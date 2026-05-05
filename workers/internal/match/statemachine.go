@@ -107,6 +107,9 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 				return detection
 			}
 		}
+
+	case StateCooldown:
+		// Matches during cooldown are discarded to prevent duplicate detections.
 	}
 
 	return nil

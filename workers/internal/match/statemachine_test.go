@@ -107,3 +107,39 @@ func TestStateMachine_IdleWithLowScore(t *testing.T) {
 	assert.Nil(t, cd, "low-score result should not produce a confirmation")
 	assert.Equal(t, StateIdle, sm.State(), "state should remain Idle with low-score result")
 }
+
+// TestStateMachine_IgnoresMatchDuringCooldown verifies that high-score matches
+// arriving while in StateCooldown are silently discarded.
+func TestStateMachine_IgnoresMatchDuringCooldown(t *testing.T) {
+	const (
+		totalFrames = 10
+		minScore    = 5
+		minCoverage = 0.8
+	)
+
+	sm := newTestStateMachine(totalFrames, minScore, minCoverage)
+	now := time.Now()
+
+	// Drive to Confirmed by sending enough hits.
+	for i := 0; i < totalFrames; i++ {
+		result := MatchResult{
+			CommercialShortID: int32(42),
+			Score:             10,
+			OffsetFrames:      i,
+		}
+		if cd := sm.Update(result, now.Add(time.Duration(i)*time.Millisecond)); cd != nil {
+			break
+		}
+	}
+	require.Equal(t, StateCooldown, sm.State(), "should be in Cooldown after confirmation")
+
+	// Send another high-score match during cooldown — must be discarded.
+	result := MatchResult{
+		CommercialShortID: int32(42),
+		Score:             10,
+		OffsetFrames:      5,
+	}
+	cd := sm.Update(result, now.Add(50*time.Millisecond))
+	assert.Nil(t, cd, "match during cooldown must not produce a detection")
+	assert.Equal(t, StateCooldown, sm.State(), "state must remain Cooldown")
+}
