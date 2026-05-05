@@ -11,82 +11,90 @@ import (
 )
 
 // FFmpegProcess wraps a running ffmpeg subprocess.
+// It outputs to two separate pipes using -f tee:
+//   - pipe:3 (ExtraFiles[0]): ADTS AAC evidence stream
+//   - pipe:4 (ExtraFiles[1]): f32le PCM analysis stream (16kHz mono)
 type FFmpegProcess struct {
-	cmd      *exec.Cmd
-	stdout   io.ReadCloser // PCM f32le 16kHz mono
-	aacRead  *os.File      // AAC fMP4 stream (read end)
-	aacWrite *os.File      // AAC fMP4 stream (write end, held for lifecycle)
-	log      *zap.Logger
+	cmd     *exec.Cmd
+	aacRead *os.File // pipe:3 — ADTS AAC evidence stream (read end)
+	pcmRead *os.File // pipe:4 — f32le PCM analysis stream (read end)
+	log     *zap.Logger
 }
 
 // StartFFmpeg launches ffmpeg for the given stream URL.
 // Returns the process with two readable streams:
-//   - PCMReader(): raw float32 PCM at 16kHz mono (stdout)
-//   - AACReader(): AAC fMP4 stream (pipe:3 / ExtraFiles[0])
+//   - AACReader(): ADTS AAC evidence stream (pipe:3)
+//   - PCMReader(): raw float32 PCM at 16kHz mono (pipe:4)
 //
 // The context is passed to exec.CommandContext but does NOT automatically
 // kill the process on cancellation. Call Stop() to terminate the subprocess.
 func StartFFmpeg(ctx context.Context, streamURL string, log *zap.Logger) (*FFmpegProcess, error) {
-	// Create a pipe for AAC output (pipe:3)
+	// Create pipes for both outputs
 	aacRead, aacWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("create aac pipe: %w", err)
 	}
 
-	// Build ffmpeg command arguments per §8.2
+	pcmRead, pcmWrite, err := os.Pipe()
+	if err != nil {
+		aacRead.Close()
+		aacWrite.Close()
+		return nil, fmt.Errorf("create pcm pipe: %w", err)
+	}
+
+	// Build ffmpeg command arguments per §8.2 of plano_implementacao.md
+	// Uses -f tee to write to two separate outputs:
+	// pipe:3 → ADTS AAC (evidence)
+	// pipe:4 → f32le PCM 16kHz mono (analysis)
 	args := []string{
 		"-reconnect", "1",
 		"-reconnect_streamed", "1",
-		"-reconnect_delay_max", "10",
+		"-reconnect_delay_max", "5",
+		"-reconnect_at_eof", "1",
+		"-timeout", "10000000",
+		"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
 		"-i", streamURL,
-		"-filter_complex", "[0:a]asplit=2[pcm_out][aac_out]",
-		"-map", "[pcm_out]", "-ar", "16000", "-ac", "1", "-f", "f32le", "pipe:1",
-		"-map", "[aac_out]", "-c:a", "aac", "-b:a", "128k", "-f", "mp4",
-		"-movflags", "frag_keyframe+empty_moov", "pipe:3",
-		"-loglevel", "error",
+		"-map", "0:a",
+		"-f", "tee",
+		"-map_metadata", "-1",
+		"[select='a':f=adts:onfail=ignore]pipe:3|[select='a':f=f32le:ar=16000:ac=1:onfail=ignore]pipe:4",
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 
 	// ExtraFiles adds file descriptors starting at 3.
-	// pipe:3 in ffmpeg maps to ExtraFiles[0]
-	cmd.ExtraFiles = []*os.File{aacWrite}
-
-	// Get stdout pipe for PCM output
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		aacRead.Close()
-		aacWrite.Close()
-		return nil, fmt.Errorf("get stdout pipe: %w", err)
-	}
+	// pipe:3 in ffmpeg maps to ExtraFiles[0] (AAC write end)
+	// pipe:4 in ffmpeg maps to ExtraFiles[1] (PCM write end)
+	cmd.ExtraFiles = []*os.File{aacWrite, pcmWrite}
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		aacRead.Close()
 		aacWrite.Close()
-		stdout.Close()
+		pcmRead.Close()
+		pcmWrite.Close()
 		return nil, fmt.Errorf("ffmpeg start: %w", err)
 	}
 
-	// Close write end in parent — ffmpeg owns the write end now.
-	// Closing this allows ffmpeg to detect EOF when it finishes writing.
+	// Close write ends in parent — ffmpeg owns them now.
+	// Closing these allows ffmpeg to detect EOF when it finishes writing.
 	aacWrite.Close()
+	pcmWrite.Close()
 
 	return &FFmpegProcess{
-		cmd:      cmd,
-		stdout:   stdout,
-		aacRead:  aacRead,
-		aacWrite: aacWrite,
-		log:      log,
+		cmd:     cmd,
+		aacRead: aacRead,
+		pcmRead: pcmRead,
+		log:     log,
 	}, nil
 }
 
-// PCMReader returns the stdout reader containing raw float32 PCM at 16kHz mono.
+// PCMReader returns the pipe reader containing raw float32 PCM at 16kHz mono.
 func (p *FFmpegProcess) PCMReader() io.Reader {
-	return p.stdout
+	return p.pcmRead
 }
 
-// AACReader returns the pipe reader for AAC fMP4 stream.
+// AACReader returns the pipe reader for ADTS AAC evidence stream.
 func (p *FFmpegProcess) AACReader() io.Reader {
 	return p.aacRead
 }
@@ -97,8 +105,8 @@ func (p *FFmpegProcess) Stop() {
 	if p.cmd.Process != nil {
 		p.cmd.Process.Kill()
 	}
-	p.stdout.Close()
 	p.aacRead.Close()
+	p.pcmRead.Close()
 	_ = p.cmd.Wait() // reap the process
 }
 
