@@ -5,10 +5,6 @@ export default function DetectionsPage() {
   const [filters, setFilters] = useState({ limit: 50 })
   const { data: detections = [], isLoading } = useDetections(filters)
 
-  function playEvidence(id) {
-    window.open(`/v1/internal/detections/${id}/evidence`, '_blank')
-  }
-
   if (isLoading) return <div>Carregando...</div>
 
   return (
@@ -35,9 +31,16 @@ export default function DetectionsPage() {
               <td>{d.commercial_id}</td>
               <td>{(d.confidence * 100).toFixed(1)}%</td>
               <td>
-                {d.evidence_status === 'available'
-                  ? <button onClick={() => playEvidence(d.id)}>▶ Ouvir</button>
-                  : <span style={{ color: '#aaa' }}>{d.evidence_status}</span>}
+                {d.evidence_status === 'available' ? (
+                  <audio
+                    controls
+                    preload="none"
+                    src={`/v1/internal/detections/${d.id}/evidence`}
+                    style={{ height: 28 }}
+                  />
+                ) : (
+                  <span style={{ color: '#aaa' }}>{d.evidence_status}</span>
+                )}
               </td>
             </tr>
           ))}
