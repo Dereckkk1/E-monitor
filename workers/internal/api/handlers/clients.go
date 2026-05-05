@@ -23,7 +23,7 @@ func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in catalog.CreateClientInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, "invalid request", 400)
 		return
 	}
 	if in.Name == "" {
