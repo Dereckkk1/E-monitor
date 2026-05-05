@@ -1,0 +1,13 @@
+FROM golang:1.22-alpine AS builder
+RUN apk add --no-cache ca-certificates git
+WORKDIR /src
+COPY workers/go.mod workers/go.sum ./
+RUN go mod download
+COPY workers/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
+
+FROM alpine:3.19
+RUN apk add --no-cache ffmpeg ca-certificates
+COPY --from=builder /out/api /usr/local/bin/api
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/api"]
