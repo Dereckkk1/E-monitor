@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"radiocheck/internal/catalog"
 )
 
@@ -16,7 +18,7 @@ type StationsHandler struct {
 func (h *StationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	items, err := h.Repo.List(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, "internal error", 500)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": items})
@@ -38,7 +40,7 @@ func (h *StationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.Repo.Create(r.Context(), in)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, "internal error", 500)
 		return
 	}
 	writeJSON(w, 201, out)
@@ -52,7 +54,11 @@ func (h *StationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := h.Repo.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, "not found", 404)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
 		return
 	}
 	writeJSON(w, 200, st)
