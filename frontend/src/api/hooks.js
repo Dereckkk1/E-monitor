@@ -3,7 +3,7 @@ import api from './client'
 
 // Stations
 export function useStations() {
-  return useQuery({ queryKey: ['stations'], queryFn: () => api.get('/stations').then(r => r.data.data) })
+  return useQuery({ queryKey: ['stations'], queryFn: () => api.get('/stations').then(r => r.data.data ?? []) })
 }
 export function useCreateStation() {
   const qc = useQueryClient()
@@ -15,7 +15,7 @@ export function useCreateStation() {
 
 // Clients
 export function useClients() {
-  return useQuery({ queryKey: ['clients'], queryFn: () => api.get('/clients').then(r => r.data.data) })
+  return useQuery({ queryKey: ['clients'], queryFn: () => api.get('/clients').then(r => r.data.data ?? []) })
 }
 export function useCreateClient() {
   const qc = useQueryClient()
@@ -27,7 +27,7 @@ export function useCreateClient() {
 
 // Campaigns
 export function useCampaigns() {
-  return useQuery({ queryKey: ['campaigns'], queryFn: () => api.get('/campaigns').then(r => r.data.data) })
+  return useQuery({ queryKey: ['campaigns'], queryFn: () => api.get('/campaigns').then(r => r.data.data ?? []) })
 }
 export function useCreateCampaign() {
   const qc = useQueryClient()
@@ -51,10 +51,22 @@ export function usePauseCampaign() {
   })
 }
 
+// Upload de comercial (multipart/form-data)
+export function useUploadCommercial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (formData) =>
+      api.post('/commercials', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
 // Detections
 export function useDetections(filters = {}) {
   return useQuery({
     queryKey: ['detections', filters],
-    queryFn: () => api.get('/detections', { params: filters }).then(r => r.data.data),
+    queryFn: () => api.get('/detections', { params: filters }).then(r => r.data.data ?? []),
   })
 }
