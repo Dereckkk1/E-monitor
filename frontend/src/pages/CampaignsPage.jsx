@@ -27,7 +27,11 @@ export default function CampaignsPage() {
 
   function handleSubmit(e) {
     e.preventDefault()
-    createCampaign.mutate(form, {
+    createCampaign.mutate({
+      ...form,
+      start_date: form.start_date ? form.start_date + 'T00:00:00Z' : '',
+      end_date:   form.end_date   ? form.end_date   + 'T00:00:00Z' : '',
+    }, {
       onSuccess: () => { setShowForm(false); setForm({ name: '', client_id: '', start_date: '', end_date: '', target_stations: [] }) }
     })
   }
@@ -73,7 +77,12 @@ export default function CampaignsPage() {
               </label>
             ))}
           </fieldset>
-          <button type="submit" disabled={createCampaign.isPending}>Criar</button>
+          <button type="submit" disabled={createCampaign.isPending}>
+            {createCampaign.isPending ? 'Criando...' : 'Criar'}
+          </button>
+          {createCampaign.isError && (
+            <p style={{ color: 'red' }}>Erro ao criar campanha. Tente novamente.</p>
+          )}
         </form>
       )}
       <table border="1" cellPadding="6" style={{ marginTop: 16, borderCollapse: 'collapse' }}>
