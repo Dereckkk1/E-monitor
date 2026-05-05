@@ -43,6 +43,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/", d.Campaigns.List)
 			r.Post("/", d.Campaigns.Create)
 			r.Get("/{id}", d.Campaigns.Get)
+			r.Put("/{id}/start", d.Campaigns.Start)
+			r.Put("/{id}/pause", d.Campaigns.Pause)
 		})
 		r.Route("/commercials", func(r chi.Router) {
 			r.Post("/", d.Commercials.Upload)
