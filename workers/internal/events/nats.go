@@ -24,3 +24,9 @@ func Connect(url string) (*nats.Conn, error) {
 	}
 	return nc, nil
 }
+
+func Close(nc *nats.Conn) {
+	if nc != nil {
+		nc.Drain()
+	}
+}

@@ -38,7 +38,10 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentTyp
 		Body:        body,
 		ContentType: aws.String(contentType),
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("storage: put %s: %w", key, err)
+	}
+	return nil
 }
 
 func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
@@ -47,7 +50,7 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, in
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, "", 0, err
+		return nil, "", 0, fmt.Errorf("storage: get %s: %w", key, err)
 	}
 	ct := ""
 	if out.ContentType != nil {
