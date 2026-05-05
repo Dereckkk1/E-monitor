@@ -17,6 +17,9 @@ type PCMRing struct {
 
 // NewPCMRing creates a new PCMRing with the given sample capacity.
 func NewPCMRing(capacity int) *PCMRing {
+	if capacity <= 0 {
+		panic("ringbuffer: capacity must be > 0")
+	}
 	return &PCMRing{
 		samples:  make([]float32, capacity),
 		capacity: capacity,

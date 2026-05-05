@@ -23,6 +23,9 @@ type ByteRing struct {
 
 // NewByteRing creates a new ByteRing with the given chunk capacity.
 func NewByteRing(capacity int) *ByteRing {
+	if capacity <= 0 {
+		panic("ringbuffer: capacity must be > 0")
+	}
 	return &ByteRing{
 		chunks:   make([]byteChunk, capacity),
 		capacity: capacity,
@@ -54,7 +57,7 @@ func (r *ByteRing) Extract(from, to time.Time) []byte {
 	// Determine the index of the oldest chunk.
 	// When the buffer is full, the oldest chunk is at r.head.
 	// When not full, the oldest chunk is at index 0.
-	var out []byte
+	out := []byte{}
 	oldest := 0
 	if r.size == r.capacity {
 		oldest = r.head
