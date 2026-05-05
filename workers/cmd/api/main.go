@@ -9,13 +9,18 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/db"
+	"radiocheck/internal/evidence"
 	"radiocheck/internal/events"
+	"radiocheck/internal/index"
 	"radiocheck/internal/storage"
+	"radiocheck/internal/supervisor"
 )
 
 func main() {
@@ -25,6 +30,13 @@ func main() {
 	}
 
 	ctx := context.Background()
+
+	// Logger.
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("logger: %v", err)
+	}
+	defer logger.Sync() //nolint:errcheck
 
 	pool, err := db.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -50,10 +62,39 @@ func main() {
 	commercials := catalog.NewCommercials(pool)
 	detections := catalog.NewDetections(pool)
 
+	// Index store + loader.
+	indexStore := index.New()
+	loader := index.NewLoader(indexStore, pool, nc, logger)
+	if err := loader.LoadAll(ctx); err != nil {
+		logger.Warn("index loader: initial load failed", zap.Error(err))
+	}
+	indexSub, err := loader.Subscribe(ctx)
+	if err != nil {
+		log.Fatalf("index loader subscribe: %v", err)
+	}
+	defer indexSub.Unsubscribe() //nolint:errcheck
+
+	// Evidence service.
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, logger)
+	evidSub, err := evidSvc.Subscribe(ctx)
+	if err != nil {
+		log.Fatalf("evidence subscribe: %v", err)
+	}
+	defer evidSub.Unsubscribe() //nolint:errcheck
+
+	// Supervisor.
+	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, logger)
+
+	// Campaigns handler with supervisor wired in.
+	campaignsHandler := &handlers.CampaignsHandler{
+		Repo:       campaigns,
+		Supervisor: sup,
+	}
+
 	deps := api.Deps{
 		Stations:    &handlers.StationsHandler{Repo: stations},
 		Clients:     &handlers.ClientsHandler{Repo: clients},
-		Campaigns:   &handlers.CampaignsHandler{Repo: campaigns},
+		Campaigns:   campaignsHandler,
 		Commercials: &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath},
 		Detections:  &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
 		Health:      &handlers.HealthHandler{DB: pool, NATS: nc},
@@ -78,5 +119,5 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	srv.Shutdown(shutdownCtx)
+	srv.Shutdown(shutdownCtx) //nolint:errcheck
 }
