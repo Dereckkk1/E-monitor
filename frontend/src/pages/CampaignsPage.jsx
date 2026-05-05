@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useCampaigns, useCreateCampaign, useStartCampaign, usePauseCampaign, useClients, useStations } from '../api/hooks'
+import { useCampaigns, useCreateCampaign, useStartCampaign, usePauseCampaign, useClients, useStations, useUploadCommercial } from '../api/hooks'
 
 export default function CampaignsPage() {
   const { data: campaigns = [], isLoading } = useCampaigns()
@@ -8,8 +8,13 @@ export default function CampaignsPage() {
   const createCampaign = useCreateCampaign()
   const startCampaign = useStartCampaign()
   const pauseCampaign = usePauseCampaign()
+  const uploadCommercial = useUploadCommercial()
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', client_id: '', start_date: '', end_date: '', target_stations: [] })
+  const [uploadFor, setUploadFor] = useState(null)
+  const [uploadTitle, setUploadTitle] = useState('')
+  const [uploadCut, setUploadCut] = useState('')
+  const [uploadFile, setUploadFile] = useState(null)
 
   function toggleStation(id) {
     setForm(f => ({
@@ -24,6 +29,23 @@ export default function CampaignsPage() {
     e.preventDefault()
     createCampaign.mutate(form, {
       onSuccess: () => { setShowForm(false); setForm({ name: '', client_id: '', start_date: '', end_date: '', target_stations: [] }) }
+    })
+  }
+
+  function handleUpload(e) {
+    e.preventDefault()
+    const fd = new FormData()
+    fd.append('campaign_id', uploadFor)
+    fd.append('title', uploadTitle)
+    if (uploadCut) fd.append('cut_label', uploadCut)
+    fd.append('file', uploadFile)
+    uploadCommercial.mutate(fd, {
+      onSuccess: () => {
+        setUploadFor(null)
+        setUploadTitle('')
+        setUploadCut('')
+        setUploadFile(null)
+      },
     })
   }
 
@@ -67,11 +89,48 @@ export default function CampaignsPage() {
               <td>
                 {c.status !== 'active' && <button onClick={() => startCampaign.mutate(c.id)} disabled={startCampaign.isPending}>Iniciar</button>}
                 {c.status === 'active' && <button onClick={() => pauseCampaign.mutate(c.id)} disabled={pauseCampaign.isPending}>Pausar</button>}
+                <button onClick={() => setUploadFor(c.id)}>Upload</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {uploadFor && (
+        <div style={{ marginTop: 16, padding: 12, border: '1px solid #ccc', maxWidth: 400 }}>
+          <h3>Upload de Comercial</h3>
+          <p style={{ fontSize: 12, color: '#666' }}>
+            Campanha: {campaigns.find(c => c.id === uploadFor)?.name}
+          </p>
+          <form onSubmit={handleUpload} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <input
+              placeholder="Título do comercial"
+              value={uploadTitle}
+              onChange={e => setUploadTitle(e.target.value)}
+              required
+            />
+            <input
+              placeholder="Cut label (ex: versão 30s)"
+              value={uploadCut}
+              onChange={e => setUploadCut(e.target.value)}
+            />
+            <input
+              type="file"
+              accept="audio/*"
+              onChange={e => setUploadFile(e.target.files[0])}
+              required
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" disabled={uploadCommercial.isPending}>
+                {uploadCommercial.isPending ? 'Enviando...' : 'Enviar'}
+              </button>
+              <button type="button" onClick={() => setUploadFor(null)}>Cancelar</button>
+            </div>
+            {uploadCommercial.isError && (
+              <p style={{ color: 'red' }}>Erro no upload. Tente novamente.</p>
+            )}
+          </form>
+        </div>
+      )}
     </div>
   )
 }
