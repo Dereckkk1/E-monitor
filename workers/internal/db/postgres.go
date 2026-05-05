@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,11 +15,15 @@ func New(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	cfg.MaxConns = 20
 	cfg.MinConns = 2
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+
+	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(connCtx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: connect: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.Ping(connCtx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
