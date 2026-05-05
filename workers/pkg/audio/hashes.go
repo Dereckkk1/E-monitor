@@ -1,9 +1,11 @@
 package audio
 
-// Hash constants (32-bit hash encoding)
+// Constellation-map pairing constants (§7.3 of plano_implementacao.md).
 const (
-	FanOut   = 15  // number of target peaks to pair with each anchor
-	MaxDelta = 200 // maximum frame delta for pairing
+	FanOut         = 5  // max target peaks to pair with each anchor
+	TargetZoneTMin = 1  // minimum frame delta for pairing
+	TargetZoneTMax = 16 // maximum frame delta for pairing
+	TargetZoneF    = 50 // maximum frequency bin distance for pairing
 )
 
 // Hash represents a single fingerprint hash.
@@ -13,7 +15,10 @@ type Hash struct {
 }
 
 // GenerateHashes produces fingerprint hashes from spectrogram peaks.
-// For each peak (anchor), pairs it with up to FanOut subsequent peaks within MaxDelta frames.
+// For each peak (anchor), pairs it with up to FanOut subsequent peaks that fall
+// within the target zone: [TargetZoneTMin, TargetZoneTMax] frames ahead and
+// within ±TargetZoneF frequency bins.
+//
 // Hash encoding (32-bit):
 //
 //	bits 23-31 (9 bits): anchor frequency bin (f1 & 0x1FF)
@@ -37,22 +42,28 @@ func GenerateHashes(peaks [][2]int) []Hash {
 			targetBin := target[1]
 
 			dt := targetFrame - anchorFrame
-			if dt <= 0 {
+			if dt < TargetZoneTMin {
 				continue
 			}
-			if dt > MaxDelta {
-				// Peaks are sorted by frame; once delta exceeds MaxDelta we can break
+			if dt > TargetZoneTMax {
+				// Peaks sorted by frame; once dt exceeds max we can break.
 				break
+			}
+
+			df := targetBin - anchorBin
+			if df < 0 {
+				df = -df
+			}
+			if df > TargetZoneF {
+				continue
 			}
 
 			f1 := uint32(anchorBin) & 0x1FF
 			f2 := uint32(targetBin) & 0x1FF
 			d := uint32(dt) & 0x3FFF
 
-			value := (f1 << 23) | (f2 << 14) | d
-
 			hashes = append(hashes, Hash{
-				Value:     value,
+				Value:     (f1 << 23) | (f2 << 14) | d,
 				TimeFrame: anchorFrame,
 			})
 			paired++
