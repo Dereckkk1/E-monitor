@@ -275,3 +275,40 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 	)
 	return nil
 }
+
+// RestoreActive re-launches workers for all campaigns with status 'active'.
+// Called once at startup after the index loader finishes, so workers resume
+// after a process restart or crash.
+func (s *Supervisor) RestoreActive(ctx context.Context) error {
+	rows, err := s.db.Query(ctx, `
+		SELECT id FROM campaigns WHERE status = 'active'
+	`)
+	if err != nil {
+		return fmt.Errorf("supervisor.RestoreActive: query: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("supervisor.RestoreActive: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("supervisor.RestoreActive: iterate: %w", err)
+	}
+
+	for _, id := range ids {
+		if err := s.Start(id); err != nil {
+			s.log.Error("supervisor.RestoreActive: failed to start campaign",
+				zap.String("campaign_id", id.String()),
+				zap.Error(err),
+			)
+		}
+	}
+
+	s.log.Info("supervisor.RestoreActive: done", zap.Int("campaigns", len(ids)))
+	return nil
+}
