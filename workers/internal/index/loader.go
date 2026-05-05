@@ -37,10 +37,12 @@ func NewLoader(store *Store, db *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *
 // are found. Called once at startup.
 func (l *Loader) LoadAll(ctx context.Context) error {
 	rows, err := l.db.Query(ctx, `
-		SELECT fh.hash_value, fh.time_frame, c.short_id
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, c.short_id
 		FROM fingerprint_hashes fh
-		JOIN commercials c ON c.id = fh.commercial_id
+		JOIN commercials c  ON c.id  = fh.commercial_id
+		JOIN campaigns   ca ON ca.id = c.campaign_id
 		WHERE c.fingerprint_status = 'ready'
+		  AND ca.status = 'active'
 	`)
 	if err != nil {
 		return fmt.Errorf("index loader: query fingerprint_hashes: %w", err)
@@ -50,13 +52,17 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 	newIndex := make(Index)
 	for rows.Next() {
 		var hashValue uint32
-		var timeFrame int32
-		var shortID int32
-		if err := rows.Scan(&hashValue, &timeFrame, &shortID); err != nil {
+		var timeFrame  int32
+		var variantID  int16
+		var rateID     int16
+		var shortID    int32
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &shortID); err != nil {
 			return fmt.Errorf("index loader: scan row: %w", err)
 		}
 		newIndex[hashValue] = append(newIndex[hashValue], Entry{
 			CommercialShortID: shortID,
+			VariantID:         uint8(variantID),
+			RateID:            uint8(rateID),
 			TimeFrame:         timeFrame,
 		})
 	}
@@ -93,11 +99,14 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			return
 		}
 
-		// Fetch the commercial's short_id, confirming it is ready.
+		// Fetch the commercial's short_id, confirming it is ready and its campaign is active.
 		var shortID int32
 		err := l.db.QueryRow(ctx, `
-			SELECT short_id FROM commercials
-			WHERE id = $1 AND fingerprint_status = 'ready'
+			SELECT c.short_id FROM commercials c
+			JOIN campaigns ca ON ca.id = c.campaign_id
+			WHERE c.id = $1
+			  AND c.fingerprint_status = 'ready'
+			  AND ca.status = 'active'
 		`, payload.CommercialID).Scan(&shortID)
 		if err != nil {
 			l.log.Warn("index.reload: commercial not found or not ready",
@@ -109,7 +118,8 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 
 		// Fetch all fingerprint hashes for this commercial.
 		rows, err := l.db.Query(ctx, `
-			SELECT hash_value, time_frame FROM fingerprint_hashes
+			SELECT hash_value, time_frame, variant_id, rate_id
+			FROM fingerprint_hashes
 			WHERE commercial_id = $1
 		`, payload.CommercialID)
 		if err != nil {
@@ -125,19 +135,23 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		type hashEntry struct {
 			hash      uint32
 			timeFrame int32
+			variantID int16
+			rateID    int16
 		}
 		var newEntries []hashEntry
 		for rows.Next() {
 			var hashValue uint32
-			var timeFrame int32
-			if err := rows.Scan(&hashValue, &timeFrame); err != nil {
+			var timeFrame  int32
+			var variantID  int16
+			var rateID     int16
+			if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID); err != nil {
 				l.log.Error("index.reload: scan row failed",
 					zap.String("commercial_id", payload.CommercialID),
 					zap.Error(err),
 				)
 				return
 			}
-			newEntries = append(newEntries, hashEntry{hash: hashValue, timeFrame: timeFrame})
+			newEntries = append(newEntries, hashEntry{hash: hashValue, timeFrame: timeFrame, variantID: variantID, rateID: rateID})
 		}
 		if err := rows.Err(); err != nil {
 			l.log.Error("index.reload: iterate rows failed",
@@ -174,6 +188,8 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		for _, ne := range newEntries {
 			merged[ne.hash] = append(merged[ne.hash], Entry{
 				CommercialShortID: shortID,
+				VariantID:         uint8(ne.variantID),
+				RateID:            uint8(ne.rateID),
 				TimeFrame:         ne.timeFrame,
 			})
 		}
