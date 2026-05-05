@@ -85,6 +85,11 @@ func main() {
 	// Supervisor.
 	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, logger)
 
+	// Re-launch workers for campaigns that were active before restart.
+	if err := sup.RestoreActive(ctx); err != nil {
+		logger.Warn("supervisor restore active failed", zap.Error(err))
+	}
+
 	// Campaigns handler with supervisor wired in.
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
