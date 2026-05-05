@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -151,15 +153,28 @@ func (s *Service) handle(msg *nats.Msg) {
 
 	// 8. Build S3 key.
 	detectionID := uuid.New()
-	key := fmt.Sprintf("evidence/%s/%s/%s.aac", stationID, detectedAt.Format("2006-01"), detectionID)
+	key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.m4a",
+		detectedAt.Format("2006"),
+		detectedAt.Format("01"),
+		detectedAt.Format("02"),
+		stationID,
+		detectionID,
+	)
 
-	// 9. Upload evidence to S3 if audio data is available.
+	// 9. Encode to m4a and upload to S3 if audio data is available.
 	if len(aacData) > 0 {
-		if putErr := s.store.Put(ctx, key, bytes.NewReader(aacData), "audio/aac"); putErr != nil {
-			s.log.Error("evidence: s3 upload failed", zap.String("key", key), zap.Error(putErr))
+		m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)
+		if err != nil {
+			s.log.Error("evidence encoding failed", zap.Error(err))
+			// fall through with evidenceStatus = "failed"
 		} else {
-			evidenceStatus = "available"
-			evidenceKey = key
+			err = s.store.Put(ctx, key, bytes.NewReader(m4aData), "video/mp4")
+			if err == nil {
+				evidenceStatus = "available"
+				evidenceKey = key
+			} else {
+				s.log.Error("evidence upload failed", zap.Error(err))
+			}
 		}
 	}
 
@@ -200,4 +215,43 @@ func (s *Service) handle(msg *nats.Msg) {
 		zap.String("station_id", stationID.String()),
 		zap.String("evidence_status", evidenceStatus),
 	)
+}
+
+// encodeToM4A wraps raw ADTS-format AAC bytes in an m4a (MP4) container using
+// ffmpeg. Temporary files are created and cleaned up via defer.
+func encodeToM4A(aacData []byte, detectionID uuid.UUID, detectedAt time.Time) ([]byte, error) {
+	// Write raw ADTS to a temp file.
+	tmpIn, err := os.CreateTemp("", "evidence-*.aac")
+	if err != nil {
+		return nil, fmt.Errorf("create temp input: %w", err)
+	}
+	defer os.Remove(tmpIn.Name())
+	if _, err := tmpIn.Write(aacData); err != nil {
+		tmpIn.Close()
+		return nil, fmt.Errorf("write temp input: %w", err)
+	}
+	tmpIn.Close()
+
+	tmpOut, err := os.CreateTemp("", "evidence-*.m4a")
+	if err != nil {
+		return nil, fmt.Errorf("create temp output: %w", err)
+	}
+	defer os.Remove(tmpOut.Name())
+	tmpOut.Close()
+
+	cmd := exec.Command("ffmpeg", "-y",
+		"-f", "adts",
+		"-i", tmpIn.Name(),
+		"-c:a", "copy",
+		"-movflags", "+faststart",
+		"-metadata", fmt.Sprintf("title=Evidência %s", detectionID),
+		"-metadata", "artist=Sistema de Monitoramento",
+		"-metadata", fmt.Sprintf("date=%s", detectedAt.Format(time.RFC3339)),
+		tmpOut.Name(),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg encode: %w: %s", err, out)
+	}
+
+	return os.ReadFile(tmpOut.Name())
 }
