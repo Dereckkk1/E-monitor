@@ -1,9 +1,9 @@
 package audio
 
-// Peak finder constants matching Python's maximum_filter with size=(21, 11)
+// Peak finder constants (±15 frames, ±15 bins → 31×31 neighbourhood).
 const (
-	neighborFrames = 10 // ±10 frames  → window of 21
-	neighborBins   = 5  // ±5 bins     → window of 11
+	neighborFrames = 15
+	neighborBins   = 15
 )
 
 // PickPeaks finds local maxima in the spectrogram using a sliding maximum filter.
