@@ -7,6 +7,8 @@ import (
 // Entry is one posting in the hash index.
 type Entry struct {
 	CommercialShortID int32
+	VariantID         uint8 // broadcast simulation variant (0=original, 1=light, 2=medium, 3=heavy)
+	RateID            uint8 // time-stretch rate variant
 	TimeFrame         int32
 }
 
