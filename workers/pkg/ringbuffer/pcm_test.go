@@ -26,3 +26,10 @@ func TestPCMRing_ReadLastMoreThanSize(t *testing.T) {
 	got := r.ReadLast(10)
 	assert.Equal(t, []float32{1, 2, 3}, got)
 }
+
+func TestPCMRing_Size(t *testing.T) {
+	r := NewPCMRing(10)
+	assert.Equal(t, 0, r.Size())
+	r.Write([]float32{1, 2, 3})
+	assert.Equal(t, 3, r.Size())
+}

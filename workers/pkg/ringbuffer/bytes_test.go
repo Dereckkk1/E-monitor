@@ -37,3 +37,16 @@ func TestByteRing_OverwritesOldest(t *testing.T) {
 	got := r.Extract(t0, t2)
 	assert.Equal(t, []byte{3, 4, 5, 6}, got)
 }
+
+func TestByteRing_ExtractPartialWindow(t *testing.T) {
+	r := NewByteRing(5)
+	t0 := time.Now()
+	t1 := t0.Add(time.Second)
+	t2 := t0.Add(2 * time.Second)
+	r.Write([]byte("a"), t0)
+	r.Write([]byte("b"), t1)
+	r.Write([]byte("c"), t2)
+	// Extract only middle chunk
+	out := r.Extract(t1, t1)
+	assert.Equal(t, []byte("b"), out)
+}
