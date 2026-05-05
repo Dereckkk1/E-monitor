@@ -31,6 +31,9 @@ type WorkerConfig struct {
 	MatchThreshold   int           // minimum score to count as hit (e.g. 5)
 	MinCoverage      float64       // minimum coverage for confirmation (e.g. 0.4)
 	ConfirmTimeout   time.Duration // max detecting window (e.g. 30s)
+	// AACBuffer is an optional externally-owned ring buffer for AAC evidence.
+	// If nil, Run() creates its own internal buffer (backward-compatible).
+	AACBuffer *ringbuffer.ByteRing
 }
 
 // DetectionEvent is the payload published to NATS when a detection is confirmed.
@@ -91,7 +94,12 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 
 		// 2. Create ring buffers.
-		aacBuf := ringbuffer.NewByteRing(3000)           // ~5 min at ~1 chunk/100ms
+		// Use externally-provided AACBuffer if available (allows the supervisor to
+		// register it with the evidence service before passing it here).
+		aacBuf := w.cfg.AACBuffer
+		if aacBuf == nil {
+			aacBuf = ringbuffer.NewByteRing(3000) // ~5 min at ~1 chunk/100ms
+		}
 		pcmBuf := ringbuffer.NewPCMRing(16000 * 35)      // 35 seconds of PCM
 
 		// 3. Create state machines: one per commercial short ID.
