@@ -1,1 +1,27 @@
 .worktrees/
+
+# Go
+workers/bin/
+workers/*.exe
+
+# Python
+fingerprint/.venv/
+fingerprint/__pycache__/
+fingerprint/**/__pycache__/
+fingerprint/.pytest_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker / env
+infra/docker/.env
+infra/docker/data/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
