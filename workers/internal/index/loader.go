@@ -59,6 +59,9 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &shortID); err != nil {
 			return fmt.Errorf("index loader: scan row: %w", err)
 		}
+		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
+			return fmt.Errorf("index loader: variant_id=%d or rate_id=%d out of uint8 range", variantID, rateID)
+		}
 		newIndex[hashValue] = append(newIndex[hashValue], Entry{
 			CommercialShortID: shortID,
 			VariantID:         uint8(variantID),
@@ -148,6 +151,14 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 				l.log.Error("index.reload: scan row failed",
 					zap.String("commercial_id", payload.CommercialID),
 					zap.Error(err),
+				)
+				return
+			}
+			if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
+				l.log.Error("index.reload: variant_id or rate_id out of uint8 range",
+					zap.String("commercial_id", payload.CommercialID),
+					zap.Int16("variant_id", variantID),
+					zap.Int16("rate_id", rateID),
 				)
 				return
 			}
