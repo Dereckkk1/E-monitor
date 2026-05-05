@@ -42,7 +42,7 @@ export default function CampaignsPage() {
     fd.append('campaign_id', uploadFor)
     fd.append('title', uploadTitle)
     if (uploadCut) fd.append('cut_label', uploadCut)
-    fd.append('file', uploadFile)
+    fd.append('audio', uploadFile)
     uploadCommercial.mutate(fd, {
       onSuccess: () => {
         setUploadFor(null)
