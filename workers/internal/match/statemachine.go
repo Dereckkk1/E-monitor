@@ -12,7 +12,7 @@ type State int
 const (
 	StateIdle      State = iota
 	StateDetecting State = iota
-	StateConfirmed State = iota
+	StateCooldown  State = iota
 )
 
 // ConfirmedDetection is emitted when the state machine confirms a detection.
@@ -34,9 +34,11 @@ type StateMachine struct {
 	log               *zap.Logger
 
 	// Configuration
-	minScore       int           // minimum MatchResult.Score to count as a hit
-	minCoverage    float64       // minimum Coverage() to confirm
-	confirmTimeout time.Duration // max time in Detecting before reset (no confirm)
+	minScore         int           // minimum MatchResult.Score to count as a hit
+	minCoverage      float64       // minimum Coverage() to confirm
+	confirmTimeout   time.Duration // max time in Detecting before reset (no confirm)
+	cooldownDuration time.Duration
+	cooldownUntil    time.Time
 }
 
 // NewStateMachine creates a new StateMachine for tracking one commercial on one station.
@@ -47,6 +49,7 @@ func NewStateMachine(
 	minScore int,
 	minCoverage float64,
 	confirmTimeout time.Duration,
+	cooldownDuration time.Duration,
 	log *zap.Logger,
 ) *StateMachine {
 	return &StateMachine{
@@ -57,6 +60,7 @@ func NewStateMachine(
 		minScore:          minScore,
 		minCoverage:       minCoverage,
 		confirmTimeout:    confirmTimeout,
+		cooldownDuration:  cooldownDuration,
 		log:               log,
 	}
 }
@@ -97,9 +101,9 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 					zap.Int32("commercialShortID", sm.commercialShortID),
 					zap.Float64("confidence", confidence),
 				)
-				// Reset to Idle before returning
 				sm.coverage.Reset()
-				sm.state = StateIdle
+				sm.state = StateCooldown
+				sm.cooldownUntil = now.Add(sm.cooldownDuration)
 				return detection
 			}
 		}
@@ -108,16 +112,27 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 	return nil
 }
 
-// Tick checks if the detecting phase has timed out. Call once per window.
-// If timed out, resets to Idle.
+// Tick checks if the detecting phase has timed out, or if cooldown has expired.
+// Call once per window.
 func (sm *StateMachine) Tick(now time.Time) {
-	if sm.state == StateDetecting && now.Sub(sm.firstMatchAt) > sm.confirmTimeout {
-		sm.log.Info("detection timed out, resetting to idle",
-			zap.String("stationID", sm.stationID),
-			zap.Int32("commercialShortID", sm.commercialShortID),
-		)
-		sm.coverage.Reset()
-		sm.state = StateIdle
+	switch sm.state {
+	case StateDetecting:
+		if now.Sub(sm.firstMatchAt) > sm.confirmTimeout {
+			sm.log.Info("detection timed out, resetting to idle",
+				zap.String("stationID", sm.stationID),
+				zap.Int32("commercialShortID", sm.commercialShortID),
+			)
+			sm.coverage.Reset()
+			sm.state = StateIdle
+		}
+	case StateCooldown:
+		if now.After(sm.cooldownUntil) {
+			sm.log.Info("cooldown expired, back to idle",
+				zap.String("stationID", sm.stationID),
+				zap.Int32("commercialShortID", sm.commercialShortID),
+			)
+			sm.state = StateIdle
+		}
 	}
 }
 

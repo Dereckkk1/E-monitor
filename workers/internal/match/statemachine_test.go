@@ -17,7 +17,8 @@ func newTestStateMachine(totalFrames int, minScore int, minCoverage float64) *St
 		totalFrames,
 		minScore,
 		minCoverage,
-		5*time.Second,
+		5*time.Second,        // confirmTimeout
+		100*time.Millisecond, // cooldownDuration curto para testes
 		log,
 	)
 }
@@ -57,8 +58,12 @@ func TestStateMachine_ConfirmsAfterCoverage(t *testing.T) {
 	assert.GreaterOrEqual(t, confirmed.Confidence, minCoverage,
 		"confidence should be >= minCoverage at confirmation")
 
-	// After confirmation, state should be back to Idle
-	assert.Equal(t, StateIdle, sm.State(), "state should reset to Idle after confirmation")
+	// After confirmation, state should be in Cooldown
+	assert.Equal(t, StateCooldown, sm.State(), "após confirmação deve entrar em Cooldown")
+
+	// Avançar além do cooldown (100ms).
+	sm.Tick(time.Now().Add(200 * time.Millisecond))
+	assert.Equal(t, StateIdle, sm.State(), "após cooldown expirar deve voltar a Idle")
 }
 
 // TestStateMachine_TimeoutResetsToIdle feeds one hit to enter Detecting, then

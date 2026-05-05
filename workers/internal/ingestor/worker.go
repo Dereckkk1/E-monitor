@@ -106,6 +106,8 @@ func (w *Worker) Run(ctx context.Context) {
 		machines := make(map[int32]*match.StateMachine, len(w.cfg.CommercialShortIDs))
 		for _, id := range w.cfg.CommercialShortIDs {
 			totalFrames := w.cfg.CommercialFrames[id]
+			frameDur := time.Duration(float64(time.Second) * float64(totalFrames) * 2048 / 16000)
+			cooldown := frameDur + 5*time.Second
 			machines[id] = match.NewStateMachine(
 				stationIDStr,
 				id,
@@ -113,6 +115,7 @@ func (w *Worker) Run(ctx context.Context) {
 				w.cfg.MatchThreshold,
 				w.cfg.MinCoverage,
 				w.cfg.ConfirmTimeout,
+				cooldown,
 				w.log,
 			)
 		}
