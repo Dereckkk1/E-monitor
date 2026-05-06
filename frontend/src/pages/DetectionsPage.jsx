@@ -21,16 +21,6 @@ function formatDateTime(isoString) {
   })
 }
 
-function formatDuration(startMs, endMs) {
-  if (startMs == null && endMs == null) return '—'
-  const diff = (endMs - startMs) / 1000
-  if (diff <= 0) return '—'
-  const m = Math.floor(diff / 60)
-  const s = Math.round(diff % 60)
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
-}
-
 function startOfDay(date) {
   const d = new Date(date)
   d.setHours(0, 0, 0, 0)
@@ -177,15 +167,15 @@ export default function DetectionsPage() {
   }))
   const selectedCampaignOption = campaignOptions.find(o => o.value === selectedCampaignId) ?? null
 
-  const selectedCampaign = campaigns.find(c => c.id === selectedCampaignId) ?? null
-
   const targetStations = useMemo(() => {
-    if (!selectedCampaign || stationCatalog.length === 0) return []
-    const ids = new Set(selectedCampaign.target_stations ?? [])
+    if (!selectedCampaignId || stationCatalog.length === 0) return []
+    const campaign = campaigns.find(c => c.id === selectedCampaignId)
+    if (!campaign) return []
+    const ids = new Set(campaign.target_stations ?? [])
     return stationCatalog
       .filter(s => ids.has(s.id))
       .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-  }, [selectedCampaign, stationCatalog])
+  }, [selectedCampaignId, campaigns, stationCatalog])
 
   // ── Period presets ────────────────────────────────────────────
   function applyPreset(preset) {
@@ -235,8 +225,9 @@ export default function DetectionsPage() {
       {/* Campaign selector */}
       <div className="detection-header">
         <div className="campaign-selector-wrap">
-          <label>Campanha</label>
+          <label htmlFor="campaign-select">Campanha</label>
           <RSelect
+            inputId="campaign-select"
             options={campaignOptions}
             value={selectedCampaignOption}
             onChange={handleCampaignChange}
