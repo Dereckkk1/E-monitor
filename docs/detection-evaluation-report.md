@@ -171,4 +171,52 @@ cd fingerprint
 python scripts/evaluate_detection.py                 # synthetic, 8s
 python scripts/evaluate_detection.py --seconds 20    # synthetic, 20s
 python scripts/evaluate_detection.py --master master.wav  # comercial real
+python scripts/evaluate_detection.py --master master.wav --export-audio dir/  # exporta WAVs
 ```
+
+---
+
+## 8. Follow-up — implementação das recomendações
+
+As recomendações 4.1, 4.4, 4.5 e 4.7 foram implementadas. O harness foi expandido de 15 para 20 perfis, removendo o `Light echo` (pouco realista em FM moderno) e adicionando 5 perfis baseados em condições reais de antena.
+
+### Mudanças aplicadas
+
+| Recomendação | O que mudou | Onde |
+|--------------|-------------|------|
+| **4.1** | +2 variantes no `broadcast_sim` (white noise -32dB e AM combo com noise -35dB) | `fingerprint/fingerprint/broadcast_sim.py` |
+| **4.4** | `PEAK_AMPLITUDE_PERCENTILE` 75→80, `PEAK_NEIGHBORHOOD` 15×15→17×17 | Python + Go (revelou que Go **não tinha** percentile filtering — gap fechado) |
+| **4.5** | Gate de `StateUncertain` baixou de `cov ≥ 0.4` para também aceitar `score ≥ 3× threshold AND cov ≥ 0.2` | `workers/internal/match/statemachine.go` (apenas no branch fase2) |
+| **4.7** | `FAN_OUT` 5→8, `TARGET_ZONE_T_MAX` 16→24 | Python + Go sincronizados |
+
+### Novos perfis adicionados ao harness
+
+1. **AM NRSC mask** — lowpass 5kHz + compressão + hiss -33dB (padrão AM brasileiro)
+2. **FM pre-emphasis 75µs** — EQ boost em 4kHz/8kHz (típico de processador FM)
+3. **AM modulation clipping** — saturação em 0.85 (over-modulação comum)
+4. **Multipath fading 0.3Hz** — modulação cíclica de amplitude (recepção com reflexão)
+5. **Cheap receiver IF** — bandpass 200-3500Hz (receptor barato com IF estreito)
+6. **Stream rebuffering** — gaps de 100ms a cada 5s (jitter de rede)
+
+### Resultados finais
+
+| Cenário | Antes (15 perfis, 4 variantes) | Depois (20 perfis, 6 variantes) |
+|---------|------------------------------|-------------------------------|
+| Jingle musical (Rogga Verão 30s) | 15/15 (100%) | **20/20 (100%)** |
+| Comercial falado (Amanay 30s) | 14/15 (93%) | **20/20 (100%)** |
+
+### Observações dos novos resultados
+
+- **Variant 5 do `broadcast_sim`** (AM combo com hiss) salvou os perfis #20 em ambos os áudios — sem ela, score cairia abaixo do limiar
+- **Variant 1** (compressão média + AAC 64k) ficou sendo a melhor referência pra comercial falado em vários perfis com compressão
+- **Multipath fading no falado:** coverage 0.47, perto do limiar — segundo ponto frágil em voz, depois do AM combo (cov 0.49)
+- **Margem em comercial falado é menor** que em musical, como esperado — voz tem menos densidade espectral
+
+### Caveat persistente
+
+Os números acima são **pior caso teórico** porque o harness não usa CLAP neural verification (recomendação 4.5 — implementada no Go mas o harness é Python puro). Em produção, casos com score 500-800 e coverage 0.45-0.49 (como AM combo no comercial falado) seriam encaminhados ao `StateUncertain` → CLAP, dando uma camada extra de robustez.
+
+### Custos
+
+- **Índice +50% em RAM** (6 variantes × 3 rates = 18 entries por comercial vs 12 antes). Aceitável.
+- **Fingerprints atuais no DB ficam inválidos** após mudanças 4.4 + 4.7 — re-fingerprintar todos os comerciais antes de promover pra produção. Migração necessária.
