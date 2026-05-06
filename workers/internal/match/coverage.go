@@ -1,38 +1,64 @@
 package match
 
-// CoverageWindow tracks which time-frame offsets have been "seen" for a
-// commercial during the detecting phase.
-// It estimates temporal coverage: what fraction of the commercial's expected
-// frames have produced a match in any window.
+import "time"
+
+// Frames per second of analysis (sampleRate / hopSize at 16kHz / 2048 = 7.8125).
+// Each window covers ~31 frames (4s window at 7.8125 frames/s).
+const (
+	framesPerSecond  = 16000.0 / 2048.0
+	framesPerWindow  = 32 // 4-second window rounded up
+)
+
+// CoverageWindow estimates how much of a commercial's duration has been observed
+// during the detecting phase, by tracking the time elapsed between the first
+// and most-recent successful match.
+//
+// Rationale: when a commercial plays continuously, the histogram peak (offset)
+// stays roughly constant — what changes is the input position. Tracking unique
+// offsets undercounts coverage. Tracking time-since-first-match gives an
+// honest estimate: each new match means another window of the master was just
+// observed, so the visible portion of the commercial grew by ~one window.
 type CoverageWindow struct {
-	seen        map[int]struct{} // set of OffsetFrames seen
-	totalFrames int              // expected total frames for the commercial
+	totalFrames int
+	first       time.Time
+	last        time.Time
+	count       int
 }
 
-// NewCoverageWindow creates a new CoverageWindow for a commercial with the
-// given total number of expected frames.
+// NewCoverageWindow creates a coverage window for a commercial with the given
+// total number of expected frames.
 func NewCoverageWindow(totalFrames int) *CoverageWindow {
-	return &CoverageWindow{
-		seen:        make(map[int]struct{}),
-		totalFrames: totalFrames,
+	return &CoverageWindow{totalFrames: totalFrames}
+}
+
+// Add records a successful match at the given wall-clock time.
+// The offset is accepted for API compatibility but not used by the time-based
+// estimator.
+func (c *CoverageWindow) Add(_ int, now time.Time) {
+	if c.count == 0 {
+		c.first = now
 	}
+	c.last = now
+	c.count++
 }
 
-// Add records an offset frame as seen.
-func (c *CoverageWindow) Add(offsetFrames int) {
-	c.seen[offsetFrames] = struct{}{}
-}
-
-// Coverage returns the fraction of unique offsets seen vs totalFrames.
-// Returns 0 if totalFrames == 0.
+// Coverage returns the estimated fraction of the commercial that has been
+// observed playing through. Bounded to [0, 1].
 func (c *CoverageWindow) Coverage() float64 {
-	if c.totalFrames == 0 {
+	if c.count == 0 || c.totalFrames == 0 {
 		return 0
 	}
-	return float64(len(c.seen)) / float64(c.totalFrames)
+	elapsed := c.last.Sub(c.first).Seconds()
+	frames := int(elapsed*framesPerSecond) + framesPerWindow
+	if frames > c.totalFrames {
+		frames = c.totalFrames
+	}
+	return float64(frames) / float64(c.totalFrames)
 }
 
-// Reset clears all seen offsets.
+// Reset clears the coverage window.
 func (c *CoverageWindow) Reset() {
-	c.seen = make(map[int]struct{})
+	c.first = time.Time{}
+	c.last = time.Time{}
+	c.count = 0
 }

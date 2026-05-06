@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -113,10 +114,16 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
 	if ct == "" {
 		ct = "audio/mp4"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
-	io.Copy(w, body)
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, id.String()+".m4a", time.Time{}, bytes.NewReader(data))
 }
