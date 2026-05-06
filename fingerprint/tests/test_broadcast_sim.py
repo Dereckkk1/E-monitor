@@ -35,9 +35,9 @@ def _ffmpeg_available():
 
 
 @pytest.mark.skipif(not _ffmpeg_available(), reason="ffmpeg not installed")
-def test_simulate_variants_returns_three(tone_master):
+def test_simulate_variants_returns_five(tone_master):
     out = simulate_variants(tone_master)
-    assert set(out.keys()) == {0, 1, 2}
+    assert set(out.keys()) == {0, 1, 2, 3, 4}
     for v_id, audio in out.items():
         assert isinstance(audio, np.ndarray)
         assert audio.dtype == np.float32
