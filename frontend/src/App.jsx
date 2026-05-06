@@ -33,7 +33,7 @@ function AppShell() {
         >
           <HamburgerIcon />
         </button>
-        <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 16, color: 'var(--c-text)' }}>
+        <span className="mobile-topbar-title">
           Radiocheck
         </span>
       </div>
@@ -41,7 +41,7 @@ function AppShell() {
       <div className="app-shell">
         {/* Sidebar */}
         <aside className={`app-sidebar${sidebarOpen ? ' open' : ''}`}>
-          <Sidebar />
+          <Sidebar onClose={() => setSidebarOpen(false)} />
         </aside>
 
         {/* Overlay for mobile */}
