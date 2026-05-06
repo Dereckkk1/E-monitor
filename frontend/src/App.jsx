@@ -7,6 +7,7 @@ import ClientsPage    from './pages/ClientsPage'
 import CampaignsPage  from './pages/CampaignsPage'
 import MonitoringPage from './pages/MonitoringPage'
 import DetectionsPage from './pages/DetectionsPage'
+import DashboardPage  from './pages/DashboardPage'
 
 function HamburgerIcon() {
   return (
@@ -60,8 +61,7 @@ function AppShell() {
             <Route path="/campaigns"   element={<CampaignsPage />} />
             <Route path="/monitoring"  element={<MonitoringPage />} />
             <Route path="/detections"  element={<DetectionsPage />} />
-            {/* Dashboard placeholder — redirect until client view is built */}
-            <Route path="/dashboard"   element={<Navigate to="/detections" replace />} />
+            <Route path="/dashboard"   element={<DashboardPage />} />
             {/* Catch-all */}
             <Route path="*"            element={<Navigate to="/stations" replace />} />
           </Routes>
