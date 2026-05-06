@@ -27,4 +27,5 @@ infra/docker/data/
 Thumbs.db
 
 .claude/
-/docs
+
+node_modules
