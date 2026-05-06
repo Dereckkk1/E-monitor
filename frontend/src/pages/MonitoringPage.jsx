@@ -1,5 +1,5 @@
 import { useStations } from '../api/hooks'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 // ── Constants ────────────────────────────────────────────────────
@@ -62,7 +62,7 @@ function sortStations(stations) {
 function RefreshIcon({ spinning }) {
   return (
     <svg
-      className={`refresh-icon${spinning ? '' : ''}`}
+      className={`refresh-icon${spinning ? ' spin' : ''}`}
       width="14"
       height="14"
       viewBox="0 0 24 24"
@@ -237,10 +237,6 @@ export default function MonitoringPage() {
     return () => clearInterval(id)
   }, [refetch])
 
-  const handleRefresh = useCallback(() => {
-    refetch()
-  }, [refetch])
-
   const sorted = sortStations(stations)
 
   return (
@@ -256,11 +252,11 @@ export default function MonitoringPage() {
           )}
           <button
             className={`refresh-btn${isFetching ? ' refreshing' : ''}`}
-            onClick={handleRefresh}
+            onClick={refetch}
             disabled={isFetching}
             title="Atualizar agora"
           >
-            <RefreshIcon />
+            <RefreshIcon spinning={isFetching} />
             Atualizar
           </button>
         </div>
