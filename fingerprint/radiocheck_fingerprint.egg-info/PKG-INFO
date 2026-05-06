@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: radiocheck-fingerprint
+Version: 0.1.0
+Summary: Fingerprint generation service for Radiocheck
+Requires-Python: >=3.11
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.11
+Requires-Dist: soundfile>=0.12
+Requires-Dist: asyncpg>=0.29
+Requires-Dist: nats-py>=2.7
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"

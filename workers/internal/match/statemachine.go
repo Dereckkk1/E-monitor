@@ -20,6 +20,7 @@ type ConfirmedDetection struct {
 	CommercialShortID int32
 	StationID         string // passed in at construction
 	DetectedAt        time.Time
+	FirstMatchAt      time.Time // when the detecting phase started (≈ commercial start)
 	OffsetFrames      int
 	Confidence        float64 // coverage at confirmation time
 }
@@ -75,7 +76,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 		if result.Score >= sm.minScore {
 			sm.state = StateDetecting
 			sm.firstMatchAt = now
-			sm.coverage.Add(result.OffsetFrames)
+			sm.coverage.Add(result.OffsetFrames, now)
 			sm.log.Info("detecting started",
 				zap.String("stationID", sm.stationID),
 				zap.Int32("commercialShortID", sm.commercialShortID),
@@ -86,13 +87,14 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 
 	case StateDetecting:
 		if result.Score >= sm.minScore {
-			sm.coverage.Add(result.OffsetFrames)
+			sm.coverage.Add(result.OffsetFrames, now)
 			if sm.coverage.Coverage() >= sm.minCoverage {
 				confidence := sm.coverage.Coverage()
 				detection := &ConfirmedDetection{
 					CommercialShortID: sm.commercialShortID,
 					StationID:         sm.stationID,
 					DetectedAt:        now,
+					FirstMatchAt:      sm.firstMatchAt,
 					OffsetFrames:      result.OffsetFrames,
 					Confidence:        confidence,
 				}

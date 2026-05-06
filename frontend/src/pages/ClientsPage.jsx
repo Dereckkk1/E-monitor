@@ -14,36 +14,52 @@ export default function ClientsPage() {
     })
   }
 
-  if (isLoading) return <div>Carregando...</div>
+  if (isLoading) return <p className="empty-state">Carregando...</p>
 
   return (
     <div>
-      <h2>Clientes</h2>
-      <button onClick={() => setShowForm(!showForm)}>Novo Cliente</button>
+      <div className="page-header">
+        <h2>Clientes</h2>
+        <button className="btn btn-primary btn-sm" onClick={() => setShowForm(v => !v)}>
+          {showForm ? 'Cancelar' : '+ Novo cliente'}
+        </button>
+      </div>
+
       {showForm && (
-        <form onSubmit={handleSubmit} style={{ margin: '12px 0', display: 'flex', gap: 8 }}>
-          <input
-            placeholder="Nome do cliente"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            required
-          />
-          <button type="submit" disabled={createClient.isPending}>Criar</button>
-          <button type="button" onClick={() => setShowForm(false)}>Cancelar</button>
-        </form>
+        <div className="card" style={{ marginBottom: 20, padding: 16 }}>
+          <h3 style={{ marginBottom: 14 }}>Novo cliente</h3>
+          <form onSubmit={handleSubmit} className="cluster">
+            <div className="field" style={{ flex: 1, maxWidth: 360 }}>
+              <label>Nome *</label>
+              <input className="input" value={name} onChange={e => setName(e.target.value)} required />
+            </div>
+            <button className="btn btn-primary btn-sm" type="submit" style={{ alignSelf: 'flex-end' }} disabled={createClient.isPending}>
+              {createClient.isPending ? 'Criando...' : 'Criar'}
+            </button>
+            {createClient.isError && <p className="text-error" style={{ width: '100%' }}>Erro ao criar. Tente novamente.</p>}
+          </form>
+        </div>
       )}
-      <table border="1" cellPadding="6" style={{ marginTop: 16, borderCollapse: 'collapse' }}>
-        <thead><tr><th>Nome</th><th>ID</th></tr></thead>
-        <tbody>
-          {clients.map(c => (
-            <tr key={c.id}>
-              <td>{c.name}</td>
-              <td style={{ fontSize: 11, color: '#888' }}>{c.id}</td>
+
+      <div className="card">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>ID</th>
             </tr>
-          ))}
-          {clients.length === 0 && <tr><td colSpan={2}>Nenhum cliente cadastrado.</td></tr>}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {clients.map(c => (
+              <tr key={c.id}>
+                <td style={{ fontWeight: 500 }}>{c.name}</td>
+                <td className="text-muted" style={{ fontFamily: 'monospace', fontSize: 11 }}>{c.id}</td>
+              </tr>
+            ))}
+            {clients.length === 0 && <tr><td className="table-empty" colSpan={2}>Nenhum cliente cadastrado.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

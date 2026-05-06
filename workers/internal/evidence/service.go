@@ -88,18 +88,24 @@ func (s *Service) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 }
 
 // handle processes a single detections.confirmed message.
-// Errors are logged but never cause a panic.
+//
+// Flow:
+//  1. Insert detection right away with evidence_status='pending' so the API
+//     can surface it immediately.
+//  2. Spawn a goroutine that waits until the requested evidence window is
+//     fully captured by the ring buffer, then extracts, encodes, uploads and
+//     updates the detection row with the final status.
+//
+// Errors are logged but never panic.
 func (s *Service) handle(msg *nats.Msg) {
 	ctx := context.Background()
 
-	// 1. Unmarshal JSON.
 	var ev detectionEvent
 	if err := json.Unmarshal(msg.Data, &ev); err != nil {
 		s.log.Warn("evidence: unmarshal failed", zap.Error(err))
 		return
 	}
 
-	// 2. Parse UUIDs and timestamps.
 	stationID, err := uuid.Parse(ev.StationID)
 	if err != nil {
 		s.log.Warn("evidence: invalid station_id", zap.String("station_id", ev.StationID), zap.Error(err))
@@ -112,85 +118,37 @@ func (s *Service) handle(msg *nats.Msg) {
 	}
 	windowStart, err := time.Parse(time.RFC3339, ev.EvidenceWindowStart)
 	if err != nil {
-		s.log.Warn("evidence: invalid evidence_window_start", zap.String("value", ev.EvidenceWindowStart), zap.Error(err))
+		s.log.Warn("evidence: invalid evidence_window_start", zap.Error(err))
 		return
 	}
 	windowEnd, err := time.Parse(time.RFC3339, ev.EvidenceWindowEnd)
 	if err != nil {
-		s.log.Warn("evidence: invalid evidence_window_end", zap.String("value", ev.EvidenceWindowEnd), zap.Error(err))
+		s.log.Warn("evidence: invalid evidence_window_end", zap.Error(err))
 		return
 	}
 
-	// 3. Look up ring buffer for this station (read-only).
-	s.mu.RLock()
-	buf := s.buffers[stationID]
-	s.mu.RUnlock()
-
-	// 4. Initialise evidence state.
-	evidenceStatus := "failed"
-	evidenceKey := ""
-	var aacData []byte
-
-	// 5. Extract audio data if the buffer is registered.
-	if buf != nil {
-		aacData = buf.Extract(windowStart, windowEnd)
-	}
-
-	// 6. Look up commercial and campaign UUIDs by short_id.
+	// Look up commercial + campaign.
 	var commercialID, campaignID uuid.UUID
 	row := s.db.QueryRow(ctx,
 		`SELECT c.id, c.campaign_id FROM commercials c WHERE c.short_id = $1 AND c.fingerprint_status = 'ready' LIMIT 1`,
 		ev.CommercialShortID,
 	)
 	if err := row.Scan(&commercialID, &campaignID); err != nil {
-		s.log.Warn("evidence: commercial not found",
-			zap.Int32("short_id", ev.CommercialShortID),
-			zap.Error(err),
-		)
+		s.log.Warn("evidence: commercial not found", zap.Int32("short_id", ev.CommercialShortID), zap.Error(err))
 		commercialID = uuid.Nil
 		campaignID = uuid.Nil
 	}
 
-	// 8. Build S3 key.
-	detectionID := uuid.New()
-	key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.m4a",
-		detectedAt.Format("2006"),
-		detectedAt.Format("01"),
-		detectedAt.Format("02"),
-		stationID,
-		detectionID,
-	)
-
-	// 9. Encode to m4a and upload to S3 if audio data is available.
-	if len(aacData) > 0 {
-		m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)
-		if err != nil {
-			s.log.Error("evidence encoding failed", zap.Error(err))
-			// fall through with evidenceStatus = "failed"
-		} else {
-			err = s.store.Put(ctx, key, bytes.NewReader(m4aData), "video/mp4")
-			if err == nil {
-				evidenceStatus = "available"
-				evidenceKey = key
-			} else {
-				s.log.Error("evidence upload failed", zap.Error(err))
-			}
-		}
-	}
-
-	// 10. Insert detection into Postgres.
 	det, err := s.detections.Create(ctx, catalog.CreateDetectionInput{
-		StationID:    stationID,
-		CommercialID: commercialID,
-		CampaignID:   campaignID,
-		DetectedAt:   detectedAt,
-		// MatchStartOffsetMs / MatchEndOffsetMs are 0 — the worker does not
-		// publish sub-ms offsets in the current event payload.
+		StationID:          stationID,
+		CommercialID:       commercialID,
+		CampaignID:         campaignID,
+		DetectedAt:         detectedAt,
 		MatchStartOffsetMs: 0,
 		MatchEndOffsetMs:   0,
 		Confidence:         ev.Confidence,
 		HashCount:          0,
-		TemporalCoverage:   0,
+		TemporalCoverage:   ev.Confidence,
 		VariantUsed:        0,
 		RateUsed:           0,
 	})
@@ -199,22 +157,84 @@ func (s *Service) handle(msg *nats.Msg) {
 		return
 	}
 
-	// 11. Update evidence fields if the upload succeeded.
-	if evidenceStatus == "available" {
-		sizeBytes := int64(len(aacData))
-		if updateErr := s.detections.UpdateEvidence(ctx, det.ID, det.DetectedAt, "available", evidenceKey, sizeBytes); updateErr != nil {
-			s.log.Error("evidence: update evidence failed",
-				zap.String("detection_id", det.ID.String()),
-				zap.Error(updateErr),
-			)
-		}
-	}
-
-	s.log.Info("evidence: detection persisted",
+	s.log.Info("evidence: detection persisted (pending)",
 		zap.String("detection_id", det.ID.String()),
 		zap.String("station_id", stationID.String()),
-		zap.String("evidence_status", evidenceStatus),
+		zap.Time("window_end", windowEnd),
 	)
+
+	// Async: wait for the window to be fully captured, then extract & upload.
+	go s.processEvidence(det.ID, det.DetectedAt, stationID, windowStart, windowEnd)
+}
+
+// processEvidence sleeps until the evidence window is fully captured by the
+// ring buffer, then extracts the audio, encodes it to m4a, uploads to S3 and
+// updates the detection row with the final evidence status.
+func (s *Service) processEvidence(
+	detectionID uuid.UUID,
+	detectedAt time.Time,
+	stationID uuid.UUID,
+	windowStart, windowEnd time.Time,
+) {
+	ctx := context.Background()
+
+	// Small margin so we don't race the buffer writer.
+	if delay := time.Until(windowEnd) + 2*time.Second; delay > 0 {
+		time.Sleep(delay)
+	}
+
+	s.mu.RLock()
+	buf := s.buffers[stationID]
+	s.mu.RUnlock()
+
+	if buf == nil {
+		s.markFailed(ctx, detectionID, detectedAt, "no buffer")
+		return
+	}
+
+	aacData := buf.Extract(windowStart, windowEnd)
+	if len(aacData) == 0 {
+		s.markFailed(ctx, detectionID, detectedAt, "buffer extract empty")
+		return
+	}
+
+	m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)
+	if err != nil {
+		s.log.Error("evidence encoding failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
+		s.markFailed(ctx, detectionID, detectedAt, "encode failed")
+		return
+	}
+
+	key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.m4a",
+		detectedAt.Format("2006"), detectedAt.Format("01"), detectedAt.Format("02"),
+		stationID, detectionID,
+	)
+
+	if err := s.store.Put(ctx, key, bytes.NewReader(m4aData), "video/mp4"); err != nil {
+		s.log.Error("evidence upload failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
+		s.markFailed(ctx, detectionID, detectedAt, "upload failed")
+		return
+	}
+
+	if err := s.detections.UpdateEvidence(ctx, detectionID, detectedAt, "available", key, int64(len(m4aData))); err != nil {
+		s.log.Error("evidence: update evidence failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
+		return
+	}
+
+	s.log.Info("evidence: ready",
+		zap.String("detection_id", detectionID.String()),
+		zap.Int("bytes", len(m4aData)),
+	)
+}
+
+func (s *Service) markFailed(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time, reason string) {
+	s.log.Warn("evidence: marking failed",
+		zap.String("detection_id", detectionID.String()),
+		zap.String("reason", reason),
+	)
+	if err := s.detections.UpdateEvidence(ctx, detectionID, detectedAt, "failed", "", 0); err != nil {
+		s.log.Error("evidence: failed-status update failed", zap.Error(err))
+	}
 }
 
 // encodeToM4A wraps raw ADTS-format AAC bytes in an m4a (MP4) container using
@@ -240,7 +260,7 @@ func encodeToM4A(aacData []byte, detectionID uuid.UUID, detectedAt time.Time) ([
 	tmpOut.Close()
 
 	cmd := exec.Command("ffmpeg", "-y",
-		"-f", "adts",
+		"-f", "aac",
 		"-i", tmpIn.Name(),
 		"-c:a", "copy",
 		"-movflags", "+faststart",
