@@ -37,7 +37,10 @@ export default function StationsPage() {
 
   function handleSubmit(e) {
     e.preventDefault()
-    createStation.mutate({ ...form, frequency_mhz: Number(form.frequency_mhz) }, {
+    createStation.mutate({
+      ...form,
+      frequency_mhz: form.frequency_mhz !== '' ? Number(form.frequency_mhz) : null,
+    }, {
       onSuccess: () => {
         setShowForm(false)
         setForm({ name: '', band: 'FM', frequency_mhz: '', city: '', state: '', stream_url: '' })
@@ -196,7 +199,7 @@ export default function StationsPage() {
                   <td style={{ color: 'var(--c-text-2)' }}>98.5 MHz</td>
                   <td style={{ color: 'var(--c-text-3)' }}>São Paulo / SP</td>
                   <td><span className="badge badge-active">Ativo</span></td>
-                  <td style={{ color: 'var(--c-text-3)', fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td style={{ color: 'var(--c-text-3)', fontSize: 11, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     https://stream.exemplo.com.br/radio
                   </td>
                 </tr>

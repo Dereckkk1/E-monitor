@@ -159,7 +159,7 @@ export default function ClientsPage() {
                       fontFamily: "'Courier New', monospace",
                       fontSize: 11,
                       color: 'var(--c-text-3)',
-                      maxWidth: 200,
+                      maxWidth: '200px',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
