@@ -1,7 +1,10 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useCampaigns, useDetections } from '../api/hooks'
-import AudioPlayer from '../components/AudioPlayer'
+import { useCampaigns, useDetections, useStations } from '../api/hooks'
+import RSelect from '../components/RSelect'
+import DetectionsCalendar from '../components/DetectionsCalendar'
+import DayDetailModal from '../components/DayDetailModal'
+import { bucketDetections } from './detections/utils'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -135,7 +138,10 @@ export default function DetectionsPage() {
     () => searchParams.get('campaign_id') ?? ''
   )
   const [period, setPeriod] = useState(defaultPeriod)
-  const [activePlayerId, setActivePlayerId] = useState(null)
+  const [modalCell, setModalCell] = useState(null) // { station, dayKey } | null
+
+  const { data: stationsResp } = useStations({ limit: 2000 })
+  const stationCatalog = stationsResp?.data ?? []
 
   // Build detection filters — only run when campaign is selected
   const detectionFilters = useMemo(() => {
@@ -144,7 +150,7 @@ export default function DetectionsPage() {
       campaign_id: selectedCampaignId,
       start_date:  period.start.toISOString(),
       end_date:    period.end.toISOString(),
-      limit:       200,
+      limit:       5000,
     }
   }, [selectedCampaignId, period])
 
@@ -159,11 +165,27 @@ export default function DetectionsPage() {
   const isLoadingData   = showDetections && (loadingDetections || isFetching)
 
   // ── Campaign change ───────────────────────────────────────────
-  function handleCampaignChange(e) {
-    setSelectedCampaignId(e.target.value)
+  function handleCampaignChange(opt) {
+    setSelectedCampaignId(opt?.value ?? '')
     setPeriod(defaultPeriod())
-    setActivePlayerId(null)
+    setModalCell(null)
   }
+
+  const campaignOptions = campaigns.map(c => ({
+    value: c.id,
+    label: c.name + (c.client_name ? ` — ${c.client_name}` : ''),
+  }))
+  const selectedCampaignOption = campaignOptions.find(o => o.value === selectedCampaignId) ?? null
+
+  const selectedCampaign = campaigns.find(c => c.id === selectedCampaignId) ?? null
+
+  const targetStations = useMemo(() => {
+    if (!selectedCampaign || stationCatalog.length === 0) return []
+    const ids = new Set(selectedCampaign.target_stations ?? [])
+    return stationCatalog
+      .filter(s => ids.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+  }, [selectedCampaign, stationCatalog])
 
   // ── Period presets ────────────────────────────────────────────
   function applyPreset(preset) {
@@ -180,21 +202,21 @@ export default function DetectionsPage() {
       end   = endOfDay(now)
     }
     setPeriod({ start, end, preset })
-    setActivePlayerId(null)
+    setModalCell(null)
   }
 
   function handleStartDateChange(e) {
     if (!e.target.value) return
     const d = startOfDay(new Date(e.target.value + 'T00:00:00'))
     setPeriod(p => ({ ...p, start: d, preset: null }))
-    setActivePlayerId(null)
+    setModalCell(null)
   }
 
   function handleEndDateChange(e) {
     if (!e.target.value) return
     const d = endOfDay(new Date(e.target.value + 'T00:00:00'))
     setPeriod(p => ({ ...p, end: d, preset: null }))
-    setActivePlayerId(null)
+    setModalCell(null)
   }
 
   // ── Period label for empty state ──────────────────────────────
@@ -213,23 +235,16 @@ export default function DetectionsPage() {
       {/* Campaign selector */}
       <div className="detection-header">
         <div className="campaign-selector-wrap">
-          <label htmlFor="campaign-select">Campanha</label>
-          <select
-            id="campaign-select"
-            className="select"
-            value={selectedCampaignId}
+          <label>Campanha</label>
+          <RSelect
+            options={campaignOptions}
+            value={selectedCampaignOption}
             onChange={handleCampaignChange}
-            disabled={loadingCampaigns}
-          >
-            <option value="">
-              {loadingCampaigns ? 'Carregando campanhas…' : 'Selecione uma campanha'}
-            </option>
-            {campaigns.map(c => (
-              <option key={c.id} value={c.id}>
-                {c.name}{c.client_name ? ` — ${c.client_name}` : ''}
-              </option>
-            ))}
-          </select>
+            isDisabled={loadingCampaigns}
+            isLoading={loadingCampaigns}
+            placeholder={loadingCampaigns ? 'Carregando campanhas…' : 'Selecione uma campanha'}
+            isClearable
+          />
         </div>
       </div>
 
@@ -289,47 +304,21 @@ export default function DetectionsPage() {
       ) : detections.length === 0 ? (
         <EmptyNoDetections periodLabel={periodLabel} />
       ) : (
-        <div className="card">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Emissora</th>
-                <th>Data / Hora</th>
-                <th>Duração</th>
-                <th>Comercial</th>
-                <th>Áudio</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detections.map(d => (
-                <tr key={d.id}>
-                  <td style={{ fontWeight: 500 }}>{d.station_name}</td>
-                  <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                    {formatDateTime(d.detected_at)}
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {formatDuration(d.match_start_offset_ms, d.match_end_offset_ms)}
-                  </td>
-                  <td>{d.commercial_name}</td>
-                  <td>
-                    {d.evidence_status === 'available' ? (
-                      <AudioPlayer
-                        src={`/v1/internal/detections/${d.id}/evidence`}
-                        isPlaying={activePlayerId === d.id}
-                        onPlay={() => setActivePlayerId(d.id)}
-                        onPause={() => setActivePlayerId(null)}
-                      />
-                    ) : (
-                      <span className="text-muted" style={{ fontSize: 11 }}>
-                        {d.evidence_status || 'indisponível'}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DetectionsCalendar
+          stations={targetStations}
+          detections={detections}
+          period={period}
+          onCellClick={(station, dayKey) => setModalCell({ station, dayKey })}
+        />
+      )}
+
+      {modalCell && (
+        <DayDetailModal
+          station={modalCell.station}
+          dayKey={modalCell.dayKey}
+          buckets={bucketDetections(detections)}
+          onClose={() => setModalCell(null)}
+        />
       )}
     </div>
   )
