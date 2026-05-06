@@ -60,11 +60,12 @@ function IconDashboard() {
 }
 
 /* ── Nav link helper ─────────────────────────────────────────── */
-function SidebarLink({ to, icon, children }) {
+function SidebarLink({ to, icon, children, onClose }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) => 'sidebar-link' + (isActive ? ' active' : '')}
+      onClick={onClose}
     >
       {icon}
       {children}
@@ -73,34 +74,34 @@ function SidebarLink({ to, icon, children }) {
 }
 
 /* ── Admin navigation ────────────────────────────────────────── */
-function AdminNav() {
+function AdminNav({ onClose }) {
   return (
     <>
       <span className="sidebar-section-label">Operações</span>
-      <SidebarLink to="/stations"   icon={<IconStations />}>Emissoras</SidebarLink>
-      <SidebarLink to="/clients"    icon={<IconClients />}>Clientes</SidebarLink>
-      <SidebarLink to="/campaigns"  icon={<IconCampaigns />}>Campanhas</SidebarLink>
+      <SidebarLink to="/stations"   icon={<IconStations />}   onClose={onClose}>Emissoras</SidebarLink>
+      <SidebarLink to="/clients"    icon={<IconClients />}    onClose={onClose}>Clientes</SidebarLink>
+      <SidebarLink to="/campaigns"  icon={<IconCampaigns />}  onClose={onClose}>Campanhas</SidebarLink>
 
       <span className="sidebar-section-label">Monitoramento</span>
-      <SidebarLink to="/monitoring" icon={<IconMonitoring />}>Monitoramento</SidebarLink>
-      <SidebarLink to="/detections" icon={<IconDetections />}>Veiculações</SidebarLink>
+      <SidebarLink to="/monitoring" icon={<IconMonitoring />} onClose={onClose}>Monitoramento</SidebarLink>
+      <SidebarLink to="/detections" icon={<IconDetections />} onClose={onClose}>Veiculações</SidebarLink>
     </>
   )
 }
 
 /* ── Client navigation ───────────────────────────────────────── */
-function ClientNav() {
+function ClientNav({ onClose }) {
   return (
     <>
       <span className="sidebar-section-label">Minha conta</span>
-      <SidebarLink to="/dashboard"  icon={<IconDashboard />}>Dashboard</SidebarLink>
-      <SidebarLink to="/detections" icon={<IconDetections />}>Veiculações</SidebarLink>
+      <SidebarLink to="/dashboard"  icon={<IconDashboard />}  onClose={onClose}>Dashboard</SidebarLink>
+      <SidebarLink to="/detections" icon={<IconDetections />} onClose={onClose}>Veiculações</SidebarLink>
     </>
   )
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
-export default function Sidebar() {
+export default function Sidebar({ onClose }) {
   const { isAdmin, user } = useAuth()
 
   return (
@@ -111,7 +112,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        {isAdmin ? <AdminNav /> : <ClientNav />}
+        {isAdmin ? <AdminNav onClose={onClose} /> : <ClientNav onClose={onClose} />}
       </nav>
 
       <div className="sidebar-footer">

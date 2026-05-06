@@ -41,7 +41,6 @@
 
   /* Compat aliases (usado em pages legadas) */
   --radius:    var(--radius-sm);
-  --radius-xl: 16px;
 
   /* Layout sidebar */
   --sidebar-width: 240px;
@@ -204,6 +203,14 @@ a  { color: var(--c-action); text-decoration: none; }
   color: var(--c-text-2);
   display: none;
   line-height: 1;
+}
+
+.mobile-topbar-title {
+  font-family: var(--font-heading);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.02em;
 }
 
 .sidebar-overlay {
