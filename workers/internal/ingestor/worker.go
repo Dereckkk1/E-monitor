@@ -240,16 +240,28 @@ func (w *Worker) runPCMReader(
 
 // publishDetection serialises a ConfirmedDetection and publishes it to NATS.
 // Publish failures are logged but do not crash the worker.
+//
+// Evidence window: 60s before the commercial started + the full commercial +
+// 60s after it ends. Uses FirstMatchAt as a proxy for start (offset by the
+// analysis window length so we capture audio just before the first frame
+// that produced a hit).
 func (w *Worker) publishDetection(det *match.ConfirmedDetection, stationIDStr string) {
-	detectedAt := det.DetectedAt
+	totalFrames := w.cfg.CommercialFrames[det.CommercialShortID]
+	durationSec := float64(totalFrames) * 2048.0 / 16000.0
+	duration := time.Duration(durationSec * float64(time.Second))
+	commercialStart := det.FirstMatchAt.Add(-4 * time.Second) // analysis window length
+	commercialEnd := commercialStart.Add(duration)
+	evidenceStart := commercialStart.Add(-60 * time.Second)
+	evidenceEnd := commercialEnd.Add(60 * time.Second)
+
 	evt := DetectionEvent{
 		StationID:           stationIDStr,
 		CommercialShortID:   det.CommercialShortID,
-		DetectedAt:          detectedAt.UTC().Format(time.RFC3339),
+		DetectedAt:          det.DetectedAt.UTC().Format(time.RFC3339),
 		OffsetFrames:        det.OffsetFrames,
 		Confidence:          det.Confidence,
-		EvidenceWindowStart: detectedAt.Add(-60 * time.Second).UTC().Format(time.RFC3339),
-		EvidenceWindowEnd:   detectedAt.Add(60 * time.Second).UTC().Format(time.RFC3339),
+		EvidenceWindowStart: evidenceStart.UTC().Format(time.RFC3339),
+		EvidenceWindowEnd:   evidenceEnd.UTC().Format(time.RFC3339),
 	}
 
 	payload, err := json.Marshal(evt)

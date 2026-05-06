@@ -42,11 +42,11 @@ func StartFFmpeg(ctx context.Context, streamURL string, log *zap.Logger) (*FFmpe
 		return nil, fmt.Errorf("create pcm pipe: %w", err)
 	}
 
-	// Build ffmpeg command arguments per §8.2 of plano_implementacao.md
-	// Uses -f tee to write to two separate outputs:
-	// pipe:3 → ADTS AAC (evidence)
+	// Two separate outputs on pipe:3 and pipe:4:
+	// pipe:3 → ADTS AAC passthrough (evidence, no re-encode)
 	// pipe:4 → f32le PCM 16kHz mono (analysis)
 	args := []string{
+		"-y",
 		"-reconnect", "1",
 		"-reconnect_streamed", "1",
 		"-reconnect_delay_max", "5",
@@ -54,10 +54,8 @@ func StartFFmpeg(ctx context.Context, streamURL string, log *zap.Logger) (*FFmpe
 		"-timeout", "10000000",
 		"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
 		"-i", streamURL,
-		"-map", "0:a",
-		"-f", "tee",
-		"-map_metadata", "-1",
-		"[select='a':f=adts:onfail=ignore]pipe:3|[select='a':f=f32le:ar=16000:ac=1:onfail=ignore]pipe:4",
+		"-map", "0:a:0", "-c:a", "copy", "-f", "adts", "pipe:3",
+		"-map", "0:a:0", "-ar", "16000", "-ac", "1", "-f", "f32le", "pipe:4",
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)

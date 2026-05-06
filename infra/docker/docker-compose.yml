@@ -90,6 +90,22 @@ services:
       minio:
         condition: service_healthy
 
+  radio-sim:
+    image: alpine:3.19
+    profiles: ["sim"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache ffmpeg >/dev/null && exec /sim/simulate.sh"]
+    environment:
+      QUALITY: ${SIM_QUALITY:-fm-standard}
+      PORT: "8000"
+      GAP_SECONDS: ${SIM_GAP_SECONDS:-15}
+      MASTERS_DIR: /masters
+    ports:
+      - "${SIM_PORT:-18000}:8000"
+    volumes:
+      - mastersdata:/masters:ro
+      - ../../scripts/radio-sim:/sim:ro
+
   fingerprint:
     build:
       context: ../..
