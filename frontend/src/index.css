@@ -1221,3 +1221,53 @@ a  { color: var(--c-action); text-decoration: none; }
   .campaigns-empty { grid-template-columns: 1fr; }
   .campaigns-empty-preview { display: none; }
 }
+
+/* ── Stations Page ────────────────────────────────────────────── */
+.band-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-text-2);
+}
+
+.stations-empty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  align-items: center;
+  padding: 48px 40px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+
+.stations-empty-action {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stations-empty h3 {
+  font-size: 18px;
+  color: var(--c-text);
+}
+
+.stations-empty p {
+  font-size: 13px;
+  color: var(--c-text-3);
+  line-height: 1.6;
+}
+
+.stations-empty-preview {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .stations-empty { grid-template-columns: 1fr; }
+  .stations-empty-preview { display: none; }
+}
