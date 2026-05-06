@@ -76,6 +76,30 @@ func (c *Commercials) Get(ctx context.Context, id uuid.UUID) (*Commercial, error
 	return &com, nil
 }
 
+func (c *Commercials) ListByCampaign(ctx context.Context, campaignID uuid.UUID) ([]Commercial, error) {
+	rows, err := c.pool.Query(ctx, `
+		SELECT id, short_id, campaign_id, title, cut_label, duration_seconds,
+		       master_storage_path, master_sha256, fingerprint_status,
+		       fingerprint_generated_at, fingerprint_hash_count, created_at, updated_at
+		FROM commercials WHERE campaign_id = $1 ORDER BY created_at ASC`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Commercial
+	for rows.Next() {
+		var com Commercial
+		if err := rows.Scan(&com.ID, &com.ShortID, &com.CampaignID, &com.Title,
+			&com.CutLabel, &com.DurationSeconds, &com.MasterStoragePath, &com.MasterSHA256,
+			&com.FingerprintStatus, &com.FingerprintGeneratedAt, &com.FingerprintHashCount,
+			&com.CreatedAt, &com.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, com)
+	}
+	return out, rows.Err()
+}
+
 // ListReadyByCampaigns returns commercials with fingerprint_status='ready' for the given campaigns.
 func (c *Commercials) ListReadyByCampaigns(ctx context.Context, campaignIDs []uuid.UUID) ([]Commercial, error) {
 	if len(campaignIDs) == 0 {

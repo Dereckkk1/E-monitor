@@ -51,7 +51,14 @@ export function usePauseCampaign() {
   })
 }
 
-// Upload de comercial (multipart/form-data)
+// Commercials
+export function useCommercials(campaignId) {
+  return useQuery({
+    queryKey: ['commercials', campaignId],
+    queryFn: () => api.get('/commercials', { params: { campaign_id: campaignId } }).then(r => r.data.data ?? []),
+    enabled: !!campaignId,
+  })
+}
 export function useUploadCommercial() {
   const qc = useQueryClient()
   return useMutation({
@@ -59,7 +66,9 @@ export function useUploadCommercial() {
       api.post('/commercials', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       }).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+    onSuccess: (_, formData) => {
+      qc.invalidateQueries({ queryKey: ['commercials', formData.get('campaign_id')] })
+    },
   })
 }
 

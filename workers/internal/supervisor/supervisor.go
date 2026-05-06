@@ -92,20 +92,20 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 		return fmt.Errorf("supervisor: get campaign: %w", err)
 	}
 
-	// 2. For each station in campaign.TargetStations, start/replace worker.
+	// 2. Update campaign status to active BEFORE starting workers so that
+	// ActiveCampaignsForStation (called inside startStationWorker) finds it.
+	if err := s.campaigns.UpdateStatus(ctx, campaignID, "active"); err != nil {
+		return fmt.Errorf("supervisor: update campaign status: %w", err)
+	}
+
+	// 3. For each station in campaign.TargetStations, start/replace worker.
 	for _, stationID := range camp.TargetStations {
 		if err := s.startStationWorker(ctx, stationID); err != nil {
 			s.log.Error("supervisor: failed to start worker for station",
 				zap.String("station_id", stationID.String()),
 				zap.Error(err),
 			)
-			// Continue for other stations; return aggregate error below.
 		}
-	}
-
-	// 3. Update campaign status to active.
-	if err := s.campaigns.UpdateStatus(ctx, campaignID, "active"); err != nil {
-		return fmt.Errorf("supervisor: update campaign status: %w", err)
 	}
 
 	// 4. Update monitoring_status for all targeted stations.

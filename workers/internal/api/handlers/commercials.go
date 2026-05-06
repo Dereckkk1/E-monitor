@@ -28,6 +28,23 @@ type CommercialsHandler struct {
 	MastersPath string
 }
 
+func (h *CommercialsHandler) List(w http.ResponseWriter, r *http.Request) {
+	campaignID, err := uuid.Parse(r.URL.Query().Get("campaign_id"))
+	if err != nil {
+		http.Error(w, "campaign_id required", 400)
+		return
+	}
+	coms, err := h.Repo.ListByCampaign(r.Context(), campaignID)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	if coms == nil {
+		coms = []catalog.Commercial{}
+	}
+	writeJSON(w, 200, map[string]any{"data": coms})
+}
+
 func (h *CommercialsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -71,8 +88,8 @@ func (h *CommercialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext != ".wav" && ext != ".mp3" && ext != ".m4a" && ext != ".aac" {
-		http.Error(w, "unsupported audio format (use wav/mp3/m4a/aac)", 400)
+	if ext != ".wav" && ext != ".mp3" && ext != ".m4a" && ext != ".aac" && ext != ".mpeg" {
+		http.Error(w, "unsupported audio format (use wav/mp3/m4a/aac/mpeg)", 400)
 		return
 	}
 
