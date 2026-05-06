@@ -26,10 +26,10 @@ function formatDateFull(date) {
 }
 
 const STATUS_META = {
-  active:  { label: 'Ativas',      color: 'var(--c-action)',  badgeClass: 'badge-active'  },
-  paused:  { label: 'Pausadas',    color: 'var(--c-warning)', badgeClass: 'badge-paused'  },
-  planned: { label: 'Planejadas',  color: 'var(--c-info)',    badgeClass: 'badge-planned' },
-  ended:   { label: 'Encerradas',  color: 'var(--c-text-3)',  badgeClass: 'badge-ended'   },
+  active:  { label: 'Ativas',      badge: 'Ativa',      color: 'var(--c-action)',  badgeClass: 'badge-active'  },
+  paused:  { label: 'Pausadas',    badge: 'Pausada',    color: 'var(--c-warning)', badgeClass: 'badge-paused'  },
+  planned: { label: 'Planejadas',  badge: 'Planejada',  color: 'var(--c-info)',    badgeClass: 'badge-planned' },
+  ended:   { label: 'Encerradas',  badge: 'Encerrada',  color: 'var(--c-text-3)',  badgeClass: 'badge-ended'   },
 }
 
 // ── Status Overview ───────────────────────────────────────────────
@@ -92,7 +92,7 @@ function CampaignCard({ campaign }) {
   return (
     <div className="campaign-card">
       <div className="campaign-card-header">
-        <span className={`badge ${meta.badgeClass}`}>{meta.label.replace(/s$/, '')}</span>
+        <span className={`badge ${meta.badgeClass}`}>{meta.badge ?? campaign.status}</span>
       </div>
 
       <div className="campaign-card-name">{campaign.name}</div>
@@ -202,7 +202,7 @@ export default function DashboardPage() {
   const { data: campaigns = [], isLoading } = useCampaigns()
   const [showEnded, setShowEnded] = useState(false)
 
-  const today = formatDateFull(new Date())
+  const today = useMemo(() => formatDateFull(new Date()), [])
 
   const activeCampaigns = useMemo(
     () => campaigns.filter(c => c.status !== 'ended'),

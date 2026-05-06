@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useCampaigns, useDetections } from '../api/hooks'
 import AudioPlayer from '../components/AudioPlayer'
@@ -130,19 +130,12 @@ function EmptyNoDetections({ periodLabel }) {
 export default function DetectionsPage() {
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns()
 
-  const [selectedCampaignId, setSelectedCampaignId] = useState('')
+  const [searchParams] = useSearchParams()
+  const [selectedCampaignId, setSelectedCampaignId] = useState(
+    () => searchParams.get('campaign_id') ?? ''
+  )
   const [period, setPeriod] = useState(defaultPeriod)
   const [activePlayerId, setActivePlayerId] = useState(null)
-
-  const [searchParams] = useSearchParams()
-
-  // Pre-select campaign from URL query param (e.g. ?campaign_id=UUID)
-  useEffect(() => {
-    const paramId = searchParams.get('campaign_id')
-    if (paramId && !selectedCampaignId) {
-      setSelectedCampaignId(paramId)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build detection filters — only run when campaign is selected
   const detectionFilters = useMemo(() => {
