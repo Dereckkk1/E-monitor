@@ -150,7 +150,7 @@ export default function DetectionsPage() {
     data: detections = [],
     isLoading: loadingDetections,
     isFetching,
-  } = useDetections(detectionFilters ?? {})
+  } = useDetections(detectionFilters)
 
   // Suppress query when no campaign selected
   const showDetections  = !!selectedCampaignId
