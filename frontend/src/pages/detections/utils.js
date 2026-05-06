@@ -3,7 +3,14 @@ const TZ = 'America/Sao_Paulo'
 
 // Returns YYYY-MM-DD in São Paulo time for a given Date or ISO string.
 export function dayKeyOf(dateOrIso) {
-  const d = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso)
+  let d
+  if (dateOrIso instanceof Date) {
+    d = dateOrIso
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateOrIso)) {
+    d = new Date(`${dateOrIso}T12:00:00Z`)
+  } else {
+    d = new Date(dateOrIso)
+  }
   // 'en-CA' yields YYYY-MM-DD natively, and timeZone forces SP local date.
   return d.toLocaleDateString('en-CA', { timeZone: TZ })
 }
