@@ -18,11 +18,12 @@ export default function AudioPlayer({ src, isPlaying, onPlay, onPause }) {
     const audio = audioRef.current
     if (!audio) return
     if (isPlaying) {
-      audio.play().catch(() => {})
+      audio.play().catch(() => { onPause() })
     } else {
       audio.pause()
     }
-  }, [isPlaying])
+    return () => { audio.pause() }
+  }, [isPlaying, src])
 
   function handleTimeUpdate() {
     const audio = audioRef.current

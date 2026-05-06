@@ -6,18 +6,19 @@ import AudioPlayer from '../components/AudioPlayer'
 
 function formatDateTime(isoString) {
   if (!isoString) return '—'
-  const d = new Date(isoString)
-  const day   = String(d.getDate()).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year  = d.getFullYear()
-  const hh    = String(d.getHours()).padStart(2, '0')
-  const mm    = String(d.getMinutes()).padStart(2, '0')
-  const ss    = String(d.getSeconds()).padStart(2, '0')
-  return `${day}/${month}/${year} ${hh}:${mm}:${ss}`
+  return new Date(isoString).toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 function formatDuration(startMs, endMs) {
-  if (!startMs && !endMs) return '—'
+  if (startMs == null && endMs == null) return '—'
   const diff = (endMs - startMs) / 1000
   if (diff <= 0) return '—'
   const m = Math.floor(diff / 60)
@@ -39,11 +40,8 @@ function endOfDay(date) {
 }
 
 function toDateInputValue(date) {
-  const d = new Date(date)
-  const year  = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day   = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return new Date(date).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+  // en-CA produces yyyy-mm-dd natively
 }
 
 function defaultPeriod() {
