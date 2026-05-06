@@ -1271,3 +1271,42 @@ a  { color: var(--c-action); text-decoration: none; }
   .stations-empty { grid-template-columns: 1fr; }
   .stations-empty-preview { display: none; }
 }
+
+/* ── Clients Page ─────────────────────────────────────────────── */
+.clients-empty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  align-items: center;
+  padding: 48px 40px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+
+.clients-empty-action {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.clients-empty h3 {
+  font-size: 18px;
+  color: var(--c-text);
+}
+
+.clients-empty p {
+  font-size: 13px;
+  color: var(--c-text-3);
+  line-height: 1.6;
+}
+
+.clients-empty-preview {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .clients-empty { grid-template-columns: 1fr; }
+  .clients-empty-preview { display: none; }
+}
