@@ -37,6 +37,7 @@ export default function AudioPlayer({ src, isPlaying, onPlay, onPause }) {
   }
 
   function handleEnded() {
+    audioRef.current.currentTime = 0
     setCurrentTime(0)
     onPause()
   }

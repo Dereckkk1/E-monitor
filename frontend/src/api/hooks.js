@@ -77,5 +77,6 @@ export function useDetections(filters = {}) {
   return useQuery({
     queryKey: ['detections', filters],
     queryFn: () => api.get('/detections', { params: filters }).then(r => r.data.data ?? []),
+    enabled: filters !== null && filters.campaign_id != null,
   })
 }
