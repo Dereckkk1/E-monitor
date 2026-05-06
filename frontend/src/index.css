@@ -830,3 +830,186 @@ a  { color: var(--c-action); text-decoration: none; }
     display: none;
   }
 }
+
+/* ── Monitoring Page ──────────────────────────────────────────── */
+.monitoring-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.monitoring-header h2 {
+  flex: 1;
+  margin: 0;
+}
+
+.monitoring-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.monitoring-timestamp {
+  font-size: 12px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.monitoring-status-pills {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.monitoring-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+.monitoring-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.station-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.station-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: box-shadow 0.2s, border-color 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.station-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--c-action-border);
+}
+
+.station-card.status-error {
+  border-color: color-mix(in srgb, var(--c-danger) 40%, var(--c-border));
+  background: color-mix(in srgb, var(--c-danger) 3%, var(--c-surface));
+}
+
+.station-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.station-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.station-status-dot.dot-active {
+  background: var(--c-success);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-success) 40%, transparent);
+  animation: dot-pulse 2s ease-out infinite;
+}
+
+.station-status-dot.dot-error {
+  background: var(--c-danger);
+}
+
+.station-status-dot.dot-paused {
+  background: var(--c-text-3);
+}
+
+.station-status-dot.dot-calibrating {
+  background: var(--c-warning);
+  animation: dot-blink 1s step-end infinite;
+}
+
+@keyframes dot-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-success) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 8px color-mix(in srgb, var(--c-success) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-success) 0%, transparent); }
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.station-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  line-height: 1.3;
+}
+
+.station-meta {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.station-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.station-failures {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-danger);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  font-family: var(--font-body);
+}
+
+.refresh-btn:hover:not(:disabled) {
+  border-color: var(--c-action-border);
+  color: var(--c-action);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.refresh-btn.refreshing .refresh-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
