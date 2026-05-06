@@ -1,7 +1,7 @@
 """
 evaluate_detection.py — End-to-end detection evaluation harness.
 
-Generates (or loads) a master audio, applies 15 realistic broadcast degradation
+Generates (or loads) a master audio, applies 20 realistic broadcast degradation
 profiles via ffmpeg + numpy, and reports detection success rate against the
 master fingerprint as reference.
 
@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,21 +35,26 @@ MATCH_THRESHOLD = 5
 MIN_COVERAGE = 0.4
 
 PROFILES = [
-    {"name": "AAC 128k (clean ref)",       "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "128k"]},
-    {"name": "AAC 96k",                    "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "AAC 64k",                    "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "64k"]},
-    {"name": "AAC 48k",                    "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "48k"]},
-    {"name": "AAC 32k (very low)",         "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "32k"]},
-    {"name": "MP3 64k",                    "filter": None,                                                                            "codec": ["-c:a", "libmp3lame", "-b:a", "64k"]},
-    {"name": "AM-style lowpass 4kHz",      "filter": "lowpass=f=4000",                                                                "codec": ["-c:a", "aac", "-b:a", "64k"]},
-    {"name": "Heavy compression",          "filter": "acompressor=threshold=-30dB:ratio=15:attack=1:release=80,alimiter=limit=0.95",  "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "Loudness war (limiter)",     "filter": "acompressor=threshold=-25dB:ratio=8:attack=1:release=60,alimiter=limit=0.99",   "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "Broadcast EQ (mid boost)",   "filter": "equalizer=f=2000:t=q:w=1:g=4,equalizer=f=4000:t=q:w=1:g=3",                     "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "Light echo / phase",         "filter": "aecho=0.6:0.4:30:0.3",                                                          "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "Resample 8k roundtrip",      "filter": "aresample=8000,aresample=16000",                                                "codec": ["-c:a", "aac", "-b:a", "96k"]},
-    {"name": "Hiss -30dB",                 "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("white", -30)},
-    {"name": "Hum 60Hz -25dB",             "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("hum60", -25)},
-    {"name": "AM combo (lp+comp+hiss+48k)", "filter": "lowpass=f=3500,acompressor=threshold=-28dB:ratio=10:attack=2:release=70",       "codec": ["-c:a", "aac", "-b:a", "48k"], "post": ("white", -35)},
+    {"name": "AAC 128k (clean ref)",              "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "128k"]},
+    {"name": "AAC 96k",                           "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "AAC 64k",                           "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "64k"]},
+    {"name": "AAC 48k",                           "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "48k"]},
+    {"name": "AAC 32k (very low)",                "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "32k"]},
+    {"name": "MP3 64k",                           "filter": None,                                                                            "codec": ["-c:a", "libmp3lame", "-b:a", "64k"]},
+    {"name": "AM-style lowpass 4kHz",             "filter": "lowpass=f=4000",                                                                "codec": ["-c:a", "aac", "-b:a", "64k"]},
+    {"name": "AM NRSC mask (5kHz lp + comp + hiss)", "filter": "lowpass=f=5000,acompressor=threshold=-26dB:ratio=6:attack=2:release=80",   "codec": ["-c:a", "aac", "-b:a", "64k"], "post": ("white", -33)},
+    {"name": "FM pre-emphasis 75us boost",        "filter": "equalizer=f=4000:t=q:w=1:g=6,equalizer=f=8000:t=q:w=1:g=8",                     "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "Heavy compression",                 "filter": "acompressor=threshold=-30dB:ratio=15:attack=1:release=80,alimiter=limit=0.95",  "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "Loudness war (limiter)",            "filter": "acompressor=threshold=-25dB:ratio=8:attack=1:release=60,alimiter=limit=0.99",   "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "AM modulation clipping (heavy clip)", "filter": "acompressor=threshold=-22dB:ratio=8:attack=1:release=60",                     "codec": ["-c:a", "aac", "-b:a", "64k"], "post": ("clipping", 0.85)},
+    {"name": "Broadcast EQ (mid boost)",          "filter": "equalizer=f=2000:t=q:w=1:g=4,equalizer=f=4000:t=q:w=1:g=3",                     "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "Multipath fading 0.3Hz",            "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("fading", 0.3, 0.35)},
+    {"name": "Cheap receiver IF (200-3500Hz bandpass)", "filter": "highpass=f=200,lowpass=f=3500",                                         "codec": ["-c:a", "aac", "-b:a", "64k"]},
+    {"name": "Resample 8k roundtrip",             "filter": "aresample=8000,aresample=16000",                                                "codec": ["-c:a", "aac", "-b:a", "96k"]},
+    {"name": "Stream rebuffering (100ms gap each 5s)", "filter": None,                                                                       "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("gaps", 100, 5.0)},
+    {"name": "Hiss -30dB",                        "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("white", -30)},
+    {"name": "Hum 60Hz -25dB",                    "filter": None,                                                                            "codec": ["-c:a", "aac", "-b:a", "96k"], "post": ("hum60", -25)},
+    {"name": "AM combo (lp+comp+hiss+48k)",       "filter": "lowpass=f=3500,acompressor=threshold=-28dB:ratio=10:attack=2:release=70",       "codec": ["-c:a", "aac", "-b:a", "48k"], "post": ("white", -35)},
 ]
 
 
@@ -121,14 +127,30 @@ def apply_profile(master_path: str, profile: dict) -> np.ndarray:
 
     post = profile.get("post")
     if post is not None:
-        kind, db = post
-        amp = 10 ** (db / 20.0)
+        kind = post[0]
         if kind == "white":
+            amp = 10 ** (post[1] / 20.0)
             n_rng = np.random.default_rng(13)
             audio = audio + n_rng.normal(0, amp, len(audio)).astype(np.float32)
         elif kind == "hum60":
+            amp = 10 ** (post[1] / 20.0)
             t = np.arange(len(audio)) / SAMPLE_RATE
             audio = audio + (amp * np.sin(2 * np.pi * 60 * t)).astype(np.float32)
+        elif kind == "fading":
+            rate, depth = post[1], post[2]
+            t = np.arange(len(audio)) / SAMPLE_RATE
+            audio = (audio * (1.0 - depth + depth * np.sin(2 * np.pi * rate * t).astype(np.float32))).astype(np.float32)
+        elif kind == "gaps":
+            gap_ms, period_s = post[1], post[2]
+            gap_samples = int(gap_ms * SAMPLE_RATE / 1000)
+            period_samples = int(period_s * SAMPLE_RATE)
+            a = audio.copy()
+            for start in range(period_samples, len(a), period_samples):
+                a[start:start + gap_samples] = 0
+            audio = a
+        elif kind == "clipping":
+            level = post[1]
+            audio = np.clip(audio, -level, level).astype(np.float32)
     return audio.astype(np.float32)
 
 
@@ -209,11 +231,23 @@ def match_multi_variant(query_hashes, refs):
     return max(results, key=lambda r: r["score"]), False
 
 
+def _slug(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return s or "profile"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--master", help="WAV/MP3 file as master (default: synthetic)")
     ap.add_argument("--seconds", type=float, default=8.0, help="Synthetic audio duration")
+    ap.add_argument("--export-audio", help="Directory to save degraded WAVs (one per profile)")
     args = ap.parse_args()
+
+    export_dir = None
+    if args.export_audio:
+        export_dir = Path(args.export_audio)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Exporting degraded audios to {export_dir}")
 
     print("=" * 82)
     print("Radiocheck — Detection Evaluation Harness")
@@ -243,11 +277,18 @@ def main():
               f"{'Score':>6} {'Cov':>6}  Result")
         print("-" * 82)
 
+        if export_dir:
+            ref_path = export_dir / "00_master_as_seen_by_system.wav"
+            sf.write(str(ref_path), audio, SAMPLE_RATE, subtype="PCM_16")
+
         detected = 0
         rows = []  # for the markdown report
         for i, p in enumerate(PROFILES, 1):
             try:
                 degraded = apply_profile(master_path, p)
+                if export_dir:
+                    out_wav = export_dir / f"{i:02d}_{_slug(p['name'])}.wav"
+                    sf.write(str(out_wav), degraded, SAMPLE_RATE, subtype="PCM_16")
                 q_hashes = generate_fingerprint(degraded)
                 best, ok = match_multi_variant(q_hashes, refs)
                 mark = "OK" if ok else "MISS"
