@@ -2,9 +2,9 @@ package audio
 
 // Constellation-map pairing constants (§7.3 of plano_implementacao.md).
 const (
-	FanOut         = 5  // max target peaks to pair with each anchor
+	FanOut         = 8  // max target peaks to pair with each anchor
 	TargetZoneTMin = 1  // minimum frame delta for pairing
-	TargetZoneTMax = 16 // maximum frame delta for pairing
+	TargetZoneTMax = 24 // maximum frame delta for pairing
 	TargetZoneF    = 50 // maximum frequency bin distance for pairing
 )
 
