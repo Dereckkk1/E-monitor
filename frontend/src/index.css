@@ -604,3 +604,229 @@ a  { color: var(--c-action); text-decoration: none; }
   min-width: 68px;
   text-align: right;
 }
+
+/* ── Dashboard Page ───────────────────────────────────────────── */
+.dashboard-greeting {
+  margin-bottom: 28px;
+}
+
+.dashboard-greeting h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+
+.dashboard-greeting-sub {
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.dashboard-greeting-date {
+  font-size: 12px;
+  color: var(--c-text-3);
+  margin-top: 2px;
+}
+
+.status-overview {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  padding: 20px 24px;
+  margin-bottom: 28px;
+}
+
+.status-overview-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--c-text-3);
+  margin-bottom: 12px;
+}
+
+.status-bar {
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.status-bar-segment {
+  border-radius: var(--radius-full);
+  transition: opacity 0.15s;
+  min-width: 4px;
+}
+
+.status-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.status-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.status-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.campaign-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.campaign-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: box-shadow 0.2s, border-color 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.campaign-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--c-action-border);
+}
+
+.campaign-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.campaign-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  line-height: 1.3;
+}
+
+.campaign-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.campaign-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.campaign-card-actions {
+  margin-top: auto;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--c-action);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: gap 0.15s;
+  font-family: var(--font-body);
+}
+
+.btn-link:hover {
+  gap: 8px;
+}
+
+/* Empty state dual layout */
+.dashboard-empty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  align-items: center;
+  padding: 48px 40px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+
+.dashboard-empty-action {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dashboard-empty-icon {
+  color: var(--c-action);
+  opacity: 0.6;
+}
+
+.dashboard-empty h3 {
+  font-size: 18px;
+  color: var(--c-text);
+}
+
+.dashboard-empty p {
+  font-size: 13px;
+  color: var(--c-text-3);
+  line-height: 1.6;
+}
+
+.dashboard-empty-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  opacity: 0.35;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ghost-card {
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ghost-line {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--c-border);
+}
+
+/* Toggle encerradas */
+.ended-toggle {
+  margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .dashboard-empty {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-empty-preview {
+    display: none;
+  }
+}

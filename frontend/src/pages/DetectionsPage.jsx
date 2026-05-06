@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useCampaigns, useDetections } from '../api/hooks'
 import AudioPlayer from '../components/AudioPlayer'
 
@@ -132,6 +133,16 @@ export default function DetectionsPage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState('')
   const [period, setPeriod] = useState(defaultPeriod)
   const [activePlayerId, setActivePlayerId] = useState(null)
+
+  const [searchParams] = useSearchParams()
+
+  // Pre-select campaign from URL query param (e.g. ?campaign_id=UUID)
+  useEffect(() => {
+    const paramId = searchParams.get('campaign_id')
+    if (paramId && !selectedCampaignId) {
+      setSelectedCampaignId(paramId)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build detection filters — only run when campaign is selected
   const detectionFilters = useMemo(() => {
