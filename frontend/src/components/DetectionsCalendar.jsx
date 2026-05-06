@@ -52,7 +52,7 @@ export default function DetectionsCalendar({ stations, detections, period, onCel
                       type="button"
                       className="calendar-cell calendar-cell-hit"
                       onClick={() => onCellClick(station, dk)}
-                      aria-label={`${count} veiculações em ${formatShortDay(dk)}`}
+                      aria-label={`${primary}: ${count} veiculações em ${formatShortDay(dk)}`}
                     >
                       {count}
                     </button>
