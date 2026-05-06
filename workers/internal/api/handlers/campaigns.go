@@ -84,6 +84,26 @@ func (h *CampaignsHandler) Start(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	if h.Supervisor != nil {
+		_ = h.Supervisor.Pause(id)
+	}
+	if err := h.Repo.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (h *CampaignsHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

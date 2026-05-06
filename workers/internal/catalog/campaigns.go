@@ -91,6 +91,28 @@ func (c *Campaigns) UpdateStatus(ctx context.Context, id uuid.UUID, status strin
 	return err
 }
 
+// Delete removes a campaign and all its associated data (detections, fingerprint hashes, commercials).
+func (c *Campaigns) Delete(ctx context.Context, id uuid.UUID) error {
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	steps := []string{
+		`DELETE FROM detections WHERE campaign_id = $1`,
+		`DELETE FROM fingerprint_hashes WHERE commercial_id IN (SELECT id FROM commercials WHERE campaign_id = $1)`,
+		`DELETE FROM commercials WHERE campaign_id = $1`,
+		`DELETE FROM campaigns WHERE id = $1`,
+	}
+	for _, q := range steps {
+		if _, err := tx.Exec(ctx, q, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // ActiveCampaignsForStation returns IDs of all currently-active campaigns that include the given station.
 func (c *Campaigns) ActiveCampaignsForStation(ctx context.Context, stationID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := c.pool.Query(ctx, `

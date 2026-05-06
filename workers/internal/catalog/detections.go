@@ -11,7 +11,9 @@ import (
 type Detection struct {
 	ID                 uuid.UUID `json:"id"`
 	StationID          uuid.UUID `json:"station_id"`
+	StationName        string    `json:"station_name"`
 	CommercialID       uuid.UUID `json:"commercial_id"`
+	CommercialName     string    `json:"commercial_name"`
 	CampaignID         uuid.UUID `json:"campaign_id"`
 	DetectedAt         time.Time `json:"detected_at"`
 	MatchStartOffsetMs int32     `json:"match_start_offset_ms"`
@@ -94,16 +96,19 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		f.Limit = 100
 	}
 	rows, err := d.pool.Query(ctx, `
-		SELECT id, station_id, commercial_id, campaign_id, detected_at,
-		       match_start_offset_ms, match_end_offset_ms, confidence, hash_count,
-		       temporal_coverage, variant_used, rate_used,
-		       evidence_status, evidence_key, evidence_size_bytes, created_at
-		FROM detections
-		WHERE ($1::uuid IS NULL OR campaign_id = $1)
-		  AND ($2::uuid IS NULL OR station_id = $2)
-		  AND ($3::timestamptz IS NULL OR detected_at >= $3)
-		  AND ($4::timestamptz IS NULL OR detected_at <= $4)
-		ORDER BY detected_at DESC
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		       d.campaign_id, d.detected_at,
+		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
+		       d.temporal_coverage, d.variant_used, d.rate_used,
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.created_at
+		FROM detections d
+		LEFT JOIN stations s ON s.id = d.station_id
+		LEFT JOIN commercials c ON c.id = d.commercial_id
+		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
+		  AND ($2::uuid IS NULL OR d.station_id = $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
+		  AND ($4::timestamptz IS NULL OR d.detected_at <= $4)
+		ORDER BY d.detected_at DESC
 		LIMIT $5 OFFSET $6`,
 		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset)
 	if err != nil {
@@ -113,8 +118,8 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 	var out []Detection
 	for rows.Next() {
 		var det Detection
-		if err := rows.Scan(&det.ID, &det.StationID, &det.CommercialID, &det.CampaignID,
-			&det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
+		if err := rows.Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
+			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
 			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
 			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
 			&det.EvidenceSizeBytes, &det.CreatedAt); err != nil {
@@ -128,12 +133,17 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) {
 	var det Detection
 	err := d.pool.QueryRow(ctx, `
-		SELECT id, station_id, commercial_id, campaign_id, detected_at,
-		       match_start_offset_ms, match_end_offset_ms, confidence, hash_count,
-		       temporal_coverage, variant_used, rate_used,
-		       evidence_status, evidence_key, evidence_size_bytes, created_at
-		FROM detections WHERE id = $1`, id,
-	).Scan(&det.ID, &det.StationID, &det.CommercialID, &det.CampaignID, &det.DetectedAt,
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		       d.campaign_id, d.detected_at,
+		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
+		       d.temporal_coverage, d.variant_used, d.rate_used,
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.created_at
+		FROM detections d
+		LEFT JOIN stations s ON s.id = d.station_id
+		LEFT JOIN commercials c ON c.id = d.commercial_id
+		WHERE d.id = $1`, id,
+	).Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
+		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
 		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.CreatedAt)
