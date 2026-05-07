@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
 	"radiocheck/internal/index"
 	"radiocheck/internal/ingestor"
@@ -98,7 +100,22 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 		return fmt.Errorf("supervisor: update campaign status: %w", err)
 	}
 
-	// 3. For each station in campaign.TargetStations, start/replace worker.
+	// 3. Trigger index reload for all ready commercials in this campaign.
+	// Handles the case where fingerprints were generated before the campaign was activated
+	// (the index.reload handler requires ca.status = 'active', which is now satisfied).
+	if coms, err := s.commercials.ListReadyByCampaigns(ctx, []uuid.UUID{campaignID}); err == nil {
+		for _, c := range coms {
+			payload, _ := json.Marshal(map[string]string{"commercial_id": c.ID.String()})
+			if err := s.nc.Publish(events.SubjectIndexReload, payload); err != nil {
+				s.log.Warn("supervisor: index reload publish failed",
+					zap.String("commercial_id", c.ID.String()),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	// 4. For each station in campaign.TargetStations, start/replace worker.
 	for _, stationID := range camp.TargetStations {
 		if err := s.startStationWorker(ctx, stationID); err != nil {
 			s.log.Error("supervisor: failed to start worker for station",
@@ -108,7 +125,7 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 		}
 	}
 
-	// 4. Update monitoring_status for all targeted stations.
+	// 5. Update monitoring_status for all targeted stations.
 	for _, stationID := range camp.TargetStations {
 		if err := s.stations.UpdateMonitoringStatus(ctx, stationID, "active"); err != nil {
 			s.log.Warn("supervisor: update station monitoring_status failed",
@@ -140,8 +157,9 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		return fmt.Errorf("active campaigns for station: %w", err)
 	}
 
-	// c. Load all ready commercials for those campaigns.
-	coms, err := s.commercials.ListReadyByCampaigns(ctx, activeCampaignIDs)
+	// c. Load ready commercials for those campaigns that target this station.
+	// A commercial with empty target_stations runs on all campaign stations.
+	coms, err := s.commercials.ListReadyByCampaignsForStation(ctx, activeCampaignIDs, stationID)
 	if err != nil {
 		return fmt.Errorf("list ready commercials: %w", err)
 	}
@@ -169,15 +187,38 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// g. Create AAC ring buffer for evidence (~5 min of ~1 chunk/100ms).
 	aacBuf := ringbuffer.NewByteRing(3000)
 
+	capturedStationID := stationID
+	heartbeatFn := func() {
+		// Run in a separate goroutine so the PCM reader is never blocked by a slow DB write.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := s.stations.UpdateHealthCheck(ctx, capturedStationID); err != nil {
+				s.log.Warn("supervisor: heartbeat update failed",
+					zap.String("station_id", capturedStationID.String()),
+					zap.Error(err),
+				)
+			}
+		}()
+	}
+
 	cfg := ingestor.WorkerConfig{
 		StationID:          station.ID,
 		StreamURL:          station.StreamURL,
 		CommercialShortIDs: shortIDs,
 		CommercialFrames:   frames,
-		MatchThreshold:     5,
-		MinCoverage:        0.4,
-		ConfirmTimeout:     30 * time.Second,
-		AACBuffer:          aacBuf,
+		MatchThreshold:     3, // absolute histogram score floor (rejects random hash collisions)
+		// Per-window score coverage: 5% catches real broadcast matches that
+		// typically run 0.05-0.30 (Massa Joinville case ran 0.08). Random audio
+		// stays at 0.005-0.01, so 0.05 is 5-10x above noise.
+		MinScoreCoverage: 0.05,
+		// Temporal coverage: detection must sustain for 15% of the commercial's
+		// duration. For a 30s commercial that's ~4.5s of consistent delta-aligned
+		// matches — impossible for random audio to fake.
+		MinTemporalCoverage: 0.15,
+		ConfirmTimeout:      30 * time.Second,
+		AACBuffer:           aacBuf,
+		HeartbeatFn:         heartbeatFn,
 	}
 	w := ingestor.NewWorker(cfg, s.store, s.nc, s.log)
 
@@ -273,6 +314,32 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 		zap.String("campaign_id", campaignID.String()),
 		zap.Int("stations_paused", len(stationsToPause)),
 	)
+	return nil
+}
+
+// Reload rebuilds workers for all stations of a campaign without changing its status.
+// It is a no-op if the campaign is not currently active.
+// Used when campaign stations or commercial station assignments change while active.
+func (s *Supervisor) Reload(campaignID uuid.UUID) error {
+	ctx := context.Background()
+	camp, err := s.campaigns.Get(ctx, campaignID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("supervisor.Reload: get campaign: %w", err)
+	}
+	if camp.Status != "active" {
+		return nil
+	}
+	for _, stationID := range camp.TargetStations {
+		if err := s.startStationWorker(ctx, stationID); err != nil {
+			s.log.Warn("supervisor.Reload: failed to restart worker",
+				zap.String("station_id", stationID.String()),
+				zap.Error(err),
+			)
+		}
+	}
 	return nil
 }
 
