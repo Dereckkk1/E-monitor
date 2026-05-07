@@ -2,7 +2,21 @@
 
 Itens identificados durante a Fase 2 (semanas 7–18) que **não bloqueiam o critério de saída** mas **devem ser resolvidos antes da Fase 3** (semanas 19–30, escala para 30→200 emissoras). Cada item lista o que, por quê, onde no código, e dependências.
 
-A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de vida de campanha), 2C (webhooks) e 2D (backup + tiering). Confira PRs e branches `worktree-agent-*` para o histórico de decisão.
+A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de vida de campanha), 2C (webhooks), 2D (backup + tiering) e do security review de 2026-05-07.
+
+---
+
+## Resolvidos no security-review (2026-05-07)
+
+Cinco fixes aplicados em sequência sobre `master` após varredura de segurança. Cada commit é independente e pode ser revertido isoladamente.
+
+| # | Commit  | Fix |
+|---|---------|-----|
+| 1 | `5b36b64` | `fix(webhook): bloqueia SSRF via custom DialContext + validação de URL no PATCH` — `safehttp.go` resolve host, rejeita private/loopback/link-local antes do dial; `CheckRedirect` re-valida; PATCH valida no momento da config. Cobre 169.254.169.254 (cloud metadata), 10/172.16/192.168/127, link-local, IPv6 ULA/LL/multicast. |
+| 2 | `91391ff` | `fix(auth): fixar algoritmo JWT em HS256` — `ParseToken` agora exige `Method.Alg() == "HS256"` em vez de aceitar qualquer `*jwt.SigningMethodHMAC`. Defesa em profundidade contra alg confusion. |
+| 3 | `f476d79` | `fix(api): exigir role admin para mutações em webhook config e campaign cancel` — PATCH `/clients/{id}/webhook`, POST `/clients/{id}/webhook-test`, POST `/campaigns/{id}/cancel`, PUT `/campaigns/{id}/start`, PUT `/campaigns/{id}/pause` agora rodam atrás de `auth.RequireRole("admin")`. Reads (`GET /webhook`, `GET /webhook-deliveries`) seguem operator+admin. |
+| 4 | `47853fa` | `fix(webhook): adiciona X-Radiocheck-Timestamp e assina timestamp+body (replay protection)` — passa a assinar `<unix_seconds>.<raw_body>` (formato Stripe-style) e emite `X-Radiocheck-Timestamp`. Receivers devem checar freshness ±5min. `docs/webhooks.md` atualizado com Go/Node/curl. |
+| 5 | `36132e6` | `fix(webhook): rejeitar http:// por default (exceção localhost em dev)` — validador refusa `http://` salvo se `RADIOCHECK_ENV=development` E host loopback. Cobre tanto config (PATCH) quanto delivery (mesmo client) — sem URL `http` salva, dispatcher nunca a vê. |
 
 ---
 
@@ -44,10 +58,22 @@ A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de 
 **Dependência:** pequena.
 
 ### F-07. Encryption do `webhook_secret` em DB
-**Por quê:** secrets em plaintext violam best practices e potencialmente compliance. DB dump = vazamento.
+**Por quê:** secrets em plaintext violam best practices e potencialmente compliance. DB dump = vazamento. **Urgência elevada após security review (2026-05-07):** com tenancy real (F-50) operadores terão acesso amplo ao dump por design — secrets têm que estar cifrados antes disso. Hoje secrets viajam em texto claro também no backup nightly (ver F-51).
 **Onde:** `migrations/` + `workers/internal/catalog/clients.go`.
 **Como:** AES-GCM com KEK em variável de ambiente, ou dependência externa (Vault, KMS). Coluna nova `webhook_secret_encrypted` + migration de dados.
 **Dependência:** definição de gestão de chaves.
+
+### F-50. Tenancy real (operator ↔ client) substituindo "admin gate"
+**Por quê:** os fixes F-3 do security review tornam mutações de webhook/cancel admin-only — solução PoC. Em produção, operadores precisam mutar configs **dos clientes que servem**, sem virar admin global. Sem isso, qualquer ajuste em config força promoção a admin (overprivileging).
+**Onde:** novo modelo `operator_clients` (m2m) + middleware `auth.RequireClientAccess(clientIDFromPath)` em `workers/internal/auth/`. Endpoints já gateados a admin podem voltar a operator+admin com filtro de tenancy.
+**Como:** (a) tabela `operator_clients(operator_id uuid, client_id uuid)`; (b) UI de admin para gerenciar mapeamento; (c) middleware extrai `client_id` da URL e checa `claims.UserID ∈ operator_clients(client_id)` OU `claims.Role=="admin"`.
+**Dependência:** decisão de UX sobre como ofertar a tela de mapeamento.
+
+### F-51. GPG-encrypt do tarball de backup antes de upload R2
+**Por quê:** o backup nightly (`infra/scripts/backup.sh`) serializa o DB inteiro — incluindo `clients.webhook_secret`, `auth_users.password_hash`, dados sensíveis de detecção — e faz upload pra R2 sem encryption-at-rest controlada por nós. Comprometimento da chave R2 = leak total.
+**Onde:** `infra/scripts/backup.sh` + provisão de keypair GPG.
+**Como:** `gpg --encrypt --recipient backup-key < dump.sql.gz > dump.sql.gz.gpg` antes do `rclone copy`. Chave privada armazenada offline (cofre); chave pública no servidor de backup. Documentar runbook de restore em `docs/backup-and-retention.md`.
+**Dependência:** F-07 (encryption de secrets em DB) atenua mas não substitui — outros campos ainda saem em claro.
 
 ### F-08. Cobertura de testes ≥70% nas camadas críticas
 **Por quê:** atualmente abaixo de 50% em `supervisor`, `ingestor`, `evidence`, `index`, `webhook`, `lifecycle_scheduler`. PoC tolera; produção não.
@@ -90,6 +116,31 @@ A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de 
 **Por quê:** quem cancelou? Quando? Não há registro hoje além do log estruturado do scheduler.
 **Onde:** `workers/internal/api/handlers/campaigns.go` (`Cancel`).
 **Como:** insert em `audit_log` (tabela criada na migration 0009 da Fase 2).
+
+### F-60. Rate-limit distribuído para API keys (substituir in-memory)
+**Por quê:** `workers/internal/auth/apikey.go` aplica rate-limit em mapa em memória — funciona com 1 réplica, fura com 2+ atrás de LB (cada uma com sua própria contagem). Atacante com keys válidas pode multiplicar QPS proporcionalmente ao número de réplicas.
+**Onde:** `workers/internal/auth/apikey.go`.
+**Como:** `pg_advisory_xact_lock` por hash de key + contador em tabela `apikey_rate_limit`, OU Redis com `INCR` + TTL. Escolher Redis se já formos rodar Redis pra outra coisa; senão Postgres advisory lock é mais simples.
+
+### F-61. Login rate-limit por IP/email
+**Por quê:** `POST /v1/internal/auth/login` não tem proteção contra brute-force. Com a base de usuários da Fase 2 (operadores + admin) virando alvo, basta um script para tentar credenciais sequencialmente.
+**Onde:** `workers/internal/api/handlers/auth.go`.
+**Como:** janela móvel de 60s, max 10 tentativas por IP+email. Mesma stack escolhida em F-60 (Redis ou advisory lock).
+
+### F-62. CORS whitelist em vez de wildcard
+**Por quê:** `corsMiddleware` em `workers/internal/api/router.go` envia `Access-Control-Allow-Origin: *`. Combinado com `Authorization: Bearer ...` em browser-based callers, é permissivo demais — qualquer site pode disparar requests cross-origin que carregam credentials de outro site se o usuário estiver autenticado.
+**Onde:** `workers/internal/api/router.go::corsMiddleware`.
+**Como:** ler whitelist de `RADIOCHECK_CORS_ORIGINS` (CSV); se origem não bate, não emitir o header. Documentar no runbook como adicionar novos domínios.
+
+### F-63. File size limit no fingerprint CLI antes do ffmpeg decode
+**Por quê:** `workers/cmd/fingerprint/main.go` aceita arquivo de qualquer tamanho e passa pra ffmpeg. Upload malicioso multi-GB consegue: (a) encher disco do worker, (b) congelar pipeline (ffmpeg single-threaded por arquivo), (c) custar muita CPU.
+**Onde:** `workers/cmd/fingerprint/main.go`.
+**Como:** `os.Stat` antes de decode; rejeitar arquivos >100MB (configurável via env). Mensagem de erro clara orientando que o esperado é WAV de master, não master + bônus.
+
+### F-64. UI: render de `webhook_deliveries.response_body` deve ser text-only
+**Por quê:** `response_body` é capped em 4KB e persistido como string. Se o receiver retorna HTML/JS, a UI hoje pode renderizá-lo — risco de XSS armazenado quando operador abre tela de deliveries.
+**Onde:** componente que mostra deliveries (provavelmente `frontend/src/pages/ClientsPage.jsx` ou modal de webhook).
+**Como:** usar `<pre>` com texto plano + escape (`React` já escapa por default, confirmar que não há `dangerouslySetInnerHTML` no caminho).
 
 ---
 
