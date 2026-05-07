@@ -150,6 +150,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/admin/evidence/tiering/run", d.Admin.RunTiering)
 					r.Post("/admin/stations/{id}/threshold/refresh", d.Admin.RefreshThreshold)
+					r.Post("/admin/calibration/run", d.Admin.RunCalibration)
 				})
 			}
 		})

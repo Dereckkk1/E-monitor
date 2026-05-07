@@ -145,6 +145,36 @@ var (
 		Name: "radiocheck_station_threshold_refreshes_total",
 		Help: "Number of dynamic threshold refresh attempts per station, by outcome.",
 	}, []string{"station_id", "outcome"})
+
+	// ── Calibration scheduler (§9.4) ─────────────────────────────────────
+	// Counter: every recalibration attempt, labeled by terminal result.
+	CalibrationRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_calibration_runs_total",
+		Help: "Total per-station calibration scheduler runs, labeled by result.",
+	}, []string{"result"}) // success | error
+
+	// Gauge: unix epoch of the last successful recalibration per station.
+	// Used by the CalibrationStale alert.
+	CalibrationLastSuccessTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_calibration_last_success_timestamp",
+		Help: "Unix epoch of the most recent successful recalibration per station.",
+	}, []string{"station_id"})
+
+	// Histogram: recalibration duration per call (any station). We deliberately
+	// drop the station_id label here: with 200+ stations × ~10 buckets that
+	// would mean 2k+ time series in Prometheus per scrape — a cardinality
+	// bomb for a metric that observers consume as an aggregate. If a per-
+	// station drill-down is ever needed, derive it from `runs_total` +
+	// per-station logs instead.
+	//
+	// Buckets are tuned for the actual range we observe: the SQL itself
+	// resolves in milliseconds, but stuck connections / slow runs can cross
+	// many seconds; the upper bucket aligns with StationTimeout (5min).
+	CalibrationDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "radiocheck_calibration_duration_seconds",
+		Help:    "Duration of a single calibration scheduler run (any station).",
+		Buckets: []float64{5, 15, 30, 60, 120, 300},
+	})
 )
 
 func init() {
@@ -159,5 +189,6 @@ func init() {
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,
+		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 	)
 }
