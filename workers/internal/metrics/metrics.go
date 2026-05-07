@@ -43,6 +43,20 @@ var (
 		Name: "radiocheck_evidence_queue_size",
 		Help: "Number of items in evidence retry spool.",
 	})
+
+	// CampaignsByStatus is a snapshot gauge of campaigns grouped by status.
+	// Updated by the lifecycle scheduler on every tick (§18.2.1).
+	CampaignsByStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_campaigns_by_status",
+		Help: "Number of campaigns currently in each lifecycle status.",
+	}, []string{"status"})
+
+	// CampaignTransitions counts every status transition observed by the
+	// lifecycle scheduler (programada→ativa and ativa→concluida).
+	CampaignTransitions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_campaign_lifecycle_transitions_total",
+		Help: "Total campaign lifecycle status transitions, labeled by from/to.",
+	}, []string{"from", "to"})
 )
 
 func init() {
@@ -50,5 +64,6 @@ func init() {
 		WorkerBytesTotal, WorkerReconnectsTotal, WorkerStallRestarts,
 		WorkerActive, MatchWindowDuration, DetectionTotal,
 		EvidenceUploadFailures, EvidenceQueueSize,
+		CampaignsByStatus, CampaignTransitions,
 	)
 }
