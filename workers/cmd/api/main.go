@@ -96,6 +96,14 @@ func main() {
 	// Supervisor.
 	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, healthEvents, logger)
 
+	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
+	// version disambiguation before re-emitting on detections.confirmed.
+	pendingSub, err := sup.SubscribePendingDetections(ctx)
+	if err != nil {
+		log.Fatalf("supervisor pending subscribe: %v", err)
+	}
+	defer pendingSub.Unsubscribe() //nolint:errcheck
+
 	// Re-launch workers for campaigns that were active before restart.
 	if err := sup.RestoreActive(ctx); err != nil {
 		logger.Warn("supervisor restore active failed", zap.Error(err))
