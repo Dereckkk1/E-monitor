@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -215,9 +216,19 @@ func (j *TieringJob) moveOne(
 		return errors.New("detection row vanished mid-move")
 	}
 
-	// 5. Delete from source — only if src and dst are different buckets,
-	//    OR if storage class is different. Same bucket + same key + same
-	//    class would be a no-op + dangerous delete.
+	// 5. Delete from source — only if src and dst are different buckets.
+	//    Same bucket + same key would mean we just PUT-overwrote the source
+	//    and a Delete here would destroy the freshly promoted object (the
+	//    Put above is the move when buckets coincide).
+	//
+	//    Defensive note: in dev/staging, hot/cold/archive frequently point at
+	//    the same MinIO bucket (see NewTieringJob). In that branch the move
+	//    becomes a row-only update (tier flag in the DB) — physically the
+	//    object stays put. That is fine for non-prod environments and for
+	//    callers using PutWithStorageClass with a real lifecycle backend.
+	//    For production to actually save money, configure
+	//    EVIDENCE_HOT_BUCKET ≠ EVIDENCE_COLD_BUCKET (and/or distinct storage
+	//    classes) — see docs/backup-and-retention.md §2.4.
 	if src.Bucket() != dst.Bucket() {
 		if err := src.Delete(ctx, c.EvidenceKey); err != nil {
 			// Don't fail the whole move — the row is already updated, the
@@ -287,18 +298,32 @@ func (j *TieringJob) Schedule(ctx context.Context) {
 
 	// Tick once a minute; trigger when the local clock crosses 03:00 and we
 	// haven't run today yet. Cheap and resilient to clock drift.
-	var lastRun time.Time
+	//
+	// lastRun is written from two goroutines (the startup pass below and the
+	// ticker loop). We guard it with a mutex to avoid the data race AND, more
+	// importantly, to ensure the ticker observes the startup pass's lastRun
+	// stamp — otherwise booting at 02:59 BR could fire a startup pass and then
+	// the 03:00 tick would fire a SECOND concurrent pass against the same
+	// tables/buckets.
+	var (
+		lastRun   time.Time
+		lastRunMu sync.Mutex
+	)
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	// Also kick off an immediate pass on startup so the metrics gauge has a
-	// real value within the first hour of uptime.
+	// real value within the first hour of uptime. After it finishes we stamp
+	// lastRun so the daily ticker treats today as already-run.
 	go func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
 		if err := j.Run(runCtx); err != nil {
 			j.Log.Warn("evidence tiering: startup pass failed", zap.Error(err))
 		}
+		lastRunMu.Lock()
+		lastRun = time.Now().In(loc)
+		lastRunMu.Unlock()
 	}()
 
 	for {
@@ -310,10 +335,14 @@ func (j *TieringJob) Schedule(ctx context.Context) {
 			if now.Hour() != 3 {
 				continue
 			}
-			if !lastRun.IsZero() && now.Year() == lastRun.Year() && now.YearDay() == lastRun.YearDay() {
+			lastRunMu.Lock()
+			alreadyRanToday := !lastRun.IsZero() && now.Year() == lastRun.Year() && now.YearDay() == lastRun.YearDay()
+			if alreadyRanToday {
+				lastRunMu.Unlock()
 				continue
 			}
 			lastRun = now
+			lastRunMu.Unlock()
 			runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			if err := j.Run(runCtx); err != nil {
 				j.Log.Warn("evidence tiering: scheduled pass failed", zap.Error(err))
