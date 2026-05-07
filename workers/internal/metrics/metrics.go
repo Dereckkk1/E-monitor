@@ -43,6 +43,52 @@ var (
 		Name: "radiocheck_evidence_queue_size",
 		Help: "Number of items in evidence retry spool.",
 	})
+
+	// ── Backup & restore (§14.4) ─────────────────────────────────────────
+	// These are mirrored from the textfile-collector exports written by
+	// infra/scripts/backup.sh & restore-test.sh, but also exposed by the API
+	// process so dashboards have a single source of truth when the host is
+	// not running node_exporter.
+	PostgresBackupLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_postgres_backup_last_success_timestamp",
+		Help: "Unix epoch of the most recent successful pg_basebackup.",
+	})
+
+	PostgresBackupSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_postgres_backup_size_bytes",
+		Help: "Size of the most recent pg_basebackup tarball, in bytes.",
+	})
+
+	PostgresBackupDuration = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_postgres_backup_duration_seconds",
+		Help: "Wall-clock duration of the most recent pg_basebackup attempt.",
+	})
+
+	PostgresRestoreTestStatus = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_postgres_restore_test_last_status",
+		Help: "Result of the most recent restore-test run (1 ok, 0 fail).",
+	})
+
+	// ── Evidence tiering (§11.4) ─────────────────────────────────────────
+	EvidenceTierMovements = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_evidence_tier_movements_total",
+		Help: "Number of evidence objects moved between storage tiers.",
+	}, []string{"from", "to"})
+
+	EvidenceStorageBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_evidence_storage_bytes",
+		Help: "Aggregate evidence storage by tier, in bytes.",
+	}, []string{"tier"})
+
+	EvidenceTieringLastRun = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_evidence_tiering_last_run_timestamp",
+		Help: "Unix epoch of the last evidence tiering job run.",
+	})
+
+	EvidenceTieringErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "radiocheck_evidence_tiering_errors_total",
+		Help: "Total non-fatal errors hit by the evidence tiering job.",
+	})
 )
 
 func init() {
@@ -50,5 +96,9 @@ func init() {
 		WorkerBytesTotal, WorkerReconnectsTotal, WorkerStallRestarts,
 		WorkerActive, MatchWindowDuration, DetectionTotal,
 		EvidenceUploadFailures, EvidenceQueueSize,
+		PostgresBackupLastSuccess, PostgresBackupSize, PostgresBackupDuration,
+		PostgresRestoreTestStatus,
+		EvidenceTierMovements, EvidenceStorageBytes,
+		EvidenceTieringLastRun, EvidenceTieringErrors,
 	)
 }
