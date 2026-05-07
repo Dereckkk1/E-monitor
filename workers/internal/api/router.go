@@ -75,6 +75,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/", d.Stations.Create)
 				r.Get("/{id}", d.Stations.Get)
 				r.Put("/{id}", d.Stations.Update)
+				r.Get("/{id}/threshold", d.Stations.GetThreshold)
 			})
 			r.Route("/clients", func(r chi.Router) {
 				r.Get("/", d.Clients.List)

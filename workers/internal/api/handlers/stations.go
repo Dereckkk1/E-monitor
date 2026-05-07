@@ -109,6 +109,23 @@ func (h *StationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, st)
 }
 
+// GetThreshold returns the calibration status (min_hashes, days elapsed, mode)
+// for a station — surface the fase2 calibration job state for operators.
+func (h *StationsHandler) GetThreshold(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid station id", http.StatusBadRequest)
+		return
+	}
+	status, err := h.Repo.GetCalibrationStatus(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(status)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
