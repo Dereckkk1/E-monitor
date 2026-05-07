@@ -141,7 +141,7 @@ func loadIndex(ctx context.Context, pool *pgxpool.Pool) (*index.Store, map[int32
 		JOIN commercials c  ON c.id  = fh.commercial_id
 		JOIN campaigns   ca ON ca.id = c.campaign_id
 		WHERE c.fingerprint_status = 'ready'
-		  AND ca.status = 'active'
+		  AND ca.status = 'ativa'
 	`)
 	if err != nil {
 		return nil, nil, err

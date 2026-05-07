@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  useCampaigns, useCreateCampaign, useStartCampaign, usePauseCampaign, useDeleteCampaign,
+  useCampaigns, useCreateCampaign, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
 } from '../api/hooks'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
+import { useConfirm, useAlert } from '../components/ConfirmModal'
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
 
@@ -21,10 +22,65 @@ function fmtDur(sec) {
   return `${sec.toFixed(1)}s`
 }
 
+// daysUntil returns the (signed) integer number of days between today and
+// the given ISO date. Negative => already passed. Compares date-only,
+// observador local; suficiente para tooltip humano.
+function daysUntil(iso) {
+  if (!iso) return null
+  const target = new Date(iso.slice(0, 10) + 'T00:00:00')
+  const today  = new Date()
+  today.setHours(0, 0, 0, 0)
+  const ms = target - today
+  return Math.round(ms / 86400000)
+}
+
+// dateTooltip builds the hover hint per the lifecycle UX:
+//   "começa em X dias" / "começou há X dias"
+//   "termina em Y dias" / "encerrou em Y" / "encerra hoje"
+function startDateTooltip(iso, status) {
+  if (!iso) return ''
+  const d = daysUntil(iso)
+  if (d == null) return ''
+  if (status === 'programada') {
+    if (d <= 0) return 'inicia hoje'
+    return d === 1 ? 'começa amanhã' : `começa em ${d} dias`
+  }
+  if (d === 0) return 'iniciou hoje'
+  if (d < 0)  return `iniciou há ${-d} ${-d === 1 ? 'dia' : 'dias'}`
+  return d === 1 ? 'inicia amanhã' : `inicia em ${d} dias`
+}
+
+function endDateTooltip(iso, status) {
+  if (!iso) return ''
+  const d = daysUntil(iso)
+  if (d == null) return ''
+  if (status === 'concluida' || status === 'cancelada') {
+    if (d === 0)  return 'encerrou hoje'
+    if (d < 0)    return `encerrou há ${-d} ${-d === 1 ? 'dia' : 'dias'}`
+    return `prevista para ${d} ${d === 1 ? 'dia' : 'dias'}`
+  }
+  if (d === 0) return 'encerra hoje'
+  if (d < 0)   return `encerrou há ${-d} ${-d === 1 ? 'dia' : 'dias'}`
+  return d === 1 ? 'termina amanhã' : `termina em ${d} dias`
+}
+
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const STATUS_LABEL = { planned: 'Planejada', active: 'Ativa', paused: 'Pausada', ended: 'Encerrada' }
-const STATUS_CLASS = { planned: 'badge-planned', active: 'badge-active', paused: 'badge-paused', ended: 'badge-ended' }
+// Lifecycle PT-BR (§18.2.1) — 4 estados finitos.
+const STATUS_LABEL = {
+  programada: 'Programada',
+  ativa: 'Ativa',
+  concluida: 'Concluída',
+  cancelada: 'Cancelada',
+}
+const STATUS_CLASS = {
+  programada: 'badge-programada',
+  ativa: 'badge-ativa',
+  concluida: 'badge-concluida',
+  cancelada: 'badge-cancelada',
+}
+// Ordem de exibição: ativas → programadas (próximas a entrar) → concluídas/canceladas (histórico).
+const STATUS_ORDER = { ativa: 1, programada: 2, concluida: 3, cancelada: 4 }
 const FP_LABEL    = { pending: 'aguardando', generating: 'gerando…', ready: 'pronto', failed: 'falhou' }
 const FP_CLASS    = { pending: 'fp-pending', generating: 'fp-generating', ready: 'fp-ready', failed: 'fp-failed' }
 
@@ -764,9 +820,9 @@ function CampaignStationsSection({ campaign, allStations }) {
               {updateCampaignStations.isPending ? <><IconSpinner /> Salvando</> : 'Salvar emissoras'}
             </button>
           </div>
-          {campaign.status === 'active' && (
+          {campaign.status === 'ativa' && (
             <p style={{ fontSize: 12, color: 'var(--c-warning)' }}>
-              A campanha será pausada e reiniciada para aplicar as alterações.
+              Os workers serão reiniciados para aplicar as alterações.
             </p>
           )}
         </div>
@@ -800,10 +856,32 @@ function CampaignStationsSection({ campaign, allStations }) {
 
 // ─── CampaignRow ───────────────────────────────────────────────────────────────
 
-function CampaignRow({ campaign, clients, allStations, startCampaign, pauseCampaign, deleteCampaign }) {
+function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign }) {
   const [expanded, setExpanded] = useState(false)
+  const confirm = useConfirm()
+  const alertDialog = useAlert()
   const client = clients.find(cl => cl.id === campaign.client_id)
   const stationCount = (campaign.target_stations ?? []).length
+  const startTip = startDateTooltip(campaign.start_date, campaign.status)
+  const endTip   = endDateTooltip(campaign.end_date, campaign.status)
+  const canCancel = campaign.status === 'programada' || campaign.status === 'ativa'
+
+  async function handleCancel() {
+    const ok = await confirm(
+      `Cancelar "${campaign.name}"? Os workers param imediatamente e a campanha vai para o histórico (não é possível reativar).`
+    )
+    if (!ok) return
+    cancelCampaign.mutate(campaign.id, {
+      onError: (err) => {
+        const status = err?.response?.status
+        if (status === 409) {
+          alertDialog('Esta campanha já está em estado terminal.')
+        } else {
+          alertDialog('Erro ao cancelar campanha.')
+        }
+      }
+    })
+  }
 
   return (
     <div className={`campaign-row${expanded ? ' expanded' : ''}`}>
@@ -817,39 +895,33 @@ function CampaignRow({ campaign, clients, allStations, startCampaign, pauseCampa
           <div className="campaign-row-meta">
             {client?.name ?? '—'}
             {' · '}
-            {fmtDate(campaign.start_date)} — {fmtDate(campaign.end_date)}
+            <span title={startTip}>{fmtDate(campaign.start_date)}</span>
+            {' — '}
+            <span title={endTip}>{fmtDate(campaign.end_date)}</span>
             {' · '}
             {stationCount} {stationCount === 1 ? 'emissora' : 'emissoras'}
           </div>
         </div>
 
         <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
-          <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-ended'}`}>
+          <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-concluida'}`}>
             {STATUS_LABEL[campaign.status] ?? campaign.status}
           </span>
-          {campaign.status !== 'active' && (
-            <button
-              className="btn btn-success btn-sm"
-              onClick={() => startCampaign.mutate(campaign.id)}
-              disabled={startCampaign.isPending}
-            >
-              Iniciar
-            </button>
-          )}
-          {campaign.status === 'active' && (
+          {canCancel && (
             <button
               className="btn btn-muted btn-sm"
-              onClick={() => pauseCampaign.mutate(campaign.id)}
-              disabled={pauseCampaign.isPending}
+              onClick={handleCancel}
+              disabled={cancelCampaign.isPending}
+              title="Encerrar a campanha imediatamente"
             >
-              Pausar
+              Cancelar campanha
             </button>
           )}
           <button
             className="btn btn-icon btn-danger-ghost btn-sm"
             title="Excluir campanha"
             onClick={async () => {
-              if (await window.confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
+              if (await confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
                 deleteCampaign.mutate(campaign.id)
               }
             }}
@@ -1040,9 +1112,23 @@ export default function CampaignsPage() {
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
 
-  const startCampaign  = useStartCampaign()
-  const pauseCampaign  = usePauseCampaign()
+  const cancelCampaign = useCancelCampaign()
   const deleteCampaign = useDeleteCampaign()
+
+  // Server already orders by lifecycle, but a client-side guard keeps the UX
+  // consistent if the API ever changes its ORDER BY.
+  const orderedCampaigns = useMemo(() => {
+    return [...campaigns].sort((a, b) => {
+      const ra = STATUS_ORDER[a.status] ?? 99
+      const rb = STATUS_ORDER[b.status] ?? 99
+      if (ra !== rb) return ra - rb
+      // Within same status: programada → soonest first; everything else → most recent first.
+      if (a.status === 'programada') {
+        return new Date(a.start_date) - new Date(b.start_date)
+      }
+      return new Date(b.start_date) - new Date(a.start_date)
+    })
+  }, [campaigns])
 
   const [showModal, setShowModal] = useState(false)
 
@@ -1082,14 +1168,13 @@ export default function CampaignsPage() {
         <EmptyState onNew={() => setShowModal(true)} />
       ) : (
         <div className="campaign-list">
-          {campaigns.map(c => (
+          {orderedCampaigns.map(c => (
             <CampaignRow
               key={c.id}
               campaign={c}
               clients={clients}
               allStations={allStations}
-              startCampaign={startCampaign}
-              pauseCampaign={pauseCampaign}
+              cancelCampaign={cancelCampaign}
               deleteCampaign={deleteCampaign}
             />
           ))}

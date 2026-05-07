@@ -101,6 +101,9 @@ func main() {
 		logger.Warn("supervisor restore active failed", zap.Error(err))
 	}
 
+	// Lifecycle scheduler (§18.2.1): promote programada→ativa→concluida by date.
+	sup.StartLifecycle(ctx)
+
 	// Daily calibration job: promote stations out of calibration mode after 7 days (§9.4).
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
