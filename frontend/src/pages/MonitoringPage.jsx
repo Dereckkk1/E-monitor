@@ -31,7 +31,13 @@ function MiniHealthBar({ dailySummary }) {
 }
 
 // ── Status dot ────────────────────────────────────────────────────────────────
-function StatusDot({ status }) {
+// Combina monitoring_status (estado configurado) com is_currently_down (estado
+// real do stream). Se o stream caiu, força ponto vermelho mesmo se a campanha
+// está ativa — assim a UI reflete o sintoma, não só a intenção.
+function StatusDot({ status, isCurrentlyDown }) {
+  if (isCurrentlyDown) {
+    return <span className="station-status-dot dot-error" />
+  }
   const cls =
     status === 'active'      ? 'dot-active'      :
     status === 'error'       ? 'dot-error'        :
@@ -83,7 +89,9 @@ function HealthDrawer({ station, onClose }) {
     : stats.uptime >= 95 ? 'health-stat-value--warn'
     : 'health-stat-value--bad'
 
-  const currentStatus = station.monitoring_status === 'active' ? 'up' : 'down'
+  // Online só se a campanha está ativa E o stream não está em outage agora.
+  const currentStatus =
+    station.monitoring_status === 'active' && !station.is_currently_down ? 'up' : 'down'
 
   return (
     <>
@@ -208,11 +216,15 @@ export default function MonitoringPage() {
     }
     if (band !== 'Todas') list = list.filter(s => s.band === band)
     if (healthFilter === 'Com falha') {
-      list = list.filter(s => s.uptime_pct < 99.9 || s.monitoring_status === 'error')
+      list = list.filter(s => s.uptime_pct < 99.9 || s.monitoring_status === 'error' || s.is_currently_down)
     } else if (healthFilter === 'Estável') {
-      list = list.filter(s => s.uptime_pct >= 99.9 && s.monitoring_status !== 'error')
+      list = list.filter(s => s.uptime_pct >= 99.9 && s.monitoring_status !== 'error' && !s.is_currently_down)
     }
     return [...list].sort((a, b) => {
+      // Stations atualmente caídas vão pro topo, depois com erro de cadastro,
+      // depois pior uptime, depois alfabético.
+      if (a.is_currently_down && !b.is_currently_down) return -1
+      if (b.is_currently_down && !a.is_currently_down) return 1
       if (a.monitoring_status === 'error' && b.monitoring_status !== 'error') return -1
       if (b.monitoring_status === 'error' && a.monitoring_status !== 'error') return 1
       if (a.uptime_pct !== b.uptime_pct) return a.uptime_pct - b.uptime_pct
@@ -329,7 +341,7 @@ export default function MonitoringPage() {
                     ? `Queda ${relativeTime(st.last_incident_at)}`
                     : 'Sem quedas'}
                 </div>
-                <StatusDot status={st.monitoring_status} />
+                <StatusDot status={st.monitoring_status} isCurrentlyDown={st.is_currently_down} />
               </div>
             ))}
           </div>

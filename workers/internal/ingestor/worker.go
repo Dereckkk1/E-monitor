@@ -99,10 +99,20 @@ func (w *Worker) Run(ctx context.Context) {
 		default:
 		}
 
+		// Reset per-attempt flag — OnStreamUp must fire again after each connect.
+		w.streamUpFired = false
+
 		// 1. Start ffmpeg.
 		proc, err := StartFFmpeg(ctx, w.cfg.StreamURL, w.log)
 		if err != nil {
 			w.log.Error("ffmpeg start failed", zap.String("stationID", stationIDStr), zap.Error(err))
+			// Fire OnStreamDown on the FIRST failure of an outage. The supervisor
+			// keeps an open down event in health_events; subsequent failures during
+			// the same outage don't create new events (idempotent at the catalog
+			// layer via GetLastOpenDown / RecordDown).
+			if w.cfg.OnStreamDown != nil {
+				w.cfg.OnStreamDown()
+			}
 			if sleep(ctx, jitter(backoff)); ctx.Err() != nil {
 				return
 			}
@@ -162,6 +172,15 @@ func (w *Worker) Run(ctx context.Context) {
 		// 8. If ctx done: exit outer loop.
 		if ctx.Err() != nil {
 			return
+		}
+
+		// Readers exited (either ffmpeg dropped or never delivered any PCM).
+		// Always fire OnStreamDown — the supervisor dedups so it only opens
+		// a single down event per continuous outage. This catches both:
+		//   1) was-up-then-dropped (clean disconnect during operation)
+		//   2) ffmpeg-connected-but-zero-PCM (ND FM-style: HTTP OK, no body)
+		if w.cfg.OnStreamDown != nil {
+			w.cfg.OnStreamDown()
 		}
 
 		// 9. Reconnect: log and apply backoff.
@@ -233,6 +252,21 @@ func (w *Worker) runPCMReader(
 			continue
 		}
 		sampleCount -= tickEvery
+
+		// First successful tick (~2s of PCM): stream is officially up.
+		// HeartbeatFn updates last_health_check (UI cue, fires immediately so
+		// UI shows "Ao vivo" within 2s instead of waiting 30s for the regular
+		// heartbeat cadence). OnStreamUp records the recovery in health_events
+		// (closes any open down event).
+		if !w.streamUpFired {
+			w.streamUpFired = true
+			if w.cfg.OnStreamUp != nil {
+				w.cfg.OnStreamUp()
+			}
+			if w.cfg.HeartbeatFn != nil {
+				w.cfg.HeartbeatFn()
+			}
+		}
 
 		heartbeatTick++
 		if heartbeatTick >= heartbeatEvery {

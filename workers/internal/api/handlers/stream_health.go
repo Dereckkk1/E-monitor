@@ -35,10 +35,11 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	type row struct {
 		catalog.Station
-		UptimePct      float64                `json:"uptime_pct"`
-		IncidentCount  int                    `json:"incident_count"`
-		LastIncidentAt *time.Time             `json:"last_incident_at,omitempty"`
-		DailySummary   []catalog.DailySummary `json:"daily_summary"`
+		UptimePct       float64                `json:"uptime_pct"`
+		IncidentCount   int                    `json:"incident_count"`
+		LastIncidentAt  *time.Time             `json:"last_incident_at,omitempty"`
+		DailySummary    []catalog.DailySummary `json:"daily_summary"`
+		IsCurrentlyDown bool                   `json:"is_currently_down"`
 	}
 
 	result := make([]row, 0, len(stations))
@@ -49,6 +50,7 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 			entry.IncidentCount = s.IncidentCount
 			entry.LastIncidentAt = s.LastIncidentAt
 			entry.DailySummary = s.DailySummary
+			entry.IsCurrentlyDown = s.IsCurrentlyDown
 		}
 		result = append(result, entry)
 	}

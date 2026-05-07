@@ -80,6 +80,7 @@ services:
       - "${API_PORT}:8080"
     volumes:
       - mastersdata:/data/masters
+      - ../../audio-refs:/audio-refs:ro
     depends_on:
       postgres:
         condition: service_healthy
