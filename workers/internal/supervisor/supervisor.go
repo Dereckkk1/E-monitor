@@ -27,6 +27,15 @@ import (
 const (
 	sampleRate = 16000
 	hopSize    = 2048
+	// defaultMatchThreshold is used when station_thresholds has no row for the
+	// station yet (or the lookup fails). 5 mirrors the floor used by the
+	// calibration job (`max(noise_p99 * 1.5, 5)`).
+	defaultMatchThreshold = 5
+	// thresholdRefreshInterval is how often the supervisor re-reads
+	// station_thresholds for each running worker. Must be longer than the
+	// calibration job's cadence (daily) but short enough that operator-
+	// initiated SQL tweaks propagate without a worker restart.
+	thresholdRefreshInterval = 5 * time.Minute
 )
 
 // workerEntry holds a running worker and its cancellation function,
@@ -36,6 +45,10 @@ type workerEntry struct {
 	cancel     context.CancelFunc
 	lastDownID *int64
 	lastDownAt *time.Time
+	// refreshNow signals the per-worker threshold refresh goroutine to
+	// re-read station_thresholds immediately (used by RefreshThreshold).
+	// Buffered (cap 1) so a signal is never lost and never blocks.
+	refreshNow chan struct{}
 }
 
 // Supervisor manages the lifecycle of stream workers.
@@ -246,7 +259,7 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	capturedStationID := stationID
 
 	// ── Startup recovery: find open 'down' event from a previous crash ──────
-	entry := &workerEntry{cancel: cancel}
+	entry := &workerEntry{cancel: cancel, refreshNow: make(chan struct{}, 1)}
 	if ev, err := s.healthEvents.GetLastOpenDown(context.Background(), capturedStationID); err == nil {
 		entry.lastDownID = &ev.ID
 		entry.lastDownAt = &ev.EventAt
@@ -357,17 +370,36 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		}()
 	}
 
+	// ── Resolve dynamic threshold from station_thresholds (§9.4) ───────────
+	// Fallback to defaultMatchThreshold (5) when no row exists yet or the
+	// query errors — matches the calibration job's floor of 5. This atomic
+	// is shared with the worker; the periodic refresh goroutine (below)
+	// updates it in place so an in-flight worker picks up new values
+	// without restart.
+	threshold := defaultMatchThreshold
+	if v, err := s.stations.GetThreshold(ctx, capturedStationID); err == nil {
+		threshold = v
+	} else {
+		s.log.Warn("supervisor: threshold lookup failed; using default",
+			zap.Stringer("station_id", capturedStationID),
+			zap.Int("default", defaultMatchThreshold),
+			zap.Error(err),
+		)
+	}
+	thresholdAtomic := ingestor.NewMatchThreshold(threshold)
+	metrics.StationThreshold.WithLabelValues(capturedStationID.String()).Set(float64(threshold))
+
 	cfg := ingestor.WorkerConfig{
 		StationID:          station.ID,
 		StreamURL:          station.StreamURL,
 		CommercialShortIDs: shortIDs,
 		CommercialFrames:   frames,
-		MatchThreshold:     3,
+		MatchThreshold:     thresholdAtomic,
 		// 0.02 = score >= 2% dos hashes da janela. Massa Joinville 10:43 mostrou
 		// match real sustentado por 30s com pico 20 e vários frames 8-16 que o
-		// 0.05 anterior rejeitava. Threshold absoluto (3) e MinTemporalCoverage
-		// (0.15 = 4.5s sustentados com mesmo delta_bin) seguem como defesas
-		// principais contra falso positivo.
+		// 0.05 anterior rejeitava. Threshold absoluto (vindo de station_thresholds,
+		// default 5) e MinTemporalCoverage (0.15 = 4.5s sustentados com mesmo
+		// delta_bin) seguem como defesas principais contra falso positivo.
 		MinScoreCoverage:    0.02,
 		MinTemporalCoverage: 0.15,
 		ConfirmTimeout:      30 * time.Second,
@@ -395,6 +427,12 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// ── Preventive restart goroutine (§8.7 fase2 hardening) ─────────────────
 	// Once-per-day graceful restart in 3–5 AM window to mitigate memory leaks.
 	go s.schedulePreventiveRestart(workerCtx, stationID)
+
+	// ── Threshold refresher (§9.4 fase2 hardening) ──────────────────────────
+	// Periodically re-reads station_thresholds and updates the worker's
+	// atomic threshold in-place. Also reacts immediately to RefreshThreshold
+	// calls (admin endpoint).
+	go s.runThresholdRefresher(workerCtx, capturedStationID, w, entry.refreshNow)
 
 	s.log.Info("supervisor: worker started",
 		zap.String("station_id", stationID.String()),
@@ -446,6 +484,92 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 			return
 		}
 	}
+}
+
+// runThresholdRefresher periodically re-reads station_thresholds for the
+// given station and applies the value to the worker's atomic threshold.
+// On lookup error the previous value is kept (we never *down*grade to the
+// default once a worker has been calibrated). Exits when ctx is cancelled.
+//
+// trigger is an optional buffered channel that callers (e.g. RefreshThreshold)
+// can use to force an immediate re-read between ticks. A closed or nil
+// channel is treated as no manual trigger.
+func (s *Supervisor) runThresholdRefresher(
+	ctx context.Context,
+	stationID uuid.UUID,
+	w *ingestor.Worker,
+	trigger <-chan struct{},
+) {
+	ticker := time.NewTicker(thresholdRefreshInterval)
+	defer ticker.Stop()
+	stationLabel := stationID.String()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-trigger:
+		}
+		s.refreshThresholdOnce(ctx, stationID, stationLabel, w)
+	}
+}
+
+// refreshThresholdOnce performs a single GetThreshold lookup and applies the
+// result. Extracted so the admin handler / tests can drive a refresh without
+// going through the timer.
+func (s *Supervisor) refreshThresholdOnce(
+	ctx context.Context,
+	stationID uuid.UUID,
+	stationLabel string,
+	w *ingestor.Worker,
+) {
+	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := s.stations.GetThreshold(lookupCtx, stationID)
+	if err != nil {
+		metrics.StationThresholdRefreshes.WithLabelValues(stationLabel, "error").Inc()
+		s.log.Warn("supervisor: threshold refresh failed; keeping previous value",
+			zap.String("station_id", stationLabel),
+			zap.Int32("current", w.Threshold()),
+			zap.Error(err),
+		)
+		return
+	}
+	prev := w.SetThreshold(v)
+	metrics.StationThreshold.WithLabelValues(stationLabel).Set(float64(v))
+	if int(prev) == v {
+		metrics.StationThresholdRefreshes.WithLabelValues(stationLabel, "unchanged").Inc()
+		return
+	}
+	metrics.StationThresholdRefreshes.WithLabelValues(stationLabel, "updated").Inc()
+	s.log.Info("supervisor: threshold updated",
+		zap.String("station_id", stationLabel),
+		zap.Int32("previous", prev),
+		zap.Int("current", v),
+	)
+}
+
+// RefreshThreshold forces the worker for stationID to re-read its threshold
+// from station_thresholds immediately, returning a sentinel error when no
+// worker is running for that station. Wired to the admin endpoint
+// POST /v1/internal/admin/stations/{id}/threshold/refresh.
+//
+// The actual lookup runs asynchronously inside runThresholdRefresher so the
+// HTTP handler stays cheap; the signal channel is buffered (cap 1) so a
+// burst of refresh requests collapses into a single re-read.
+func (s *Supervisor) RefreshThreshold(stationID uuid.UUID) error {
+	s.mu.Lock()
+	entry, ok := s.workers[stationID]
+	s.mu.Unlock()
+	if !ok || entry == nil || entry.refreshNow == nil {
+		return fmt.Errorf("supervisor: no worker running for station %s", stationID)
+	}
+	select {
+	case entry.refreshNow <- struct{}{}:
+	default:
+		// already pending — coalesce.
+	}
+	return nil
 }
 
 // Pause stops workers for stations that have no other active campaign after
