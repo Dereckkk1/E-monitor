@@ -21,9 +21,9 @@ import (
 	"fmt"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -73,9 +73,10 @@ func PublishWithTracing(ctx context.Context, nc *nats.Conn, subject string, payl
 	if msg.Header == nil {
 		msg.Header = nats.Header{}
 	}
-	propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	).Inject(ctx, natsHeaderCarrier(msg.Header))
+	// Use the global propagator configured in Init (W3C TraceContext +
+	// Baggage). Building a composite per call would silently mask any
+	// custom propagator the operator wired up later.
+	otel.GetTextMapPropagator().Inject(ctx, natsHeaderCarrier(msg.Header))
 
 	if err := nc.PublishMsg(msg); err != nil {
 		span.RecordError(err)
@@ -94,9 +95,7 @@ func PublishWithTracing(ctx context.Context, nc *nats.Conn, subject string, payl
 // the message (DB writes, downstream publishes) chains under the same trace.
 func StartConsumerSpan(ctx context.Context, msg *nats.Msg, name string) (context.Context, trace.Span) {
 	if msg != nil && msg.Header != nil {
-		ctx = propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{}, propagation.Baggage{},
-		).Extract(ctx, natsHeaderCarrier(msg.Header))
+		ctx = otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
 	}
 	subject := ""
 	if msg != nil {
