@@ -93,6 +93,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/", d.Campaigns.List)
 				r.Post("/", d.Campaigns.Create)
 				r.Get("/{id}", d.Campaigns.Get)
+				// Lifecycle (§18.2.1): /cancel is the only manual transition.
+				r.Post("/{id}/cancel", d.Campaigns.Cancel)
+				// /start is kept as admin/debug to force activation outside
+				// the date window. /pause is deprecated; alias of /cancel.
 				r.Put("/{id}/start", d.Campaigns.Start)
 				r.Put("/{id}/pause", d.Campaigns.Pause)
 				r.Put("/{id}/stations", d.Campaigns.UpdateStations)
