@@ -105,6 +105,9 @@ func main() {
 	sup.StartLifecycle(ctx)
 
 	// Daily calibration job: promote stations out of calibration mode after 7 days (§9.4).
+	// This handles the *initial* calibration window — stations entering the
+	// system collect noise samples for 7 days, then get promoted with their
+	// computed noise_p99.
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -119,6 +122,37 @@ func main() {
 				}
 				jobCancel()
 			}
+		}
+	}()
+
+	// Periodic re-calibration scheduler (§9.4): every 24h, find stations
+	// whose station_thresholds row hasn't been updated for ≥7d and reset
+	// calibration_mode=true so a fresh sample buffer is collected. The
+	// initial RunCalibrationJob above (also running daily) then promotes
+	// them out again with the freshly computed noise_p99.
+	//
+	// Multi-replica safety: pg_try_advisory_lock guards each tick so only
+	// one API instance drives the scan at a time.
+	calibrationScheduler := calibration.NewScheduler(pool, logger)
+	if v := os.Getenv("CALIBRATION_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			calibrationScheduler.Interval = d
+		} else {
+			logger.Warn("invalid CALIBRATION_INTERVAL, using default",
+				zap.String("value", v))
+		}
+	}
+	if v := os.Getenv("CALIBRATION_MIN_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			calibrationScheduler.MinAge = d
+		} else {
+			logger.Warn("invalid CALIBRATION_MIN_AGE, using default",
+				zap.String("value", v))
+		}
+	}
+	go func() {
+		if err := calibrationScheduler.Run(ctx); err != nil {
+			logger.Error("calibration scheduler exited with error", zap.Error(err))
 		}
 	}()
 
@@ -155,7 +189,7 @@ func main() {
 		Auth:         handlers.NewAuthHandler(pool),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
-		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Log: logger},
+		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Calibration: calibrationScheduler, Log: logger},
 		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 	}
 
