@@ -105,3 +105,41 @@ func TestMatchWindow_EmptyIndex(t *testing.T) {
 	results := MatchWindow(samples, store, 5, 0.4)
 	assert.Empty(t, results, "empty index should always produce 0 results")
 }
+
+// TestMatchWindow_DynamicThreshold confirms that callers can drive MatchWindow
+// with thresholds resolved at runtime (the supervisor reads station_thresholds
+// every 5 min and pushes the new value into a *atomic.Int32 the worker reads
+// on every tick). This test mirrors that pattern: the same window passes at a
+// permissive threshold but is rejected at a stricter one — i.e. raising the
+// threshold mid-flight will silence false positives without restarting.
+func TestMatchWindow_DynamicThreshold(t *testing.T) {
+	const (
+		freqHz     = 880.0
+		sampleRate = 16000
+		numSamples = 160000
+		shortID    = int32(11)
+	)
+
+	samples := makeSineWave(freqHz, sampleRate, numSamples)
+
+	filtered := audio.ApplyHighPass(samples, 100.0, sampleRate)
+	normalized := audio.NormalizeRMS(filtered, -20.0)
+	refHashes := audio.GenerateHashes(audio.PickPeaks(audio.STFT(normalized)))
+	require.NotEmpty(t, refHashes)
+	store := buildIndexFromHashes(refHashes, shortID)
+
+	// Permissive threshold: self-match passes.
+	low := MatchWindow(samples, store, 5, 0.4)
+	require.NotEmpty(t, low, "self-match at threshold=5 should produce results")
+	peakScore := 0
+	for _, r := range low {
+		if r.Score > peakScore {
+			peakScore = r.Score
+		}
+	}
+	require.Greater(t, peakScore, 5)
+
+	// Strict threshold above the observed peak: no results.
+	high := MatchWindow(samples, store, peakScore+1, 0.4)
+	assert.Empty(t, high, "threshold above peak score must reject all matches")
+}
