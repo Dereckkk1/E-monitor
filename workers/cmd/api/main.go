@@ -13,6 +13,8 @@ import (
 
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
+	"radiocheck/internal/auth"
+	"radiocheck/internal/calibration"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/db"
@@ -21,6 +23,7 @@ import (
 	"radiocheck/internal/index"
 	"radiocheck/internal/storage"
 	"radiocheck/internal/supervisor"
+	"radiocheck/internal/webhook"
 )
 
 func main() {
@@ -91,6 +94,30 @@ func main() {
 		logger.Warn("supervisor restore active failed", zap.Error(err))
 	}
 
+	// Daily calibration job: promote stations out of calibration mode after 7 days (§9.4).
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				jobCtx, jobCancel := context.WithTimeout(ctx, 5*time.Minute)
+				if err := calibration.RunCalibrationJob(jobCtx, pool, logger); err != nil {
+					logger.Error("calibration job failed", zap.Error(err))
+				}
+				jobCancel()
+			}
+		}
+	}()
+
+	// Webhook deliverer: fan-out detection.confirmed events to client endpoints (§13.1).
+	deliverer := webhook.New(pool, nc, logger)
+	if err := deliverer.Start(ctx); err != nil {
+		logger.Warn("webhook deliverer start failed", zap.Error(err))
+	}
+
 	// Campaigns handler with supervisor wired in.
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
@@ -103,8 +130,11 @@ func main() {
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
-		Health:       &handlers.HealthHandler{DB: pool, NATS: nc},
+		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
+		Auth:         handlers.NewAuthHandler(pool),
+		APIKey:       auth.NewAPIKeyMiddleware(pool),
+		APIKeys:      handlers.NewAPIKeysHandler(pool),
 	}
 
 	srv := &http.Server{

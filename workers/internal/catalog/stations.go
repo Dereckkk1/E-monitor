@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -362,4 +363,49 @@ func (s *Stations) ListActive(ctx context.Context) ([]Station, error) {
 		out = append(out, st)
 	}
 	return out, rows.Err()
+}
+
+// GetThreshold returns the min_hashes threshold for the station from
+// station_thresholds (fase2 calibration §9.4). Returns the default of 5
+// if no threshold row exists yet.
+func (s *Stations) GetThreshold(ctx context.Context, stationID uuid.UUID) (int, error) {
+	var minHashes int
+	err := s.pool.QueryRow(ctx,
+		`SELECT min_hashes FROM station_thresholds WHERE station_id = $1`,
+		stationID,
+	).Scan(&minHashes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 5, nil
+	}
+	return minHashes, err
+}
+
+// CalibrationStatus holds calibration state for a station (§9.4 fase2).
+type CalibrationStatus struct {
+	CalibrationMode bool `json:"calibration_mode"`
+	MinHashes       int  `json:"min_hashes"`
+	DaysElapsed     int  `json:"days_elapsed"`
+}
+
+// GetCalibrationStatus returns the full calibration state for a station.
+// If no threshold row exists the station is treated as still in calibration mode.
+func (s *Stations) GetCalibrationStatus(ctx context.Context, stationID uuid.UUID) (CalibrationStatus, error) {
+	var mode bool
+	var minHashes int
+	var startedAt time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT calibration_mode, min_hashes, COALESCE(calibration_started_at, NOW())
+		FROM station_thresholds WHERE station_id = $1
+	`, stationID).Scan(&mode, &minHashes, &startedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CalibrationStatus{CalibrationMode: true, MinHashes: 5, DaysElapsed: 0}, nil
+	}
+	if err != nil {
+		return CalibrationStatus{}, err
+	}
+	return CalibrationStatus{
+		CalibrationMode: mode,
+		MinHashes:       minHashes,
+		DaysElapsed:     int(time.Since(startedAt).Hours() / 24),
+	}, nil
 }
