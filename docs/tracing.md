@@ -155,6 +155,21 @@ adicione um link interno para a Tempo/Jaeger data source mapeando
 `{trace_id}` → URL do Jaeger:
 `http://jaeger:16686/trace/${__value.raw}`.
 
+## Limitações conhecidas
+
+- **Match engine (`workers/internal/match/`) não está instrumentado
+  internamente.** Razão: as assinaturas exportadas (`Update`,
+  `MatchWindow`, etc.) não foram alteradas para preservar contrato com
+  testes existentes e workers paralelos que importam o pacote. A duração
+  total da janela é capturada por `worker.window` no ingestor (raiz por
+  janela de match) — esse span engloba a chamada completa do engine e dá
+  visibilidade suficiente em escala (atributos `results_count`,
+  `duration_seconds`, mais `score`/`coverage` nos logs estruturados
+  ligados pelo mesmo `trace_id`). Refatoração futura pode adicionar spans
+  internos (`match.lookup`, `match.candidate`, `match.confirm`) quando o
+  engine for tocado por outra razão; até lá não há ganho operacional que
+  justifique o churn.
+
 ## Limites conhecidos
 
 - Jaeger all-in-one mantém apenas 24h de traces em memória por padrão.
