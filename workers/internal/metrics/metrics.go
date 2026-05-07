@@ -89,6 +89,28 @@ var (
 		Name: "radiocheck_evidence_tiering_errors_total",
 		Help: "Total non-fatal errors hit by the evidence tiering job.",
 	})
+
+	// Webhook delivery (§13.1.4).
+	WebhookDeliveriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_webhook_deliveries_total",
+		Help: "Total webhook deliveries by terminal status.",
+	}, []string{"status"}) // enqueued | delivered | failed | retry | dead
+
+	WebhookDeliveryDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "radiocheck_webhook_delivery_duration_seconds",
+		Help:    "HTTP duration of webhook POST requests.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	WebhookQueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_webhook_queue_size",
+		Help: "Number of webhook_deliveries rows with status='pending'.",
+	})
+
+	WebhookDLQSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_webhook_dlq_size",
+		Help: "Number of webhook_deliveries rows with status='dead'.",
+	})
 )
 
 func init() {
@@ -100,5 +122,6 @@ func init() {
 		PostgresRestoreTestStatus,
 		EvidenceTierMovements, EvidenceStorageBytes,
 		EvidenceTieringLastRun, EvidenceTieringErrors,
+		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 	)
 }

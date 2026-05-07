@@ -119,11 +119,21 @@ func main() {
 		}
 	}()
 
-	// Webhook deliverer: fan-out detection.confirmed events to client endpoints (§13.1).
-	deliverer := webhook.New(pool, nc, logger)
+	// Webhook subsystem (§13.1.4):
+	//   1. Deliverer: subscribes to detections.confirmed NATS events and
+	//      enqueues outbox rows in webhook_deliveries.
+	//   2. Worker: polls webhook_deliveries and POSTs them with HMAC-SHA256
+	//      signatures, retrying with exponential backoff up to the DLQ.
+	deliverer := webhook.New(pool, nc, logger, clients, commercials, stations)
 	if err := deliverer.Start(ctx); err != nil {
 		logger.Warn("webhook deliverer start failed", zap.Error(err))
 	}
+	webhookWorker := webhook.NewWorker(pool, logger)
+	go func() {
+		if err := webhookWorker.Run(ctx); err != nil {
+			logger.Error("webhook worker exited with error", zap.Error(err))
+		}
+	}()
 
 	// Campaigns handler with supervisor wired in.
 	campaignsHandler := &handlers.CampaignsHandler{
@@ -143,6 +153,7 @@ func main() {
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
 		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Log: logger},
+		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 	}
 
 	srv := &http.Server{

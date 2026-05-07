@@ -168,3 +168,44 @@ export function useStationHealthEvents(stationId, days = 7) {
     enabled: !!stationId,
   })
 }
+
+// Webhooks (§13.1.4)
+export function useWebhookConfig(clientId) {
+  return useQuery({
+    queryKey: ['webhook-config', clientId],
+    queryFn: () => api.get(`/clients/${clientId}/webhook`).then(r => r.data),
+    enabled: !!clientId,
+  })
+}
+
+export function useUpdateWebhookConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ clientId, ...body }) =>
+      api.patch(`/clients/${clientId}/webhook`, body).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['webhook-config', vars.clientId] })
+      qc.invalidateQueries({ queryKey: ['webhook-deliveries', vars.clientId] })
+    },
+  })
+}
+
+export function useWebhookDeliveries(clientId, params = {}) {
+  return useQuery({
+    queryKey: ['webhook-deliveries', clientId, params],
+    queryFn: () =>
+      api.get(`/clients/${clientId}/webhook-deliveries`, { params }).then(r => r.data.data ?? []),
+    enabled: !!clientId,
+    refetchInterval: 10_000,
+  })
+}
+
+export function useTestWebhook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (clientId) => api.post(`/clients/${clientId}/webhook-test`).then(r => r.data),
+    onSuccess: (_, clientId) => {
+      qc.invalidateQueries({ queryKey: ['webhook-deliveries', clientId] })
+    },
+  })
+}
