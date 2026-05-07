@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -28,12 +29,27 @@ type WorkerConfig struct {
 	// CommercialFrames maps each commercial short ID to its total frame count
 	// (used for coverage window sizing).
 	CommercialFrames map[int32]int
-	MatchThreshold   int           // minimum score to count as hit (e.g. 5)
-	MinCoverage      float64       // minimum coverage for confirmation (e.g. 0.4)
-	ConfirmTimeout   time.Duration // max detecting window (e.g. 30s)
+	MatchThreshold   int     // minimum absolute histogram score to count a window as a hit (noise floor)
+	// MinScoreCoverage is the per-window filter: score / totalHashes must reach
+	// this fraction for the window to count. 0.05 is well above noise (~0.005)
+	// while still admitting real-broadcast matches that typically run 0.05-0.30.
+	MinScoreCoverage float64
+	// MinTemporalCoverage is the state-machine confirmation filter: the elapsed
+	// time between the first and last sustained hit must reach this fraction of
+	// the commercial's duration before a detection is emitted. This is the main
+	// false-positive defense — random audio cannot sustain delta-aligned hits.
+	MinTemporalCoverage float64
+	ConfirmTimeout      time.Duration // max detecting window (e.g. 30s)
 	// AACBuffer is an optional externally-owned ring buffer for AAC evidence.
 	// If nil, Run() creates its own internal buffer (backward-compatible).
 	AACBuffer *ringbuffer.ByteRing
+	// HeartbeatFn is called every ~30s while PCM audio is flowing.
+	// Nil means no heartbeat. Used by the supervisor to update last_health_check.
+	HeartbeatFn func()
+	// OnStreamUp is called once per connect attempt, ~2s after audio starts flowing.
+	OnStreamUp func()
+	// OnStreamDown is called when the stream disconnects unexpectedly (not on ctx cancel).
+	OnStreamDown func()
 }
 
 // DetectionEvent is the payload published to NATS when a detection is confirmed.
@@ -49,10 +65,11 @@ type DetectionEvent struct {
 
 // Worker is a goroutine-based stream ingestor for one radio station.
 type Worker struct {
-	cfg   WorkerConfig
-	store *index.Store
-	nc    *nats.Conn
-	log   *zap.Logger
+	cfg           WorkerConfig
+	store         *index.Store
+	nc            *nats.Conn
+	log           *zap.Logger
+	streamUpFired bool // true after OnStreamUp fired for current connect attempt
 }
 
 // NewWorker creates a new Worker with the given configuration.
@@ -81,6 +98,8 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		default:
 		}
+
+		w.streamUpFired = false // reset for this connect attempt
 
 		// 1. Start ffmpeg.
 		proc, err := StartFFmpeg(ctx, w.cfg.StreamURL, w.log)
@@ -113,7 +132,7 @@ func (w *Worker) Run(ctx context.Context) {
 				id,
 				totalFrames,
 				w.cfg.MatchThreshold,
-				w.cfg.MinCoverage,
+				w.cfg.MinTemporalCoverage,
 				w.cfg.ConfirmTimeout,
 				cooldown,
 				w.log,
@@ -145,6 +164,11 @@ func (w *Worker) Run(ctx context.Context) {
 		// 8. If ctx done: exit outer loop.
 		if ctx.Err() != nil {
 			return
+		}
+
+		// Stream disconnected unexpectedly. Only fire if we were ever up this attempt.
+		if w.streamUpFired && w.cfg.OnStreamDown != nil {
+			w.cfg.OnStreamDown()
 		}
 
 		// 9. Reconnect: log and apply backoff.
@@ -184,27 +208,54 @@ func (w *Worker) runPCMReader(
 	machines map[int32]*match.StateMachine,
 	stationIDStr string,
 ) {
-	const tickEvery = 32000  // samples per 2-second tick at 16kHz
-	const windowSize = 64000 // 4 seconds at 16kHz
+	const tickEvery = 32000   // samples per 2-second tick at 16kHz
+	const windowSize = 64000  // 4 seconds at 16kHz
+	const heartbeatEvery = 15 // ticks ≈ 30s of flowing audio
+	// Read 4096 float32 samples at a time to avoid per-sample syscall overhead.
+	const readChunk = 4096
+
+	rawBuf := make([]byte, readChunk*4)
+	floatBuf := make([]float32, readChunk)
 
 	sampleCount := 0
+	heartbeatTick := 0
 
 	for {
-		var sample float32
-		if err := binary.Read(r, binary.LittleEndian, &sample); err != nil {
-			if err != io.EOF {
+		n, err := io.ReadFull(r, rawBuf)
+		if err != nil {
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
 				w.log.Warn("pcm reader error", zap.Error(err))
 			}
 			return
 		}
-
-		pcmBuf.Write([]float32{sample})
-		sampleCount++
+		samplesRead := n / 4
+		for i := 0; i < samplesRead; i++ {
+			bits := binary.LittleEndian.Uint32(rawBuf[i*4:])
+			floatBuf[i] = math.Float32frombits(bits)
+		}
+		pcmBuf.Write(floatBuf[:samplesRead])
+		sampleCount += samplesRead
 
 		if sampleCount < tickEvery {
 			continue
 		}
-		sampleCount = 0
+		sampleCount -= tickEvery
+
+		// Fire OnStreamUp once per connect attempt (first 2-second tick of audio).
+		if !w.streamUpFired {
+			w.streamUpFired = true
+			if w.cfg.OnStreamUp != nil {
+				w.cfg.OnStreamUp()
+			}
+		}
+
+		heartbeatTick++
+		if heartbeatTick >= heartbeatEvery {
+			heartbeatTick = 0
+			if w.cfg.HeartbeatFn != nil {
+				w.cfg.HeartbeatFn()
+			}
+		}
 
 		// Extract 4-second window.
 		window := pcmBuf.ReadLast(windowSize)
@@ -213,8 +264,42 @@ func (w *Worker) runPCMReader(
 			continue
 		}
 
-		results := match.MatchWindow(window, w.store, w.cfg.MatchThreshold)
+		results := match.MatchWindow(window, w.store, w.cfg.MatchThreshold, w.cfg.MinScoreCoverage)
 		now := time.Now()
+
+		// Log every window that passes the threshold so we can see score/ratio.
+		for _, r := range results {
+			w.log.Info("window match",
+				zap.String("station_id", stationIDStr),
+				zap.Int32("commercial_short_id", r.CommercialShortID),
+				zap.Int("score", r.Score),
+				zap.Int("total_hashes", r.TotalHashes),
+				zap.Float64("ratio", float64(r.Score)/float64(r.TotalHashes)),
+				zap.Uint8("variant", r.VariantID),
+			)
+		}
+
+		// Always emit the top raw score for this window so we can audit any
+		// timestamp later. ScanScores ignores the coverage filter, so this
+		// reflects the true peak the matcher saw — useful when the external
+		// reference system reports a detection and we want to know what we
+		// scored during that exact window.
+		if len(results) == 0 {
+			scores := match.ScanScores(window, w.store)
+			var topID int32
+			topScore := 0
+			for id, sc := range scores {
+				if sc > topScore {
+					topScore = sc
+					topID = id
+				}
+			}
+			w.log.Info("window scan",
+				zap.String("station_id", stationIDStr),
+				zap.Int32("top_commercial_short_id", topID),
+				zap.Int("top_score", topScore),
+			)
+		}
 
 		// Tick all state machines first (timeout check).
 		for _, sm := range machines {
