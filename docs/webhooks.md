@@ -91,9 +91,16 @@ Content-Type: application/json
 User-Agent: Radiocheck-Webhook/1.0
 X-Radiocheck-Event: detection.confirmed
 X-Radiocheck-Signature: sha256=<hex>
+X-Radiocheck-Delivery-Id: <uuid>
 ```
 
 `<hex>` é `HMAC_SHA256(secret, raw_body)` em lowercase hex.
+
+`X-Radiocheck-Delivery-Id` é o UUID da row em `webhook_deliveries`. É **estável
+entre tentativas** — se o mesmo evento for re-tentado após backoff, o cliente
+recebe o mesmo `delivery_id`. Use-o para correlacionar logs e deduplicar
+entregas idempotentemente. (Não confundir com `event_id` no payload, que é o
+identificador do evento de domínio.)
 
 ### Go
 
@@ -197,3 +204,80 @@ Hoje só `detection.confirmed`. Novos eventos devem ser:
   (legado).
 - `0012_webhooks_complete.up.sql` — `webhook_enabled`, `webhook_events`,
   tabela `webhook_deliveries`, índices.
+
+## Trade-offs e dívida técnica
+
+Decisões deliberadas que aceitamos para entregar a Etapa 2C dentro do prazo.
+Cada item tem o caminho de evolução documentado para quando virarmos
+produção.
+
+### Outbox não-transacional vs detecção
+
+A inserção em `detections` (feita por `evidence.Service` ao consumir
+`detections.confirmed` no NATS) e a inserção em `webhook_deliveries` (feita
+por `webhook.Deliverer` no mesmo subject) acontecem em **transações
+distintas, em processos distintos**. Se o processo de webhook crashar
+**entre o publish do NATS e o insert na outbox**, o evento é perdido — não
+há replay automático.
+
+Para produção: migrar para um **outbox transacional**, onde a row em
+`webhook_deliveries` é inserida na mesma `BEGIN/COMMIT` que `detections`
+(no caminho `evidence.Service`), garantindo "ou ambos commitam, ou nenhum".
+O NATS deixa de ser o gatilho de enfileiramento e vira só notificação de
+"tem trabalho novo".
+
+### Worker serial dentro do batch
+
+`batchSize = 10` é o `LIMIT` do `SELECT ... FOR UPDATE SKIP LOCKED`. As 10
+deliveries claimadas são processadas **sequencialmente** dentro do tick —
+não há fan-out paralelo. Para o volume da PoC isso é amplamente suficiente
+(latência típica < 500ms por POST × 10 = 5s, dentro do `pollInterval`).
+
+Para escala (>50 detections/s): adicionar `errgroup` + semáforo dentro de
+`tick()` para fazer N POSTs em paralelo, com `N` configurável (`maxInflight`
+separado de `batchSize`). O `SKIP LOCKED` já permite múltiplas réplicas do
+worker, então fan-out horizontal por processo também é uma alternativa.
+
+### Secret armazenado em plaintext
+
+`clients.webhook_secret` é `TEXT` plain. Quem tem `SELECT` na tabela
+`clients` lê o segredo. O endpoint `GET /webhook` mascara para
+`webhook_secret_masked` na API, mas o DB não está protegido.
+
+Para produção: column encryption (`pgcrypto` com chave fora do DB) ou
+KMS-wrapping (AWS KMS, GCP KMS, HashiCorp Vault) com decrypt no caminho do
+worker. Migrar com migration que roda
+`UPDATE clients SET webhook_secret = pgp_sym_encrypt(webhook_secret, key)`.
+
+### Sem `Idempotency-Key` no envelope
+
+Não enviamos `Idempotency-Key` separado — o `event_id` no payload já é
+único por evento de domínio, e o `X-Radiocheck-Delivery-Id` é único por
+tentativa de delivery (mas estável entre retries de uma mesma row em
+`webhook_deliveries`). Clientes que precisam idempotência forte devem
+indexar `event_id` localmente e ignorar duplicatas — duplicatas raras
+podem acontecer quando uma resposta 2xx do cliente é perdida na rede e o
+worker reagenda retry.
+
+Não há plano de adicionar `Idempotency-Key` enquanto o contrato com `event_id`
+estiver atendendo. Se um cliente reportar problema, reavaliar.
+
+### HTTPS obrigatório
+
+O validador atual (`PatchConfig` em `handlers/webhooks.go`) aceita tanto
+`http://` quanto `https://`. **Decisão consciente para PoC:** facilitar
+testes com endpoints internos em rede privada e ferramentas locais
+(webhook.site, ngrok, RequestBin) que ocasionalmente expõem HTTP.
+
+Para produção: restringir o validador a `https://` apenas, com exceção
+explícita para `http://localhost`, `http://127.0.0.1` e `http://[::1]`
+(loopback) em ambiente de dev. Plano: adicionar guarda comportada por
+config (`webhook.allow_insecure_url`), default `false` em prod.
+
+### Refresh de gauges com `COUNT(*)`
+
+`refreshGauges()` roda dois `SELECT COUNT(*)` a cada 5s. Em volumes da PoC
+(<10k rows em `webhook_deliveries`) isso é < 1ms mesmo sem índice especial.
+Para escala (>1M rows histórico), considerar índice parcial por status
+ativo, ou cache em `webhook_stats` atualizado por trigger. TODO está no
+código (`worker.go::refreshGauges`).
