@@ -43,9 +43,9 @@ func TestStations_CreateListGet(t *testing.T) {
 	require.Equal(t, "Test FM", created.Name)
 	require.Equal(t, "paused", created.MonitoringStatus)
 
-	list, err := repo.List(ctx)
+	out, err := repo.List(ctx, ListInput{Page: 1, Limit: 10})
 	require.NoError(t, err)
-	require.Len(t, list, 1)
+	require.Len(t, out.Data, 1)
 
 	fetched, err := repo.Get(ctx, created.ID)
 	require.NoError(t, err)

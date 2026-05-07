@@ -99,8 +99,6 @@ func (w *Worker) Run(ctx context.Context) {
 		default:
 		}
 
-		w.streamUpFired = false // reset for this connect attempt
-
 		// 1. Start ffmpeg.
 		proc, err := StartFFmpeg(ctx, w.cfg.StreamURL, w.log)
 		if err != nil {
@@ -164,11 +162,6 @@ func (w *Worker) Run(ctx context.Context) {
 		// 8. If ctx done: exit outer loop.
 		if ctx.Err() != nil {
 			return
-		}
-
-		// Stream disconnected unexpectedly. Only fire if we were ever up this attempt.
-		if w.streamUpFired && w.cfg.OnStreamDown != nil {
-			w.cfg.OnStreamDown()
 		}
 
 		// 9. Reconnect: log and apply backoff.
@@ -240,14 +233,6 @@ func (w *Worker) runPCMReader(
 			continue
 		}
 		sampleCount -= tickEvery
-
-		// Fire OnStreamUp once per connect attempt (first 2-second tick of audio).
-		if !w.streamUpFired {
-			w.streamUpFired = true
-			if w.cfg.OnStreamUp != nil {
-				w.cfg.OnStreamUp()
-			}
-		}
 
 		heartbeatTick++
 		if heartbeatTick >= heartbeatEvery {

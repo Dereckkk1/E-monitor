@@ -35,34 +35,38 @@ type StateMachine struct {
 	log               *zap.Logger
 
 	// Configuration
-	minScore         int           // minimum MatchResult.Score to count as a hit
-	minCoverage      float64       // minimum Coverage() to confirm
-	confirmTimeout   time.Duration // max time in Detecting before reset (no confirm)
-	cooldownDuration time.Duration
-	cooldownUntil    time.Time
+	minScore            int           // minimum MatchResult.Score to count as a hit
+	minTemporalCoverage float64       // minimum Coverage() (time elapsed / commercial duration) to confirm
+	confirmTimeout      time.Duration // max time in Detecting before reset (no confirm)
+	cooldownDuration    time.Duration
+	cooldownUntil       time.Time
 }
 
 // NewStateMachine creates a new StateMachine for tracking one commercial on one station.
+// minTemporalCoverage is the fraction of the commercial's duration that must
+// elapse between the first and most-recent sustained match before a detection
+// is confirmed. This is the primary false-positive defense: random audio cannot
+// sustain delta-aligned hits over a meaningful fraction of a commercial.
 func NewStateMachine(
 	stationID string,
 	commercialShortID int32,
 	totalFrames int,
 	minScore int,
-	minCoverage float64,
+	minTemporalCoverage float64,
 	confirmTimeout time.Duration,
 	cooldownDuration time.Duration,
 	log *zap.Logger,
 ) *StateMachine {
 	return &StateMachine{
-		stationID:         stationID,
-		commercialShortID: commercialShortID,
-		state:             StateIdle,
-		coverage:          NewCoverageWindow(totalFrames),
-		minScore:          minScore,
-		minCoverage:       minCoverage,
-		confirmTimeout:    confirmTimeout,
-		cooldownDuration:  cooldownDuration,
-		log:               log,
+		stationID:           stationID,
+		commercialShortID:   commercialShortID,
+		state:               StateIdle,
+		coverage:            NewCoverageWindow(totalFrames),
+		minScore:            minScore,
+		minTemporalCoverage: minTemporalCoverage,
+		confirmTimeout:      confirmTimeout,
+		cooldownDuration:    cooldownDuration,
+		log:                 log,
 	}
 }
 
@@ -88,7 +92,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 	case StateDetecting:
 		if result.Score >= sm.minScore {
 			sm.coverage.Add(result.OffsetFrames, now)
-			if sm.coverage.Coverage() >= sm.minCoverage {
+			if sm.coverage.Coverage() >= sm.minTemporalCoverage {
 				confidence := sm.coverage.Coverage()
 				detection := &ConfirmedDetection{
 					CommercialShortID: sm.commercialShortID,

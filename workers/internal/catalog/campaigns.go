@@ -91,6 +91,17 @@ func (c *Campaigns) UpdateStatus(ctx context.Context, id uuid.UUID, status strin
 	return err
 }
 
+// UpdateTargetStations replaces the target_stations list for a campaign.
+func (c *Campaigns) UpdateTargetStations(ctx context.Context, id uuid.UUID, stationIDs []uuid.UUID) error {
+	if stationIDs == nil {
+		stationIDs = []uuid.UUID{}
+	}
+	_, err := c.pool.Exec(ctx,
+		`UPDATE campaigns SET target_stations = $2, updated_at = now() WHERE id = $1`,
+		id, stationIDs)
+	return err
+}
+
 // Delete removes a campaign and all its associated data (detections, fingerprint hashes, commercials).
 func (c *Campaigns) Delete(ctx context.Context, id uuid.UUID) error {
 	tx, err := c.pool.Begin(ctx)

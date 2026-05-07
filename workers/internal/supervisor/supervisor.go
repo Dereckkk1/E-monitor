@@ -29,21 +29,24 @@ const (
 
 // workerEntry holds a running worker and its cancellation function.
 type workerEntry struct {
-	worker *ingestor.Worker
-	cancel context.CancelFunc
+	worker     *ingestor.Worker
+	cancel     context.CancelFunc
+	lastDownID *int64
+	lastDownAt *time.Time
 }
 
 // Supervisor manages the lifecycle of stream workers.
 // It implements the CampaignSupervisor interface used by the API handlers.
 type Supervisor struct {
-	db          *pgxpool.Pool
-	store       *index.Store
-	nc          *nats.Conn
-	evidence    *evidence.Service
-	campaigns   *catalog.Campaigns
-	stations    *catalog.Stations
-	commercials *catalog.Commercials
-	log         *zap.Logger
+	db           *pgxpool.Pool
+	store        *index.Store
+	nc           *nats.Conn
+	evidence     *evidence.Service
+	campaigns    *catalog.Campaigns
+	stations     *catalog.Stations
+	commercials  *catalog.Commercials
+	healthEvents *catalog.HealthEvents
+	log          *zap.Logger
 
 	mu      sync.Mutex
 	workers map[uuid.UUID]*workerEntry // stationID → entry
@@ -58,18 +61,20 @@ func New(
 	campaigns *catalog.Campaigns,
 	stations *catalog.Stations,
 	commercials *catalog.Commercials,
+	healthEvents *catalog.HealthEvents,
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
-		db:          db,
-		store:       store,
-		nc:          nc,
-		evidence:    ev,
-		campaigns:   campaigns,
-		stations:    stations,
-		commercials: commercials,
-		log:         log,
-		workers:     make(map[uuid.UUID]*workerEntry),
+		db:           db,
+		store:        store,
+		nc:           nc,
+		evidence:     ev,
+		campaigns:    campaigns,
+		stations:     stations,
+		commercials:  commercials,
+		healthEvents: healthEvents,
+		log:          log,
+		workers:      make(map[uuid.UUID]*workerEntry),
 	}
 }
 
@@ -188,8 +193,25 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	aacBuf := ringbuffer.NewByteRing(3000)
 
 	capturedStationID := stationID
+
+	// ── Startup recovery: find open 'down' event from a previous crash ──────
+	entry := &workerEntry{cancel: cancel}
+	if ev, err := s.healthEvents.GetLastOpenDown(context.Background(), capturedStationID); err == nil {
+		entry.lastDownID = &ev.ID
+		entry.lastDownAt = &ev.EventAt
+		s.log.Info("supervisor: startup recovery — found open down event",
+			zap.String("station_id", capturedStationID.String()),
+			zap.Time("event_at", ev.EventAt),
+		)
+	}
+
+	// Store entry in map NOW so callbacks can find it (worker starts below).
+	s.mu.Lock()
+	s.workers[capturedStationID] = entry
+	s.mu.Unlock()
+
+	// ── Heartbeat ────────────────────────────────────────────────────────────
 	heartbeatFn := func() {
-		// Run in a separate goroutine so the PCM reader is never blocked by a slow DB write.
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -202,36 +224,95 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		}()
 	}
 
+	// ── Stream up callback ────────────────────────────────────────────────────
+	onStreamUp := func() {
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			s.mu.Lock()
+			e, ok := s.workers[capturedStationID]
+			var downID *int64
+			var downAt *time.Time
+			if ok {
+				downID = e.lastDownID
+				downAt = e.lastDownAt
+			}
+			s.mu.Unlock()
+
+			if ok && downID != nil && downAt != nil {
+				dur := int(time.Since(*downAt).Seconds())
+				if err := s.healthEvents.UpdateDownDuration(bgCtx, *downID, *downAt, dur); err != nil {
+					s.log.Warn("supervisor: update down duration failed",
+						zap.String("station_id", capturedStationID.String()),
+						zap.Error(err),
+					)
+				}
+			}
+
+			if err := s.healthEvents.RecordUp(bgCtx, capturedStationID); err != nil {
+				s.log.Warn("supervisor: record up failed",
+					zap.String("station_id", capturedStationID.String()),
+					zap.Error(err),
+				)
+			}
+
+			// Clear the tracked down event — outage is resolved.
+			s.mu.Lock()
+			if e, ok := s.workers[capturedStationID]; ok {
+				e.lastDownID = nil
+				e.lastDownAt = nil
+			}
+			s.mu.Unlock()
+		}()
+	}
+
+	// ── Stream down callback ─────────────────────────────────────────────────
+	onStreamDown := func() {
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			id, at, err := s.healthEvents.RecordDown(bgCtx, capturedStationID)
+			if err != nil {
+				s.log.Warn("supervisor: record down failed",
+					zap.String("station_id", capturedStationID.String()),
+					zap.Error(err),
+				)
+				return
+			}
+
+			s.mu.Lock()
+			if e, ok := s.workers[capturedStationID]; ok {
+				e.lastDownID = &id
+				e.lastDownAt = &at
+			}
+			s.mu.Unlock()
+		}()
+	}
+
 	cfg := ingestor.WorkerConfig{
-		StationID:          station.ID,
-		StreamURL:          station.StreamURL,
-		CommercialShortIDs: shortIDs,
-		CommercialFrames:   frames,
-		MatchThreshold:     3, // absolute histogram score floor (rejects random hash collisions)
-		// Per-window score coverage: 5% catches real broadcast matches that
-		// typically run 0.05-0.30 (Massa Joinville case ran 0.08). Random audio
-		// stays at 0.005-0.01, so 0.05 is 5-10x above noise.
-		MinScoreCoverage: 0.05,
-		// Temporal coverage: detection must sustain for 15% of the commercial's
-		// duration. For a 30s commercial that's ~4.5s of consistent delta-aligned
-		// matches — impossible for random audio to fake.
+		StationID:           station.ID,
+		StreamURL:           station.StreamURL,
+		CommercialShortIDs:  shortIDs,
+		CommercialFrames:    frames,
+		MatchThreshold:      3,
+		MinScoreCoverage:    0.05,
 		MinTemporalCoverage: 0.15,
 		ConfirmTimeout:      30 * time.Second,
 		AACBuffer:           aacBuf,
 		HeartbeatFn:         heartbeatFn,
+		OnStreamUp:          onStreamUp,
+		OnStreamDown:        onStreamDown,
 	}
 	w := ingestor.NewWorker(cfg, s.store, s.nc, s.log)
+	entry.worker = w
 
-	// h. Register ByteRing with evidence service before worker starts.
+	// Register ByteRing with evidence service before worker starts.
 	s.evidence.Register(stationID, aacBuf)
 
-	// i. Start goroutine.
+	// Start goroutine (entry was already stored in the map above).
 	go w.Run(workerCtx)
-
-	// j. Store in workers map.
-	s.mu.Lock()
-	s.workers[stationID] = &workerEntry{worker: w, cancel: cancel}
-	s.mu.Unlock()
 
 	s.log.Info("supervisor: worker started",
 		zap.String("station_id", stationID.String()),

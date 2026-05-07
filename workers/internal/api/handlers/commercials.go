@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ type CommercialsHandler struct {
 	Repo        *catalog.Commercials
 	NATS        *nats.Conn
 	MastersPath string
+	Supervisor  CampaignSupervisor // optional; used to reload workers after station assignment changes
 }
 
 func (h *CommercialsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +150,147 @@ func (h *CommercialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 202, com)
+}
+
+// Delete removes a commercial and its fingerprint hashes. The master file on
+// disk is also unlinked. Refuses if detections already exist for the commercial.
+func (h *CommercialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+
+	campaignID, masterPath, err := h.Repo.Delete(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, catalog.ErrCommercialHasDetections) {
+			http.Error(w, "commercial has detection history; archive instead", 409)
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+			return
+		}
+		http.Error(w, "internal error", 500)
+		return
+	}
+
+	if masterPath != "" {
+		_ = os.Remove(masterPath)
+	}
+
+	if h.Supervisor != nil {
+		_ = h.Supervisor.Reload(campaignID)
+	}
+
+	w.WriteHeader(204)
+}
+
+// UpdateStations sets which stations a commercial should be detected on.
+// An empty list means the commercial is inactive (runs on no station).
+func (h *CommercialsHandler) UpdateStations(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	var in struct {
+		TargetStations []uuid.UUID `json:"target_stations"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	if in.TargetStations == nil {
+		in.TargetStations = []uuid.UUID{}
+	}
+
+	com, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+
+	if err := h.Repo.UpdateStations(r.Context(), id, in.TargetStations); err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+
+	// Reload workers for the campaign so the new station assignment takes effect immediately.
+	if h.Supervisor != nil {
+		_ = h.Supervisor.Reload(com.CampaignID)
+	}
+
+	w.WriteHeader(204)
+}
+
+// Audio streams the master audio file for a commercial.
+// Supports HTTP Range requests for in-browser playback with seek.
+// The `?download=1` query param forces an attachment Content-Disposition.
+func (h *CommercialsHandler) Audio(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	com, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+
+	f, err := os.Open(com.MasterStoragePath)
+	if err != nil {
+		http.Error(w, "audio file not available", 404)
+		return
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(com.MasterStoragePath))
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		switch ext {
+		case ".m4a", ".aac":
+			ct = "audio/mp4"
+		case ".mp3", ".mpeg":
+			ct = "audio/mpeg"
+		case ".wav":
+			ct = "audio/wav"
+		default:
+			ct = "application/octet-stream"
+		}
+	}
+
+	safeTitle := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == '"' || r < 32 {
+			return '_'
+		}
+		return r
+	}, com.Title)
+	filename := safeTitle + ext
+
+	disposition := "inline"
+	if r.URL.Query().Get("download") == "1" {
+		disposition = "attachment"
+	}
+
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", disposition+"; filename=\""+filename+"\"")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, filename, stat.ModTime(), f)
 }
 
 func probeDuration(path string) (float64, error) {

@@ -16,10 +16,11 @@ type CampaignsHandler struct {
 	Supervisor CampaignSupervisor
 }
 
-// CampaignSupervisor is implemented in Task 25.
+// CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
 type CampaignSupervisor interface {
 	Start(campaignID uuid.UUID) error
 	Pause(campaignID uuid.UUID) error
+	Reload(campaignID uuid.UUID) error
 }
 
 func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -118,5 +119,53 @@ func (h *CampaignsHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", 500)
 		return
 	}
+	w.WriteHeader(204)
+}
+
+// UpdateStations replaces the target_stations list for a campaign.
+// If the campaign is active, workers are paused and restarted with the new station list.
+func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	var in struct {
+		TargetStations []uuid.UUID `json:"target_stations"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	if in.TargetStations == nil {
+		in.TargetStations = []uuid.UUID{}
+	}
+
+	camp, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+	wasActive := camp.Status == "active"
+
+	// Pause current workers so removed stations get stopped cleanly.
+	if wasActive && h.Supervisor != nil {
+		_ = h.Supervisor.Pause(id)
+	}
+
+	if err := h.Repo.UpdateTargetStations(r.Context(), id, in.TargetStations); err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+
+	// Restart with the new station list.
+	if wasActive && h.Supervisor != nil {
+		_ = h.Supervisor.Start(id)
+	}
+
 	w.WriteHeader(204)
 }
