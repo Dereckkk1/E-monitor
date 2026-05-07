@@ -229,7 +229,17 @@ mesmo HMAC — útil para validar a integração antes de uma campanha real.
 
 ## Eventos suportados
 
-Hoje só `detection.confirmed`. Novos eventos devem ser:
+Hoje:
+
+- `detection.confirmed` — uma veiculação foi detectada e persistida (caminho normal).
+- `detection.retracted` — uma detecção previamente publicada foi retratada
+  pela desambiguação de versões (§18.2.2). Veja
+  [version-disambiguation.md](version-disambiguation.md) para o contrato
+  completo do payload e o cenário que dispara o evento. Receivers que
+  mantêm cópia local devem usar `(station_id, commercial.short_id,
+  detection.detected_at)` para localizar a row a marcar como retratada.
+
+Novos eventos devem ser:
 
 1. Adicionados à constante `EventType` em
    `workers/internal/webhook/outbox.go`.
