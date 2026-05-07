@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -170,6 +169,10 @@ func computeSummary(stationID uuid.UUID, events []HealthEvent, days int, periodS
 			lastIncidentAt = &t
 			if ev.DurationSeconds != nil {
 				totalDowntime += *ev.DurationSeconds
+			} else {
+				// open outage: count elapsed time to now
+				elapsed := int(time.Since(ev.EventAt).Seconds())
+				totalDowntime += elapsed
 			}
 		}
 	}
@@ -218,5 +221,3 @@ func buildDailySummary(events []HealthEvent, days int) []DailySummary {
 	return daily
 }
 
-// isNoRows reports whether err is the pgx "no rows" sentinel.
-func isNoRows(err error) bool { return err == pgx.ErrNoRows }
