@@ -63,10 +63,11 @@ func New(
 // events (e.g. the API "send test webhook" handler).
 func (d *Deliverer) Outbox() *Outbox { return d.outbox }
 
-// Start subscribes to detections.confirmed and translates each message into
-// an Outbox.Enqueue call. The subscription is drained when ctx is cancelled.
+// Start subscribes to detections.confirmed (and detections.retracted, for
+// §18.2.2) and translates each message into an Outbox.Enqueue call. Both
+// subscriptions are drained when ctx is cancelled.
 func (d *Deliverer) Start(ctx context.Context) error {
-	sub, err := d.nc.Subscribe(events.SubjectDetectionConfirmed, func(msg *nats.Msg) {
+	subConfirmed, err := d.nc.Subscribe(events.SubjectDetectionConfirmed, func(msg *nats.Msg) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := d.handleDetection(bgCtx, msg.Data); err != nil {
@@ -74,11 +75,23 @@ func (d *Deliverer) Start(ctx context.Context) error {
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("webhook: subscribe: %w", err)
+		return fmt.Errorf("webhook: subscribe confirmed: %w", err)
+	}
+	subRetracted, err := d.nc.Subscribe(events.SubjectDetectionRetracted, func(msg *nats.Msg) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := d.handleRetracted(bgCtx, msg.Data); err != nil {
+			d.log.Warn("webhook deliverer: handle retracted failed", zap.Error(err))
+		}
+	})
+	if err != nil {
+		_ = subConfirmed.Drain()
+		return fmt.Errorf("webhook: subscribe retracted: %w", err)
 	}
 	go func() {
 		<-ctx.Done()
-		_ = sub.Drain()
+		_ = subConfirmed.Drain()
+		_ = subRetracted.Drain()
 	}()
 	return nil
 }
@@ -151,6 +164,82 @@ func (d *Deliverer) handleDetection(ctx context.Context, raw []byte) error {
 
 	return d.outbox.Enqueue(ctx, &Event{
 		Type:     EventDetectionConfirmed,
+		ClientID: clientID,
+		Body:     body,
+	})
+}
+
+// retractedEvent matches the JSON shape published by the supervisor on
+// SubjectDetectionRetracted (see workers/internal/supervisor/disambiguation.go).
+type retractedEvent struct {
+	StationID         string  `json:"station_id"`
+	CommercialShortID int32   `json:"commercial_short_id"`
+	DetectedAt        string  `json:"detected_at"`
+	RetractedAt       string  `json:"retracted_at"`
+	Reason            string  `json:"reason"`
+	Confidence        float64 `json:"confidence"`
+}
+
+// handleRetracted enqueues a detection.retracted webhook for the client that
+// owns the affected commercial. Payload mirrors the confirmed envelope but
+// carries detected_at + retracted_at + reason so receivers can mark their
+// local copy as overruled.
+func (d *Deliverer) handleRetracted(ctx context.Context, raw []byte) error {
+	var ev retractedEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+
+	// Look up the commercial + owning client by short_id (commercial may
+	// already have its row touched by the supervisor's UPDATE — that's fine,
+	// we just need the client).
+	var (
+		commercialID    uuid.UUID
+		commercialTitle string
+		clientID        uuid.UUID
+	)
+	row := d.db.QueryRow(ctx, `
+		SELECT c.id, COALESCE(c.title, ''), COALESCE(ca.client_id, '00000000-0000-0000-0000-000000000000'::uuid)
+		FROM commercials c
+		LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+		WHERE c.short_id = $1
+		LIMIT 1`, ev.CommercialShortID)
+	if err := row.Scan(&commercialID, &commercialTitle, &clientID); err != nil {
+		return fmt.Errorf("lookup commercial %d: %w", ev.CommercialShortID, err)
+	}
+	if clientID == uuid.Nil {
+		return nil
+	}
+
+	stationUUID, err := uuid.Parse(ev.StationID)
+	if err != nil {
+		return fmt.Errorf("parse station id: %w", err)
+	}
+	var stationName string
+	_ = d.db.QueryRow(ctx,
+		`SELECT COALESCE(name, '') FROM stations WHERE id = $1`, stationUUID,
+	).Scan(&stationName)
+
+	body := map[string]any{
+		"detection": map[string]any{
+			"detected_at":  ev.DetectedAt,
+			"retracted_at": ev.RetractedAt,
+			"reason":       ev.Reason,
+			"confidence":   ev.Confidence,
+		},
+		"station": map[string]any{
+			"id":   ev.StationID,
+			"name": stationName,
+		},
+		"commercial": map[string]any{
+			"id":       commercialID.String(),
+			"short_id": ev.CommercialShortID,
+			"title":    commercialTitle,
+		},
+	}
+
+	return d.outbox.Enqueue(ctx, &Event{
+		Type:     EventDetectionRetracted,
 		ClientID: clientID,
 		Body:     body,
 	})
