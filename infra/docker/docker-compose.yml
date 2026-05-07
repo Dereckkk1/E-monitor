@@ -81,6 +81,13 @@ services:
       MASTERS_PATH: /data/masters
       API_PORT: "8080"
       CLAP_VERIFIER_URL: http://clap-verifier:8080
+      # OpenTelemetry tracing (§15.3). Empty endpoint disables tracing
+      # cleanly; pointing at jaeger:4317 lights up the Jaeger UI.
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+      OTEL_SERVICE_NAME: radiocheck-api
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      RADIOCHECK_ENV: development
     ports:
       - "${API_PORT}:8080"
     volumes:
@@ -169,6 +176,20 @@ services:
       - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "9093:9093"
+
+  # ── Fase 2: distributed tracing (§15.3) ──────────────────────────────────
+  # Jaeger all-in-one (collector + query + UI in a single container). The
+  # workers point OTEL_EXPORTER_OTLP_ENDPOINT at jaeger:4317 (OTLP gRPC).
+  # The UI is exposed on http://localhost:16686.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "4317:4317"   # OTLP gRPC ingest
+      - "4318:4318"   # OTLP HTTP ingest (kept enabled for libraries that
+                      # only speak HTTP, e.g. browser-based agents).
+      - "16686:16686" # Jaeger UI
 
   # ── Fase 2: backup diario do PG ──────────────────────────────────────────
   backup:
