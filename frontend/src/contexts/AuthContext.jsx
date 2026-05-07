@@ -1,22 +1,75 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useState, useCallback } from 'react'
 
-// Placeholder — will be wired to E-radios auth
-const AuthContext = createContext({
-  isAdmin: true,
-  isClient: false,
-  user: { name: 'Admin', email: '' },
-})
+const TOKEN_KEY = 'rc_token'
+const USER_KEY = 'rc_user'
+
+const AuthContext = createContext(null)
+
+function readUser() {
+  try {
+    const raw = sessionStorage.getItem(USER_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
 
 export function AuthProvider({ children }) {
-  // Hardcoded admin for now; swap with real auth later
+  // Token + user persist in sessionStorage so a refresh keeps the user
+  // signed in but closing the tab forces a new login. PoC trade-off — when
+  // refresh tokens land we should switch to httpOnly cookies (TODO).
+  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY))
+  const [user, setUser] = useState(readUser)
+
+  const login = useCallback((newToken, newUser) => {
+    sessionStorage.setItem(TOKEN_KEY, newToken)
+    if (newUser) sessionStorage.setItem(USER_KEY, JSON.stringify(newUser))
+    setToken(newToken)
+    setUser(newUser ?? null)
+  }, [])
+
+  const logout = useCallback(() => {
+    sessionStorage.removeItem(TOKEN_KEY)
+    sessionStorage.removeItem(USER_KEY)
+    setToken(null)
+    setUser(null)
+  }, [])
+
+  // Role helpers consumed by Sidebar / role-gated routes. Falls back to the
+  // PoC-era "admin" default when no user is loaded so existing UI code that
+  // assumes admin keeps rendering for now.
+  const role = user?.role ?? null
+  const isAdmin = role === 'admin' || role == null
+  const isClient = role === 'viewer'
+
   const value = {
-    isAdmin: true,
-    isClient: false,
-    user: { name: 'Admin', email: '' },
+    token,
+    user,
+    isAuthenticated: !!token,
+    isAdmin,
+    isClient,
+    login,
+    logout,
   }
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
-  return useContext(AuthContext)
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used within <AuthProvider>')
+  return ctx
+}
+
+// Module-level accessors so non-React code (e.g. axios interceptors) can
+// reach the current token / clear it on 401 without subscribing to React
+// state. Kept here, next to the consumers, instead of in api/client.js so
+// the storage keys live in exactly one file.
+export function getStoredToken() {
+  return sessionStorage.getItem(TOKEN_KEY)
+}
+
+export function clearStoredAuth() {
+  sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(USER_KEY)
 }
