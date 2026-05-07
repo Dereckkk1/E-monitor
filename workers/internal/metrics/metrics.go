@@ -126,6 +126,15 @@ var (
 		Name: "radiocheck_campaign_lifecycle_transitions_total",
 		Help: "Total campaign lifecycle status transitions, labeled by from/to.",
 	}, []string{"from", "to"})
+
+	// ── Version disambiguation (§18.2.2) ─────────────────────────────────
+	// MatchDisambiguation counts how often a confirmed detection was either
+	// suppressed at submission time (a longer cut already published) or
+	// caused the supervisor to retract a previously published row.
+	MatchDisambiguation = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_match_disambiguation_total",
+		Help: "Detections affected by §18.2.2 version disambiguation, by action.",
+	}, []string{"action"}) // suppressed | retracted
 )
 
 func init() {
@@ -139,5 +148,6 @@ func init() {
 		EvidenceTieringLastRun, EvidenceTieringErrors,
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
+		MatchDisambiguation,
 	)
 }

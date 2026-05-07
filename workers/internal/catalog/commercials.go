@@ -175,6 +175,40 @@ func (c *Commercials) ListReadyByCampaignsForStation(ctx context.Context, campai
 	return out, rows.Err()
 }
 
+// CommercialDedupInfo holds the per-detection metadata that the supervisor
+// needs to apply §18.2.2 version disambiguation: the owning client, the
+// commercial duration (used to pick the longer cut on conflict) and the
+// per-campaign dedup window override (defaults to 5s).
+type CommercialDedupInfo struct {
+	CommercialID       uuid.UUID
+	ClientID           uuid.UUID
+	DurationSeconds    int
+	DedupWindowSeconds int
+}
+
+// LookupForDedup returns the disambiguation context for the given commercial
+// short id (joining commercials → campaigns to get client_id and the
+// per-campaign dedup window). Returns pgx.ErrNoRows when the short id is
+// unknown or its fingerprint is not yet ready.
+func (c *Commercials) LookupForDedup(ctx context.Context, shortID int32) (CommercialDedupInfo, error) {
+	var info CommercialDedupInfo
+	var dur float64
+	err := c.pool.QueryRow(ctx, `
+		SELECT c.id, ca.client_id, c.duration_seconds, COALESCE(ca.dedup_window_seconds, 5)
+		FROM commercials c
+		JOIN campaigns ca ON ca.id = c.campaign_id
+		WHERE c.short_id = $1 AND c.fingerprint_status = 'ready'
+		LIMIT 1`,
+		shortID,
+	).Scan(&info.CommercialID, &info.ClientID, &dur, &info.DedupWindowSeconds)
+	if err != nil {
+		return CommercialDedupInfo{}, err
+	}
+	// Round half-up; durations in DB are NUMERIC and may store fractional seconds.
+	info.DurationSeconds = int(dur + 0.5)
+	return info, nil
+}
+
 // UpdateStations sets the target_stations for a commercial.
 // An empty slice means the commercial is inactive (runs on no station).
 func (c *Commercials) UpdateStations(ctx context.Context, id uuid.UUID, stationIDs []uuid.UUID) error {
