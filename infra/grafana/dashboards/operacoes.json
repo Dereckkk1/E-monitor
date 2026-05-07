@@ -1,0 +1,29 @@
+{
+  "id": null,
+  "title": "Radiocheck — Operações",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Workers Ativos",
+      "type": "stat",
+      "targets": [{"expr": "radiocheck_worker_active_total", "legendFormat": "Workers"}],
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}
+    },
+    {
+      "id": 2,
+      "title": "Detecções por hora",
+      "type": "timeseries",
+      "targets": [{"expr": "increase(radiocheck_detections_total{status=\"confirmed\"}[1h])", "legendFormat": "{{station_id}}"}],
+      "gridPos": {"x": 6, "y": 0, "w": 18, "h": 8}
+    },
+    {
+      "id": 3,
+      "title": "Falhas de upload de evidência",
+      "type": "stat",
+      "targets": [{"expr": "radiocheck_evidence_upload_failures_total", "legendFormat": "Falhas"}],
+      "gridPos": {"x": 0, "y": 4, "w": 6, "h": 4}
+    }
+  ],
+  "schemaVersion": 38,
+  "uid": "radiocheck-ops"
+}

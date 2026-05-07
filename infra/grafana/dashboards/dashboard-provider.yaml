@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: radiocheck
+    folder: Radiocheck
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards
