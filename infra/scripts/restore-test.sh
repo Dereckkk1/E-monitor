@@ -21,6 +21,10 @@ START_EPOCH=$(date +%s)
 : "${R2_BUCKET:?R2_BUCKET not set}"
 : "${R2_ACCESS_KEY:?R2_ACCESS_KEY not set}"
 : "${R2_SECRET_KEY:?R2_SECRET_KEY not set}"
+# PGDATABASE matches backup.sh's contract — fail fast rather than silently
+# probing the wrong DB name during the smoke phase. See
+# docs/backup-and-retention.md §1.2.
+: "${PGDATABASE:?PGDATABASE not set}"
 
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 AWS_CLI="${AWS_CLI:-aws}"
@@ -145,7 +149,7 @@ QUERY='SELECT
 
 log "running smoke queries"
 RESULT=$("$DOCKER_BIN" exec "$CONTAINER_NAME" \
-    psql -U postgres -d "${PGDATABASE:-radiocheck}" -tA -F'|' -c "$QUERY" 2>&1) \
+    psql -U postgres -d "$PGDATABASE" -tA -F'|' -c "$QUERY" 2>&1) \
     || { log "smoke query stderr: $RESULT"; fail "smoke query failed"; }
 
 log "smoke result: $RESULT"
