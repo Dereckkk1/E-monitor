@@ -18,8 +18,22 @@
 #   PROM_TEXTFILE_DIR           -- if set, writes prom metrics here
 #   AWS_CLI                     -- override aws binary path (default: aws)
 #   LOCAL_RETENTION_DAYS        -- default 7
+#   LOCK_FILE                   -- flock target, default /var/lock/radiocheck-pg-backup.lock
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+# ─── Single-instance guard ──────────────────────────────────────────────────
+# Two cron jobs landing on top of each other (or a manual retry while the cron
+# is still running) would launch pg_basebackup twice in parallel and either
+# corrupt local state or balloon load on the primary. flock(1) makes the second
+# invocation exit cleanly with status 0 ("nothing to do — another run is in
+# progress") instead of failing the cron.
+LOCK_FILE="${LOCK_FILE:-/var/lock/radiocheck-pg-backup.lock}"
+exec 200>"$LOCK_FILE" || { echo "[backup] cannot open lock file $LOCK_FILE" >&2; exit 1; }
+if ! flock -n 200; then
+    echo "[backup] another backup is already running (lock=$LOCK_FILE), exiting" >&2
+    exit 0
+fi
 
 log() { printf '%s [backup] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 fail() { log "FATAL: $*"; emit_metrics fail 0 0; emit_json fail 0 0; exit 1; }
