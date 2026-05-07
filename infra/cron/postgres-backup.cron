@@ -1,0 +1,31 @@
+# Radiocheck — Postgres backup & restore-test schedule (§14.4)
+#
+# Install on the backup host with:
+#   sudo cp infra/cron/postgres-backup.cron /etc/cron.d/radiocheck-postgres
+#   sudo chown root:root /etc/cron.d/radiocheck-postgres
+#   sudo chmod 0644 /etc/cron.d/radiocheck-postgres
+#
+# Required env (set system-wide or sourced inside the script):
+#   PGUSER PGPASSWORD PGHOST PGPORT PGDATABASE
+#   R2_ENDPOINT R2_BUCKET R2_ACCESS_KEY R2_SECRET_KEY
+#   PROM_TEXTFILE_DIR (optional — typically /var/lib/node_exporter/textfile)
+#
+# Times are in TZ=America/Sao_Paulo (see §14.4); the cron line below sets it
+# explicitly so we don't rely on the system clock.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TZ=America/Sao_Paulo
+MAILTO=""
+
+# Daily physical backup at 03:00 BR.
+0 3 * * * root /opt/radiocheck/infra/scripts/backup.sh >> /var/log/radiocheck/backup.log 2>&1
+
+# Monthly restore-test at 04:00 BR on the first day of the month.
+0 4 1 * * root /opt/radiocheck/infra/scripts/restore-test.sh >> /var/log/radiocheck/restore-test.log 2>&1
+
+# Daily evidence tiering can also be triggered via the API endpoint
+# (POST /v1/internal/admin/evidence/tiering/run) by the Go worker scheduler;
+# this cron is only a fallback for environments where the worker is offline.
+# Uncomment to enable:
+# 0 3 * * * root curl -fsS -X POST -H "Authorization: Bearer ${RADIOCHECK_ADMIN_JWT}" http://localhost:8080/v1/internal/admin/evidence/tiering/run >> /var/log/radiocheck/tiering.log 2>&1
