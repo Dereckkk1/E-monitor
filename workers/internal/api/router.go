@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/auth"
 )
@@ -35,12 +37,16 @@ type Deps struct {
 
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
+	// We deliberately wrap the *router* (not the per-route handlers) with
+	// otelhttp at the bottom of this function so chi.RouteContext is populated
+	// by the time the span name formatter runs.
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 	r.Use(corsMiddleware)
+	r.Use(otelRoutePatternMiddleware)
 
 	// External client API — protected by API key (§13.1).
 	if d.APIKey != nil {
@@ -156,7 +162,32 @@ func NewRouter(d Deps) http.Handler {
 		})
 	})
 
-	return r
+	// Wrap the whole router with OpenTelemetry's HTTP instrumentation. The
+	// otelhttp handler reads any inbound traceparent header, starts a server
+	// span, and terminates it when the response is flushed. Outbound calls
+	// made with otelhttp.NewTransport (e.g. webhook deliveries) become
+	// children of the active span.
+	//
+	// Span names default to "<method> <url-path>". A chi middleware at the
+	// top of the stack rewrites them to the matched route pattern (e.g.
+	// "GET /v1/internal/clients/{clientID}/api-keys") once chi resolves it,
+	// so dashboards don't blow up cardinality with raw IDs.
+	return otelhttp.NewHandler(r, "radiocheck-api",
+		otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
+			return req.Method + " " + req.URL.Path
+		}),
+	)
+}
+
+// otelRoutePatternMiddleware rewrites the active span name to the matched
+// chi route pattern after the inner handler returns.
+func otelRoutePatternMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+			trace.SpanFromContext(r.Context()).SetName(r.Method + " " + rctx.RoutePattern())
+		}
+	})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
