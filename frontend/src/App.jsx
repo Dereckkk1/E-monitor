@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import { ConfirmProvider } from './components/ConfirmModal'
+import RequireAuth from './components/RequireAuth'
 import Sidebar from './components/Sidebar'
 import StationsPage    from './pages/StationsPage'
 import StationEditPage from './pages/StationEditPage'
@@ -10,6 +11,7 @@ import CampaignsPage  from './pages/CampaignsPage'
 import MonitoringPage from './pages/MonitoringPage'
 import DetectionsPage from './pages/DetectionsPage'
 import DashboardPage  from './pages/DashboardPage'
+import LoginPage      from './pages/LoginPage'
 
 function HamburgerIcon() {
   return (
@@ -78,7 +80,19 @@ export default function App() {
   return (
     <AuthProvider>
       <ConfirmProvider>
-        <AppShell />
+        <Routes>
+          {/* Public */}
+          <Route path="/login" element={<LoginPage />} />
+          {/* Everything else is gated by RequireAuth */}
+          <Route
+            path="/*"
+            element={
+              <RequireAuth>
+                <AppShell />
+              </RequireAuth>
+            }
+          />
+        </Routes>
       </ConfirmProvider>
     </AuthProvider>
   )

@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 /* ── SVG icon primitives ──────────────────────────────────────── */
@@ -102,7 +102,18 @@ function ClientNav({ onClose }) {
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
 export default function Sidebar({ onClose }) {
-  const { isAdmin, user } = useAuth()
+  const { isAdmin, user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  function handleLogout() {
+    logout()
+    if (onClose) onClose()
+    navigate('/login', { replace: true })
+  }
+
+  // user is null when AuthContext is in its bootstrap default state
+  // (shouldn't happen behind RequireAuth, but guarded for safety).
+  const displayLabel = user?.email || user?.name || 'Conta'
 
   return (
     <>
@@ -116,7 +127,12 @@ export default function Sidebar({ onClose }) {
       </nav>
 
       <div className="sidebar-footer">
-        {user.name}
+        <div className="sidebar-user">
+          <span className="sidebar-user-email" title={displayLabel}>{displayLabel}</span>
+          <button type="button" className="sidebar-logout" onClick={handleLogout}>
+            Sair
+          </button>
+        </div>
       </div>
     </>
   )
