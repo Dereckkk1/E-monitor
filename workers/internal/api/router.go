@@ -6,9 +6,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"radiocheck/internal/api/handlers"
+	"radiocheck/internal/auth"
 )
 
+// Deps groups all handlers and middleware required by the API router.
+//
+// External (`/v1`) routes are protected by API key (§13.1).
+// Internal (`/v1/internal`) routes require a JWT with role admin/operator,
+// except for /health and /auth/login which remain public.
+//
+// StreamHealth (master) and APIKeys/Auth (fase2) coexist in this router.
 type Deps struct {
 	Stations     *handlers.StationsHandler
 	Clients      *handlers.ClientsHandler
@@ -17,6 +26,9 @@ type Deps struct {
 	Detections   *handlers.DetectionsHandler
 	Health       *handlers.HealthHandler
 	StreamHealth *handlers.StreamHealthHandler
+	Auth         *handlers.AuthHandler
+	APIKey       *auth.APIKeyMiddleware
+	APIKeys      *handlers.APIKeysHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -28,46 +40,81 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Timeout(60 * time.Second))
 	r.Use(corsMiddleware)
 
-	r.Route("/v1/internal", func(r chi.Router) {
-		r.Get("/health", d.Health.Check)
+	// External client API — protected by API key (§13.1).
+	if d.APIKey != nil {
+		r.Route("/v1", func(r chi.Router) {
+			r.Group(func(r chi.Router) {
+				r.Use(d.APIKey.Middleware)
+				r.Route("/detections", func(r chi.Router) {
+					r.Get("/", d.Detections.List)
+					r.Get("/{id}", d.Detections.Get)
+					r.Get("/{id}/evidence", d.Detections.Evidence)
+				})
+			})
+		})
+	}
 
-		r.Route("/stations", func(r chi.Router) {
-			r.Get("/", d.Stations.List)
-			r.Post("/", d.Stations.Create)
-			r.Get("/{id}", d.Stations.Get)
-			r.Put("/{id}", d.Stations.Update)
-		})
-		r.Route("/clients", func(r chi.Router) {
-			r.Get("/", d.Clients.List)
-			r.Post("/", d.Clients.Create)
-			r.Put("/{id}", d.Clients.Update)
-			r.Delete("/{id}", d.Clients.Delete)
-		})
-		r.Route("/campaigns", func(r chi.Router) {
-			r.Get("/", d.Campaigns.List)
-			r.Post("/", d.Campaigns.Create)
-			r.Get("/{id}", d.Campaigns.Get)
-			r.Put("/{id}/start", d.Campaigns.Start)
-			r.Put("/{id}/pause", d.Campaigns.Pause)
-			r.Put("/{id}/stations", d.Campaigns.UpdateStations)
-			r.Delete("/{id}", d.Campaigns.Delete)
-		})
-		r.Route("/commercials", func(r chi.Router) {
-			r.Get("/", d.Commercials.List)
-			r.Post("/", d.Commercials.Upload)
-			r.Get("/{id}", d.Commercials.Get)
-			r.Get("/{id}/audio", d.Commercials.Audio)
-			r.Put("/{id}/stations", d.Commercials.UpdateStations)
-			r.Delete("/{id}", d.Commercials.Delete)
-		})
-		r.Route("/detections", func(r chi.Router) {
-			r.Get("/", d.Detections.List)
-			r.Get("/{id}", d.Detections.Get)
-			r.Get("/{id}/evidence", d.Detections.Evidence)
-		})
-		r.Route("/stream-health", func(r chi.Router) {
-			r.Get("/", d.StreamHealth.List)
-			r.Get("/{stationId}", d.StreamHealth.Detail)
+	// Prometheus metrics — public, no auth required (§15.1).
+	r.Handle("/metrics", promhttp.Handler())
+
+	r.Route("/v1/internal", func(r chi.Router) {
+		// Public: health check and login do not require JWT.
+		r.Get("/health", d.Health.Check)
+		if d.Auth != nil {
+			r.Post("/auth/login", d.Auth.Login)
+		}
+
+		// Protected: all other internal routes require a valid JWT
+		// with role "admin" or "operator".
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireJWT)
+			r.Use(auth.RequireRole("admin", "operator"))
+
+			r.Route("/stations", func(r chi.Router) {
+				r.Get("/", d.Stations.List)
+				r.Post("/", d.Stations.Create)
+				r.Get("/{id}", d.Stations.Get)
+				r.Put("/{id}", d.Stations.Update)
+			})
+			r.Route("/clients", func(r chi.Router) {
+				r.Get("/", d.Clients.List)
+				r.Post("/", d.Clients.Create)
+				r.Put("/{id}", d.Clients.Update)
+				r.Delete("/{id}", d.Clients.Delete)
+			})
+			if d.APIKeys != nil {
+				r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
+				r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)
+				r.Delete("/clients/{clientID}/api-keys/{keyID}", d.APIKeys.Revoke)
+				r.Patch("/clients/{clientID}/webhook", d.APIKeys.SetWebhook)
+			}
+			r.Route("/campaigns", func(r chi.Router) {
+				r.Get("/", d.Campaigns.List)
+				r.Post("/", d.Campaigns.Create)
+				r.Get("/{id}", d.Campaigns.Get)
+				r.Put("/{id}/start", d.Campaigns.Start)
+				r.Put("/{id}/pause", d.Campaigns.Pause)
+				r.Put("/{id}/stations", d.Campaigns.UpdateStations)
+				r.Delete("/{id}", d.Campaigns.Delete)
+			})
+			r.Route("/commercials", func(r chi.Router) {
+				r.Get("/", d.Commercials.List)
+				r.Post("/", d.Commercials.Upload)
+				r.Get("/{id}", d.Commercials.Get)
+				r.Get("/{id}/audio", d.Commercials.Audio)
+				r.Put("/{id}/stations", d.Commercials.UpdateStations)
+				r.Delete("/{id}", d.Commercials.Delete)
+			})
+			r.Route("/detections", func(r chi.Router) {
+				r.Get("/", d.Detections.List)
+				r.Get("/{id}", d.Detections.Get)
+				r.Get("/{id}/evidence", d.Detections.Evidence)
+			})
+			r.Route("/stream-health", func(r chi.Router) {
+				r.Get("/", d.StreamHealth.List)
+				r.Get("/{stationId}", d.StreamHealth.Detail)
+			})
+			r.Get("/workers", d.Health.WorkerStatus)
 		})
 	})
 
