@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useClients, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
+import WebhookModal from '../components/WebhookModal'
 
 const EMPTY_FORM = {
   name: '',
@@ -80,6 +81,17 @@ function PinIcon() {
   return (
     <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 1C4.343 1 3 2.343 3 4c0 2.5 3 7 3 7s3-4.5 3-7c0-1.657-1.343-3-3-3z" /><circle cx="6" cy="4" r="1" />
+    </svg>
+  )
+}
+
+function WebhookIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="10" cy="3.5" r="1.5" />
+      <circle cx="7" cy="10.5" r="1.5" />
+      <path d="M5 4.5l1.5 4.5M9 4.5L7.5 9M5.5 3.5h3" />
     </svg>
   )
 }
@@ -314,6 +326,7 @@ export default function ClientsPage() {
 
   const [creating, setCreating] = useState(false)
   const [editing, setEditing]   = useState(null)
+  const [webhookFor, setWebhookFor] = useState(null)
 
   function handleCreate(data) {
     createClient.mutate(data, { onSuccess: () => setCreating(false) })
@@ -385,6 +398,14 @@ export default function ClientsPage() {
                   <button
                     className="btn-icon btn-secondary"
                     style={{ borderRadius: 'var(--radius-md)' }}
+                    title="Webhook"
+                    onClick={() => setWebhookFor(c)}
+                  >
+                    <WebhookIcon />
+                  </button>
+                  <button
+                    className="btn-icon btn-secondary"
+                    style={{ borderRadius: 'var(--radius-md)' }}
                     title="Editar"
                     onClick={() => setEditing(c)}
                   >
@@ -423,6 +444,13 @@ export default function ClientsPage() {
           onSave={handleUpdate}
           isSaving={updateClient.isPending}
           isError={updateClient.isError}
+        />
+      )}
+
+      {webhookFor && (
+        <WebhookModal
+          client={webhookFor}
+          onClose={() => setWebhookFor(null)}
         />
       )}
     </div>

@@ -30,6 +30,7 @@ type Deps struct {
 	APIKey       *auth.APIKeyMiddleware
 	APIKeys      *handlers.APIKeysHandler
 	Admin        *handlers.AdminHandler
+	Webhooks     *handlers.WebhooksHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -88,7 +89,13 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
 				r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)
 				r.Delete("/clients/{clientID}/api-keys/{keyID}", d.APIKeys.Revoke)
-				r.Patch("/clients/{clientID}/webhook", d.APIKeys.SetWebhook)
+			}
+			if d.Webhooks != nil {
+				// Webhook config + observability + test dispatcher (§13.1.4).
+				r.Get("/clients/{id}/webhook", d.Webhooks.GetConfig)
+				r.Patch("/clients/{id}/webhook", d.Webhooks.PatchConfig)
+				r.Get("/clients/{id}/webhook-deliveries", d.Webhooks.ListDeliveries)
+				r.Post("/clients/{id}/webhook-test", d.Webhooks.SendTest)
 			}
 			r.Route("/campaigns", func(r chi.Router) {
 				r.Get("/", d.Campaigns.List)
