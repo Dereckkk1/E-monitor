@@ -2,6 +2,10 @@
 
 O sistema ajusta automaticamente o `min_hashes` (mínimo de hashes para confirmar uma detecção) por emissora.
 
+> Para detalhes de como o valor calculado aqui é aplicado em runtime pelo
+> worker (refresh periódico, endpoint admin, métricas), ver
+> [`threshold-dynamic.md`](threshold-dynamic.md).
+
 ## Fluxo
 
 1. Cada nova emissora começa em `calibration_mode = true` (threshold padrão: 5 hashes).
