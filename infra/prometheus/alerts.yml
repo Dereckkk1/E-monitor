@@ -50,3 +50,145 @@ groups:
           severity: warning
         annotations:
           summary: "Job de tiering de evidências não executou nas últimas 48h"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Novos alertas (§15.5 do plano) — adicionados 2026-05-07
+  # ─────────────────────────────────────────────────────────────────────
+  - name: radiocheck-novos
+    interval: 30s
+    rules:
+      # ── R26 / falha de rede compartilhada ────────────────────────────
+      - alert: MultipleStreamsDown
+        expr: |
+          count(increase(radiocheck_worker_bytes_received_total[5m]) == 0) >= 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Múltiplos streams sem dados ({{ $value }} workers)"
+          description: |
+            {{ $value }} workers ficaram sem receber bytes nos últimos 5min.
+            Causa raiz comum: rede de saída, DNS, proxy de saída ou bloqueio
+            simultâneo por upstream. Investigar antes de tratar como falhas
+            individuais por emissora.
+          runbook_url: "docs/runbooks/MultipleStreamsDown.md"
+
+      # ── DBLatencyHigh ────────────────────────────────────────────────
+      # TODO(metrics): expor radiocheck_db_query_duration_seconds_bucket no
+      # API process (pgxpool tracer ou middleware sqlc). Sem essa métrica o
+      # alerta abaixo nunca dispara. Ver §15.1 do plano.
+      # - alert: DBLatencyHigh
+      #   expr: |
+      #     histogram_quantile(
+      #       0.95,
+      #       rate(radiocheck_db_query_duration_seconds_bucket[5m])
+      #     ) > 1
+      #   for: 10m
+      #   labels:
+      #     severity: warning
+      #   annotations:
+      #     summary: "Latência p95 de queries Postgres > 1s"
+      #     description: |
+      #       p95 das queries Postgres ultrapassou 1s nos últimos 5min.
+      #       Possíveis causas: contenção de lock, índice ausente, vacuum
+      #       agressivo, plano de query degradado.
+      #     runbook_url: "docs/runbooks/DBLatencyHigh.md"
+
+      # ── EvidenceQueueGrowing ─────────────────────────────────────────
+      - alert: EvidenceQueueGrowing
+        expr: |
+          radiocheck_evidence_queue_size > 100
+          and
+          deriv(radiocheck_evidence_queue_size[10m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fila de upload de evidência crescendo ({{ $value }} itens)"
+          description: |
+            Spool de evidências acima de 100 itens E com derivada positiva
+            nos últimos 10min — uploads não estão drenando. Provavelmente
+            problema persistente de S3/R2 ou throughput de upload muito
+            baixo. Se ignorado, pode esgotar disco local.
+          runbook_url: "docs/runbooks/EvidenceQueueGrowing.md"
+
+      # ── DetectionRateAnomaly ─────────────────────────────────────────
+      # Versão simplificada (z-score completo é caro): dispara quando a
+      # taxa instantânea cai abaixo de 30% da média móvel de 7 dias. Cobre
+      # o cenário "emissoras pararam de detectar" (ex.: índice corrompido,
+      # threshold incorreto pós-deploy). Não cobre spike — adicionar
+      # `or rate(...) > 3 * avg_over_time(...)` se precisar.
+      - alert: DetectionRateAnomaly
+        expr: |
+          sum(rate(radiocheck_detections_total{status="confirmed"}[10m]))
+            < 0.3 * sum(avg_over_time(rate(radiocheck_detections_total{status="confirmed"}[10m])[7d:10m]))
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxa de detecção 70% abaixo da média de 7 dias"
+          description: |
+            Total de detecções confirmadas por minuto caiu para menos de
+            30% da média histórica de 7 dias. Possíveis causas: índice
+            não recarregado após troca de comerciais, threshold deslocado,
+            quedas em massa de stream (ver MultipleStreamsDown).
+          runbook_url: "docs/runbooks/DetectionRateAnomaly.md"
+
+      # ── WorkerHighMemory ─────────────────────────────────────────────
+      # Indicador de memory leak (R28). Threshold 1.5 GiB por worker
+      # individual; ajustar quando o footprint real do índice for medido.
+      # Depende de cAdvisor exportando container_memory_working_set_bytes.
+      - alert: WorkerHighMemory
+        expr: |
+          container_memory_working_set_bytes{name=~"radiocheck-worker.*|api"}
+            > 1.5 * 1024 * 1024 * 1024
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker consumindo >1.5 GiB de memória ({{ $labels.name }})"
+          description: |
+            Container {{ $labels.name }} está acima de 1.5 GiB de RSS por
+            mais de 30min. Indicador típico de memory leak (R28). O restart
+            preventivo (§8.7) deve cobrir, mas se reincidir investigar.
+          runbook_url: "docs/runbooks/WorkerHighMemory.md"
+
+      # ── ClockDrift ───────────────────────────────────────────────────
+      # TODO(metrics): node_exporter precisa estar rodando em cada host
+      # com a coleção `time` habilitada para expor `node_timex_offset_seconds`.
+      # A regra abaixo dispara quando |offset| > 2s em qualquer node. Drift
+      # afeta correlação de timestamps de detecção entre workers/host de DB.
+      - alert: ClockDrift
+        expr: |
+          abs(node_timex_offset_seconds) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clock drift > 2s em {{ $labels.instance }}"
+          description: |
+            Diferença de relógio em {{ $labels.instance }} excedeu 2s.
+            Compromete a correlação temporal de detecções e a janela de
+            cooldown. Verificar `chrony`/`systemd-timesyncd` no host.
+          runbook_url: "docs/runbooks/ClockDrift.md"
+
+      # ── LifecycleSchedulerStuck ──────────────────────────────────────
+      # TODO(metrics): expor radiocheck_lifecycle_scheduler_last_run_timestamp
+      # no scheduler de campanhas (§18.2.1). Item ficou de fora da
+      # implementação 2B; necessário criar gauge atualizada a cada tick
+      # (independente de haver transição). Sem ela este alerta nunca
+      # dispara — manter ativo para já validar a regra quando a métrica
+      # for adicionada.
+      - alert: LifecycleSchedulerStuck
+        expr: |
+          time() - radiocheck_lifecycle_scheduler_last_run_timestamp > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Lifecycle scheduler de campanhas sem rodar há >5min"
+          description: |
+            Scheduler de transições programada→ativa→concluida não executa
+            há mais de 5 minutos. Campanhas podem ficar travadas em estado
+            incorreto. Ver §18.2.1 do plano.
+          runbook_url: "docs/runbooks/LifecycleSchedulerStuck.md"
