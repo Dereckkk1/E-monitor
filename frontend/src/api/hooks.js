@@ -84,6 +84,14 @@ export function usePauseCampaign() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }
+// Lifecycle (§18.2.1): cancel é a única transição manual restante.
+export function useCancelCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/campaigns/${id}/cancel`).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
 export function useDeleteCampaign() {
   const qc = useQueryClient()
   return useMutation({

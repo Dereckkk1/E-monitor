@@ -25,11 +25,12 @@ function formatDateFull(date) {
   })
 }
 
+// Status keys are the lifecycle values written by the API (§18.2.1 PT-BR).
 const STATUS_META = {
-  active:  { label: 'Ativas',      badge: 'Ativa',      color: 'var(--c-action)',  badgeClass: 'badge-active'  },
-  paused:  { label: 'Pausadas',    badge: 'Pausada',    color: 'var(--c-warning)', badgeClass: 'badge-paused'  },
-  planned: { label: 'Planejadas',  badge: 'Planejada',  color: 'var(--c-info)',    badgeClass: 'badge-planned' },
-  ended:   { label: 'Encerradas',  badge: 'Encerrada',  color: 'var(--c-text-3)',  badgeClass: 'badge-ended'   },
+  ativa:      { label: 'Ativas',      badge: 'Ativa',      color: '#10b981',          badgeClass: 'badge-ativa'      },
+  programada: { label: 'Programadas', badge: 'Programada', color: '#6b7280',          badgeClass: 'badge-programada' },
+  concluida:  { label: 'Concluídas',  badge: 'Concluída',  color: '#3b82f6',          badgeClass: 'badge-concluida'  },
+  cancelada:  { label: 'Canceladas',  badge: 'Cancelada',  color: 'rgba(239, 68, 68, 0.6)', badgeClass: 'badge-cancelada' },
 }
 
 // ── Status Overview ───────────────────────────────────────────────
@@ -37,7 +38,7 @@ const STATUS_META = {
 function StatusOverview({ campaigns }) {
   const total = campaigns.length
   const counts = useMemo(() => {
-    const c = { active: 0, paused: 0, planned: 0, ended: 0 }
+    const c = { ativa: 0, programada: 0, concluida: 0, cancelada: 0 }
     campaigns.forEach(camp => {
       if (c[camp.status] !== undefined) c[camp.status]++
     })
@@ -87,7 +88,7 @@ function StatusOverview({ campaigns }) {
 
 function CampaignCard({ campaign }) {
   const navigate = useNavigate()
-  const meta = STATUS_META[campaign.status] ?? STATUS_META.ended
+  const meta = STATUS_META[campaign.status] ?? STATUS_META.concluida
 
   return (
     <div className="campaign-card">

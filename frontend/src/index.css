@@ -523,6 +523,12 @@ textarea.input { min-height: 90px; resize: vertical; line-height: 1.5; }
 .badge-ended    { background: color-mix(in srgb, var(--c-text-3)  18%, transparent); color: var(--c-text-3); }
 .badge-error    { background: color-mix(in srgb, var(--c-danger)  18%, transparent); color: var(--c-danger); }
 
+/* Lifecycle PT-BR (§18.2.1): 4 cores fixas. */
+.badge-ativa      { background: color-mix(in srgb, #10b981 18%, transparent); color: #10b981; }
+.badge-programada { background: color-mix(in srgb, #6b7280 18%, transparent); color: #6b7280; }
+.badge-concluida  { background: color-mix(in srgb, #3b82f6 18%, transparent); color: #3b82f6; }
+.badge-cancelada  { background: color-mix(in srgb, #ef4444 14%, transparent); color: rgba(239, 68, 68, 0.85); }
+
 .badge-fp-ready      { color: var(--c-success); }
 .badge-fp-generating { color: var(--c-warning); }
 .badge-fp-pending    { color: var(--c-text-3); }
