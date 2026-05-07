@@ -86,6 +86,62 @@ Cinco fixes aplicados em sequência sobre `master` após varredura de segurança
 **Onde:** todo o `workers/internal/`.
 **Status:** Etapa 2F do plano de execução. Já está na fila.
 
+### F-80. Cobertura de testes ≥70% nas camadas críticas (parcial em Fase 2)
+
+**Por quê:** §19.1 do plano exige ≥70% nas camadas críticas (matching, fingerprint, state machine, parsers); ≥85% no Match Engine. Estado atual após Item G (entrega parcial por rate limit do agent):
+- match: 62.1% — perto da meta
+- handlers: 35.0%
+- webhook: 25.6%
+- supervisor: 18.7%
+- evidence: 17.1%
+- ingestor: 17.0%
+- index: 10.3%
+- catalog: 8.2%
+
+A baixa cobertura é **estrutural**: pacotes com dependências concretas (pgxpool, nats.Conn, ffmpeg, S3Client) não foram extraídos como interfaces, então o caminho I/O-bound só é testável com mocks viáveis após refactor de seams.
+
+**Onde:** todos os pacotes acima.
+
+**Como:**
+1. Extrair interfaces mínimas (apenas o subset usado): ex `type StationsRepo interface { GetThreshold(ctx, id) (int32, error); ... }` em vez de depender de `*catalog.Stations` concreto.
+2. Mocks com `gomock` ou hand-written via interface (consistente com `mockBus` em `lifecycle_scheduler_test.go`).
+3. Para handlers: usar `httptest.NewRecorder` + `chi.NewRouter` populando `URLParam`.
+4. Para evidence: criar `AudioEncoder` interface (envelopa ffmpeg shell exec).
+5. Aproveitar testes já escritos pelo agent G (worktree merged como entrega parcial) e expandir.
+
+**Dependência:** sem; mas afeta outros follow-ups que precisam de seams (F-XX abaixo).
+
+**Estimativa:** 8-16h dedicadas, dependendo da profundidade dos refactors.
+
+### F-81. Extrair interfaces mínimas para testabilidade
+
+**Por quê:** vide F-80. Hoje o supervisor depende de `*catalog.Stations` concreto, evidence service depende de `*storage.S3Client` + ffmpeg shell exec, etc. Sem seams, mocks são impossíveis sem testcontainer.
+
+**Onde:**
+- `workers/internal/supervisor/supervisor.go` — recebe interfaces em vez de structs concretas.
+- `workers/internal/evidence/service.go` — `AudioEncoder` (ffmpeg) + `BlobStore` (S3) interfaces.
+- `workers/internal/ingestor/worker.go` — `StreamReader` interface (envelopa http get + ffmpeg input).
+- `workers/internal/api/handlers/*.go` — handlers já recebem dependências; só falta documentar contratos mínimos.
+
+**Como:** extrair interfaces no pacote consumidor (não no pacote de implementação). Ex: `supervisor` define `StationsRepo`, `Calibration` define `CatalogRepo`. Implementação concreta (`*catalog.Stations`) implementa tacitamente.
+
+**Dependência:** decisão de estilo (interfaces locais vs centralizadas em `internal/contracts/`).
+
+### F-82. Limpeza pós-merge dos testes do Item G
+
+Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-agent-a05865f29ac7968f8`):
+
+1. **Confirmar guarda `<-ctx.Done()` no topo de `ingestor.Worker.Run`** para sustentar `TestRun_RespectsCancelledContext` sem precisar de timeout de 2s. Se não existir, adicionar (1 linha).
+2. **Asserts positivos em `evidence/service_test.go::TestHandle_Invalid*`** depois que `Service` ganhar contador observable de "rejected" (vai sair junto com extração de interface, F-81).
+3. **Podar `TestDedupBufferRetention_Constant` e `TestDefaultThresholdConstant`** — pinning de constantes não-públicas é tautologia. Manter só pinning de wire-format (subjects NATS, headers HTTP, event types).
+4. **Unificar `RetractedEvent` struct** entre `supervisor/`, `webhook/`, `ingestor/` em uma lib comum (`internal/events/types.go`?), eliminando 3 testes JSON-shape duplicados.
+
+### F-83. Limitações conhecidas do tracing (Item F)
+
+1. **Match engine sem instrumentação interna.** `worker.window` no ingestor cobre a duração total da janela; lookup no índice e geração de candidate ficam dentro desse span sem subdivisão. Não é gap operacional sério — duração total + atributos `score`/`coverage` em logs já permitem investigar outliers.
+2. **`evidence.process_async` e `webhook.deliver` em traces separados.** Async/decoupled por design (callback NATS retorna antes do upload S3 terminar; webhook outbox pode entregar minutos depois). `PropagateTraceContext` mantém o `trace_id` em comum, mas não há `parent_span_id` ligando os dois — aparecem como traces irmãos com mesmo trace_id no Jaeger. Documentado em `docs/tracing.md`.
+3. **CLAP verifier sidecar (Python) não instrumentado.** Fora do escopo do Item F (Go-only). Se for instrumentar depois, usar `opentelemetry-instrumentation-fastapi` ou similar e injetar trace context no header HTTP da chamada do `neural/client.go`.
+
 ---
 
 ## Itens médios — fazer antes do crescimento real
