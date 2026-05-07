@@ -108,6 +108,22 @@ Resposta:
 {"status":"ok","stations":7,"duration_ms":42}
 ```
 
+#### Idempotência
+
+Cliques simultâneos do operador (ex: dois admins acionando a mesma
+emissora pelo painel) são seguros. O `UPDATE` em `station_thresholds`
+feito por `RunOnceForStation` é idempotente — sempre sai com
+`calibration_mode=true` e `noise_samples='{}'` — e o
+`calibration_started_at` é simplesmente sobrescrito. A perda fracional
+de janela é aceitável (no pior caso, a calibração pode demorar alguns
+segundos a mais antes de fechar).
+
+A rota admin emite as mesmas métricas que o tick natural
+(`radiocheck_calibration_runs_total{result}`,
+`radiocheck_calibration_last_success_timestamp`,
+`radiocheck_calibration_duration_seconds`), então dashboards e alertas
+não diferenciam entre execução manual e automática.
+
 ## Reconfiguração Manual (banco)
 
 Quando o endpoint admin não estiver disponível, é possível disparar a

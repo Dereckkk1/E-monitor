@@ -70,6 +70,15 @@ curl -X POST http://api/v1/internal/admin/calibration/run \
   -d '{"station_id":"<uuid>"}'
 ```
 
+**Idempotência:** acionar várias vezes a mesma emissora é seguro — o
+UPDATE em `station_thresholds` é idempotente (sempre seta
+`calibration_mode=true` e zera `noise_samples`), e
+`calibration_started_at` é simplesmente sobrescrito. Em concorrência
+real (dois admins clicando), a perda fracional de janela é aceitável.
+A rota admin **emite as mesmas métricas que o tick natural**, então
+não há "buraco" em `radiocheck_calibration_last_success_timestamp`
+após um run manual bem-sucedido.
+
 ### 2. Soltar advisory lock travado
 Se o diagnóstico (4) mostrou um pid antigo segurando o lock advisory:
 
