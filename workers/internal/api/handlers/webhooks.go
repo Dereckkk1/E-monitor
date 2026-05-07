@@ -151,7 +151,7 @@ func (h *WebhooksHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 
 func validEvent(e string) bool {
 	switch e {
-	case "detection.confirmed", "webhook.test", "*":
+	case "detection.confirmed", "detection.retracted", "webhook.test", "*":
 		return true
 	}
 	return false
