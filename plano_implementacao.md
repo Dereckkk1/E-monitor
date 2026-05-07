@@ -1846,6 +1846,10 @@ A qualquer momento durante a migração, se observarmos:
 
 ### 18.1 Fase 1 — Prova Técnica (Semanas 1 a 6)
 
+**Status (2026-05-07): code-complete. Validação operacional pendente.** Pendências:
+- Cobertura de testes ≥70% nas camadas críticas — atual 8-62% por pacote (ver `docs/follow-ups-fase2.md` F-80).
+- Critério de saída empírico (14 dias contínuos com precision ≥95% / recall ≥90% medidos manualmente) ainda não medido.
+
 **Escopo:** 5 emissoras representativas, 10 comerciais.
 
 **Composição das 5 emissoras (escolha intencional para cobrir os tipos de processamento):**
@@ -1871,6 +1875,11 @@ A qualquer momento durante a migração, se observarmos:
 **Equipe esperada:** 1 dev sênior backend full-time, 1 dev pleno backend full-time, 1 consultor DSP/áudio part-time (análise dos primeiros resultados e tuning de parâmetros).
 
 ### 18.2 Fase 2 — Hardening e Coexistência (Semanas 7 a 18)
+
+**Status (2026-05-07): code-complete. Validação operacional pendente.** Todas as entregas de código estão em master, incluindo §18.2.1 (ciclo de vida automático de campanha) e §18.2.2 (desambiguação de versões). Tracing OpenTelemetry §15.3 também integrado. Pendências para fechar a fase:
+- Escalamento operacional para 30 emissoras + 50 comerciais (cadastro conforme demanda).
+- Critério de saída empírico (concordância ≥95% com fornecedor por 3 semanas consecutivas, uptime ≥99% mensal, latência p95 <10s) ainda não medido.
+- Débitos técnicos catalogados em `docs/follow-ups-fase2.md` (F-01 a F-83) para resolver antes ou logo após o Go/No-Go da Fase 3.
 
 **Escopo:** 30 emissoras, 50 comerciais. Fase A da migração executada em paralelo.
 
