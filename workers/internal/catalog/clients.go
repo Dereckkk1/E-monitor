@@ -56,6 +56,26 @@ type UpdateClientInput struct {
 	State        *string `json:"state"`
 }
 
+// WebhookConfig represents a client's webhook delivery configuration (§13.1.4).
+//
+// Secret is stored in plaintext for the PoC (per spec). The HTTP API never
+// returns the full secret; handlers expose only the first 4 chars + ellipsis.
+type WebhookConfig struct {
+	URL     string   `json:"url"`
+	Secret  string   `json:"-"` // never serialized through the API
+	Enabled bool     `json:"enabled"`
+	Events  []string `json:"events"`
+}
+
+// UpdateWebhookInput is the payload accepted by PATCH /clients/{id}/webhook.
+// All fields are optional pointers so the caller can update a single field.
+type UpdateWebhookInput struct {
+	URL     *string  `json:"webhook_url,omitempty"`
+	Secret  *string  `json:"webhook_secret,omitempty"`
+	Enabled *bool    `json:"webhook_enabled,omitempty"`
+	Events  []string `json:"webhook_events,omitempty"`
+}
+
 func (c *Clients) Create(ctx context.Context, in CreateClientInput) (*Client, error) {
 	var cli Client
 	err := c.pool.QueryRow(ctx, `
@@ -107,4 +127,58 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 		out = append(out, cli)
 	}
 	return out, rows.Err()
+}
+
+// GetWebhookConfig returns the webhook configuration for a client. Returns nil
+// (and no error) when the client has no URL configured — callers treat this
+// as "webhooks disabled for this client".
+func (c *Clients) GetWebhookConfig(ctx context.Context, id uuid.UUID) (*WebhookConfig, error) {
+	var (
+		url     *string
+		secret  *string
+		enabled bool
+		events  []string
+	)
+	err := c.pool.QueryRow(ctx, `
+		SELECT webhook_url, webhook_secret, COALESCE(webhook_enabled, false), COALESCE(webhook_events, ARRAY['detection.confirmed']::TEXT[])
+		FROM clients WHERE id = $1`, id,
+	).Scan(&url, &secret, &enabled, &events)
+	if err != nil {
+		return nil, err
+	}
+	if url == nil || *url == "" {
+		return nil, nil
+	}
+	cfg := &WebhookConfig{
+		URL:     *url,
+		Enabled: enabled,
+		Events:  events,
+	}
+	if secret != nil {
+		cfg.Secret = *secret
+	}
+	return cfg, nil
+}
+
+// UpdateWebhookConfig applies a partial update of the webhook config columns
+// in `clients`. Pointers left nil are not modified, so the caller can change
+// a single field without round-tripping the rest.
+func (c *Clients) UpdateWebhookConfig(ctx context.Context, id uuid.UUID, in UpdateWebhookInput) (*WebhookConfig, error) {
+	tag, err := c.pool.Exec(ctx, `
+		UPDATE clients SET
+			webhook_url     = COALESCE($2, webhook_url),
+			webhook_secret  = COALESCE($3, webhook_secret),
+			webhook_enabled = COALESCE($4, webhook_enabled),
+			webhook_events  = CASE WHEN $5::text[] IS NULL THEN webhook_events ELSE $5 END,
+			updated_at      = NOW()
+		WHERE id = $1`,
+		id, in.URL, in.Secret, in.Enabled, in.Events,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return c.GetWebhookConfig(ctx, id)
 }
