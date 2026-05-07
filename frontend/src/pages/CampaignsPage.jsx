@@ -7,6 +7,7 @@ import {
 } from '../api/hooks'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
+import { useConfirm, useAlert } from '../components/ConfirmModal'
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
 
@@ -857,6 +858,8 @@ function CampaignStationsSection({ campaign, allStations }) {
 
 function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign }) {
   const [expanded, setExpanded] = useState(false)
+  const confirm = useConfirm()
+  const alertDialog = useAlert()
   const client = clients.find(cl => cl.id === campaign.client_id)
   const stationCount = (campaign.target_stations ?? []).length
   const startTip = startDateTooltip(campaign.start_date, campaign.status)
@@ -864,7 +867,7 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   const canCancel = campaign.status === 'programada' || campaign.status === 'ativa'
 
   async function handleCancel() {
-    const ok = await window.confirm(
+    const ok = await confirm(
       `Cancelar "${campaign.name}"? Os workers param imediatamente e a campanha vai para o histórico (não é possível reativar).`
     )
     if (!ok) return
@@ -872,9 +875,9 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
       onError: (err) => {
         const status = err?.response?.status
         if (status === 409) {
-          window.alert('Esta campanha já está em estado terminal.')
+          alertDialog('Esta campanha já está em estado terminal.')
         } else {
-          window.alert('Erro ao cancelar campanha.')
+          alertDialog('Erro ao cancelar campanha.')
         }
       }
     })
@@ -918,7 +921,7 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
             className="btn btn-icon btn-danger-ghost btn-sm"
             title="Excluir campanha"
             onClick={async () => {
-              if (await window.confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
+              if (await confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
                 deleteCampaign.mutate(campaign.id)
               }
             }}

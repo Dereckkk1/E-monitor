@@ -77,14 +77,10 @@ export function useStartCampaign() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }
-export function usePauseCampaign() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id) => api.put(`/campaigns/${id}/pause`).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
-  })
-}
 // Lifecycle (§18.2.1): cancel é a única transição manual restante.
+// O antigo usePauseCampaign foi removido — /pause virou alias silencioso de
+// /cancel e expor o hook levaria alguém a chamar o endpoint deprecado (que
+// agora retorna 410 Gone). Use useCancelCampaign.
 export function useCancelCampaign() {
   const qc = useQueryClient()
   return useMutation({
