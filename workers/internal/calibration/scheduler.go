@@ -207,7 +207,7 @@ func (s *Scheduler) tickWithResult(ctx context.Context) (int, error) {
 			}
 			elapsed := time.Since(start)
 			metrics.CalibrationRunsTotal.WithLabelValues("success").Inc()
-			metrics.CalibrationDurationSeconds.WithLabelValues(id.String()).Observe(elapsed.Seconds())
+			metrics.CalibrationDurationSeconds.Observe(elapsed.Seconds())
 			metrics.CalibrationLastSuccessTimestamp.WithLabelValues(id.String()).Set(float64(time.Now().Unix()))
 			s.log.Info("calibration scheduler: station recalibrated",
 				zap.String("station_id", id.String()),
