@@ -126,6 +126,25 @@ var (
 		Name: "radiocheck_campaign_lifecycle_transitions_total",
 		Help: "Total campaign lifecycle status transitions, labeled by from/to.",
 	}, []string{"from", "to"})
+
+	// ── Threshold dinâmico (§9.4) ────────────────────────────────────────
+	// StationThreshold tracks the current min_hashes value applied by each
+	// running worker. Updated on worker startup and on every periodic /
+	// admin-triggered refresh. Useful to spot drift between calibration
+	// state and what the matcher is actually using in memory.
+	StationThreshold = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_station_threshold",
+		Help: "Current min_hashes threshold applied by the worker for each station.",
+	}, []string{"station_id"})
+
+	// StationThresholdRefreshes counts every refresh the supervisor performs
+	// against station_thresholds, labelled by outcome. 'updated' means the
+	// value changed; 'unchanged' means it matched the in-memory copy;
+	// 'error' means GetThreshold failed (and the in-memory copy was kept).
+	StationThresholdRefreshes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_station_threshold_refreshes_total",
+		Help: "Number of dynamic threshold refresh attempts per station, by outcome.",
+	}, []string{"station_id", "outcome"})
 )
 
 func init() {
@@ -139,5 +158,6 @@ func init() {
 		EvidenceTieringLastRun, EvidenceTieringErrors,
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
+		StationThreshold, StationThresholdRefreshes,
 	)
 }
