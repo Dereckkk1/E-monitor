@@ -24,12 +24,30 @@ PGUSER, PGPASSWORD, PGHOST, PGPORT, PGDATABASE
 R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY, R2_SECRET_KEY
 BACKUP_DIR              (default /var/lib/radiocheck/backup)
 LOCAL_RETENTION_DAYS    (default 7)
+LOCK_FILE               (default /var/lock/radiocheck-pg-backup.lock)
 PROM_TEXTFILE_DIR       (opcional — para node_exporter scrape)
 ```
+
+Todas as variáveis `PG*` são **fail-fast** em ambos `backup.sh` e
+`restore-test.sh` — se alguma estiver vazia, o script aborta antes de
+qualquer operação. Isso é deliberado: rodar `restore-test.sh` contra o
+banco errado (porque algum default mascarou a config faltando) seria
+silencioso e perigoso. Defina `PGDATABASE=radiocheck` (ou o nome do banco
+em uso) explicitamente no `.env` da máquina de backup.
 
 Em produção mantenha o `.env` da máquina de backup separado do `.env` da
 aplicação. R2 usa pares de credenciais distintos por bucket — o de backup
 deve ter permissão `Object Read & Write` apenas no `radiocheck-backups`.
+
+#### 1.2.1 Mutex via flock
+
+`backup.sh` adquire um `flock(1)` exclusivo sobre `$LOCK_FILE` na entrada do
+script. Se outra instância já estiver rodando (cron sobreposto, retry manual
+durante uma execução em andamento), a segunda invocação sai com status `0`
+e mensagem `another backup is already running` — sem disparar
+`pg_basebackup` em paralelo. Configure o lockfile via `LOCK_FILE` se o
+default `/var/lock/radiocheck-pg-backup.lock` não couber no host (ex.: WSL
+sem `/var/lock` montado em tmpfs).
 
 ### 1.3 Política de retenção
 
@@ -157,7 +175,37 @@ origem é pulado pra não destruir o objeto recém-promovido. O storage class
 ainda muda, então a economia em produção (com buckets distintos) continua
 real.
 
-### 2.4 Reverter tier (cold → hot)
+### 2.4 Configuração para mover objetos fisicamente
+
+O job de tiering só **move bytes** quando `Hot.Bucket()` ≠ `Cold.Bucket()`
+(ou `Cold.Bucket()` ≠ `Archive.Bucket()`). Quando os buckets coincidem — o
+caso default em dev/staging com um único MinIO — o tiering vira só uma
+flag de coluna no banco (`detections.tier`): o objeto fica no mesmo lugar
+e a economia de storage não acontece. Isso é proposital (evita destruir o
+objeto recém-promovido), mas exige configuração explícita em produção.
+
+Para que produção realmente economize, defina buckets distintos via env:
+
+```
+EVIDENCE_HOT_BUCKET=radiocheck-evidence-hot         # SSD local ou R2 STANDARD
+EVIDENCE_COLD_BUCKET=radiocheck-evidence-cold       # R2 STANDARD outra região
+EVIDENCE_ARCHIVE_BUCKET=radiocheck-evidence-archive # R2 STANDARD_IA
+```
+
+Ou, mantendo um único bucket, troque a **storage class** entre tiers — o
+job já chama `PutWithStorageClass(..., "STANDARD_IA")` na promoção
+cold→archive (ver `ArchiveStorageClass` em `NewTieringJob`). Nesse modelo,
+o backend de storage faz a economia via lifecycle/class rebate, e o
+DELETE da origem fica desligado mesmo. Use uma das duas estratégias:
+buckets distintos OU classes distintas; misturar as duas é redundante.
+
+Sintoma de configuração errada: gauge
+`radiocheck_evidence_storage_bytes{tier="cold"}` cresce, mas o uso real do
+bucket hot não diminui. Cheque `kubectl exec api -- env | grep EVIDENCE_`
+e compare com o bucket reportado por `radiocheck_storage_*` (se houver) ou
+diretamente pelo painel R2.
+
+### 2.5 Reverter tier (cold → hot)
 
 Não é automatizado. Procedimento manual:
 
@@ -176,7 +224,7 @@ aws s3 rm s3://radiocheck-cold/<key> --endpoint-url $R2_ENDPOINT
 Use só pra incidentes (cliente reclamou, auditoria solicitou). Não é fluxo
 normal.
 
-### 2.5 Forçar tiering manual
+### 2.6 Forçar tiering manual
 
 ```bash
 # pega um JWT admin
@@ -194,7 +242,7 @@ Resposta esperada:
 {"status":"ok","duration_ms":12453}
 ```
 
-### 2.6 Métricas
+### 2.7 Métricas
 
 Expostas pelo `api` em `/metrics`:
 
@@ -205,6 +253,20 @@ Expostas pelo `api` em `/metrics`:
 
 Alerta `EvidenceTieringStalled` em `infra/prometheus/alerts.yml` dispara se o
 job não rodar nas últimas 48h.
+
+### 2.8 Follow-ups
+
+- **Migration 0013 — `CREATE INDEX CONCURRENTLY`.** A migration cria
+  `detections_tier_created_at_idx` em transação (default da ferramenta de
+  migração). Em PoC e Fase 2 isso é aceitável porque a tabela ainda é
+  pequena. Em produção, com a tabela passando de ~10M linhas, considere
+  rodar manualmente um `CREATE INDEX CONCURRENTLY` antes do deploy da
+  migration e ajustar a tool para aceitar `--no-transaction` na 0013
+  específica. Comentário com TODO está deixado no próprio arquivo SQL.
+- **Promoção daily→weekly→monthly.** Ainda manual via `aws s3 cp`
+  cruzando prefixos; ver §1.3.
+- **Limpeza de objetos órfãos no bucket hot** quando o move falha entre
+  UPDATE e DELETE — ver §2.3.
 
 ## 3. Onde os scripts rodam
 
