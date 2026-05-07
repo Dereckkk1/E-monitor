@@ -19,8 +19,9 @@ import (
 const SampleRate = 16000
 
 // VariantID values match the variant_id column in fingerprint_hashes
-// (SMALLINT). The plan describes three broadcast-simulation variants
-// (clean/light/medium/heavy); for the PoC we ship only `clean`.
+// (SMALLINT). The plan describes a clean baseline plus three
+// broadcast-simulation variants (light/medium/heavy); for the PoC we ship
+// only `clean`.
 type VariantID uint8
 
 const (
