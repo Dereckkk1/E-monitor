@@ -303,15 +303,14 @@ estiver atendendo. Se um cliente reportar problema, reavaliar.
 
 ### HTTPS obrigatório
 
-O validador atual (`PatchConfig` em `handlers/webhooks.go`) aceita tanto
-`http://` quanto `https://`. **Decisão consciente para PoC:** facilitar
-testes com endpoints internos em rede privada e ferramentas locais
-(webhook.site, ngrok, RequestBin) que ocasionalmente expõem HTTP.
+`PatchConfig` agora rejeita `http://` por default. A única exceção é
+`RADIOCHECK_ENV=development` **somado a** host loopback (`localhost`,
+`127.0.0.1`, `::1`) — combinacao usada apenas em testes locais. URL com
+qualquer outro host em http retorna 400 com mensagem
+`http URLs are not allowed in production; set RADIOCHECK_ENV=development for local testing`.
 
-Para produção: restringir o validador a `https://` apenas, com exceção
-explícita para `http://localhost`, `http://127.0.0.1` e `http://[::1]`
-(loopback) em ambiente de dev. Plano: adicionar guarda comportada por
-config (`webhook.allow_insecure_url`), default `false` em prod.
+Resolvido em commit do security review (2026-05-07). Webhook receivers em
+producao **devem** servir HTTPS valido, senao a config falha antes de salvar.
 
 ### Refresh de gauges com `COUNT(*)`
 

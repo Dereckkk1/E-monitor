@@ -106,6 +106,17 @@ func (h *WebhooksHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "webhook_url must be a valid http(s) URL", http.StatusBadRequest)
 			return
 		}
+		// HTTPS is required by default. http:// is only accepted when
+		// RADIOCHECK_ENV=development AND the host is loopback (localhost,
+		// 127.0.0.1, ::1) — for local integration tests. Anything else
+		// would expose the HMAC-signed payload (incl. detection metadata)
+		// in plaintext on the wire.
+		if !webhook.AllowInsecureURL(parsed) {
+			http.Error(w,
+				"http URLs are not allowed in production; set RADIOCHECK_ENV=development for local testing",
+				http.StatusBadRequest)
+			return
+		}
 		// SSRF guard: refuse URLs that resolve to private/loopback/link-local
 		// space. In dev mode the validator is a no-op so localhost works.
 		if err := webhook.ValidateURLForSSRF(r.Context(), *in.URL); err != nil {
