@@ -1,0 +1,342 @@
+{
+  "id": null,
+  "uid": "radiocheck-infra",
+  "title": "Radiocheck — Infra",
+  "tags": ["radiocheck", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "label": "Datasource"
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "query": "label_values(node_uname_info, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "label": "Host"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU por container",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Uso de CPU (%) por container Radiocheck. Requer cAdvisor exportando container_cpu_usage_seconds_total. Se não houver cAdvisor configurado, painel ficará vazio.",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"radiocheck.*\"}[5m])) * 100",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "noValue": "Sem dados (cAdvisor requerido)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Memória por container",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "RSS / working set por container Radiocheck (MiB). Requer cAdvisor.",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "container_memory_working_set_bytes{name=~\"radiocheck.*\"} / 1024 / 1024",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decmbytes",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "noValue": "Sem dados (cAdvisor requerido)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 3,
+      "title": "Uso de disco por mountpoint",
+      "type": "gauge",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Percentual de uso por filesystem. Requer node_exporter.",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "(1 - (node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs\", instance=~\"$instance\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs\", instance=~\"$instance\"})) * 100",
+          "legendFormat": "{{instance}} {{mountpoint}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}
+            ]
+          },
+          "noValue": "Sem dados (node_exporter requerido)"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Throughput de rede",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Tráfego de rede agregado (rx/tx em bytes/s) por host. Requer node_exporter.",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\", instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{instance}} rx",
+          "refId": "A"
+        },
+        {
+          "expr": "-sum by (instance) (rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\", instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{instance}} tx",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "noValue": "Sem dados (node_exporter requerido)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 5,
+      "title": "Postgres — taxa de commits/rollbacks",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: substituir por histogram_quantile(0.95, rate(radiocheck_db_query_duration_seconds_bucket[5m])) quando o histograma de latência de queries for instrumentado. Hoje usamos pg_stat_database como proxy de carga. Requer postgres_exporter apontando para o DB radiocheck.",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"radiocheck\"}[5m])",
+          "legendFormat": "commits/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_database_xact_rollback{datname=\"radiocheck\"}[5m])",
+          "legendFormat": "rollbacks/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "noValue": "Sem dados (postgres_exporter requerido)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 6,
+      "title": "NATS — throughput de mensagens",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: requer nats_exporter (ou prometheus_nats_exporter) configurado. Mostrará 'No data' enquanto não estiver no docker-compose.",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(gnatsd_varz_in_msgs[5m])",
+          "legendFormat": "in msgs/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(gnatsd_varz_out_msgs[5m])",
+          "legendFormat": "out msgs/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "noValue": "Sem dados (nats_exporter requerido)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 7,
+      "title": "R2 — uso de storage por tier",
+      "type": "gauge",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Bytes armazenados por tier (hot/cold/archive). Métrica radiocheck_evidence_storage_bytes — exportada pelo job de tiering (§11.4).",
+      "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "radiocheck_evidence_storage_bytes",
+          "legendFormat": "{{tier}}",
+          "refId": "A",
+          "instant": true
+        },
+        {
+          "expr": "sum(radiocheck_evidence_storage_bytes)",
+          "legendFormat": "total",
+          "refId": "B",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100000000000},
+              {"color": "red", "value": 500000000000}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Backup — horas desde último sucesso",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Horas desde o último pg_basebackup bem-sucedido. Métrica: radiocheck_postgres_backup_last_success_timestamp (§14.4). Threshold: amarelo > 26h, vermelho > 48h.",
+      "gridPos": {"x": 12, "y": 24, "w": 12, "h": 4},
+      "targets": [
+        {
+          "expr": "(time() - radiocheck_postgres_backup_last_success_timestamp) / 3600",
+          "legendFormat": "Horas desde último backup",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 26},
+              {"color": "red", "value": 48}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Detection ingestion lag por estação",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: depende de radiocheck_worker_last_pcm_timestamp{station_id} (não instrumentado hoje). Quando exposto, mostrará idade do último PCM recebido — valores subindo indicam worker travado.",
+      "gridPos": {"x": 12, "y": 28, "w": 12, "h": 4},
+      "targets": [
+        {
+          "expr": "time() - radiocheck_worker_last_pcm_timestamp",
+          "legendFormat": "{{station_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5},
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 30},
+              {"color": "red", "value": 120}
+            ]
+          },
+          "noValue": "Sem dados (métrica pendente)"
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    }
+  ]
+}
