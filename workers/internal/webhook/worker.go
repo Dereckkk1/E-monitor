@@ -56,10 +56,14 @@ type Worker struct {
 }
 
 // NewWorker builds a Worker with sensible defaults.
+//
+// The HTTP client used for outbound POSTs is built with SSRF protection
+// (BuildSafeHTTPClient) — any URL that resolves to a loopback/private/
+// link-local address fails the dial. See safehttp.go for the full rationale.
 func NewWorker(db *pgxpool.Pool, log *zap.Logger) *Worker {
 	return &Worker{
 		db:           db,
-		httpClient:   &http.Client{Timeout: defaultHTTPTimeout},
+		httpClient:   BuildSafeHTTPClient(defaultHTTPTimeout),
 		log:          log,
 		pollInterval: defaultPollInterval,
 		batchSize:    defaultBatchSize,
