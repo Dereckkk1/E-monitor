@@ -175,6 +175,15 @@ var (
 		Help:    "Duration of a single calibration scheduler run (any station).",
 		Buckets: []float64{5, 15, 30, 60, 120, 300},
 	})
+
+	// ── Version disambiguation (§18.2.2) ─────────────────────────────────
+	// MatchDisambiguation counts how often a confirmed detection was either
+	// suppressed at submission time (a longer cut already published) or
+	// caused the supervisor to retract a previously published row.
+	MatchDisambiguation = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_match_disambiguation_total",
+		Help: "Detections affected by §18.2.2 version disambiguation, by action.",
+	}, []string{"action"}) // suppressed | retracted
 )
 
 func init() {
@@ -190,5 +199,6 @@ func init() {
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
+		MatchDisambiguation,
 	)
 }

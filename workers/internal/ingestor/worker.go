@@ -445,7 +445,11 @@ func (w *Worker) publishDetection(det *match.ConfirmedDetection, stationIDStr st
 		return
 	}
 
-	if err := w.nc.Publish(events.SubjectDetectionConfirmed, payload); err != nil {
+	// Route through the supervisor for §18.2.2 version disambiguation. The
+	// supervisor decides whether to publish on detections.confirmed,
+	// suppress, or retract a previous publication. Workers no longer
+	// publish directly to detections.confirmed.
+	if err := w.nc.Publish(events.SubjectDetectionPending, payload); err != nil {
 		w.log.Error("nats publish failed",
 			zap.String("stationID", stationIDStr),
 			zap.Int32("commercialShortID", det.CommercialShortID),
