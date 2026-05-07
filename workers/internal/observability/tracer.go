@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -30,4 +31,15 @@ func PropagateTraceContext(src, dst context.Context) context.Context {
 		return dst
 	}
 	return trace.ContextWithSpanContext(dst, sc)
+}
+
+// AddSpanAttributes attaches kv to the active span on ctx (if any). No-op
+// when ctx carries no recording span — handy for places that want to
+// annotate without forcing the caller to thread span variables.
+func AddSpanAttributes(ctx context.Context, kv ...attribute.KeyValue) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(kv...)
 }
