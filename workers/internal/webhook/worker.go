@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +35,7 @@ const (
 	defaultHTTPTimeout   = 10 * time.Second
 	maxResponseBodyBytes = 4 * 1024 // 4 KB cap for response_body persistence
 	signatureHeaderName  = "X-Radiocheck-Signature"
+	timestampHeaderName  = "X-Radiocheck-Timestamp"
 	eventTypeHeaderName  = "X-Radiocheck-Event"
 	deliveryIDHeaderName = "X-Radiocheck-Delivery-Id"
 	userAgentHeader      = "Radiocheck-Webhook/1.0"
@@ -196,9 +198,15 @@ func (w *Worker) deliver(ctx context.Context, d pendingDelivery) {
 		w.scheduleRetryOrDead(ctx, d, err.Error(), 0, "")
 		return
 	}
+	// Replay protection: sign timestamp+body (Stripe-style) and emit the
+	// timestamp in a separate header. Receivers MUST verify both freshness
+	// (e.g. ±5min from their own clock) AND the signature derived from
+	// `<timestamp>.<body>`. See docs/webhooks.md.
+	ts := time.Now().Unix()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgentHeader)
-	req.Header.Set(signatureHeaderName, "sha256="+signBody(d.Secret, d.Payload))
+	req.Header.Set(timestampHeaderName, strconv.FormatInt(ts, 10))
+	req.Header.Set(signatureHeaderName, "sha256="+signTimestampedBody(d.Secret, ts, d.Payload))
 	req.Header.Set(eventTypeHeaderName, d.EventType)
 	// Stable per-row identifier so receivers can correlate logs and dedupe
 	// retries (same delivery_id may arrive multiple times across attempts).
