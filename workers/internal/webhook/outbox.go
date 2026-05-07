@@ -131,8 +131,34 @@ func subscribedTo(events []string, t string) bool {
 }
 
 // signBody returns the lowercase hex encoding of HMAC-SHA256(secret, body).
+//
+// DEPRECATED: kept only for backwards compatibility in tests. New deliveries
+// use signTimestampedBody to prevent replay (the unsigned-timestamp scheme
+// allowed an on-path attacker to replay an intercepted webhook indefinitely
+// because the body alone never expires).
 func signBody(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// signTimestampedBody returns lowercase hex of
+// HMAC-SHA256(secret, fmt.Sprintf("%d.%s", unixSeconds, body)).
+//
+// Rationale: signing only `body` lets an MITM (or anyone with stolen-in-flight
+// payloads) replay valid POSTs forever. Including a timestamp in the signed
+// material — Stripe-style — lets the receiver enforce a freshness window
+// (e.g. 5 minutes) and reject anything older.
+//
+// The timestamp is also sent in the X-Radiocheck-Timestamp header so the
+// receiver can re-derive the signature; if an attacker mutates the header,
+// the signature won't match.
+func signTimestampedBody(secret string, unixSeconds int64, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	// Stripe uses the literal "%d.%s" format. We do the same so docs/examples
+	// match the most common reference implementation receivers will already
+	// know.
+	mac.Write([]byte(fmt.Sprintf("%d.", unixSeconds)))
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }

@@ -90,11 +90,22 @@ Cabeçalhos enviados:
 Content-Type: application/json
 User-Agent: Radiocheck-Webhook/1.0
 X-Radiocheck-Event: detection.confirmed
+X-Radiocheck-Timestamp: 1715123456
 X-Radiocheck-Signature: sha256=<hex>
 X-Radiocheck-Delivery-Id: <uuid>
 ```
 
-`<hex>` é `HMAC_SHA256(secret, raw_body)` em lowercase hex.
+`<hex>` é `HMAC_SHA256(secret, "<X-Radiocheck-Timestamp>.<raw_body>")` em
+lowercase hex (formato Stripe-style). **A assinatura cobre o timestamp +
+body**, não apenas o body — isso impede replay de requisições antigas.
+
+### O que o receiver DEVE verificar (obrigatório)
+
+1. `X-Radiocheck-Timestamp` está dentro de uma janela aceitável (recomendado:
+   ±5 minutos do seu relógio). Rejeitar fora da janela com 401, mesmo que a
+   assinatura seja válida — a freshness é defesa contra replay.
+2. `HMAC_SHA256(secret, ts + "." + raw_body)` é igual à assinatura recebida,
+   usando comparação de tempo constante (`hmac.Equal`/`timingSafeEqual`).
 
 `X-Radiocheck-Delivery-Id` é o UUID da row em `webhook_deliveries`. É **estável
 entre tentativas** — se o mesmo evento for re-tentado após backoff, o cliente
@@ -109,15 +120,30 @@ import (
     "crypto/hmac"
     "crypto/sha256"
     "encoding/hex"
+    "fmt"
     "io"
+    "strconv"
+    "strings"
+    "time"
 )
 
 func verify(req *http.Request, secret string) (bool, []byte, error) {
     body, err := io.ReadAll(req.Body)
     if err != nil { return false, nil, err }
+
+    // 1. Freshness check.
+    tsStr := req.Header.Get("X-Radiocheck-Timestamp")
+    ts, err := strconv.ParseInt(tsStr, 10, 64)
+    if err != nil { return false, body, nil }
+    if d := time.Since(time.Unix(ts, 0)); d > 5*time.Minute || d < -5*time.Minute {
+        return false, body, nil // outside replay window
+    }
+
+    // 2. Signature check (constant time).
     sig := req.Header.Get("X-Radiocheck-Signature")
     if !strings.HasPrefix(sig, "sha256=") { return false, body, nil }
     mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write([]byte(fmt.Sprintf("%d.", ts)))
     mac.Write(body)
     want := hex.EncodeToString(mac.Sum(nil))
     return hmac.Equal([]byte(sig[7:]), []byte(want)), body, nil
@@ -129,10 +155,21 @@ func verify(req *http.Request, secret string) (bool, []byte, error) {
 ```js
 import crypto from "crypto"
 
+const TOLERANCE_MS = 5 * 60 * 1000
+
 export function verify(req, secret, rawBody) {
+  const tsStr = req.headers["x-radiocheck-timestamp"] || ""
+  const ts = Number.parseInt(tsStr, 10)
+  if (!Number.isFinite(ts)) return false
+  if (Math.abs(Date.now() - ts * 1000) > TOLERANCE_MS) return false
+
   const sig = req.headers["x-radiocheck-signature"] || ""
   if (!sig.startsWith("sha256=")) return false
-  const want = crypto.createHmac("sha256", secret).update(rawBody).digest("hex")
+  const want = crypto
+    .createHmac("sha256", secret)
+    .update(`${ts}.`)
+    .update(rawBody)
+    .digest("hex")
   return crypto.timingSafeEqual(Buffer.from(sig.slice(7)), Buffer.from(want))
 }
 ```
@@ -141,9 +178,11 @@ export function verify(req, secret, rawBody) {
 
 ```bash
 BODY='{"event_id":"abc","type":"webhook.test","occurred_at":"2026-05-07T00:00:00Z","data":{}}'
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
+TS=$(date +%s)
+SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
 curl -X POST "$URL" \
   -H "Content-Type: application/json" \
+  -H "X-Radiocheck-Timestamp: $TS" \
   -H "X-Radiocheck-Signature: sha256=$SIG" \
   -H "X-Radiocheck-Event: webhook.test" \
   -d "$BODY"
