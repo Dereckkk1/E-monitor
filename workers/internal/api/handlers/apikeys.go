@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -72,31 +71,6 @@ func (h *APIKeysHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *APIKeysHandler) SetWebhook(w http.ResponseWriter, r *http.Request) {
-	clientID := chi.URLParam(r, "clientID")
-	var body struct {
-		WebhookURL string `json:"webhook_url"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if body.WebhookURL != "" {
-		parsed, err := url.ParseRequestURI(body.WebhookURL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			http.Error(w, "invalid webhook_url: must be http or https", http.StatusBadRequest)
-			return
-		}
-	}
-	// Generate a fresh random secret for this webhook
-	webhookSecret, _ := auth.GenerateAPIKey()
-	_, err := h.db.Exec(r.Context(), `
-		UPDATE clients SET webhook_url = $2, webhook_secret = $3 WHERE id = $1
-	`, clientID, body.WebhookURL, webhookSecret)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"webhook_secret": webhookSecret})
-}
+// Webhook configuration is owned by handlers/webhooks.go (PatchConfig). The
+// previous SetWebhook method here was dead code — no router mounted it and
+// the frontend never called it. Removed to avoid confusion.
