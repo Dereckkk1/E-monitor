@@ -34,10 +34,13 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/", d.Stations.List)
 			r.Post("/", d.Stations.Create)
 			r.Get("/{id}", d.Stations.Get)
+			r.Put("/{id}", d.Stations.Update)
 		})
 		r.Route("/clients", func(r chi.Router) {
 			r.Get("/", d.Clients.List)
 			r.Post("/", d.Clients.Create)
+			r.Put("/{id}", d.Clients.Update)
+			r.Delete("/{id}", d.Clients.Delete)
 		})
 		r.Route("/campaigns", func(r chi.Router) {
 			r.Get("/", d.Campaigns.List)
@@ -45,12 +48,16 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/{id}", d.Campaigns.Get)
 			r.Put("/{id}/start", d.Campaigns.Start)
 			r.Put("/{id}/pause", d.Campaigns.Pause)
+			r.Put("/{id}/stations", d.Campaigns.UpdateStations)
 			r.Delete("/{id}", d.Campaigns.Delete)
 		})
 		r.Route("/commercials", func(r chi.Router) {
 			r.Get("/", d.Commercials.List)
 			r.Post("/", d.Commercials.Upload)
 			r.Get("/{id}", d.Commercials.Get)
+			r.Get("/{id}/audio", d.Commercials.Audio)
+			r.Put("/{id}/stations", d.Commercials.UpdateStations)
+			r.Delete("/{id}", d.Commercials.Delete)
 		})
 		r.Route("/detections", func(r chi.Router) {
 			r.Get("/", d.Detections.List)

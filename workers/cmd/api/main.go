@@ -100,7 +100,7 @@ func main() {
 		Stations:    &handlers.StationsHandler{Repo: stations},
 		Clients:     &handlers.ClientsHandler{Repo: clients},
 		Campaigns:   campaignsHandler,
-		Commercials: &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath},
+		Commercials: &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup},
 		Detections:  &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
 		Health:      &handlers.HealthHandler{DB: pool, NATS: nc},
 	}

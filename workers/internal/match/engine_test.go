@@ -57,7 +57,7 @@ func TestMatchWindow_NoMatch(t *testing.T) {
 
 	store := buildIndexFromHashes(refHashes, 1)
 
-	results := MatchWindow(samples, store, 5)
+	results := MatchWindow(samples, store, 5, 0.4)
 	assert.Empty(t, results, "random noise should not match a deterministic reference signal at threshold=5")
 }
 
@@ -82,7 +82,7 @@ func TestMatchWindow_SelfMatch(t *testing.T) {
 
 	store := buildIndexFromHashes(refHashes, shortID)
 
-	results := MatchWindow(samples, store, threshold)
+	results := MatchWindow(samples, store, threshold, 0.4)
 	require.NotEmpty(t, results, "self-match should return at least one result")
 
 	// At least one result should correspond to the registered commercial.
@@ -102,6 +102,6 @@ func TestMatchWindow_EmptyIndex(t *testing.T) {
 	samples := makeSineWave(440.0, 16000, 160000)
 	store := index.New() // empty index
 
-	results := MatchWindow(samples, store, 5)
+	results := MatchWindow(samples, store, 5, 0.4)
 	assert.Empty(t, results, "empty index should always produce 0 results")
 }

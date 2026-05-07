@@ -4,11 +4,13 @@ import (
 	"sort"
 )
 
-// Peak finder constants (±17 frames, ±17 bins → 35×35 neighbourhood).
+// Peak finder constants.
+// neighborFrames/neighborBins are the half-sizes (radius) of the neighbourhood window.
+// Python uses maximum_filter with footprint shape (17,17), so radius = (17-1)/2 = 8.
 const (
-	neighborFrames           = 17
-	neighborBins             = 17
-	PeakAmplitudePercentile  = 80 // reject peaks below the 80th percentile of magnitudes
+	neighborFrames          = 8
+	neighborBins            = 8
+	PeakAmplitudePercentile = 80 // reject peaks below the 80th percentile of magnitudes
 )
 
 // percentile computes the pth percentile of a float32 slice (0-100).
