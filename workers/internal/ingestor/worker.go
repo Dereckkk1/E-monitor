@@ -70,6 +70,28 @@ type Worker struct {
 	nc            *nats.Conn
 	log           *zap.Logger
 	streamUpFired bool // true after OnStreamUp fired for current connect attempt
+
+	// lastPCMAt protects access to the most recent PCM sample timestamp.
+	// Used by the supervisor's stall watchdog to decide when to restart a
+	// worker that stopped producing audio (LastPCMAt() / UpdateLastPCMAt()).
+	lastPCMMu sync.Mutex
+	lastPCMAt time.Time
+}
+
+// UpdateLastPCMAt records the time of the most recent PCM sample received.
+// Called from the PCM reader on each successful read.
+func (w *Worker) UpdateLastPCMAt(t time.Time) {
+	w.lastPCMMu.Lock()
+	w.lastPCMAt = t
+	w.lastPCMMu.Unlock()
+}
+
+// LastPCMAt returns the time of the most recent PCM sample received,
+// or the zero Time if no audio has been received yet.
+func (w *Worker) LastPCMAt() time.Time {
+	w.lastPCMMu.Lock()
+	defer w.lastPCMMu.Unlock()
+	return w.lastPCMAt
 }
 
 // NewWorker creates a new Worker with the given configuration.
@@ -246,6 +268,7 @@ func (w *Worker) runPCMReader(
 			floatBuf[i] = math.Float32frombits(bits)
 		}
 		pcmBuf.Write(floatBuf[:samplesRead])
+		w.UpdateLastPCMAt(time.Now())
 		sampleCount += samplesRead
 
 		if sampleCount < tickEvery {

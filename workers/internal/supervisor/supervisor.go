@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"radiocheck/internal/evidence"
 	"radiocheck/internal/index"
 	"radiocheck/internal/ingestor"
+	"radiocheck/internal/metrics"
 	"radiocheck/pkg/ringbuffer"
 )
 
@@ -27,7 +29,8 @@ const (
 	hopSize    = 2048
 )
 
-// workerEntry holds a running worker and its cancellation function.
+// workerEntry holds a running worker and its cancellation function,
+// plus the open down-event identity (for stream-health idempotency).
 type workerEntry struct {
 	worker     *ingestor.Worker
 	cancel     context.CancelFunc
@@ -48,8 +51,9 @@ type Supervisor struct {
 	healthEvents *catalog.HealthEvents
 	log          *zap.Logger
 
-	mu      sync.Mutex
-	workers map[uuid.UUID]*workerEntry // stationID → entry
+	mu               sync.Mutex
+	workers          map[uuid.UUID]*workerEntry // stationID → entry
+	lastStallRestart map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
 }
 
 // New constructs a Supervisor.
@@ -65,16 +69,17 @@ func New(
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
-		db:           db,
-		store:        store,
-		nc:           nc,
-		evidence:     ev,
-		campaigns:    campaigns,
-		stations:     stations,
-		commercials:  commercials,
-		healthEvents: healthEvents,
-		log:          log,
-		workers:      make(map[uuid.UUID]*workerEntry),
+		db:               db,
+		store:            store,
+		nc:               nc,
+		evidence:         ev,
+		campaigns:        campaigns,
+		stations:         stations,
+		commercials:      commercials,
+		healthEvents:     healthEvents,
+		log:              log,
+		workers:          make(map[uuid.UUID]*workerEntry),
+		lastStallRestart: make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -82,6 +87,48 @@ func New(
 // using the fingerprinting constants (sampleRate / hopSize).
 func totalFrames(durationSeconds float64) int {
 	return int(durationSeconds * float64(sampleRate) / float64(hopSize))
+}
+
+// computePreventiveRestartDelay calculates time until next 3–5 AM window restart.
+// Each call returns a different random value within the 2-hour window.
+// Uses local time (TZ should be set to America/Sao_Paulo at process level).
+func computePreventiveRestartDelay() time.Duration {
+	offset := time.Duration(rand.Int63n(int64(2 * time.Hour))) // random 0–2h
+	base := 3 * time.Hour
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	next := midnight.Add(24*time.Hour + base + offset)
+	if next.Before(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return time.Until(next)
+}
+
+// schedulePreventiveRestart runs in a goroutine and performs a graceful restart
+// of the given station's worker once per day in the 3–5 AM window (§8.7).
+// It exits after the restart fires (the new worker will spawn its own goroutine).
+func (s *Supervisor) schedulePreventiveRestart(ctx context.Context, stationID uuid.UUID) {
+	delay := computePreventiveRestartDelay()
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+	s.log.Info("supervisor: preventive restart",
+		zap.String("station_id", stationID.String()),
+		zap.Duration("scheduled_delay", delay))
+	s.mu.Lock()
+	entry, ok := s.workers[stationID]
+	s.mu.Unlock()
+	if !ok {
+		return // worker was stopped externally
+	}
+	entry.cancel()
+	if err := s.startStationWorker(context.Background(), stationID); err != nil {
+		s.log.Error("supervisor: preventive restart failed",
+			zap.String("station_id", stationID.String()),
+			zap.Error(err))
+	}
 }
 
 // Start launches workers for all stations targeted by the given campaign.
@@ -183,6 +230,7 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		old.cancel()
 		delete(s.workers, stationID)
 		s.evidence.Unregister(stationID)
+		metrics.WorkerActive.Dec()
 	}
 	s.mu.Unlock()
 
@@ -209,6 +257,7 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	s.mu.Lock()
 	s.workers[capturedStationID] = entry
 	s.mu.Unlock()
+	metrics.WorkerActive.Inc()
 
 	// ── Heartbeat ────────────────────────────────────────────────────────────
 	heartbeatFn := func() {
@@ -306,11 +355,11 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	}
 
 	cfg := ingestor.WorkerConfig{
-		StationID:           station.ID,
-		StreamURL:           station.StreamURL,
-		CommercialShortIDs:  shortIDs,
-		CommercialFrames:    frames,
-		MatchThreshold:      3,
+		StationID:          station.ID,
+		StreamURL:          station.StreamURL,
+		CommercialShortIDs: shortIDs,
+		CommercialFrames:   frames,
+		MatchThreshold:     3,
 		// 0.02 = score >= 2% dos hashes da janela. Massa Joinville 10:43 mostrou
 		// match real sustentado por 30s com pico 20 e vários frames 8-16 que o
 		// 0.05 anterior rejeitava. Threshold absoluto (3) e MinTemporalCoverage
@@ -333,12 +382,67 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// Start goroutine (entry was already stored in the map above).
 	go w.Run(workerCtx)
 
+	// ── Stall watchdog goroutine (fase2 hardening) ──────────────────────────
+	// Restarts the worker if no PCM has been observed for >60s.
+	// Cooldown of 2 minutes between consecutive restarts to avoid restart loops
+	// when a stream is genuinely down (then the reconnect backoff in the worker
+	// is the right mechanism, not stall restart).
+	go s.runStallWatchdog(workerCtx, stationID, w, cancel)
+
+	// ── Preventive restart goroutine (§8.7 fase2 hardening) ─────────────────
+	// Once-per-day graceful restart in 3–5 AM window to mitigate memory leaks.
+	go s.schedulePreventiveRestart(workerCtx, stationID)
+
 	s.log.Info("supervisor: worker started",
 		zap.String("station_id", stationID.String()),
 		zap.String("stream_url", station.StreamURL),
 		zap.Int("commercials", len(shortIDs)),
 	)
 	return nil
+}
+
+// runStallWatchdog periodically checks whether the worker has produced PCM
+// recently. If LastPCMAt is older than 60s, the worker is canceled and
+// restarted. A 2-minute cooldown prevents restart storms.
+func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.UUID, w *ingestor.Worker, cancel context.CancelFunc) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-workerCtx.Done():
+			return
+		case <-ticker.C:
+			last := w.LastPCMAt()
+			if last.IsZero() || time.Since(last) <= 60*time.Second {
+				continue
+			}
+			s.mu.Lock()
+			lastRestart, seen := s.lastStallRestart[stationID]
+			if seen && time.Since(lastRestart) < 2*time.Minute {
+				s.mu.Unlock()
+				continue
+			}
+			s.lastStallRestart[stationID] = time.Now()
+			s.mu.Unlock()
+			metrics.WorkerStallRestarts.WithLabelValues(stationID.String()).Inc()
+			s.log.Warn("supervisor: worker stall detected, restarting",
+				zap.String("station_id", stationID.String()))
+			cancel()
+			s.mu.Lock()
+			delete(s.workers, stationID)
+			s.evidence.Unregister(stationID)
+			s.mu.Unlock()
+			metrics.WorkerActive.Dec()
+			go func() {
+				if err := s.startStationWorker(context.Background(), stationID); err != nil {
+					s.log.Error("supervisor: stall restart failed",
+						zap.String("station_id", stationID.String()),
+						zap.Error(err))
+				}
+			}()
+			return
+		}
+	}
 }
 
 // Pause stops workers for stations that have no other active campaign after
@@ -388,6 +492,7 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 				entry.cancel()
 				delete(s.workers, stationID)
 				s.evidence.Unregister(stationID)
+				metrics.WorkerActive.Dec()
 			}
 			s.mu.Unlock()
 			stationsToPause = append(stationsToPause, stationID)
@@ -441,6 +546,35 @@ func (s *Supervisor) Reload(campaignID uuid.UUID) error {
 		}
 	}
 	return nil
+}
+
+// WorkerStatus holds runtime status of a single station worker.
+type WorkerStatus struct {
+	StationID string    `json:"station_id"`
+	Active    bool      `json:"active"`
+	LastPCMAt time.Time `json:"last_pcm_at"`
+	StallRisk bool      `json:"stall_risk"`
+}
+
+// WorkerStatuses returns a snapshot of all currently running workers.
+// Used by the /v1/internal/workers handler.
+func (s *Supervisor) WorkerStatuses() []WorkerStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var statuses []WorkerStatus
+	for id, entry := range s.workers {
+		if entry.worker == nil {
+			continue
+		}
+		last := entry.worker.LastPCMAt()
+		statuses = append(statuses, WorkerStatus{
+			StationID: id.String(),
+			Active:    true,
+			LastPCMAt: last,
+			StallRisk: !last.IsZero() && time.Since(last) > 30*time.Second,
+		})
+	}
+	return statuses
 }
 
 // RestoreActive re-launches workers for all campaigns with status 'active'.
