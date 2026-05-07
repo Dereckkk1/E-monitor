@@ -135,10 +135,33 @@ func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
 // RunOnceForStation forces a single station to be recalibrated immediately,
 // bypassing the MinAge filter and the advisory lock. Used by the admin
 // endpoint when an operator wants to re-run a specific station.
+//
+// Observabilidade: emite as **mesmas** métricas que o tick natural
+// (radiocheck_calibration_runs_total{result}, last_success_timestamp,
+// duration_seconds), via recalibrateAndRecord. Antes deste commit a
+// rota admin não incrementava nada — qualquer dashboard/alerta baseado
+// nessas métricas perdia execuções manuais.
 func (s *Scheduler) RunOnceForStation(ctx context.Context, stationID uuid.UUID) error {
 	stCtx, cancel := context.WithTimeout(ctx, s.StationTimeout)
 	defer cancel()
-	return s.recalibrateOne(stCtx, stationID)
+	return s.recalibrateAndRecord(stCtx, stationID)
+}
+
+// recalibrateAndRecord wraps recalibrateOne with the standard metric
+// instrumentation shared by both the tick path and the admin endpoint.
+// Returns the underlying error from recalibrateOne unchanged.
+func (s *Scheduler) recalibrateAndRecord(ctx context.Context, stationID uuid.UUID) error {
+	start := time.Now()
+	err := s.recalibrateOne(ctx, stationID)
+	elapsed := time.Since(start)
+	if err != nil {
+		metrics.CalibrationRunsTotal.WithLabelValues("error").Inc()
+		return err
+	}
+	metrics.CalibrationRunsTotal.WithLabelValues("success").Inc()
+	metrics.CalibrationDurationSeconds.Observe(elapsed.Seconds())
+	metrics.CalibrationLastSuccessTimestamp.WithLabelValues(stationID.String()).Set(float64(time.Now().Unix()))
+	return nil
 }
 
 func (s *Scheduler) tick(ctx context.Context) {
@@ -197,21 +220,16 @@ func (s *Scheduler) tickWithResult(ctx context.Context) (int, error) {
 			stCtx, cancel := context.WithTimeout(gctx, s.StationTimeout)
 			defer cancel()
 			start := time.Now()
-			if err := s.recalibrateOne(stCtx, id); err != nil {
-				metrics.CalibrationRunsTotal.WithLabelValues("error").Inc()
+			if err := s.recalibrateAndRecord(stCtx, id); err != nil {
 				s.log.Warn("calibration scheduler: station failed",
 					zap.String("station_id", id.String()),
 					zap.Error(err))
 				// Swallow — one station's failure must not interrupt others.
 				return nil
 			}
-			elapsed := time.Since(start)
-			metrics.CalibrationRunsTotal.WithLabelValues("success").Inc()
-			metrics.CalibrationDurationSeconds.Observe(elapsed.Seconds())
-			metrics.CalibrationLastSuccessTimestamp.WithLabelValues(id.String()).Set(float64(time.Now().Unix()))
 			s.log.Info("calibration scheduler: station recalibrated",
 				zap.String("station_id", id.String()),
-				zap.Duration("duration", elapsed),
+				zap.Duration("duration", time.Since(start)),
 			)
 			return nil
 		})
