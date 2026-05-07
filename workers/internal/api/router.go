@@ -29,6 +29,7 @@ type Deps struct {
 	Auth         *handlers.AuthHandler
 	APIKey       *auth.APIKeyMiddleware
 	APIKeys      *handlers.APIKeysHandler
+	Admin        *handlers.AdminHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -116,6 +117,14 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/{stationId}", d.StreamHealth.Detail)
 			})
 			r.Get("/workers", d.Health.WorkerStatus)
+
+			// Admin-only operational endpoints (§11.4 / §14.4).
+			if d.Admin != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/admin/evidence/tiering/run", d.Admin.RunTiering)
+				})
+			}
 		})
 	})
 
