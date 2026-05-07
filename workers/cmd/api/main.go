@@ -21,6 +21,7 @@ import (
 	"radiocheck/internal/evidence"
 	"radiocheck/internal/events"
 	"radiocheck/internal/index"
+	"radiocheck/internal/observability"
 	"radiocheck/internal/storage"
 	"radiocheck/internal/supervisor"
 	"radiocheck/internal/webhook"
@@ -40,6 +41,21 @@ func main() {
 		log.Fatalf("logger: %v", err)
 	}
 	defer logger.Sync() //nolint:errcheck
+
+	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
+	// OTLP endpoint is configured so dev / CI keep working without a
+	// collector. The deferred shutdown flushes pending spans on SIGTERM.
+	tracingShutdown, err := observability.Init(ctx, "radiocheck-api")
+	if err != nil {
+		logger.Warn("tracing init failed; continuing without traces", zap.Error(err))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracingShutdown(shutdownCtx); err != nil {
+			logger.Warn("tracing shutdown failed", zap.Error(err))
+		}
+	}()
 
 	pool, err := db.New(ctx, cfg.DatabaseURL)
 	if err != nil {
