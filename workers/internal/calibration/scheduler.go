@@ -132,9 +132,11 @@ func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
 	return s.tickWithResult(ctx)
 }
 
-// RunOnceForStation forces a single station to be recalibrated immediately,
-// bypassing the MinAge filter and the advisory lock. Used by the admin
-// endpoint when an operator wants to re-run a specific station.
+// RunOnceForStation força re-arme imediato da janela de calibração para uma
+// station, bypassando MinAge e advisory lock. Cliques simultâneos do operador
+// são seguros: o UPDATE em station_thresholds é idempotente e o
+// calibration_started_at é simplesmente sobrescrito (perda fracional de janela
+// aceitável).
 //
 // Observabilidade: emite as **mesmas** métricas que o tick natural
 // (radiocheck_calibration_runs_total{result}, last_success_timestamp,
