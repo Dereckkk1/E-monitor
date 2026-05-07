@@ -9,10 +9,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 )
 
 // NATS subjects emitted when the LifecycleScheduler promotes campaigns
@@ -183,6 +185,9 @@ func (s *LifecycleScheduler) Run(ctx context.Context) error {
 // tick runs both transitions in a single TX (see Campaigns.PromoteScheduledLifecycle)
 // and dispatches the resulting events.
 func (s *LifecycleScheduler) tick(ctx context.Context) {
+	ctx, span := observability.Tracer().Start(ctx, "lifecycle.tick")
+	defer span.End()
+
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -191,6 +196,11 @@ func (s *LifecycleScheduler) tick(ctx context.Context) {
 		s.log.Error("lifecycle scheduler: promote failed", zap.Error(err))
 		return
 	}
+
+	span.SetAttributes(
+		attribute.Int("activated_count", len(activated)),
+		attribute.Int("ended_count", len(ended)),
+	)
 
 	for _, id := range activated {
 		metrics.CampaignTransitions.WithLabelValues("programada", "ativa").Inc()

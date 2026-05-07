@@ -23,12 +23,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/events"
 	"radiocheck/internal/ingestor"
 	"radiocheck/internal/match"
 	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 )
 
 // RetractedEvent is the payload published on SubjectDetectionRetracted when a
@@ -52,7 +55,13 @@ func (s *Supervisor) SubscribePendingDetections(ctx context.Context) (*nats.Subs
 	sub, err := s.nc.Subscribe(events.SubjectDetectionPending, func(msg *nats.Msg) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := s.handlePendingDetection(bgCtx, msg.Data); err != nil {
+		// Extract worker-side trace-context from the NATS header (if any) so
+		// every supervisor span chains under the original detection trace.
+		spanCtx, span := observability.StartConsumerSpan(bgCtx, msg, "supervisor.handle_pending")
+		defer span.End()
+		if err := s.handlePendingDetection(spanCtx, msg.Data); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			s.log.Warn("supervisor: pending detection handle failed", zap.Error(err))
 		}
 	})
@@ -129,23 +138,43 @@ func evaluateDedup(candidateDuration int, candidateShortID int32, conflict *Dedu
 // match.ConfirmedDetection so we can republish it verbatim on the confirmed
 // subject (preserving the EvidenceWindow* fields the worker computed).
 func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDetection, original ingestor.DetectionEvent) {
+	ctx, span := observability.Tracer().Start(ctx, "supervisor.submit_detection",
+		// station_id and commercial_short_id are useful as searchable
+		// attributes; detected_at uses RFC3339 so trace UIs render it.
+	)
+	span.SetAttributes(
+		attribute.String("station_id", det.StationID),
+		attribute.Int("commercial_short_id", int(det.CommercialShortID)),
+		attribute.String("detected_at", det.DetectedAt.UTC().Format(time.RFC3339)),
+		attribute.Float64("confidence", det.Confidence),
+	)
+	defer span.End()
+
 	stationID, err := uuid.Parse(det.StationID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid station_id")
 		s.log.Warn("supervisor: invalid station_id in detection",
 			zap.String("station_id", det.StationID), zap.Error(err))
 		return
 	}
 
-	info, err := s.commercials.LookupForDedup(ctx, det.CommercialShortID)
+	lookupCtx, lookupSpan := observability.Tracer().Start(ctx, "dedup.lookup")
+	info, err := s.commercials.LookupForDedup(lookupCtx, det.CommercialShortID)
 	if err != nil {
+		lookupSpan.RecordError(err)
+		lookupSpan.SetStatus(codes.Error, err.Error())
+		lookupSpan.End()
 		// If we cannot resolve the client we can't dedup; publish anyway so
 		// behavior degrades to pre-§18.2.2.
+		span.AddEvent("dedup.lookup_failed_publish_anyway")
 		s.log.Warn("supervisor: dedup lookup failed, publishing without dedup",
 			zap.Int32("commercial_short_id", det.CommercialShortID),
 			zap.Error(err))
-		s.publishConfirmed(original)
+		s.publishConfirmed(ctx, original)
 		return
 	}
+	lookupSpan.End()
 
 	dedupWindow := time.Duration(info.DedupWindowSeconds) * time.Second
 	if dedupWindow <= 0 {
@@ -155,6 +184,7 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 	now := time.Now()
 	s.dedupBuffer.GC(now.Add(-s.dedupBuffer.MaxAge()))
 
+	_, evalSpan := observability.Tracer().Start(ctx, "dedup.evaluate")
 	conflict := s.dedupBuffer.Find(stationID, info.ClientID, det.DetectedAt, dedupWindow)
 	newEntry := DedupEntry{
 		Detection:       det,
@@ -164,10 +194,13 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 	}
 
 	action := evaluateDedup(info.DurationSeconds, det.CommercialShortID, conflict)
+	evalSpan.SetAttributes(attribute.Int("dedup.action", int(action)))
+	evalSpan.End()
+	span.SetAttributes(attribute.Int("dedup.action", int(action)))
 	switch action {
 	case DedupActionPublish:
 		s.dedupBuffer.Add(newEntry)
-		s.publishConfirmed(original)
+		s.publishConfirmed(ctx, original)
 	case DedupActionRetractAndPublish:
 		reason := "longer_cut_detected"
 		if info.DurationSeconds == conflict.DurationSeconds {
@@ -175,7 +208,7 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 		}
 		s.retract(ctx, conflict.Detection, reason, det.CommercialShortID)
 		s.dedupBuffer.Replace(conflict, newEntry)
-		s.publishConfirmed(original)
+		s.publishConfirmed(ctx, original)
 	case DedupActionSuppress:
 		metrics.MatchDisambiguation.WithLabelValues("suppressed").Inc()
 		s.log.Info("supervisor: detection suppressed by version disambiguation",
@@ -194,13 +227,13 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 
 // publishConfirmed forwards a detection to the post-disambiguation subject.
 // All downstream consumers (evidence, webhook) listen here.
-func (s *Supervisor) publishConfirmed(ev ingestor.DetectionEvent) {
+func (s *Supervisor) publishConfirmed(ctx context.Context, ev ingestor.DetectionEvent) {
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		s.log.Error("supervisor: marshal confirmed detection failed", zap.Error(err))
 		return
 	}
-	if err := s.nc.Publish(events.SubjectDetectionConfirmed, payload); err != nil {
+	if err := observability.PublishWithTracing(ctx, s.nc, events.SubjectDetectionConfirmed, payload); err != nil {
 		s.log.Error("supervisor: publish confirmed failed",
 			zap.String("station_id", ev.StationID),
 			zap.Int32("commercial_short_id", ev.CommercialShortID),
@@ -211,6 +244,14 @@ func (s *Supervisor) publishConfirmed(ev ingestor.DetectionEvent) {
 // retract stamps detections.retracted_at and publishes a NATS event so
 // downstream consumers (webhook, UI) can surface the change.
 func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, reason string, replacementShortID int32) {
+	ctx, span := observability.Tracer().Start(ctx, "detection.retract")
+	span.SetAttributes(
+		attribute.String("station_id", det.StationID),
+		attribute.Int("commercial_short_id", int(det.CommercialShortID)),
+		attribute.String("reason", reason),
+		attribute.Int("replacement_short_id", int(replacementShortID)),
+	)
+	defer span.End()
 	now := time.Now().UTC()
 	stationID, err := uuid.Parse(det.StationID)
 	if err != nil {
@@ -265,7 +306,7 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 		s.log.Error("supervisor: marshal retracted event failed", zap.Error(err))
 		return
 	}
-	if err := s.nc.Publish(events.SubjectDetectionRetracted, payload); err != nil {
+	if err := observability.PublishWithTracing(ctx, s.nc, events.SubjectDetectionRetracted, payload); err != nil {
 		s.log.Error("supervisor: publish retracted failed",
 			zap.String("station_id", det.StationID),
 			zap.Int32("commercial_short_id", det.CommercialShortID),

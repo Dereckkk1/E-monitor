@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
@@ -21,6 +22,7 @@ import (
 	"radiocheck/internal/index"
 	"radiocheck/internal/ingestor"
 	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 	"radiocheck/pkg/ringbuffer"
 )
 
@@ -223,6 +225,10 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 // startStationWorker builds and starts (or replaces) the worker for stationID,
 // using all ready commercials from every active campaign targeting that station.
 func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID) error {
+	ctx, span := observability.Tracer().Start(ctx, "supervisor.start_worker",
+	)
+	span.SetAttributes(attribute.String("station_id", stationID.String()))
+	defer span.End()
 	// a. Load station from DB (to get StreamURL, ShortID).
 	station, err := s.stations.Get(ctx, stationID)
 	if err != nil {
@@ -533,6 +539,10 @@ func (s *Supervisor) refreshThresholdOnce(
 	stationLabel string,
 	w *ingestor.Worker,
 ) {
+	ctx, span := observability.Tracer().Start(ctx, "threshold.refresh")
+	span.SetAttributes(attribute.String("station_id", stationLabel))
+	defer span.End()
+
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	v, err := s.stations.GetThreshold(lookupCtx, stationID)
