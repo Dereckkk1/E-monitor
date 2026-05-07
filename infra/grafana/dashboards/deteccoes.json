@@ -1,0 +1,303 @@
+{
+  "id": null,
+  "uid": "radiocheck-deteccoes",
+  "title": "Radiocheck — Detecções",
+  "tags": ["radiocheck", "deteccoes"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "label": "Datasource"
+      },
+      {
+        "name": "station_id",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "query": "label_values(radiocheck_detections_total, station_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "label": "Estação"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Detecções por hora — total",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Taxa total de detecções confirmadas por hora, somada em todas as estações filtradas. Métrica: radiocheck_detections_total{status=\"confirmed\"}.",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(radiocheck_detections_total{status=\"confirmed\", station_id=~\"$station_id\"}[5m])) * 3600",
+          "legendFormat": "Detecções/h",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "single"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Detecções por estação (top 10)",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: idealmente este painel agruparia por campaign_id, mas radiocheck_detections_total atualmente só tem labels (station_id, status). Ajustado para ranking por estação. Adicionar label campaign_id à métrica antes de migrar para ranking por campanha.",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 9},
+      "targets": [
+        {
+          "expr": "topk(10, sum by (station_id) (rate(radiocheck_detections_total{status=\"confirmed\"}[1h]) * 3600))",
+          "legendFormat": "{{station_id}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 20}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Distribuição de duração de janela de match",
+      "type": "heatmap",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Proxy de confidence distribution: distribuição da duração das janelas de matching. TODO: substituir por radiocheck_match_confidence_score quando a métrica de score for instrumentada (hoje só existe radiocheck_match_window_duration_seconds).",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 9},
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(radiocheck_match_window_duration_seconds_bucket[5m]))",
+          "legendFormat": "{{le}}",
+          "refId": "A",
+          "format": "heatmap"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "yAxis": {"unit": "s"},
+        "color": {"scheme": "Spectral", "mode": "scheme"}
+      }
+    },
+    {
+      "id": 4,
+      "title": "Versões — supressões / retrações (rate por hora)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: métrica radiocheck_match_disambiguation_total{action} ainda não está exposta no master (será adicionada pelo Item A — desambiguação de versões §18.2.2). Painel exibirá 'No data' até a métrica entrar em produção.",
+      "gridPos": {"x": 0, "y": 17, "w": 12, "h": 6},
+      "targets": [
+        {
+          "expr": "sum by (action) (rate(radiocheck_match_disambiguation_total[1h]) * 3600)",
+          "legendFormat": "{{action}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "blue", "value": null},
+              {"color": "yellow", "value": 5}
+            ]
+          },
+          "noValue": "Sem dados (métrica pendente — Item A)"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Verificação neural — taxa",
+      "type": "gauge",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: radiocheck_match_neural_verifications_total ainda não instrumentada. Painel mostra 'No data' enquanto a camada neural (§10) não estiver ativa em produção.",
+      "gridPos": {"x": 12, "y": 17, "w": 12, "h": 6},
+      "targets": [
+        {
+          "expr": "sum(rate(radiocheck_match_neural_verifications_total[5m])) / clamp_min(sum(rate(radiocheck_detections_total[5m])), 1e-9)",
+          "legendFormat": "Taxa neural",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 0.9}
+            ]
+          },
+          "noValue": "Sem dados (camada neural pendente — §10)"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Detecções por status",
+      "type": "piechart",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Distribuição de detecções por status (confirmed, retracted, etc). Usa o label 'status' já presente em radiocheck_detections_total.",
+      "gridPos": {"x": 0, "y": 23, "w": 12, "h": 9},
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(radiocheck_detections_total[24h]))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "list", "placement": "right", "showLegend": true, "values": ["value", "percent"]},
+        "pieType": "donut",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"},
+          "noValue": "Sem detecções no período"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Latência de confirmação (p50/p95/p99)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: histogram radiocheck_detection_confirmation_seconds_bucket ainda não exposto. Substituído provisoriamente pela latência da janela de matching (radiocheck_match_window_duration_seconds), que serve como aproximação enquanto a métrica de confirmação end-to-end não é adicionada.",
+      "gridPos": {"x": 12, "y": 23, "w": 12, "h": 9},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(radiocheck_match_window_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(radiocheck_match_window_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(radiocheck_match_window_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 8,
+      "title": "Versões — supressões nas últimas 24h",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "TODO: depende de radiocheck_match_disambiguation_total{action=\"suppressed\"} (Item A — §18.2.2). Mostrará 'No data' até a métrica ser exposta.",
+      "gridPos": {"x": 0, "y": 32, "w": 24, "h": 5},
+      "targets": [
+        {
+          "expr": "sum(increase(radiocheck_match_disambiguation_total{action=\"suppressed\"}[24h]))",
+          "legendFormat": "Supressões 24h",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "blue", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "red", "value": 200}
+            ]
+          },
+          "noValue": "Sem dados (métrica pendente — Item A)"
+        }
+      }
+    }
+  ]
+}
