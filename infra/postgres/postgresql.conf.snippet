@@ -1,0 +1,34 @@
+# Radiocheck — postgresql.conf snippet for WAL archiving (§14.4)
+#
+# This snippet enables continuous WAL archiving to Cloudflare R2. It is meant
+# to be appended to the host's postgresql.conf (or applied via ALTER SYSTEM).
+#
+# Required AWS-CLI env vars must be exposed to the postgres process:
+#   R2_BUCKET, R2_ENDPOINT, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# In a systemd unit, set them via Environment=. In docker-compose, declare them
+# under the postgres service `environment:` block.
+#
+# How to apply (host install):
+#   1) sudo cat infra/postgres/postgresql.conf.snippet \
+#        >> /etc/postgresql/16/main/postgresql.conf
+#   2) sudo systemctl restart postgresql
+#
+# How to apply (running cluster, requires reload+restart for some keys):
+#   ALTER SYSTEM SET wal_level = 'replica';
+#   ALTER SYSTEM SET archive_mode = 'on';
+#   ALTER SYSTEM SET archive_command = '...';
+#   ALTER SYSTEM SET archive_timeout = '60';
+#   ALTER SYSTEM SET max_wal_senders = '3';
+#   ALTER SYSTEM SET wal_keep_size = '1GB';
+#   -- restart required because archive_mode/wal_level are PGC_POSTMASTER.
+
+wal_level = replica
+archive_mode = on
+archive_command = 'aws s3 cp %p s3://${R2_BUCKET}/wal/%f --endpoint-url ${R2_ENDPOINT}'
+archive_timeout = 60
+max_wal_senders = 3
+wal_keep_size = 1GB
+
+# Optional but recommended for replication & PITR:
+# hot_standby = on
+# wal_compression = on

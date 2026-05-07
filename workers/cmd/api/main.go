@@ -86,6 +86,13 @@ func main() {
 	}
 	defer evidSub.Unsubscribe() //nolint:errcheck
 
+	// Evidence tiering job (§11.4). For now hot/cold/archive all share the
+	// same R2/MinIO client; in production the operator can override the
+	// archive client to point at a different bucket / storage class. The
+	// schedule fires once a day at 03:00 BR.
+	tieringJob := evidence.NewTieringJob(pool, s3Client, s3Client, s3Client, logger)
+	go tieringJob.Schedule(ctx)
+
 	// Supervisor.
 	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, healthEvents, logger)
 
@@ -135,6 +142,7 @@ func main() {
 		Auth:         handlers.NewAuthHandler(pool),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
+		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Log: logger},
 	}
 
 	srv := &http.Server{
