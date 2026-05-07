@@ -10,7 +10,20 @@ import (
 const (
 	SubjectFingerprintGenerate = "fingerprint.generate"
 	SubjectIndexReload         = "index.reload"
-	SubjectDetectionConfirmed  = "detections.confirmed"
+	// SubjectDetectionPending carries a state-machine confirmation from the
+	// ingestor to the supervisor for §18.2.2 version disambiguation. The
+	// supervisor decides whether to publish (SubjectDetectionConfirmed),
+	// suppress, or retract a previously-published detection. Workers no
+	// longer publish directly to SubjectDetectionConfirmed.
+	SubjectDetectionPending = "detections.pending"
+	// SubjectDetectionConfirmed is the post-disambiguation event consumed by
+	// evidence and webhook delivery.
+	SubjectDetectionConfirmed = "detections.confirmed"
+	// SubjectDetectionRetracted signals that a previously published detection
+	// was overruled by a longer cut from the same client (§18.2.2). Webhook
+	// deliverer fans the event out to subscribers and the catalog updates
+	// detections.retracted_at.
+	SubjectDetectionRetracted = "detections.retracted"
 )
 
 func Connect(url string) (*nats.Conn, error) {
