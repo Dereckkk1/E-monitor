@@ -76,6 +76,7 @@ services:
       S3_REGION: us-east-1
       MASTERS_PATH: /data/masters
       API_PORT: "8080"
+      CLAP_VERIFIER_URL: http://clap-verifier:8080
     ports:
       - "${API_PORT}:8080"
     volumes:
@@ -123,7 +124,65 @@ services:
       nats:
         condition: service_started
 
+  # ── Fase 2: neural verifier sidecar (CLAP) ────────────────────────────────
+  clap-verifier:
+    build:
+      context: ../../clap-verifier
+    environment:
+      - MOCK_MODE=true
+    ports:
+      - "8081:8080"
+    volumes:
+      - clap-models:/models
+
+  # ── Fase 2: observabilidade (Prometheus + Grafana + Alertmanager) ────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-lifecycle"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    volumes:
+      - ../grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
+  # ── Fase 2: backup diario do PG ──────────────────────────────────────────
+  backup:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}"
+      BACKUP_DIR: /backup
+    volumes:
+      - backup-data:/backup
+      - ../scripts/backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "-c", "while true; do sleep 86400; sh /backup.sh; done"]
+    depends_on:
+      - postgres
+
 volumes:
   pgdata:
   miniodata:
   mastersdata:
+  clap-models:
+  grafana-data:
+  backup-data:
