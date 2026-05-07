@@ -1887,6 +1887,7 @@ A qualquer momento durante a migração, se observarmos:
 - Backup de Postgres configurado e testado (restore de teste mensal).
 - Política de retenção de evidências implementada (tiering automático após 30 dias).
 - **Ciclo de vida automático de campanha (§18.2.1).**
+- **Desambiguação de versões (§18.2.2).**
 
 **Critério de saída:** concordância igual ou superior a 95% com fornecedor atual por 3 semanas consecutivas. Sistema operando 24/7 com uptime igual ou superior a 99% mensal. Latência p95 de confirmação inferior a 10 segundos.
 
