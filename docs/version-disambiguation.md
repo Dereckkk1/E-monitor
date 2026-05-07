@@ -132,6 +132,41 @@ Expostas em `/metrics` (Prometheus):
 Use o ratio `retracted/(retracted+suppressed+detections)` pra avaliar
 quantas vezes a desambiguação está atuando.
 
+## Constraint operacional: single-instance
+
+O subscriber de `detections.pending` no `supervisor`
+(`SubscribePendingDetections`) é uma **subscription core NATS sem queue
+group**. Isso é deliberado durante a Fase 2:
+
+- O `supervisor` é o **único produtor** de `detections.confirmed` e
+  `detections.retracted`. Workers só publicam em `detections.pending`.
+- O **dedup buffer é in-memory, por processo** (`dedup_buffer.go`). Cada
+  réplica do binário tem seu próprio buffer; eles não se enxergam.
+- **Conclusão:** rodar mais de uma instância do binário `cmd/api` em
+  paralelo durante Fase 2 quebra o dedup. Cada réplica recebe cópia da
+  mesma `detections.pending`, cada uma decide por si só, e o resultado é
+  duplicação de `detections.confirmed`/`detections.retracted` proporcional
+  ao número de réplicas.
+
+**Política:** durante Fase 2, **um único processo `cmd/api` em produção**.
+HA via failover (process supervisor reinicia se cair), não por load
+balancer com 2+ réplicas ativas.
+
+Para Fase 3 (escala 30→200 emissoras), a solução real é uma das duas:
+
+1. **Queue group NATS** (`SubscribeQueue("detections.pending", "supervisor")`)
+   + **buffer compartilhado** (Redis ou tabela Postgres com TTL). Cada
+   pending é entregue a uma única réplica, e a decisão de dedup consulta
+   estado compartilhado.
+2. **Leader election** (advisory lock no Postgres, ex:
+   `pg_try_advisory_lock(<key>)`). Só o líder roda o subscriber; demais
+   réplicas ficam idle no caminho de dedup mas servem requisições HTTP
+   normalmente.
+
+Tracking: `docs/follow-ups-fase2.md` (item F-70 — leader election ou
+queue group para o supervisor permitir multi-réplica). É **bloqueador**
+antes de Fase 3.
+
 ## Riscos e dívida técnica
 
 ### R-A. Retração causa confusão downstream

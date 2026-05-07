@@ -98,6 +98,11 @@ func main() {
 
 	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
 	// version disambiguation before re-emitting on detections.confirmed.
+	//
+	// SINGLE-INSTANCE: este subscriber não usa queue group. Rodar múltiplas
+	// instâncias do binário levará a duplicação de eventos detections.confirmed
+	// (cada réplica tem seu próprio dedup buffer in-memory).
+	// Tracking: docs/follow-ups-fase2.md (F-70 leader election multi-réplica).
 	pendingSub, err := sup.SubscribePendingDetections(ctx)
 	if err != nil {
 		log.Fatalf("supervisor pending subscribe: %v", err)
