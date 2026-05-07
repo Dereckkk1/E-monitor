@@ -126,6 +126,29 @@ var (
 		Name: "radiocheck_campaign_lifecycle_transitions_total",
 		Help: "Total campaign lifecycle status transitions, labeled by from/to.",
 	}, []string{"from", "to"})
+
+	// ── Calibration scheduler (§9.4) ─────────────────────────────────────
+	// Counter: every recalibration attempt, labeled by terminal result.
+	CalibrationRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_calibration_runs_total",
+		Help: "Total per-station calibration scheduler runs, labeled by result.",
+	}, []string{"result"}) // success | error
+
+	// Gauge: unix epoch of the last successful recalibration per station.
+	// Used by the CalibrationStale alert.
+	CalibrationLastSuccessTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_calibration_last_success_timestamp",
+		Help: "Unix epoch of the most recent successful recalibration per station.",
+	}, []string{"station_id"})
+
+	// Histogram: per-station recalibration duration. The 5-min ceiling is
+	// generous; the actual SQL takes milliseconds, but the timeout protects
+	// against a stuck DB connection.
+	CalibrationDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "radiocheck_calibration_duration_seconds",
+		Help:    "Duration of a per-station calibration scheduler run.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"station_id"})
 )
 
 func init() {
@@ -139,5 +162,6 @@ func init() {
 		EvidenceTieringLastRun, EvidenceTieringErrors,
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
+		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 	)
 }
