@@ -92,21 +92,36 @@ func NewRouter(d Deps) http.Handler {
 			}
 			if d.Webhooks != nil {
 				// Webhook config + observability + test dispatcher (§13.1.4).
+				//
+				// Reads (operator+admin): exposing config and delivery
+				// history is fine for any authenticated internal user.
 				r.Get("/clients/{id}/webhook", d.Webhooks.GetConfig)
-				r.Patch("/clients/{id}/webhook", d.Webhooks.PatchConfig)
 				r.Get("/clients/{id}/webhook-deliveries", d.Webhooks.ListDeliveries)
-				r.Post("/clients/{id}/webhook-test", d.Webhooks.SendTest)
+				// Mutations (admin-only): until tenancy is implemented
+				// (see follow-ups F-XX), restrict mutations to admins so a
+				// regular operator cannot rotate another client's webhook
+				// secret or fire a test POST to an attacker-controlled URL.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Patch("/clients/{id}/webhook", d.Webhooks.PatchConfig)
+					r.Post("/clients/{id}/webhook-test", d.Webhooks.SendTest)
+				})
 			}
 			r.Route("/campaigns", func(r chi.Router) {
 				r.Get("/", d.Campaigns.List)
 				r.Post("/", d.Campaigns.Create)
 				r.Get("/{id}", d.Campaigns.Get)
-				// Lifecycle (§18.2.1): /cancel is the only manual transition.
-				r.Post("/{id}/cancel", d.Campaigns.Cancel)
-				// /start is kept as admin/debug to force activation outside
-				// the date window. /pause is deprecated; alias of /cancel.
-				r.Put("/{id}/start", d.Campaigns.Start)
-				r.Put("/{id}/pause", d.Campaigns.Pause)
+				// Lifecycle (§18.2.1): /cancel is the only manual
+				// transition. Until tenancy is wired (follow-ups F-XX),
+				// cancellation requires admin so operators can't terminate
+				// arbitrary campaigns. /start and /pause already act on
+				// global supervisor state and are also admin-gated.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/{id}/cancel", d.Campaigns.Cancel)
+					r.Put("/{id}/start", d.Campaigns.Start)
+					r.Put("/{id}/pause", d.Campaigns.Pause)
+				})
 				r.Put("/{id}/stations", d.Campaigns.UpdateStations)
 				r.Delete("/{id}", d.Campaigns.Delete)
 			})
