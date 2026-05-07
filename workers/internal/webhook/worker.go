@@ -12,9 +12,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 )
 
 // Backoff schedule (§13.1.4): 1m, 5m, 15m, 1h, 4h. After 5 attempts the
@@ -114,13 +117,19 @@ func (w *Worker) Run(ctx context.Context) error {
 // parallel fan-out (errgroup + semaphore) is a follow-up — see
 // docs/webhooks.md "Trade-offs e dívida técnica".
 func (w *Worker) tick(ctx context.Context) {
+	ctx, span := observability.Tracer().Start(ctx, "webhook.batch_tick")
+	defer span.End()
+
 	w.refreshGauges(ctx)
 
 	rows, err := w.claimBatch(ctx, w.batchSize)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "claim batch failed")
 		w.log.Warn("webhook worker: claim batch failed", zap.Error(err))
 		return
 	}
+	span.SetAttributes(attribute.Int("batch_size", len(rows)))
 	for _, r := range rows {
 		w.deliver(ctx, r)
 	}
@@ -186,7 +195,17 @@ func (w *Worker) claimBatch(ctx context.Context, limit int) ([]pendingDelivery, 
 
 // deliver attempts to POST a single delivery and records the outcome.
 func (w *Worker) deliver(ctx context.Context, d pendingDelivery) {
+	ctx, span := observability.Tracer().Start(ctx, "webhook.deliver")
+	span.SetAttributes(
+		attribute.String("delivery_id", d.ID.String()),
+		attribute.String("client_id", d.ClientID.String()),
+		attribute.Int("attempt", d.AttemptCount+1),
+		attribute.String("event_type", d.EventType),
+	)
+	defer span.End()
+
 	if d.URL == "" {
+		span.SetStatus(codes.Error, "no webhook_url")
 		w.markDead(ctx, d, "client has no webhook_url configured", 0, "")
 		return
 	}
@@ -215,9 +234,11 @@ func (w *Worker) deliver(ctx context.Context, d pendingDelivery) {
 
 	resp, err := w.httpClient.Do(req)
 	dur := time.Since(start)
-	metrics.WebhookDeliveryDuration.Observe(dur.Seconds())
+	observability.ObserveWithTraceExemplar(ctx, metrics.WebhookDeliveryDuration, dur.Seconds())
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		w.scheduleRetryOrDead(ctx, d, err.Error(), 0, "")
 		return
 	}
@@ -225,6 +246,7 @@ func (w *Worker) deliver(ctx context.Context, d pendingDelivery) {
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	bodyStr := string(bodyBytes)
+	span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
