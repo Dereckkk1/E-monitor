@@ -1,0 +1,26 @@
+groups:
+  - name: radiocheck
+    rules:
+      - alert: StreamDownProlongado
+        expr: increase(radiocheck_worker_bytes_received_total[10m]) == 0 and on() radiocheck_worker_active_total > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker sem bytes por 10min: {{ $labels.station_id }}"
+
+      - alert: EvidenceUploadFailures
+        expr: increase(radiocheck_evidence_upload_failures_total[1h]) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mais de 10 falhas de upload de evidência na última hora"
+
+      - alert: DiskSpaceCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disco com menos de 5% livre"
