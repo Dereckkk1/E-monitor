@@ -61,6 +61,7 @@ func main() {
 	campaigns := catalog.NewCampaigns(pool)
 	commercials := catalog.NewCommercials(pool)
 	detections := catalog.NewDetections(pool)
+	healthEvents := catalog.NewHealthEvents(pool)
 
 	// Index store + loader.
 	indexStore := index.New()
@@ -83,7 +84,7 @@ func main() {
 	defer evidSub.Unsubscribe() //nolint:errcheck
 
 	// Supervisor.
-	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, logger)
+	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, healthEvents, logger)
 
 	// Re-launch workers for campaigns that were active before restart.
 	if err := sup.RestoreActive(ctx); err != nil {
@@ -97,12 +98,13 @@ func main() {
 	}
 
 	deps := api.Deps{
-		Stations:    &handlers.StationsHandler{Repo: stations},
-		Clients:     &handlers.ClientsHandler{Repo: clients},
-		Campaigns:   campaignsHandler,
-		Commercials: &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup},
-		Detections:  &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
-		Health:      &handlers.HealthHandler{DB: pool, NATS: nc},
+		Stations:     &handlers.StationsHandler{Repo: stations},
+		Clients:      &handlers.ClientsHandler{Repo: clients},
+		Campaigns:    campaignsHandler,
+		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup},
+		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
+		Health:       &handlers.HealthHandler{DB: pool, NATS: nc},
+		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
 	}
 
 	srv := &http.Server{
