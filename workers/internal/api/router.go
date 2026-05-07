@@ -10,12 +10,13 @@ import (
 )
 
 type Deps struct {
-	Stations    *handlers.StationsHandler
-	Clients     *handlers.ClientsHandler
-	Campaigns   *handlers.CampaignsHandler
-	Commercials *handlers.CommercialsHandler
-	Detections  *handlers.DetectionsHandler
-	Health      *handlers.HealthHandler
+	Stations     *handlers.StationsHandler
+	Clients      *handlers.ClientsHandler
+	Campaigns    *handlers.CampaignsHandler
+	Commercials  *handlers.CommercialsHandler
+	Detections   *handlers.DetectionsHandler
+	Health       *handlers.HealthHandler
+	StreamHealth *handlers.StreamHealthHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -63,6 +64,10 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/", d.Detections.List)
 			r.Get("/{id}", d.Detections.Get)
 			r.Get("/{id}/evidence", d.Detections.Evidence)
+		})
+		r.Route("/stream-health", func(r chi.Router) {
+			r.Get("/", d.StreamHealth.List)
+			r.Get("/{stationId}", d.StreamHealth.Detail)
 		})
 	})
 
