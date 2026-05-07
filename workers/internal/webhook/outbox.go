@@ -37,6 +37,7 @@ type EventType string
 
 const (
 	EventDetectionConfirmed EventType = "detection.confirmed"
+	EventDetectionRetracted EventType = "detection.retracted"
 	EventWebhookTest        EventType = "webhook.test"
 )
 

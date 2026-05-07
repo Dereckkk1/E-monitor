@@ -75,6 +75,12 @@ Cinco fixes aplicados em sequência sobre `master` após varredura de segurança
 **Como:** `gpg --encrypt --recipient backup-key < dump.sql.gz > dump.sql.gz.gpg` antes do `rclone copy`. Chave privada armazenada offline (cofre); chave pública no servidor de backup. Documentar runbook de restore em `docs/backup-and-retention.md`.
 **Dependência:** F-07 (encryption de secrets em DB) atenua mas não substitui — outros campos ainda saem em claro.
 
+### F-70. Leader election / queue group para supervisor permitir multi-réplica
+**Por quê:** o subscriber `SubscribePendingDetections` no `supervisor` (§18.2.2 — desambiguação de versões) é uma subscription core NATS **sem queue group**. O dedup buffer (`workers/internal/supervisor/dedup_buffer.go`) é in-memory, por processo. Se 2+ instâncias do binário `cmd/api` rodam em paralelo, cada réplica recebe cópia de `detections.pending` e decide por si só → duplicação de `detections.confirmed`/`detections.retracted`. Hoje a Fase 2 assume **single-instance** (documentado em `docs/version-disambiguation.md`); HA é por failover, não por load balancer com réplicas ativas. Para Fase 3 (30→200 emissoras com HA real), isso vira bloqueador.
+**Onde:** `workers/cmd/api/main.go` (chamada de `SubscribePendingDetections`) + `workers/internal/supervisor/disambiguation.go` (subscriber) + `workers/internal/supervisor/dedup_buffer.go` (buffer in-memory).
+**Como:** duas opções: (a) queue group NATS (`SubscribeQueue("detections.pending", "supervisor")`) + buffer compartilhado (Redis ou tabela Postgres com TTL); (b) leader election via `pg_try_advisory_lock(<key>)` — só o líder consome `detections.pending`. Opção (b) é mais simples se já temos Postgres e nenhum motivo pra Redis.
+**Dependência:** decisão sobre stack de coordenação (Redis vs Postgres advisory lock). Mesma decisão de F-60/F-61.
+
 ### F-08. Cobertura de testes ≥70% nas camadas críticas
 **Por quê:** atualmente abaixo de 50% em `supervisor`, `ingestor`, `evidence`, `index`, `webhook`, `lifecycle_scheduler`. PoC tolera; produção não.
 **Onde:** todo o `workers/internal/`.

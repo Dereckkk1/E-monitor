@@ -229,7 +229,34 @@ mesmo HMAC — útil para validar a integração antes de uma campanha real.
 
 ## Eventos suportados
 
-Hoje só `detection.confirmed`. Novos eventos devem ser:
+Hoje:
+
+- `detection.confirmed` — uma veiculação foi detectada e persistida (caminho normal).
+- `detection.retracted` — uma detecção previamente publicada foi retratada
+  pela desambiguação de versões (§18.2.2). Veja
+  [version-disambiguation.md](version-disambiguation.md) para o contrato
+  completo do payload e o cenário que dispara o evento. Receivers que
+  mantêm cópia local devem usar `(station_id, commercial.short_id,
+  detection.detected_at)` para localizar a row a marcar como retratada.
+
+  **Ordem dos eventos pode inverter em janelas curtas:** se uma detecção é
+  retratada **antes** de o `evidence.Service` inserir a row em `detections`
+  (janela típica < 3s entre o publish em `detections.confirmed` e o
+  `INSERT`), o webhook pode receber `detection.retracted` **sem ter
+  recebido `detection.confirmed`** correspondente. Isso acontece porque o
+  pipeline de retração e o pipeline de confirmação trafegam em subjects
+  NATS distintos (`detections.retracted` vs `detections.confirmed`) e cada
+  um vira sua própria row em `webhook_deliveries` com cadência de retry
+  independente — pode acontecer de a entrega de `retracted` chegar antes
+  da de `confirmed`. Clientes devem tratar idempotentemente:
+  - **Opção A (mais simples):** ignorar `detection.retracted` cujo
+    `detection_id` é desconhecido localmente — o `confirmed` posterior já
+    virá com `retracted_at` populado se a retração for persistida no DB
+    do Radiocheck.
+  - **Opção B:** manter buffer próprio de `retracted` recebidos e aplicar
+    a marcação assim que o `confirmed` correspondente chegar.
+
+Novos eventos devem ser:
 
 1. Adicionados à constante `EventType` em
    `workers/internal/webhook/outbox.go`.

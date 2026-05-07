@@ -2,7 +2,7 @@ import StationAvatar from './StationAvatar'
 import {
   bucketDetections,
   daysBetween,
-  countFor,
+  countSplit,
   formatShortDay,
   weekdayOf,
   stationLabel,
@@ -42,19 +42,45 @@ export default function DetectionsCalendar({ stations, detections, period, onCel
               </div>
               <div className="calendar-cells">
                 {days.map(dk => {
-                  const count = countFor(buckets, station.id, dk)
-                  if (count === 0) {
+                  const { active, retracted } = countSplit(buckets, station.id, dk)
+                  const total = active + retracted
+                  if (total === 0) {
                     return <div key={dk} className="calendar-cell calendar-cell-empty">—</div>
                   }
+                  // §18.2.2 — retratadas mostradas riscadas. Tooltip explica.
+                  const ariaLabel =
+                    retracted > 0
+                      ? `${primary}: ${active} veiculações (${retracted} retratada${retracted > 1 ? 's' : ''}) em ${formatShortDay(dk)}`
+                      : `${primary}: ${active} veiculações em ${formatShortDay(dk)}`
+                  const title =
+                    retracted > 0
+                      ? `${active} ativa${active === 1 ? '' : 's'} · ${retracted} retratada${retracted === 1 ? '' : 's'} (versão maior detectada)`
+                      : undefined
                   return (
                     <button
                       key={dk}
                       type="button"
                       className="calendar-cell calendar-cell-hit"
                       onClick={() => onCellClick(station, dk)}
-                      aria-label={`${primary}: ${count} veiculações em ${formatShortDay(dk)}`}
+                      aria-label={ariaLabel}
+                      title={title}
                     >
-                      <span className="detect-badge detect-badge--air">{count}</span>
+                      {active > 0 && (
+                        <span className="detect-badge detect-badge--air">{active}</span>
+                      )}
+                      {retracted > 0 && (
+                        <span
+                          className="detect-badge detect-badge--air"
+                          style={{
+                            textDecoration: 'line-through',
+                            opacity: 0.55,
+                            marginLeft: active > 0 ? 2 : 0,
+                            fontSize: 10,
+                          }}
+                        >
+                          {retracted}
+                        </span>
+                      )}
                     </button>
                   )
                 })}

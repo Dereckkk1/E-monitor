@@ -53,6 +53,19 @@ export function countFor(buckets, stationId, dayKey) {
   return buckets.get(stationId)?.get(dayKey)?.length ?? 0
 }
 
+// Returns { active, retracted } counts for a cell — useful to render the
+// retracted ones distinctly (line-through) in the calendar (§18.2.2).
+export function countSplit(buckets, stationId, dayKey) {
+  const list = buckets.get(stationId)?.get(dayKey) ?? []
+  let active = 0
+  let retracted = 0
+  for (const d of list) {
+    if (d.retracted_at) retracted++
+    else active++
+  }
+  return { active, retracted }
+}
+
 // Returns the array of detections for the cell, sorted by detected_at ASC.
 export function detectionsFor(buckets, stationId, dayKey) {
   const list = buckets.get(stationId)?.get(dayKey)

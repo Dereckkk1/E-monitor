@@ -9,6 +9,15 @@ import {
   stationLabel,
 } from '../pages/detections/utils'
 
+// Compact dd/mm/yyyy hh:mm display used in the retracted tooltip (§18.2.2).
+function formatRetractedAt(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
   const [activePlayerId, setActivePlayerId] = useState(null)
 
@@ -48,8 +57,21 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
         </div>
 
         <div className="day-detail-list">
-          {list.map(d => (
-            <div key={d.id} className="day-detail-item">
+          {list.map(d => {
+            const retracted = !!d.retracted_at
+            const retractedTooltip = retracted
+              ? `Retratada em ${formatRetractedAt(d.retracted_at)} — versão maior detectada`
+              : undefined
+            const itemStyle = retracted
+              ? { textDecoration: 'line-through', opacity: 0.55 }
+              : undefined
+            return (
+            <div
+              key={d.id}
+              className="day-detail-item"
+              style={itemStyle}
+              title={retractedTooltip}
+            >
               <div className="day-detail-time">{formatTimeOnly(d.detected_at)}</div>
               <div className="day-detail-name">{d.commercial_name}</div>
               <div className="day-detail-audio">
@@ -81,7 +103,8 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
                 )}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>,

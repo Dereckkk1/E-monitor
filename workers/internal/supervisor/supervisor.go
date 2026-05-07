@@ -70,7 +70,16 @@ type Supervisor struct {
 
 	// Lifecycle (§18.2.1). Optional: nil when not configured.
 	lifecycle *LifecycleScheduler
+
+	// Version disambiguation (§18.2.2). The buffer keeps the last 60s of
+	// confirmed publications keyed by (station_id, client_id) so duplicate
+	// cuts of the same jingle don't both get published.
+	dedupBuffer *DedupBuffer
 }
+
+// dedupBufferRetention is how far back the supervisor keeps prior publications
+// to detect overlap with newer confirmations (§18.2.2).
+const dedupBufferRetention = 60 * time.Second
 
 // New constructs a Supervisor.
 func New(
@@ -96,6 +105,7 @@ func New(
 		log:              log,
 		workers:          make(map[uuid.UUID]*workerEntry),
 		lastStallRestart: make(map[uuid.UUID]time.Time),
+		dedupBuffer:      NewDedupBuffer(dedupBufferRetention),
 	}
 }
 

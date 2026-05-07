@@ -8,6 +8,7 @@ import {
 
 const ALL_EVENTS = [
   { value: 'detection.confirmed', label: 'Detecção confirmada' },
+  { value: 'detection.retracted', label: 'Detecção retratada' },
   { value: 'webhook.test',        label: 'Teste de webhook' },
 ]
 
