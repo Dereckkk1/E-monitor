@@ -647,7 +647,7 @@ func (s *Supervisor) StartLifecycle(ctx context.Context) {
 		// campaign and updates the status to 'cancelada' — but the scheduler
 		// already moved this campaign to 'concluida'. We only need the
 		// worker-stop side of Pause; do it inline.
-		s.stopWorkersForCampaign(campaignID)
+		s.StopWorkersForCampaign(campaignID)
 	}
 
 	s.lifecycle = sched
@@ -658,11 +658,12 @@ func (s *Supervisor) StartLifecycle(ctx context.Context) {
 	}()
 }
 
-// stopWorkersForCampaign cancels workers for stations that have no other
+// StopWorkersForCampaign cancels workers for stations that have no other
 // active campaign once campaignID has left the 'ativa' state. Mirrors the
 // worker-stopping half of Pause() but does NOT mutate campaign.status —
-// the lifecycle scheduler already did that.
-func (s *Supervisor) stopWorkersForCampaign(campaignID uuid.UUID) {
+// callers (lifecycle scheduler, Cancel handler) already moved the row to
+// its terminal state.
+func (s *Supervisor) StopWorkersForCampaign(campaignID uuid.UUID) {
 	ctx := context.Background()
 	camp, err := s.campaigns.Get(ctx, campaignID)
 	if err != nil {

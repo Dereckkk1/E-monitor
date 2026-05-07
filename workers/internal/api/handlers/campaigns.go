@@ -30,6 +30,7 @@ type CampaignSupervisor interface {
 	Start(campaignID uuid.UUID) error
 	Pause(campaignID uuid.UUID) error
 	Reload(campaignID uuid.UUID) error
+	StopWorkersForCampaign(campaignID uuid.UUID)
 }
 
 func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -158,37 +159,27 @@ func (h *CampaignsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Stop workers via the existing Pause path. Pause() will rerun the status
-	// flip ('cancelada' → 'cancelada') which is a harmless no-op, then halt
-	// workers for stations that no longer have any active campaign.
+	// Stop workers for stations that no longer have any active campaign.
+	// CancelCampaign already flipped the status, so we go straight to the
+	// worker-stop path without an extra DB round-trip via Pause().
 	if h.Supervisor != nil {
-		if err := h.Supervisor.Pause(id); err != nil {
-			// Log only — the cancellation itself is durable.
-			_ = err
-		}
+		h.Supervisor.StopWorkersForCampaign(id)
 	}
 	w.WriteHeader(204)
 }
 
-// Pause is kept for backward compatibility. It is functionally equivalent to
-// Cancel under the new lifecycle model — see §18.2.1.
+// Pause is deprecated as of 2026-05-07 (§18.2.1). The 'paused' state was
+// collapsed into 'cancelada' under the new lifecycle model, and silently
+// aliasing /pause → cancel was a contract break. This handler now returns
+// HTTP 410 Gone so callers fail loud and migrate to POST /campaigns/{id}/cancel.
 //
-// Deprecated: use Cancel.
+// Deprecated: use Cancel via POST /campaigns/{id}/cancel.
 func (h *CampaignsHandler) Pause(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		http.Error(w, "invalid id", 400)
-		return
-	}
-	if h.Supervisor == nil {
-		http.Error(w, "supervisor not configured", 503)
-		return
-	}
-	if err := h.Supervisor.Pause(id); err != nil {
-		http.Error(w, "internal error", 500)
-		return
-	}
-	w.WriteHeader(204)
+	writeJSON(w, http.StatusGone, map[string]any{
+		"error":   "endpoint deprecated",
+		"message": "use POST /campaigns/{id}/cancel instead",
+		"since":   "2026-05-07",
+	})
 }
 
 // UpdateStations replaces the target_stations list for a campaign.
