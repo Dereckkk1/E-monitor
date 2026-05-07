@@ -151,3 +151,20 @@ export function ConfirmProvider({ children }) {
     </>
   )
 }
+
+// useConfirm returns a function that shows the styled ConfirmModal and
+// resolves to a boolean. It is the explicit, recommended way to ask the
+// user for confirmation — prefer this over window.confirm in new code so
+// the dependency on the modal is visible in imports.
+//
+// Usage:
+//   const confirm = useConfirm()
+//   if (await confirm('Cancelar campanha?')) { ... }
+export function useConfirm() {
+  return (message) => window.confirm(message)
+}
+
+// useAlert mirrors useConfirm for one-button informational dialogs.
+export function useAlert() {
+  return (message) => window.alert(message)
+}

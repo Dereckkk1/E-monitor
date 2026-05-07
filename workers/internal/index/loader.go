@@ -42,7 +42,7 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 		JOIN commercials c  ON c.id  = fh.commercial_id
 		JOIN campaigns   ca ON ca.id = c.campaign_id
 		WHERE c.fingerprint_status = 'ready'
-		  AND ca.status = 'active'
+		  AND ca.status = 'ativa'
 	`)
 	if err != nil {
 		return fmt.Errorf("index loader: query fingerprint_hashes: %w", err)
@@ -109,7 +109,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			JOIN campaigns ca ON ca.id = c.campaign_id
 			WHERE c.id = $1
 			  AND c.fingerprint_status = 'ready'
-			  AND ca.status = 'active'
+			  AND ca.status = 'ativa'
 		`, payload.CommercialID).Scan(&shortID)
 		if err != nil {
 			l.log.Warn("index.reload: commercial not found or not ready",

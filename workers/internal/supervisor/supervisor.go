@@ -54,6 +54,9 @@ type Supervisor struct {
 	mu               sync.Mutex
 	workers          map[uuid.UUID]*workerEntry // stationID → entry
 	lastStallRestart map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
+
+	// Lifecycle (§18.2.1). Optional: nil when not configured.
+	lifecycle *LifecycleScheduler
 }
 
 // New constructs a Supervisor.
@@ -146,9 +149,9 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 		return fmt.Errorf("supervisor: get campaign: %w", err)
 	}
 
-	// 2. Update campaign status to active BEFORE starting workers so that
+	// 2. Update campaign status to ativa BEFORE starting workers so that
 	// ActiveCampaignsForStation (called inside startStationWorker) finds it.
-	if err := s.campaigns.UpdateStatus(ctx, campaignID, "active"); err != nil {
+	if err := s.campaigns.UpdateStatus(ctx, campaignID, "ativa"); err != nil {
 		return fmt.Errorf("supervisor: update campaign status: %w", err)
 	}
 
@@ -464,8 +467,8 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 	var stationsToPause []uuid.UUID
 
 	for _, stationID := range camp.TargetStations {
-		// ActiveCampaignsForStation returns campaigns with status = 'active'.
-		// The current campaign is still 'active' at this point (we haven't
+		// ActiveCampaignsForStation returns campaigns with status = 'ativa'.
+		// The current campaign is still 'ativa' at this point (we haven't
 		// updated its status yet), so we need to exclude it from the check.
 		activeCampaignIDs, err := s.campaigns.ActiveCampaignsForStation(ctx, stationID)
 		if err != nil {
@@ -500,8 +503,10 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 		// c. If another active campaign uses this station, leave worker running.
 	}
 
-	// 3. Update campaign status to paused.
-	if err := s.campaigns.UpdateStatus(ctx, campaignID, "paused"); err != nil {
+	// 3. Update campaign status to cancelada.
+	// (Pause is now an alias for Cancel — see §18.2.1: 'paused' was collapsed
+	// into 'cancelada' since pause-as-deactivation was the de-facto usage.)
+	if err := s.campaigns.UpdateStatus(ctx, campaignID, "cancelada"); err != nil {
 		return fmt.Errorf("supervisor: update campaign status: %w", err)
 	}
 
@@ -534,7 +539,7 @@ func (s *Supervisor) Reload(campaignID uuid.UUID) error {
 		}
 		return fmt.Errorf("supervisor.Reload: get campaign: %w", err)
 	}
-	if camp.Status != "active" {
+	if camp.Status != "ativa" {
 		return nil
 	}
 	for _, stationID := range camp.TargetStations {
@@ -577,12 +582,12 @@ func (s *Supervisor) WorkerStatuses() []WorkerStatus {
 	return statuses
 }
 
-// RestoreActive re-launches workers for all campaigns with status 'active'.
+// RestoreActive re-launches workers for all campaigns with status 'ativa'.
 // Called once at startup after the index loader finishes, so workers resume
 // after a process restart or crash.
 func (s *Supervisor) RestoreActive(ctx context.Context) error {
 	rows, err := s.db.Query(ctx, `
-		SELECT id FROM campaigns WHERE status = 'active'
+		SELECT id FROM campaigns WHERE status = 'ativa'
 	`)
 	if err != nil {
 		return fmt.Errorf("supervisor.RestoreActive: query: %w", err)
@@ -612,4 +617,86 @@ func (s *Supervisor) RestoreActive(ctx context.Context) error {
 
 	s.log.Info("supervisor.RestoreActive: done", zap.Int("campaigns", len(ids)))
 	return nil
+}
+
+// StartLifecycle wires up the LifecycleScheduler (§18.2.1) and runs it in a
+// goroutine. Activation/end events trigger worker start/pause via the
+// existing Start/Pause methods, so no other code path is touched.
+//
+// Idempotent: a second call is a no-op.
+func (s *Supervisor) StartLifecycle(ctx context.Context) {
+	if s.lifecycle != nil {
+		return
+	}
+	bus := NewNATSEventBus(s.nc, s.log)
+	sched := NewLifecycleScheduler(s.db, s.campaigns, bus, s.log)
+
+	sched.OnActivated = func(_ context.Context, campaignID uuid.UUID) {
+		// The scheduler already moved the row to 'ativa'. Start() expects to
+		// flip the status itself, but doing it again is a harmless idempotent
+		// UPDATE — and reusing Start() means we get the same worker-spawn
+		// path used by the manual /start endpoint.
+		if err := s.Start(campaignID); err != nil {
+			s.log.Error("lifecycle: auto-start failed",
+				zap.String("campaign_id", campaignID.String()),
+				zap.Error(err))
+		}
+	}
+	sched.OnEnded = func(_ context.Context, campaignID uuid.UUID) {
+		// Pause() stops workers for stations no longer covered by any active
+		// campaign and updates the status to 'cancelada' — but the scheduler
+		// already moved this campaign to 'concluida'. We only need the
+		// worker-stop side of Pause; do it inline.
+		s.StopWorkersForCampaign(campaignID)
+	}
+
+	s.lifecycle = sched
+	go func() {
+		if err := sched.Run(ctx); err != nil {
+			s.log.Error("lifecycle scheduler exited with error", zap.Error(err))
+		}
+	}()
+}
+
+// StopWorkersForCampaign cancels workers for stations that have no other
+// active campaign once campaignID has left the 'ativa' state. Mirrors the
+// worker-stopping half of Pause() but does NOT mutate campaign.status —
+// callers (lifecycle scheduler, Cancel handler) already moved the row to
+// its terminal state.
+func (s *Supervisor) StopWorkersForCampaign(campaignID uuid.UUID) {
+	ctx := context.Background()
+	camp, err := s.campaigns.Get(ctx, campaignID)
+	if err != nil {
+		s.log.Warn("supervisor.stopWorkersForCampaign: get campaign failed",
+			zap.String("campaign_id", campaignID.String()),
+			zap.Error(err))
+		return
+	}
+	for _, stationID := range camp.TargetStations {
+		activeIDs, err := s.campaigns.ActiveCampaignsForStation(ctx, stationID)
+		if err != nil {
+			s.log.Warn("supervisor.stopWorkersForCampaign: active campaigns query failed",
+				zap.String("station_id", stationID.String()),
+				zap.Error(err))
+			continue
+		}
+		// activeIDs no longer contains campaignID (it's now 'concluida'),
+		// so any leftover entry means another campaign still uses this station.
+		if len(activeIDs) > 0 {
+			continue
+		}
+		s.mu.Lock()
+		if entry, ok := s.workers[stationID]; ok {
+			entry.cancel()
+			delete(s.workers, stationID)
+			s.evidence.Unregister(stationID)
+			metrics.WorkerActive.Dec()
+		}
+		s.mu.Unlock()
+		if err := s.stations.UpdateMonitoringStatus(ctx, stationID, "paused"); err != nil {
+			s.log.Warn("supervisor.stopWorkersForCampaign: update station monitoring_status failed",
+				zap.String("station_id", stationID.String()),
+				zap.Error(err))
+		}
+	}
 }

@@ -111,6 +111,21 @@ var (
 		Name: "radiocheck_webhook_dlq_size",
 		Help: "Number of webhook_deliveries rows with status='dead'.",
 	})
+
+	// ── Campaign lifecycle (§18.2.1) ─────────────────────────────────────
+	// CampaignsByStatus is a snapshot gauge of campaigns grouped by status.
+	// Updated by the lifecycle scheduler on every tick.
+	CampaignsByStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_campaigns_by_status",
+		Help: "Number of campaigns currently in each lifecycle status.",
+	}, []string{"status"})
+
+	// CampaignTransitions counts every status transition observed by the
+	// lifecycle scheduler (programada→ativa and ativa→concluida).
+	CampaignTransitions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_campaign_lifecycle_transitions_total",
+		Help: "Total campaign lifecycle status transitions, labeled by from/to.",
+	}, []string{"from", "to"})
 )
 
 func init() {
@@ -123,5 +138,6 @@ func init() {
 		EvidenceTierMovements, EvidenceStorageBytes,
 		EvidenceTieringLastRun, EvidenceTieringErrors,
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
+		CampaignsByStatus, CampaignTransitions,
 	)
 }
