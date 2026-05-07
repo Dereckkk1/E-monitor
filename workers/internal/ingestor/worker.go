@@ -13,10 +13,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 	"radiocheck/internal/events"
 	"radiocheck/internal/index"
 	"radiocheck/internal/match"
+	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 	"radiocheck/pkg/ringbuffer"
 )
 
@@ -280,6 +283,12 @@ func (w *Worker) runAACReader(r io.Reader, aacBuf *ringbuffer.ByteRing) {
 
 // runPCMReader reads float32 PCM samples from r, feeds them into pcmBuf,
 // and triggers matching every 32000 samples (2 seconds at 16kHz).
+//
+// We deliberately DO NOT open a long-lived span around w.Run — that span would
+// last for hours and dominate trace UIs. Instead, every 2-second matching
+// iteration opens its own short-lived "worker.window" span as the trace root,
+// with sample windows that contain a hit producing additional spans for the
+// downstream publish.
 func (w *Worker) runPCMReader(
 	r io.Reader,
 	pcmBuf *ringbuffer.PCMRing,
@@ -350,7 +359,27 @@ func (w *Worker) runPCMReader(
 			continue
 		}
 
+		// Span per analysis window — short-lived so it never dominates the
+		// trace UI. The current sampling default is parent-based ratio 1.0
+		// in dev; production should drop the ratio so this 2 Hz span source
+		// doesn't flood the collector.
+		windowCtx, windowSpan := observability.Tracer().Start(context.Background(), "worker.window",
+		)
+		windowSpan.SetAttributes(attribute.String("station_id", stationIDStr))
+
+		matchStart := time.Now()
 		results := match.MatchWindow(window, w.store, int(w.cfg.MatchThreshold.Load()), w.cfg.MinScoreCoverage)
+		matchElapsed := time.Since(matchStart)
+		// Histogram observation with trace_id exemplar so Grafana can jump
+		// from a long-tail bucket directly to the offending trace.
+		observability.ObserveWithTraceExemplar(windowCtx,
+			metrics.MatchWindowDuration.WithLabelValues(stationIDStr),
+			matchElapsed.Seconds(),
+		)
+		windowSpan.SetAttributes(
+			attribute.Int("results_count", len(results)),
+			attribute.Float64("duration_seconds", matchElapsed.Seconds()),
+		)
 		now := time.Now()
 
 		// Log every window that passes the threshold so we can see score/ratio.
@@ -402,10 +431,11 @@ func (w *Worker) runPCMReader(
 		for id, sm := range machines {
 			if res, ok := resultByID[id]; ok {
 				if confirmed := sm.Update(res, now); confirmed != nil {
-					w.publishDetection(confirmed, stationIDStr)
+					w.publishDetection(windowCtx, confirmed, stationIDStr)
 				}
 			}
 		}
+		windowSpan.End()
 	}
 }
 
@@ -416,7 +446,15 @@ func (w *Worker) runPCMReader(
 // 60s after it ends. Uses FirstMatchAt as a proxy for start (offset by the
 // analysis window length so we capture audio just before the first frame
 // that produced a hit).
-func (w *Worker) publishDetection(det *match.ConfirmedDetection, stationIDStr string) {
+func (w *Worker) publishDetection(ctx context.Context, det *match.ConfirmedDetection, stationIDStr string) {
+	ctx, span := observability.Tracer().Start(ctx, "worker.publish_pending",
+	)
+	span.SetAttributes(
+		attribute.String("station_id", stationIDStr),
+		attribute.Int("commercial_short_id", int(det.CommercialShortID)),
+		attribute.Float64("confidence", det.Confidence),
+	)
+	defer span.End()
 	totalFrames := w.cfg.CommercialFrames[det.CommercialShortID]
 	durationSec := float64(totalFrames) * 2048.0 / 16000.0
 	duration := time.Duration(durationSec * float64(time.Second))
@@ -449,7 +487,7 @@ func (w *Worker) publishDetection(det *match.ConfirmedDetection, stationIDStr st
 	// supervisor decides whether to publish on detections.confirmed,
 	// suppress, or retract a previous publication. Workers no longer
 	// publish directly to detections.confirmed.
-	if err := w.nc.Publish(events.SubjectDetectionPending, payload); err != nil {
+	if err := observability.PublishWithTracing(ctx, w.nc, events.SubjectDetectionPending, payload); err != nil {
 		w.log.Error("nats publish failed",
 			zap.String("stationID", stationIDStr),
 			zap.Int32("commercialShortID", det.CommercialShortID),
