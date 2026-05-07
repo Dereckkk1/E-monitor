@@ -12,6 +12,11 @@ type State int
 const (
 	StateIdle      State = iota
 	StateDetecting State = iota
+	// StateUncertain is entered from Detecting when coverage is in an
+	// ambiguous zone (borderline coverage, or high score with low coverage).
+	// It awaits neural verification via ResolveNeural() to either confirm or
+	// drop the detection. Tick() expires the state if no resolution arrives.
+	StateUncertain State = iota
 	StateCooldown  State = iota
 )
 
@@ -33,6 +38,13 @@ type StateMachine struct {
 	coverage          *CoverageWindow
 	firstMatchAt      time.Time
 	log               *zap.Logger
+
+	// StateDetecting tracking
+	detectingWindows int
+
+	// StateUncertain tracking (fase2 neural verification)
+	uncertainWindows      int
+	uncertainOffsetFrames int
 
 	// Configuration
 	minScore            int           // minimum MatchResult.Score to count as a hit
@@ -80,6 +92,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 		if result.Score >= sm.minScore {
 			sm.state = StateDetecting
 			sm.firstMatchAt = now
+			sm.detectingWindows = 0
 			sm.coverage.Add(result.OffsetFrames, now)
 			sm.log.Info("detecting started",
 				zap.String("stationID", sm.stationID),
@@ -90,6 +103,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 		}
 
 	case StateDetecting:
+		sm.detectingWindows++
 		if result.Score >= sm.minScore {
 			sm.coverage.Add(result.OffsetFrames, now)
 			if sm.coverage.Coverage() >= sm.minTemporalCoverage {
@@ -108,11 +122,39 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 					zap.Float64("confidence", confidence),
 				)
 				sm.coverage.Reset()
+				sm.detectingWindows = 0
 				sm.state = StateCooldown
 				sm.cooldownUntil = now.Add(sm.cooldownDuration)
 				return detection
 			}
+
+			// Transition to StateUncertain if coverage is in the ambiguous zone.
+			// Two paths: (1) borderline coverage ≥0.4 but below threshold, or
+			// (2) high score (3× threshold) with low coverage ≥0.2. The latter catches
+			// noise-disrupted matches where the neural verifier can disambiguate.
+			// Requires at least 3 windows processed.
+			cov := sm.coverage.Coverage()
+			highScore := result.Score >= 3*sm.minScore
+			covPath := cov >= 0.4 && cov < sm.minTemporalCoverage
+			scorePath := highScore && cov >= 0.2 && cov < sm.minTemporalCoverage
+			if sm.detectingWindows >= 3 && (covPath || scorePath) {
+				sm.state = StateUncertain
+				sm.uncertainWindows = 0
+				sm.uncertainOffsetFrames = result.OffsetFrames
+				sm.log.Info("detection uncertain, awaiting neural resolution",
+					zap.String("stationID", sm.stationID),
+					zap.Int32("commercialShortID", sm.commercialShortID),
+					zap.Float64("coverage", cov),
+					zap.Int("score", result.Score),
+				)
+				return nil
+			}
 		}
+
+	case StateUncertain:
+		// Expiry is handled by Tick(); Update() only processes neural resolution
+		// via ResolveNeural(). Discard any non-neural match results here.
+		return nil
 
 	case StateCooldown:
 		// Matches during cooldown are discarded to prevent duplicate detections.
@@ -121,13 +163,25 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 	return nil
 }
 
-// Tick checks if the detecting phase has timed out, or if cooldown has expired.
+// Tick checks if the detecting phase has timed out, cooldown has expired,
+// or if StateUncertain has lingered too long without neural resolution.
 // Call once per window.
 func (sm *StateMachine) Tick(now time.Time) {
 	switch sm.state {
 	case StateDetecting:
 		if now.Sub(sm.firstMatchAt) > sm.confirmTimeout {
 			sm.log.Info("detection timed out, resetting to idle",
+				zap.String("stationID", sm.stationID),
+				zap.Int32("commercialShortID", sm.commercialShortID),
+			)
+			sm.coverage.Reset()
+			sm.detectingWindows = 0
+			sm.state = StateIdle
+		}
+	case StateUncertain:
+		sm.uncertainWindows++
+		if sm.uncertainWindows >= 3 {
+			sm.log.Info("uncertain detection expired without neural resolution",
 				zap.String("stationID", sm.stationID),
 				zap.Int32("commercialShortID", sm.commercialShortID),
 			)
@@ -148,4 +202,53 @@ func (sm *StateMachine) Tick(now time.Time) {
 // State returns the current state.
 func (sm *StateMachine) State() State {
 	return sm.state
+}
+
+// IsUncertain returns true when the state machine is in the StateUncertain state,
+// waiting for neural verification to decide the detection.
+func (sm *StateMachine) IsUncertain() bool { return sm.state == StateUncertain }
+
+// UncertainOffset returns the OffsetFrames recorded when the machine entered StateUncertain.
+func (sm *StateMachine) UncertainOffset() int { return sm.uncertainOffsetFrames }
+
+// ResolveNeural resolves an uncertain detection based on neural cosine similarity score.
+// Returns a *ConfirmedDetection if similarity >= 0.85, otherwise resets to Idle.
+// If called outside StateUncertain, returns nil without side effects.
+func (sm *StateMachine) ResolveNeural(similarity float64, now time.Time) *ConfirmedDetection {
+	if sm.state != StateUncertain {
+		return nil
+	}
+	if similarity >= 0.85 {
+		confidence := sm.coverage.Coverage()
+		detection := &ConfirmedDetection{
+			CommercialShortID: sm.commercialShortID,
+			StationID:         sm.stationID,
+			DetectedAt:        now,
+			FirstMatchAt:      sm.firstMatchAt,
+			OffsetFrames:      sm.uncertainOffsetFrames,
+			Confidence:        confidence,
+		}
+		sm.log.Info("uncertain detection confirmed via neural",
+			zap.String("stationID", sm.stationID),
+			zap.Int32("commercialShortID", sm.commercialShortID),
+			zap.Float64("similarity", similarity),
+			zap.Float64("confidence", confidence),
+		)
+		sm.coverage.Reset()
+		sm.detectingWindows = 0
+		sm.uncertainWindows = 0
+		sm.state = StateCooldown
+		sm.cooldownUntil = now.Add(sm.cooldownDuration)
+		return detection
+	}
+	sm.log.Info("uncertain detection rejected by neural",
+		zap.String("stationID", sm.stationID),
+		zap.Int32("commercialShortID", sm.commercialShortID),
+		zap.Float64("similarity", similarity),
+	)
+	sm.coverage.Reset()
+	sm.detectingWindows = 0
+	sm.uncertainWindows = 0
+	sm.state = StateIdle
+	return nil
 }
