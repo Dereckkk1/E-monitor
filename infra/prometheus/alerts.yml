@@ -50,3 +50,15 @@ groups:
           severity: warning
         annotations:
           summary: "Job de tiering de evidências não executou nas últimas 48h"
+
+      - alert: CalibrationStale
+        # Threshold: 14 dias = 2× a janela de 7d definida em §9.4. Acima disso
+        # o station_thresholds está vencido — o p99 de ruído ficou velho e o
+        # min_hashes pode estar fora de calibração com a operação real.
+        expr: time() - radiocheck_calibration_last_success_timestamp > 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Calibração não roda há mais de 14d para {{ $labels.station_id }}"
+          description: "Verifique o scheduler de calibração e o runbook CalibrationStale."
