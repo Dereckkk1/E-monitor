@@ -24,3 +24,29 @@ groups:
           severity: critical
         annotations:
           summary: "Disco com menos de 5% livre"
+
+      - alert: BackupNotRunning
+        expr: time() - radiocheck_postgres_backup_last_success_timestamp > 26 * 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup do Postgres sem sucesso há mais de 26h"
+          description: "Verifique /var/log/radiocheck/backup.log e o status do cron radiocheck-postgres."
+
+      - alert: RestoreTestFailed
+        expr: radiocheck_postgres_restore_test_last_status != 1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Último teste de restore falhou"
+          description: "Veja /var/log/radiocheck/restore-test.log para o detalhe do erro."
+
+      - alert: EvidenceTieringStalled
+        expr: time() - radiocheck_evidence_tiering_last_run_timestamp > 48 * 3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job de tiering de evidências não executou nas últimas 48h"
