@@ -106,6 +106,12 @@ func (h *WebhooksHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "webhook_url must be a valid http(s) URL", http.StatusBadRequest)
 			return
 		}
+		// SSRF guard: refuse URLs that resolve to private/loopback/link-local
+		// space. In dev mode the validator is a no-op so localhost works.
+		if err := webhook.ValidateURLForSSRF(r.Context(), *in.URL); err != nil {
+			http.Error(w, "webhook_url rejected: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if in.Secret != nil && *in.Secret != "" && len(*in.Secret) < 16 {
 		http.Error(w, "webhook_secret must be at least 16 characters", http.StatusBadRequest)
