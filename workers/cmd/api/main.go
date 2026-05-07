@@ -63,6 +63,17 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Bootstrap admin user (§16). Idempotent: when the email already
+	// exists, this is a no-op; when env vars are unset, also no-op.
+	// Documented in docs/auth-bootstrap.md.
+	if err := auth.EnsureAdmin(ctx, pool, auth.BootstrapConfig{
+		Email:    os.Getenv("RADIOCHECK_BOOTSTRAP_ADMIN_EMAIL"),
+		Password: os.Getenv("RADIOCHECK_BOOTSTRAP_ADMIN_PASSWORD"),
+		Role:     "admin",
+	}, logger); err != nil {
+		log.Fatalf("bootstrap admin: %v", err)
+	}
+
 	nc, err := events.Connect(cfg.NATSURL)
 	if err != nil {
 		log.Fatalf("nats: %v", err)
