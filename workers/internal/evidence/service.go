@@ -13,9 +13,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
+	"radiocheck/internal/observability"
 	"radiocheck/internal/storage"
 	"radiocheck/pkg/ringbuffer"
 )
@@ -98,7 +101,11 @@ func (s *Service) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 //
 // Errors are logged but never panic.
 func (s *Service) handle(msg *nats.Msg) {
-	ctx := context.Background()
+	// Extract trace-context from the supervisor's NATS header so the entire
+	// evidence pipeline (DB insert, ffmpeg encode, S3 upload) chains under
+	// the same trace as the originating detection window.
+	ctx, span := observability.StartConsumerSpan(context.Background(), msg, "evidence.process_detection")
+	defer span.End()
 
 	var ev detectionEvent
 	if err := json.Unmarshal(msg.Data, &ev); err != nil {
@@ -111,6 +118,10 @@ func (s *Service) handle(msg *nats.Msg) {
 		s.log.Warn("evidence: invalid station_id", zap.String("station_id", ev.StationID), zap.Error(err))
 		return
 	}
+	span.SetAttributes(
+		attribute.String("station_id", ev.StationID),
+		attribute.Int("commercial_short_id", int(ev.CommercialShortID)),
+	)
 	detectedAt, err := time.Parse(time.RFC3339, ev.DetectedAt)
 	if err != nil {
 		s.log.Warn("evidence: invalid detected_at", zap.String("detected_at", ev.DetectedAt), zap.Error(err))
@@ -164,19 +175,41 @@ func (s *Service) handle(msg *nats.Msg) {
 	)
 
 	// Async: wait for the window to be fully captured, then extract & upload.
-	go s.processEvidence(det.ID, det.DetectedAt, stationID, windowStart, windowEnd)
+	// Capture the trace context so child spans (extract/encode/upload) chain
+	// under the original detection trace even though we drop the parent span
+	// before returning from handle().
+	go s.processEvidence(ctx, det.ID, det.DetectedAt, stationID, windowStart, windowEnd)
 }
 
 // processEvidence sleeps until the evidence window is fully captured by the
 // ring buffer, then extracts the audio, encodes it to m4a, uploads to S3 and
 // updates the detection row with the final evidence status.
+//
+// parentCtx carries only the trace context inherited from handle(); the
+// originating span is already closed by the time this function runs. We
+// detach the cancellation chain so a slow encode is not killed when the
+// inbound request finishes, but keep the trace IDs so spans nest correctly.
 func (s *Service) processEvidence(
+	parentCtx context.Context,
 	detectionID uuid.UUID,
 	detectedAt time.Time,
 	stationID uuid.UUID,
 	windowStart, windowEnd time.Time,
 ) {
 	ctx := context.Background()
+	// Re-link to the parent trace without inheriting cancellation. trace.
+	// SpanContextFromContext is the cheapest way; observability.Tracer.Start
+	// already picks it up via OTel context.
+	ctx = traceContextFromParent(parentCtx, ctx)
+
+	// Span covers the full async path so trace shows exact sleep / S3 / DB
+	// timings.
+	ctx, span := observability.Tracer().Start(ctx, "evidence.process_async")
+	span.SetAttributes(
+		attribute.String("detection_id", detectionID.String()),
+		attribute.String("station_id", stationID.String()),
+	)
+	defer span.End()
 
 	// Small margin so we don't race the buffer writer.
 	if delay := time.Until(windowEnd) + 2*time.Second; delay > 0 {
@@ -188,43 +221,75 @@ func (s *Service) processEvidence(
 	s.mu.RUnlock()
 
 	if buf == nil {
+		span.SetStatus(codes.Error, "no buffer")
 		s.markFailed(ctx, detectionID, detectedAt, "no buffer")
 		return
 	}
 
+	_, extractSpan := observability.Tracer().Start(ctx, "evidence.extract_buffer")
 	aacData := buf.Extract(windowStart, windowEnd)
+	extractSpan.SetAttributes(attribute.Int("bytes", len(aacData)))
+	extractSpan.End()
 	if len(aacData) == 0 {
+		span.SetStatus(codes.Error, "buffer extract empty")
 		s.markFailed(ctx, detectionID, detectedAt, "buffer extract empty")
 		return
 	}
 
+	_, encodeSpan := observability.Tracer().Start(ctx, "evidence.ffmpeg_encode")
 	m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)
+	encodeSpan.SetAttributes(attribute.Int("bytes_in", len(aacData)), attribute.Int("bytes_out", len(m4aData)))
 	if err != nil {
+		encodeSpan.RecordError(err)
+		encodeSpan.SetStatus(codes.Error, err.Error())
+		encodeSpan.End()
 		s.log.Error("evidence encoding failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
 		s.markFailed(ctx, detectionID, detectedAt, "encode failed")
 		return
 	}
+	encodeSpan.End()
 
 	key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.m4a",
 		detectedAt.Format("2006"), detectedAt.Format("01"), detectedAt.Format("02"),
 		stationID, detectionID,
 	)
 
-	if err := s.store.Put(ctx, key, bytes.NewReader(m4aData), "video/mp4"); err != nil {
+	uploadCtx, uploadSpan := observability.Tracer().Start(ctx, "evidence.s3_upload")
+	uploadSpan.SetAttributes(attribute.String("s3.key", key), attribute.Int("bytes", len(m4aData)))
+	if err := s.store.Put(uploadCtx, key, bytes.NewReader(m4aData), "video/mp4"); err != nil {
+		uploadSpan.RecordError(err)
+		uploadSpan.SetStatus(codes.Error, err.Error())
+		uploadSpan.End()
 		s.log.Error("evidence upload failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
 		s.markFailed(ctx, detectionID, detectedAt, "upload failed")
 		return
 	}
+	uploadSpan.End()
 
-	if err := s.detections.UpdateEvidence(ctx, detectionID, detectedAt, "available", key, int64(len(m4aData))); err != nil {
+	persistCtx, persistSpan := observability.Tracer().Start(ctx, "evidence.persist_path")
+	if err := s.detections.UpdateEvidence(persistCtx, detectionID, detectedAt, "available", key, int64(len(m4aData))); err != nil {
+		persistSpan.RecordError(err)
+		persistSpan.SetStatus(codes.Error, err.Error())
+		persistSpan.End()
 		s.log.Error("evidence: update evidence failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
 		return
 	}
+	persistSpan.End()
 
 	s.log.Info("evidence: ready",
 		zap.String("detection_id", detectionID.String()),
 		zap.Int("bytes", len(m4aData)),
 	)
+}
+
+// traceContextFromParent re-attaches the parent's OTel SpanContext to a fresh
+// context.Background(). This lets the async goroutine survive the parent's
+// cancellation while keeping the trace continuity.
+func traceContextFromParent(parent, child context.Context) context.Context {
+	// trace.ContextWithSpanContext is exposed through the trace package; we
+	// avoid pulling it just for this and use the observability helper to
+	// keep imports minimal.
+	return observability.PropagateTraceContext(parent, child)
 }
 
 func (s *Service) markFailed(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time, reason string) {

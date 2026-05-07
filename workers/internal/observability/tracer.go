@@ -1,6 +1,8 @@
 package observability
 
 import (
+	"context"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -16,4 +18,16 @@ const instrumentationName = "radiocheck"
 // stays uniform across all spans.
 func Tracer() trace.Tracer {
 	return otel.Tracer(instrumentationName)
+}
+
+// PropagateTraceContext copies the OTel SpanContext from src into dst without
+// inheriting cancellation. Useful when a request handler kicks off an async
+// goroutine that must survive the request's lifetime but should remain part
+// of the same trace.
+func PropagateTraceContext(src, dst context.Context) context.Context {
+	sc := trace.SpanContextFromContext(src)
+	if !sc.IsValid() {
+		return dst
+	}
+	return trace.ContextWithSpanContext(dst, sc)
 }
