@@ -28,35 +28,41 @@ var backoffSchedule = []time.Duration{
 }
 
 const (
-	maxAttempts            = 5
-	defaultPollInterval    = 5 * time.Second
-	defaultMaxConcurrent   = 10
-	defaultHTTPTimeout     = 10 * time.Second
-	maxResponseBodyBytes   = 4 * 1024 // 4 KB cap for response_body persistence
-	signatureHeaderName    = "X-Radiocheck-Signature"
-	eventTypeHeaderName    = "X-Radiocheck-Event"
-	userAgentHeader        = "Radiocheck-Webhook/1.0"
+	maxAttempts          = 5
+	defaultPollInterval  = 5 * time.Second
+	defaultBatchSize     = 10
+	defaultHTTPTimeout   = 10 * time.Second
+	maxResponseBodyBytes = 4 * 1024 // 4 KB cap for response_body persistence
+	signatureHeaderName  = "X-Radiocheck-Signature"
+	eventTypeHeaderName  = "X-Radiocheck-Event"
+	deliveryIDHeaderName = "X-Radiocheck-Delivery-Id"
+	userAgentHeader      = "Radiocheck-Webhook/1.0"
 )
 
 // Worker drains pending webhook_deliveries rows and POSTs them to the
 // configured client URL. It is safe to run multiple workers concurrently in
 // the same process — `FOR UPDATE SKIP LOCKED` is used to claim work.
+//
+// batchSize controls how many rows are claimed per tick (the SQL LIMIT). The
+// claimed rows are delivered serially within a single tick — this is NOT a
+// concurrency knob. Fan-out with errgroup + semaphore is a documented
+// follow-up (see docs/webhooks.md "Trade-offs e dívida técnica").
 type Worker struct {
-	db            *pgxpool.Pool
-	httpClient    *http.Client
-	log           *zap.Logger
-	pollInterval  time.Duration
-	maxConcurrent int
+	db           *pgxpool.Pool
+	httpClient   *http.Client
+	log          *zap.Logger
+	pollInterval time.Duration
+	batchSize    int
 }
 
 // NewWorker builds a Worker with sensible defaults.
 func NewWorker(db *pgxpool.Pool, log *zap.Logger) *Worker {
 	return &Worker{
-		db:            db,
-		httpClient:    &http.Client{Timeout: defaultHTTPTimeout},
-		log:           log,
-		pollInterval:  defaultPollInterval,
-		maxConcurrent: defaultMaxConcurrent,
+		db:           db,
+		httpClient:   &http.Client{Timeout: defaultHTTPTimeout},
+		log:          log,
+		pollInterval: defaultPollInterval,
+		batchSize:    defaultBatchSize,
 	}
 }
 
@@ -76,7 +82,7 @@ func (w *Worker) WithPollInterval(d time.Duration) *Worker {
 func (w *Worker) Run(ctx context.Context) error {
 	w.log.Info("webhook worker: starting",
 		zap.Duration("poll_interval", w.pollInterval),
-		zap.Int("max_concurrent", w.maxConcurrent),
+		zap.Int("batch_size", w.batchSize),
 	)
 	t := time.NewTicker(w.pollInterval)
 	defer t.Stop()
@@ -96,10 +102,15 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 // tick processes one batch of pending deliveries.
+//
+// NOTE: deliveries within a batch are processed serially. batchSize is the
+// SQL LIMIT on the claim query, NOT a goroutine fan-out limit. Adding
+// parallel fan-out (errgroup + semaphore) is a follow-up — see
+// docs/webhooks.md "Trade-offs e dívida técnica".
 func (w *Worker) tick(ctx context.Context) {
 	w.refreshGauges(ctx)
 
-	rows, err := w.claimBatch(ctx, w.maxConcurrent)
+	rows, err := w.claimBatch(ctx, w.batchSize)
 	if err != nil {
 		w.log.Warn("webhook worker: claim batch failed", zap.Error(err))
 		return
@@ -185,6 +196,10 @@ func (w *Worker) deliver(ctx context.Context, d pendingDelivery) {
 	req.Header.Set("User-Agent", userAgentHeader)
 	req.Header.Set(signatureHeaderName, "sha256="+signBody(d.Secret, d.Payload))
 	req.Header.Set(eventTypeHeaderName, d.EventType)
+	// Stable per-row identifier so receivers can correlate logs and dedupe
+	// retries (same delivery_id may arrive multiple times across attempts).
+	// We use the webhook_deliveries.id UUID directly.
+	req.Header.Set(deliveryIDHeaderName, d.ID.String())
 
 	resp, err := w.httpClient.Do(req)
 	dur := time.Since(start)
@@ -309,8 +324,15 @@ func (w *Worker) scheduleRetryOrDead(ctx context.Context, d pendingDelivery, rea
 	)
 }
 
-// refreshGauges keeps the queue/DLQ size gauges in sync. Cheap COUNT queries
-// against an indexed status column.
+// refreshGauges keeps the queue/DLQ size gauges in sync.
+//
+// TODO(scale): two `COUNT(*)` scans every poll tick (5s) are cheap today but
+// degrade as `webhook_deliveries` grows — even with an index on `status`,
+// PostgreSQL still has to count visible tuples. For production scale,
+// consider one of: (a) a partial index per status + cached count refreshed
+// on a slower schedule, (b) maintain counters in a small `webhook_stats`
+// table updated by triggers, or (c) sample at a longer interval. NOT
+// optimizing now: at PoC volumes (<10k rows) this is well under 1ms.
 func (w *Worker) refreshGauges(ctx context.Context) {
 	var pending, dead int
 	if err := w.db.QueryRow(ctx,
