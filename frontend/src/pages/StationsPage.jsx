@@ -1,255 +1,346 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useStations, useCreateStation } from '../api/hooks'
+import StationAvatar from '../components/StationAvatar'
+import RSelect from '../components/RSelect'
 
-const STATUS_CLASS = {
-  active:      'badge-active',
-  paused:      'badge-paused',
-  calibrating: 'badge-paused',
-  error:       'badge-error',
-}
-const STATUS_LABEL = {
-  active:      'Ativo',
-  paused:      'Pausado',
-  calibrating: 'Calibrando',
-  error:       'Erro',
+const BAND_OPTIONS = [
+  { value: 'FM', label: 'FM' },
+  { value: 'AM', label: 'AM' },
+]
+
+const STATUS_META = {
+  active:      { label: 'Ativa',       cls: 'badge-success' },
+  calibrating: { label: 'Calibrando',  cls: 'badge-warning' },
+  paused:      { label: 'Pausada',     cls: 'badge-neutral' },
+  error:       { label: 'Erro',        cls: 'badge-danger'  },
 }
 
-function AntennaIcon() {
+function formatPMM(pmm) {
+  if (pmm == null) return null
+  return new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(pmm)
+}
+
+function formatPop(n) {
+  if (n == null) return null
+  return new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(n) + ' hab.'
+}
+
+function streamDomain(url) {
+  if (!url) return null
+  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return null }
+}
+
+function SearchIcon() {
   return (
-    <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="32" cy="32" r="4" fill="currentColor" />
-      <path d="M32 36v16" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-      <path d="M24 52h16" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-      <path d="M20 28a16 16 0 0 1 24 0" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" />
-      <path d="M13 21a24 24 0 0 1 38 0" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" />
-      <path d="M7 14a32 32 0 0 1 50 0" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" fill="none" strokeOpacity="0.4" />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+      <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" />
+    </svg>
+  )
+}
+function PlusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M7 2v10M2 7h10" />
+    </svg>
+  )
+}
+function EditIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" />
+    </svg>
+  )
+}
+function PinIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 1C4.343 1 3 2.343 3 4c0 2.5 3 7 3 7s3-4.5 3-7c0-1.657-1.343-3-3-3z" /><circle cx="6" cy="4" r="1" />
+    </svg>
+  )
+}
+function GlobeIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <circle cx="6" cy="6" r="5" />
+      <path d="M1 6h10M6 1c-1.5 1.5-2 3-2 5s.5 3.5 2 5M6 1c1.5 1.5 2 3 2 5s-.5 3.5-2 5" />
     </svg>
   )
 }
 
+const LIMIT = 25
+
 export default function StationsPage() {
-  const { data: stations = [], isLoading } = useStations()
-  const createStation = useCreateStation()
-  const [showForm, setShowForm] = useState(false)
+  const navigate = useNavigate()
+
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQ,  setDebouncedQ]  = useState('')
+  const debounceRef  = useRef(null)
+
+  function handleSearch(e) {
+    const val = e.target.value
+    setSearchInput(val)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQ(val)
+      setPage(1)
+    }, 400)
+  }
+
+  const [band, setBand] = useState('')
+  const [page, setPage] = useState(1)
+  useEffect(() => { setPage(1) }, [band])
+
+  const { data, isLoading } = useStations({ q: debouncedQ, band, page, limit: LIMIT })
+  const stations = data?.data ?? []
+  const total    = data?.total ?? 0
+  const pages    = data?.pages ?? 1
+
+  // Create modal
+  const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ name: '', band: 'FM', frequency_mhz: '', city: '', state: '', stream_url: '' })
+  const createStation = useCreateStation()
 
-  function set(k, v) { setForm(f => ({ ...f, [k]: v })) }
+  function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
-  function handleSubmit(e) {
+  async function handleCreate(e) {
     e.preventDefault()
-    createStation.mutate({
-      ...form,
+    await createStation.mutateAsync({
+      name: form.name,
+      band: form.band,
       frequency_mhz: form.frequency_mhz !== '' ? Number(form.frequency_mhz) : null,
-    }, {
-      onSuccess: () => {
-        setShowForm(false)
-        setForm({ name: '', band: 'FM', frequency_mhz: '', city: '', state: '', stream_url: '' })
-      },
+      city: form.city || null,
+      state: form.state || null,
+      stream_url: form.stream_url,
     })
+    setCreating(false)
+    setForm({ name: '', band: 'FM', frequency_mhz: '', city: '', state: '', stream_url: '' })
+  }
+
+  function buildPages(current, total) {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+    const pages = []
+    if (current <= 4) {
+      pages.push(1, 2, 3, 4, 5, '…', total)
+    } else if (current >= total - 3) {
+      pages.push(1, '…', total - 4, total - 3, total - 2, total - 1, total)
+    } else {
+      pages.push(1, '…', current - 1, current, current + 1, '…', total)
+    }
+    return pages
   }
 
   return (
     <div>
       {/* Header */}
       <div className="page-header">
-        <h2>Emissoras</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowForm(v => !v)}>
-          {showForm ? 'Cancelar' : '+ Nova emissora'}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h2>Emissoras</h2>
+          {total > 0 && (
+            <span className="text-muted" style={{ fontSize: 13, fontWeight: 400 }}>
+              {total.toLocaleString('pt-BR')}
+            </span>
+          )}
+        </div>
+        <button className="btn btn-primary" onClick={() => setCreating(true)}>
+          <PlusIcon /> Nova emissora
         </button>
       </div>
 
-      {/* Form */}
-      {showForm && (
-        <div className="card" style={{ marginBottom: 20, padding: 20 }}>
-          <h3 style={{ marginBottom: 16 }}>Nova emissora</h3>
-          <form onSubmit={handleSubmit} className="stack">
-            {/* Row 1: Nome + Banda + Frequência */}
-            <div className="form-row">
-              <div className="field" style={{ flex: 2 }}>
+      {/* Filters */}
+      <div className="stations-filters">
+        <div className="stations-search">
+          <span className="stations-search-icon"><SearchIcon /></span>
+          <input
+            className="input stations-search-input"
+            type="text"
+            placeholder="Buscar por nome, cidade…"
+            value={searchInput}
+            onChange={handleSearch}
+          />
+        </div>
+
+        <div className="stations-band-filter">
+          {['', 'FM', 'AM'].map(b => (
+            <button
+              key={b || 'all'}
+              className={`band-tab${band === b ? ' active' : ''}`}
+              onClick={() => setBand(b)}
+            >
+              {b || 'Todas'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <div className="stations-list">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="station-row">
+              <div className="skeleton" style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0 }} />
+              <div className="station-row-main">
+                <div className="skeleton" style={{ height: 14, width: '55%', borderRadius: 4, marginBottom: 6 }} />
+                <div className="skeleton" style={{ height: 11, width: '35%', borderRadius: 4 }} />
+              </div>
+              <div className="station-row-cats" style={{ gap: 4 }}>
+                <div className="skeleton" style={{ height: 20, width: 60, borderRadius: 10 }} />
+                <div className="skeleton" style={{ height: 20, width: 72, borderRadius: 10 }} />
+              </div>
+              <div className="station-row-meta">
+                <div className="skeleton" style={{ height: 11, width: 70, borderRadius: 4 }} />
+              </div>
+              <div className="station-row-actions">
+                <div className="skeleton" style={{ height: 20, width: 54, borderRadius: 10 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : stations.length === 0 ? (
+        <div className="card" style={{ padding: '48px 24px', textAlign: 'center' }}>
+          <p className="text-muted" style={{ fontSize: 15 }}>
+            {debouncedQ
+              ? `Nenhum resultado para "${debouncedQ}"`
+              : 'Nenhuma emissora cadastrada.'}
+          </p>
+          {!debouncedQ && (
+            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => setCreating(true)}>
+              <PlusIcon /> Adicionar emissora
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="stations-list">
+          {stations.map(st => {
+            const statusMeta = STATUS_META[st.monitoring_status] ?? { label: st.monitoring_status, cls: 'badge-neutral' }
+            const cats       = st.meta?.categories ?? []
+            const pmm        = formatPMM(st.pmm)
+            const pop        = formatPop(st.meta?.total_population)
+            const covStates  = st.meta?.coverage_states?.length > 0
+              ? `${st.meta.coverage_states.length} estado${st.meta.coverage_states.length > 1 ? 's' : ''}`
+              : null
+            const domain     = streamDomain(st.stream_url)
+            const loc        = [st.city, st.state].filter(Boolean).join('/')
+
+            return (
+              <div key={st.id} className="station-row">
+                <StationAvatar station={st} size={44} />
+
+                <div className="station-row-main">
+                  <div className="station-row-name">{st.name}</div>
+                  <div className="station-row-sub">
+                    {st.frequency_mhz != null ? `${st.frequency_mhz} ` : ''}{st.band}
+                    {loc ? <><span className="station-row-dot">·</span><PinIcon />{loc}</> : null}
+                  </div>
+                </div>
+
+                <div className="station-row-cats">
+                  {cats.slice(0, 3).map(c => (
+                    <span key={c} className="category-tag">{c}</span>
+                  ))}
+                  {cats.length > 3 && (
+                    <span className="category-tag category-tag-more">+{cats.length - 3}</span>
+                  )}
+                </div>
+
+                <div className="station-row-meta">
+                  {pop && <span>{pop}</span>}
+                  {covStates && <span>{covStates}</span>}
+                  {!pop && !covStates && domain && (
+                    <span className="station-row-domain"><GlobeIcon />{domain}</span>
+                  )}
+                </div>
+
+                <div className="station-row-actions">
+                  <span className={`badge ${statusMeta.cls}`}>{statusMeta.label}</span>
+                  {pmm && <span className="station-pmm">PMM {pmm}</span>}
+                  <button
+                    className="btn-icon"
+                    title="Editar"
+                    onClick={() => navigate(`/stations/${st.id}/edit`)}
+                  >
+                    <EditIcon />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {pages > 1 && (
+        <div className="pagination">
+          <button className="pagination-btn" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
+            ← Anterior
+          </button>
+          <div className="pagination-pages">
+            {buildPages(page, pages).map((pg, i) =>
+              pg === '…'
+                ? <span key={`e-${i}`} className="pagination-ellipsis">…</span>
+                : <button
+                    key={`p-${pg}`}
+                    className={`pagination-page${pg === page ? ' active' : ''}`}
+                    onClick={() => setPage(pg)}
+                  >{pg}</button>
+            )}
+          </div>
+          <button className="pagination-btn" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>
+            Próxima →
+          </button>
+        </div>
+      )}
+
+      {/* Create modal */}
+      {creating && (
+        <div className="modal-overlay" onClick={() => setCreating(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Nova emissora</h3>
+              <button className="modal-close" onClick={() => setCreating(false)}>✕</button>
+            </div>
+            <form onSubmit={handleCreate} className="modal-body">
+              <div className="field">
                 <label>Nome *</label>
-                <input
-                  className="input"
-                  placeholder="Ex: Rádio Globo"
-                  value={form.name}
-                  onChange={e => set('name', e.target.value)}
-                  required
-                />
+                <input className="input" value={form.name} onChange={e => setF('name', e.target.value)} required />
+              </div>
+              <div className="cluster" style={{ alignItems: 'flex-end' }}>
+                <div className="field" style={{ flex: '0 0 90px' }}>
+                  <label>Banda *</label>
+                  <RSelect
+                    options={BAND_OPTIONS}
+                    value={BAND_OPTIONS.find(o => o.value === form.band) ?? null}
+                    onChange={opt => setF('band', opt?.value ?? 'FM')}
+                    isSearchable={false}
+                  />
+                </div>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Frequência</label>
+                  <input className="input" type="number" step="0.1" placeholder="100.5" value={form.frequency_mhz} onChange={e => setF('frequency_mhz', e.target.value)} />
+                </div>
+              </div>
+              <div className="cluster" style={{ alignItems: 'flex-end' }}>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Cidade</label>
+                  <input className="input" value={form.city} onChange={e => setF('city', e.target.value)} />
+                </div>
+                <div className="field" style={{ flex: '0 0 72px' }}>
+                  <label>UF</label>
+                  <input className="input" maxLength={2} placeholder="SP" value={form.state} onChange={e => setF('state', e.target.value.toUpperCase())} />
+                </div>
               </div>
               <div className="field">
-                <label>Banda</label>
-                <select className="select" value={form.band} onChange={e => set('band', e.target.value)}>
-                  <option value="FM">FM</option>
-                  <option value="AM">AM</option>
-                </select>
+                <label>URL do stream *</label>
+                <input className="input" type="url" value={form.stream_url} onChange={e => setF('stream_url', e.target.value)} required />
               </div>
-              <div className="field">
-                <label>Frequência (MHz)</label>
-                <input
-                  className="input"
-                  type="number"
-                  step="0.1"
-                  placeholder="98.5"
-                  value={form.frequency_mhz}
-                  onChange={e => set('frequency_mhz', e.target.value)}
-                />
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setCreating(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary" disabled={createStation.isPending}>
+                  {createStation.isPending ? 'Salvando…' : 'Criar emissora'}
+                </button>
               </div>
-            </div>
-
-            {/* Row 2: Cidade + UF */}
-            <div className="form-row">
-              <div className="field" style={{ flex: 2 }}>
-                <label>Cidade</label>
-                <input
-                  className="input"
-                  placeholder="Ex: São Paulo"
-                  value={form.city}
-                  onChange={e => set('city', e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label>UF</label>
-                <input
-                  className="input"
-                  maxLength={2}
-                  placeholder="SP"
-                  value={form.state}
-                  onChange={e => set('state', e.target.value.toUpperCase())}
-                />
-              </div>
-            </div>
-
-            {/* Row 3: Stream URL */}
-            <div className="field">
-              <label>URL do stream *</label>
-              <input
-                className="input"
-                placeholder="https://..."
-                value={form.stream_url}
-                onChange={e => set('stream_url', e.target.value)}
-                required
-              />
-            </div>
-
-            {/* Actions */}
-            <div className="cluster">
-              <button className="btn btn-primary btn-sm" type="submit" disabled={createStation.isPending}>
-                {createStation.isPending ? 'Salvando...' : 'Salvar emissora'}
-              </button>
-              {createStation.isError && (
-                <span className="text-error">Erro ao salvar. Tente novamente.</span>
-              )}
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Loading skeleton */}
-      {isLoading && (
-        <div className="card">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nome</th><th>Banda</th><th>Frequência</th>
-                <th>Cidade / UF</th><th>Status</th><th>Stream URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...Array(4)].map((_, i) => (
-                <tr key={i}>
-                  <td><div className="skeleton-cell" style={{ width: '120px' }} /></td>
-                  <td><div className="skeleton-cell" style={{ width: '36px' }} /></td>
-                  <td><div className="skeleton-cell" style={{ width: '64px' }} /></td>
-                  <td><div className="skeleton-cell" style={{ width: '100px' }} /></td>
-                  <td><div className="skeleton-cell" style={{ width: '56px' }} /></td>
-                  <td><div className="skeleton-cell" style={{ width: '200px' }} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!isLoading && stations.length === 0 && (
-        <div className="stations-empty">
-          <div className="stations-empty-action">
-            <div style={{ color: 'var(--c-action)', opacity: 0.75 }}>
-              <AntennaIcon />
-            </div>
-            <h3>Nenhuma emissora cadastrada</h3>
-            <p>Adicione uma emissora para começar o monitoramento.</p>
-            <div>
-              <button className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
-                + Nova emissora
-              </button>
-            </div>
+            </form>
           </div>
-          <div className="stations-empty-preview">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Nome</th><th>Banda</th><th>Frequência</th>
-                  <th>Cidade / UF</th><th>Status</th><th>Stream URL</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-heading)', color: 'var(--c-text)' }}>Rádio Exemplo</td>
-                  <td><span className="band-pill">FM</span></td>
-                  <td style={{ color: 'var(--c-text-2)' }}>98.5 MHz</td>
-                  <td style={{ color: 'var(--c-text-3)' }}>São Paulo / SP</td>
-                  <td><span className="badge badge-active">Ativo</span></td>
-                  <td style={{ color: 'var(--c-text-3)', fontSize: 11, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    https://stream.exemplo.com.br/radio
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Table */}
-      {!isLoading && stations.length > 0 && (
-        <div className="card">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Banda</th>
-                <th>Frequência</th>
-                <th>Cidade / UF</th>
-                <th>Status</th>
-                <th>Stream URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stations.map(s => (
-                <tr key={s.id}>
-                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-heading)', color: 'var(--c-text)' }}>
-                    {s.name}
-                  </td>
-                  <td>
-                    <span className="band-pill">{s.band}</span>
-                  </td>
-                  <td style={{ color: 'var(--c-text-2)' }}>
-                    {s.frequency_mhz ? `${s.frequency_mhz} MHz` : '—'}
-                  </td>
-                  <td style={{ color: 'var(--c-text-3)' }}>
-                    {[s.city, s.state].filter(Boolean).join(' / ') || '—'}
-                  </td>
-                  <td>
-                    <span className={`badge ${STATUS_CLASS[s.monitoring_status] ?? 'badge-ended'}`}>
-                      {STATUS_LABEL[s.monitoring_status] ?? s.monitoring_status}
-                    </span>
-                  </td>
-                  <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--c-text-3)', fontSize: 11 }}>
-                    {s.stream_url}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       )}
     </div>

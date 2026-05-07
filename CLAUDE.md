@@ -109,6 +109,8 @@ Use estes links para ir direto à seção relevante em vez de ler o arquivo inte
 | [§18 Plano de Execução por Fases](plano_implementacao.md#L1845) | 1845 | Cronograma: 4 fases ao longo de 36 semanas |
 | [§18.1 Fase 1 — Prova Técnica](plano_implementacao.md#L1847) | 1847 | Semanas 1–6: PoC funcional |
 | [§18.2 Fase 2 — Hardening](plano_implementacao.md#L1873) | 1873 | Semanas 7–18: estabilização e coexistência |
+| [§18.2.1 Ciclo de vida de campanha](plano_implementacao.md#L1893) | 1893 | Estados programada/ativa/concluida/cancelada com transição automática por data |
+| [§18.2.2 Desambiguação de versões](plano_implementacao.md#L1970) | 1970 | Dedup pós-confirmação entre cortes 30s/60s do mesmo cliente |
 | [§18.3 Fase 3 — Escala](plano_implementacao.md#L1892) | 1892 | Semanas 19–30: migração comercial |
 | [§18.4 Fase 4 — Corte Total](plano_implementacao.md#L1908) | 1908 | Semanas 31–36: desligamento do fornecedor |
 | [§18.5 Cronograma Sumário](plano_implementacao.md#L1922) | 1922 | Tabela resumida |

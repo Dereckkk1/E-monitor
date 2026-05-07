@@ -1886,8 +1886,179 @@ A qualquer momento durante a migração, se observarmos:
 - Alertas em produção com runbooks documentados.
 - Backup de Postgres configurado e testado (restore de teste mensal).
 - Política de retenção de evidências implementada (tiering automático após 30 dias).
+- **Ciclo de vida automático de campanha (§18.2.1).**
 
 **Critério de saída:** concordância igual ou superior a 95% com fornecedor atual por 3 semanas consecutivas. Sistema operando 24/7 com uptime igual ou superior a 99% mensal. Latência p95 de confirmação inferior a 10 segundos.
+
+#### 18.2.1 Ciclo de vida automático de campanha
+
+**Problema atual.** A coluna `campaigns.status` já armazena estado, mas as transições são todas manuais (operador clica em Iniciar/Pausar). Os campos `start_date` e `end_date` são gravados no banco no cadastro da campanha, mas nenhum scheduler/cron lê eles em runtime — uma campanha programada para começar amanhã às 06:00 não sobe sozinha; uma campanha que terminou na semana passada continua consumindo workers até alguém pausar.
+
+**Estados-alvo (4 valores finitos):**
+
+| Estado | Significado | Workers ativos? | Como entra |
+|---|---|---|---|
+| `programada` | Cadastrada, ainda não chegou em `start_date` | Não | Default ao criar |
+| `ativa` | `now()` dentro de [`start_date`, `end_date`] | **Sim** | Auto: scheduler quando `now() >= start_date` (e não cancelada) |
+| `concluida` | `now() > end_date` | Não | Auto: scheduler quando `now() > end_date` |
+| `cancelada` | Encerrada manualmente antes do fim | Não | Manual: operador clica em Cancelar |
+
+**Regra de monitoramento:** os stream workers consultam só campanhas em status `ativa`. Os outros três estados são equivalentes para o supervisor (worker não roda). Isso fecha o vazamento atual onde uma campanha esquecida ativa fica monitorando indefinidamente.
+
+**Transições:**
+
+```
+[criar]  ──►  programada
+                  │ now() >= start_date AND status = programada
+                  ▼
+                ativa
+                  │ now() > end_date
+                  ▼
+              concluida
+                                                      
+qualquer estado (programada/ativa)  ── operador ──► cancelada
+cancelada não volta atrás (criar nova campanha)
+```
+
+**Implementação proposta:**
+
+1. **Migração de schema.** Renomear o CHECK constraint de `('planned','active','paused','ended')` para `('programada','ativa','concluida','cancelada')`. Migração de dados existentes:
+   - `planned` → `programada`
+   - `active` → `ativa` (ou `concluida` se `end_date < now()`)
+   - `paused` → `cancelada` (semântica mais próxima do uso atual de pause como "parar antes do fim")
+   - `ended` → `concluida`
+
+2. **Scheduler interno.** Goroutine no API/supervisor que roda a cada 60s:
+   ```sql
+   -- Promover programada → ativa
+   UPDATE campaigns SET status = 'ativa'
+   WHERE status = 'programada' AND start_date <= now()::date;
+
+   -- Encerrar ativa → concluida
+   UPDATE campaigns SET status = 'concluida'
+   WHERE status = 'ativa' AND end_date < now()::date;
+   ```
+   Após cada UPDATE, o scheduler emite eventos NATS (`campaign.activated`, `campaign.ended`) que o supervisor consome para iniciar/parar workers das stations afetadas.
+
+3. **Endpoints API.**
+   - Remover `PUT /campaigns/{id}/start` e `PUT /campaigns/{id}/pause` da API pública (transições deixam de ser manuais).
+   - Adicionar `PUT /campaigns/{id}/cancel` (única transição manual restante).
+   - Manter `PUT /campaigns/{id}/start` apenas como endpoint admin/debug para forçar ativação fora da janela de datas (uso operacional para testes ou retomada após cancelamento por engano — exige nova campanha, não reativação).
+
+4. **Frontend.**
+   - Substituir botões "Iniciar"/"Pausar" por um botão único "Cancelar campanha" (visível só em `programada`/`ativa`).
+   - Badge de status ganha 4 cores: cinza (programada), verde (ativa), azul (concluida), vermelho-sutil (cancelada).
+   - Listagem ordena por: ativas → programadas (próximas a entrar) → concluidas/canceladas (histórico).
+   - Tooltip/hint nas datas explicando "começa em X" / "termina em Y" / "encerrou em Y".
+
+5. **Observabilidade.** Métricas Prometheus:
+   - `campaigns_by_status{status="ativa|programada|concluida|cancelada"}` (gauge)
+   - `campaign_lifecycle_transitions_total{from,to}` (counter)
+   - Alerta: scheduler que não roda há mais de 5 minutos (saúde do timer interno).
+
+**Riscos e cuidados:**
+
+- **R-A. Janela de tempo crítica:** se uma campanha ativa às 23:59:59 e o scheduler roda a cada 60s, pode haver até ~1 minuto de "ar perdido" no início. Aceitável para PoC; em produção, adiantar a ativação para `start_date 00:00 - 5min` para garantir worker já estável às 00:00.
+- **R-B. Campanhas em massa expirando juntas:** se 50 campanhas terminam à meia-noite, o scheduler vai tentar parar/recarregar dezenas de workers ao mesmo tempo. Throttle no supervisor (ex: máx 5 reload concorrentes).
+- **R-C. Time zone.** `start_date`/`end_date` são `DATE` (sem hora). Usar TZ `America/Sao_Paulo` consistente — converter `now()` para esse TZ antes de comparar. Já existe `AT TIME ZONE 'America/Sao_Paulo'` em queries de detecção.
+- **R-D. Compatibilidade com data existente.** Antes de soltar a migração em prod, rodar dry-run e verificar que `paused` → `cancelada` não causa perda inesperada (operador pode esperar que pausa retomasse).
+
+**Critério de aceite:**
+- Campanha criada com `start_date = amanhã` fica em `programada` até a meia-noite, sobe automaticamente para `ativa`, monitora normalmente, e cai para `concluida` no fim do `end_date` sem intervenção.
+- Estado `ativa` é precondição estrita pra worker rodar — campanha não-ativa nunca consome stream worker.
+
+#### 18.2.2 Desambiguação de versões (cortes 30s/60s do mesmo conceito)
+
+**Problema observado em produção (PoC, 2026-05-07).** Quando uma campanha tem cortes diferentes do mesmo jingle (ex: VERÃO 30 e VERÃO 60), o de menor duração é áudio-subconjunto do maior. Quando o de 60s toca, durante os primeiros ~30s ambos os fingerprints batem alinhados; com `MinTemporalCoverage=0.15` (4.5s pra 30s, 9s pra 60s), ambos cruzam o threshold e duas detecções são publicadas pro mesmo evento real. O fornecedor concorrente apresenta o mesmo defeito, mas isso não é justificativa pra mantê-lo.
+
+A §9.8 do plano original já antecipou o problema, mas foi escrita assumindo `MinTemporalCoverage` de 60% — patamar onde o de 60s só confirma se realmente sustenta match por 36s+ (o que o de 30s não consegue, pois o master acaba aos 30s). Com 15% atual, a desambiguação por threshold isolado não funciona; precisa de coordenação entre state machines.
+
+**Estratégia escolhida (opção 1 da decisão de roadmap):** dedup pós-confirmação no supervisor.
+
+```
+state machine confirma detecção (commercial X, station S, t)
+        │
+        ▼
+supervisor.publish() ────► verifica dedup buffer:
+                          query: "outro commercial Y do mesmo cliente
+                                  confirmou em station S em [t-Δ, t+Δ]?"
+                          ├── não → publica X normalmente
+                          └── sim → compara duração:
+                                    ├── X mais longo  → publica X, marca Y como suprimido
+                                    ├── X mais curto  → suprime X (não publica)
+                                    └── empate exato  → publica o de short_id menor (determinístico)
+```
+
+**Parâmetros:**
+
+- **Δ (janela de coincidência):** 5 segundos. Suficiente pra cobrir desvios de timing entre quando state machines atingem MinTemporalCoverage (varia com duração do comercial); pequeno o bastante pra não confundir veiculações sequenciais legítimas.
+- **Mesmo cliente, não mesma campanha:** o dedup só dispara entre comerciais do **mesmo `client_id`**. Comerciais de clientes diferentes que coincidem temporalmente são detecções separadas legítimas — radio toca dois jingles concorrentes em sequência, ambos devem aparecer.
+- **Buffer em memória:** mantém ring buffer dos últimos 60s de detecções confirmadas por (station_id, client_id) no supervisor. Persistência no Postgres é desnecessária — buffer é só pra coordenação curta.
+
+**Implementação proposta:**
+
+1. **Mudança no fluxo do worker.** Em vez de chamar `publishDetection()` direto após `sm.Update() != nil`, o worker entrega a `ConfirmedDetection` ao supervisor via channel/método: `supervisor.SubmitDetection(det)`.
+
+2. **Novo método no supervisor:**
+   ```go
+   func (s *Supervisor) SubmitDetection(det match.ConfirmedDetection) {
+       s.mu.Lock()
+       defer s.mu.Unlock()
+
+       commercial := s.commercialsByShortID[det.CommercialShortID]
+       clientID := s.campaigns.ClientID(commercial.CampaignID)
+
+       // Limpa entradas mais velhas que 60s
+       s.dedupBuffer.GC(time.Now().Add(-60 * time.Second))
+
+       // Procura conflito
+       conflict := s.dedupBuffer.Find(det.StationID, clientID, det.DetectedAt, 5*time.Second)
+
+       if conflict == nil {
+           s.dedupBuffer.Add(det, clientID, commercial.DurationSeconds)
+           s.publish(det)
+           return
+       }
+
+       // Conflito: aplica regra de maior duração
+       if commercial.DurationSeconds > conflict.DurationSeconds {
+           s.retract(conflict.Detection)        // emite evento de retração no NATS
+           s.dedupBuffer.Replace(conflict, det)
+           s.publish(det)
+       } else if commercial.DurationSeconds < conflict.DurationSeconds {
+           // Suprime o atual silenciosamente — log no nível info
+           s.log.Info("detection suppressed by version disambiguation",
+               zap.Int32("suppressed_short_id", det.CommercialShortID),
+               zap.Int32("kept_short_id", conflict.Detection.CommercialShortID))
+       } else {
+           // Empate: prefere short_id menor (determinístico)
+           if det.CommercialShortID < conflict.Detection.CommercialShortID {
+               s.retract(conflict.Detection)
+               s.dedupBuffer.Replace(conflict, det)
+               s.publish(det)
+           }
+       }
+   }
+   ```
+
+3. **Retração.** O caso "Y já foi publicado, X chega depois e é mais longo" precisa retratar Y. Opções:
+   - **3a (escolhida):** publicar evento `detection.retracted` no NATS com o `detection_id` original. API/UI consumem e marcam a detecção como `retracted` no banco (campo novo `retracted_at TIMESTAMPTZ`). Cliente externo via webhook recebe `detection.retracted`.
+   - **3b (alternativa):** atrasar publicação de toda detecção em 5s pra dar tempo de chegar uma versão maior. Vira opção 2 do roadmap original (mais correto, mais latência) — descartada nesta fase.
+   
+   Stack atual (NATS + Postgres com partição por mês) já suporta retração sem mudança de schema além do campo `retracted_at`.
+
+4. **Janela `Δ` calibrável por campanha.** Em campanhas com cortes muito próximos em duração (ex: 28s e 32s), 5s pode não capturar o gap entre as duas confirmações. Adicionar config opcional `dedup_window_seconds` em `campaigns`, default 5.
+
+**Riscos:**
+
+- **R-A. Retração causa confusão downstream.** Cliente externo via webhook recebe detecção, depois recebe retração. Sistema de relatório precisa lidar com isso. Mitigar: documentar no contrato da API; UI mostra detecções retratadas riscadas com tooltip explicativo; relatórios consolidados ignoram retratadas.
+- **R-B. Falso negativo por supressão indevida.** Cenário: cliente X tem dois cortes diferentes (não relacionados, conceito A 30s e conceito B 60s) e ambos tocam em rajada. O de 60s confirma 6s depois do de 30s, dentro da janela Δ. Sistema suprime o de 30s achando que era subconjunto do de 60s — falso negativo. Mitigar: comparar fingerprint hash overlap entre os dois comerciais. Se overlap > 50% (são versões reais), aplica dedup; se < 50% (jingles independentes), publica ambos. Adiciona uma chamada extra mas evita o caso.
+- **R-C. Buffer em memória é volátil.** Se o supervisor reinicia entre uma confirmação e outra, dedup falha. Aceitável: o impacto é uma detecção duplicada por restart, raro.
+
+**Critério de aceite:**
+- Quando o jingle de 60s toca na rádio, **somente uma** detecção é gravada/publicada (a de 60s).
+- Quando só o de 30s toca (não há áudio para os últimos 30s do master de 60s), só o de 30s confirma — sem dedup necessário, comportamento sem mudança.
+- Detecções suprimidas e retratadas são logadas com nível info, contabilizadas em `match_disambiguation_total{action="suppressed|retracted"}`.
 
 ### 18.3 Fase 3 — Escala e Migração Comercial (Semanas 19 a 30)
 

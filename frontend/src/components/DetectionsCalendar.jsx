@@ -54,7 +54,7 @@ export default function DetectionsCalendar({ stations, detections, period, onCel
                       onClick={() => onCellClick(station, dk)}
                       aria-label={`${primary}: ${count} veiculações em ${formatShortDay(dk)}`}
                     >
-                      {count}
+                      <span className="detect-badge detect-badge--air">{count}</span>
                     </button>
                   )
                 })}

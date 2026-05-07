@@ -268,8 +268,22 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	}
 
 	// ── Stream down callback ─────────────────────────────────────────────────
+	// Idempotent per outage: if the worker already has an open down event
+	// (lastDownID set), reconnect-loop callbacks are no-ops. A new event is
+	// only recorded after the worker successfully comes up (which clears
+	// lastDownID via onStreamUp) and then drops again.
 	onStreamDown := func() {
 		go func() {
+			s.mu.Lock()
+			alreadyOpen := false
+			if e, ok := s.workers[capturedStationID]; ok && e.lastDownID != nil {
+				alreadyOpen = true
+			}
+			s.mu.Unlock()
+			if alreadyOpen {
+				return
+			}
+
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
@@ -297,7 +311,12 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		CommercialShortIDs:  shortIDs,
 		CommercialFrames:    frames,
 		MatchThreshold:      3,
-		MinScoreCoverage:    0.05,
+		// 0.02 = score >= 2% dos hashes da janela. Massa Joinville 10:43 mostrou
+		// match real sustentado por 30s com pico 20 e vários frames 8-16 que o
+		// 0.05 anterior rejeitava. Threshold absoluto (3) e MinTemporalCoverage
+		// (0.15 = 4.5s sustentados com mesmo delta_bin) seguem como defesas
+		// principais contra falso positivo.
+		MinScoreCoverage:    0.02,
 		MinTemporalCoverage: 0.15,
 		ConfirmTimeout:      30 * time.Second,
 		AACBuffer:           aacBuf,

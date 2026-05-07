@@ -29,6 +29,10 @@ type StationHealthSummary struct {
 	IncidentCount  int            `json:"incident_count"`
 	LastIncidentAt *time.Time     `json:"last_incident_at,omitempty"`
 	DailySummary   []DailySummary `json:"daily_summary"`
+	// IsCurrentlyDown indicates the most recent event is an unresolved 'down'
+	// (no matching 'up' yet). True iff the last event is type='down' AND its
+	// duration_seconds is still NULL (i.e., RecordUp hasn't closed it).
+	IsCurrentlyDown bool `json:"is_currently_down"`
 }
 
 // ─── Repository ─────────────────────────────────────────────────────────────
@@ -185,12 +189,24 @@ func computeSummary(stationID uuid.UUID, events []HealthEvent, days int, periodS
 		}
 	}
 
+	// Events come ordered ASC by event_at. Station is "currently down" iff the
+	// last event is an unresolved 'down' (RecordUp closes one by writing an
+	// 'up' AND backfilling duration_seconds on the matching 'down').
+	isCurrentlyDown := false
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		if last.EventType == "down" && last.DurationSeconds == nil {
+			isCurrentlyDown = true
+		}
+	}
+
 	return &StationHealthSummary{
-		StationID:      stationID,
-		UptimePct:      uptimePct,
-		IncidentCount:  incidentCount,
-		LastIncidentAt: lastIncidentAt,
-		DailySummary:   buildDailySummary(events, days),
+		StationID:       stationID,
+		UptimePct:       uptimePct,
+		IncidentCount:   incidentCount,
+		LastIncidentAt:  lastIncidentAt,
+		DailySummary:    buildDailySummary(events, days),
+		IsCurrentlyDown: isCurrentlyDown,
 	}
 }
 

@@ -1,0 +1,8 @@
+ALTER TABLE clients
+  ADD COLUMN IF NOT EXISTS logo_url     TEXT,
+  ADD COLUMN IF NOT EXISTS cnpj         TEXT,
+  ADD COLUMN IF NOT EXISTS cep          TEXT,
+  ADD COLUMN IF NOT EXISTS phone        TEXT,
+  ADD COLUMN IF NOT EXISTS contact_name TEXT,
+  ADD COLUMN IF NOT EXISTS city         TEXT,
+  ADD COLUMN IF NOT EXISTS state        TEXT;

@@ -1,0 +1,9 @@
+{
+  "name": "radiocheck-scripts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "mongodb": "^6.0.0",
+    "pg": "^8.0.0"
+  }
+}

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useCampaigns, useDetections, useStations } from '../api/hooks'
+import { useCampaigns, useDetections, useStations, useClients } from '../api/hooks'
 import RSelect from '../components/RSelect'
 import DetectionsCalendar from '../components/DetectionsCalendar'
 import DayDetailModal from '../components/DayDetailModal'
@@ -8,73 +8,127 @@ import { bucketDetections } from './detections/utils'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function formatDateTime(isoString) {
-  if (!isoString) return '—'
-  return new Date(isoString).toLocaleString('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
+function currentMonthValue() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-function startOfDay(date) {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  return d
+function prevMonthValue(ymStr) {
+  const [y, m] = ymStr.split('-').map(Number)
+  const d = new Date(y, m - 2, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function endOfDay(date) {
-  const d = new Date(date)
-  d.setHours(23, 59, 59, 999)
-  return d
+function monthToRange(ymStr) {
+  const [y, m] = ymStr.split('-').map(Number)
+  const start = new Date(y, m - 1, 1, 0, 0, 0, 0)
+  const end   = new Date(y, m, 0, 23, 59, 59, 999)
+  return { start, end }
 }
 
-function toDateInputValue(date) {
-  return new Date(date).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
-  // en-CA produces yyyy-mm-dd natively
+function monthLabel(ymStr) {
+  const [y, m] = ymStr.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 }
 
-function defaultPeriod() {
-  const end   = endOfDay(new Date())
-  const start = startOfDay(new Date(Date.now() - 6 * 24 * 60 * 60 * 1000))
-  return { start, end, preset: '7d' }
+// ── Client mini avatar (for campaign select) ──────────────────────
+
+function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
+  const [imgError, setImgError] = useState(false)
+  if (logo && !imgError) {
+    return (
+      <img
+        src={logo}
+        alt={name}
+        width={size}
+        height={size}
+        style={{
+          width: size, height: size,
+          borderRadius: 4,
+          objectFit: 'cover',
+          flexShrink: 0,
+          border: '1px solid #e2e8f0',
+          display: 'block',
+        }}
+        onError={() => setImgError(true)}
+      />
+    )
+  }
+  const initials = name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
+  return (
+    <div style={{
+      width: size, height: size,
+      borderRadius: 4,
+      background: '#fce7f3',
+      color: '#E81E75',
+      fontSize: Math.round(size * 0.42),
+      fontWeight: 700,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+      fontFamily: "'Fira Sans Condensed', sans-serif",
+      userSelect: 'none',
+    }}>
+      {initials}
+    </div>
+  )
 }
 
 // ── Skeleton ─────────────────────────────────────────────────────
 
-function SkeletonTable() {
-  const widths = [
-    ['18%', '14%', '8%', '22%', '24%'],
-    ['16%', '14%', '8%', '28%', '24%'],
-    ['20%', '14%', '8%', '20%', '24%'],
-    ['17%', '14%', '8%', '26%', '24%'],
-    ['19%', '14%', '8%', '22%', '24%'],
-  ]
+const SKEL_DAYS = 14
+const SKEL_HITS = [
+  new Set([1, 3, 6, 9, 12]),
+  new Set([0, 2, 5, 8, 11]),
+  new Set([2, 4, 7, 10, 13]),
+  new Set([1, 5, 6,  9, 12]),
+  new Set([3, 4, 8, 11, 13]),
+]
+const SKEL_NAME_WIDTHS  = [108, 120, 95, 115, 102]
+const SKEL_PLACE_WIDTHS = [74,  82,  68, 78,  72]
+
+function SkeletonCalendar() {
+  const days = Array.from({ length: SKEL_DAYS }, (_, i) => i)
   return (
-    <div className="card" style={{ overflow: 'hidden' }}>
-      {/* Fake thead */}
-      <div style={{
-        display: 'flex',
-        gap: 16,
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--c-border)',
-        background: 'var(--c-surface-2)',
-      }}>
-        {['18%', '14%', '8%', '22%', '24%'].map((w, i) => (
-          <div key={i} className="skeleton-cell" style={{ width: w, height: 12 }} />
+    <div className="calendar-card">
+      <div className="calendar-grid">
+
+        {/* Header row */}
+        <div className="calendar-header-row">
+          <div className="calendar-corner" />
+          <div className="calendar-days-header">
+            {days.map(i => (
+              <div key={i} className="calendar-day-header">
+                <div className="skeleton" style={{ width: 22, height: 10, borderRadius: 3 }} />
+                <div className="skeleton" style={{ width: 16, height: 8,  borderRadius: 3, marginTop: 3 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Station rows */}
+        {SKEL_HITS.map((hits, ri) => (
+          <div key={ri} className="calendar-row">
+            <div className="calendar-station">
+              <div className="skeleton" style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0 }} />
+              <div className="calendar-station-text">
+                <div className="skeleton" style={{ width: SKEL_NAME_WIDTHS[ri],  height: 12, borderRadius: 4 }} />
+                <div className="skeleton" style={{ width: SKEL_PLACE_WIDTHS[ri], height: 9,  borderRadius: 3, marginTop: 5 }} />
+              </div>
+            </div>
+            <div className="calendar-cells">
+              {days.map(i => (
+                <div key={i} className="calendar-cell">
+                  {hits.has(i) && (
+                    <div className="skeleton" style={{ width: 26, height: 26, borderRadius: 6 }} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
-      {widths.map((row, ri) => (
-        <div key={ri} className="skeleton-row">
-          {row.map((w, ci) => (
-            <div key={ci} className="skeleton-cell" style={{ width: w }} />
-          ))}
-        </div>
-      ))}
     </div>
   )
 }
@@ -113,7 +167,7 @@ function EmptyNoDetections({ periodLabel }) {
         </svg>
       </div>
       <h3>Nenhuma veiculação encontrada</h3>
-      <p>Nenhuma veiculação detectada {periodLabel ? `no período ${periodLabel}` : 'no período selecionado'}.</p>
+      <p>Nenhuma veiculação detectada {periodLabel ? `em ${periodLabel}` : 'no período selecionado'}.</p>
     </div>
   )
 }
@@ -122,16 +176,27 @@ function EmptyNoDetections({ periodLabel }) {
 
 export default function DetectionsPage() {
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns()
+  const { data: clients = [] } = useClients()
 
   const [searchParams] = useSearchParams()
   const [selectedCampaignId, setSelectedCampaignId] = useState(
     () => searchParams.get('campaign_id') ?? ''
   )
-  const [period, setPeriod] = useState(defaultPeriod)
-  const [modalCell, setModalCell] = useState(null) // { station, dayKey } | null
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
+  const [modalCell, setModalCell] = useState(null)
 
   const { data: stationsResp } = useStations({ limit: 2000 })
   const stationCatalog = stationsResp?.data ?? []
+
+  // Derive period from selected month
+  const period = useMemo(() => monthToRange(selectedMonth), [selectedMonth])
+
+  // Client lookup map
+  const clientMap = useMemo(() => {
+    const m = new Map()
+    clients.forEach(c => m.set(c.id, c))
+    return m
+  }, [clients])
 
   // Build detection filters — only run when campaign is selected
   const detectionFilters = useMemo(() => {
@@ -148,24 +213,58 @@ export default function DetectionsPage() {
     data: detections = [],
     isLoading: loadingDetections,
     isFetching,
+    refetch,
   } = useDetections(detectionFilters)
 
-  // Suppress query when no campaign selected
-  const showDetections  = !!selectedCampaignId
-  const isLoadingData   = showDetections && (loadingDetections || isFetching)
+  const showDetections = !!selectedCampaignId
+  const isLoadingData  = showDetections && (loadingDetections || isFetching)
 
   // ── Campaign change ───────────────────────────────────────────
   function handleCampaignChange(opt) {
     setSelectedCampaignId(opt?.value ?? '')
-    setPeriod(defaultPeriod())
+    setSelectedMonth(currentMonthValue())
     setModalCell(null)
   }
 
-  const campaignOptions = campaigns.map(c => ({
-    value: c.id,
-    label: c.name + (c.client_name ? ` — ${c.client_name}` : ''),
-  }))
+  const campaignOptions = campaigns.map(c => {
+    const client = clientMap.get(c.client_id) ?? null
+    return {
+      value:      c.id,
+      label:      c.name,
+      clientName: client?.name ?? '',
+      clientLogo: client?.logo_url ?? null,
+    }
+  })
+
   const selectedCampaignOption = campaignOptions.find(o => o.value === selectedCampaignId) ?? null
+
+  function formatCampaignOption(opt, { context }) {
+    const size = context === 'value' ? 18 : 22
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <ClientMiniAvatar name={opt.clientName} logo={opt.clientLogo} size={size} />
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0, overflow: 'hidden' }}>
+          {opt.clientName && (
+            <span style={{ fontWeight: 600, color: '#06055B', whiteSpace: 'nowrap', fontSize: 13 }}>
+              {opt.clientName}
+            </span>
+          )}
+          {opt.clientName && (
+            <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 400, flexShrink: 0 }}>|</span>
+          )}
+          <span style={{
+            color: '#4b5563',
+            fontSize: 13,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}>
+            {opt.label}
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   const targetStations = useMemo(() => {
     if (!selectedCampaignId || stationCatalog.length === 0) return []
@@ -177,43 +276,15 @@ export default function DetectionsPage() {
       .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
   }, [selectedCampaignId, campaigns, stationCatalog])
 
-  // ── Period presets ────────────────────────────────────────────
-  function applyPreset(preset) {
-    const now = new Date()
-    let start, end
-    if (preset === 'today') {
-      start = startOfDay(now)
-      end   = endOfDay(now)
-    } else if (preset === '7d') {
-      start = startOfDay(new Date(now - 6 * 24 * 60 * 60 * 1000))
-      end   = endOfDay(now)
-    } else if (preset === '30d') {
-      start = startOfDay(new Date(now - 29 * 24 * 60 * 60 * 1000))
-      end   = endOfDay(now)
-    }
-    setPeriod({ start, end, preset })
-    setModalCell(null)
-  }
+  // ── Month navigation ──────────────────────────────────────────
+  const currentMonth = currentMonthValue()
+  const prevMonth    = prevMonthValue(currentMonth)
 
-  function handleStartDateChange(e) {
+  function handleMonthChange(e) {
     if (!e.target.value) return
-    const d = startOfDay(new Date(e.target.value + 'T00:00:00'))
-    setPeriod(p => ({ ...p, start: d, preset: null }))
+    setSelectedMonth(e.target.value)
     setModalCell(null)
   }
-
-  function handleEndDateChange(e) {
-    if (!e.target.value) return
-    const d = endOfDay(new Date(e.target.value + 'T00:00:00'))
-    setPeriod(p => ({ ...p, end: d, preset: null }))
-    setModalCell(null)
-  }
-
-  // ── Period label for empty state ──────────────────────────────
-  const periodLabel = useMemo(() => {
-    const fmt = d => formatDateTime(d.toISOString()).slice(0, 10)
-    return `${fmt(period.start)} – ${fmt(period.end)}`
-  }, [period])
 
   // ── Render ────────────────────────────────────────────────────
   return (
@@ -222,7 +293,7 @@ export default function DetectionsPage() {
         <h2>Veiculações</h2>
       </div>
 
-      {/* Campaign selector */}
+      {/* Campaign selector + refresh */}
       <div className="detection-header">
         <div className="campaign-selector-wrap">
           <label htmlFor="campaign-select">Campanha</label>
@@ -231,57 +302,75 @@ export default function DetectionsPage() {
             options={campaignOptions}
             value={selectedCampaignOption}
             onChange={handleCampaignChange}
+            formatOptionLabel={formatCampaignOption}
             isDisabled={loadingCampaigns}
             isLoading={loadingCampaigns}
             placeholder={loadingCampaigns ? 'Carregando campanhas…' : 'Selecione uma campanha'}
             isClearable
           />
         </div>
+
+        {showDetections && (
+          <button
+            className="btn-refresh"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            title="Atualizar veiculações"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              fill="none"
+              style={{ flexShrink: 0 }}
+              className={isFetching ? 'spinning' : ''}
+            >
+              <path
+                d="M13.5 8A5.5 5.5 0 1 1 8 2.5a5.47 5.47 0 0 1 3.5 1.27"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <path
+                d="M11.5 1.5V4H14"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Atualizar
+          </button>
+        )}
       </div>
 
-      {/* Period filters — only visible after campaign is selected */}
+      {/* Period filters — monthly */}
       {showDetections && (
         <div className="period-filters">
           <button
-            className={`period-pill${period.preset === 'today' ? ' active' : ''}`}
-            onClick={() => applyPreset('today')}
+            className={`period-pill${selectedMonth === currentMonth ? ' active' : ''}`}
+            onClick={() => { setSelectedMonth(currentMonth); setModalCell(null) }}
           >
-            Hoje
+            Mês atual
           </button>
           <button
-            className={`period-pill${period.preset === '7d' ? ' active' : ''}`}
-            onClick={() => applyPreset('7d')}
+            className={`period-pill${selectedMonth === prevMonth ? ' active' : ''}`}
+            onClick={() => { setSelectedMonth(prevMonth); setModalCell(null) }}
           >
-            7 dias
-          </button>
-          <button
-            className={`period-pill${period.preset === '30d' ? ' active' : ''}`}
-            onClick={() => applyPreset('30d')}
-          >
-            30 dias
+            Mês anterior
           </button>
 
           <div className="period-divider" />
 
           <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 0 }}>
-            <label style={{ marginBottom: 0, fontSize: 12, color: 'var(--c-text-3)', fontWeight: 600 }}>De</label>
+            <label style={{ marginBottom: 0, fontSize: 12, color: 'var(--c-text-3)', fontWeight: 600 }}>
+              Período
+            </label>
             <input
-              className="input"
-              type="date"
-              style={{ width: 'auto' }}
-              value={toDateInputValue(period.start)}
-              onChange={handleStartDateChange}
-            />
-          </div>
-
-          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 0 }}>
-            <label style={{ marginBottom: 0, fontSize: 12, color: 'var(--c-text-3)', fontWeight: 600 }}>Até</label>
-            <input
-              className="input"
-              type="date"
-              style={{ width: 'auto' }}
-              value={toDateInputValue(period.end)}
-              onChange={handleEndDateChange}
+              className="input-month"
+              type="month"
+              value={selectedMonth}
+              onChange={handleMonthChange}
             />
           </div>
         </div>
@@ -291,9 +380,9 @@ export default function DetectionsPage() {
       {!showDetections ? (
         <EmptyNoCampaign />
       ) : isLoadingData ? (
-        <SkeletonTable />
+        <SkeletonCalendar />
       ) : detections.length === 0 ? (
-        <EmptyNoDetections periodLabel={periodLabel} />
+        <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
         <DetectionsCalendar
           stations={targetStations}

@@ -1,75 +1,307 @@
 import { useState } from 'react'
-import { useClients, useCreateClient } from '../api/hooks'
+import { useClients, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
+import StationAvatar from '../components/StationAvatar'
 
-function ClientSkeleton() {
+const EMPTY_FORM = {
+  name: '',
+  logo_url: '',
+  contact_email: '',
+  contact_name: '',
+  phone: '',
+  cnpj: '',
+  cep: '',
+  city: '',
+  state: '',
+}
+
+function nullify(form) {
+  return Object.fromEntries(
+    Object.entries(form).map(([k, v]) => [k, v.trim() === '' ? null : v.trim()])
+  )
+}
+
+function formatCNPJ(v) {
+  const d = v.replace(/\D/g, '').slice(0, 14)
+  if (d.length <= 2) return d
+  if (d.length <= 5) return `${d.slice(0,2)}.${d.slice(2)}`
+  if (d.length <= 8) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5)}`
+  if (d.length <= 12) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8)}`
+  return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`
+}
+
+function formatCEP(v) {
+  const d = v.replace(/\D/g, '').slice(0, 8)
+  if (d.length <= 5) return d
+  return `${d.slice(0,5)}-${d.slice(5)}`
+}
+
+function PlusIcon() {
   return (
-    <div className="card" style={{ overflow: 'hidden' }}>
-      {[0, 1, 2].map(i => (
-        <div key={i} className="skeleton-row">
-          <div className="skeleton-cell" style={{ width: '40%' }} />
-          <div className="skeleton-cell" style={{ width: '25%' }} />
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M7 2v10M2 7h10" />
+    </svg>
+  )
+}
+
+function EditIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3.5h10M5.5 3.5V2.5h3v1M3 3.5l.75 8h6.5L11 3.5M5.5 6v4M8.5 6v4" />
+    </svg>
+  )
+}
+
+function MailIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="3" width="10" height="7" rx="1.5" />
+      <path d="M1 4l5 3.5L11 4" />
+    </svg>
+  )
+}
+
+function PhoneIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.5 8.5l-2-2-1.5 1.5C5.5 7.5 4.5 6.5 4 5l1.5-1.5-2-2-2 2c0 4 3.5 7.5 7.5 7.5l2-2z" />
+    </svg>
+  )
+}
+
+function PinIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 1C4.343 1 3 2.343 3 4c0 2.5 3 7 3 7s3-4.5 3-7c0-1.657-1.343-3-3-3z" /><circle cx="6" cy="4" r="1" />
+    </svg>
+  )
+}
+
+function ClientFormModal({ initial, onClose, onSave, isSaving, isError }) {
+  const [form, setForm] = useState(
+    initial
+      ? {
+          name:          initial.name         ?? '',
+          logo_url:      initial.logo_url      ?? '',
+          contact_email: initial.contact_email ?? '',
+          contact_name:  initial.contact_name  ?? '',
+          phone:         initial.phone         ?? '',
+          cnpj:          initial.cnpj          ?? '',
+          cep:           initial.cep           ?? '',
+          city:          initial.city          ?? '',
+          state:         initial.state         ?? '',
+        }
+      : EMPTY_FORM
+  )
+
+  function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    onSave(nullify(form))
+  }
+
+  const isEdit = !!initial
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{isEdit ? 'Editar cliente' : 'Novo cliente'}</h3>
+          <button className="modal-close" onClick={onClose}>✕</button>
         </div>
-      ))}
+        <form onSubmit={handleSubmit} className="modal-body">
+          <div className="field">
+            <label>Nome *</label>
+            <input
+              className="input"
+              value={form.name}
+              onChange={e => setF('name', e.target.value)}
+              placeholder="Nome do cliente"
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="field">
+            <label>URL do logo</label>
+            <input
+              className="input"
+              type="url"
+              value={form.logo_url}
+              onChange={e => setF('logo_url', e.target.value)}
+              placeholder="https://exemplo.com/logo.png"
+            />
+          </div>
+
+          <div className="form-row">
+            <div className="field">
+              <label>CNPJ</label>
+              <input
+                className="input"
+                value={form.cnpj}
+                onChange={e => setF('cnpj', formatCNPJ(e.target.value))}
+                placeholder="00.000.000/0000-00"
+              />
+            </div>
+            <div className="field">
+              <label>CEP</label>
+              <input
+                className="input"
+                value={form.cep}
+                onChange={e => setF('cep', formatCEP(e.target.value))}
+                placeholder="00000-000"
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="field" style={{ flex: 2 }}>
+              <label>Cidade</label>
+              <input
+                className="input"
+                value={form.city}
+                onChange={e => setF('city', e.target.value)}
+                placeholder="São Paulo"
+              />
+            </div>
+            <div className="field" style={{ flex: '0 0 72px' }}>
+              <label>UF</label>
+              <input
+                className="input"
+                maxLength={2}
+                value={form.state}
+                onChange={e => setF('state', e.target.value.toUpperCase())}
+                placeholder="SP"
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="field">
+              <label>Telefone</label>
+              <input
+                className="input"
+                type="tel"
+                value={form.phone}
+                onChange={e => setF('phone', e.target.value)}
+                placeholder="(11) 99999-9999"
+              />
+            </div>
+            <div className="field">
+              <label>E-mail de contato</label>
+              <input
+                className="input"
+                type="email"
+                value={form.contact_email}
+                onChange={e => setF('contact_email', e.target.value)}
+                placeholder="contato@empresa.com"
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Nome do responsável</label>
+            <input
+              className="input"
+              value={form.contact_name}
+              onChange={e => setF('contact_name', e.target.value)}
+              placeholder="Nome do contato principal"
+            />
+          </div>
+
+          {isError && (
+            <p className="text-error">Erro ao salvar. Tente novamente.</p>
+          )}
+
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando…' : isEdit ? 'Salvar alterações' : 'Criar cliente'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
 
 function ClientsEmptyState({ onAdd }) {
+  const mockClients = [
+    { name: 'Anunciante Exemplo', city: 'São Paulo', state: 'SP', cnpj: '12.345.678/0001-99', contact_email: 'contato@ex.com' },
+    { name: 'Marca Nacional', city: 'Rio de Janeiro', state: 'RJ', cnpj: '98.765.432/0001-11' },
+    { name: 'Agência Digital', city: 'Belo Horizonte', state: 'MG' },
+  ]
+
   return (
     <div className="clients-empty">
       <div className="clients-empty-action">
-        <svg
-          width="64"
-          height="64"
-          viewBox="0 0 64 64"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
-          style={{ color: 'var(--c-action)' }}
-        >
-          <circle cx="32" cy="20" r="12" fill="currentColor" opacity="0.18" />
-          <ellipse cx="32" cy="46" rx="20" ry="12" fill="currentColor" opacity="0.18" />
-          <circle cx="32" cy="20" r="8" stroke="currentColor" strokeWidth="2.5" />
-          <path
-            d="M14 52c0-9.941 8.059-18 18-18s18 8.059 18 18"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-          />
+        <svg width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true" style={{ color: 'var(--c-action)' }}>
+          <circle cx="28" cy="18" r="10" fill="currentColor" opacity="0.12" />
+          <ellipse cx="28" cy="40" rx="18" ry="10" fill="currentColor" opacity="0.10" />
+          <circle cx="28" cy="18" r="7" stroke="currentColor" strokeWidth="2.5" />
+          <path d="M12 46c0-8.837 7.163-16 16-16s16 7.163 16 16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
         </svg>
         <h3>Nenhum cliente cadastrado</h3>
-        <p>Adicione um cliente para começar a criar campanhas.</p>
-        <div>
-          <button className="btn btn-primary btn-sm" onClick={onAdd}>
-            + Novo cliente
-          </button>
-        </div>
+        <p>Cadastre anunciantes e agências para vincular nas campanhas.</p>
+        <button className="btn btn-primary btn-sm" onClick={onAdd}>
+          <PlusIcon /> Novo cliente
+        </button>
       </div>
 
       <div className="clients-empty-preview" aria-hidden="true">
-        <div className="card" style={{ overflow: 'hidden' }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>ID</th>
-              </tr>
-            </thead>
-            <tbody>
-              {['Rádio Cultura', 'CBN São Paulo', 'Band FM'].map((name, i) => (
-                <tr key={i}>
-                  <td style={{ fontFamily: 'var(--font-heading)', fontWeight: 700, color: 'var(--c-text)' }}>
-                    {name}
-                  </td>
-                  <td style={{ fontFamily: "'Courier New', monospace", fontSize: 11, color: 'var(--c-text-3)' }}>
-                    {`00000000-000${i}-0000-0000-000000000000`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="clients-list clients-list-ghost">
+          {mockClients.map((c, i) => (
+            <div key={i} className="client-row">
+              <StationAvatar station={c} size={40} />
+              <div className="client-row-main">
+                <div className="client-row-name">{c.name}</div>
+                {(c.city || c.state) && (
+                  <div className="client-row-sub">
+                    <PinIcon />
+                    {[c.city, c.state].filter(Boolean).join(', ')}
+                  </div>
+                )}
+              </div>
+              <div className="client-row-chips">
+                {c.cnpj && <span className="client-chip">{c.cnpj}</span>}
+                {c.contact_email && <span className="client-chip"><MailIcon />{c.contact_email}</span>}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ClientRowSkeleton() {
+  return (
+    <div className="clients-list">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="client-row">
+          <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 8, flexShrink: 0 }} />
+          <div className="client-row-main">
+            <div className="skeleton" style={{ height: 13, width: '45%', borderRadius: 4, marginBottom: 6 }} />
+            <div className="skeleton" style={{ height: 11, width: '28%', borderRadius: 4 }} />
+          </div>
+          <div className="client-row-chips" style={{ gap: 4 }}>
+            <div className="skeleton" style={{ height: 20, width: 120, borderRadius: 10 }} />
+          </div>
+          <div className="client-row-actions">
+            <div className="skeleton" style={{ height: 28, width: 28, borderRadius: 6 }} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -77,102 +309,121 @@ function ClientsEmptyState({ onAdd }) {
 export default function ClientsPage() {
   const { data: clients = [], isLoading } = useClients()
   const createClient = useCreateClient()
-  const [showForm, setShowForm] = useState(false)
-  const [name, setName] = useState('')
+  const updateClient = useUpdateClient()
+  const deleteClient = useDeleteClient()
 
-  function handleSubmit(e) {
-    e.preventDefault()
-    createClient.mutate({ name }, {
-      onSuccess: () => { setShowForm(false); setName('') },
-    })
+  const [creating, setCreating] = useState(false)
+  const [editing, setEditing]   = useState(null)
+
+  function handleCreate(data) {
+    createClient.mutate(data, { onSuccess: () => setCreating(false) })
+  }
+
+  function handleUpdate(data) {
+    updateClient.mutate({ id: editing.id, ...data }, { onSuccess: () => setEditing(null) })
+  }
+
+  async function handleDelete(c) {
+    if (!await window.confirm(`Excluir o cliente "${c.name}"? Essa ação não pode ser desfeita.`)) return
+    deleteClient.mutate(c.id)
   }
 
   return (
     <div>
       <div className="page-header">
-        <h2>Clientes</h2>
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={() => setShowForm(v => !v)}
-        >
-          {showForm ? 'Cancelar' : '+ Novo cliente'}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h2>Clientes</h2>
+          {clients.length > 0 && (
+            <span className="text-muted" style={{ fontSize: 13, fontWeight: 400 }}>
+              {clients.length}
+            </span>
+          )}
+        </div>
+        <button className="btn btn-primary" onClick={() => setCreating(true)}>
+          <PlusIcon /> Novo cliente
         </button>
       </div>
 
-      {showForm && (
-        <div className="card" style={{ marginBottom: 20, padding: 16 }}>
-          <form onSubmit={handleSubmit} className="cluster" style={{ alignItems: 'flex-end' }}>
-            <div className="field" style={{ flex: 1, maxWidth: 360 }}>
-              <label>Nome *</label>
-              <input
-                className="input"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="Nome do cliente"
-                required
-                autoFocus
-              />
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              type="submit"
-              disabled={createClient.isPending}
-            >
-              {createClient.isPending ? 'Criando...' : 'Criar'}
-            </button>
-            {createClient.isError && (
-              <p className="text-error" style={{ width: '100%' }}>
-                Erro ao criar. Tente novamente.
-              </p>
-            )}
-          </form>
+      {isLoading ? (
+        <ClientRowSkeleton />
+      ) : clients.length === 0 ? (
+        <ClientsEmptyState onAdd={() => setCreating(true)} />
+      ) : (
+        <div className="clients-list">
+          {clients.map(c => {
+            const loc = [c.city, c.state].filter(Boolean).join(', ')
+            return (
+              <div key={c.id} className="client-row">
+                <StationAvatar station={{ name: c.name, logo_url: c.logo_url }} size={40} />
+
+                <div className="client-row-main">
+                  <div className="client-row-name">{c.name}</div>
+                  {(loc || c.contact_name) && (
+                    <div className="client-row-sub">
+                      {loc && <><PinIcon />{loc}</>}
+                      {c.contact_name && loc && <span className="client-row-dot">·</span>}
+                      {c.contact_name && <span>{c.contact_name}</span>}
+                    </div>
+                  )}
+                </div>
+
+                <div className="client-row-chips">
+                  {c.cnpj && <span className="client-chip">{c.cnpj}</span>}
+                  {c.contact_email && (
+                    <span className="client-chip">
+                      <MailIcon />{c.contact_email}
+                    </span>
+                  )}
+                  {c.phone && (
+                    <span className="client-chip">
+                      <PhoneIcon />{c.phone}
+                    </span>
+                  )}
+                </div>
+
+                <div className="client-row-actions">
+                  <button
+                    className="btn-icon btn-secondary"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                    title="Editar"
+                    onClick={() => setEditing(c)}
+                  >
+                    <EditIcon />
+                  </button>
+                  <button
+                    className="btn-icon btn-danger-ghost"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                    title="Excluir"
+                    onClick={() => handleDelete(c)}
+                    disabled={deleteClient.isPending}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {isLoading ? (
-        <ClientSkeleton />
-      ) : clients.length === 0 ? (
-        <ClientsEmptyState onAdd={() => setShowForm(true)} />
-      ) : (
-        <div className="card">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>ID</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map(c => (
-                <tr key={c.id}>
-                  <td
-                    style={{
-                      fontFamily: 'var(--font-heading)',
-                      fontWeight: 700,
-                      color: 'var(--c-text)',
-                    }}
-                  >
-                    {c.name}
-                  </td>
-                  <td
-                    style={{
-                      fontFamily: "'Courier New', monospace",
-                      fontSize: 11,
-                      color: 'var(--c-text-3)',
-                      maxWidth: '200px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title={c.id}
-                  >
-                    {c.id}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {creating && (
+        <ClientFormModal
+          initial={null}
+          onClose={() => { setCreating(false); createClient.reset?.() }}
+          onSave={handleCreate}
+          isSaving={createClient.isPending}
+          isError={createClient.isError}
+        />
+      )}
+
+      {editing && (
+        <ClientFormModal
+          initial={editing}
+          onClose={() => { setEditing(null); updateClient.reset?.() }}
+          onSave={handleUpdate}
+          isSaving={updateClient.isPending}
+          isError={updateClient.isError}
+        />
       )}
     </div>
   )

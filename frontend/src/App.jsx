@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
+import { ConfirmProvider } from './components/ConfirmModal'
 import Sidebar from './components/Sidebar'
-import StationsPage   from './pages/StationsPage'
+import StationsPage    from './pages/StationsPage'
+import StationEditPage from './pages/StationEditPage'
 import ClientsPage    from './pages/ClientsPage'
 import CampaignsPage  from './pages/CampaignsPage'
 import MonitoringPage from './pages/MonitoringPage'
@@ -56,7 +58,8 @@ function AppShell() {
         <main className="app-content">
           <Routes>
             <Route path="/"            element={<Navigate to="/stations" replace />} />
-            <Route path="/stations"    element={<StationsPage />} />
+            <Route path="/stations"         element={<StationsPage />} />
+            <Route path="/stations/:id/edit" element={<StationEditPage />} />
             <Route path="/clients"     element={<ClientsPage />} />
             <Route path="/campaigns"   element={<CampaignsPage />} />
             <Route path="/monitoring"  element={<MonitoringPage />} />
@@ -74,7 +77,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <ConfirmProvider>
+        <AppShell />
+      </ConfirmProvider>
     </AuthProvider>
   )
 }
