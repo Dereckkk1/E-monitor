@@ -72,6 +72,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: --rate-id must be in [0,255], got %d\n", rateID)
 		os.Exit(2)
 	}
+	if !dryRun && dbURL == "" {
+		fmt.Fprintln(os.Stderr, "error: --db-url not set and DATABASE_URL is empty (or use --dry-run)")
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	variant, err := fingerprint.ParseVariant(variantArg)
 	if err != nil {
@@ -109,11 +114,6 @@ func main() {
 	if dryRun {
 		fmt.Println("[4/4] dry-run            : skipping DB write")
 		return
-	}
-
-	if dbURL == "" {
-		fmt.Fprintln(os.Stderr, "error: --db-url not set and DATABASE_URL is empty")
-		os.Exit(2)
 	}
 
 	pool, err := pgxpool.New(ctx, dbURL)
