@@ -155,7 +155,7 @@ func main() {
 		Auth:         handlers.NewAuthHandler(pool),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
-		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Log: logger},
+		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Threshold: sup, Log: logger},
 		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 	}
 

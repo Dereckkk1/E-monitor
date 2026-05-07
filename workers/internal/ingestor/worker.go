@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,7 +30,12 @@ type WorkerConfig struct {
 	// CommercialFrames maps each commercial short ID to its total frame count
 	// (used for coverage window sizing).
 	CommercialFrames map[int32]int
-	MatchThreshold   int     // minimum absolute histogram score to count a window as a hit (noise floor)
+	// MatchThreshold is the minimum absolute histogram score to count a window
+	// as a hit (noise floor). Backed by an atomic so the supervisor can hot-
+	// reload it from station_thresholds without restarting the worker. If nil,
+	// NewWorker defaults to a constant of 5 (matches the calibration job's
+	// minimum). Callers should typically construct it via NewMatchThreshold.
+	MatchThreshold *atomic.Int32
 	// MinScoreCoverage is the per-window filter: score / totalHashes must reach
 	// this fraction for the window to count. 0.05 is well above noise (~0.005)
 	// while still admitting real-broadcast matches that typically run 0.05-0.30.
@@ -94,14 +100,47 @@ func (w *Worker) LastPCMAt() time.Time {
 	return w.lastPCMAt
 }
 
+// NewMatchThreshold returns an *atomic.Int32 pre-loaded with v. Helper used by
+// the supervisor (and tests) to build WorkerConfig without manual atomic dance.
+func NewMatchThreshold(v int) *atomic.Int32 {
+	a := new(atomic.Int32)
+	a.Store(int32(v))
+	return a
+}
+
 // NewWorker creates a new Worker with the given configuration.
+// If cfg.MatchThreshold is nil it is replaced with NewMatchThreshold(5) so the
+// worker remains usable when callers haven't wired the dynamic threshold path.
 func NewWorker(cfg WorkerConfig, store *index.Store, nc *nats.Conn, log *zap.Logger) *Worker {
+	if cfg.MatchThreshold == nil {
+		cfg.MatchThreshold = NewMatchThreshold(5)
+	}
 	return &Worker{
 		cfg:   cfg,
 		store: store,
 		nc:    nc,
 		log:   log,
 	}
+}
+
+// SetThreshold atomically updates the MatchThreshold used by the running
+// worker. The next match window — and any state machines created on the
+// next reconnect — will see the new value. Returns the previous value so
+// the caller can log/expose drift.
+func (w *Worker) SetThreshold(v int) int32 {
+	if w.cfg.MatchThreshold == nil {
+		w.cfg.MatchThreshold = NewMatchThreshold(v)
+		return 0
+	}
+	return w.cfg.MatchThreshold.Swap(int32(v))
+}
+
+// Threshold returns the current MatchThreshold value (atomic read).
+func (w *Worker) Threshold() int32 {
+	if w.cfg.MatchThreshold == nil {
+		return 0
+	}
+	return w.cfg.MatchThreshold.Load()
 }
 
 // Run starts the worker. Blocks until ctx is cancelled.
@@ -152,6 +191,11 @@ func (w *Worker) Run(ctx context.Context) {
 		pcmBuf := ringbuffer.NewPCMRing(16000 * 35)      // 35 seconds of PCM
 
 		// 3. Create state machines: one per commercial short ID.
+		// Snapshot the threshold *once* per connect attempt for the state
+		// machines: the in-flight detection window must not change minScore
+		// midway. The MatchWindow call below reads the atomic on every tick
+		// so threshold updates take effect for the noise-floor filter.
+		smThreshold := int(w.cfg.MatchThreshold.Load())
 		machines := make(map[int32]*match.StateMachine, len(w.cfg.CommercialShortIDs))
 		for _, id := range w.cfg.CommercialShortIDs {
 			totalFrames := w.cfg.CommercialFrames[id]
@@ -161,7 +205,7 @@ func (w *Worker) Run(ctx context.Context) {
 				stationIDStr,
 				id,
 				totalFrames,
-				w.cfg.MatchThreshold,
+				smThreshold,
 				w.cfg.MinTemporalCoverage,
 				w.cfg.ConfirmTimeout,
 				cooldown,
@@ -306,7 +350,7 @@ func (w *Worker) runPCMReader(
 			continue
 		}
 
-		results := match.MatchWindow(window, w.store, w.cfg.MatchThreshold, w.cfg.MinScoreCoverage)
+		results := match.MatchWindow(window, w.store, int(w.cfg.MatchThreshold.Load()), w.cfg.MinScoreCoverage)
 		now := time.Now()
 
 		// Log every window that passes the threshold so we can see score/ratio.
