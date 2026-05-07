@@ -9,24 +9,27 @@ import (
 )
 
 type Detection struct {
-	ID                 uuid.UUID `json:"id"`
-	StationID          uuid.UUID `json:"station_id"`
-	StationName        string    `json:"station_name"`
-	CommercialID       uuid.UUID `json:"commercial_id"`
-	CommercialName     string    `json:"commercial_name"`
-	CampaignID         uuid.UUID `json:"campaign_id"`
-	DetectedAt         time.Time `json:"detected_at"`
-	MatchStartOffsetMs int32     `json:"match_start_offset_ms"`
-	MatchEndOffsetMs   int32     `json:"match_end_offset_ms"`
-	Confidence         float64   `json:"confidence"`
-	HashCount          int32     `json:"hash_count"`
-	TemporalCoverage   *float64  `json:"temporal_coverage,omitempty"`
-	VariantUsed        *int16    `json:"variant_used,omitempty"`
-	RateUsed           *int16    `json:"rate_used,omitempty"`
-	EvidenceStatus     string    `json:"evidence_status"`
-	EvidenceKey        *string   `json:"evidence_key,omitempty"`
-	EvidenceSizeBytes  *int64    `json:"evidence_size_bytes,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 uuid.UUID  `json:"id"`
+	StationID          uuid.UUID  `json:"station_id"`
+	StationName        string     `json:"station_name"`
+	CommercialID       uuid.UUID  `json:"commercial_id"`
+	CommercialName     string     `json:"commercial_name"`
+	CampaignID         uuid.UUID  `json:"campaign_id"`
+	DetectedAt         time.Time  `json:"detected_at"`
+	MatchStartOffsetMs int32      `json:"match_start_offset_ms"`
+	MatchEndOffsetMs   int32      `json:"match_end_offset_ms"`
+	Confidence         float64    `json:"confidence"`
+	HashCount          int32      `json:"hash_count"`
+	TemporalCoverage   *float64   `json:"temporal_coverage,omitempty"`
+	VariantUsed        *int16     `json:"variant_used,omitempty"`
+	RateUsed           *int16     `json:"rate_used,omitempty"`
+	EvidenceStatus     string     `json:"evidence_status"`
+	EvidenceKey        *string    `json:"evidence_key,omitempty"`
+	EvidenceSizeBytes  *int64     `json:"evidence_size_bytes,omitempty"`
+	// RetractedAt is set when §18.2.2 disambiguation overruled this row in
+	// favour of a longer cut from the same client; nil otherwise.
+	RetractedAt *time.Time `json:"retracted_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type Detections struct {
@@ -61,14 +64,14 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 		RETURNING id, station_id, commercial_id, campaign_id, detected_at,
 		          match_start_offset_ms, match_end_offset_ms, confidence, hash_count,
 		          temporal_coverage, variant_used, rate_used,
-		          evidence_status, evidence_key, evidence_size_bytes, created_at`,
+		          evidence_status, evidence_key, evidence_size_bytes, retracted_at, created_at`,
 		in.StationID, in.CommercialID, in.CampaignID, in.DetectedAt,
 		in.MatchStartOffsetMs, in.MatchEndOffsetMs, in.Confidence, in.HashCount,
 		in.TemporalCoverage, in.VariantUsed, in.RateUsed,
 	).Scan(&det.ID, &det.StationID, &det.CommercialID, &det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt)
 	return &det, err
 }
 
@@ -100,7 +103,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -122,7 +125,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
 			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
 			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
-			&det.EvidenceSizeBytes, &det.CreatedAt); err != nil {
+			&det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, det)
@@ -137,7 +140,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -146,7 +149,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
