@@ -35,6 +35,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // ErrSSRFBlocked is returned when a host resolves to a private/loopback/
@@ -236,9 +238,13 @@ func BuildSafeHTTPClient(timeout time.Duration) *http.Client {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	// otelhttp.NewTransport wraps the SSRF-safe transport so each outbound
+	// POST gets a child span (HTTP client kind) including DNS, TLS, and
+	// time-to-first-byte sub-events. No-op when no TracerProvider is set.
+	otelTransport := otelhttp.NewTransport(transport)
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: transport,
+		Transport: otelTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errors.New("ssrf: too many redirects")

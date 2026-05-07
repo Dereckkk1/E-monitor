@@ -33,11 +33,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
 	"radiocheck/internal/metrics"
+	"radiocheck/internal/observability"
 )
 
 // Defaults for the scheduler. Overridable via env vars in cmd/api/main.go
@@ -153,15 +156,21 @@ func (s *Scheduler) RunOnceForStation(ctx context.Context, stationID uuid.UUID) 
 // instrumentation shared by both the tick path and the admin endpoint.
 // Returns the underlying error from recalibrateOne unchanged.
 func (s *Scheduler) recalibrateAndRecord(ctx context.Context, stationID uuid.UUID) error {
+	ctx, span := observability.Tracer().Start(ctx, "calibration.recalibrate")
+	span.SetAttributes(attribute.String("station_id", stationID.String()))
+	defer span.End()
+
 	start := time.Now()
 	err := s.recalibrateOne(ctx, stationID)
 	elapsed := time.Since(start)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		metrics.CalibrationRunsTotal.WithLabelValues("error").Inc()
 		return err
 	}
 	metrics.CalibrationRunsTotal.WithLabelValues("success").Inc()
-	metrics.CalibrationDurationSeconds.Observe(elapsed.Seconds())
+	observability.ObserveWithTraceExemplar(ctx, metrics.CalibrationDurationSeconds, elapsed.Seconds())
 	metrics.CalibrationLastSuccessTimestamp.WithLabelValues(stationID.String()).Set(float64(time.Now().Unix()))
 	return nil
 }
@@ -173,6 +182,9 @@ func (s *Scheduler) tick(ctx context.Context) {
 }
 
 func (s *Scheduler) tickWithResult(ctx context.Context) (int, error) {
+	ctx, span := observability.Tracer().Start(ctx, "calibration.scheduler_tick")
+	defer span.End()
+
 	// Take a connection so the session-level advisory lock survives across
 	// the whole scan. Releasing the connection back to the pool releases
 	// the lock automatically.
@@ -188,9 +200,11 @@ func (s *Scheduler) tickWithResult(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("advisory lock: %w", err)
 	}
 	if !locked {
+		span.AddEvent("advisory_lock_skipped")
 		s.log.Info("calibration scheduler: another instance holds the advisory lock; skipping tick")
 		return 0, nil
 	}
+	span.SetAttributes(attribute.Bool("advisory_lock_acquired", true))
 	defer func() {
 		// Best-effort release; pool.Release already drops the lock when the
 		// session ends, but unlocking explicitly is cheap and lets a co-located
@@ -202,6 +216,7 @@ func (s *Scheduler) tickWithResult(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("list eligible: %w", err)
 	}
+	span.SetAttributes(attribute.Int("eligible_count", len(stations)))
 	if len(stations) == 0 {
 		s.log.Debug("calibration scheduler: no stations eligible")
 		return 0, nil

@@ -21,10 +21,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
+	"radiocheck/internal/observability"
 )
 
 // Deliverer subscribes to detection events on NATS and forwards them to the
@@ -70,7 +73,11 @@ func (d *Deliverer) Start(ctx context.Context) error {
 	subConfirmed, err := d.nc.Subscribe(events.SubjectDetectionConfirmed, func(msg *nats.Msg) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := d.handleDetection(bgCtx, msg.Data); err != nil {
+		spanCtx, span := observability.StartConsumerSpan(bgCtx, msg, "webhook.outbox_enqueue")
+		defer span.End()
+		if err := d.handleDetection(spanCtx, msg.Data); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			d.log.Warn("webhook deliverer: handle detection failed", zap.Error(err))
 		}
 	})
@@ -80,7 +87,11 @@ func (d *Deliverer) Start(ctx context.Context) error {
 	subRetracted, err := d.nc.Subscribe(events.SubjectDetectionRetracted, func(msg *nats.Msg) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := d.handleRetracted(bgCtx, msg.Data); err != nil {
+		spanCtx, span := observability.StartConsumerSpan(bgCtx, msg, "webhook.outbox_enqueue_retracted")
+		defer span.End()
+		if err := d.handleRetracted(spanCtx, msg.Data); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			d.log.Warn("webhook deliverer: handle retracted failed", zap.Error(err))
 		}
 	})
@@ -135,6 +146,14 @@ func (d *Deliverer) handleDetection(ctx context.Context, raw []byte) error {
 		// No client = no webhook recipient. Quietly drop.
 		return nil
 	}
+
+	// Annotate the active span (deliverer.handle) so a search by client_id
+	// or station_id surfaces this enqueue.
+	observability.AddSpanAttributes(ctx,
+		attribute.String("client_id", clientID.String()),
+		attribute.String("station_id", ev.StationID),
+		attribute.Int("commercial_short_id", int(ev.CommercialShortID)),
+	)
 
 	stationUUID, err := uuid.Parse(ev.StationID)
 	if err != nil {
