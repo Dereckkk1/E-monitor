@@ -6,30 +6,32 @@ import (
 )
 
 type Config struct {
-	DatabaseURL  string
-	RedisURL     string
-	NATSURL      string
-	S3Endpoint   string
-	S3Bucket     string
-	S3AccessKey  string
-	S3SecretKey  string
-	S3Region     string
-	MastersPath  string
-	APIPort      string
+	DatabaseURL      string
+	RedisURL         string
+	NATSURL          string
+	S3Endpoint       string
+	S3PublicEndpoint string
+	S3Bucket         string
+	S3AccessKey      string
+	S3SecretKey      string
+	S3Region         string
+	MastersPath      string
+	APIPort          string
 }
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		RedisURL:    os.Getenv("REDIS_URL"),
-		NATSURL:     os.Getenv("NATS_URL"),
-		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
-		S3Bucket:    os.Getenv("S3_BUCKET"),
-		S3AccessKey: os.Getenv("S3_ACCESS_KEY"),
-		S3SecretKey: os.Getenv("S3_SECRET_KEY"),
-		S3Region:    os.Getenv("S3_REGION"),
-		MastersPath: os.Getenv("MASTERS_PATH"),
-		APIPort:     os.Getenv("API_PORT"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
+		RedisURL:         os.Getenv("REDIS_URL"),
+		NATSURL:          os.Getenv("NATS_URL"),
+		S3Endpoint:       os.Getenv("S3_ENDPOINT"),
+		S3PublicEndpoint: os.Getenv("S3_PUBLIC_ENDPOINT"),
+		S3Bucket:         os.Getenv("S3_BUCKET"),
+		S3AccessKey:      os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
+		S3Region:         os.Getenv("S3_REGION"),
+		MastersPath:      os.Getenv("MASTERS_PATH"),
+		APIPort:          os.Getenv("API_PORT"),
 	}
 	required := map[string]string{
 		"DATABASE_URL":  cfg.DatabaseURL,

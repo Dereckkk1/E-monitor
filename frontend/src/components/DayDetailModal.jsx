@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import StationAvatar from './StationAvatar'
 import AudioPlayer from './AudioPlayer'
+import api from '../api/client'
 import {
   detectionsFor,
   formatLongDay,
@@ -20,6 +21,12 @@ function formatRetractedAt(iso) {
 
 export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
   const [activePlayerId, setActivePlayerId] = useState(null)
+  // Cache of presigned evidence URLs keyed by detection id. Each entry is
+  // { url, expiresAt } where expiresAt is the absolute deadline returned by
+  // the API. We refresh when within 30s of expiry so playback / download
+  // never hits a stale signature mid-stream.
+  const [evidenceUrls, setEvidenceUrls] = useState({})
+  const [loadingId, setLoadingId] = useState(null)
 
   useEffect(() => {
     function onKey(e) {
@@ -28,6 +35,50 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // ensureEvidenceUrl returns a usable presigned URL for the detection,
+  // fetching one on the first call and re-using the cached one until it's
+  // close to expiry. Throws on 4xx/5xx so callers can surface the failure.
+  const ensureEvidenceUrl = useCallback(async (id) => {
+    const cached = evidenceUrls[id]
+    if (cached && new Date(cached.expiresAt).getTime() > Date.now() + 30_000) {
+      return cached.url
+    }
+    const { data } = await api.get(`/detections/${id}/evidence/url`)
+    setEvidenceUrls(prev => ({ ...prev, [id]: data }))
+    return data.url
+  }, [evidenceUrls])
+
+  async function handlePlay(id) {
+    if (loadingId) return
+    if (evidenceUrls[id]?.url) {
+      setActivePlayerId(id)
+      return
+    }
+    setLoadingId(id)
+    try {
+      await ensureEvidenceUrl(id)
+      setActivePlayerId(id)
+    } catch {
+      // Swallow: next click retries. AudioPlayer with no src renders idle.
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  async function handleDownload(id) {
+    try {
+      const url = await ensureEvidenceUrl(id)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `veiculacao-${id}.mp3`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      // Same rationale as play: silent failure, user can retry.
+    }
+  }
 
   if (!station || !dayKey) return null
 
@@ -78,14 +129,14 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
                 {d.evidence_status === 'available' ? (
                   <>
                     <AudioPlayer
-                      src={`/v1/internal/detections/${d.id}/evidence`}
+                      src={evidenceUrls[d.id]?.url || ''}
                       isPlaying={activePlayerId === d.id}
-                      onPlay={() => setActivePlayerId(d.id)}
+                      onPlay={() => handlePlay(d.id)}
                       onPause={() => setActivePlayerId(null)}
                     />
-                    <a
-                      href={`/v1/internal/detections/${d.id}/evidence`}
-                      download={`veiculacao-${d.id}.mp3`}
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(d.id)}
                       className="day-detail-download"
                       title="Baixar áudio"
                       aria-label="Baixar evidência de áudio"
@@ -94,7 +145,7 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
                         <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                         <path d="M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
                       </svg>
-                    </a>
+                    </button>
                   </>
                 ) : (
                   <span className="text-muted" style={{ fontSize: 11 }}>
