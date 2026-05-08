@@ -6,6 +6,10 @@ A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de 
 
 ---
 
+## Resolvidos pós-Fase 2
+
+- **Migration runner automático** (2026-05-07): service `migrate` (golang-migrate) no `infra/docker/docker-compose.yml` aplica `migrations/*.up.sql` antes do `api` subir. `api` depende de `migrate: condition: service_completed_successfully`. Bootstrap de DB existente via `scripts/bootstrap-migrations.sh` (one-shot, idempotente, popula `schema_migrations` com `version=14, dirty=false`). Documentação completa em [`docs/migrations.md`](migrations.md). Resolve o problema histórico de migrations novas precisarem de `psql` manual a cada deploy.
+
 ## Resolvidos no security-review (2026-05-07)
 
 Cinco fixes aplicados em sequência sobre `master` após varredura de segurança. Cada commit é independente e pode ser revertido isoladamente.
