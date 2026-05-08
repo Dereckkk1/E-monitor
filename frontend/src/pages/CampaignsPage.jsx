@@ -549,12 +549,21 @@ function BulkUploadZone({ campaignId, campaignStationIds, allStations }) {
         const created = await new Promise((resolve, reject) => {
           uploadCommercial.mutate(fd, { onSuccess: resolve, onError: reject })
         })
-        // Se escolheu emissoras específicas, atualiza agora
-        const stationIds = entry.stations ?? []
-        if (stationIds.length > 0) {
+        // entry.stations:
+        //   null  → estado inválido (botão Enviar fica desabilitado)
+        //   []    → "Todas" (UI). Backend trata target_stations=[] como INATIVO,
+        //           então expandimos aqui para o conjunto atual de emissoras da
+        //           campanha. Sem essa expansão o material subia inativo e
+        //           ninguém percebia (incidente 2026-05-08).
+        //   [ids] → específicas
+        const picked = entry.stations ?? []
+        const targetStations = (picked.length === 0 && hasStations)
+          ? campaignStations.map(s => s.id)
+          : picked
+        if (targetStations.length > 0) {
           await new Promise((resolve, reject) => {
             updateStations.mutate(
-              { id: created.id, campaignId, targetStations: stationIds },
+              { id: created.id, campaignId, targetStations },
               { onSuccess: resolve, onError: reject }
             )
           })

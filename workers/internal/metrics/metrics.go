@@ -146,6 +146,24 @@ var (
 		Help: "Number of dynamic threshold refresh attempts per station, by outcome.",
 	}, []string{"station_id", "outcome"})
 
+	// WorkerCommercials is the number of commercials a worker has loaded for a
+	// station. Set by the supervisor on every (re)start and on every
+	// reconciler tick. A value of 0 on an active campaign's station is the
+	// signature failure mode that masked the 2026-05-08 missed detections —
+	// alert if it stays at 0 longer than the reconciler interval.
+	WorkerCommercials = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_worker_commercials",
+		Help: "Number of commercials currently loaded by the worker for each station.",
+	}, []string{"station_id"})
+
+	// WorkerReconcileRuns counts every reconciler pass per outcome.
+	// 'unchanged' = list matched DB; 'restarted' = list differed and worker
+	// was rebuilt; 'error' = the lookup failed (previous state preserved).
+	WorkerReconcileRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_worker_reconcile_runs_total",
+		Help: "Outcome of the per-station commercial reconciler ticks.",
+	}, []string{"station_id", "outcome"})
+
 	// ── Calibration scheduler (§9.4) ─────────────────────────────────────
 	// Counter: every recalibration attempt, labeled by terminal result.
 	CalibrationRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -198,6 +216,7 @@ func init() {
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,
+		WorkerCommercials, WorkerReconcileRuns,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 		MatchDisambiguation,
 	)

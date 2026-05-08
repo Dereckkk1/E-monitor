@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
+	"go.uber.org/zap"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
 )
@@ -28,6 +29,7 @@ type CommercialsHandler struct {
 	NATS        *nats.Conn
 	MastersPath string
 	Supervisor  CampaignSupervisor // optional; used to reload workers after station assignment changes
+	Log         *zap.Logger        // optional; used to surface Reload failures (silent failure caused 2026-05-08 missed detections)
 }
 
 func (h *CommercialsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +182,13 @@ func (h *CommercialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Supervisor != nil {
-		_ = h.Supervisor.Reload(campaignID)
+		if err := h.Supervisor.Reload(campaignID); err != nil && h.Log != nil {
+			h.Log.Error("commercials.Delete: supervisor reload failed",
+				zap.String("campaign_id", campaignID.String()),
+				zap.String("commercial_id", id.String()),
+				zap.Error(err),
+			)
+		}
 	}
 
 	w.WriteHeader(204)
@@ -221,8 +229,17 @@ func (h *CommercialsHandler) UpdateStations(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Reload workers for the campaign so the new station assignment takes effect immediately.
+	// A silent failure here is exactly what masked the 2026-05-08 missed
+	// detections — the supervisor's per-worker reconciler is the safety net,
+	// but the operator should still see the failure so they can dig in.
 	if h.Supervisor != nil {
-		_ = h.Supervisor.Reload(com.CampaignID)
+		if err := h.Supervisor.Reload(com.CampaignID); err != nil && h.Log != nil {
+			h.Log.Error("commercials.UpdateStations: supervisor reload failed",
+				zap.String("campaign_id", com.CampaignID.String()),
+				zap.String("commercial_id", id.String()),
+				zap.Error(err),
+			)
+		}
 	}
 
 	w.WriteHeader(204)

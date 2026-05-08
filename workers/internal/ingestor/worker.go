@@ -146,6 +146,19 @@ func (w *Worker) Threshold() int32 {
 	return w.cfg.MatchThreshold.Load()
 }
 
+// CommercialShortIDs returns a copy of the short ids the worker is currently
+// matching against. Used by the supervisor's reconciler (reconcile.go) to
+// detect drift between the in-memory list and the DB. Safe to mutate; the
+// slice returned does not share backing storage with the live config.
+func (w *Worker) CommercialShortIDs() []int32 {
+	if len(w.cfg.CommercialShortIDs) == 0 {
+		return nil
+	}
+	out := make([]int32, len(w.cfg.CommercialShortIDs))
+	copy(out, w.cfg.CommercialShortIDs)
+	return out
+}
+
 // Run starts the worker. Blocks until ctx is cancelled.
 // Internally: starts ffmpeg, runs two goroutines (AAC reader, PCM reader/matcher),
 // handles reconnection with exponential backoff.

@@ -16,6 +16,13 @@
 **Regra dura:** workers só rodam para campanhas em `ativa`. Os outros três
 estados são equivalentes para o supervisor (worker desligado).
 
+> Nuance pós-2026-05-08: o índice em memória de fingerprints (separado dos
+> workers) carrega hashes de `programada` E `ativa`. Isso elimina a janela
+> de race entre fim de geração de fingerprint e a transição
+> `programada → ativa`. Hashes de campanhas terminais (`concluida`,
+> `cancelada`) continuam fora do índice. Ver
+> [docs/worker-commercial-reconciler.md](worker-commercial-reconciler.md#filtro-de-status-do-loader-era-exclusivamente-ativa).
+
 `cancelada` é terminal — não volta para `programada`/`ativa`. Para retomar uma
 campanha cancelada por engano, criar uma nova.
 
@@ -237,3 +244,28 @@ SELECT id, name, start_date, end_date, updated_at
   FROM campaigns
  WHERE status = 'paused';
 ```
+
+## Edição de `target_stations` em campanha ativa
+
+`PUT /v1/internal/campaigns/{id}/stations` é processado por
+`Supervisor.UpdateStations` (uma única chamada). O método:
+
+1. Atualiza `campaigns.target_stations` no banco.
+2. Se a campanha está `ativa`, calcula o diff entre lista antiga e nova:
+   - **Removidas e não cobertas por outra campanha ativa:** worker é parado e
+     `monitoring_status` da estação volta para `paused`.
+   - **Removidas mas ainda cobertas:** worker continua, e o reconciler
+     (`docs/worker-commercial-reconciler.md`) ajusta a lista de comerciais
+     no próximo tick (≤30s).
+   - **Mantidas e adicionadas:** `startStationWorker` (idempotente — substitui
+     worker existente).
+3. Se a campanha não está `ativa`, só atualiza o banco. Nenhum worker é
+   manipulado.
+
+**A campanha NÃO transita por `cancelada` durante essa operação.** Antes do
+incidente 2026-05-08 o handler fazia `Pause(id)` (que flipava status para
+`cancelada`) + UPDATE + `Start(id)` (que devolvia para `ativa`); qualquer
+falha no meio deixava a campanha permanentemente cancelada. Veja
+[`workers/internal/supervisor/station_changes.go`](../workers/internal/supervisor/station_changes.go)
+e o teste de regressão
+[`workers/internal/api/handlers/campaigns_test.go::TestCampaigns_UpdateStations_DelegatesToSupervisor`](../workers/internal/api/handlers/campaigns_test.go).

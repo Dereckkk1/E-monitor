@@ -15,14 +15,16 @@ import (
 
 // fakeSupervisor implements CampaignSupervisor for tests.
 type fakeSupervisor struct {
-	startCalls atomic.Int32
-	pauseCalls atomic.Int32
-	reload     atomic.Int32
-	stopCalls  atomic.Int32
-	startErr   error
-	pauseErr   error
-	reloadErr  error
-	lastCancelArg uuid.UUID
+	startCalls         atomic.Int32
+	pauseCalls         atomic.Int32
+	reload             atomic.Int32
+	stopCalls          atomic.Int32
+	updateStationsCalls atomic.Int32
+	startErr           error
+	pauseErr           error
+	reloadErr          error
+	updateStationsErr  error
+	lastCancelArg      uuid.UUID
 }
 
 func (f *fakeSupervisor) Start(id uuid.UUID) error {
@@ -36,6 +38,10 @@ func (f *fakeSupervisor) Pause(id uuid.UUID) error {
 func (f *fakeSupervisor) Reload(id uuid.UUID) error {
 	f.reload.Add(1)
 	return f.reloadErr
+}
+func (f *fakeSupervisor) UpdateStations(id uuid.UUID, stations []uuid.UUID) error {
+	f.updateStationsCalls.Add(1)
+	return f.updateStationsErr
 }
 func (f *fakeSupervisor) StopWorkersForCampaign(id uuid.UUID) {
 	f.stopCalls.Add(1)
@@ -188,6 +194,55 @@ func TestCampaigns_UpdateStations_InvalidID(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestCampaigns_UpdateStations_DelegatesToSupervisor verifies that, with a
+// supervisor wired in, the handler delegates to Supervisor.UpdateStations and
+// does NOT bounce through Pause+Start (the legacy dance that briefly flipped
+// the campaign through 'cancelada' — see incident 2026-05-08 / docs/worker-
+// commercial-reconciler.md).
+func TestCampaigns_UpdateStations_DelegatesToSupervisor(t *testing.T) {
+	sup := &fakeSupervisor{}
+	h := &CampaignsHandler{Supervisor: sup}
+	r := chi.NewRouter()
+	r.Put("/campaigns/{id}/stations", h.UpdateStations)
+
+	id := uuid.New()
+	body := `{"target_stations":["` + uuid.New().String() + `"]}`
+	req := httptest.NewRequest(http.MethodPut, "/campaigns/"+id.String()+"/stations",
+		strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body=%s, want 204", rec.Code, rec.Body.String())
+	}
+	if got := sup.updateStationsCalls.Load(); got != 1 {
+		t.Errorf("UpdateStations calls = %d, want 1", got)
+	}
+	if got := sup.pauseCalls.Load(); got != 0 {
+		t.Errorf("Pause calls = %d, want 0 (Pause+Start dance must be gone)", got)
+	}
+	if got := sup.startCalls.Load(); got != 0 {
+		t.Errorf("Start calls = %d, want 0 (Pause+Start dance must be gone)", got)
+	}
+}
+
+// TestCampaigns_UpdateStations_NotFoundFromSupervisor maps the supervisor's
+// "campaign not found" sentinel to a 404 response.
+func TestCampaigns_UpdateStations_NotFoundFromSupervisor(t *testing.T) {
+	sup := &fakeSupervisor{updateStationsErr: errors.New("supervisor.UpdateStations: campaign not found: x")}
+	h := &CampaignsHandler{Supervisor: sup}
+	r := chi.NewRouter()
+	r.Put("/campaigns/{id}/stations", h.UpdateStations)
+
+	req := httptest.NewRequest(http.MethodPut, "/campaigns/"+uuid.New().String()+"/stations",
+		strings.NewReader(`{"target_stations":[]}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 body=%s", rec.Code, rec.Body.String())
 	}
 }
 
