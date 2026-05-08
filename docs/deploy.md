@@ -8,10 +8,11 @@
 ## Índice
 
 1. [Análise do sistema](#1-análise-do-sistema)
-2. [Cloudflare Pages — Frontend](#2-cloudflare-pages--frontend)
-3. [Google VM — Especificações](#3-google-vm--especificações)
-4. [Google VM — Configuração do zero](#4-google-vm--configuração-do-zero)
-5. [Análise de custos](#5-análise-de-custos)
+2. [Domínio: Hostgator → Cloudflare](#2-domínio-hostgator--cloudflare)
+3. [Cloudflare Pages — Frontend](#3-cloudflare-pages--frontend)
+4. [Google VM — Especificações](#4-google-vm--especificações)
+5. [Google VM — Configuração do zero](#5-google-vm--configuração-do-zero)
+6. [Análise de custos](#6-análise-de-custos)
 
 ---
 
@@ -47,7 +48,55 @@ Números baseados em stress test real (50 workers ativos medidos em 08/05/2026):
 
 ---
 
-## 2. Cloudflare Pages — Frontend
+## 2. Domínio: Hostgator → Cloudflare
+
+O objetivo é transferir o controle do DNS do Hostgator para o Cloudflare. O domínio continua registrado no Hostgator — você só muda quem responde pelo DNS. Isso é necessário para o Cloudflare Pages e o Cloudflare Tunnel funcionarem com seu domínio.
+
+### Passo 1 — Adicionar o domínio no Cloudflare
+
+1. Acesse [dash.cloudflare.com](https://dash.cloudflare.com) → **Add a Site**
+2. Digite seu domínio (ex: `e-monitor.online`) → **Continue**
+3. Selecione o plano **Free** → **Continue**
+4. O Cloudflare vai escanear os registros DNS existentes do Hostgator automaticamente. Revise a lista — geralmente importa tudo certo. Clique em **Continue**
+5. Na próxima tela o Cloudflare vai te dar **2 nameservers**, algo como:
+   ```
+   chad.ns.cloudflare.com
+   nina.ns.cloudflare.com
+   ```
+   Anote os dois — você vai precisar no próximo passo.
+
+### Passo 2 — Trocar os nameservers no Hostgator
+
+1. Acesse o painel do Hostgator → **Meus Produtos** → localize seu domínio → **Gerenciar**
+2. Vá em **Servidores DNS** (ou "Nameservers")
+3. Troque os nameservers atuais pelos dois que o Cloudflare forneceu:
+   ```
+   Nameserver 1: chad.ns.cloudflare.com
+   Nameserver 2: nina.ns.cloudflare.com
+   ```
+   (os nomes exatos são os que o Cloudflare te deu no passo anterior)
+4. Salve.
+
+> A propagação leva de 5 minutos a 24 horas. Normalmente resolve em menos de 1 hora. Você pode checar em [dnschecker.org](https://dnschecker.org) digitando seu domínio e vendo se os nameservers já aparecem como Cloudflare.
+
+### Passo 3 — Confirmar no Cloudflare
+
+Depois que a propagação acontecer, o Cloudflare vai detectar automaticamente e mudar o status do domínio para **Active**. Você recebe um e-mail de confirmação.
+
+### Passo 4 — Registros DNS que você vai precisar
+
+Após o domínio estar ativo no Cloudflare, os registros abaixo são criados automaticamente pelos próximos passos deste guia:
+
+| Subdomínio | Tipo | Criado por | Aponta para |
+|---|---|---|---|
+| `app.e-monitor.online` | CNAME | Cloudflare Pages (seção 3) | Endereço do Pages gerado automaticamente |
+| `api.e-monitor.online` | CNAME | `cloudflared tunnel route dns` (seção 5, Bloco G) | Cloudflare Tunnel |
+
+Você não precisa criar esses registros manualmente — os comandos das seções seguintes fazem isso.
+
+---
+
+## 3. Cloudflare Pages — Frontend
 
 ### Pré-requisitos
 
@@ -82,18 +131,18 @@ git push -u origin master
 
 | Nome | Valor |
 |---|---|
-| `VITE_API_URL` | `https://api.seudominio.com.br` |
+| `VITE_API_URL` | `https://api.e-monitor.online` |
 | `NODE_VERSION` | `20` |
 
 **5.** Clique em **Save and Deploy**. O primeiro build leva ~2 minutos.
 
-**6. Domínio customizado (opcional):** Custom domains → adicione `app.seudominio.com.br`. O Cloudflare cria o DNS automaticamente.
+**6. Domínio customizado (opcional):** Custom domains → adicione `app.e-monitor.online`. O Cloudflare cria o DNS automaticamente.
 
 Todo `git push origin master` dispara rebuild automático.
 
 ---
 
-## 3. Google VM — Especificações
+## 4. Google VM — Especificações
 
 ### Região e zona
 
@@ -200,7 +249,7 @@ Protocols: TCP:22
 
 ---
 
-## 4. Google VM — Configuração do zero
+## 5. Google VM — Configuração do zero
 
 Conecte via SSH:
 
@@ -358,7 +407,7 @@ cloudflared tunnel create radiocheck-prod
 # Anote o Tunnel ID gerado (UUID)
 
 # Criar rota DNS
-cloudflared tunnel route dns radiocheck-prod api.seudominio.com.br
+cloudflared tunnel route dns radiocheck-prod api.e-monitor.online
 
 # Configuração do tunnel
 sudo mkdir -p /etc/cloudflared
@@ -367,7 +416,7 @@ tunnel: SEU_TUNNEL_ID_AQUI
 credentials-file: /root/.cloudflared/SEU_TUNNEL_ID_AQUI.json
 
 ingress:
-  - hostname: api.seudominio.com.br
+  - hostname: api.e-monitor.online
     service: http://localhost:8080
   - service: http_status:404
 EOF
@@ -614,7 +663,7 @@ docker compose ps
 curl http://localhost:8080/health
 
 # API via Tunnel (no browser ou curl)
-curl https://api.seudominio.com.br/health
+curl https://api.e-monitor.online/health
 
 # Migrations aplicadas (deve mostrar 14 linhas)
 docker compose exec postgres psql -U radiocheck -d radiocheck \
@@ -633,7 +682,7 @@ ssh -L 3001:localhost:3001 radiocheck@IP_DA_VM
 
 ---
 
-## 5. Análise de custos
+## 6. Análise de custos
 
 ### Base de cálculo
 
