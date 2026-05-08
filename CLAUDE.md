@@ -143,3 +143,10 @@ A documentação operacional do sistema fica em `/docs`. Ao implementar uma func
 1. Implemente o código.
 2. Crie ou atualize o arquivo correspondente em `/docs`.
 3. Não modifique `plano_implementacao.md` para documentar o que foi feito — esse arquivo é blueprint, não changelog.
+
+### Operação básica que você precisa saber antes de mexer
+
+- **Migrations:** runner automático via service `migrate` no docker-compose. Aplica `migrations/*.up.sql` antes do `api` subir. Adicionar nova migration = criar arquivo `0NNN_name.up.sql`/`.down.sql` e fazer `docker compose up -d --build`. Ver [docs/migrations.md](docs/migrations.md) — leitura obrigatória antes de mexer em schema.
+- **Auth:** todas as rotas `/v1/internal/*` exigem JWT (admin/operator). Bootstrap admin idempotente via env vars `RADIOCHECK_BOOTSTRAP_ADMIN_EMAIL` / `RADIOCHECK_BOOTSTRAP_ADMIN_PASSWORD` no `.env` (criado se não existir, no-op se já existir). Mutações sensíveis (webhook config, campaign cancel) exigem role admin. Ver [docs/auth-bootstrap.md](docs/auth-bootstrap.md).
+- **Tracing:** OTLP gRPC pra Jaeger (`localhost:16686`). Setar `OTEL_EXPORTER_OTLP_ENDPOINT=` (vazio) desliga sem panic. Ver [docs/tracing.md](docs/tracing.md).
+- **Follow-ups conhecidos:** ver [docs/follow-ups-fase2.md](docs/follow-ups-fase2.md) — dívida técnica catalogada (F-01 a F-83) que deve ser resolvida antes/durante a Fase 3.
