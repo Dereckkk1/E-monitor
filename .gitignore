@@ -29,3 +29,19 @@ Thumbs.db
 .claude/
 
 node_modules
+
+# Tooling caches / scratch
+.playwright-mcp/
+.pytest_cache/
+.cache/
+
+# Investigação ad-hoc — referências de áudio, screenshots de debug, etc.
+# (manter localmente, fora do histórico)
+audio-refs/
+*.png
+!frontend/**/*.png
+!docs/**/*.png
+
+# Cloned helper repos that shouldn't live inside this tree.
+# `impeccable/` é um clone de skill com .git próprio — manter externo.
+impeccable/
