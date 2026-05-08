@@ -123,7 +123,7 @@ a  { color: var(--c-action); text-decoration: none; }
 
 .sidebar-nav {
   flex: 1;
-  padding: 12px 8px;
+  padding: 8px 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -133,40 +133,43 @@ a  { color: var(--c-action); text-decoration: none; }
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.5px;
   color: var(--c-text-3);
-  padding: 8px 8px 4px;
-  margin-top: 8px;
+  padding: 4px 16px;
+  margin-top: 10px;
 }
 
 .sidebar-link {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  padding: 12px 16px;
+  margin: 2px 0 2px 8px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  min-height: 48px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--c-text-2);
   text-decoration: none;
-  transition: background 0.15s, color 0.15s;
+  transition: all 0.2s ease;
   white-space: nowrap;
 }
 
 .sidebar-link:hover {
   background: var(--c-surface-2);
-  color: var(--c-text);
+  color: var(--c-action);
 }
 
 .sidebar-link.active {
   background: var(--c-action-light);
   color: var(--c-action);
   font-weight: 600;
+  border-right: 2px solid var(--c-action);
 }
 
 .sidebar-link .sidebar-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   opacity: 0.7;
 }
@@ -817,6 +820,12 @@ textarea.input { min-height: 90px; resize: vertical; line-height: 1.5; }
   text-decoration: none;
   flex-shrink: 0;
   transition: background 120ms ease, color 120ms ease;
+  /* Was an <a>, now a <button> (presigned URLs are fetched on click). Reset
+     the user-agent button chrome so the icon-only look is preserved. */
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 .day-detail-download:hover {
   background: var(--c-surface-2);
@@ -3412,7 +3421,7 @@ textarea.input { min-height: 90px; resize: vertical; line-height: 1.5; }
   text-align: left;
 }
 .sidebar-logout:hover {
-  background: var(--c-surface-2);
-  border-color: var(--c-text-3);
-  color: var(--c-text);
+  background: #FEF2F2;
+  border-color: var(--c-danger);
+  color: var(--c-danger);
 }

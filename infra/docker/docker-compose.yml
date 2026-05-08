@@ -94,6 +94,11 @@ services:
       REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
       S3_ENDPOINT: http://minio:9000
+      # Endpoint baked into presigned URLs that the *browser* will follow.
+      # Inside docker compose the API talks to MinIO via the service alias
+      # (minio:9000), but a presigned URL with that host fails in the browser
+      # because the host is not resolvable from the user's machine.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_BUCKET: ${S3_BUCKET}
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}

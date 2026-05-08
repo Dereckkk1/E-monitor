@@ -143,6 +143,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/", d.Detections.List)
 				r.Get("/{id}", d.Detections.Get)
 				r.Get("/{id}/evidence", d.Detections.Evidence)
+				r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
 			})
 			r.Route("/stream-health", func(r chi.Router) {
 				r.Get("/", d.StreamHealth.List)

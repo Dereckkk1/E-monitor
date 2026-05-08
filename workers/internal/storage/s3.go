@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -13,11 +14,21 @@ import (
 )
 
 type Client struct {
-	s3     *s3.Client
-	bucket string
+	s3        *s3.Client
+	presignS3 *s3.Client
+	bucket    string
 }
 
-func New(ctx context.Context, endpoint, bucket, region, accessKey, secretKey string) (*Client, error) {
+// New builds a storage client. endpoint is the S3/MinIO URL the *server*
+// uses for object I/O (e.g. http://minio:9000 inside docker compose).
+//
+// publicEndpoint is the URL the *browser* will see when following presigned
+// URLs (e.g. http://localhost:9000). It must be reachable from the user's
+// machine, not from the API container. When empty, presigning falls back to
+// endpoint — which is fine for production where both addresses are the same
+// (a real S3 / R2 bucket) but breaks in dev where the API talks to MinIO via
+// a docker network alias the browser cannot resolve.
+func New(ctx context.Context, endpoint, publicEndpoint, bucket, region, accessKey, secretKey string) (*Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
@@ -29,7 +40,15 @@ func New(ctx context.Context, endpoint, bucket, region, accessKey, secretKey str
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = true
 	})
-	return &Client{s3: cli, bucket: bucket}, nil
+	pe := publicEndpoint
+	if pe == "" {
+		pe = endpoint
+	}
+	presign := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(pe)
+		o.UsePathStyle = true
+	})
+	return &Client{s3: cli, presignS3: presign, bucket: bucket}, nil
 }
 
 func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentType string) error {
@@ -98,6 +117,24 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("storage: delete %s: %w", key, err)
 	}
 	return nil
+}
+
+// PresignGet returns a time-limited URL the browser can GET directly from
+// the bucket without going through the API. Used by the internal frontend
+// so HTML media tags (<audio>, <a download>) — which cannot send the
+// Authorization header — still receive authenticated access to evidence
+// clips. ttl bounds how long the URL stays valid; the returned expiresAt
+// is the absolute deadline so the caller can cache and refresh.
+func (c *Client) PresignGet(ctx context.Context, key string, ttl time.Duration) (url string, expiresAt time.Time, err error) {
+	p := s3.NewPresignClient(c.presignS3)
+	req, err := p.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("storage: presign %s: %w", key, err)
+	}
+	return req.URL, time.Now().Add(ttl), nil
 }
 
 // Head returns size + content-type without downloading the body. Useful for

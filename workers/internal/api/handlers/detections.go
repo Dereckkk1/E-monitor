@@ -89,6 +89,44 @@ func (h *DetectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, det)
 }
 
+// EvidenceURL returns a short-lived presigned GET URL for the detection's
+// evidence clip. Used by the internal frontend so <audio> / <a download>
+// tags — which cannot send the Authorization header — can fetch the clip
+// directly from object storage. The TTL is short (5 min) because the URL
+// inherits no auth once issued; the frontend should re-fetch it close to
+// expiry. Returns 404 with the same semantics as Evidence (detection not
+// found, or clip not yet available).
+func (h *DetectionsHandler) EvidenceURL(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	det, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+	if det.EvidenceStatus != "available" || det.EvidenceKey == nil {
+		http.Error(w, "evidence not available", 404)
+		return
+	}
+	const ttl = 5 * time.Minute
+	url, expiresAt, err := h.Storage.PresignGet(r.Context(), *det.EvidenceKey, ttl)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"url":        url,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
 func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
