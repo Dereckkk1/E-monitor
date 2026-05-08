@@ -19,12 +19,17 @@ import (
 )
 
 // DedupEntry is one previously-published confirmation kept in the buffer for
-// short-window cross-checks against newer confirmations.
+// broadcast-window overlap checks against newer confirmations.
 type DedupEntry struct {
 	Detection       match.ConfirmedDetection
 	ClientID        uuid.UUID
 	DurationSeconds int
-	InsertedAt      time.Time
+	// BroadcastStart is the inferred wall-clock time when the commercial
+	// started playing on the stream (= EvidenceWindowStart + 60s). Used for
+	// interval-overlap dedup so misaligned cuts (e.g. a 30s taken from the
+	// second half of a 60s) are still correlated correctly.
+	BroadcastStart time.Time
+	InsertedAt     time.Time
 }
 
 // DedupBuffer is a small in-memory ring of recent confirmed detections,
@@ -65,12 +70,14 @@ func (b *DedupBuffer) GC(cutoff time.Time) {
 }
 
 // Find returns a *copy* of the first entry matching (stationID, clientID)
-// whose Detection.DetectedAt is within ±window of t, or nil if no entry
-// qualifies. The returned pointer is decoupled from internal storage —
-// callers must use Replace/Add to mutate the buffer.
-func (b *DedupBuffer) Find(stationID uuid.UUID, clientID uuid.UUID, t time.Time, window time.Duration) *DedupEntry {
+// whose broadcast window [BroadcastStart, BroadcastStart+DurationSeconds]
+// overlaps with [broadcastStart, broadcastStart+durationSeconds].
+// Returns nil if no entry qualifies. The returned pointer is decoupled from
+// internal storage — callers must use Replace/Add to mutate the buffer.
+func (b *DedupBuffer) Find(stationID uuid.UUID, clientID uuid.UUID, broadcastStart time.Time, durationSeconds int) *DedupEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	candidateEnd := broadcastStart.Add(time.Duration(durationSeconds) * time.Second)
 	for i := range b.entries {
 		e := &b.entries[i]
 		if e.ClientID != clientID {
@@ -80,11 +87,9 @@ func (b *DedupBuffer) Find(stationID uuid.UUID, clientID uuid.UUID, t time.Time,
 		if err != nil || entryStation != stationID {
 			continue
 		}
-		diff := t.Sub(e.Detection.DetectedAt)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff <= window {
+		entryEnd := e.BroadcastStart.Add(time.Duration(e.DurationSeconds) * time.Second)
+		// Interval overlap: A starts before B ends AND B starts before A ends.
+		if broadcastStart.Before(entryEnd) && e.BroadcastStart.Before(candidateEnd) {
 			out := *e
 			return &out
 		}

@@ -41,20 +41,24 @@ estável e independente de relógio).
 
 | Parâmetro | Valor | Origem |
 |---|---|---|
-| Janela Δ | 5 segundos (default) | `campaigns.dedup_window_seconds` |
+| Critério de conflito | sobreposição de janelas de veiculação | `DedupBuffer.Find()` |
 | Buffer maxAge | 60 segundos | constante `dedupBufferRetention` |
 | Escopo | mesmo `client_id`, mesma `station_id` | regra fixa |
 | Empate | menor `short_id` ganha | regra fixa |
 
-A coluna `dedup_window_seconds` aceita valores entre 0 e 60 segundos
-(check constraint na migration 0014). Casos de uso:
+**Como a janela de veiculação é calculada:**
+`BroadcastStart = EvidenceWindowStart + 60s` (o worker serializa
+`EvidenceWindowStart = FirstMatchAt - 4s - 60s`, então somar 60s recupera o
+início inferido da veiculação no ar). A janela completa é
+`[BroadcastStart, BroadcastStart + DurationSeconds]`.
 
-- **0** → desabilita desambiguação para a campanha (todas confirmações
-  publicam).
-- **5** (default) → captura a janela típica de divergência entre as state
-  machines de cortes diferentes.
-- **>5** → para campanhas com cortes muito próximos em duração (ex: 28s e
-  32s) onde o gap entre as confirmações pode ser maior.
+Dois comerciais do mesmo cliente na mesma emissora são considerados conflito
+quando as suas janelas se sobrepõem (`A.start < B.end && B.start < A.end`).
+Isso cobre cortes desalinhados (ex: o 30s extraído da metade do 60s) que a
+lógica anterior baseada em proximidade de `DetectedAt` perdia.
+
+> **`campaigns.dedup_window_seconds`** — campo legado, não é mais usado pelo
+> supervisor após o fix de 2026-05-08 (Itapoá/Rôgga). Será removido na Fase 3.
 
 ## Fluxo de retração
 
@@ -205,6 +209,9 @@ detecção duplicada por restart. Aceitável.
       sem mudança.
 - [x] Detecções suprimidas e retratadas são logadas com nível info,
       contabilizadas em `match_disambiguation_total{action="suppressed|retracted"}`.
+- [x] Cortes **desalinhados** (o 30s extraído da metade do 60s) são deduplicados
+      corretamente por sobreposição de janela de veiculação, independente do
+      gap entre `DetectedAt` (fix 2026-05-08 — incidente Itapoá/Rôgga).
 
 ## Migrations relacionadas
 
