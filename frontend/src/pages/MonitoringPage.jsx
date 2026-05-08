@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useStreamHealth, useStationHealthEvents } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import HealthTimeline from '../components/HealthTimeline'
+import { tokenize, matchesAllTokens } from '../utils/search'
 
 // ── Mini 7-day bar ────────────────────────────────────────────────────────────
 function MiniHealthBar({ dailySummary }) {
@@ -206,13 +207,16 @@ export default function MonitoringPage() {
 
   const filtered = useMemo(() => {
     let list = stations
-    if (search) {
-      const q = search.toLowerCase()
-      list = list.filter(s =>
-        s.name.toLowerCase().includes(q) ||
-        (s.city ?? '').toLowerCase().includes(q) ||
-        (s.state ?? '').toLowerCase().includes(q)
-      )
+    const tokens = tokenize(search)
+    if (tokens.length > 0) {
+      const fields = [
+        'name',
+        'city',
+        'state',
+        'band',
+        s => s.frequency_mhz != null ? String(s.frequency_mhz) : '',
+      ]
+      list = list.filter(s => matchesAllTokens(s, fields, tokens))
     }
     if (band !== 'Todas') list = list.filter(s => s.band === band)
     if (healthFilter === 'Com falha') {
