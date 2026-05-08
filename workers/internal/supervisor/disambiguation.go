@@ -176,20 +176,23 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 	}
 	lookupSpan.End()
 
-	dedupWindow := time.Duration(info.DedupWindowSeconds) * time.Second
-	if dedupWindow <= 0 {
-		dedupWindow = 5 * time.Second
-	}
+	// campaigns.dedup_window_seconds is superseded by broadcast-window overlap
+	// (§18.2.2 fix for misaligned cuts). The column is kept in the schema for
+	// now and will be dropped in Fase 3 once no old callers rely on it.
+
+	broadcastStart := computeBroadcastStart(original.EvidenceWindowStart, det.DetectedAt)
+	span.SetAttributes(attribute.String("broadcast_start", broadcastStart.UTC().Format(time.RFC3339)))
 
 	now := time.Now()
 	s.dedupBuffer.GC(now.Add(-s.dedupBuffer.MaxAge()))
 
 	_, evalSpan := observability.Tracer().Start(ctx, "dedup.evaluate")
-	conflict := s.dedupBuffer.Find(stationID, info.ClientID, det.DetectedAt, dedupWindow)
+	conflict := s.dedupBuffer.Find(stationID, info.ClientID, broadcastStart, info.DurationSeconds)
 	newEntry := DedupEntry{
 		Detection:       det,
 		ClientID:        info.ClientID,
 		DurationSeconds: info.DurationSeconds,
+		BroadcastStart:  broadcastStart,
 		InsertedAt:      now,
 	}
 
@@ -223,6 +226,28 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 		// before suppressing. Cuts < 50% overlap are independent jingles
 		// from the same client and both should publish. Deferred to Fase 3.
 	}
+}
+
+// computeBroadcastStart derives the inferred wall-clock start of the commercial
+// on the stream from the evidence window start timestamp carried in the NATS
+// event. The worker computes:
+//
+//	evidenceWindowStart = FirstMatchAt - 4s (analysis window) - 60s (pre-buffer)
+//
+// so: broadcastStart = evidenceWindowStart + 60s.
+//
+// Falls back to detectedAt when evidenceWindowStart is absent or unparseable
+// (e.g. empty string in tests, legacy events) — preserving pre-fix behaviour
+// for that edge case at the cost of possible missed dedup for misaligned cuts.
+func computeBroadcastStart(evidenceWindowStart string, fallback time.Time) time.Time {
+	if evidenceWindowStart == "" {
+		return fallback
+	}
+	t, err := time.Parse(time.RFC3339, evidenceWindowStart)
+	if err != nil {
+		return fallback
+	}
+	return t.Add(60 * time.Second)
 }
 
 // publishConfirmed forwards a detection to the post-disambiguation subject.
