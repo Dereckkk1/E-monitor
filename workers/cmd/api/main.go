@@ -80,8 +80,8 @@ func main() {
 	}
 	defer nc.Close()
 
-	s3Client, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
-		cfg.S3AccessKey, cfg.S3SecretKey)
+	s3Client, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3Bucket,
+		cfg.S3Region, cfg.S3AccessKey, cfg.S3SecretKey)
 	if err != nil {
 		log.Fatalf("s3: %v", err)
 	}
@@ -216,13 +216,14 @@ func main() {
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
 		Supervisor: sup,
+		Log:        logger,
 	}
 
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations},
 		Clients:      &handlers.ClientsHandler{Repo: clients},
 		Campaigns:    campaignsHandler,
-		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup},
+		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},

@@ -32,6 +32,25 @@ func NewLoader(store *Store, db *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *
 	}
 }
 
+// indexEligibleStatuses is the set of campaign statuses whose commercials
+// belong in the in-memory matching index. We deliberately include
+// 'programada' alongside 'ativa' so that the lifecycle scheduler's
+// programada → ativa transition (§18.2.1) does not race with index
+// population: by the time the worker comes up, the hashes are already there.
+//
+// Excluded by design:
+//   - 'concluida'  → terminal, no worker ever runs against it
+//   - 'cancelada'  → terminal, same reasoning; also avoids "stuck" hashes
+//                    if an operator cancels a campaign whose fingerprints
+//                    are still being generated
+//
+// Pre-2026-05-08 we filtered ca.status='ativa' only. That meant any
+// fingerprint completion arriving on the NATS reload subject before
+// Supervisor.Start fired was silently rejected — and if Start failed for
+// any reason (DB blip, NATS hiccup), the hashes never made it into memory.
+// See docs/worker-commercial-reconciler.md.
+const indexEligibleStatuses = `('programada', 'ativa')`
+
 // LoadAll loads ALL ready commercials' fingerprints into the index via a
 // single JOIN query. It always swaps a non-nil index — even when no rows
 // are found. Called once at startup.
@@ -42,7 +61,7 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 		JOIN commercials c  ON c.id  = fh.commercial_id
 		JOIN campaigns   ca ON ca.id = c.campaign_id
 		WHERE c.fingerprint_status = 'ready'
-		  AND ca.status = 'ativa'
+		  AND ca.status IN `+indexEligibleStatuses+`
 	`)
 	if err != nil {
 		return fmt.Errorf("index loader: query fingerprint_hashes: %w", err)
@@ -102,14 +121,15 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			return
 		}
 
-		// Fetch the commercial's short_id, confirming it is ready and its campaign is active.
+		// Fetch the commercial's short_id, confirming it is ready and its
+		// campaign is in an index-eligible status (see indexEligibleStatuses).
 		var shortID int32
 		err := l.db.QueryRow(ctx, `
 			SELECT c.short_id FROM commercials c
 			JOIN campaigns ca ON ca.id = c.campaign_id
 			WHERE c.id = $1
 			  AND c.fingerprint_status = 'ready'
-			  AND ca.status = 'ativa'
+			  AND ca.status IN `+indexEligibleStatuses+`
 		`, payload.CommercialID).Scan(&shortID)
 		if err != nil {
 			l.log.Warn("index.reload: commercial not found or not ready",

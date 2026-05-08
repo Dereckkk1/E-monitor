@@ -450,6 +450,15 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// calls (admin endpoint).
 	go s.runThresholdRefresher(workerCtx, capturedStationID, w, entry.refreshNow)
 
+	// ── Commercial reconciler (post-2026-05-08 hardening) ───────────────────
+	// Periodically re-reads which commercials should be loaded for this
+	// station and rebuilds the worker if the set drifted. Catches
+	// missed/failed Reload calls that would otherwise leave a worker matching
+	// against a stale list — see reconcile.go for the incident context.
+	go s.runCommercialReconciler(workerCtx, capturedStationID)
+
+	metrics.WorkerCommercials.WithLabelValues(stationID.String()).Set(float64(len(shortIDs)))
+
 	s.log.Info("supervisor: worker started",
 		zap.String("station_id", stationID.String()),
 		zap.String("stream_url", station.StreamURL),
@@ -640,6 +649,7 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 				delete(s.workers, stationID)
 				s.evidence.Unregister(stationID)
 				metrics.WorkerActive.Dec()
+				metrics.WorkerCommercials.DeleteLabelValues(stationID.String())
 			}
 			s.mu.Unlock()
 			stationsToPause = append(stationsToPause, stationID)
@@ -835,6 +845,7 @@ func (s *Supervisor) StopWorkersForCampaign(campaignID uuid.UUID) {
 			delete(s.workers, stationID)
 			s.evidence.Unregister(stationID)
 			metrics.WorkerActive.Dec()
+			metrics.WorkerCommercials.DeleteLabelValues(stationID.String())
 		}
 		s.mu.Unlock()
 		if err := s.stations.UpdateMonitoringStatus(ctx, stationID, "paused"); err != nil {

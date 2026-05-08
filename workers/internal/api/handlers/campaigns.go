@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 	"radiocheck/internal/catalog"
 )
 
@@ -23,6 +24,7 @@ var validStatuses = map[string]struct{}{
 type CampaignsHandler struct {
 	Repo       *catalog.Campaigns
 	Supervisor CampaignSupervisor
+	Log        *zap.Logger // optional; used to surface Pause/Start/Reload failures
 }
 
 // CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
@@ -30,6 +32,10 @@ type CampaignSupervisor interface {
 	Start(campaignID uuid.UUID) error
 	Pause(campaignID uuid.UUID) error
 	Reload(campaignID uuid.UUID) error
+	// UpdateStations replaces target_stations on a campaign and reconciles
+	// running workers without bouncing the campaign through 'cancelada' as
+	// the legacy Pause+Start dance did.
+	UpdateStations(campaignID uuid.UUID, newStations []uuid.UUID) error
 	StopWorkersForCampaign(campaignID uuid.UUID)
 }
 
@@ -117,7 +123,12 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Supervisor != nil {
-		_ = h.Supervisor.Pause(id)
+		if perr := h.Supervisor.Pause(id); perr != nil && h.Log != nil {
+			h.Log.Error("campaigns.Delete: supervisor pause failed",
+				zap.String("campaign_id", id.String()),
+				zap.Error(perr),
+			)
+		}
 	}
 	if err := h.Repo.Delete(r.Context(), id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -183,7 +194,12 @@ func (h *CampaignsHandler) Pause(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateStations replaces the target_stations list for a campaign.
-// If the campaign is active, workers are paused and restarted with the new station list.
+//
+// When a supervisor is wired, the DB write and the per-station worker
+// reconciliation happen inside Supervisor.UpdateStations as a single path —
+// the campaign never transitions through 'cancelada' (which is what the
+// previous Pause+Start dance did). When no supervisor is wired (test mode),
+// we fall back to a plain DB update.
 func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -201,8 +217,27 @@ func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request
 		in.TargetStations = []uuid.UUID{}
 	}
 
-	camp, err := h.Repo.Get(r.Context(), id)
-	if err != nil {
+	if h.Supervisor != nil {
+		if err := h.Supervisor.UpdateStations(id, in.TargetStations); err != nil {
+			if h.Log != nil {
+				h.Log.Error("campaigns.UpdateStations: supervisor failed",
+					zap.String("campaign_id", id.String()),
+					zap.Error(err),
+				)
+			}
+			if strings.Contains(err.Error(), "campaign not found") {
+				http.Error(w, "not found", 404)
+				return
+			}
+			http.Error(w, "internal error", 500)
+			return
+		}
+		w.WriteHeader(204)
+		return
+	}
+
+	// No supervisor (test setup) — plain DB update.
+	if _, err := h.Repo.Get(r.Context(), id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "not found", 404)
 		} else {
@@ -210,21 +245,9 @@ func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
-	wasActive := camp.Status == "ativa"
-
-	// Pause current workers so removed stations get stopped cleanly.
-	if wasActive && h.Supervisor != nil {
-		_ = h.Supervisor.Pause(id)
-	}
-
 	if err := h.Repo.UpdateTargetStations(r.Context(), id, in.TargetStations); err != nil {
 		http.Error(w, "internal error", 500)
 		return
-	}
-
-	// Restart with the new station list.
-	if wasActive && h.Supervisor != nil {
-		_ = h.Supervisor.Start(id)
 	}
 
 	w.WriteHeader(204)
