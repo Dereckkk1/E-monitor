@@ -45,3 +45,10 @@ audio-refs/
 # Cloned helper repos that shouldn't live inside this tree.
 # `impeccable/` é um clone de skill com .git próprio — manter externo.
 impeccable/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
