@@ -359,7 +359,7 @@ function CommercialRow({ commercial, campaignStationIds, allStations }) {
     })
   }
 
-  const audioSrc = `/v1/internal/commercials/${commercial.id}/audio`
+  const audioSrc = `${import.meta.env.VITE_API_URL ?? ''}/v1/internal/commercials/${commercial.id}/audio`
   const downloadHref = `${audioSrc}?download=1`
 
   function togglePlay() {
