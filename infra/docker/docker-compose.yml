@@ -37,6 +37,26 @@ services:
       - "${NATS_PORT}:4222"
       - "8222:8222"
 
+  # ── Migration runner (golang-migrate) ────────────────────────────────────
+  # Roda automaticamente antes do `api` subir. Lê migrations/*.up.sql em
+  # ordem de versão e aplica as pendentes. Tabela `schema_migrations` no
+  # Postgres rastreia o estado. Sai com 0 quando tudo aplicado (ou no-op).
+  # Para DB existente, rodar `scripts/bootstrap-migrations.sh` UMA VEZ
+  # antes do primeiro `up` para popular schema_migrations com a versão
+  # atual e evitar re-execução de migrations já aplicadas.
+  migrate:
+    image: migrate/migrate:v4.17.1
+    volumes:
+      - ../../migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      - "up"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   minio:
     image: minio/minio:latest
     environment:
@@ -102,6 +122,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       nats:
