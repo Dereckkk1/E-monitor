@@ -2,7 +2,7 @@ import axios from 'axios'
 import { getStoredToken, clearStoredAuth } from '../contexts/AuthContext'
 
 const api = axios.create({
-  baseURL: '/v1/internal',
+  baseURL: `${import.meta.env.VITE_API_URL ?? ''}/v1/internal`,
   headers: { 'Content-Type': 'application/json' },
 })
 

@@ -440,7 +440,7 @@ ssh-keygen -t ed25519 -C "radiocheck-prod" -f ~/.ssh/id_ed25519 -N ""
 cat ~/.ssh/id_ed25519.pub
 # Adicionar em: GitHub → Settings → SSH Keys → New SSH key
 
-git clone git@github.com:SEU_USUARIO/radiocheck.git /home/radiocheck/radiocheck
+git clone git@github.com:Dereckkk1/Radiocheck.git /home/radiocheck/radiocheck
 cd /home/radiocheck/radiocheck
 ```
 
