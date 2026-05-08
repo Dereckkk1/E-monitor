@@ -148,11 +148,14 @@ func (s *Stations) List(ctx context.Context, in ListInput) (ListOutput, error) {
 	args := []any{}
 	n := 1
 
-	// Each token must match at least one of: name, city, state, band, frequency, metadata (coverage_cities etc.)
+	// Each token must match at least one of: name, city, state, band, frequency.
+	// metadata is intentionally excluded — it contains coverage_cities/states
+	// which made searches for a city return every station that *covers* it
+	// rather than stations *located* in it (paridade com /marketplace do E-radios).
 	for _, tok := range strings.Fields(in.Q) {
 		whereParts = append(whereParts, fmt.Sprintf(
-			`(name ILIKE '%%'||$%d||'%%' OR city ILIKE '%%'||$%d||'%%' OR state ILIKE '%%'||$%d||'%%' OR band ILIKE '%%'||$%d||'%%' OR COALESCE(frequency_mhz::text,'') ILIKE '%%'||$%d||'%%' OR metadata::text ILIKE '%%'||$%d||'%%')`,
-			n, n, n, n, n, n,
+			`(name ILIKE '%%'||$%d||'%%' OR city ILIKE '%%'||$%d||'%%' OR state ILIKE '%%'||$%d||'%%' OR band ILIKE '%%'||$%d||'%%' OR COALESCE(frequency_mhz::text,'') ILIKE '%%'||$%d||'%%')`,
+			n, n, n, n, n,
 		))
 		args = append(args, tok)
 		n++

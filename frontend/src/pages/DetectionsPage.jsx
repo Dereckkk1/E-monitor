@@ -5,6 +5,7 @@ import RSelect from '../components/RSelect'
 import DetectionsCalendar from '../components/DetectionsCalendar'
 import DayDetailModal from '../components/DayDetailModal'
 import { bucketDetections } from './detections/utils'
+import { tokenize, matchesAllTokens } from '../utils/search'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -184,6 +185,7 @@ export default function DetectionsPage() {
   )
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
   const [modalCell, setModalCell] = useState(null)
+  const [search, setSearch] = useState('')
 
   const { data: stationsResp } = useStations({ limit: 2000 })
   const stationCatalog = stationsResp?.data ?? []
@@ -218,6 +220,13 @@ export default function DetectionsPage() {
 
   const showDetections = !!selectedCampaignId
   const isLoadingData  = showDetections && (loadingDetections || isFetching)
+
+  // Só exibe detecções com evidência confirmada — pending/failed ficam ocultos
+  // até o áudio estar disponível, evitando contagens provisórias na grid.
+  const confirmedDetections = useMemo(
+    () => detections.filter(d => d.evidence_status === 'available'),
+    [detections]
+  )
 
   // ── Campaign change ───────────────────────────────────────────
   function handleCampaignChange(opt) {
@@ -275,6 +284,19 @@ export default function DetectionsPage() {
       .filter(s => ids.has(s.id))
       .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
   }, [selectedCampaignId, campaigns, stationCatalog])
+
+  const filteredTargetStations = useMemo(() => {
+    const tokens = tokenize(search)
+    if (tokens.length === 0) return targetStations
+    const fields = [
+      'name',
+      'city',
+      'state',
+      'band',
+      s => s.frequency_mhz != null ? String(s.frequency_mhz) : '',
+    ]
+    return targetStations.filter(s => matchesAllTokens(s, fields, tokens))
+  }, [targetStations, search])
 
   // ── Month navigation ──────────────────────────────────────────
   const currentMonth = currentMonthValue()
@@ -373,6 +395,23 @@ export default function DetectionsPage() {
               onChange={handleMonthChange}
             />
           </div>
+
+          <div className="period-divider" />
+
+          <div className="stations-search" style={{ maxWidth: 280, flex: '1 1 220px' }}>
+            <span className="stations-search-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+                <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+              </svg>
+            </span>
+            <input
+              className="input stations-search-input"
+              type="text"
+              placeholder="Buscar emissora, cidade…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
         </div>
       )}
 
@@ -381,12 +420,14 @@ export default function DetectionsPage() {
         <EmptyNoCampaign />
       ) : isLoadingData ? (
         <SkeletonCalendar />
-      ) : detections.length === 0 ? (
+      ) : confirmedDetections.length === 0 ? (
+        <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
+      ) : filteredTargetStations.length === 0 ? (
         <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
         <DetectionsCalendar
-          stations={targetStations}
-          detections={detections}
+          stations={filteredTargetStations}
+          detections={confirmedDetections}
           period={period}
           onCellClick={(station, dayKey) => setModalCell({ station, dayKey })}
         />
@@ -396,7 +437,7 @@ export default function DetectionsPage() {
         <DayDetailModal
           station={modalCell.station}
           dayKey={modalCell.dayKey}
-          buckets={bucketDetections(detections)}
+          buckets={bucketDetections(confirmedDetections)}
           onClose={() => setModalCell(null)}
         />
       )}

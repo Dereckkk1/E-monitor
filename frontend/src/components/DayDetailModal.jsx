@@ -10,6 +10,17 @@ import {
   stationLabel,
 } from '../pages/detections/utils'
 
+const COMMERCIAL_COLORS = [
+  '#16a34a', // verde
+  '#7c3aed', // roxo
+  '#2563eb', // azul
+  '#ea580c', // laranja
+  '#db2777', // rosa
+  '#0891b2', // turquesa
+  '#ca8a04', // âmbar
+  '#64748b', // cinza-azul
+]
+
 // Compact dd/mm/yyyy hh:mm display used in the retracted tooltip (§18.2.2).
 function formatRetractedAt(iso) {
   if (!iso) return ''
@@ -85,6 +96,16 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
   const list = detectionsFor(buckets, station.id, dayKey)
   const { primary, secondary } = stationLabel(station)
 
+  // Assign a color to each unique commercial in the order they first appear
+  const commercialColorMap = new Map()
+  let colorIdx = 0
+  for (const d of list) {
+    if (!commercialColorMap.has(d.commercial_id)) {
+      commercialColorMap.set(d.commercial_id, COMMERCIAL_COLORS[colorIdx % COMMERCIAL_COLORS.length])
+      colorIdx++
+    }
+  }
+
   return createPortal(
     <div className="day-detail-backdrop" onClick={onClose} role="dialog" aria-modal="true">
       <div className="day-detail-card" onClick={e => e.stopPropagation()}>
@@ -113,9 +134,11 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
             const retractedTooltip = retracted
               ? `Retratada em ${formatRetractedAt(d.retracted_at)} — versão maior detectada`
               : undefined
-            const itemStyle = retracted
-              ? { textDecoration: 'line-through', opacity: 0.55 }
-              : undefined
+            const accentColor = commercialColorMap.get(d.commercial_id)
+            const itemStyle = {
+              borderLeft: `3px solid ${accentColor}`,
+              ...(retracted ? { textDecoration: 'line-through', opacity: 0.55 } : {}),
+            }
             return (
             <div
               key={d.id}
@@ -124,7 +147,7 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
               title={retractedTooltip}
             >
               <div className="day-detail-time">{formatTimeOnly(d.detected_at)}</div>
-              <div className="day-detail-name">{d.commercial_name}</div>
+              <div className="day-detail-name" style={{ color: accentColor }}>{d.commercial_name}</div>
               <div className="day-detail-audio">
                 {d.evidence_status === 'available' ? (
                   <>
