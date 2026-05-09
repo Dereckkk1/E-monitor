@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import StationAvatar from './StationAvatar'
 import AudioPlayer from './AudioPlayer'
@@ -32,11 +32,10 @@ function formatRetractedAt(iso) {
 
 export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
   const [activePlayerId, setActivePlayerId] = useState(null)
-  // Cache of presigned evidence URLs keyed by detection id. Each entry is
-  // { url, expiresAt } where expiresAt is the absolute deadline returned by
-  // the API. We refresh when within 30s of expiry so playback / download
-  // never hits a stale signature mid-stream.
-  const [evidenceUrls, setEvidenceUrls] = useState({})
+  // Blob URLs keyed by detection id. Using a ref for synchronous cache
+  // lookups and state for triggering re-renders.
+  const [evidenceBlobUrls, setEvidenceBlobUrls] = useState({})
+  const blobUrlsRef = useRef({})
   const [loadingId, setLoadingId] = useState(null)
 
   useEffect(() => {
@@ -47,22 +46,29 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // ensureEvidenceUrl returns a usable presigned URL for the detection,
-  // fetching one on the first call and re-using the cached one until it's
-  // close to expiry. Throws on 4xx/5xx so callers can surface the failure.
-  const ensureEvidenceUrl = useCallback(async (id) => {
-    const cached = evidenceUrls[id]
-    if (cached && new Date(cached.expiresAt).getTime() > Date.now() + 30_000) {
-      return cached.url
+  // Revoke all blob URLs when the modal unmounts to free memory.
+  useEffect(() => {
+    return () => {
+      Object.values(blobUrlsRef.current).forEach(u => URL.revokeObjectURL(u))
     }
-    const { data } = await api.get(`/detections/${id}/evidence/url`)
-    setEvidenceUrls(prev => ({ ...prev, [id]: data }))
-    return data.url
-  }, [evidenceUrls])
+  }, [])
+
+  // ensureEvidenceUrl fetches the audio blob from the API proxy endpoint
+  // on first call, caches the resulting blob URL, and returns it on
+  // subsequent calls. Using the proxy avoids presigned MinIO URLs (which
+  // break in prod due to mixed-content / localhost addressing).
+  const ensureEvidenceUrl = useCallback(async (id) => {
+    if (blobUrlsRef.current[id]) return blobUrlsRef.current[id]
+    const resp = await api.get(`/detections/${id}/evidence`, { responseType: 'blob' })
+    const blobUrl = URL.createObjectURL(resp.data)
+    blobUrlsRef.current[id] = blobUrl
+    setEvidenceBlobUrls(prev => ({ ...prev, [id]: blobUrl }))
+    return blobUrl
+  }, [])
 
   async function handlePlay(id) {
     if (loadingId) return
-    if (evidenceUrls[id]?.url) {
+    if (evidenceBlobUrls[id]) {
       setActivePlayerId(id)
       return
     }
@@ -82,7 +88,7 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
       const url = await ensureEvidenceUrl(id)
       const a = document.createElement('a')
       a.href = url
-      a.download = `veiculacao-${id}.mp3`
+      a.download = `veiculacao-${id}.m4a`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -152,7 +158,7 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
                 {d.evidence_status === 'available' ? (
                   <>
                     <AudioPlayer
-                      src={evidenceUrls[d.id]?.url || ''}
+                      src={evidenceBlobUrls[d.id] || ''}
                       isPlaying={activePlayerId === d.id}
                       onPlay={() => handlePlay(d.id)}
                       onPause={() => setActivePlayerId(null)}
