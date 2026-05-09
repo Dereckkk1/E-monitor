@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"sync"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 	"radiocheck/internal/ingestor"
 	"radiocheck/internal/metrics"
 	"radiocheck/internal/observability"
-	"radiocheck/pkg/ringbuffer"
+	"radiocheck/internal/segments"
 )
 
 const (
@@ -66,6 +67,11 @@ type Supervisor struct {
 	healthEvents *catalog.HealthEvents
 	log          *zap.Logger
 
+	// segmentsRoot is the directory under which each station gets a
+	// per-station subdir for ffmpeg's segment muxer output. See
+	// docs/evidence-segments.md.
+	segmentsRoot string
+
 	mu               sync.Mutex
 	workers          map[uuid.UUID]*workerEntry // stationID → entry
 	lastStallRestart map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
@@ -84,6 +90,11 @@ type Supervisor struct {
 const dedupBufferRetention = 60 * time.Second
 
 // New constructs a Supervisor.
+//
+// segmentsRoot is the directory under which each station's worker creates a
+// subdir for ffmpeg's segment muxer to write evidence into. The directory
+// must exist and be writable; the supervisor creates per-station subdirs on
+// demand.
 func New(
 	db *pgxpool.Pool,
 	store *index.Store,
@@ -93,6 +104,7 @@ func New(
 	stations *catalog.Stations,
 	commercials *catalog.Commercials,
 	healthEvents *catalog.HealthEvents,
+	segmentsRoot string,
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
@@ -104,6 +116,7 @@ func New(
 		stations:         stations,
 		commercials:      commercials,
 		healthEvents:     healthEvents,
+		segmentsRoot:     segmentsRoot,
 		log:              log,
 		workers:          make(map[uuid.UUID]*workerEntry),
 		lastStallRestart: make(map[uuid.UUID]time.Time),
@@ -269,8 +282,16 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// f. Create new context with cancel.
 	workerCtx, cancel := context.WithCancel(ctx)
 
-	// g. Create AAC ring buffer for evidence (~5 min of ~1 chunk/100ms).
-	aacBuf := ringbuffer.NewByteRing(3000)
+	// g. Per-station segment dir for ffmpeg's evidence output. ffmpeg writes
+	//    rotating ADTS files there; the evidence service reads them back at
+	//    detection time. Created here so the dir is guaranteed to exist
+	//    before ffmpeg starts.
+	segmentsDir := segments.DirFor(s.segmentsRoot, stationID)
+	if err := os.MkdirAll(segmentsDir, 0o755); err != nil {
+		cancel()
+		return fmt.Errorf("supervisor: mkdir segments dir %s: %w", segmentsDir, err)
+	}
+	segmentsPattern := segments.FFmpegOutputPattern(s.segmentsRoot, stationID)
 
 	capturedStationID := stationID
 
@@ -416,19 +437,22 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		// 0.05 anterior rejeitava. Threshold absoluto (vindo de station_thresholds,
 		// default 5) e MinTemporalCoverage (0.15 = 4.5s sustentados com mesmo
 		// delta_bin) seguem como defesas principais contra falso positivo.
-		MinScoreCoverage:    0.02,
-		MinTemporalCoverage: 0.15,
-		ConfirmTimeout:      30 * time.Second,
-		AACBuffer:           aacBuf,
-		HeartbeatFn:         heartbeatFn,
-		OnStreamUp:          onStreamUp,
-		OnStreamDown:        onStreamDown,
+		MinScoreCoverage:      0.02,
+		MinTemporalCoverage:   0.15,
+		ConfirmTimeout:        30 * time.Second,
+		SegmentsOutputPattern: segmentsPattern,
+		HeartbeatFn:           heartbeatFn,
+		OnStreamUp:            onStreamUp,
+		OnStreamDown:          onStreamDown,
 	}
 	w := ingestor.NewWorker(cfg, s.store, s.nc, s.log)
 	entry.worker = w
 
-	// Register ByteRing with evidence service before worker starts.
-	s.evidence.Register(stationID, aacBuf)
+	// Register the segment dir with the evidence service before the worker
+	// (and thus ffmpeg) starts writing segments — guarantees that any
+	// detection's evidence lookup finds the path even if it fires before
+	// the first segment file is flushed.
+	s.evidence.Register(stationID, segmentsDir)
 
 	// Start goroutine (entry was already stored in the map above).
 	go w.Run(workerCtx)

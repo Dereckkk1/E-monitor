@@ -48,10 +48,12 @@ type WorkerConfig struct {
 	// the commercial's duration before a detection is emitted. This is the main
 	// false-positive defense — random audio cannot sustain delta-aligned hits.
 	MinTemporalCoverage float64
-	ConfirmTimeout      time.Duration // max detecting window (e.g. 30s)
-	// AACBuffer is an optional externally-owned ring buffer for AAC evidence.
-	// If nil, Run() creates its own internal buffer (backward-compatible).
-	AACBuffer *ringbuffer.ByteRing
+	ConfirmTimeout time.Duration // max detecting window (e.g. 30s)
+	// SegmentsOutputPattern is the absolute strftime path passed to ffmpeg's
+	// segment muxer; ffmpeg writes ADTS-AAC evidence files there at
+	// SegmentDuration cadence. The directory must already exist when the
+	// worker starts. See internal/segments.FFmpegOutputPattern.
+	SegmentsOutputPattern string
 	// HeartbeatFn is called every ~30s while PCM audio is flowing.
 	// Nil means no heartbeat. Used by the supervisor to update last_health_check.
 	HeartbeatFn func()
@@ -180,7 +182,7 @@ func (w *Worker) Run(ctx context.Context) {
 		w.streamUpFired = false
 
 		// 1. Start ffmpeg.
-		proc, err := StartFFmpeg(ctx, w.cfg.StreamURL, w.log)
+		proc, err := StartFFmpeg(ctx, w.cfg.StreamURL, w.cfg.SegmentsOutputPattern, w.log)
 		if err != nil {
 			w.log.Error("ffmpeg start failed", zap.String("stationID", stationIDStr), zap.Error(err))
 			// Fire OnStreamDown on the FIRST failure of an outage. The supervisor
@@ -197,14 +199,10 @@ func (w *Worker) Run(ctx context.Context) {
 			continue
 		}
 
-		// 2. Create ring buffers.
-		// Use externally-provided AACBuffer if available (allows the supervisor to
-		// register it with the evidence service before passing it here).
-		aacBuf := w.cfg.AACBuffer
-		if aacBuf == nil {
-			aacBuf = ringbuffer.NewByteRing(3000) // ~5 min at ~1 chunk/100ms
-		}
-		pcmBuf := ringbuffer.NewPCMRing(16000 * 35)      // 35 seconds of PCM
+		// 2. Create the PCM ring used by the matcher. AAC evidence is written
+		//    by ffmpeg directly to disk via the segment muxer (see
+		//    SegmentsOutputPattern + internal/segments) — no in-memory ring.
+		pcmBuf := ringbuffer.NewPCMRing(16000 * 35) // 35 seconds of PCM
 
 		// 3. Create state machines: one per commercial short ID.
 		// Snapshot the threshold *once* per connect attempt for the state
@@ -229,24 +227,10 @@ func (w *Worker) Run(ctx context.Context) {
 			)
 		}
 
-		var wg sync.WaitGroup
-
-		// 4. Launch goroutine: AAC reader.
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w.runAACReader(proc.AACReader(), aacBuf)
-		}()
-
-		// 5. Launch goroutine: PCM reader + matcher.
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w.runPCMReader(proc.PCMReader(), pcmBuf, machines, stationIDStr)
-		}()
-
-		// 6. Wait for both goroutines to finish.
-		wg.Wait()
+		// 4. Run PCM reader + matcher in this goroutine. The AAC stream is
+		//    handled inside ffmpeg via the segment muxer; nothing for us to
+		//    pump in user-space.
+		w.runPCMReader(proc.PCMReader(), pcmBuf, machines, stationIDStr)
 
 		// 7. Stop ffmpeg (idempotent — kills if still running, reaps process).
 		proc.Stop()
@@ -274,23 +258,6 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		}
 		backoff = min(backoff*2, maxBackoff)
-	}
-}
-
-// runAACReader reads AAC chunks from r and stores them in aacBuf.
-func (w *Worker) runAACReader(r io.Reader, aacBuf *ringbuffer.ByteRing) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			aacBuf.Write(buf[:n], time.Now())
-		}
-		if err != nil {
-			if err != io.EOF {
-				w.log.Warn("aac reader error", zap.Error(err))
-			}
-			return
-		}
 	}
 }
 

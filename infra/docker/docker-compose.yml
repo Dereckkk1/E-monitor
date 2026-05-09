@@ -104,6 +104,7 @@ services:
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       S3_REGION: us-east-1
       MASTERS_PATH: /data/masters
+      SEGMENTS_PATH: /data/segments
       API_PORT: "8080"
       CLAP_VERIFIER_URL: http://clap-verifier:8080
       # OpenTelemetry tracing (§15.3). Empty endpoint disables tracing
@@ -123,6 +124,7 @@ services:
       - "${API_PORT}:8080"
     volumes:
       - mastersdata:/data/masters
+      - segmentsdata:/data/segments
       - ../../audio-refs:/audio-refs:ro
     depends_on:
       postgres:
@@ -224,6 +226,27 @@ services:
                       # only speak HTTP, e.g. browser-based agents).
       - "16686:16686" # Jaeger UI
 
+  # ── Evidence segment cleanup (rolling retention) ─────────────────────────
+  # ffmpeg writes ADTS segments to /data/segments/<station>/ continuously;
+  # this sidecar deletes files older than the retention window so disk usage
+  # stays bounded. 60 minutes is plenty: the longest evidence window we
+  # extract is ~3 minutes (60s pre + 60s commercial + 60s post). Cron runs
+  # every 5 minutes — the segments are rotated every 30s by ffmpeg, so 5
+  # minutes is fine-grained enough to never accumulate noticeable backlog.
+  segments-cleanup:
+    image: alpine:3.19
+    volumes:
+      - segmentsdata:/data/segments
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          find /data/segments -type f -name "*.aac" -mmin +60 -delete 2>/dev/null || true
+          find /data/segments -type d -empty -mindepth 1 -delete 2>/dev/null || true
+          sleep 300
+        done
+    restart: unless-stopped
+
   # ── Fase 2: backup diario do PG ──────────────────────────────────────────
   backup:
     image: postgres:16-alpine
@@ -242,6 +265,7 @@ volumes:
   pg_archive:
   miniodata:
   mastersdata:
+  segmentsdata:
   clap-models:
   grafana-data:
   backup-data:

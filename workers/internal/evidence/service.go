@@ -19,8 +19,8 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
 	"radiocheck/internal/observability"
+	"radiocheck/internal/segments"
 	"radiocheck/internal/storage"
-	"radiocheck/pkg/ringbuffer"
 )
 
 type detectionEvent struct {
@@ -33,8 +33,9 @@ type detectionEvent struct {
 	EvidenceWindowEnd   string  `json:"evidence_window_end"`
 }
 
-// Service listens for confirmed detections, extracts audio evidence from ring
-// buffers, uploads it to S3, and persists detection records to Postgres.
+// Service listens for confirmed detections, extracts audio evidence from the
+// per-station segment directory ffmpeg writes to, uploads it to S3, and
+// persists detection records to Postgres.
 type Service struct {
 	db         *pgxpool.Pool
 	store      *storage.Client
@@ -42,7 +43,10 @@ type Service struct {
 	detections *catalog.Detections
 	log        *zap.Logger
 	mu         sync.RWMutex
-	buffers    map[uuid.UUID]*ringbuffer.ByteRing
+	// segmentDirs maps station UUIDs to the absolute filesystem directory
+	// where ffmpeg is dropping ADTS-AAC segment files. Populated by the
+	// supervisor via Register / Unregister as workers come up and down.
+	segmentDirs map[uuid.UUID]string
 }
 
 // NewService constructs a ready-to-use evidence Service.
@@ -54,28 +58,28 @@ func NewService(
 	log *zap.Logger,
 ) *Service {
 	return &Service{
-		db:         db,
-		store:      store,
-		nc:         nc,
-		detections: detections,
-		log:        log,
-		buffers:    make(map[uuid.UUID]*ringbuffer.ByteRing),
+		db:          db,
+		store:       store,
+		nc:          nc,
+		detections:  detections,
+		log:         log,
+		segmentDirs: make(map[uuid.UUID]string),
 	}
 }
 
-// Register associates a ring buffer with a station so that evidence can be
-// extracted when a detection is confirmed.
-func (s *Service) Register(stationID uuid.UUID, buf *ringbuffer.ByteRing) {
+// Register associates the on-disk segment directory of a station so that
+// evidence can be extracted when a detection is confirmed.
+func (s *Service) Register(stationID uuid.UUID, dir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.buffers[stationID] = buf
+	s.segmentDirs[stationID] = dir
 }
 
-// Unregister removes the ring buffer association for a station.
+// Unregister removes the segment directory association for a station.
 func (s *Service) Unregister(stationID uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.buffers, stationID)
+	delete(s.segmentDirs, stationID)
 }
 
 // Subscribe begins consuming "detections.confirmed" NATS messages.
@@ -211,30 +215,58 @@ func (s *Service) processEvidence(
 	)
 	defer span.End()
 
-	// Small margin so we don't race the buffer writer.
-	if delay := time.Until(windowEnd) + 2*time.Second; delay > 0 {
+	// Wait until ffmpeg has had time to flush the segment that contains
+	// windowEnd. SegmentDuration + a couple of seconds of margin is enough:
+	// the segment muxer rotates on wall-clock boundaries, so windowEnd is
+	// guaranteed to be on disk by then.
+	if delay := time.Until(windowEnd) + segments.SegmentDuration + 2*time.Second; delay > 0 {
 		time.Sleep(delay)
 	}
 
 	s.mu.RLock()
-	buf := s.buffers[stationID]
+	dir := s.segmentDirs[stationID]
 	s.mu.RUnlock()
 
-	if buf == nil {
-		span.SetStatus(codes.Error, "no buffer")
-		s.markFailed(ctx, detectionID, detectedAt, "no buffer")
+	if dir == "" {
+		span.SetStatus(codes.Error, "no segment dir")
+		s.markFailed(ctx, detectionID, detectedAt, "no segment dir")
 		return
 	}
 
-	_, extractSpan := observability.Tracer().Start(ctx, "evidence.extract_buffer")
-	aacData := buf.Extract(windowStart, windowEnd)
-	extractSpan.SetAttributes(attribute.Int("bytes", len(aacData)))
-	extractSpan.End()
-	if len(aacData) == 0 {
-		span.SetStatus(codes.Error, "buffer extract empty")
-		s.markFailed(ctx, detectionID, detectedAt, "buffer extract empty")
+	_, extractSpan := observability.Tracer().Start(ctx, "evidence.extract_segments")
+	res, err := segments.Extract(dir, windowStart, windowEnd)
+	if err != nil {
+		extractSpan.RecordError(err)
+		extractSpan.SetStatus(codes.Error, err.Error())
+		extractSpan.End()
+		s.log.Error("evidence: segment extract failed",
+			zap.String("detection_id", detectionID.String()),
+			zap.String("dir", dir),
+			zap.Time("from", windowStart),
+			zap.Time("to", windowEnd),
+			zap.Error(err),
+		)
+		s.markFailed(ctx, detectionID, detectedAt, "segment extract failed")
 		return
 	}
+	extractSpan.SetAttributes(
+		attribute.Int("bytes", len(res.Data)),
+		attribute.Float64("covered_fraction", res.CoveredFraction),
+		attribute.Bool("partial", res.Partial),
+	)
+	extractSpan.End()
+	if len(res.Data) == 0 {
+		span.SetStatus(codes.Error, "segment extract empty")
+		s.markFailed(ctx, detectionID, detectedAt, "segment extract empty")
+		return
+	}
+	if res.Partial {
+		s.log.Warn("evidence: partial segment coverage",
+			zap.String("detection_id", detectionID.String()),
+			zap.Float64("covered_fraction", res.CoveredFraction),
+		)
+	}
+	aacData := res.Data
 
 	_, encodeSpan := observability.Tracer().Start(ctx, "evidence.ffmpeg_encode")
 	m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)

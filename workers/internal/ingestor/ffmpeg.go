@@ -11,40 +11,51 @@ import (
 )
 
 // FFmpegProcess wraps a running ffmpeg subprocess.
-// It outputs to two separate pipes using -f tee:
-//   - pipe:3 (ExtraFiles[0]): ADTS AAC evidence stream
-//   - pipe:4 (ExtraFiles[1]): f32le PCM analysis stream (16kHz mono)
+//
+// ffmpeg is invoked with two outputs:
+//   - The ADTS-AAC evidence stream is written DIRECTLY to disk via the
+//     segment muxer (one rotating file every SegmentDuration seconds, named
+//     by wall-clock strftime). The Go side never reads these bytes through a
+//     pipe — see internal/segments for the read path.
+//   - The f32le PCM analysis stream is read from pipe:3 by the matcher.
+//
+// We dropped pipe:3 for AAC because keeping the evidence in an in-memory
+// ring buffer keyed on time.Now() lost audio whenever ffmpeg reconnected,
+// the worker restarted, or wall-clock drift accumulated against the AAC
+// arrival timestamps. Anchoring evidence to disk and to ffmpeg's own
+// stream-time PTS makes the capture survive process restarts and
+// reconnects, and produces files an operator can `ffplay` directly.
 type FFmpegProcess struct {
 	cmd     *exec.Cmd
-	aacRead *os.File // pipe:3 — ADTS AAC evidence stream (read end)
-	pcmRead *os.File // pipe:4 — f32le PCM analysis stream (read end)
+	pcmRead *os.File // pipe:3 — f32le PCM analysis stream (read end)
 	log     *zap.Logger
 }
 
 // StartFFmpeg launches ffmpeg for the given stream URL.
-// Returns the process with two readable streams:
-//   - AACReader(): ADTS AAC evidence stream (pipe:3)
-//   - PCMReader(): raw float32 PCM at 16kHz mono (pipe:4)
+//
+// segmentsDir must already exist; ffmpeg will write rotating ADTS files
+// named with strftime there (see internal/segments.FFmpegOutputPattern for
+// the path used by callers).
 //
 // The context is passed to exec.CommandContext but does NOT automatically
 // kill the process on cancellation. Call Stop() to terminate the subprocess.
-func StartFFmpeg(ctx context.Context, streamURL string, log *zap.Logger) (*FFmpegProcess, error) {
-	// Create pipes for both outputs
-	aacRead, aacWrite, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("create aac pipe: %w", err)
+func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, log *zap.Logger) (*FFmpegProcess, error) {
+	if segmentsOutputPattern == "" {
+		return nil, fmt.Errorf("ffmpeg: segmentsOutputPattern is required")
 	}
 
 	pcmRead, pcmWrite, err := os.Pipe()
 	if err != nil {
-		aacRead.Close()
-		aacWrite.Close()
 		return nil, fmt.Errorf("create pcm pipe: %w", err)
 	}
 
-	// Two separate outputs on pipe:3 and pipe:4:
-	// pipe:3 → ADTS AAC passthrough (evidence, no re-encode)
-	// pipe:4 → f32le PCM 16kHz mono (analysis)
+	// Two outputs:
+	//   1. Segment muxer → disk (evidence). -segment_atclocktime aligns
+	//      rotation with multiples of segment_time from wall-clock zero so
+	//      file boundaries are predictable. -reset_timestamps starts each
+	//      file's PTS at zero, which is what the readers expect when they
+	//      `cat`-concat. -strftime expands %Y%m%d-%H%M%S in the filename.
+	//   2. f32le PCM @ 16kHz mono → pipe:3 (analysis).
 	args := []string{
 		"-y",
 		"-reconnect", "1",
@@ -54,34 +65,41 @@ func StartFFmpeg(ctx context.Context, streamURL string, log *zap.Logger) (*FFmpe
 		"-timeout", "10000000",
 		"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
 		"-i", streamURL,
-		"-map", "0:a:0", "-c:a", "copy", "-f", "adts", "pipe:3",
-		"-map", "0:a:0", "-ar", "16000", "-ac", "1", "-f", "f32le", "pipe:4",
+
+		"-map", "0:a:0",
+		"-c:a", "copy",
+		"-f", "segment",
+		"-segment_time", "30",
+		"-segment_format", "adts",
+		"-segment_atclocktime", "1",
+		"-reset_timestamps", "1",
+		"-strftime", "1",
+		segmentsOutputPattern,
+
+		"-map", "0:a:0",
+		"-ar", "16000",
+		"-ac", "1",
+		"-f", "f32le",
+		"pipe:3",
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 
-	// ExtraFiles adds file descriptors starting at 3.
-	// pipe:3 in ffmpeg maps to ExtraFiles[0] (AAC write end)
-	// pipe:4 in ffmpeg maps to ExtraFiles[1] (PCM write end)
-	cmd.ExtraFiles = []*os.File{aacWrite, pcmWrite}
+	// ExtraFiles[0] becomes pipe:3 in ffmpeg-land — the PCM write end.
+	cmd.ExtraFiles = []*os.File{pcmWrite}
 
-	// Start the process
 	if err := cmd.Start(); err != nil {
-		aacRead.Close()
-		aacWrite.Close()
 		pcmRead.Close()
 		pcmWrite.Close()
 		return nil, fmt.Errorf("ffmpeg start: %w", err)
 	}
 
-	// Close write ends in parent — ffmpeg owns them now.
-	// Closing these allows ffmpeg to detect EOF when it finishes writing.
-	aacWrite.Close()
+	// ffmpeg owns the write end now; closing here lets it observe EOF when
+	// it shuts down.
 	pcmWrite.Close()
 
 	return &FFmpegProcess{
 		cmd:     cmd,
-		aacRead: aacRead,
 		pcmRead: pcmRead,
 		log:     log,
 	}, nil
@@ -92,18 +110,12 @@ func (p *FFmpegProcess) PCMReader() io.Reader {
 	return p.pcmRead
 }
 
-// AACReader returns the pipe reader for ADTS AAC evidence stream.
-func (p *FFmpegProcess) AACReader() io.Reader {
-	return p.aacRead
-}
-
 // Stop terminates the ffmpeg process and closes all pipes.
 // It calls Process.Kill() to terminate the subprocess, then waits for it to exit.
 func (p *FFmpegProcess) Stop() {
 	if p.cmd.Process != nil {
 		p.cmd.Process.Kill()
 	}
-	p.aacRead.Close()
 	p.pcmRead.Close()
 	_ = p.cmd.Wait() // reap the process
 }
