@@ -10,7 +10,7 @@ function blockMsForWindow(windowMs) {
 // ── Convert raw events into contiguous segments ───────────────────────────────
 function eventsToSegments(events, periodStart, periodEnd) {
   if (!events || events.length === 0) {
-    return [{ start: periodStart, end: periodEnd, type: 'unknown' }]
+    return [{ start: periodStart, end: periodEnd, type: 'up' }]
   }
 
   const sorted = [...events].sort((a, b) => new Date(a.event_at) - new Date(b.event_at))
@@ -22,7 +22,7 @@ function eventsToSegments(events, periodStart, periodEnd) {
     if (evAt <= cursor) continue
 
     if (evAt > cursor) {
-      segments.push({ start: cursor, end: evAt, type: 'unknown' })
+      segments.push({ start: cursor, end: evAt, type: 'up' })
     }
 
     if (ev.event_type === 'down') {
