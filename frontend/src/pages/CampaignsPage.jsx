@@ -5,6 +5,7 @@ import {
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
 } from '../api/hooks'
+import api from '../api/client'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
@@ -333,9 +334,17 @@ function StationPickerDropdown({ commercial, campaignStationIds, allStations, an
 function CommercialRow({ commercial, campaignStationIds, allStations }) {
   const [anchorRect, setAnchorRect] = useState(null)
   const [playing, setPlaying] = useState(false)
+  const [audioBlobUrl, setAudioBlobUrl] = useState(null)
+  const [audioLoading, setAudioLoading] = useState(false)
+  const [downloadLoading, setDownloadLoading] = useState(false)
   const btnRef = useRef(null)
   const audioRef = useRef(null)
   const deleteCommercial = useDeleteCommercial()
+
+  // Revoke blob URL on unmount to free memory.
+  useEffect(() => {
+    return () => { if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl) }
+  }, [audioBlobUrl])
 
   function openPicker() {
     if (anchorRect) { setAnchorRect(null); return }
@@ -359,16 +368,55 @@ function CommercialRow({ commercial, campaignStationIds, allStations }) {
     })
   }
 
-  const audioSrc = `${import.meta.env.VITE_API_URL ?? ''}/v1/internal/commercials/${commercial.id}/audio`
-  const downloadHref = `${audioSrc}?download=1`
+  // fetchAudioBlob fetches the master audio with JWT auth and returns a blob URL.
+  // The <audio> element cannot send Authorization headers directly, so we go
+  // through the axios client (which injects the token) and create an object URL.
+  async function fetchAudioBlob() {
+    if (audioBlobUrl) return audioBlobUrl
+    const resp = await api.get(`/commercials/${commercial.id}/audio`, { responseType: 'blob' })
+    const url = URL.createObjectURL(resp.data)
+    setAudioBlobUrl(url)
+    return url
+  }
 
-  function togglePlay() {
-    setPlaying(p => !p)
+  async function togglePlay() {
+    if (playing) { setPlaying(false); return }
+    if (audioLoading) return
+    setAudioLoading(true)
+    try {
+      await fetchAudioBlob()
+      setPlaying(true)
+    } catch {
+      window.alert('Não foi possível carregar o áudio.')
+    } finally {
+      setAudioLoading(false)
+    }
+  }
+
+  async function handleDownload() {
+    if (downloadLoading) return
+    setDownloadLoading(true)
+    try {
+      const url = await fetchAudioBlob()
+      const ext = commercial.master_storage_path?.split('.').pop() ?? 'mp3'
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${commercial.title}.${ext}`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      window.alert('Não foi possível baixar o áudio.')
+    } finally {
+      setDownloadLoading(false)
+    }
   }
 
   useEffect(() => {
     if (playing && audioRef.current) {
       audioRef.current.play().catch(() => setPlaying(false))
+    } else if (!playing && audioRef.current) {
+      audioRef.current.pause()
     }
   }, [playing])
 
@@ -440,18 +488,21 @@ function CommercialRow({ commercial, campaignStationIds, allStations }) {
               onClick={togglePlay}
               type="button"
               title={playing ? 'Parar' : 'Ouvir'}
+              disabled={audioLoading}
               style={{ color: playing ? 'var(--c-action)' : 'var(--c-text-2)' }}
             >
               {playing ? <IconStop /> : <IconPlay />}
             </button>
-            <a
+            <button
               className="btn btn-icon btn-sm"
-              href={downloadHref}
+              onClick={handleDownload}
+              type="button"
               title="Baixar"
-              style={{ color: 'var(--c-text-2)', textDecoration: 'none' }}
+              disabled={downloadLoading}
+              style={{ color: 'var(--c-text-2)' }}
             >
               <IconDownload />
-            </a>
+            </button>
             <button
               className="btn btn-icon btn-danger-ghost btn-sm"
               onClick={handleDelete}
@@ -469,7 +520,7 @@ function CommercialRow({ commercial, campaignStationIds, allStations }) {
           <td colSpan={5} style={{ padding: '6px 12px', background: 'var(--c-surface-2)' }}>
             <audio
               ref={audioRef}
-              src={audioSrc}
+              src={audioBlobUrl ?? ''}
               controls
               onEnded={() => setPlaying(false)}
               style={{ width: '100%', height: 32 }}
