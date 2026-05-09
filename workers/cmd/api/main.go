@@ -22,6 +22,7 @@ import (
 	"radiocheck/internal/events"
 	"radiocheck/internal/index"
 	"radiocheck/internal/observability"
+	"radiocheck/internal/sharing"
 	"radiocheck/internal/storage"
 	"radiocheck/internal/supervisor"
 	"radiocheck/internal/webhook"
@@ -104,6 +105,17 @@ func main() {
 		log.Fatalf("index loader subscribe: %v", err)
 	}
 	defer indexSub.Unsubscribe() //nolint:errcheck
+
+	// Shared-hash detection (§18.2.2 follow-up). Subscribes to
+	// fingerprint.shared-scan, runs MatchWindow against the catalog, flags
+	// is_shared on overlapping ranges, then republishes index.reload so the
+	// in-memory index picks up the new flags. See docs/shared-hash-detection.md.
+	sharingSubscriber := sharing.NewSubscriber(pool, nc, logger)
+	sharingSub, err := sharingSubscriber.Subscribe(ctx)
+	if err != nil {
+		log.Fatalf("sharing subscribe: %v", err)
+	}
+	defer sharingSub.Unsubscribe() //nolint:errcheck
 
 	// Evidence service.
 	evidSvc := evidence.NewService(pool, s3Client, nc, detections, logger)
