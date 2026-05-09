@@ -672,7 +672,7 @@ docker compose exec postgres psql -U radiocheck -d radiocheck \
 
 # Backfill shared-hash detection (rodar uma vez, depois de 0015 entrar):
 # ver docs/shared-hash-detection.md
-docker compose exec api /app/backfill-shared-hashes --dsn "$DATABASE_URL"
+docker compose exec api backfill-shared-hashes --dsn "$DATABASE_URL"
 
 # Bucket MinIO criado
 docker compose exec minio mc ls local/

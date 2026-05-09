@@ -24,6 +24,13 @@ const (
 	// deliverer fans the event out to subscribers and the catalog updates
 	// detections.retracted_at.
 	SubjectDetectionRetracted = "detections.retracted"
+	// SubjectFingerprintSharedScan triggers the shared-hash detection pass
+	// for a freshly-persisted commercial. Published by the Python fingerprint
+	// service AFTER write_hashes + mark_status('ready'), consumed by the api
+	// process which decodes the master, runs MatchWindow against the existing
+	// catalog, and flags fingerprint_hashes.is_shared on overlapping ranges.
+	// See docs/shared-hash-detection.md.
+	SubjectFingerprintSharedScan = "fingerprint.shared-scan"
 )
 
 func Connect(url string) (*nats.Conn, error) {

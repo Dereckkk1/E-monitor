@@ -24,6 +24,11 @@ log = logging.getLogger("fingerprint")
 
 SUBJECT_GENERATE = "fingerprint.generate"
 SUBJECT_INDEX_RELOAD = "index.reload"
+# Shared-hash detection (§18.2.2 follow-up). After write_hashes +
+# mark_status('ready') we publish here so the api process can flag
+# fingerprint_hashes.is_shared on regions that overlap with existing
+# commercials. See docs/shared-hash-detection.md.
+SUBJECT_SHARED_SCAN = "fingerprint.shared-scan"
 
 
 async def handle_generate(msg, pool: asyncpg.Pool, nc: nats.NATS):
@@ -72,6 +77,14 @@ async def handle_generate(msg, pool: asyncpg.Pool, nc: nats.NATS):
 
     reload_payload = json.dumps({"commercial_id": commercial_id}).encode()
     await nc.publish(SUBJECT_INDEX_RELOAD, reload_payload)
+
+    # Trigger shared-hash detection so this commercial cannot false-positive
+    # on content it shares with another commercial in the catalog. The api
+    # process subscribes to SUBJECT_SHARED_SCAN, runs the scan, and republishes
+    # SUBJECT_INDEX_RELOAD when it finishes — so the matching index reloads a
+    # second time with the new is_shared flags.
+    await nc.publish(SUBJECT_SHARED_SCAN, reload_payload)
+
     log.info("done commercial_id=%s hashes=%d", commercial_id, total_hashes)
 
 
