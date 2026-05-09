@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"radiocheck/internal/fingerprint"
+	"radiocheck/internal/sharing"
 )
 
 func main() {
@@ -143,5 +144,16 @@ func main() {
 	}
 	fmt.Printf("       inserted rows      : %d (variant=%d, rate_id=%d, replace=%v)\n",
 		inserted, variant, rateID, replace)
+
+	// Run shared-hash detection so this commercial cannot false-positive on
+	// content it shares with anything else in the catalog. Failures here are
+	// logged but do not unwind the persist — the fingerprint is still usable
+	// (just with all-unique scoring), and the next CLI run picks up missed
+	// flagging.
+	if err := sharing.MarkSharedHashes(ctx, pool, commercial.ID, input); err != nil {
+		fmt.Fprintln(os.Stderr, "shared-hash flagging failed (non-fatal):", err)
+	} else {
+		fmt.Println("       shared-hash flag    : OK")
+	}
 	fmt.Println("done.")
 }
