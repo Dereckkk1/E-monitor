@@ -11,11 +11,11 @@ import (
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 type HealthEvent struct {
-	ID              int64
-	StationID       uuid.UUID
-	EventType       string // "up" | "down"
-	EventAt         time.Time
-	DurationSeconds *int
+	ID              int64     `json:"id"`
+	StationID       uuid.UUID `json:"station_id"`
+	EventType       string    `json:"event_type"` // "up" | "down"
+	EventAt         time.Time `json:"event_at"`
+	DurationSeconds *int      `json:"duration_seconds"`
 }
 
 type DailySummary struct {
