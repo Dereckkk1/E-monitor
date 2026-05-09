@@ -106,6 +106,78 @@ func TestMatchWindow_EmptyIndex(t *testing.T) {
 	assert.Empty(t, results, "empty index should always produce 0 results")
 }
 
+// TestMatchWindow_UniqueScoreExcludesSharedHits seeds a store where commercial 1
+// owns a set of unique hashes plus a set of shared hashes (the same hash_value
+// appears under commercial 2 with IsShared=true on both sides). When the live
+// audio matches both pools, MatchResult.Score should count every hit but
+// MatchResult.UniqueScore should drop the shared ones. This is the engine-side
+// guarantee that the state machine relies on to suppress false-positive
+// confirmations of a commercial whose only matches come from a sting it shares
+// with the commercial actually playing.
+func TestMatchWindow_UniqueScoreExcludesSharedHits(t *testing.T) {
+	const (
+		freqHz     = 770.0
+		sampleRate = 16000
+		numSamples = 160000
+		ownerID    = int32(101)
+		otherID    = int32(202)
+		threshold  = 5
+	)
+
+	samples := makeSineWave(freqHz, sampleRate, numSamples)
+	filtered := audio.ApplyHighPass(samples, 100.0, sampleRate)
+	normalized := audio.NormalizeRMS(filtered, -20.0)
+	refHashes := audio.GenerateHashes(audio.PickPeaks(audio.STFT(normalized)))
+	require.NotEmpty(t, refHashes, "reference signal must produce hashes")
+
+	// Build the index by hand: every reference hash gets two postings —
+	// one for ownerID with IsShared=true, one for otherID with IsShared=true
+	// (i.e. the hash is shared between two commercials). Half the hashes get
+	// an EXTRA owner-only posting flagged IsShared=false, simulating a portion
+	// of the master that is unique to ownerID.
+	idx := make(index.Index)
+	for i, h := range refHashes {
+		idx[h.Value] = append(idx[h.Value],
+			index.Entry{CommercialShortID: ownerID, TimeFrame: int32(h.TimeFrame), IsShared: true},
+			index.Entry{CommercialShortID: otherID, TimeFrame: int32(h.TimeFrame), IsShared: true},
+		)
+		if i%2 == 0 {
+			idx[h.Value] = append(idx[h.Value],
+				index.Entry{CommercialShortID: ownerID, TimeFrame: int32(h.TimeFrame), IsShared: false},
+			)
+		}
+	}
+	store := index.New()
+	store.Swap(idx)
+
+	results := MatchWindow(samples, store, threshold, 0.0)
+	require.NotEmpty(t, results, "self-match should produce results for both commercials")
+
+	var owner, other *MatchResult
+	for i := range results {
+		switch results[i].CommercialShortID {
+		case ownerID:
+			owner = &results[i]
+		case otherID:
+			other = &results[i]
+		}
+	}
+	require.NotNil(t, owner, "owner commercial must be among results")
+	require.NotNil(t, other, "other commercial must be among results")
+
+	// Owner has shared + unique postings → UniqueScore must be >0 and < Score.
+	assert.Greater(t, owner.UniqueScore, 0,
+		"owner has unique-flagged postings; UniqueScore must be positive")
+	assert.Less(t, owner.UniqueScore, owner.Score,
+		"owner's UniqueScore must drop the shared hits below the total Score")
+
+	// Other has only shared postings → UniqueScore must be exactly 0.
+	assert.Equal(t, 0, other.UniqueScore,
+		"other commercial has only shared postings; UniqueScore must be 0")
+	assert.Greater(t, other.Score, 0,
+		"other commercial still contributes to Score (the histogram peak survives)")
+}
+
 // TestMatchWindow_DynamicThreshold confirms that callers can drive MatchWindow
 // with thresholds resolved at runtime (the supervisor reads station_thresholds
 // every 5 min and pushes the new value into a *atomic.Int32 the worker reads

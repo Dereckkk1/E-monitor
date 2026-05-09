@@ -10,6 +10,12 @@ type Entry struct {
 	VariantID         uint8 // broadcast simulation variant (0=original, 1=light, 2=medium, 3=heavy)
 	RateID            uint8 // time-stretch rate variant
 	TimeFrame         int32
+	// IsShared is true when this hash_value also appears under another
+	// commercial. Shared hashes still contribute to the histogram peak (so
+	// degraded streams keep matching), but the state machine ignores them
+	// when deciding whether enough unique evidence has accumulated to
+	// confirm a detection — see workers/internal/match/engine.go.
+	IsShared bool
 }
 
 // Index maps hash values to their entry lists.

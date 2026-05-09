@@ -43,6 +43,7 @@ func TestStateMachine_ConfirmsAfterCoverage(t *testing.T) {
 		result := MatchResult{
 			CommercialShortID: int32(42),
 			Score:             10,
+			UniqueScore:       10,
 			OffsetFrames:      i,
 		}
 		cd := sm.Update(result, now.Add(time.Duration(i)*time.Millisecond))
@@ -77,6 +78,7 @@ func TestStateMachine_TimeoutResetsToIdle(t *testing.T) {
 	result := MatchResult{
 		CommercialShortID: int32(42),
 		Score:             10,
+		UniqueScore:       10,
 		OffsetFrames:      0,
 	}
 	cd := sm.Update(result, now)
@@ -100,6 +102,7 @@ func TestStateMachine_IdleWithLowScore(t *testing.T) {
 	result := MatchResult{
 		CommercialShortID: int32(42),
 		Score:             2,
+		UniqueScore:       2,
 		OffsetFrames:      0,
 	}
 	cd := sm.Update(result, now)
@@ -125,6 +128,7 @@ func TestStateMachine_IgnoresMatchDuringCooldown(t *testing.T) {
 		result := MatchResult{
 			CommercialShortID: int32(42),
 			Score:             10,
+			UniqueScore:       10,
 			OffsetFrames:      i,
 		}
 		if cd := sm.Update(result, now.Add(time.Duration(i)*time.Millisecond)); cd != nil {
@@ -137,9 +141,67 @@ func TestStateMachine_IgnoresMatchDuringCooldown(t *testing.T) {
 	result := MatchResult{
 		CommercialShortID: int32(42),
 		Score:             10,
+		UniqueScore:       10,
 		OffsetFrames:      5,
 	}
 	cd := sm.Update(result, now.Add(50*time.Millisecond))
 	assert.Nil(t, cd, "match during cooldown must not produce a detection")
 	assert.Equal(t, StateCooldown, sm.State(), "state must remain Cooldown")
+}
+
+// TestStateMachine_SharedOnlyMatchesDoNotConfirm guards the false-positive fix:
+// when every hit comes from hashes shared with another commercial (Score is
+// high but UniqueScore is 0), the state machine must stay Idle and never emit
+// a ConfirmedDetection. This is the in-process counterpart of the AMB30/JINGLE
+// scenario where the last 6s sting of one commercial drives Score on the other.
+func TestStateMachine_SharedOnlyMatchesDoNotConfirm(t *testing.T) {
+	sm := newTestStateMachine(10, 5, 0.8)
+	now := time.Now()
+
+	// Twenty windows with Score=10 (above threshold) but UniqueScore=0. With
+	// pre-fix behaviour, coverage would advance and confirmation would fire
+	// somewhere around window 8. With the unique-score gate it must stay Idle.
+	for i := 0; i < 20; i++ {
+		result := MatchResult{
+			CommercialShortID: int32(42),
+			Score:             10,
+			UniqueScore:       0,
+			OffsetFrames:      i,
+		}
+		cd := sm.Update(result, now.Add(time.Duration(i)*time.Millisecond))
+		require.Nil(t, cd, "window %d: shared-only matches must not confirm", i)
+	}
+	assert.Equal(t, StateIdle, sm.State(),
+		"state must remain Idle when all matches come from shared hashes")
+}
+
+// TestStateMachine_UniqueMatchesAdvanceCoverage is the regression check for the
+// other direction: when UniqueScore meets the threshold, the state machine
+// should still confirm normally — i.e. excluding shared hits from coverage
+// must not break legitimate detections.
+func TestStateMachine_UniqueMatchesAdvanceCoverage(t *testing.T) {
+	const (
+		totalFrames = 10
+		minScore    = 5
+		minCoverage = 0.8
+	)
+	sm := newTestStateMachine(totalFrames, minScore, minCoverage)
+	now := time.Now()
+
+	var confirmed *ConfirmedDetection
+	for i := 0; i < totalFrames; i++ {
+		// UniqueScore equal to Score: every hit comes from a unique hash.
+		result := MatchResult{
+			CommercialShortID: int32(42),
+			Score:             10,
+			UniqueScore:       10,
+			OffsetFrames:      i,
+		}
+		if cd := sm.Update(result, now.Add(time.Duration(i)*time.Millisecond)); cd != nil {
+			confirmed = cd
+			break
+		}
+	}
+	require.NotNil(t, confirmed, "unique-only matches must still confirm")
+	assert.Equal(t, int32(42), confirmed.CommercialShortID)
 }

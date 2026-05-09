@@ -13,6 +13,7 @@
 4. [Google VM — Especificações](#4-google-vm--especificações)
 5. [Google VM — Configuração do zero](#5-google-vm--configuração-do-zero)
 6. [Análise de custos](#6-análise-de-custos)
+7. [Rotina de deploy](#7-rotina-de-deploy)
 
 ---
 
@@ -726,3 +727,82 @@ GCS, egress e IP estático são ruído nessa escala.
 ### Estratégia de compromisso
 
 Recomendação: suba **on-demand por 30 dias**. Monitore RAM e CPU pelo Grafana. Com dados reais de produção, assine **CUD 1 ano** — economiza ~$86/mês. Só considere 3 anos se o projeto for estratégico de longo prazo.
+
+---
+
+## 7. Rotina de deploy
+
+### Pré-requisitos
+
+- Acesso SSH à VM funcionando
+- Cloudflare Pages conectado ao repositório GitHub (rebuild automático no push)
+
+### Conectar na VM
+
+```bash
+# Via Cloud Shell do GCP (browser) — funciona de qualquer IP
+# Acesse: console.cloud.google.com → ícone >_ no topo
+
+gcloud compute ssh vm-e-monitor --zone southamerica-east1-a
+```
+
+> Se o SSH travar por firewall (UFW bloqueando), rode no Cloud Shell:
+> ```bash
+> gcloud compute instances add-metadata vm-e-monitor \
+>   --zone southamerica-east1-a \
+>   --metadata startup-script="ufw allow from 35.235.240.0/20 to any port 22"
+> gcloud compute instances reset vm-e-monitor --zone southamerica-east1-a
+> ```
+> Aguarde 1 minuto e tente novamente.
+
+### Deploy do backend
+
+```bash
+# 1. Entrar como usuário de serviço
+sudo su - radiocheck
+
+# 2. Rodar o script de deploy
+cd radiocheck
+./scripts/deploy.sh
+```
+
+O script faz automaticamente:
+1. `git pull` — puxa o código novo
+2. `docker compose build` — rebuilda as imagens alteradas
+3. `docker compose up -d` — sobe os containers
+4. Aguarda migrations completarem
+5. Health check na API
+6. Mostra status final dos containers
+
+### Deploy do frontend
+
+O frontend é deployado automaticamente pelo Cloudflare Pages a cada `git push origin master`. Não requer acesso à VM.
+
+Para forçar um redeploy sem mudança de código: Cloudflare Pages → seu projeto → **Deployments** → **Retry deployment**.
+
+### Verificar após o deploy
+
+```bash
+# Saúde da API
+curl https://api.e-monitor.online/v1/internal/health
+# Esperado: {"deps":{"nats":"ok","postgres":"ok"},"status":"ok"}
+
+# Ver logs em tempo real
+docker compose -f infra/docker/docker-compose.yml \
+               -f infra/docker/docker-compose.override.yml \
+               --env-file infra/docker/.env \
+               logs -f api
+```
+
+### Rollback
+
+```bash
+# Ver commits recentes
+git log --oneline -10
+
+# Voltar para um commit específico
+git checkout HASH_DO_COMMIT
+
+# Rebuildar
+./scripts/deploy.sh
+```
