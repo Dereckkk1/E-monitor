@@ -133,7 +133,7 @@ func main() {
 	go tieringJob.Schedule(ctx)
 
 	// Supervisor.
-	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, healthEvents, logger)
+	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, healthEvents, cfg.SegmentsPath, logger)
 
 	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
 	// version disambiguation before re-emitting on detections.confirmed.

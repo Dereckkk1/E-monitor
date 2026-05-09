@@ -35,6 +35,7 @@
 | Alertmanager | `alertmanager` | ~128 MB | Não |
 | Jaeger | `jaeger` | ~11 MB | Não |
 | Backup daemon | `backup` | ~1 MB | Não |
+| Segments cleanup | `segments-cleanup` | ~1 MB | Não |
 
 ### Projeção para 200 emissoras
 

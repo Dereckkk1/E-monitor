@@ -9,40 +9,38 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
-
-	"radiocheck/pkg/ringbuffer"
 )
 
-// TestNewService_Defaults verifies the constructor wires a non-nil buffers
-// map so Register/Unregister never panic.
+// TestNewService_Defaults verifies the constructor wires a non-nil
+// segmentDirs map so Register/Unregister never panic.
 func TestNewService_Defaults(t *testing.T) {
 	s := NewService(nil, nil, nil, nil, zap.NewNop())
 	if s == nil {
 		t.Fatal("NewService returned nil")
 	}
-	if s.buffers == nil {
-		t.Fatal("expected buffers map to be initialised")
+	if s.segmentDirs == nil {
+		t.Fatal("expected segmentDirs map to be initialised")
 	}
 }
 
-// TestRegisterUnregister_Roundtrip exercises the public buffer registry used
-// by the supervisor and confirms Unregister clears the slot.
+// TestRegisterUnregister_Roundtrip exercises the public segment-dir registry
+// used by the supervisor and confirms Unregister clears the slot.
 func TestRegisterUnregister_Roundtrip(t *testing.T) {
 	s := NewService(nil, nil, nil, nil, zap.NewNop())
 	id := uuid.New()
-	buf := ringbuffer.NewByteRing(16)
+	dir := "/tmp/segments/" + id.String()
 
-	s.Register(id, buf)
+	s.Register(id, dir)
 	s.mu.RLock()
-	got, ok := s.buffers[id]
+	got, ok := s.segmentDirs[id]
 	s.mu.RUnlock()
-	if !ok || got != buf {
-		t.Fatal("Register did not store the buffer")
+	if !ok || got != dir {
+		t.Fatal("Register did not store the dir")
 	}
 
 	s.Unregister(id)
 	s.mu.RLock()
-	_, ok = s.buffers[id]
+	_, ok = s.segmentDirs[id]
 	s.mu.RUnlock()
 	if ok {
 		t.Fatal("Unregister did not clear the slot")
@@ -65,15 +63,15 @@ func TestRegister_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				id := uuid.New()
-				s.Register(id, ringbuffer.NewByteRing(8))
+				s.Register(id, "/tmp/segments/"+id.String())
 				s.Unregister(id)
 			}
 		}()
 	}
 	wg.Wait()
 
-	if len(s.buffers) != 0 {
-		t.Fatalf("expected zero buffers after balanced register/unregister, got %d", len(s.buffers))
+	if len(s.segmentDirs) != 0 {
+		t.Fatalf("expected zero dirs after balanced register/unregister, got %d", len(s.segmentDirs))
 	}
 }
 

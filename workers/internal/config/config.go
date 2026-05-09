@@ -16,7 +16,12 @@ type Config struct {
 	S3SecretKey      string
 	S3Region         string
 	MastersPath      string
-	APIPort          string
+	// SegmentsPath is the directory under which ffmpeg writes per-station
+	// rotating ADTS-AAC evidence segments. The supervisor creates one
+	// subdirectory per active station inside this path. Defaults to
+	// /data/segments when unset.
+	SegmentsPath string
+	APIPort      string
 }
 
 func Load() (*Config, error) {
@@ -31,6 +36,7 @@ func Load() (*Config, error) {
 		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		S3Region:         os.Getenv("S3_REGION"),
 		MastersPath:      os.Getenv("MASTERS_PATH"),
+		SegmentsPath:     os.Getenv("SEGMENTS_PATH"),
 		APIPort:          os.Getenv("API_PORT"),
 	}
 	required := map[string]string{
@@ -52,6 +58,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.APIPort == "" {
 		cfg.APIPort = "8080"
+	}
+	if cfg.SegmentsPath == "" {
+		cfg.SegmentsPath = "/data/segments"
 	}
 	return cfg, nil
 }
