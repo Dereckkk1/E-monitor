@@ -87,9 +87,16 @@ func NewStateMachine(
 // or nil otherwise.
 // After confirmation, resets to Idle automatically.
 func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDetection {
+	// The state machine credits coverage strictly from UniqueScore — hits that
+	// came from hashes flagged as shared with another commercial don't count.
+	// This is the false-positive defense for cases like the AMB30/JINGLE
+	// pair: when commercial A plays and its end-sting matches commercial B,
+	// B accumulates Score from the shared hashes only. UniqueScore stays at 0
+	// and B never advances out of Idle. Total Score is left for the engine's
+	// own minScoreCoverage filter and for diagnostics.
 	switch sm.state {
 	case StateIdle:
-		if result.Score >= sm.minScore {
+		if result.UniqueScore >= sm.minScore {
 			sm.state = StateDetecting
 			sm.firstMatchAt = now
 			sm.detectingWindows = 0
@@ -98,13 +105,14 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 				zap.String("stationID", sm.stationID),
 				zap.Int32("commercialShortID", sm.commercialShortID),
 				zap.Int("score", result.Score),
+				zap.Int("uniqueScore", result.UniqueScore),
 				zap.Int("offsetFrames", result.OffsetFrames),
 			)
 		}
 
 	case StateDetecting:
 		sm.detectingWindows++
-		if result.Score >= sm.minScore {
+		if result.UniqueScore >= sm.minScore {
 			sm.coverage.Add(result.OffsetFrames, now)
 			if sm.coverage.Coverage() >= sm.minTemporalCoverage {
 				confidence := sm.coverage.Coverage()
@@ -134,7 +142,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 			// noise-disrupted matches where the neural verifier can disambiguate.
 			// Requires at least 3 windows processed.
 			cov := sm.coverage.Coverage()
-			highScore := result.Score >= 3*sm.minScore
+			highScore := result.UniqueScore >= 3*sm.minScore
 			covPath := cov >= 0.4 && cov < sm.minTemporalCoverage
 			scorePath := highScore && cov >= 0.2 && cov < sm.minTemporalCoverage
 			if sm.detectingWindows >= 3 && (covPath || scorePath) {

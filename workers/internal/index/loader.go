@@ -56,7 +56,7 @@ const indexEligibleStatuses = `('programada', 'ativa')`
 // are found. Called once at startup.
 func (l *Loader) LoadAll(ctx context.Context) error {
 	rows, err := l.db.Query(ctx, `
-		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, c.short_id
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, c.short_id
 		FROM fingerprint_hashes fh
 		JOIN commercials c  ON c.id  = fh.commercial_id
 		JOIN campaigns   ca ON ca.id = c.campaign_id
@@ -74,8 +74,9 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 		var timeFrame  int32
 		var variantID  int16
 		var rateID     int16
+		var isShared   bool
 		var shortID    int32
-		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &shortID); err != nil {
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared, &shortID); err != nil {
 			return fmt.Errorf("index loader: scan row: %w", err)
 		}
 		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
@@ -86,6 +87,7 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 			VariantID:         uint8(variantID),
 			RateID:            uint8(rateID),
 			TimeFrame:         timeFrame,
+			IsShared:          isShared,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -141,7 +143,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 
 		// Fetch all fingerprint hashes for this commercial.
 		rows, err := l.db.Query(ctx, `
-			SELECT hash_value, time_frame, variant_id, rate_id
+			SELECT hash_value, time_frame, variant_id, rate_id, is_shared
 			FROM fingerprint_hashes
 			WHERE commercial_id = $1
 		`, payload.CommercialID)
@@ -160,6 +162,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			timeFrame int32
 			variantID int16
 			rateID    int16
+			isShared  bool
 		}
 		var newEntries []hashEntry
 		for rows.Next() {
@@ -167,7 +170,8 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			var timeFrame  int32
 			var variantID  int16
 			var rateID     int16
-			if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID); err != nil {
+			var isShared   bool
+			if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared); err != nil {
 				l.log.Error("index.reload: scan row failed",
 					zap.String("commercial_id", payload.CommercialID),
 					zap.Error(err),
@@ -182,7 +186,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 				)
 				return
 			}
-			newEntries = append(newEntries, hashEntry{hash: hashValue, timeFrame: timeFrame, variantID: variantID, rateID: rateID})
+			newEntries = append(newEntries, hashEntry{hash: hashValue, timeFrame: timeFrame, variantID: variantID, rateID: rateID, isShared: isShared})
 		}
 		if err := rows.Err(); err != nil {
 			l.log.Error("index.reload: iterate rows failed",
@@ -222,6 +226,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 				VariantID:         uint8(ne.variantID),
 				RateID:            uint8(ne.rateID),
 				TimeFrame:         ne.timeFrame,
+				IsShared:          ne.isShared,
 			})
 		}
 

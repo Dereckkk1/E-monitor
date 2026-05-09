@@ -23,31 +23,53 @@ type MatchResult struct {
 	CommercialShortID int32
 	VariantID         uint8 // variant that produced the best score
 	RateID            uint8 // rate variant that produced the best score
-	Score             int   // histogram peak count
-	TotalHashes       int   // total hashes in the live window (for coverage ratio)
-	OffsetFrames      int   // estimated offset of detection within the commercial
+	Score             int   // histogram peak count (all hits, including shared)
+	// UniqueScore is the histogram peak count counting only hits from hashes
+	// that are NOT flagged as shared with another commercial. The state
+	// machine uses this — not Score — to decide confirmation, so a commercial
+	// whose only matches come from a sting it shares with the commercial
+	// actually playing cannot accumulate enough evidence to confirm.
+	UniqueScore  int
+	TotalHashes  int // total hashes in the live window (for coverage ratio)
+	OffsetFrames int // estimated offset of detection within the commercial
 }
 
-// buildHistogram is the shared inner loop: preprocess → STFT → peaks → hashes → histogram.
-// Returns the per-commercial best scores and the total number of live hashes generated.
-func buildHistogram(samples []float32, store *index.Store) (best map[int32]struct {
+// bestEntry is the per-commercial best (count, variant, rate, deltaBin) tuple
+// returned by histogramFromHashes. Using a named type keeps the public-facing
+// MatchWindow signature short and makes the test helper easier to read.
+type bestEntry struct {
 	count     int
 	variantID uint8
 	rateID    uint8
 	deltaBin  int
-}, totalHashes int) {
-	filtered := audio.ApplyHighPass(samples, 100.0, 16000)
-	normalized := audio.NormalizeRMS(filtered, -20.0)
-	spec := audio.STFT(normalized)
-	peaks := audio.PickPeaks(spec)
-	hashes := audio.GenerateHashes(peaks)
+}
 
+// histogramFromHashes is the inner loop: given a slice of hashes already
+// extracted from PCM, lookup each against the store and produce two parallel
+// histograms — one counting all hits, one counting only hits whose Entry has
+// IsShared=false. Splitting at the histogram level (rather than discarding
+// shared hashes outright) keeps the deltaBin peak intact, which is what we
+// rely on to estimate OffsetFrames; we just read the unique count off the
+// same key after the peak is chosen.
+//
+// Returns:
+//   - bestTotal[commercialID]: the (deltaBin, count) with the highest TOTAL
+//     count for that commercial. Used to pick the winning bin.
+//   - uniqueByKey[histKey]: per-(commercial,variant,rate,deltaBin) count of
+//     non-shared hits. Caller looks up the unique count at the same key
+//     bestTotal selected.
+func histogramFromHashes(hashes []audio.Hash, store *index.Store) (
+	bestTotal map[int32]bestEntry,
+	uniqueByKey map[histKey]int,
+	totalHashes int,
+) {
 	totalHashes = len(hashes)
 	if totalHashes == 0 {
-		return nil, 0
+		return nil, nil, 0
 	}
 
-	histogram := make(map[histKey]int)
+	histTotal := make(map[histKey]int)
+	uniqueByKey = make(map[histKey]int)
 	for _, h := range hashes {
 		for _, entry := range store.Lookup(h.Value) {
 			delta := h.TimeFrame - int(entry.TimeFrame)
@@ -57,33 +79,37 @@ func buildHistogram(samples []float32, store *index.Store) (best map[int32]struc
 				rateID:       entry.RateID,
 				deltaBin:     delta / DeltaBinSize,
 			}
-			histogram[k]++
+			histTotal[k]++
+			if !entry.IsShared {
+				uniqueByKey[k]++
+			}
 		}
 	}
 
-	type entry struct {
-		count     int
-		variantID uint8
-		rateID    uint8
-		deltaBin  int
-	}
-	best = make(map[int32]struct {
-		count     int
-		variantID uint8
-		rateID    uint8
-		deltaBin  int
-	})
-	for k, count := range histogram {
-		if cur, ok := best[k.commercialID]; !ok || count > cur.count {
-			best[k.commercialID] = struct {
-				count     int
-				variantID uint8
-				rateID    uint8
-				deltaBin  int
-			}{count, k.variantID, k.rateID, k.deltaBin}
+	bestTotal = make(map[int32]bestEntry)
+	for k, count := range histTotal {
+		if cur, ok := bestTotal[k.commercialID]; !ok || count > cur.count {
+			bestTotal[k.commercialID] = bestEntry{count, k.variantID, k.rateID, k.deltaBin}
 		}
 	}
-	return best, totalHashes
+	return bestTotal, uniqueByKey, totalHashes
+}
+
+// buildHistogram preprocesses PCM (HPF → RMS norm → STFT → peaks → hashes)
+// and delegates to histogramFromHashes. Kept as a named function so tests
+// that operate on PCM (the existing engine_test.go cases) can still reach
+// the histogram building without re-implementing the preprocessing.
+func buildHistogram(samples []float32, store *index.Store) (
+	bestTotal map[int32]bestEntry,
+	uniqueByKey map[histKey]int,
+	totalHashes int,
+) {
+	filtered := audio.ApplyHighPass(samples, 100.0, 16000)
+	normalized := audio.NormalizeRMS(filtered, -20.0)
+	spec := audio.STFT(normalized)
+	peaks := audio.PickPeaks(spec)
+	hashes := audio.GenerateHashes(peaks)
+	return histogramFromHashes(hashes, store)
 }
 
 // MatchWindow fingerprints one PCM window and looks up matches in the index.
@@ -102,7 +128,7 @@ func buildHistogram(samples []float32, store *index.Store) (best map[int32]struc
 // It is unrelated to the temporal coverage check performed by the state machine.
 // Returns all MatchResults satisfying both filters (may be empty).
 func MatchWindow(samples []float32, store *index.Store, threshold int, minScoreCoverage float64) []MatchResult {
-	best, totalHashes := buildHistogram(samples, store)
+	best, uniqueByKey, totalHashes := buildHistogram(samples, store)
 	if totalHashes == 0 {
 		return nil
 	}
@@ -112,11 +138,13 @@ func MatchWindow(samples []float32, store *index.Store, threshold int, minScoreC
 	var results []MatchResult
 	for id, b := range best {
 		if b.count >= threshold && b.count >= minHits {
+			k := histKey{commercialID: id, variantID: b.variantID, rateID: b.rateID, deltaBin: b.deltaBin}
 			results = append(results, MatchResult{
 				CommercialShortID: id,
 				VariantID:         b.variantID,
 				RateID:            b.rateID,
 				Score:             b.count,
+				UniqueScore:       uniqueByKey[k],
 				TotalHashes:       totalHashes,
 				OffsetFrames:      b.deltaBin * DeltaBinSize,
 			})
@@ -128,9 +156,11 @@ func MatchWindow(samples []float32, store *index.Store, threshold int, minScoreC
 
 // ScanScores returns the raw best score for every commercial that has at least
 // one matching hash in the window, without applying any threshold. Used for
-// diagnostics and threshold calibration.
+// diagnostics and threshold calibration. Reports the TOTAL score (shared +
+// unique); diagnostics historically did not distinguish, and a parallel
+// "unique" calibration tool can be added later if needed.
 func ScanScores(samples []float32, store *index.Store) map[int32]int {
-	best, _ := buildHistogram(samples, store)
+	best, _, _ := buildHistogram(samples, store)
 	out := make(map[int32]int, len(best))
 	for id, b := range best {
 		out[id] = b.count

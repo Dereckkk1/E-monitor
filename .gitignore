@@ -52,3 +52,5 @@ impeccable/
 !.dev.vars.example
 .env*
 !.env.example
+
+docs/*.md
