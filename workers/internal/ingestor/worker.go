@@ -61,7 +61,21 @@ type WorkerConfig struct {
 	OnStreamUp func()
 	// OnStreamDown is called when the stream disconnects unexpectedly (not on ctx cancel).
 	OnStreamDown func()
+	// OnNoiseSample is called periodically (every NoiseSampleEvery windows)
+	// with the highest histogram peak across all commercials in the live
+	// matching index. The supervisor wires this to
+	// calibration.RecordNoiseSample so per-station thresholds get the
+	// observation feed they need to converge out of calibration_mode after
+	// 7 days. Nil disables sampling for that worker.
+	OnNoiseSample func(score int)
 }
+
+// NoiseSampleEvery is the number of analysis windows between noise samples.
+// 5 = every 10 seconds at the matcher's 2 Hz cadence. Picked to keep the
+// per-station write rate at ~6 UPDATE/min while still filling the 5000-row
+// noise_samples cap in roughly 14 hours of continuous operation — well
+// within the 7-day calibration window.
+const NoiseSampleEvery = 5
 
 // DetectionEvent is the payload published to NATS when a detection is confirmed.
 type DetectionEvent struct {
@@ -296,6 +310,7 @@ func (w *Worker) runPCMReader(
 
 	sampleCount := 0
 	heartbeatTick := 0
+	noiseSampleTick := 0
 
 	for {
 		n, err := io.ReadFull(r, rawBuf)
@@ -425,6 +440,26 @@ func (w *Worker) runPCMReader(
 				}
 			}
 		}
+
+		// Calibration noise sampling. Every NoiseSampleEvery-th window we
+		// take the highest histogram peak across all commercials in the
+		// matching index — that's the per-station noise signal the
+		// calibration job needs to compute noise_p99 and lift min_hashes
+		// off its permissive default. The sample is delivered through a
+		// non-blocking hook so a slow DB write never stalls matching.
+		noiseSampleTick++
+		if w.cfg.OnNoiseSample != nil && noiseSampleTick >= NoiseSampleEvery {
+			noiseSampleTick = 0
+			scores := match.ScanScores(window, w.store)
+			topScore := 0
+			for _, sc := range scores {
+				if sc > topScore {
+					topScore = sc
+				}
+			}
+			w.cfg.OnNoiseSample(topScore)
+		}
+
 		windowSpan.End()
 	}
 }

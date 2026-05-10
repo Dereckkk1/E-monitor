@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/calibration"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
@@ -426,6 +427,42 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	thresholdAtomic := ingestor.NewMatchThreshold(threshold)
 	metrics.StationThreshold.WithLabelValues(capturedStationID.String()).Set(float64(threshold))
 
+	// ── Calibration noise sampling pipeline ────────────────────────────────
+	// The worker emits the histogram peak across all commercials roughly
+	// every 10 seconds. We funnel those samples through a buffered channel
+	// to a drainer goroutine that does the actual DB write — this keeps a
+	// slow Postgres response from ever stalling the matcher. If the channel
+	// fills (drainer falling behind / DB hiccup) we drop samples; the 5000-
+	// row cap on noise_samples means losing a few does not affect the p99
+	// the calibration job eventually computes.
+	noiseCh := make(chan int, 32)
+	go func() {
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case score := <-noiseCh:
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := calibration.RecordNoiseSample(bgCtx, s.db, capturedStationID, score); err != nil {
+					s.log.Warn("calibration: record sample failed",
+						zap.Stringer("station_id", capturedStationID),
+						zap.Error(err),
+					)
+				}
+				cancel()
+			}
+		}
+	}()
+	onNoiseSample := func(score int) {
+		select {
+		case noiseCh <- score:
+		default:
+			// Drop sample when the buffer is full — preserves the matcher's
+			// real-time guarantee at the cost of a few missing data points
+			// during DB pressure.
+		}
+	}
+
 	cfg := ingestor.WorkerConfig{
 		StationID:          station.ID,
 		StreamURL:          station.StreamURL,
@@ -444,6 +481,7 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		HeartbeatFn:           heartbeatFn,
 		OnStreamUp:            onStreamUp,
 		OnStreamDown:          onStreamDown,
+		OnNoiseSample:         onNoiseSample,
 	}
 	w := ingestor.NewWorker(cfg, s.store, s.nc, s.log)
 	entry.worker = w
