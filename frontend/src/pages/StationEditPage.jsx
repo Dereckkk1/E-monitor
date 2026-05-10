@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useStation, useUpdateStation } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import RSelect from '../components/RSelect'
+import CalibrationPanel from '../components/CalibrationPanel'
 
 const BAND_OPTIONS = [
   { value: 'FM', label: 'FM' },
@@ -476,6 +477,8 @@ export default function StationEditPage() {
                 <input className="input" type="number" min="0" value={form.total_population} onChange={e => setF('total_population', e.target.value)} placeholder="5000000" />
               </Field>
             </Section>
+
+            <CalibrationPanel stationId={id} />
 
           </div>
 

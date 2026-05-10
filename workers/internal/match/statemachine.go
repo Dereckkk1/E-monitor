@@ -21,13 +21,28 @@ const (
 )
 
 // ConfirmedDetection is emitted when the state machine confirms a detection.
+//
+// HashCount is the cumulative UniqueScore credited across windows during the
+// Detecting phase (sum of unique hashes hits that drove the confirmation).
+// TemporalCoverage is the same value as Confidence for now (both come from
+// CoverageWindow.Coverage()) but is exposed separately so downstream consumers
+// can persist them in their schema slots without code re-using one as the
+// other. FirstOffsetFrames is the alignment offset captured when the state
+// machine first transitioned Idle → Detecting; OffsetFrames carries the offset
+// at confirmation. VariantID/RateID record which fingerprint variant produced
+// the confirming match (always 0/0 today; reserved for §9.7 multi-rate).
 type ConfirmedDetection struct {
 	CommercialShortID int32
 	StationID         string // passed in at construction
 	DetectedAt        time.Time
 	FirstMatchAt      time.Time // when the detecting phase started (≈ commercial start)
 	OffsetFrames      int
+	FirstOffsetFrames int
 	Confidence        float64 // coverage at confirmation time
+	TemporalCoverage  float64
+	HashCount         int
+	VariantID         uint8
+	RateID            uint8
 }
 
 // StateMachine tracks detection state for one commercial on one station.
@@ -40,7 +55,11 @@ type StateMachine struct {
 	log               *zap.Logger
 
 	// StateDetecting tracking
-	detectingWindows int
+	detectingWindows  int
+	cumulativeHashes  int   // sum of UniqueScore credited while Detecting
+	firstOffsetFrames int   // OffsetFrames at Idle → Detecting transition
+	lastVariantID     uint8 // VariantID of the most recent confirming hit
+	lastRateID        uint8 // RateID of the most recent confirming hit
 
 	// StateUncertain tracking (fase2 neural verification)
 	uncertainWindows      int
@@ -100,6 +119,10 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 			sm.state = StateDetecting
 			sm.firstMatchAt = now
 			sm.detectingWindows = 0
+			sm.cumulativeHashes = result.UniqueScore
+			sm.firstOffsetFrames = result.OffsetFrames
+			sm.lastVariantID = result.VariantID
+			sm.lastRateID = result.RateID
 			sm.coverage.Add(result.OffsetFrames, now)
 			sm.log.Info("detecting started",
 				zap.String("stationID", sm.stationID),
@@ -113,6 +136,9 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 	case StateDetecting:
 		sm.detectingWindows++
 		if result.UniqueScore >= sm.minScore {
+			sm.cumulativeHashes += result.UniqueScore
+			sm.lastVariantID = result.VariantID
+			sm.lastRateID = result.RateID
 			sm.coverage.Add(result.OffsetFrames, now)
 			if sm.coverage.Coverage() >= sm.minTemporalCoverage {
 				confidence := sm.coverage.Coverage()
@@ -122,15 +148,22 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 					DetectedAt:        now,
 					FirstMatchAt:      sm.firstMatchAt,
 					OffsetFrames:      result.OffsetFrames,
+					FirstOffsetFrames: sm.firstOffsetFrames,
 					Confidence:        confidence,
+					TemporalCoverage:  confidence,
+					HashCount:         sm.cumulativeHashes,
+					VariantID:         sm.lastVariantID,
+					RateID:            sm.lastRateID,
 				}
 				sm.log.Info("detection confirmed",
 					zap.String("stationID", sm.stationID),
 					zap.Int32("commercialShortID", sm.commercialShortID),
 					zap.Float64("confidence", confidence),
+					zap.Int("hashCount", sm.cumulativeHashes),
 				)
 				sm.coverage.Reset()
 				sm.detectingWindows = 0
+				sm.cumulativeHashes = 0
 				sm.state = StateCooldown
 				sm.cooldownUntil = now.Add(sm.cooldownDuration)
 				return detection
@@ -184,6 +217,7 @@ func (sm *StateMachine) Tick(now time.Time) {
 			)
 			sm.coverage.Reset()
 			sm.detectingWindows = 0
+			sm.cumulativeHashes = 0
 			sm.state = StateIdle
 		}
 	case StateUncertain:
@@ -194,6 +228,7 @@ func (sm *StateMachine) Tick(now time.Time) {
 				zap.Int32("commercialShortID", sm.commercialShortID),
 			)
 			sm.coverage.Reset()
+			sm.cumulativeHashes = 0
 			sm.state = StateIdle
 		}
 	case StateCooldown:
@@ -234,16 +269,23 @@ func (sm *StateMachine) ResolveNeural(similarity float64, now time.Time) *Confir
 			DetectedAt:        now,
 			FirstMatchAt:      sm.firstMatchAt,
 			OffsetFrames:      sm.uncertainOffsetFrames,
+			FirstOffsetFrames: sm.firstOffsetFrames,
 			Confidence:        confidence,
+			TemporalCoverage:  confidence,
+			HashCount:         sm.cumulativeHashes,
+			VariantID:         sm.lastVariantID,
+			RateID:            sm.lastRateID,
 		}
 		sm.log.Info("uncertain detection confirmed via neural",
 			zap.String("stationID", sm.stationID),
 			zap.Int32("commercialShortID", sm.commercialShortID),
 			zap.Float64("similarity", similarity),
 			zap.Float64("confidence", confidence),
+			zap.Int("hashCount", sm.cumulativeHashes),
 		)
 		sm.coverage.Reset()
 		sm.detectingWindows = 0
+		sm.cumulativeHashes = 0
 		sm.uncertainWindows = 0
 		sm.state = StateCooldown
 		sm.cooldownUntil = now.Add(sm.cooldownDuration)
@@ -256,6 +298,7 @@ func (sm *StateMachine) ResolveNeural(similarity float64, now time.Time) *Confir
 	)
 	sm.coverage.Reset()
 	sm.detectingWindows = 0
+	sm.cumulativeHashes = 0
 	sm.uncertainWindows = 0
 	sm.state = StateIdle
 	return nil

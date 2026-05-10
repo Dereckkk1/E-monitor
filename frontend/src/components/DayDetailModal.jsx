@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import StationAvatar from './StationAvatar'
 import AudioPlayer from './AudioPlayer'
 import api from '../api/client'
@@ -181,6 +182,17 @@ export default function DayDetailModal({ station, dayKey, buckets, onClose }) {
                     {d.evidence_status || 'indisponível'}
                   </span>
                 )}
+                <Link
+                  to={`/detections/${d.id}`}
+                  className="day-detail-details"
+                  title="Ver detalhes da detecção"
+                  aria-label="Ver detalhes"
+                  onClick={onClose}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </Link>
               </div>
             </div>
             )

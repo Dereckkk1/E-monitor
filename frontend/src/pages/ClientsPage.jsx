@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useClients, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import WebhookModal from '../components/WebhookModal'
@@ -81,6 +82,24 @@ function PinIcon() {
   return (
     <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 1C4.343 1 3 2.343 3 4c0 2.5 3 7 3 7s3-4.5 3-7c0-1.657-1.343-3-3-3z" /><circle cx="6" cy="4" r="1" />
+    </svg>
+  )
+}
+
+function ApiKeyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="4" cy="9" r="2.5" />
+      <path d="M6 7.5l5-5M9 4l1.5 1.5M11 2.5l1.5 1.5" />
+    </svg>
+  )
+}
+
+function DeliveriesIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3h10M2 7h10M2 11h6" />
+      <circle cx="11" cy="11" r="1.25" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -398,11 +417,27 @@ export default function ClientsPage() {
                   <button
                     className="btn-icon btn-secondary"
                     style={{ borderRadius: 'var(--radius-md)' }}
-                    title="Webhook"
+                    title="Webhook (configurar)"
                     onClick={() => setWebhookFor(c)}
                   >
                     <WebhookIcon />
                   </button>
+                  <Link
+                    className="btn-icon btn-secondary"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                    title="Entregas de webhook"
+                    to={`/clients/${c.id}/webhooks`}
+                  >
+                    <DeliveriesIcon />
+                  </Link>
+                  <Link
+                    className="btn-icon btn-secondary"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                    title="API Keys"
+                    to={`/clients/${c.id}/api-keys`}
+                  >
+                    <ApiKeyIcon />
+                  </Link>
                   <button
                     className="btn-icon btn-secondary"
                     style={{ borderRadius: 'var(--radius-md)' }}
