@@ -255,7 +255,13 @@ type CreateStationInput struct {
 }
 
 func (s *Stations) Create(ctx context.Context, in CreateStationInput) (*Station, error) {
-	st, err := scanStationRow(s.pool.QueryRow(ctx, fmt.Sprintf(`
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("create station: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	st, err := scanStationRow(tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO stations (name, band, frequency_mhz, city, state, stream_url)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING %s`, stationSelectCols),
@@ -263,6 +269,24 @@ func (s *Stations) Create(ctx context.Context, in CreateStationInput) (*Station,
 	).Scan)
 	if err != nil {
 		return nil, err
+	}
+
+	// Seed the station_thresholds row in the same transaction so the worker
+	// has a place to record noise samples from the first ingestion window.
+	// Without this row, RecordNoiseSample's UPDATE silently affects 0 rows
+	// (the WHERE never matches), the calibration job never picks the station
+	// up (it filters on noise_samples > 0), and min_hashes stays at the
+	// permissive default of 5 forever — which causes false positives on
+	// stations with noisier streams. Defaults here mirror the table DDL:
+	// calibration_mode=true, min_hashes=5, empty noise_samples buffer.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO station_thresholds (station_id) VALUES ($1)
+	`, st.ID); err != nil {
+		return nil, fmt.Errorf("create station: seed thresholds: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("create station: commit: %w", err)
 	}
 	return &st, nil
 }
