@@ -1,0 +1,563 @@
+/* ── OperationsPage ──────────────────────────────────────────── */
+/*
+ * Operações / Worker Console — live view of ingestion workers.
+ * Class prefix: op-
+ *
+ * Density: this is a live monitoring view, so spacing is tighter than a
+ * marketing-style page. KPI row up top, then a dense table below. The
+ * refetch indicator (op-refetch-bar) is a slim pink stripe that animates
+ * left-to-right whenever the /workers query is in flight, giving the user
+ * a passive "pulse" without a blocking spinner.
+ */
+
+.op-root {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+.op-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.op-header-text h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.op-header-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--c-text-2);
+  font-weight: 400;
+}
+
+.op-pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.op-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.op-pulse-dot--ok { background: var(--c-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-success) 18%, transparent); }
+.op-pulse-dot--bad { background: var(--c-danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-danger) 18%, transparent); }
+
+@keyframes op-pulse-anim {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.op-pulse-dot--live { animation: op-pulse-anim 1.6s ease-in-out infinite; }
+
+/* ── KPI row ─────────────────────────────────────────────────── */
+.op-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.op-kpi {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 96px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  overflow: hidden;
+}
+.op-kpi:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--c-action-border);
+}
+
+.op-kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-text-3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.op-kpi-value {
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--c-text);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.op-kpi-value-suffix {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text-3);
+  margin-left: 4px;
+  letter-spacing: 0;
+}
+.op-kpi-foot {
+  font-size: 12px;
+  color: var(--c-text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* Status accent bar on the left side of each KPI — no large color wash. */
+.op-kpi::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 12px; bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--c-text-3);
+}
+.op-kpi--ok::before     { background: var(--c-success); }
+.op-kpi--warn::before   { background: var(--c-warning); }
+.op-kpi--danger::before { background: var(--c-danger); }
+.op-kpi--info::before   { background: var(--c-action); }
+
+.op-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  width: fit-content;
+}
+.op-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.op-chip--success { background: color-mix(in srgb, var(--c-success) 14%, transparent); color: var(--c-success); }
+.op-chip--success .op-chip-dot { background: var(--c-success); }
+.op-chip--warning { background: color-mix(in srgb, var(--c-warning) 18%, transparent); color: var(--c-warning); }
+.op-chip--warning .op-chip-dot { background: var(--c-warning); }
+.op-chip--danger  { background: color-mix(in srgb, var(--c-danger) 14%, transparent); color: var(--c-danger); }
+.op-chip--danger  .op-chip-dot { background: var(--c-danger); }
+.op-chip--info    { background: color-mix(in srgb, var(--c-info) 14%, transparent); color: var(--c-info); }
+.op-chip--info    .op-chip-dot { background: var(--c-info); }
+.op-chip--neutral { background: var(--c-surface-2); color: var(--c-text-2); }
+.op-chip--neutral .op-chip-dot { background: var(--c-text-3); }
+
+/* Subtle pulse on the green dot inside a "running" status chip so the user
+ * sees the system is alive at a glance without the chip itself flashing. */
+.op-chip--success.op-chip--live .op-chip-dot {
+  animation: op-pulse-anim 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-success) 22%, transparent);
+}
+
+/* Tooltip wrapper — used on the CLAP chip. */
+.op-tip {
+  position: relative;
+  display: inline-flex;
+}
+.op-tip-bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: var(--c-text);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  max-width: 260px;
+  white-space: normal;
+  width: 220px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 5;
+  box-shadow: 0 6px 18px rgba(6,5,91,0.18);
+}
+.op-tip:hover .op-tip-bubble {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Filters ─────────────────────────────────────────────────── */
+.op-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.op-search {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+  max-width: 380px;
+}
+.op-search-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--c-text-3);
+  pointer-events: none;
+  display: inline-flex;
+}
+.op-search-input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.op-filter-tabs {
+  display: inline-flex;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+}
+.op-filter-tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-full);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.op-filter-tab:hover { color: var(--c-text); }
+.op-filter-tab.active {
+  background: var(--c-surface);
+  color: var(--c-action);
+  box-shadow: var(--shadow-sm);
+}
+.op-filter-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  color: var(--c-text-3);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+.op-filter-tab.active .op-filter-count {
+  background: var(--c-action-light);
+  color: var(--c-action);
+}
+
+/* ── Table card ──────────────────────────────────────────────── */
+.op-table-card {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Slim pink top stripe that animates left→right while refetching. */
+.op-refetch-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: transparent;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 1;
+}
+.op-refetch-bar::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--c-action), transparent);
+  animation: op-refetch-sweep 1.2s ease-in-out infinite;
+}
+@keyframes op-refetch-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.op-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.op-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.op-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--c-surface-2);
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-text-3);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+
+.op-table tbody tr {
+  transition: background 0.12s ease;
+  cursor: pointer;
+}
+.op-table tbody tr:hover {
+  background: var(--c-surface-2);
+}
+.op-table tbody tr + tr td {
+  border-top: 1px solid var(--c-border);
+}
+
+.op-table td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.op-cell-station {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 240px;
+}
+.op-cell-station-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.op-cell-station-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.op-cell-station-meta {
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+
+.op-cell-num {
+  font-feature-settings: 'tnum';
+  color: var(--c-text);
+  white-space: nowrap;
+}
+.op-cell-num--muted { color: var(--c-text-3); }
+.op-cell-num--danger { color: var(--c-danger); font-weight: 600; }
+
+.op-cell-warn { color: var(--c-warning); font-weight: 600; }
+
+/* Mini uptime bar — narrow horizontal track with green fill. */
+.op-uptime {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 110px;
+}
+.op-uptime-track {
+  flex: 1;
+  height: 6px;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  min-width: 60px;
+}
+.op-uptime-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+.op-uptime-fill--ok    { background: var(--c-success); }
+.op-uptime-fill--warn  { background: var(--c-warning); }
+.op-uptime-fill--bad   { background: var(--c-danger); }
+.op-uptime-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* ── Skeleton rows ───────────────────────────────────────────── */
+.op-skel-line {
+  background: linear-gradient(90deg, var(--c-surface-2) 25%, var(--c-border) 50%, var(--c-surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shine 1.4s ease-in-out infinite;
+  border-radius: 4px;
+  display: inline-block;
+}
+.op-skel-circle {
+  background: linear-gradient(90deg, var(--c-surface-2) 25%, var(--c-border) 50%, var(--c-surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shine 1.4s ease-in-out infinite;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Empty state (Tutorial Estilizado) ───────────────────────── */
+/*
+ * The empty state is NOT a sad icon centered on the page. It's a ghosted
+ * preview of the loaded table (50% opacity, three faded rows showing the
+ * shape of real data) with a focused action panel overlaid on top, so the
+ * user sees what the screen will look like once a campaign is active.
+ */
+.op-empty {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  min-height: 360px;
+}
+
+.op-empty-ghost {
+  position: absolute;
+  inset: 0;
+  padding: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 0.4;
+  filter: blur(0.3px);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.18) 100%);
+          mask-image: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.18) 100%);
+}
+.op-empty-ghost-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--c-border);
+}
+.op-empty-ghost-row:first-child { border-top: 0; }
+
+.op-empty-overlay {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 56px 24px 40px;
+  max-width: 460px;
+  margin: 0 auto;
+}
+.op-empty-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-xl);
+  background: var(--c-action-light);
+  color: var(--c-action);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 20px rgba(232,30,117,0.18);
+  margin-bottom: 4px;
+}
+.op-empty-title {
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.op-empty-text {
+  font-size: 13px;
+  color: var(--c-text-2);
+  line-height: 1.5;
+  max-width: 380px;
+}
+.op-empty-cta {
+  margin-top: 8px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .op-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .op-header { flex-direction: column; align-items: stretch; }
+  .op-pulse { align-self: flex-start; }
+  .op-kpis { grid-template-columns: 1fr; }
+  .op-filters { flex-direction: column; align-items: stretch; }
+  .op-search { max-width: none; }
+  .op-filter-tabs { width: 100%; }
+  .op-filter-tab { flex: 1; }
+  .op-table thead { display: none; }
+  .op-table, .op-table tbody, .op-table tr, .op-table td { display: block; width: 100%; }
+  .op-table tbody tr {
+    padding: 14px 16px;
+    border-top: 1px solid var(--c-border);
+  }
+  .op-table tbody tr + tr td { border-top: 0; }
+  .op-table td {
+    padding: 4px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .op-table td::before {
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--c-text-3);
+  }
+  .op-table td.op-cell-station-td::before { display: none; }
+  .op-cell-station { min-width: 0; }
+  .op-uptime { min-width: 0; flex: 1; }
+}

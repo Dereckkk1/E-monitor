@@ -10,6 +10,10 @@ import ClientsPage    from './pages/ClientsPage'
 import CampaignsPage  from './pages/CampaignsPage'
 import MonitoringPage from './pages/MonitoringPage'
 import DetectionsPage from './pages/DetectionsPage'
+import DetectionDetailPage from './pages/DetectionDetailPage'
+import OperationsPage from './pages/OperationsPage'
+import WebhookDeliveriesPage from './pages/WebhookDeliveriesPage'
+import ApiKeysPage    from './pages/ApiKeysPage'
 import DashboardPage  from './pages/DashboardPage'
 import LoginPage      from './pages/LoginPage'
 
@@ -63,9 +67,13 @@ function AppShell() {
             <Route path="/stations"         element={<StationsPage />} />
             <Route path="/stations/:id/edit" element={<StationEditPage />} />
             <Route path="/clients"     element={<ClientsPage />} />
+            <Route path="/clients/:id/webhooks"  element={<WebhookDeliveriesPage />} />
+            <Route path="/clients/:id/api-keys"  element={<ApiKeysPage />} />
             <Route path="/campaigns"   element={<CampaignsPage />} />
             <Route path="/monitoring"  element={<MonitoringPage />} />
+            <Route path="/operations"  element={<OperationsPage />} />
             <Route path="/detections"  element={<DetectionsPage />} />
+            <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/dashboard"   element={<DashboardPage />} />
             {/* Catch-all */}
             <Route path="*"            element={<Navigate to="/stations" replace />} />

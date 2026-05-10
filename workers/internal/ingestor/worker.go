@@ -67,11 +67,21 @@ type WorkerConfig struct {
 type DetectionEvent struct {
 	StationID           string  `json:"station_id"`
 	CommercialShortID   int32   `json:"commercial_short_id"`
-	DetectedAt          string  `json:"detected_at"`           // RFC3339
+	DetectedAt          string  `json:"detected_at"` // RFC3339
 	OffsetFrames        int     `json:"offset_frames"`
 	Confidence          float64 `json:"confidence"`
 	EvidenceWindowStart string  `json:"evidence_window_start"` // DetectedAt - 60s
 	EvidenceWindowEnd   string  `json:"evidence_window_end"`   // DetectedAt + 60s
+
+	// Forensic fields propagated from the state machine. Older clients that
+	// don't know these tags ignore them on unmarshal; newer ones (evidence
+	// service) consume them to populate the detections row beyond Confidence.
+	HashCount          int32   `json:"hash_count"`
+	TemporalCoverage   float64 `json:"temporal_coverage"`
+	MatchStartOffsetMs int32   `json:"match_start_offset_ms"` // first match offset within the commercial
+	MatchEndOffsetMs   int32   `json:"match_end_offset_ms"`   // last match offset within the commercial
+	VariantUsed        int16   `json:"variant_used"`
+	RateUsed           int16   `json:"rate_used"`
 }
 
 // Worker is a goroutine-based stream ingestor for one radio station.
@@ -443,6 +453,11 @@ func (w *Worker) publishDetection(ctx context.Context, det *match.ConfirmedDetec
 	evidenceStart := commercialStart.Add(-60 * time.Second)
 	evidenceEnd := commercialEnd.Add(60 * time.Second)
 
+	// Frame → ms: 2048 samples per frame at 16 kHz = 128 ms.
+	const frameMs = 128
+	matchStartMs := int32(det.FirstOffsetFrames * frameMs)
+	matchEndMs := int32(det.OffsetFrames * frameMs)
+
 	evt := DetectionEvent{
 		StationID:           stationIDStr,
 		CommercialShortID:   det.CommercialShortID,
@@ -451,6 +466,12 @@ func (w *Worker) publishDetection(ctx context.Context, det *match.ConfirmedDetec
 		Confidence:          det.Confidence,
 		EvidenceWindowStart: evidenceStart.UTC().Format(time.RFC3339),
 		EvidenceWindowEnd:   evidenceEnd.UTC().Format(time.RFC3339),
+		HashCount:           int32(det.HashCount),
+		TemporalCoverage:    det.TemporalCoverage,
+		MatchStartOffsetMs:  matchStartMs,
+		MatchEndOffsetMs:    matchEndMs,
+		VariantUsed:         int16(det.VariantID),
+		RateUsed:            int16(det.RateID),
 	}
 
 	payload, err := json.Marshal(evt)

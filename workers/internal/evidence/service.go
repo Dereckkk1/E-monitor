@@ -31,6 +31,12 @@ type detectionEvent struct {
 	Confidence          float64 `json:"confidence"`
 	EvidenceWindowStart string  `json:"evidence_window_start"`
 	EvidenceWindowEnd   string  `json:"evidence_window_end"`
+	HashCount           int32   `json:"hash_count"`
+	TemporalCoverage    float64 `json:"temporal_coverage"`
+	MatchStartOffsetMs  int32   `json:"match_start_offset_ms"`
+	MatchEndOffsetMs    int32   `json:"match_end_offset_ms"`
+	VariantUsed         int16   `json:"variant_used"`
+	RateUsed            int16   `json:"rate_used"`
 }
 
 // Service listens for confirmed detections, extracts audio evidence from the
@@ -154,18 +160,22 @@ func (s *Service) handle(msg *nats.Msg) {
 		campaignID = uuid.Nil
 	}
 
+	// TemporalCoverage is the same value as Confidence today (both come from
+	// CoverageWindow.Coverage()), but it round-trips on its own JSON tag so
+	// the schema column reflects what the worker actually sent rather than a
+	// silent re-use of Confidence.
 	det, err := s.detections.Create(ctx, catalog.CreateDetectionInput{
 		StationID:          stationID,
 		CommercialID:       commercialID,
 		CampaignID:         campaignID,
 		DetectedAt:         detectedAt,
-		MatchStartOffsetMs: 0,
-		MatchEndOffsetMs:   0,
+		MatchStartOffsetMs: ev.MatchStartOffsetMs,
+		MatchEndOffsetMs:   ev.MatchEndOffsetMs,
 		Confidence:         ev.Confidence,
-		HashCount:          0,
-		TemporalCoverage:   ev.Confidence,
-		VariantUsed:        0,
-		RateUsed:           0,
+		HashCount:          ev.HashCount,
+		TemporalCoverage:   ev.TemporalCoverage,
+		VariantUsed:        ev.VariantUsed,
+		RateUsed:           ev.RateUsed,
 	})
 	if err != nil {
 		s.log.Error("evidence: db insert failed", zap.Error(err))

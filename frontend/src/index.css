@@ -832,6 +832,25 @@ textarea.input { min-height: 90px; resize: vertical; line-height: 1.5; }
   color: var(--c-action);
 }
 
+.day-detail-details {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  color: var(--c-text-3);
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.day-detail-details:hover {
+  background: var(--c-action-light);
+  color: var(--c-action);
+  transform: translateX(1px);
+}
+
 /* ── Dashboard Page ───────────────────────────────────────────── */
 .dashboard-greeting {
   margin-bottom: 28px;

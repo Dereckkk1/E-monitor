@@ -238,6 +238,12 @@ func TestDetectionEvent_JSONRoundTrip(t *testing.T) {
 		Confidence:          0.92,
 		EvidenceWindowStart: "2026-05-07T09:59:00Z",
 		EvidenceWindowEnd:   "2026-05-07T10:01:00Z",
+		HashCount:           37,
+		TemporalCoverage:    0.92,
+		MatchStartOffsetMs:  256,
+		MatchEndOffsetMs:    30464,
+		VariantUsed:         0,
+		RateUsed:            0,
 	}
 	b, err := json.Marshal(src)
 	if err != nil {
@@ -252,6 +258,12 @@ func TestDetectionEvent_JSONRoundTrip(t *testing.T) {
 		`"confidence"`,
 		`"evidence_window_start"`,
 		`"evidence_window_end"`,
+		`"hash_count"`,
+		`"temporal_coverage"`,
+		`"match_start_offset_ms"`,
+		`"match_end_offset_ms"`,
+		`"variant_used"`,
+		`"rate_used"`,
 	} {
 		if !contains(b, []byte(field)) {
 			t.Fatalf("expected JSON to contain %s; got %s", field, string(b))
