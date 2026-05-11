@@ -179,6 +179,24 @@ export default function DistributionStep({
           rows={rows}
           cellData={cellData}
           onCellClick={handleCellClick}
+          onCellIncrement={(stationId, materialId, dateISO, currentValue) => {
+            upsertOverride.mutate({
+              campaignId,
+              material_id: materialId,
+              station_id: stationId,
+              for_date: dateISO,
+              plays_expected: currentValue + 1,
+            })
+          }}
+          onCellDecrement={(stationId, materialId, dateISO, currentValue) => {
+            upsertOverride.mutate({
+              campaignId,
+              material_id: materialId,
+              station_id: stationId,
+              for_date: dateISO,
+              plays_expected: Math.max(0, currentValue - 1),
+            })
+          }}
         />
       )}
 
