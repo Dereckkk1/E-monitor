@@ -1,6 +1,10 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useCampaigns, useDetections, useStations, useClients } from '../api/hooks'
+import {
+  useCampaigns, useStations, useClients, useStreamHealth,
+  useCampaignMaterials, useMaterials, useDistributionRules,
+  useMaterialTypes, useDailySummary,
+} from '../api/hooks'
 import RSelect from '../components/RSelect'
 import DetectionsCalendar from '../components/DetectionsCalendar'
 import DayDetailModal from '../components/DayDetailModal'
@@ -200,33 +204,36 @@ export default function DetectionsPage() {
     return m
   }, [clients])
 
-  // Build detection filters — only run when campaign is selected
-  const detectionFilters = useMemo(() => {
-    if (!selectedCampaignId) return null
-    return {
-      campaign_id: selectedCampaignId,
-      start_date:  period.start.toISOString(),
-      end_date:    period.end.toISOString(),
-      limit:       5000,
-    }
-  }, [selectedCampaignId, period])
+  // Find the selected campaign object (we'll use start/end dates from it)
+  const selectedCampaign = useMemo(
+    () => campaigns.find(c => c.id === selectedCampaignId) ?? null,
+    [campaigns, selectedCampaignId]
+  )
 
+  // Date range strings for daily-summary query (YYYY-MM-DD)
+  const fromISO = useMemo(() => period.start.toISOString().slice(0, 10), [period])
+  const toISO   = useMemo(() => period.end.toISOString().slice(0, 10), [period])
+
+  // Hydrate the campaign's material library
+  const { data: clientLibrary = [] } = useMaterials(selectedCampaign?.client_id ?? null)
+  const materialsById = useMemo(
+    () => Object.fromEntries(clientLibrary.map(m => [m.id, m])),
+    [clientLibrary]
+  )
+
+  // Campaign-scoped data
+  const { data: campaignMaterials = [] } = useCampaignMaterials(selectedCampaignId || null)
+  const { data: distributionRules = [] } = useDistributionRules(selectedCampaignId || null)
+  const { data: materialTypes = [] }     = useMaterialTypes()
   const {
-    data: detections = [],
-    isLoading: loadingDetections,
+    data: summary = [],
+    isLoading: loadingSummary,
     isFetching,
     refetch,
-  } = useDetections(detectionFilters)
+  } = useDailySummary(selectedCampaignId || null, fromISO, toISO)
 
   const showDetections = !!selectedCampaignId
-  const isLoadingData  = showDetections && (loadingDetections || isFetching)
-
-  // Só exibe detecções com evidência confirmada — pending/failed ficam ocultos
-  // até o áudio estar disponível, evitando contagens provisórias na grid.
-  const confirmedDetections = useMemo(
-    () => detections.filter(d => d.evidence_status === 'available'),
-    [detections]
-  )
+  const isLoadingData  = showDetections && (loadingSummary || isFetching)
 
   // ── Campaign change ───────────────────────────────────────────
   function handleCampaignChange(opt) {
