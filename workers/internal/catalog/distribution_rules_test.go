@@ -64,7 +64,10 @@ func TestDistributionRules_CRUD(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	r, _ := repo.Get(ctx, rule.ID)
+	r, err := repo.Get(ctx, rule.ID)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
 	if r.PlaysPerDay != 5 {
 		t.Errorf("after update: PlaysPerDay = %d, want 5", r.PlaysPerDay)
 	}

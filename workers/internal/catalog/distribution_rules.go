@@ -111,7 +111,17 @@ func (dr *DistributionRules) ListByCampaign(ctx context.Context, campaignID uuid
 //   - date is in [start_date, end_date]
 //   - weekday of date matches weekday_mask
 //
-// Used by the categorizer.
+// Used by the categorizer (workers/internal/categorizer).
+//
+// IMPORTANT TZ contract: `date` MUST already be normalized to local date
+// at midnight in America/Sao_Paulo. The SQL casts `$4::date` which uses
+// the session timezone to extract the date portion — passing a UTC time
+// can resolve to the wrong weekday for events near midnight in SP TZ.
+// Caller's responsibility: do the TZ conversion in Go before invoking this.
+//
+// Time-of-day matching (slot inclusion) is intentionally NOT done here —
+// the categorizer evaluates that in Go after this method returns the
+// applicable rules. Filter is date+weekday only.
 func (dr *DistributionRules) ListApplicable(ctx context.Context,
 	campaignID, materialID, stationID uuid.UUID, date time.Time) ([]DistributionRule, error) {
 
