@@ -39,6 +39,17 @@ const (
 	// shared region. Aligned with the runtime matcher's default minScore so
 	// every region the runtime would credit gets flagged here.
 	MinScore = 5
+	// SubsetThreshold é a fração de janelas em que o scan precisa bater no
+	// "outro" comercial para que o par seja classificado como subset/duplicata
+	// em vez de sting compartilhado. ≥ threshold → não flag (deixa a
+	// disambiguação por duração decidir). < threshold → flag normal.
+	//
+	// Calibração: em um corte 30s extraído de um master 60s, o scan do 30s
+	// bate no 60s em 100% das janelas. No par AMB30/JINGLE (sting de 6,25s
+	// em comerciais de 30s), o scan bate em ~11-15% das janelas. Threshold
+	// de 0.5 cobre os dois extremos com folga e dá margem pra cortes
+	// mal-alinhados (ex: 27s de overlap em 30s = 90%).
+	SubsetThreshold = 0.5
 )
 
 // MarkSharedHashes scans the given commercial's master audio against the
@@ -86,62 +97,22 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 		return fmt.Errorf("sharing: decode master: %w", err)
 	}
 
-	// 4. Slide the analysis window. For every window where any *other*
-	//    commercial scores above MinScore, accumulate frame ranges to flag
-	//    on both the new commercial and the matched one.
-	const sampleRate = fingerprint.SampleRate
-	const stftHopSamples = 2048 // matches pkg/audio STFT hop
-	windowSamples := sampleRate * WindowSeconds
-	hopSamples := sampleRate * HopSeconds
+	// 4. Slide a 4s @ 1s hop window over A's PCM, run MatchWindow against the
+	//    catalog index, and accumulate per-(other commercial) ranges plus
+	//    window-hit counts. The window-hit counts let step 5 classify each
+	//    pair (A, X) as subset/duplicate (skip flagging) or sting (flag).
+	scan := scanForSharedRegions(pcm, store, shortID, shortIDToCommercialID, commercialID)
 
-	rangesByCommercial := make(map[uuid.UUID][]frameRange)
-
-	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
-		window := pcm[off : off+windowSamples]
-		results := match.MatchWindow(window, store, MinScore, 0.0)
-		ownStartFrame := int32(off / stftHopSamples)
-		ownEndFrame := int32((off + windowSamples) / stftHopSamples)
-		for _, r := range results {
-			if r.CommercialShortID == shortID {
-				continue // self-match
-			}
-			otherID, ok := shortIDToCommercialID[r.CommercialShortID]
-			if !ok {
-				continue // catalog inconsistency — skip safely
-			}
-
-			// New commercial's range: this analysis window.
-			rangesByCommercial[commercialID] = append(
-				rangesByCommercial[commercialID],
-				frameRange{ownStartFrame, ownEndFrame},
-			)
-
-			// Other commercial's range: derived from the histogram delta.
-			// live_time_frame - entry.TimeFrame = OffsetFrames, so
-			// entry.TimeFrame = live_time_frame - OffsetFrames. The window
-			// covers live frames [ownStartFrame, ownEndFrame].
-			xStart := int32(int(ownStartFrame) - r.OffsetFrames)
-			xEnd := int32(int(ownEndFrame) - r.OffsetFrames)
-			if xStart > xEnd {
-				xStart, xEnd = xEnd, xStart
-			}
-			if xEnd <= 0 {
-				continue
-			}
-			if xStart < 0 {
-				xStart = 0
-			}
-			rangesByCommercial[otherID] = append(
-				rangesByCommercial[otherID],
-				frameRange{xStart, xEnd},
-			)
-		}
-	}
+	// 5. Classify each pair (A, X) and produce the final rangesByCommercial.
+	//    Pairs whose hit ratio ≥ SubsetThreshold are treated as subset/dup
+	//    relationships (where the disambiguation-by-duration layer is the
+	//    appropriate defense), so we do NOT flag them as shared.
+	rangesByCommercial := classifyAndFilter(scan, SubsetThreshold)
 	if len(rangesByCommercial) == 0 {
 		return nil
 	}
 
-	// 5. Merge overlapping/contiguous frame ranges per commercial, then issue
+	// 6. Merge overlapping/contiguous frame ranges per commercial, then issue
 	//    one UPDATE per merged range.
 	for cid, frs := range rangesByCommercial {
 		merged := mergeRanges(frs)
@@ -164,6 +135,127 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 
 // frameRange is a half-open interval [from, until) on time_frame.
 type frameRange struct{ from, until int32 }
+
+// scanReport agrega os dados de um scan de A contra o catálogo: total de
+// janelas analisadas e, por outro comercial X, quantas janelas tiveram hit
+// + as ranges (em A e em X) que precisariam ser flagged se o par for sting.
+//
+// Mantido como tipo nomeado para que o filtro subset/sting seja testável
+// isoladamente (sem rodar áudio + DB).
+type scanReport struct {
+	ownCommercialID uuid.UUID
+	totalWindows    int
+	perOther        map[uuid.UUID]*perOtherScan
+}
+
+type perOtherScan struct {
+	windowsWithHits int
+	ownRanges       []frameRange
+	otherRanges     []frameRange
+}
+
+// scanForSharedRegions desliza uma janela de WindowSeconds em hops de
+// HopSeconds sobre o PCM de A, busca matches no índice e devolve um
+// scanReport com totais por outro comercial. Não toca DB.
+func scanForSharedRegions(
+	pcm []float32,
+	store *index.Store,
+	ownShortID int32,
+	shortIDToCommercialID map[int32]uuid.UUID,
+	ownCommercialID uuid.UUID,
+) scanReport {
+	const sampleRate = fingerprint.SampleRate
+	const stftHopSamples = 2048 // matches pkg/audio STFT hop
+	windowSamples := sampleRate * WindowSeconds
+	hopSamples := sampleRate * HopSeconds
+
+	report := scanReport{
+		ownCommercialID: ownCommercialID,
+		perOther:        make(map[uuid.UUID]*perOtherScan),
+	}
+
+	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
+		report.totalWindows++
+		window := pcm[off : off+windowSamples]
+		results := match.MatchWindow(window, store, MinScore, 0.0)
+
+		ownStartFrame := int32(off / stftHopSamples)
+		ownEndFrame := int32((off + windowSamples) / stftHopSamples)
+
+		seenThisWindow := make(map[uuid.UUID]bool)
+		for _, r := range results {
+			if r.CommercialShortID == ownShortID {
+				continue // self-match
+			}
+			otherID, ok := shortIDToCommercialID[r.CommercialShortID]
+			if !ok {
+				continue // catalog inconsistency — skip safely
+			}
+
+			scan := report.perOther[otherID]
+			if scan == nil {
+				scan = &perOtherScan{}
+				report.perOther[otherID] = scan
+			}
+			if !seenThisWindow[otherID] {
+				scan.windowsWithHits++
+				seenThisWindow[otherID] = true
+			}
+
+			scan.ownRanges = append(scan.ownRanges, frameRange{ownStartFrame, ownEndFrame})
+
+			// Other commercial's range: live_time_frame - entry.TimeFrame =
+			// OffsetFrames, so entry.TimeFrame = live_time_frame -
+			// OffsetFrames. The window covers live frames
+			// [ownStartFrame, ownEndFrame].
+			xStart := int32(int(ownStartFrame) - r.OffsetFrames)
+			xEnd := int32(int(ownEndFrame) - r.OffsetFrames)
+			if xStart > xEnd {
+				xStart, xEnd = xEnd, xStart
+			}
+			if xEnd <= 0 {
+				continue
+			}
+			if xStart < 0 {
+				xStart = 0
+			}
+			scan.otherRanges = append(scan.otherRanges, frameRange{xStart, xEnd})
+		}
+	}
+	return report
+}
+
+// classifyAndFilter consome um scanReport e devolve o mapa final
+// commercial_id → ranges a flagar como is_shared.
+//
+// Regra: para cada outro comercial X, calcula `fraction = windowsWithHits /
+// totalWindows`. Se fraction ≥ subsetThreshold, o par (A, X) é interpretado
+// como relação subset/duplicata (ex: corte 30s extraído do master 60s) e
+// **não é flagado** — a desambiguação por maior duração no supervisor é
+// a defesa apropriada nesse caso. Se fraction < subsetThreshold, é um
+// sting compartilhado em comerciais distintos — flag normal.
+//
+// O caso "duplicata total" (ambos comerciais ≥ subsetThreshold um do outro)
+// resulta em nenhum flag por nenhum dos dois scans — comportamento desejado,
+// já que duas duplicatas confirmariam ambas e o operador deve remover a
+// extra do catálogo. Detectável via SQL de auditoria (shared_pct nas duas
+// linhas).
+func classifyAndFilter(report scanReport, subsetThreshold float64) map[uuid.UUID][]frameRange {
+	out := make(map[uuid.UUID][]frameRange)
+	if report.totalWindows == 0 {
+		return out
+	}
+	for otherID, scan := range report.perOther {
+		fraction := float64(scan.windowsWithHits) / float64(report.totalWindows)
+		if fraction >= subsetThreshold {
+			// Subset/duplicate — não flag.
+			continue
+		}
+		out[report.ownCommercialID] = append(out[report.ownCommercialID], scan.ownRanges...)
+		out[otherID] = append(out[otherID], scan.otherRanges...)
+	}
+	return out
+}
 
 // loadCatalogIndex loads every fingerprint_hash for ready commercials into an
 // index, plus a short_id → commercial_id map so the scan can translate match

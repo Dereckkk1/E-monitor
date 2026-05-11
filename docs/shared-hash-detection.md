@@ -142,15 +142,51 @@ Then run the backfill again.
   processed independently and serially. ~10 minutes for 200 commercials on
   the staging hardware.
 
+## Subset / version-cut relationships
+
+A **subset relationship** appears when one commercial is a literal cut of
+another (e.g. a 30s edit extracted from a 60s master). Without special
+handling the algorithm above would flag *every* hash of the shorter cut as
+shared (because every window of its audio also appears in the longer
+master), causing the matcher to never confirm it — a false negative.
+
+The algorithm classifies each pair (A, X) at the end of A's scan:
+
+```
+fraction = windows_with_hits_on_X / total_windows_in_scan
+
+fraction ≥ SubsetThreshold (0.5) → subset/duplicate — DO NOT flag the pair
+fraction <  SubsetThreshold      → sting overlap  — flag both sides
+```
+
+For a clean 30s extract of a 60s master, the 30s scan hits the 60s in 100%
+of its windows. Reciprocally, the 60s scan hits the 30s in ~50% of its
+windows (the matching half). Both fall at or above the threshold → neither
+side is flagged. The runtime then relies on the
+[version-disambiguation](version-disambiguation.md) layer: both versions
+confirm legitimately, and the supervisor picks the longer cut.
+
+For the AMB30/JINGLE sting (~6,25s overlap in 30s commercials), the scan
+hits the other in ~11-15% of windows — well below the threshold — so flags
+are applied normally and the false-positive defense works as designed.
+
+The threshold lives in `sharing.SubsetThreshold` and is unit-tested in
+[`sharing_test.go`](../workers/internal/sharing/sharing_test.go).
+
 ## Known limits
 
 - `loudnorm` divergence: the same audio in two masters may produce hashes
   with different values. Exact-value collision misses ~98% of the genuinely
   shared content. Matching-engine simulation captures it correctly, at the
   cost of a longer per-upload step.
-- Two commercials whose audio is **fully identical** end up with all hashes
-  flagged shared. Neither will confirm. Detect via the SQL above (`shared_pct
-  ≈ 100` on both sides) and resolve by deleting the duplicate.
+- **Duplicates** (two commercials with essentially identical audio): both
+  scans see the other at ratio ≥ SubsetThreshold, so both are classified as
+  subset and neither is flagged. The disambiguation-by-duration layer
+  cannot break the tie (same duration) — both detections get published
+  legitimately. Detect operationally via the `shared_pct` audit query
+  before the fix landed; after the algorithm change duplicates surface as
+  both rows with `shared = 0` and overlapping detection windows. Resolve
+  by deleting the redundant master from the catalog.
 - The flag is stored on `fingerprint_hashes` rather than on a separate
   ranges table. The denormalization keeps the runtime index loader on a
   single SELECT (no JOIN in the hot path); the trade-off is that resetting
