@@ -6,10 +6,10 @@ BEGIN;
 
 -- ────── 1. Coluna category em detections ──────
 
-ALTER TABLE detections ADD COLUMN category TEXT
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS category TEXT
     CHECK (category IN ('in_slot','out_slot','out_date','orphan'));
 
-CREATE INDEX idx_detections_category ON detections(campaign_id, detected_at, category);
+CREATE INDEX IF NOT EXISTS idx_detections_category ON detections(campaign_id, detected_at, category);
 
 -- Backfill: detections existentes viram 'orphan' (nenhuma regra existe ainda).
 UPDATE detections SET category = 'orphan' WHERE category IS NULL;

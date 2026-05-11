@@ -146,6 +146,18 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 2. **`evidence.process_async` e `webhook.deliver` em traces separados.** Async/decoupled por design (callback NATS retorna antes do upload S3 terminar; webhook outbox pode entregar minutos depois). `PropagateTraceContext` mantém o `trace_id` em comum, mas não há `parent_span_id` ligando os dois — aparecem como traces irmãos com mesmo trace_id no Jaeger. Documentado em `docs/tracing.md`.
 3. **CLAP verifier sidecar (Python) não instrumentado.** Fora do escopo do Item F (Go-only). Se for instrumentar depois, usar `opentelemetry-instrumentation-fastapi` ou similar e injetar trace context no header HTTP da chamada do `neural/client.go`.
 
+### F-84. `daily_play_summary` view performance com predicate pushdown
+
+**Por quê:** a view criada na migration 0018 não suporta predicate pushdown de `campaign_id`. Em volume de produção (centenas de campanhas, milhões de detections/mês), queries filtradas por campanha vão materializar a view inteira antes de aplicar o filtro. Consultas de clientes no endpoint `GET /v1/internal/campaigns/:id/daily-summary` sofrem latência inaceitável quando há muitos dados históricos.
+
+**Onde:** `migrations/0018_detections_categorization.up.sql` (criação da view) + endpoint em `workers/internal/api/handlers/campaigns.go`.
+
+**Como:** promover pra MATERIALIZED VIEW com refresh incremental disparado pelo worker após INSERT/UPDATE em detections. Spec §5.4 já antecipa essa arquitetura — implementação deve seguir modelo de invalidação por campaign. Adicionar trigger ou update schedule no supervisor para disparar `REFRESH MATERIALIZED VIEW daily_play_summary WHERE campaign_id = $1` após confirmar detecção.
+
+**Dependência:** decisão sobre trigger vs. refresh manual. Risco médio se view tornar grande.
+
+**Validação:** rodar `EXPLAIN ANALYZE` com volume representativo (1M+ detections, 100+ campanhas) antes de mergear o Plano 3 (Detections refactor).
+
 ---
 
 ## Itens médios — fazer antes do crescimento real
