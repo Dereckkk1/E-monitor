@@ -303,3 +303,12 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-97** — Validação "future-only edit" no frontend: pré-bloqueio de campos + tooltip explicando que regras passadas só podem ter o end_date encurtado. Pareado com F-91 no backend.
 - **F-98** — Drag-and-drop pra reordenar materiais dentro de uma campanha (UX nice-to-have).
 - **F-99** — Atalho "Aplicar regra a todas as emissoras com este material" (bulk action no rule editor side panel).
+
+---
+
+## Detections Refactor (Plano 3) — Follow-ups
+
+- **F-100** — Botão dedicado de "Saúde da emissora" no header de cada bloco da grade, em vez de clique no avatar (acessibilidade melhor). Atualmente o clique no header todo abre o HealthDrawer.
+- **F-101** — Filtros de categoria na toolbar (ex: "Mostrar só células com déficit"). Útil pra investigar problemas rapidamente.
+- **F-102** — Export do relatório (CSV/PDF) com os totais + breakdown por (station, material, day) pra entregar ao cliente.
+- **F-103** — Indicador visual de "última atualização" da view (a `daily_play_summary` é live mas usuário não sabe). Mostrar timestamp do último refetch.
