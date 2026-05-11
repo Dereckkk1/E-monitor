@@ -23,8 +23,8 @@ func TestDiagnose_AmbientalJingle2(t *testing.T) {
 	defer cancel()
 
 	root := repoRoot(t)
-	masterPath := filepath.Join(root, "audio-refs", "AMBIENTAL JINGLE (1).mp3")
-	evidencePath := filepath.Join(root, "audio-refs", "veiculacao-aa0fbd27-c19f-4cee-9a88-dcb0f4484257.m4a")
+	masterPath := filepath.Join(root, "audio-refs", "AMBIENTAL JINGLE (2).mp3")
+	evidencePath := filepath.Join(root, "audio-refs", "veiculacao-aa0fbd27-c19f-4cee-9a88-dcb0f4484257 (1).m4a")
 
 	// Reproduce Python's broadcast_sim variant 0 path: acompressor + AAC 96k
 	// re-encode/decode, then run the matcher's own preprocessing (highpass100
