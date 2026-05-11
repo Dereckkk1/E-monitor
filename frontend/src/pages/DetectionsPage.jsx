@@ -305,6 +305,73 @@ export default function DetectionsPage() {
     return targetStations.filter(s => matchesAllTokens(s, fields, tokens))
   }, [targetStations, search])
 
+  // Color lookup for material types
+  const typeColorById = useMemo(
+    () => Object.fromEntries(materialTypes.map(t => [t.id, t.color])),
+    [materialTypes]
+  )
+
+  // Build "rows" — one per (station, material) combination that exists in this campaign
+  const rows = useMemo(() => {
+    const r = []
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (!mat) continue
+      for (const sid of cm.target_stations) {
+        const matching = distributionRules.filter(rule =>
+          rule.material_id === cm.material_id && rule.station_ids.includes(sid))
+        const first = matching[0]
+        r.push({
+          stationId: sid,
+          materialId: cm.material_id,
+          materialTitle: mat.title,
+          typeColor: typeColorById[mat.type_id] ?? '#94a3b8',
+          ruleSummary: first
+            ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
+            : null,
+          extraRules: Math.max(0, matching.length - 1),
+        })
+      }
+    }
+    return r
+  }, [campaignMaterials, distributionRules, materialsById, typeColorById])
+
+  // Build cellData map from daily summary
+  const cellData = useMemo(() => {
+    const m = new Map()
+    for (const s of summary) {
+      const key = `${s.station_id}|${s.material_id}|${s.for_date.slice(0, 10)}`
+      m.set(key, { ...s, hasOverride: false })
+    }
+    return m
+  }, [summary])
+
+  // The month being displayed (first of selectedMonth)
+  const monthDate = useMemo(() => {
+    const [y, m] = selectedMonth.split('-').map(Number)
+    return new Date(y, m - 1, 1)
+  }, [selectedMonth])
+
+  // Filter rows by station+material search
+  const filteredRows = useMemo(() => {
+    const tokens = tokenize(search)
+    if (tokens.length === 0) return rows
+    return rows.filter(r => {
+      const station = stationCatalog.find(s => s.id === r.stationId)
+      if (!station) return false
+      const fields = [
+        station.name ?? '',
+        station.city ?? '',
+        station.state ?? '',
+        station.band ?? '',
+        station.frequency_mhz != null ? String(station.frequency_mhz) : '',
+        r.materialTitle ?? '',
+      ]
+      return tokens.every(tok =>
+        fields.some(f => f.toLowerCase().includes(tok.toLowerCase())))
+    })
+  }, [rows, search, stationCatalog])
+
   // ── Month navigation ──────────────────────────────────────────
   const currentMonth = currentMonthValue()
   const prevMonth    = prevMonthValue(currentMonth)
