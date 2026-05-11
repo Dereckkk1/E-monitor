@@ -44,6 +44,10 @@ CREATE TABLE materials (
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    -- NOTA: NÃO adicionar UNIQUE(client_id, master_sha256) nesta migration.
+    -- Commercials existentes podem ter duplicatas (mesmo MP3 em campanhas
+    -- diferentes). Migrar 1:1 preserva referências de detections.commercial_id.
+    -- Constraint pode ser adicionada em migration futura após limpeza manual.
 );
 CREATE INDEX idx_materials_client ON materials(client_id);
 CREATE INDEX idx_materials_type ON materials(type_id);
