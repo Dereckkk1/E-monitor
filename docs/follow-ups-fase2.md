@@ -278,3 +278,17 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **Antes de iniciar Fase 3**, F-01 a F-08 devem estar resolvidos ou explicitamente aceitos como dívida.
 - **Atualizar este arquivo** ao resolver: marcar item como `**Status:** resolvido em commit <sha>` e remover quando antigo.
 - **Não documentar aqui o que já está em `plano_implementacao.md`.** Esse arquivo é apenas para itens identificados durante implementação que merecem rastreamento operacional.
+
+---
+
+## Foundations (Plano 1) — Follow-ups
+
+- **F-85** — Padronizar comportamento de `Delete` / `Update` em repos do catalog. Hoje `material_types.Delete`, `materials.Delete`, `materials.UpdateType`, `campaign_materials.Unlink`, `campaign_materials.UpdateStations` retornam nil silenciosamente quando a linha não existe. `clients.Delete` retorna `pgx.ErrNoRows`. Decidir um padrão único (provavelmente loud — verificar `RowsAffected`) e aplicar consistentemente.
+- **F-86** — Refatorar `MaterialsHandler.Upload` e `CommercialsHandler.Upload` extraindo helper compartilhado de SHA256 + storage + dispatch fingerprint num pacote `internal/upload/`. Atualmente duplicado.
+- **F-87** — Adicionar `UNIQUE(client_id, master_sha256)` em `materials` após operador mesclar duplicatas via UI (futura).
+- **F-88** — Implementar `probeDuration()` em `MaterialsHandler` via `ffprobe` (atualmente retorna 30.0 stub). Copiar lógica de `commercials.go` ou extrair pra helper compartilhado.
+- **F-89** — Background job de re-categorização em `DistributionRulesHandler` não bloqueia o handler nem reporta status. Considerar fila NATS com worker dedicado se volume de detections crescer e re-categorização ficar > 1s.
+- **F-90** — Deprecar `commercials.target_stations` e `commercials.campaign_id` em migration futura (0019+) após Planos 2 e 3 estarem em produção.
+- **F-91** — Validação "future-only edit" (§8 da spec) em `DistributionRulesHandler.Update/Delete`. Atualmente backend aceita qualquer edição; validação fica na UI. Mover pro backend antes do Plano 2.
+- **F-92** — Escape de metacaracteres LIKE (`%`, `_`, `\`) no parâmetro `q` de `Materials.ListByClient`. Atualmente vulnerável a injeção semântica (não SQL injection, mas comportamento inesperado). Sanitizar no handler layer.
+- **F-93** — `ListApplicable` em `distribution_rules.go` documentou contrato de TZ (caller deve passar SP-local-midnight). Considerar mudar assinatura pra aceitar `string` "YYYY-MM-DD" pra remover ambiguidade no runtime.
