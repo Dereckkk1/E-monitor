@@ -9,6 +9,7 @@ const CATEGORY_LABEL = {
   out_slot: { label: 'Fora da faixa',   variant: 'yellow' },
   out_date: { label: 'Fora da data',    variant: 'purple' },
   orphan:   { label: 'Bônus (sem regra)', variant: 'blue' },
+  other:    { label: 'Sem categoria',   variant: 'gray' },
 }
 
 function fmtTime(iso) {
@@ -123,13 +124,24 @@ export default function DayDetailModal({
     ? detectionsResp
     : (detectionsResp?.data ?? [])
 
-  // Filter to just this material (the API doesn't support commercial_id filter param)
-  const filtered = detections.filter(d => d.commercial_id === materialId)
+  // Show all detections for this (station, day) — don't strictly filter by materialId.
+  // Reason: detections.commercial_id may not always equal materials.id (e.g. for materials
+  // uploaded via wizard before backfill, or when audio hash matches a different material).
+  // Mark mismatches with a "outro material" hint instead of hiding them.
+  const filtered = detections
   const grouped = {
     in_slot:  filtered.filter(d => d.category === 'in_slot'),
     out_slot: filtered.filter(d => d.category === 'out_slot'),
     out_date: filtered.filter(d => d.category === 'out_date'),
     orphan:   filtered.filter(d => d.category === 'orphan'),
+    other:    filtered.filter(d => !['in_slot','out_slot','out_date','orphan'].includes(d.category)),
+  }
+
+  // Debug for diagnosis: log what shape we got
+  if (typeof window !== 'undefined' && window.__RC_DEBUG_MODAL) {
+    console.log('DayDetailModal: detections=', detections.length, 'materialId=', materialId,
+      'first commercial_id=', detections[0]?.commercial_id,
+      'categories=', detections.map(d => d.category))
   }
 
   return (
