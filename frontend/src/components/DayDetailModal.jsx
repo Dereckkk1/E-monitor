@@ -218,7 +218,17 @@ function DetectionsList({ grouped, activePlayerId, evidenceBlobUrls, loadingId, 
               {list.map(d => {
                 const isPlaying = activePlayerId === d.id
                 const isLoadingThis = loadingId === d.id
-                const hasEvidence = d.evidence_status === 'available'
+                // Show audio controls for any status that has a chance of having audio.
+                // Backend returns 404 if evidence isn't actually available — handled in handlePlay's catch.
+                const hasEvidence = d.evidence_status === 'available' ||
+                                    d.evidence_status === 'pending' ||
+                                    d.evidence_status === 'generating' ||
+                                    !d.evidence_status  // legacy detections may have no status
+                const evidenceLabel = d.evidence_status === 'pending' ? 'processando…'
+                  : d.evidence_status === 'generating' ? 'gerando…'
+                  : d.evidence_status === 'missing' ? 'sem áudio'
+                  : d.evidence_status === 'failed' ? 'falhou'
+                  : null
                 return (
                   <li key={d.id} style={{
                     padding: '6px 10px', background: '#fafbfc',
@@ -255,7 +265,12 @@ function DetectionsList({ grouped, activePlayerId, evidenceBlobUrls, loadingId, 
                         )}
                         {!hasEvidence && (
                           <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                            {d.evidence_status || 'indisponível'}
+                            {evidenceLabel || 'indisponível'}
+                          </span>
+                        )}
+                        {hasEvidence && evidenceLabel && (
+                          <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 6 }}>
+                            {evidenceLabel}
                           </span>
                         )}
                       </div>
