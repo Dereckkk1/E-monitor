@@ -5,6 +5,7 @@ import {
   useCampaigns, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
+  useCampaignMaterials, useMaterials,
 } from '../api/hooks'
 import api from '../api/client'
 import RSelect from '../components/RSelect'
@@ -757,8 +758,49 @@ function BulkUploadZone({ campaignId, campaignStationIds, allStations }) {
 
 // ─── MaterialsPanel ────────────────────────────────────────────────────────────
 
-function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
-  const { data: commercials = [], isLoading } = useCommercials(campaignId)
+function MaterialsPanel({ campaign, campaignStationIds, allStations }) {
+  const campaignId = campaign.id
+  const clientId = campaign.client_id
+  const { data: commercials = [], isLoading: loadingCom } = useCommercials(campaignId)
+  const { data: campaignMaterials = [], isLoading: loadingCM } = useCampaignMaterials(campaignId)
+  const { data: clientLibrary = [] } = useMaterials(clientId)
+  const isLoading = loadingCom || loadingCM
+
+  const libraryById = useMemo(
+    () => Object.fromEntries(clientLibrary.map(m => [m.id, m])),
+    [clientLibrary]
+  )
+
+  // Merge: prefer items from campaign_materials (new schema) when both exist.
+  // After Plan 1 backfill, commercial.id == material.id for migrated rows.
+  const items = useMemo(() => {
+    const fromLinks = campaignMaterials
+      .map(link => {
+        const mat = libraryById[link.material_id]
+        if (!mat) return null
+        // Shape it like a Commercial so CommercialRow can render it unchanged.
+        return {
+          id: mat.id,
+          short_id: mat.short_id,
+          campaign_id: campaignId,
+          title: mat.title,
+          cut_label: null,
+          duration_seconds: mat.duration_seconds,
+          master_storage_path: mat.master_storage_path,
+          master_sha256: mat.master_sha256,
+          fingerprint_status: mat.fingerprint_status,
+          fingerprint_generated_at: mat.fingerprint_generated_at,
+          fingerprint_hash_count: mat.fingerprint_hash_count,
+          target_stations: link.target_stations,
+          created_at: link.added_at,
+        }
+      })
+      .filter(Boolean)
+
+    const linkedIds = new Set(fromLinks.map(x => x.id))
+    const fromOld = commercials.filter(c => !linkedIds.has(c.id))
+    return [...fromLinks, ...fromOld]
+  }, [campaignMaterials, libraryById, commercials, campaignId])
 
   return (
     <div className="expanded-section">
@@ -768,7 +810,7 @@ function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
         <div style={{ padding: '16px 0' }}>
           {[1,2].map(i => <div key={i} className="skeleton" style={{ height: 36, borderRadius: 6, marginBottom: 6 }} />)}
         </div>
-      ) : commercials.length > 0 ? (
+      ) : items.length > 0 ? (
         <table className="commercials-table">
           <thead>
             <tr>
@@ -780,7 +822,7 @@ function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
             </tr>
           </thead>
           <tbody>
-            {commercials.map(c => (
+            {items.map(c => (
               <CommercialRow
                 key={c.id}
                 commercial={c}
@@ -1004,7 +1046,7 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         <div className="campaign-expanded">
           <CampaignStationsSection campaign={campaign} allStations={allStations} />
           <MaterialsPanel
-            campaignId={campaign.id}
+            campaign={campaign}
             campaignStationIds={campaign.target_stations ?? []}
             allStations={allStations}
           />
