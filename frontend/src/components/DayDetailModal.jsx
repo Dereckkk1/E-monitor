@@ -9,7 +9,6 @@ const CATEGORY_LABEL = {
   out_slot: { label: 'Fora da faixa',   variant: 'yellow' },
   out_date: { label: 'Fora da data',    variant: 'purple' },
   orphan:   { label: 'Bônus (sem regra)', variant: 'blue' },
-  other:    { label: 'Sem categoria',   variant: 'gray' },
 }
 
 function fmtTime(iso) {
@@ -108,9 +107,11 @@ export default function DayDetailModal({
     }
   }
 
-  // Fetch detections for this exact (campaign, station, day)
-  const startISO = `${dateISO}T00:00:00.000Z`
-  const endISO   = `${dateISO}T23:59:59.999Z`
+  // Fetch detections for this (campaign, station, day) using São Paulo local-day
+  // range (UTC-3). The daily_play_summary view buckets by SP day; matching that
+  // here ensures we get the same detections the view counted.
+  const startISO = new Date(`${dateISO}T00:00:00.000-03:00`).toISOString()
+  const endISO   = new Date(`${dateISO}T23:59:59.999-03:00`).toISOString()
   const { data: detectionsResp, isLoading } = useDetections({
     campaign_id: campaignId,
     station_id: stationId,
@@ -124,24 +125,15 @@ export default function DayDetailModal({
     ? detectionsResp
     : (detectionsResp?.data ?? [])
 
-  // Show all detections for this (station, day) — don't strictly filter by materialId.
-  // Reason: detections.commercial_id may not always equal materials.id (e.g. for materials
-  // uploaded via wizard before backfill, or when audio hash matches a different material).
-  // Mark mismatches with a "outro material" hint instead of hiding them.
-  const filtered = detections
+  // Filter to detections of this material only. After Plan 1 migration, materials.id
+  // equals the original commercial.id, so commercial_id on legacy detections matches.
+  // New materials uploaded via wizard get the same ID end-to-end.
+  const filtered = detections.filter(d => d.commercial_id === materialId)
   const grouped = {
     in_slot:  filtered.filter(d => d.category === 'in_slot'),
     out_slot: filtered.filter(d => d.category === 'out_slot'),
     out_date: filtered.filter(d => d.category === 'out_date'),
     orphan:   filtered.filter(d => d.category === 'orphan'),
-    other:    filtered.filter(d => !['in_slot','out_slot','out_date','orphan'].includes(d.category)),
-  }
-
-  // Debug for diagnosis: log what shape we got
-  if (typeof window !== 'undefined' && window.__RC_DEBUG_MODAL) {
-    console.log('DayDetailModal: detections=', detections.length, 'materialId=', materialId,
-      'first commercial_id=', detections[0]?.commercial_id,
-      'categories=', detections.map(d => d.category))
   }
 
   return (
