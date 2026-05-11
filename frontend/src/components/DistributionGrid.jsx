@@ -30,7 +30,7 @@ import StationAvatar from './StationAvatar'
  */
 export default function DistributionGrid({
   month, campaignStart, campaignEnd, stations, rows, cellData,
-  onCellClick, onStationClick, mode = 'edit',
+  onCellClick, onStationClick, onCellIncrement, onCellDecrement, mode = 'edit',
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -137,6 +137,8 @@ export default function DistributionGrid({
                         isOutsideRange={isOutsideRange}
                         hasOverride={!!cell.hasOverride}
                         onClick={(e) => onCellClick?.(row.stationId, row.materialId, dateISO, e.currentTarget.getBoundingClientRect())}
+                        onIncrement={onCellIncrement ? () => onCellIncrement(row.stationId, row.materialId, dateISO, cell.expected ?? 0) : undefined}
+                        onDecrement={onCellDecrement ? () => onCellDecrement(row.stationId, row.materialId, dateISO, cell.expected ?? 0) : undefined}
                         hint={`${row.materialTitle} · ${dateISO}`}
                       />
                     )
