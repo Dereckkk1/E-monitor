@@ -1,29 +1,10 @@
 package catalog
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/require"
-	"radiocheck/internal/db"
+	"github.com/google/uuid"
 )
-
-// newTestDB returns a raw pool connected to TEST_DATABASE_URL.
-// It skips the test if the env var is not set and closes the pool on cleanup.
-func newTestDB(t *testing.T) (context.Context, *pgxpool.Pool) {
-	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	ctx := context.Background()
-	pool, err := db.New(ctx, url)
-	require.NoError(t, err)
-	t.Cleanup(func() { pool.Close() })
-	return ctx, pool
-}
 
 func TestMaterialTypes_List(t *testing.T) {
 	ctx, pool := newTestDB(t)
@@ -70,5 +51,11 @@ func TestMaterialTypes_Create(t *testing.T) {
 	}
 	if mt.Name != "Promo Especial" {
 		t.Errorf("Name = %q, want Promo Especial", mt.Name)
+	}
+	if mt.Color != "#ff00ff" {
+		t.Errorf("Color = %q, want #ff00ff", mt.Color)
+	}
+	if mt.ID == (uuid.UUID{}) {
+		t.Errorf("ID is zero")
 	}
 }
