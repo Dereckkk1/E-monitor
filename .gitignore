@@ -53,4 +53,4 @@ impeccable/
 .env*
 !.env.example
 
-docs/*.md
+docs/*.md.superpowers/
