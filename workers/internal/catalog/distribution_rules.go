@@ -167,3 +167,98 @@ func (dr *DistributionRules) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := dr.pool.Exec(ctx, `DELETE FROM distribution_rules WHERE id = $1`, id)
 	return err
 }
+
+// RecategorizeForRule re-classifica todas as detections potencialmente
+// afetadas pela criação/edição/exclusão da regra dada. Usa lógica SQL
+// equivalente ao categorizer Go: pra cada detection que cabe no escopo
+// (campaign, material, station_ids, date_range), decide in_slot/out_slot
+// /orphan/out_date e UPDATE category.
+//
+// Performance: roda inteiro em SQL (sem N+1). Milissegundos pra cobrir
+// uma campanha inteira mesmo com centenas de milhares de detections.
+func (dr *DistributionRules) RecategorizeForRule(ctx context.Context, ruleID uuid.UUID) error {
+	r, err := dr.Get(ctx, ruleID)
+	if err != nil {
+		return err
+	}
+	return dr.recategorizeScope(ctx, r.CampaignID, &r.MaterialID, r.StationIDs, r.StartDate, r.EndDate)
+}
+
+// RecategorizeForCampaign re-classifica todas as detections de uma campanha.
+// Útil ao deletar uma regra (não sabemos mais o scope dela) ou pra backfill manual.
+func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campaignID uuid.UUID) error {
+	var start, end time.Time
+	err := dr.pool.QueryRow(ctx,
+		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&start, &end)
+	if err != nil {
+		return err
+	}
+	return dr.recategorizeScope(ctx, campaignID, nil, nil, start, end)
+}
+
+// recategorizeScope é o motor SQL. Pra cada detection no escopo, computa
+// a nova categoria e UPDATE em batch.
+//
+// SQL lógica (replica do categorizer.Categorize em SQL):
+//   - Pra cada detection que casa scope (campaign + opcional material + opcional stations + date range):
+//   - Se a data local (SP timezone) está fora do range da campanha → out_date
+//   - Senão se existe ANY rule onde detection.time_local está em [time_start, time_end] → in_slot
+//   - Senão se existe ANY rule mesmo material+station+weekday+date → out_slot
+//   - Senão → orphan
+func (dr *DistributionRules) recategorizeScope(ctx context.Context,
+	campaignID uuid.UUID, materialID *uuid.UUID, stationIDs []uuid.UUID,
+	from, to time.Time) error {
+
+	_, err := dr.pool.Exec(ctx, `
+WITH scope AS (
+    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id, d.station_id
+    FROM detections d
+    WHERE d.campaign_id = $1
+      AND ($2::uuid IS NULL OR d.commercial_id = $2)
+      AND ($3::uuid[] IS NULL OR d.station_id = ANY($3))
+      AND (date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+           BETWEEN $4::date AND $5::date)
+),
+classified AS (
+    SELECT
+        s.id, s.detected_at,
+        CASE
+            WHEN date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                 NOT BETWEEN c.start_date AND c.end_date
+                THEN 'out_date'
+            WHEN EXISTS (
+                SELECT 1 FROM distribution_rules r
+                WHERE r.campaign_id = s.campaign_id
+                  AND r.material_id = s.material_id
+                  AND s.station_id = ANY(r.station_ids)
+                  AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                      BETWEEN r.start_date AND r.end_date
+                  AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
+                  AND (s.detected_at AT TIME ZONE 'America/Sao_Paulo')::time
+                      BETWEEN r.time_start AND r.time_end
+            )
+                THEN 'in_slot'
+            WHEN EXISTS (
+                SELECT 1 FROM distribution_rules r
+                WHERE r.campaign_id = s.campaign_id
+                  AND r.material_id = s.material_id
+                  AND s.station_id = ANY(r.station_ids)
+                  AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                      BETWEEN r.start_date AND r.end_date
+                  AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
+            )
+                THEN 'out_slot'
+            ELSE 'orphan'
+        END AS new_category
+    FROM scope s
+    JOIN campaigns c ON c.id = s.campaign_id
+)
+UPDATE detections d
+SET category = cl.new_category
+FROM classified cl
+WHERE d.id = cl.id AND d.detected_at = cl.detected_at
+  AND d.category IS DISTINCT FROM cl.new_category`,
+		campaignID, materialID, stationIDs, from, to)
+	return err
+}
