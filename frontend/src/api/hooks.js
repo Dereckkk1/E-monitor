@@ -213,3 +213,221 @@ export function useTestWebhook() {
     },
   })
 }
+
+// ─── Material Types ─────────────────────────────────────────────────────────
+
+export function useMaterialTypes() {
+  return useQuery({
+    queryKey: ['material-types'],
+    queryFn: () => api.get('/material-types').then(r => r.data ?? []),
+  })
+}
+
+export function useCreateMaterialType() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data) => api.post('/material-types', data).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['material-types'] }),
+  })
+}
+
+export function useUpdateMaterialType() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.put(`/material-types/${id}`, body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['material-types'] }),
+  })
+}
+
+export function useDeleteMaterialType() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.delete(`/material-types/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['material-types'] }),
+  })
+}
+
+// ─── Materials (per-client library) ────────────────────────────────────────
+
+export function useMaterials(clientId, q = '') {
+  return useQuery({
+    queryKey: ['materials', clientId, q],
+    queryFn: () => api.get(`/clients/${clientId}/materials`, { params: { q } }).then(r => r.data ?? []),
+    enabled: !!clientId,
+  })
+}
+
+export function useUploadMaterial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (formData) => api.post('/materials', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+    onSuccess: (mat) => {
+      qc.invalidateQueries({ queryKey: ['materials', mat.client_id] })
+    },
+  })
+}
+
+// useUpdateMaterialTypeId — changes a material's type_id (NOT the material_type entity).
+// Distinct from useUpdateMaterialType above which edits a row in material_types.
+export function useUpdateMaterialTypeId() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, type_id }) => api.patch(`/materials/${id}/type`, { type_id }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['materials'] }),
+  })
+}
+
+export function useDeleteMaterial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.delete(`/materials/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['materials'] }),
+  })
+}
+
+// ─── Campaign Materials (N:N link) ─────────────────────────────────────────
+
+export function useCampaignMaterials(campaignId) {
+  return useQuery({
+    queryKey: ['campaign-materials', campaignId],
+    queryFn: () => api.get(`/campaigns/${campaignId}/materials`).then(r => r.data ?? []),
+    enabled: !!campaignId,
+  })
+}
+
+export function useLinkCampaignMaterial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, material_id, target_stations }) =>
+      api.post(`/campaigns/${campaignId}/materials`, { material_id, target_stations }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaign-materials', vars.campaignId] })
+    },
+  })
+}
+
+export function useUnlinkCampaignMaterial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, materialId }) =>
+      api.delete(`/campaigns/${campaignId}/materials/${materialId}`),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaign-materials', vars.campaignId] })
+    },
+  })
+}
+
+export function useUpdateCampaignMaterialStations() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, materialId, target_stations }) =>
+      api.put(`/campaigns/${campaignId}/materials/${materialId}/stations`, { target_stations }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaign-materials', vars.campaignId] })
+    },
+  })
+}
+
+// ─── Distribution Rules ────────────────────────────────────────────────────
+
+export function useDistributionRules(campaignId) {
+  return useQuery({
+    queryKey: ['distribution-rules', campaignId],
+    queryFn: () => api.get(`/campaigns/${campaignId}/distribution-rules`).then(r => r.data ?? []),
+    enabled: !!campaignId,
+  })
+}
+
+export function useCreateDistributionRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, ...body }) =>
+      api.post(`/campaigns/${campaignId}/distribution-rules`, body).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['distribution-rules', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+export function useUpdateDistributionRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, ruleId, ...body }) =>
+      api.put(`/campaigns/${campaignId}/distribution-rules/${ruleId}`, body),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['distribution-rules', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+export function useDeleteDistributionRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, ruleId }) =>
+      api.delete(`/campaigns/${campaignId}/distribution-rules/${ruleId}`),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['distribution-rules', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+// ─── Distribution Overrides ────────────────────────────────────────────────
+
+export function useDistributionOverrides(campaignId, from, to) {
+  return useQuery({
+    queryKey: ['distribution-overrides', campaignId, from, to],
+    queryFn: () => api.get(`/campaigns/${campaignId}/distribution-overrides`,
+      { params: { from, to } }).then(r => r.data ?? []),
+    enabled: !!campaignId && !!from && !!to,
+  })
+}
+
+export function useUpsertOverride() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, ...body }) =>
+      api.put(`/campaigns/${campaignId}/distribution-overrides`, body),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['distribution-overrides', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+export function useDeleteOverride() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, ...body }) =>
+      api.delete(`/campaigns/${campaignId}/distribution-overrides`, { data: body }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['distribution-overrides', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+// ─── Daily Summary ─────────────────────────────────────────────────────────
+
+export function useDailySummary(campaignId, from, to) {
+  return useQuery({
+    queryKey: ['daily-summary', campaignId, from, to],
+    queryFn: () => api.get(`/campaigns/${campaignId}/daily-summary`,
+      { params: { from, to } }).then(r => r.data ?? []),
+    enabled: !!campaignId && !!from && !!to,
+  })
+}
+
+// ─── Campaign single fetch ─────────────────────────────────────────────────
+
+export function useCampaign(id) {
+  return useQuery({
+    queryKey: ['campaigns', id],
+    queryFn: () => api.get(`/campaigns/${id}`).then(r => r.data),
+    enabled: !!id,
+  })
+}
