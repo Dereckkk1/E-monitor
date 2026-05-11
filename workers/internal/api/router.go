@@ -21,18 +21,23 @@ import (
 //
 // StreamHealth (master) and APIKeys/Auth (fase2) coexist in this router.
 type Deps struct {
-	Stations     *handlers.StationsHandler
-	Clients      *handlers.ClientsHandler
-	Campaigns    *handlers.CampaignsHandler
-	Commercials  *handlers.CommercialsHandler
-	Detections   *handlers.DetectionsHandler
-	Health       *handlers.HealthHandler
-	StreamHealth *handlers.StreamHealthHandler
-	Auth         *handlers.AuthHandler
-	APIKey       *auth.APIKeyMiddleware
-	APIKeys      *handlers.APIKeysHandler
-	Admin        *handlers.AdminHandler
-	Webhooks     *handlers.WebhooksHandler
+	Stations             *handlers.StationsHandler
+	Clients              *handlers.ClientsHandler
+	Campaigns            *handlers.CampaignsHandler
+	Commercials          *handlers.CommercialsHandler
+	Detections           *handlers.DetectionsHandler
+	Health               *handlers.HealthHandler
+	StreamHealth         *handlers.StreamHealthHandler
+	Auth                 *handlers.AuthHandler
+	APIKey               *auth.APIKeyMiddleware
+	APIKeys              *handlers.APIKeysHandler
+	Admin                *handlers.AdminHandler
+	Webhooks             *handlers.WebhooksHandler
+	MaterialTypes        *handlers.MaterialTypesHandler
+	Materials            *handlers.MaterialsHandler
+	CampaignMaterials    *handlers.CampaignMaterialsHandler
+	DistributionRules    *handlers.DistributionRulesHandler
+	DistributionOverrides *handlers.DistributionOverridesHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -139,6 +144,50 @@ func NewRouter(d Deps) http.Handler {
 				r.Put("/{id}/stations", d.Commercials.UpdateStations)
 				r.Delete("/{id}", d.Commercials.Delete)
 			})
+
+			// Material types — global registry (Tasks 13-19).
+			r.Route("/material-types", func(r chi.Router) {
+				r.Get("/", d.MaterialTypes.List)
+				r.Post("/", d.MaterialTypes.Create)
+				r.Put("/{id}", d.MaterialTypes.Update)
+				r.Delete("/{id}", d.MaterialTypes.Delete)
+			})
+
+			// Materials — per-client library.
+			r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
+			r.Route("/materials", func(r chi.Router) {
+				r.Post("/", d.Materials.Upload)
+				r.Get("/{id}", d.Materials.Get)
+				r.Patch("/{id}/type", d.Materials.UpdateType)
+				r.Delete("/{id}", d.Materials.Delete)
+			})
+
+			// Campaign ↔ Materials link.
+			r.Route("/campaigns/{campaignID}/materials", func(r chi.Router) {
+				r.Post("/", d.CampaignMaterials.Link)
+				r.Get("/", d.CampaignMaterials.ListByCampaign)
+				r.Put("/{materialID}/stations", d.CampaignMaterials.UpdateStations)
+				r.Delete("/{materialID}", d.CampaignMaterials.Unlink)
+			})
+
+			// Distribution rules.
+			r.Route("/campaigns/{campaignID}/distribution-rules", func(r chi.Router) {
+				r.Get("/", d.DistributionRules.ListByCampaign)
+				r.Post("/", d.DistributionRules.Create)
+				r.Put("/{ruleID}", d.DistributionRules.Update)
+				r.Delete("/{ruleID}", d.DistributionRules.Delete)
+			})
+
+			// Distribution overrides.
+			r.Route("/campaigns/{campaignID}/distribution-overrides", func(r chi.Router) {
+				r.Get("/", d.DistributionOverrides.ListByDateRange)
+				r.Put("/", d.DistributionOverrides.Upsert)
+				r.Delete("/", d.DistributionOverrides.Delete)
+			})
+
+			// Daily summary — feeds the /detections UI.
+			r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
+
 			r.Route("/detections", func(r chi.Router) {
 				r.Get("/", d.Detections.List)
 				r.Get("/{id}", d.Detections.Get)
