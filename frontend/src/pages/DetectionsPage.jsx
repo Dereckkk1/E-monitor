@@ -6,10 +6,9 @@ import {
   useMaterialTypes, useDailySummary,
 } from '../api/hooks'
 import RSelect from '../components/RSelect'
-import DetectionsCalendar from '../components/DetectionsCalendar'
+import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
-import { bucketDetections } from './detections/utils'
-import { tokenize, matchesAllTokens } from '../utils/search'
+import { tokenize } from '../utils/search'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -161,6 +160,21 @@ function EmptyNoCampaign() {
   )
 }
 
+function EmptyNoRules() {
+  return (
+    <div className="detection-empty">
+      <div className="detection-empty-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <rect x="6" y="12" width="36" height="28" rx="4" stroke="currentColor" strokeWidth="2" />
+          <path d="M14 22h20M14 28h12M14 34h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </div>
+      <h3>Campanha sem materiais vinculados</h3>
+      <p>Vá em <strong>Campanhas → Editar</strong> pra adicionar materiais e regras de distribuição.</p>
+    </div>
+  )
+}
+
 function EmptyNoDetections({ periodLabel }) {
   return (
     <div className="detection-empty">
@@ -190,6 +204,8 @@ export default function DetectionsPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
+  // TODO F-100: re-wire station click to open HealthDrawer (DistributionGrid station headers don't expose onStationClick yet — added in Task 7)
+  const [healthStationId, setHealthStationId] = useState(null)
 
   const { data: stationsResp } = useStations({ limit: 2000 })
   const stationCatalog = stationsResp?.data ?? []
@@ -282,28 +298,6 @@ export default function DetectionsPage() {
     )
   }
 
-  const targetStations = useMemo(() => {
-    if (!selectedCampaignId || stationCatalog.length === 0) return []
-    const campaign = campaigns.find(c => c.id === selectedCampaignId)
-    if (!campaign) return []
-    const ids = new Set(campaign.target_stations ?? [])
-    return stationCatalog
-      .filter(s => ids.has(s.id))
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-  }, [selectedCampaignId, campaigns, stationCatalog])
-
-  const filteredTargetStations = useMemo(() => {
-    const tokens = tokenize(search)
-    if (tokens.length === 0) return targetStations
-    const fields = [
-      'name',
-      'city',
-      'state',
-      'band',
-      s => s.frequency_mhz != null ? String(s.frequency_mhz) : '',
-    ]
-    return targetStations.filter(s => matchesAllTokens(s, fields, tokens))
-  }, [targetStations, search])
 
   // Color lookup for material types
   const typeColorById = useMemo(
@@ -494,24 +488,33 @@ export default function DetectionsPage() {
         <EmptyNoCampaign />
       ) : isLoadingData ? (
         <SkeletonCalendar />
-      ) : confirmedDetections.length === 0 ? (
-        <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
-      ) : filteredTargetStations.length === 0 ? (
+      ) : rows.length === 0 ? (
+        <EmptyNoRules />
+      ) : filteredRows.length === 0 ? (
         <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
-        <DetectionsCalendar
-          stations={filteredTargetStations}
-          detections={confirmedDetections}
-          period={period}
-          onCellClick={(station, dayKey) => setModalCell({ station, dayKey })}
+        <DistributionGrid
+          mode="view"
+          month={monthDate}
+          campaignStart={selectedCampaign?.start_date}
+          campaignEnd={selectedCampaign?.end_date}
+          stations={stationCatalog}
+          rows={filteredRows}
+          cellData={cellData}
+          onCellClick={(stationId, materialId, dateISO) =>
+            setModalCell({ stationId, materialId, dateISO })}
         />
       )}
 
       {modalCell && (
         <DayDetailModal
-          station={modalCell.station}
-          dayKey={modalCell.dayKey}
-          buckets={bucketDetections(confirmedDetections)}
+          stationId={modalCell.stationId}
+          materialId={modalCell.materialId}
+          dateISO={modalCell.dateISO}
+          campaignId={selectedCampaignId}
+          station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
+          material={materialsById[modalCell.materialId] ?? null}
+          cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.materialId}|${modalCell.dateISO}`) ?? null}
           onClose={() => setModalCell(null)}
         />
       )}
