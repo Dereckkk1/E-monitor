@@ -1,5 +1,8 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDetections } from '../api/hooks'
 import BadgePill from './BadgePill'
+import AudioPlayer from './AudioPlayer'
+import api from '../api/client'
 
 const CATEGORY_LABEL = {
   in_slot:  { label: 'Dentro da faixa', variant: 'green' },
@@ -39,6 +42,71 @@ export default function DayDetailModal({
   station, material, cellSummary,
   onClose,
 }) {
+  const [activePlayerId, setActivePlayerId] = useState(null)
+  // Blob URLs keyed by detection id. Using a ref for synchronous cache
+  // lookups and state for triggering re-renders.
+  const [evidenceBlobUrls, setEvidenceBlobUrls] = useState({})
+  const blobUrlsRef = useRef({})
+  const [loadingId, setLoadingId] = useState(null)
+
+  // Esc to close
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Revoke all blob URLs when the modal unmounts to free memory.
+  useEffect(() => {
+    return () => {
+      Object.values(blobUrlsRef.current).forEach(u => URL.revokeObjectURL(u))
+    }
+  }, [])
+
+  // ensureEvidenceUrl fetches the audio blob from the API proxy endpoint
+  // on first call, caches the resulting blob URL, and returns it on
+  // subsequent calls. Using the proxy avoids presigned MinIO URLs (which
+  // break in prod due to mixed-content / localhost addressing).
+  const ensureEvidenceUrl = useCallback(async (id) => {
+    if (blobUrlsRef.current[id]) return blobUrlsRef.current[id]
+    const resp = await api.get(`/detections/${id}/evidence`, { responseType: 'blob' })
+    const blobUrl = URL.createObjectURL(resp.data)
+    blobUrlsRef.current[id] = blobUrl
+    setEvidenceBlobUrls(prev => ({ ...prev, [id]: blobUrl }))
+    return blobUrl
+  }, [])
+
+  async function handlePlay(id) {
+    if (loadingId) return
+    if (evidenceBlobUrls[id]) {
+      setActivePlayerId(id)
+      return
+    }
+    setLoadingId(id)
+    try {
+      await ensureEvidenceUrl(id)
+      setActivePlayerId(id)
+    } catch {
+      // Swallow: next click retries. AudioPlayer with no src renders idle.
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  async function handleDownload(id) {
+    try {
+      const url = await ensureEvidenceUrl(id)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `veiculacao-${id}.m4a`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      // Same rationale as play: silent failure, user can retry.
+    }
+  }
+
   // Fetch detections for this exact (campaign, station, day)
   const startISO = `${dateISO}T00:00:00.000Z`
   const endISO   = `${dateISO}T23:59:59.999Z`
@@ -66,7 +134,7 @@ export default function DayDetailModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 600 }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ maxWidth: 700 }} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <div>
             <h3 style={{ margin: 0 }}>
@@ -109,7 +177,15 @@ export default function DayDetailModal({
           ) : filtered.length === 0 ? (
             <p style={{ color: '#64748b' }}>Nenhuma detection registrada nesse dia.</p>
           ) : (
-            <DetectionsList grouped={grouped} />
+            <DetectionsList
+              grouped={grouped}
+              activePlayerId={activePlayerId}
+              evidenceBlobUrls={evidenceBlobUrls}
+              loadingId={loadingId}
+              onPlay={handlePlay}
+              onPause={() => setActivePlayerId(null)}
+              onDownload={handleDownload}
+            />
           )}
         </div>
       </div>
@@ -126,7 +202,7 @@ function SummaryStat({ label, value, variant, prefix }) {
   )
 }
 
-function DetectionsList({ grouped }) {
+function DetectionsList({ grouped, activePlayerId, evidenceBlobUrls, loadingId, onPlay, onPause, onDownload }) {
   return (
     <div>
       {Object.entries(grouped).map(([cat, list]) => {
@@ -139,18 +215,54 @@ function DetectionsList({ grouped }) {
               <strong style={{ fontSize: 13 }}>{label}</strong>
             </div>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 12 }}>
-              {list.map(d => (
-                <li key={d.id} style={{
-                  display: 'flex', justifyContent: 'space-between',
-                  padding: '6px 10px', background: '#fafbfc',
-                  borderRadius: 6, marginBottom: 4,
-                }}>
-                  <span style={{ fontFamily: 'monospace' }}>{fmtTime(d.detected_at)}</span>
-                  <span style={{ color: '#64748b' }}>
-                    conf: {(d.confidence * 100).toFixed(0)}% · hash {d.hash_count}
-                  </span>
-                </li>
-              ))}
+              {list.map(d => {
+                const isPlaying = activePlayerId === d.id
+                const isLoadingThis = loadingId === d.id
+                const hasEvidence = d.evidence_status === 'available'
+                return (
+                  <li key={d.id} style={{
+                    padding: '6px 10px', background: '#fafbfc',
+                    borderRadius: 6, marginBottom: 4,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{fmtTime(d.detected_at)}</span>
+                      <span style={{ color: '#64748b', flex: 1, marginLeft: 12 }}>
+                        conf {(d.confidence * 100).toFixed(0)}% · hash {d.hash_count}
+                      </span>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {hasEvidence && (
+                          <>
+                            <AudioPlayer
+                              src={evidenceBlobUrls[d.id] || ''}
+                              isPlaying={isPlaying}
+                              onPlay={() => onPlay(d.id)}
+                              onPause={onPause}
+                            />
+                            <button
+                              type="button"
+                              className="day-detail-download"
+                              onClick={() => onDownload(d.id)}
+                              title="Baixar áudio"
+                              aria-label="Baixar evidência de áudio"
+                              disabled={isLoadingThis}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                              </svg>
+                            </button>
+                          </>
+                        )}
+                        {!hasEvidence && (
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                            {d.evidence_status || 'indisponível'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                )
+              })}
             </ul>
           </div>
         )
