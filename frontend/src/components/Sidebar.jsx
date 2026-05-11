@@ -68,6 +68,19 @@ function IconOperations() {
   )
 }
 
+function IconMaterialTypes() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="4" width="10" height="2.5" rx="1" />
+      <rect x="1" y="8" width="7" height="2.5" rx="1" />
+      <rect x="1" y="12" width="9" height="2.5" rx="1" />
+      <circle cx="13.5" cy="5.25" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="13.5" cy="9.25" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="13.5" cy="13.25" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 /* ── Nav link helper ─────────────────────────────────────────── */
 function SidebarLink({ to, icon, children, onClose }) {
   return (
@@ -90,9 +103,10 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/dashboard"  icon={<IconDashboard />}  onClose={onClose}>Dashboard</SidebarLink>
 
       <span className="sidebar-section-label">Operações</span>
-      <SidebarLink to="/stations"   icon={<IconStations />}   onClose={onClose}>Emissoras</SidebarLink>
-      <SidebarLink to="/clients"    icon={<IconClients />}    onClose={onClose}>Clientes</SidebarLink>
-      <SidebarLink to="/campaigns"  icon={<IconCampaigns />}  onClose={onClose}>Campanhas</SidebarLink>
+      <SidebarLink to="/stations"       icon={<IconStations />}      onClose={onClose}>Emissoras</SidebarLink>
+      <SidebarLink to="/clients"        icon={<IconClients />}       onClose={onClose}>Clientes</SidebarLink>
+      <SidebarLink to="/campaigns"      icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
+      <SidebarLink to="/material-types" icon={<IconMaterialTypes />} onClose={onClose}>Tipos de material</SidebarLink>
 
       <span className="sidebar-section-label">Monitoramento</span>
       <SidebarLink to="/operations" icon={<IconOperations />} onClose={onClose}>Workers</SidebarLink>
