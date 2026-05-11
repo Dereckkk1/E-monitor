@@ -292,3 +292,14 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-91** — Validação "future-only edit" (§8 da spec) em `DistributionRulesHandler.Update/Delete`. Atualmente backend aceita qualquer edição; validação fica na UI. Mover pro backend antes do Plano 2.
 - **F-92** — Escape de metacaracteres LIKE (`%`, `_`, `\`) no parâmetro `q` de `Materials.ListByClient`. Atualmente vulnerável a injeção semântica (não SQL injection, mas comportamento inesperado). Sanitizar no handler layer.
 - **F-93** — `ListApplicable` em `distribution_rules.go` documentou contrato de TZ (caller deve passar SP-local-midnight). Considerar mudar assinatura pra aceitar `string` "YYYY-MM-DD" pra remover ambiguidade no runtime.
+
+---
+
+## Wizard Frontend (Plano 2) — Follow-ups
+
+- **F-94** — Modificar `CampaignMaterials.ListByCampaign` no backend pra hidratar `material_title` e `type_id` no JOIN, evitando o `useMaterials(clientId)` extra no frontend (currently the wizard parent makes both queries and joins client-side).
+- **F-95** — Adicionar testes Vitest pra componentes críticos (DistributionGrid, RuleSidePanel, OverridePopover, CampaignWizardPage). Toda validação atual é manual.
+- **F-96** — Skeleton loaders nas etapas durante fetch inicial (atualmente mostra spinners ad-hoc ou nada). Especialmente importante na etapa 4 enquanto carrega rules + overrides + summary.
+- **F-97** — Validação "future-only edit" no frontend: pré-bloqueio de campos + tooltip explicando que regras passadas só podem ter o end_date encurtado. Pareado com F-91 no backend.
+- **F-98** — Drag-and-drop pra reordenar materiais dentro de uma campanha (UX nice-to-have).
+- **F-99** — Atalho "Aplicar regra a todas as emissoras com este material" (bulk action no rule editor side panel).
