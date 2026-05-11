@@ -252,7 +252,13 @@ export function useDeleteMaterialType() {
 export function useMaterials(clientId, q = '') {
   return useQuery({
     queryKey: ['materials', clientId, q],
-    queryFn: () => api.get(`/clients/${clientId}/materials`, { params: { q } }).then(r => r.data ?? []),
+    // ListByClient wraps in {data: [...]} (line 46 of materials.go) — handle both shapes.
+    queryFn: () => api.get(`/clients/${clientId}/materials`, { params: { q } }).then(r => {
+      const d = r.data
+      if (Array.isArray(d)) return d
+      if (Array.isArray(d?.data)) return d.data
+      return []
+    }),
     enabled: !!clientId,
   })
 }
