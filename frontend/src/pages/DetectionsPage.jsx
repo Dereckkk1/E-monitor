@@ -8,6 +8,7 @@ import {
 import RSelect from '../components/RSelect'
 import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
+import CoverageSummary from '../components/CoverageSummary'
 import { tokenize } from '../utils/search'
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -493,17 +494,20 @@ export default function DetectionsPage() {
       ) : filteredRows.length === 0 ? (
         <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
-        <DistributionGrid
-          mode="view"
-          month={monthDate}
-          campaignStart={selectedCampaign?.start_date}
-          campaignEnd={selectedCampaign?.end_date}
-          stations={stationCatalog}
-          rows={filteredRows}
-          cellData={cellData}
-          onCellClick={(stationId, materialId, dateISO) =>
-            setModalCell({ stationId, materialId, dateISO })}
-        />
+        <>
+          <CoverageSummary summary={summary} />
+          <DistributionGrid
+            mode="view"
+            month={monthDate}
+            campaignStart={selectedCampaign?.start_date}
+            campaignEnd={selectedCampaign?.end_date}
+            stations={stationCatalog}
+            rows={filteredRows}
+            cellData={cellData}
+            onCellClick={(stationId, materialId, dateISO) =>
+              setModalCell({ stationId, materialId, dateISO })}
+          />
+        </>
       )}
 
       {modalCell && (
