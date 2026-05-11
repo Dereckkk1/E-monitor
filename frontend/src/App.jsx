@@ -16,6 +16,8 @@ import WebhookDeliveriesPage from './pages/WebhookDeliveriesPage'
 import ApiKeysPage    from './pages/ApiKeysPage'
 import DashboardPage  from './pages/DashboardPage'
 import LoginPage      from './pages/LoginPage'
+import CampaignWizardPage from './pages/CampaignWizardPage'
+import MaterialTypesPage from './pages/MaterialTypesPage'
 
 function HamburgerIcon() {
   return (
@@ -70,6 +72,9 @@ function AppShell() {
             <Route path="/clients/:id/webhooks"  element={<WebhookDeliveriesPage />} />
             <Route path="/clients/:id/api-keys"  element={<ApiKeysPage />} />
             <Route path="/campaigns"   element={<CampaignsPage />} />
+            <Route path="/campaigns/new"      element={<CampaignWizardPage />} />
+            <Route path="/campaigns/:id/edit" element={<CampaignWizardPage />} />
+            <Route path="/material-types"     element={<MaterialTypesPage />} />
             <Route path="/monitoring"  element={<MonitoringPage />} />
             <Route path="/operations"  element={<OperationsPage />} />
             <Route path="/detections"  element={<DetectionsPage />} />
