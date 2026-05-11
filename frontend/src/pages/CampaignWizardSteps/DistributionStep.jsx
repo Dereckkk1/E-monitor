@@ -150,9 +150,9 @@ export default function DistributionStep({
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 0 12px' }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Distribua os materiais</h3>
+        <h3 style={{ margin: 0, fontSize: 16, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>Distribua os materiais</h3>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: '#64748b' }}>
+          <span style={{ fontSize: 11, color: 'var(--c-text-2)' }}>
             {rules.length} regra{rules.length !== 1 ? 's' : ''}, {overrides.length} override{overrides.length !== 1 ? 's' : ''}
           </span>
           <MonthNavigator
@@ -232,12 +232,17 @@ export default function DistributionStep({
 function EmptyDistributionState({ onAddRule }) {
   return (
     <div style={{
-      padding: 48, textAlign: 'center', background: '#fafbfc',
-      border: '1px dashed #e2e8f0', borderRadius: 12,
+      padding: 48, textAlign: 'center', background: 'var(--c-bg)',
+      border: '1px dashed var(--c-border)', borderRadius: 'var(--radius-lg)',
     }}>
-      <div style={{ fontSize: 40, color: '#cbd5e1', marginBottom: 8 }}>▦</div>
-      <h4 style={{ margin: '0 0 6px', color: '#0f172a' }}>Comece criando uma regra</h4>
-      <p style={{ margin: '0 0 16px', color: '#64748b', fontSize: 13 }}>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 8 }}>
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </svg>
+      <h4 style={{ margin: '0 0 6px', fontFamily: 'var(--font-heading)', fontWeight: 700, color: 'var(--c-text)' }}>Comece criando uma regra</h4>
+      <p style={{ margin: '0 0 16px', color: 'var(--c-text-2)', fontSize: 13 }}>
         Uma regra define quantas vezes um material toca por dia, em quais emissoras, faixa horária e período.
       </p>
       <button onClick={onAddRule} className="btn btn-primary btn-sm">+ Adicionar primeira regra</button>

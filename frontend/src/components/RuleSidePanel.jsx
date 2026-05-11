@@ -99,13 +99,13 @@ export default function RuleSidePanel({
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'fixed', top: 0, right: 0, bottom: 0, width: 460,
-          background: '#fff', boxShadow: '-24px 0 48px -12px rgba(15,23,42,0.25)',
+          background: 'var(--c-surface)', boxShadow: '-24px 0 48px -12px rgba(15,23,42,0.25)',
           display: 'flex', flexDirection: 'column',
         }}
       >
-        <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-          <h3 style={{ margin: 0, fontSize: 15 }}>{mode === 'edit' ? 'Editar regra' : 'Adicionar regra'}</h3>
-          <button onClick={onClose} style={{ width: 28, height: 28, border: 0, background: '#f1f5f9', borderRadius: 8, cursor: 'pointer' }}>×</button>
+        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--c-border)', display: 'flex', justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>{mode === 'edit' ? 'Editar regra' : 'Adicionar regra'}</h3>
+          <button onClick={onClose} style={{ width: 28, height: 28, border: 0, background: 'var(--c-surface-2)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>×</button>
         </div>
 
         <div style={{ padding: '18px 22px', overflowY: 'auto', flex: 1 }}>
@@ -184,7 +184,7 @@ export default function RuleSidePanel({
           </div>
         </div>
 
-        <div style={{ padding: '14px 22px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', gap: 8, background: '#fafbfc' }}>
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--c-border)', display: 'flex', justifyContent: 'space-between', gap: 8, background: 'var(--c-bg)' }}>
           {mode === 'edit' && onDelete ? (
             <button onClick={onDelete} className="btn btn-danger btn-sm">🗑 Excluir regra</button>
           ) : <div />}
@@ -202,23 +202,23 @@ export default function RuleSidePanel({
 }
 
 const Label = ({ children }) => (
-  <label style={{ display: 'block', fontSize: 11, color: '#64748b', fontWeight: 600,
+  <label style={{ display: 'block', fontSize: 11, color: 'var(--c-text-2)', fontWeight: 600,
     marginBottom: 6, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
     {children}
   </label>
 )
 
 const inputStyle = {
-  width: '100%', border: '1px solid #e2e8f0', borderRadius: 8,
-  padding: '9px 12px', fontSize: 13, color: '#0f172a', boxSizing: 'border-box',
-  fontFamily: 'inherit', background: '#fff',
+  width: '100%', border: '1px solid var(--c-border)', borderRadius: 'var(--radius-md)',
+  padding: '9px 12px', fontSize: 13, color: 'var(--c-text)', boxSizing: 'border-box',
+  fontFamily: 'inherit', background: 'var(--c-surface)',
 }
 
 const twoCol = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }
 const chipRow = { display: 'flex', flexWrap: 'wrap', gap: 5 }
 const chip = {
-  padding: '5px 10px', borderRadius: 999, background: '#f1f5f9', color: '#475569',
+  padding: '5px 10px', borderRadius: 'var(--radius-full)', background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
   fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid transparent',
-  display: 'inline-flex', alignItems: 'center',
+  display: 'inline-flex', alignItems: 'center', transition: 'background 100ms, color 100ms',
 }
-const chipOn = { background: '#fdf2f8', color: '#be185d', borderColor: '#f9a8d4' }
+const chipOn = { background: 'var(--c-action-light)', color: 'var(--c-action)', borderColor: 'var(--c-action-border)' }

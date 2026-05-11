@@ -36,7 +36,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
   return (
     <div style={{ maxWidth: 960, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Materiais ({cmpMats.length})</h3>
+        <h3 style={{ margin: 0, fontSize: 16, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>Materiais ({cmpMats.length})</h3>
         <button onClick={() => setShowAdd(true)} className="btn btn-primary btn-sm">
           + Adicionar material
         </button>
@@ -84,12 +84,16 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
 function EmptyState({ onAdd }) {
   return (
     <div style={{
-      padding: 48, textAlign: 'center', background: '#fafbfc',
-      border: '1px dashed #e2e8f0', borderRadius: 12,
+      padding: 48, textAlign: 'center', background: 'var(--c-bg)',
+      border: '1px dashed var(--c-border)', borderRadius: 'var(--radius-lg)',
     }}>
-      <div style={{ fontSize: 40, color: '#cbd5e1', marginBottom: 8 }}>🎵</div>
-      <h4 style={{ margin: '0 0 6px', color: '#0f172a' }}>Nenhum material ainda</h4>
-      <p style={{ margin: '0 0 16px', color: '#64748b', fontSize: 13 }}>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 8 }}>
+        <path d="M9 18V5l12-2v13" />
+        <circle cx="6" cy="18" r="3" />
+        <circle cx="18" cy="16" r="3" />
+      </svg>
+      <h4 style={{ margin: '0 0 6px', fontFamily: 'var(--font-heading)', fontWeight: 700, color: 'var(--c-text)' }}>Nenhum material ainda</h4>
+      <p style={{ margin: '0 0 16px', color: 'var(--c-text-2)', fontSize: 13 }}>
         Vincule materiais existentes da biblioteca do cliente, ou suba arquivos novos.
       </p>
       <button onClick={onAdd} className="btn btn-primary btn-sm">+ Adicionar primeiro material</button>
@@ -104,18 +108,18 @@ function MaterialCard({ material, link, type, allTypes, campaignStations, onType
 
   return (
     <div style={{
-      padding: 12, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8,
+      padding: 12, background: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 'var(--radius-md)',
       display: 'flex', alignItems: 'center', gap: 12,
     }}>
-      <TypeIconPill color={type?.color ?? '#94a3b8'} height={32} />
+      <TypeIconPill color={type?.color ?? 'var(--c-text-3)'} height={32} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: '#0f172a' }}>{material.title}</div>
-        <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+        <div style={{ fontWeight: 600, color: 'var(--c-text)' }}>{material.title}</div>
+        <div style={{ fontSize: 11, color: 'var(--c-text-2)', marginTop: 2 }}>
           {material.duration_seconds ? `${material.duration_seconds.toFixed(1)}s` : '—'}
           {' · '}
-          {material.fingerprint_status === 'ready' ? '✓ pronto' :
-           material.fingerprint_status === 'generating' ? '⏳ gerando' :
-           material.fingerprint_status === 'failed' ? '✗ falhou' :
+          {material.fingerprint_status === 'ready' ? 'pronto' :
+           material.fingerprint_status === 'generating' ? 'gerando…' :
+           material.fingerprint_status === 'failed' ? 'falhou' :
            'aguardando'}
           {stationNames.length > 0 ? ` · ${stationNames.length} emissora${stationNames.length !== 1 ? 's' : ''}` : ' · sem emissora'}
         </div>
@@ -188,25 +192,25 @@ function AddMaterialPanel({
       position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', backdropFilter: 'blur(4px)', zIndex: 50,
     }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, background: '#fff',
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, background: 'var(--c-surface)',
         boxShadow: '-24px 0 48px -12px rgba(15,23,42,0.25)',
         display: 'flex', flexDirection: 'column',
       }}>
-        <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-          <h3 style={{ margin: 0 }}>Adicionar material</h3>
-          <button onClick={onClose} style={{ width: 28, height: 28, border: 0, background: '#f1f5f9', borderRadius: 8, cursor: 'pointer' }}>×</button>
+        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--c-border)', display: 'flex', justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>Adicionar material</h3>
+          <button onClick={onClose} style={{ width: 28, height: 28, border: 0, background: 'var(--c-surface-2)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>×</button>
         </div>
-        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0' }}>
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--c-border)' }}>
           <button onClick={() => setTab('library')} style={tabStyle(tab === 'library')}>Da biblioteca ({available.length})</button>
           <button onClick={() => setTab('upload')} style={tabStyle(tab === 'upload')}>Subir novo</button>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
           {tab === 'library' ? (
             available.length === 0 ? (
-              <p style={{ color: '#64748b' }}>Nenhum material disponível na biblioteca deste cliente. Use a aba "Subir novo" pra adicionar.</p>
+              <p style={{ color: 'var(--c-text-2)' }}>Nenhum material disponível na biblioteca deste cliente. Use a aba "Subir novo" pra adicionar.</p>
             ) : (
               available.map(m => (
-                <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, borderBottom: '1px solid #f1f5f9' }}>
+                <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, borderBottom: '1px solid var(--c-surface-2)' }}>
                   <input type="checkbox" checked={selectedLibIds.has(m.id)}
                     onChange={() => {
                       const next = new Set(selectedLibIds)
@@ -214,7 +218,7 @@ function AddMaterialPanel({
                       setSelectedLibIds(next)
                     }} />
                   <span style={{ flex: 1 }}>{m.title}</span>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>{m.duration_seconds?.toFixed(1)}s</span>
+                  <span style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{m.duration_seconds?.toFixed(1)}s</span>
                 </label>
               ))
             )
@@ -229,9 +233,9 @@ function AddMaterialPanel({
               <div style={{ marginTop: 12 }}>
                 {uploadQueue.map(entry => (
                   <div key={entry.key} style={{
-                    padding: 8, background: '#fafbfc', border: '1px solid #e2e8f0', borderRadius: 6, marginBottom: 6,
+                    padding: 8, background: 'var(--c-bg)', border: '1px solid var(--c-border)', borderRadius: 'var(--radius-sm)', marginBottom: 6,
                   }}>
-                    <div style={{ fontSize: 12, marginBottom: 4 }}>📎 {entry.file.name}</div>
+                    <div style={{ fontSize: 12, marginBottom: 4, color: 'var(--c-text-2)' }}>{entry.file.name}</div>
                     <input
                       className="input"
                       placeholder="Título"
@@ -249,8 +253,8 @@ function AddMaterialPanel({
                       <option value="">Selecione o tipo…</option>
                       {materialTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
-                    <div style={{ fontSize: 11, marginTop: 4, color: entry.status === 'done' ? '#15803d' : entry.status === 'error' ? '#b91c1c' : '#64748b' }}>
-                      {entry.status === 'done' ? '✓ enviado' : entry.status === 'error' ? '✗ erro' : 'pendente'}
+                    <div style={{ fontSize: 11, marginTop: 4, color: entry.status === 'done' ? 'var(--c-success)' : entry.status === 'error' ? 'var(--c-danger)' : 'var(--c-text-2)' }}>
+                      {entry.status === 'done' ? 'Enviado' : entry.status === 'error' ? 'Erro no envio' : 'Enviando…'}
                     </div>
                   </div>
                 ))}
@@ -258,7 +262,7 @@ function AddMaterialPanel({
             </div>
           )}
         </div>
-        <div style={{ padding: '14px 22px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--c-border)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button onClick={onClose} className="btn btn-secondary btn-sm">Cancelar</button>
           {tab === 'library' ? (
             <button onClick={linkSelected} disabled={selectedLibIds.size === 0} className="btn btn-primary btn-sm">
@@ -277,8 +281,9 @@ function AddMaterialPanel({
 
 const tabStyle = (active) => ({
   flex: 1, padding: '10px 14px', border: 0,
-  borderBottom: active ? '2px solid #E81E75' : '2px solid transparent',
-  background: '#fff', cursor: 'pointer',
-  color: active ? '#E81E75' : '#64748b',
+  borderBottom: active ? '2px solid var(--c-action)' : '2px solid transparent',
+  background: 'var(--c-surface)', cursor: 'pointer',
+  color: active ? 'var(--c-action)' : 'var(--c-text-2)',
   fontWeight: active ? 600 : 400,
+  transition: 'color 100ms, border-color 100ms',
 })

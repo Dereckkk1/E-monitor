@@ -18,8 +18,8 @@ export default function WizardStepper({ currentStep, completedSteps = [], onStep
 
   return (
     <div style={{
-      display: 'flex', padding: '14px 24px', background: '#fff',
-      borderBottom: '1px solid #f1f5f9', gap: 32, alignItems: 'center', position: 'relative',
+      display: 'flex', padding: '14px 24px', background: 'var(--c-surface)',
+      borderBottom: '1px solid var(--c-surface-2)', gap: 32, alignItems: 'center', position: 'relative',
     }}>
       {STEPS.map(step => {
         const done = completedSteps.includes(step.id)
@@ -33,7 +33,8 @@ export default function WizardStepper({ currentStep, completedSteps = [], onStep
             disabled={!clickable}
             style={{
               display: 'flex', alignItems: 'center', gap: 10, fontSize: 12,
-              color: active ? '#0f172a' : done ? '#15803d' : '#94a3b8',
+              fontFamily: 'var(--font-heading)',
+              color: active ? 'var(--c-text)' : done ? 'var(--c-success)' : 'var(--c-text-3)',
               fontWeight: active ? 600 : 400,
               background: 'transparent', border: 0,
               cursor: clickable ? 'pointer' : 'default',
@@ -44,8 +45,8 @@ export default function WizardStepper({ currentStep, completedSteps = [], onStep
               width: 22, height: 22, borderRadius: '50%',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontWeight: 700, fontSize: 11,
-              background: active ? '#E81E75' : done ? '#15803d' : '#f1f5f9',
-              color: (active || done) ? '#fff' : '#94a3b8',
+              background: active ? 'var(--c-action)' : done ? 'var(--c-success)' : 'var(--c-surface-2)',
+              color: (active || done) ? 'var(--c-surface)' : 'var(--c-text-3)',
             }}>{done ? '✓' : step.id}</span>
             {step.label}
           </button>
@@ -53,12 +54,12 @@ export default function WizardStepper({ currentStep, completedSteps = [], onStep
       })}
       <div style={{
         position: 'absolute', left: 24, right: 24, bottom: -1, height: 2,
-        background: '#f1f5f9',
+        background: 'var(--c-surface-2)',
       }}>
         <div style={{
           height: '100%', width: `${progress}%`,
-          background: '#E81E75',
-          transition: 'width 250ms cubic-bezier(0.16,1,0.3,1)',
+          background: 'var(--c-action)',
+          transition: 'width 150ms cubic-bezier(0.16,1,0.3,1)',
         }} />
       </div>
     </div>

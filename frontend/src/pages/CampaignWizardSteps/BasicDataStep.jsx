@@ -16,7 +16,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
-      <h3 style={{ marginTop: 0, fontSize: 16 }}>Dados básicos</h3>
+      <h3 style={{ marginTop: 0, fontSize: 16, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>Dados básicos</h3>
 
       <div className="field">
         <label>Nome da campanha *</label>
@@ -44,7 +44,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
           isDisabled={isEditMode}
         />
         {isEditMode && (
-          <p style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+          <p style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 4 }}>
             Cliente não pode ser alterado após criar a campanha.
           </p>
         )}

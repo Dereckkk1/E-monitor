@@ -32,27 +32,27 @@ export default function WizardLayout({
 
   return (
     <div style={{
-      background: '#fff',
-      border: '1px solid #e2e8f0',
-      borderRadius: 16,
+      background: 'var(--c-surface)',
+      border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius-xl)',
       overflow: 'hidden',
-      boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
+      boxShadow: 'var(--shadow-sm)',
       margin: 16,
       display: 'flex',
       flexDirection: 'column',
       minHeight: 'calc(100vh - 32px)',
     }}>
       <div style={{
-        padding: '18px 24px', borderBottom: '1px solid #e2e8f0',
+        padding: '18px 24px', borderBottom: '1px solid var(--c-border)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontFamily: 'inherit', fontWeight: 700 }}>{title}</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>{title}</h2>
         <button
           onClick={() => navigate('/campaigns')}
           aria-label="Fechar"
           style={{
-            width: 28, height: 28, borderRadius: 8,
-            background: '#f1f5f9', color: '#64748b',
+            width: 28, height: 28, borderRadius: 'var(--radius-md)',
+            background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: 'pointer', border: 0, fontSize: 14,
           }}
@@ -72,8 +72,8 @@ export default function WizardLayout({
       </div>
 
       <div style={{
-        padding: '14px 24px', borderTop: '1px solid #e2e8f0',
-        display: 'flex', justifyContent: 'space-between', background: '#fff',
+        padding: '14px 24px', borderTop: '1px solid var(--c-border)',
+        display: 'flex', justifyContent: 'space-between', background: 'var(--c-surface)',
       }}>
         <button
           className="btn btn-secondary btn-sm"
