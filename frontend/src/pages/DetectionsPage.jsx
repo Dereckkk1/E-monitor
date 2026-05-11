@@ -205,7 +205,6 @@ export default function DetectionsPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
-  // TODO F-100: re-wire station click to open HealthDrawer (DistributionGrid station headers don't expose onStationClick yet — added in Task 7)
   const [healthStationId, setHealthStationId] = useState(null)
 
   const { data: stationsResp } = useStations({ limit: 2000 })
@@ -506,6 +505,7 @@ export default function DetectionsPage() {
             cellData={cellData}
             onCellClick={(stationId, materialId, dateISO) =>
               setModalCell({ stationId, materialId, dateISO })}
+            onStationClick={(stationId) => setHealthStationId(stationId)}
           />
         </>
       )}

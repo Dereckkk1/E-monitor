@@ -30,7 +30,7 @@ import StationAvatar from './StationAvatar'
  */
 export default function DistributionGrid({
   month, campaignStart, campaignEnd, stations, rows, cellData,
-  onCellClick, mode = 'edit',
+  onCellClick, onStationClick, mode = 'edit',
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -86,7 +86,8 @@ export default function DistributionGrid({
               <div style={{
                 gridColumn: '1 / -1', background: '#fff', borderBottom: '1px solid #e2e8f0',
                 padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 10,
-              }}>
+                cursor: onStationClick ? 'pointer' : 'default',
+              }} onClick={onStationClick ? () => onStationClick(station.id) : undefined}>
                 <StationAvatar station={station} size={30} />
                 <div>
                   <span style={{ fontWeight: 600, color: '#0f172a' }}>{station.name}</span>
