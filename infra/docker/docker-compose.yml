@@ -121,7 +121,11 @@ services:
       OTEL_SERVICE_NAME: radiocheck-api
       OTEL_TRACES_SAMPLER: parentbased_traceidratio
       OTEL_TRACES_SAMPLER_ARG: "1.0"
-      RADIOCHECK_ENV: development
+      # Em PROD: setar RADIOCHECK_ENV=production no .env da VM.
+      # Vira o `deployment.environment` resource attribute dos spans OTel e
+      # é base pra qualquer guard futuro de "este é prod, não roda comando
+      # destrutivo". Default `development` é seguro pra dev local.
+      RADIOCHECK_ENV: ${RADIOCHECK_ENV:-development}
       # Auth (§16.1). JWT_SECRET é obrigatório (>= 32 chars).
       # As duas vars de bootstrap são opcionais e idempotentes:
       # se setadas e o admin ainda não existe, é criado no startup.

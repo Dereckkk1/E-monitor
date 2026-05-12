@@ -9,7 +9,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/diag ./cmd/diag
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-shared-hashes ./cmd/backfill-shared-hashes
 
 FROM alpine:3.19
-RUN apk add --no-cache ffmpeg ca-certificates
+# tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
+# via time.LoadLocation. Sem isso, cai pra UTC silenciosamente e a janela
+# diária de movimentação hot→cold desalinha por 3h. Observado nos logs como
+# `evidence tiering: TZ load failed, using UTC, error: unknown time zone
+# America/Sao_Paulo` (incidente 2026-05-12, F-114).
+RUN apk add --no-cache ffmpeg ca-certificates tzdata
 COPY --from=builder /out/api                     /usr/local/bin/api
 COPY --from=builder /out/diag                    /usr/local/bin/diag
 COPY --from=builder /out/backfill-shared-hashes  /usr/local/bin/backfill-shared-hashes
