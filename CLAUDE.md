@@ -77,6 +77,25 @@ docker run --rm -e AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY" \
 
 O incidente 2026-05-12 expôs esse conflito latente: `initdb.d` executa `.sql` em ordem alfabética (incluindo `.down.sql` ANTES de `.up.sql`), deixando o schema em estado fragmentado que o golang-migrate marca como `dirty` e se recusa a continuar. Resultado: `users` table não criada → api crash loop. Recovery exige `DROP SCHEMA public CASCADE` + re-run do migrate. Limpeza definitiva em F-111 (pendente — remover o mount do `initdb.d`).
 
+**4.7. Prod usa `docker-compose.override.yml` (gitignored) — sempre incluir em comandos manuais.**
+
+A VM tem `infra/docker/docker-compose.override.yml` com bind mounts para `/mnt/db/pgdata`, `/mnt/data/minio`, `/mnt/data/masters` e `/mnt/data/audio-refs`. O `scripts/deploy.sh` em prod sempre inclui esse arquivo. **Comandos manuais sem o override usam configuração diferente da rodando — silenciosamente.** Isso causou ~4h de caos no incidente 2026-05-12: rodamos diagnóstico apontado pro `pgdata` named volume vazio enquanto o dado real estava intacto em `/mnt/db/pgdata`. Detalhes em [incident-2026-05-12-pgdata-loss.md §Causa raiz #5](docs/incident-2026-05-12-pgdata-loss.md).
+
+```bash
+# ❌ CONFIGURAÇÃO DIFERENTE da prod (silenciosamente):
+docker compose -f infra/docker/docker-compose.yml ps
+
+# ✅ Espelha o que o deploy.sh usa:
+docker compose -f infra/docker/docker-compose.yml \
+               -f infra/docker/docker-compose.override.yml \
+               --env-file infra/docker/.env ps
+
+# ✅✅ Atalho — só roda o deploy.sh, que já faz isso:
+./scripts/deploy.sh
+```
+
+Após F-116 (base yml suporta `PGDATA_HOST_PATH` via env vars), o override é redundante e será removido em limpeza futura. Por enquanto continua existindo na VM por compatibilidade.
+
 ---
 
 ## Índice do Plano (`plano_implementacao.md`)

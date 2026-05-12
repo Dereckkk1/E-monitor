@@ -1,22 +1,44 @@
-# Incidente 2026-05-12 — Perda total do pgdata
+# Incidente 2026-05-12 — Quase-perda do pgdata (e camadas de defesa que ficaram)
+
+> **CORREÇÃO IMPORTANTE (2026-05-12 fim do dia):** O dado **nunca foi
+> destruído**. Sobreviveu intacto em `/mnt/db/pgdata` no host o tempo
+> todo, via bind mount declarado em `infra/docker/docker-compose.override.yml`
+> (gitignored — só existe na VM). O `deploy.sh` em prod sempre usou esse
+> override. Meus comandos manuais de diagnóstico (apenas
+> `-f docker-compose.yml`) usaram o `pgdata` named volume do base yml —
+> um volume DIFERENTE, vazio. Operamos por horas como se tivéssemos
+> perdido tudo, mas a base estava lá. Quando o usuário rodou `deploy.sh`,
+> compose voltou pro override → dado original ressurgiu. As 9 camadas
+> de defesa adicionadas durante a "recovery" continuam todas valiosas
+> porque agora o bind mount é **explícito e versionado** no base yml,
+> backup funciona, snapshot GCP existe, alerta Prometheus dispara.
+> Defesa em profundidade ficou redundante — e redundância é justamente
+> o objetivo. Detalhes em "§Causa raiz #5 — Override file não
+> documentado" abaixo.
 
 ## Resumo executivo
 
 Durante um redeploy de rotina do service `api`, o comando
-`docker compose up -d --force-recreate api` (sem `--no-deps`) propagou o
-recreate para o `postgres` como dependência. O volume `docker_pgdata`
-foi destruído e recriado vazio. Toda a base de dados foi perdida.
+`docker compose up -d --force-recreate api` (sem `--no-deps`, sem
+override file) levou compose a usar o `pgdata` named volume vazio do
+base yml em vez do bind mount `/mnt/db/pgdata` que prod usa em
+operação normal via override file. Sistema continuou rodando, mas
+apontando para uma base "fantasma" — limpa, sem dados.
 
 Backup automático **nunca rodou em produção** desde que o sistema foi
 ao ar: o container `backup` tinha dois bugs de configuração que faziam
 o script abortar silenciosamente em toda iteração. O R2 estava vazio.
-Não havia base backup nem WAL archive utilizáveis.
+Não havia base backup nem WAL archive utilizáveis. **Se** a perda
+tivesse sido real (caso o override file também tivesse sido apagado),
+não haveria recovery possível.
 
-Recovery: drop + recreate do schema via golang-migrate, sistema voltou
-ao ar com base vazia. Histórico de detecções, calibração de threshold
-das estações, eventos de stream health e evidências em S3 (todas
-removidas junto com o volume `docker_miniodata`) **perdidos
-permanentemente**.
+O que pareceu "recovery" foi na verdade `DROP SCHEMA public CASCADE`
++ `migrate` aplicando 15 migrations no named volume vazio. Operador
+recadastrou parte do catálogo nesse estado. **Esse recadastro ficou
+orfão** quando o usuário rodou `deploy.sh` algumas horas depois — o
+override voltou a apontar pro bind mount original, dado pré-incidente
+ressurgiu, e os cadastros da janela "fake recovery" ficaram presos
+no named volume `docker_pgdata` (não acessível pelo sistema rodando).
 
 Mitigação operacional: o fornecedor externo continua espelhando as
 veiculações em paralelo (§17 do plano), preservando o registro
@@ -26,15 +48,18 @@ operacional para os clientes durante o período de coexistência.
 
 | Quando | Evento |
 |--------|--------|
-| 2026-05-12 11:21:10 | `docker compose up -d --force-recreate api` rodado sem `--no-deps`. `--force-recreate` propaga para dependências. `docker_pgdata` recriado vazio. |
-| 2026-05-12 11:21:20 | Postgres inicializou via `docker-entrypoint-initdb.d`, executando arquivos da pasta `migrations/` em ordem alfabética. Cada `.down.sql` falhou (tabelas ainda não existiam), cada `.up.sql` parcialmente bem-sucedido. Estado final: ~50 tabelas presentes mas `schema_migrations.dirty=true` na versão 1, e a tabela `users` (auth, migration 0007) ausente. |
+| 2026-05-12 11:21:10 | `docker compose -f docker-compose.yml up -d --force-recreate api` rodado sem `--no-deps` **e sem o override file**. `--force-recreate` propaga para dependências. Compose vê o postgres só com `pgdata` named volume (do base yml) → cria volume novo vazio. **O bind mount real em `/mnt/db/pgdata` continua intacto no host, só não está sendo montado.** |
+| 2026-05-12 11:21:20 | Postgres inicializou na named volume vazia via `docker-entrypoint-initdb.d`, executando arquivos da pasta `migrations/` em ordem alfabética. Cada `.down.sql` falhou (tabelas ainda não existiam), cada `.up.sql` parcialmente bem-sucedido. Estado final: ~50 tabelas presentes mas `schema_migrations.dirty=true` na versão 1, e a tabela `users` (auth, migration 0007) ausente. |
 | 2026-05-12 11:23:14 | Postgres detectou shutdown sujo, fez WAL recovery a partir do nada, ficou ready. |
 | 2026-05-12 11:28 | Tentativa de continuar deploy. `api` em crash-loop com `ERROR: relation "users" does not exist`. |
-| 2026-05-12 11:28 | Confirmado: 0 rows em `detections`, `commercials`, `stations`, `fingerprint_hashes`. |
+| 2026-05-12 11:28 | Confirmado: 0 rows em `detections`, `commercials`, `stations`, `fingerprint_hashes` — **na named volume nova**. Nem o agente nem o operador olharam pro bind mount em `/mnt/db/pgdata` (que ninguém sabia que existia). |
 | 2026-05-12 11:30 | Procura por backups: `docker_backup-data` vazio, `docker_pg_archive` vazio, R2 bucket `radiocheck-backups` vazio em todos os prefixes. |
 | 2026-05-12 11:34 | Identificada causa do backup nunca rodar (ver §"Causa raiz #2" abaixo). |
-| 2026-05-12 11:35 | Recovery: `DROP SCHEMA public CASCADE` + `docker compose up migrate`. 15 migrations aplicadas em sequência. |
-| 2026-05-12 11:37 | `api` voltou ao ar com schema completo e DB vazia. Bootstrap admin recriado. |
+| 2026-05-12 11:35 | "Recovery" (na realidade, ressuscitação no volume errado): `DROP SCHEMA public CASCADE` + `docker compose up migrate`. 15 migrations aplicadas em sequência. |
+| 2026-05-12 11:37 | `api` voltou ao ar com schema completo na named volume vazia. Bootstrap admin recriado. |
+| 2026-05-12 11:38-15:00 | Sequência de defesas adicionadas: backup container fixado (F-109), bind mount adicionado ao base yml (F-116), tzdata (F-114), RADIOCHECK_ENV parametrizado (F-115), node-exporter + alerta (F-110), snapshot GCP configurado (F-117), branches pushadas pro GitHub. Operador começou recadastro do catálogo no named volume vazio. |
+| 2026-05-12 ~15:30 | Usuário rodou `./scripts/deploy.sh` (que inclui `-f docker-compose.override.yml`). Compose recreou containers usando o override → postgres voltou a apontar pro bind mount `/mnt/db/pgdata`. Dado original **ressurgiu**. Usuário relata "meus dados voltaram kkkkkk". |
+| 2026-05-12 ~16:00 | Override file inspecionado, mistério resolvido. Postmortem corrigido. |
 
 ## Causa raiz #1 — `--force-recreate` propagou para dependências
 
@@ -128,21 +153,54 @@ backup tinha mais de 48h. O script tem suporte a `PROM_TEXTFILE_DIR`
 para escrever métricas, mas a config não estava habilitada e não havia
 alert rule no Prometheus correspondente.
 
-## O que foi perdido
+## Causa raiz #5 — Override file de prod não documentado/versionado
 
-| Categoria | Status | Pode recuperar? |
-|-----------|--------|------------------|
-| `detections` (histórico de veiculações) | Perdido | Não. Fornecedor antigo (§17) tem registro paralelo durante coexistência. |
-| `fingerprint_hashes` | Perdido | Regenerável a partir dos masters em `docker_mastersdata`. |
-| `commercials` (metadata) | Perdido | Manual: recadastrar via UI. |
-| `stations` (~33 emissoras + URLs de stream) | Perdido | Manual: recadastrar. |
-| `campaigns`, `clients` | Perdido | Manual: recadastrar. |
-| `station_thresholds` (calibração — 5000 samples) | Perdido | Auto-recalibra em 7 dias (§9.4). |
-| `stream_health_events` | Perdido | Acumula a partir de agora. |
-| `webhook_deliveries` (DLQ) | Perdido | Aceitável — eram entregas idempotentes. |
-| Evidências em S3 (MinIO local) | Perdido | `docker_miniodata` também foi recreado. Sem backup. |
-| Audio masters (mp3) | **Preservado** | `docker_mastersdata` intacto, 18 files. |
-| Código | **Preservado** | GitHub + worktrees locais. |
+`infra/docker/docker-compose.override.yml` existe na VM com bind mounts
+para `/mnt/db/pgdata`, `/mnt/data/minio`, `/mnt/data/masters` e
+`/mnt/data/audio-refs`. **O arquivo está gitignored** (via
+`infra/docker/.env` + glob — nenhum *.override.yml no repositório) e
+nunca foi mencionado em CLAUDE.md, deploy.md ou qualquer documentação
+operacional.
+
+O `deploy.sh` em prod sempre incluiu `-f docker-compose.override.yml`
+no comando docker. Operações normais via deploy.sh funcionavam
+corretamente. **Comandos manuais (`docker compose -f docker-compose.yml`
+sem o override) usavam silenciosamente uma configuração diferente.**
+
+O agente investigando o incidente (eu) não tinha como saber do
+override sem perguntar explicitamente — e perguntei tarde demais. O
+operador também não pensou em mencionar porque era infra "óbvia"
+da rotina dele.
+
+**Mitigação adotada:** o base yml agora declara bind mount via env
+vars (`PGDATA_HOST_PATH` etc, F-116). Mesmo sem o override file, prod
+fica corretamente bindado se o `.env` setar a var. O override file
+continua existindo para compatibilidade com o deploy.sh atual, mas é
+agora redundante — pode ser deletado em uma limpeza futura.
+
+## O que foi *realmente* perdido vs. o que pareceu perdido
+
+| Categoria | Pareceu Perdido | Realidade |
+|-----------|-----------------|-----------|
+| `detections` (histórico de veiculações) | ✘ | ✓ **Preservado** em `/mnt/db/pgdata` |
+| `fingerprint_hashes` | ✘ | ✓ Preservado |
+| `commercials` (metadata) | ✘ | ✓ Preservado |
+| `stations` (~33 emissoras) | ✘ | ✓ Preservado |
+| `campaigns`, `clients` | ✘ | ✓ Preservado |
+| `station_thresholds` (calibração) | ✘ | ✓ Preservado |
+| `stream_health_events` | ✘ | ✓ Preservado |
+| `webhook_deliveries` | ✘ | ✓ Preservado |
+| Evidências em S3 (MinIO) | ✘ | ✓ Preservadas em `/mnt/data/minio` |
+| Audio masters (mp3) | ✓ Preservado em volume nomeado | ✓ Também em `/mnt/data/masters` |
+| **Recadastro feito durante a "fake recovery"** | n/a | **Orfão no named volume `docker_pgdata`** — não acessível pelo sistema rodando |
+| Código | ✓ | ✓ |
+
+A janela de "fake recovery" durou ~4h (11:35 → 15:30 UTC). Qualquer
+cadastro feito pelo operador nesse período está no named volume vazio
+que ninguém mais monta. Recuperação possível mas trabalhosa: criar
+um postgres efêmero apontando pra `docker_pgdata`, exportar via
+`pg_dump`, restore parcial no postgres real. Operador relatou que o
+recadastro feito foi mínimo, então provavelmente não vale o esforço.
 
 ## Recovery aplicado
 
@@ -168,10 +226,21 @@ bootstrap admin criado, api listening em :8080.
 
 ## Lições
 
+0. **Configuração de prod precisa ser versionada (ou pelo menos
+   documentada).** Arquivos críticos como override files do compose
+   que estão presentes apenas na VM e ausentes do git são uma armadilha
+   esperando vítimas. Quando algo "estranho" acontecer em prod, agentes
+   e operadores precisam de informação suficiente pra reproduzir o
+   estado mentalmente sem ter que adivinhar. Tornou-se a regra mais
+   importante: **nenhum comportamento operacional de prod pode ser
+   invisível pra leitor do repositório.**
+
 1. **`docker compose up --force-recreate` sem `--no-deps` em produção
    é deploy destrutivo.** Stateful services (postgres, minio, redis)
    nunca devem ser recriados como "efeito colateral" de um deploy de
-   service stateless.
+   service stateless. **E sempre incluir o override file ao operar em
+   prod**, ou o compose pode silenciosamente usar uma config diferente
+   da rodando — exatamente o que causou a confusão deste incidente.
 
 2. **"Backup configurado" ≠ "backup funcionando".** Sem teste end-to-end
    (script roda → arquivo aparece no destino) e sem alerta de
