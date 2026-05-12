@@ -13,6 +13,14 @@
 
 BEGIN;
 
+-- ────── 0. Drop a view que referencia material_id ──────
+-- A view daily_play_summary (criada na migration 0018) referencia material_id
+-- tanto em distribution_rules quanto em distribution_overrides. Postgres
+-- recusaria os ALTER TABLE ... DROP COLUMN material_id abaixo enquanto a view
+-- existir. Recriamos a view por tipo no final da migration.
+
+DROP VIEW IF EXISTS daily_play_summary;
+
 -- ────── 1. distribution_rules: material_id → type_id ──────
 
 DELETE FROM distribution_rules;
@@ -42,7 +50,6 @@ ALTER TABLE distribution_overrides ADD PRIMARY KEY (campaign_id, type_id, statio
 -- portanto não há expected). Continuam visíveis individualmente na modal
 -- via /v1/internal/detections (que retorna por material).
 
-DROP VIEW IF EXISTS daily_play_summary;
 CREATE VIEW daily_play_summary AS
 WITH expected AS (
     SELECT
