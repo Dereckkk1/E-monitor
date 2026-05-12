@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useDetections } from '../api/hooks'
 import BadgePill from './BadgePill'
 import AudioPlayer from './AudioPlayer'
@@ -39,7 +40,7 @@ function fmtDate(iso) {
  */
 export default function DayDetailModal({
   campaignId, stationId, materialId, dateISO,
-  station, material, cellSummary,
+  station, material, materialType, cellSummary,
   onClose,
 }) {
   const [activePlayerId, setActivePlayerId] = useState(null)
@@ -183,6 +184,8 @@ export default function DayDetailModal({
           ) : (
             <DetectionsList
               grouped={grouped}
+              material={material}
+              materialType={materialType}
               activePlayerId={activePlayerId}
               evidenceBlobUrls={evidenceBlobUrls}
               loadingId={loadingId}
@@ -206,7 +209,14 @@ function SummaryStat({ label, value, variant, prefix }) {
   )
 }
 
-function DetectionsList({ grouped, activePlayerId, evidenceBlobUrls, loadingId, onPlay, onPause, onDownload }) {
+function DetectionsList({ grouped, material, materialType, activePlayerId, evidenceBlobUrls, loadingId, onPlay, onPause, onDownload }) {
+  // Material type drives the colored left border + name/type chip on every row.
+  // Falls back to neutral gray when the material has no type_id assigned (legacy
+  // materials registered before the material-types feature existed).
+  const typeColor = materialType?.color ?? '#94a3b8'
+  const typeName  = materialType?.name  ?? 'Sem tipo'
+  const matTitle  = material?.title     ?? 'Material'
+
   return (
     <div>
       {Object.entries(grouped).map(([cat, list]) => {
@@ -235,9 +245,35 @@ function DetectionsList({ grouped, activePlayerId, evidenceBlobUrls, loadingId, 
                   : null
                 return (
                   <li key={d.id} style={{
-                    padding: '6px 10px', background: '#fafbfc',
+                    padding: '8px 10px 8px 12px', background: '#fafbfc',
                     borderRadius: 6, marginBottom: 4,
+                    borderLeft: `3px solid ${typeColor}`,
+                    display: 'flex', flexDirection: 'column', gap: 6,
                   }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ color: typeColor, fontWeight: 600, fontSize: 12 }}>
+                        {matTitle}
+                      </span>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        color: typeColor,
+                        background: `color-mix(in srgb, ${typeColor} 12%, transparent)`,
+                        padding: '2px 7px', borderRadius: 10,
+                      }}>
+                        {typeName}
+                      </span>
+                      <Link
+                        to={`/detections/${d.id}`}
+                        style={{
+                          marginLeft: 'auto', fontSize: 11, color: '#E81E75',
+                          fontWeight: 600, textDecoration: 'none',
+                        }}
+                        title="Abrir detalhes da veiculação"
+                      >
+                        Detalhes →
+                      </Link>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
                       <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{fmtTime(d.detected_at)}</span>
                       <span style={{ color: '#64748b', flex: 1, marginLeft: 12 }}>
