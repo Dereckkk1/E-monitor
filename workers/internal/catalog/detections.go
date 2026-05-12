@@ -27,6 +27,11 @@ type Detection struct {
 	EvidenceStatus     string     `json:"evidence_status"`
 	EvidenceKey        *string    `json:"evidence_key,omitempty"`
 	EvidenceSizeBytes  *int64     `json:"evidence_size_bytes,omitempty"`
+	// Category is one of in_slot|out_slot|out_date|orphan (migration 0018).
+	// Consumed by the DayDetailModal to group detections under their category
+	// section; without it, the modal renders an empty list even when filtered
+	// detections exist.
+	Category    string     `json:"category"`
 	// RetractedAt is set when §18.2.2 disambiguation overruled this row in
 	// favour of a longer cut from the same client; nil otherwise.
 	RetractedAt *time.Time `json:"retracted_at,omitempty"`
@@ -74,14 +79,14 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 		RETURNING id, station_id, commercial_id, campaign_id, detected_at,
 		          match_start_offset_ms, match_end_offset_ms, confidence, hash_count,
 		          temporal_coverage, variant_used, rate_used,
-		          evidence_status, evidence_key, evidence_size_bytes, retracted_at, created_at`,
+		          evidence_status, evidence_key, evidence_size_bytes, category, retracted_at, created_at`,
 		in.StationID, in.CommercialID, in.CampaignID, in.DetectedAt,
 		in.MatchStartOffsetMs, in.MatchEndOffsetMs, in.Confidence, in.HashCount,
 		in.TemporalCoverage, in.VariantUsed, in.RateUsed, category,
 	).Scan(&det.ID, &det.StationID, &det.CommercialID, &det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt)
 	return &det, err
 }
 
@@ -162,7 +167,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.retracted_at, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -184,7 +189,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
 			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
 			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
-			&det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt); err != nil {
+			&det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, det)
@@ -199,7 +204,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.retracted_at, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -208,7 +213,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.RetractedAt, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
