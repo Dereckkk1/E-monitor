@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   useCampaignMaterials, useMaterials, useMaterialTypes,
   useLinkCampaignMaterial, useUnlinkCampaignMaterial, useUploadMaterial,
-  useUpdateMaterialTypeId,
+  useUpdateMaterialTypeId, useUpdateCampaignMaterialStations,
 } from '../../api/hooks'
+import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
 
 /**
@@ -21,8 +22,11 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
   const { data: libMats = [] } = useMaterials(clientId)
   const unlink = useUnlinkCampaignMaterial()
   const updateType = useUpdateMaterialTypeId()
+  const updateStations = useUpdateCampaignMaterialStations()
   const confirm = useConfirm()
   const [showAdd, setShowAdd] = useState(false)
+  // Which material card is currently in stations-editing mode (only one open at a time).
+  const [editingStationsFor, setEditingStationsFor] = useState(null)
 
   const typeById = Object.fromEntries(materialTypes.map(t => [t.id, t]))
 
@@ -113,6 +117,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
             const mat = materialsById[link.material_id]
             if (!mat) return null
             const type = mat.type_id ? typeById[mat.type_id] : null
+            const isEditing = editingStationsFor === link.material_id
             return (
               <MaterialCard
                 key={link.material_id}
@@ -121,7 +126,15 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
                 type={type}
                 allTypes={materialTypes}
                 campaignStations={campaignStations}
+                isEditingStations={isEditing}
+                onToggleStationsEdit={() =>
+                  setEditingStationsFor(isEditing ? null : link.material_id)}
                 onTypeChange={(typeId) => updateType.mutate({ id: mat.id, type_id: typeId })}
+                onSaveStations={(target_stations) => {
+                  updateStations.mutate({
+                    campaignId, materialId: link.material_id, target_stations,
+                  })
+                }}
                 onUnlink={() => handleUnlink(mat.id, mat.title)}
               />
             )
@@ -159,12 +172,26 @@ function fingerprintBadge(status) {
   return map[status] ?? map.pending
 }
 
-function MaterialCard({ material, link, type, allTypes, campaignStations, onTypeChange, onUnlink }) {
-  const stationNames = link.target_stations
-    .map(id => campaignStations.find(s => s.id === id)?.name)
-    .filter(Boolean)
+function MaterialCard({
+  material, link, type, allTypes, campaignStations,
+  isEditingStations, onToggleStationsEdit,
+  onTypeChange, onSaveStations, onUnlink,
+}) {
   const fp = fingerprintBadge(material.fingerprint_status)
   const typeColor = type?.color ?? 'var(--c-text-3)'
+
+  const totalStations = campaignStations.length
+  const linkedCount   = link.target_stations.length
+  const allLinked     = linkedCount === totalStations && totalStations > 0
+  const noneLinked    = linkedCount === 0
+
+  // Visual signal for the stations chip — green when all, amber when partial,
+  // red when zero (material won't be detected anywhere).
+  const stationsChip = noneLinked
+    ? { bg: '#fee2e2', fg: 'var(--c-danger)',  label: 'sem emissora — não será detectado' }
+    : allLinked
+    ? { bg: '#dcfce7', fg: 'var(--c-success)', label: `em todas (${totalStations})` }
+    : { bg: '#fef9c3', fg: '#a16207',          label: `${linkedCount} de ${totalStations} emissoras` }
 
   return (
     <div
@@ -173,114 +200,402 @@ function MaterialCard({ material, link, type, allTypes, campaignStations, onType
         border: '1px solid var(--c-border)',
         borderLeft: `4px solid ${typeColor}`,
         borderRadius: 'var(--radius-md)',
-        padding: '14px 16px',
-        display: 'flex', alignItems: 'center', gap: 16,
         transition: 'all 150ms cubic-bezier(0.16,1,0.3,1)',
-      }}
-      onMouseEnter={e => {
-        e.currentTarget.style.borderColor = 'var(--c-action-300, #F472B6)'
-        e.currentTarget.style.borderLeftColor = typeColor
-        e.currentTarget.style.transform = 'translateY(-1px)'
-        e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.borderColor = 'var(--c-border)'
-        e.currentTarget.style.borderLeftColor = typeColor
-        e.currentTarget.style.transform = 'translateY(0)'
-        e.currentTarget.style.boxShadow = 'none'
+        overflow: 'hidden',
       }}
     >
-      {/* Icon block */}
-      <div style={{
-        width: 44, height: 44, borderRadius: 'var(--radius-md)',
-        background: `color-mix(in srgb, ${typeColor} 12%, transparent)`,
-        color: typeColor,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M9 18V5l12-2v13" />
-          <circle cx="6" cy="18" r="3" />
-          <circle cx="18" cy="16" r="3" />
-        </svg>
+      {/* ── Header row ── */}
+      <div
+        style={{
+          padding: '14px 16px',
+          display: 'flex', alignItems: 'center', gap: 16,
+          transition: 'all 150ms cubic-bezier(0.16,1,0.3,1)',
+        }}
+      >
+        {/* Icon block */}
+        <div style={{
+          width: 44, height: 44, borderRadius: 'var(--radius-md)',
+          background: `color-mix(in srgb, ${typeColor} 12%, transparent)`,
+          color: typeColor,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
+          </svg>
+        </div>
+
+        {/* Title + meta */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontWeight: 700, fontSize: 14, color: 'var(--c-text)',
+            fontFamily: 'var(--font-heading)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {material.title}
+          </div>
+          <div style={{
+            marginTop: 6, display: 'flex', alignItems: 'center', gap: 8,
+            fontSize: 11, color: 'var(--c-text-2)', flexWrap: 'wrap',
+          }}>
+            <span style={{ fontWeight: 600, color: 'var(--c-text)' }}>
+              {fmtDuration(material.duration_seconds)}
+            </span>
+            <span style={{ color: 'var(--c-text-3)' }}>·</span>
+            <span style={{
+              padding: '2px 8px', borderRadius: 'var(--radius-full)',
+              background: fp.bg, color: fp.fg,
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+            }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: fp.dot }} />
+              {fp.label}
+            </span>
+          </div>
+        </div>
+
+        {/* Stations chip — clickable to expand the editor */}
+        <button
+          onClick={onToggleStationsEdit}
+          title="Editar emissoras vinculadas"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '7px 12px', borderRadius: 'var(--radius-full)',
+            background: stationsChip.bg, color: stationsChip.fg,
+            border: 0, cursor: 'pointer',
+            fontSize: 11, fontWeight: 700,
+            fontFamily: 'var(--font-heading)',
+            whiteSpace: 'nowrap', maxWidth: 240,
+            transition: 'all 100ms',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="6" width="12" height="7" rx="1.5" />
+            <path d="M5 4.5l5-2.5" />
+            <circle cx="11" cy="9.5" r="1.2" />
+          </svg>
+          {stationsChip.label}
+          <svg
+            width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{
+              transition: 'transform 200ms',
+              transform: isEditingStations ? 'rotate(180deg)' : 'rotate(0deg)',
+            }}
+          >
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        </button>
+
+        {/* Type select */}
+        <select
+          value={material.type_id ?? ''}
+          onChange={e => onTypeChange(e.target.value || null)}
+          className="input"
+          style={{ width: 150, fontSize: 12 }}
+          title="Tipo do material"
+        >
+          <option value="">Sem tipo</option>
+          {allTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+
+        {/* Unlink */}
+        <button
+          onClick={onUnlink}
+          title="Desvincular da campanha"
+          aria-label="Desvincular material"
+          style={{
+            width: 32, height: 32, borderRadius: 'var(--radius-md)',
+            background: 'transparent', border: '1px solid var(--c-border)',
+            color: 'var(--c-text-3)', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+            transition: 'all 100ms',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.background = '#fee2e2'
+            e.currentTarget.style.borderColor = '#fecaca'
+            e.currentTarget.style.color = 'var(--c-danger)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.borderColor = 'var(--c-border)'
+            e.currentTarget.style.color = 'var(--c-text-3)'
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 5h10M6 5V3.5h4V5M5 5l1 9h4l1-9" />
+          </svg>
+        </button>
       </div>
 
-      {/* Title + meta */}
+      {/* ── Expandable stations editor ── */}
+      {isEditingStations && (
+        <StationsInlineEditor
+          campaignStations={campaignStations}
+          selectedIds={link.target_stations}
+          onSave={onSaveStations}
+          onClose={onToggleStationsEdit}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Inline expandable editor that lets the user toggle which campaign stations
+ * are linked to a given material. Stations are grouped by UF for scannability,
+ * and changes save on demand (Salvar button) — not on every checkbox change,
+ * to avoid spamming the backend.
+ */
+function StationsInlineEditor({ campaignStations, selectedIds, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => new Set(selectedIds))
+  const [search, setSearch] = useState('')
+
+  const grouped = useMemo(() => {
+    const m = new Map()
+    const q = search.trim().toLowerCase()
+    for (const st of campaignStations) {
+      if (q) {
+        const hay = `${st.name ?? ''} ${st.city ?? ''} ${st.state ?? ''} ${st.frequency_mhz ?? ''}`.toLowerCase()
+        if (!hay.includes(q)) continue
+      }
+      const key = st.state || '—'
+      if (!m.has(key)) m.set(key, [])
+      m.get(key).push(st)
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [campaignStations, search])
+
+  function toggle(id) {
+    setDraft(d => {
+      const next = new Set(d)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function toggleGroup(stations, allOn) {
+    setDraft(d => {
+      const next = new Set(d)
+      for (const s of stations) {
+        if (allOn) next.delete(s.id)
+        else next.add(s.id)
+      }
+      return next
+    })
+  }
+
+  const draftCount = draft.size
+  const dirty = draftCount !== selectedIds.length ||
+    [...draft].some(id => !selectedIds.includes(id))
+
+  function selectAll() { setDraft(new Set(campaignStations.map(s => s.id))) }
+  function clearAll() { setDraft(new Set()) }
+
+  return (
+    <div style={{
+      borderTop: '1px solid var(--c-border)',
+      background: 'var(--c-bg)',
+      padding: '14px 16px 16px',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      {/* Toolbar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 7,
+          padding: '4px 10px', borderRadius: 'var(--radius-full)',
+          background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+          fontSize: 11, fontWeight: 700, color: 'var(--c-text)',
+          fontFamily: 'var(--font-heading)',
+        }}>
+          <span style={{ color: 'var(--c-action)' }}>{draftCount}</span>
+          <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>
+            / {campaignStations.length} selecionadas
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', gap: 6 }}>
+          <MiniBtn onClick={selectAll}>Todas</MiniBtn>
+          <MiniBtn onClick={clearAll} variant="ghost">Limpar</MiniBtn>
+        </div>
+
+        <div style={{
+          flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 10px', borderRadius: 'var(--radius-md)',
+          background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--c-text-3)" strokeWidth="1.75" strokeLinecap="round">
+            <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" />
+          </svg>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar emissora, cidade, UF…"
+            style={{
+              flex: 1, border: 0, outline: 'none', background: 'transparent',
+              fontSize: 12, color: 'var(--c-text)',
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Grouped grid */}
+      {grouped.length === 0 ? (
+        <div style={{
+          padding: '20px 12px', textAlign: 'center', fontSize: 12,
+          color: 'var(--c-text-3)',
+        }}>
+          Nenhuma emissora corresponde a "{search}".
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 320, overflowY: 'auto', paddingRight: 4 }}>
+          {grouped.map(([state, stations]) => {
+            const allOn = stations.every(s => draft.has(s.id))
+            const someOn = !allOn && stations.some(s => draft.has(s.id))
+            return (
+              <div key={state} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  fontSize: 11, color: 'var(--c-text-2)',
+                  fontFamily: 'var(--font-heading)',
+                }}>
+                  <button
+                    onClick={() => toggleGroup(stations, allOn)}
+                    style={{
+                      padding: '2px 8px', borderRadius: 'var(--radius-full)',
+                      background: allOn ? 'var(--c-action)' : someOn ? 'var(--c-action-light, rgba(232,30,117,0.12))' : 'var(--c-surface-2)',
+                      color: allOn ? '#fff' : someOn ? 'var(--c-action)' : 'var(--c-text)',
+                      border: 0, cursor: 'pointer',
+                      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
+                    }}
+                    title={allOn ? `Desmarcar UF ${state}` : `Marcar UF ${state}`}
+                  >
+                    {state}
+                  </button>
+                  <span style={{ color: 'var(--c-text-3)' }}>
+                    {stations.filter(s => draft.has(s.id)).length} / {stations.length}
+                  </span>
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                  gap: 6,
+                }}>
+                  {stations.map(s => (
+                    <StationCheckbox
+                      key={s.id}
+                      station={s}
+                      checked={draft.has(s.id)}
+                      onToggle={() => toggle(s.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Footer actions */}
+      <div style={{
+        display: 'flex', justifyContent: 'flex-end', gap: 8,
+        paddingTop: 10, borderTop: '1px solid var(--c-border)',
+      }}>
+        <button
+          onClick={onClose}
+          style={{
+            padding: '7px 14px', borderRadius: 'var(--radius-md)',
+            background: 'transparent', color: 'var(--c-text-2)',
+            border: '1px solid var(--c-border)', cursor: 'pointer',
+            fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-heading)',
+          }}
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={() => {
+            onSave([...draft])
+            onClose()
+          }}
+          disabled={!dirty}
+          style={{
+            padding: '7px 16px', borderRadius: 'var(--radius-md)',
+            background: dirty ? 'var(--c-action)' : 'var(--c-surface-2)',
+            color: dirty ? '#fff' : 'var(--c-text-3)',
+            border: 0, cursor: dirty ? 'pointer' : 'not-allowed',
+            fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)',
+          }}
+        >
+          {dirty ? `Salvar (${draftCount})` : 'Sem alterações'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MiniBtn({ onClick, children, variant = 'solid' }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '4px 10px', borderRadius: 'var(--radius-md)',
+        background: variant === 'ghost' ? 'transparent' : 'var(--c-surface)',
+        color: variant === 'ghost' ? 'var(--c-text-2)' : 'var(--c-text)',
+        border: '1px solid var(--c-border)', cursor: 'pointer',
+        fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-heading)',
+        transition: 'all 100ms',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--c-action-300, #F472B6)' }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function StationCheckbox({ station, checked, onToggle }) {
+  const freq = station.frequency_mhz != null ? ` ${station.frequency_mhz}` : ''
+  return (
+    <label
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '7px 10px', borderRadius: 'var(--radius-md)',
+        background: checked ? 'var(--c-action-light, rgba(232,30,117,0.08))' : 'var(--c-surface)',
+        border: `1px solid ${checked ? 'var(--c-action-300, #F472B6)' : 'var(--c-border)'}`,
+        cursor: 'pointer',
+        transition: 'all 100ms',
+        minWidth: 0,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        style={{ width: 14, height: 14, accentColor: 'var(--c-action)', flexShrink: 0 }}
+      />
+      <StationAvatar station={station} size={22} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
-          fontWeight: 700, fontSize: 14, color: 'var(--c-text)',
+          fontSize: 12, fontWeight: 600, color: 'var(--c-text)',
           fontFamily: 'var(--font-heading)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
-          {material.title}
+          {station.name}
         </div>
         <div style={{
-          marginTop: 6, display: 'flex', alignItems: 'center', gap: 8,
-          fontSize: 11, color: 'var(--c-text-2)', flexWrap: 'wrap',
+          fontSize: 10, color: 'var(--c-text-3)',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
-          <span style={{ fontWeight: 600, color: 'var(--c-text)' }}>
-            {fmtDuration(material.duration_seconds)}
-          </span>
-          <span style={{ color: 'var(--c-text-3)' }}>·</span>
-          <span style={{
-            padding: '2px 8px', borderRadius: 'var(--radius-full)',
-            background: fp.bg, color: fp.fg,
-            fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: fp.dot }} />
-            {fp.label}
-          </span>
-          <span style={{ color: 'var(--c-text-3)' }}>·</span>
-          <span>
-            {stationNames.length > 0
-              ? `${stationNames.length} emissora${stationNames.length !== 1 ? 's' : ''}`
-              : 'sem emissora'}
-          </span>
+          {station.band || ''}{freq}{station.city ? ` · ${station.city}` : ''}
         </div>
       </div>
-
-      {/* Type select */}
-      <select
-        value={material.type_id ?? ''}
-        onChange={e => onTypeChange(e.target.value || null)}
-        className="input"
-        style={{ width: 170, fontSize: 12 }}
-        title="Tipo do material"
-      >
-        <option value="">Sem tipo</option>
-        {allTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
-
-      {/* Unlink */}
-      <button
-        onClick={onUnlink}
-        title="Desvincular da campanha"
-        aria-label="Desvincular material"
-        style={{
-          width: 32, height: 32, borderRadius: 'var(--radius-md)',
-          background: 'transparent', border: '1px solid var(--c-border)',
-          color: 'var(--c-text-3)', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'all 100ms',
-        }}
-        onMouseEnter={e => {
-          e.currentTarget.style.background = '#fee2e2'
-          e.currentTarget.style.borderColor = '#fecaca'
-          e.currentTarget.style.color = 'var(--c-danger)'
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.background = 'transparent'
-          e.currentTarget.style.borderColor = 'var(--c-border)'
-          e.currentTarget.style.color = 'var(--c-text-3)'
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 5h10M6 5V3.5h4V5M5 5l1 9h4l1-9" />
-        </svg>
-      </button>
-    </div>
+    </label>
   )
 }
 
