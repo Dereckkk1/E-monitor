@@ -248,17 +248,53 @@ services:
     restart: unless-stopped
 
   # ── Fase 2: backup diario do PG ──────────────────────────────────────────
+  # Bugs encontrados em 2026-05-12 (incidente perda de pgdata):
+  #   1. Entrypoint anterior fazia `sleep 86400` ANTES de rodar o backup —
+  #      primeira execução só ocorria 24h após o container subir. Combinado
+  #      com restarts frequentes em desenvolvimento, backup nunca rodava.
+  #   2. Falta de PG*/R2_* env vars fazia o backup.sh abortar imediatamente
+  #      via `: "${PGHOST:?...}"`. O `while true` engolia o erro silenciosamente.
+  # Fix: roda backup imediatamente após subida + plumbar todos env vars que
+  # o script exige. AWS CLI agora instalado via `apk add aws-cli` no entrypoint.
   backup:
     image: postgres:16-alpine
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}"
+      # Para pg_basebackup (script lê esses individualmente).
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
       BACKUP_DIR: /backup
+      # R2 destination (Cloudflare object storage).
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY}
+      R2_SECRET_KEY: ${R2_SECRET_KEY}
+      LOCAL_RETENTION_DAYS: "${BACKUP_LOCAL_RETENTION_DAYS:-7}"
     volumes:
       - backup-data:/backup
+      - pg_archive:/var/lib/postgresql/archive:ro
       - ../scripts/backup.sh:/backup.sh:ro
-    entrypoint: ["sh", "-c", "while true; do sleep 86400; sh /backup.sh; done"]
+    # Roda o backup imediatamente após o postgres ficar pronto, depois espera
+    # 24h pro próximo ciclo. apk add aws-cli porque o script usa `aws s3 cp`
+    # para fazer upload pro R2 e a imagem postgres:16-alpine não vem com ele.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache aws-cli >/dev/null 2>&1
+        echo "[backup] container ready — running first backup now"
+        while true; do
+          sh /backup.sh || echo "[backup] script exited non-zero — see log above"
+          echo "[backup] sleeping 24h until next run"
+          sleep 86400
+        done
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:
