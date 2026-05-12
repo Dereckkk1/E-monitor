@@ -306,6 +306,12 @@ export default function DetectionsPage() {
     () => Object.fromEntries(materialTypes.map(t => [t.id, t.color])),
     [materialTypes]
   )
+  // Full type object lookup, used by the DayDetailModal to render the colored
+  // name/type chip + left border on each detection row.
+  const typeById = useMemo(
+    () => Object.fromEntries(materialTypes.map(t => [t.id, t])),
+    [materialTypes]
+  )
 
   // Build "rows" — one per (station, material) combination that exists in this campaign
   const rows = useMemo(() => {
@@ -512,18 +518,22 @@ export default function DetectionsPage() {
         </>
       )}
 
-      {modalCell && (
-        <DayDetailModal
-          stationId={modalCell.stationId}
-          materialId={modalCell.materialId}
-          dateISO={modalCell.dateISO}
-          campaignId={selectedCampaignId}
-          station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
-          material={materialsById[modalCell.materialId] ?? null}
-          cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.materialId}|${modalCell.dateISO}`) ?? null}
-          onClose={() => setModalCell(null)}
-        />
-      )}
+      {modalCell && (() => {
+        const mat = materialsById[modalCell.materialId] ?? null
+        return (
+          <DayDetailModal
+            stationId={modalCell.stationId}
+            materialId={modalCell.materialId}
+            dateISO={modalCell.dateISO}
+            campaignId={selectedCampaignId}
+            station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
+            material={mat}
+            materialType={mat?.type_id ? typeById[mat.type_id] ?? null : null}
+            cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.materialId}|${modalCell.dateISO}`) ?? null}
+            onClose={() => setModalCell(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
