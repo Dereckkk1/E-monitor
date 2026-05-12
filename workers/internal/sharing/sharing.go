@@ -19,6 +19,7 @@ package sharing
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/google/uuid"
@@ -39,18 +40,54 @@ const (
 	// shared region. Aligned with the runtime matcher's default minScore so
 	// every region the runtime would credit gets flagged here.
 	MinScore = 5
-	// SubsetThreshold é a fração de janelas em que o scan precisa bater no
-	// "outro" comercial para que o par seja classificado como subset/duplicata
-	// em vez de sting compartilhado. ≥ threshold → não flag (deixa a
-	// disambiguação por duração decidir). < threshold → flag normal.
+	// SubsetThreshold é a fração de frames de áudio coberta pela região
+	// compartilhada (em qualquer um dos dois lados do par) que separa subset
+	// de sting. A classificação usa max(ownCoverage, otherCoverage) porque
+	// pares assimétricos (pequeno ⊂ grande) só denunciam o subset olhando
+	// para o lado *menor* — o lado grande sempre vê só uma fração pequena
+	// de janelas batendo no pequeno.
 	//
-	// Calibração: em um corte 30s extraído de um master 60s, o scan do 30s
-	// bate no 60s em 100% das janelas. No par AMB30/JINGLE (sting de 6,25s
-	// em comerciais de 30s), o scan bate em ~11-15% das janelas. Threshold
-	// de 0.5 cobre os dois extremos com folga e dá margem pra cortes
-	// mal-alinhados (ex: 27s de overlap em 30s = 90%).
+	// Calibração:
+	//   - VERÃO 30 ⊂ VERÃO 60: own=100% (todo o 30s), other=50% (metade do 60s) → max=100% → subset
+	//   - PULSO (7s) ⊂ X (30s): own=100% (todo o PULSO), other=23% (7s/30s) → max=100% → subset
+	//   - AMB30/JINGLE sting 6,25s em 30s: own=20%, other=20% → max=20% → sting (flag normal)
+	// Threshold 0.5 dá margem confortável para os dois extremos.
 	SubsetThreshold = 0.5
+	// MinShareableDurationSeconds é a duração mínima (em segundos) que um
+	// comercial precisa ter para participar do shared-hash flagging. Comerciais
+	// mais curtos têm poucas janelas de análise distintas (PULSO de 7s gera
+	// apenas 4 janelas em 4s @ 1s hop) e UMA única janela já cobre >50% da
+	// duração total, o que impede a classificação subset/sting bidirecional
+	// de funcionar com a resolução necessária.
+	//
+	// Além disso, matches de outros comerciais contra um comercial curto
+	// podem produzir `xRange` calculado fora dos bounds do comercial pequeno
+	// — gerando fatias finas (e.g. [0, 7] frames) que individualmente passam
+	// abaixo do SubsetThreshold mas, cumulativamente entre múltiplos scans,
+	// flagam quase tudo do comercial vítima. Sintoma observado em prod com
+	// RÔGGA PULSO SONORO (~67% flagged depois do backfill).
+	//
+	// Para comerciais < MinShareableDurationSeconds, a defesa shared-hash
+	// é pulada **dos dois lados** (não flaga o curto e não usa ele para
+	// flagar os outros). O caso de conflito real (X de 30s toca, e contém
+	// o áudio de PULSO de 7s) cai pra defesa de
+	// `version-disambiguation` — supervisor retrata PULSO em favor de X
+	// pela regra de maior duração no momento da confirmação.
+	MinShareableDurationSeconds = 10.0
 )
+
+// MinShareableDurationFrames é MinShareableDurationSeconds convertido para
+// frames usando a mesma fórmula que o resto do pipeline
+// (sampleRate / stftHopSamples = 16000 / 2048 ≈ 7,8125 frames/s).
+// Computado em init() porque Go não converte uma constante float fracionária
+// para int em tempo de compilação.
+var MinShareableDurationFrames int
+
+func init() {
+	// math.Floor quebra a redução em constante de tempo de compilação que
+	// Go faria com a expressão pura; o resultado ainda é 78 para 10s.
+	MinShareableDurationFrames = int(math.Floor(MinShareableDurationSeconds * float64(fingerprint.SampleRate) / 2048.0))
+}
 
 // MarkSharedHashes scans the given commercial's master audio against the
 // existing fingerprint catalog, identifies regions that overlap with other
@@ -78,7 +115,7 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 
 	// 2. Load the matching index from every ready commercial. This includes
 	//    the commercial under scan; we drop self-matches inline.
-	idx, shortIDToCommercialID, err := loadCatalogIndex(ctx, pool)
+	idx, shortIDToCommercialID, totalFramesByID, err := loadCatalogIndex(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("sharing: load catalog: %w", err)
 	}
@@ -98,15 +135,16 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 	}
 
 	// 4. Slide a 4s @ 1s hop window over A's PCM, run MatchWindow against the
-	//    catalog index, and accumulate per-(other commercial) ranges plus
-	//    window-hit counts. The window-hit counts let step 5 classify each
-	//    pair (A, X) as subset/duplicate (skip flagging) or sting (flag).
-	scan := scanForSharedRegions(pcm, store, shortID, shortIDToCommercialID, commercialID)
+	//    catalog index, and accumulate per-(other commercial) ranges + the
+	//    own/other total frame counts that step 5 needs to compute coverage
+	//    on both sides of each pair.
+	scan := scanForSharedRegions(pcm, store, shortID, shortIDToCommercialID, commercialID, totalFramesByID)
 
 	// 5. Classify each pair (A, X) and produce the final rangesByCommercial.
-	//    Pairs whose hit ratio ≥ SubsetThreshold are treated as subset/dup
-	//    relationships (where the disambiguation-by-duration layer is the
-	//    appropriate defense), so we do NOT flag them as shared.
+	//    A pair is "subset" when the matched audio covers ≥ SubsetThreshold
+	//    of *either* commercial — typical of cuts of the same master. Subset
+	//    pairs are NOT flagged (disambiguation-by-duration is the correct
+	//    defense). Below threshold on both sides = sting → flag normal.
 	rangesByCommercial := classifyAndFilter(scan, SubsetThreshold)
 	if len(rangesByCommercial) == 0 {
 		return nil
@@ -136,22 +174,23 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 // frameRange is a half-open interval [from, until) on time_frame.
 type frameRange struct{ from, until int32 }
 
-// scanReport agrega os dados de um scan de A contra o catálogo: total de
-// janelas analisadas e, por outro comercial X, quantas janelas tiveram hit
-// + as ranges (em A e em X) que precisariam ser flagged se o par for sting.
+// scanReport agrega os dados de um scan de A contra o catálogo: o tamanho
+// total de A em frames e, por outro comercial X, as ranges em A e em X
+// + tamanho total de X. Tudo o que `classifyAndFilter` precisa para decidir
+// subset vs sting de forma simétrica.
 //
 // Mantido como tipo nomeado para que o filtro subset/sting seja testável
 // isoladamente (sem rodar áudio + DB).
 type scanReport struct {
 	ownCommercialID uuid.UUID
-	totalWindows    int
+	ownTotalFrames  int
 	perOther        map[uuid.UUID]*perOtherScan
 }
 
 type perOtherScan struct {
-	windowsWithHits int
-	ownRanges       []frameRange
-	otherRanges     []frameRange
+	otherTotalFrames int
+	ownRanges        []frameRange
+	otherRanges      []frameRange
 }
 
 // scanForSharedRegions desliza uma janela de WindowSeconds em hops de
@@ -163,6 +202,7 @@ func scanForSharedRegions(
 	ownShortID int32,
 	shortIDToCommercialID map[int32]uuid.UUID,
 	ownCommercialID uuid.UUID,
+	totalFramesByID map[uuid.UUID]int,
 ) scanReport {
 	const sampleRate = fingerprint.SampleRate
 	const stftHopSamples = 2048 // matches pkg/audio STFT hop
@@ -171,18 +211,17 @@ func scanForSharedRegions(
 
 	report := scanReport{
 		ownCommercialID: ownCommercialID,
+		ownTotalFrames:  len(pcm) / stftHopSamples,
 		perOther:        make(map[uuid.UUID]*perOtherScan),
 	}
 
 	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
-		report.totalWindows++
 		window := pcm[off : off+windowSamples]
 		results := match.MatchWindow(window, store, MinScore, 0.0)
 
 		ownStartFrame := int32(off / stftHopSamples)
 		ownEndFrame := int32((off + windowSamples) / stftHopSamples)
 
-		seenThisWindow := make(map[uuid.UUID]bool)
 		for _, r := range results {
 			if r.CommercialShortID == ownShortID {
 				continue // self-match
@@ -194,12 +233,8 @@ func scanForSharedRegions(
 
 			scan := report.perOther[otherID]
 			if scan == nil {
-				scan = &perOtherScan{}
+				scan = &perOtherScan{otherTotalFrames: totalFramesByID[otherID]}
 				report.perOther[otherID] = scan
-			}
-			if !seenThisWindow[otherID] {
-				scan.windowsWithHits++
-				seenThisWindow[otherID] = true
 			}
 
 			scan.ownRanges = append(scan.ownRanges, frameRange{ownStartFrame, ownEndFrame})
@@ -225,29 +260,69 @@ func scanForSharedRegions(
 	return report
 }
 
+// frameCoverage returns the total number of frames covered by the union of
+// the input ranges (i.e. the merged length).
+func frameCoverage(rs []frameRange) int {
+	if len(rs) == 0 {
+		return 0
+	}
+	merged := mergeRanges(rs)
+	total := 0
+	for _, r := range merged {
+		total += int(r.until - r.from)
+	}
+	return total
+}
+
 // classifyAndFilter consome um scanReport e devolve o mapa final
 // commercial_id → ranges a flagar como is_shared.
 //
-// Regra: para cada outro comercial X, calcula `fraction = windowsWithHits /
-// totalWindows`. Se fraction ≥ subsetThreshold, o par (A, X) é interpretado
-// como relação subset/duplicata (ex: corte 30s extraído do master 60s) e
-// **não é flagado** — a desambiguação por maior duração no supervisor é
-// a defesa apropriada nesse caso. Se fraction < subsetThreshold, é um
-// sting compartilhado em comerciais distintos — flag normal.
+// Regra (simétrica): para cada outro comercial X, calcula
 //
-// O caso "duplicata total" (ambos comerciais ≥ subsetThreshold um do outro)
-// resulta em nenhum flag por nenhum dos dois scans — comportamento desejado,
-// já que duas duplicatas confirmariam ambas e o operador deve remover a
-// extra do catálogo. Detectável via SQL de auditoria (shared_pct nas duas
-// linhas).
+//	ownCov   = (frames de A cobertos pelos matches) / ownTotalFrames
+//	otherCov = (frames de X cobertos pelos matches) / otherTotalFrames
+//	score    = max(ownCov, otherCov)
+//
+// Se score ≥ subsetThreshold → subset/duplicata (não flag — deixa a
+// disambiguação por duração resolver). Caso contrário → sting → flag normal.
+//
+// Por que max e não cada lado independente: pares assimétricos (pequeno ⊂
+// grande) só revelam a relação subset pelo lado *menor* — o lado grande vê
+// só uma fatia pequena de hits. Pegar o máximo garante que basta um dos
+// dois lados estar fortemente coberto pra evitar o flag indevido.
+//
+// O caso "duplicata total" (ambos os lados ≈ 100%) resulta em nenhum flag —
+// comportamento desejado, já que duas duplicatas confirmariam ambas e o
+// operador deve remover a extra do catálogo. Detectável via SQL de
+// auditoria (shared_pct = 0 nas duas linhas).
 func classifyAndFilter(report scanReport, subsetThreshold float64) map[uuid.UUID][]frameRange {
 	out := make(map[uuid.UUID][]frameRange)
-	if report.totalWindows == 0 {
+	if report.ownTotalFrames == 0 {
+		return out
+	}
+	// Comerciais curtos não participam do shared-hash flagging (ver doc da
+	// constante MinShareableDurationSeconds). Pula a scan inteira se o
+	// próprio comercial é curto demais.
+	if report.ownTotalFrames < MinShareableDurationFrames {
 		return out
 	}
 	for otherID, scan := range report.perOther {
-		fraction := float64(scan.windowsWithHits) / float64(report.totalWindows)
-		if fraction >= subsetThreshold {
+		// Pula pares onde o **outro** comercial é curto demais — evita
+		// flagar fatias finas espúrias num vinheta/sting vítima e mantém
+		// a simetria do skip dos dois lados.
+		if scan.otherTotalFrames < MinShareableDurationFrames {
+			continue
+		}
+		ownCov := float64(frameCoverage(scan.ownRanges)) / float64(report.ownTotalFrames)
+		var otherCov float64
+		if scan.otherTotalFrames > 0 {
+			otherCov = float64(frameCoverage(scan.otherRanges)) / float64(scan.otherTotalFrames)
+		}
+		score := ownCov
+		if otherCov > score {
+			score = otherCov
+		}
+		if score >= subsetThreshold {
 			// Subset/duplicate — não flag.
 			continue
 		}
@@ -261,35 +336,43 @@ func classifyAndFilter(report scanReport, subsetThreshold float64) map[uuid.UUID
 // index, plus a short_id → commercial_id map so the scan can translate match
 // results back to the FK identity needed for UPDATEs.
 //
+// Also returns totalFramesByID, the total frame count per commercial derived
+// from commercials.duration_seconds (sampleRate / stftHop = 16000 / 2048 =
+// 7.8125 frames per second). The classifier needs this to compute coverage
+// of the matched ranges on the *other* side of each pair.
+//
 // We load every status here (not just programada/ativa as the runtime loader
 // does): the shared-hash flag is a permanent property of the master and we
 // want to catch overlap with completed/cancelled campaigns too — they may
 // be reactivated later, and the flag is cheap to set even if currently unused.
-func loadCatalogIndex(ctx context.Context, pool *pgxpool.Pool) (index.Index, map[int32]uuid.UUID, error) {
+func loadCatalogIndex(ctx context.Context, pool *pgxpool.Pool) (index.Index, map[int32]uuid.UUID, map[uuid.UUID]int, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, c.short_id, c.id
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id,
+		       c.short_id, c.id, c.duration_seconds
 		FROM fingerprint_hashes fh
 		JOIN commercials c ON c.id = fh.commercial_id
 		WHERE c.fingerprint_status = 'ready'
 	`)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer rows.Close()
 
 	idx := make(index.Index)
 	shortIDToID := make(map[int32]uuid.UUID)
+	totalFramesByID := make(map[uuid.UUID]int)
 	for rows.Next() {
 		var hashValue uint32
 		var timeFrame int32
 		var variantID, rateID int16
 		var shortID int32
 		var commercialID uuid.UUID
-		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &shortID, &commercialID); err != nil {
-			return nil, nil, err
+		var durationSec float64
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &shortID, &commercialID, &durationSec); err != nil {
+			return nil, nil, nil, err
 		}
 		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
-			return nil, nil, fmt.Errorf("sharing: variant_id=%d or rate_id=%d out of uint8 range",
+			return nil, nil, nil, fmt.Errorf("sharing: variant_id=%d or rate_id=%d out of uint8 range",
 				variantID, rateID)
 		}
 		idx[hashValue] = append(idx[hashValue], index.Entry{
@@ -303,8 +386,11 @@ func loadCatalogIndex(ctx context.Context, pool *pgxpool.Pool) (index.Index, map
 			// detection behaviour vs the runtime matcher).
 		})
 		shortIDToID[shortID] = commercialID
+		// duration_seconds * (sampleRate / stftHopSamples). Idempotent across
+		// rows for the same commercial — last write wins but all rows agree.
+		totalFramesByID[commercialID] = int(durationSec * float64(fingerprint.SampleRate) / 2048.0)
 	}
-	return idx, shortIDToID, rows.Err()
+	return idx, shortIDToID, totalFramesByID, rows.Err()
 }
 
 // mergeRanges merges overlapping or contiguous frame ranges into a minimal
