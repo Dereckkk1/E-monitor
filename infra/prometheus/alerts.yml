@@ -34,6 +34,28 @@ groups:
           summary: "Backup do Postgres sem sucesso há mais de 26h"
           description: "Verifique /var/log/radiocheck/backup.log e o status do cron radiocheck-postgres."
 
+      # F-110: defesa contra o cenário de "backup nunca rodou silenciosamente"
+      # — exatamente o que aconteceu antes do incidente 2026-05-12. Se a
+      # métrica nunca aparece, BackupNotRunning fica passivo (não tem dado
+      # pra comparar com time()). absent() dispara explicitamente nesse caso.
+      - alert: BackupMetricMissing
+        expr: absent(radiocheck_postgres_backup_last_success_timestamp)
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Métrica de backup nunca apareceu — backup pipeline pode estar quebrado"
+          description: |
+            O container backup deveria escrever radiocheck_postgres_backup_last_success_timestamp
+            via textfile collector (PROM_TEXTFILE_DIR + node-exporter). Métrica
+            ausente sugere que: (1) backup nunca rodou; (2) node-exporter não
+            está scrapeable; (3) caminho do textfile está errado. Sem essa
+            métrica, qualquer falha de backup é silenciosa.
+            Investigação:
+              docker compose logs node-exporter
+              docker compose logs backup
+              curl prometheus:9090/api/v1/targets
+
       - alert: RestoreTestFailed
         expr: radiocheck_postgres_restore_test_last_status != 1
         for: 1h
