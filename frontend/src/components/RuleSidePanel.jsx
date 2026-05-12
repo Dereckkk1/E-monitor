@@ -7,16 +7,20 @@ const WEEKDAY_NAMES = ['D','S','T','Q','Q','S','S']
 /**
  * Slide-from-right panel for creating or editing a distribution rule.
  *
+ * Migration 0019: rules are now keyed by material TYPE — not by individual
+ * material. The user picks one type (Spot 30s, Testemunhal, etc) and the rule
+ * applies to every material of that type linked to the campaign.
+ *
  * Props:
  *  - open: bool
  *  - onClose: () => void
  *  - onSubmit: (payload) => void   // payload matches POST/PUT distribution-rules
  *  - onDelete?: () => void         // only shown in edit mode
  *  - mode: "create" | "edit"
- *  - initial: { material_id, station_ids, start_date, end_date,
+ *  - initial: { type_id, station_ids, start_date, end_date,
  *               weekday_mask, time_start, time_end, plays_per_day } | null
- *  - materials: Array<{id, title, type_color}>    // from campaign_materials
- *  - stations:  Array<{id, name}>                 // from campaign.target_stations
+ *  - types:     Array<{id, name, color, materialCount}>   // material types present in this campaign
+ *  - stations:  Array<{id, name}>                          // from campaign.target_stations
  *  - campaignStart: ISO date
  *  - campaignEnd:   ISO date
  *  - submitting: bool
@@ -24,11 +28,11 @@ const WEEKDAY_NAMES = ['D','S','T','Q','Q','S','S']
 export default function RuleSidePanel({
   open, onClose, onSubmit, onDelete,
   mode = 'create', initial = null,
-  materials = [], stations = [],
+  types = [], stations = [],
   campaignStart, campaignEnd,
   submitting = false,
 }) {
-  const [materialId, setMaterialId] = useState(initial?.material_id ?? '')
+  const [typeId, setTypeId] = useState(initial?.type_id ?? '')
   const [stationIds, setStationIds] = useState(initial?.station_ids ?? [])
   const [startDate, setStartDate] = useState(initial?.start_date ?? campaignStart?.slice(0, 10) ?? '')
   const [endDate, setEndDate] = useState(initial?.end_date ?? campaignEnd?.slice(0, 10) ?? '')
@@ -39,7 +43,7 @@ export default function RuleSidePanel({
 
   useEffect(() => {
     if (open) {
-      setMaterialId(initial?.material_id ?? '')
+      setTypeId(initial?.type_id ?? '')
       setStationIds(initial?.station_ids ?? [])
       setStartDate(initial?.start_date ?? campaignStart?.slice(0, 10) ?? '')
       setEndDate(initial?.end_date ?? campaignEnd?.slice(0, 10) ?? '')
@@ -70,7 +74,7 @@ export default function RuleSidePanel({
   }
 
   function isValid() {
-    return materialId &&
+    return typeId &&
       stationIds.length > 0 &&
       startDate && endDate &&
       timeStart && timeEnd &&
@@ -79,7 +83,7 @@ export default function RuleSidePanel({
 
   function submit() {
     onSubmit({
-      material_id: materialId,
+      type_id: typeId,
       station_ids: stationIds,
       start_date: startDate,
       end_date: endDate,
@@ -90,42 +94,115 @@ export default function RuleSidePanel({
     })
   }
 
+  const selectedType = types.find(t => t.id === typeId) ?? null
+
   return createPortal(
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)',
-      backdropFilter: 'blur(4px)', zIndex: 50,
+      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)',
+      backdropFilter: 'blur(6px)', zIndex: 50,
     }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 460,
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: 480,
           background: 'var(--c-surface)', boxShadow: '-24px 0 48px -12px rgba(15,23,42,0.25)',
           display: 'flex', flexDirection: 'column',
         }}
       >
-        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--c-border)', display: 'flex', justifyContent: 'space-between' }}>
-          <h3 style={{ margin: 0, fontSize: 15, fontFamily: 'var(--font-heading)', fontWeight: 700 }}>{mode === 'edit' ? 'Editar regra' : 'Adicionar regra'}</h3>
-          <button onClick={onClose} style={{ width: 28, height: 28, border: 0, background: 'var(--c-surface-2)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>×</button>
+        <div style={{
+          padding: '20px 22px', borderBottom: '1px solid var(--c-border)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.12em',
+              color: 'var(--c-action)', textTransform: 'uppercase',
+            }}>
+              Regra de distribuição · por tipo
+            </span>
+            <h3 style={{
+              margin: '3px 0 0', fontSize: 17, fontFamily: 'var(--font-heading)', fontWeight: 700,
+              color: 'var(--c-text)',
+            }}>
+              {mode === 'edit' ? 'Editar regra' : 'Nova regra'}
+            </h3>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Fechar"
+            style={{
+              width: 30, height: 30, border: 0, background: 'var(--c-surface-2)',
+              borderRadius: 'var(--radius-md)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--c-text-2)',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </div>
 
-        <div style={{ padding: '18px 22px', overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1 }}>
 
-          <div style={{ marginBottom: 16 }}>
-            <Label>Material *</Label>
-            <div style={chipRow}>
-              {materials.map(m => (
-                <button key={m.id}
-                  onClick={() => setMaterialId(m.id)}
-                  style={{ ...chip, ...(materialId === m.id ? chipOn : {}) }}
-                >
-                  <TypeIconPill color={m.type_color ?? '#94a3b8'} height={10} />
-                  <span style={{ marginLeft: 5 }}>{m.title}</span>
-                </button>
-              ))}
-            </div>
+          <div style={{ marginBottom: 20 }}>
+            <Label>Tipo de material *</Label>
+            {types.length === 0 ? (
+              <div style={{
+                padding: 14, borderRadius: 'var(--radius-md)',
+                background: '#fef9c3', color: '#a16207',
+                fontSize: 12, lineHeight: 1.55,
+              }}>
+                Nenhum tipo disponível. Volte ao passo 3 e defina o tipo dos materiais
+                vinculados à campanha.
+              </div>
+            ) : (
+              <div style={chipRow}>
+                {types.map(t => {
+                  const on = typeId === t.id
+                  return (
+                    <button key={t.id}
+                      onClick={() => setTypeId(t.id)}
+                      style={{
+                        ...chip,
+                        ...(on ? {
+                          background: `color-mix(in srgb, ${t.color} 14%, transparent)`,
+                          color: t.color,
+                          borderColor: `color-mix(in srgb, ${t.color} 40%, transparent)`,
+                        } : {}),
+                      }}
+                    >
+                      <TypeIconPill color={t.color ?? '#94a3b8'} height={10} />
+                      <span style={{ marginLeft: 6 }}>{t.name}</span>
+                      {t.materialCount != null && (
+                        <span style={{
+                          marginLeft: 6, padding: '0 6px',
+                          background: 'var(--c-surface)', color: 'var(--c-text-3)',
+                          borderRadius: 'var(--radius-full)', fontSize: 9, fontWeight: 700,
+                        }}>
+                          {t.materialCount}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {selectedType && (
+              <div style={{
+                marginTop: 10, padding: '8px 12px',
+                background: 'var(--c-bg)', border: '1px solid var(--c-border)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 11, color: 'var(--c-text-2)', lineHeight: 1.5,
+              }}>
+                Essa regra vai contar como cumprida quando <strong style={{ color: 'var(--c-text)' }}>qualquer
+                material do tipo {selectedType.name}</strong> tocar nas emissoras
+                selecionadas{selectedType.materialCount != null && ` (${selectedType.materialCount} material${selectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`}.
+              </div>
+            )}
           </div>
 
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 20 }}>
             <Label>Emissoras *</Label>
             <div style={chipRow}>
               {stations.map(s => (
@@ -184,7 +261,11 @@ export default function RuleSidePanel({
           </div>
         </div>
 
-        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--c-border)', display: 'flex', justifyContent: 'space-between', gap: 8, background: 'var(--c-bg)' }}>
+        <div style={{
+          padding: '14px 22px', borderTop: '1px solid var(--c-border)',
+          display: 'flex', justifyContent: 'space-between', gap: 8,
+          background: 'var(--c-bg)',
+        }}>
           {mode === 'edit' && onDelete ? (
             <button onClick={onDelete} className="btn btn-danger btn-sm">🗑 Excluir regra</button>
           ) : <div />}
@@ -219,6 +300,6 @@ const chipRow = { display: 'flex', flexWrap: 'wrap', gap: 5 }
 const chip = {
   padding: '5px 10px', borderRadius: 'var(--radius-full)', background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
   fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid transparent',
-  display: 'inline-flex', alignItems: 'center', transition: 'background 100ms, color 100ms',
+  display: 'inline-flex', alignItems: 'center', transition: 'all 100ms',
 }
 const chipOn = { background: 'var(--c-action-light)', color: 'var(--c-action)', borderColor: 'var(--c-action-border)' }

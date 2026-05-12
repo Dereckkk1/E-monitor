@@ -16,7 +16,7 @@ type DistributionOverridesHandler struct {
 }
 
 type overridePayload struct {
-	MaterialID    uuid.UUID `json:"material_id"`
+	TypeID        uuid.UUID `json:"type_id"`
 	StationID     uuid.UUID `json:"station_id"`
 	ForDate       string    `json:"for_date"` // YYYY-MM-DD
 	PlaysExpected int16     `json:"plays_expected"`
@@ -40,7 +40,7 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.Repo.Upsert(r.Context(), catalog.UpsertOverrideInput{
-		CampaignID: campaignID, MaterialID: p.MaterialID, StationID: p.StationID,
+		CampaignID: campaignID, TypeID: p.TypeID, StationID: p.StationID,
 		ForDate: date, PlaysExpected: p.PlaysExpected, Reason: p.Reason,
 	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -65,7 +65,7 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 		http.Error(w, "for_date must be YYYY-MM-DD", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Delete(r.Context(), campaignID, p.MaterialID, p.StationID, date); err != nil {
+	if err := h.Repo.Delete(r.Context(), campaignID, p.TypeID, p.StationID, date); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

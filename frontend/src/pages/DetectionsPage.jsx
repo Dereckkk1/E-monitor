@@ -301,11 +301,6 @@ export default function DetectionsPage() {
   }
 
 
-  // Color lookup for material types
-  const typeColorById = useMemo(
-    () => Object.fromEntries(materialTypes.map(t => [t.id, t.color])),
-    [materialTypes]
-  )
   // Full type object lookup, used by the DayDetailModal to render the colored
   // name/type chip + left border on each detection row.
   const typeById = useMemo(
@@ -313,21 +308,38 @@ export default function DetectionsPage() {
     [materialTypes]
   )
 
-  // Build "rows" — one per (station, material) combination that exists in this campaign
-  const rows = useMemo(() => {
-    const r = []
+  // Migration 0019: distribution is by TYPE, so the grid shows one row per
+  // (station, type) pair. A type only appears for a station when at least
+  // one material of that type is linked to it.
+  const typesInScopeByStation = useMemo(() => {
+    const m = new Map()
     for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
-      if (!mat) continue
+      if (!mat?.type_id) continue
       for (const sid of cm.target_stations) {
+        if (!m.has(sid)) m.set(sid, new Set())
+        m.get(sid).add(mat.type_id)
+      }
+    }
+    return m
+  }, [campaignMaterials, materialsById])
+
+  const rows = useMemo(() => {
+    const r = []
+    for (const [sid, typeSet] of typesInScopeByStation.entries()) {
+      for (const tid of typeSet) {
+        const type = typeById[tid]
+        if (!type) continue
         const matching = distributionRules.filter(rule =>
-          rule.material_id === cm.material_id && rule.station_ids.includes(sid))
+          rule.type_id === tid && rule.station_ids.includes(sid))
         const first = matching[0]
         r.push({
           stationId: sid,
-          materialId: cm.material_id,
-          materialTitle: mat.title,
-          typeColor: typeColorById[mat.type_id] ?? '#94a3b8',
+          // Grid was built around `materialId` — we feed the type's UUID here
+          // and keep the prop name so the existing cell-key plumbing works.
+          materialId: tid,
+          materialTitle: type.name,
+          typeColor: type.color ?? '#94a3b8',
           ruleSummary: first
             ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
             : null,
@@ -336,13 +348,14 @@ export default function DetectionsPage() {
       }
     }
     return r
-  }, [campaignMaterials, distributionRules, materialsById, typeColorById])
+  }, [typesInScopeByStation, typeById, distributionRules])
 
-  // Build cellData map from daily summary
+  // Build cellData map keyed by (station, TYPE, date) — daily_play_summary now
+  // groups by type after migration 0019.
   const cellData = useMemo(() => {
     const m = new Map()
     for (const s of summary) {
-      const key = `${s.station_id}|${s.material_id}|${s.for_date.slice(0, 10)}`
+      const key = `${s.station_id}|${s.type_id}|${s.for_date.slice(0, 10)}`
       m.set(key, { ...s, hasOverride: false })
     }
     return m
@@ -511,29 +524,25 @@ export default function DetectionsPage() {
             stations={stationCatalog}
             rows={filteredRows}
             cellData={cellData}
-            onCellClick={(stationId, materialId, dateISO) =>
-              setModalCell({ stationId, materialId, dateISO })}
+            onCellClick={(stationId, typeId, dateISO) =>
+              setModalCell({ stationId, typeId, dateISO })}
             onStationClick={(stationId) => setHealthStationId(stationId)}
           />
         </>
       )}
 
-      {modalCell && (() => {
-        const mat = materialsById[modalCell.materialId] ?? null
-        return (
-          <DayDetailModal
-            stationId={modalCell.stationId}
-            materialId={modalCell.materialId}
-            dateISO={modalCell.dateISO}
-            campaignId={selectedCampaignId}
-            station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
-            material={mat}
-            materialType={mat?.type_id ? typeById[mat.type_id] ?? null : null}
-            cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.materialId}|${modalCell.dateISO}`) ?? null}
-            onClose={() => setModalCell(null)}
-          />
-        )
-      })()}
+      {modalCell && (
+        <DayDetailModal
+          stationId={modalCell.stationId}
+          typeId={modalCell.typeId}
+          dateISO={modalCell.dateISO}
+          campaignId={selectedCampaignId}
+          station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
+          materialType={typeById[modalCell.typeId] ?? null}
+          cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.typeId}|${modalCell.dateISO}`) ?? null}
+          onClose={() => setModalCell(null)}
+        />
+      )}
     </div>
   )
 }

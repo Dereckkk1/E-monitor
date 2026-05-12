@@ -9,7 +9,8 @@ import (
 )
 
 // DailySummaryRow is one row from the daily_play_summary view.
-// One row per (campaign, material, station, day) tuple with the 6 metric counts:
+// Migration 0019: one row per (campaign, TYPE, station, day) — not per material.
+// The 6 metric counts:
 //   - expected: programmed plays (gray) — sum of rules' plays_per_day or override
 //   - in_slot:  actual plays inside time slot (green)
 //   - deficit:  max(0, expected - in_slot - out_slot) (red, "still owed")
@@ -18,7 +19,7 @@ import (
 //   - out_date: plays out of campaign date range (purple)
 type DailySummaryRow struct {
 	CampaignID uuid.UUID `json:"campaign_id"`
-	MaterialID uuid.UUID `json:"material_id"`
+	TypeID     uuid.UUID `json:"type_id"`
 	StationID  uuid.UUID `json:"station_id"`
 	ForDate    time.Time `json:"for_date"`
 	Expected   int32     `json:"expected"`
@@ -47,12 +48,12 @@ func (ds *DailySummaryRepo) ListByCampaign(ctx context.Context,
 	campaignID uuid.UUID, from, to time.Time) ([]DailySummaryRow, error) {
 
 	rows, err := ds.pool.Query(ctx, `
-		SELECT campaign_id, material_id, station_id, for_date,
+		SELECT campaign_id, type_id, station_id, for_date,
 		       expected, in_slot, deficit, bonus, out_slot, out_date
 		FROM daily_play_summary
 		WHERE campaign_id = $1
 		  AND for_date BETWEEN $2 AND $3
-		ORDER BY station_id, material_id, for_date`,
+		ORDER BY station_id, type_id, for_date`,
 		campaignID, from, to)
 	if err != nil {
 		return nil, err
@@ -61,7 +62,7 @@ func (ds *DailySummaryRepo) ListByCampaign(ctx context.Context,
 	var out []DailySummaryRow
 	for rows.Next() {
 		var r DailySummaryRow
-		if err := rows.Scan(&r.CampaignID, &r.MaterialID, &r.StationID, &r.ForDate,
+		if err := rows.Scan(&r.CampaignID, &r.TypeID, &r.StationID, &r.ForDate,
 			&r.Expected, &r.InSlot, &r.Deficit, &r.Bonus,
 			&r.OutSlot, &r.OutDate); err != nil {
 			return nil, err

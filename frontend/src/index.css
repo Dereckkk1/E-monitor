@@ -103,22 +103,15 @@ a  { color: var(--c-action); text-decoration: none; }
 .sidebar-logo {
   padding: 20px 16px 16px;
   border-bottom: 1px solid var(--c-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.sidebar-logo-name {
-  font-family: var(--font-heading);
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--c-text);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
-.sidebar-logo-sub {
-  font-size: 11px;
-  color: var(--c-text-3);
-  font-weight: 400;
-  margin-top: 2px;
+.sidebar-logo-img {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }
 
 .sidebar-nav {

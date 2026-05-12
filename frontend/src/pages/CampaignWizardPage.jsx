@@ -142,7 +142,15 @@ export default function CampaignWizardPage() {
         campaignStations={targetStationIds.map(id => allStations.find(s => s.id === id)).filter(Boolean)}
       />
     )
-    nextDisabled = materialCount === 0
+    // Migration 0019: distribution is by type, so every linked material MUST
+    // have a type_id before advancing — otherwise no rule can cover it.
+    const someWithoutType = campaignMaterials.some(cm => {
+      const mat = materialsById[cm.material_id]
+      return mat && !mat.type_id
+    })
+    const someWithoutStations = campaignMaterials.some(cm =>
+      !cm.target_stations || cm.target_stations.length === 0)
+    nextDisabled = materialCount === 0 || someWithoutType || someWithoutStations
   } else if (currentStep === 4) {
     stepContent = (
       <DistributionStep

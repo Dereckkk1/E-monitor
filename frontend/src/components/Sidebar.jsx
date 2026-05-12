@@ -145,8 +145,7 @@ export default function Sidebar({ onClose }) {
   return (
     <>
       <div className="sidebar-logo">
-        <div className="sidebar-logo-name">Radiocheck</div>
-        <div className="sidebar-logo-sub">E-radios</div>
+        <img src="/E-monitor%20logo.png" alt="E-monitor" className="sidebar-logo-img" />
       </div>
 
       <nav className="sidebar-nav">

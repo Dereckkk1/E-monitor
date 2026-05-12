@@ -1,11 +1,32 @@
 package catalog
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// seedType creates a material type for tests and registers cleanup. Tests
+// can't reuse the seeded types from migration 0016 because the cleanup of
+// other tests may have deleted them via cascading FK; making a fresh one
+// per test keeps things isolated.
+func seedType(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
+	t.Helper()
+	tid := uuid.New()
+	// Append a unique suffix to satisfy material_types.name UNIQUE constraint.
+	_, err := pool.Exec(ctx, `INSERT INTO material_types (id, name, color)
+		VALUES ($1, $2, '#3b82f6')`, tid, name+"-"+tid.String()[:8])
+	if err != nil {
+		t.Fatalf("seed type: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM material_types WHERE id = $1", tid)
+	})
+	return tid
+}
 
 func TestDistributionRules_CRUD(t *testing.T) {
 	ctx, pool := newTestDB(t)
@@ -16,8 +37,9 @@ func TestDistributionRules_CRUD(t *testing.T) {
 		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
 	})
+	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
-		ClientID: cli.ID, Title: "M", DurationSeconds: 30,
+		ClientID: cli.ID, Title: "M", TypeID: &typeID, DurationSeconds: 30,
 		MasterStoragePath: "/tmp", MasterSHA256: "x",
 	})
 	t.Cleanup(func() {
@@ -32,7 +54,7 @@ func TestDistributionRules_CRUD(t *testing.T) {
 
 	rule, err := repo.Create(ctx, CreateDistributionRuleInput{
 		CampaignID:  cmp.ID,
-		MaterialID:  mat.ID,
+		TypeID:      typeID,
 		StationIDs:  []uuid.UUID{station},
 		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
@@ -47,6 +69,9 @@ func TestDistributionRules_CRUD(t *testing.T) {
 	if rule.PlaysPerDay != 3 {
 		t.Errorf("PlaysPerDay = %d, want 3", rule.PlaysPerDay)
 	}
+	if rule.TypeID != typeID {
+		t.Errorf("TypeID = %v, want %v", rule.TypeID, typeID)
+	}
 
 	list, _ := repo.ListByCampaign(ctx, cmp.ID)
 	if len(list) != 1 {
@@ -55,7 +80,7 @@ func TestDistributionRules_CRUD(t *testing.T) {
 
 	// Update
 	if err := repo.Update(ctx, rule.ID, CreateDistributionRuleInput{
-		CampaignID: cmp.ID, MaterialID: mat.ID,
+		CampaignID: cmp.ID, TypeID: typeID,
 		StationIDs:  []uuid.UUID{station},
 		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
@@ -89,8 +114,9 @@ func TestDistributionRules_Constraints(t *testing.T) {
 		Name: "C", ClientID: cli.ID,
 		StartDate: time.Now(), EndDate: time.Now().AddDate(0, 1, 0),
 	})
+	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
-		ClientID: cli.ID, Title: "M", DurationSeconds: 30,
+		ClientID: cli.ID, Title: "M", TypeID: &typeID, DurationSeconds: 30,
 		MasterStoragePath: "/tmp", MasterSHA256: "y",
 	})
 	t.Cleanup(func() {
@@ -104,7 +130,7 @@ func TestDistributionRules_Constraints(t *testing.T) {
 
 	// end_date < start_date deve falhar (rule_dates_valid)
 	_, err := repo.Create(ctx, CreateDistributionRuleInput{
-		CampaignID: cmp.ID, MaterialID: mat.ID,
+		CampaignID: cmp.ID, TypeID: typeID,
 		StationIDs:  []uuid.UUID{uuid.New()},
 		StartDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
 		EndDate:     time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -125,8 +151,9 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
 	})
+	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
-		ClientID: cli.ID, Title: "M", DurationSeconds: 30,
+		ClientID: cli.ID, Title: "M", TypeID: &typeID, DurationSeconds: 30,
 		MasterStoragePath: "/tmp", MasterSHA256: "rk-bulk",
 	})
 	stat, _ := NewStations(pool).Create(ctx, CreateStationInput{
@@ -154,10 +181,10 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 		t.Fatalf("create detection: %v", err)
 	}
 
-	// 2. Cria regra que cobre essa data + faixa
+	// 2. Cria regra que cobre essa data + faixa (por TIPO, não material)
 	repo := NewDistributionRules(pool)
 	rule, err := repo.Create(ctx, CreateDistributionRuleInput{
-		CampaignID: cmp.ID, MaterialID: mat.ID,
+		CampaignID: cmp.ID, TypeID: typeID,
 		StationIDs:  []uuid.UUID{stat.ID},
 		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),

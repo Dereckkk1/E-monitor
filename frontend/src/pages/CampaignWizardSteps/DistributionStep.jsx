@@ -50,23 +50,58 @@ export default function DistributionStep({
   const [popoverAnchor, setPopoverAnchor] = useState(null)
   const [popoverContext, setPopoverContext] = useState(null) // { stationId, materialId, date }
 
-  const typeColorById = Object.fromEntries(materialTypes.map(t => [t.id, t.color]))
+  const typeById = useMemo(
+    () => Object.fromEntries(materialTypes.map(t => [t.id, t])),
+    [materialTypes]
+  )
 
-  // Build "rows": one per (station, material) combination
-  const rows = useMemo(() => {
-    const r = []
+  // Build "rows" — one per (station, TYPE) combination. A row only exists when
+  // at least one material of that type is linked to the station; otherwise the
+  // type is "unreachable" on that station and showing an empty row would be
+  // misleading.
+  //
+  // typesInScopeByStation: stationId → Set<typeId>
+  const typesInScopeByStation = useMemo(() => {
+    const m = new Map()
     for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
-      if (!mat) continue
+      if (!mat?.type_id) continue
       for (const sid of cm.target_stations) {
+        if (!m.has(sid)) m.set(sid, new Set())
+        m.get(sid).add(mat.type_id)
+      }
+    }
+    return m
+  }, [campaignMaterials, materialsById])
+
+  // materialCountByType: typeId → number of materials of that type linked to the campaign
+  const materialCountByType = useMemo(() => {
+    const counts = {}
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (!mat?.type_id) continue
+      counts[mat.type_id] = (counts[mat.type_id] ?? 0) + 1
+    }
+    return counts
+  }, [campaignMaterials, materialsById])
+
+  const rows = useMemo(() => {
+    const r = []
+    for (const [sid, typeSet] of typesInScopeByStation.entries()) {
+      for (const tid of typeSet) {
+        const type = typeById[tid]
+        if (!type) continue
         const matching = rules.filter(rule =>
-          rule.material_id === cm.material_id && rule.station_ids.includes(sid))
+          rule.type_id === tid && rule.station_ids.includes(sid))
         const first = matching[0]
         r.push({
           stationId: sid,
-          materialId: cm.material_id,
-          materialTitle: mat.title,
-          typeColor: typeColorById[mat.type_id] ?? '#94a3b8',
+          // Grid was built around `materialId`; we keep the prop name and feed
+          // the type's UUID so the grid's cell key stays a string-keyed UUID.
+          materialId: tid,
+          materialTitle: type.name,
+          typeColor: type.color ?? '#94a3b8',
+          materialCount: materialCountByType[tid] ?? 0,
           ruleSummary: first
             ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
             : null,
@@ -75,15 +110,16 @@ export default function DistributionStep({
       }
     }
     return r
-  }, [campaignMaterials, rules, materialsById, typeColorById])
+  }, [typesInScopeByStation, typeById, rules, materialCountByType])
 
-  // Build cellData map from summary + override marker
+  // Build cellData map from summary + override marker. Migration 0019 made the
+  // view group by type, so the key uses type_id where it used to use material_id.
   const cellData = useMemo(() => {
     const m = new Map()
     for (const s of summary) {
-      const key = `${s.station_id}|${s.material_id}|${s.for_date.slice(0, 10)}`
+      const key = `${s.station_id}|${s.type_id}|${s.for_date.slice(0, 10)}`
       const hasOverride = overrides.some(o =>
-        o.station_id === s.station_id && o.material_id === s.material_id &&
+        o.station_id === s.station_id && o.type_id === s.type_id &&
         o.for_date.slice(0, 10) === s.for_date.slice(0, 10))
       m.set(key, { ...s, hasOverride })
     }
@@ -116,28 +152,33 @@ export default function DistributionStep({
     setRuleEditOpen(false)
   }
 
-  function handleCellClick(stationId, materialId, dateISO, rect) {
+  function handleCellClick(stationId, typeId, dateISO, rect) {
     setPopoverAnchor(rect)
-    setPopoverContext({ stationId, materialId, date: dateISO })
+    setPopoverContext({ stationId, typeId, date: dateISO })
   }
 
   const ctx = popoverContext
-  const cellKey = ctx ? `${ctx.stationId}|${ctx.materialId}|${ctx.date}` : null
+  const cellKey = ctx ? `${ctx.stationId}|${ctx.typeId}|${ctx.date}` : null
   const cellInfo = cellKey ? cellData.get(cellKey) : null
   const matchingOverride = ctx ? overrides.find(o =>
-    o.station_id === ctx.stationId && o.material_id === ctx.materialId &&
+    o.station_id === ctx.stationId && o.type_id === ctx.typeId &&
     o.for_date.slice(0, 10) === ctx.date) : null
 
-  // Pre-compute lists for the RuleSidePanel
-  const ruleEditorMaterials = useMemo(() =>
-    campaignMaterials.map(cm => {
+  // Pre-compute lists for the RuleSidePanel — types present in the campaign
+  // (a type is "present" when at least one material of that type is linked).
+  const ruleEditorTypes = useMemo(() => {
+    const seen = new Map()
+    for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
-      return {
-        id: cm.material_id,
-        title: mat?.title ?? '(material)',
-        type_color: typeColorById[mat?.type_id],
+      const t = mat?.type_id ? typeById[mat.type_id] : null
+      if (!t) continue
+      if (!seen.has(t.id)) {
+        seen.set(t.id, { id: t.id, name: t.name, color: t.color, materialCount: 0 })
       }
-    }), [campaignMaterials, materialsById, typeColorById])
+      seen.get(t.id).materialCount += 1
+    }
+    return [...seen.values()]
+  }, [campaignMaterials, materialsById, typeById])
 
   const ruleEditorStations = useMemo(() => {
     const stationSet = new Set()
@@ -159,9 +200,10 @@ export default function DistributionStep({
             Quando e quantas vezes vai tocar?
           </h2>
           <p style={{ margin: 0, color: 'var(--c-text-2)', fontSize: 13, lineHeight: 1.55 }}>
-            Crie regras que definem <strong style={{ color: 'var(--c-text)' }}>quantas vezes</strong> cada material
-            toca por dia, em quais emissoras, faixa horária e período. Clique nas células do calendário
-            pra criar exceções pontuais.
+            Crie regras que definem <strong style={{ color: 'var(--c-text)' }}>quantas vezes</strong> cada
+            <strong style={{ color: 'var(--c-text)' }}> tipo</strong> de material toca por dia, em quais emissoras,
+            faixa horária e período. Qualquer material desse tipo cumpre a meta. Clique nas células
+            do calendário pra criar exceções pontuais.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -225,19 +267,19 @@ export default function DistributionStep({
           rows={rows}
           cellData={cellData}
           onCellClick={handleCellClick}
-          onCellIncrement={(stationId, materialId, dateISO, currentValue) => {
+          onCellIncrement={(stationId, typeId, dateISO, currentValue) => {
             upsertOverride.mutate({
               campaignId,
-              material_id: materialId,
+              type_id: typeId,
               station_id: stationId,
               for_date: dateISO,
               plays_expected: currentValue + 1,
             })
           }}
-          onCellDecrement={(stationId, materialId, dateISO, currentValue) => {
+          onCellDecrement={(stationId, typeId, dateISO, currentValue) => {
             upsertOverride.mutate({
               campaignId,
-              material_id: materialId,
+              type_id: typeId,
               station_id: stationId,
               for_date: dateISO,
               plays_expected: Math.max(0, currentValue - 1),
@@ -253,7 +295,7 @@ export default function DistributionStep({
         onDelete={editingRule ? handleDeleteRule : undefined}
         mode={editingRule ? 'edit' : 'create'}
         initial={editingRule}
-        materials={ruleEditorMaterials}
+        types={ruleEditorTypes}
         stations={ruleEditorStations}
         campaignStart={campaignStart}
         campaignEnd={campaignEnd}
@@ -267,7 +309,7 @@ export default function DistributionStep({
         onApply={async (newValue) => {
           await upsertOverride.mutateAsync({
             campaignId,
-            material_id: ctx.materialId,
+            type_id: ctx.typeId,
             station_id: ctx.stationId,
             for_date: ctx.date,
             plays_expected: newValue,
@@ -277,7 +319,7 @@ export default function DistributionStep({
         onRevert={async () => {
           await deleteOverride.mutateAsync({
             campaignId,
-            material_id: ctx.materialId,
+            type_id: ctx.typeId,
             station_id: ctx.stationId,
             for_date: ctx.date,
           })
@@ -285,7 +327,7 @@ export default function DistributionStep({
         }}
         currentRuleValue={cellInfo?.expected ?? 0}
         currentOverrideValue={matchingOverride?.plays_expected ?? null}
-        materialTitle={rows.find(r => r.materialId === ctx?.materialId)?.materialTitle ?? '—'}
+        materialTitle={rows.find(r => r.materialId === ctx?.typeId)?.materialTitle ?? '—'}
         stationName={allStations.find(s => s.id === ctx?.stationId)?.name ?? '—'}
         date={ctx?.date}
       />
