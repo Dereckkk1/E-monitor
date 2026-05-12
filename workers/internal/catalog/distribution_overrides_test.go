@@ -13,8 +13,9 @@ func TestDistributionOverrides_Upsert(t *testing.T) {
 		Name: "C", ClientID: cli.ID,
 		StartDate: time.Now(), EndDate: time.Now().AddDate(0, 1, 0),
 	})
+	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
-		ClientID: cli.ID, Title: "M", DurationSeconds: 30,
+		ClientID: cli.ID, Title: "M", TypeID: &typeID, DurationSeconds: 30,
 		MasterStoragePath: "/tmp", MasterSHA256: "z",
 	})
 	stat, err := NewStations(pool).Create(ctx, CreateStationInput{
@@ -36,7 +37,7 @@ func TestDistributionOverrides_Upsert(t *testing.T) {
 
 	// Insert
 	if err := repo.Upsert(ctx, UpsertOverrideInput{
-		CampaignID: cmp.ID, MaterialID: mat.ID, StationID: stat.ID,
+		CampaignID: cmp.ID, TypeID: typeID, StationID: stat.ID,
 		ForDate: date, PlaysExpected: 2,
 	}); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -44,7 +45,7 @@ func TestDistributionOverrides_Upsert(t *testing.T) {
 
 	// Update via upsert
 	if err := repo.Upsert(ctx, UpsertOverrideInput{
-		CampaignID: cmp.ID, MaterialID: mat.ID, StationID: stat.ID,
+		CampaignID: cmp.ID, TypeID: typeID, StationID: stat.ID,
 		ForDate: date, PlaysExpected: 5,
 	}); err != nil {
 		t.Fatalf("update: %v", err)
@@ -61,9 +62,12 @@ func TestDistributionOverrides_Upsert(t *testing.T) {
 	if list[0].PlaysExpected != 5 {
 		t.Errorf("PlaysExpected = %d, want 5", list[0].PlaysExpected)
 	}
+	if list[0].TypeID != typeID {
+		t.Errorf("TypeID = %v, want %v", list[0].TypeID, typeID)
+	}
 
 	// Delete
-	if err := repo.Delete(ctx, cmp.ID, mat.ID, stat.ID, date); err != nil {
+	if err := repo.Delete(ctx, cmp.ID, typeID, stat.ID, date); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	list, _ = repo.ListByCampaignAndDateRange(ctx, cmp.ID,

@@ -42,7 +42,7 @@ func TestDistributionRulesHandler_Create_BadDate(t *testing.T) {
 	r := chi.NewRouter()
 	r.Post("/campaigns/{campaignID}/distribution-rules", h.Create)
 	// Valid JSON but invalid date format
-	body := `{"material_id":"` + uuid.New().String() + `","station_ids":[],"start_date":"not-a-date","end_date":"2026-06-30","weekday_mask":62,"time_start":"08:00","time_end":"10:00","plays_per_day":3}`
+	body := `{"type_id":"` + uuid.New().String() + `","station_ids":[],"start_date":"not-a-date","end_date":"2026-06-30","weekday_mask":62,"time_start":"08:00","time_end":"10:00","plays_per_day":3}`
 	req := httptest.NewRequest("POST",
 		"/campaigns/"+uuid.New().String()+"/distribution-rules",
 		strings.NewReader(body))

@@ -28,7 +28,7 @@ func TestDistributionOverridesHandler_Upsert_BadDate(t *testing.T) {
 	h := &DistributionOverridesHandler{}
 	r := chi.NewRouter()
 	r.Put("/campaigns/{campaignID}/distribution-overrides", h.Upsert)
-	body := `{"material_id":"` + uuid.New().String() + `","station_id":"` + uuid.New().String() + `","for_date":"not-a-date","plays_expected":3}`
+	body := `{"type_id":"` + uuid.New().String() + `","station_id":"` + uuid.New().String() + `","for_date":"not-a-date","plays_expected":3}`
 	req := httptest.NewRequest("PUT",
 		"/campaigns/"+uuid.New().String()+"/distribution-overrides",
 		strings.NewReader(body))

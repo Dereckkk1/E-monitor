@@ -32,6 +32,11 @@ type Detection struct {
 	// section; without it, the modal renders an empty list even when filtered
 	// detections exist.
 	Category    string     `json:"category"`
+	// TypeID is the type_id of the detected material, resolved via JOIN
+	// materials (migration 0019 made distribution rules type-keyed; the
+	// frontend filters/groups detections by type using this field).
+	// Nil when the material has no type assigned (legacy).
+	TypeID      *uuid.UUID `json:"type_id,omitempty"`
 	// RetractedAt is set when §18.2.2 disambiguation overruled this row in
 	// favour of a longer cut from the same client; nil otherwise.
 	RetractedAt *time.Time `json:"retracted_at,omitempty"`
@@ -92,6 +97,11 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 
 // categorize resolves the detection's category by loading the campaign and
 // applicable rules, then invoking the pure categorizer.
+//
+// Migration 0019: rules are now keyed by material TYPE. We look up the type
+// of the detected material via JOIN materials and only return rules that
+// match it. If the material has no type_id (legacy), zero rules come back
+// and the categorizer falls through to "orphan".
 func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (string, error) {
 	var cmpStart, cmpEnd time.Time
 	err := d.pool.QueryRow(ctx,
@@ -102,12 +112,12 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 	}
 
 	rows, err := d.pool.Query(ctx, `
-		SELECT start_date, end_date, weekday_mask,
-		       time_start::text, time_end::text, plays_per_day
-		FROM distribution_rules
-		WHERE campaign_id = $1
-		  AND material_id = $2
-		  AND $3 = ANY(station_ids)`,
+		SELECT r.start_date, r.end_date, r.weekday_mask,
+		       r.time_start::text, r.time_end::text, r.plays_per_day
+		FROM distribution_rules r
+		WHERE r.campaign_id = $1
+		  AND r.type_id = (SELECT type_id FROM materials WHERE id = $2)
+		  AND $3 = ANY(r.station_ids)`,
 		in.CampaignID, in.CommercialID, in.StationID)
 	if err != nil {
 		return categorizer.CatOrphan, err
@@ -167,10 +177,12 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category, d.retracted_at, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
+		       m.type_id, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
+		LEFT JOIN materials m ON m.id = d.commercial_id
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::uuid IS NULL OR d.station_id = $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
@@ -189,7 +201,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
 			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
 			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
-			&det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt); err != nil {
+			&det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt, &det.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, det)
@@ -204,16 +216,18 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
-		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category, d.retracted_at, d.created_at
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
+		       m.type_id, d.retracted_at, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
+		LEFT JOIN materials m ON m.id = d.commercial_id
 		WHERE d.id = $1`, id,
 	).Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
 		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt, &det.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

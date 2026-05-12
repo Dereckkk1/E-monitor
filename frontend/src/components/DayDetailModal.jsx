@@ -39,8 +39,8 @@ function fmtDate(iso) {
  *  - onClose: () => void
  */
 export default function DayDetailModal({
-  campaignId, stationId, materialId, dateISO,
-  station, material, materialType, cellSummary,
+  campaignId, stationId, typeId, dateISO,
+  station, materialType, cellSummary,
   onClose,
 }) {
   const [activePlayerId, setActivePlayerId] = useState(null)
@@ -126,10 +126,10 @@ export default function DayDetailModal({
     ? detectionsResp
     : (detectionsResp?.data ?? [])
 
-  // Filter to detections of this material only. After Plan 1 migration, materials.id
-  // equals the original commercial.id, so commercial_id on legacy detections matches.
-  // New materials uploaded via wizard get the same ID end-to-end.
-  const filtered = detections.filter(d => d.commercial_id === materialId)
+  // Migration 0019: rows are by TYPE, so the modal filters detections to those
+  // whose material's type matches. The backend enriches each detection with
+  // type_id via JOIN materials (catalog/detections.go).
+  const filtered = detections.filter(d => d.type_id === typeId)
   const grouped = {
     in_slot:  filtered.filter(d => d.category === 'in_slot'),
     out_slot: filtered.filter(d => d.category === 'out_slot'),
@@ -139,20 +139,35 @@ export default function DayDetailModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 700 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
+      <div
+        className="modal"
+        style={{
+          maxWidth: 700,
+          maxHeight: 'calc(100vh - 48px)',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header" style={{ flexShrink: 0 }}>
           <div>
-            <h3 style={{ margin: 0 }}>
-              {material?.title ?? 'Material'} · {station?.name ?? 'Emissora'}
+            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {materialType?.color && (
+                <span style={{
+                  display: 'inline-block', width: 10, height: 10, borderRadius: 3,
+                  background: materialType.color, flexShrink: 0,
+                }} />
+              )}
+              {materialType?.name ?? 'Tipo'} · {station?.name ?? 'Emissora'}
             </h3>
             <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 13 }}>
-              {fmtDate(dateISO)}
+              {fmtDate(dateISO)} — materiais individuais detectados abaixo
             </p>
           </div>
           <button className="modal-close" onClick={onClose} type="button">×</button>
         </div>
 
-        <div className="modal-body" style={{ padding: 20 }}>
+        <div className="modal-body" style={{ padding: 20, flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
           {/* Cell summary badges */}
           {cellSummary && (
@@ -184,7 +199,6 @@ export default function DayDetailModal({
           ) : (
             <DetectionsList
               grouped={grouped}
-              material={material}
               materialType={materialType}
               activePlayerId={activePlayerId}
               evidenceBlobUrls={evidenceBlobUrls}
@@ -209,13 +223,13 @@ function SummaryStat({ label, value, variant, prefix }) {
   )
 }
 
-function DetectionsList({ grouped, material, materialType, activePlayerId, evidenceBlobUrls, loadingId, onPlay, onPause, onDownload }) {
-  // Material type drives the colored left border + name/type chip on every row.
-  // Falls back to neutral gray when the material has no type_id assigned (legacy
-  // materials registered before the material-types feature existed).
+function DetectionsList({ grouped, materialType, activePlayerId, evidenceBlobUrls, loadingId, onPlay, onPause, onDownload }) {
+  // Material type drives the colored left border + chip on every row. The row
+  // title is the *individual* material name (commercial_name from the
+  // detection record) so the user sees exactly which cut played even though
+  // the cell is keyed by type.
   const typeColor = materialType?.color ?? '#94a3b8'
   const typeName  = materialType?.name  ?? 'Sem tipo'
-  const matTitle  = material?.title     ?? 'Material'
 
   return (
     <div>
@@ -252,7 +266,7 @@ function DetectionsList({ grouped, material, materialType, activePlayerId, evide
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ color: typeColor, fontWeight: 600, fontSize: 12 }}>
-                        {matTitle}
+                        {d.commercial_name || 'Material sem título'}
                       </span>
                       <span style={{
                         fontSize: 10, fontWeight: 600, textTransform: 'uppercase',

@@ -82,31 +82,43 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
       </div>
 
       {/* Counter bar */}
-      {cmpMats.length > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-          padding: '12px 16px',
-          background: 'var(--c-action-light, rgba(232,30,117,0.06))',
-          border: '1px solid var(--c-action-light, rgba(232,30,117,0.12))',
-          borderRadius: 'var(--radius-md)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{
-              padding: '4px 10px', borderRadius: 'var(--radius-full)',
-              background: 'var(--c-action)', color: '#fff',
-              fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)',
-            }}>
-              {cmpMats.length}
-            </span>
-            <span style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
-              {cmpMats.length === 1 ? 'material vinculado' : 'materiais vinculados'} à campanha
-            </span>
+      {cmpMats.length > 0 && (() => {
+        const noTypeCount = cmpMats.filter(cm => {
+          const mat = materialsById[cm.material_id]
+          return mat && !mat.type_id
+        }).length
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            padding: '12px 16px',
+            background: noTypeCount > 0 ? '#fef9c3' : 'var(--c-action-light, rgba(232,30,117,0.06))',
+            border: `1px solid ${noTypeCount > 0 ? '#fde047' : 'var(--c-action-light, rgba(232,30,117,0.12))'}`,
+            borderRadius: 'var(--radius-md)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{
+                padding: '4px 10px', borderRadius: 'var(--radius-full)',
+                background: noTypeCount > 0 ? '#ca8a04' : 'var(--c-action)', color: '#fff',
+                fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)',
+              }}>
+                {cmpMats.length}
+              </span>
+              <span style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
+                {cmpMats.length === 1 ? 'material vinculado' : 'materiais vinculados'} à campanha
+              </span>
+            </div>
+            {noTypeCount > 0 ? (
+              <span style={{ fontSize: 11, color: '#a16207', fontWeight: 600 }}>
+                ⚠ {noTypeCount} sem tipo — defina o tipo pra poder distribuir
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
+                Distribuição é por tipo. Materiais sem tipo não entram nas regras.
+              </span>
+            )}
           </div>
-          <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
-            Cada material será monitorado em todas as emissoras do passo 2.
-          </span>
-        </div>
-      )}
+        )
+      })()}
 
       {/* List */}
       {cmpMats.length === 0 ? (
@@ -178,7 +190,10 @@ function MaterialCard({
   onTypeChange, onSaveStations, onUnlink,
 }) {
   const fp = fingerprintBadge(material.fingerprint_status)
-  const typeColor = type?.color ?? 'var(--c-text-3)'
+  const missingType = !type
+  // When the material has no type, the left border turns amber to flag the
+  // blocker for advancing the wizard. Otherwise it carries the type's color.
+  const typeColor = type?.color ?? '#ca8a04'
 
   const totalStations = campaignStations.length
   const linkedCount   = link.target_stations.length
@@ -253,6 +268,19 @@ function MaterialCard({
               <span style={{ width: 5, height: 5, borderRadius: '50%', background: fp.dot }} />
               {fp.label}
             </span>
+            {missingType && (
+              <>
+                <span style={{ color: 'var(--c-text-3)' }}>·</span>
+                <span style={{
+                  padding: '2px 8px', borderRadius: 'var(--radius-full)',
+                  background: '#fef3c7', color: '#a16207',
+                  fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                }}>
+                  ⚠ defina o tipo pra poder distribuir
+                </span>
+              </>
+            )}
           </div>
         </div>
 
