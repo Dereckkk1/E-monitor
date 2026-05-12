@@ -146,6 +146,18 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 2. **`evidence.process_async` e `webhook.deliver` em traces separados.** Async/decoupled por design (callback NATS retorna antes do upload S3 terminar; webhook outbox pode entregar minutos depois). `PropagateTraceContext` mantém o `trace_id` em comum, mas não há `parent_span_id` ligando os dois — aparecem como traces irmãos com mesmo trace_id no Jaeger. Documentado em `docs/tracing.md`.
 3. **CLAP verifier sidecar (Python) não instrumentado.** Fora do escopo do Item F (Go-only). Se for instrumentar depois, usar `opentelemetry-instrumentation-fastapi` ou similar e injetar trace context no header HTTP da chamada do `neural/client.go`.
 
+### F-84. `daily_play_summary` view performance com predicate pushdown
+
+**Por quê:** a view criada na migration 0018 não suporta predicate pushdown de `campaign_id`. Em volume de produção (centenas de campanhas, milhões de detections/mês), queries filtradas por campanha vão materializar a view inteira antes de aplicar o filtro. Consultas de clientes no endpoint `GET /v1/internal/campaigns/:id/daily-summary` sofrem latência inaceitável quando há muitos dados históricos.
+
+**Onde:** `migrations/0018_detections_categorization.up.sql` (criação da view) + endpoint em `workers/internal/api/handlers/campaigns.go`.
+
+**Como:** promover pra MATERIALIZED VIEW com refresh incremental disparado pelo worker após INSERT/UPDATE em detections. Spec §5.4 já antecipa essa arquitetura — implementação deve seguir modelo de invalidação por campaign. Adicionar trigger ou update schedule no supervisor para disparar `REFRESH MATERIALIZED VIEW daily_play_summary WHERE campaign_id = $1` após confirmar detecção.
+
+**Dependência:** decisão sobre trigger vs. refresh manual. Risco médio se view tornar grande.
+
+**Validação:** rodar `EXPLAIN ANALYZE` com volume representativo (1M+ detections, 100+ campanhas) antes de mergear o Plano 3 (Detections refactor).
+
 ---
 
 ## Itens médios — fazer antes do crescimento real
@@ -266,3 +278,37 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **Antes de iniciar Fase 3**, F-01 a F-08 devem estar resolvidos ou explicitamente aceitos como dívida.
 - **Atualizar este arquivo** ao resolver: marcar item como `**Status:** resolvido em commit <sha>` e remover quando antigo.
 - **Não documentar aqui o que já está em `plano_implementacao.md`.** Esse arquivo é apenas para itens identificados durante implementação que merecem rastreamento operacional.
+
+---
+
+## Foundations (Plano 1) — Follow-ups
+
+- **F-85** — Padronizar comportamento de `Delete` / `Update` em repos do catalog. Hoje `material_types.Delete`, `materials.Delete`, `materials.UpdateType`, `campaign_materials.Unlink`, `campaign_materials.UpdateStations` retornam nil silenciosamente quando a linha não existe. `clients.Delete` retorna `pgx.ErrNoRows`. Decidir um padrão único (provavelmente loud — verificar `RowsAffected`) e aplicar consistentemente.
+- **F-86** — Refatorar `MaterialsHandler.Upload` e `CommercialsHandler.Upload` extraindo helper compartilhado de SHA256 + storage + dispatch fingerprint num pacote `internal/upload/`. Atualmente duplicado.
+- **F-87** — Adicionar `UNIQUE(client_id, master_sha256)` em `materials` após operador mesclar duplicatas via UI (futura).
+- **F-88** — Implementar `probeDuration()` em `MaterialsHandler` via `ffprobe` (atualmente retorna 30.0 stub). Copiar lógica de `commercials.go` ou extrair pra helper compartilhado.
+- **F-89** — Background job de re-categorização em `DistributionRulesHandler` não bloqueia o handler nem reporta status. Considerar fila NATS com worker dedicado se volume de detections crescer e re-categorização ficar > 1s.
+- **F-90** — Deprecar `commercials.target_stations` e `commercials.campaign_id` em migration futura (0019+) após Planos 2 e 3 estarem em produção.
+- **F-91** — Validação "future-only edit" (§8 da spec) em `DistributionRulesHandler.Update/Delete`. Atualmente backend aceita qualquer edição; validação fica na UI. Mover pro backend antes do Plano 2.
+- **F-92** — Escape de metacaracteres LIKE (`%`, `_`, `\`) no parâmetro `q` de `Materials.ListByClient`. Atualmente vulnerável a injeção semântica (não SQL injection, mas comportamento inesperado). Sanitizar no handler layer.
+- **F-93** — `ListApplicable` em `distribution_rules.go` documentou contrato de TZ (caller deve passar SP-local-midnight). Considerar mudar assinatura pra aceitar `string` "YYYY-MM-DD" pra remover ambiguidade no runtime.
+
+---
+
+## Wizard Frontend (Plano 2) — Follow-ups
+
+- **F-94** — Modificar `CampaignMaterials.ListByCampaign` no backend pra hidratar `material_title` e `type_id` no JOIN, evitando o `useMaterials(clientId)` extra no frontend (currently the wizard parent makes both queries and joins client-side).
+- **F-95** — Adicionar testes Vitest pra componentes críticos (DistributionGrid, RuleSidePanel, OverridePopover, CampaignWizardPage). Toda validação atual é manual.
+- **F-96** — Skeleton loaders nas etapas durante fetch inicial (atualmente mostra spinners ad-hoc ou nada). Especialmente importante na etapa 4 enquanto carrega rules + overrides + summary.
+- **F-97** — Validação "future-only edit" no frontend: pré-bloqueio de campos + tooltip explicando que regras passadas só podem ter o end_date encurtado. Pareado com F-91 no backend.
+- **F-98** — Drag-and-drop pra reordenar materiais dentro de uma campanha (UX nice-to-have).
+- **F-99** — Atalho "Aplicar regra a todas as emissoras com este material" (bulk action no rule editor side panel).
+
+---
+
+## Detections Refactor (Plano 3) — Follow-ups
+
+- **F-100** — Botão dedicado de "Saúde da emissora" no header de cada bloco da grade, em vez de clique no avatar (acessibilidade melhor). Atualmente o clique no header todo abre o HealthDrawer.
+- **F-101** — Filtros de categoria na toolbar (ex: "Mostrar só células com déficit"). Útil pra investigar problemas rapidamente.
+- **F-102** — Export do relatório (CSV/PDF) com os totais + breakdown por (station, material, day) pra entregar ao cliente.
+- **F-103** — Indicador visual de "última atualização" da view (a `daily_play_summary` é live mas usuário não sabe). Mostrar timestamp do último refetch.

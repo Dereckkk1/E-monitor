@@ -1,11 +1,15 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useCampaigns, useDetections, useStations, useClients } from '../api/hooks'
+import {
+  useCampaigns, useStations, useClients,
+  useCampaignMaterials, useMaterials, useDistributionRules,
+  useMaterialTypes, useDailySummary,
+} from '../api/hooks'
 import RSelect from '../components/RSelect'
-import DetectionsCalendar from '../components/DetectionsCalendar'
+import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
-import { bucketDetections } from './detections/utils'
-import { tokenize, matchesAllTokens } from '../utils/search'
+import CoverageSummary from '../components/CoverageSummary'
+import { tokenize } from '../utils/search'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -157,6 +161,21 @@ function EmptyNoCampaign() {
   )
 }
 
+function EmptyNoRules() {
+  return (
+    <div className="detection-empty">
+      <div className="detection-empty-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <rect x="6" y="12" width="36" height="28" rx="4" stroke="currentColor" strokeWidth="2" />
+          <path d="M14 22h20M14 28h12M14 34h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </div>
+      <h3>Campanha sem materiais vinculados</h3>
+      <p>Vá em <strong>Campanhas → Editar</strong> pra adicionar materiais e regras de distribuição.</p>
+    </div>
+  )
+}
+
 function EmptyNoDetections({ periodLabel }) {
   return (
     <div className="detection-empty">
@@ -186,9 +205,12 @@ export default function DetectionsPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
+  // TODO F-100: wire up HealthDrawer once the component is built
+  // eslint-disable-next-line no-unused-vars
+  const [healthStationId, setHealthStationId] = useState(null)
 
   const { data: stationsResp } = useStations({ limit: 2000 })
-  const stationCatalog = stationsResp?.data ?? []
+  const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
 
   // Derive period from selected month
   const period = useMemo(() => monthToRange(selectedMonth), [selectedMonth])
@@ -200,33 +222,36 @@ export default function DetectionsPage() {
     return m
   }, [clients])
 
-  // Build detection filters — only run when campaign is selected
-  const detectionFilters = useMemo(() => {
-    if (!selectedCampaignId) return null
-    return {
-      campaign_id: selectedCampaignId,
-      start_date:  period.start.toISOString(),
-      end_date:    period.end.toISOString(),
-      limit:       5000,
-    }
-  }, [selectedCampaignId, period])
+  // Find the selected campaign object (we'll use start/end dates from it)
+  const selectedCampaign = useMemo(
+    () => campaigns.find(c => c.id === selectedCampaignId) ?? null,
+    [campaigns, selectedCampaignId]
+  )
 
+  // Date range strings for daily-summary query (YYYY-MM-DD)
+  const fromISO = useMemo(() => period.start.toISOString().slice(0, 10), [period])
+  const toISO   = useMemo(() => period.end.toISOString().slice(0, 10), [period])
+
+  // Hydrate the campaign's material library
+  const { data: clientLibrary = [] } = useMaterials(selectedCampaign?.client_id ?? null)
+  const materialsById = useMemo(
+    () => Object.fromEntries(clientLibrary.map(m => [m.id, m])),
+    [clientLibrary]
+  )
+
+  // Campaign-scoped data
+  const { data: campaignMaterials = [] } = useCampaignMaterials(selectedCampaignId || null)
+  const { data: distributionRules = [] } = useDistributionRules(selectedCampaignId || null)
+  const { data: materialTypes = [] }     = useMaterialTypes()
   const {
-    data: detections = [],
-    isLoading: loadingDetections,
+    data: summary = [],
+    isLoading: loadingSummary,
     isFetching,
     refetch,
-  } = useDetections(detectionFilters)
+  } = useDailySummary(selectedCampaignId || null, fromISO, toISO)
 
   const showDetections = !!selectedCampaignId
-  const isLoadingData  = showDetections && (loadingDetections || isFetching)
-
-  // Só exibe detecções com evidência confirmada — pending/failed ficam ocultos
-  // até o áudio estar disponível, evitando contagens provisórias na grid.
-  const confirmedDetections = useMemo(
-    () => detections.filter(d => d.evidence_status === 'available'),
-    [detections]
-  )
+  const isLoadingData  = showDetections && (loadingSummary || isFetching)
 
   // ── Campaign change ───────────────────────────────────────────
   function handleCampaignChange(opt) {
@@ -275,28 +300,73 @@ export default function DetectionsPage() {
     )
   }
 
-  const targetStations = useMemo(() => {
-    if (!selectedCampaignId || stationCatalog.length === 0) return []
-    const campaign = campaigns.find(c => c.id === selectedCampaignId)
-    if (!campaign) return []
-    const ids = new Set(campaign.target_stations ?? [])
-    return stationCatalog
-      .filter(s => ids.has(s.id))
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-  }, [selectedCampaignId, campaigns, stationCatalog])
 
-  const filteredTargetStations = useMemo(() => {
+  // Color lookup for material types
+  const typeColorById = useMemo(
+    () => Object.fromEntries(materialTypes.map(t => [t.id, t.color])),
+    [materialTypes]
+  )
+
+  // Build "rows" — one per (station, material) combination that exists in this campaign
+  const rows = useMemo(() => {
+    const r = []
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (!mat) continue
+      for (const sid of cm.target_stations) {
+        const matching = distributionRules.filter(rule =>
+          rule.material_id === cm.material_id && rule.station_ids.includes(sid))
+        const first = matching[0]
+        r.push({
+          stationId: sid,
+          materialId: cm.material_id,
+          materialTitle: mat.title,
+          typeColor: typeColorById[mat.type_id] ?? '#94a3b8',
+          ruleSummary: first
+            ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
+            : null,
+          extraRules: Math.max(0, matching.length - 1),
+        })
+      }
+    }
+    return r
+  }, [campaignMaterials, distributionRules, materialsById, typeColorById])
+
+  // Build cellData map from daily summary
+  const cellData = useMemo(() => {
+    const m = new Map()
+    for (const s of summary) {
+      const key = `${s.station_id}|${s.material_id}|${s.for_date.slice(0, 10)}`
+      m.set(key, { ...s, hasOverride: false })
+    }
+    return m
+  }, [summary])
+
+  // The month being displayed (first of selectedMonth)
+  const monthDate = useMemo(() => {
+    const [y, m] = selectedMonth.split('-').map(Number)
+    return new Date(y, m - 1, 1)
+  }, [selectedMonth])
+
+  // Filter rows by station+material search
+  const filteredRows = useMemo(() => {
     const tokens = tokenize(search)
-    if (tokens.length === 0) return targetStations
-    const fields = [
-      'name',
-      'city',
-      'state',
-      'band',
-      s => s.frequency_mhz != null ? String(s.frequency_mhz) : '',
-    ]
-    return targetStations.filter(s => matchesAllTokens(s, fields, tokens))
-  }, [targetStations, search])
+    if (tokens.length === 0) return rows
+    return rows.filter(r => {
+      const station = stationCatalog.find(s => s.id === r.stationId)
+      if (!station) return false
+      const fields = [
+        station.name ?? '',
+        station.city ?? '',
+        station.state ?? '',
+        station.band ?? '',
+        station.frequency_mhz != null ? String(station.frequency_mhz) : '',
+        r.materialTitle ?? '',
+      ]
+      return tokens.every(tok =>
+        fields.some(f => f.toLowerCase().includes(tok.toLowerCase())))
+    })
+  }, [rows, search, stationCatalog])
 
   // ── Month navigation ──────────────────────────────────────────
   const currentMonth = currentMonthValue()
@@ -420,24 +490,37 @@ export default function DetectionsPage() {
         <EmptyNoCampaign />
       ) : isLoadingData ? (
         <SkeletonCalendar />
-      ) : confirmedDetections.length === 0 ? (
-        <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
-      ) : filteredTargetStations.length === 0 ? (
+      ) : rows.length === 0 ? (
+        <EmptyNoRules />
+      ) : filteredRows.length === 0 ? (
         <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
-        <DetectionsCalendar
-          stations={filteredTargetStations}
-          detections={confirmedDetections}
-          period={period}
-          onCellClick={(station, dayKey) => setModalCell({ station, dayKey })}
-        />
+        <>
+          <CoverageSummary summary={summary} />
+          <DistributionGrid
+            mode="view"
+            month={monthDate}
+            campaignStart={selectedCampaign?.start_date}
+            campaignEnd={selectedCampaign?.end_date}
+            stations={stationCatalog}
+            rows={filteredRows}
+            cellData={cellData}
+            onCellClick={(stationId, materialId, dateISO) =>
+              setModalCell({ stationId, materialId, dateISO })}
+            onStationClick={(stationId) => setHealthStationId(stationId)}
+          />
+        </>
       )}
 
       {modalCell && (
         <DayDetailModal
-          station={modalCell.station}
-          dayKey={modalCell.dayKey}
-          buckets={bucketDetections(confirmedDetections)}
+          stationId={modalCell.stationId}
+          materialId={modalCell.materialId}
+          dateISO={modalCell.dateISO}
+          campaignId={selectedCampaignId}
+          station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
+          material={materialsById[modalCell.materialId] ?? null}
+          cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.materialId}|${modalCell.dateISO}`) ?? null}
           onClose={() => setModalCell(null)}
         />
       )}
