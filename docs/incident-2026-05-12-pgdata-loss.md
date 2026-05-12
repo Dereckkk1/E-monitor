@@ -196,31 +196,71 @@ bootstrap admin criado, api listening em :8080.
   [`fix/backup-actually-runs`](../infra/docker/docker-compose.yml).
   Inverter ordem entrypoint, plumbar todas as env vars (PG* + R2_*),
   instalar `aws-cli` via `apk add` no entrypoint, `depends_on`
-  exigindo `service_healthy` em vez de `service_started`. Verificação
-  pós-deploy: rodar `sh /backup.sh` manual e conferir objeto no R2.
-- **F-110 — Alerta Prometheus de ausência de backup**. Habilitar
-  `PROM_TEXTFILE_DIR` no `backup.sh`, montar como volume do
-  node_exporter (textfile collector), adicionar regra
-  `radiocheck_backup_last_success_seconds > 48h → critical`. Sem
-  isso, F-109 pode regredir silenciosamente.
-- **F-111 — Separar `migrations/` em `initdb.d` vs `migrate`.** O
-  ideal é remover totalmente o mount em `postgres.volumes` e deixar
-  só o `migrate` service. Postgres sobe vazio sempre, migrate é
-  source of truth. Alternativa: mover migrations para `migrations/up/`
-  e mount só essa subpasta (sem os `.down.sql`) em initdb.d.
-- **F-112 — Política `--no-deps` em todos os deploys**. Documentar
-  em `docs/deploy.md` e idealmente envolver em script
-  (`scripts/deploy-service.sh`) que abstrai a complexidade e garante
-  `--no-deps` por default em recreates de service único.
-- **F-113 — Backup do MinIO/S3** (evidências). Hoje o `backup.sh`
-  cobre apenas o Postgres. Evidências em MinIO local foram perdidas
-  juntas com o pgdata. Em prod futura (object storage cloud), o
-  provider já replica; pra MinIO local valeria um `mc mirror` para
-  R2 periódico.
-- **F-114 — Imagem do api inclui `tzdata`.** Warn observado no boot:
-  `evidence tiering: TZ load failed, using UTC, error: unknown time
-  zone America/Sao_Paulo`. Adicionar `apk add tzdata` no
-  `workers.Dockerfile` stage final.
+  exigindo `service_healthy` em vez de `service_started`.
+  Adicionalmente: trocado `pg_basebackup` (que exige replication
+  config no postgres) por `pg_dump -Fc` (apenas SELECT, mais
+  portável). Verificação em prod 2026-05-12 12:44 UTC:
+  `s3://radiocheck-backups/postgres/daily/radiocheck-20260512-084414.dump`
+  (177KB, primeiro backup com sucesso da história do sistema).
+- **F-110 — *RESOLVIDO* — Alerta Prometheus de ausência de backup.**
+  Branch [`fix/postgres-bind-mount`](../infra/prometheus/alerts.yml)
+  (commit `80c1e0f`). Novo service `node-exporter` no compose com
+  `--collector.textfile.directory=/textfile`, volume compartilhado
+  `prometheus-textfile` entre `backup` (rw) e `node-exporter` (ro).
+  `backup.sh` escreve métricas via `PROM_TEXTFILE_DIR=/textfile`.
+  Prometheus scrapeia `node-exporter:9100`. Alerta
+  `BackupNotRunning` (existente, fica passivo sem dado) +
+  `BackupMetricMissing` (novo, dispara via `absent()` se a métrica
+  nunca apareceu — protege contra o cenário exato de 2026-05-12,
+  onde o pipeline estava quebrado em silêncio).
+- **F-111 — Separar `migrations/` em `initdb.d` vs `migrate`.**
+  Pendente. O ideal é remover totalmente o mount em
+  `postgres.volumes` e deixar só o `migrate` service. Postgres sobe
+  vazio sempre, migrate é source of truth. Alternativa: mover
+  migrations para `migrations/up/` e mount só essa subpasta (sem os
+  `.down.sql`) em initdb.d. Mitigado por enquanto pela regra §4.6 do
+  CLAUDE.md ("se DB vier suja, dropa schema antes de rodar migrate").
+- **F-112 — Política `--no-deps` em todos os deploys**. Pendente como
+  script (`scripts/deploy-service.sh`), mas já codificado como regra
+  §4.1 do CLAUDE.md. Todo agente futuro lê isso antes de mexer.
+- **F-113 — Backup do MinIO/S3** (evidências). Pendente. Hoje o
+  `backup.sh` cobre apenas o Postgres. Em prod futura (object storage
+  cloud), o provider já replica; pra MinIO local valeria um
+  `mc mirror` para R2 periódico. Mitigado por F-116 (bind mount em
+  `miniodata` impede compose de apagar).
+- **F-114 — *RESOLVIDO* — Imagem do api inclui `tzdata`.** Branch
+  [`fix/postgres-bind-mount`](../infra/docker/Dockerfiles/workers.Dockerfile)
+  (commit `9fddea3`). `apk add tzdata` no stage final. Próximo build
+  da imagem do api elimina o warning de timezone no startup.
+- **F-115 — *RESOLVIDO* — `RADIOCHECK_ENV` parametrizado.** Branch
+  [`fix/postgres-bind-mount`](../infra/docker/docker-compose.yml)
+  (commit `9fddea3`). Compose passou de hardcoded `development` para
+  `${RADIOCHECK_ENV:-development}`. Prod seta `RADIOCHECK_ENV=production`
+  no `.env`. Vira o `deployment.environment` attribute de OTel e
+  base para guards futuros de "este é prod, não roda comando
+  destrutivo".
+- **F-116 — *RESOLVIDO (código) / Pendente (deploy)* — Bind mount em
+  pgdata, miniodata e mastersdata.** Branch
+  [`fix/postgres-bind-mount`](../infra/docker/docker-compose.yml)
+  (commit `b553f56`). Compose aceita 3 env vars opcionais:
+  `PGDATA_HOST_PATH`, `MINIODATA_HOST_PATH`, `MASTERSDATA_HOST_PATH`.
+  Quando setadas, usa bind mount no host (dado sobrevive a
+  `docker compose down -v` e `--force-recreate`). Default = volume
+  nomeado (dev local). Script de migração
+  [`infra/scripts/migrate-volumes-to-bind.sh`](../infra/scripts/migrate-volumes-to-bind.sh)
+  automatiza a transição. Documentação completa em
+  [data-durability.md](data-durability.md).
+- **F-117 — *RESOLVIDO (operacional)* — Snapshot diário do disco da
+  VM no GCP.** Schedule `default-schedule-1` criado no GCP Console,
+  retenção 14 dias, executa 04:00 UTC. Primeira execução: 2026-05-13.
+  Independente das outras camadas de defesa — protege contra
+  ransomware na VM, erro humano `rm -rf` no host, e VM deletada.
+- **F-118 — Restore drill mensal.** Pendente. Script
+  `infra/scripts/restore-drill.sh` que: (1) baixa o backup mais
+  recente do R2, (2) sobe postgres efêmero, (3) restora, (4) roda
+  smoke-test (`SELECT COUNT(*)` em 3 tabelas), (5) destrói. Sem
+  isso, sabemos que backups existem mas não que são restoráveis. Ver
+  [data-durability.md §Restore drill](data-durability.md).
 
 ## Recadastro do catálogo
 
@@ -244,3 +284,33 @@ Duas opções:
 Recomendação: opção 1, mais simples e idempotente. Os masters antigos
 em `docker_mastersdata` ficam órfãos e podem ser limpos depois
 (`docker volume rm` ou deixar para o próximo `down -v`).
+
+## Estado de recuperação (atualizado 2026-05-12 fim do dia)
+
+### Camadas de defesa ativas em prod
+
+| Camada | Protege contra | Status |
+|--------|---------------|--------|
+| Bind mount `/srv/radiocheck/*` | `docker compose --force-recreate`, `down -v` | ✅ Deployed |
+| `pg_dump` diário no Cloudflare R2 | Disco da VM falhar, DROP errado, corrupção | ✅ Rodando (1ª execução 12:44 UTC, 177KB) |
+| Snapshot diário disco GCP | VM deletada, ransomware, `rm -rf` no host | ✅ Schedule criado |
+| Alerta Prometheus `BackupNotRunning` (>26h) | Backup quebrar silenciosamente | ✅ Pipeline ativo |
+| Alerta `BackupMetricMissing` (`absent()`) | Pipeline de métricas quebrar | ✅ Pipeline ativo |
+
+A combinação **bind mount + R2 + snapshot GCP** = três cópias
+independentes em três tecnologias diferentes. Perda de dado agora
+exige falha simultânea em três planos separados.
+
+### Doc relacionado
+
+- [data-durability.md](data-durability.md) — modelo completo de
+  ameaças, runbooks de recovery, procedimento de migração
+  named-volume → bind-mount, restore drill (pendente).
+- [incident-2026-05-09-jingle-falsepos.md](incident-2026-05-09-jingle-falsepos.md)
+  — incidente da véspera (falso-positivo de AMBIENTAL JINGLE) cuja
+  saga de fixes (F-108 v1→v2→v3) acabou expondo o problema do
+  backup e levou a este incidente.
+- [shared-hash-detection.md](shared-hash-detection.md) — algoritmo de
+  shared-hash em sua forma final pós-2026-05-12.
+- `CLAUDE.md` §4 — regras críticas operacionais para qualquer
+  agente futuro, derivadas deste incidente.

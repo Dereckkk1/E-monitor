@@ -22,6 +22,61 @@ O arquivo `plano_implementacao.md` é a fonte única de verdade arquitetural des
 
 Os **Não Objetivos** (seção 1.3, linha 32) definem explicitamente o que está fora do sistema. Não adicione reconhecimento de música, transcrição, integração com sistemas de tráfego ou captura over-the-air — mesmo que pareça útil. Qualquer expansão de escopo precisa de aprovação explícita do usuário.
 
+### 4. Operações destrutivas em prod — leitura obrigatória antes de mexer
+
+Esta seção existe por causa do **incidente 2026-05-12** ([postmortem](docs/incident-2026-05-12-pgdata-loss.md)) que destruiu 100% do `pgdata` de produção. Regras:
+
+**4.1. `--force-recreate` sem `--no-deps` é proibido em produção.**
+
+`docker compose up -d --force-recreate <service>` propaga o recreate para as dependências declaradas em `depends_on`. Para `api`, isso inclui `postgres`. Em determinadas condições o Docker considera o volume divergente e o recria do zero — apagando o dado.
+
+```bash
+# ❌ NUNCA em prod:
+docker compose -f infra/docker/docker-compose.yml up -d --force-recreate api
+
+# ✅ CORRETO:
+docker compose -f infra/docker/docker-compose.yml up -d --force-recreate --no-deps api
+```
+
+A mesma regra vale para `down`, `restart`, `up`: se está mexendo em qualquer service stateful (postgres/minio/redis), passe `--no-deps` quando aplicável.
+
+**4.2. `docker compose exec` NÃO usa imagem nova — recreate antes.**
+
+`docker compose build api` produz imagem nova mas **não troca o binário no container que está rodando**. `docker compose exec api ...` continua executando o binário antigo. Ordem correta de deploy:
+
+```bash
+docker compose build api                                              # 1. build da imagem
+docker compose up -d --force-recreate --no-deps api                   # 2. recreate (PEGA imagem nova)
+docker compose exec api backfill-shared-hashes --dsn "$DATABASE_URL"  # 3. comandos one-shot
+```
+
+Inverter a ordem (2 e 3) faz o comando rodar com binário velho silenciosamente. Foi o que aconteceu com o F-108 v2 em prod no incidente 2026-05-12 — backfill rodou antigo.
+
+**4.3. Antes de testar comando experimental em prod: teste local primeiro.**
+
+Você tem dev local (Windows). Use. Não rode comando inédito direto na VM.
+
+**4.4. Volumes de dado crítico usam bind mount no host, não volume nomeado.**
+
+Em prod, o `.env` da VM deve ter `PGDATA_HOST_PATH`, `MINIODATA_HOST_PATH` e `MASTERSDATA_HOST_PATH` apontando para paths em `/srv/radiocheck/*`. Bind mounts sobrevivem a `docker compose down -v` e `--force-recreate`. Detalhes: [docs/data-durability.md](docs/data-durability.md).
+
+**4.5. Backup precisa ser testado end-to-end, não só configurado.**
+
+O backup do incidente 2026-05-12 estava "configurado" há 4 dias mas **nunca tinha rodado uma vez com sucesso** — falhas silenciosas no entrypoint engoliam o erro. Antes de confiar em qualquer backup, valide que o arquivo realmente aparece no destino:
+
+```bash
+# Após qualquer mudança no backup: rode manualmente e confirme upload
+docker compose exec backup sh /backup.sh
+docker run --rm -e AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY" \
+  -e AWS_SECRET_ACCESS_KEY="$R2_SECRET_KEY" \
+  amazon/aws-cli --endpoint-url "$R2_ENDPOINT" \
+  s3 ls "s3://$R2_BUCKET/postgres/daily/" | tail -3
+```
+
+**4.6. NUNCA monte `migrations/` em `docker-entrypoint-initdb.d` + use `migrate` service simultaneamente.**
+
+O incidente 2026-05-12 expôs esse conflito latente: `initdb.d` executa `.sql` em ordem alfabética (incluindo `.down.sql` ANTES de `.up.sql`), deixando o schema em estado fragmentado que o golang-migrate marca como `dirty` e se recusa a continuar. Resultado: `users` table não criada → api crash loop. Recovery exige `DROP SCHEMA public CASCADE` + re-run do migrate. Limpeza definitiva em F-111 (pendente — remover o mount do `initdb.d`).
+
 ---
 
 ## Índice do Plano (`plano_implementacao.md`)
@@ -150,4 +205,19 @@ A documentação operacional do sistema fica em `/docs`. Ao implementar uma func
 - **Auth:** todas as rotas `/v1/internal/*` exigem JWT (admin/operator). Bootstrap admin idempotente via env vars `RADIOCHECK_BOOTSTRAP_ADMIN_EMAIL` / `RADIOCHECK_BOOTSTRAP_ADMIN_PASSWORD` no `.env` (criado se não existir, no-op se já existir). Mutações sensíveis (webhook config, campaign cancel) exigem role admin. Ver [docs/auth-bootstrap.md](docs/auth-bootstrap.md).
 - **Tracing:** OTLP gRPC pra Jaeger (`localhost:16686`). Setar `OTEL_EXPORTER_OTLP_ENDPOINT=` (vazio) desliga sem panic. Ver [docs/tracing.md](docs/tracing.md).
 - **Worker reconciler:** a cada 30s cada worker reconfere no banco se a lista de comerciais carregada bate com o que deveria — e reinicia caso divirja. Métricas `radiocheck_worker_commercials{station_id}` e `radiocheck_worker_reconcile_runs_total` no Prometheus. Existe pra impedir que `target_stations` editado em campanha ativa deixe worker cego (incidente 2026-05-08). Ver [docs/worker-commercial-reconciler.md](docs/worker-commercial-reconciler.md).
-- **Follow-ups conhecidos:** ver [docs/follow-ups-fase2.md](docs/follow-ups-fase2.md) — dívida técnica catalogada (F-01 a F-83) que deve ser resolvida antes/durante a Fase 3.
+- **Shared-hash detection:** algoritmo bidirecional que distingue subset (corte 30s/60s) de sting (~6s compartilhados) e pula comerciais < 10s. Ver [docs/shared-hash-detection.md](docs/shared-hash-detection.md). Bidirecional + skip vieram dos incidentes 2026-05-09 (sting) e 2026-05-12 (subset) — ver [docs/incident-2026-05-09-jingle-falsepos.md](docs/incident-2026-05-09-jingle-falsepos.md).
+- **Durabilidade de dados:** prod usa bind mount em `/srv/radiocheck/*` + pg_dump diário no R2 + snapshot do disco GCP + alerta Prometheus de backup ausente. Ver [docs/data-durability.md](docs/data-durability.md). Histórico de como chegamos aqui em [docs/incident-2026-05-12-pgdata-loss.md](docs/incident-2026-05-12-pgdata-loss.md).
+- **Follow-ups conhecidos:** ver [docs/follow-ups-fase2.md](docs/follow-ups-fase2.md) — dívida técnica catalogada (F-01 a F-83) que deve ser resolvida antes/durante a Fase 3. Novos follow-ups F-100+ rastreados nos respectivos docs de incidente.
+
+### Estado das branches stacked (estado em 2026-05-12)
+
+Ao final do incidente de 2026-05-12, ficaram 4 branches stacked não-mergeadas em master. Se você é um agente futuro entrando no projeto, **verifique primeiro se elas já foram mergeadas** antes de assumir que o estado do master é o atual:
+
+| Branch | Conteúdo principal |
+|--------|--------------------|
+| `fix/backup-actually-runs` | Backup container que de fato roda (entrypoint + env vars + aws-cli) + postmortem do incidente. Base: `master`. |
+| `fix/postgres-bind-mount` | Bind mount pgdata/minio/masters + node-exporter + F-110 alerta + tzdata + RADIOCHECK_ENV parametrizado. Base: `fix/backup-actually-runs`. |
+| `fix/sharing-bidirectional-subset` | F-108 v3 (subset bidirecional + skip de comerciais < 10s). Base: `master`. |
+| `feat/campaign-wizard-foundations` | Novo fluxo de cadastro de campanhas em wizard (65 commits). Base: `master`. |
+
+`git log --all --not master` lista o que está fora de master. Verificar antes de assumir qualquer estado.
