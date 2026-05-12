@@ -191,6 +191,24 @@ services:
     volumes:
       - clap-models:/models
 
+  # ── F-110: node-exporter pra textfile collector ──────────────────────────
+  # Lê arquivos .prom em /textfile (escritos pelo backup.sh via
+  # PROM_TEXTFILE_DIR) e expõe como métricas Prometheus. Sem isso, o alerta
+  # BackupNotRunning em alerts.yml fica passivo — métrica nunca aparece, alerta
+  # nunca dispara. Causa raiz de uma das camadas que falhou em 2026-05-12.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--collector.textfile.directory=/textfile"
+      # Desabilita coletores pesados/desnecessários — só queremos o textfile
+      # pras métricas de backup. Hardware/disk metrics ficam pro GCP nativo.
+      - "--collector.disable-defaults"
+      - "--collector.textfile"
+    volumes:
+      - prometheus-textfile:/textfile:ro
+    ports:
+      - "9100:9100"
+
   # ── Fase 2: observabilidade (Prometheus + Grafana + Alertmanager) ────────
   prometheus:
     image: prom/prometheus:v2.52.0
@@ -283,10 +301,14 @@ services:
       R2_ACCESS_KEY: ${R2_ACCESS_KEY}
       R2_SECRET_KEY: ${R2_SECRET_KEY}
       LOCAL_RETENTION_DAYS: "${BACKUP_LOCAL_RETENTION_DAYS:-7}"
+      # Textfile collector (F-110): script escreve métricas .prom aqui,
+      # node-exporter expõe pra Prometheus, alerta dispara se ficar stale.
+      PROM_TEXTFILE_DIR: /textfile
     volumes:
       - backup-data:/backup
       - pg_archive:/var/lib/postgresql/archive:ro
       - ../scripts/backup.sh:/backup.sh:ro
+      - prometheus-textfile:/textfile
     # Roda o backup imediatamente após o postgres ficar pronto, depois espera
     # 24h pro próximo ciclo. apk add aws-cli porque o script usa `aws s3 cp`
     # para fazer upload pro R2 e a imagem postgres:16-alpine não vem com ele.
@@ -315,3 +337,4 @@ volumes:
   clap-models:
   grafana-data:
   backup-data:
+  prometheus-textfile:
