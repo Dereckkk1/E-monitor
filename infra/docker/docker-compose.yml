@@ -9,7 +9,13 @@ services:
       # snippet at infra/postgres/postgresql.conf.snippet — left disabled in
       # local dev to avoid forcing AWS credentials on every contributor.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PGDATA_HOST_PATH: defina no .env para um path absoluto do host
+      # (ex: /srv/radiocheck/postgres-data) — o postgres passa a usar bind
+      # mount, e o dado sobrevive a `docker compose down -v` / `--force-recreate`
+      # (causa do incidente 2026-05-12). Sem o env var, cai no volume nomeado
+      # `pgdata` (comportamento legado, OK pra dev local).
+      # Procedimento de migração: docs/data-durability.md.
+      - ${PGDATA_HOST_PATH:-pgdata}:/var/lib/postgresql/data
       - pg_archive:/var/lib/postgresql/archive
       - ../../migrations:/docker-entrypoint-initdb.d:ro
     ports:
@@ -67,7 +73,9 @@ services:
       - "${MINIO_PORT}:9000"
       - "${MINIO_CONSOLE_PORT}:9001"
     volumes:
-      - miniodata:/data
+      # MINIODATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod
+      # protege as evidências de detecção contra recreate acidental.
+      - ${MINIODATA_HOST_PATH:-miniodata}:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -113,7 +121,11 @@ services:
       OTEL_SERVICE_NAME: radiocheck-api
       OTEL_TRACES_SAMPLER: parentbased_traceidratio
       OTEL_TRACES_SAMPLER_ARG: "1.0"
-      RADIOCHECK_ENV: development
+      # Em PROD: setar RADIOCHECK_ENV=production no .env da VM.
+      # Vira o `deployment.environment` resource attribute dos spans OTel e
+      # é base pra qualquer guard futuro de "este é prod, não roda comando
+      # destrutivo". Default `development` é seguro pra dev local.
+      RADIOCHECK_ENV: ${RADIOCHECK_ENV:-development}
       # Auth (§16.1). JWT_SECRET é obrigatório (>= 32 chars).
       # As duas vars de bootstrap são opcionais e idempotentes:
       # se setadas e o admin ainda não existe, é criado no startup.
@@ -123,7 +135,9 @@ services:
     ports:
       - "${API_PORT}:8080"
     volumes:
-      - mastersdata:/data/masters
+      # MASTERSDATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod
+      # protege os arquivos master (mp3 dos comerciais).
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/data/masters
       - segmentsdata:/data/segments
       - ../../audio-refs:/audio-refs:ro
     depends_on:
@@ -151,7 +165,7 @@ services:
     ports:
       - "${SIM_PORT:-18000}:8000"
     volumes:
-      - mastersdata:/masters:ro
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/masters:ro
       - ../../scripts/radio-sim:/sim:ro
 
   fingerprint:
@@ -163,7 +177,7 @@ services:
       NATS_URL: nats://nats:4222
       MASTERS_PATH: /data/masters
     volumes:
-      - mastersdata:/data/masters
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/data/masters
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,6 +194,24 @@ services:
       - "8081:8080"
     volumes:
       - clap-models:/models
+
+  # ── F-110: node-exporter pra textfile collector ──────────────────────────
+  # Lê arquivos .prom em /textfile (escritos pelo backup.sh via
+  # PROM_TEXTFILE_DIR) e expõe como métricas Prometheus. Sem isso, o alerta
+  # BackupNotRunning em alerts.yml fica passivo — métrica nunca aparece, alerta
+  # nunca dispara. Causa raiz de uma das camadas que falhou em 2026-05-12.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--collector.textfile.directory=/textfile"
+      # Desabilita coletores pesados/desnecessários — só queremos o textfile
+      # pras métricas de backup. Hardware/disk metrics ficam pro GCP nativo.
+      - "--collector.disable-defaults"
+      - "--collector.textfile"
+    volumes:
+      - prometheus-textfile:/textfile:ro
+    ports:
+      - "9100:9100"
 
   # ── Fase 2: observabilidade (Prometheus + Grafana + Alertmanager) ────────
   prometheus:
@@ -248,17 +280,57 @@ services:
     restart: unless-stopped
 
   # ── Fase 2: backup diario do PG ──────────────────────────────────────────
+  # Bugs encontrados em 2026-05-12 (incidente perda de pgdata):
+  #   1. Entrypoint anterior fazia `sleep 86400` ANTES de rodar o backup —
+  #      primeira execução só ocorria 24h após o container subir. Combinado
+  #      com restarts frequentes em desenvolvimento, backup nunca rodava.
+  #   2. Falta de PG*/R2_* env vars fazia o backup.sh abortar imediatamente
+  #      via `: "${PGHOST:?...}"`. O `while true` engolia o erro silenciosamente.
+  # Fix: roda backup imediatamente após subida + plumbar todos env vars que
+  # o script exige. AWS CLI agora instalado via `apk add aws-cli` no entrypoint.
   backup:
     image: postgres:16-alpine
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}"
+      # Para pg_basebackup (script lê esses individualmente).
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
       BACKUP_DIR: /backup
+      # R2 destination (Cloudflare object storage).
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY}
+      R2_SECRET_KEY: ${R2_SECRET_KEY}
+      LOCAL_RETENTION_DAYS: "${BACKUP_LOCAL_RETENTION_DAYS:-7}"
+      # Textfile collector (F-110): script escreve métricas .prom aqui,
+      # node-exporter expõe pra Prometheus, alerta dispara se ficar stale.
+      PROM_TEXTFILE_DIR: /textfile
     volumes:
       - backup-data:/backup
+      - pg_archive:/var/lib/postgresql/archive:ro
       - ../scripts/backup.sh:/backup.sh:ro
-    entrypoint: ["sh", "-c", "while true; do sleep 86400; sh /backup.sh; done"]
+      - prometheus-textfile:/textfile
+    # Roda o backup imediatamente após o postgres ficar pronto, depois espera
+    # 24h pro próximo ciclo. apk add aws-cli porque o script usa `aws s3 cp`
+    # para fazer upload pro R2 e a imagem postgres:16-alpine não vem com ele.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache aws-cli >/dev/null 2>&1
+        echo "[backup] container ready — running first backup now"
+        while true; do
+          sh /backup.sh || echo "[backup] script exited non-zero — see log above"
+          echo "[backup] sleeping 24h until next run"
+          sleep 86400
+        done
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:
@@ -269,3 +341,4 @@ volumes:
   clap-models:
   grafana-data:
   backup-data:
+  prometheus-textfile:
