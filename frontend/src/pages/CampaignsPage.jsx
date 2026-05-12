@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
-  useCampaigns, useCreateCampaign, useCancelCampaign, useDeleteCampaign,
+  useCampaigns, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
+  useCampaignMaterials, useMaterials,
 } from '../api/hooks'
 import api from '../api/client'
 import RSelect from '../components/RSelect'
@@ -756,8 +758,49 @@ function BulkUploadZone({ campaignId, campaignStationIds, allStations }) {
 
 // ─── MaterialsPanel ────────────────────────────────────────────────────────────
 
-function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
-  const { data: commercials = [], isLoading } = useCommercials(campaignId)
+function MaterialsPanel({ campaign, campaignStationIds, allStations }) {
+  const campaignId = campaign.id
+  const clientId = campaign.client_id
+  const { data: commercials = [], isLoading: loadingCom } = useCommercials(campaignId)
+  const { data: campaignMaterials = [], isLoading: loadingCM } = useCampaignMaterials(campaignId)
+  const { data: clientLibrary = [] } = useMaterials(clientId)
+  const isLoading = loadingCom || loadingCM
+
+  const libraryById = useMemo(
+    () => Object.fromEntries(clientLibrary.map(m => [m.id, m])),
+    [clientLibrary]
+  )
+
+  // Merge: prefer items from campaign_materials (new schema) when both exist.
+  // After Plan 1 backfill, commercial.id == material.id for migrated rows.
+  const items = useMemo(() => {
+    const fromLinks = campaignMaterials
+      .map(link => {
+        const mat = libraryById[link.material_id]
+        if (!mat) return null
+        // Shape it like a Commercial so CommercialRow can render it unchanged.
+        return {
+          id: mat.id,
+          short_id: mat.short_id,
+          campaign_id: campaignId,
+          title: mat.title,
+          cut_label: null,
+          duration_seconds: mat.duration_seconds,
+          master_storage_path: mat.master_storage_path,
+          master_sha256: mat.master_sha256,
+          fingerprint_status: mat.fingerprint_status,
+          fingerprint_generated_at: mat.fingerprint_generated_at,
+          fingerprint_hash_count: mat.fingerprint_hash_count,
+          target_stations: link.target_stations,
+          created_at: link.added_at,
+        }
+      })
+      .filter(Boolean)
+
+    const linkedIds = new Set(fromLinks.map(x => x.id))
+    const fromOld = commercials.filter(c => !linkedIds.has(c.id))
+    return [...fromLinks, ...fromOld]
+  }, [campaignMaterials, libraryById, commercials, campaignId])
 
   return (
     <div className="expanded-section">
@@ -767,7 +810,7 @@ function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
         <div style={{ padding: '16px 0' }}>
           {[1,2].map(i => <div key={i} className="skeleton" style={{ height: 36, borderRadius: 6, marginBottom: 6 }} />)}
         </div>
-      ) : commercials.length > 0 ? (
+      ) : items.length > 0 ? (
         <table className="commercials-table">
           <thead>
             <tr>
@@ -779,7 +822,7 @@ function MaterialsPanel({ campaignId, campaignStationIds, allStations }) {
             </tr>
           </thead>
           <tbody>
-            {commercials.map(c => (
+            {items.map(c => (
               <CommercialRow
                 key={c.id}
                 commercial={c}
@@ -964,6 +1007,13 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         </div>
 
         <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
+          <Link
+            to={`/campaigns/${campaign.id}/edit`}
+            className="btn btn-secondary btn-sm"
+            onClick={e => e.stopPropagation()}
+          >
+            Editar
+          </Link>
           <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-concluida'}`}>
             {STATUS_LABEL[campaign.status] ?? campaign.status}
           </span>
@@ -996,7 +1046,7 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         <div className="campaign-expanded">
           <CampaignStationsSection campaign={campaign} allStations={allStations} />
           <MaterialsPanel
-            campaignId={campaign.id}
+            campaign={campaign}
             campaignStationIds={campaign.target_stations ?? []}
             allStations={allStations}
           />
@@ -1006,141 +1056,16 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   )
 }
 
-// ─── NewCampaignModal ──────────────────────────────────────────────────────────
-
-function NewCampaignModal({ clients, onClose }) {
-  const createCampaign = useCreateCampaign()
-  const emptyForm = { name: '', client_id: '', start_date: '', end_date: '', target_stations: [] }
-  const [form, setForm] = useState(emptyForm)
-
-  const [stationInput, setStationInput]   = useState('')
-  const [debouncedInput, setDebouncedInput] = useState('')
-  const [selectedStationOpts, setSelectedStationOpts] = useState([])
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedInput(stationInput), 400)
-    return () => clearTimeout(t)
-  }, [stationInput])
-
-  const { data: stationSearchData, isFetching: fetchingStations } = useStations({
-    q: debouncedInput || undefined,
-    limit: 50,
-  })
-  const searchResults = stationSearchData?.data ?? []
-
-  const stationOptions = useMemo(() => {
-    const results = searchResults.map(s => {
-      const freq = s.frequency_mhz != null ? ` ${s.frequency_mhz}` : ''
-      const city = s.city ? ` ${s.city}` : ''
-      return { value: s.id, label: `${s.name} (${s.band}${freq}${city})` }
-    })
-    const resultIds = new Set(results.map(o => o.value))
-    const extra = selectedStationOpts.filter(o => !resultIds.has(o.value))
-    return [...results, ...extra]
-  }, [searchResults, selectedStationOpts])
-
-  function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
-
-  function handleSubmit(e) {
-    e.preventDefault()
-    createCampaign.mutate({
-      ...form,
-      start_date: form.start_date + 'T00:00:00Z',
-      end_date:   form.end_date   + 'T00:00:00Z',
-    }, { onSuccess: onClose })
-  }
-
-  // Close on Escape
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 600 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>Nova campanha</h3>
-          <button className="modal-close" onClick={onClose} type="button"><IconX size={14} /></button>
-        </div>
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body">
-            <div className="form-row">
-              <div className="field" style={{ flex: 3 }}>
-                <label>Nome *</label>
-                <input className="input" placeholder="ex: Campanha Verão 2025" value={form.name} onChange={e => setField('name', e.target.value)} required />
-              </div>
-              <div className="field" style={{ flex: 2 }}>
-                <label>Cliente *</label>
-                <RSelect
-                  options={clients.map(c => ({ value: c.id, label: c.name }))}
-                  value={clients.find(c => c.id === form.client_id) ? { value: form.client_id, label: clients.find(c => c.id === form.client_id).name } : null}
-                  onChange={opt => setField('client_id', opt?.value ?? '')}
-                  placeholder="Selecione…"
-                  isClearable
-                />
-              </div>
-            </div>
-
-            <div className="form-row">
-              <div className="field">
-                <label>Início *</label>
-                <input className="input" type="date" value={form.start_date} onChange={e => setField('start_date', e.target.value)} required />
-              </div>
-              <div className="field">
-                <label>Fim *</label>
-                <input className="input" type="date" value={form.end_date} onChange={e => setField('end_date', e.target.value)} required />
-              </div>
-            </div>
-
-            <div className="field">
-              <label>Emissoras (opcional — pode adicionar depois)</label>
-              <RSelect
-                isMulti
-                options={stationOptions}
-                value={selectedStationOpts}
-                onChange={opts => {
-                  const arr = opts ?? []
-                  setSelectedStationOpts(arr)
-                  setField('target_stations', arr.map(o => o.value))
-                }}
-                onInputChange={(val, { action }) => {
-                  if (action === 'input-change') setStationInput(val)
-                }}
-                filterOption={() => true}
-                isLoading={fetchingStations}
-                placeholder="Buscar emissoras…"
-                closeMenuOnSelect={false}
-              />
-            </div>
-
-            {createCampaign.isError && (
-              <p className="text-error">Erro ao criar campanha. Tente novamente.</p>
-            )}
-          </div>
-          <div className="modal-footer" style={{ padding: '0 20px 20px' }}>
-            <button className="btn btn-secondary btn-sm" onClick={onClose} type="button">Cancelar</button>
-            <button className="btn btn-primary btn-sm" type="submit" disabled={createCampaign.isPending}>
-              {createCampaign.isPending ? <><IconSpinner /> Criando…</> : 'Criar campanha'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
 // ─── EmptyState ────────────────────────────────────────────────────────────────
 
-function EmptyState({ onNew }) {
+function EmptyState() {
   return (
     <div className="campaigns-empty">
       <div className="campaigns-empty-action">
         <div style={{ color: 'var(--c-action)', opacity: 0.7 }}><IconMegaphone /></div>
         <h3>Nenhuma campanha cadastrada</h3>
         <p>Crie a primeira campanha para começar a monitorar a veiculação de comerciais nas emissoras.</p>
-        <button className="btn btn-primary btn-sm" onClick={onNew}>+ Nova campanha</button>
+        <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>
       </div>
       <div className="campaigns-empty-preview" aria-hidden="true">
         <div className="ghost-card">
@@ -1190,8 +1115,6 @@ export default function CampaignsPage() {
     })
   }, [campaigns])
 
-  const [showModal, setShowModal] = useState(false)
-
   if (isLoading) {
     return (
       <div>
@@ -1219,13 +1142,11 @@ export default function CampaignsPage() {
     <div>
       <div className="page-header">
         <h2>Campanhas</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}>
-          + Nova campanha
-        </button>
+        <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>
       </div>
 
       {campaigns.length === 0 ? (
-        <EmptyState onNew={() => setShowModal(true)} />
+        <EmptyState />
       ) : (
         <div className="campaign-list">
           {orderedCampaigns.map(c => (
@@ -1239,13 +1160,6 @@ export default function CampaignsPage() {
             />
           ))}
         </div>
-      )}
-
-      {showModal && (
-        <NewCampaignModal
-          clients={clients}
-          onClose={() => setShowModal(false)}
-        />
       )}
     </div>
   )

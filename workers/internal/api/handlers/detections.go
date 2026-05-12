@@ -16,8 +16,9 @@ import (
 )
 
 type DetectionsHandler struct {
-	Repo    *catalog.Detections
-	Storage *storage.Client
+	Repo        *catalog.Detections
+	Storage     *storage.Client
+	SummaryRepo *catalog.DailySummaryRepo
 }
 
 func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -164,4 +165,33 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(w, r, id.String()+".m4a", time.Time{}, bytes.NewReader(data))
+}
+
+func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request) {
+	campaignID, err := uuid.Parse(chi.URLParam(r, "campaignID"))
+	if err != nil {
+		http.Error(w, "invalid campaignID", http.StatusBadRequest)
+		return
+	}
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	from, err := time.Parse("2006-01-02", fromStr)
+	if err != nil {
+		http.Error(w, "from must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse("2006-01-02", toStr)
+	if err != nil {
+		http.Error(w, "to must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	rows, err := h.SummaryRepo.ListByCampaign(r.Context(), campaignID, from, to)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []catalog.DailySummaryRow{}
+	}
+	writeJSON(w, http.StatusOK, rows)
 }

@@ -94,6 +94,14 @@ func main() {
 	detections := catalog.NewDetections(pool)
 	healthEvents := catalog.NewHealthEvents(pool)
 
+	// New catalog repos (Tasks 4-9 / 13-18).
+	matTypesRepo  := catalog.NewMaterialTypes(pool)
+	matsRepo      := catalog.NewMaterials(pool)
+	cmpMatsRepo   := catalog.NewCampaignMaterials(pool)
+	distRulesRepo := catalog.NewDistributionRules(pool)
+	distOverRepo  := catalog.NewDistributionOverrides(pool)
+	dailySumRepo  := catalog.NewDailySummary(pool)
+
 	// Index store + loader.
 	indexStore := index.New()
 	loader := index.NewLoader(indexStore, pool, nc, logger)
@@ -236,7 +244,7 @@ func main() {
 		Clients:      &handlers.ClientsHandler{Repo: clients},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
-		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client},
+		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client, SummaryRepo: dailySumRepo},
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
 		Auth:         handlers.NewAuthHandler(pool),
@@ -244,6 +252,11 @@ func main() {
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
 		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Threshold: sup, Calibration: calibrationScheduler, Log: logger},
 		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
+		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
+		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc},
+		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo},
+		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo},
+		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},
 	}
 
 	srv := &http.Server{
