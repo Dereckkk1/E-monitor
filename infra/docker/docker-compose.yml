@@ -9,7 +9,13 @@ services:
       # snippet at infra/postgres/postgresql.conf.snippet — left disabled in
       # local dev to avoid forcing AWS credentials on every contributor.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PGDATA_HOST_PATH: defina no .env para um path absoluto do host
+      # (ex: /srv/radiocheck/postgres-data) — o postgres passa a usar bind
+      # mount, e o dado sobrevive a `docker compose down -v` / `--force-recreate`
+      # (causa do incidente 2026-05-12). Sem o env var, cai no volume nomeado
+      # `pgdata` (comportamento legado, OK pra dev local).
+      # Procedimento de migração: docs/data-durability.md.
+      - ${PGDATA_HOST_PATH:-pgdata}:/var/lib/postgresql/data
       - pg_archive:/var/lib/postgresql/archive
       - ../../migrations:/docker-entrypoint-initdb.d:ro
     ports:
@@ -67,7 +73,9 @@ services:
       - "${MINIO_PORT}:9000"
       - "${MINIO_CONSOLE_PORT}:9001"
     volumes:
-      - miniodata:/data
+      # MINIODATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod
+      # protege as evidências de detecção contra recreate acidental.
+      - ${MINIODATA_HOST_PATH:-miniodata}:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -123,7 +131,9 @@ services:
     ports:
       - "${API_PORT}:8080"
     volumes:
-      - mastersdata:/data/masters
+      # MASTERSDATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod
+      # protege os arquivos master (mp3 dos comerciais).
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/data/masters
       - segmentsdata:/data/segments
       - ../../audio-refs:/audio-refs:ro
     depends_on:
@@ -151,7 +161,7 @@ services:
     ports:
       - "${SIM_PORT:-18000}:8000"
     volumes:
-      - mastersdata:/masters:ro
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/masters:ro
       - ../../scripts/radio-sim:/sim:ro
 
   fingerprint:
@@ -163,7 +173,7 @@ services:
       NATS_URL: nats://nats:4222
       MASTERS_PATH: /data/masters
     volumes:
-      - mastersdata:/data/masters
+      - ${MASTERSDATA_HOST_PATH:-mastersdata}:/data/masters
     depends_on:
       postgres:
         condition: service_healthy
