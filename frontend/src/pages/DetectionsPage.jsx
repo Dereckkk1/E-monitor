@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  useCampaigns, useStations, useClients, useStreamHealth,
+  useCampaigns, useStations, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary,
 } from '../api/hooks'
@@ -205,10 +205,12 @@ export default function DetectionsPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
+  // TODO F-100: wire up HealthDrawer once the component is built
+  // eslint-disable-next-line no-unused-vars
   const [healthStationId, setHealthStationId] = useState(null)
 
   const { data: stationsResp } = useStations({ limit: 2000 })
-  const stationCatalog = stationsResp?.data ?? []
+  const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
 
   // Derive period from selected month
   const period = useMemo(() => monthToRange(selectedMonth), [selectedMonth])
