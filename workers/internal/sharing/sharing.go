@@ -19,6 +19,7 @@ package sharing
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/google/uuid"
@@ -52,7 +53,41 @@ const (
 	//   - AMB30/JINGLE sting 6,25s em 30s: own=20%, other=20% → max=20% → sting (flag normal)
 	// Threshold 0.5 dá margem confortável para os dois extremos.
 	SubsetThreshold = 0.5
+	// MinShareableDurationSeconds é a duração mínima (em segundos) que um
+	// comercial precisa ter para participar do shared-hash flagging. Comerciais
+	// mais curtos têm poucas janelas de análise distintas (PULSO de 7s gera
+	// apenas 4 janelas em 4s @ 1s hop) e UMA única janela já cobre >50% da
+	// duração total, o que impede a classificação subset/sting bidirecional
+	// de funcionar com a resolução necessária.
+	//
+	// Além disso, matches de outros comerciais contra um comercial curto
+	// podem produzir `xRange` calculado fora dos bounds do comercial pequeno
+	// — gerando fatias finas (e.g. [0, 7] frames) que individualmente passam
+	// abaixo do SubsetThreshold mas, cumulativamente entre múltiplos scans,
+	// flagam quase tudo do comercial vítima. Sintoma observado em prod com
+	// RÔGGA PULSO SONORO (~67% flagged depois do backfill).
+	//
+	// Para comerciais < MinShareableDurationSeconds, a defesa shared-hash
+	// é pulada **dos dois lados** (não flaga o curto e não usa ele para
+	// flagar os outros). O caso de conflito real (X de 30s toca, e contém
+	// o áudio de PULSO de 7s) cai pra defesa de
+	// `version-disambiguation` — supervisor retrata PULSO em favor de X
+	// pela regra de maior duração no momento da confirmação.
+	MinShareableDurationSeconds = 10.0
 )
+
+// MinShareableDurationFrames é MinShareableDurationSeconds convertido para
+// frames usando a mesma fórmula que o resto do pipeline
+// (sampleRate / stftHopSamples = 16000 / 2048 ≈ 7,8125 frames/s).
+// Computado em init() porque Go não converte uma constante float fracionária
+// para int em tempo de compilação.
+var MinShareableDurationFrames int
+
+func init() {
+	// math.Floor quebra a redução em constante de tempo de compilação que
+	// Go faria com a expressão pura; o resultado ainda é 78 para 10s.
+	MinShareableDurationFrames = int(math.Floor(MinShareableDurationSeconds * float64(fingerprint.SampleRate) / 2048.0))
+}
 
 // MarkSharedHashes scans the given commercial's master audio against the
 // existing fingerprint catalog, identifies regions that overlap with other
@@ -265,7 +300,19 @@ func classifyAndFilter(report scanReport, subsetThreshold float64) map[uuid.UUID
 	if report.ownTotalFrames == 0 {
 		return out
 	}
+	// Comerciais curtos não participam do shared-hash flagging (ver doc da
+	// constante MinShareableDurationSeconds). Pula a scan inteira se o
+	// próprio comercial é curto demais.
+	if report.ownTotalFrames < MinShareableDurationFrames {
+		return out
+	}
 	for otherID, scan := range report.perOther {
+		// Pula pares onde o **outro** comercial é curto demais — evita
+		// flagar fatias finas espúrias num vinheta/sting vítima e mantém
+		// a simetria do skip dos dois lados.
+		if scan.otherTotalFrames < MinShareableDurationFrames {
+			continue
+		}
 		ownCov := float64(frameCoverage(scan.ownRanges)) / float64(report.ownTotalFrames)
 		var otherCov float64
 		if scan.otherTotalFrames > 0 {

@@ -34,8 +34,11 @@ const frames30s = 234
 // 60s commercial → ~468 frames total.
 const frames60s = 468
 
-// 7s commercial → ~54 frames total.
+// 7s commercial → ~54 frames total. Below MinShareableDurationFrames (~78).
 const frames7s = 54
+
+// 15s commercial → ~117 frames total. Above MinShareableDurationFrames.
+const frames15s = 117
 
 // TestClassifyAndFilter_StingPair: two 30s commercials sharing a ~6,25s sting.
 // Both coverages well below threshold → flag normally.
@@ -92,31 +95,29 @@ func TestClassifyAndFilter_SubsetPair_Symmetric(t *testing.T) {
 	}
 }
 
-// TestClassifyAndFilter_AsymmetricSubset_PULSOInsideX: PULSO (7s) inside X (30s).
-// When X is the one being scanned, X's perspective sees only ~7s out of 30s
-// hitting PULSO. The OLD window-fraction heuristic would say "sting" (low
-// fraction of X's windows) and flag. The new bidirectional rule sees the
-// OTHER side: PULSO is 100% covered → subset → don't flag.
-func TestClassifyAndFilter_AsymmetricSubset_PULSOInsideX(t *testing.T) {
-	own := uuid.New()    // X (30s) being scanned
-	other := uuid.New()  // PULSO (7s)
+// TestClassifyAndFilter_AsymmetricSubset_15sInside30s: a 15s commercial fully
+// contained inside a 30s commercial (both ≥ MinShareableDuration). When the
+// 30s is being scanned, X sees ~15s of itself hitting the smaller. The
+// bidirectional rule catches this via otherCov=100% even when ownCov is
+// modest.
+func TestClassifyAndFilter_AsymmetricSubset_15sInside30s(t *testing.T) {
+	own := uuid.New()   // X (30s) being scanned
+	other := uuid.New() // small (15s)
 
-	// X has 27 windows; only ~4 of them hit PULSO.
-	// → ownRanges: ~4 consecutive windows of X.
-	// → otherRanges: covers ~all of PULSO's 7s (each X-window of 4s hits 4s
-	//   of PULSO, and consecutive X-windows shift through PULSO's full range).
+	// X has ~27 windows; ~14 of them hit the small commercial (those covering
+	// the 15s region inside X).
 	ownRanges := []frameRange{
-		{from: 50, until: 82},
-		{from: 58, until: 90},
-		{from: 66, until: 98},
-		{from: 74, until: 106},
+		{from: 50, until: 82}, {from: 58, until: 90}, {from: 66, until: 98},
+		{from: 74, until: 106}, {from: 82, until: 114}, {from: 90, until: 122},
+		{from: 98, until: 130}, {from: 106, until: 138}, {from: 114, until: 146},
+		{from: 122, until: 154}, {from: 130, until: 162},
 	}
-	// PULSO has ~54 frames total. The matched ranges should cover ~all of it.
+	// otherRanges cover ~all of the 15s commercial's frames.
 	otherRanges := []frameRange{
-		{from: 0, until: 32},
-		{from: 8, until: 40},
-		{from: 16, until: 48},
-		{from: 24, until: 54},
+		{from: 0, until: 32}, {from: 8, until: 40}, {from: 16, until: 48},
+		{from: 24, until: 56}, {from: 32, until: 64}, {from: 40, until: 72},
+		{from: 48, until: 80}, {from: 56, until: 88}, {from: 64, until: 96},
+		{from: 72, until: 104}, {from: 80, until: 112},
 	}
 
 	report := scanReport{
@@ -124,7 +125,7 @@ func TestClassifyAndFilter_AsymmetricSubset_PULSOInsideX(t *testing.T) {
 		ownTotalFrames:  frames30s,
 		perOther: map[uuid.UUID]*perOtherScan{
 			other: {
-				otherTotalFrames: frames7s,
+				otherTotalFrames: frames15s,
 				ownRanges:        ownRanges,
 				otherRanges:      otherRanges,
 			},
@@ -133,7 +134,64 @@ func TestClassifyAndFilter_AsymmetricSubset_PULSOInsideX(t *testing.T) {
 
 	out := classifyAndFilter(report, SubsetThreshold)
 	if len(out) != 0 {
-		t.Errorf("asymmetric subset (PULSO inside X) must not flag — old window-fraction heuristic would have; got %v", out)
+		t.Errorf("asymmetric subset (15s inside 30s) must not flag — bidirectional check should catch it via otherCov; got %v", out)
+	}
+}
+
+// TestClassifyAndFilter_ShortCommercialOwnScanSkipped: a 7s commercial
+// (below MinShareableDuration) scanning the catalog. The whole scan must
+// short-circuit — no flags from either side. PULSO/ROGGA Pulso Sonoro on
+// 2026-05-12 was the production case that exposed why this matters.
+func TestClassifyAndFilter_ShortCommercialOwnScanSkipped(t *testing.T) {
+	own := uuid.New()  // PULSO (7s) scanning
+	other := uuid.New()
+
+	// Even if there's a "sting"-looking pair (low coverages both sides), the
+	// scan must be skipped because the scanning commercial is too short.
+	report := scanReport{
+		ownCommercialID: own,
+		ownTotalFrames:  frames7s,
+		perOther: map[uuid.UUID]*perOtherScan{
+			other: {
+				otherTotalFrames: frames30s,
+				ownRanges:        []frameRange{{from: 0, until: 7}},
+				otherRanges:      []frameRange{{from: 50, until: 57}},
+			},
+		},
+	}
+
+	out := classifyAndFilter(report, SubsetThreshold)
+	if len(out) != 0 {
+		t.Errorf("short-commercial scan must be skipped entirely, got %v", out)
+	}
+}
+
+// TestClassifyAndFilter_ShortCommercialOtherSkipped: a 30s commercial scans
+// the catalog and finds a "match" against a 7s commercial. The pair must be
+// skipped on the OTHER side check — protecting the short victim from being
+// flagged by an aggregated set of scans.
+func TestClassifyAndFilter_ShortCommercialOtherSkipped(t *testing.T) {
+	own := uuid.New()   // 30s scanning
+	other := uuid.New() // 7s victim
+
+	// A "sting-looking" pair: small slice of own, small slice of other.
+	// Without the short-commercial skip, this would be flagged and PULSO
+	// (the victim) accumulates fragments from multiple such scans.
+	report := scanReport{
+		ownCommercialID: own,
+		ownTotalFrames:  frames30s,
+		perOther: map[uuid.UUID]*perOtherScan{
+			other: {
+				otherTotalFrames: frames7s,
+				ownRanges:        []frameRange{{from: 50, until: 82}},
+				otherRanges:      []frameRange{{from: 0, until: 7}},
+			},
+		},
+	}
+
+	out := classifyAndFilter(report, SubsetThreshold)
+	if len(out) != 0 {
+		t.Errorf("pair with short other-commercial must be skipped, got %v", out)
 	}
 }
 
