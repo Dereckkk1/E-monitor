@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Radiocheck — Postgres physical backup (§14.4)
+# Radiocheck — Postgres logical backup (§14.4)
 #
-# Performs a daily pg_basebackup (tar + gzip), uploads it to Cloudflare R2,
-# rotates local files (keeps last 7 days), and emits a JSON status line on
-# stdout. Optionally writes a Prometheus textfile metrics file so node_exporter
-# can scrape it (see infra/prometheus/textfile-collector/README.md).
+# Performs a daily pg_dump (custom format, --create), uploads it to Cloudflare
+# R2, rotates local files (keeps last 7 days), and emits a JSON status line
+# on stdout. Optionally writes a Prometheus textfile metrics file so
+# node_exporter can scrape it (see infra/prometheus/textfile-collector/README.md).
+#
+# Why pg_dump instead of pg_basebackup: physical backup (basebackup) requires
+# `replication` permission on the role and a pg_hba.conf entry for the backup
+# host, neither of which we have on the docker compose stack. Logical backup
+# (pg_dump) only needs CONNECT + SELECT on the schema and is more portable for
+# our small DB. Trade-off: no PITR (no WAL stream) — recover only to the
+# moment of the last backup.
 #
 # Required env:
 #   PGUSER, PGPASSWORD, PGHOST, PGPORT, PGDATABASE
@@ -54,24 +61,23 @@ TIMESTAMP=$(TZ=America/Sao_Paulo date +%Y%m%d-%H%M%S)
 BACKUP_DIR="${BACKUP_DIR:-/var/lib/radiocheck/backup}"
 LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-7}"
 AWS_CLI="${AWS_CLI:-aws}"
-WORK_DIR="$BACKUP_DIR/$TIMESTAMP"
-TARBALL="$BACKUP_DIR/radiocheck-$TIMESTAMP.tar.gz"
+DUMP_FILE="$BACKUP_DIR/radiocheck-$TIMESTAMP.dump"
 
 mkdir -p "$BACKUP_DIR"
 
-# Cleanup partial work on exit (regardless of success — tarball survives, dir
-# is intermediate).
+# Cleanup partial dump on failure (success keeps the dump file for the local
+# retention window).
 cleanup() {
-    if [[ -d "$WORK_DIR" ]]; then
-        rm -rf "$WORK_DIR" || true
+    if [[ -f "$DUMP_FILE.partial" ]]; then
+        rm -f "$DUMP_FILE.partial" || true
     fi
 }
 trap cleanup EXIT
 
 emit_json() {
     local status="$1" size="$2" duration="$3"
-    printf '{"timestamp":"%s","size_bytes":%s,"duration_seconds":%s,"status":"%s","tarball":"%s"}\n' \
-        "$(date -u +%FT%TZ)" "$size" "$duration" "$status" "$TARBALL"
+    printf '{"timestamp":"%s","size_bytes":%s,"duration_seconds":%s,"status":"%s","dump":"%s"}\n' \
+        "$(date -u +%FT%TZ)" "$size" "$duration" "$status" "$DUMP_FILE"
 }
 
 emit_metrics() {
@@ -108,49 +114,45 @@ emit_metrics() {
     mv "$tmp" "$out"
 }
 
-log "starting backup PGHOST=$PGHOST PGDATABASE=$PGDATABASE -> $TARBALL"
+log "starting backup PGHOST=$PGHOST PGDATABASE=$PGDATABASE -> $DUMP_FILE"
 
-mkdir -p "$WORK_DIR"
+# pg_dump in custom format (-Fc), with parallel jobs disabled (-j 1 is the
+# default; -Fc doesn't support directory-parallel anyway). Custom format is
+# already compressed internally — no need to gzip on top. Restore with:
+#
+#     pg_restore -h <host> -U <user> -d <db> --clean --if-exists radiocheck-*.dump
+#
+# `--no-owner --no-acl` makes the dump portable across DBs with different
+# role names (we restore as `radiocheck` regardless of the dump origin).
+PGPASSWORD="$PGPASSWORD" pg_dump \
+    -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+    -Fc \
+    --no-owner \
+    --no-acl \
+    --file="$DUMP_FILE.partial" \
+    || fail "pg_dump failed"
 
-# pg_basebackup: physical backup, tar format, gzipped, with WAL streamed
-# alongside (so the backup is restoreable on its own without external WAL).
-PGPASSWORD="$PGPASSWORD" pg_basebackup \
-    -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" \
-    -D "$WORK_DIR" \
-    -F tar \
-    -z \
-    -X stream \
-    -P \
-    -c fast \
-    -l "radiocheck-$TIMESTAMP" \
-    || fail "pg_basebackup failed"
+mv "$DUMP_FILE.partial" "$DUMP_FILE"
 
-log "pg_basebackup completed; bundling artifacts"
-
-# pg_basebackup -F tar -z creates base.tar.gz + pg_wal.tar.gz inside $WORK_DIR.
-# Bundle them into a single tarball for atomic upload.
-( cd "$BACKUP_DIR" && tar -czf "$TARBALL" -C "$WORK_DIR" . ) \
-    || fail "bundling tarball failed"
-
-SIZE=$(stat -c '%s' "$TARBALL" 2>/dev/null || stat -f '%z' "$TARBALL")
-MD5=$(md5sum "$TARBALL" 2>/dev/null | awk '{print $1}' || md5 -q "$TARBALL")
-log "tarball size=${SIZE}B md5=$MD5"
+SIZE=$(stat -c '%s' "$DUMP_FILE" 2>/dev/null || stat -f '%z' "$DUMP_FILE")
+MD5=$(md5sum "$DUMP_FILE" 2>/dev/null | awk '{print $1}' || md5 -q "$DUMP_FILE")
+log "dump size=${SIZE}B md5=$MD5"
 
 # Upload to R2 via aws-cli with custom endpoint.
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY"
 export AWS_SECRET_ACCESS_KEY="$R2_SECRET_KEY"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 
-REMOTE_KEY="postgres/daily/radiocheck-$TIMESTAMP.tar.gz"
+REMOTE_KEY="postgres/daily/radiocheck-$TIMESTAMP.dump"
 log "uploading to s3://$R2_BUCKET/$REMOTE_KEY"
-"$AWS_CLI" s3 cp "$TARBALL" "s3://$R2_BUCKET/$REMOTE_KEY" \
+"$AWS_CLI" s3 cp "$DUMP_FILE" "s3://$R2_BUCKET/$REMOTE_KEY" \
     --endpoint-url "$R2_ENDPOINT" \
     --metadata "md5=$MD5,timestamp=$TIMESTAMP" \
     || fail "s3 upload failed"
 
-# Rotate: delete local tarballs older than $LOCAL_RETENTION_DAYS.
+# Rotate: delete local dumps older than $LOCAL_RETENTION_DAYS.
 log "rotating local backups (keeping last ${LOCAL_RETENTION_DAYS} days)"
-find "$BACKUP_DIR" -maxdepth 1 -type f -name 'radiocheck-*.tar.gz' \
+find "$BACKUP_DIR" -maxdepth 1 -type f -name 'radiocheck-*.dump' \
     -mtime "+$LOCAL_RETENTION_DAYS" -print -delete >&2 || true
 
 END_EPOCH=$(date +%s)
