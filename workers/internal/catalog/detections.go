@@ -562,6 +562,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 // MaterialAggregateRow is one entry of the airtime-report sidebar panel.
 type MaterialAggregateRow struct {
 	MaterialID          uuid.UUID  `json:"material_id"`
+	MaterialShortID     *int32     `json:"material_short_id,omitempty"`
 	MaterialTitle       string     `json:"material_title"`
 	MaterialDurationSec *float64   `json:"material_duration_sec,omitempty"`
 	MaterialTypeID      *uuid.UUID `json:"material_type_id,omitempty"`
@@ -600,7 +601,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 	}
 
 	rows, err := d.pool.Query(ctx, `
-		SELECT d.commercial_id, COALESCE(c.title, ''),
+		SELECT d.commercial_id, m.short_id, COALESCE(c.title, ''),
 		       m.duration_seconds, m.type_id, mt.name, mt.color,
 		       COUNT(*) AS cnt
 		FROM detections d
@@ -627,7 +628,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		      )
 		      FROM unnest($4::text[]) AS tok
 		  ))
-		GROUP BY d.commercial_id, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
+		GROUP BY d.commercial_id, m.short_id, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
 		ORDER BY cnt DESC, c.title ASC`,
 		f.CampaignID, f.StartDate, f.EndDate, qTokens)
 	if err != nil {
@@ -641,7 +642,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 	)
 	for rows.Next() {
 		var r MaterialAggregateRow
-		if err := rows.Scan(&r.MaterialID, &r.MaterialTitle,
+		if err := rows.Scan(&r.MaterialID, &r.MaterialShortID, &r.MaterialTitle,
 			&r.MaterialDurationSec, &r.MaterialTypeID, &r.MaterialTypeName, &r.MaterialTypeColor,
 			&r.Count); err != nil {
 			return nil, err

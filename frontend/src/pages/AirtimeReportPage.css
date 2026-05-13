@@ -34,24 +34,41 @@
 .airtime-filters-date input { min-width: 130px; }
 
 .airtime-filters-search-wrap {
-  position: relative;
   display: flex;
   align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.airtime-filters-search-wrap:focus-within {
+  border-color: #F472B6;
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.1);
 }
 .airtime-filters-search-icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
   color: #94a3b8;
   pointer-events: none;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 .airtime-filters-search-input {
-  padding-left: 30px;
+  flex: 1;
+  min-width: 0;
   width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  height: 100%;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: #06055B;
 }
+.airtime-filters-search-input::placeholder { color: #94a3b8; }
 
 .airtime-filters-export-wrap { display: flex; align-items: end; }
 .airtime-filters-export {
@@ -540,69 +557,98 @@
 .airtime-panel-summary-sep { color: #cbd5e1; }
 .airtime-panel-summary-meta { color: #64748b; }
 
-.airtime-panel-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 18px 28px;
+/* Table layout: ID | Comercial+bar | Total. Each row gets its own
+   stable color (via hashed material_id) — passed in as --material-color
+   custom property by the component. */
+.airtime-panel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
+.airtime-panel-table thead th {
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  padding: 0 12px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.airtime-panel-th-id    { width: 90px; }
+.airtime-panel-th-total { width: 80px; text-align: right; }
 
-.airtime-panel-row {
-  min-width: 0;
-  transition: opacity 150ms ease;
+.airtime-panel-tr {
+  transition: background 150ms ease;
 }
-.airtime-panel-row.highlighted { opacity: 1; }
-.airtime-panel-grid:hover .airtime-panel-row:not(.highlighted) { opacity: 0.55; }
+.airtime-panel-tr:hover,
+.airtime-panel-tr.highlighted {
+  background: #fafbfc;
+}
+.airtime-panel-tr td {
+  padding: 14px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.airtime-panel-tr:last-child td { border-bottom: none; }
 
-.airtime-panel-row-top {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-.airtime-panel-row-stripe {
-  width: 3px;
-  height: 14px;
-  border-radius: 2px;
-  flex-shrink: 0;
-  align-self: center;
-}
-.airtime-panel-row-title {
-  flex: 1;
-  color: #06055B;
-  font-weight: 600;
+.airtime-panel-td-id {
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, monospace);
+  color: #64748b;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.airtime-panel-td-name {
+  min-width: 0;
+}
+.airtime-panel-name-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.airtime-panel-name-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.airtime-panel-name-text {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 auto;
   min-width: 0;
 }
-.airtime-panel-row-count {
-  color: #06055B;
-  font-weight: 700;
-  font-size: 16px;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-.airtime-panel-row-bar-bg {
-  margin-top: 6px;
-  height: 5px;
+.airtime-panel-bar-bg {
+  height: 4px;
   background: #f1f5f9;
-  border-radius: 3px;
+  border-radius: 2px;
   overflow: hidden;
+  max-width: 480px;
 }
-.airtime-panel-row-bar-fill {
+.airtime-panel-bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   transition: width 400ms cubic-bezier(0.16,1,0.3,1);
 }
 
-.airtime-panel-row-skel {
-  display: flex;
-  flex-direction: column;
+.airtime-panel-td-total {
+  text-align: right;
+  font-weight: 700;
+  font-size: 16px;
+  color: #06055B;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+
+.airtime-panel-tr-skel td { padding: 14px 12px; border-bottom: 1px solid #f1f5f9; }
+
 .airtime-panel-empty {
   color: #64748b;
   font-size: 13px;

@@ -61,6 +61,7 @@ export default function AirtimeFiltersBar({
   onCampaignChange,
   onFromChange,
   onToChange,
+  onRangeChange,
   onQChange,
   onExportClick,
   exporting = false,
@@ -126,19 +127,19 @@ export default function AirtimeFiltersBar({
   }, [from, to, selectedCampaignRaw])
 
   function applyPreset(p) {
+    // Combine from+to into a single onRangeChange call so we don't trigger
+    // two consecutive URL writes that read stale state and clobber each
+    // other (the bug that made presets silently fail).
     if (p === 'last7') {
-      onFromChange(daysAgoISO(7))
-      onToChange(todayISO())
+      onRangeChange({ from: daysAgoISO(7), to: todayISO() })
     } else if (p === 'thisMonth') {
-      onFromChange(firstOfMonthISO())
-      onToChange(todayISO())
+      onRangeChange({ from: firstOfMonthISO(), to: todayISO() })
     } else if (p === 'fullCampaign' && selectedCampaignRaw) {
-      onFromChange(selectedCampaignRaw.start_date)
       const t = todayISO()
       const tEnd = selectedCampaignRaw.end_date && selectedCampaignRaw.end_date < t
         ? selectedCampaignRaw.end_date
         : t
-      onToChange(tEnd)
+      onRangeChange({ from: selectedCampaignRaw.start_date, to: tEnd })
     }
   }
 
@@ -214,7 +215,7 @@ export default function AirtimeFiltersBar({
               placeholder="Emissora, material…"
               value={localQ}
               onChange={handleQ}
-              className="input airtime-filters-search-input"
+              className="airtime-filters-search-input"
             />
           </div>
         </div>
