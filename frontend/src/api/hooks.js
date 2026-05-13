@@ -178,6 +178,72 @@ export function useDetections(filters = {}) {
   })
 }
 
+// Paginated detections for /reports/airtime. Returns {data, page, page_size,
+// total, total_pages}. Separate hook from useDetections so the DayDetailModal
+// (which expects the unpaginated array shape) stays untouched.
+export function useDetectionsPaged({
+  campaignId, from, to, q = '', sort = 'detected_at_desc',
+  page = 1, pageSize = 10,
+} = {}) {
+  return useQuery({
+    queryKey: ['detections-paged', campaignId, from, to, q, sort, page, pageSize],
+    queryFn: () => api.get('/detections', {
+      params: {
+        campaign_id: campaignId,
+        from, to,
+        q: q || undefined,
+        sort,
+        page,
+        page_size: pageSize,
+      },
+    }).then(r => r.data),
+    enabled: !!campaignId && !!from && !!to,
+    placeholderData: (prev) => prev,
+  })
+}
+
+// Material aggregate panel for /reports/airtime. Returns
+// {data: [{material_id, material_title, material_type_color, count, ...}],
+//  total_detections, distinct_materials}.
+export function useMaterialAggregate({ campaignId, from, to, q = '' } = {}) {
+  return useQuery({
+    queryKey: ['material-aggregate', campaignId, from, to, q],
+    queryFn: () => api.get('/detections/aggregate-by-material', {
+      params: {
+        campaign_id: campaignId,
+        from, to,
+        q: q || undefined,
+      },
+    }).then(r => r.data),
+    enabled: !!campaignId && !!from && !!to,
+    placeholderData: (prev) => prev,
+  })
+}
+
+// Triggers a CSV download via the admin-only export endpoint. Imperative
+// (not a hook): caller awaits and handles errors. Filename comes from the
+// server Content-Disposition; we fall back to a date-stamped name client-side.
+export async function exportDetectionsCsv({ campaignId, from, to, q = '', sort = 'detected_at_desc' } = {}) {
+  const resp = await api.get('/detections/export', {
+    params: {
+      campaign_id: campaignId,
+      from, to,
+      q: q || undefined,
+      sort,
+    },
+    responseType: 'blob',
+  })
+  const url = URL.createObjectURL(resp.data)
+  const a = document.createElement('a')
+  a.href = url
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  a.download = `veiculacoes_${stamp}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 // Admin-only retroactive entry. Aceita um payload com:
 //   { campaign_id, station_id, commercial_id, detected_at (ISO8601), note,
 //     audio?: File }
