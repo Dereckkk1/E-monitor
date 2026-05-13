@@ -247,31 +247,35 @@ export default function AirtimeReportPage() {
   )
 }
 
-// Skeleton mirror-exact: matches the new card geometry — time-block,
-// station block, play, chevron on top row + meta band below.
+// Skeleton mirror-exact: matches the single-line card geometry — play, date
+// + time, station (logo + 2-line text), PMM pill, Custo pill, spacer,
+// material info on the right, right colored stripe.
 function SkeletonList() {
   return (
     <>
       {Array.from({ length: 10 }).map((_, i) => (
         <div key={i} className="airtime-row airtime-row-skel" aria-hidden>
-          <div className="airtime-row-stripe airtime-skel-stripe" />
+          <div className="airtime-skel-circle" style={{ width: 40, height: 40 }} />
           <div className="airtime-row-time-block">
-            <div className="airtime-skel-line" style={{ width: 78, height: 14 }} />
-            <div className="airtime-skel-line" style={{ width: 60, height: 9, marginTop: 6 }} />
+            <div className="airtime-skel-line" style={{ width: 88, height: 14 }} />
+            <div className="airtime-skel-line" style={{ width: 70, height: 14 }} />
           </div>
           <div className="airtime-row-station">
-            <div className="airtime-skel-circle" style={{ width: 44, height: 44, borderRadius: 8 }} />
+            <div className="airtime-skel-circle" style={{ width: 40, height: 40, borderRadius: 8 }} />
             <div className="airtime-row-station-text">
-              <div className="airtime-skel-line" style={{ width: 130, height: 12 }} />
-              <div className="airtime-skel-line" style={{ width: 90, height: 9, marginTop: 6 }} />
+              <div className="airtime-skel-line" style={{ width: 150, height: 12 }} />
+              <div className="airtime-skel-line" style={{ width: 90, height: 10, marginTop: 6 }} />
             </div>
           </div>
-          <div className="airtime-skel-circle" style={{ width: 40, height: 40 }} />
+          <div className="airtime-skel-line" style={{ width: 72, height: 26, borderRadius: 9999 }} />
+          <div className="airtime-skel-line" style={{ width: 84, height: 26, borderRadius: 9999 }} />
           <div />
-          <div className="airtime-row-meta">
-            <div className="airtime-skel-line" style={{ width: 220, height: 11 }} />
-            <div className="airtime-skel-line" style={{ width: 140, height: 11 }} />
+          <div className="airtime-row-material">
+            <div className="airtime-skel-line" style={{ width: 50, height: 9 }} />
+            <div className="airtime-skel-line" style={{ width: 160, height: 12, marginTop: 5 }} />
+            <div className="airtime-skel-line" style={{ width: 60, height: 9, marginTop: 5 }} />
           </div>
+          <div className="airtime-skel-line" style={{ width: 5, height: '100%' }} />
         </div>
       ))}
     </>

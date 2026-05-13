@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import StationAvatar from './StationAvatar'
 import AudioPlayer from './AudioPlayer'
 import api from '../api/client'
+import { materialColor } from '../utils/materialColor'
 
-const CATEGORY_META = {
-  in_slot:  { label: 'Dentro da faixa',  className: 'airtime-cat-green' },
-  out_slot: { label: 'Fora da faixa',    className: 'airtime-cat-yellow' },
-  out_date: { label: 'Fora da data',     className: 'airtime-cat-purple' },
-  orphan:   { label: 'Bônus',             className: 'airtime-cat-blue' },
+const CATEGORY_DOT = {
+  in_slot:  '#16A34A',
+  out_slot: '#D97706',
+  out_date: '#9333EA',
+  orphan:   '#2563EB',
 }
 
 function fmtDate(iso) {
@@ -37,6 +38,35 @@ function resolveCost(detection, pricingByStation) {
     return { value: t?.unit_value ?? null, mode: 'per_insertion' }
   }
   return { value: null, mode: 'none' }
+}
+
+function IconHeadset() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2 11v-3a6 6 0 0 1 12 0v3" />
+      <path d="M2 11a1.5 1.5 0 0 1 1.5-1.5h1V13H3.5A1.5 1.5 0 0 1 2 11.5Z" fill="currentColor" stroke="none" />
+      <path d="M14 11a1.5 1.5 0 0 0-1.5-1.5h-1V13h1A1.5 1.5 0 0 0 14 11.5Z" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function IconMoney() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+      <circle cx="8" cy="8" r="1.5" />
+      <path d="M4 5.5v.01M12 10.5v.01" />
+    </svg>
+  )
+}
+
+function IconCheck() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
+      <circle cx="6" cy="6" r="6" fill="#E81E75" />
+      <path d="M3.5 6l1.6 1.6L8.5 4.2" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 export default function AirtimeDetectionRow({
@@ -87,24 +117,17 @@ export default function AirtimeDetectionRow({
     logo_url: detection.station_logo_url,
   }
 
-  const stripe = detection.material_type_color || '#94a3b8'
-  const cat = CATEGORY_META[detection.category] ?? { label: detection.category, className: 'airtime-cat-gray' }
+  const matColor = materialColor(detection.commercial_id)
   const cost = resolveCost(detection, pricingByStation)
   const pmm = fmtPMM(detection.station_pmm)
   const noEvidence = detection.evidence_status !== 'available'
+  const catDotColor = CATEGORY_DOT[detection.category] ?? '#94a3b8'
 
-  // Dial: "102,7 FM · São Paulo–SP" — gracefully omits missing parts.
-  const dialParts = []
-  if (detection.station_frequency_mhz != null) {
-    const freq = String(detection.station_frequency_mhz).replace('.', ',')
-    dialParts.push(`${freq} ${detection.station_band ?? ''}`.trim())
-  }
-  const place = [detection.station_city, detection.station_state].filter(Boolean).join('–')
-  if (place) dialParts.push(place)
-  const dial = dialParts.join(' · ')
-
-  // Material subline: "Spot 30s · Rôgga"
-  const materialSub = [detection.material_type_name, detection.client_name].filter(Boolean).join(' · ')
+  // Dial line: "Classic Pan - FM (88.3) FM" style — name plus dial inline.
+  const freqStr = detection.station_frequency_mhz != null
+    ? String(detection.station_frequency_mhz).replace('.', ',')
+    : null
+  const place = [detection.station_city, detection.station_state].filter(Boolean).join(' / ')
 
   return (
     <article
@@ -113,10 +136,9 @@ export default function AirtimeDetectionRow({
         (highlighted ? ' airtime-row-highlight' : '') +
         (isPlaying ? ' airtime-row-playing' : '')
       }
+      style={{ '--material-color': matColor }}
       aria-labelledby={`airtime-mat-${detection.id}`}
     >
-      <div className="airtime-row-stripe" style={{ background: stripe }} aria-hidden />
-
       <button
         type="button"
         className="airtime-row-play"
@@ -151,57 +173,54 @@ export default function AirtimeDetectionRow({
       <div className="airtime-row-station">
         <div className="airtime-row-logo">
           <StationAvatar station={stationForAvatar} size={40} />
+          <span className="airtime-row-logo-check" aria-hidden><IconCheck /></span>
         </div>
         <div className="airtime-row-station-text">
-          <span className="airtime-row-station-name">{detection.station_name}</span>
-          {dial && <span className="airtime-row-station-dial">{dial}</span>}
+          <span className="airtime-row-station-name">
+            {detection.station_name}
+            {freqStr && <span className="airtime-row-station-freq"> - {detection.station_band} ({freqStr})</span>}
+          </span>
+          {place && <span className="airtime-row-station-place">{place}</span>}
         </div>
+      </div>
+
+      <div className="airtime-row-pill airtime-row-pill-pmm" title={detection.station_pmm != null ? `PMM: ${Math.round(detection.station_pmm)}` : 'PMM não cadastrado'}>
+        <IconHeadset />
+        <span>{pmm ?? '—'}</span>
+      </div>
+
+      <div className={'airtime-row-pill airtime-row-pill-cost' + (cost.value == null && cost.mode !== 'consolidated' ? ' is-empty' : '')}
+           title={cost.mode === 'consolidated' ? 'Plano consolidado — sem custo por inserção' : undefined}>
+        <IconMoney />
+        {cost.mode === 'consolidated' ? (
+          <span>Plano</span>
+        ) : cost.value != null ? (
+          <span>{fmtCost(cost.value)}</span>
+        ) : (
+          <span>—</span>
+        )}
       </div>
 
       <div className="airtime-row-material" id={`airtime-mat-${detection.id}`}>
-        <span className="airtime-row-dot" style={{ background: stripe }} aria-hidden />
-        <div className="airtime-row-material-text">
-          <span className="airtime-row-material-title">{detection.commercial_name}</span>
-          {materialSub && <span className="airtime-row-material-sub">{materialSub}</span>}
-        </div>
+        {detection.material_type_name && (
+          <span className="airtime-row-material-type">{detection.material_type_name}</span>
+        )}
+        <button
+          type="button"
+          className="airtime-row-material-name"
+          style={{ color: matColor }}
+          onClick={() => navigate(`/detections/${detection.id}`)}
+          title={detection.commercial_name}
+        >
+          <span className="airtime-row-cat-dot" style={{ background: catDotColor }} aria-hidden />
+          {detection.commercial_name}
+        </button>
+        {detection.client_name && (
+          <span className="airtime-row-material-client">{detection.client_name}</span>
+        )}
       </div>
 
-      <div className="airtime-row-metrics">
-        <div className="airtime-row-metric">
-          <span className="airtime-row-metric-label">PMM</span>
-          <span
-            className="airtime-row-metric-value"
-            title={detection.station_pmm != null ? String(Math.round(detection.station_pmm)) : undefined}
-          >
-            {pmm ?? '—'}
-          </span>
-        </div>
-        <div className="airtime-row-metric">
-          <span className="airtime-row-metric-label">Custo</span>
-          {cost.mode === 'consolidated' ? (
-            <span className="airtime-row-cost-badge" title="Plano consolidado — sem custo por inserção">
-              Plano
-            </span>
-          ) : cost.value != null ? (
-            <span className="airtime-row-metric-value airtime-row-cost">{fmtCost(cost.value)}</span>
-          ) : (
-            <span className="airtime-row-metric-value">—</span>
-          )}
-        </div>
-      </div>
-
-      <span className={`airtime-row-cat ${cat.className}`}>{cat.label}</span>
-
-      <button
-        type="button"
-        className="airtime-row-chevron"
-        onClick={() => navigate(`/detections/${detection.id}`)}
-        aria-label="Ver detalhes da veiculação"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M6 4l4 4-4 4" />
-        </svg>
-      </button>
+      <div className="airtime-row-stripe-right" aria-hidden />
 
       {isPlaying && blobUrl && (
         <div className="airtime-row-player">

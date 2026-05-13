@@ -1,37 +1,9 @@
 // AirtimeMaterialPanel — "Total por áudio" summary below the detection list.
 //
 // Layout: table-like rows with ID | • Comercial + bar | Total. Each material
-// gets a stable color derived from its UUID so the same material always
-// shows up with the same hue across page loads. Bars are full-width below
-// the title, scaled against the top counter.
-
-const PALETTE = [
-  '#A16207', // amber-700
-  '#E11D48', // rose-600
-  '#9333EA', // purple-600
-  '#3B82F6', // blue-500
-  '#0891B2', // cyan-600
-  '#16A34A', // green-600
-  '#EA580C', // orange-600
-  '#0D9488', // teal-600
-  '#7C3AED', // violet-600
-  '#DB2777', // pink-600
-  '#65A30D', // lime-600
-  '#1D4ED8', // indigo-700
-  '#BE123C', // rose-700
-  '#15803D', // green-700
-  '#C2410C', // orange-700
-  '#581C87', // purple-900
-]
-
-function hashColor(key) {
-  if (!key) return PALETTE[0]
-  let h = 0
-  for (let i = 0; i < key.length; i++) {
-    h = (h * 31 + key.charCodeAt(i)) | 0
-  }
-  return PALETTE[Math.abs(h) % PALETTE.length]
-}
+// gets a stable color (via materialColor util) so the same material always
+// shows up with the same hue across the page (panel + row stripe).
+import { materialColor } from '../utils/materialColor'
 
 function fmtId(shortId, materialId) {
   if (shortId != null) return String(shortId)
@@ -105,7 +77,7 @@ export default function AirtimeMaterialPanel({
           <tbody>
             {items.map(item => {
               const pct = Math.max(2, (item.count / max) * 100)
-              const color = hashColor(item.material_id)
+              const color = materialColor(item.material_id)
               const hl = highlightedMaterialId === item.material_id
               return (
                 <tr
