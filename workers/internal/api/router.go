@@ -38,6 +38,7 @@ type Deps struct {
 	CampaignMaterials    *handlers.CampaignMaterialsHandler
 	DistributionRules    *handlers.DistributionRulesHandler
 	DistributionOverrides *handlers.DistributionOverridesHandler
+	Pricing              *handlers.PricingHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -121,7 +122,14 @@ func NewRouter(d Deps) http.Handler {
 			r.Route("/campaigns", func(r chi.Router) {
 				r.Get("/", d.Campaigns.List)
 				r.Post("/", d.Campaigns.Create)
+				// Literal antes do param pra chi resolver corretamente:
+				// /campaigns/financials → Financials, /campaigns/{id} → Get.
+				r.Get("/financials", d.Campaigns.Financials)
 				r.Get("/{id}", d.Campaigns.Get)
+				// Edita o trio básico (name, start_date, end_date) — usado
+				// pelo Step 1 do wizard em modo edit. client_id continua
+				// imutável.
+				r.Put("/{id}", d.Campaigns.Update)
 				// Lifecycle (§18.2.1): /cancel is the only manual
 				// transition. Until tenancy is wired (follow-ups F-XX),
 				// cancellation requires admin so operators can't terminate
@@ -185,6 +193,18 @@ func NewRouter(d Deps) http.Handler {
 				r.Delete("/", d.DistributionOverrides.Delete)
 			})
 
+			// Pricing por (campanha × emissora) — alimenta o Step 5 do
+			// wizard e os valores do resumo em /detections + CPM em
+			// /campaigns. Mode: consolidated | per_insertion. Validação
+			// forte no repo, retorna 422 em payload inválido.
+			if d.Pricing != nil {
+				r.Route("/campaigns/{campaignID}/pricing", func(r chi.Router) {
+					r.Get("/", d.Pricing.ListByCampaign)
+					r.Put("/{stationID}", d.Pricing.Upsert)
+					r.Delete("/{stationID}", d.Pricing.Delete)
+				})
+			}
+
 			// Daily summary — feeds the /detections UI.
 			r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
 
@@ -193,6 +213,21 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/{id}", d.Detections.Get)
 				r.Get("/{id}/evidence", d.Detections.Evidence)
 				r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
+				// Admin-only soft-delete ("desconsiderar veiculação"). Reverter
+				// é a operação simétrica via /restore. Veiculação fica zerada
+				// nos agregados (daily_play_summary filtra ignored_at IS NULL)
+				// mas a evidência e o registro continuam intactos.
+				//
+				// Admin-only manual entry ("Adicionar veiculação manualmente"):
+				// veiculações retroativas. A linha entra em daily_play_summary
+				// igual à automática — o categorizer roda pra decidir
+				// in_slot/out_slot/out_date/orphan.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/manual", d.Detections.CreateManual)
+					r.Post("/{id}/ignore", d.Detections.Ignore)
+					r.Post("/{id}/restore", d.Detections.Restore)
+				})
 			})
 			r.Route("/stream-health", func(r chi.Router) {
 				r.Get("/", d.StreamHealth.List)

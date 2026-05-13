@@ -25,6 +25,17 @@ const WEEKDAY_NAMES = ['D','S','T','Q','Q','S','S']
  *  - campaignEnd:   ISO date
  *  - submitting: bool
  */
+// Backend serializes time.Time as RFC3339 ("2026-05-12T00:00:00Z") and TIME
+// columns as "HH:MM:SS"; the HTML <input> wants "YYYY-MM-DD" and "HH:MM".
+function toDateInput(iso) {
+  if (!iso) return ''
+  return String(iso).slice(0, 10)
+}
+function toTimeInput(t) {
+  if (!t) return ''
+  return String(t).slice(0, 5)
+}
+
 export default function RuleSidePanel({
   open, onClose, onSubmit, onDelete,
   mode = 'create', initial = null,
@@ -34,22 +45,22 @@ export default function RuleSidePanel({
 }) {
   const [typeId, setTypeId] = useState(initial?.type_id ?? '')
   const [stationIds, setStationIds] = useState(initial?.station_ids ?? [])
-  const [startDate, setStartDate] = useState(initial?.start_date ?? campaignStart?.slice(0, 10) ?? '')
-  const [endDate, setEndDate] = useState(initial?.end_date ?? campaignEnd?.slice(0, 10) ?? '')
+  const [startDate, setStartDate] = useState(toDateInput(initial?.start_date) || toDateInput(campaignStart))
+  const [endDate, setEndDate] = useState(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
   const [weekdayMask, setWeekdayMask] = useState(initial?.weekday_mask ?? 62) // Mon-Fri default
-  const [timeStart, setTimeStart] = useState(initial?.time_start ?? '08:00')
-  const [timeEnd, setTimeEnd] = useState(initial?.time_end ?? '10:00')
+  const [timeStart, setTimeStart] = useState(toTimeInput(initial?.time_start) || '08:00')
+  const [timeEnd, setTimeEnd] = useState(toTimeInput(initial?.time_end) || '10:00')
   const [playsPerDay, setPlaysPerDay] = useState(initial?.plays_per_day ?? 3)
 
   useEffect(() => {
     if (open) {
       setTypeId(initial?.type_id ?? '')
       setStationIds(initial?.station_ids ?? [])
-      setStartDate(initial?.start_date ?? campaignStart?.slice(0, 10) ?? '')
-      setEndDate(initial?.end_date ?? campaignEnd?.slice(0, 10) ?? '')
+      setStartDate(toDateInput(initial?.start_date) || toDateInput(campaignStart))
+      setEndDate(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
       setWeekdayMask(initial?.weekday_mask ?? 62)
-      setTimeStart(initial?.time_start ?? '08:00')
-      setTimeEnd(initial?.time_end ?? '10:00')
+      setTimeStart(toTimeInput(initial?.time_start) || '08:00')
+      setTimeEnd(toTimeInput(initial?.time_end) || '10:00')
       setPlaysPerDay(initial?.plays_per_day ?? 3)
     }
   }, [open, initial, campaignStart, campaignEnd])

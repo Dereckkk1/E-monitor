@@ -63,11 +63,34 @@ export function useDeleteClient() {
 export function useCampaigns() {
   return useQuery({ queryKey: ['campaigns'], queryFn: () => api.get('/campaigns').then(r => r.data.data ?? []) })
 }
+
+// Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
+// Retorna [{campaign_id, total_invested, total_insertions}]; o CPM em si é
+// calculado no frontend pra preservar precisão.
+export function useCampaignsFinancials() {
+  return useQuery({
+    queryKey: ['campaigns-financials'],
+    queryFn: () => api.get('/campaigns/financials').then(r => r.data ?? []),
+  })
+}
 export function useCreateCampaign() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data) => api.post('/campaigns', data).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
+// Edita o trio básico (name, start_date, end_date) de uma campanha existente.
+// Usado pelo Step 1 do wizard em modo edit — client_id é imutável.
+export function useUpdateCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.put(`/campaigns/${id}`, body).then(r => r.data),
+    onSuccess: (data, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaigns'] })
+      qc.invalidateQueries({ queryKey: ['campaign', vars.id] })
+    },
   })
 }
 export function useStartCampaign() {
@@ -152,6 +175,69 @@ export function useDetections(filters = {}) {
     queryKey: ['detections', filters],
     queryFn: () => api.get('/detections', { params: filters }).then(r => r.data.data ?? []),
     enabled: filters !== null && filters.campaign_id != null,
+  })
+}
+
+// Admin-only retroactive entry. Aceita um payload com:
+//   { campaign_id, station_id, commercial_id, detected_at (ISO8601), note,
+//     audio?: File }
+// Quando `audio` está presente, envia multipart/form-data e o áudio vira a
+// "censura" reproduzível na detail page. Sem áudio, envia JSON e a veiculação
+// fica com evidence_status='missing'. Backend roda o mesmo categorizador da
+// engine real; resposta atualiza lista + agregados.
+export function useCreateManualDetection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload) => {
+      const { audio, ...meta } = payload
+      if (audio) {
+        const fd = new FormData()
+        Object.entries(meta).forEach(([k, v]) => fd.append(k, v ?? ''))
+        fd.append('audio', audio)
+        return api.post('/detections/manual', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        }).then(r => r.data)
+      }
+      return api.post('/detections/manual', meta).then(r => r.data)
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      const det = data?.detection ?? data
+      if (det?.campaign_id) {
+        qc.invalidateQueries({ queryKey: ['daily-summary', det.campaign_id] })
+      }
+    },
+  })
+}
+
+// Admin-only soft-delete: marks a veiculação as ignored so it stops counting
+// in daily_play_summary aggregates. Invalidates anything that depends on a
+// detection list or campaign rollup so the UI snaps to the new state.
+export function useIgnoreDetection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/detections/${id}/ignore`).then(r => r.data),
+    onSuccess: (data, id) => {
+      qc.invalidateQueries({ queryKey: ['detection', id] })
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      if (data?.campaign_id) {
+        qc.invalidateQueries({ queryKey: ['daily-summary', data.campaign_id] })
+      }
+    },
+  })
+}
+
+export function useRestoreDetection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/detections/${id}/restore`).then(r => r.data),
+    onSuccess: (data, id) => {
+      qc.invalidateQueries({ queryKey: ['detection', id] })
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      if (data?.campaign_id) {
+        qc.invalidateQueries({ queryKey: ['daily-summary', data.campaign_id] })
+      }
+    },
   })
 }
 
@@ -413,6 +499,46 @@ export function useDeleteOverride() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['distribution-overrides', vars.campaignId] })
       qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+    },
+  })
+}
+
+// ─── Pricing por (campaign × station) ──────────────────────────────────────
+
+// Lista todos os pricings cadastrados pra uma campanha (uma entrada por
+// emissora). Cada entrada tem `mode`, `consolidated_value` (quando consolidated)
+// e `per_type` (quando per_insertion). Usado pelo Step 5 do wizard, pelo
+// resumo de /detections e pelo cálculo de CPM em /campaigns.
+export function useCampaignPricing(campaignId) {
+  return useQuery({
+    queryKey: ['pricing', campaignId],
+    queryFn: () => api.get(`/campaigns/${campaignId}/pricing`).then(r => r.data ?? []),
+    enabled: !!campaignId,
+  })
+}
+
+// Upsert do pricing de uma (campaign, station). Body:
+//   { mode: 'consolidated' | 'per_insertion',
+//     consolidated_value?: number,
+//     per_type?: [{ type_id, unit_value }] }
+export function useUpsertStationPricing() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, stationId, ...body }) =>
+      api.put(`/campaigns/${campaignId}/pricing/${stationId}`, body).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['pricing', vars.campaignId] })
+    },
+  })
+}
+
+export function useDeleteStationPricing() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, stationId }) =>
+      api.delete(`/campaigns/${campaignId}/pricing/${stationId}`),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['pricing', vars.campaignId] })
     },
   })
 }

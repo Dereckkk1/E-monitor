@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -233,6 +234,125 @@ func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []
 		return nil, nil, err
 	}
 	return activated, ended, nil
+}
+
+// UpdateBasicInput é o subset editável depois que a campanha foi criada.
+// client_id é imutável (Step 1 do wizard trava no edit mode — a biblioteca
+// de materiais carregada pertence ao cliente original) e status é alterado
+// só via lifecycle endpoints (Cancel / PromoteScheduledLifecycle).
+type UpdateBasicInput struct {
+	Name      string
+	StartDate time.Time
+	EndDate   time.Time
+}
+
+// UpdateBasic edita o trio (name, start_date, end_date) de uma campanha.
+// Retorna pgx.ErrNoRows se o id não existir. A lifecycle não é tocada — uma
+// campanha 'concluida' continua concluida mesmo que o end_date avance pra
+// frente; a próxima rodada do PromoteScheduledLifecycle reverte se for o caso.
+func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasicInput) (*Campaign, error) {
+	var camp Campaign
+	err := c.pool.QueryRow(ctx, `
+		UPDATE campaigns
+		SET name = $2, start_date = $3, end_date = $4, updated_at = now()
+		WHERE id = $1
+		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
+		          created_at, updated_at`,
+		id, in.Name, in.StartDate, in.EndDate,
+	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
+		&camp.Status, &camp.TargetStations, &camp.CreatedAt, &camp.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &camp, nil
+}
+
+// CampaignFinancials carrega um agregado simples por campanha pra alimentar o
+// badge de CPM na listagem. Calculado server-side pra evitar N fetches de
+// pricing+daily-summary no frontend.
+//
+// Fórmulas (alinhadas com a especificação 2026-05-12):
+//   - per_insertion: invested += unit_value × (in_slot + bonus)
+//                    insertions += in_slot + bonus
+//   - consolidated:  invested += consolidated_value (independente das plays)
+//                    insertions += in_slot + bonus
+//   - CPM = invested / insertions × 1000, calculado no caller (frontend)
+//     pra ter precisão decimal.
+type CampaignFinancials struct {
+	CampaignID     uuid.UUID `json:"campaign_id"`
+	TotalInvested  float64   `json:"total_invested"`
+	TotalInsertions int      `json:"total_insertions"`
+}
+
+// FinancialsByCampaign retorna o agregado de TODAS as campanhas. Tabela
+// pequena (~100 entradas no pior caso), uma query só.
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context) ([]CampaignFinancials, error) {
+	const q = `
+		WITH per_ins AS (
+			-- Investimento e inserções no modo per_insertion: precisa do
+			-- unit_value × (in_slot + bonus) somado por campanha.
+			SELECT
+				p.campaign_id,
+				COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::float8 AS invested,
+				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions
+			FROM campaign_station_pricing p
+			JOIN campaign_station_type_pricing tp
+				ON tp.campaign_id = p.campaign_id
+			   AND tp.station_id  = p.station_id
+			LEFT JOIN daily_play_summary s
+				ON s.campaign_id = p.campaign_id
+			   AND s.station_id  = p.station_id
+			   AND s.type_id     = tp.type_id
+			WHERE p.mode = 'per_insertion'
+			GROUP BY p.campaign_id
+		),
+		consolidated_inv AS (
+			-- Investimento consolidado: independente das plays, só somar o
+			-- consolidated_value por campanha.
+			SELECT
+				p.campaign_id,
+				COALESCE(SUM(p.consolidated_value), 0)::float8 AS invested
+			FROM campaign_station_pricing p
+			WHERE p.mode = 'consolidated'
+			GROUP BY p.campaign_id
+		),
+		consolidated_ins AS (
+			-- Inserções de emissoras em modo consolidado também entram no
+			-- denominador do CPM (mesma definição "qtd inserções" pra ambos
+			-- os modos).
+			SELECT
+				p.campaign_id,
+				COALESCE(SUM(s.in_slot + s.bonus), 0)::int AS insertions
+			FROM campaign_station_pricing p
+			LEFT JOIN daily_play_summary s
+				ON s.campaign_id = p.campaign_id
+			   AND s.station_id  = p.station_id
+			WHERE p.mode = 'consolidated'
+			GROUP BY p.campaign_id
+		)
+		SELECT
+			c.id,
+			COALESCE(per_ins.invested, 0) + COALESCE(consolidated_inv.invested, 0) AS total_invested,
+			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions
+		FROM campaigns c
+		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
+		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
+		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
+	`
+	rows, err := c.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
+	}
+	defer rows.Close()
+	out := make([]CampaignFinancials, 0)
+	for rows.Next() {
+		var f CampaignFinancials
+		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions); err != nil {
+			return nil, fmt.Errorf("campaigns.FinancialsByCampaign: scan: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // UpdateTargetStations replaces the target_stations list for a campaign.

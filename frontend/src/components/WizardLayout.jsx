@@ -3,10 +3,11 @@ import WizardStepper from './WizardStepper'
 import CampaignSummaryStrip from './CampaignSummaryStrip'
 
 const STEP_META = {
-  1: { eyebrow: 'Passo 1 de 4', kicker: 'Identificação' },
-  2: { eyebrow: 'Passo 2 de 4', kicker: 'Onde vai tocar' },
-  3: { eyebrow: 'Passo 3 de 4', kicker: 'O que vai tocar' },
-  4: { eyebrow: 'Passo 4 de 4', kicker: 'Quando e quanto' },
+  1: { eyebrow: 'Passo 1 de 5', kicker: 'Identificação' },
+  2: { eyebrow: 'Passo 2 de 5', kicker: 'Onde vai tocar' },
+  3: { eyebrow: 'Passo 3 de 5', kicker: 'O que vai tocar' },
+  4: { eyebrow: 'Passo 4 de 5', kicker: 'Quando e quanto' },
+  5: { eyebrow: 'Passo 5 de 5', kicker: 'Investimento por emissora' },
 }
 
 /**
@@ -36,7 +37,7 @@ export default function WizardLayout({
 }) {
   const navigate = useNavigate()
   const meta = STEP_META[currentStep] ?? STEP_META[1]
-  const isLast = currentStep === 4
+  const isLast = currentStep === 5
 
   return (
     <div style={{

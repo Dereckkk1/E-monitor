@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import BadgePill from './BadgePill'
 
-const WEEKEND_BG = '#f8fafc'
 const OUTSIDE_BG = 'repeating-linear-gradient(45deg, #fafbfc 0 5px, #f1f5f9 5px 10px)'
 const OVERRIDE_BG = '#fef9c3'
 
@@ -10,7 +9,7 @@ const OVERRIDE_BG = '#fef9c3'
  *
  * Props:
  *  - expected, inSlot, deficit, bonus, outSlot, outDate: number | null
- *  - isWeekend, isOutsideRange, hasOverride: bool
+ *  - isOutsideRange, hasOverride, hasPendingDraft: bool
  *  - onClick: (event) => void — fires when the badge area is clicked (opens popover in edit mode)
  *  - onIncrement, onDecrement: () => void — optional. When provided, hover shows +/- micro-buttons.
  *  - hint: string — tooltip
@@ -18,16 +17,16 @@ const OVERRIDE_BG = '#fef9c3'
 export default function DayCell({
   expected = null, inSlot = null, deficit = null,
   bonus = null, outSlot = null, outDate = null,
-  isWeekend = false, isOutsideRange = false,
-  hasOverride = false, onClick, onIncrement, onDecrement, hint,
+  isOutsideRange = false,
+  hasOverride = false, hasPendingDraft = false,
+  onClick, onIncrement, onDecrement, hint,
 }) {
   const [hovered, setHovered] = useState(false)
-  const disabled = isWeekend || isOutsideRange
+  const disabled = isOutsideRange
   const showStepper = !disabled && (onIncrement || onDecrement) && hovered
 
   const bg = hasOverride ? OVERRIDE_BG
     : isOutsideRange ? OUTSIDE_BG
-    : isWeekend ? WEEKEND_BG
     : '#fff'
 
   const showExpected = expected != null && expected > 0
@@ -65,14 +64,17 @@ export default function DayCell({
         gap: 2,
         minHeight: 38,
         cursor: disabled ? 'default' : 'pointer',
-        boxShadow: !disabled && hovered ? 'inset 0 0 0 1px var(--c-action)' : 'none',
+        boxShadow: hasPendingDraft
+          ? 'inset 0 0 0 2px #f59e0b'
+          : !disabled && hovered ? 'inset 0 0 0 1px var(--c-action)' : 'none',
         transition: 'box-shadow 80ms',
       }}
     >
       {hasOverride && (
         <span style={{
           position: 'absolute', top: 3, right: 3,
-          width: 4, height: 4, borderRadius: '50%', background: '#b45309',
+          width: 4, height: 4, borderRadius: '50%',
+          background: hasPendingDraft ? '#f59e0b' : '#b45309',
         }} />
       )}
 

@@ -3,6 +3,9 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
+import { useIgnoreDetection, useRestoreDetection } from '../api/hooks'
+import { useAuth } from '../contexts/AuthContext'
+import { useConfirm } from '../components/ConfirmModal'
 import './DetectionDetailPage.css'
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -395,6 +398,10 @@ function AnalysisPanel({ detection }) {
 export default function DetectionDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
+  const confirm = useConfirm()
+  const ignoreDetection  = useIgnoreDetection()
+  const restoreDetection = useRestoreDetection()
 
   // Detection itself
   const detectionQuery = useQuery({
@@ -544,6 +551,35 @@ export default function DetectionDetailPage() {
         </div>
       </div>
 
+      {/* ── Manual entry ribbon ── */}
+      {detection.manual_at && (
+        <div className="dd-manual-ribbon" role="status">
+          <div className="dd-manual-ribbon-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+          </div>
+          <div className="dd-manual-ribbon-text">
+            <span className="dd-manual-ribbon-title">
+              Veiculação inserida manualmente em {formatShortDateTime(detection.manual_at)}
+            </span>
+            {detection.manual_note && (
+              <span className="dd-manual-ribbon-desc">
+                {detection.manual_note}
+              </span>
+            )}
+            {!detection.manual_note && (
+              <span className="dd-manual-ribbon-desc">
+                Registro retroativo criado por um administrador. Conta normalmente em
+                relatórios e agregados; o áudio não está disponível porque não houve
+                captura automática.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Retracted ribbon ── */}
       {detection.retracted_at && (
         <div className="dd-retracted-ribbon" role="alert">
@@ -557,6 +593,25 @@ export default function DetectionDetailPage() {
             <span className="dd-retracted-ribbon-desc">
               Provavelmente um corte mais longo (60s) sobrepôs este (30s) e o sistema
               consolidou a veiculação na versão mais completa.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Ignored ribbon ── */}
+      {detection.ignored_at && (
+        <div className="dd-ignored-ribbon" role="alert">
+          <div className="dd-ignored-ribbon-icon">
+            <WarnIcon />
+          </div>
+          <div className="dd-ignored-ribbon-text">
+            <span className="dd-ignored-ribbon-title">
+              Veiculação desconsiderada em {formatShortDateTime(detection.ignored_at)}
+            </span>
+            <span className="dd-ignored-ribbon-desc">
+              Esta veiculação foi marcada como desconsiderada por um administrador.
+              Ela não conta em relatórios nem agregados, mas o áudio e os dados
+              originais permanecem preservados para auditoria.
             </span>
           </div>
         </div>
@@ -676,6 +731,64 @@ export default function DetectionDetailPage() {
         </Link>
 
       </div>
+
+      {/* ── Danger zone (admin) ── */}
+      {isAdmin && (
+        <DangerZone
+          isIgnored={!!detection.ignored_at}
+          isPending={ignoreDetection.isPending || restoreDetection.isPending}
+          onIgnore={async () => {
+            const ok = await confirm(
+              'Desconsiderar esta veiculação?\n\n' +
+              'Ela não vai mais contar em relatórios nem agregados até ser ' +
+              'reativada. O áudio e os dados originais permanecem armazenados. ' +
+              'Você pode reverter a qualquer momento.')
+            if (!ok) return
+            try { await ignoreDetection.mutateAsync(detection.id) }
+            catch { window.alert('Erro ao desconsiderar. Tente novamente.') }
+          }}
+          onRestore={async () => {
+            try { await restoreDetection.mutateAsync(detection.id) }
+            catch { window.alert('Erro ao reativar. Tente novamente.') }
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Admin-only soft-delete action. Lives at the bottom of the page, framed as a
+// "zona de perigo" so it doesn't sit next to non-destructive actions. The
+// button text + tone flips between "Desconsiderar" and "Reativar" based on
+// the current ignored_at state.
+function DangerZone({ isIgnored, isPending, onIgnore, onRestore }) {
+  return (
+    <div className="dd-danger-zone">
+      <div className="dd-danger-zone-text">
+        <span className="dd-danger-zone-title">
+          {isIgnored ? 'Veiculação desconsiderada' : 'Zona de perigo'}
+        </span>
+        <span className="dd-danger-zone-desc">
+          {isIgnored
+            ? 'Esta veiculação está atualmente fora dos agregados. Reative-a se foi ' +
+              'desconsiderada por engano ou se a situação que motivou a remoção ' +
+              'voltou a ser válida.'
+            : 'Desconsidere esta veiculação se ela não deve contar em relatórios — ' +
+              'por exemplo, comerciais inseridos fora do contrato após acordo ' +
+              'offline com a emissora, ou capturas acidentais. O áudio e os dados ' +
+              'continuam armazenados; a ação é reversível.'}
+        </span>
+      </div>
+      <button
+        type="button"
+        className={`dd-danger-zone-btn${isIgnored ? ' is-restore' : ''}`}
+        onClick={isIgnored ? onRestore : onIgnore}
+        disabled={isPending}
+      >
+        {isPending
+          ? 'Processando…'
+          : isIgnored ? 'Reativar veiculação' : 'Desconsiderar veiculação'}
+      </button>
     </div>
   )
 }

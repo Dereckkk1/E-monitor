@@ -27,6 +27,13 @@ const (
 	CatOrphan  = "orphan"
 )
 
+// SlotToleranceSeconds é a folga (15 min) aplicada a cada extremo da faixa de
+// horário de uma rule ao classificar uma detection como in_slot. Cobre o
+// jitter normal de stream + broadcaster (latência de buffer, atraso de
+// programação ao vivo, etc.) que faria uma veiculação tocada às 05:45 cair
+// como "fora da faixa" quando o atendente entende que ela tocou 'às 6h'.
+const SlotToleranceSeconds = 15 * 60
+
 var spLocation, _ = time.LoadLocation("America/Sao_Paulo")
 
 // Categorize classifica uma detection. A campanha é assumida existente
@@ -35,15 +42,16 @@ var spLocation, _ = time.LoadLocation("America/Sao_Paulo")
 // Regra (spec §6.1):
 //  1. detectedAt fora de [campaign.StartDate, campaign.EndDate] → out_date
 //  2. nenhuma rule aplicável (mesmo material/station/data) → orphan
-//  3. rule existe e time ∈ [time_start, time_end] → in_slot
-//  4. rule existe mas time fora da faixa → out_slot
+//  3. rule existe e time ∈ [time_start - 15min, time_end + 15min] → in_slot
+//  4. rule existe mas time fora da faixa tolerada → out_slot
 //
 // Comparações de data são feitas no fuso America/Sao_Paulo. detectedAt pode
 // chegar em qualquer fuso (típicamente UTC do worker); o categorizer
 // converte internamente pra SP antes de extrair date/weekday/time-of-day.
 //
-// Tempo de faixa é boundary-inclusive em ambos os lados (>= time_start &&
-// <= time_end).
+// Tempo de faixa tem tolerância de SlotToleranceSeconds (15min) em cada extremo
+// e é boundary-inclusive — uma rule 08:00-10:00 aceita detections entre
+// 07:45:00 e 10:15:00 como in_slot.
 func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule) string {
 	local := detectedAt.In(spLocation)
 	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLocation)
@@ -69,10 +77,12 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule) string {
 			continue
 		}
 		hasApplicable = true
-		// Time window — boundary inclusive
+		// Time window — boundary inclusive, com folga de SlotToleranceSeconds em
+		// cada extremo. Não há wraparound: se rs < tolerância (rule perto da
+		// meia-noite), o limite inferior é efetivamente 00:00 do mesmo dia.
 		rs := r.TimeStart.Hour()*3600 + r.TimeStart.Minute()*60 + r.TimeStart.Second()
 		re := r.TimeEnd.Hour()*3600 + r.TimeEnd.Minute()*60 + r.TimeEnd.Second()
-		if timeOfDay >= rs && timeOfDay <= re {
+		if timeOfDay >= rs-SlotToleranceSeconds && timeOfDay <= re+SlotToleranceSeconds {
 			return CatInSlot
 		}
 	}

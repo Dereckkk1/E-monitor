@@ -1,27 +1,21 @@
-import { useState, useMemo } from 'react'
+import { Fragment, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCampaigns, useStations, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
-  useMaterialTypes, useDailySummary,
+  useMaterialTypes, useDailySummary, useCampaignPricing,
 } from '../api/hooks'
 import RSelect from '../components/RSelect'
 import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
 import CoverageSummary from '../components/CoverageSummary'
-import { tokenize } from '../utils/search'
+import { tokenize, matchesAllTokens } from '../utils/search'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
 function currentMonthValue() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-function prevMonthValue(ymStr) {
-  const [y, m] = ymStr.split('-').map(Number)
-  const d = new Date(y, m - 2, 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
 function monthToRange(ymStr) {
@@ -82,58 +76,202 @@ function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
 
 // ── Skeleton ─────────────────────────────────────────────────────
 
-const SKEL_DAYS = 14
-const SKEL_HITS = [
-  new Set([1, 3, 6, 9, 12]),
-  new Set([0, 2, 5, 8, 11]),
-  new Set([2, 4, 7, 10, 13]),
-  new Set([1, 5, 6,  9, 12]),
-  new Set([3, 4, 8, 11, 13]),
+// Mirror DistributionGrid's "stop at today" rule so the loading state has the
+// same column count as the data view that follows it.
+function skeletonDayCount(monthDate) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  if (!monthDate) return today.getDate()
+  const year = monthDate.getFullYear()
+  const monthIdx = monthDate.getMonth()
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate()
+  const isCurrentMonth = year === today.getFullYear() && monthIdx === today.getMonth()
+  const isFutureMonth  = year > today.getFullYear() ||
+    (year === today.getFullYear() && monthIdx > today.getMonth())
+  return isFutureMonth ? 0 : (isCurrentMonth ? today.getDate() : daysInMonth)
+}
+
+// Deterministic hit pattern that scales with any day count. ~35% density,
+// staggered per row so the skeleton doesn't look striped.
+function skeletonHits(dayCount, rowSeed) {
+  const hits = new Set()
+  for (let i = 0; i < dayCount; i++) {
+    if (((i * 7 + rowSeed * 11) % 17) < 6) hits.add(i)
+  }
+  return hits
+}
+
+// Mirrors DistributionGrid's two-tier structure: a full-width station header
+// (avatar + station name) followed by indented material sub-rows. Three
+// stations with [2, 1, 2] materials matches the typical campaign shape.
+const SKEL_STATIONS = [
+  { nameW: 108, placeW: 74, materials: [{ titleW: 60 }, { titleW: 76 }] },
+  { nameW: 95,  placeW: 82, materials: [{ titleW: 68 }] },
+  { nameW: 120, placeW: 68, materials: [{ titleW: 62 }, { titleW: 90 }] },
 ]
-const SKEL_NAME_WIDTHS  = [108, 120, 95, 115, 102]
-const SKEL_PLACE_WIDTHS = [74,  82,  68, 78,  72]
 
-function SkeletonCalendar() {
-  const days = Array.from({ length: SKEL_DAYS }, (_, i) => i)
+function SkeletonCalendar({ monthDate }) {
+  const dayCount = skeletonDayCount(monthDate)
+  const days = Array.from({ length: dayCount }, (_, i) => i)
+  // Mirror do gridTemplate do DistributionGrid: 2 colunas no resumo
+  // (200 row-summary + 180 station-total). Sticky-right alinhado.
+  const ROW_SUM_W = 200
+  const STATION_TOTAL_W = 180
+  const gridTemplate = `220px repeat(${dayCount}, 88px) 1fr ${ROW_SUM_W}px ${STATION_TOTAL_W}px`
+
+  let matRowIdx = 0
+
   return (
-    <div className="calendar-card">
-      <div className="calendar-grid">
+    <div style={{
+      overflowX: 'auto', background: '#fff',
+      border: '1px solid #f1f5f9', borderRadius: 12,
+    }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: gridTemplate,
+        fontSize: 12, minWidth: 'fit-content',
+      }}>
 
-        {/* Header row */}
-        <div className="calendar-header-row">
-          <div className="calendar-corner" />
-          <div className="calendar-days-header">
-            {days.map(i => (
-              <div key={i} className="calendar-day-header">
-                <div className="skeleton" style={{ width: 22, height: 10, borderRadius: 3 }} />
-                <div className="skeleton" style={{ width: 16, height: 8,  borderRadius: 3, marginTop: 3 }} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Station rows */}
-        {SKEL_HITS.map((hits, ri) => (
-          <div key={ri} className="calendar-row">
-            <div className="calendar-station">
-              <div className="skeleton" style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0 }} />
-              <div className="calendar-station-text">
-                <div className="skeleton" style={{ width: SKEL_NAME_WIDTHS[ri],  height: 12, borderRadius: 4 }} />
-                <div className="skeleton" style={{ width: SKEL_PLACE_WIDTHS[ri], height: 9,  borderRadius: 3, marginTop: 5 }} />
-              </div>
-            </div>
-            <div className="calendar-cells">
-              {days.map(i => (
-                <div key={i} className="calendar-cell">
-                  {hits.has(i) && (
-                    <div className="skeleton" style={{ width: 26, height: 26, borderRadius: 6 }} />
-                  )}
-                </div>
-              ))}
-            </div>
+        {/* Header row — empty corner + day-header placeholders + summary */}
+        <div style={{ ...skelHead, left: 0, zIndex: 3 }} />
+        {days.map(i => (
+          <div key={`hd-${i}`} style={skelHead}>
+            <div className="skeleton" style={{ width: 22, height: 9,  borderRadius: 3 }} />
+            <div className="skeleton" style={{ width: 16, height: 11, borderRadius: 3, marginTop: 3 }} />
           </div>
         ))}
+        <div style={{ ...skelHead, gridColumn: '-3 / -1', borderLeft: '2px solid #e2e8f0', borderRight: 'none', right: 0, zIndex: 3 }}>
+          <div className="skeleton" style={{ width: 44, height: 10, borderRadius: 3 }} />
+        </div>
+
+        {/* Station blocks */}
+        {SKEL_STATIONS.map((s, si) => (
+          <Fragment key={`s-${si}`}>
+            {/* Station header (full-width, content sticks left) */}
+            <div style={{
+              gridColumn: '1 / -1', background: '#fff',
+              borderBottom: '1px solid #e2e8f0',
+            }}>
+              <div style={{
+                position: 'sticky', left: 0, width: 'fit-content',
+                padding: '11px 14px', display: 'flex', alignItems: 'center',
+                gap: 10, background: '#fff',
+              }}>
+                <div className="skeleton" style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div className="skeleton" style={{ width: s.nameW,  height: 11, borderRadius: 4 }} />
+                  <div className="skeleton" style={{ width: s.placeW, height: 9,  borderRadius: 3 }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Material sub-rows */}
+            {s.materials.map((m, mi) => {
+              const hits = skeletonHits(dayCount, matRowIdx++)
+              return (
+                <Fragment key={`m-${si}-${mi}`}>
+                  <div style={{
+                    padding: '11px 14px 11px 24px', background: '#fafbfc',
+                    borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    position: 'sticky', left: 0, zIndex: 2,
+                  }}>
+                    <div className="skeleton" style={{ width: 3, height: 16, borderRadius: 2 }} />
+                    <div className="skeleton" style={{ width: m.titleW, height: 11, borderRadius: 4 }} />
+                  </div>
+                  {days.map(d => (
+                    <div key={`c-${si}-${mi}-${d}`} style={skelCell}>
+                      {hits.has(d) && (
+                        <div className="skeleton" style={{ width: 26, height: 26, borderRadius: 6 }} />
+                      )}
+                    </div>
+                  ))}
+                  {/* Row summary placeholder: 6 pills */}
+                  <div style={{
+                    ...skelCell, gridColumn: '-3 / -2', justifyContent: 'flex-start',
+                    borderLeft: '2px solid #e2e8f0', padding: '8px 10px', gap: 10,
+                    position: 'sticky', right: STATION_TOTAL_W, zIndex: 2, background: '#fff',
+                  }}>
+                    <div style={{ display: 'flex', gap: 3, flex: 1 }}>
+                      {Array.from({ length: 6 }).map((_, k) => (
+                        <div key={k} className="skeleton" style={{ width: 22, height: 16, borderRadius: 4 }} />
+                      ))}
+                    </div>
+                  </div>
+                  {/* Station total placeholder — spans all material rows do bloco */}
+                  {mi === 0 && (
+                    <div style={{
+                      ...skelCell, gridColumn: '-2 / -1', gridRow: `span ${s.materials.length}`,
+                      flexDirection: 'column', alignItems: 'stretch', justifyContent: 'center',
+                      padding: '10px 12px', gap: 6,
+                      borderLeft: '1px solid #f1f5f9',
+                      position: 'sticky', right: 0, zIndex: 2, background: '#fff',
+                    }}>
+                      <div className="skeleton" style={{ width: '90%', height: 16, borderRadius: 999 }} />
+                      <div className="skeleton" style={{ width: '90%', height: 16, borderRadius: 999 }} />
+                    </div>
+                  )}
+                </Fragment>
+              )
+            })}
+          </Fragment>
+        ))}
       </div>
+    </div>
+  )
+}
+
+const skelHead = {
+  background: '#fafbfc',
+  borderBottom: '2px solid #e2e8f0',
+  borderRight: '1px solid #f1f5f9',
+  padding: '9px 6px',
+  height: 44,
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 2,
+}
+
+const skelCell = {
+  height: 56,
+  borderBottom: '1px solid #f1f5f9',
+  borderRight: '1px solid #f1f5f9',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
+
+// Loader twin of <CoverageSummary>: big "Cobertura do plano" block on the left,
+// divider, then five stat placeholders matching the real card's slots.
+function SkeletonCoverage() {
+  const stats = [
+    { labelW: 56, badgeW: 38 },
+    { labelW: 80, badgeW: 32 },
+    { labelW: 46, badgeW: 34 },
+    { labelW: 44, badgeW: 32 },
+    { labelW: 68, badgeW: 36 },
+  ]
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 24,
+      padding: '14px 18px', marginBottom: 14,
+      background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
+    }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="skeleton" style={{ width: 110, height: 10, borderRadius: 3 }} />
+        <div className="skeleton" style={{ width: 72,  height: 28, borderRadius: 6 }} />
+      </div>
+      <div style={{ height: 40, width: 1, background: '#e2e8f0' }} />
+      {stats.map((s, i) => (
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="skeleton" style={{ width: s.labelW, height: 9,  borderRadius: 3 }} />
+          <div className="skeleton" style={{ width: s.badgeW, height: 18, borderRadius: 999 }} />
+        </div>
+      ))}
     </div>
   )
 }
@@ -243,6 +381,14 @@ export default function DetectionsPage() {
   const { data: campaignMaterials = [] } = useCampaignMaterials(selectedCampaignId || null)
   const { data: distributionRules = [] } = useDistributionRules(selectedCampaignId || null)
   const { data: materialTypes = [] }     = useMaterialTypes()
+  const { data: pricingList = [] }       = useCampaignPricing(selectedCampaignId || null)
+
+  // Indexa pricing por station_id pra consumo direto na DistributionGrid.
+  const pricingByStation = useMemo(() => {
+    const m = {}
+    for (const p of pricingList) m[p.station_id] = p
+    return m
+  }, [pricingList])
   const {
     data: summary = [],
     isLoading: loadingSummary,
@@ -260,17 +406,37 @@ export default function DetectionsPage() {
     setModalCell(null)
   }
 
-  const campaignOptions = campaigns.map(c => {
+  const allCampaignOptions = useMemo(() => campaigns.map(c => {
     const client = clientMap.get(c.client_id) ?? null
     return {
       value:      c.id,
       label:      c.name,
       clientName: client?.name ?? '',
       clientLogo: client?.logo_url ?? null,
+      startDate:  c.start_date,
+      endDate:    c.end_date,
     }
-  })
+  }), [campaigns, clientMap])
 
-  const selectedCampaignOption = campaignOptions.find(o => o.value === selectedCampaignId) ?? null
+  // Dropdown só lista campanhas cujo intervalo [start_date, end_date] cruza
+  // a competência selecionada. Mesma semântica do filtro de /campaigns: 14–16
+  // de maio aparece quando você seleciona maio; jan–dez aparece em qualquer
+  // mês entre os dois.
+  const campaignOptions = useMemo(() => {
+    const { start, end } = period
+    return allCampaignOptions.filter(o => {
+      if (!o.startDate || !o.endDate) return false
+      const cs = new Date(o.startDate), ce = new Date(o.endDate)
+      return cs <= end && ce >= start
+    })
+  }, [allCampaignOptions, period])
+
+  // A campanha já selecionada continua aparecendo no input mesmo quando ela
+  // não cruza a competência atual (caso típico: deep-link com `?campaign_id=…`).
+  // Quem busca pelo dropdown só vê as do mês.
+  const selectedCampaignOption = useMemo(() =>
+    allCampaignOptions.find(o => o.value === selectedCampaignId) ?? null,
+    [allCampaignOptions, selectedCampaignId])
 
   function formatCampaignOption(opt, { context }) {
     const size = context === 'value' ? 18 : 22
@@ -367,30 +533,30 @@ export default function DetectionsPage() {
     return new Date(y, m - 1, 1)
   }, [selectedMonth])
 
-  // Filter rows by station+material search
+  // Filter rows by station+material search. Uses matchesAllTokens for
+  // accent-insensitive, token-AND/field-OR matching — same behavior as the
+  // station search in /monitoring and the campaign material picker.
   const filteredRows = useMemo(() => {
     const tokens = tokenize(search)
     if (tokens.length === 0) return rows
+    const stationById = new Map(stationCatalog.map(s => [s.id, s]))
+    const fields = ['name', 'city', 'state', 'band', 'freq', 'title']
     return rows.filter(r => {
-      const station = stationCatalog.find(s => s.id === r.stationId)
-      if (!station) return false
-      const fields = [
-        station.name ?? '',
-        station.city ?? '',
-        station.state ?? '',
-        station.band ?? '',
-        station.frequency_mhz != null ? String(station.frequency_mhz) : '',
-        r.materialTitle ?? '',
-      ]
-      return tokens.every(tok =>
-        fields.some(f => f.toLowerCase().includes(tok.toLowerCase())))
+      const st = stationById.get(r.stationId)
+      if (!st) return false
+      const haystack = {
+        name:  st.name  ?? '',
+        city:  st.city  ?? '',
+        state: st.state ?? '',
+        band:  st.band  ?? '',
+        freq:  st.frequency_mhz != null ? String(st.frequency_mhz) : '',
+        title: r.materialTitle ?? '',
+      }
+      return matchesAllTokens(haystack, fields, tokens)
     })
   }, [rows, search, stationCatalog])
 
   // ── Month navigation ──────────────────────────────────────────
-  const currentMonth = currentMonthValue()
-  const prevMonth    = prevMonthValue(currentMonth)
-
   function handleMonthChange(e) {
     if (!e.target.value) return
     setSelectedMonth(e.target.value)
@@ -458,21 +624,6 @@ export default function DetectionsPage() {
       {/* Period filters — monthly */}
       {showDetections && (
         <div className="period-filters">
-          <button
-            className={`period-pill${selectedMonth === currentMonth ? ' active' : ''}`}
-            onClick={() => { setSelectedMonth(currentMonth); setModalCell(null) }}
-          >
-            Mês atual
-          </button>
-          <button
-            className={`period-pill${selectedMonth === prevMonth ? ' active' : ''}`}
-            onClick={() => { setSelectedMonth(prevMonth); setModalCell(null) }}
-          >
-            Mês anterior
-          </button>
-
-          <div className="period-divider" />
-
           <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 0 }}>
             <label style={{ marginBottom: 0, fontSize: 12, color: 'var(--c-text-3)', fontWeight: 600 }}>
               Período
@@ -508,7 +659,10 @@ export default function DetectionsPage() {
       {!showDetections ? (
         <EmptyNoCampaign />
       ) : isLoadingData ? (
-        <SkeletonCalendar />
+        <>
+          <SkeletonCoverage />
+          <SkeletonCalendar monthDate={monthDate} />
+        </>
       ) : rows.length === 0 ? (
         <EmptyNoRules />
       ) : filteredRows.length === 0 ? (
@@ -524,6 +678,7 @@ export default function DetectionsPage() {
             stations={stationCatalog}
             rows={filteredRows}
             cellData={cellData}
+            pricingByStation={pricingByStation}
             onCellClick={(stationId, typeId, dateISO) =>
               setModalCell({ stationId, typeId, dateISO })}
             onStationClick={(stationId) => setHealthStationId(stationId)}
@@ -540,6 +695,17 @@ export default function DetectionsPage() {
           station={stationCatalog.find(s => s.id === modalCell.stationId) ?? null}
           materialType={typeById[modalCell.typeId] ?? null}
           cellSummary={cellData.get(`${modalCell.stationId}|${modalCell.typeId}|${modalCell.dateISO}`) ?? null}
+          rules={distributionRules.filter(r =>
+            r.type_id === modalCell.typeId &&
+            r.station_ids.includes(modalCell.stationId))}
+          // Materiais elegíveis pra inserção manual: linkados à campanha,
+          // com aquela emissora no target_stations, e do mesmo tipo da
+          // célula (a modal é keyed por tipo). Sem isso o picker do form
+          // ficaria com a biblioteca inteira.
+          availableMaterials={campaignMaterials
+            .filter(cm => (cm.target_stations ?? []).includes(modalCell.stationId))
+            .map(cm => materialsById[cm.material_id])
+            .filter(m => m && m.type_id === modalCell.typeId)}
           onClose={() => setModalCell(null)}
         />
       )}
