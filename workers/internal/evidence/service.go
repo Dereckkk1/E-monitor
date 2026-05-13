@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel/attribute"
@@ -148,16 +150,46 @@ func (s *Service) handle(msg *nats.Msg) {
 		return
 	}
 
-	// Look up commercial + campaign.
+	// Look up commercial + campaign. First try commercials (legacy +
+	// backfilled materials). If short_id doesn't resolve there, fall back
+	// to materials joined with campaign_materials — campaign_id is derived
+	// from the linked campaign that targets this station and is currently
+	// active on detectedAt. If multiple overlap, pick the most recently
+	// added link (multi-attribution is a future feature — F-119).
 	var commercialID, campaignID uuid.UUID
-	row := s.db.QueryRow(ctx,
+	lookupErr := s.db.QueryRow(ctx,
 		`SELECT c.id, c.campaign_id FROM commercials c WHERE c.short_id = $1 AND c.fingerprint_status = 'ready' LIMIT 1`,
 		ev.CommercialShortID,
-	)
-	if err := row.Scan(&commercialID, &campaignID); err != nil {
-		s.log.Warn("evidence: commercial not found", zap.Int32("short_id", ev.CommercialShortID), zap.Error(err))
-		commercialID = uuid.Nil
-		campaignID = uuid.Nil
+	).Scan(&commercialID, &campaignID)
+
+	if errors.Is(lookupErr, pgx.ErrNoRows) {
+		lookupErr = s.db.QueryRow(ctx, `
+			SELECT m.id, cm.campaign_id
+			FROM materials m
+			JOIN campaign_materials cm ON cm.material_id = m.id
+			JOIN campaigns ca           ON ca.id = cm.campaign_id
+			WHERE m.short_id = $1
+			  AND $2 = ANY(cm.target_stations)
+			  AND ca.status IN ('programada','ativa')
+			  AND $3::date BETWEEN ca.start_date AND ca.end_date
+			ORDER BY cm.added_at DESC
+			LIMIT 1
+		`, ev.CommercialShortID, stationID, detectedAt).Scan(&commercialID, &campaignID)
+	}
+
+	if lookupErr != nil {
+		// Drop the detection — the old code fell through with uuid.Nil
+		// and relied on the FK violation to mask the error, but
+		// migration 0024 dropped that FK. The column is NOT NULL, so
+		// inserting uuid.Nil would either succeed with garbage or fail
+		// the NOT NULL constraint. Either way, dropping is correct
+		// here: the commercial/material is gone or was never there.
+		s.log.Warn("evidence: failed to resolve short_id to commercial or material",
+			zap.Int32("short_id", ev.CommercialShortID),
+			zap.String("station_id", stationID.String()),
+			zap.Error(lookupErr),
+		)
+		return
 	}
 
 	// TemporalCoverage is the same value as Confidence today (both come from
