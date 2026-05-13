@@ -122,6 +122,22 @@ func (s *Supervisor) reconcileOnce(ctx context.Context, stationID uuid.UUID, sta
 		wantedIDs = append(wantedIDs, c.ShortID)
 	}
 
+	// Append materials linked via campaign_materials. On error we keep the
+	// worker as-is for this cycle rather than restarting against a
+	// commercials-only wanted list — otherwise a transient materials hiccup
+	// would tear down a worker that was correctly loaded with both kinds.
+	mats, err := s.materials.ListReadyByCampaignsForStation(queryCtx, activeIDs, stationID)
+	if err != nil {
+		metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "error").Inc()
+		s.log.Warn("supervisor.reconcile: list materials failed; keeping worker",
+			zap.String("station_id", stationLabel),
+			zap.Error(err))
+		return false
+	}
+	for _, m := range mats {
+		wantedIDs = append(wantedIDs, m.ShortID)
+	}
+
 	s.mu.Lock()
 	entry, ok := s.workers[stationID]
 	if !ok || entry == nil || entry.worker == nil {

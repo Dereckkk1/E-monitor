@@ -130,3 +130,45 @@ func (m *Materials) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
 	return err
 }
+
+// ReadyMaterialForWorker holds the per-worker fields needed by the
+// supervisor's worker setup. Only the matcher-relevant subset, not the
+// full Material struct.
+type ReadyMaterialForWorker struct {
+	ID              uuid.UUID
+	ShortID         int32
+	DurationSeconds float64
+}
+
+// ListReadyByCampaignsForStation returns ready materials that are linked
+// (via campaign_materials) to any of the given campaigns AND that include
+// the given station in that link's target_stations array. Backfilled
+// materials whose UUID also exists in commercials are EXCLUDED — those go
+// through the commercials path. Mirrors commercials.ListReadyByCampaignsForStation.
+func (m *Materials) ListReadyByCampaignsForStation(ctx context.Context, campaignIDs []uuid.UUID, stationID uuid.UUID) ([]ReadyMaterialForWorker, error) {
+	if len(campaignIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := m.pool.Query(ctx, `
+		SELECT DISTINCT mat.id, mat.short_id, mat.duration_seconds
+		FROM materials mat
+		JOIN campaign_materials cm ON cm.material_id = mat.id
+		WHERE cm.campaign_id = ANY($1)
+		  AND mat.fingerprint_status = 'ready'
+		  AND $2 = ANY(cm.target_stations)
+		  AND mat.id NOT IN (SELECT id FROM commercials)`,
+		campaignIDs, stationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ReadyMaterialForWorker
+	for rows.Next() {
+		var r ReadyMaterialForWorker
+		if err := rows.Scan(&r.ID, &r.ShortID, &r.DurationSeconds); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
