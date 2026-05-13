@@ -144,26 +144,26 @@
   border-top: 1px solid #f1f5f9;
 }
 
-/* --- Detection row (single-line layout) ============================== */
-/* All info on one horizontal line. Columns in order:
-   play | time | station | material | metrics | SPACER(1fr) | category | chevron
-   The 1fr spacer pushes the category pill to the far right; everything
-   else stays packed to the left.
-   Stripe absolute on left edge spans the full card. */
+/* --- Detection row (single-line, reference-aligned) ================== */
+/* Columns in order:
+   play | date+time | station(logo+check+name+place) | PMM pill |
+   Custo pill | SPACER(1fr) | material info (right) | right stripe
+   The 1fr spacer keeps everything packed on the left; material info and
+   the colored stripe live on the right edge. */
 .airtime-row {
   display: grid;
   grid-template-columns:
     40px              /* play */
-    auto              /* time block (horizontal: date + time) */
-    minmax(160px, auto)  /* station */
-    minmax(180px, auto)  /* material */
-    auto              /* metrics (horizontal: PMM + custo) */
-    1fr               /* spacer — pushes category pill to the right */
-    auto              /* category pill */
-    16px;             /* chevron */
+    auto              /* date + time inline */
+    minmax(220px, auto)  /* station */
+    auto              /* PMM pill */
+    auto              /* Custo pill */
+    1fr               /* spacer pushes material right */
+    auto              /* material info */
+    5px;              /* right colored stripe */
   align-items: center;
-  column-gap: 20px;
-  padding: 14px 18px 14px 22px;
+  column-gap: 18px;
+  padding: 14px 0 14px 18px;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -187,13 +187,15 @@
 }
 .airtime-row-playing { border-color: #E81E75; }
 
-/* Stripe: absolute on the left edge, spans full card height. */
-.airtime-row-stripe {
+/* Right-edge colored stripe — material's hash color (set via --material-color
+   on the row). Lives in the last grid column rather than absolute-positioned
+   so it scales with the card height automatically. */
+.airtime-row-stripe-right {
   width: 5px;
   height: 100%;
-  position: absolute;
-  left: 0;
-  top: 0;
+  background: var(--material-color, #94a3b8);
+  align-self: stretch;
+  border-radius: 0 12px 12px 0;
 }
 
 /* ── Col 1: time block (horizontal: date + time, both large) ───────── */
@@ -230,19 +232,31 @@
   overflow: hidden;
 }
 .airtime-row-logo {
-  width: 44px;
-  height: 44px;
+  position: relative;
+  width: 40px;
+  height: 40px;
   border-radius: 8px;
-  overflow: hidden;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f8fafc;
 }
-.airtime-row-logo > * { width: 100%; height: 100%; }
-.airtime-row-logo img,
-.airtime-row-logo .station-avatar-img { object-fit: cover; }
+.airtime-row-logo > .station-avatar-img,
+.airtime-row-logo > img,
+.airtime-row-logo > .station-avatar-fallback {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 8px;
+  object-fit: cover;
+  display: block;
+}
+.airtime-row-logo-check {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  display: inline-flex;
+  background: #fff;
+  border-radius: 50%;
+  padding: 1px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
 .airtime-row-station-text {
   display: flex;
   flex-direction: column;
@@ -254,19 +268,23 @@
 .airtime-row-station-name {
   color: #06055B;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.airtime-row-station-dial {
-  color: #64748b;
+.airtime-row-station-freq {
+  color: #475569;
+  font-weight: 600;
+}
+.airtime-row-station-place {
+  color: #94a3b8;
   font-size: 11px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── Col 3: play button ────────────────────────────────────────────── */
@@ -308,128 +326,87 @@
 }
 @keyframes airtime-spin { to { transform: rotate(360deg); } }
 
-/* ── Col 4: chevron ────────────────────────────────────────────────── */
-.airtime-row-chevron {
-  width: 20px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: #cbd5e1;
-  cursor: pointer;
-  transition: color 150ms ease, transform 150ms ease;
-  font-family: inherit;
-  padding: 0;
-  line-height: 1;
-  justify-self: end;
-  display: flex;
+/* ── Metric pills (PMM + Custo) ───────────────────────────────────── */
+.airtime-row-pill {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.airtime-row-chevron:hover {
-  color: #C4185E;
-  transform: translateX(2px);
+.airtime-row-pill-pmm {
+  background: #FCE7F3;
+  color: #BE185D;
+}
+.airtime-row-pill-cost {
+  background: #DCFCE7;
+  color: #15803D;
+}
+.airtime-row-pill-cost.is-empty {
+  background: #f1f5f9;
+  color: #94a3b8;
 }
 
-/* ── Col 4: material block (inline in single-line layout) ──────────── */
+/* ── Right-aligned material info ──────────────────────────────────── */
 .airtime-row-material {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
   min-width: 0;
-  overflow: hidden;
+  padding-right: 14px;
+  text-align: right;
 }
-.airtime-row-dot {
+.airtime-row-material-type {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+}
+.airtime-row-material-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+.airtime-row-material-name:hover {
+  text-decoration: underline;
+}
+.airtime-row-cat-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.airtime-row-material-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  overflow: hidden;
-  flex: 1 1 auto;
-}
-.airtime-row-material-title {
-  color: #06055B;
-  font-weight: 700;
-  font-size: 13px;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.airtime-row-material-sub {
-  color: #64748b;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ── Col 5: metrics (horizontal: PMM and Custo side by side) ───────── */
-.airtime-row-metrics {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  gap: 18px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.airtime-row-metric {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  white-space: nowrap;
-}
-.airtime-row-metric-label {
+.airtime-row-material-client {
   color: #94a3b8;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-}
-.airtime-row-metric-value {
-  color: #06055B;
-  font-weight: 700;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-.airtime-row-cost { color: #C4185E; }
-.airtime-row-cost-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  background: #f1f5f9;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 600;
-  border-radius: 9999px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-  min-width: 56px;
-  text-align: center;
-}
-
-/* ── Col 6: category pill ──────────────────────────────────────────── */
-.airtime-row-cat {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  border-radius: 9999px;
   font-size: 11px;
   font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
 }
-.airtime-cat-green  { background: #dcfce7; color: #15803d; }
-.airtime-cat-yellow { background: #fef3c7; color: #b45309; }
-.airtime-cat-purple { background: #ede9fe; color: #6d28d9; }
-.airtime-cat-blue   { background: #dbeafe; color: #1d4ed8; }
-.airtime-cat-gray   { background: #e2e8f0; color: #475569; }
 
+/* Legacy meta classes kept for skeleton fallback rendering. */
 .airtime-row-player {
   grid-column: 1 / -1;
   margin-top: 12px;
@@ -806,9 +783,9 @@
 }
 
 /* --- Mobile reshape ================================================== */
-/* Below 768px the card stacks rows. Grid: 3 cols (play | flex | chevron),
-   multiple rows. Time + station + material + metrics + cat each get their
-   own row spanning the middle column. */
+/* Below 768px the row stacks: play+time on the top, station full-width
+   below, pills wrap, material info pushes to its own row, and the right
+   stripe spans the full card height as the visual closer. */
 @media (max-width: 767px) {
   .airtime-filters-row {
     grid-template-columns: 1fr;
@@ -817,32 +794,31 @@
   .airtime-filters-dates { flex-direction: row; }
 
   .airtime-row {
-    grid-template-columns: 44px 1fr 16px;
-    grid-template-rows: auto auto auto auto auto;
+    grid-template-columns: 44px 1fr 5px;
+    grid-template-rows: auto auto auto auto;
     column-gap: 12px;
-    row-gap: 8px;
-    padding: 14px 16px 14px 20px;
+    row-gap: 10px;
+    padding: 14px 0 14px 18px;
   }
   .airtime-row-play   { grid-column: 1; grid-row: 1 / span 2; width: 44px; height: 44px; }
   .airtime-row-time-block { grid-column: 2; grid-row: 1; }
-  .airtime-row-chevron    { grid-column: 3; grid-row: 1; }
   .airtime-row-station    { grid-column: 2; grid-row: 2; }
+  .airtime-row-pill {
+    grid-row: 3;
+  }
+  .airtime-row-pill-pmm  { grid-column: 1 / span 2; justify-self: start; }
+  .airtime-row-pill-cost { grid-column: 2 / span 2; justify-self: end; padding-right: 18px; }
   .airtime-row-material {
     grid-column: 1 / -1;
-    grid-row: 3;
-    padding-top: 10px;
-    margin-top: 4px;
-    border-top: 1px dashed #e2e8f0;
-  }
-  .airtime-row-metrics {
-    grid-column: 1 / -1;
     grid-row: 4;
-    justify-content: flex-start;
-    gap: 16px;
+    align-items: flex-start;
+    text-align: left;
+    padding: 10px 18px 0 0;
+    border-top: 1px dashed #e2e8f0;
+    margin-top: 4px;
   }
-  .airtime-row-cat {
-    grid-column: 1 / -1;
-    grid-row: 5;
-    align-self: flex-start;
+  .airtime-row-stripe-right {
+    grid-column: 3;
+    grid-row: 1 / -1;
   }
 }
