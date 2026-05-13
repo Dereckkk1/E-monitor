@@ -477,6 +477,88 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 	return out, rows.Err()
 }
 
+// IterateForExport streams enriched detections without paging, invoking the
+// callback once per row. Stops if cb returns an error. Uses the same WHERE
+// clause as ListPaged so filters/q behave identically.
+func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
+	cb func(DetectionEnriched) error) error {
+	var qTokens any = nil
+	if q := strings.TrimSpace(f.Q); q != "" {
+		toks := strings.Fields(q)
+		if len(toks) > 4 {
+			toks = toks[:4]
+		}
+		qTokens = toks
+	}
+	order := "DESC"
+	if f.Sort == "detected_at_asc" {
+		order = "ASC"
+	}
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		       d.campaign_id, d.detected_at,
+		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
+		       d.temporal_coverage, d.variant_used, d.rate_used,
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
+		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
+		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
+		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm,
+		       m.duration_seconds, mt.name, mt.color,
+		       cmp.client_id, cli.name
+		FROM detections d
+		LEFT JOIN stations s        ON s.id = d.station_id
+		LEFT JOIN commercials c     ON c.id = d.commercial_id
+		LEFT JOIN materials m       ON m.id = d.commercial_id
+		LEFT JOIN material_types mt ON mt.id = m.type_id
+		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
+		LEFT JOIN clients cli       ON cli.id = cmp.client_id
+		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
+		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND d.ignored_at IS NULL
+		  AND d.retracted_at IS NULL
+		  AND ($4::text[] IS NULL OR (
+		      SELECT bool_and(
+		          unaccent(lower(
+		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
+		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
+		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
+		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(cli.name,'')
+		          )) LIKE '%' || unaccent(lower(tok)) || '%'
+		      )
+		      FROM unnest($4::text[]) AS tok
+		  ))
+		ORDER BY d.detected_at `+order,
+		f.CampaignID, f.StartDate, f.EndDate, qTokens)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var det DetectionEnriched
+		if err := rows.Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
+			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
+			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
+			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
+			&det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt,
+			&det.IgnoredAt, &det.IgnoredBy,
+			&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt,
+			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
+			&det.StationLogoURL, &det.StationPMM,
+			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
+			&det.ClientID, &det.ClientName); err != nil {
+			return err
+		}
+		if err := cb(det); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // MaterialAggregateRow is one entry of the airtime-report sidebar panel.
 type MaterialAggregateRow struct {
 	MaterialID          uuid.UUID  `json:"material_id"`

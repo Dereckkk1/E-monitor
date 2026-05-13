@@ -231,6 +231,12 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/manual", d.Detections.CreateManual)
 					r.Post("/{id}/ignore", d.Detections.Ignore)
 					r.Post("/{id}/restore", d.Detections.Restore)
+					// CSV export do relatório data/hora — streaming. Fica
+					// dentro do grupo admin, mas como prefixo estático
+					// /export nunca colide com /{id} porque o /{id} também
+					// está no grupo admin acima e o /export é mais
+					// específico — chi resolve por especificidade.
+					r.Get("/export", d.Detections.Export)
 				})
 			})
 			r.Route("/stream-health", func(r chi.Router) {

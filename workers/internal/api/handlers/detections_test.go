@@ -131,6 +131,34 @@ func TestDetectionsHandler_Aggregate_BadCampaignID(t *testing.T) {
 	}
 }
 
+// ── Export CSV validation ───────────────────────────────────────────
+
+func TestDetectionsHandler_Export_BadCampaignID(t *testing.T) {
+	h := &DetectionsHandler{}
+	r := chi.NewRouter()
+	r.Get("/export", h.Export)
+
+	req := httptest.NewRequest("GET", "/export?campaign_id=not-uuid", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bad campaign_id", rr.Code)
+	}
+}
+
+func TestDetectionsHandler_Export_BadFromDate(t *testing.T) {
+	h := &DetectionsHandler{}
+	r := chi.NewRouter()
+	r.Get("/export", h.Export)
+
+	req := httptest.NewRequest("GET", "/export?from=bad", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bad from", rr.Code)
+	}
+}
+
 func TestDetectionsHandler_Aggregate_BadFromDate(t *testing.T) {
 	h := &DetectionsHandler{}
 	r := chi.NewRouter()
