@@ -102,3 +102,45 @@ func TestDetectionsHandler_List_Paged_BadCampaignID(t *testing.T) {
 		t.Errorf("status = %d, want 400 for bad campaign_id", rr.Code)
 	}
 }
+
+// ── Aggregate-by-material validation ─────────────────────────────────
+
+func TestDetectionsHandler_Aggregate_RequiresCampaignID(t *testing.T) {
+	h := &DetectionsHandler{}
+	r := chi.NewRouter()
+	r.Get("/aggregate-by-material", h.AggregateByMaterial)
+
+	req := httptest.NewRequest("GET", "/aggregate-by-material", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for missing campaign_id", rr.Code)
+	}
+}
+
+func TestDetectionsHandler_Aggregate_BadCampaignID(t *testing.T) {
+	h := &DetectionsHandler{}
+	r := chi.NewRouter()
+	r.Get("/aggregate-by-material", h.AggregateByMaterial)
+
+	req := httptest.NewRequest("GET", "/aggregate-by-material?campaign_id=not-uuid", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bad campaign_id", rr.Code)
+	}
+}
+
+func TestDetectionsHandler_Aggregate_BadFromDate(t *testing.T) {
+	h := &DetectionsHandler{}
+	r := chi.NewRouter()
+	r.Get("/aggregate-by-material", h.AggregateByMaterial)
+
+	req := httptest.NewRequest("GET",
+		"/aggregate-by-material?campaign_id="+uuid.New().String()+"&from=bad", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bad from", rr.Code)
+	}
+}

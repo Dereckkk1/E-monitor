@@ -479,6 +479,49 @@ func (h *DetectionsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// AggregateByMaterial backs the airtime-report sidebar panel. Requires
+// campaign_id; accepts from/to (RFC3339) and q (same semantics as the
+// paginated list so the sidebar stays in sync with the lista's filters).
+func (h *DetectionsHandler) AggregateByMaterial(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	cidStr := q.Get("campaign_id")
+	if cidStr == "" {
+		http.Error(w, "campaign_id required", http.StatusBadRequest)
+		return
+	}
+	cid, err := uuid.Parse(cidStr)
+	if err != nil {
+		http.Error(w, "invalid campaign_id", http.StatusBadRequest)
+		return
+	}
+	f := catalog.AggregateFilter{CampaignID: cid}
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid from (use RFC3339)", http.StatusBadRequest)
+			return
+		}
+		f.StartDate = &t
+	}
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid to (use RFC3339)", http.StatusBadRequest)
+			return
+		}
+		f.EndDate = &t
+	}
+	if v := q.Get("q"); v != "" {
+		f.Q = v
+	}
+	res, err := h.Repo.AggregateByMaterial(r.Context(), f)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request) {
 	campaignID, err := uuid.Parse(chi.URLParam(r, "campaignID"))
 	if err != nil {
