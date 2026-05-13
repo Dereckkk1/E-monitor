@@ -144,8 +144,8 @@ export default function AirtimeDetectionRow({
       </button>
 
       <div className="airtime-row-time-block">
-        <span className="airtime-row-time">{fmtTime(detection.detected_at)}</span>
         <span className="airtime-row-date">{fmtDate(detection.detected_at)}</span>
+        <span className="airtime-row-time">{fmtTime(detection.detected_at)}</span>
       </div>
 
       <div className="airtime-row-station">
