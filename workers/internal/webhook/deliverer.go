@@ -15,10 +15,12 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel/attribute"
@@ -127,20 +129,61 @@ func (d *Deliverer) handleDetection(ctx context.Context, raw []byte) error {
 		return fmt.Errorf("unmarshal: %w", err)
 	}
 
+	// We need station_id + detected_at parsed up-front so the materials
+	// fallback can pick the active campaign that targets this station on
+	// the day the match fired.
+	stationUUID, err := uuid.Parse(ev.StationID)
+	if err != nil {
+		return fmt.Errorf("parse station id: %w", err)
+	}
+	detectedAt, err := time.Parse(time.RFC3339, ev.DetectedAt)
+	if err != nil {
+		return fmt.Errorf("parse detected_at: %w", err)
+	}
+
 	// Look up the commercial (by short_id) to discover its owning client.
+	// Try commercials first; if missing, fall back to materials via the
+	// campaign_materials link active on detectedAt for this station.
+	// Multi-attribution is a future feature (F-119); for now the most
+	// recently added link wins.
 	var (
-		commercialID  uuid.UUID
+		commercialID    uuid.UUID
 		commercialTitle string
-		clientID      uuid.UUID
+		clientID        uuid.UUID
 	)
-	row := d.db.QueryRow(ctx, `
+	lookupErr := d.db.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.title, ''), COALESCE(ca.client_id, '00000000-0000-0000-0000-000000000000'::uuid)
 		FROM commercials c
 		LEFT JOIN campaigns ca ON ca.id = c.campaign_id
 		WHERE c.short_id = $1 AND c.fingerprint_status = 'ready'
-		LIMIT 1`, ev.CommercialShortID)
-	if err := row.Scan(&commercialID, &commercialTitle, &clientID); err != nil {
-		return fmt.Errorf("lookup commercial %d: %w", ev.CommercialShortID, err)
+		LIMIT 1`, ev.CommercialShortID).Scan(&commercialID, &commercialTitle, &clientID)
+
+	if errors.Is(lookupErr, pgx.ErrNoRows) {
+		lookupErr = d.db.QueryRow(ctx, `
+			SELECT m.id, COALESCE(m.title, ''), ca.client_id
+			FROM materials m
+			JOIN campaign_materials cm ON cm.material_id = m.id
+			JOIN campaigns ca           ON ca.id = cm.campaign_id
+			WHERE m.short_id = $1
+			  AND m.fingerprint_status = 'ready'
+			  AND $2 = ANY(cm.target_stations)
+			  AND ca.status IN ('programada','ativa')
+			  AND $3::date BETWEEN ca.start_date AND ca.end_date
+			ORDER BY cm.added_at DESC
+			LIMIT 1`, ev.CommercialShortID, stationUUID, detectedAt).Scan(&commercialID, &commercialTitle, &clientID)
+	}
+
+	if lookupErr != nil {
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			// Neither commercials nor materials resolve this short_id.
+			// Drop quietly — no client to notify.
+			d.log.Warn("webhook confirmed: short_id resolved to neither commercial nor material",
+				zap.Int32("short_id", ev.CommercialShortID),
+				zap.String("station_id", ev.StationID),
+			)
+			return nil
+		}
+		return fmt.Errorf("lookup commercial %d: %w", ev.CommercialShortID, lookupErr)
 	}
 	if clientID == uuid.Nil {
 		// No client = no webhook recipient. Quietly drop.
@@ -154,11 +197,6 @@ func (d *Deliverer) handleDetection(ctx context.Context, raw []byte) error {
 		attribute.String("station_id", ev.StationID),
 		attribute.Int("commercial_short_id", int(ev.CommercialShortID)),
 	)
-
-	stationUUID, err := uuid.Parse(ev.StationID)
-	if err != nil {
-		return fmt.Errorf("parse station id: %w", err)
-	}
 	var stationName string
 	_ = d.db.QueryRow(ctx,
 		`SELECT COALESCE(name, '') FROM stations WHERE id = $1`, stationUUID,
@@ -209,30 +247,60 @@ func (d *Deliverer) handleRetracted(ctx context.Context, raw []byte) error {
 		return fmt.Errorf("unmarshal: %w", err)
 	}
 
+	// We need station_id + detected_at parsed up-front for the materials
+	// fallback (same shape as handleDetection).
+	stationUUID, err := uuid.Parse(ev.StationID)
+	if err != nil {
+		return fmt.Errorf("parse station id: %w", err)
+	}
+	detectedAt, err := time.Parse(time.RFC3339, ev.DetectedAt)
+	if err != nil {
+		return fmt.Errorf("parse detected_at: %w", err)
+	}
+
 	// Look up the commercial + owning client by short_id (commercial may
 	// already have its row touched by the supervisor's UPDATE — that's fine,
-	// we just need the client).
+	// we just need the client). Mirrors handleDetection's dual-lookup but
+	// without the fingerprint_status filter: a retraction can fire on a
+	// commercial/material whose row is mid-update.
 	var (
 		commercialID    uuid.UUID
 		commercialTitle string
 		clientID        uuid.UUID
 	)
-	row := d.db.QueryRow(ctx, `
+	lookupErr := d.db.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.title, ''), COALESCE(ca.client_id, '00000000-0000-0000-0000-000000000000'::uuid)
 		FROM commercials c
 		LEFT JOIN campaigns ca ON ca.id = c.campaign_id
 		WHERE c.short_id = $1
-		LIMIT 1`, ev.CommercialShortID)
-	if err := row.Scan(&commercialID, &commercialTitle, &clientID); err != nil {
-		return fmt.Errorf("lookup commercial %d: %w", ev.CommercialShortID, err)
+		LIMIT 1`, ev.CommercialShortID).Scan(&commercialID, &commercialTitle, &clientID)
+
+	if errors.Is(lookupErr, pgx.ErrNoRows) {
+		lookupErr = d.db.QueryRow(ctx, `
+			SELECT m.id, COALESCE(m.title, ''), ca.client_id
+			FROM materials m
+			JOIN campaign_materials cm ON cm.material_id = m.id
+			JOIN campaigns ca           ON ca.id = cm.campaign_id
+			WHERE m.short_id = $1
+			  AND $2 = ANY(cm.target_stations)
+			  AND ca.status IN ('programada','ativa')
+			  AND $3::date BETWEEN ca.start_date AND ca.end_date
+			ORDER BY cm.added_at DESC
+			LIMIT 1`, ev.CommercialShortID, stationUUID, detectedAt).Scan(&commercialID, &commercialTitle, &clientID)
+	}
+
+	if lookupErr != nil {
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			d.log.Warn("webhook retracted: short_id resolved to neither commercial nor material",
+				zap.Int32("short_id", ev.CommercialShortID),
+				zap.String("station_id", ev.StationID),
+			)
+			return nil
+		}
+		return fmt.Errorf("lookup commercial %d: %w", ev.CommercialShortID, lookupErr)
 	}
 	if clientID == uuid.Nil {
 		return nil
-	}
-
-	stationUUID, err := uuid.Parse(ev.StationID)
-	if err != nil {
-		return fmt.Errorf("parse station id: %w", err)
 	}
 	var stationName string
 	_ = d.db.QueryRow(ctx,
