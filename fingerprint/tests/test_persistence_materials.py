@@ -68,3 +68,69 @@ async def test_mark_material_status_pending_skips_hash_count(mock_pool):
     sql_used = conn.execute.call_args[0][0]
     assert "UPDATE materials" in sql_used
     assert "fingerprint_hash_count" not in sql_used
+
+
+import json
+from unittest.mock import patch
+from fingerprint.main import handle_generate
+
+
+@pytest.mark.asyncio
+async def test_handle_generate_routes_material_payload(mock_pool, tmp_path):
+    pool, conn = mock_pool
+    # 1. fetch_material returns a valid row
+    audio_file = tmp_path / "test.mp3"
+    audio_file.write_bytes(b"fake")
+    conn.fetchrow.return_value = {
+        "id": "mat-uuid",
+        "master_storage_path": str(audio_file),
+        "duration_seconds": 30.0,
+    }
+    nc = AsyncMock()
+    msg = MagicMock()
+    msg.data = json.dumps({"material_id": "mat-uuid"}).encode()
+
+    # Patch heavy audio work — we only care that the right path is chosen.
+    with patch("fingerprint.main.simulate_variants", return_value={0: b"x"}), \
+         patch("fingerprint.main.generate_fingerprint", return_value=[(1, 0)]), \
+         patch("fingerprint.main.write_hashes", new_callable=AsyncMock):
+        await handle_generate(msg, pool, nc)
+
+    # Confirm UPDATE materials was called (mark_material_status), not commercials
+    update_sqls = [c[0][0] for c in conn.execute.call_args_list]
+    assert any("UPDATE materials" in s for s in update_sqls)
+    assert not any("UPDATE commercials" in s for s in update_sqls)
+
+    # Confirm republished payload uses material_id
+    publish_payloads = [c[0][1] for c in nc.publish.call_args_list]
+    decoded = [json.loads(p.decode()) for p in publish_payloads]
+    assert any("material_id" in d for d in decoded)
+
+
+@pytest.mark.asyncio
+async def test_handle_generate_routes_commercial_payload(mock_pool, tmp_path):
+    """Regression: the commercial path must still work after the dispatcher refactor."""
+    pool, conn = mock_pool
+    audio_file = tmp_path / "test.mp3"
+    audio_file.write_bytes(b"fake")
+    conn.fetchrow.return_value = {
+        "id": "com-uuid",
+        "master_storage_path": str(audio_file),
+        "duration_seconds": 30.0,
+    }
+    nc = AsyncMock()
+    msg = MagicMock()
+    msg.data = json.dumps({"commercial_id": "com-uuid"}).encode()
+
+    with patch("fingerprint.main.simulate_variants", return_value={0: b"x"}), \
+         patch("fingerprint.main.generate_fingerprint", return_value=[(1, 0)]), \
+         patch("fingerprint.main.write_hashes", new_callable=AsyncMock):
+        await handle_generate(msg, pool, nc)
+
+    update_sqls = [c[0][0] for c in conn.execute.call_args_list]
+    assert any("UPDATE commercials" in s for s in update_sqls)
+    assert not any("UPDATE materials" in s for s in update_sqls)
+
+    publish_payloads = [c[0][1] for c in nc.publish.call_args_list]
+    decoded = [json.loads(p.decode()) for p in publish_payloads]
+    assert any("commercial_id" in d for d in decoded)

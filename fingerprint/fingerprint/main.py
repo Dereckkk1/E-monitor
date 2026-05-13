@@ -12,8 +12,10 @@ from fingerprint.broadcast_sim import simulate_variants
 from fingerprint.generator import generate_fingerprint
 from fingerprint.persistence import (
     fetch_commercial,
+    fetch_material,
     write_hashes,
     mark_status,
+    mark_material_status,
 )
 
 logging.basicConfig(
@@ -34,58 +36,72 @@ SUBJECT_SHARED_SCAN = "fingerprint.shared-scan"
 async def handle_generate(msg, pool: asyncpg.Pool, nc: nats.NATS):
     try:
         payload = json.loads(msg.data.decode())
-        commercial_id = payload["commercial_id"]
     except Exception as e:
-        log.error("invalid payload: %s", e)
+        log.error("invalid JSON payload: %s", e)
         return
 
-    log.info("processing commercial_id=%s", commercial_id)
+    # Support both legacy commercial_id and new material_id payloads.
+    if "material_id" in payload:
+        entity_id = payload["material_id"]
+        entity_kind = "material"
+        fetcher = fetch_material
+        marker = mark_material_status
+        reload_key = "material_id"
+    elif "commercial_id" in payload:
+        entity_id = payload["commercial_id"]
+        entity_kind = "commercial"
+        fetcher = fetch_commercial
+        marker = mark_status
+        reload_key = "commercial_id"
+    else:
+        log.error("payload missing both material_id and commercial_id: %s", payload)
+        return
+
+    log.info("processing %s_id=%s", entity_kind, entity_id)
 
     try:
-        commercial = await fetch_commercial(pool, commercial_id)
+        entity = await fetcher(pool, entity_id)
     except Exception as e:
-        log.error("fetch_commercial failed: %s", e)
+        log.error("fetch_%s failed: %s", entity_kind, e)
         return
 
-    master_path = commercial["master_storage_path"]
+    master_path = entity["master_storage_path"]
     if not os.path.isfile(master_path):
         log.error("master file not found: %s", master_path)
-        await mark_status(pool, commercial_id, "failed")
+        await marker(pool, entity_id, "failed")
         return
 
-    await mark_status(pool, commercial_id, "generating")
+    await marker(pool, entity_id, "generating")
 
     try:
         variants = simulate_variants(master_path)
     except Exception as e:
         log.exception("broadcast_sim failed: %s", e)
-        await mark_status(pool, commercial_id, "failed")
+        await marker(pool, entity_id, "failed")
         return
 
     total_hashes = 0
     try:
         for variant_id, audio in variants.items():
             hashes = generate_fingerprint(audio)
-            await write_hashes(pool, commercial_id, variant_id, rate_id=0, hashes=hashes)
+            await write_hashes(pool, entity_id, variant_id, rate_id=0, hashes=hashes)
             total_hashes += len(hashes)
     except Exception as e:
         log.exception("generate/write failed: %s", e)
-        await mark_status(pool, commercial_id, "failed")
+        await marker(pool, entity_id, "failed")
         return
 
-    await mark_status(pool, commercial_id, "ready", hash_count=total_hashes)
+    await marker(pool, entity_id, "ready", hash_count=total_hashes)
 
-    reload_payload = json.dumps({"commercial_id": commercial_id}).encode()
+    # Republish both the index reload and the shared-scan trigger using the
+    # SAME key the upstream sent (material_id or commercial_id). Go-side
+    # subscribers handle both shapes (see workers/internal/index/loader.go
+    # and workers/internal/sharing/subscriber.go).
+    reload_payload = json.dumps({reload_key: entity_id}).encode()
     await nc.publish(SUBJECT_INDEX_RELOAD, reload_payload)
-
-    # Trigger shared-hash detection so this commercial cannot false-positive
-    # on content it shares with another commercial in the catalog. The api
-    # process subscribes to SUBJECT_SHARED_SCAN, runs the scan, and republishes
-    # SUBJECT_INDEX_RELOAD when it finishes — so the matching index reloads a
-    # second time with the new is_shared flags.
     await nc.publish(SUBJECT_SHARED_SCAN, reload_payload)
 
-    log.info("done commercial_id=%s hashes=%d", commercial_id, total_hashes)
+    log.info("done %s_id=%s hashes=%d", entity_kind, entity_id, total_hashes)
 
 
 async def main():
