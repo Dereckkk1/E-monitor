@@ -2,15 +2,19 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/storage"
 )
@@ -165,6 +169,242 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(w, r, id.String()+".m4a", time.Time{}, bytes.NewReader(data))
+}
+
+// manualAudioMIME mapeia content-types aceitos no upload da "censura" → extensão
+// usada na chave S3. Browsers costumam mandar audio/mpeg (mp3), audio/mp4 (m4a)
+// e audio/wav. Outros formatos são rejeitados pra evitar binário arbitrário
+// sentando no bucket de evidências.
+var manualAudioMIME = map[string]string{
+	"audio/mpeg":  "mp3",
+	"audio/mp3":   "mp3",
+	"audio/mp4":   "m4a",
+	"audio/x-m4a": "m4a",
+	"audio/aac":   "aac",
+	"audio/wav":   "wav",
+	"audio/x-wav": "wav",
+	"audio/wave":  "wav",
+	"audio/ogg":   "ogg",
+}
+
+const manualAudioMaxBytes = 25 << 20 // 25 MB
+
+// CreateManual is the admin "Adicionar veiculação manualmente" action. The
+// payload mirrors the form on the DayDetailModal: campaign + station + the
+// chosen material + the declared timestamp + an optional note + an optional
+// audio file (the "censura" recorded by the broadcaster). The repo validates
+// the material↔station↔campaign link and runs the same categorizer the real
+// engine uses, so the inserted row participates in agregados just like an
+// automatic detection.
+//
+// Aceita JSON (sem áudio) OU multipart/form-data (com áudio opcional no campo
+// `audio`). O JSON-only path preserva o uso por API ou testes que só querem
+// inserir metadados.
+func (h *DetectionsHandler) CreateManual(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var (
+		campaignID, stationID, commercialID uuid.UUID
+		detectedAt                          time.Time
+		note                                string
+		audioReader                         io.Reader
+		audioSize                           int64
+		audioExt                            string
+		audioContentType                    string
+	)
+
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		r.Body = http.MaxBytesReader(w, r.Body, manualAudioMaxBytes+(1<<20))
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "invalid multipart payload (limite 25MB)", http.StatusBadRequest)
+			return
+		}
+		var err error
+		if campaignID, err = uuid.Parse(r.FormValue("campaign_id")); err != nil {
+			http.Error(w, "invalid campaign_id", http.StatusBadRequest)
+			return
+		}
+		if stationID, err = uuid.Parse(r.FormValue("station_id")); err != nil {
+			http.Error(w, "invalid station_id", http.StatusBadRequest)
+			return
+		}
+		if commercialID, err = uuid.Parse(r.FormValue("commercial_id")); err != nil {
+			http.Error(w, "invalid commercial_id", http.StatusBadRequest)
+			return
+		}
+		if detectedAt, err = time.Parse(time.RFC3339, r.FormValue("detected_at")); err != nil {
+			http.Error(w, "invalid detected_at (use RFC3339)", http.StatusBadRequest)
+			return
+		}
+		note = r.FormValue("note")
+
+		file, header, ferr := r.FormFile("audio")
+		if ferr == nil {
+			defer file.Close()
+			audioContentType = header.Header.Get("Content-Type")
+			ext, accepted := manualAudioMIME[strings.ToLower(audioContentType)]
+			if !accepted {
+				http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac ou ogg)", http.StatusUnsupportedMediaType)
+				return
+			}
+			audioExt = ext
+			audioSize = header.Size
+			audioReader = file
+		}
+	} else {
+		// JSON fallback.
+		var in struct {
+			CampaignID   uuid.UUID `json:"campaign_id"`
+			StationID    uuid.UUID `json:"station_id"`
+			CommercialID uuid.UUID `json:"commercial_id"`
+			DetectedAt   time.Time `json:"detected_at"`
+			Note         string    `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		campaignID, stationID, commercialID = in.CampaignID, in.StationID, in.CommercialID
+		detectedAt = in.DetectedAt
+		note = in.Note
+	}
+
+	if campaignID == uuid.Nil || stationID == uuid.Nil || commercialID == uuid.Nil {
+		http.Error(w, "campaign_id, station_id and commercial_id are required", http.StatusBadRequest)
+		return
+	}
+	if detectedAt.IsZero() {
+		http.Error(w, "detected_at is required", http.StatusBadRequest)
+		return
+	}
+	if detectedAt.After(time.Now().Add(5 * time.Minute)) {
+		http.Error(w, "detected_at cannot be in the future", http.StatusBadRequest)
+		return
+	}
+
+	det, err := h.Repo.CreateManual(r.Context(), catalog.CreateManualInput{
+		StationID:    stationID,
+		CommercialID: commercialID,
+		CampaignID:   campaignID,
+		DetectedAt:   detectedAt,
+		ManualBy:     claims.UserID,
+		ManualNote:   note,
+	})
+	if err != nil {
+		if errors.Is(err, catalog.ErrMaterialNotLinkedToStation) {
+			http.Error(w, "material is not linked to this station in this campaign", http.StatusUnprocessableEntity)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Upload do áudio acontece DEPOIS do insert pra usar o ID gerado pelo
+	// banco na chave S3 (mesmo padrão do evidence.Service automático). Se o
+	// upload falhar, a detection permanece com evidence_status='missing' —
+	// o admin pode reinserir ou subir o áudio depois (futuro endpoint).
+	if audioReader != nil && h.Storage != nil {
+		key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.%s",
+			detectedAt.UTC().Format("2006"),
+			detectedAt.UTC().Format("01"),
+			detectedAt.UTC().Format("02"),
+			stationID,
+			det.ID,
+			audioExt,
+		)
+		if err := h.Storage.Put(r.Context(), key, audioReader, audioContentType); err != nil {
+			// Insere ficou OK, só o áudio falhou — retorna a detection
+			// como está (evidence_status='missing') com 207 pra o caller
+			// poder logar/reagir.
+			writeJSON(w, http.StatusMultiStatus, map[string]any{
+				"detection":     det,
+				"audio_error":   err.Error(),
+				"audio_warning": "veiculação criada mas o upload do áudio falhou — tente desconsiderar e reinserir",
+			})
+			return
+		}
+		if err := h.Repo.UpdateEvidence(r.Context(), det.ID, det.DetectedAt, "available", key, audioSize); err != nil {
+			http.Error(w, "internal error updating evidence", http.StatusInternalServerError)
+			return
+		}
+		if updated, err := h.Repo.Get(r.Context(), det.ID); err == nil {
+			det = updated
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, det)
+}
+
+// Ignore is the admin "desconsiderar veiculação" action: stamps ignored_at
+// on the row so daily_play_summary skips it. Reversible via Restore. The
+// audio evidence and category column are preserved for auditing — only the
+// aggregate counters drop the row.
+func (h *DetectionsHandler) Ignore(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Existence + idempotency guard: surface 404 if the row doesn't exist,
+	// otherwise the UPDATE silently no-ops.
+	det, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := h.Repo.Ignore(r.Context(), det.ID, claims.UserID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	updated, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// Restore reverts Ignore by clearing ignored_at/ignored_by. The row counts
+// in daily_play_summary again immediately.
+func (h *DetectionsHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	det, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := h.Repo.Restore(r.Context(), det.ID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	updated, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request) {

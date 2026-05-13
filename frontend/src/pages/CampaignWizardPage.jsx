@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useCampaign, useCreateCampaign,
+  useCampaign, useCreateCampaign, useUpdateCampaign,
   useCampaignMaterials, useClients, useStations,
   useDistributionRules, useMaterials,
 } from '../api/hooks'
@@ -10,6 +10,7 @@ import BasicDataStep from './CampaignWizardSteps/BasicDataStep'
 import StationsStep from './CampaignWizardSteps/StationsStep'
 import MaterialsStep from './CampaignWizardSteps/MaterialsStep'
 import DistributionStep from './CampaignWizardSteps/DistributionStep'
+import PricingStep from './CampaignWizardSteps/PricingStep'
 
 export default function CampaignWizardPage() {
   const { id: routeId } = useParams()
@@ -33,7 +34,10 @@ export default function CampaignWizardPage() {
         end_date: existingCampaign.end_date?.slice(0, 10) ?? '',
       })
       setCampaignId(existingCampaign.id)
-      setCompletedSteps([1, 2, 3])
+      // Em modo edit todas as etapas anteriores são consideradas concluídas,
+      // assim o usuário pode navegar livremente pra editar valor sem refazer
+      // o fluxo todo.
+      setCompletedSteps([1, 2, 3, 4])
     }
   }, [existingCampaign])
 
@@ -58,6 +62,12 @@ export default function CampaignWizardPage() {
   const distributedCount = countCoveredCombinations(distributionRules)
 
   const createCampaign = useCreateCampaign()
+  const updateCampaign = useUpdateCampaign()
+
+  // Ref usada pelo PricingStep pra expor saveAll() ao parent. handleFinish
+  // chama isso ANTES de navegar pra /campaigns — sem o save, os drafts do
+  // Step 5 nunca chegam no banco.
+  const pricingRef = useRef(null)
 
   function handleStepClick(step) {
     if (step <= currentStep || completedSteps.includes(step - 1)) {
@@ -69,7 +79,7 @@ export default function CampaignWizardPage() {
     if (!completedSteps.includes(currentStep)) {
       setCompletedSteps([...completedSteps, currentStep])
     }
-    setCurrentStep(s => Math.min(4, s + 1))
+    setCurrentStep(s => Math.min(5, s + 1))
   }
 
   function handlePrev() {
@@ -91,11 +101,37 @@ export default function CampaignWizardPage() {
         window.alert('Erro ao criar campanha. Tente novamente.')
         return
       }
+    } else if (currentStep === 1 && campaignId) {
+      // Modo edit: persiste qualquer mudança em name / start_date / end_date
+      // antes de avançar. Sem isso o usuário podia editar o período no Step 1
+      // e o backend nunca via — bug reportado em 2026-05-12.
+      const startChanged = (existingCampaign?.start_date?.slice(0, 10) ?? '') !== draftCampaign.start_date
+      const endChanged   = (existingCampaign?.end_date?.slice(0, 10)   ?? '') !== draftCampaign.end_date
+      const nameChanged  = (existingCampaign?.name ?? '')               !== draftCampaign.name
+      if (startChanged || endChanged || nameChanged) {
+        try {
+          await updateCampaign.mutateAsync({
+            id: campaignId,
+            name: draftCampaign.name,
+            start_date: draftCampaign.start_date + 'T00:00:00Z',
+            end_date:   draftCampaign.end_date   + 'T00:00:00Z',
+          })
+        } catch {
+          window.alert('Erro ao salvar alterações da campanha. Tente novamente.')
+          return
+        }
+      }
     }
     markStepCompleteAndAdvance()
   }
 
-  function handleFinish() {
+  async function handleFinish() {
+    // Step 5 → persiste todos os pricings antes de fechar o wizard. Se algum
+    // falhar, saveAll() já mostra alert; aqui apenas abortamos.
+    if (pricingRef.current) {
+      const ok = await pricingRef.current.saveAll()
+      if (!ok) return
+    }
     navigate('/campaigns', { replace: true })
   }
 
@@ -163,10 +199,25 @@ export default function CampaignWizardPage() {
       />
     )
     nextDisabled = false
+  } else if (currentStep === 5) {
+    const campaignStations = targetStationIds
+      .map(id => allStations.find(s => s.id === id))
+      .filter(Boolean)
+    stepContent = (
+      <PricingStep
+        ref={pricingRef}
+        campaignId={campaignId}
+        campaignStations={campaignStations}
+        campaignMaterials={campaignMaterials}
+        materialsById={materialsById}
+      />
+    )
+    // O nextDisabled aqui é só visual; saveAll() valida de novo na hora.
+    nextDisabled = false
   }
 
-  const nextLabel = currentStep === 4 ? 'Concluir campanha →' : 'Avançar →'
-  const onNext = currentStep === 4 ? handleFinish : handleNext
+  const nextLabel = currentStep === 5 ? 'Concluir campanha →' : 'Avançar →'
+  const onNext = currentStep === 5 ? handleFinish : handleNext
 
   return (
     <WizardLayout

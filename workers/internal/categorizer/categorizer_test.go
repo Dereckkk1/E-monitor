@@ -70,11 +70,47 @@ func TestCategorize_OutSlot(t *testing.T) {
 		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
 	}
 	rules := []Rule{mkRule(1, 30, 62, "08:00", "10:00", 3)}
-	// Detection às 14:00 BRT (17:00 UTC) — fora da faixa
+	// Detection às 14:00 BRT (17:00 UTC) — fora da faixa (>>15min de folga)
 	det := time.Date(2026, 6, 10, 17, 0, 0, 0, time.UTC)
 	got := Categorize(det, cmp, rules)
 	if got != "out_slot" {
 		t.Errorf("got %q, want out_slot", got)
+	}
+}
+
+func TestCategorize_InSlot_ToleranceBefore(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, saoPaulo),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
+	}
+	rules := []Rule{mkRule(1, 30, 62, "06:00", "19:00", 3)}
+	// 05:45 BRT — exatamente no limite da tolerância → in_slot
+	det := time.Date(2026, 6, 10, 5, 45, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, rules); got != "in_slot" {
+		t.Errorf("05:45 com rule 06:00-19:00: got %q, want in_slot", got)
+	}
+	// 05:44 BRT — 16 min antes, fora da tolerância → out_slot
+	det = time.Date(2026, 6, 10, 5, 44, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, rules); got != "out_slot" {
+		t.Errorf("05:44 com rule 06:00-19:00: got %q, want out_slot", got)
+	}
+}
+
+func TestCategorize_InSlot_ToleranceAfter(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, saoPaulo),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
+	}
+	rules := []Rule{mkRule(1, 30, 62, "06:00", "19:00", 3)}
+	// 19:15 BRT — exatamente no limite → in_slot
+	det := time.Date(2026, 6, 10, 19, 15, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, rules); got != "in_slot" {
+		t.Errorf("19:15 com rule 06:00-19:00: got %q, want in_slot", got)
+	}
+	// 19:16 BRT — 16 min depois → out_slot
+	det = time.Date(2026, 6, 10, 19, 16, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, rules); got != "out_slot" {
+		t.Errorf("19:16 com rule 06:00-19:00: got %q, want out_slot", got)
 	}
 }
 

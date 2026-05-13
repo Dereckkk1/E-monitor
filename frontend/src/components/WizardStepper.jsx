@@ -49,12 +49,22 @@ function IconCheck() {
     </svg>
   )
 }
+function IconMoney() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="4" width="12" height="8" rx="1.4" />
+      <circle cx="8" cy="8" r="1.8" />
+      <path d="M4.5 6h.01M11.5 10h.01" />
+    </svg>
+  )
+}
 
 const STEPS = [
   { id: 1, label: 'Dados básicos', hint: 'Nome, cliente, período',     Icon: IconInfo },
   { id: 2, label: 'Emissoras',     hint: 'Quem vai monitorar',         Icon: IconRadio },
   { id: 3, label: 'Materiais',     hint: 'Áudios da campanha',         Icon: IconStack },
   { id: 4, label: 'Distribuição',  hint: 'Regras de veiculação',       Icon: IconCalendar },
+  { id: 5, label: 'Valores',       hint: 'Investimento por emissora',  Icon: IconMoney },
 ]
 
 export default function WizardStepper({ currentStep, completedSteps = [], onStepClick }) {

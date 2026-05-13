@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +42,21 @@ type Detection struct {
 	// RetractedAt is set when §18.2.2 disambiguation overruled this row in
 	// favour of a longer cut from the same client; nil otherwise.
 	RetractedAt *time.Time `json:"retracted_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	// IgnoredAt / IgnoredBy are set when an admin manually disregards this
+	// veiculação via the "Desconsiderar" action on the detection detail page.
+	// The daily_play_summary view skips ignored rows, so bonus/deficit
+	// recompute automatically. Reversible: clearing IgnoredAt reactivates.
+	IgnoredAt *time.Time `json:"ignored_at,omitempty"`
+	IgnoredBy *uuid.UUID `json:"ignored_by,omitempty"`
+	// ManualAt / ManualBy / ManualNote populate quando um admin sobe a
+	// veiculação retroativamente via "Adicionar veiculação manualmente" na
+	// modal de /detections. A linha conta normalmente em agregados (o
+	// categorizer roda igual a uma detection real); a tripla é só pra
+	// auditoria + badge + nota na detail page.
+	ManualAt   *time.Time `json:"manual_at,omitempty"`
+	ManualBy   *uuid.UUID `json:"manual_by,omitempty"`
+	ManualNote *string    `json:"manual_note,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type Detections struct {
@@ -149,6 +165,97 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 	), nil
 }
 
+// CreateManualInput é o payload da inserção retroativa "Adicionar veiculação
+// manualmente" que aparece na DayDetailModal. Os campos espelham a entrada
+// real (campaign / commercial / station / detected_at) mais a tripla de
+// auditoria que vai pra detections.manual_*. O categorizador roda igual à
+// engine — então out_slot / out_date / orphan funcionam exatamente como
+// veiculação real.
+type CreateManualInput struct {
+	StationID    uuid.UUID
+	CommercialID uuid.UUID
+	CampaignID   uuid.UUID
+	DetectedAt   time.Time
+	ManualBy     uuid.UUID
+	ManualNote   string // pode ser vazio → vai como NULL
+}
+
+// CreateManual valida o vínculo material × emissora × campanha (rejeita se a
+// emissora não estiver em campaign_materials.target_stations pro material), e
+// insere a detection com:
+//   - confidence = 1.0 (declarado, ground-truth)
+//   - hash_count = 0, *_offset_ms = 0
+//   - evidence_status = 'missing' (sem áudio)
+//   - manual_at = now(), manual_by, manual_note
+//
+// A categorização (in_slot/out_slot/out_date/orphan) sai do mesmo
+// categorizer.Categorize() que a engine real usa.
+func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*Detection, error) {
+	// Validação do vínculo: a emissora precisa estar no target_stations
+	// do material dentro daquela campanha. Sem isso o operador podia subir
+	// veiculação de um material que nem está atribuído à emissora — gerando
+	// dado contraditório com o restante do sistema.
+	var linked bool
+	err := d.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM campaign_materials
+			WHERE campaign_id = $1
+			  AND material_id = $2
+			  AND $3 = ANY(target_stations)
+		)`, in.CampaignID, in.CommercialID, in.StationID,
+	).Scan(&linked)
+	if err != nil {
+		return nil, err
+	}
+	if !linked {
+		return nil, ErrMaterialNotLinkedToStation
+	}
+
+	// Reutiliza o categorizer existente passando os mesmos inputs.
+	cat, err := d.categorize(ctx, CreateDetectionInput{
+		StationID:    in.StationID,
+		CommercialID: in.CommercialID,
+		CampaignID:   in.CampaignID,
+		DetectedAt:   in.DetectedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var note *string
+	if trimmed := strings.TrimSpace(in.ManualNote); trimmed != "" {
+		note = &trimmed
+	}
+
+	row := d.pool.QueryRow(ctx, `
+		INSERT INTO detections (
+		    station_id, commercial_id, campaign_id, detected_at,
+		    match_start_offset_ms, match_end_offset_ms,
+		    confidence, hash_count, category,
+		    evidence_status,
+		    manual_at, manual_by, manual_note
+		) VALUES (
+		    $1, $2, $3, $4,
+		    0, 0,
+		    1.0, 0, $5,
+		    'missing',
+		    now(), $6, $7
+		)
+		RETURNING id`,
+		in.StationID, in.CommercialID, in.CampaignID, in.DetectedAt,
+		cat, in.ManualBy, note,
+	)
+	var id uuid.UUID
+	if err := row.Scan(&id); err != nil {
+		return nil, err
+	}
+	return d.Get(ctx, id)
+}
+
+// ErrMaterialNotLinkedToStation sinaliza tentativa de inserir veiculação
+// manual de material que não está atribuído à emissora alvo na campanha.
+var ErrMaterialNotLinkedToStation = errors.New("material is not linked to this station in this campaign")
+
 func (d *Detections) UpdateEvidence(ctx context.Context, id uuid.UUID, detectedAt time.Time,
 	status, key string, sizeBytes int64) error {
 	_, err := d.pool.Exec(ctx, `
@@ -178,7 +285,8 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
-		       m.type_id, d.retracted_at, d.created_at
+		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
+		       d.manual_at, d.manual_by, d.manual_note, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -201,7 +309,9 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
 			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
 			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
-			&det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt, &det.CreatedAt); err != nil {
+			&det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt,
+			&det.IgnoredAt, &det.IgnoredBy,
+			&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, det)
@@ -217,7 +327,8 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
-		       m.type_id, d.retracted_at, d.created_at
+		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
+		       d.manual_at, d.manual_by, d.manual_note, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -227,9 +338,30 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
-		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt, &det.CreatedAt)
+		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID,
+		&det.RetractedAt, &det.IgnoredAt, &det.IgnoredBy,
+		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &det, nil
+}
+
+// Ignore stamps ignored_at = now() and ignored_by = userID on the detection
+// so daily_play_summary excludes it from aggregates. Idempotent — a second
+// call updates the timestamp but keeps the row in the ignored state.
+func (d *Detections) Ignore(ctx context.Context, id, userID uuid.UUID) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections SET ignored_at = now(), ignored_by = $2 WHERE id = $1`,
+		id, userID)
+	return err
+}
+
+// Restore clears ignored_at / ignored_by so the detection counts again. No-op
+// when the row was never ignored.
+func (d *Detections) Restore(ctx context.Context, id uuid.UUID) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections SET ignored_at = NULL, ignored_by = NULL WHERE id = $1`,
+		id)
+	return err
 }

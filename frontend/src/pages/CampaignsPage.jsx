@@ -5,12 +5,13 @@ import {
   useCampaigns, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
-  useCampaignMaterials, useMaterials,
+  useCampaignMaterials, useMaterials, useCampaignsFinancials,
 } from '../api/hooks'
 import api from '../api/client'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
+import { tokenize, matchesAllTokens } from '../utils/search'
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
 
@@ -959,7 +960,42 @@ function CampaignStationsSection({ campaign, allStations }) {
 
 // ─── CampaignRow ───────────────────────────────────────────────────────────────
 
-function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign }) {
+// Inline badge na meta da row: investimento total + CPM calculado.
+// Só aparece quando a campanha tem pricing cadastrado (total_invested > 0).
+// Tooltip detalha as duas pernas da fórmula. Visual: pílula sutil com tinta
+// rosa-action pra não competir com o badge de status à direita.
+const _BRL_CAMPAIGN_LIST = new Intl.NumberFormat('pt-BR', {
+  style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
+})
+function CPMBadge({ financials }) {
+  const { total_invested: inv, total_insertions: ins } = financials
+  const cpm = ins > 0 ? (inv / ins) * 1000 : null
+  return (
+    <span
+      title={cpm != null
+        ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ ${ins} inserções × 1000`
+        : 'Nenhuma inserção realizada ainda — CPM indeterminado.'}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        padding: '2px 8px', borderRadius: 'var(--radius-full)',
+        background: 'var(--c-action-light)', color: 'var(--c-action)',
+        fontSize: 10.5, fontWeight: 700,
+        fontFamily: 'var(--font-heading)', letterSpacing: '0.02em',
+        verticalAlign: 'middle',
+      }}
+    >
+      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden>
+        <path d="M3 13l5-9 5 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {_BRL_CAMPAIGN_LIST.format(inv)}
+      <span style={{ color: 'var(--c-action)', opacity: 0.7, fontWeight: 500 }}>
+        · CPM {cpm != null ? _BRL_CAMPAIGN_LIST.format(cpm) : '—'}
+      </span>
+    </span>
+  )
+}
+
+function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign, financials }) {
   const [expanded, setExpanded] = useState(false)
   const confirm = useConfirm()
   const alertDialog = useAlert()
@@ -1003,6 +1039,12 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
             <span title={endTip}>{fmtDate(campaign.end_date)}</span>
             {' · '}
             {stationCount} {stationCount === 1 ? 'emissora' : 'emissoras'}
+            {financials && financials.total_invested > 0 && (
+              <>
+                {' · '}
+                <CPMBadge financials={financials} />
+              </>
+            )}
           </div>
         </div>
 
@@ -1096,9 +1138,23 @@ export default function CampaignsPage() {
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
+  const { data: financialsList = [] }       = useCampaignsFinancials()
+  const financialsByCampaign = useMemo(
+    () => Object.fromEntries(financialsList.map(f => [f.campaign_id, f])),
+    [financialsList]
+  )
 
   const cancelCampaign = useCancelCampaign()
   const deleteCampaign = useDeleteCampaign()
+
+  const [search, setSearch] = useState('')
+  // Competência default = mês atual. O usuário pode limpar pra ver todas, mas
+  // o caso comum é "quais campanhas estão ativas neste mês". Selecionar um
+  // mês mantém só campanhas cujo intervalo [start_date, end_date] o cruza.
+  const [competence, setCompetence] = useState(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
 
   // Server already orders by lifecycle, but a client-side guard keeps the UX
   // consistent if the API ever changes its ORDER BY.
@@ -1114,6 +1170,43 @@ export default function CampaignsPage() {
       return new Date(b.start_date) - new Date(a.start_date)
     })
   }, [campaigns])
+
+  const clientNameById = useMemo(
+    () => Object.fromEntries(clients.map(c => [c.id, c.name ?? ''])),
+    [clients]
+  )
+
+  // Filter pipeline: month-overlap first (cheaper, drops most rows), then
+  // accent-insensitive token search across name + client.
+  const filteredCampaigns = useMemo(() => {
+    let list = orderedCampaigns
+
+    if (competence) {
+      const [y, m] = competence.split('-').map(Number)
+      const monthStart = new Date(y, m - 1, 1, 0, 0, 0, 0)
+      const monthEnd   = new Date(y, m, 0, 23, 59, 59, 999)
+      list = list.filter(c => {
+        if (!c.start_date || !c.end_date) return false
+        const cStart = new Date(c.start_date)
+        const cEnd   = new Date(c.end_date)
+        // Interval-overlap test: cStart <= monthEnd && cEnd >= monthStart.
+        return cStart <= monthEnd && cEnd >= monthStart
+      })
+    }
+
+    const tokens = tokenize(search)
+    if (tokens.length > 0) {
+      list = list.filter(c => {
+        const haystack = {
+          name: c.name ?? '',
+          client: clientNameById[c.client_id] ?? '',
+        }
+        return matchesAllTokens(haystack, ['name', 'client'], tokens)
+      })
+    }
+
+    return list
+  }, [orderedCampaigns, search, competence, clientNameById])
 
   if (isLoading) {
     return (
@@ -1138,6 +1231,8 @@ export default function CampaignsPage() {
     )
   }
 
+  const hasFilters = !!search || !!competence
+
   return (
     <div>
       <div className="page-header">
@@ -1148,19 +1243,129 @@ export default function CampaignsPage() {
       {campaigns.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="campaign-list">
-          {orderedCampaigns.map(c => (
-            <CampaignRow
-              key={c.id}
-              campaign={c}
-              clients={clients}
-              allStations={allStations}
-              cancelCampaign={cancelCampaign}
-              deleteCampaign={deleteCampaign}
-            />
-          ))}
-        </div>
+        <>
+          <CampaignFilters
+            search={search}
+            onSearchChange={setSearch}
+            competence={competence}
+            onCompetenceChange={setCompetence}
+            onClear={() => { setSearch(''); setCompetence('') }}
+            hasFilters={hasFilters}
+            total={campaigns.length}
+            shown={filteredCampaigns.length}
+          />
+
+          {filteredCampaigns.length === 0 ? (
+            <FilteredEmptyState onClear={() => { setSearch(''); setCompetence('') }} />
+          ) : (
+            <div className="campaign-list">
+              {filteredCampaigns.map(c => (
+                <CampaignRow
+                  key={c.id}
+                  campaign={c}
+                  clients={clients}
+                  allStations={allStations}
+                  cancelCampaign={cancelCampaign}
+                  deleteCampaign={deleteCampaign}
+                  financials={financialsByCampaign[c.id]}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
+    </div>
+  )
+}
+
+// Filter bar above the campaign list — text search (name / client) plus a
+// competence picker that uses month-overlap semantics: a campaign appears for
+// any month its [start_date, end_date] interval touches.
+function CampaignFilters({
+  search, onSearchChange, competence, onCompetenceChange,
+  onClear, hasFilters, total, shown,
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      padding: '10px 12px', marginBottom: 12,
+      background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius-md)',
+    }}>
+      <div className="stations-search" style={{ flex: '1 1 260px', maxWidth: 360, minWidth: 220 }}>
+        <span className="stations-search-icon">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+          </svg>
+        </span>
+        <input
+          className="input stations-search-input"
+          type="text"
+          placeholder="Buscar por nome ou cliente…"
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+        />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label style={{
+          fontSize: 11, color: 'var(--c-text-3)', fontWeight: 700,
+          textTransform: 'uppercase', letterSpacing: '0.04em',
+        }}>
+          Competência
+        </label>
+        <input
+          className="input-month"
+          type="month"
+          value={competence}
+          onChange={e => onCompetenceChange(e.target.value)}
+        />
+      </div>
+
+      {hasFilters && (
+        <>
+          <span style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
+            {shown} de {total}
+          </span>
+          <button
+            type="button"
+            onClick={onClear}
+            style={{
+              padding: '5px 10px', borderRadius: 'var(--radius-md)',
+              background: 'transparent', border: '1px solid var(--c-border)',
+              color: 'var(--c-text-2)', fontSize: 11, fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Limpar
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function FilteredEmptyState({ onClear }) {
+  return (
+    <div style={{
+      padding: '40px 24px', textAlign: 'center',
+      background: 'var(--c-bg)', border: '1px dashed var(--c-border)',
+      borderRadius: 'var(--radius-md)', color: 'var(--c-text-2)',
+    }}>
+      <p style={{ margin: '0 0 12px', fontSize: 14 }}>
+        Nenhuma campanha corresponde aos filtros aplicados.
+      </p>
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          padding: '7px 14px', borderRadius: 'var(--radius-md)',
+          background: 'var(--c-action)', color: '#fff', border: 0,
+          fontSize: 12, fontWeight: 700, cursor: 'pointer',
+        }}
+      >
+        Limpar filtros
+      </button>
     </div>
   )
 }

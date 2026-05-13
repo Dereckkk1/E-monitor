@@ -49,6 +49,10 @@ export default function DistributionStep({
   const [editingRule, setEditingRule] = useState(null)
   const [popoverAnchor, setPopoverAnchor] = useState(null)
   const [popoverContext, setPopoverContext] = useState(null) // { stationId, materialId, date }
+  // Pending +/- changes staged locally — committed only on "Confirmar".
+  // Key: `${stationId}|${typeId}|${dateISO}` → new plays_expected value.
+  const [pendingDrafts, setPendingDrafts] = useState(() => new Map())
+  const [committing, setCommitting] = useState(false)
 
   const typeById = useMemo(
     () => Object.fromEntries(materialTypes.map(t => [t.id, t])),
@@ -74,17 +78,6 @@ export default function DistributionStep({
     return m
   }, [campaignMaterials, materialsById])
 
-  // materialCountByType: typeId → number of materials of that type linked to the campaign
-  const materialCountByType = useMemo(() => {
-    const counts = {}
-    for (const cm of campaignMaterials) {
-      const mat = materialsById[cm.material_id]
-      if (!mat?.type_id) continue
-      counts[mat.type_id] = (counts[mat.type_id] ?? 0) + 1
-    }
-    return counts
-  }, [campaignMaterials, materialsById])
-
   const rows = useMemo(() => {
     const r = []
     for (const [sid, typeSet] of typesInScopeByStation.entries()) {
@@ -101,7 +94,6 @@ export default function DistributionStep({
           materialId: tid,
           materialTitle: type.name,
           typeColor: type.color ?? '#94a3b8',
-          materialCount: materialCountByType[tid] ?? 0,
           ruleSummary: first
             ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
             : null,
@@ -110,7 +102,7 @@ export default function DistributionStep({
       }
     }
     return r
-  }, [typesInScopeByStation, typeById, rules, materialCountByType])
+  }, [typesInScopeByStation, typeById, rules])
 
   // Build cellData map from summary + override marker. Migration 0019 made the
   // view group by type, so the key uses type_id where it used to use material_id.
@@ -125,6 +117,67 @@ export default function DistributionStep({
     }
     return m
   }, [summary, overrides])
+
+  // Overlay any staged drafts on top of the server-derived cellData. The grid
+  // sees the optimistic expected value so +/- feels instant; the real upsert
+  // only runs when the user clicks "Confirmar".
+  const cellDataWithDrafts = useMemo(() => {
+    if (pendingDrafts.size === 0) return cellData
+    const m = new Map(cellData)
+    for (const [key, expected] of pendingDrafts.entries()) {
+      const existing = m.get(key) ?? {}
+      m.set(key, { ...existing, expected, hasOverride: true, hasPendingDraft: true })
+    }
+    return m
+  }, [cellData, pendingDrafts])
+
+  function stageCellChange(stationId, typeId, dateISO, delta) {
+    const key = `${stationId}|${typeId}|${dateISO}`
+    setPendingDrafts(prev => {
+      const next = new Map(prev)
+      const current = next.has(key)
+        ? next.get(key)
+        : (cellData.get(key)?.expected ?? 0)
+      next.set(key, Math.max(0, current + delta))
+      return next
+    })
+  }
+
+  async function commitDrafts() {
+    if (pendingDrafts.size === 0 || committing) return
+    setCommitting(true)
+    // Snapshot avoids re-iterating drafts the user adds mid-commit.
+    const snapshot = [...pendingDrafts.entries()]
+    for (const [key, value] of snapshot) {
+      const [stationId, typeId, dateISO] = key.split('|')
+      try {
+        await upsertOverride.mutateAsync({
+          campaignId,
+          type_id: typeId,
+          station_id: stationId,
+          for_date: dateISO,
+          plays_expected: value,
+        })
+        // Drop the entry only if the user hasn't bumped it since we snapshotted;
+        // otherwise their newer change would silently disappear.
+        setPendingDrafts(prev => {
+          if (prev.get(key) !== value) return prev
+          const next = new Map(prev)
+          next.delete(key)
+          return next
+        })
+      } catch {
+        setCommitting(false)
+        window.alert(`Erro ao salvar alterações em ${dateISO}. Tente novamente.`)
+        return
+      }
+    }
+    setCommitting(false)
+  }
+
+  function discardDrafts() {
+    setPendingDrafts(new Map())
+  }
 
   function openRuleEditor(existing = null) {
     setEditingRule(existing)
@@ -255,6 +308,23 @@ export default function DistributionStep({
         </div>
       </div>
 
+      {rules.length > 0 && (
+        <RuleChipList
+          rules={rules}
+          typeById={typeById}
+          onEdit={openRuleEditor}
+        />
+      )}
+
+      {pendingDrafts.size > 0 && (
+        <PendingDraftsBar
+          count={pendingDrafts.size}
+          committing={committing}
+          onDiscard={discardDrafts}
+          onCommit={commitDrafts}
+        />
+      )}
+
       {rows.length === 0 ? (
         <EmptyDistributionState onAddRule={() => openRuleEditor(null)} />
       ) : (
@@ -265,26 +335,12 @@ export default function DistributionStep({
           campaignEnd={campaignEnd}
           stations={allStations}
           rows={rows}
-          cellData={cellData}
+          cellData={cellDataWithDrafts}
           onCellClick={handleCellClick}
-          onCellIncrement={(stationId, typeId, dateISO, currentValue) => {
-            upsertOverride.mutate({
-              campaignId,
-              type_id: typeId,
-              station_id: stationId,
-              for_date: dateISO,
-              plays_expected: currentValue + 1,
-            })
-          }}
-          onCellDecrement={(stationId, typeId, dateISO, currentValue) => {
-            upsertOverride.mutate({
-              campaignId,
-              type_id: typeId,
-              station_id: stationId,
-              for_date: dateISO,
-              plays_expected: Math.max(0, currentValue - 1),
-            })
-          }}
+          onCellIncrement={(stationId, typeId, dateISO) =>
+            stageCellChange(stationId, typeId, dateISO, +1)}
+          onCellDecrement={(stationId, typeId, dateISO) =>
+            stageCellChange(stationId, typeId, dateISO, -1)}
         />
       )}
 
@@ -331,6 +387,124 @@ export default function DistributionStep({
         stationName={allStations.find(s => s.id === ctx?.stationId)?.name ?? '—'}
         date={ctx?.date}
       />
+    </div>
+  )
+}
+
+// Sticky-feeling banner shown while there are unsaved +/- changes. Confirm
+// flushes every pending cell into upsertOverride; discard wipes the local
+// state and lets the grid snap back to server values.
+function PendingDraftsBar({ count, committing, onDiscard, onCommit }) {
+  const plural = count === 1 ? 'alteração pendente' : 'alterações pendentes'
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '12px 16px', borderRadius: 'var(--radius-md)',
+      background: '#fffbeb', border: '1px solid #fcd34d',
+      boxShadow: '0 1px 2px rgba(202, 138, 4, 0.08)',
+      fontFamily: 'var(--font-heading)',
+    }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden style={{ color: '#b45309', flexShrink: 0 }}>
+        <path d="M12 3l9 16H3l9-16z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        <path d="M12 10v4M12 17h.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+      <span style={{ fontSize: 13, fontWeight: 600, color: '#92400e', flex: 1 }}>
+        <strong style={{ color: '#78350f' }}>{count}</strong> {plural} —
+        <span style={{ color: '#a16207', fontWeight: 500 }}> clique em Confirmar para salvar no servidor.</span>
+      </span>
+      <button
+        type="button"
+        onClick={onDiscard}
+        disabled={committing}
+        style={{
+          padding: '7px 14px', borderRadius: 'var(--radius-md)',
+          background: 'transparent', border: '1px solid #d4d4d8',
+          color: '#52525b', fontSize: 12, fontWeight: 600,
+          cursor: committing ? 'not-allowed' : 'pointer',
+          opacity: committing ? 0.6 : 1,
+          fontFamily: 'var(--font-heading)',
+        }}
+      >
+        Descartar
+      </button>
+      <button
+        type="button"
+        onClick={onCommit}
+        disabled={committing}
+        style={{
+          padding: '7px 16px', borderRadius: 'var(--radius-md)',
+          background: '#b45309', color: '#fff', border: 0,
+          fontSize: 12, fontWeight: 700,
+          cursor: committing ? 'wait' : 'pointer',
+          fontFamily: 'var(--font-heading)',
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          opacity: committing ? 0.85 : 1,
+        }}
+      >
+        {committing ? 'Salvando…' : 'Confirmar'}
+      </button>
+    </div>
+  )
+}
+
+// Clickable chip list of existing distribution rules. Each chip opens the rule
+// editor pre-filled with that rule. Provides the only path to edit existing
+// rules now that the standalone "Regra" column was removed from the grid.
+function RuleChipList({ rules, typeById, onEdit }) {
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
+      padding: '10px 14px', borderRadius: 'var(--radius-md)',
+      background: 'var(--c-bg)', border: '1px solid var(--c-border)',
+    }}>
+      <span style={{
+        fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+        fontFamily: 'var(--font-heading)', marginRight: 4,
+      }}>
+        Regras
+      </span>
+      {rules.map(rule => {
+        const type = typeById[rule.type_id]
+        const color = type?.color ?? '#94a3b8'
+        const name  = type?.name  ?? 'Tipo'
+        return (
+          <button
+            key={rule.id}
+            type="button"
+            onClick={() => onEdit(rule)}
+            title="Editar regra"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '5px 10px 5px 8px', borderRadius: 999,
+              background: 'var(--c-surface)',
+              border: `1px solid ${color}33`,
+              cursor: 'pointer', fontSize: 11, fontWeight: 600,
+              color: 'var(--c-text)',
+              transition: 'all 120ms',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = `${color}10`
+              e.currentTarget.style.borderColor = `${color}66`
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'var(--c-surface)'
+              e.currentTarget.style.borderColor = `${color}33`
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0,
+            }} />
+            <span style={{ color }}>{name}</span>
+            <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>
+              {String(rule.time_start).slice(0, 5)}–{String(rule.time_end).slice(0, 5)} · {rule.plays_per_day}×/dia
+            </span>
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden style={{ opacity: 0.55 }}>
+              <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )
+      })}
     </div>
   )
 }

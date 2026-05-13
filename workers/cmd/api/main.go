@@ -100,6 +100,7 @@ func main() {
 	cmpMatsRepo   := catalog.NewCampaignMaterials(pool)
 	distRulesRepo := catalog.NewDistributionRules(pool)
 	distOverRepo  := catalog.NewDistributionOverrides(pool)
+	pricingRepo   := catalog.NewPricing(pool)
 	dailySumRepo  := catalog.NewDailySummary(pool)
 
 	// Index store + loader.
@@ -254,9 +255,10 @@ func main() {
 		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc},
-		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo},
+		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, Supervisor: sup, Log: logger},
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},
+		Pricing:               &handlers.PricingHandler{Repo: pricingRepo},
 	}
 
 	srv := &http.Server{
