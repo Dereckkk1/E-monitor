@@ -210,6 +210,10 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Route("/detections", func(r chi.Router) {
 				r.Get("/", d.Detections.List)
+				// Static prefixes BEFORE /{id} so chi doesn't try to parse
+				// "aggregate-by-material" as a UUID. Same reason for /export
+				// inside the admin group below.
+				r.Get("/aggregate-by-material", d.Detections.AggregateByMaterial)
 				r.Get("/{id}", d.Detections.Get)
 				r.Get("/{id}/evidence", d.Detections.Evidence)
 				r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
