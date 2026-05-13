@@ -117,14 +117,21 @@ export default function AirtimeFiltersBar({
     const t = todayISO()
     if (from === daysAgoISO(7) && to === t) return 'last7'
     if (from === firstOfMonthISO() && to === t) return 'thisMonth'
-    if (selectedCampaignRaw && from === selectedCampaignRaw.start_date) {
-      const tEnd = selectedCampaignRaw.end_date && selectedCampaignRaw.end_date < t
-        ? selectedCampaignRaw.end_date
-        : t
-      if (to === tEnd) return 'fullCampaign'
+    if (selectedCampaignRaw) {
+      const start = selectedCampaignRaw.start_date ? String(selectedCampaignRaw.start_date).slice(0, 10) : ''
+      const end   = selectedCampaignRaw.end_date   ? String(selectedCampaignRaw.end_date).slice(0, 10)   : ''
+      const tEnd = end && end < t ? end : t
+      if (from === start && to === tEnd) return 'fullCampaign'
     }
     return 'custom'
   }, [from, to, selectedCampaignRaw])
+
+  // Campaign dates may arrive as full ISO timestamps ("2026-04-01T00:00:00Z")
+  // from the backend; the date inputs (and the rest of the page) only deal
+  // in YYYY-MM-DD. Strip to the date portion before propagating.
+  function toDateOnly(s) {
+    return s ? String(s).slice(0, 10) : ''
+  }
 
   function applyPreset(p) {
     // Combine from+to into a single onRangeChange call so we don't trigger
@@ -135,11 +142,12 @@ export default function AirtimeFiltersBar({
     } else if (p === 'thisMonth') {
       onRangeChange({ from: firstOfMonthISO(), to: todayISO() })
     } else if (p === 'fullCampaign' && selectedCampaignRaw) {
-      const t = todayISO()
-      const tEnd = selectedCampaignRaw.end_date && selectedCampaignRaw.end_date < t
-        ? selectedCampaignRaw.end_date
-        : t
-      onRangeChange({ from: selectedCampaignRaw.start_date, to: tEnd })
+      const today = todayISO()
+      const start = toDateOnly(selectedCampaignRaw.start_date)
+      const end = toDateOnly(selectedCampaignRaw.end_date)
+      const tEnd = end && end < today ? end : today
+      if (!start) return
+      onRangeChange({ from: start, to: tEnd })
     }
   }
 
