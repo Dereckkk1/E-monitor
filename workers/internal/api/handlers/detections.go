@@ -27,6 +27,15 @@ type DetectionsHandler struct {
 
 func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+
+	// When ?page=N is passed we go down the paginated path (airtime report
+	// consumer). Without page we keep the legacy shape — array wrapped in
+	// {data: [...]} with offset/limit — that DayDetailModal already eats.
+	if q.Get("page") != "" {
+		h.listPaged(w, r)
+		return
+	}
+
 	f := catalog.ListFilter{}
 	if v := q.Get("campaign_id"); v != "" {
 		id, err := uuid.Parse(v)
@@ -74,6 +83,69 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": items})
+}
+
+// listPaged is invoked when ?page=N is present on /detections. Accepts
+// campaign_id, from/to (RFC3339), q (search), sort, page_size (1..200,
+// default 10), page (>= 1). Returns the ListPagedResult shape consumed by
+// the airtime report.
+func (h *DetectionsHandler) listPaged(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := catalog.ListPagedFilter{}
+
+	if v := q.Get("campaign_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			http.Error(w, "invalid campaign_id", 400)
+			return
+		}
+		f.CampaignID = &id
+	}
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid from (use RFC3339)", 400)
+			return
+		}
+		f.StartDate = &t
+	}
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid to (use RFC3339)", 400)
+			return
+		}
+		f.EndDate = &t
+	}
+	if v := q.Get("q"); v != "" {
+		f.Q = v
+	}
+	if v := q.Get("sort"); v != "" {
+		f.Sort = v
+	}
+	if v := q.Get("page"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			http.Error(w, "invalid page (>=1)", 400)
+			return
+		}
+		f.Page = n
+	}
+	if v := q.Get("page_size"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 200 {
+			http.Error(w, "invalid page_size (1..200)", 400)
+			return
+		}
+		f.PageSize = n
+	}
+
+	res, err := h.Repo.ListPaged(r.Context(), f)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	writeJSON(w, 200, res)
 }
 
 func (h *DetectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
