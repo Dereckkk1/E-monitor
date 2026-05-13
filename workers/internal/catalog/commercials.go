@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -186,10 +187,14 @@ type CommercialDedupInfo struct {
 	DedupWindowSeconds int
 }
 
-// LookupForDedup returns the disambiguation context for the given commercial
-// short id (joining commercials → campaigns to get client_id and the
-// per-campaign dedup window). Returns pgx.ErrNoRows when the short id is
-// unknown or its fingerprint is not yet ready.
+// LookupForDedup returns the disambiguation context for the given short id
+// (joining commercials → campaigns to get client_id and the per-campaign
+// dedup window). When the short id is not found among commercials, the
+// lookup falls back to materials (linked via campaign_materials to a
+// currently-active campaign); the returned CommercialID is then a material
+// UUID — the field is polymorphic, mirroring the unified short_id sequence
+// shared between the two tables. Returns pgx.ErrNoRows when the short id
+// is unknown or its fingerprint is not yet ready in either table.
 func (c *Commercials) LookupForDedup(ctx context.Context, shortID int32) (CommercialDedupInfo, error) {
 	var info CommercialDedupInfo
 	var dur float64
@@ -201,6 +206,27 @@ func (c *Commercials) LookupForDedup(ctx context.Context, shortID int32) (Commer
 		LIMIT 1`,
 		shortID,
 	).Scan(&info.CommercialID, &info.ClientID, &dur, &info.DedupWindowSeconds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Maybe this short_id is a material — try the materials path.
+		// Materials aren't single-valued by campaign; pick the most recently
+		// added link to a currently-active campaign (consistent with the
+		// attribution rule used by evidence/service.go in Phase 7).
+		err = c.pool.QueryRow(ctx, `
+			SELECT m.id,
+			       ca.client_id,
+			       m.duration_seconds,
+			       COALESCE(ca.dedup_window_seconds, 5)
+			FROM materials m
+			JOIN campaign_materials cm ON cm.material_id = m.id
+			JOIN campaigns ca           ON ca.id = cm.campaign_id
+			WHERE m.short_id = $1
+			  AND m.fingerprint_status = 'ready'
+			  AND ca.status IN ('programada','ativa')
+			ORDER BY cm.added_at DESC
+			LIMIT 1`,
+			shortID,
+		).Scan(&info.CommercialID, &info.ClientID, &dur, &info.DedupWindowSeconds)
+	}
 	if err != nil {
 		return CommercialDedupInfo{}, err
 	}
