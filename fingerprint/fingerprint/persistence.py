@@ -72,3 +72,43 @@ async def write_hashes(pool: asyncpg.Pool, commercial_id: str, variant_id: int,
             columns=["commercial_id", "variant_id", "rate_id", "hash_value", "time_frame"],
         )
     log.info("wrote %d hashes for commercial=%s variant=%d", len(rows), commercial_id, variant_id)
+
+
+async def fetch_material(pool: asyncpg.Pool, material_id: str) -> dict:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, master_storage_path, duration_seconds
+            FROM materials
+            WHERE id = $1
+            """,
+            material_id,
+        )
+    if row is None:
+        raise LookupError(f"material {material_id} not found")
+    return dict(row)
+
+
+async def mark_material_status(pool: asyncpg.Pool, material_id: str, status: str,
+                                hash_count: int | None = None) -> None:
+    async with pool.acquire() as conn:
+        if status == "ready":
+            await conn.execute(
+                """
+                UPDATE materials
+                SET fingerprint_status = $2,
+                    fingerprint_generated_at = NOW(),
+                    fingerprint_hash_count = $3
+                WHERE id = $1
+                """,
+                material_id, status, hash_count,
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE materials
+                SET fingerprint_status = $2
+                WHERE id = $1
+                """,
+                material_id, status,
+            )
