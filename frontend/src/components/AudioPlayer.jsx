@@ -13,17 +13,38 @@ export default function AudioPlayer({ src, isPlaying, onPlay, onPause }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
 
-  // Sync isPlaying prop with audio element
+  // Sync isPlaying prop with audio element.
+  //
+  // Notes:
+  //  - play() can reject with AbortError when a freshly-mounted player is
+  //    asked to play a blob URL that hasn't finished loading. Previously we
+  //    called onPause() on every rejection, which DESMOUNTED the player in
+  //    consumers that tie isPlaying to the player's visibility (e.g.
+  //    AirtimeDetectionRow). Now we just warn and let the user retry.
+  //  - The previous cleanup paused on every effect re-run. That fires even
+  //    for benign re-renders triggered by the audio's own ondurationchange
+  //    or by parent state updates that don't change src/isPlaying — and
+  //    interrupting play() while it's still pending causes the same
+  //    AbortError above. We now pause only on unmount.
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
     if (isPlaying) {
-      audio.play().catch(() => { onPause() })
+      audio.play().catch(err => {
+        // eslint-disable-next-line no-console
+        console.warn('AudioPlayer: play() rejected', err)
+      })
     } else {
       audio.pause()
     }
-    return () => { audio.pause() }
   }, [isPlaying, src])
+
+  // Pause on unmount only — keeps in-flight play() promises from being
+  // aborted by transient re-renders.
+  useEffect(() => () => {
+    const audio = audioRef.current
+    if (audio) audio.pause()
+  }, [])
 
   function handleTimeUpdate() {
     const audio = audioRef.current

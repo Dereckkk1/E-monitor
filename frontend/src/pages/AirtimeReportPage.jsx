@@ -133,6 +133,13 @@ export default function AirtimeReportPage() {
     setFilters({ to: v, page: '1' })
     setActivePlayerId(null)
   }
+  // handleRangeChange is the path used by preset chips. Putting both ends in
+  // a single setFilters call avoids the "two updates fighting over the same
+  // stale searchParams" bug that made presets silently no-op.
+  function handleRangeChange({ from: f, to: t }) {
+    setFilters({ from: f, to: t, page: '1' })
+    setActivePlayerId(null)
+  }
   function handleQChange(v) {
     setFilters({ q: v || '', page: '1' })
     setActivePlayerId(null)
@@ -165,6 +172,7 @@ export default function AirtimeReportPage() {
         onCampaignChange={handleCampaignChange}
         onFromChange={handleFromChange}
         onToChange={handleToChange}
+        onRangeChange={handleRangeChange}
         onQChange={handleQChange}
         onExportClick={handleExport}
         exporting={exporting}
