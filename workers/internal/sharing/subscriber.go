@@ -29,22 +29,22 @@ func NewSubscriber(pool *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *Subscrib
 	return &Subscriber{pool: pool, nc: nc, log: log}
 }
 
-// payload is the JSON shape produced by the Python fingerprint service after
-// it finishes writing hashes for a commercial. Mirrors the index.reload
-// payload so an operator can re-trigger flagging by hand if needed:
-//
-//	nats pub fingerprint.shared-scan '{"commercial_id":"<uuid>"}'
+// payload accepts both commercial_id and material_id keys. The Python
+// daemon picks the one matching what the API published upstream. Exactly
+// one should be set per message; commercial_id takes precedence if both
+// are present (matches index/loader.go reloadPayload behavior).
 type payload struct {
-	CommercialID string `json:"commercial_id"`
+	CommercialID string `json:"commercial_id,omitempty"`
+	MaterialID   string `json:"material_id,omitempty"`
 }
 
-// Subscribe starts the listener. Each message resolves the commercial's
-// master path from the DB and runs the shared-hash scan. After a successful
-// scan it publishes SubjectIndexReload so the matching index reloads with
-// the freshly-set is_shared flags.
+// Subscribe starts the listener. Each message resolves the entity's master
+// path from the DB and runs the shared-hash scan. After a successful scan
+// it publishes SubjectIndexReload so the matching index reloads with the
+// freshly-set is_shared flags.
 //
-// Failures are logged and swallowed: an un-flagged commercial just falls
-// back to all-unique scoring (the pre-fix behaviour); the next upload that
+// Failures are logged and swallowed: an un-flagged entity just falls back
+// to all-unique scoring (the pre-fix behaviour); the next upload that
 // touches the same audio region will retry the flagging.
 func (s *Subscriber) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 	sub, err := s.nc.Subscribe(events.SubjectFingerprintSharedScan, func(msg *nats.Msg) {
@@ -56,45 +56,61 @@ func (s *Subscriber) Subscribe(ctx context.Context) (*nats.Subscription, error) 
 			)
 			return
 		}
-		commercialID, err := uuid.Parse(p.CommercialID)
-		if err != nil {
-			s.log.Warn("shared-scan: invalid commercial_id",
-				zap.String("commercial_id", p.CommercialID),
-				zap.Error(err),
-			)
-			return
-		}
 
 		// We use a fresh background context per message — the parent ctx is
 		// only used to drive Drain on shutdown.
 		bgCtx := context.Background()
 
-		// Look up the master path. The commercial may have been deleted
-		// between the publish and our handler firing; treat that as a
-		// no-op rather than an error.
+		var entityID uuid.UUID
+		var entityKind string
 		var masterPath string
 		var status string
-		if err := s.pool.QueryRow(bgCtx,
-			`SELECT master_storage_path, fingerprint_status FROM commercials WHERE id = $1`,
-			commercialID,
-		).Scan(&masterPath, &status); err != nil {
-			s.log.Warn("shared-scan: lookup commercial failed",
-				zap.String("commercial_id", commercialID.String()),
-				zap.Error(err),
+		var lookupErr error
+
+		if p.CommercialID != "" {
+			entityKind = "commercial"
+			entityID, lookupErr = uuid.Parse(p.CommercialID)
+			if lookupErr == nil {
+				lookupErr = s.pool.QueryRow(bgCtx,
+					`SELECT master_storage_path, fingerprint_status FROM commercials WHERE id = $1`,
+					entityID,
+				).Scan(&masterPath, &status)
+			}
+		} else if p.MaterialID != "" {
+			entityKind = "material"
+			entityID, lookupErr = uuid.Parse(p.MaterialID)
+			if lookupErr == nil {
+				lookupErr = s.pool.QueryRow(bgCtx,
+					`SELECT master_storage_path, fingerprint_status FROM materials WHERE id = $1`,
+					entityID,
+				).Scan(&masterPath, &status)
+			}
+		} else {
+			s.log.Warn("shared-scan: payload missing both commercial_id and material_id")
+			return
+		}
+
+		if lookupErr != nil {
+			s.log.Warn("shared-scan: lookup failed",
+				zap.String("entity_id", entityID.String()),
+				zap.String("kind", entityKind),
+				zap.Error(lookupErr),
 			)
 			return
 		}
 		if status != "ready" {
 			s.log.Info("shared-scan: skipping — fingerprint_status not ready",
-				zap.String("commercial_id", commercialID.String()),
+				zap.String("entity_id", entityID.String()),
+				zap.String("kind", entityKind),
 				zap.String("status", status),
 			)
 			return
 		}
 
-		if err := MarkSharedHashes(bgCtx, s.pool, commercialID, masterPath); err != nil {
+		if err := MarkSharedHashes(bgCtx, s.pool, entityID, masterPath); err != nil {
 			s.log.Error("shared-scan: MarkSharedHashes failed",
-				zap.String("commercial_id", commercialID.String()),
+				zap.String("entity_id", entityID.String()),
+				zap.String("kind", entityKind),
 				zap.Error(err),
 			)
 			return
@@ -102,18 +118,25 @@ func (s *Subscriber) Subscribe(ctx context.Context) (*nats.Subscription, error) 
 
 		// Republish index.reload so the matching index picks up the
 		// freshly-set is_shared flags. The earlier reload published by the
-		// Python service made the new commercial's hashes visible without
+		// Python service made the new entity's hashes visible without
 		// flags; this second reload supersedes them.
-		reload, _ := json.Marshal(payload{CommercialID: commercialID.String()})
+		var reload []byte
+		if entityKind == "commercial" {
+			reload, _ = json.Marshal(payload{CommercialID: entityID.String()})
+		} else {
+			reload, _ = json.Marshal(payload{MaterialID: entityID.String()})
+		}
 		if err := s.nc.Publish(events.SubjectIndexReload, reload); err != nil {
 			s.log.Warn("shared-scan: republish index.reload failed",
-				zap.String("commercial_id", commercialID.String()),
+				zap.String("entity_id", entityID.String()),
+				zap.String("kind", entityKind),
 				zap.Error(err),
 			)
 			return
 		}
 		s.log.Info("shared-scan: ok",
-			zap.String("commercial_id", commercialID.String()),
+			zap.String("entity_id", entityID.String()),
+			zap.String("kind", entityKind),
 		)
 	})
 	if err != nil {
