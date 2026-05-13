@@ -146,20 +146,23 @@
 
 /* --- Detection row (single-line layout) ============================== */
 /* All info on one horizontal line. Columns in order:
-   play | time | station(logo+text) | material | metrics | category | chevron
+   play | time | station | material | metrics | SPACER(1fr) | category | chevron
+   The 1fr spacer pushes the category pill to the far right; everything
+   else stays packed to the left.
    Stripe absolute on left edge spans the full card. */
 .airtime-row {
   display: grid;
   grid-template-columns:
     40px              /* play */
-    88px              /* time block */
-    minmax(160px, 1.1fr)  /* station */
-    minmax(180px, 1.4fr)  /* material */
-    auto              /* metrics */
+    auto              /* time block (horizontal: date + time) */
+    minmax(160px, auto)  /* station */
+    minmax(180px, auto)  /* material */
+    auto              /* metrics (horizontal: PMM + custo) */
+    1fr               /* spacer — pushes category pill to the right */
     auto              /* category pill */
     16px;             /* chevron */
   align-items: center;
-  column-gap: 18px;
+  column-gap: 20px;
   padding: 14px 18px 14px 22px;
   background: #fff;
   border: 1px solid #e2e8f0;
@@ -193,29 +196,29 @@
   top: 0;
 }
 
-/* ── Col 1: time block ─────────────────────────────────────────────── */
+/* ── Col 1: time block (horizontal: date + time, both large) ───────── */
 .airtime-row-time-block {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+.airtime-row-date {
+  color: #334155;
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 .airtime-row-time {
   color: #06055B;
   font-weight: 700;
-  font-size: 15px;
-  line-height: 1.15;
+  font-size: 17px;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-.airtime-row-date {
-  color: #64748b;
-  font-weight: 500;
-  font-size: 11px;
-  line-height: 1.3;
-  margin-top: 3px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* ── Col 2: station block (logo + name + dial) ─────────────────────── */
@@ -366,13 +369,14 @@
   text-overflow: ellipsis;
 }
 
-/* ── Col 5: metrics ────────────────────────────────────────────────── */
+/* ── Col 5: metrics (horizontal: PMM and Custo side by side) ───────── */
 .airtime-row-metrics {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 18px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .airtime-row-metric {
   display: inline-flex;
@@ -386,16 +390,12 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 700;
-  min-width: 38px;
-  text-align: right;
 }
 .airtime-row-metric-value {
   color: #06055B;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
-  min-width: 56px;
-  text-align: right;
 }
 .airtime-row-cost { color: #C4185E; }
 .airtime-row-cost-badge {
@@ -795,25 +795,20 @@
 }
 
 /* --- Tablet/Medium ================================================== */
-/* Below 1200px the metrics column compacts a bit and category truncates. */
+/* Below 1200px tighten the column gap and reduce time font slightly. */
 @media (max-width: 1199px) {
   .airtime-row {
-    grid-template-columns:
-      40px              /* play */
-      80px              /* time */
-      minmax(140px, 1fr)
-      minmax(160px, 1.3fr)
-      auto
-      auto
-      16px;
-    column-gap: 14px;
+    column-gap: 16px;
     padding: 14px 16px 14px 20px;
   }
+  .airtime-row-date { font-size: 14px; }
+  .airtime-row-time { font-size: 15px; }
 }
 
 /* --- Mobile reshape ================================================== */
-/* Below 768px the card stacks: play+time on row 1, station full-width on
-   row 2, material+metrics+cat+chevron on row 3 wrapping naturally. */
+/* Below 768px the card stacks rows. Grid: 3 cols (play | flex | chevron),
+   multiple rows. Time + station + material + metrics + cat each get their
+   own row spanning the middle column. */
 @media (max-width: 767px) {
   .airtime-filters-row {
     grid-template-columns: 1fr;
@@ -823,38 +818,28 @@
 
   .airtime-row {
     grid-template-columns: 44px 1fr 16px;
-    grid-template-rows: auto auto auto;
+    grid-template-rows: auto auto auto auto auto;
     column-gap: 12px;
-    row-gap: 10px;
+    row-gap: 8px;
     padding: 14px 16px 14px 20px;
   }
   .airtime-row-play   { grid-column: 1; grid-row: 1 / span 2; width: 44px; height: 44px; }
-  .airtime-row-time-block {
-    grid-column: 2;
-    grid-row: 1;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .airtime-row-date { margin-top: 0; }
-  .airtime-row-chevron { grid-column: 3; grid-row: 1; }
-  .airtime-row-station { grid-column: 2; grid-row: 2; }
+  .airtime-row-time-block { grid-column: 2; grid-row: 1; }
+  .airtime-row-chevron    { grid-column: 3; grid-row: 1; }
+  .airtime-row-station    { grid-column: 2; grid-row: 2; }
   .airtime-row-material {
     grid-column: 1 / -1;
     grid-row: 3;
     padding-top: 10px;
+    margin-top: 4px;
     border-top: 1px dashed #e2e8f0;
   }
   .airtime-row-metrics {
     grid-column: 1 / -1;
     grid-row: 4;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
     justify-content: flex-start;
+    gap: 16px;
   }
-  .airtime-row-metric-label,
-  .airtime-row-metric-value { min-width: 0; text-align: left; }
   .airtime-row-cat {
     grid-column: 1 / -1;
     grid-row: 5;
