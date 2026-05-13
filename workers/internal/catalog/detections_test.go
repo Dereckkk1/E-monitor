@@ -1,8 +1,12 @@
 package catalog
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDetections_Create_CategorizesOrphan(t *testing.T) {
@@ -50,5 +54,168 @@ func TestDetections_Create_CategorizesOrphan(t *testing.T) {
 	}
 	if category != "orphan" {
 		t.Errorf("category = %q, want orphan", category)
+	}
+}
+
+// seedAirtimeFixture spins up the minimal set of rows needed to exercise the
+// paginated airtime-report queries: one client, one campaign, one station,
+// one material. Returns ctx + pool + the IDs so the test can insert
+// detections referencing them. Cleanup is registered via t.Cleanup.
+func seedAirtimeFixture(t *testing.T, materialTitle string) (
+	ctx context.Context, pool *pgxpool.Pool,
+	campaignID, materialID, stationID uuid.UUID,
+) {
+	t.Helper()
+	ctx, pool = newTestDB(t)
+
+	cli, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "T-airtime-" + materialTitle})
+	if err != nil {
+		t.Fatalf("seed client: %v", err)
+	}
+	cmp, err := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "C-airtime-" + materialTitle, ClientID: cli.ID,
+		StartDate: time.Now().AddDate(0, 0, -7),
+		EndDate:   time.Now().AddDate(0, 0, 30),
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	mat, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: materialTitle, DurationSeconds: 30,
+		MasterStoragePath: "/tmp", MasterSHA256: "airtime-" + materialTitle,
+	})
+	if err != nil {
+		t.Fatalf("seed material: %v", err)
+	}
+	stat, err := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "Airtime FM", Band: "FM", StreamURL: "http://example.com/airtime-" + materialTitle,
+	})
+	if err != nil {
+		t.Fatalf("seed station: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM detections WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", mat.ID)
+		pool.Exec(ctx, "DELETE FROM campaigns WHERE id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", cli.ID)
+		pool.Exec(ctx, "DELETE FROM stations WHERE id = $1", stat.ID)
+	})
+	return ctx, pool, cmp.ID, mat.ID, stat.ID
+}
+
+func TestDetections_ListPaged_BasicPaging(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-basic")
+	dets := NewDetections(pool)
+	// 25 detections, 1h apart, all in the campaign window.
+	for i := 0; i < 25; i++ {
+		_, err := dets.Create(ctx, CreateDetectionInput{
+			StationID: statID, CommercialID: matID, CampaignID: campID,
+			DetectedAt:         time.Now().Add(-time.Duration(i) * time.Hour),
+			MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+			Confidence: 0.95, HashCount: 100,
+			TemporalCoverage: 0.85,
+		})
+		if err != nil {
+			t.Fatalf("seed detection %d: %v", i, err)
+		}
+	}
+
+	res, err := dets.ListPaged(ctx, ListPagedFilter{
+		CampaignID: &campID, Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPaged page 1: %v", err)
+	}
+	if len(res.Data) != 10 {
+		t.Errorf("page 1 data len = %d, want 10", len(res.Data))
+	}
+	if res.Total != 25 {
+		t.Errorf("total = %d, want 25", res.Total)
+	}
+	if res.TotalPages != 3 {
+		t.Errorf("total_pages = %d, want 3", res.TotalPages)
+	}
+
+	res2, err := dets.ListPaged(ctx, ListPagedFilter{
+		CampaignID: &campID, Page: 3, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPaged page 3: %v", err)
+	}
+	if len(res2.Data) != 5 {
+		t.Errorf("last page len = %d, want 5", len(res2.Data))
+	}
+}
+
+func TestDetections_ListPaged_QFilter(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Cha cha cha 30s")
+	dets := NewDetections(pool)
+	_, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt:         time.Now(),
+		MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+		Confidence: 0.95, HashCount: 100,
+		TemporalCoverage: 0.85,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+
+	res, err := dets.ListPaged(ctx, ListPagedFilter{
+		CampaignID: &campID, Q: "cha", Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPaged q='cha': %v", err)
+	}
+	if res.Total != 1 {
+		t.Errorf("q='cha' total = %d, want 1", res.Total)
+	}
+
+	res2, err := dets.ListPaged(ctx, ListPagedFilter{
+		CampaignID: &campID, Q: "xyz-impossivel", Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPaged q='xyz': %v", err)
+	}
+	if res2.Total != 0 {
+		t.Errorf("q='xyz' total = %d, want 0", res2.Total)
+	}
+}
+
+func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-ignored")
+	dets := NewDetections(pool)
+	d1, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt:         time.Now(),
+		MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+		Confidence: 0.95, HashCount: 100,
+		TemporalCoverage: 0.85,
+	})
+	if err != nil {
+		t.Fatalf("seed d1: %v", err)
+	}
+	_, err = dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt:         time.Now().Add(-time.Hour),
+		MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+		Confidence: 0.95, HashCount: 100,
+		TemporalCoverage: 0.85,
+	})
+	if err != nil {
+		t.Fatalf("seed d2: %v", err)
+	}
+	if err := dets.Ignore(ctx, d1.ID, uuid.New()); err != nil {
+		t.Fatalf("ignore d1: %v", err)
+	}
+
+	res, err := dets.ListPaged(ctx, ListPagedFilter{
+		CampaignID: &campID, Page: 1, PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPaged: %v", err)
+	}
+	if res.Total != 1 {
+		t.Errorf("total = %d, want 1 (ignored excluded)", res.Total)
 	}
 }
