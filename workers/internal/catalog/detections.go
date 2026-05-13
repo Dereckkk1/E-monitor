@@ -275,6 +275,164 @@ type ListFilter struct {
 	Offset     int
 }
 
+// ListPagedFilter mirrors ListFilter but with page-based pagination and an
+// optional case/accent-insensitive search over station/material/type/client
+// text fields. Separate from ListFilter because the paginated path returns a
+// different shape (ListPagedResult); keeping the types distinct avoids
+// breaking the unpaginated consumers (DayDetailModal).
+type ListPagedFilter struct {
+	CampaignID *uuid.UUID
+	StartDate  *time.Time
+	EndDate    *time.Time
+	Q          string // free text; empty disables the filter
+	Sort       string // "detected_at_desc" (default) | "detected_at_asc"
+	Page       int    // 1-based
+	PageSize   int    // 1..200
+}
+
+// ListPagedResult is the wire format returned to the frontend. Total is a
+// separate count(*) so the paginator can render "X of N" + last-page jump.
+type ListPagedResult struct {
+	Data       []DetectionEnriched `json:"data"`
+	Page       int                 `json:"page"`
+	PageSize   int                 `json:"page_size"`
+	Total      int                 `json:"total"`
+	TotalPages int                 `json:"total_pages"`
+}
+
+// DetectionEnriched extends Detection with the joined columns the airtime
+// report card needs in one round-trip. Adding new fields is safe: JSON
+// decoders ignore unknown keys, and the airtime-report card consumes a
+// dedicated hook (useDetectionsPaged) that knows the shape.
+type DetectionEnriched struct {
+	Detection
+	StationFrequencyMHz *float64   `json:"station_frequency_mhz,omitempty"`
+	StationBand         *string    `json:"station_band,omitempty"`
+	StationCity         *string    `json:"station_city,omitempty"`
+	StationState        *string    `json:"station_state,omitempty"`
+	StationLogoURL      *string    `json:"station_logo_url,omitempty"`
+	StationPMM          *float64   `json:"station_pmm,omitempty"`
+	MaterialDurationSec *float64   `json:"material_duration_sec,omitempty"`
+	MaterialTypeName    *string    `json:"material_type_name,omitempty"`
+	MaterialTypeColor   *string    `json:"material_type_color,omitempty"`
+	ClientID            *uuid.UUID `json:"client_id,omitempty"`
+	ClientName          *string    `json:"client_name,omitempty"`
+}
+
+// ListPaged is the cronological detection list backing /reports/airtime.
+// Performs a single query with COUNT(*) OVER () for total. Excludes ignored
+// and retracted rows so the airtime report matches what daily_play_summary
+// counts.
+func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPagedResult, error) {
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.PageSize < 1 || f.PageSize > 200 {
+		f.PageSize = 10
+	}
+	order := "DESC"
+	if f.Sort == "detected_at_asc" {
+		order = "ASC"
+	}
+
+	var qTokens any = nil
+	if q := strings.TrimSpace(f.Q); q != "" {
+		toks := strings.Fields(q)
+		if len(toks) > 4 {
+			toks = toks[:4]
+		}
+		qTokens = toks
+	}
+
+	sql := `
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		       d.campaign_id, d.detected_at,
+		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
+		       d.temporal_coverage, d.variant_used, d.rate_used,
+		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
+		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
+		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
+		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm,
+		       m.duration_seconds, mt.name, mt.color,
+		       cmp.client_id, cli.name,
+		       COUNT(*) OVER () AS total
+		FROM detections d
+		LEFT JOIN stations s        ON s.id = d.station_id
+		LEFT JOIN commercials c     ON c.id = d.commercial_id
+		LEFT JOIN materials m       ON m.id = d.commercial_id
+		LEFT JOIN material_types mt ON mt.id = m.type_id
+		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
+		LEFT JOIN clients cli       ON cli.id = cmp.client_id
+		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
+		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND d.ignored_at IS NULL
+		  AND d.retracted_at IS NULL
+		  AND ($4::text[] IS NULL OR (
+		      SELECT bool_and(
+		          unaccent(lower(
+		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
+		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
+		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
+		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(cli.name,'')
+		          )) LIKE '%' || unaccent(lower(tok)) || '%'
+		      )
+		      FROM unnest($4::text[]) AS tok
+		  ))
+		ORDER BY d.detected_at ` + order + `
+		LIMIT $5 OFFSET $6`
+
+	offset := (f.Page - 1) * f.PageSize
+	rows, err := d.pool.Query(ctx, sql,
+		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []DetectionEnriched
+		total int
+	)
+	for rows.Next() {
+		var det DetectionEnriched
+		if err := rows.Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
+			&det.CampaignID, &det.DetectedAt, &det.MatchStartOffsetMs, &det.MatchEndOffsetMs,
+			&det.Confidence, &det.HashCount, &det.TemporalCoverage, &det.VariantUsed,
+			&det.RateUsed, &det.EvidenceStatus, &det.EvidenceKey,
+			&det.EvidenceSizeBytes, &det.Category, &det.TypeID, &det.RetractedAt,
+			&det.IgnoredAt, &det.IgnoredBy,
+			&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt,
+			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
+			&det.StationLogoURL, &det.StationPMM,
+			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
+			&det.ClientID, &det.ClientName,
+			&total); err != nil {
+			return nil, err
+		}
+		out = append(out, det)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	totalPages := (total + f.PageSize - 1) / f.PageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if out == nil {
+		out = []DetectionEnriched{}
+	}
+	return &ListPagedResult{
+		Data:       out,
+		Page:       f.Page,
+		PageSize:   f.PageSize,
+		Total:      total,
+		TotalPages: totalPages,
+	}, nil
+}
+
 func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error) {
 	if f.Limit <= 0 || f.Limit > 1000 {
 		f.Limit = 100
