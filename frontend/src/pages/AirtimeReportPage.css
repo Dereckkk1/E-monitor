@@ -1,0 +1,806 @@
+/* ===== AirtimeReportPage ============================================ */
+.airtime-page { padding: 0; }
+
+/* --- Filters bar (sticky top) --------------------------------------- */
+.airtime-filters {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.airtime-filters-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(180px, 220px) auto;
+  gap: 14px;
+  align-items: end;
+}
+.airtime-filters-campaign label,
+.airtime-filters-date label,
+.airtime-filters-search > label {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.airtime-filters-dates { display: flex; gap: 10px; }
+.airtime-filters-date input { min-width: 130px; }
+
+.airtime-filters-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.airtime-filters-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+}
+.airtime-filters-search-input {
+  padding-left: 30px;
+  width: 100%;
+}
+
+.airtime-filters-export-wrap { display: flex; align-items: end; }
+.airtime-filters-export {
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #06055B;
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.airtime-filters-export:hover:not(:disabled) {
+  border-color: #F472B6;
+  color: #C4185E;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+}
+.airtime-filters-export:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.airtime-filters-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+.airtime-preset-chip {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: inherit;
+}
+.airtime-preset-chip:hover:not(:disabled) {
+  background: #fce7f3;
+  color: #9d174d;
+}
+.airtime-preset-chip.active {
+  background: #fce7f3;
+  border-color: #F472B6;
+  color: #9d174d;
+}
+.airtime-preset-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.input-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
+}
+
+/* --- Split layout --------------------------------------------------- */
+.airtime-split {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1279px) {
+  .airtime-split { grid-template-columns: 1fr 320px; gap: 18px; }
+}
+@media (max-width: 1023px) {
+  .airtime-split { grid-template-columns: 1fr; }
+  .airtime-panel-wrap { order: -1; }
+}
+
+.airtime-list { min-width: 0; scroll-margin-top: 140px; }
+
+/* --- Detection row =================================================== */
+/* Grid: 4 columns, 2 rows. Top row = primary info, bottom row = meta band.
+   Stripe is positioned absolutely so it spans the full card edge without
+   participating in the grid.
+   Cols: time-block | station-block | play | chevron
+   Row 2 (.airtime-row-meta) spans all columns. */
+.airtime-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 40px 16px;
+  grid-template-rows: auto auto;
+  column-gap: 16px;
+  row-gap: 0;
+  align-items: center;
+  padding: 16px 18px 14px 22px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  margin-bottom: 10px;
+  transition:
+    transform 200ms cubic-bezier(0.16,1,0.3,1),
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+  position: relative;
+  overflow: hidden;
+}
+.airtime-row:hover {
+  transform: translateY(-2px);
+  border-color: #F472B6;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+}
+.airtime-row-highlight {
+  border-color: #F472B6;
+  box-shadow: 0 0 0 1px #F472B6;
+}
+.airtime-row-playing { border-color: #E81E75; }
+
+/* Stripe: absolute on the left edge, spans full card height. */
+.airtime-row-stripe {
+  width: 5px;
+  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* ── Col 1: time block ─────────────────────────────────────────────── */
+.airtime-row-time-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.airtime-row-time {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.airtime-row-date {
+  color: #64748b;
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 1.3;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Col 2: station block (logo + name + dial) ─────────────────────── */
+.airtime-row-station {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+.airtime-row-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+}
+.airtime-row-logo > * { width: 100%; height: 100%; }
+.airtime-row-logo img,
+.airtime-row-logo .station-avatar-img { object-fit: cover; }
+.airtime-row-station-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+.airtime-row-station-name {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.airtime-row-station-dial {
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Col 3: play button ────────────────────────────────────────────── */
+.airtime-row-play {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: #E81E75;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 150ms ease;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(232, 30, 117, 0.22);
+  justify-self: center;
+  padding: 0;
+}
+.airtime-row-play svg { margin-left: 1px; }
+.airtime-row-play:hover:not(:disabled) {
+  background: #C4185E;
+  transform: scale(1.06);
+  box-shadow: 0 4px 12px rgba(232, 30, 117, 0.32);
+}
+.airtime-row-play:disabled {
+  background: #cbd5e1;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.airtime-row-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: airtime-spin 600ms linear infinite;
+}
+@keyframes airtime-spin { to { transform: rotate(360deg); } }
+
+/* ── Col 4: chevron ────────────────────────────────────────────────── */
+.airtime-row-chevron {
+  width: 20px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: color 150ms ease, transform 150ms ease;
+  font-family: inherit;
+  padding: 0;
+  line-height: 1;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.airtime-row-chevron:hover {
+  color: #C4185E;
+  transform: translateX(2px);
+}
+
+/* ── Row 2: meta band ─────────────────────────────────────────────── */
+.airtime-row-meta {
+  grid-column: 1 / -1;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.airtime-row-material {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 280px;
+  flex-wrap: wrap;
+}
+.airtime-row-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.airtime-row-material-title {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.airtime-row-material-type,
+.airtime-row-client {
+  color: #64748b;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.airtime-row-sep { color: #cbd5e1; }
+
+.airtime-row-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.airtime-row-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+.airtime-row-metric-label {
+  color: #94a3b8;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.airtime-row-metric-value {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.airtime-row-cost { color: #C4185E; }
+.airtime-row-cost-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.airtime-row-cat {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.airtime-cat-green  { background: #dcfce7; color: #15803d; }
+.airtime-cat-yellow { background: #fef3c7; color: #b45309; }
+.airtime-cat-purple { background: #ede9fe; color: #6d28d9; }
+.airtime-cat-blue   { background: #dbeafe; color: #1d4ed8; }
+.airtime-cat-gray   { background: #e2e8f0; color: #475569; }
+
+.airtime-row-player {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+/* --- Skeleton ------------------------------------------------------- */
+.airtime-row-skel { pointer-events: none; }
+.airtime-skel-stripe { background: #f1f5f9; }
+.airtime-skel-circle {
+  background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
+  background-size: 200% 100%;
+  animation: airtime-shimmer 1.4s linear infinite;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.airtime-skel-line {
+  background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
+  background-size: 200% 100%;
+  animation: airtime-shimmer 1.4s linear infinite;
+  border-radius: 4px;
+}
+@keyframes airtime-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* --- Paginator ------------------------------------------------------ */
+.airtime-paginator {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 12px 4px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.airtime-paginator-info {
+  color: #64748b;
+  font-size: 13px;
+}
+.airtime-paginator-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.airtime-paginator-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.airtime-paginator-btn:hover:not(:disabled):not(.active) {
+  border-color: #F472B6;
+  color: #C4185E;
+}
+.airtime-paginator-btn.active {
+  background: #E81E75;
+  border-color: #E81E75;
+  color: #fff;
+}
+.airtime-paginator-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.airtime-paginator-ellipsis {
+  color: #94a3b8;
+  padding: 0 4px;
+}
+
+/* --- Material panel ------------------------------------------------- */
+.airtime-panel-wrap { position: sticky; top: 150px; }
+.airtime-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.airtime-panel-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #06055B;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.airtime-panel-info-icon {
+  color: #94a3b8;
+  cursor: help;
+  font-weight: 400;
+  font-size: 12px;
+}
+.airtime-panel-divider {
+  border-top: 1px solid #f1f5f9;
+  margin: 12px 0;
+}
+.airtime-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.airtime-panel-row { transition: opacity 150ms ease; }
+.airtime-panel-row.highlighted { opacity: 1; }
+.airtime-panel-list:hover .airtime-panel-row:not(.highlighted) { opacity: 0.55; }
+
+.airtime-panel-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.airtime-panel-row-stripe {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.airtime-panel-row-title {
+  flex: 1;
+  color: #06055B;
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.airtime-panel-row-count {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 18px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.airtime-panel-row-bar-bg {
+  margin-top: 6px;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.airtime-panel-row-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 400ms cubic-bezier(0.16,1,0.3,1);
+}
+
+.airtime-panel-row-skel {
+  display: flex;
+  flex-direction: column;
+}
+.airtime-panel-empty {
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+  padding: 16px 0;
+}
+.airtime-panel-more {
+  display: block;
+  margin: 12px auto 0;
+  background: none;
+  border: none;
+  color: #C4185E;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.airtime-panel-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.airtime-panel-total-label {
+  color: #334155;
+  font-weight: 600;
+  font-size: 13px;
+}
+.airtime-panel-total-value {
+  color: #06055B;
+  font-weight: 700;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.airtime-panel-meta {
+  color: #64748b;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* --- Ghost preview -------------------------------------------------- */
+.airtime-ghost {
+  position: relative;
+  padding: 40px 24px;
+  min-height: 480px;
+}
+.airtime-ghost-row {
+  display: grid;
+  grid-template-columns: 4px 40px 100px 1fr 100px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  margin-bottom: 10px;
+  opacity: 0.2;
+}
+.airtime-ghost-row-stripe {
+  width: 4px;
+  height: 60px;
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+.airtime-ghost-row-play {
+  width: 40px;
+  height: 40px;
+  background: #e2e8f0;
+  border-radius: 50%;
+}
+.airtime-ghost-row-datetime {
+  display: flex;
+  flex-direction: column;
+}
+.airtime-ghost-row-station {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.airtime-ghost-logo {
+  width: 40px;
+  height: 40px;
+  background: #e2e8f0;
+  border-radius: 6px;
+}
+.airtime-ghost-bar {
+  height: 11px;
+  background: #e2e8f0;
+  border-radius: 4px;
+}
+.airtime-ghost-row-metrics {
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+}
+
+.airtime-ghost-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.04);
+  padding: 32px;
+  text-align: center;
+  max-width: 380px;
+  width: calc(100% - 48px);
+}
+.airtime-ghost-icon {
+  color: #cbd5e1;
+  margin-bottom: 12px;
+}
+.airtime-ghost-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #06055B;
+}
+.airtime-ghost-description {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.5;
+}
+.airtime-ghost-cta {
+  background: #E81E75;
+  color: #fff;
+  border: none;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: inherit;
+}
+.airtime-ghost-cta:hover {
+  background: #C4185E;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.08);
+}
+
+/* --- Error card ----------------------------------------------------- */
+.airtime-error-card {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.airtime-error-card p {
+  margin: 0;
+  color: #991b1b;
+  font-size: 14px;
+}
+.airtime-error-cta {
+  background: #fff;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.airtime-error-cta:hover {
+  background: #fee2e2;
+}
+
+/* --- Mobile reshape ================================================== */
+/* Below 768px the card reshapes: time-block moves above the station block
+   (full-width stacked), play stays inline as a compact action, metrics flow
+   into the meta band as part of the same horizontal stream. */
+@media (max-width: 767px) {
+  .airtime-filters-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .airtime-filters-dates { flex-direction: row; }
+
+  .airtime-row {
+    grid-template-columns: 1fr 40px 16px;
+    grid-template-rows: auto auto auto;
+    column-gap: 12px;
+    padding: 14px 16px 12px 20px;
+  }
+  .airtime-row-time-block {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .airtime-row-date { margin-top: 0; }
+  .airtime-row-station {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .airtime-row-play {
+    grid-column: 2;
+    grid-row: 2;
+    width: 44px;
+    height: 44px;
+  }
+  .airtime-row-chevron {
+    grid-column: 3;
+    grid-row: 2;
+  }
+  .airtime-row-meta {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .airtime-row-metrics { gap: 12px; }
+}
