@@ -20,12 +20,21 @@ function daysAgoISO(n) {
 
 // Convert YYYY-MM-DD → full RFC3339 in São Paulo local time (UTC-3) so the
 // backend WHERE clause aligns with how daily_play_summary buckets detections
-// (same pattern as the existing /detections page).
+// (same pattern as the existing /detections page). Returns null on inputs
+// that don't look like a date — guards against full ISO timestamps from
+// API responses sneaking into this helper (which would produce a crashy
+// concatenation like "2026-04-01T00:00:00ZT00:00:00.000-03:00").
 function isoToRFC3339Start(iso) {
-  return new Date(`${iso}T00:00:00.000-03:00`).toISOString()
+  const date = iso ? String(iso).slice(0, 10) : ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const d = new Date(`${date}T00:00:00.000-03:00`)
+  return isNaN(d.getTime()) ? null : d.toISOString()
 }
 function isoToRFC3339End(iso) {
-  return new Date(`${iso}T23:59:59.999-03:00`).toISOString()
+  const date = iso ? String(iso).slice(0, 10) : ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const d = new Date(`${date}T23:59:59.999-03:00`)
+  return isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 function fmtRangeLabel(from, to) {
