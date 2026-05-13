@@ -477,6 +477,109 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 	return out, rows.Err()
 }
 
+// MaterialAggregateRow is one entry of the airtime-report sidebar panel.
+type MaterialAggregateRow struct {
+	MaterialID          uuid.UUID  `json:"material_id"`
+	MaterialTitle       string     `json:"material_title"`
+	MaterialDurationSec *float64   `json:"material_duration_sec,omitempty"`
+	MaterialTypeID      *uuid.UUID `json:"material_type_id,omitempty"`
+	MaterialTypeName    *string    `json:"material_type_name,omitempty"`
+	MaterialTypeColor   *string    `json:"material_type_color,omitempty"`
+	Count               int        `json:"count"`
+}
+
+// MaterialAggregateResult is the wire format of /aggregate-by-material.
+type MaterialAggregateResult struct {
+	Data              []MaterialAggregateRow `json:"data"`
+	TotalDetections   int                    `json:"total_detections"`
+	DistinctMaterials int                    `json:"distinct_materials"`
+}
+
+// AggregateFilter is the query input — campaign is required, the rest mirror
+// ListPagedFilter so the panel stays consistent with the list.
+type AggregateFilter struct {
+	CampaignID uuid.UUID
+	StartDate  *time.Time
+	EndDate    *time.Time
+	Q          string
+}
+
+// AggregateByMaterial counts non-ignored, non-retracted detections grouped by
+// material for the airtime-report sidebar panel. Same WHERE clause as
+// ListPaged so the panel matches the list under any filter combination.
+func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter) (*MaterialAggregateResult, error) {
+	var qTokens any = nil
+	if q := strings.TrimSpace(f.Q); q != "" {
+		toks := strings.Fields(q)
+		if len(toks) > 4 {
+			toks = toks[:4]
+		}
+		qTokens = toks
+	}
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT d.commercial_id, COALESCE(c.title, ''),
+		       m.duration_seconds, m.type_id, mt.name, mt.color,
+		       COUNT(*) AS cnt
+		FROM detections d
+		LEFT JOIN commercials c     ON c.id = d.commercial_id
+		LEFT JOIN materials m       ON m.id = d.commercial_id
+		LEFT JOIN material_types mt ON mt.id = m.type_id
+		LEFT JOIN stations s        ON s.id = d.station_id
+		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
+		LEFT JOIN clients cli       ON cli.id = cmp.client_id
+		WHERE d.campaign_id = $1
+		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND d.ignored_at IS NULL
+		  AND d.retracted_at IS NULL
+		  AND ($4::text[] IS NULL OR (
+		      SELECT bool_and(
+		          unaccent(lower(
+		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
+		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
+		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
+		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(cli.name,'')
+		          )) LIKE '%' || unaccent(lower(tok)) || '%'
+		      )
+		      FROM unnest($4::text[]) AS tok
+		  ))
+		GROUP BY d.commercial_id, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
+		ORDER BY cnt DESC, c.title ASC`,
+		f.CampaignID, f.StartDate, f.EndDate, qTokens)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []MaterialAggregateRow
+		total int
+	)
+	for rows.Next() {
+		var r MaterialAggregateRow
+		if err := rows.Scan(&r.MaterialID, &r.MaterialTitle,
+			&r.MaterialDurationSec, &r.MaterialTypeID, &r.MaterialTypeName, &r.MaterialTypeColor,
+			&r.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+		total += r.Count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []MaterialAggregateRow{}
+	}
+	return &MaterialAggregateResult{
+		Data:              out,
+		TotalDetections:   total,
+		DistinctMaterials: len(out),
+	}, nil
+}
+
 func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) {
 	var det Detection
 	err := d.pool.QueryRow(ctx, `

@@ -182,6 +182,79 @@ func TestDetections_ListPaged_QFilter(t *testing.T) {
 	}
 }
 
+func TestDetections_AggregateByMaterial(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Aggregate-A")
+	dets := NewDetections(pool)
+	// 5 detections of matA.
+	for i := 0; i < 5; i++ {
+		_, err := dets.Create(ctx, CreateDetectionInput{
+			StationID: statID, CommercialID: matID, CampaignID: campID,
+			DetectedAt:         time.Now().Add(-time.Duration(i) * time.Minute),
+			MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+			Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+		})
+		if err != nil {
+			t.Fatalf("seed matA detection %d: %v", i, err)
+		}
+	}
+	// matB linked to the same campaign + station.
+	matB, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID:          uuid.MustParse(mustClientIDFromCampaign(t, pool, campID)),
+		Title:             "Aggregate-B",
+		DurationSeconds:   60,
+		MasterStoragePath: "/tmp", MasterSHA256: "aggregate-b",
+	})
+	if err != nil {
+		t.Fatalf("seed matB: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM detections WHERE commercial_id = $1", matB.ID)
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", matB.ID)
+	})
+	for i := 0; i < 2; i++ {
+		_, err := dets.Create(ctx, CreateDetectionInput{
+			StationID: statID, CommercialID: matB.ID, CampaignID: campID,
+			DetectedAt:         time.Now().Add(-time.Duration(10+i) * time.Minute),
+			MatchStartOffsetMs: 0, MatchEndOffsetMs: 60000,
+			Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+		})
+		if err != nil {
+			t.Fatalf("seed matB detection %d: %v", i, err)
+		}
+	}
+
+	res, err := dets.AggregateByMaterial(ctx, AggregateFilter{CampaignID: campID})
+	if err != nil {
+		t.Fatalf("AggregateByMaterial: %v", err)
+	}
+	if res.TotalDetections != 7 {
+		t.Errorf("total = %d, want 7", res.TotalDetections)
+	}
+	if res.DistinctMaterials != 2 {
+		t.Errorf("distinct = %d, want 2", res.DistinctMaterials)
+	}
+	if len(res.Data) == 0 || res.Data[0].Count != 5 {
+		t.Errorf("top row count = %v, want 5", func() any {
+			if len(res.Data) == 0 {
+				return "empty"
+			}
+			return res.Data[0].Count
+		}())
+	}
+}
+
+// mustClientIDFromCampaign fetches the client_id of a campaign row. Used by
+// the aggregate test to seed a second material under the same client.
+func mustClientIDFromCampaign(t *testing.T, pool *pgxpool.Pool, campID uuid.UUID) string {
+	t.Helper()
+	var s string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT client_id::text FROM campaigns WHERE id = $1`, campID).Scan(&s); err != nil {
+		t.Fatalf("read client_id: %v", err)
+	}
+	return s
+}
+
 func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-ignored")
 	dets := NewDetections(pool)
