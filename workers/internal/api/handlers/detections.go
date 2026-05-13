@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -477,6 +478,102 @@ func (h *DetectionsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// Export streams detections as CSV (semicolon-separated, BOM-prefixed UTF-8
+// so Excel pt-BR opens it correctly). Admin-only — gated at the router.
+// Uses IterateForExport so memory stays bounded regardless of row count.
+func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := catalog.ListPagedFilter{}
+
+	if v := q.Get("campaign_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			http.Error(w, "invalid campaign_id", http.StatusBadRequest)
+			return
+		}
+		f.CampaignID = &id
+	}
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid from (use RFC3339)", http.StatusBadRequest)
+			return
+		}
+		f.StartDate = &t
+	}
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid to (use RFC3339)", http.StatusBadRequest)
+			return
+		}
+		f.EndDate = &t
+	}
+	if v := q.Get("q"); v != "" {
+		f.Q = v
+	}
+	if v := q.Get("sort"); v != "" {
+		f.Sort = v
+	}
+
+	filename := fmt.Sprintf("veiculacoes_%s.csv", time.Now().Format("20060102_150405"))
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.WriteHeader(http.StatusOK)
+
+	// BOM so Excel pt-BR detects UTF-8.
+	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+	cw := csv.NewWriter(w)
+	cw.Comma = ';'
+	_ = cw.Write([]string{
+		"Data", "Hora", "Emissora", "Frequência", "Banda", "Cidade", "UF",
+		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "Categoria",
+	})
+
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+
+	_ = h.Repo.IterateForExport(r.Context(), f, func(d catalog.DetectionEnriched) error {
+		t := d.DetectedAt.In(loc)
+		freq := ""
+		if d.StationFrequencyMHz != nil {
+			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *d.StationFrequencyMHz), ".", ",")
+		}
+		pmm := ""
+		if d.StationPMM != nil {
+			pmm = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.StationPMM), ".", ",")
+		}
+		dur := ""
+		if d.MaterialDurationSec != nil {
+			dur = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.MaterialDurationSec), ".", ",")
+		}
+		return cw.Write([]string{
+			t.Format("02/01/2006"),
+			t.Format("15:04:05"),
+			d.StationName,
+			freq,
+			strOrEmpty(d.StationBand),
+			strOrEmpty(d.StationCity),
+			strOrEmpty(d.StationState),
+			d.CommercialName,
+			dur,
+			strOrEmpty(d.MaterialTypeName),
+			strOrEmpty(d.ClientName),
+			pmm,
+			d.Category,
+		})
+	})
+
+	cw.Flush()
+}
+
+func strOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // AggregateByMaterial backs the airtime-report sidebar panel. Requires
