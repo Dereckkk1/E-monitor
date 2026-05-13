@@ -1,10 +1,8 @@
-import { useState } from 'react'
-
-// AirtimeMaterialPanel renders the sticky-right "Total por áudio" summary for
-// /reports/airtime. Each row is a material with a color-stripe, the title,
-// the count and a horizontal bar scaled to (count / max). Hovering a row
-// pings the parent so the corresponding cards in the list highlight (cross-
-// highlight pattern from the spec).
+// AirtimeMaterialPanel renders the "Total por áudio" summary as a full-width
+// section below the detection list. Items are laid out in a responsive grid
+// (auto-fill, minmax 280px) so on wide screens it shows 3-4 columns, on
+// narrow stays 1. Each item has color stripe, title, count and a scaled
+// horizontal bar. Hover pings the parent for cross-highlight in the list.
 export default function AirtimeMaterialPanel({
   aggregate,
   loading = false,
@@ -12,44 +10,46 @@ export default function AirtimeMaterialPanel({
   onHover = () => {},
   onLeave = () => {},
 }) {
-  const [showAll, setShowAll] = useState(false)
-
   if (loading) {
     return (
-      <aside className="airtime-panel airtime-panel-loading" aria-label="Total de veiculações por material">
-        <h3 className="airtime-panel-title">Total por áudio</h3>
-        <div className="airtime-panel-divider" />
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="airtime-panel-row-skel">
-            <div className="airtime-skel-line" style={{ width: '60%' }} />
-            <div className="airtime-skel-line" style={{ width: '100%', height: 6, marginTop: 6 }} />
-          </div>
-        ))}
-      </aside>
+      <section className="airtime-panel airtime-panel-loading" aria-label="Total de veiculações por material">
+        <header className="airtime-panel-header">
+          <h3 className="airtime-panel-title">Total por áudio</h3>
+        </header>
+        <div className="airtime-panel-grid">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="airtime-panel-row-skel">
+              <div className="airtime-skel-line" style={{ width: '60%', height: 12 }} />
+              <div className="airtime-skel-line" style={{ width: '100%', height: 6, marginTop: 8 }} />
+            </div>
+          ))}
+        </div>
+      </section>
     )
   }
 
   const items = aggregate?.data ?? []
   const max = items[0]?.count ?? 1
-  const visible = showAll ? items : items.slice(0, 8)
 
   return (
-    <aside className="airtime-panel" aria-label="Total de veiculações por material">
-      <h3 className="airtime-panel-title">
-        <span>Total por áudio</span>
-        <span
-          className="airtime-panel-info-icon"
-          title="Considera detecções confirmadas no período (incluindo fora da faixa/data)"
-          aria-hidden
-        >ⓘ</span>
-      </h3>
-      <div className="airtime-panel-divider" />
+    <section className="airtime-panel" aria-label="Total de veiculações por material">
+      <header className="airtime-panel-header">
+        <h3 className="airtime-panel-title">Total por áudio</h3>
+        <div className="airtime-panel-summary">
+          <span className="airtime-panel-summary-label">Total geral</span>
+          <span className="airtime-panel-summary-value">{aggregate?.total_detections ?? 0}</span>
+          <span className="airtime-panel-summary-sep">·</span>
+          <span className="airtime-panel-summary-meta">
+            {aggregate?.distinct_materials ?? 0} materiais distintos
+          </span>
+        </div>
+      </header>
 
       {items.length === 0 ? (
         <div className="airtime-panel-empty">Nenhum material no período.</div>
       ) : (
-        <ul className="airtime-panel-list">
-          {visible.map(item => {
+        <ul className="airtime-panel-grid">
+          {items.map(item => {
             const pct = Math.max(2, (item.count / max) * 100)
             const color = item.material_type_color || '#94a3b8'
             const hl = highlightedMaterialId === item.material_id
@@ -78,23 +78,6 @@ export default function AirtimeMaterialPanel({
           })}
         </ul>
       )}
-
-      {items.length > 8 && !showAll && (
-        <button type="button" className="airtime-panel-more" onClick={() => setShowAll(true)}>
-          Ver todos ({items.length})
-        </button>
-      )}
-
-      <div className="airtime-panel-divider" />
-      <div className="airtime-panel-footer">
-        <div className="airtime-panel-total-row">
-          <span className="airtime-panel-total-label">Total geral</span>
-          <span className="airtime-panel-total-value">{aggregate?.total_detections ?? 0}</span>
-        </div>
-        <div className="airtime-panel-meta">
-          Materiais distintos: {aggregate?.distinct_materials ?? 0}
-        </div>
-      </div>
-    </aside>
+    </section>
   )
 }

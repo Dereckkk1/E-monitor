@@ -187,7 +187,7 @@ export default function AirtimeReportPage() {
           description="Escolha uma campanha no filtro acima para ver as veiculações detectadas."
         />
       ) : invalidRange ? null : (
-        <div className="airtime-split">
+        <>
           <div className="airtime-list">
             {isLoadingData && detections.length === 0 ? (
               <SkeletonList />
@@ -222,16 +222,18 @@ export default function AirtimeReportPage() {
             )}
           </div>
 
-          <div className="airtime-panel-wrap">
-            <AirtimeMaterialPanel
-              aggregate={aggResp}
-              loading={loadingAgg}
-              highlightedMaterialId={highlightedMaterialId}
-              onHover={setHighlightedMaterialId}
-              onLeave={() => setHighlightedMaterialId(null)}
-            />
-          </div>
-        </div>
+          {detections.length > 0 && (
+            <div className="airtime-panel-wrap">
+              <AirtimeMaterialPanel
+                aggregate={aggResp}
+                loading={loadingAgg}
+                highlightedMaterialId={highlightedMaterialId}
+                onHover={setHighlightedMaterialId}
+                onLeave={() => setHighlightedMaterialId(null)}
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   )

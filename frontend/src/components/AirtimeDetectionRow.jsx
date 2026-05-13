@@ -8,7 +8,7 @@ const CATEGORY_META = {
   in_slot:  { label: 'Dentro da faixa',  className: 'airtime-cat-green' },
   out_slot: { label: 'Fora da faixa',    className: 'airtime-cat-yellow' },
   out_date: { label: 'Fora da data',     className: 'airtime-cat-purple' },
-  orphan:   { label: 'Bônus (sem regra)', className: 'airtime-cat-blue' },
+  orphan:   { label: 'Bônus',             className: 'airtime-cat-blue' },
 }
 
 function fmtDate(iso) {
@@ -103,6 +103,9 @@ export default function AirtimeDetectionRow({
   if (place) dialParts.push(place)
   const dial = dialParts.join(' · ')
 
+  // Material subline: "Spot 30s · Rôgga"
+  const materialSub = [detection.material_type_name, detection.client_name].filter(Boolean).join(' · ')
+
   return (
     <article
       className={
@@ -114,24 +117,6 @@ export default function AirtimeDetectionRow({
     >
       <div className="airtime-row-stripe" style={{ background: stripe }} aria-hidden />
 
-      {/* Time block — left anchor of the timeline */}
-      <div className="airtime-row-time-block">
-        <span className="airtime-row-time">{fmtTime(detection.detected_at)}</span>
-        <span className="airtime-row-date">{fmtDate(detection.detected_at)}</span>
-      </div>
-
-      {/* Station block — logo + name + dial */}
-      <div className="airtime-row-station">
-        <div className="airtime-row-logo">
-          <StationAvatar station={stationForAvatar} size={42} />
-        </div>
-        <div className="airtime-row-station-text">
-          <span className="airtime-row-station-name">{detection.station_name}</span>
-          {dial && <span className="airtime-row-station-dial">{dial}</span>}
-        </div>
-      </div>
-
-      {/* Action group — play + chevron at the right edge */}
       <button
         type="button"
         className="airtime-row-play"
@@ -158,6 +143,55 @@ export default function AirtimeDetectionRow({
         )}
       </button>
 
+      <div className="airtime-row-time-block">
+        <span className="airtime-row-time">{fmtTime(detection.detected_at)}</span>
+        <span className="airtime-row-date">{fmtDate(detection.detected_at)}</span>
+      </div>
+
+      <div className="airtime-row-station">
+        <div className="airtime-row-logo">
+          <StationAvatar station={stationForAvatar} size={40} />
+        </div>
+        <div className="airtime-row-station-text">
+          <span className="airtime-row-station-name">{detection.station_name}</span>
+          {dial && <span className="airtime-row-station-dial">{dial}</span>}
+        </div>
+      </div>
+
+      <div className="airtime-row-material" id={`airtime-mat-${detection.id}`}>
+        <span className="airtime-row-dot" style={{ background: stripe }} aria-hidden />
+        <div className="airtime-row-material-text">
+          <span className="airtime-row-material-title">{detection.commercial_name}</span>
+          {materialSub && <span className="airtime-row-material-sub">{materialSub}</span>}
+        </div>
+      </div>
+
+      <div className="airtime-row-metrics">
+        <div className="airtime-row-metric">
+          <span className="airtime-row-metric-label">PMM</span>
+          <span
+            className="airtime-row-metric-value"
+            title={detection.station_pmm != null ? String(Math.round(detection.station_pmm)) : undefined}
+          >
+            {pmm ?? '—'}
+          </span>
+        </div>
+        <div className="airtime-row-metric">
+          <span className="airtime-row-metric-label">Custo</span>
+          {cost.mode === 'consolidated' ? (
+            <span className="airtime-row-cost-badge" title="Plano consolidado — sem custo por inserção">
+              Plano
+            </span>
+          ) : cost.value != null ? (
+            <span className="airtime-row-metric-value airtime-row-cost">{fmtCost(cost.value)}</span>
+          ) : (
+            <span className="airtime-row-metric-value">—</span>
+          )}
+        </div>
+      </div>
+
+      <span className={`airtime-row-cat ${cat.className}`}>{cat.label}</span>
+
       <button
         type="button"
         className="airtime-row-chevron"
@@ -168,47 +202,6 @@ export default function AirtimeDetectionRow({
           <path d="M6 4l4 4-4 4" />
         </svg>
       </button>
-
-      {/* Meta band — material, type, client, metrics, category pill */}
-      <div className="airtime-row-meta" id={`airtime-mat-${detection.id}`}>
-        <span className="airtime-row-material">
-          <span className="airtime-row-dot" style={{ background: stripe }} aria-hidden />
-          <span className="airtime-row-material-title">{detection.commercial_name}</span>
-          {detection.material_type_name && (
-            <>
-              <span className="airtime-row-sep">·</span>
-              <span className="airtime-row-material-type">{detection.material_type_name}</span>
-            </>
-          )}
-          {detection.client_name && (
-            <>
-              <span className="airtime-row-sep">·</span>
-              <span className="airtime-row-client">{detection.client_name}</span>
-            </>
-          )}
-        </span>
-
-        <span className="airtime-row-metrics">
-          {pmm != null && (
-            <span className="airtime-row-metric" title={detection.station_pmm != null ? `PMM: ${Math.round(detection.station_pmm)}` : undefined}>
-              <span className="airtime-row-metric-label">PMM</span>
-              <span className="airtime-row-metric-value">{pmm}</span>
-            </span>
-          )}
-          {cost.mode === 'consolidated' ? (
-            <span className="airtime-row-metric" title="Plano consolidado — sem custo por inserção">
-              <span className="airtime-row-metric-label">Custo</span>
-              <span className="airtime-row-cost-badge">Consolidado</span>
-            </span>
-          ) : cost.value != null ? (
-            <span className="airtime-row-metric">
-              <span className="airtime-row-metric-label">Custo</span>
-              <span className="airtime-row-metric-value airtime-row-cost">{fmtCost(cost.value)}</span>
-            </span>
-          ) : null}
-          <span className={`airtime-row-cat ${cat.className}`}>{cat.label}</span>
-        </span>
-      </div>
 
       {isPlaying && blobUrl && (
         <div className="airtime-row-player">
