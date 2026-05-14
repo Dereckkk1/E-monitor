@@ -996,7 +996,6 @@ function CPMBadge({ financials }) {
 }
 
 function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign, financials }) {
-  const [expanded, setExpanded] = useState(false)
   const confirm = useConfirm()
   const alertDialog = useAlert()
   const client = clients.find(cl => cl.id === campaign.client_id)
@@ -1023,10 +1022,8 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   }
 
   return (
-    <div className={`campaign-row${expanded ? ' expanded' : ''}`}>
-      <div className="campaign-row-header" onClick={() => setExpanded(v => !v)}>
-        <IconChevron open={expanded} />
-
+    <div className="campaign-row">
+      <div className="campaign-row-header">
         <StationAvatar station={{ name: client?.name ?? '?', logo_url: client?.logo_url }} size={32} />
 
         <div className="campaign-row-info">
@@ -1048,11 +1045,10 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
           </div>
         </div>
 
-        <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
+        <div className="campaign-row-actions">
           <Link
             to={`/campaigns/${campaign.id}/edit`}
             className="btn btn-secondary btn-sm"
-            onClick={e => e.stopPropagation()}
           >
             Editar
           </Link>
@@ -1084,16 +1080,6 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         </div>
       </div>
 
-      {expanded && (
-        <div className="campaign-expanded">
-          <CampaignStationsSection campaign={campaign} allStations={allStations} />
-          <MaterialsPanel
-            campaign={campaign}
-            campaignStationIds={campaign.target_stations ?? []}
-            allStations={allStations}
-          />
-        </div>
-      )}
     </div>
   )
 }
