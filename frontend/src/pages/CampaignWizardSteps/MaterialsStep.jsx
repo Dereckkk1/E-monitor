@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   useCampaignMaterials, useMaterials, useMaterialTypes,
   useLinkCampaignMaterial, useUnlinkCampaignMaterial, useUploadMaterial,
-  useUpdateMaterialTypeId, useUpdateCampaignMaterialStations,
+  useUpdateMaterialTypeId, useUpdateMaterialScript, useUpdateCampaignMaterialStations,
 } from '../../api/hooks'
 import api from '../../api/client'
 import StationAvatar from '../../components/StationAvatar'
@@ -24,11 +24,15 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
   const { data: libMats = [] } = useMaterials(clientId)
   const unlink = useUnlinkCampaignMaterial()
   const updateType = useUpdateMaterialTypeId()
+  const updateScript = useUpdateMaterialScript()
   const updateStations = useUpdateCampaignMaterialStations()
   const confirm = useConfirm()
   const [showAdd, setShowAdd] = useState(false)
   // Which material card is currently in stations-editing mode (only one open at a time).
   const [editingStationsFor, setEditingStationsFor] = useState(null)
+  // Same idea for the script editor — separate state so opening the script
+  // panel doesn't collapse the stations panel a user might already have open.
+  const [editingScriptFor, setEditingScriptFor] = useState(null)
 
   // Fallback decision modal: if the operator reloaded (or otherwise bypassed
   // the upload-time blocker), surface the same blocking modal for any
@@ -154,6 +158,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
             if (!mat) return null
             const type = mat.type_id ? typeById[mat.type_id] : null
             const isEditing = editingStationsFor === link.material_id
+            const isEditingScript = editingScriptFor === link.material_id
             return (
               <MaterialCard
                 key={link.material_id}
@@ -165,6 +170,16 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
                 isEditingStations={isEditing}
                 onToggleStationsEdit={() =>
                   setEditingStationsFor(isEditing ? null : link.material_id)}
+                isEditingScript={isEditingScript}
+                onToggleScriptEdit={() =>
+                  setEditingScriptFor(isEditingScript ? null : link.material_id)}
+                onSaveScript={(script) => {
+                  updateScript.mutate(
+                    { id: mat.id, script },
+                    { onSuccess: () => setEditingScriptFor(null) },
+                  )
+                }}
+                scriptSaving={updateScript.isPending}
                 onTypeChange={(typeId) => updateType.mutate({ id: mat.id, type_id: typeId })}
                 onSaveStations={(target_stations) => {
                   updateStations.mutate({
@@ -220,6 +235,7 @@ function fingerprintBadge(status) {
 function MaterialCard({
   material, link, type, allTypes, campaignStations,
   isEditingStations, onToggleStationsEdit,
+  isEditingScript, onToggleScriptEdit, onSaveScript, scriptSaving,
   onTypeChange, onSaveStations, onUnlink,
 }) {
   // Audio playback / download. Same pattern as CampaignsPage commercials row:
@@ -477,6 +493,35 @@ function MaterialCard({
           )}
         </IconActionBtn>
 
+        {/* Script editor toggle. Subtle when empty, action-colored dot when
+            the material already has a script — so operators see at a glance
+            which materials have copy registered without expanding each card. */}
+        <IconActionBtn
+          onClick={onToggleScriptEdit}
+          title={material.script ? 'Editar texto do comercial' : 'Adicionar texto do comercial'}
+          aria-label="Texto do comercial"
+          activeColor="var(--c-action)"
+          isActive={isEditingScript}
+        >
+          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 3h10v10H3z" />
+              <path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" />
+            </svg>
+            {material.script && !isEditingScript && (
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute', top: -3, right: -3,
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: 'var(--c-action)',
+                  boxShadow: '0 0 0 2px var(--c-surface)',
+                }}
+              />
+            )}
+          </span>
+        </IconActionBtn>
+
         {/* Unlink */}
         <button
           onClick={onUnlink}
@@ -527,7 +572,136 @@ function MaterialCard({
         />
       )}
 
+      {/* ── Expandable script editor ── */}
+      {isEditingScript && (
+        <ScriptInlineEditor
+          initial={material.script ?? ''}
+          saving={scriptSaving}
+          onSave={onSaveScript}
+          onClose={onToggleScriptEdit}
+        />
+      )}
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
+/**
+ * Inline expandable editor for materials.script. Mirrors the visual shape of
+ * StationsInlineEditor so both expanding panels feel like the same family.
+ * "Limpar" submits an empty string — server normalizes to NULL.
+ */
+function ScriptInlineEditor({ initial, saving, onSave, onClose }) {
+  const [draft, setDraft] = useState(initial)
+  const dirty = draft.trim() !== (initial ?? '').trim()
+  const hasContent = draft.trim().length > 0
+
+  return (
+    <div style={{
+      borderTop: '1px solid var(--c-border)',
+      background: 'var(--c-bg)',
+      padding: '16px 18px',
+      animation: 'wizard-expand 200ms cubic-bezier(0.16,1,0.3,1)',
+      display: 'flex', flexDirection: 'column', gap: 10,
+    }}>
+      <style>{`
+        @keyframes wizard-expand {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        gap: 12,
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{
+            fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
+            textTransform: 'uppercase', color: 'var(--c-text-3)',
+            fontFamily: 'var(--font-heading)',
+          }}>
+            Texto do comercial
+          </span>
+          <span style={{ fontSize: 11.5, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+            Roteiro / copy falado. Aparece em /detecções quando esse material veicular.
+            <span style={{ color: 'var(--c-text-3)' }}> Campo opcional.</span>
+          </span>
+        </div>
+        <span style={{
+          fontSize: 10, color: 'var(--c-text-3)',
+          fontVariantNumeric: 'tabular-nums',
+          flexShrink: 0,
+        }}>
+          {draft.length} {draft.length === 1 ? 'caractere' : 'caracteres'}
+        </span>
+      </div>
+
+      <textarea
+        className="input"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        disabled={saving}
+        rows={5}
+        autoFocus
+        placeholder="Ex.: A nova promoção da Acme chegou. Aproveite descontos de até 30% nesta semana. Acme — sua escolha certa."
+        style={{
+          fontSize: 13, lineHeight: 1.55, resize: 'vertical',
+          minHeight: 96, fontFamily: 'var(--font-body)',
+        }}
+      />
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <button
+          type="button"
+          onClick={() => setDraft('')}
+          disabled={saving || !hasContent}
+          style={{
+            background: 'transparent', border: 0,
+            color: hasContent ? 'var(--c-text-2)' : 'var(--c-text-3)',
+            fontSize: 11.5, fontWeight: 600,
+            cursor: saving || !hasContent ? 'not-allowed' : 'pointer',
+            padding: '4px 0',
+          }}
+        >
+          Limpar
+        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            style={{
+              padding: '8px 14px', borderRadius: 'var(--radius-md)',
+              background: 'transparent', border: '1px solid var(--c-border)',
+              color: 'var(--c-text-2)', fontSize: 12, fontWeight: 600,
+              cursor: saving ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--font-body)',
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(draft.trim())}
+            disabled={saving || !dirty}
+            style={{
+              minWidth: 96,
+              padding: '8px 14px', borderRadius: 'var(--radius-md)',
+              background: dirty && !saving ? 'var(--c-action)' : 'var(--c-surface-2)',
+              border: `1px solid ${dirty && !saving ? 'var(--c-action)' : 'var(--c-border)'}`,
+              color: dirty && !saving ? '#fff' : 'var(--c-text-3)',
+              fontSize: 12, fontWeight: 700,
+              cursor: saving || !dirty ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--font-body)',
+              transition: 'all 120ms',
+            }}
+          >
+            {saving ? 'Salvando…' : hasContent ? 'Salvar' : 'Remover'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -965,6 +1139,8 @@ function AddMaterialPanel({
         file,
         title: file.name.replace(/\.[^.]+$/, ''),
         typeId: '',
+        // Optional spoken-copy. Persists as materials.script when non-empty.
+        script: '',
         stage: 'queued',   // queued | uploading | fingerprinting | verifying | deciding | linking | done | removed | error
         errorMsg: null,
       }))
@@ -1000,6 +1176,7 @@ function AddMaterialPanel({
         fd.append('client_id', clientId)
         fd.append('title', entry.title)
         if (entry.typeId) fd.append('type_id', entry.typeId)
+        if (entry.script && entry.script.trim()) fd.append('script', entry.script.trim())
         fd.append('audio', entry.file)
 
         let mat
@@ -1531,6 +1708,44 @@ function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes, disab
                   <option value="">Sem tipo (opcional)</option>
                   {materialTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
+                {/* Texto do comercial — opcional, vai pra materials.script.
+                    Aparece em /detections/:id quando a veiculação rolar.
+                    Sem limite de caracteres no banco (TEXT); a UI mostra um
+                    contador discreto pra dar noção do tamanho. */}
+                <div>
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    alignItems: 'baseline', marginBottom: 4,
+                  }}>
+                    <label
+                      htmlFor={`script-${entry.key}`}
+                      style={{
+                        fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em',
+                        textTransform: 'uppercase', color: 'var(--c-text-3)',
+                      }}
+                    >
+                      Texto do comercial <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--c-text-3)' }}>(opcional)</span>
+                    </label>
+                    {entry.script?.length > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--c-text-3)', fontVariantNumeric: 'tabular-nums' }}>
+                        {entry.script.length}
+                      </span>
+                    )}
+                  </div>
+                  <textarea
+                    id={`script-${entry.key}`}
+                    className="input"
+                    placeholder="Cole o roteiro / copy falado. Aparece em /detecções quando o material veicular."
+                    value={entry.script}
+                    onChange={e => setUploadQueue(q => q.map(x => x.key === entry.key ? { ...x, script: e.target.value } : x))}
+                    disabled={!editable}
+                    rows={3}
+                    style={{
+                      fontSize: 12, lineHeight: 1.5, resize: 'vertical',
+                      minHeight: 64, fontFamily: 'var(--font-body)',
+                    }}
+                  />
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{
                     fontSize: 11, fontWeight: 600,

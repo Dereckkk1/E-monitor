@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  useCampaigns, useCancelCampaign, useDeleteCampaign,
+  useCampaignsPaged, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
   useCampaignMaterials, useMaterials, useCampaignsFinancials,
@@ -10,8 +10,10 @@ import {
 import api from '../api/client'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
+import AirtimePaginator from '../components/AirtimePaginator'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
-import { tokenize, matchesAllTokens } from '../utils/search'
+
+const CAMPAIGNS_PAGE_SIZE = 12
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
 
@@ -83,8 +85,8 @@ const STATUS_CLASS = {
   concluida: 'badge-concluida',
   cancelada: 'badge-cancelada',
 }
-// Ordem de exibição: ativas → programadas (próximas a entrar) → concluídas/canceladas (histórico).
-const STATUS_ORDER = { ativa: 1, programada: 2, concluida: 3, cancelada: 4 }
+// Lifecycle ordering used to live here as STATUS_ORDER for client-side sort,
+// but server now owns the order — kept the comment for code archaeology.
 const FP_LABEL    = { pending: 'aguardando', generating: 'gerando…', ready: 'pronto', failed: 'falhou' }
 const FP_CLASS    = { pending: 'fp-pending', generating: 'fp-generating', ready: 'fp-ready', failed: 'fp-failed' }
 
@@ -1149,7 +1151,6 @@ function EmptyState() {
 // ─── CampaignsPage ─────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
-  const { data: campaigns = [], isLoading } = useCampaigns()
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
@@ -1162,6 +1163,13 @@ export default function CampaignsPage() {
   const cancelCampaign = useCancelCampaign()
   const deleteCampaign = useDeleteCampaign()
 
+  // Two-tier search state:
+  //   searchInput → what's in the textbox (re-renders only the input itself)
+  //   search      → the debounced value handed to the paged query
+  // This decoupling keeps the input focused while the user types: only the
+  // input re-renders on each keystroke, and the query fires 300ms after the
+  // last change.
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   // Competência default = mês atual. O usuário pode limpar pra ver todas, mas
   // o caso comum é "quais campanhas estão ativas neste mês". Selecionar um
@@ -1170,83 +1178,54 @@ export default function CampaignsPage() {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
+  const [page, setPage] = useState(1)
 
-  // Server already orders by lifecycle, but a client-side guard keeps the UX
-  // consistent if the API ever changes its ORDER BY.
-  const orderedCampaigns = useMemo(() => {
-    return [...campaigns].sort((a, b) => {
-      const ra = STATUS_ORDER[a.status] ?? 99
-      const rb = STATUS_ORDER[b.status] ?? 99
-      if (ra !== rb) return ra - rb
-      // Within same status: programada → soonest first; everything else → most recent first.
-      if (a.status === 'programada') {
-        return new Date(a.start_date) - new Date(b.start_date)
-      }
-      return new Date(b.start_date) - new Date(a.start_date)
-    })
-  }, [campaigns])
+  // Debounce searchInput → search (300ms). Re-armed on every keystroke;
+  // cleanup runs on unmount so a pending fire-after-unmount can't leak.
+  const debounceRef = useRef(null)
+  function changeSearch(v) {
+    setSearchInput(v)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setSearch(v)
+      setPage(1)
+    }, 300)
+  }
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+  }, [])
 
-  const clientNameById = useMemo(
-    () => Object.fromEntries(clients.map(c => [c.id, c.name ?? ''])),
-    [clients]
-  )
-
-  // Filter pipeline: month-overlap first (cheaper, drops most rows), then
-  // accent-insensitive token search across name + client.
-  const filteredCampaigns = useMemo(() => {
-    let list = orderedCampaigns
-
-    if (competence) {
-      const [y, m] = competence.split('-').map(Number)
-      const monthStart = new Date(y, m - 1, 1, 0, 0, 0, 0)
-      const monthEnd   = new Date(y, m, 0, 23, 59, 59, 999)
-      list = list.filter(c => {
-        if (!c.start_date || !c.end_date) return false
-        const cStart = new Date(c.start_date)
-        const cEnd   = new Date(c.end_date)
-        // Interval-overlap test: cStart <= monthEnd && cEnd >= monthStart.
-        return cStart <= monthEnd && cEnd >= monthStart
-      })
-    }
-
-    const tokens = tokenize(search)
-    if (tokens.length > 0) {
-      list = list.filter(c => {
-        const haystack = {
-          name: c.name ?? '',
-          client: clientNameById[c.client_id] ?? '',
-        }
-        return matchesAllTokens(haystack, ['name', 'client'], tokens)
-      })
-    }
-
-    return list
-  }, [orderedCampaigns, search, competence, clientNameById])
-
-  if (isLoading) {
-    return (
-      <div>
-        <div className="page-header">
-          <h2>Campanhas</h2>
-        </div>
-        {[1,2,3].map(i => (
-          <div key={i} className="campaign-row" style={{ marginBottom: 8 }}>
-            <div className="campaign-row-header" style={{ pointerEvents: 'none' }}>
-              <div className="skeleton" style={{ width: 14, height: 14, borderRadius: 3 }} />
-              <div className="skeleton" style={{ width: 32, height: 32, borderRadius: 8 }} />
-              <div style={{ flex: 1 }}>
-                <div className="skeleton" style={{ width: '35%', height: 14, borderRadius: 4, marginBottom: 6 }} />
-                <div className="skeleton" style={{ width: '55%', height: 11, borderRadius: 4 }} />
-              </div>
-              <div className="skeleton" style={{ width: 60, height: 22, borderRadius: 999 }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    )
+  function changeCompetence(v) { setCompetence(v); setPage(1) }
+  function clearFilters() {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSearchInput('')
+    setSearch('')
+    setCompetence('')
+    setPage(1)
   }
 
+  // Server-side pagination: backend handles filter + sort + paging, returns
+  // {data, total, total_pages, page, page_size}. Stale data stays visible
+  // during navigation thanks to keepPreviousData on the hook.
+  const { data: pagedResp, isLoading, isFetching } = useCampaignsPaged({
+    q: search,
+    competence,
+    page,
+    pageSize: CAMPAIGNS_PAGE_SIZE,
+  })
+  const pageCampaigns = pagedResp?.data ?? []
+  const totalFiltered = pagedResp?.total ?? 0
+  const totalPages    = pagedResp?.total_pages ?? 1
+
   const hasFilters = !!search || !!competence
+  const safePage   = Math.min(page, Math.max(1, totalPages))
+
+  // total === 0 + no filters = catalog is empty (first-run state).
+  // total === 0 + filters    = nothing matched the user's narrowing.
+  // Both are only meaningful AFTER the first fetch — otherwise we'd flash
+  // "no campaigns" before the catalog finishes loading.
+  const initialEmpty  = !hasFilters && totalFiltered === 0 && !isLoading
+  const filteredEmpty = hasFilters && totalFiltered === 0 && !isLoading
 
   return (
     <div>
@@ -1255,37 +1234,50 @@ export default function CampaignsPage() {
         <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>
       </div>
 
-      {campaigns.length === 0 ? (
+      {initialEmpty ? (
         <EmptyState />
       ) : (
         <>
           <CampaignFilters
-            search={search}
-            onSearchChange={setSearch}
+            search={searchInput}
+            onSearchChange={changeSearch}
             competence={competence}
-            onCompetenceChange={setCompetence}
-            onClear={() => { setSearch(''); setCompetence('') }}
+            onCompetenceChange={changeCompetence}
+            onClear={clearFilters}
             hasFilters={hasFilters}
-            total={campaigns.length}
-            shown={filteredCampaigns.length}
+            total={totalFiltered}
+            shown={totalFiltered}
           />
 
-          {filteredCampaigns.length === 0 ? (
-            <FilteredEmptyState onClear={() => { setSearch(''); setCompetence('') }} />
+          {isLoading ? (
+            <CampaignListSkeleton />
+          ) : filteredEmpty ? (
+            <FilteredEmptyState onClear={clearFilters} />
           ) : (
-            <div className="campaign-list">
-              {filteredCampaigns.map(c => (
-                <CampaignRow
-                  key={c.id}
-                  campaign={c}
-                  clients={clients}
-                  allStations={allStations}
-                  cancelCampaign={cancelCampaign}
-                  deleteCampaign={deleteCampaign}
-                  financials={financialsByCampaign[c.id]}
-                />
-              ))}
-            </div>
+            <>
+              <div className="campaign-list" style={{ opacity: isFetching ? 0.7 : 1, transition: 'opacity 150ms' }}>
+                {pageCampaigns.map(c => (
+                  <CampaignRow
+                    key={c.id}
+                    campaign={c}
+                    clients={clients}
+                    allStations={allStations}
+                    cancelCampaign={cancelCampaign}
+                    deleteCampaign={deleteCampaign}
+                    financials={financialsByCampaign[c.id]}
+                  />
+                ))}
+              </div>
+              <AirtimePaginator
+                page={safePage}
+                totalPages={totalPages}
+                total={totalFiltered}
+                pageSize={CAMPAIGNS_PAGE_SIZE}
+                onChange={setPage}
+                singular="campanha"
+                plural="campanhas"
+              />
+            </>
           )}
         </>
       )}
@@ -1296,66 +1288,111 @@ export default function CampaignsPage() {
 // Filter bar above the campaign list — text search (name / client) plus a
 // competence picker that uses month-overlap semantics: a campaign appears for
 // any month its [start_date, end_date] interval touches.
+// Filter bar above the campaign list — competência (single step from the
+// shared .flow-filter family) plus an accent-insensitive token search on
+// name/client. Matches the visual language used in /detections + /airtime.
 function CampaignFilters({
   search, onSearchChange, competence, onCompetenceChange,
   onClear, hasFilters, total, shown,
 }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-      padding: '10px 12px', marginBottom: 12,
-      background: 'var(--c-surface)', border: '1px solid var(--c-border)',
-      borderRadius: 'var(--radius-md)',
-    }}>
-      <div className="stations-search" style={{ flex: '1 1 260px', maxWidth: 360, minWidth: 220 }}>
-        <span className="stations-search-icon">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
-          </svg>
-        </span>
-        <input
-          className="input stations-search-input"
-          type="text"
-          placeholder="Buscar por nome ou cliente…"
-          value={search}
-          onChange={e => onSearchChange(e.target.value)}
-        />
-      </div>
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        display: 'flex', alignItems: 'stretch', gap: 14, flexWrap: 'wrap',
+      }}>
+        <div className="flow-filter flow-filter--active" style={{ flex: '0 0 220px', maxWidth: 240 }}>
+          <label className="flow-filter-label" htmlFor="campaigns-competence">
+            <span className="flow-filter-label-step">1</span>
+            Competência
+          </label>
+          <input
+            id="campaigns-competence"
+            className="flow-month-input"
+            type="month"
+            value={competence}
+            onChange={e => onCompetenceChange(e.target.value)}
+          />
+        </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <label style={{
-          fontSize: 11, color: 'var(--c-text-3)', fontWeight: 700,
-          textTransform: 'uppercase', letterSpacing: '0.04em',
-        }}>
-          Competência
-        </label>
-        <input
-          className="input-month"
-          type="month"
-          value={competence}
-          onChange={e => onCompetenceChange(e.target.value)}
-        />
-      </div>
+        <div className="flow-filter" style={{ flex: '1 1 280px', minWidth: 240, maxWidth: 460 }}>
+          <label className="flow-filter-label" htmlFor="campaigns-search">
+            Buscar
+            {hasFilters && (
+              <span style={{
+                marginLeft: 'auto',
+                textTransform: 'none', letterSpacing: 0,
+                fontSize: 11, fontWeight: 600, color: 'var(--c-text-3)',
+              }}>
+                {shown === 1 ? '1 campanha' : `${shown} campanhas`}
+              </span>
+            )}
+          </label>
+          <div className="stations-search" style={{ width: '100%', maxWidth: 'none' }}>
+            <span className="stations-search-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+                <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+              </svg>
+            </span>
+            <input
+              id="campaigns-search"
+              className="input stations-search-input"
+              type="text"
+              placeholder="Buscar por nome ou cliente…"
+              value={search}
+              onChange={e => onSearchChange(e.target.value)}
+            />
+          </div>
+        </div>
 
-      {hasFilters && (
-        <>
-          <span style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
-            {shown} de {total}
-          </span>
-          <button
-            type="button"
-            onClick={onClear}
-            style={{
-              padding: '5px 10px', borderRadius: 'var(--radius-md)',
-              background: 'transparent', border: '1px solid var(--c-border)',
-              color: 'var(--c-text-2)', fontSize: 11, fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Limpar
-          </button>
-        </>
-      )}
+        {hasFilters && (
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={onClear}
+              style={{
+                height: 38, padding: '0 14px', borderRadius: 'var(--radius-md)',
+                background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+                color: 'var(--c-text-2)', fontSize: 12, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'var(--font-body)',
+                transition: 'all 150ms',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'var(--c-action-border)'
+                e.currentTarget.style.color = 'var(--c-action)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--c-border)'
+                e.currentTarget.style.color = 'var(--c-text-2)'
+              }}
+            >
+              Limpar
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Row-shaped skeletons that occupy the same vertical space as a CampaignRow.
+// Scoped to the list so the filter bar stays mounted (and focused) across
+// query refetches.
+function CampaignListSkeleton() {
+  return (
+    <div className="campaign-list">
+      {[1, 2, 3, 4, 5].map(i => (
+        <div key={i} className="campaign-row" style={{ marginBottom: 8 }}>
+          <div className="campaign-row-header" style={{ pointerEvents: 'none' }}>
+            <div className="skeleton" style={{ width: 14, height: 14, borderRadius: 3 }} />
+            <div className="skeleton" style={{ width: 32, height: 32, borderRadius: 8 }} />
+            <div style={{ flex: 1 }}>
+              <div className="skeleton" style={{ width: '35%', height: 14, borderRadius: 4, marginBottom: 6 }} />
+              <div className="skeleton" style={{ width: '55%', height: 11, borderRadius: 4 }} />
+            </div>
+            <div className="skeleton" style={{ width: 60, height: 22, borderRadius: 999 }} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -1363,20 +1400,43 @@ function CampaignFilters({
 function FilteredEmptyState({ onClear }) {
   return (
     <div style={{
-      padding: '40px 24px', textAlign: 'center',
-      background: 'var(--c-bg)', border: '1px dashed var(--c-border)',
-      borderRadius: 'var(--radius-md)', color: 'var(--c-text-2)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      gap: 14, padding: '64px 32px', textAlign: 'center',
+      background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius-xl)',
     }}>
-      <p style={{ margin: '0 0 12px', fontSize: 14 }}>
-        Nenhuma campanha corresponde aos filtros aplicados.
+      <div style={{
+        width: 56, height: 56, borderRadius: 'var(--radius-lg)',
+        background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 0 6px rgba(100, 116, 139, 0.04)',
+      }}>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
+      </div>
+      <h3 style={{
+        fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 20,
+        color: 'var(--c-text)', margin: 0, letterSpacing: '-0.01em',
+      }}>Nenhuma campanha encontrada</h3>
+      <p style={{
+        margin: 0, color: 'var(--c-text-2)', fontSize: 14, lineHeight: 1.5,
+        maxWidth: 380,
+      }}>
+        Nenhuma campanha corresponde aos filtros aplicados. Tente outra competência ou limpe os filtros pra ver todas.
       </p>
       <button
         type="button"
         onClick={onClear}
         style={{
-          padding: '7px 14px', borderRadius: 'var(--radius-md)',
-          background: 'var(--c-action)', color: '#fff', border: 0,
-          fontSize: 12, fontWeight: 700, cursor: 'pointer',
+          marginTop: 4,
+          padding: '10px 18px', borderRadius: 'var(--radius-md)',
+          background: 'var(--c-action)', color: '#fff',
+          border: '1px solid var(--c-action)',
+          fontSize: 13, fontWeight: 600, cursor: 'pointer',
+          fontFamily: 'var(--font-body)',
+          transition: 'all 150ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
         Limpar filtros

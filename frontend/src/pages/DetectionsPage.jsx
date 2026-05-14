@@ -1,5 +1,5 @@
-import { Fragment, useState, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Fragment, useState, useMemo, useRef, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   useCampaigns, useStations, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
@@ -9,13 +9,23 @@ import RSelect from '../components/RSelect'
 import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
 import CoverageSummary from '../components/CoverageSummary'
+import FlowStepper from '../components/FlowStepper'
 import { tokenize, matchesAllTokens } from '../utils/search'
+import { safeLogoUrl } from '../utils/logoUrl'
+import { parseLocalDate } from '../utils/dates'
+
+const STEP_LABELS = ['Competência', 'Campanha', 'Período']
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function currentMonthValue() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+function pad2(n) { return String(n).padStart(2, '0') }
+
+function monthFromDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
+}
+
+function isoFromDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
 function monthToRange(ymStr) {
@@ -30,14 +40,45 @@ function monthLabel(ymStr) {
   return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 }
 
+function rangeLabel(startISO, endISO) {
+  if (!startISO || !endISO) return ''
+  const a = new Date(`${startISO}T00:00:00`)
+  const b = new Date(`${endISO}T00:00:00`)
+  const sameMonth = a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
+  const monthShort = a.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
+  const monthShortB = b.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
+  if (sameMonth) {
+    return a.getDate() === b.getDate()
+      ? `${a.getDate()} de ${monthShort}`
+      : `${a.getDate()}–${b.getDate()} ${monthShort}`
+  }
+  return `${a.getDate()} ${monthShort} – ${b.getDate()} ${monthShortB}`
+}
+
+// Intersection of (month range) ∩ (campaign range), returned as ISO date strings.
+function defaultRangeForCampaign(ymStr, campaign) {
+  if (!ymStr || !campaign?.start_date || !campaign?.end_date) return { start: '', end: '' }
+  const { start: monthStart, end: monthEnd } = monthToRange(ymStr)
+  // parseLocalDate avoids the UTC-midnight shift that would push these to
+  // the previous calendar day in São Paulo.
+  const cStart = parseLocalDate(campaign.start_date)
+  const cEnd   = parseLocalDate(campaign.end_date)
+  cEnd.setHours(23, 59, 59, 999)
+  const start = cStart > monthStart ? cStart : monthStart
+  const end   = cEnd   < monthEnd   ? cEnd   : monthEnd
+  if (start > end) return { start: '', end: '' }
+  return { start: isoFromDate(start), end: isoFromDate(end) }
+}
+
 // ── Client mini avatar (for campaign select) ──────────────────────
 
 function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
   const [imgError, setImgError] = useState(false)
-  if (logo && !imgError) {
+  const safeLogo = safeLogoUrl(logo)
+  if (safeLogo && !imgError) {
     return (
       <img
-        src={logo}
+        src={safeLogo}
         alt={name}
         width={size}
         height={size}
@@ -74,7 +115,7 @@ function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
   )
 }
 
-// ── Skeleton ─────────────────────────────────────────────────────
+// ── Skeleton (also used as ghost backdrop on empty states) ───────
 
 // Mirror DistributionGrid's "stop at today" rule so the loading state has the
 // same column count as the data view that follows it.
@@ -91,8 +132,6 @@ function skeletonDayCount(monthDate) {
   return isFutureMonth ? 0 : (isCurrentMonth ? today.getDate() : daysInMonth)
 }
 
-// Deterministic hit pattern that scales with any day count. ~35% density,
-// staggered per row so the skeleton doesn't look striped.
 function skeletonHits(dayCount, rowSeed) {
   const hits = new Set()
   for (let i = 0; i < dayCount; i++) {
@@ -101,9 +140,6 @@ function skeletonHits(dayCount, rowSeed) {
   return hits
 }
 
-// Mirrors DistributionGrid's two-tier structure: a full-width station header
-// (avatar + station name) followed by indented material sub-rows. Three
-// stations with [2, 1, 2] materials matches the typical campaign shape.
 const SKEL_STATIONS = [
   { nameW: 108, placeW: 74, materials: [{ titleW: 60 }, { titleW: 76 }] },
   { nameW: 95,  placeW: 82, materials: [{ titleW: 68 }] },
@@ -113,8 +149,6 @@ const SKEL_STATIONS = [
 function SkeletonCalendar({ monthDate }) {
   const dayCount = skeletonDayCount(monthDate)
   const days = Array.from({ length: dayCount }, (_, i) => i)
-  // Mirror do gridTemplate do DistributionGrid: 2 colunas no resumo
-  // (200 row-summary + 180 station-total). Sticky-right alinhado.
   const ROW_SUM_W = 200
   const STATION_TOTAL_W = 180
   const gridTemplate = `220px repeat(${dayCount}, 88px) 1fr ${ROW_SUM_W}px ${STATION_TOTAL_W}px`
@@ -130,8 +164,6 @@ function SkeletonCalendar({ monthDate }) {
         display: 'grid', gridTemplateColumns: gridTemplate,
         fontSize: 12, minWidth: 'fit-content',
       }}>
-
-        {/* Header row — empty corner + day-header placeholders + summary */}
         <div style={{ ...skelHead, left: 0, zIndex: 3 }} />
         {days.map(i => (
           <div key={`hd-${i}`} style={skelHead}>
@@ -143,10 +175,8 @@ function SkeletonCalendar({ monthDate }) {
           <div className="skeleton" style={{ width: 44, height: 10, borderRadius: 3 }} />
         </div>
 
-        {/* Station blocks */}
         {SKEL_STATIONS.map((s, si) => (
           <Fragment key={`s-${si}`}>
-            {/* Station header (full-width, content sticks left) */}
             <div style={{
               gridColumn: '1 / -1', background: '#fff',
               borderBottom: '1px solid #e2e8f0',
@@ -164,7 +194,6 @@ function SkeletonCalendar({ monthDate }) {
               </div>
             </div>
 
-            {/* Material sub-rows */}
             {s.materials.map((m, mi) => {
               const hits = skeletonHits(dayCount, matRowIdx++)
               return (
@@ -185,7 +214,6 @@ function SkeletonCalendar({ monthDate }) {
                       )}
                     </div>
                   ))}
-                  {/* Row summary placeholder: 6 pills */}
                   <div style={{
                     ...skelCell, gridColumn: '-3 / -2', justifyContent: 'flex-start',
                     borderLeft: '2px solid #e2e8f0', padding: '8px 10px', gap: 10,
@@ -197,7 +225,6 @@ function SkeletonCalendar({ monthDate }) {
                       ))}
                     </div>
                   </div>
-                  {/* Station total placeholder — spans all material rows do bloco */}
                   {mi === 0 && (
                     <div style={{
                       ...skelCell, gridColumn: '-2 / -1', gridRow: `span ${s.materials.length}`,
@@ -245,8 +272,6 @@ const skelCell = {
   justifyContent: 'center',
 }
 
-// Loader twin of <CoverageSummary>: big "Cobertura do plano" block on the left,
-// divider, then five stat placeholders matching the real card's slots.
 function SkeletonCoverage() {
   const stats = [
     { labelW: 56, badgeW: 38 },
@@ -276,56 +301,162 @@ function SkeletonCoverage() {
   )
 }
 
-// ── Empty states ─────────────────────────────────────────────────
+// ── Empty state ──────────────────────────────────────────────────
 
-function EmptyNoCampaign() {
+// Progressive-disclosure stepper. Shown above the empty-state card so users
+// learn the 3-step filter path (Competência → Campanha → Período em dias)
+// without reading prose. Each step has 3 visual states (pending/active/done).
+function GhostBackdrop({ monthDate }) {
   return (
-    <div className="detection-empty">
-      <div className="detection-empty-icon">
-        <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
-          <circle cx="28" cy="28" r="27" stroke="currentColor" strokeWidth="2" />
-          <path d="M14 28c0-7.732 6.268-14 14-14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M19 28c0-4.97 4.03-9 9-9"      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M24 28c0-2.21 1.79-4 4-4"       stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-          <circle cx="28" cy="28" r="2" fill="currentColor" />
-          <path d="M42 28c0 7.732-6.268 14-14 14"  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M37 28c0 4.97-4.03 9-9 9"       stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M32 28c0 2.21-1.79 4-4 4"       stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-        </svg>
-      </div>
-      <h3>Selecione uma campanha</h3>
-      <p>Escolha uma campanha acima para ver as veiculações detectadas.</p>
+    <div className="detection-empty-ghost" aria-hidden="true">
+      <SkeletonCoverage />
+      <SkeletonCalendar monthDate={monthDate} />
     </div>
   )
 }
 
-function EmptyNoRules() {
-  return (
-    <div className="detection-empty">
-      <div className="detection-empty-icon">
-        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <rect x="6" y="12" width="36" height="28" rx="4" stroke="currentColor" strokeWidth="2" />
-          <path d="M14 22h20M14 28h12M14 34h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-      </div>
-      <h3>Campanha sem materiais vinculados</h3>
-      <p>Vá em <strong>Campanhas → Editar</strong> pra adicionar materiais e regras de distribuição.</p>
-    </div>
-  )
+const ICONS = {
+  calendar: (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  ),
+  campaign: (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" />
+      <path d="M16 8a4 4 0 0 1 0 8" />
+      <path d="M19 5a8 8 0 0 1 0 14" />
+    </svg>
+  ),
+  alert: (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+      <path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    </svg>
+  ),
+  search: (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  ),
 }
 
-function EmptyNoDetections({ periodLabel }) {
+/**
+ * Unified empty state for /detections. Variants:
+ *  - "no-month"      → step 1, asks for competência
+ *  - "no-campaign"   → step 2, asks for campanha (with count hint)
+ *  - "no-rules"      → campaign has no materials linked
+ *  - "no-detections" → filters valid but zero hits in range
+ *
+ * All variants share the same shell: ghost backdrop + centered focused card.
+ */
+function DetectionsEmpty({
+  variant,
+  ghostMonthDate,
+  monthLabelText,
+  campaignName,
+  rangeLabelText,
+  campaignCount,
+  onPickMonth,
+  onPickCampaign,
+  onEditCampaign,
+  onExpandRange,
+}) {
+  let content
+  if (variant === 'no-month') {
+    content = (
+      <>
+        <FlowStepper step={1} steps={STEP_LABELS} />
+        <div className="detection-empty-icon">{ICONS.calendar}</div>
+        <h3>Comece pela <strong>competência</strong></h3>
+        <p>Escolha o mês de referência. As campanhas que cruzam esse período ficam disponíveis logo em seguida.</p>
+        <div className="detection-empty-actions">
+          <button type="button" className="detection-empty-cta" onClick={onPickMonth}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" />
+            </svg>
+            Escolher competência
+          </button>
+        </div>
+      </>
+    )
+  } else if (variant === 'no-campaign') {
+    const count = campaignCount ?? 0
+    content = (
+      <>
+        <FlowStepper step={2} steps={STEP_LABELS} />
+        <div className="detection-empty-icon">{ICONS.campaign}</div>
+        <h3>Escolha uma <strong>campanha</strong> de {monthLabelText}</h3>
+        <p>
+          {count === 0
+            ? <>Nenhuma campanha vigente em <strong>{monthLabelText}</strong>. Troque a competência ou cadastre uma nova campanha.</>
+            : <>{count === 1 ? '1 campanha vigente' : `${count} campanhas vigentes`} nesse mês. Pra ver as veiculações detectadas, selecione uma campanha.</>}
+        </p>
+        <div className="detection-empty-actions">
+          {count > 0 && (
+            <button type="button" className="detection-empty-cta" onClick={onPickCampaign}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+              Abrir lista de campanhas
+            </button>
+          )}
+          <button type="button" className="detection-empty-cta detection-empty-cta--ghost" onClick={onPickMonth}>
+            Trocar competência
+          </button>
+        </div>
+      </>
+    )
+  } else if (variant === 'no-rules') {
+    content = (
+      <>
+        <FlowStepper step={3} steps={STEP_LABELS} />
+        <div className="detection-empty-icon detection-empty-icon--warn">{ICONS.alert}</div>
+        <h3>Campanha sem materiais vinculados</h3>
+        <p>
+          <strong>{campaignName}</strong> ainda não tem materiais nem regras de distribuição. Sem isso, não há o que monitorar.
+        </p>
+        <div className="detection-empty-actions">
+          <button type="button" className="detection-empty-cta" onClick={onEditCampaign}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+            </svg>
+            Editar campanha
+          </button>
+        </div>
+      </>
+    )
+  } else {
+    // no-detections
+    content = (
+      <>
+        <FlowStepper step={3} steps={STEP_LABELS} />
+        <div className="detection-empty-icon detection-empty-icon--mute">{ICONS.search}</div>
+        <h3>Nenhuma veiculação no período</h3>
+        <p>
+          Sem detecções entre <strong>{rangeLabelText || monthLabelText}</strong>. Pode ser que a campanha não tenha sido veiculada nesses dias, ou que o range esteja apertado demais.
+        </p>
+        <div className="detection-empty-actions">
+          {onExpandRange && (
+            <button type="button" className="detection-empty-cta" onClick={onExpandRange}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6" /><path d="M3 17v-6h6" /><path d="M21 13a9 9 0 0 1-15 5.5" /><path d="M3 11a9 9 0 0 1 15-5.5" />
+              </svg>
+              Ampliar pro mês todo
+            </button>
+          )}
+        </div>
+      </>
+    )
+  }
+
   return (
-    <div className="detection-empty">
-      <div className="detection-empty-icon">
-        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <rect x="6" y="12" width="36" height="28" rx="4" stroke="currentColor" strokeWidth="2" />
-          <path d="M14 8h20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M18 24h12M18 30h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-      </div>
-      <h3>Nenhuma veiculação encontrada</h3>
-      <p>Nenhuma veiculação detectada {periodLabel ? `em ${periodLabel}` : 'no período selecionado'}.</p>
+    <div className="detection-empty" role="status" aria-live="polite">
+      <GhostBackdrop monthDate={ghostMonthDate} />
+      <div className="detection-empty-card">{content}</div>
     </div>
   )
 }
@@ -333,25 +464,36 @@ function EmptyNoDetections({ periodLabel }) {
 // ── Main page ─────────────────────────────────────────────────────
 
 export default function DetectionsPage() {
+  const navigate = useNavigate()
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns()
   const { data: clients = [] } = useClients()
 
   const [searchParams] = useSearchParams()
-  const [selectedCampaignId, setSelectedCampaignId] = useState(
-    () => searchParams.get('campaign_id') ?? ''
-  )
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
+  const deepLinkCampaignId = searchParams.get('campaign_id') ?? ''
+
+  const [selectedCampaignId, setSelectedCampaignId] = useState(deepLinkCampaignId)
+  // selectedMonthRaw is the user-picked month; effectiveMonth derives a
+  // fallback from a deep-linked campaign so /detections?campaign_id=… still
+  // works without forcing the user to pick a competência first.
+  const [selectedMonthRaw, setSelectedMonthRaw] = useState('')
+  // userRange holds the date-range filter (step 3). Empty strings mean
+  // "fall back to the default" (intersection of month ∩ campaign).
+  const [userRange, setUserRange] = useState({ start: '', end: '' })
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
   // TODO F-100: wire up HealthDrawer once the component is built
   // eslint-disable-next-line no-unused-vars
   const [healthStationId, setHealthStationId] = useState(null)
 
+  const monthInputRef = useRef(null)
+
+  const focusCampaignSelect = useCallback(() => {
+    // RSelect doesn't forward refs; we focus by the inputId we attached below.
+    document.getElementById('detection-campaign')?.focus()
+  }, [])
+
   const { data: stationsResp } = useStations({ limit: 2000 })
   const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
-
-  // Derive period from selected month
-  const period = useMemo(() => monthToRange(selectedMonth), [selectedMonth])
 
   // Client lookup map
   const clientMap = useMemo(() => {
@@ -360,15 +502,43 @@ export default function DetectionsPage() {
     return m
   }, [clients])
 
-  // Find the selected campaign object (we'll use start/end dates from it)
   const selectedCampaign = useMemo(
     () => campaigns.find(c => c.id === selectedCampaignId) ?? null,
     [campaigns, selectedCampaignId]
   )
 
-  // Date range strings for daily-summary query (YYYY-MM-DD)
-  const fromISO = useMemo(() => period.start.toISOString().slice(0, 10), [period])
-  const toISO   = useMemo(() => period.end.toISOString().slice(0, 10), [period])
+  // Deep-link derived month: when URL carries ?campaign_id and the user
+  // hasn't picked a month yet, fall back to the month containing the
+  // campaign's start (or today's month if the campaign is still in the
+  // future). Read-only derivation — no setState in an effect.
+  const monthFromDeepLink = useMemo(() => {
+    if (!deepLinkCampaignId || campaigns.length === 0) return ''
+    const c = campaigns.find(c => c.id === deepLinkCampaignId)
+    if (!c?.start_date) return ''
+    const cs = parseLocalDate(c.start_date)
+    const now = new Date()
+    return monthFromDate(cs > now ? cs : now)
+  }, [deepLinkCampaignId, campaigns])
+
+  const selectedMonth = selectedMonthRaw || monthFromDeepLink
+
+  // Default date range = intersection of month and campaign. The effective
+  // range is whatever the user picked, falling back to the default.
+  const defaultRange = useMemo(() =>
+    defaultRangeForCampaign(selectedMonth, selectedCampaign),
+    [selectedMonth, selectedCampaign])
+
+  const rangeStart = userRange.start || defaultRange.start
+  const rangeEnd   = userRange.end   || defaultRange.end
+
+  // Date range strings for the daily-summary query: we always fetch the
+  // selected MONTH (not the user range) so tweaking the range doesn't refetch;
+  // the range is applied as a client-side visual narrow on the grid + coverage.
+  const monthRangeISO = useMemo(() => {
+    if (!selectedMonth) return { from: '', to: '' }
+    const { start, end } = monthToRange(selectedMonth)
+    return { from: isoFromDate(start), to: isoFromDate(end) }
+  }, [selectedMonth])
 
   // Hydrate the campaign's material library
   const { data: clientLibrary = [] } = useMaterials(selectedCampaign?.client_id ?? null)
@@ -383,29 +553,42 @@ export default function DetectionsPage() {
   const { data: materialTypes = [] }     = useMaterialTypes()
   const { data: pricingList = [] }       = useCampaignPricing(selectedCampaignId || null)
 
-  // Indexa pricing por station_id pra consumo direto na DistributionGrid.
   const pricingByStation = useMemo(() => {
     const m = {}
     for (const p of pricingList) m[p.station_id] = p
     return m
   }, [pricingList])
+
   const {
     data: summary = [],
     isLoading: loadingSummary,
     isFetching,
     refetch,
-  } = useDailySummary(selectedCampaignId || null, fromISO, toISO)
+  } = useDailySummary(selectedCampaignId || null, monthRangeISO.from, monthRangeISO.to)
 
-  const showDetections = !!selectedCampaignId
-  const isLoadingData  = showDetections && (loadingSummary || isFetching)
+  // Client-side range narrow (drives both CoverageSummary and the visible
+  // grid days). If range isn't set yet, fall back to the full month.
+  const rangedSummary = useMemo(() => {
+    if (!rangeStart || !rangeEnd) return summary
+    return summary.filter(s => {
+      const d = (s.for_date ?? '').slice(0, 10)
+      return d >= rangeStart && d <= rangeEnd
+    })
+  }, [summary, rangeStart, rangeEnd])
 
-  // ── Campaign change ───────────────────────────────────────────
-  function handleCampaignChange(opt) {
-    setSelectedCampaignId(opt?.value ?? '')
-    setSelectedMonth(currentMonthValue())
-    setModalCell(null)
-  }
+  // Grid clamp: pass the intersection of (user range) ∩ (campaign range) as
+  // the campaignStart/campaignEnd so the grid keeps its existing semantics.
+  const gridStart = useMemo(() => {
+    if (rangeStart) return rangeStart
+    return selectedCampaign?.start_date ?? ''
+  }, [rangeStart, selectedCampaign])
 
+  const gridEnd = useMemo(() => {
+    if (rangeEnd) return rangeEnd
+    return selectedCampaign?.end_date ?? ''
+  }, [rangeEnd, selectedCampaign])
+
+  // ── Campaign options + filtering ──────────────────────────────
   const allCampaignOptions = useMemo(() => campaigns.map(c => {
     const client = clientMap.get(c.client_id) ?? null
     return {
@@ -419,21 +602,19 @@ export default function DetectionsPage() {
   }), [campaigns, clientMap])
 
   // Dropdown só lista campanhas cujo intervalo [start_date, end_date] cruza
-  // a competência selecionada. Mesma semântica do filtro de /campaigns: 14–16
-  // de maio aparece quando você seleciona maio; jan–dez aparece em qualquer
-  // mês entre os dois.
+  // a competência selecionada. Sem competência, lista vazia (o seletor fica
+  // bloqueado mesmo).
   const campaignOptions = useMemo(() => {
-    const { start, end } = period
+    if (!selectedMonth) return []
+    const { start, end } = monthToRange(selectedMonth)
     return allCampaignOptions.filter(o => {
       if (!o.startDate || !o.endDate) return false
-      const cs = new Date(o.startDate), ce = new Date(o.endDate)
+      const cs = parseLocalDate(o.startDate)
+      const ce = parseLocalDate(o.endDate)
       return cs <= end && ce >= start
     })
-  }, [allCampaignOptions, period])
+  }, [allCampaignOptions, selectedMonth])
 
-  // A campanha já selecionada continua aparecendo no input mesmo quando ela
-  // não cruza a competência atual (caso típico: deep-link com `?campaign_id=…`).
-  // Quem busca pelo dropdown só vê as do mês.
   const selectedCampaignOption = useMemo(() =>
     allCampaignOptions.find(o => o.value === selectedCampaignId) ?? null,
     [allCampaignOptions, selectedCampaignId])
@@ -466,17 +647,12 @@ export default function DetectionsPage() {
     )
   }
 
-
-  // Full type object lookup, used by the DayDetailModal to render the colored
-  // name/type chip + left border on each detection row.
+  // ── Type/material plumbing for the grid (unchanged from before) ─
   const typeById = useMemo(
     () => Object.fromEntries(materialTypes.map(t => [t.id, t])),
     [materialTypes]
   )
 
-  // Migration 0019: distribution is by TYPE, so the grid shows one row per
-  // (station, type) pair. A type only appears for a station when at least
-  // one material of that type is linked to it.
   const typesInScopeByStation = useMemo(() => {
     const m = new Map()
     for (const cm of campaignMaterials) {
@@ -501,8 +677,6 @@ export default function DetectionsPage() {
         const first = matching[0]
         r.push({
           stationId: sid,
-          // Grid was built around `materialId` — we feed the type's UUID here
-          // and keep the prop name so the existing cell-key plumbing works.
           materialId: tid,
           materialTitle: type.name,
           typeColor: type.color ?? '#94a3b8',
@@ -516,26 +690,21 @@ export default function DetectionsPage() {
     return r
   }, [typesInScopeByStation, typeById, distributionRules])
 
-  // Build cellData map keyed by (station, TYPE, date) — daily_play_summary now
-  // groups by type after migration 0019.
   const cellData = useMemo(() => {
     const m = new Map()
-    for (const s of summary) {
+    for (const s of rangedSummary) {
       const key = `${s.station_id}|${s.type_id}|${s.for_date.slice(0, 10)}`
       m.set(key, { ...s, hasOverride: false })
     }
     return m
-  }, [summary])
+  }, [rangedSummary])
 
-  // The month being displayed (first of selectedMonth)
   const monthDate = useMemo(() => {
+    if (!selectedMonth) return new Date()
     const [y, m] = selectedMonth.split('-').map(Number)
     return new Date(y, m - 1, 1)
   }, [selectedMonth])
 
-  // Filter rows by station+material search. Uses matchesAllTokens for
-  // accent-insensitive, token-AND/field-OR matching — same behavior as the
-  // station search in /monitoring and the campaign material picker.
   const filteredRows = useMemo(() => {
     const tokens = tokenize(search)
     if (tokens.length === 0) return rows
@@ -556,12 +725,89 @@ export default function DetectionsPage() {
     })
   }, [rows, search, stationCatalog])
 
-  // ── Month navigation ──────────────────────────────────────────
+  // ── Filter step state ─────────────────────────────────────────
+  // Drives both the filter bar UI (which field is disabled vs active vs done)
+  // and the empty-state variant. Single source of truth.
+  const filterStep = !selectedMonth ? 1 : !selectedCampaignId ? 2 : 3
+
   function handleMonthChange(e) {
-    if (!e.target.value) return
-    setSelectedMonth(e.target.value)
+    const v = e.target.value
+    setSelectedMonthRaw(v)
+    // Changing the month invalidates user-picked range — the picked dates
+    // probably don't belong to the new month at all.
+    setUserRange({ start: '', end: '' })
+    // …and may invalidate the campaign selection if the new month doesn't
+    // overlap with it.
+    if (selectedCampaignId) {
+      const c = campaigns.find(cc => cc.id === selectedCampaignId)
+      if (c && v) {
+        const { start, end } = monthToRange(v)
+        const cs = parseLocalDate(c.start_date)
+        const ce = parseLocalDate(c.end_date)
+        if (!(cs <= end && ce >= start)) setSelectedCampaignId('')
+      } else {
+        setSelectedCampaignId('')
+      }
+    }
     setModalCell(null)
   }
+
+  function handleCampaignChange(opt) {
+    setSelectedCampaignId(opt?.value ?? '')
+    // Different campaign → different date bounds → reset the user range.
+    setUserRange({ start: '', end: '' })
+    setModalCell(null)
+  }
+
+  function handleRangeStart(e) {
+    const v = e.target.value
+    setUserRange(prev => {
+      const next = { start: v, end: prev.end || rangeEnd }
+      if (v && next.end && v > next.end) next.end = v
+      return next
+    })
+  }
+
+  function handleRangeEnd(e) {
+    const v = e.target.value
+    setUserRange(prev => {
+      const next = { start: prev.start || rangeStart, end: v }
+      if (v && next.start && v < next.start) next.start = v
+      return next
+    })
+  }
+
+  function handleResetRange() {
+    setUserRange({ start: '', end: '' })
+  }
+
+  // Bounds for the date pickers = the full month ∩ campaign window. Outside
+  // those, dates are meaningless on this page.
+  const rangeBounds = defaultRange
+
+  // Is the user range narrower than the full intersection? Used to show
+  // the "reset" affordance.
+  const rangeIsCustom = !!(userRange.start || userRange.end) &&
+    rangeBounds.start && rangeBounds.end &&
+    (rangeStart !== rangeBounds.start || rangeEnd !== rangeBounds.end)
+
+  // ── Empty-state variant decision ──────────────────────────────
+  // Search is intentionally NOT part of this decision — when the user
+  // searches and gets zero matches, we leave the grid visible (with its own
+  // empty inside) instead of replacing the whole screen.
+  const showDetections = filterStep === 3
+  const isLoadingData  = showDetections && (loadingSummary || isFetching)
+  const hasRows = rows.length > 0
+  const hasDetectionsInRange = rangedSummary.length > 0
+
+  let emptyVariant = null
+  if (filterStep === 1) emptyVariant = 'no-month'
+  else if (filterStep === 2) emptyVariant = 'no-campaign'
+  else if (!isLoadingData && !hasRows) emptyVariant = 'no-rules'
+  else if (!isLoadingData && !hasDetectionsInRange) emptyVariant = 'no-detections'
+
+  // Compute campaign count for current month (used in empty-state copy)
+  const campaignCount = campaignOptions.length
 
   // ── Render ────────────────────────────────────────────────────
   return (
@@ -570,29 +816,122 @@ export default function DetectionsPage() {
         <h2>Veiculações</h2>
       </div>
 
-      {/* Campaign selector + refresh */}
-      <div className="detection-header">
-        <div className="campaign-selector-wrap">
-          <label htmlFor="campaign-select">Campanha</label>
+      {/* 3-step filter bar: Competência → Campanha → Período em dias. */}
+      <div className="flow-filters">
+        <div className={`flow-filter ${filterStep === 1 ? 'flow-filter--active' : 'flow-filter--done'}`}>
+          <label className="flow-filter-label" htmlFor="detection-month">
+            <span className="flow-filter-label-step">1</span>
+            Competência
+          </label>
+          <input
+            id="detection-month"
+            ref={monthInputRef}
+            className="flow-month-input"
+            type="month"
+            value={selectedMonth}
+            onChange={handleMonthChange}
+            placeholder="Selecione o mês"
+          />
+        </div>
+
+        <div className={`flow-filter ${
+          !selectedMonth ? 'flow-filter--locked' :
+          filterStep === 2 ? 'flow-filter--active' : 'flow-filter--done'
+        }`}>
+          <label className="flow-filter-label" htmlFor="detection-campaign">
+            <span className="flow-filter-label-step">2</span>
+            Campanha
+            {selectedMonth && filterStep === 2 && campaignCount > 0 && (
+              <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, fontSize: 11, fontWeight: 600, color: 'var(--c-text-3)' }}>
+                {campaignCount === 1 ? '1 disponível' : `${campaignCount} disponíveis`}
+              </span>
+            )}
+          </label>
           <RSelect
-            inputId="campaign-select"
+            inputId="detection-campaign"
             options={campaignOptions}
             value={selectedCampaignOption}
             onChange={handleCampaignChange}
             formatOptionLabel={formatCampaignOption}
-            isDisabled={loadingCampaigns}
+            isDisabled={!selectedMonth || loadingCampaigns}
             isLoading={loadingCampaigns}
-            placeholder={loadingCampaigns ? 'Carregando campanhas…' : 'Selecione uma campanha'}
+            placeholder={
+              !selectedMonth ? 'Escolha uma competência primeiro' :
+              loadingCampaigns ? 'Carregando…' :
+              campaignCount === 0 ? `Nenhuma campanha em ${monthLabel(selectedMonth)}` :
+              `${campaignCount === 1 ? '1 campanha' : `${campaignCount} campanhas`} em ${monthLabel(selectedMonth)}`
+            }
             isClearable
+            noOptionsMessage={() => `Nenhuma campanha em ${monthLabel(selectedMonth)}`}
           />
         </div>
 
-        {showDetections && (
+        <div className={`flow-filter ${
+          filterStep < 3 ? 'flow-filter--locked' : 'flow-filter--active'
+        }`}>
+          <label className="flow-filter-label">
+            <span className="flow-filter-label-step">3</span>
+            Período
+            {rangeIsCustom && (
+              <button
+                type="button"
+                className="flow-range-reset"
+                onClick={handleResetRange}
+                title="Resetar pro intervalo completo da campanha no mês"
+                style={{ marginLeft: 'auto' }}
+              >
+                Resetar
+              </button>
+            )}
+          </label>
+          <div className="flow-range">
+            <input
+              type="date"
+              value={rangeStart}
+              min={rangeBounds.start || undefined}
+              max={rangeBounds.end || undefined}
+              onChange={handleRangeStart}
+              disabled={filterStep < 3}
+              aria-label="Data de início"
+            />
+            <span className="flow-range-arrow">→</span>
+            <input
+              type="date"
+              value={rangeEnd}
+              min={rangeBounds.start || undefined}
+              max={rangeBounds.end || undefined}
+              onChange={handleRangeEnd}
+              disabled={filterStep < 3}
+              aria-label="Data de fim"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Secondary toolbar: station search + refresh. Only when we have data. */}
+      {showDetections && (
+        <div className="flow-toolbar">
+          <div className="stations-search">
+            <span className="stations-search-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+                <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+              </svg>
+            </span>
+            <input
+              className="input stations-search-input"
+              type="text"
+              placeholder="Buscar emissora, cidade…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+
           <button
             className="btn-refresh"
             onClick={() => refetch()}
             disabled={isFetching}
             title="Atualizar veiculações"
+            style={{ marginLeft: 'auto' }}
           >
             <svg
               width="14"
@@ -618,63 +957,45 @@ export default function DetectionsPage() {
             </svg>
             Atualizar
           </button>
-        )}
-      </div>
-
-      {/* Period filters — monthly */}
-      {showDetections && (
-        <div className="period-filters">
-          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 0 }}>
-            <label style={{ marginBottom: 0, fontSize: 12, color: 'var(--c-text-3)', fontWeight: 600 }}>
-              Período
-            </label>
-            <input
-              className="input-month"
-              type="month"
-              value={selectedMonth}
-              onChange={handleMonthChange}
-            />
-          </div>
-
-          <div className="period-divider" />
-
-          <div className="stations-search" style={{ maxWidth: 280, flex: '1 1 220px' }}>
-            <span className="stations-search-icon">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
-                <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
-              </svg>
-            </span>
-            <input
-              className="input stations-search-input"
-              type="text"
-              placeholder="Buscar emissora, cidade…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
         </div>
       )}
 
-      {/* Content area */}
-      {!showDetections ? (
-        <EmptyNoCampaign />
+      {/* Content */}
+      {emptyVariant ? (
+        <DetectionsEmpty
+          variant={emptyVariant}
+          ghostMonthDate={monthDate}
+          monthLabelText={selectedMonth ? monthLabel(selectedMonth) : ''}
+          campaignName={selectedCampaign?.name ?? ''}
+          rangeLabelText={rangeLabel(rangeStart, rangeEnd)}
+          campaignCount={campaignCount}
+          onPickMonth={() => {
+            const el = monthInputRef.current
+            if (!el) return
+            el.focus()
+            if (typeof el.showPicker === 'function') {
+              try { el.showPicker() } catch { /* showPicker can throw if focus stolen */ }
+            }
+          }}
+          onPickCampaign={focusCampaignSelect}
+          onEditCampaign={() => {
+            if (selectedCampaignId) navigate(`/campaigns/${selectedCampaignId}/edit`)
+          }}
+          onExpandRange={rangeIsCustom ? handleResetRange : null}
+        />
       ) : isLoadingData ? (
         <>
           <SkeletonCoverage />
           <SkeletonCalendar monthDate={monthDate} />
         </>
-      ) : rows.length === 0 ? (
-        <EmptyNoRules />
-      ) : filteredRows.length === 0 ? (
-        <EmptyNoDetections periodLabel={monthLabel(selectedMonth)} />
       ) : (
         <>
-          <CoverageSummary summary={summary} />
+          <CoverageSummary summary={rangedSummary} />
           <DistributionGrid
             mode="view"
             month={monthDate}
-            campaignStart={selectedCampaign?.start_date}
-            campaignEnd={selectedCampaign?.end_date}
+            campaignStart={gridStart}
+            campaignEnd={gridEnd}
             stations={stationCatalog}
             rows={filteredRows}
             cellData={cellData}
@@ -698,10 +1019,6 @@ export default function DetectionsPage() {
           rules={distributionRules.filter(r =>
             r.type_id === modalCell.typeId &&
             r.station_ids.includes(modalCell.stationId))}
-          // Materiais elegíveis pra inserção manual: linkados à campanha,
-          // com aquela emissora no target_stations, e do mesmo tipo da
-          // célula (a modal é keyed por tipo). Sem isso o picker do form
-          // ficaria com a biblioteca inteira.
           availableMaterials={campaignMaterials
             .filter(cm => (cm.target_stations ?? []).includes(modalCell.stationId))
             .map(cm => materialsById[cm.material_id])

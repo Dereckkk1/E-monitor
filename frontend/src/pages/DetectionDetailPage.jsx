@@ -617,6 +617,25 @@ export default function DetectionDetailPage() {
         </div>
       )}
 
+      {/* ── Script block ── only when the material has copy registered.
+            Lives above the technical grid because it's the most "human"
+            content on the page — what was actually spoken in the spot. */}
+      {detection.commercial_script && (
+        <div className="dd-script">
+          <div className="dd-script-head">
+            <div className="dd-script-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+                <path d="M8 13h8M8 17h6" />
+              </svg>
+            </div>
+            <span className="dd-script-eyebrow">Texto do comercial</span>
+          </div>
+          <p className="dd-script-body">{detection.commercial_script}</p>
+        </div>
+      )}
+
       {/* ── Main grid: Evidence | Analysis ── */}
       <div className="dd-grid">
         <EvidencePanel

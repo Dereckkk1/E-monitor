@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useStations, useCreateStation } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import RSelect from '../components/RSelect'
+import { useRadioPlayer } from '../contexts/RadioPlayerContext'
 
 const BAND_OPTIONS = [
   { value: 'FM', label: 'FM' },
@@ -72,6 +73,7 @@ const LIMIT = 25
 
 export default function StationsPage() {
   const navigate = useNavigate()
+  const { toggleStation, isStationPlaying } = useRadioPlayer()
 
   const [searchInput, setSearchInput] = useState('')
   const [debouncedQ,  setDebouncedQ]  = useState('')
@@ -254,6 +256,32 @@ export default function StationsPage() {
                 <div className="station-row-actions">
                   <span className={`badge ${statusMeta.cls}`}>{statusMeta.label}</span>
                   {pmm && <span className="station-pmm">PMM {pmm}</span>}
+                  {st.stream_url && (
+                    <button
+                      className={
+                        'station-listen-btn' +
+                        (isStationPlaying(st.stream_url) ? ' is-playing' : '')
+                      }
+                      title={isStationPlaying(st.stream_url) ? 'Parar' : 'Ouvir ao vivo'}
+                      aria-label={isStationPlaying(st.stream_url) ? 'Parar stream' : `Ouvir ${st.name}`}
+                      onClick={() => toggleStation({
+                        url: st.stream_url,
+                        name: st.name,
+                        logo: st.logo_url ?? null,
+                      })}
+                    >
+                      {isStationPlaying(st.stream_url) ? (
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                          <rect x="4" y="3" width="3" height="10" rx="0.5" />
+                          <rect x="9" y="3" width="3" height="10" rx="0.5" />
+                        </svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                          <path d="M4.5 2.5v11l9-5.5z" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
                   <button
                     className="btn-icon"
                     title="Editar"

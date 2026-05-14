@@ -2,6 +2,7 @@ import { Fragment } from 'react'
 import DayCell from './DayCell'
 import TypeIconPill from './TypeIconPill'
 import StationAvatar from './StationAvatar'
+import { parseLocalDate } from '../utils/dates'
 
 /**
  * Grid of station × material × day with distribution badges.
@@ -48,10 +49,11 @@ export default function DistributionGrid({
   const monthIdx = month.getMonth()
   const dayNames = ['DOM','SEG','TER','QUA','QUI','SEX','SÁB']
 
-  const cStart = new Date(campaignStart)
-  const cEnd = new Date(campaignEnd)
-  cStart.setHours(0, 0, 0, 0)
-  cEnd.setHours(0, 0, 0, 0)
+  // parseLocalDate keeps the calendar day intact across timezones — using
+  // `new Date(iso)` here would shift YYYY-MM-DD values to the previous day
+  // in São Paulo (UTC-3), pushing the visible range one day earlier.
+  const cStart = parseLocalDate(campaignStart)
+  const cEnd   = parseLocalDate(campaignEnd)
   const today = new Date()
   today.setHours(0,0,0,0)
 

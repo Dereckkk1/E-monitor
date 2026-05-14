@@ -129,6 +129,57 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 	return out, rows.Err()
 }
 
+// ListPaged returns a paginated slice of clients filtered by a free-text
+// query. Search is case- and accent-insensitive across name/city/state/cnpj/
+// contact_email/contact_name (same vocabulary the frontend offered locally,
+// now pushed to SQL so it composes with paging). Returns (rows, totalCount).
+func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) ([]Client, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	const where = `
+		WHERE
+		    $1 = '' OR
+		    unaccent(lower(
+		        COALESCE(name,'') || ' ' ||
+		        COALESCE(city,'') || ' ' ||
+		        COALESCE(state,'') || ' ' ||
+		        COALESCE(cnpj,'') || ' ' ||
+		        COALESCE(contact_name,'') || ' ' ||
+		        COALESCE(contact_email,'')
+		    )) LIKE '%' || unaccent(lower($1)) || '%'
+	`
+
+	var total int
+	if err := c.pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`+where, q).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := c.pool.Query(ctx, `
+		SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
+		FROM clients`+where+`
+		ORDER BY name
+		LIMIT $2 OFFSET $3`, q, pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []Client
+	for rows.Next() {
+		var cli Client
+		if err := rows.Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, cli)
+	}
+	return out, total, rows.Err()
+}
+
 // GetWebhookConfig returns the webhook configuration for a client. Returns nil
 // (and no error) when the client has no URL configured — callers treat this
 // as "webhooks disabled for this client".

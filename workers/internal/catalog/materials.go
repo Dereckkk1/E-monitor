@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,8 +28,12 @@ type Material struct {
 	MostSimilarMaterialID  *uuid.UUID `json:"most_similar_material_id,omitempty"`
 	SimilarityScore        *float32   `json:"similarity_score,omitempty"`
 	SimilarityAckdAt       *time.Time `json:"similarity_acknowledged_at,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	// Script is the spoken-copy of the commercial — optional free text the
+	// operator fills in at upload or later via the wizard. Surfaced on
+	// /detections/:id when the detected material has one.
+	Script    *string   `json:"script,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Materials is the repository for the materials table.
@@ -49,13 +54,16 @@ type CreateMaterialInput struct {
 	DurationSeconds   float64
 	MasterStoragePath string
 	MasterSHA256      string
+	// Script is optional spoken-copy of the commercial. Empty string is
+	// treated as NULL on insert.
+	Script *string
 }
 
 const materialColumns = `id, short_id, client_id, title, type_id, duration_seconds,
        master_storage_path, master_sha256, fingerprint_status,
        fingerprint_generated_at, fingerprint_hash_count,
        similarity_check_status, most_similar_material_id, similarity_score,
-       similarity_acknowledged_at, created_at, updated_at`
+       similarity_acknowledged_at, script, created_at, updated_at`
 
 func scanMaterial(row interface {
 	Scan(...any) error
@@ -64,7 +72,7 @@ func scanMaterial(row interface {
 		&m.DurationSeconds, &m.MasterStoragePath, &m.MasterSHA256,
 		&m.FingerprintStatus, &m.FingerprintGeneratedAt, &m.FingerprintHashCount,
 		&m.SimilarityCheckStatus, &m.MostSimilarMaterialID, &m.SimilarityScore,
-		&m.SimilarityAckdAt, &m.CreatedAt, &m.UpdatedAt)
+		&m.SimilarityAckdAt, &m.Script, &m.CreatedAt, &m.UpdatedAt)
 }
 
 // Create inserts a new material and returns the persisted row.
@@ -72,11 +80,11 @@ func (m *Materials) Create(ctx context.Context, in CreateMaterialInput) (*Materi
 	var mat Material
 	row := m.pool.QueryRow(ctx, `
 		INSERT INTO materials (client_id, title, type_id, duration_seconds,
-		                       master_storage_path, master_sha256)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		                       master_storage_path, master_sha256, script)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+materialColumns,
 		in.ClientID, in.Title, in.TypeID, in.DurationSeconds,
-		in.MasterStoragePath, in.MasterSHA256,
+		in.MasterStoragePath, in.MasterSHA256, in.Script,
 	)
 	if err := scanMaterial(row, &mat); err != nil {
 		return nil, err
@@ -126,6 +134,21 @@ func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.U
 	_, err := m.pool.Exec(ctx,
 		`UPDATE materials SET type_id = $2, updated_at = now() WHERE id = $1`, id, typeID)
 	return err
+}
+
+// UpdateScript sets (or clears) the script for a material. Pass nil — or a
+// pointer to "" — to clear; the handler is responsible for normalizing empty
+// input. Returns pgx.ErrNoRows when the id does not exist.
+func (m *Materials) UpdateScript(ctx context.Context, id uuid.UUID, script *string) error {
+	tag, err := m.pool.Exec(ctx,
+		`UPDATE materials SET script = $2, updated_at = now() WHERE id = $1`, id, script)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // Delete removes a material by ID.

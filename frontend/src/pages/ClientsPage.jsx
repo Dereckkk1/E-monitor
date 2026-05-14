@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { useClients, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
+import { useClientsPaged, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import WebhookModal from '../components/WebhookModal'
+import AirtimePaginator from '../components/AirtimePaginator'
+
+const CLIENTS_PAGE_SIZE = 20
 
 const EMPTY_FORM = {
   name: '',
@@ -266,6 +269,95 @@ function ClientFormModal({ initial, onClose, onSave, isSaving, isError }) {
   )
 }
 
+// Search-only filter bar for /clients. Single text input with a leading
+// magnifying glass + soft "Limpar" affordance that appears once the user
+// has typed something. Visually matches the .stations-search pattern used
+// elsewhere so the page reads as part of the same product.
+function ClientsFilters({ search, onSearchChange, onClear }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      marginBottom: 16, flexWrap: 'wrap',
+    }}>
+      <div className="stations-search" style={{ flex: '1 1 280px', maxWidth: 420 }}>
+        <span className="stations-search-icon">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+          </svg>
+        </span>
+        <input
+          className="input stations-search-input"
+          type="text"
+          placeholder="Buscar por nome, CNPJ, cidade, e-mail…"
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+        />
+      </div>
+      {!!search && (
+        <button
+          type="button"
+          onClick={onClear}
+          style={{
+            height: 38, padding: '0 14px', borderRadius: 'var(--radius-md)',
+            background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+            color: 'var(--c-text-2)', fontSize: 12, fontWeight: 600,
+            cursor: 'pointer', fontFamily: 'var(--font-body)',
+          }}
+        >
+          Limpar
+        </button>
+      )}
+    </div>
+  )
+}
+
+function FilteredClientsEmptyState({ onClear }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      gap: 14, padding: '64px 32px', textAlign: 'center',
+      background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius-xl)',
+    }}>
+      <div style={{
+        width: 56, height: 56, borderRadius: 'var(--radius-lg)',
+        background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 0 6px rgba(100, 116, 139, 0.04)',
+      }}>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
+      </div>
+      <h3 style={{
+        fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 20,
+        color: 'var(--c-text)', margin: 0, letterSpacing: '-0.01em',
+      }}>Nenhum cliente encontrado</h3>
+      <p style={{
+        margin: 0, color: 'var(--c-text-2)', fontSize: 14, lineHeight: 1.5,
+        maxWidth: 380,
+      }}>
+        Nenhum cliente corresponde à sua busca. Tente outro termo ou limpe pra ver todos.
+      </p>
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          marginTop: 4,
+          padding: '10px 18px', borderRadius: 'var(--radius-md)',
+          background: 'var(--c-action)', color: '#fff',
+          border: '1px solid var(--c-action)',
+          fontSize: 13, fontWeight: 600, cursor: 'pointer',
+          fontFamily: 'var(--font-body)',
+        }}
+      >
+        Limpar busca
+      </button>
+    </div>
+  )
+}
+
 function ClientsEmptyState({ onAdd }) {
   const mockClients = [
     { name: 'Anunciante Exemplo', city: 'São Paulo', state: 'SP', cnpj: '12.345.678/0001-99', contact_email: 'contato@ex.com' },
@@ -338,7 +430,37 @@ function ClientRowSkeleton() {
 }
 
 export default function ClientsPage() {
-  const { data: clients = [], isLoading } = useClients()
+  // Two-tier search state — see CampaignsPage for the rationale: typing
+  // shouldn't refire the query (or rebuild the page) on every keystroke.
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const { data: pagedResp, isLoading, isFetching } = useClientsPaged({
+    q: search, page, pageSize: CLIENTS_PAGE_SIZE,
+  })
+  const clients     = pagedResp?.data ?? []
+  const total       = pagedResp?.total ?? 0
+  const totalPages  = pagedResp?.total_pages ?? 1
+
+  const debounceRef = useRef(null)
+  function changeSearch(v) {
+    setSearchInput(v)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setSearch(v)
+      setPage(1)
+    }, 300)
+  }
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+  }, [])
+  function clearSearch() {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSearchInput('')
+    setSearch('')
+    setPage(1)
+  }
+
   const createClient = useCreateClient()
   const updateClient = useUpdateClient()
   const deleteClient = useDeleteClient()
@@ -346,6 +468,13 @@ export default function ClientsPage() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing]   = useState(null)
   const [webhookFor, setWebhookFor] = useState(null)
+
+  // total === 0 + no search = real empty catalog. total === 0 + search =
+  // filter excluded everything (different empty state with "Limpar busca").
+  // Both decisions need isLoading to be false so we don't flash the empty
+  // state during the first fetch.
+  const initialEmpty  = !search && total === 0 && !isLoading
+  const filteredEmpty = !!search && total === 0 && !isLoading
 
   function handleCreate(data) {
     createClient.mutate(data, { onSuccess: () => setCreating(false) })
@@ -365,9 +494,9 @@ export default function ClientsPage() {
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <h2>Clientes</h2>
-          {clients.length > 0 && (
+          {total > 0 && (
             <span className="text-muted" style={{ fontSize: 13, fontWeight: 400 }}>
-              {clients.length}
+              {total}
             </span>
           )}
         </div>
@@ -376,12 +505,22 @@ export default function ClientsPage() {
         </button>
       </div>
 
+      {!initialEmpty && (
+        <ClientsFilters
+          search={searchInput}
+          onSearchChange={changeSearch}
+          onClear={clearSearch}
+        />
+      )}
+
       {isLoading ? (
         <ClientRowSkeleton />
-      ) : clients.length === 0 ? (
+      ) : initialEmpty ? (
         <ClientsEmptyState onAdd={() => setCreating(true)} />
+      ) : filteredEmpty ? (
+        <FilteredClientsEmptyState onClear={clearSearch} />
       ) : (
-        <div className="clients-list">
+        <div className="clients-list" style={{ opacity: isFetching ? 0.7 : 1, transition: 'opacity 150ms' }}>
           {clients.map(c => {
             const loc = [c.city, c.state].filter(Boolean).join(', ')
             return (
@@ -460,6 +599,18 @@ export default function ClientsPage() {
             )
           })}
         </div>
+      )}
+
+      {!initialEmpty && !filteredEmpty && total > 0 && (
+        <AirtimePaginator
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={CLIENTS_PAGE_SIZE}
+          onChange={setPage}
+          singular="cliente"
+          plural="clientes"
+        />
       )}
 
       {creating && (

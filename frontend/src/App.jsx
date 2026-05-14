@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
+import { RadioPlayerProvider } from './contexts/RadioPlayerContext'
 import { ConfirmProvider } from './components/ConfirmModal'
 import RequireAuth from './components/RequireAuth'
 import Sidebar from './components/Sidebar'
+import RadioPlayer from './components/RadioPlayer'
 import StationsPage    from './pages/StationsPage'
 import StationEditPage from './pages/StationEditPage'
 import ClientsPage    from './pages/ClientsPage'
@@ -64,6 +66,7 @@ function AppShell() {
         />
 
         {/* Main content */}
+        <RadioPlayer />
         <main className="app-content">
           <Routes>
             <Route path="/"            element={<Navigate to="/stations" replace />} />
@@ -95,19 +98,21 @@ export default function App() {
   return (
     <AuthProvider>
       <ConfirmProvider>
-        <Routes>
-          {/* Public */}
-          <Route path="/login" element={<LoginPage />} />
-          {/* Everything else is gated by RequireAuth */}
-          <Route
-            path="/*"
-            element={
-              <RequireAuth>
-                <AppShell />
-              </RequireAuth>
-            }
-          />
-        </Routes>
+        <RadioPlayerProvider>
+          <Routes>
+            {/* Public */}
+            <Route path="/login" element={<LoginPage />} />
+            {/* Everything else is gated by RequireAuth */}
+            <Route
+              path="/*"
+              element={
+                <RequireAuth>
+                  <AppShell />
+                </RequireAuth>
+              }
+            />
+          </Routes>
+        </RadioPlayerProvider>
       </ConfirmProvider>
     </AuthProvider>
   )

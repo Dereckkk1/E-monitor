@@ -1,27 +1,39 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import RSelect from './RSelect'
 import { useAuth } from '../contexts/AuthContext'
+import { safeLogoUrl } from '../utils/logoUrl'
+import { parseLocalDate } from '../utils/dates'
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+function pad2(n) { return String(n).padStart(2, '0') }
+function isoFromDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
+function todayISO() { return isoFromDate(new Date()) }
 function daysAgoISO(n) {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
+  const d = new Date(); d.setDate(d.getDate() - n)
+  return isoFromDate(d)
 }
-function firstOfMonthISO() {
-  const d = new Date()
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10)
+function monthLabel(ymStr) {
+  if (!ymStr) return ''
+  const [y, m] = ymStr.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+}
+function monthToRange(ymStr) {
+  const [y, m] = ymStr.split('-').map(Number)
+  const start = new Date(y, m - 1, 1, 0, 0, 0, 0)
+  const end   = new Date(y, m, 0, 23, 59, 59, 999)
+  return { start, end }
 }
 
-// Reused from DetectionsPage — keep visuals consistent across both screens.
+// ClientMiniAvatar mirrors DetectionsPage's avatar to keep the campaign
+// dropdown visuals identical across the app.
 function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
   const [imgError, setImgError] = useState(false)
-  if (logo && !imgError) {
+  const safeLogo = safeLogoUrl(logo)
+  if (safeLogo && !imgError) {
     return (
       <img
-        src={logo}
+        src={safeLogo}
         alt={name}
         width={size}
         height={size}
@@ -51,9 +63,28 @@ function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
   )
 }
 
+/**
+ * Filter bar for /airtime-report. Mirrors the 3-step flow from /detections:
+ * Competência → Campanha → Período. Competência filters the campaign select
+ * (only campaigns whose lifecycle overlaps the month appear). Date range
+ * defaults to the intersection of (month ∩ campaign) but can be pushed
+ * outside that window via the presets.
+ *
+ * Props:
+ *   - competence: 'YYYY-MM' | '' — controlled by parent (URL-backed)
+ *   - onCompetenceChange(v)
+ *   - campaignId, onCampaignChange(id)
+ *   - from, to: 'YYYY-MM-DD' — date range
+ *   - onFromChange, onToChange, onRangeChange({from,to})
+ *   - q: search string (debounced internally before propagation)
+ *   - onQChange(v)
+ *   - onExportClick, exporting
+ */
 export default function AirtimeFiltersBar({
   campaigns = [],
   clients = [],
+  competence,
+  onCompetenceChange,
   campaignId,
   from,
   to,
@@ -74,7 +105,7 @@ export default function AirtimeFiltersBar({
     return m
   }, [clients])
 
-  const campaignOptions = useMemo(() => campaigns.map(c => {
+  const allCampaignOptions = useMemo(() => campaigns.map(c => {
     const client = clientMap.get(c.client_id) ?? null
     return {
       value: c.id,
@@ -86,8 +117,26 @@ export default function AirtimeFiltersBar({
     }
   }), [campaigns, clientMap])
 
-  const selectedCampaignOption = campaignOptions.find(o => o.value === campaignId) ?? null
-  const selectedCampaignRaw = campaigns.find(c => c.id === campaignId) ?? null
+  // Campaign options scoped by competence (same semantics as /detections).
+  const campaignOptions = useMemo(() => {
+    if (!competence) return []
+    const { start, end } = monthToRange(competence)
+    return allCampaignOptions.filter(o => {
+      if (!o.startDate || !o.endDate) return false
+      const cs = parseLocalDate(o.startDate)
+      const ce = parseLocalDate(o.endDate)
+      return cs <= end && ce >= start
+    })
+  }, [allCampaignOptions, competence])
+
+  // Selected campaign object — used both for the controlled value of the
+  // select and for the "Campanha inteira" preset detection below.
+  const selectedCampaignOption = useMemo(
+    () => allCampaignOptions.find(o => o.value === campaignId) ?? null,
+    [allCampaignOptions, campaignId])
+  const selectedCampaignRaw = useMemo(
+    () => campaigns.find(c => c.id === campaignId) ?? null,
+    [campaigns, campaignId])
 
   function formatCampaignOption(opt, { context }) {
     const size = context === 'value' ? 18 : 22
@@ -111,43 +160,63 @@ export default function AirtimeFiltersBar({
     )
   }
 
+  // Step state drives the active/locked/done classes on each filter cell.
+  const step = !competence ? 1 : !campaignId ? 2 : 3
+  const invalidRange = from && to && from > to
+
   // Preset detection — derive which chip is "active" purely from current
   // from/to values. "custom" is the fallback when no preset matches.
   const activePreset = useMemo(() => {
     const t = todayISO()
     if (from === daysAgoISO(7) && to === t) return 'last7'
-    if (from === firstOfMonthISO() && to === t) return 'thisMonth'
+    if (from === daysAgoISO(30) && to === t) return 'last30'
+    if (competence) {
+      const { start, end } = monthToRange(competence)
+      const sISO = isoFromDate(start)
+      const eISO = isoFromDate(end)
+      const monthEndCapped = eISO < t ? eISO : t
+      if (from === sISO && to === monthEndCapped) return 'fullMonth'
+      if (selectedCampaignRaw) {
+        const cs = String(selectedCampaignRaw.start_date).slice(0, 10)
+        const ce = String(selectedCampaignRaw.end_date).slice(0, 10)
+        const intStart = cs > sISO ? cs : sISO
+        const intEnd   = ce < monthEndCapped ? ce : monthEndCapped
+        if (from === intStart && to === intEnd) return 'monthCampaign'
+      }
+    }
     if (selectedCampaignRaw) {
-      const start = selectedCampaignRaw.start_date ? String(selectedCampaignRaw.start_date).slice(0, 10) : ''
-      const end   = selectedCampaignRaw.end_date   ? String(selectedCampaignRaw.end_date).slice(0, 10)   : ''
+      const start = String(selectedCampaignRaw.start_date).slice(0, 10)
+      const end   = String(selectedCampaignRaw.end_date).slice(0, 10)
       const tEnd = end && end < t ? end : t
       if (from === start && to === tEnd) return 'fullCampaign'
     }
     return 'custom'
-  }, [from, to, selectedCampaignRaw])
-
-  // Campaign dates may arrive as full ISO timestamps ("2026-04-01T00:00:00Z")
-  // from the backend; the date inputs (and the rest of the page) only deal
-  // in YYYY-MM-DD. Strip to the date portion before propagating.
-  function toDateOnly(s) {
-    return s ? String(s).slice(0, 10) : ''
-  }
+  }, [from, to, competence, selectedCampaignRaw])
 
   function applyPreset(p) {
-    // Combine from+to into a single onRangeChange call so we don't trigger
-    // two consecutive URL writes that read stale state and clobber each
-    // other (the bug that made presets silently fail).
-    if (p === 'last7') {
-      onRangeChange({ from: daysAgoISO(7), to: todayISO() })
-    } else if (p === 'thisMonth') {
-      onRangeChange({ from: firstOfMonthISO(), to: todayISO() })
-    } else if (p === 'fullCampaign' && selectedCampaignRaw) {
-      const today = todayISO()
-      const start = toDateOnly(selectedCampaignRaw.start_date)
-      const end = toDateOnly(selectedCampaignRaw.end_date)
-      const tEnd = end && end < today ? end : today
-      if (!start) return
-      onRangeChange({ from: start, to: tEnd })
+    const t = todayISO()
+    if (p === 'last7')  return onRangeChange({ from: daysAgoISO(7),  to: t })
+    if (p === 'last30') return onRangeChange({ from: daysAgoISO(30), to: t })
+    if (p === 'fullMonth' && competence) {
+      const { start, end } = monthToRange(competence)
+      const sISO = isoFromDate(start)
+      const eISO = isoFromDate(end)
+      return onRangeChange({ from: sISO, to: eISO < t ? eISO : t })
+    }
+    if (p === 'monthCampaign' && competence && selectedCampaignRaw) {
+      const { start, end } = monthToRange(competence)
+      const sISO = isoFromDate(start)
+      const eISO = isoFromDate(end)
+      const monthEndCapped = eISO < t ? eISO : t
+      const cs = String(selectedCampaignRaw.start_date).slice(0, 10)
+      const ce = String(selectedCampaignRaw.end_date).slice(0, 10)
+      return onRangeChange({ from: cs > sISO ? cs : sISO, to: ce < monthEndCapped ? ce : monthEndCapped })
+    }
+    if (p === 'fullCampaign' && selectedCampaignRaw) {
+      const start = String(selectedCampaignRaw.start_date).slice(0, 10)
+      const end   = String(selectedCampaignRaw.end_date).slice(0, 10)
+      const tEnd = end && end < t ? end : t
+      return onRangeChange({ from: start, to: tEnd })
     }
   }
 
@@ -155,6 +224,10 @@ export default function AirtimeFiltersBar({
   const [localQ, setLocalQ] = useState(q ?? '')
   const debounceRef = useRef(null)
   useEffect(() => {
+    // External resets (parent zeroing q via "Limpar filtros" etc.) need to
+    // pull the local input back into sync. The compare guards against the
+    // setState-in-effect lint complaint when nothing actually changed.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalQ(prev => prev === (q ?? '') ? prev : (q ?? ''))
   }, [q])
   function handleQ(e) {
@@ -167,49 +240,108 @@ export default function AirtimeFiltersBar({
     if (debounceRef.current) clearTimeout(debounceRef.current)
   }, [])
 
-  const invalidRange = from && to && from > to
+  const campaignCount = campaignOptions.length
 
   return (
-    <div className="airtime-filters">
-      <div className="airtime-filters-row">
-        <div className="airtime-filters-campaign">
-          <label htmlFor="airtime-campaign-select">Campanha</label>
+    <div>
+      {/* 3-step filter bar */}
+      <div className="flow-filters">
+        <div className={`flow-filter ${step === 1 ? 'flow-filter--active' : 'flow-filter--done'}`}>
+          <label className="flow-filter-label" htmlFor="airtime-month">
+            <span className="flow-filter-label-step">1</span>
+            Competência
+          </label>
+          <input
+            id="airtime-month"
+            className="flow-month-input"
+            type="month"
+            value={competence ?? ''}
+            onChange={e => onCompetenceChange(e.target.value)}
+          />
+        </div>
+
+        <div className={`flow-filter ${
+          !competence ? 'flow-filter--locked' :
+          step === 2 ? 'flow-filter--active' : 'flow-filter--done'
+        }`}>
+          <label className="flow-filter-label" htmlFor="airtime-campaign">
+            <span className="flow-filter-label-step">2</span>
+            Campanha
+            {competence && step === 2 && campaignCount > 0 && (
+              <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, fontSize: 11, fontWeight: 600, color: 'var(--c-text-3)' }}>
+                {campaignCount === 1 ? '1 disponível' : `${campaignCount} disponíveis`}
+              </span>
+            )}
+          </label>
           <RSelect
-            inputId="airtime-campaign-select"
+            inputId="airtime-campaign"
             options={campaignOptions}
             value={selectedCampaignOption}
             onChange={opt => onCampaignChange(opt?.value ?? '')}
             formatOptionLabel={formatCampaignOption}
-            placeholder="Selecione uma campanha"
+            isDisabled={!competence}
+            placeholder={
+              !competence ? 'Escolha uma competência primeiro' :
+              campaignCount === 0 ? `Nenhuma campanha em ${monthLabel(competence)}` :
+              `${campaignCount === 1 ? '1 campanha' : `${campaignCount} campanhas`} em ${monthLabel(competence)}`
+            }
+            noOptionsMessage={() => `Nenhuma campanha em ${monthLabel(competence)}`}
             isClearable
           />
         </div>
 
-        <div className="airtime-filters-dates">
-          <div className="airtime-filters-date">
-            <label htmlFor="airtime-from">De</label>
+        <div className={`flow-filter ${
+          step < 3 ? 'flow-filter--locked' : 'flow-filter--active'
+        }`}>
+          <label className="flow-filter-label">
+            <span className="flow-filter-label-step">3</span>
+            Período
+          </label>
+          <div className={'flow-range' + (invalidRange ? ' flow-range--error' : '')}>
             <input
-              id="airtime-from"
               type="date"
               value={from ?? ''}
               onChange={e => onFromChange(e.target.value)}
-              className={'input' + (invalidRange ? ' input-error' : '')}
+              disabled={step < 3}
+              aria-label="Data de início"
             />
-          </div>
-          <div className="airtime-filters-date">
-            <label htmlFor="airtime-to">Até</label>
+            <span className="flow-range-arrow">→</span>
             <input
-              id="airtime-to"
               type="date"
               value={to ?? ''}
               onChange={e => onToChange(e.target.value)}
-              className={'input' + (invalidRange ? ' input-error' : '')}
+              disabled={step < 3}
+              aria-label="Data de fim"
             />
           </div>
         </div>
+      </div>
 
-        <div className="airtime-filters-search">
-          <label htmlFor="airtime-search">Buscar</label>
+      {/* Range presets (only meaningful once we're at step 3). */}
+      {step === 3 && (
+        <div className="airtime-filters-presets">
+          {[
+            { id: 'monthCampaign', label: 'Vigência no mês', disabled: !selectedCampaignRaw },
+            { id: 'fullMonth',     label: 'Mês inteiro' },
+            { id: 'fullCampaign',  label: 'Campanha inteira', disabled: !selectedCampaignRaw },
+            { id: 'last7',         label: 'Últimos 7 dias' },
+            { id: 'last30',        label: 'Últimos 30 dias' },
+            { id: 'custom',        label: 'Personalizado', readonly: true },
+          ].map(p => (
+            <button
+              key={p.id}
+              type="button"
+              className={'airtime-preset-chip' + (activePreset === p.id ? ' active' : '')}
+              disabled={p.disabled || p.readonly}
+              onClick={() => !p.readonly && applyPreset(p.id)}
+            >{p.label}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Secondary toolbar: search + export. Visible whenever a campaign is set. */}
+      {step === 3 && (
+        <div className="flow-toolbar">
           <div className="airtime-filters-search-wrap">
             <span className="airtime-filters-search-icon" aria-hidden>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
@@ -220,45 +352,27 @@ export default function AirtimeFiltersBar({
             <input
               id="airtime-search"
               type="text"
-              placeholder="Emissora, material…"
+              placeholder="Buscar emissora, material…"
               value={localQ}
               onChange={handleQ}
               className="airtime-filters-search-input"
             />
           </div>
-        </div>
 
-        {isAdmin && (
-          <div className="airtime-filters-export-wrap">
+          {isAdmin && (
             <button
               type="button"
               className="airtime-filters-export"
               onClick={onExportClick}
               disabled={!campaignId || invalidRange || exporting}
               title={!campaignId ? 'Selecione uma campanha' : 'Exportar CSV'}
+              style={{ marginLeft: 'auto' }}
             >
               {exporting ? 'Gerando…' : '↓ Exportar CSV'}
             </button>
-          </div>
-        )}
-      </div>
-
-      <div className="airtime-filters-presets">
-        {[
-          { id: 'last7',        label: 'Últimos 7 dias' },
-          { id: 'thisMonth',    label: 'Este mês' },
-          { id: 'fullCampaign', label: 'Campanha inteira', disabled: !selectedCampaignRaw },
-          { id: 'custom',       label: 'Personalizado', readonly: true },
-        ].map(p => (
-          <button
-            key={p.id}
-            type="button"
-            className={'airtime-preset-chip' + (activePreset === p.id ? ' active' : '')}
-            disabled={p.disabled || p.readonly}
-            onClick={() => !p.readonly && applyPreset(p.id)}
-          >{p.label}</button>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

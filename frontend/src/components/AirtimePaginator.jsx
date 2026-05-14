@@ -2,12 +2,16 @@
 // the current page. Renders a count-only line when there's a single page so
 // the user still sees "N veiculações" but doesn't see meaningless nav.
 
-export default function AirtimePaginator({ page, totalPages, total, pageSize, onChange }) {
+export default function AirtimePaginator({
+  page, totalPages, total, pageSize, onChange,
+  singular = 'veiculação',
+  plural = 'veiculações',
+}) {
   if (totalPages <= 1) {
     return (
       <div className="airtime-paginator">
         <span className="airtime-paginator-info">
-          {total} {total === 1 ? 'veiculação' : 'veiculações'}
+          {total} {total === 1 ? singular : plural}
         </span>
       </div>
     )
@@ -31,7 +35,7 @@ export default function AirtimePaginator({ page, totalPages, total, pageSize, on
   return (
     <nav className="airtime-paginator" aria-label="Paginação">
       <span className="airtime-paginator-info">
-        Mostrando {first}–{last} de {total} {total === 1 ? 'veiculação' : 'veiculações'}
+        Mostrando {first}–{last} de {total} {total === 1 ? singular : plural}
       </span>
       <div className="airtime-paginator-controls">
         <button

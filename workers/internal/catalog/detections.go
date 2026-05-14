@@ -56,7 +56,11 @@ type Detection struct {
 	ManualAt   *time.Time `json:"manual_at,omitempty"`
 	ManualBy   *uuid.UUID `json:"manual_by,omitempty"`
 	ManualNote *string    `json:"manual_note,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	// CommercialScript mirrors materials.script for the detected material.
+	// Populated by the Get handler (single-detection detail page); the bulk
+	// list endpoints leave it nil to keep the payload tight.
+	CommercialScript *string   `json:"commercial_script,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type Detections struct {
@@ -672,7 +676,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.temporal_coverage, d.variant_used, d.rate_used,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
-		       d.manual_at, d.manual_by, d.manual_note, d.created_at
+		       d.manual_at, d.manual_by, d.manual_note, m.script, d.created_at
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -684,7 +688,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
 		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID,
 		&det.RetractedAt, &det.IgnoredAt, &det.IgnoredBy,
-		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt)
+		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CommercialScript, &det.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

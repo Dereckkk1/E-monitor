@@ -268,7 +268,6 @@ func main() {
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo},
-		VendorImage:         handlers.NewVendorImageHandler(),
 	}
 
 	srv := &http.Server{
