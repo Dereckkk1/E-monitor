@@ -6,9 +6,16 @@
 package similarity
 
 import (
+	"context"
+	"fmt"
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"radiocheck/internal/fingerprint"
+	"radiocheck/internal/index"
+	"radiocheck/internal/match"
 )
 
 const (
@@ -117,4 +124,209 @@ func mergeRanges(rs []frameRange) []frameRange {
 		}
 	}
 	return merged
+}
+
+// CheckMaterialSimilarity scans the given material against the other ready
+// materials of the same client and writes the top match (if score ≥
+// WarnThreshold) to the materials row. Idempotent — re-running for the same
+// material state produces no-op UPDATEs.
+//
+// Heavy by design (decode + match per window). The caller should run after
+// fingerprint generation completes. Failures set similarity_check_status to
+// 'failed' so they can be retried via the NATS event.
+func CheckMaterialSimilarity(ctx context.Context, pool *pgxpool.Pool, materialID uuid.UUID) error {
+	// 1. Resolve client_id + master_storage_path.
+	var clientID uuid.UUID
+	var masterPath string
+	var fpStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT client_id, master_storage_path, fingerprint_status
+		FROM materials WHERE id = $1
+	`, materialID).Scan(&clientID, &masterPath, &fpStatus); err != nil {
+		return fmt.Errorf("similarity: lookup material: %w", err)
+	}
+	if fpStatus != "ready" {
+		// Caller should not have fired the event in this case. Mark skipped
+		// rather than failed so operators see "no fingerprint" not "scan error".
+		_, err := pool.Exec(ctx,
+			`UPDATE materials SET similarity_check_status = 'skipped' WHERE id = $1`,
+			materialID)
+		return err
+	}
+
+	// 2. Build the per-client index. Excludes self and skips materials whose
+	//    own fingerprint isn't ready. Joins fingerprint_hashes by material id
+	//    (post-bridge, fingerprint_hashes.commercial_id is polymorphic).
+	idx, shortToID, totalFramesByID, err := loadClientIndex(ctx, pool, clientID, materialID)
+	if err != nil {
+		_ = markFailed(ctx, pool, materialID)
+		return fmt.Errorf("similarity: load client index: %w", err)
+	}
+	if len(idx) == 0 {
+		// First material of this client OR no other ready materials. Skip.
+		_, err := pool.Exec(ctx,
+			`UPDATE materials SET similarity_check_status = 'skipped' WHERE id = $1`,
+			materialID)
+		return err
+	}
+	store := index.New()
+	store.Swap(idx)
+
+	// 3. Decode the new material's PCM through the same pipeline used at
+	//    fingerprint generation so live hashes align with stored hashes.
+	pcm, err := fingerprint.DecodePCM(ctx, masterPath, fingerprint.VariantClean)
+	if err != nil {
+		_ = markFailed(ctx, pool, materialID)
+		return fmt.Errorf("similarity: decode master: %w", err)
+	}
+
+	// 4. Slide window, run MatchWindow against the per-client index, build report.
+	report := runScan(pcm, store, materialID, shortToID, totalFramesByID)
+
+	// 5. Pick top match, persist.
+	topID, score := pickTopMatch(report)
+	if score < WarnThreshold {
+		_, err := pool.Exec(ctx, `
+			UPDATE materials
+			SET similarity_check_status = 'ready',
+			    most_similar_material_id = NULL,
+			    similarity_score = NULL
+			WHERE id = $1
+		`, materialID)
+		return err
+	}
+	_, err = pool.Exec(ctx, `
+		UPDATE materials
+		SET similarity_check_status = 'ready',
+		    most_similar_material_id = $2,
+		    similarity_score = $3
+		WHERE id = $1
+	`, materialID, topID, score)
+	return err
+}
+
+func markFailed(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
+	_, err := pool.Exec(ctx,
+		`UPDATE materials SET similarity_check_status = 'failed' WHERE id = $1`, id)
+	return err
+}
+
+// loadClientIndex loads all fingerprint hashes belonging to OTHER materials of
+// the same client that are currently 'ready'. Returns the index, a
+// short_id→material_id map (so MatchWindow results can be translated back to
+// FK identity), and the per-material total frame counts.
+//
+// Filters: same client_id, exclude self, fingerprint_status = 'ready'.
+//
+// Post-bridge, fingerprint_hashes.commercial_id is polymorphic and holds
+// material UUIDs for wizard-uploaded materials, so JOIN materials m ON
+// m.id = fh.commercial_id resolves correctly.
+func loadClientIndex(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	clientID uuid.UUID,
+	selfID uuid.UUID,
+) (index.Index, map[int32]uuid.UUID, map[uuid.UUID]int, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id,
+		       m.short_id, m.id, m.duration_seconds
+		FROM fingerprint_hashes fh
+		JOIN materials m ON m.id = fh.commercial_id
+		WHERE m.client_id = $1
+		  AND m.id != $2
+		  AND m.fingerprint_status = 'ready'
+	`, clientID, selfID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	idx := make(index.Index)
+	shortToID := make(map[int32]uuid.UUID)
+	totalFramesByID := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var hashValue uint32
+		var timeFrame int32
+		var variantID, rateID int16
+		var shortID int32
+		var matID uuid.UUID
+		var durationSec float64
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID,
+			&shortID, &matID, &durationSec); err != nil {
+			return nil, nil, nil, err
+		}
+		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
+			return nil, nil, nil, fmt.Errorf(
+				"similarity: variant_id=%d or rate_id=%d out of uint8 range",
+				variantID, rateID)
+		}
+		idx[hashValue] = append(idx[hashValue], index.Entry{
+			CommercialShortID: shortID,
+			VariantID:         uint8(variantID),
+			RateID:            uint8(rateID),
+			TimeFrame:         timeFrame,
+		})
+		shortToID[shortID] = matID
+		// duration_seconds × (sampleRate / stftHop) = frames.
+		totalFramesByID[matID] = int(durationSec * float64(fingerprint.SampleRate) / 2048.0)
+	}
+	return idx, shortToID, totalFramesByID, rows.Err()
+}
+
+// runScan slides a WindowSeconds window in HopSeconds increments over pcm,
+// runs MatchWindow against the catalog index, and builds a scanReport. Does
+// not touch the DB.
+func runScan(
+	pcm []float32,
+	store *index.Store,
+	selfID uuid.UUID,
+	shortToID map[int32]uuid.UUID,
+	totalFramesByID map[uuid.UUID]int,
+) scanReport {
+	const sampleRate = fingerprint.SampleRate
+	const stftHopSamples = 2048
+	windowSamples := sampleRate * WindowSeconds
+	hopSamples := sampleRate * HopSeconds
+
+	report := scanReport{
+		ownTotalFrames: len(pcm) / stftHopSamples,
+		perOther:       make(map[uuid.UUID]*pairScan),
+	}
+
+	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
+		window := pcm[off : off+windowSamples]
+		results := match.MatchWindow(window, store, MinScore, 0.0)
+
+		ownStart := int32(off / stftHopSamples)
+		ownEnd := int32((off + windowSamples) / stftHopSamples)
+
+		for _, r := range results {
+			otherID, ok := shortToID[r.CommercialShortID]
+			if !ok || otherID == selfID {
+				continue
+			}
+			s := report.perOther[otherID]
+			if s == nil {
+				s = &pairScan{otherTotalFrames: totalFramesByID[otherID]}
+				report.perOther[otherID] = s
+			}
+			s.ownRanges = append(s.ownRanges, frameRange{ownStart, ownEnd})
+
+			// Other range derived from the histogram delta:
+			// live_frame - OffsetFrames = entry.TimeFrame.
+			xStart := int32(int(ownStart) - r.OffsetFrames)
+			xEnd := int32(int(ownEnd) - r.OffsetFrames)
+			if xStart > xEnd {
+				xStart, xEnd = xEnd, xStart
+			}
+			if xEnd <= 0 {
+				continue
+			}
+			if xStart < 0 {
+				xStart = 0
+			}
+			s.otherRanges = append(s.otherRanges, frameRange{xStart, xEnd})
+		}
+	}
+	return report
 }
