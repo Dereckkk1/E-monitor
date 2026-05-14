@@ -27,8 +27,12 @@ const (
 	// in the cov computation. Aligned with the runtime matcher.
 	MinScore = 5
 	// WarnThreshold is the score (max(ownCov, otherCov)) at or above which
-	// we surface the warning. Calibration: <5% noise, 15-25% sting, 50%+ subset.
-	WarnThreshold = 0.15
+	// we surface the blocking decision modal at upload time. Calibration:
+	// <5% noise, 15-25% sting (intentional reuse of a vinheta — not blocking),
+	// 50%+ subset / near-duplicate. At 50% we are confident the operator is
+	// uploading material that overlaps the existing catalog enough to warrant
+	// a hard decision (manter os dois vs remover o novo).
+	WarnThreshold = 0.50
 )
 
 // frameRange is a half-open [from, until) interval on the time_frame axis.
