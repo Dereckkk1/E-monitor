@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   useCampaignMaterials, useMaterials, useMaterialTypes,
   useLinkCampaignMaterial, useUnlinkCampaignMaterial, useUploadMaterial,
@@ -222,6 +222,69 @@ function MaterialCard({
   isEditingStations, onToggleStationsEdit,
   onTypeChange, onSaveStations, onUnlink,
 }) {
+  // Audio playback / download. Same pattern as CampaignsPage commercials row:
+  // <audio> can't carry the JWT, so we fetch a blob via the authed axios
+  // client, build an object URL, and feed THAT to the player and download
+  // anchor. Blob URL is cached for the row's lifetime (revoked on unmount).
+  const [audioBlobUrl, setAudioBlobUrl] = useState(null)
+  const [playing, setPlaying] = useState(false)
+  const [audioLoading, setAudioLoading] = useState(false)
+  const [downloadLoading, setDownloadLoading] = useState(false)
+  const audioRef = useRef(null)
+
+  useEffect(() => () => {
+    if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl)
+  }, [audioBlobUrl])
+
+  async function fetchAudioBlob() {
+    if (audioBlobUrl) return audioBlobUrl
+    const resp = await api.get(`/materials/${material.id}/audio`, { responseType: 'blob' })
+    const url = URL.createObjectURL(resp.data)
+    setAudioBlobUrl(url)
+    return url
+  }
+
+  async function togglePlay() {
+    if (playing) { setPlaying(false); return }
+    if (audioLoading) return
+    setAudioLoading(true)
+    try {
+      await fetchAudioBlob()
+      setPlaying(true)
+    } catch {
+      window.alert('Não foi possível carregar o áudio.')
+    } finally {
+      setAudioLoading(false)
+    }
+  }
+
+  async function handleDownload() {
+    if (downloadLoading) return
+    setDownloadLoading(true)
+    try {
+      const url = await fetchAudioBlob()
+      const ext = material.master_storage_path?.split('.').pop() ?? 'mp3'
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${material.title}.${ext}`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      window.alert('Não foi possível baixar o áudio.')
+    } finally {
+      setDownloadLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (playing && audioRef.current) {
+      audioRef.current.play().catch(() => setPlaying(false))
+    } else if (!playing && audioRef.current) {
+      audioRef.current.pause()
+    }
+  }, [playing])
+
   const fp = fingerprintBadge(material.fingerprint_status)
   const missingType = !type
   // When the material has no type, the left border turns amber to flag the
@@ -364,6 +427,56 @@ function MaterialCard({
           {allTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
 
+        {/* Play */}
+        <IconActionBtn
+          onClick={togglePlay}
+          disabled={audioLoading}
+          title={playing ? 'Pausar' : 'Ouvir material'}
+          aria-label={playing ? 'Pausar' : 'Ouvir material'}
+          activeColor="var(--c-action)"
+          isActive={playing}
+        >
+          {audioLoading ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{
+              animation: 'spin 0.8s linear infinite',
+            }}>
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeOpacity="0.25" />
+              <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+          ) : playing ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="3.5" y="3" width="3" height="10" rx="0.5" />
+              <rect x="9.5" y="3" width="3" height="10" rx="0.5" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.5 2.5v11l9-5.5z" />
+            </svg>
+          )}
+        </IconActionBtn>
+
+        {/* Download */}
+        <IconActionBtn
+          onClick={handleDownload}
+          disabled={downloadLoading}
+          title="Baixar áudio"
+          aria-label="Baixar áudio"
+        >
+          {downloadLoading ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{
+              animation: 'spin 0.8s linear infinite',
+            }}>
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeOpacity="0.25" />
+              <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 2v8M4.5 7L8 10.5 11.5 7" />
+              <path d="M2.5 12.5h11" />
+            </svg>
+          )}
+        </IconActionBtn>
+
         {/* Unlink */}
         <button
           onClick={onUnlink}
@@ -394,6 +507,16 @@ function MaterialCard({
         </button>
       </div>
 
+      {/* Hidden audio element driven by `playing`. Mounted always (so the
+          ref is stable across renders), but only ticks audio when blob is
+          loaded and playing=true (effect above). */}
+      <audio
+        ref={audioRef}
+        src={audioBlobUrl ?? undefined}
+        onEnded={() => setPlaying(false)}
+        style={{ display: 'none' }}
+      />
+
       {/* ── Expandable stations editor ── */}
       {isEditingStations && (
         <StationsInlineEditor
@@ -404,7 +527,49 @@ function MaterialCard({
         />
       )}
 
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
+  )
+}
+
+/**
+ * Round-rect 32x32 icon button used for the inline material-row actions
+ * (play / download). Mirrors the visual weight of the trash button next to
+ * it so the three form a coherent action cluster.
+ */
+function IconActionBtn({ onClick, disabled, title, ariaLabel, isActive, activeColor, children }) {
+  const baseColor = isActive ? (activeColor ?? 'var(--c-action)') : 'var(--c-text-3)'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel ?? title}
+      style={{
+        width: 32, height: 32, borderRadius: 'var(--radius-md)',
+        background: isActive ? 'color-mix(in srgb, var(--c-action) 10%, transparent)' : 'transparent',
+        border: `1px solid ${isActive ? 'color-mix(in srgb, var(--c-action) 35%, transparent)' : 'var(--c-border)'}`,
+        color: baseColor,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+        transition: 'all 100ms',
+      }}
+      onMouseEnter={e => {
+        if (disabled || isActive) return
+        e.currentTarget.style.borderColor = 'var(--c-action-300, #F472B6)'
+        e.currentTarget.style.color = 'var(--c-text-2)'
+      }}
+      onMouseLeave={e => {
+        if (isActive) return
+        e.currentTarget.style.borderColor = 'var(--c-border)'
+        e.currentTarget.style.color = baseColor
+      }}
+    >
+      {children}
+    </button>
   )
 }
 
