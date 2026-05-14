@@ -39,6 +39,7 @@ type Deps struct {
 	DistributionRules    *handlers.DistributionRulesHandler
 	DistributionOverrides *handlers.DistributionOverridesHandler
 	Pricing              *handlers.PricingHandler
+	VendorImage        *handlers.VendorImageHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -76,6 +77,14 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/health", d.Health.Check)
 		if d.Auth != nil {
 			r.Post("/auth/login", d.Auth.Login)
+		}
+
+		// Public image proxy for Vendor logos — the browser <img> tag
+		// can't send a bearer token, and the upstream Vendor endpoint
+		// already considers the token itself the auth (signed URL pattern).
+		// Forwarding here just keeps the apiKey out of the front bundle.
+		if d.VendorImage != nil {
+			r.Get("/vendor-image", d.VendorImage.ServeHTTP)
 		}
 
 		// Protected: all other internal routes require a valid JWT
