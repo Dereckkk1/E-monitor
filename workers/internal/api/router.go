@@ -39,7 +39,6 @@ type Deps struct {
 	DistributionRules    *handlers.DistributionRulesHandler
 	DistributionOverrides *handlers.DistributionOverridesHandler
 	Pricing              *handlers.PricingHandler
-	AudiencyImage        *handlers.AudiencyImageHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -77,14 +76,6 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/health", d.Health.Check)
 		if d.Auth != nil {
 			r.Post("/auth/login", d.Auth.Login)
-		}
-
-		// Public image proxy for Audiency logos — the browser <img> tag
-		// can't send a bearer token, and the upstream Audiency endpoint
-		// already considers the token itself the auth (signed URL pattern).
-		// Forwarding here just keeps the apiKey out of the front bundle.
-		if d.AudiencyImage != nil {
-			r.Get("/audiency-image", d.AudiencyImage.ServeHTTP)
 		}
 
 		// Protected: all other internal routes require a valid JWT
@@ -178,6 +169,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/{id}/audio", d.Materials.Audio)
 				r.Post("/{id}/similarity/acknowledge", d.Materials.Acknowledge)
 				r.Patch("/{id}/type", d.Materials.UpdateType)
+				r.Patch("/{id}/script", d.Materials.UpdateScript)
 				r.Delete("/{id}", d.Materials.Delete)
 			})
 

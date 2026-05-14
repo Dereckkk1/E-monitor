@@ -1,48 +1,31 @@
 /* ===== AirtimeReportPage ============================================ */
 .airtime-page { padding: 0; }
 
-/* --- Filters bar (sticky top) --------------------------------------- */
-.airtime-filters {
+/* --- Filters bar -------------------------------------------------- */
+/* The 3-step bar (.flow-filters) is defined in index.css; the page just
+ * gives it a sticky positioning so it stays in view as the list scrolls. */
+.airtime-page .flow-filters {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 16px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  background: var(--c-bg);
+  padding-top: 8px;
+  margin-top: -8px;
 }
-.airtime-filters-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(180px, 220px) auto;
-  gap: 14px;
-  align-items: end;
-}
-.airtime-filters-campaign label,
-.airtime-filters-date label,
-.airtime-filters-search > label {
-  display: block;
-  font-size: 11px;
-  color: #64748b;
-  font-weight: 600;
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.airtime-filters-dates { display: flex; gap: 10px; }
-.airtime-filters-date input { min-width: 130px; }
 
+/* Search input wrap for the secondary toolbar row */
 .airtime-filters-search-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: 38px;
   padding: 0 12px;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   transition: border-color 150ms ease, box-shadow 150ms ease;
+  flex: 1 1 280px;
+  max-width: 360px;
 }
 .airtime-filters-search-wrap:focus-within {
   border-color: #F472B6;
@@ -70,9 +53,8 @@
 }
 .airtime-filters-search-input::placeholder { color: #94a3b8; }
 
-.airtime-filters-export-wrap { display: flex; align-items: end; }
 .airtime-filters-export {
-  height: 40px;
+  height: 38px;
   padding: 0 16px;
   border: 1px solid #e2e8f0;
   background: #fff;
@@ -100,9 +82,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #f1f5f9;
+  margin-bottom: 12px;
 }
 .airtime-preset-chip {
   height: 30px;
@@ -787,12 +767,6 @@
    below, pills wrap, material info pushes to its own row, and the right
    stripe spans the full card height as the visual closer. */
 @media (max-width: 767px) {
-  .airtime-filters-row {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-  .airtime-filters-dates { flex-direction: row; }
-
   .airtime-row {
     grid-template-columns: 44px 1fr 5px;
     grid-template-rows: auto auto auto auto;

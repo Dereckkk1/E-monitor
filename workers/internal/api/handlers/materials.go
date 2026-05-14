@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 
 	"radiocheck/internal/catalog"
@@ -78,6 +80,7 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	clientIDStr := r.FormValue("client_id")
 	title := r.FormValue("title")
 	typeIDStr := r.FormValue("type_id")
+	scriptRaw := strings.TrimSpace(r.FormValue("script"))
 
 	clientID, err := uuid.Parse(clientIDStr)
 	if err != nil {
@@ -97,6 +100,13 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		typeID = &tid
+	}
+
+	// Script is optional. Empty-after-trim is persisted as NULL so the
+	// frontend can rely on `script === undefined/null` for "no script set".
+	var script *string
+	if scriptRaw != "" {
+		script = &scriptRaw
 	}
 
 	file, header, err := r.FormFile("audio")
@@ -155,6 +165,7 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		DurationSeconds:   duration,
 		MasterStoragePath: finalPath,
 		MasterSHA256:      sha,
+		Script:            script,
 	})
 	if err != nil {
 		os.Remove(finalPath)
@@ -189,6 +200,41 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Repo.UpdateType(r.Context(), id, p.TypeID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UpdateScript sets (or clears) the spoken-copy of a material.
+// Body: {"script": "<text>" | null}. Empty string after trim is normalized
+// to NULL so the field reads as "no script" both server- and client-side.
+func (h *MaterialsHandler) UpdateScript(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var p struct {
+		Script *string `json:"script"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if p.Script != nil {
+		trimmed := strings.TrimSpace(*p.Script)
+		if trimmed == "" {
+			p.Script = nil
+		} else {
+			p.Script = &trimmed
+		}
+	}
+	if err := h.Repo.UpdateScript(r.Context(), id, p.Script); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

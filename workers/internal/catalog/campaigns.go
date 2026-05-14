@@ -55,6 +55,90 @@ func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
 	return c.ListFiltered(ctx, nil)
 }
 
+// ListPaged returns campaigns filtered by competence (YYYY-MM, month-overlap
+// semantics — same rule used by /detections) and free-text search across
+// campaign name + client name. Empty competence skips the date filter; empty
+// q skips the text filter.
+//
+// Returns (rows, totalCount). Ordering matches the unpaged List(): lifecycle
+// status → programmed-soonest-first → start_date desc, so paging mirrors what
+// the user sees in the canonical list.
+func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, pageSize int) ([]Campaign, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+
+	// Build month bounds when competence is set. We hand both ends to the
+	// query and the SQL uses them only when $2 (competence flag) is non-empty.
+	var monthStart, monthEnd time.Time
+	if competence != "" {
+		t, err := time.Parse("2006-01", competence)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid competence %q: %w", competence, err)
+		}
+		monthStart = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+		monthEnd = monthStart.AddDate(0, 1, 0).Add(-time.Nanosecond)
+	}
+
+	// $1 = q, $2 = competence (non-empty marker), $3 = monthStart, $4 = monthEnd
+	const where = `
+		WHERE
+		    ($2 = '' OR (c.start_date <= $4 AND c.end_date >= $3))
+		    AND ($1 = '' OR unaccent(lower(
+		        COALESCE(c.name,'') || ' ' || COALESCE(cl.name,'')
+		    )) LIKE '%' || unaccent(lower($1)) || '%')
+	`
+
+	// Count: same WHERE, no LIMIT.
+	var total int
+	if err := c.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM campaigns c
+		LEFT JOIN clients cl ON cl.id = c.client_id`+where,
+		q, competence, monthStart, monthEnd,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := c.pool.Query(ctx, `
+		SELECT c.id, c.client_id, c.name, c.start_date, c.end_date, c.status, c.target_stations,
+		       c.created_at, c.updated_at
+		FROM campaigns c
+		LEFT JOIN clients cl ON cl.id = c.client_id`+where+`
+		ORDER BY CASE c.status
+		    WHEN 'ativa'      THEN 1
+		    WHEN 'programada' THEN 2
+		    WHEN 'concluida'  THEN 3
+		    WHEN 'cancelada'  THEN 4
+		    ELSE 5
+		END,
+		CASE WHEN c.status = 'programada' THEN c.start_date ELSE NULL END ASC NULLS LAST,
+		c.start_date DESC
+		LIMIT $5 OFFSET $6`,
+		q, competence, monthStart, monthEnd, pageSize, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []Campaign
+	for rows.Next() {
+		var camp Campaign
+		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
+			&camp.EndDate, &camp.Status, &camp.TargetStations,
+			&camp.CreatedAt, &camp.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, camp)
+	}
+	return out, total, rows.Err()
+}
+
 // ListFiltered returns campaigns filtered by status. If statuses is nil/empty,
 // all campaigns are returned. Ordering follows the lifecycle UX rule:
 // ativas → programadas (próximas a entrar) → concluidas/canceladas (histórico).

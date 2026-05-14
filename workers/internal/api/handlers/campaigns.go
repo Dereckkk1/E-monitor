@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,9 +42,46 @@ type CampaignSupervisor interface {
 }
 
 func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	// Paged mode kicks in as soon as ?page or ?page_size shows up; legacy
+	// callers (DetectionsPage, AirtimeReportPage, wizard layout etc.) keep
+	// hitting the unpaged path so they can still build dropdowns from the
+	// full catalog.
+	if q.Get("page") != "" || q.Get("page_size") != "" || q.Get("q") != "" || q.Get("competence") != "" {
+		page, _ := strconv.Atoi(q.Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(q.Get("page_size"))
+		if size < 1 {
+			size = 20
+		}
+		if size > 200 {
+			size = 200
+		}
+		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), page, size)
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		totalPages := (total + size - 1) / size
+		if totalPages < 1 {
+			totalPages = 1
+		}
+		writeJSON(w, 200, map[string]any{
+			"data":        items,
+			"total":       total,
+			"total_pages": totalPages,
+			"page":        page,
+			"page_size":   size,
+		})
+		return
+	}
+
 	// ?status=programada,ativa,concluida,cancelada — CSV, optional.
 	var statuses []string
-	if raw := r.URL.Query().Get("status"); raw != "" {
+	if raw := q.Get("status"); raw != "" {
 		for _, s := range strings.Split(raw, ",") {
 			s = strings.TrimSpace(s)
 			if s == "" {

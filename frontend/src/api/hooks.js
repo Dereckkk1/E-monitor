@@ -37,6 +37,22 @@ export function useUpdateStation() {
 export function useClients() {
   return useQuery({ queryKey: ['clients'], queryFn: () => api.get('/clients').then(r => r.data.data ?? []) })
 }
+// Paged version — backend kicks into pagination mode when any of page,
+// page_size, or q is set. Returns { data, total, total_pages, page, page_size }.
+// queryKey starts with 'clients' so existing invalidateQueries({ queryKey:
+// ['clients'] }) calls inside Create/Update/Delete mutations also bust this
+// cache automatically. placeholderData = previous result keeps the list
+// visible (and the search input focused) while a new page/query is in
+// flight — react-query v5 dropped keepPreviousData in favor of this form.
+export function useClientsPaged({ q = '', page = 1, pageSize = 20 } = {}) {
+  return useQuery({
+    queryKey: ['clients', 'paged', q, page, pageSize],
+    queryFn: () => api.get('/clients', {
+      params: { q: q || undefined, page, page_size: pageSize },
+    }).then(r => r.data),
+    placeholderData: (prev) => prev,
+  })
+}
 export function useCreateClient() {
   const qc = useQueryClient()
   return useMutation({
@@ -62,6 +78,29 @@ export function useDeleteClient() {
 // Campaigns
 export function useCampaigns() {
   return useQuery({ queryKey: ['campaigns'], queryFn: () => api.get('/campaigns').then(r => r.data.data ?? []) })
+}
+// Paged version — backend uses the same /campaigns endpoint but switches into
+// pagination mode whenever any of (page, page_size, q, competence) is set.
+// `competence` is "YYYY-MM" and applies month-overlap semantics same as the
+// client-side filter the page used before. queryKey starts with 'campaigns'
+// so the existing invalidations on Create/Update/Cancel/Delete also bust
+// this cache.
+export function useCampaignsPaged({ q = '', competence = '', page = 1, pageSize = 12 } = {}) {
+  return useQuery({
+    queryKey: ['campaigns', 'paged', q, competence, page, pageSize],
+    queryFn: () => api.get('/campaigns', {
+      params: {
+        q: q || undefined,
+        competence: competence || undefined,
+        page,
+        page_size: pageSize,
+      },
+    }).then(r => r.data),
+    // v5: keepPreviousData was removed. The identity function preserves the
+    // last paged result while a new query is in flight so the list (and the
+    // search input's focus) doesn't flicker out on every keystroke.
+    placeholderData: (prev) => prev,
+  })
 }
 
 // Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
@@ -444,6 +483,22 @@ export function useUpdateMaterialTypeId() {
   return useMutation({
     mutationFn: ({ id, type_id }) => api.patch(`/materials/${id}/type`, { type_id }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['materials'] }),
+  })
+}
+
+// useUpdateMaterialScript — sets (or clears) the free-text script of a
+// material. Pass `script: ""` (or null) to clear; the server normalizes
+// empty-after-trim to NULL. Invalidates both materials cache and any open
+// detection-detail queries so the new script surfaces immediately.
+export function useUpdateMaterialScript() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, script }) =>
+      api.patch(`/materials/${id}/script`, { script }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['materials'] })
+      qc.invalidateQueries({ queryKey: ['detection'] })
+    },
   })
 }
 

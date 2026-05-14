@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { safeLogoUrl } from '../utils/logoUrl'
 
 const APPSHEET_BASE    = 'https://www.appsheet.com/image/getimageurl'
 const APPSHEET_APP     = 'E-R%C3%A1dios-408183446-24-03-22-2'
@@ -6,16 +7,14 @@ const APPSHEET_TABLE   = 'R%C3%A1dios%202'
 const APPSHEET_VERSION = '1.002203'
 
 function buildLogoUrl(path) {
-  if (!path) return null
-  if (path.startsWith('http://') || path.startsWith('https://')) return path
-  // Same-origin relative path (e.g. our Audiency image proxy at
-  // /v1/internal/audiency-image?token=...). Pass through untouched —
-  // Vite proxies /v1 to the backend in dev; in prod they're on the same
-  // host. WITHOUT this branch the path would be misinterpreted as an
-  // AppSheet filename and wrapped in the AppSheet image URL.
-  if (path.startsWith('/')) return path
+  const safe = safeLogoUrl(path)
+  if (!safe) return null
+  if (safe.startsWith('http://') || safe.startsWith('https://')) return safe
+  // Same-origin relative path. Pass through untouched — Vite proxies /v1
+  // to the backend in dev; in prod they're on the same host.
+  if (safe.startsWith('/')) return safe
   // AppSheet-style path e.g. "Rádios 2_Images/abc.jpg"
-  return `${APPSHEET_BASE}?appName=${APPSHEET_APP}&tableName=${APPSHEET_TABLE}&fileName=${encodeURIComponent(path)}&appVersion=${APPSHEET_VERSION}&signature=`
+  return `${APPSHEET_BASE}?appName=${APPSHEET_APP}&tableName=${APPSHEET_TABLE}&fileName=${encodeURIComponent(safe)}&appVersion=${APPSHEET_VERSION}&signature=`
 }
 
 function getInitials(name) {

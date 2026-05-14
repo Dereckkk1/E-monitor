@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCampaigns, useClients, useDetectionsPaged, useMaterialAggregate, useCampaignPricing,
@@ -9,21 +9,51 @@ import AirtimeDetectionRow from '../components/AirtimeDetectionRow'
 import AirtimeMaterialPanel from '../components/AirtimeMaterialPanel'
 import AirtimePaginator from '../components/AirtimePaginator'
 import AirtimeGhostPreview from '../components/AirtimeGhostPreview'
+import { parseLocalDate } from '../utils/dates'
 import './AirtimeReportPage.css'
 
-function todayISO() { return new Date().toISOString().slice(0, 10) }
+function pad2(n) { return String(n).padStart(2, '0') }
+function isoFromDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+function todayISO() { return isoFromDate(new Date()) }
 function daysAgoISO(n) {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
+  const d = new Date(); d.setDate(d.getDate() - n)
+  return isoFromDate(d)
+}
+function monthLabel(ymStr) {
+  if (!ymStr) return ''
+  const [y, m] = ymStr.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+}
+function monthToRange(ymStr) {
+  const [y, m] = ymStr.split('-').map(Number)
+  return {
+    start: new Date(y, m - 1, 1, 0, 0, 0, 0),
+    end:   new Date(y, m, 0, 23, 59, 59, 999),
+  }
+}
+
+// Intersection of (month ∩ campaign) clamped by today, used as the default
+// date range when the user picks a campaign. Returns YYYY-MM-DD strings.
+function defaultRangeForCampaign(ymStr, campaign) {
+  if (!ymStr || !campaign?.start_date || !campaign?.end_date) return { from: '', to: '' }
+  const { start: monthStart, end: monthEnd } = monthToRange(ymStr)
+  // parseLocalDate avoids the UTC-midnight shift that would push these to
+  // the previous calendar day in São Paulo.
+  const cStart = parseLocalDate(campaign.start_date)
+  const cEnd   = parseLocalDate(campaign.end_date); cEnd.setHours(23, 59, 59, 999)
+  const today  = new Date();                         today.setHours(23, 59, 59, 999)
+  const start = cStart > monthStart ? cStart : monthStart
+  let   end   = cEnd   < monthEnd   ? cEnd   : monthEnd
+  if (end > today) end = today
+  if (start > end) return { from: '', to: '' }
+  return { from: isoFromDate(start), to: isoFromDate(end) }
 }
 
 // Convert YYYY-MM-DD → full RFC3339 in São Paulo local time (UTC-3) so the
-// backend WHERE clause aligns with how daily_play_summary buckets detections
-// (same pattern as the existing /detections page). Returns null on inputs
-// that don't look like a date — guards against full ISO timestamps from
-// API responses sneaking into this helper (which would produce a crashy
-// concatenation like "2026-04-01T00:00:00ZT00:00:00.000-03:00").
+// backend WHERE clause aligns with how daily_play_summary buckets detections.
+// Guards against full ISO timestamps from API responses sneaking in.
 function isoToRFC3339Start(iso) {
   const date = iso ? String(iso).slice(0, 10) : ''
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
@@ -46,10 +76,11 @@ export default function AirtimeReportPage() {
   const { data: campaigns = [] } = useCampaigns()
   const { data: clients = [] } = useClients()
 
-  // URL é fonte de verdade — usuário consegue compartilhar o link e estado.
+  // URL is the source of truth — users can share the link with state preserved.
+  const competence = searchParams.get('competence') ?? ''
   const campaignId = searchParams.get('campaign_id') ?? ''
-  const from = searchParams.get('from') ?? daysAgoISO(7)
-  const to   = searchParams.get('to')   ?? todayISO()
+  const from = searchParams.get('from') ?? ''
+  const to   = searchParams.get('to')   ?? ''
   const q    = searchParams.get('q')    ?? ''
   const page = parseInt(searchParams.get('page') ?? '1', 10) || 1
 
@@ -61,15 +92,6 @@ export default function AirtimeReportPage() {
     })
     setSearchParams(next, { replace: true })
   }
-
-  // Hidrata as datas no primeiro mount (URL sem from/to). replace evita
-  // poluir o histórico do browser.
-  useEffect(() => {
-    if (!searchParams.get('from') || !searchParams.get('to')) {
-      setFilters({ from: daysAgoISO(7), to: todayISO() })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const invalidRange = !!(from && to && from > to)
 
@@ -130,8 +152,23 @@ export default function AirtimeReportPage() {
     }
   }
 
+  function handleCompetenceChange(v) {
+    // Changing competence invalidates campaign + range — different month,
+    // different catalog, different default window.
+    setFilters({ competence: v || '', campaign_id: '', from: '', to: '', page: '1' })
+    setActivePlayerId(null)
+  }
   function handleCampaignChange(id) {
-    setFilters({ campaign_id: id || '', page: '1' })
+    if (!id) {
+      setFilters({ campaign_id: '', from: '', to: '', page: '1' })
+      setActivePlayerId(null)
+      return
+    }
+    // Seed the date range to the intersection of competence ∩ campaign so
+    // the user lands on something sensible without having to fiddle.
+    const campaign = campaigns.find(c => c.id === id)
+    const def = defaultRangeForCampaign(competence, campaign)
+    setFilters({ campaign_id: id, from: def.from, to: def.to, page: '1' })
     setActivePlayerId(null)
   }
   function handleFromChange(v) {
@@ -142,9 +179,6 @@ export default function AirtimeReportPage() {
     setFilters({ to: v, page: '1' })
     setActivePlayerId(null)
   }
-  // handleRangeChange is the path used by preset chips. Putting both ends in
-  // a single setFilters call avoids the "two updates fighting over the same
-  // stale searchParams" bug that made presets silently no-op.
   function handleRangeChange({ from: f, to: t }) {
     setFilters({ from: f, to: t, page: '1' })
     setActivePlayerId(null)
@@ -156,14 +190,38 @@ export default function AirtimeReportPage() {
   function handlePageChange(p) {
     setFilters({ page: String(p) })
     setActivePlayerId(null)
-    // Rola o container da lista pro topo (e não a janela inteira) pra preservar
-    // o header sticky no campo de visão.
     const list = document.querySelector('.airtime-list')
     if (list) list.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
 
-  const showList = !!campaignId && !invalidRange
+  // Step state mirrors /detections: 1=no competence, 2=no campaign, 3=ready.
+  const step = !competence ? 1 : !campaignId ? 2 : 3
+  const showList = step === 3 && !invalidRange
   const isLoadingData = showList && (loadingList || isFetching)
+
+  // Campaign-count hint shown on the "no-campaign" empty state.
+  const campaignsInCompetence = useMemo(() => {
+    if (!competence) return 0
+    const { start, end } = monthToRange(competence)
+    return campaigns.filter(c => {
+      if (!c.start_date || !c.end_date) return false
+      const cs = parseLocalDate(c.start_date)
+      const ce = parseLocalDate(c.end_date)
+      return cs <= end && ce >= start
+    }).length
+  }, [campaigns, competence])
+
+  function focusMonthInput() {
+    const el = document.getElementById('airtime-month')
+    if (!el) return
+    el.focus()
+    if (typeof el.showPicker === 'function') {
+      try { el.showPicker() } catch { /* ignore */ }
+    }
+  }
+  function focusCampaignSelect() {
+    document.getElementById('airtime-campaign')?.focus()
+  }
 
   return (
     <div className="airtime-page">
@@ -174,6 +232,8 @@ export default function AirtimeReportPage() {
       <AirtimeFiltersBar
         campaigns={campaigns}
         clients={clients}
+        competence={competence}
+        onCompetenceChange={handleCompetenceChange}
         campaignId={campaignId}
         from={from}
         to={to}
@@ -198,10 +258,27 @@ export default function AirtimeReportPage() {
         </div>
       )}
 
-      {!campaignId ? (
+      {step === 1 ? (
         <AirtimeGhostPreview
-          title="Selecione uma campanha"
-          description="Escolha uma campanha no filtro acima para ver as veiculações detectadas."
+          step={1}
+          icon="calendar"
+          title="Comece pela competência"
+          description="Escolha o mês de referência. As campanhas que cruzam esse período ficam disponíveis logo em seguida."
+          ctaLabel="Escolher competência"
+          onCta={focusMonthInput}
+        />
+      ) : step === 2 ? (
+        <AirtimeGhostPreview
+          step={2}
+          icon="campaign"
+          title={`Escolha uma campanha de ${monthLabel(competence)}`}
+          description={
+            campaignsInCompetence === 0
+              ? `Nenhuma campanha vigente em ${monthLabel(competence)}. Troque a competência ou cadastre uma nova campanha.`
+              : `${campaignsInCompetence === 1 ? '1 campanha vigente' : `${campaignsInCompetence} campanhas vigentes`} nesse mês. Pra ver as veiculações, selecione uma campanha.`
+          }
+          ctaLabel={campaignsInCompetence > 0 ? 'Abrir lista de campanhas' : null}
+          onCta={campaignsInCompetence > 0 ? focusCampaignSelect : null}
         />
       ) : invalidRange ? null : (
         <>
@@ -210,6 +287,9 @@ export default function AirtimeReportPage() {
               <SkeletonList />
             ) : detections.length === 0 ? (
               <AirtimeGhostPreview
+                step={3}
+                icon="search"
+                accent="mute"
                 title="Nenhuma veiculação no período"
                 description={`Não encontramos veiculações entre ${fmtRangeLabel(from, to)}.`}
                 ctaLabel="Ampliar para últimos 30 dias"

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -15,13 +16,54 @@ type ClientsHandler struct {
 	Repo *catalog.Clients
 }
 
+// List supports two modes:
+//   - Legacy/unpaged (no ?page or ?page_size): returns the full list, ordered
+//     by name. Compatible with callers that need the entire catalog (e.g. the
+//     campaign dropdown's client map).
+//   - Paged (?page + ?page_size): returns {data, total, total_pages, page,
+//     page_size}. Optional ?q filters by name/city/state/cnpj/email/contact.
 func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, err := h.Repo.List(r.Context())
+	q := r.URL.Query()
+	pageStr := q.Get("page")
+	sizeStr := q.Get("page_size")
+	if pageStr == "" && sizeStr == "" && q.Get("q") == "" {
+		items, err := h.Repo.List(r.Context())
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"data": items})
+		return
+	}
+
+	page, _ := strconv.Atoi(pageStr)
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(sizeStr)
+	if size < 1 {
+		size = 20
+	}
+	if size > 200 {
+		size = 200
+	}
+
+	items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), page, size)
 	if err != nil {
 		http.Error(w, "internal error", 500)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"data": items})
+	totalPages := (total + size - 1) / size
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	writeJSON(w, 200, map[string]any{
+		"data":        items,
+		"total":       total,
+		"total_pages": totalPages,
+		"page":        page,
+		"page_size":   size,
+	})
 }
 
 func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {

@@ -145,6 +145,58 @@
   white-space: pre-wrap;
 }
 
+/* ── Script block ────────────────────────────────────────────── */
+/* Slightly elevated surface so the spoken copy reads as content, not as a
+   ribbon (no colored tint — this is informational, not a status flag). */
+.dd-script {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+
+.dd-script-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dd-script-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dd-script-eyebrow {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+.dd-script-body {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--c-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── Ignored ribbon (admin soft-delete) ──────────────────────── */
 .dd-ignored-ribbon {
   display: flex;
