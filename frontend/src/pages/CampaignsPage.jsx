@@ -998,11 +998,27 @@ function CPMBadge({ financials }) {
 function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign, financials }) {
   const confirm = useConfirm()
   const alertDialog = useAlert()
+  const navigate = useNavigate()
   const client = clients.find(cl => cl.id === campaign.client_id)
   const stationCount = (campaign.target_stations ?? []).length
   const startTip = startDateTooltip(campaign.start_date, campaign.status)
   const endTip   = endDateTooltip(campaign.end_date, campaign.status)
   const canCancel = campaign.status === 'programada' || campaign.status === 'ativa'
+
+  // Whole-row navigation: clicking anywhere on the listing card jumps to
+  // the wizard at /campaigns/{id}/edit. Action buttons in the right cluster
+  // (Editar, Cancelar, Excluir) stop propagation so they keep their own
+  // semantics. We also honor middle-click / cmd+click for new-tab.
+  function handleRowClick(e) {
+    // Ignore if the click landed on an interactive descendant we don't own
+    // (button / link / etc.) — those handle themselves.
+    if (e.target.closest('button, a, input, select, [role="button"]')) return
+    if (e.metaKey || e.ctrlKey) {
+      window.open(`/campaigns/${campaign.id}/edit`, '_blank', 'noopener')
+      return
+    }
+    navigate(`/campaigns/${campaign.id}/edit`)
+  }
 
   async function handleCancel() {
     const ok = await confirm(
@@ -1022,7 +1038,20 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   }
 
   return (
-    <div className="campaign-row">
+    <div
+      className="campaign-row campaign-row--clickable"
+      onClick={handleRowClick}
+      role="link"
+      tabIndex={0}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (e.target.closest('button, a, input, select')) return
+          e.preventDefault()
+          navigate(`/campaigns/${campaign.id}/edit`)
+        }
+      }}
+      title="Abrir campanha"
+    >
       <div className="campaign-row-header">
         <StationAvatar station={{ name: client?.name ?? '?', logo_url: client?.logo_url }} size={32} />
 
