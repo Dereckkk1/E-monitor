@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import WizardStepper from './WizardStepper'
 import CampaignSummaryStrip from './CampaignSummaryStrip'
+import StationAvatar from './StationAvatar'
 
 const STEP_META = {
   1: { eyebrow: 'Passo 1 de 5', kicker: 'Identificação' },
@@ -33,6 +34,11 @@ export default function WizardLayout({
   prevLabel = '← Voltar',
   summary,
   title = 'Nova campanha',
+  // Optional client context shown in the header alongside the campaign
+  // name. When provided, renders the client logo (or initials fallback)
+  // next to the title so the operator always knows whose campaign they're
+  // editing — relevant after the Audiency import made the client list 100+.
+  client,
   children,
 }) {
   const navigate = useNavigate()
@@ -54,21 +60,34 @@ export default function WizardLayout({
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         gap: 24,
       }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-          <span style={{
-            fontSize: 10, fontWeight: 700,
-            color: 'var(--c-action)',
-            textTransform: 'uppercase', letterSpacing: '0.12em',
-          }}>
-            {meta.eyebrow} · {meta.kicker}
-          </span>
-          <h1 style={{
-            margin: 0, fontFamily: 'var(--font-heading)', fontWeight: 700,
-            fontSize: 22, color: 'var(--c-text)', letterSpacing: '-0.01em',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}>
-            {title}
-          </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          {client && (
+            <StationAvatar
+              station={{ name: client.name ?? '?', logo_url: client.logo_url }}
+              size={44}
+            />
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 700,
+              color: 'var(--c-action)',
+              textTransform: 'uppercase', letterSpacing: '0.12em',
+            }}>
+              {meta.eyebrow} · {meta.kicker}
+              {client?.name && (
+                <span style={{ color: 'var(--c-text-3)', marginLeft: 8 }}>
+                  · {client.name}
+                </span>
+              )}
+            </span>
+            <h1 style={{
+              margin: 0, fontFamily: 'var(--font-heading)', fontWeight: 700,
+              fontSize: 22, color: 'var(--c-text)', letterSpacing: '-0.01em',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {title}
+            </h1>
+          </div>
         </div>
         <button
           onClick={() => navigate('/campaigns')}
