@@ -208,3 +208,18 @@ func (h *MaterialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// Acknowledge marks the material's similarity warning as resolved.
+// POST /materials/{id}/similarity/acknowledge → 204.
+func (h *MaterialsHandler) Acknowledge(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := h.Repo.Acknowledge(r.Context(), id); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

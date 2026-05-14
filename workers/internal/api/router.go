@@ -166,6 +166,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Route("/materials", func(r chi.Router) {
 				r.Post("/", d.Materials.Upload)
 				r.Get("/{id}", d.Materials.Get)
+				r.Get("/{id}/audio", d.Materials.Audio)
+				r.Post("/{id}/similarity/acknowledge", d.Materials.Acknowledge)
 				r.Patch("/{id}/type", d.Materials.UpdateType)
 				r.Delete("/{id}", d.Materials.Delete)
 			})
