@@ -37,6 +37,12 @@ export default function DistributionGrid({
   //     per_type?: [{type_id, unit_value}] }
   // Quando vazio/null, o resumo da direita mostra "R$ —" igual antes.
   pricingByStation = {},
+  // capAtToday: true (default) corta a grid em "hoje" — esperado em telas de
+  // monitoramento (/detections) onde dias futuros ainda não têm dado real.
+  // false mostra a campanha inteira até o end_date — esperado em telas de
+  // CONFIGURAÇÃO (wizard step de distribuição) onde o operador precisa
+  // planejar plays nos dias que ainda não chegaram.
+  capAtToday = true,
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -49,17 +55,17 @@ export default function DistributionGrid({
   const today = new Date()
   today.setHours(0,0,0,0)
 
-  // Visible day range = month ∩ campaign ∩ [-∞, today]. Antes começava sempre
-  // no dia 1 do mês mesmo quando a campanha começava no meio dele — a grid
-  // ficava com 13 dias hatched antes do primeiro útil. Agora arrancamos no
-  // primeiro dia útil da campanha dentro do mês.
+  // Visible day range = month ∩ campaign [∩ [-∞, today] se capAtToday]. Antes
+  // começava sempre no dia 1 do mês mesmo quando a campanha começava no meio
+  // dele — a grid ficava com 13 dias hatched antes do primeiro útil. Agora
+  // arrancamos no primeiro dia útil da campanha dentro do mês.
   const monthFirst = new Date(year, monthIdx, 1, 0, 0, 0, 0)
   const monthLast  = new Date(year, monthIdx + 1, 0, 0, 0, 0, 0)
   let firstVisible = monthFirst
   let lastVisible  = monthLast
   if (cStart > firstVisible) firstVisible = cStart
   if (cEnd   < lastVisible)  lastVisible  = cEnd
-  if (today  < lastVisible)  lastVisible  = today
+  if (capAtToday && today < lastVisible) lastVisible = today
   const days = []
   if (firstVisible <= lastVisible) {
     const cur = new Date(firstVisible)

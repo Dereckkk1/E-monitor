@@ -341,6 +341,7 @@ export default function DistributionStep({
             stageCellChange(stationId, typeId, dateISO, +1)}
           onCellDecrement={(stationId, typeId, dateISO) =>
             stageCellChange(stationId, typeId, dateISO, -1)}
+          capAtToday={false}
         />
       )}
 
