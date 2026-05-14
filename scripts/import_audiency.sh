@@ -15,13 +15,18 @@
 #   - infra/docker/.env existe.
 #
 # Env vars relevantes:
-#   FILTER_START_FROM   data ISO mínima pra start_date de campanha
-#   FILTER_START_TO     data ISO máxima pra start_date de campanha
+#   FILTER_RANGE_FROM   data ISO mínima da janela. Campanha entra se seu
+#                       intervalo [start, end] intersecta [FROM, TO].
+#   FILTER_RANGE_TO     data ISO máxima da janela.
+#                       Overlap test: cmp.start <= TO && cmp.end >= FROM.
+#                       Captura campanhas que começaram antes da janela mas
+#                       continuam dentro, e campanhas que começam na janela
+#                       mas terminam depois.
 #   DRY_RUN=1           gera os SQLs em /tmp e mostra resumo, sem aplicar
 #
 # Uso típico:
 #   # Tudo + campanhas de junho/2026
-#   FILTER_START_FROM=2026-06-01 FILTER_START_TO=2026-06-30 \
+#   FILTER_RANGE_FROM=2026-06-01 FILTER_RANGE_TO=2026-06-30 \
 #     ./scripts/import_audiency.sh
 #
 #   # Só simular
@@ -30,7 +35,7 @@
 # Em prod (na VM, com docker-compose.override.yml com bind mounts):
 #   cd /srv/radiocheck   # ou onde quer que o repo esteja
 #   git pull
-#   FILTER_START_FROM=2026-06-01 FILTER_START_TO=2026-06-30 \
+#   FILTER_RANGE_FROM=2026-06-01 FILTER_RANGE_TO=2026-06-30 \
 #     ./scripts/import_audiency.sh
 
 set -euo pipefail
@@ -51,8 +56,8 @@ if [ -f "$OVERRIDE" ]; then
 fi
 
 DRY_RUN="${DRY_RUN:-0}"
-FILTER_START_FROM="${FILTER_START_FROM:-}"
-FILTER_START_TO="${FILTER_START_TO:-}"
+FILTER_RANGE_FROM="${FILTER_RANGE_FROM:-}"
+FILTER_RANGE_TO="${FILTER_RANGE_TO:-}"
 
 step() { printf '\033[1;36m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    \033[1;32m%s\033[0m\n' "$1"; }
@@ -119,11 +124,11 @@ fi
 
 # ── 3. CAMPAIGNS (com filtro de data opcional) ─────────────────────────────
 step "3/3 — campaigns"
-if [ -n "$FILTER_START_FROM" ] || [ -n "$FILTER_START_TO" ]; then
-  warn "Filtro de start_date ativo: ${FILTER_START_FROM:-(sem mín)} .. ${FILTER_START_TO:-(sem máx)}"
+if [ -n "$FILTER_RANGE_FROM" ] || [ -n "$FILTER_RANGE_TO" ]; then
+  warn "Filtro de overlap ativo: ${FILTER_RANGE_FROM:-(sem mín)} .. ${FILTER_RANGE_TO:-(sem máx)}"
 fi
 
-FILTER_START_FROM="$FILTER_START_FROM" FILTER_START_TO="$FILTER_START_TO" \
+FILTER_RANGE_FROM="$FILTER_RANGE_FROM" FILTER_RANGE_TO="$FILTER_RANGE_TO" \
   node "$REPO_ROOT/scripts/import_campaigns_audiency_to_sql.mjs" > "$SQL_CAMPAIGNS"
 LINES=$(wc -l < "$SQL_CAMPAIGNS")
 ok "SQL gerado ($LINES linhas)"

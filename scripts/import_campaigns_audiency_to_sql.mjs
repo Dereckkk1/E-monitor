@@ -31,12 +31,18 @@
  *   INPUT             — JSON de entrada (default: scripts/data/audiency-campaigns.json)
  *   TODAY_OVERRIDE    — força a data "de hoje" pra derivação de status
  *                       (ISO YYYY-MM-DD). Default: hoje em UTC.
- *   FILTER_START_FROM — só importa campanhas com startDate >= esta data
- *                       (ISO YYYY-MM-DD). Default: sem filtro.
- *   FILTER_START_TO   — só importa campanhas com startDate <= esta data
- *                       (ISO YYYY-MM-DD). Default: sem filtro.
- *                       Pra "campanhas de junho de 2026":
- *                         FILTER_START_FROM=2026-06-01 FILTER_START_TO=2026-06-30
+ *   FILTER_RANGE_FROM — só importa campanhas cujo intervalo [startDate, endDate]
+ *                       intersecta a janela [FILTER_RANGE_FROM, FILTER_RANGE_TO].
+ *                       ISO YYYY-MM-DD. Default: sem filtro.
+ *   FILTER_RANGE_TO   — fim da janela acima. ISO YYYY-MM-DD. Default: sem filtro.
+ *
+ *                       Pra "campanhas que tocaram em junho de 2026" (inclui
+ *                       quem começou em maio e estendeu, quem terminou em
+ *                       julho, quem ficou inteira em junho):
+ *                         FILTER_RANGE_FROM=2026-06-01 FILTER_RANGE_TO=2026-06-30
+ *
+ *                       Regra de overlap: cmp.start <= FILTER_RANGE_TO
+ *                                       AND cmp.end   >= FILTER_RANGE_FROM
  */
 
 import { readFile } from 'node:fs/promises';
@@ -46,8 +52,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const INPUT = process.env.INPUT ?? resolve(__dirname, 'data', 'audiency-campaigns.json');
 const TODAY = process.env.TODAY_OVERRIDE ?? new Date().toISOString().slice(0, 10);
-const FILTER_START_FROM = process.env.FILTER_START_FROM ?? null;
-const FILTER_START_TO   = process.env.FILTER_START_TO   ?? null;
+const FILTER_RANGE_FROM = process.env.FILTER_RANGE_FROM ?? null;
+const FILTER_RANGE_TO   = process.env.FILTER_RANGE_TO   ?? null;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -88,8 +94,8 @@ async function main() {
 
   process.stderr.write(`Lendo ${list.length} campanhas de ${INPUT}\n`);
   process.stderr.write(`TODAY = ${TODAY} (usado pra derivar status)\n`);
-  if (FILTER_START_FROM || FILTER_START_TO) {
-    process.stderr.write(`Filtro startDate: ${FILTER_START_FROM ?? '-∞'} .. ${FILTER_START_TO ?? '+∞'}\n`);
+  if (FILTER_RANGE_FROM || FILTER_RANGE_TO) {
+    process.stderr.write(`Filtro overlap com janela: ${FILTER_RANGE_FROM ?? '-∞'} .. ${FILTER_RANGE_TO ?? '+∞'}\n`);
   }
 
   const out = process.stdout;
@@ -128,8 +134,10 @@ async function main() {
       continue;
     }
 
-    if (FILTER_START_FROM && startDate < FILTER_START_FROM) { skippedFilter++; continue; }
-    if (FILTER_START_TO   && startDate > FILTER_START_TO)   { skippedFilter++; continue; }
+    // Overlap test: a campaign [s, e] intersecta a janela [F, T] sse
+    //   s <= T && e >= F  (com cada lado opcional).
+    if (FILTER_RANGE_TO   && startDate > FILTER_RANGE_TO)   { skippedFilter++; continue; }
+    if (FILTER_RANGE_FROM && endDate   < FILTER_RANGE_FROM) { skippedFilter++; continue; }
 
     const status = deriveStatus(startDate, endDate, TODAY);
 
