@@ -56,18 +56,34 @@ export default function StationsStep({ campaignId, allStations, currentSelection
 
   const updateCampaign = useUpdateCampaignStations()
 
-  // Save with debounce (not on every keystroke)
+  // Save with debounce (not on every keystroke).
+  //
+  // Two hydration guards prevent data loss when `allStations` arrives later
+  // than the auto-save's 500ms window — without these the selectedOpts
+  // initializer (which uses `allStations.find`) starts empty and the effect
+  // would auto-save target_stations=[] over a populated list:
+  //
+  //   1. Skip when `allStations` hasn't loaded yet.
+  //   2. Skip when one or more ids in `currentSelection` aren't in
+  //      `allStations` — that's a hydration race, not a user-initiated
+  //      removal. The save will fire on the next render once allStations
+  //      is complete and selectedOpts re-syncs.
   useEffect(() => {
     if (!campaignId) return
+    if (!allStations || allStations.length === 0) return
     const ids = selectedOpts.map(o => o.value)
     const sameAsCurrent = ids.length === currentSelection.length &&
       ids.every(id => currentSelection.includes(id))
     if (sameAsCurrent) return
+    const allCurrentResolved = currentSelection.every(
+      id => allStations.some(s => s.id === id)
+    )
+    if (!allCurrentResolved) return
     const t = setTimeout(() => {
       updateCampaign.mutate({ id: campaignId, targetStations: ids })
     }, 500)
     return () => clearTimeout(t)
-  }, [selectedOpts, campaignId])
+  }, [selectedOpts, campaignId, allStations, currentSelection])
 
   function removeOne(id) {
     setSelectedOpts(opts => opts.filter(o => o.value !== id))
