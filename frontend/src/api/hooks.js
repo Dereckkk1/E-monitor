@@ -412,6 +412,16 @@ export function useMaterials(clientId, q = '') {
       return []
     }),
     enabled: !!clientId,
+    refetchInterval: (query) => {
+      // Poll every 3s while ANY material is still being analyzed for
+      // similarity OR fingerprint. Stops polling once everything is settled.
+      const list = query.state.data ?? []
+      const pending = list.some(m =>
+        m.fingerprint_status === 'pending' ||
+        m.fingerprint_status === 'generating' ||
+        m.similarity_check_status === 'pending')
+      return pending ? 3000 : false
+    },
   })
 }
 
@@ -445,6 +455,15 @@ export function useDeleteMaterial() {
   })
 }
 
+export function useAcknowledgeSimilarity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) =>
+      api.post(`/materials/${id}/similarity/acknowledge`).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['materials'] }),
+  })
+}
+
 // ─── Campaign Materials (N:N link) ─────────────────────────────────────────
 
 export function useCampaignMaterials(campaignId) {
@@ -452,6 +471,9 @@ export function useCampaignMaterials(campaignId) {
     queryKey: ['campaign-materials', campaignId],
     queryFn: () => api.get(`/campaigns/${campaignId}/materials`).then(r => r.data ?? []),
     enabled: !!campaignId,
+    // No polling here directly — the join row (campaign_materials) doesn't
+    // carry similarity state. The `useMaterials(clientId)` query is the one
+    // that polls; this query refreshes on its invalidation cascade.
   })
 }
 
