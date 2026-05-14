@@ -31,6 +31,12 @@ SUBJECT_INDEX_RELOAD = "index.reload"
 # fingerprint_hashes.is_shared on regions that overlap with existing
 # commercials. See docs/shared-hash-detection.md.
 SUBJECT_SHARED_SCAN = "fingerprint.shared-scan"
+# Material similarity warning. After a MATERIAL fingerprint becomes ready
+# we publish here so the api process can score the new material against
+# the client's existing materials and surface near-duplicate warnings.
+# Commercial uploads do NOT publish this — there's no materials row to
+# scan. See docs/superpowers/specs/2026-05-13-material-similarity-warning-design.md.
+SUBJECT_MATERIAL_SIMILARITY_CHECK = "material.similarity-check"
 
 
 async def handle_generate(msg, pool: asyncpg.Pool, nc: nats.NATS):
@@ -100,6 +106,15 @@ async def handle_generate(msg, pool: asyncpg.Pool, nc: nats.NATS):
     reload_payload = json.dumps({reload_key: entity_id}).encode()
     await nc.publish(SUBJECT_INDEX_RELOAD, reload_payload)
     await nc.publish(SUBJECT_SHARED_SCAN, reload_payload)
+
+    # Material-only: trigger the per-client similarity scan. Commercials
+    # don't have a materials row so the Go subscriber would skip them
+    # anyway — cleaner to only fire when there's an actual material to
+    # check.
+    if entity_kind == "material":
+        similarity_payload = json.dumps({"material_id": entity_id}).encode()
+        await nc.publish(SUBJECT_MATERIAL_SIMILARITY_CHECK, similarity_payload)
+        log.info("published material.similarity-check material_id=%s", entity_id)
 
     log.info("done %s_id=%s hashes=%d", entity_kind, entity_id, total_hashes)
 

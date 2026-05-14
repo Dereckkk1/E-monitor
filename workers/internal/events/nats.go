@@ -31,6 +31,12 @@ const (
 	// catalog, and flags fingerprint_hashes.is_shared on overlapping ranges.
 	// See docs/shared-hash-detection.md.
 	SubjectFingerprintSharedScan = "fingerprint.shared-scan"
+	// SubjectMaterialSimilarityCheck triggers the per-client similarity scan
+	// (workers/internal/similarity) after a material's fingerprint becomes
+	// ready. Payload: {"material_id":"<uuid>"}. Published by the Python
+	// fingerprint daemon, consumed by similarity.Subscriber in the api process.
+	// See docs/superpowers/specs/2026-05-13-material-similarity-warning-design.md.
+	SubjectMaterialSimilarityCheck = "material.similarity-check"
 )
 
 func Connect(url string) (*nats.Conn, error) {
