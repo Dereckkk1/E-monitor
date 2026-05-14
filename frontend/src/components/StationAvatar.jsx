@@ -8,6 +8,12 @@ const APPSHEET_VERSION = '1.002203'
 function buildLogoUrl(path) {
   if (!path) return null
   if (path.startsWith('http://') || path.startsWith('https://')) return path
+  // Same-origin relative path (e.g. our Audiency image proxy at
+  // /v1/internal/audiency-image?token=...). Pass through untouched —
+  // Vite proxies /v1 to the backend in dev; in prod they're on the same
+  // host. WITHOUT this branch the path would be misinterpreted as an
+  // AppSheet filename and wrapped in the AppSheet image URL.
+  if (path.startsWith('/')) return path
   // AppSheet-style path e.g. "Rádios 2_Images/abc.jpg"
   return `${APPSHEET_BASE}?appName=${APPSHEET_APP}&tableName=${APPSHEET_TABLE}&fileName=${encodeURIComponent(path)}&appVersion=${APPSHEET_VERSION}&signature=`
 }
