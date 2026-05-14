@@ -85,6 +85,28 @@ simultaneamente) é follow-up **F-119** em [follow-ups-fase2.md](follow-ups-fase
 - **`fingerprint_hashes.commercial_id`** nunca teve FK (era só UUID), então sempre
   aceitou qualquer UUID. O nome da coluna fica por compat histórica.
 
+## Deploy ordering (importante)
+
+Quando deployar este branch em prod, a ordem importa porque API e daemon
+Python evoluem juntos:
+
+1. **Aplicar migration 0024 primeiro.** Mudança puramente backward-compatible
+   (drop FK + unificar sequence) — binários antigos continuam funcionando.
+2. **Deploy do daemon `fingerprint` ANTES do `api`.** Se o api novo subir
+   primeiro, ele começa a publicar `{"material_id": ...}` mas o daemon antigo
+   ignora (KeyError silencioso) → materiais ficam `pending`. O daemon novo
+   trata os DOIS formatos (`commercial_id` e `material_id`), então o caminho
+   inverso (daemon novo + api antigo ainda publicando `commercial_id`) é
+   seguro.
+3. **Deploy do `api` por último.** Workers reiniciam via supervisor.Reload,
+   reconciler converge em ~30s. Se algo der errado, basta reverter o api
+   binário — o daemon e a migration são forward-compatible.
+
+Em ambiente local (Phase 8 / 10), os dois containers são recreados juntos via
+`docker compose up -d --no-deps --force-recreate api fingerprint`, então a
+ordem não importa. Em prod onde há replicas e o deploy é rolling, seguir a
+ordem acima.
+
 ## Limitações conhecidas
 
 - **F-119:** multi-atribuição (uma detecção → várias campanhas)
