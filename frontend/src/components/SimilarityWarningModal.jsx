@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useDeleteMaterial, useAcknowledgeSimilarity } from '../api/hooks'
+import api from '../api/client'
 
 /**
  * Blocking decision modal. Fires when a freshly-uploaded material is ≥50%
@@ -165,14 +166,14 @@ export default function SimilarityWarningModal({
             highlight
             title={newMaterial.title}
             durationSeconds={newMaterial.duration_seconds}
-            audioUrl={`/v1/internal/materials/${newMaterial.id}/audio`}
+            materialId={newMaterial.id}
           />
           <ComparisonCard
             tag="já existente"
             tagColor="var(--c-text-2)"
             title={similarMaterial.title}
             durationSeconds={similarMaterial.duration_seconds}
-            audioUrl={`/v1/internal/materials/${similarMaterial.id}/audio`}
+            materialId={similarMaterial.id}
           />
         </div>
 
@@ -220,7 +221,37 @@ export default function SimilarityWarningModal({
 
 /* ─────────────────────────────────────────────────────────────────── */
 
-function ComparisonCard({ tag, tagColor, highlight, title, durationSeconds, audioUrl }) {
+function ComparisonCard({ tag, tagColor, highlight, title, durationSeconds, materialId }) {
+  // The <audio> element cannot send Authorization headers directly, and
+  // /v1/internal/materials/{id}/audio is behind the JWT-gated middleware.
+  // We fetch the blob via the axios client (which injects the token) and
+  // hand the player an object URL. Revoked on unmount to avoid leaks.
+  const [blobUrl, setBlobUrl] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let createdUrl = null
+    setLoadError(null)
+    setBlobUrl(null)
+
+    api.get(`/materials/${materialId}/audio`, { responseType: 'blob' })
+      .then(resp => {
+        if (cancelled) return
+        createdUrl = URL.createObjectURL(resp.data)
+        setBlobUrl(createdUrl)
+      })
+      .catch(err => {
+        if (cancelled) return
+        setLoadError(err?.response?.status === 404 ? 'Áudio indisponível' : 'Falha ao carregar')
+      })
+
+    return () => {
+      cancelled = true
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [materialId])
+
   return (
     <div style={{
       background: 'var(--c-surface)',
@@ -265,12 +296,43 @@ function ComparisonCard({ tag, tagColor, highlight, title, durationSeconds, audi
         {durationSeconds?.toFixed?.(1) ?? '—'}s
       </div>
 
-      <audio
-        controls
-        preload="metadata"
-        src={audioUrl}
-        style={{ width: '100%', marginTop: 2 }}
-      />
+      {loadError ? (
+        <div style={{
+          padding: '10px 12px',
+          background: 'color-mix(in srgb, var(--c-danger) 8%, transparent)',
+          border: '1px dashed color-mix(in srgb, var(--c-danger) 35%, transparent)',
+          borderRadius: 'var(--radius-sm)',
+          color: 'var(--c-danger)',
+          fontSize: 11.5, fontWeight: 600,
+          textAlign: 'center',
+        }}>
+          {loadError}
+        </div>
+      ) : blobUrl ? (
+        <audio
+          controls
+          preload="metadata"
+          src={blobUrl}
+          style={{ width: '100%', marginTop: 2 }}
+        />
+      ) : (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '10px 12px',
+          background: 'var(--c-surface-2)',
+          borderRadius: 'var(--radius-sm)',
+          color: 'var(--c-text-3)',
+          fontSize: 11.5,
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{
+            animation: 'spin 0.8s linear infinite',
+          }}>
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeOpacity="0.25" />
+            <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+          </svg>
+          Carregando áudio…
+        </div>
+      )}
     </div>
   )
 }
