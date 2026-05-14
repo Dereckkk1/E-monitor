@@ -1563,12 +1563,30 @@ textarea.input {
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: box-shadow 0.2s;
+  transition: box-shadow 0.2s, border-color 0.15s, transform 0.15s;
   box-shadow: var(--shadow-sm);
 }
 
 .campaign-row:hover {
   box-shadow: var(--shadow-md);
+}
+
+/* Clickable variant: whole row navigates to the wizard. Add a subtle lift
+   + action-color border on hover so the affordance is obvious. The inner
+   .campaign-row-header still owns its own hover background. */
+.campaign-row--clickable {
+  cursor: pointer;
+}
+
+.campaign-row--clickable:hover {
+  border-color: var(--c-action-300, #F472B6);
+  transform: translateY(-1px);
+}
+
+.campaign-row--clickable:focus-visible {
+  outline: none;
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-action) 25%, transparent);
 }
 
 .campaign-row-header {
