@@ -54,7 +54,8 @@ export default function CampaignWizardPage() {
     [clientLibrary]
   )
 
-  const clientName = clients.find(c => c.id === draftCampaign.client_id)?.name ?? ''
+  const currentClient = clients.find(c => c.id === draftCampaign.client_id) ?? null
+  const clientName = currentClient?.name ?? ''
   const targetStationIds = existingCampaign?.target_stations ?? []
   const stationCount = targetStationIds.length
   const materialCount = campaignMaterials.length
@@ -222,6 +223,7 @@ export default function CampaignWizardPage() {
   return (
     <WizardLayout
       title={title}
+      client={currentClient}
       currentStep={currentStep}
       completedSteps={completedSteps}
       onStepClick={handleStepClick}
