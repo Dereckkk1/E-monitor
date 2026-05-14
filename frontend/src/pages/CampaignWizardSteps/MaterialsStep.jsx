@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   useCampaignMaterials, useMaterials, useMaterialTypes,
   useLinkCampaignMaterial, useUnlinkCampaignMaterial, useUploadMaterial,
   useUpdateMaterialTypeId, useUpdateCampaignMaterialStations,
 } from '../../api/hooks'
+import api from '../../api/client'
 import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
 import SimilarityWarningModal from '../../components/SimilarityWarningModal'
@@ -29,6 +30,28 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
   // Which material card is currently in stations-editing mode (only one open at a time).
   const [editingStationsFor, setEditingStationsFor] = useState(null)
 
+  // Fallback decision modal: if the operator reloaded (or otherwise bypassed
+  // the upload-time blocker), surface the same blocking modal for any
+  // material that still has an unresolved ≥50% similarity match. We re-fire
+  // until they decide — same hard rule as during upload.
+  const [fallbackDecision, setFallbackDecision] = useState(null)
+  // fallbackDecision shape: { newMaterial, similarMaterial } | null
+
+  useEffect(() => {
+    if (fallbackDecision) return  // one at a time
+    for (const link of cmpMats) {
+      const mat = materialsById[link.material_id]
+      if (!mat) continue
+      if (mat.similarity_check_status !== 'ready') continue
+      if (mat.similarity_acknowledged_at) continue
+      if (mat.similarity_score == null || mat.similarity_score < 0.50) continue
+      const sim = materialsById[mat.most_similar_material_id]
+      if (!sim) continue
+      setFallbackDecision({ newMaterial: mat, similarMaterial: sim })
+      return
+    }
+  }, [cmpMats, materialsById, fallbackDecision])
+
   const typeById = Object.fromEntries(materialTypes.map(t => [t.id, t]))
 
   async function handleUnlink(materialId, title) {
@@ -39,7 +62,6 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-      <style>{`@keyframes wizard-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
       {/* Section title + primary action */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 720 }}>
@@ -140,7 +162,6 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
                 type={type}
                 allTypes={materialTypes}
                 campaignStations={campaignStations}
-                materialsById={materialsById}
                 isEditingStations={isEditing}
                 onToggleStationsEdit={() =>
                   setEditingStationsFor(isEditing ? null : link.material_id)}
@@ -168,6 +189,15 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
           materialTypes={materialTypes}
         />
       )}
+
+      {fallbackDecision && (
+        <SimilarityWarningModal
+          newMaterial={fallbackDecision.newMaterial}
+          similarMaterial={fallbackDecision.similarMaterial}
+          onKept={() => setFallbackDecision(null)}
+          onRemoved={() => setFallbackDecision(null)}
+        />
+      )}
     </div>
   )
 }
@@ -188,11 +218,10 @@ function fingerprintBadge(status) {
 }
 
 function MaterialCard({
-  material, link, type, allTypes, campaignStations, materialsById,
+  material, link, type, allTypes, campaignStations,
   isEditingStations, onToggleStationsEdit,
   onTypeChange, onSaveStations, onUnlink,
 }) {
-  const [showSimilarityModal, setShowSimilarityModal] = useState(false)
   const fp = fingerprintBadge(material.fingerprint_status)
   const missingType = !type
   // When the material has no type, the left border turns amber to flag the
@@ -285,47 +314,6 @@ function MaterialCard({
                 </span>
               </>
             )}
-            {material.similarity_check_status === 'pending' && (
-              <>
-                <span style={{ color: 'var(--c-text-3)' }}>·</span>
-                <span style={{
-                  padding: '2px 8px', borderRadius: 'var(--radius-full)',
-                  background: 'var(--c-surface-2)', color: 'var(--c-text-3)',
-                  fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
-                  display: 'inline-flex', alignItems: 'center', gap: 5,
-                }}>
-                  <span style={{
-                    width: 5, height: 5, borderRadius: '50%',
-                    background: 'var(--c-text-3)',
-                    animation: 'wizard-pulse 1.2s ease-in-out infinite',
-                  }} />
-                  Analisando similaridade…
-                </span>
-              </>
-            )}
-            {material.similarity_check_status === 'ready' &&
-              material.similarity_score != null &&
-              material.similarity_score >= 0.15 &&
-              !material.similarity_acknowledged_at &&
-              materialsById && materialsById[material.most_similar_material_id] && (
-              <>
-                <span style={{ color: 'var(--c-text-3)' }}>·</span>
-                <button
-                  type="button"
-                  onClick={() => setShowSimilarityModal(true)}
-                  title="Comparar com material similar"
-                  style={{
-                    padding: '2px 8px', borderRadius: 'var(--radius-full)',
-                    background: '#fef3c7', color: '#a16207',
-                    border: 0, cursor: 'pointer',
-                    fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
-                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                  }}
-                >
-                  ⚠ {Math.round(material.similarity_score * 100)}% similar a "{materialsById[material.most_similar_material_id].title}"
-                </button>
-              </>
-            )}
           </div>
         </div>
 
@@ -416,13 +404,6 @@ function MaterialCard({
         />
       )}
 
-      {showSimilarityModal && materialsById && materialsById[material.most_similar_material_id] && (
-        <SimilarityWarningModal
-          newMaterial={material}
-          similarMaterial={materialsById[material.most_similar_material_id]}
-          onClose={() => setShowSimilarityModal(false)}
-        />
-      )}
     </div>
   )
 }
@@ -781,17 +762,34 @@ function AddMaterialPanel({
   const [tab, setTab] = useState('library')
   const [selectedLibIds, setSelectedLibIds] = useState(new Set())
   const [uploadQueue, setUploadQueue] = useState([])
+  // busy = a submitUploads pass is in flight. While true, the drawer is
+  // locked: no tab switching, no closing, no editing the queue. The lock
+  // covers upload → fingerprint poll → similarity poll → decision modal →
+  // link. It releases only after every queue entry settles.
+  const [busy, setBusy] = useState(false)
+  // pendingDecision is non-null while the blocking modal is open mid-flow.
+  // The `resolve` callback unblocks submitUploads for the next entry.
+  const [pendingDecision, setPendingDecision] = useState(null)
   const link = useLinkCampaignMaterial()
   const upload = useUploadMaterial()
 
   const available = libraryMaterials.filter(m => !alreadyLinkedIds.has(m.id))
   const defaultStationIds = campaignStations.map(s => s.id)
 
+  function setEntryStage(key, stage, extra = {}) {
+    setUploadQueue(q => q.map(e => e.key === key ? { ...e, stage, ...extra } : e))
+  }
+
   async function linkSelected() {
-    for (const id of selectedLibIds) {
-      await link.mutateAsync({ campaignId, material_id: id, target_stations: defaultStationIds })
+    setBusy(true)
+    try {
+      for (const id of selectedLibIds) {
+        await link.mutateAsync({ campaignId, material_id: id, target_stations: defaultStationIds })
+      }
+      onClose()
+    } finally {
+      setBusy(false)
     }
-    onClose()
   }
 
   function addFiles(files) {
@@ -799,29 +797,152 @@ function AddMaterialPanel({
       .filter(f => /\.(wav|mp3|m4a|aac|mpeg)$/i.test(f.name))
       .map(file => ({
         key: `${file.name}-${Date.now()}-${Math.random()}`,
-        file, title: file.name.replace(/\.[^.]+$/, ''), typeId: '', status: 'pending',
+        file,
+        title: file.name.replace(/\.[^.]+$/, ''),
+        typeId: '',
+        stage: 'queued',   // queued | uploading | fingerprinting | verifying | deciding | linking | done | removed | error
+        errorMsg: null,
       }))
     setUploadQueue(q => [...q, ...entries])
   }
 
-  async function submitUploads() {
-    for (const entry of uploadQueue) {
-      if (entry.status !== 'pending') continue
-      const fd = new FormData()
-      fd.append('client_id', clientId)
-      fd.append('title', entry.title)
-      if (entry.typeId) fd.append('type_id', entry.typeId)
-      fd.append('audio', entry.file)
-      try {
-        const mat = await upload.mutateAsync(fd)
-        await link.mutateAsync({ campaignId, material_id: mat.id, target_stations: defaultStationIds })
-        setUploadQueue(q => q.map(e => e.key === entry.key ? { ...e, status: 'done' } : e))
-      } catch {
-        setUploadQueue(q => q.map(e => e.key === entry.key ? { ...e, status: 'error' } : e))
-      }
-    }
-    setTimeout(onClose, 500)
+  function removeEntry(key) {
+    setUploadQueue(q => q.filter(e => e.key !== key))
   }
+
+  // pollMaterial polls GET /materials/{id} every intervalMs until cond(mat)
+  // returns true, or until timeoutMs elapses (throws). cond receives the
+  // fresh material payload each iteration.
+  async function pollMaterial(id, cond, { intervalMs = 1500, timeoutMs = 90_000 } = {}) {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const r = await api.get(`/materials/${id}`)
+      if (cond(r.data)) return r.data
+      await new Promise(res => setTimeout(res, intervalMs))
+    }
+    throw new Error('poll timeout')
+  }
+
+  async function submitUploads() {
+    setBusy(true)
+    try {
+      for (const entry of uploadQueue) {
+        if (entry.stage !== 'queued' && entry.stage !== 'error') continue
+
+        // 1. Upload the file
+        setEntryStage(entry.key, 'uploading', { errorMsg: null })
+        const fd = new FormData()
+        fd.append('client_id', clientId)
+        fd.append('title', entry.title)
+        if (entry.typeId) fd.append('type_id', entry.typeId)
+        fd.append('audio', entry.file)
+
+        let mat
+        try {
+          mat = await upload.mutateAsync(fd)
+        } catch (e) {
+          setEntryStage(entry.key, 'error', { errorMsg: 'Falha no upload' })
+          continue
+        }
+
+        // 2. Wait for fingerprint
+        setEntryStage(entry.key, 'fingerprinting', { materialId: mat.id })
+        let fp
+        try {
+          fp = await pollMaterial(mat.id,
+            m => m.fingerprint_status === 'ready' || m.fingerprint_status === 'failed')
+        } catch {
+          setEntryStage(entry.key, 'error', { errorMsg: 'Timeout no fingerprint' })
+          continue
+        }
+        if (fp.fingerprint_status === 'failed') {
+          setEntryStage(entry.key, 'error', { errorMsg: 'Não foi possível gerar o fingerprint' })
+          continue
+        }
+
+        // 3. Wait for similarity check (ready / skipped / failed)
+        setEntryStage(entry.key, 'verifying')
+        let verified
+        try {
+          verified = await pollMaterial(mat.id,
+            m => ['ready', 'skipped', 'failed'].includes(m.similarity_check_status))
+        } catch {
+          setEntryStage(entry.key, 'error', { errorMsg: 'Timeout na verificação' })
+          continue
+        }
+
+        // 4. If similarity ≥ threshold AND not ack: block on the modal
+        const needsDecision = verified.similarity_check_status === 'ready' &&
+          verified.similarity_score != null &&
+          verified.similarity_score >= 0.50 &&
+          !verified.similarity_acknowledged_at &&
+          verified.most_similar_material_id
+
+        if (needsDecision) {
+          // Fetch the comparison target
+          let similar
+          try {
+            const r = await api.get(`/materials/${verified.most_similar_material_id}`)
+            similar = r.data
+          } catch {
+            // If the similar material can't be loaded, fall through to linking
+            // — the warning was informational and we can't show it without it.
+            similar = null
+          }
+
+          if (similar) {
+            setEntryStage(entry.key, 'deciding')
+            const decision = await new Promise((resolve) => {
+              setPendingDecision({
+                newMaterial: verified,
+                similarMaterial: similar,
+                resolve,
+              })
+            })
+            setPendingDecision(null)
+            if (decision === 'removed') {
+              setEntryStage(entry.key, 'removed')
+              continue
+            }
+            // decision === 'kept' → fall through to link
+          }
+        }
+
+        // 5. Link
+        setEntryStage(entry.key, 'linking')
+        try {
+          await link.mutateAsync({
+            campaignId,
+            material_id: mat.id,
+            target_stations: defaultStationIds,
+          })
+          setEntryStage(entry.key, 'done')
+        } catch {
+          setEntryStage(entry.key, 'error', { errorMsg: 'Falha ao vincular à campanha' })
+        }
+      }
+    } finally {
+      setBusy(false)
+    }
+
+    // Auto-close 600ms after the last entry settled, if nothing errored.
+    setUploadQueue(q => {
+      const allClean = q.every(e => e.stage === 'done' || e.stage === 'removed')
+      if (allClean) setTimeout(onClose, 600)
+      return q
+    })
+  }
+
+  const pendingCount = uploadQueue.filter(e => e.stage === 'queued' || e.stage === 'error').length
+  const hasErrors = uploadQueue.some(e => e.stage === 'error')
+
+  // Show the verification panel (read-only progress view) any time there's a
+  // queue entry past 'queued' — that means a flow is in progress or has
+  // settled. The initial dropzone+queue editor only shows when the queue is
+  // entirely fresh OR entirely cleared.
+  const showVerificationView = uploadQueue.some(
+    e => e.stage !== 'queued' && e.stage !== 'error',
+  )
 
   return (
     <div
@@ -831,49 +952,74 @@ function AddMaterialPanel({
         zIndex: 50,
         animation: 'wizard-fade-in 200ms cubic-bezier(0.16,1,0.3,1)',
       }}
-      onClick={onClose}
+      // Backdrop click closes ONLY when nothing is in flight. While busy
+      // the operator cannot escape sideways — they must finish the run.
+      onClick={busy ? undefined : onClose}
     >
       <style>{`
         @keyframes wizard-fade-in { from { opacity: 0; } to { opacity: 1; } }
         @keyframes wizard-slide-in { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes wizard-stage-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-action) 50%, transparent); }
+          50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--c-action) 0%,  transparent); }
+        }
       `}</style>
       <aside
         onClick={e => e.stopPropagation()}
         style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 540,
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: 560,
           background: 'var(--c-surface)',
           boxShadow: '-24px 0 48px -12px rgba(15,23,42,0.25)',
           display: 'flex', flexDirection: 'column',
           animation: 'wizard-slide-in 300ms cubic-bezier(0.16,1,0.3,1)',
         }}
       >
-        {/* Header */}
+        {/* ── Header ─────────────────────────────────────────────── */}
         <div style={{
-          padding: '20px 24px', borderBottom: '1px solid var(--c-border)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '20px 24px 18px',
+          borderBottom: '1px solid var(--c-border)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+          gap: 12,
         }}>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <span style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: '0.12em',
-              color: 'var(--c-action)', textTransform: 'uppercase',
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.14em',
+              color: busy ? 'var(--c-text-3)' : 'var(--c-action)',
+              textTransform: 'uppercase',
+              fontFamily: 'var(--font-heading)',
             }}>
-              Adicionar à campanha
+              {busy ? 'Processando' : 'Adicionar à campanha'}
             </span>
             <h3 style={{
-              margin: 0, fontFamily: 'var(--font-heading)', fontWeight: 700,
-              fontSize: 18, color: 'var(--c-text)', marginTop: 4,
+              margin: '4px 0 0', fontFamily: 'var(--font-heading)', fontWeight: 700,
+              fontSize: 18, color: 'var(--c-text)', lineHeight: 1.3,
             }}>
-              {tab === 'library' ? 'Vincular da biblioteca' : 'Upload de novos áudios'}
+              {busy
+                ? 'Subindo e verificando…'
+                : tab === 'library' ? 'Vincular da biblioteca' : 'Upload de novos áudios'}
             </h3>
+            {busy && (
+              <p style={{
+                margin: '6px 0 0', fontSize: 11.5, color: 'var(--c-text-2)',
+                lineHeight: 1.5,
+              }}>
+                Não feche essa aba — estamos comparando o áudio com a biblioteca do cliente.
+              </p>
+            )}
           </div>
           <button
-            onClick={onClose}
+            onClick={busy ? undefined : onClose}
+            disabled={busy}
             aria-label="Fechar"
             style={{
               width: 30, height: 30, border: 0,
-              background: 'var(--c-surface-2)', color: 'var(--c-text-2)',
-              borderRadius: 'var(--radius-md)', cursor: 'pointer',
+              background: 'var(--c-surface-2)',
+              color: busy ? 'var(--c-text-3)' : 'var(--c-text-2)',
+              borderRadius: 'var(--radius-md)',
+              cursor: busy ? 'not-allowed' : 'pointer',
+              opacity: busy ? 0.5 : 1,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
             }}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
@@ -882,19 +1028,40 @@ function AddMaterialPanel({
           </button>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--c-border)', background: 'var(--c-bg)' }}>
-          <TabBtn active={tab === 'library'} onClick={() => setTab('library')}>
-            Biblioteca <Counter>{available.length}</Counter>
-          </TabBtn>
-          <TabBtn active={tab === 'upload'} onClick={() => setTab('upload')}>
-            Upload {uploadQueue.length > 0 && <Counter>{uploadQueue.length}</Counter>}
-          </TabBtn>
-        </div>
+        {/* ── Tabs (hidden while verifying — single-purpose view) ─── */}
+        {!showVerificationView && (
+          <div style={{
+            display: 'flex',
+            borderBottom: '1px solid var(--c-border)',
+            background: 'var(--c-bg)',
+          }}>
+            <TabBtn
+              active={tab === 'library'}
+              disabled={busy}
+              onClick={() => !busy && setTab('library')}
+            >
+              Biblioteca <Counter>{available.length}</Counter>
+            </TabBtn>
+            <TabBtn
+              active={tab === 'upload'}
+              disabled={busy}
+              onClick={() => !busy && setTab('upload')}
+            >
+              Upload {uploadQueue.length > 0 && <Counter>{uploadQueue.length}</Counter>}
+            </TabBtn>
+          </div>
+        )}
 
-        {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
-          {tab === 'library' ? (
+        {/* ── Body ───────────────────────────────────────────────── */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: showVerificationView ? '20px 24px' : 22 }}>
+          {showVerificationView ? (
+            <VerificationPanel
+              entries={uploadQueue}
+              onRetryEntry={(key) => setEntryStage(key, 'queued', { errorMsg: null })}
+              onRemoveEntry={removeEntry}
+              busy={busy}
+            />
+          ) : tab === 'library' ? (
             available.length === 0 ? (
               <NoLibraryItems onSwitchTab={() => setTab('upload')} />
             ) : (
@@ -909,13 +1076,15 @@ function AddMaterialPanel({
                         padding: '10px 12px', borderRadius: 'var(--radius-md)',
                         background: checked ? 'var(--c-action-light, rgba(232,30,117,0.06))' : 'transparent',
                         border: `1px solid ${checked ? 'var(--c-action-300, #F472B6)' : 'transparent'}`,
-                        cursor: 'pointer',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        opacity: busy ? 0.5 : 1,
                         transition: 'all 100ms',
                       }}
                     >
                       <input
                         type="checkbox"
                         checked={checked}
+                        disabled={busy}
                         onChange={() => {
                           const next = new Set(selectedLibIds)
                           if (next.has(m.id)) next.delete(m.id); else next.add(m.id)
@@ -945,70 +1114,92 @@ function AddMaterialPanel({
               setUploadQueue={setUploadQueue}
               addFiles={addFiles}
               materialTypes={materialTypes}
+              disabled={busy}
             />
           )}
         </div>
 
-        {/* Footer */}
+        {/* ── Footer ─────────────────────────────────────────────── */}
         <div style={{
-          padding: '14px 22px', borderTop: '1px solid var(--c-border)',
-          display: 'flex', justifyContent: 'flex-end', gap: 10,
+          padding: '14px 24px',
+          borderTop: '1px solid var(--c-border)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
           background: 'var(--c-surface)',
         }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '9px 16px', borderRadius: 'var(--radius-md)',
-              background: 'transparent', color: 'var(--c-text-2)',
-              border: '1px solid var(--c-border)', cursor: 'pointer',
-              fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-heading)',
-            }}
-          >
-            Cancelar
-          </button>
-          {tab === 'library' ? (
+          <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
+            {busy && 'Aguardando análise terminar…'}
+            {!busy && hasErrors && (
+              <span style={{ color: 'var(--c-danger)', fontWeight: 600 }}>
+                {uploadQueue.filter(e => e.stage === 'error').length} com erro
+              </span>
+            )}
+          </span>
+          <div style={{ display: 'flex', gap: 10 }}>
             <button
-              onClick={linkSelected}
-              disabled={selectedLibIds.size === 0}
+              onClick={busy ? undefined : onClose}
+              disabled={busy}
               style={{
-                padding: '9px 18px', borderRadius: 'var(--radius-md)',
-                background: selectedLibIds.size === 0 ? 'var(--c-surface-2)' : 'var(--c-action)',
-                color: selectedLibIds.size === 0 ? 'var(--c-text-3)' : '#fff',
-                border: 0, cursor: selectedLibIds.size === 0 ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-heading)',
+                padding: '9px 16px', borderRadius: 'var(--radius-md)',
+                background: 'transparent',
+                color: busy ? 'var(--c-text-3)' : 'var(--c-text-2)',
+                border: '1px solid var(--c-border)',
+                cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1,
+                fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-heading)',
               }}
             >
-              Vincular {selectedLibIds.size > 0 ? `(${selectedLibIds.size})` : ''}
+              Cancelar
             </button>
-          ) : (
-            <button
-              onClick={submitUploads}
-              disabled={uploadQueue.length === 0 || upload.isPending}
-              style={{
-                padding: '9px 18px', borderRadius: 'var(--radius-md)',
-                background: uploadQueue.length === 0 ? 'var(--c-surface-2)' : 'var(--c-action)',
-                color: uploadQueue.length === 0 ? 'var(--c-text-3)' : '#fff',
-                border: 0, cursor: uploadQueue.length === 0 ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-heading)',
-              }}
-            >
-              Subir e vincular
-            </button>
-          )}
+            {tab === 'library' && !showVerificationView ? (
+              <PrimaryButton
+                onClick={linkSelected}
+                disabled={busy || selectedLibIds.size === 0}
+                loading={busy}
+              >
+                Vincular {selectedLibIds.size > 0 ? `(${selectedLibIds.size})` : ''}
+              </PrimaryButton>
+            ) : (
+              <PrimaryButton
+                onClick={submitUploads}
+                disabled={busy || pendingCount === 0}
+                loading={busy}
+              >
+                {busy
+                  ? 'Verificando…'
+                  : hasErrors ? 'Tentar novamente' : 'Subir e verificar'}
+              </PrimaryButton>
+            )}
+          </div>
         </div>
       </aside>
+
+      {/* ── Blocking similarity decision modal ───────────────────── */}
+      {pendingDecision && (
+        <SimilarityWarningModal
+          newMaterial={pendingDecision.newMaterial}
+          similarMaterial={pendingDecision.similarMaterial}
+          onKept={() => pendingDecision.resolve('kept')}
+          onRemoved={() => pendingDecision.resolve('removed')}
+        />
+      )}
     </div>
   )
 }
 
-function TabBtn({ active, onClick, children }) {
+function TabBtn({ active, disabled, onClick, children }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         flex: 1, padding: '12px 14px', border: 0,
         borderBottom: active ? '2px solid var(--c-action)' : '2px solid transparent',
-        background: 'transparent', cursor: 'pointer',
+        background: 'transparent',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
         color: active ? 'var(--c-action)' : 'var(--c-text-2)',
         fontWeight: active ? 700 : 600,
         fontSize: 12, fontFamily: 'var(--font-heading)',
@@ -1076,19 +1267,20 @@ function NoLibraryItems({ onSwitchTab }) {
   )
 }
 
-function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes }) {
+function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes, disabled }) {
   const [dragOver, setDragOver] = useState(false)
 
   function onDrop(e) {
     e.preventDefault()
     setDragOver(false)
+    if (disabled) return
     if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
   }
 
   return (
     <div>
       <label
-        onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+        onDragOver={e => { e.preventDefault(); if (!disabled) setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         style={{
@@ -1097,7 +1289,8 @@ function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes }) {
           background: dragOver ? 'var(--c-action-light, rgba(232,30,117,0.08))' : 'var(--c-bg)',
           border: `2px dashed ${dragOver ? 'var(--c-action)' : 'var(--c-border)'}`,
           borderRadius: 'var(--radius-lg)',
-          cursor: 'pointer',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.55 : 1,
           transition: 'all 150ms cubic-bezier(0.16,1,0.3,1)',
           textAlign: 'center',
         }}
@@ -1129,6 +1322,7 @@ function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes }) {
           type="file"
           multiple
           accept=".wav,.mp3,.m4a,.aac,.mpeg"
+          disabled={disabled}
           onChange={e => { addFiles(e.target.files); e.target.value = '' }}
           style={{ display: 'none' }}
         />
@@ -1137,9 +1331,7 @@ function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes }) {
       {uploadQueue.length > 0 && (
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {uploadQueue.map(entry => {
-            const statusColor = entry.status === 'done' ? 'var(--c-success)'
-              : entry.status === 'error' ? 'var(--c-danger)'
-              : 'var(--c-text-2)'
+            const editable = !disabled && entry.stage === 'queued'
             return (
               <div key={entry.key} style={{
                 padding: 12, background: 'var(--c-bg)',
@@ -1147,38 +1339,330 @@ function UploadTab({ uploadQueue, setUploadQueue, addFiles, materialTypes }) {
                 display: 'flex', flexDirection: 'column', gap: 8,
               }}>
                 <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
                   fontSize: 11, color: 'var(--c-text-3)',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap', overflow: 'hidden',
                 }}>
-                  {entry.file.name}
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5z" />
+                    <polyline points="9 1 9 5 13 5" />
+                  </svg>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.file.name}</span>
                 </div>
                 <input
                   className="input"
                   placeholder="Título do material"
                   value={entry.title}
                   onChange={e => setUploadQueue(q => q.map(x => x.key === entry.key ? { ...x, title: e.target.value } : x))}
-                  disabled={entry.status !== 'pending'}
+                  disabled={!editable}
                 />
                 <select
                   className="input"
                   value={entry.typeId}
                   onChange={e => setUploadQueue(q => q.map(x => x.key === entry.key ? { ...x, typeId: e.target.value } : x))}
-                  disabled={entry.status !== 'pending'}
+                  disabled={!editable}
                   style={{ fontSize: 12 }}
                 >
                   <option value="">Sem tipo (opcional)</option>
                   {materialTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-                <span style={{ fontSize: 11, fontWeight: 600, color: statusColor }}>
-                  {entry.status === 'done' ? '✓ Enviado'
-                    : entry.status === 'error' ? '✕ Erro no envio'
-                    : '○ Aguardando upload'}
-                </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 600,
+                    color: entry.stage === 'error' ? 'var(--c-danger)' : 'var(--c-text-2)',
+                  }}>
+                    {entry.stage === 'error'
+                      ? `✕ ${entry.errorMsg ?? 'Erro'}`
+                      : '○ Pronto pra subir'}
+                  </span>
+                  {editable && (
+                    <button
+                      type="button"
+                      onClick={() => setUploadQueue(q => q.filter(x => x.key !== entry.key))}
+                      style={{
+                        background: 'transparent', border: 0, cursor: 'pointer',
+                        color: 'var(--c-text-3)', fontSize: 11,
+                        padding: 4,
+                      }}
+                      title="Remover da fila"
+                    >
+                      Remover
+                    </button>
+                  )}
+                </div>
               </div>
             )
           })}
         </div>
       )}
     </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * VerificationPanel — read-only progress view rendered while submitUploads is
+ * in flight (or after, if there are settled entries to inspect). Each entry
+ * shows its stage as a 5-step checklist with explicit completion states.
+ */
+function VerificationPanel({ entries, onRetryEntry, onRemoveEntry, busy }) {
+  const total = entries.length
+  const settled = entries.filter(
+    e => e.stage === 'done' || e.stage === 'removed' || e.stage === 'error',
+  ).length
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 14px',
+        background: 'var(--c-bg)',
+        border: '1px solid var(--c-border)',
+        borderRadius: 'var(--radius-md)',
+      }}>
+        <div>
+          <div style={{
+            fontSize: 10, fontWeight: 700, letterSpacing: '0.14em',
+            color: 'var(--c-text-3)', textTransform: 'uppercase',
+            fontFamily: 'var(--font-heading)',
+          }}>
+            Progresso
+          </div>
+          <div style={{
+            marginTop: 4, fontSize: 14, fontWeight: 700,
+            fontFamily: 'var(--font-heading)', color: 'var(--c-text)',
+          }}>
+            {settled} de {total} {total === 1 ? 'arquivo' : 'arquivos'}
+          </div>
+        </div>
+        <div style={{
+          width: 110, height: 4,
+          background: 'var(--c-surface-2)', borderRadius: 'var(--radius-full)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: `${total === 0 ? 0 : Math.round((settled / total) * 100)}%`,
+            height: '100%',
+            background: 'var(--c-action)',
+            transition: 'width 250ms cubic-bezier(0.16,1,0.3,1)',
+          }} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {entries.map(e => (
+          <VerificationEntryCard
+            key={e.key}
+            entry={e}
+            busy={busy}
+            onRetry={() => onRetryEntry(e.key)}
+            onRemove={() => onRemoveEntry(e.key)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const STAGE_ORDER = ['uploading', 'fingerprinting', 'verifying', 'deciding', 'linking']
+const STAGE_LABELS = {
+  uploading:      'Enviando arquivo',
+  fingerprinting: 'Gerando fingerprint',
+  verifying:      'Verificando similaridade',
+  deciding:       'Aguardando sua decisão',
+  linking:        'Vinculando à campanha',
+}
+
+function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
+  const isError = entry.stage === 'error'
+  const isDone = entry.stage === 'done'
+  const isRemoved = entry.stage === 'removed'
+  const isQueued = entry.stage === 'queued'
+  const currentIdx = STAGE_ORDER.indexOf(entry.stage)
+
+  // Border accent communicates the entry's overall state
+  let borderColor = 'var(--c-border)'
+  if (isError) borderColor = 'color-mix(in srgb, var(--c-danger) 50%, transparent)'
+  else if (isDone) borderColor = 'color-mix(in srgb, var(--c-success) 50%, transparent)'
+  else if (isRemoved) borderColor = 'color-mix(in srgb, var(--c-text-3) 35%, transparent)'
+  else if (currentIdx >= 0) borderColor = 'color-mix(in srgb, var(--c-action) 45%, transparent)'
+
+  return (
+    <div style={{
+      background: 'var(--c-surface)',
+      border: `1px solid ${borderColor}`,
+      borderRadius: 'var(--radius-md)',
+      padding: '12px 14px',
+      display: 'flex', flexDirection: 'column', gap: 10,
+    }}>
+      {/* File line */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+          background: isDone ? 'var(--c-success-light, color-mix(in srgb, var(--c-success) 14%, transparent))'
+            : isError ? 'color-mix(in srgb, var(--c-danger) 12%, transparent)'
+            : isRemoved ? 'var(--c-surface-2)'
+            : 'color-mix(in srgb, var(--c-action) 10%, transparent)',
+          color: isDone ? 'var(--c-success)'
+            : isError ? 'var(--c-danger)'
+            : isRemoved ? 'var(--c-text-3)'
+            : 'var(--c-action)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          {isDone ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 8 6.5 11.5 13 5" />
+            </svg>
+          ) : isError ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          ) : isRemoved ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 5h10M6 5V3.5h4V5M5 5l1 9h4l1-9" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5z" />
+              <polyline points="9 1 9 5 13 5" />
+            </svg>
+          )}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, fontWeight: 700,
+            fontFamily: 'var(--font-heading)', color: 'var(--c-text)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {entry.title}
+          </div>
+          <div style={{
+            fontSize: 11, color: 'var(--c-text-3)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {entry.file.name}
+          </div>
+        </div>
+        {isError && !busy && (
+          <button
+            type="button"
+            onClick={onRetry}
+            style={{
+              padding: '5px 10px', borderRadius: 'var(--radius-md)',
+              background: 'transparent',
+              border: '1px solid var(--c-border)',
+              color: 'var(--c-text-2)',
+              fontSize: 11, fontWeight: 600,
+              fontFamily: 'var(--font-heading)',
+              cursor: 'pointer',
+            }}
+          >
+            Tentar de novo
+          </button>
+        )}
+      </div>
+
+      {/* Stage list — visible only while flowing OR when settled with detail */}
+      {!isQueued && !isRemoved && !isDone && (
+        <ul style={{
+          listStyle: 'none', padding: 0, margin: 0,
+          display: 'flex', flexDirection: 'column', gap: 4,
+        }}>
+          {STAGE_ORDER.map((s, idx) => {
+            const reached = currentIdx > idx || (currentIdx === idx && !isError)
+            const isCurrent = currentIdx === idx && !isError
+            const isPassed = reached && !isCurrent
+            const isFailed = isError && idx === Math.max(0, currentIdx)
+
+            const dotColor = isFailed ? 'var(--c-danger)'
+              : isCurrent ? 'var(--c-action)'
+              : isPassed ? 'var(--c-success)'
+              : 'var(--c-text-3)'
+            const textColor = isFailed ? 'var(--c-danger)'
+              : isCurrent ? 'var(--c-text)'
+              : isPassed ? 'var(--c-text-2)'
+              : 'var(--c-text-3)'
+
+            return (
+              <li key={s} style={{
+                display: 'flex', alignItems: 'center', gap: 9,
+                fontSize: 12,
+                fontWeight: isCurrent ? 700 : 500,
+                color: textColor,
+              }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: dotColor,
+                  flexShrink: 0,
+                  animation: isCurrent ? 'wizard-stage-pulse 1.6s ease-out infinite' : undefined,
+                }} />
+                {STAGE_LABELS[s] ?? s}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {/* Settled summary line */}
+      {isDone && (
+        <div style={{
+          fontSize: 12, color: 'var(--c-success)', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          Vinculado à campanha
+        </div>
+      )}
+      {isRemoved && (
+        <div style={{
+          fontSize: 12, color: 'var(--c-text-3)', fontWeight: 500,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          Removido — não foi vinculado
+        </div>
+      )}
+      {isError && (
+        <div style={{
+          fontSize: 12, color: 'var(--c-danger)', fontWeight: 600,
+        }}>
+          {entry.errorMsg ?? 'Falha durante o processamento'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+
+function PrimaryButton({ onClick, disabled, loading, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: '9px 18px', borderRadius: 'var(--radius-md)',
+        background: disabled ? 'var(--c-surface-2)' : 'var(--c-action)',
+        color: disabled ? 'var(--c-text-3)' : '#fff',
+        border: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-heading)',
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        boxShadow: disabled ? 'none' : '0 1px 2px rgba(232,30,117,0.18)',
+        transition: 'all 100ms cubic-bezier(0.16,1,0.3,1)',
+      }}
+    >
+      {loading && (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{
+          animation: 'spin 0.8s linear infinite',
+        }}>
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeOpacity="0.3" />
+          <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+        </svg>
+      )}
+      {children}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </button>
   )
 }
