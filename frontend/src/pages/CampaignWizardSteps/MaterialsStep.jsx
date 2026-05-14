@@ -6,6 +6,7 @@ import {
 } from '../../api/hooks'
 import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
+import SimilarityWarningModal from '../../components/SimilarityWarningModal'
 
 /**
  * Step 3 of the wizard: link/upload materials to the campaign.
@@ -38,6 +39,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+      <style>{`@keyframes wizard-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
       {/* Section title + primary action */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 720 }}>
@@ -138,6 +140,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
                 type={type}
                 allTypes={materialTypes}
                 campaignStations={campaignStations}
+                materialsById={materialsById}
                 isEditingStations={isEditing}
                 onToggleStationsEdit={() =>
                   setEditingStationsFor(isEditing ? null : link.material_id)}
@@ -185,10 +188,11 @@ function fingerprintBadge(status) {
 }
 
 function MaterialCard({
-  material, link, type, allTypes, campaignStations,
+  material, link, type, allTypes, campaignStations, materialsById,
   isEditingStations, onToggleStationsEdit,
   onTypeChange, onSaveStations, onUnlink,
 }) {
+  const [showSimilarityModal, setShowSimilarityModal] = useState(false)
   const fp = fingerprintBadge(material.fingerprint_status)
   const missingType = !type
   // When the material has no type, the left border turns amber to flag the
@@ -281,6 +285,47 @@ function MaterialCard({
                 </span>
               </>
             )}
+            {material.similarity_check_status === 'pending' && (
+              <>
+                <span style={{ color: 'var(--c-text-3)' }}>·</span>
+                <span style={{
+                  padding: '2px 8px', borderRadius: 'var(--radius-full)',
+                  background: 'var(--c-surface-2)', color: 'var(--c-text-3)',
+                  fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: '50%',
+                    background: 'var(--c-text-3)',
+                    animation: 'wizard-pulse 1.2s ease-in-out infinite',
+                  }} />
+                  Analisando similaridade…
+                </span>
+              </>
+            )}
+            {material.similarity_check_status === 'ready' &&
+              material.similarity_score != null &&
+              material.similarity_score >= 0.15 &&
+              !material.similarity_acknowledged_at &&
+              materialsById && materialsById[material.most_similar_material_id] && (
+              <>
+                <span style={{ color: 'var(--c-text-3)' }}>·</span>
+                <button
+                  type="button"
+                  onClick={() => setShowSimilarityModal(true)}
+                  title="Comparar com material similar"
+                  style={{
+                    padding: '2px 8px', borderRadius: 'var(--radius-full)',
+                    background: '#fef3c7', color: '#a16207',
+                    border: 0, cursor: 'pointer',
+                    fontSize: 10, fontWeight: 700, letterSpacing: '0.03em',
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                  }}
+                >
+                  ⚠ {Math.round(material.similarity_score * 100)}% similar a "{materialsById[material.most_similar_material_id].title}"
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -368,6 +413,14 @@ function MaterialCard({
           selectedIds={link.target_stations}
           onSave={onSaveStations}
           onClose={onToggleStationsEdit}
+        />
+      )}
+
+      {showSimilarityModal && materialsById && materialsById[material.most_similar_material_id] && (
+        <SimilarityWarningModal
+          newMaterial={material}
+          similarMaterial={materialsById[material.most_similar_material_id]}
+          onClose={() => setShowSimilarityModal(false)}
         />
       )}
     </div>

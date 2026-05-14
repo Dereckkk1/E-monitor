@@ -23,6 +23,7 @@ import (
 	"radiocheck/internal/index"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/sharing"
+	"radiocheck/internal/similarity"
 	"radiocheck/internal/storage"
 	"radiocheck/internal/supervisor"
 	"radiocheck/internal/webhook"
@@ -125,6 +126,14 @@ func main() {
 		log.Fatalf("sharing subscribe: %v", err)
 	}
 	defer sharingSub.Unsubscribe() //nolint:errcheck
+
+	// Start similarity-check subscriber (per-client duplicate warning).
+	simSubscriber := similarity.NewSubscriber(pool, nc, logger)
+	simSub, err := simSubscriber.Subscribe(ctx)
+	if err != nil {
+		log.Fatalf("similarity subscribe: %v", err)
+	}
+	defer simSub.Unsubscribe() //nolint:errcheck
 
 	// Evidence service.
 	evidSvc := evidence.NewService(pool, s3Client, nc, detections, logger)
