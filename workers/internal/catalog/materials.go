@@ -23,6 +23,10 @@ type Material struct {
 	FingerprintStatus      string     `json:"fingerprint_status"`
 	FingerprintGeneratedAt *time.Time `json:"fingerprint_generated_at,omitempty"`
 	FingerprintHashCount   *int32     `json:"fingerprint_hash_count,omitempty"`
+	SimilarityCheckStatus  string     `json:"similarity_check_status"`
+	MostSimilarMaterialID  *uuid.UUID `json:"most_similar_material_id,omitempty"`
+	SimilarityScore        *float32   `json:"similarity_score,omitempty"`
+	SimilarityAckdAt       *time.Time `json:"similarity_acknowledged_at,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
@@ -49,7 +53,9 @@ type CreateMaterialInput struct {
 
 const materialColumns = `id, short_id, client_id, title, type_id, duration_seconds,
        master_storage_path, master_sha256, fingerprint_status,
-       fingerprint_generated_at, fingerprint_hash_count, created_at, updated_at`
+       fingerprint_generated_at, fingerprint_hash_count,
+       similarity_check_status, most_similar_material_id, similarity_score,
+       similarity_acknowledged_at, created_at, updated_at`
 
 func scanMaterial(row interface {
 	Scan(...any) error
@@ -57,36 +63,33 @@ func scanMaterial(row interface {
 	return row.Scan(&m.ID, &m.ShortID, &m.ClientID, &m.Title, &m.TypeID,
 		&m.DurationSeconds, &m.MasterStoragePath, &m.MasterSHA256,
 		&m.FingerprintStatus, &m.FingerprintGeneratedAt, &m.FingerprintHashCount,
-		&m.CreatedAt, &m.UpdatedAt)
+		&m.SimilarityCheckStatus, &m.MostSimilarMaterialID, &m.SimilarityScore,
+		&m.SimilarityAckdAt, &m.CreatedAt, &m.UpdatedAt)
 }
 
 // Create inserts a new material and returns the persisted row.
 func (m *Materials) Create(ctx context.Context, in CreateMaterialInput) (*Material, error) {
 	var mat Material
-	err := m.pool.QueryRow(ctx, `
+	row := m.pool.QueryRow(ctx, `
 		INSERT INTO materials (client_id, title, type_id, duration_seconds,
 		                       master_storage_path, master_sha256)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+materialColumns,
 		in.ClientID, in.Title, in.TypeID, in.DurationSeconds,
 		in.MasterStoragePath, in.MasterSHA256,
-	).Scan(&mat.ID, &mat.ShortID, &mat.ClientID, &mat.Title, &mat.TypeID,
-		&mat.DurationSeconds, &mat.MasterStoragePath, &mat.MasterSHA256,
-		&mat.FingerprintStatus, &mat.FingerprintGeneratedAt, &mat.FingerprintHashCount,
-		&mat.CreatedAt, &mat.UpdatedAt)
-	return &mat, err
+	)
+	if err := scanMaterial(row, &mat); err != nil {
+		return nil, err
+	}
+	return &mat, nil
 }
 
 // Get returns a single material by ID. Returns pgx.ErrNoRows when not found.
 func (m *Materials) Get(ctx context.Context, id uuid.UUID) (*Material, error) {
 	var mat Material
-	err := m.pool.QueryRow(ctx,
-		`SELECT `+materialColumns+` FROM materials WHERE id = $1`, id,
-	).Scan(&mat.ID, &mat.ShortID, &mat.ClientID, &mat.Title, &mat.TypeID,
-		&mat.DurationSeconds, &mat.MasterStoragePath, &mat.MasterSHA256,
-		&mat.FingerprintStatus, &mat.FingerprintGeneratedAt, &mat.FingerprintHashCount,
-		&mat.CreatedAt, &mat.UpdatedAt)
-	if err != nil {
+	row := m.pool.QueryRow(ctx,
+		`SELECT `+materialColumns+` FROM materials WHERE id = $1`, id)
+	if err := scanMaterial(row, &mat); err != nil {
 		return nil, err
 	}
 	return &mat, nil
@@ -128,6 +131,16 @@ func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.U
 // Delete removes a material by ID.
 func (m *Materials) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
+	return err
+}
+
+// Acknowledge marks the similarity warning for the given material as resolved
+// (the operator chose "Manter assim mesmo" in the UI). Idempotent — repeated
+// calls just refresh the timestamp.
+func (m *Materials) Acknowledge(ctx context.Context, id uuid.UUID) error {
+	_, err := m.pool.Exec(ctx,
+		`UPDATE materials SET similarity_acknowledged_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		id)
 	return err
 }
 
