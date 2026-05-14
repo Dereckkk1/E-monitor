@@ -56,12 +56,31 @@ const indexEligibleStatuses = `('programada', 'ativa')`
 // are found. Called once at startup.
 func (l *Loader) LoadAll(ctx context.Context) error {
 	rows, err := l.db.Query(ctx, `
+		-- Path 1: commercials (legacy + backfilled).
 		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, c.short_id
 		FROM fingerprint_hashes fh
 		JOIN commercials c  ON c.id  = fh.commercial_id
 		JOIN campaigns   ca ON ca.id = c.campaign_id
 		WHERE c.fingerprint_status = 'ready'
 		  AND ca.status IN `+indexEligibleStatuses+`
+
+		UNION ALL
+
+		-- Path 2: materials (new uploads from the campaign wizard, plus
+		-- legacy materials linked via campaign_materials). We exclude any
+		-- material whose UUID also exists in commercials to avoid duplicate
+		-- entries — those are handled by Path 1.
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, m.short_id
+		FROM fingerprint_hashes fh
+		JOIN materials m ON m.id = fh.commercial_id
+		WHERE m.fingerprint_status = 'ready'
+		  AND m.id NOT IN (SELECT id FROM commercials)
+		  AND EXISTS (
+		      SELECT 1 FROM campaign_materials cm
+		      JOIN campaigns ca ON ca.id = cm.campaign_id
+		      WHERE cm.material_id = m.id
+		        AND ca.status IN `+indexEligibleStatuses+`
+		  )
 	`)
 	if err != nil {
 		return fmt.Errorf("index loader: query fingerprint_hashes: %w", err)
@@ -99,9 +118,12 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 	return nil
 }
 
-// reloadPayload is the JSON structure expected in "index.reload" messages.
+// reloadPayload accepts both legacy commercial_id and new material_id
+// keys. Exactly one is expected to be non-empty per message; if both are
+// present, commercial_id takes precedence (matches Python daemon behavior).
 type reloadPayload struct {
-	CommercialID string `json:"commercial_id"`
+	CommercialID string `json:"commercial_id,omitempty"`
+	MaterialID   string `json:"material_id,omitempty"`
 }
 
 // Subscribe starts a NATS subscription to "index.reload".
@@ -118,45 +140,67 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			)
 			return
 		}
-		if payload.CommercialID == "" {
-			l.log.Warn("index.reload: missing commercial_id in payload")
+		if payload.CommercialID == "" && payload.MaterialID == "" {
+			l.log.Warn("index.reload: payload missing both commercial_id and material_id")
 			return
 		}
 
-		// Fetch the commercial's short_id, confirming it is ready and its
-		// campaign is in an index-eligible status (see indexEligibleStatuses).
+		var entityID string
+		var entityKind string
 		var shortID int32
-		err := l.db.QueryRow(ctx, `
-			SELECT c.short_id FROM commercials c
-			JOIN campaigns ca ON ca.id = c.campaign_id
-			WHERE c.id = $1
-			  AND c.fingerprint_status = 'ready'
-			  AND ca.status IN `+indexEligibleStatuses+`
-		`, payload.CommercialID).Scan(&shortID)
+		var err error
+		if payload.CommercialID != "" {
+			entityID = payload.CommercialID
+			entityKind = "commercial"
+			err = l.db.QueryRow(ctx, `
+				SELECT c.short_id FROM commercials c
+				JOIN campaigns ca ON ca.id = c.campaign_id
+				WHERE c.id = $1
+				  AND c.fingerprint_status = 'ready'
+				  AND ca.status IN `+indexEligibleStatuses+`
+			`, entityID).Scan(&shortID)
+		} else {
+			entityID = payload.MaterialID
+			entityKind = "material"
+			err = l.db.QueryRow(ctx, `
+				SELECT m.short_id FROM materials m
+				WHERE m.id = $1
+				  AND m.fingerprint_status = 'ready'
+				  AND m.id NOT IN (SELECT id FROM commercials)
+				  AND EXISTS (
+				      SELECT 1 FROM campaign_materials cm
+				      JOIN campaigns ca ON ca.id = cm.campaign_id
+				      WHERE cm.material_id = m.id
+				        AND ca.status IN `+indexEligibleStatuses+`
+				  )
+			`, entityID).Scan(&shortID)
+		}
 		if err != nil {
-			l.log.Warn("index.reload: commercial not found or not ready",
-				zap.String("commercial_id", payload.CommercialID),
+			l.log.Warn("index.reload: entity not eligible or not found",
+				zap.String("entity_id", entityID),
+				zap.String("kind", entityKind),
 				zap.Error(err),
 			)
 			return
 		}
 
-		// Fetch all fingerprint hashes for this commercial.
+		// Fetch all fingerprint hashes for this entity.
 		rows, err := l.db.Query(ctx, `
 			SELECT hash_value, time_frame, variant_id, rate_id, is_shared
 			FROM fingerprint_hashes
 			WHERE commercial_id = $1
-		`, payload.CommercialID)
+		`, entityID)
 		if err != nil {
 			l.log.Error("index.reload: query fingerprint_hashes failed",
-				zap.String("commercial_id", payload.CommercialID),
+				zap.String("entity_id", entityID),
+				zap.String("kind", entityKind),
 				zap.Error(err),
 			)
 			return
 		}
 		defer rows.Close()
 
-		// Collect entries for the reloaded commercial.
+		// Collect entries for the reloaded entity.
 		type hashEntry struct {
 			hash      uint32
 			timeFrame int32
@@ -173,14 +217,16 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			var isShared   bool
 			if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared); err != nil {
 				l.log.Error("index.reload: scan row failed",
-					zap.String("commercial_id", payload.CommercialID),
+					zap.String("entity_id", entityID),
+					zap.String("kind", entityKind),
 					zap.Error(err),
 				)
 				return
 			}
 			if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
 				l.log.Error("index.reload: variant_id or rate_id out of uint8 range",
-					zap.String("commercial_id", payload.CommercialID),
+					zap.String("entity_id", entityID),
+					zap.String("kind", entityKind),
 					zap.Int16("variant_id", variantID),
 					zap.Int16("rate_id", rateID),
 				)
@@ -190,7 +236,8 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		}
 		if err := rows.Err(); err != nil {
 			l.log.Error("index.reload: iterate rows failed",
-				zap.String("commercial_id", payload.CommercialID),
+				zap.String("entity_id", entityID),
+				zap.String("kind", entityKind),
 				zap.Error(err),
 			)
 			return
@@ -206,7 +253,7 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 			merged[k] = dst
 		}
 
-		// Remove all existing entries for this commercial, then add new ones.
+		// Remove all existing entries for this entity, then add new ones.
 		for k, entries := range merged {
 			filtered := entries[:0]
 			for _, e := range entries {
@@ -231,8 +278,9 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		}
 
 		l.store.Swap(merged)
-		l.log.Info("index reloaded for commercial",
-			zap.String("commercial_id", payload.CommercialID),
+		l.log.Info("index reloaded for entity",
+			zap.String("entity_id", entityID),
+			zap.String("kind", entityKind),
 			zap.Int("hashes", len(newEntries)),
 		)
 	})

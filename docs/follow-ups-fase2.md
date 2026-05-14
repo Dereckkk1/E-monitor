@@ -292,6 +292,13 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-91** — Validação "future-only edit" (§8 da spec) em `DistributionRulesHandler.Update/Delete`. Atualmente backend aceita qualquer edição; validação fica na UI. Mover pro backend antes do Plano 2.
 - **F-92** — Escape de metacaracteres LIKE (`%`, `_`, `\`) no parâmetro `q` de `Materials.ListByClient`. Atualmente vulnerável a injeção semântica (não SQL injection, mas comportamento inesperado). Sanitizar no handler layer.
 - **F-93** — `ListApplicable` em `distribution_rules.go` documentou contrato de TZ (caller deve passar SP-local-midnight). Considerar mudar assinatura pra aceitar `string` "YYYY-MM-DD" pra remover ambiguidade no runtime.
+- **F-119** — Multi-campaign attribution for materials. When a material is
+  linked to N overlapping active campaigns on the same station, the current
+  pipeline picks the most recently added link (`ORDER BY campaign_materials.added_at DESC LIMIT 1`).
+  A future enhancement should create one detection row per matching campaign
+  (or change the schema to support N:M between detection and campaign). See
+  ADR-2 in `docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md`
+  for the rationale behind the current single-attribution rule.
 
 ---
 

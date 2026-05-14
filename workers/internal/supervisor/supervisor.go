@@ -65,6 +65,7 @@ type Supervisor struct {
 	campaigns    *catalog.Campaigns
 	stations     *catalog.Stations
 	commercials  *catalog.Commercials
+	materials    *catalog.Materials
 	healthEvents *catalog.HealthEvents
 	log          *zap.Logger
 
@@ -104,6 +105,7 @@ func New(
 	campaigns *catalog.Campaigns,
 	stations *catalog.Stations,
 	commercials *catalog.Commercials,
+	materials *catalog.Materials,
 	healthEvents *catalog.HealthEvents,
 	segmentsRoot string,
 	log *zap.Logger,
@@ -116,6 +118,7 @@ func New(
 		campaigns:        campaigns,
 		stations:         stations,
 		commercials:      commercials,
+		materials:        materials,
 		healthEvents:     healthEvents,
 		segmentsRoot:     segmentsRoot,
 		log:              log,
@@ -262,12 +265,27 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		return fmt.Errorf("list ready commercials: %w", err)
 	}
 
+	// c2. Load ready materials linked to those campaigns that target this station.
+	// Materials whose UUID also exists in commercials are excluded by the
+	// catalog query — those go through the commercials path above.
+	mats, err := s.materials.ListReadyByCampaignsForStation(ctx, activeCampaignIDs, stationID)
+	if err != nil {
+		return fmt.Errorf("list ready materials: %w", err)
+	}
+
 	// d. Build WorkerConfig.
-	shortIDs := make([]int32, 0, len(coms))
-	frames := make(map[int32]int, len(coms))
+	shortIDs := make([]int32, 0, len(coms)+len(mats))
+	frames := make(map[int32]int, len(coms)+len(mats))
 	for _, c := range coms {
 		shortIDs = append(shortIDs, c.ShortID)
 		frames[c.ShortID] = totalFrames(c.DurationSeconds)
+	}
+	for _, m := range mats {
+		// The worker doesn't care whether short_id originated from commercials
+		// or materials — it just uses it as the match key against the unified
+		// in-memory index.
+		shortIDs = append(shortIDs, m.ShortID)
+		frames[m.ShortID] = totalFrames(m.DurationSeconds)
 	}
 
 	// e. Stop existing worker for this station if running.

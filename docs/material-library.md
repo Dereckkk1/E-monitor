@@ -60,6 +60,19 @@ Operador pode criar tipos customizados via `POST /v1/internal/material-types`.
 | PUT    | `/v1/internal/campaigns/{id}/materials/{mid}/stations` | Atualiza emissoras do vinculo |
 | DELETE | `/v1/internal/campaigns/{id}/materials/{mid}` | Desvincula |
 
+## Fingerprint generation
+
+Material upload publishes `fingerprint.generate` to NATS with payload
+`{"material_id": "<uuid>"}`. The Python daemon
+(`fingerprint/fingerprint/main.py`) consumes it, generates broadcast-sim
+variants + hashes, writes to `fingerprint_hashes`, and marks
+`materials.fingerprint_status = 'ready'`. Once ready, the in-memory
+matcher index hot-reloads to include the new short_id.
+
+See [`docs/material-fingerprint-pipeline.md`](material-fingerprint-pipeline.md)
+for the full flow, operational commands, and the campaign-attribution
+rule applied at detection-write time.
+
 ## Dedup
 
 A migration 0016 **nao** forca `UNIQUE(client_id, master_sha256)`. Isso e intencional — duplicatas existentes em `commercials` foram migradas como materiais separados. A interface do operador deve permitir mesclar duplicatas manualmente (funcionalidade futura). Em algum momento, constraint pode ser adicionada via migration nova apos limpeza manual. Ver follow-up F-87.

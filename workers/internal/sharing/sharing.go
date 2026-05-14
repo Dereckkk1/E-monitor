@@ -18,11 +18,13 @@ package sharing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"radiocheck/internal/fingerprint"
@@ -103,13 +105,22 @@ func init() {
 // scoring (the pre-fix behaviour), and the next Persist run picks up the
 // missed flagging.
 func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid.UUID, masterPath string) error {
-	// 1. Resolve the commercial's short_id (used to ignore self-matches when
-	//    the index already includes this commercial's own freshly-inserted
-	//    hashes).
+	// 1. Resolve the entity's short_id (used to ignore self-matches when the
+	//    index already includes its own freshly-inserted hashes). The entity
+	//    may be a commercial OR a material — try commercials first, fall back
+	//    to materials. This mirrors the rest of the pipeline (Phase 4 index
+	//    loader UNION) where backfilled materials are reached via the
+	//    commercials path and net-new materials via the materials path.
 	var shortID int32
-	if err := pool.QueryRow(ctx,
+	err := pool.QueryRow(ctx,
 		`SELECT short_id FROM commercials WHERE id = $1`, commercialID,
-	).Scan(&shortID); err != nil {
+	).Scan(&shortID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = pool.QueryRow(ctx,
+			`SELECT short_id FROM materials WHERE id = $1`, commercialID,
+		).Scan(&shortID)
+	}
+	if err != nil {
 		return fmt.Errorf("sharing: lookup short_id: %w", err)
 	}
 
@@ -347,11 +358,24 @@ func classifyAndFilter(report scanReport, subsetThreshold float64) map[uuid.UUID
 // be reactivated later, and the flag is cheap to set even if currently unused.
 func loadCatalogIndex(ctx context.Context, pool *pgxpool.Pool) (index.Index, map[int32]uuid.UUID, map[uuid.UUID]int, error) {
 	rows, err := pool.Query(ctx, `
+		-- Path 1: commercials.
 		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id,
 		       c.short_id, c.id, c.duration_seconds
 		FROM fingerprint_hashes fh
 		JOIN commercials c ON c.id = fh.commercial_id
 		WHERE c.fingerprint_status = 'ready'
+
+		UNION ALL
+
+		-- Path 2: materials (new uploads not backfilled into commercials).
+		-- Loaded regardless of campaign link status — is_shared is a permanent
+		-- property of the master, see the file-level comment above.
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id,
+		       m.short_id, m.id, m.duration_seconds
+		FROM fingerprint_hashes fh
+		JOIN materials m ON m.id = fh.commercial_id
+		WHERE m.fingerprint_status = 'ready'
+		  AND m.id NOT IN (SELECT id FROM commercials)
 	`)
 	if err != nil {
 		return nil, nil, nil, err
