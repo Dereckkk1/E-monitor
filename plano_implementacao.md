@@ -976,6 +976,62 @@ Escolhemos a versão de **maior duração** que confirmou. A lógica é: se o co
 
 Contraprova: se apenas o corte de 15s tocou, o de 30s não atinge cobertura temporal de 60% sobre 30s (porque os últimos 15s do master não estão no áudio), então só o de 15s confirma.
 
+### 9.9 Audit de Evidência Pré-Persist
+
+Camada de verificação determinística que roda **sobre o clipe de evidência salvo** (o artefato exato que vai pro cliente), executando o mesmo algoritmo de fingerprint contra o master atribuído. Garante a invariante:
+
+> Se o sistema marca uma veiculação como confirmada, o áudio salvo como evidência **tem que conter** o comercial reivindicado — verificável a posteriori sem recorrer ao stream ao vivo.
+
+**Por que existe.** O matching live opera sobre PCM em memória em janelas de 4s e o state machine confirma por acúmulo temporal. Bugs entre "live confirma" e "evidência salva no MinIO" podem se manifestar como falso positivo invisível ao algoritmo principal: janela de gravação errada, atribuição cruzada entre cortes do mesmo cliente, threshold de emissora mal calibrado, segmento extraído de momento diferente do match. O incidente UNIFIQUE 2026-05-14 expôs isso na prática — clip salvo casou com o master em score 2/cov 1% em todos os 6 variantes (ruído puro), mas a detecção foi confirmada com confidence 20%.
+
+**Onde encaixa no pipeline:**
+
+```
+state machine confirma
+  → NATS detections.pending
+  → supervisor faz §9.8 (desambiguação)
+  → NATS detections.confirmed
+  → evidence service:
+       INSERT detection (evidence_status='pending')
+       async: aguarda janela completar
+       extrai segmentos AAC do disco
+       decodifica para PCM
+       >>> AUDIT (§9.9) <<<
+       se passa  → encode m4a, upload S3, evidence_status='available'
+       se falha  → evidence_status='audit_rejected', sem upload, métrica + log
+```
+
+**Algoritmo do audit:**
+
+1. Decodificar clipe de evidência para PCM 16k mono float32 (mesmo pré-processamento do worker)
+2. Carregar do banco TODAS as hashes do master atribuído (`fingerprint_hashes WHERE commercial_id = $1`), todas variantes e rates
+3. Gerar hashes da evidência via `audio.GenerateHashes`
+4. Construir histograma de delta por (variant, rate, bin):
+   - Para cada hash da evidência que casa, incrementar bin = `(t_master - t_evid) / 2`
+   - Registrar conjunto de timestamps distintos do master por bin (pra cobertura)
+5. Pegar o pico: `(best_variant, best_rate, best_bin, peak_count)`
+6. Cobertura = `|distinct_master_times[best_bin]| / total_master_frames(best_variant, best_rate)`
+7. **Critério de aprovação:** `peak_count >= MATCH_THRESHOLD` E `cobertura >= MIN_COVERAGE`
+8. Mesmas constantes da §9.3 (MATCH_THRESHOLD=5, MIN_COVERAGE=0.4); calibração eventual por emissora fica fora de escopo desta camada — o ponto é detectar discrepância grosseira, não sintonia fina.
+
+**Custo.** Master típico tem ~19k hashes em ~6 variantes; clipe de evidência (~2min) gera ~16k hashes. Histograma é O(query_hashes × média de colisões) ≈ 100ms no caminho assíncrono que já espera ~2min pelo ffmpeg encerrar segmento. Latência adicional irrelevante.
+
+**Relação com §10 (neural).** Audit (§9.9) é **complementar, não substituto**:
+- §9.9 testa correctness operacional (o clipe salvo bate com o master atribuído?) — determinístico, barato, sem GPU.
+- §10 testa correctness semântica (é mesmo este comercial, ou é outro áudio que casualmente disparou o fingerprint?) — probabilístico, requer modelo, GPU.
+
+Audit reprova um caso → não vai pra neural, é rejeitado e basta. Audit aprova → segue fluxo normal; neural só entra se o state machine entrou em `StateUncertain` antes do audit.
+
+**Métricas (§15.1).**
+- `radiocheck_audit_attempts_total{result="passed|rejected|error"}` (counter)
+- `radiocheck_audit_score` (histograma de score do pico) — distribuição mostra se thresholds estão calibrados
+- `radiocheck_audit_coverage` (histograma de cobertura) — idem
+- `radiocheck_audit_duration_seconds` (histograma) — latência adicional
+
+**Status na detecção.** O campo `evidence_status` ganha um novo valor `audit_rejected` (além de `pending`, `available`, `failed`). A API externa de detecções filtra automaticamente `audit_rejected` (não conta como veiculação confirmada perante o cliente). O painel interno (operadores) mostra audit_rejected numa fila própria — é dado forense valioso pra calibrar thresholds e caçar bugs.
+
+**Kill switch.** Env var `AUDIT_ENABLED=false` desliga o audit (mantém comportamento pré-§9.9: aprova tudo). Default `true`. Existe pra emergência caso o audit comece a rejeitar tudo por bug — sem precisar de deploy.
+
 ---
 
 ## 10. Camada de Verificação Neural

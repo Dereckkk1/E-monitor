@@ -372,6 +372,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
+		  AND d.evidence_status <> 'audit_rejected'
 		  AND ($4::text[] IS NULL OR (
 		      SELECT bool_and(
 		          unaccent(lower(
@@ -457,6 +458,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		  AND ($2::uuid IS NULL OR d.station_id = $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
 		  AND ($4::timestamptz IS NULL OR d.detected_at <= $4)
+		  AND d.evidence_status <> 'audit_rejected'
 		ORDER BY d.detected_at DESC
 		LIMIT $5 OFFSET $6`,
 		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset)
@@ -522,6 +524,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
+		  AND d.evidence_status <> 'audit_rejected'
 		  AND ($4::text[] IS NULL OR (
 		      SELECT bool_and(
 		          unaccent(lower(
@@ -620,6 +623,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
+		  AND d.evidence_status <> 'audit_rejected'
 		  AND ($4::text[] IS NULL OR (
 		      SELECT bool_and(
 		          unaccent(lower(

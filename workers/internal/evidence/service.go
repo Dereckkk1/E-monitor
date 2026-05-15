@@ -18,8 +18,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
+	"radiocheck/internal/audit"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
+	"radiocheck/internal/metrics"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/segments"
 	"radiocheck/internal/storage"
@@ -49,6 +51,7 @@ type Service struct {
 	store      *storage.Client
 	nc         *nats.Conn
 	detections *catalog.Detections
+	auditor    *audit.Auditor // §9.9 — nil disables the pre-upload audit
 	log        *zap.Logger
 	mu         sync.RWMutex
 	// segmentDirs maps station UUIDs to the absolute filesystem directory
@@ -57,12 +60,14 @@ type Service struct {
 	segmentDirs map[uuid.UUID]string
 }
 
-// NewService constructs a ready-to-use evidence Service.
+// NewService constructs a ready-to-use evidence Service. Pass auditor=nil to
+// disable §9.9 audit (e.g. in tests, or as the AUDIT_ENABLED=false kill switch).
 func NewService(
 	db *pgxpool.Pool,
 	store *storage.Client,
 	nc *nats.Conn,
 	detections *catalog.Detections,
+	auditor *audit.Auditor,
 	log *zap.Logger,
 ) *Service {
 	return &Service{
@@ -70,6 +75,7 @@ func NewService(
 		store:       store,
 		nc:          nc,
 		detections:  detections,
+		auditor:     auditor,
 		log:         log,
 		segmentDirs: make(map[uuid.UUID]string),
 	}
@@ -224,7 +230,7 @@ func (s *Service) handle(msg *nats.Msg) {
 	// Capture the trace context so child spans (extract/encode/upload) chain
 	// under the original detection trace even though we drop the parent span
 	// before returning from handle().
-	go s.processEvidence(ctx, det.ID, det.DetectedAt, stationID, windowStart, windowEnd)
+	go s.processEvidence(ctx, det.ID, det.DetectedAt, stationID, commercialID, windowStart, windowEnd)
 }
 
 // processEvidence sleeps until the evidence window is fully captured by the
@@ -240,6 +246,7 @@ func (s *Service) processEvidence(
 	detectionID uuid.UUID,
 	detectedAt time.Time,
 	stationID uuid.UUID,
+	commercialID uuid.UUID,
 	windowStart, windowEnd time.Time,
 ) {
 	ctx := context.Background()
@@ -310,6 +317,18 @@ func (s *Service) processEvidence(
 	}
 	aacData := res.Data
 
+	// §9.9 — Audit de Evidência Pré-Persist. Decode the extracted AAC to PCM
+	// and replay fingerprint matching against the attributed master. If the
+	// audit fails the saved clip does not actually contain the master we said
+	// it does — mark the row audit_rejected, skip upload, surface metric.
+	if s.auditor != nil {
+		if s.runAuditOrReject(ctx, detectionID, detectedAt, commercialID, aacData) {
+			// runAuditOrReject already marked the detection and logged.
+			span.SetStatus(codes.Error, "audit_rejected")
+			return
+		}
+	}
+
 	_, encodeSpan := observability.Tracer().Start(ctx, "evidence.ffmpeg_encode")
 	m4aData, err := encodeToM4A(aacData, detectionID, detectedAt)
 	encodeSpan.SetAttributes(attribute.Int("bytes_in", len(aacData)), attribute.Int("bytes_out", len(m4aData)))
@@ -364,6 +383,92 @@ func traceContextFromParent(parent, child context.Context) context.Context {
 	// avoid pulling it just for this and use the observability helper to
 	// keep imports minimal.
 	return observability.PropagateTraceContext(parent, child)
+}
+
+// runAuditOrReject decodes the extracted AAC to PCM, runs §9.9 audit, and on
+// failure marks the detection's evidence_status as "audit_rejected" plus emits
+// metrics/logs. Returns true when the audit rejected (caller must abort the
+// upload path); returns false otherwise (caller continues normally).
+//
+// Audit infrastructure errors (DB unavailable, ffmpeg failure) are logged but
+// treated as "audit could not run" and the upload proceeds — the audit is a
+// safety net, not a hard dependency. Those count under result="error".
+func (s *Service) runAuditOrReject(
+	ctx context.Context,
+	detectionID uuid.UUID,
+	detectedAt time.Time,
+	commercialID uuid.UUID,
+	aacData []byte,
+) bool {
+	auditCtx, auditSpan := observability.Tracer().Start(ctx, "evidence.audit")
+	defer auditSpan.End()
+
+	pcm, err := audit.DecodeADTSToPCM(aacData)
+	if err != nil {
+		auditSpan.RecordError(err)
+		auditSpan.SetStatus(codes.Error, "decode failed")
+		s.log.Warn("evidence: audit decode failed; proceeding with upload",
+			zap.String("detection_id", detectionID.String()),
+			zap.Error(err),
+		)
+		metrics.AuditAttempts.WithLabelValues("error").Inc()
+		return false
+	}
+
+	result, err := s.auditor.AuditEvidence(auditCtx, commercialID, pcm)
+	if err != nil {
+		auditSpan.RecordError(err)
+		auditSpan.SetStatus(codes.Error, "audit run failed")
+		s.log.Warn("evidence: audit run failed; proceeding with upload",
+			zap.String("detection_id", detectionID.String()),
+			zap.String("commercial_id", commercialID.String()),
+			zap.Error(err),
+		)
+		metrics.AuditAttempts.WithLabelValues("error").Inc()
+		return false
+	}
+
+	auditSpan.SetAttributes(
+		attribute.Int("audit.score", result.Score),
+		attribute.Float64("audit.coverage", result.Coverage),
+		attribute.Int("audit.variant", int(result.VariantID)),
+		attribute.Int("audit.master_hashes", result.MasterHashes),
+		attribute.Int("audit.query_hashes", result.QueryHashes),
+		attribute.Bool("audit.passed", result.Passed),
+	)
+	metrics.AuditScore.Observe(float64(result.Score))
+	metrics.AuditCoverage.Observe(result.Coverage)
+	metrics.AuditDuration.Observe(result.Duration.Seconds())
+
+	if result.Passed {
+		metrics.AuditAttempts.WithLabelValues("passed").Inc()
+		s.log.Info("evidence: audit passed",
+			zap.String("detection_id", detectionID.String()),
+			zap.Int("score", result.Score),
+			zap.Float64("coverage", result.Coverage),
+			zap.Duration("duration", result.Duration),
+		)
+		return false
+	}
+
+	metrics.AuditAttempts.WithLabelValues("rejected").Inc()
+	s.log.Warn("evidence: audit REJECTED — clip does not match master",
+		zap.String("detection_id", detectionID.String()),
+		zap.String("commercial_id", commercialID.String()),
+		zap.Int("score", result.Score),
+		zap.Int("min_score", audit.DefaultMinScore),
+		zap.Float64("coverage", result.Coverage),
+		zap.Float64("min_coverage", audit.DefaultMinCoverage),
+		zap.Int("master_hashes", result.MasterHashes),
+		zap.Int("query_hashes", result.QueryHashes),
+	)
+	if err := s.detections.UpdateEvidence(ctx, detectionID, detectedAt, "audit_rejected", "", 0); err != nil {
+		s.log.Error("evidence: failed to mark audit_rejected",
+			zap.String("detection_id", detectionID.String()),
+			zap.Error(err),
+		)
+	}
+	return true
 }
 
 func (s *Service) markFailed(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time, reason string) {

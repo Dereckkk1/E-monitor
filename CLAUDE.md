@@ -148,7 +148,8 @@ Use estes links para ir direto à seção relevante em vez de ler o arquivo inte
 | [§9.6 Cobertura Temporal](plano_implementacao.md#L928) | 928 | Cálculo de cobertura para confirmação |
 | [§9.7 Matching Multi-Rate](plano_implementacao.md#L950) | 950 | Tolerância a time stretching (R8) |
 | [§9.8 Desambiguação de Versões](plano_implementacao.md#L962) | 962 | Escolha entre cortes do mesmo comercial (R20) |
-| [§10 Verificação Neural](plano_implementacao.md#L981) | 981 | Camada de verificação por embeddings neurais |
+| [§9.9 Audit de Evidência Pré-Persist](plano_implementacao.md#L979) | 979 | Re-fingerprint do clipe salvo × master antes de marcar veiculação como confirmada |
+| [§10 Verificação Neural](plano_implementacao.md#L1037) | 1037 | Camada de verificação por embeddings neurais |
 | [§10.1 Quando Ativar](plano_implementacao.md#L985) | 985 | Condições para uso da camada neural |
 | [§10.2 Modelo](plano_implementacao.md#L995) | 995 | Modelo de embedding usado |
 | [§10.3 Pipeline](plano_implementacao.md#L1001) | 1001 | Pipeline de verificação neural |
