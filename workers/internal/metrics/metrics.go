@@ -202,6 +202,40 @@ var (
 		Name: "radiocheck_match_disambiguation_total",
 		Help: "Detections affected by §18.2.2 version disambiguation, by action.",
 	}, []string{"action"}) // suppressed | retracted
+
+	// ── §9.9 Audit de Evidência Pré-Persist ────────────────────────────
+	// AuditAttempts counts each audit run by outcome:
+	//   passed   — saved clip matches master, detection is kept
+	//   rejected — saved clip does NOT match master, evidence_status='audit_rejected'
+	//   error    — audit infra failure (DB/ffmpeg); upload proceeded as if disabled
+	AuditAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_audit_attempts_total",
+		Help: "Pre-persist audit runs by outcome (passed|rejected|error).",
+	}, []string{"result"})
+
+	// AuditScore tracks the histogram peak count produced by each audit.
+	// Buckets chosen to span noise (1–3) through clean matches (10–100).
+	AuditScore = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "radiocheck_audit_score",
+		Help:    "Peak histogram score from §9.9 audit (higher = stronger match).",
+		Buckets: []float64{1, 2, 3, 5, 8, 12, 20, 40, 80, 160},
+	})
+
+	// AuditCoverage tracks the fraction of master frames present in the
+	// winning delta bin (the §9.6 "temporal coverage" calculated post-hoc
+	// on the saved clip).
+	AuditCoverage = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "radiocheck_audit_coverage",
+		Help:    "Coverage (distinct master frames / total) from §9.9 audit.",
+		Buckets: []float64{0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9},
+	})
+
+	// AuditDuration tracks audit latency on the async evidence path.
+	AuditDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "radiocheck_audit_duration_seconds",
+		Help:    "Wall-clock duration of §9.9 audit (decode + hashes + histogram).",
+		Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+	})
 )
 
 func init() {
@@ -219,5 +253,6 @@ func init() {
 		WorkerCommercials, WorkerReconcileRuns,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 		MatchDisambiguation,
+		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
 	)
 }

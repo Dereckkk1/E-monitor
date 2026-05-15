@@ -13,6 +13,7 @@ import (
 
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
+	"radiocheck/internal/audit"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/calibration"
 	"radiocheck/internal/catalog"
@@ -135,8 +136,19 @@ func main() {
 	}
 	defer simSub.Unsubscribe() //nolint:errcheck
 
+	// §9.9 Audit. Default ON; set AUDIT_ENABLED=false to bypass (kill switch
+	// for emergencies — see plano §9.9). Nil auditor means evidence.Service
+	// skips the audit step entirely.
+	var auditor *audit.Auditor
+	if os.Getenv("AUDIT_ENABLED") != "false" {
+		auditor = audit.NewAuditor(pool, logger, 0, 0) // 0,0 → use §9.3 defaults
+		logger.Info("audit enabled (§9.9 pre-persist evidence audit)")
+	} else {
+		logger.Warn("audit DISABLED via AUDIT_ENABLED=false — all detections will be persisted regardless of evidence quality")
+	}
+
 	// Evidence service.
-	evidSvc := evidence.NewService(pool, s3Client, nc, detections, logger)
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, auditor, logger)
 	evidSub, err := evidSvc.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("evidence subscribe: %v", err)
