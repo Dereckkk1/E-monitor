@@ -7,11 +7,14 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"radiocheck/internal/users"
 )
 
 type Claims struct {
-	UserID uuid.UUID `json:"user_id"`
-	Role   string    `json:"role"`
+	UserID   uuid.UUID  `json:"user_id"`
+	Role     string     `json:"role"`
+	ClientID *uuid.UUID `json:"client_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -23,14 +26,17 @@ func getSecret() ([]byte, error) {
 	return []byte(s), nil
 }
 
-func IssueToken(userID uuid.UUID, role string) (string, error) {
+// IssueTokenForUser gera o JWT a partir de uma struct users.User. Inclui
+// o claim client_id quando o user é viewer; nil caso contrário.
+func IssueTokenForUser(u *users.User) (string, error) {
 	secret, err := getSecret()
 	if err != nil {
 		return "", err
 	}
 	claims := Claims{
-		UserID: userID,
-		Role:   role,
+		UserID:   u.ID,
+		Role:     u.Role,
+		ClientID: u.ClientID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -38,6 +44,14 @@ func IssueToken(userID uuid.UUID, role string) (string, error) {
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return tok.SignedString(secret)
+}
+
+// IssueToken é mantido para compatibilidade com bootstrap.go e testes
+// legados. Não inclui client_id — admin/operator nunca tem.
+//
+// Deprecated: use IssueTokenForUser.
+func IssueToken(userID uuid.UUID, role string) (string, error) {
+	return IssueTokenForUser(&users.User{ID: userID, Role: role})
 }
 
 func ParseToken(tokenStr string) (*Claims, error) {

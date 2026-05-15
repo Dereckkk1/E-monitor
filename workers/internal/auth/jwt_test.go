@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"radiocheck/internal/auth"
+	"radiocheck/internal/users"
 )
 
 func TestJWT_RoundTrip(t *testing.T) {
@@ -64,4 +65,44 @@ func TestJWT_ExpiredToken(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = auth.ParseToken(signed)
 	assert.Error(t, err)
+}
+
+func TestJWT_IssueTokenForUser_Viewer(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-32-chars-minimum!!!!")
+	uid := uuid.New()
+	cid := uuid.New()
+	tok, err := auth.IssueTokenForUser(&users.User{
+		ID: uid, Role: "viewer", ClientID: &cid,
+	})
+	assert.NoError(t, err)
+	c, err := auth.ParseToken(tok)
+	assert.NoError(t, err)
+	assert.Equal(t, uid, c.UserID)
+	assert.Equal(t, "viewer", c.Role)
+	if assert.NotNil(t, c.ClientID) {
+		assert.Equal(t, cid, *c.ClientID)
+	}
+}
+
+func TestJWT_IssueTokenForUser_AdminHasNilClientID(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-32-chars-minimum!!!!")
+	tok, err := auth.IssueTokenForUser(&users.User{
+		ID: uuid.New(), Role: "admin",
+	})
+	assert.NoError(t, err)
+	c, err := auth.ParseToken(tok)
+	assert.NoError(t, err)
+	assert.Nil(t, c.ClientID)
+}
+
+func TestJWT_IssueToken_BackwardsCompat_NoClientID(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-32-chars-minimum!!!!")
+	id := uuid.New()
+	tok, err := auth.IssueToken(id, "admin")
+	assert.NoError(t, err)
+	c, err := auth.ParseToken(tok)
+	assert.NoError(t, err)
+	assert.Equal(t, id, c.UserID)
+	assert.Equal(t, "admin", c.Role)
+	assert.Nil(t, c.ClientID, "legacy IssueToken should not set ClientID")
 }
