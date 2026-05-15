@@ -95,6 +95,10 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (*User, error) {
 
 // UpdateInput permite mudar campos opcionais. Pointer == nil → não muda.
 // Email é imutável (decisão da P6 do spec).
+//
+// Prioridade entre client_id: se ClearClient=true, ClientID é IGNORADO
+// (a coluna vira NULL). Pra atribuir um cliente novo, deixe ClearClient=false
+// e passe ClientID != nil.
 type UpdateInput struct {
 	Name        *string
 	Phone       *string
@@ -169,6 +173,10 @@ func (r *Repo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 }
 
 // TouchLastLogin atualiza last_login_at = NOW().
+//
+// Não checa RowsAffected porque é chamado apenas pelo handler de login
+// imediatamente após GetByEmail bem-sucedido — a linha é garantidamente
+// existente. Erros de pool ainda são propagados.
 func (r *Repo) TouchLastLogin(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE users SET last_login_at = NOW() WHERE id = $1`, id)
