@@ -1,3 +1,5 @@
+BEGIN;
+
 -- Reverte indexes/constraints novos
 DROP INDEX IF EXISTS idx_users_email_active;
 DROP INDEX IF EXISTS idx_users_active;
@@ -17,3 +19,5 @@ ALTER TABLE users
   DROP COLUMN IF EXISTS phone,
   DROP COLUMN IF EXISTS name,
   DROP COLUMN IF EXISTS client_id;
+
+COMMIT;
