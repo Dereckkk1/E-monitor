@@ -64,33 +64,39 @@ export default function StationsStep({ campaignId, allStations, currentSelection
 
   // Save with debounce (not on every keystroke).
   //
-  // Two hydration guards prevent data loss when `allStations` arrives later
-  // than the auto-save's 500ms window — without these the selectedOpts
-  // initializer (which uses `allStations.find`) starts empty and the effect
-  // would auto-save target_stations=[] over a populated list:
+  // The hydration guard skips when `allStations` hasn't loaded yet —
+  // without it, the selectedOpts initializer (which uses `allStations.find`)
+  // starts empty and the effect would auto-save target_stations=[] over a
+  // populated list.
   //
-  //   1. Skip when `allStations` hasn't loaded yet.
-  //   2. Skip when one or more ids in `currentSelection` aren't in
-  //      `allStations` — that's a hydration race, not a user-initiated
-  //      removal. The save will fire on the next render once allStations
-  //      is complete and selectedOpts re-syncs.
+  // `unresolved` carries any currentSelection ids that aren't in
+  // `allStations` — usually a station that was deleted (target_stations is
+  // a plain UUID[] without a FK, so refs can orphan) or one beyond the
+  // limit=2000 window. Since the PUT replaces target_stations wholesale,
+  // we must include those ids in the payload, otherwise toggling any
+  // VISIBLE station would silently drop the invisible orphans. This also
+  // replaces the previous `allCurrentResolved` guard (e7b9745), which
+  // bricked the form forever when an orphan existed: the guard would
+  // assume "hydration in progress" and abort every save indefinitely.
   useEffect(() => {
     if (!campaignId) return
     if (!allStations || allStations.length === 0) return
-    const ids = selectedOpts.map(o => o.value)
-    const sameAsCurrent = ids.length === currentSelection.length &&
-      ids.every(id => currentSelection.includes(id))
+    const visibleIds = selectedOpts.map(o => o.value)
+    const unresolved = currentSelection.filter(
+      id => !allStations.some(s => s.id === id)
+    )
+    const fullIds = unresolved.length === 0
+      ? visibleIds
+      : [...visibleIds, ...unresolved]
+    const sameAsCurrent = fullIds.length === currentSelection.length &&
+      fullIds.every(id => currentSelection.includes(id))
     if (sameAsCurrent) {
       pendingSaveRef.current = null
       return
     }
-    const allCurrentResolved = currentSelection.every(
-      id => allStations.some(s => s.id === id)
-    )
-    if (!allCurrentResolved) return
-    pendingSaveRef.current = { campaignId, ids }
+    pendingSaveRef.current = { campaignId, ids: fullIds }
     const t = setTimeout(() => {
-      updateCampaign.mutate({ id: campaignId, targetStations: ids })
+      updateCampaign.mutate({ id: campaignId, targetStations: fullIds })
       pendingSaveRef.current = null
     }, 500)
     return () => clearTimeout(t)
