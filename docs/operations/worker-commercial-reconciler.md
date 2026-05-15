@@ -5,17 +5,24 @@ codigo-relacionado:
   - workers/internal/supervisor/reconcile.go
   - workers/internal/supervisor/supervisor.go
   - workers/internal/supervisor/station_changes.go
+  - workers/internal/ingestor/worker.go
   - workers/internal/index/loader.go
   - workers/internal/api/handlers/campaigns.go
+  - workers/internal/api/handlers/stations.go
   - workers/internal/metrics/metrics.go
 ---
 
-# Worker commercial reconciler
+# Worker reconciler
 
 > **Em uma linha:** o supervisor checa a cada 30s se a lista de comerciais
-> carregada por cada worker bate com o que está no banco. Se não bate,
-> reinicia o worker. Existe pra impedir que o sistema fique cego para um
-> comercial sem ninguém perceber.
+> **e** a `stream_url` que cada worker está usando batem com o que está no
+> banco. Se algum dos dois divergiu, reinicia o worker. Existe pra impedir
+> que o sistema fique cego para um comercial novo ou pra uma URL atualizada
+> sem ninguém perceber.
+>
+> O nome do arquivo é histórico ("commercial-reconciler"): a versão original
+> só reconciliava comerciais; a partir de 2026-05-15 também reconcilia
+> `stream_url`. A goroutine no código se chama `runWorkerReconciler`.
 
 ## Por que isso existe
 
@@ -44,18 +51,43 @@ A arquitetura tinha três fragilidades encadeadas:
 
 A cada 30 segundos, para cada worker em execução:
 
-1. Chama `ListReadyByCampaignsForStation(activeCampaigns, station)` no banco.
-2. Compara o set de `short_id` resultante com `worker.CommercialShortIDs()`.
-3. Se forem iguais → atualiza a métrica `radiocheck_worker_commercials` com a
-   contagem corrente e dorme até o próximo tick.
-4. Se forem diferentes → loga `supervisor.reconcile: commercial list drift`
-   com o diff, cancela o context do worker, remove do mapa e respawna via
-   `startStationWorker(stationID)`. O reconciler atual termina; o worker novo
-   spawna o seu próprio.
+1. Chama `stations.Get(stationID)` pra obter a `stream_url` atual.
+2. Chama `ListReadyByCampaignsForStation(activeCampaigns, station)` pra obter
+   o set de `short_id` (comerciais + materiais) que o worker deveria estar
+   matcheando.
+3. Compara `(station.StreamURL, wantedIDs)` com
+   `(worker.StreamURL(), worker.CommercialShortIDs())` via
+   [`reconcileReason`](../../workers/internal/supervisor/reconcile.go).
+4. Se a função retornar string vazia → atualiza a métrica
+   `radiocheck_worker_commercials` com a contagem corrente e dorme até o
+   próximo tick.
+5. Caso contrário → loga `supervisor.reconcile: drift detected — restarting
+   worker` com o motivo (`"stream_url changed"`, `"commercial list changed"`
+   ou `"stream_url and commercial list changed"`), cancela o context do
+   worker, remove do mapa e respawna via `startStationWorker(stationID)`. O
+   reconciler atual termina; o worker novo spawna o seu próprio.
 
-A comparação é insensível a ordem (os SELECTs não têm `ORDER BY`) e a
-duplicatas (são tratadas como o mesmo elemento). Veja
+A comparação de comerciais é insensível a ordem (os SELECTs não têm
+`ORDER BY`) e a duplicatas (são tratadas como o mesmo elemento). Veja
 [`reconcile.go::commercialSetEqual`](../../workers/internal/supervisor/reconcile.go).
+
+### Por que a URL drift também vive aqui
+
+A `stream_url` é congelada na `WorkerConfig` no momento em que
+`startStationWorker` lê o banco — exatamente o mesmo padrão de snapshot que
+deu origem ao incidente 2026-05-08 com comerciais. Quando um operador edita
+`stream_url` via `PUT /v1/internal/stations/{id}`, o handler escreve no
+banco mas não dispara reload do worker. O ffmpeg continua tentando reconnect
+na URL antiga indefinidamente, nunca produz PCM válido e o sistema mostra a
+emissora vermelha em `/monitoring` enquanto o botão de play em `/stations`
+(que lê a URL fresca do banco) funciona normalmente.
+
+Estender o reconciler em vez de criar um caminho push novo no handler é a
+escolha arquitetural deliberada — o reconciler já é a **rede de segurança
+de convergência banco↔worker** e o comentário histórico em [`reconcile.go`](../../workers/internal/supervisor/reconcile.go)
+documenta que tentativas anteriores de "Reload via handler" silenciaram
+erros e mascararam bugs. Aceitar latência de até 30s pra uma operação que é
+raríssima (operador editando URL) é um trade-off explícito.
 
 ## Janela de detecção perdida
 
@@ -108,19 +140,25 @@ rate(radiocheck_worker_reconcile_runs_total{outcome="restarted"}[5m]) > 0.05
 - **Constante de intervalo:**
   [`reconcileInterval` em `reconcile.go`](../../workers/internal/supervisor/reconcile.go).
   Pinned por teste em `reconcile_test.go::TestReconcileInterval_Constant`.
-- **Comparador:**
+- **Decisão de restart:**
+  [`reconcileReason` em `reconcile.go`](../../workers/internal/supervisor/reconcile.go).
+  Função pura que recebe `(currentURL, wantedURL, currentIDs, wantedIDs)` e
+  retorna string com o motivo (vazia = não restartar). Coberto por
+  `reconcile_test.go::TestReconcileReason`.
+- **Comparador de comerciais:**
   [`commercialSetEqual` em `reconcile.go`](../../workers/internal/supervisor/reconcile.go).
   Coberto por `reconcile_test.go::TestCommercialSetEqual` (10 cenários
   incluindo nil/empty, ordem, duplicata, sub/super-set).
 - **Goroutine spawnada por worker:**
-  `runCommercialReconciler` é chamada dentro de `startStationWorker`
+  `runWorkerReconciler` é chamada dentro de `startStationWorker`
   ([`supervisor.go`](../../workers/internal/supervisor/supervisor.go)) ao lado
   do stall watchdog e do threshold refresher. Mesmo padrão de cancelamento:
   `workerCtx.Done()` → exit.
-- **Snapshot da lista para comparação:**
-  `Worker.CommercialShortIDs()` em
-  [`ingestor/worker.go`](../../workers/internal/ingestor/worker.go).
-  Retorna cópia — chamadores podem mutar livremente.
+- **Snapshots da configuração para comparação:**
+  [`Worker.CommercialShortIDs()`](../../workers/internal/ingestor/worker.go)
+  e [`Worker.StreamURL()`](../../workers/internal/ingestor/worker.go) em
+  `ingestor/worker.go`. Os getters retornam cópia/string imutável — o
+  reconciler pode mutar livremente.
 
 ## Defesas em cima do reconciler
 
@@ -222,11 +260,43 @@ faz UPDATE + diff + start/stop incremental sem nunca mudar o status. Ver
 [`workers/internal/supervisor/station_changes.go`](../../workers/internal/supervisor/station_changes.go)
 e [`docs/campaign-lifecycle.md`](../architecture/campaign-lifecycle.md#edição-de-target_stations-em-campanha-ativa).
 
+## Stall watchdog complementar
+
+O reconciler resolve drift de **configuração** (URL ou lista de comerciais).
+O stall watchdog (no mesmo `supervisor.go`) resolve drift de **execução** —
+um worker vivo mas mudo. Os dois andam juntos: sem stall watchdog, um worker
+que nunca conseguiu pegar PCM (URL morta no boot, DNS NXDOMAIN, 410 Gone)
+ficaria zombificado sem nada pra cutucar.
+
+A regra é a função pura
+[`isStalled`](../../workers/internal/supervisor/supervisor.go):
+
+| Cenário | Decisão |
+|---------|---------|
+| `last` definido, `time.Since(last) > 60s` | stalled — restart |
+| `last` zero, `time.Since(startedAt) > stallStartupGrace` (2min) | stalled — restart |
+| `last` zero, dentro da grace | não stalled |
+| `last` recente (≤60s) | não stalled |
+
+`stallStartupGrace = 2 * time.Minute` é o critério novo (2026-05-15). Antes
+desse fix, a watchdog tinha `if last.IsZero() || time.Since(last) <= 60*time.Second { continue }`
+— qualquer worker que nunca produziu PCM era ignorado pra sempre. Isso
+combinou com a snapshot de URL pra criar zumbis silenciosos: worker subia,
+ffmpeg falhava em conectar na URL antiga, `LastPCMAt` permanecia zero, o
+watchdog pulava o restart eternamente, o reconciler de comerciais não tinha
+motivo pra restart (lista não mudou), e a URL nova no banco era invisível.
+Pinned por `stall_watchdog_test.go::TestIsStalled` e
+`TestStallStartupGrace_Constant`.
+
+Cooldown de 2 minutos entre restarts consecutivos do mesmo worker continua
+existindo no `runStallWatchdog` — protege contra restart loops quando o
+stream tá legitimamente fora do ar (aí o reconnect backoff interno do
+worker é o mecanismo certo, não o restart).
+
 ## Não objetivos
 
 O reconciler **não** corrige:
 
-- Streams caídas (isso é o stall watchdog + reconnect backoff).
 - Threshold desincronizado com calibração (é o threshold refresher).
 - Comercial com `fingerprint_status != 'ready'` — esses ficam fora de
   `ListReadyByCampaignsForStation` por design; é a calibração/fingerprint

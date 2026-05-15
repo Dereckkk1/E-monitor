@@ -72,7 +72,7 @@ docs/
 | [calibration.md](operations/calibration.md) | Scheduler de calibração (initial 7d + recurring 24h) + advisory lock |
 | [threshold-dynamic.md](operations/threshold-dynamic.md) | 3 caminhos que atualizam MatchThreshold atômico |
 | [simulacao-radio.md](operations/simulacao-radio.md) | Simulador ffmpeg com 5 presets (fm-hifi → bad-stream) |
-| [worker-commercial-reconciler.md](operations/worker-commercial-reconciler.md) | Reconciler 30s que detecta drift de lista de comerciais |
+| [worker-commercial-reconciler.md](operations/worker-commercial-reconciler.md) | Reconciler 30s que detecta drift de stream_url e lista de comerciais + stall watchdog com grace de startup |
 | [backup-and-retention.md](operations/backup-and-retention.md) | ⚠️ doc parcialmente desatualizado — descreve pg_basebackup, código usa pg_dump |
 | [data-durability.md](operations/data-durability.md) | Modelo de ameaças + 5 camadas de defesa (bind mount, R2, snapshot GCP, alerta, drill) |
 
@@ -83,6 +83,7 @@ docs/
 | [incident-2026-05-09-jingle-falsepos.md](incidents/incident-2026-05-09-jingle-falsepos.md) | 2026-05-09 | Falso-positivo + saga F-108 v1→v2→v3 do algoritmo shared-hash |
 | [incident-2026-05-12-pgdata-loss.md](incidents/incident-2026-05-12-pgdata-loss.md) | 2026-05-12 | Quase-perda do pgdata via `--force-recreate` + bind mount salvou o dado |
 | [state-2026-05-12.md](incidents/state-2026-05-12.md) | 2026-05-12 | Snapshot handoff do final do dia (legado, contexto histórico) |
+| [incident-2026-05-15-stream-url-snapshot.md](incidents/incident-2026-05-15-stream-url-snapshot.md) | 2026-05-15 | Workers presos em stream_url antiga — snapshot pattern + stall watchdog ignorava zumbi sem PCM |
 
 ## `roadmap/` — follow-ups e planos de fase
 

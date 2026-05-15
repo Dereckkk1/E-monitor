@@ -265,7 +265,7 @@ docs/
 | OpenTelemetry, Jaeger, spans | [docs/operations/tracing.md](docs/operations/tracing.md) |
 | Dashboards Grafana, métricas | [docs/operations/dashboards.md](docs/operations/dashboards.md) |
 | Calibração de threshold | [docs/operations/calibration.md](docs/operations/calibration.md) + [docs/operations/threshold-dynamic.md](docs/operations/threshold-dynamic.md) |
-| Worker, lista de comerciais, ingestão | [docs/operations/worker-commercial-reconciler.md](docs/operations/worker-commercial-reconciler.md) (incidente 2026-05-08) |
+| Worker reconciler (stream_url + comerciais) + stall watchdog | [docs/operations/worker-commercial-reconciler.md](docs/operations/worker-commercial-reconciler.md) (incidentes 2026-05-08 e 2026-05-15) |
 | Algoritmo de fingerprint / pipeline offline | [docs/architecture/fingerprint-pipeline.md](docs/architecture/fingerprint-pipeline.md) |
 | Algoritmo `shared-hash` (subset vs sting vs skip <10s) | [docs/architecture/shared-hash-detection.md](docs/architecture/shared-hash-detection.md) (incidentes 2026-05-09/12) |
 | Ciclo de vida de campanha (programada/ativa/concluida/cancelada) | [docs/architecture/campaign-lifecycle.md](docs/architecture/campaign-lifecycle.md) |

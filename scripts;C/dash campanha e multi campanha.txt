@@ -1,7 +1,11 @@
 dash campanha e multi campanha
+
 relatorio de erros (relatorio-cammpanha.pages.dev)
+
 usuarios
 - admin
 - operador
 - cliente
-arruma campanha
+
+-- - aparecer o periodo da campanha junto com o nome
+-- atualizar os links dos workers dinamicamente
