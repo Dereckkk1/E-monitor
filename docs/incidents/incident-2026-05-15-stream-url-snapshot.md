@@ -3,6 +3,7 @@ status: implementado
 ultima-verificacao: 2026-05-15
 codigo-relacionado:
   - workers/internal/ingestor/worker.go
+  - workers/internal/ingestor/ffmpeg.go
   - workers/internal/supervisor/reconcile.go
   - workers/internal/supervisor/supervisor.go
   - workers/internal/supervisor/stall_watchdog_test.go
@@ -10,6 +11,8 @@ codigo-relacionado:
   - workers/internal/ingestor/worker_test.go
   # data-do-incidente: 2026-05-15
   # contexto: relatado pelo usuário durante operação, sem ticket externo
+  # ondas: 1) snapshot pattern + stall watchdog ignorava zumbi (manhã)
+  #        2) ADTS segment muxer rejeita streams não-AAC (tarde, mesmo dia)
 ---
 
 # Workers presos na URL antiga após edição de emissora — snapshot pattern + zumbi sem PCM
@@ -168,6 +171,83 @@ docker compose -f infra/docker/docker-compose.yml \
 - **2026-05-15, ~13:30**: fix implementado com TDD, todos os testes
   passando localmente.
 
+## Segunda onda — ADTS segment muxer rejeita streams não-AAC
+
+Após o deploy da primeira onda, o usuário relatou que 9 emissoras
+continuavam vermelhas em `/monitoring` (com `LastPCMAt` zerado) embora o
+botão de play em `/stations` tocasse normal. Inspeção dos logs mostrou que
+o stall watchdog estava reiniciando essas 9 workers a cada 2 minutos —
+provando que a primeira onda funcionou (zumbis não ficam mais presos), mas
+revelando que cada restart caía no mesmo erro de inicialização.
+
+### Causa raiz
+
+O pipeline ffmpeg do worker emite dois outputs em paralelo: PCM via
+`pipe:3` (matcher) e ADTS-AAC via segment muxer em disco (evidência §11).
+A flag `-segment_format adts` instrui o muxer a usar o container ADTS, que
+é específico do codec AAC. Streams **MP3** (que são a maioria do parque de
+rádios brasileiro) crashavam imediatamente na inicialização:
+
+```
+[adts @ 0x...] Only AAC streams can be muxed by the ADTS muxer
+[out#0/segment @ 0x...] Could not write header (incorrect codec parameters?)
+Error opening output file ...
+```
+
+Confirmado em `2026-05-15` testando manualmente com o comando exato do
+worker contra `https://playerservices.streamtheworld.com/api/livestream-redirect/MIXFM_JOAOPESSOA.mp3`
+(MP3 96k). O `-c:a copy` propaga o MP3 pro muxer, que rejeita o codec.
+
+Por que demorou pra aparecer: o sistema sempre teve esse bug, mas ficou
+latente até a primeira onda (snapshot pattern) expor zumbis em massa. Antes
+disso, as estações eram pacientemente reiniciadas pelo stall watchdog…
+exceto que o stall watchdog ignorava workers com `LastPCMAt.IsZero()`, e
+esses workers MP3 nunca conseguiam emitir um único frame PCM antes do
+ffmpeg morrer. Resultado: ficavam zumbis indefinidos, e ninguém via a
+correlação.
+
+### Fix
+
+Adicionado em [`workers/internal/ingestor/ffmpeg.go`](../../workers/internal/ingestor/ffmpeg.go):
+
+1. **`ProbeAudioCodec(ctx, url)`** — chama `ffprobe -show_streams -select_streams a:0`
+   com timeout de 8s e User-Agent espelhando o do live para detectar o
+   codec antes do `ffmpeg`. Falha de probe (timeout, parse, sem stream)
+   retorna string vazia, tratada como "unknown".
+2. **`pickSegmentAudioArgs(codec)`** — função pura, testada por tabela:
+   - `aac` → `-c:a copy` (comportamento anterior, zero overhead)
+   - qualquer outro (mp3, opus, vorbis, …, ou `""` unknown) →
+     `-c:a aac -b:a 128k` (re-encode pra AAC LC, que o ADTS muxer aceita)
+3. `StartFFmpeg` chama o probe pré-flight e splica `audioCodecArgs` no
+   comando. Mantém TUDO o resto inalterado — extensão `.aac` dos
+   arquivos de evidência, audit §9.9, presigned URLs e retenção continuam
+   funcionando idênticos porque a saída em disco sempre é ADTS-AAC.
+
+Custo CPU: ~3% de 1 core por worker MP3 (encoder AAC LC a 128k é leve).
+Streams AAC nativas continuam zero overhead via `-c:a copy`.
+
+Pinned por `worker_test.go::TestPickSegmentAudioArgs` (6 cenários: AAC
+em ambos os cases, MP3, Opus, Vorbis, codec vazio/desconhecido).
+
+### Por que NÃO trocar pra mpegts
+
+A opção alternativa era `-segment_format mpegts` (TS aceita qualquer
+codec). Foi descartada porque:
+
+- Mudaria a extensão dos arquivos de evidência de `.aac` pra `.ts`,
+  quebrando glob/leitura em audit §9.9, presigned URLs e — pior — o
+  player de evidência do frontend (browsers reproduzem `<audio src=".aac">`
+  nativamente; `.ts` precisa de hls.js).
+- Adicionaria 5-10% de overhead de container (TS é mais "gordo" que ADTS).
+- Re-encode pra AAC LC é a abordagem padrão da indústria pra esse exato
+  caso e tem custo aceitável.
+
+A opção de detectar formato e usar muxer dinâmico (`adts` p/ AAC,
+`mp3` p/ MP3, `mpegts` p/ resto) foi rejeitada pelo mesmo motivo: força
+mudanças em ≥5 outros lugares (segments, presigned URLs, retention, audit,
+frontend player) pra uma optimização CPU que economiza ~3% por worker MP3.
+Trade-off ruim — fiquei no caminho cirúrgico de re-encode condicional.
+
 ## Follow-ups
 
 - **F-122 (recomendado)**: cobrir o bug correlato em
@@ -185,6 +265,18 @@ docker compose -f infra/docker/docker-compose.yml \
   ninguém é notificado se isso vira loop (URL morta de verdade) —
   expor `radiocheck_worker_zero_pcm_total` ou alertar em
   `rate(radiocheck_worker_stall_restarts_total[5m]) > 0.01`.
+
+- **F-125 (cosmético)**: o painel "Workers em alerta" mostra "último PCM
+  há 739750d" pra workers com `LastPCMAt` zerado. Isso é o frontend
+  interpretando `time.Time{}` (year 0001) como timestamp absoluto e
+  calculando `Date.now() - lastPcmAt` = ~739k dias. Deveria detectar
+  timestamp zerado e mostrar "Aguardando primeiro sinal" ou similar.
+
+- **F-126 (qualidade)**: validação na criação/edição de emissora —
+  fazer um `ffprobe` pré-cadastro pra (a) detectar URLs que retornam 403
+  (URL stale do streamtheworld ou User-Agent gate) e (b) registrar o
+  codec do stream junto com a row da emissora. Permite que o operador
+  veja na UI "essa URL não responde" antes de salvar e gerar zumbi.
 
 - **Teste pré-existente flaky (não relacionado)**:
   `internal/catalog/TestBuildDailySummary_WithDowntime` falha quando

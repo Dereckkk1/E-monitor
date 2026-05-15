@@ -2,13 +2,88 @@ package ingestor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
+	"time"
 
 	"go.uber.org/zap"
 )
+
+// probeTimeout caps how long ffprobe may spend identifying the audio codec
+// of a live stream before StartFFmpeg gives up and falls back to the
+// re-encode path. 8s comfortably covers a slow DNS + TLS handshake + ICY
+// metadata exchange while still being short enough that 200 simultaneous
+// probes during supervisor boot complete inside one stall-watchdog grace.
+const probeTimeout = 8 * time.Second
+
+// ProbeAudioCodec returns the codec name (lowercase) of the first audio
+// stream at url, using ffprobe. Used by StartFFmpeg to decide whether the
+// ADTS segment muxer can accept the input verbatim (AAC only) or whether
+// the audio must be re-encoded to AAC first.
+//
+// Returns "" with no error when ffprobe completes but reports no audio
+// streams — callers should treat that as "unknown" and re-encode. Returns
+// an error only when the probe itself fails (timeout, network, bad JSON);
+// the caller logs and uses the re-encode fallback for safety.
+//
+// Honours the same -user_agent as StartFFmpeg so a User-Agent gate that
+// rejects the live request doesn't surface as a phantom "no audio streams"
+// here.
+func ProbeAudioCodec(ctx context.Context, url string) (string, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(probeCtx, "ffprobe",
+		"-v", "quiet",
+		"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "a:0",
+		url,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe run: %w", err)
+	}
+
+	var resp struct {
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return "", fmt.Errorf("ffprobe parse: %w", err)
+	}
+	if len(resp.Streams) == 0 {
+		return "", nil
+	}
+	return strings.ToLower(resp.Streams[0].CodecName), nil
+}
+
+// pickSegmentAudioArgs decides whether the ADTS segment muxer can copy the
+// input audio verbatim or must re-encode. The ADTS muxer accepts ONLY AAC;
+// every other codec (mp3, opus, vorbis, flac, …) crashes ffmpeg at startup
+// with "Only AAC streams can be muxed by the ADTS muxer" (incident
+// 2026-05-15 second wave).
+//
+// codec is the lowercase codec_name reported by ffprobe (the wrapper does
+// the lowercasing). Empty string ("unknown" / probe failed) maps to
+// re-encode — losing a few % of CPU on a stream we could have copied is
+// far cheaper than another silent worker zombie.
+//
+// Re-encode target: AAC LC @ 128 kbps. Chosen so MP3 96k inputs come out
+// audibly indistinguishable for evidence playback while keeping evidence
+// files small; ADTS muxer accepts AAC LC.
+func pickSegmentAudioArgs(codec string) []string {
+	if strings.EqualFold(codec, "aac") {
+		return []string{"-c:a", "copy"}
+	}
+	return []string{"-c:a", "aac", "-b:a", "128k"}
+}
 
 // FFmpegProcess wraps a running ffmpeg subprocess.
 //
@@ -49,6 +124,25 @@ func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, l
 		return nil, fmt.Errorf("create pcm pipe: %w", err)
 	}
 
+	// Pre-flight codec detection. The ADTS segment muxer used below for the
+	// evidence stream only accepts AAC; any other codec (mp3, opus, vorbis,
+	// flac, …) makes ffmpeg crash at startup with "Only AAC streams can be
+	// muxed by the ADTS muxer" — see pickSegmentAudioArgs. ffprobe failure
+	// is non-fatal: we fall back to re-encode, which works for any input.
+	codec, probeErr := ProbeAudioCodec(ctx, streamURL)
+	if probeErr != nil {
+		log.Warn("ffmpeg: codec probe failed; falling back to AAC re-encode",
+			zap.String("stream_url", streamURL),
+			zap.Error(probeErr),
+		)
+	}
+	audioCodecArgs := pickSegmentAudioArgs(codec)
+	log.Info("ffmpeg: starting",
+		zap.String("stream_url", streamURL),
+		zap.String("input_codec", codec),
+		zap.Strings("segment_audio_args", audioCodecArgs),
+	)
+
 	// Two outputs:
 	//   1. Segment muxer → disk (evidence). -segment_atclocktime aligns
 	//      rotation with multiples of segment_time from wall-clock zero so
@@ -67,7 +161,9 @@ func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, l
 		"-i", streamURL,
 
 		"-map", "0:a:0",
-		"-c:a", "copy",
+	}
+	args = append(args, audioCodecArgs...)
+	args = append(args,
 		"-f", "segment",
 		"-segment_time", "30",
 		"-segment_format", "adts",
@@ -81,7 +177,7 @@ func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, l
 		"-ac", "1",
 		"-f", "f32le",
 		"pipe:3",
-	}
+	)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 

@@ -4,8 +4,9 @@ relatorio de erros (relatorio-cammpanha.pages.dev)
 
 usuarios
 - admin
-- operador
 - cliente
 
--- - aparecer o periodo da campanha junto com o nome
+-- aparecer o periodo da campanha junto com o nome
 -- atualizar os links dos workers dinamicamente
+
+parar workers depois do fim da campanha

@@ -146,6 +146,43 @@ func TestLastPCMAt_Concurrent(t *testing.T) {
 	}
 }
 
+// TestPickSegmentAudioArgs covers the pure decision the ffmpeg wrapper makes
+// at StartFFmpeg time: can we -c:a copy into the ADTS segment muxer (only
+// AAC streams qualify) or do we have to re-encode to AAC first? Incident
+// 2026-05-15 (second wave): every non-AAC live stream — MP3 in particular,
+// which is most of the brazilian radio catalog — crashed at ffmpeg startup
+// with "Only AAC streams can be muxed by the ADTS muxer", looping the
+// worker forever. Unknown codec (probe failure) falls into the re-encode
+// branch on purpose — losing a tiny bit of CPU on a phantom is far cheaper
+// than another silent crash.
+func TestPickSegmentAudioArgs(t *testing.T) {
+	cases := []struct {
+		name  string
+		codec string
+		want  []string
+	}{
+		{"aac -> copy", "aac", []string{"-c:a", "copy"}},
+		{"AAC case-insensitive -> copy", "AAC", []string{"-c:a", "copy"}},
+		{"mp3 -> reencode", "mp3", []string{"-c:a", "aac", "-b:a", "128k"}},
+		{"opus -> reencode", "opus", []string{"-c:a", "aac", "-b:a", "128k"}},
+		{"vorbis -> reencode", "vorbis", []string{"-c:a", "aac", "-b:a", "128k"}},
+		{"unknown (probe failed) -> reencode", "", []string{"-c:a", "aac", "-b:a", "128k"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pickSegmentAudioArgs(c.codec)
+			if len(got) != len(c.want) {
+				t.Fatalf("pickSegmentAudioArgs(%q) length %d, want %d (got=%v)", c.codec, len(got), len(c.want), got)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("pickSegmentAudioArgs(%q)[%d] = %q, want %q", c.codec, i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestStreamURL_Accessor verifies that Worker.StreamURL() returns whatever was
 // in the WorkerConfig at construction time. The supervisor's reconciler reads
 // this to detect when stations.stream_url has drifted from the URL the worker
