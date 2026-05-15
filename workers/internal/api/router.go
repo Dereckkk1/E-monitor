@@ -21,25 +21,27 @@ import (
 //
 // StreamHealth (master) and APIKeys/Auth (fase2) coexist in this router.
 type Deps struct {
-	Stations             *handlers.StationsHandler
-	Clients              *handlers.ClientsHandler
-	Campaigns            *handlers.CampaignsHandler
-	Commercials          *handlers.CommercialsHandler
-	Detections           *handlers.DetectionsHandler
-	Health               *handlers.HealthHandler
-	StreamHealth         *handlers.StreamHealthHandler
-	Auth                 *handlers.AuthHandler
-	APIKey               *auth.APIKeyMiddleware
-	APIKeys              *handlers.APIKeysHandler
-	Admin                *handlers.AdminHandler
-	SystemHealth         *handlers.SystemHealthHandler
-	Webhooks             *handlers.WebhooksHandler
-	MaterialTypes        *handlers.MaterialTypesHandler
-	Materials            *handlers.MaterialsHandler
-	CampaignMaterials    *handlers.CampaignMaterialsHandler
-	DistributionRules    *handlers.DistributionRulesHandler
+	Stations              *handlers.StationsHandler
+	Clients               *handlers.ClientsHandler
+	Campaigns             *handlers.CampaignsHandler
+	Commercials           *handlers.CommercialsHandler
+	Detections            *handlers.DetectionsHandler
+	Health                *handlers.HealthHandler
+	StreamHealth          *handlers.StreamHealthHandler
+	Auth                  *handlers.AuthHandler
+	APIKey                *auth.APIKeyMiddleware
+	APIKeys               *handlers.APIKeysHandler
+	Admin                 *handlers.AdminHandler
+	SystemHealth          *handlers.SystemHealthHandler
+	Webhooks              *handlers.WebhooksHandler
+	MaterialTypes         *handlers.MaterialTypesHandler
+	Materials             *handlers.MaterialsHandler
+	CampaignMaterials     *handlers.CampaignMaterialsHandler
+	DistributionRules     *handlers.DistributionRulesHandler
 	DistributionOverrides *handlers.DistributionOverridesHandler
-	Pricing              *handlers.PricingHandler
+	Pricing               *handlers.PricingHandler
+	Users                 *handlers.UsersHandler
+	Me                    *handlers.MeHandler
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -79,197 +81,257 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/login", d.Auth.Login)
 		}
 
-		// Protected: all other internal routes require a valid JWT
-		// with role "admin" or "operator".
+		// Protected: all other internal routes require a valid JWT.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireJWT)
-			r.Use(auth.RequireRole("admin", "operator"))
 
-			r.Route("/stations", func(r chi.Router) {
-				r.Get("/", d.Stations.List)
-				r.Post("/", d.Stations.Create)
-				r.Get("/{id}", d.Stations.Get)
-				r.Put("/{id}", d.Stations.Update)
-				r.Get("/{id}/threshold", d.Stations.GetThreshold)
+			// ── Self-service /auth/me* — any authenticated user ───────────────
+			// Any authenticated user (admin/operator/viewer) can manage their
+			// own profile. Role, client_id, is_active are NOT mutable via /me.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRole("admin", "operator", "viewer"))
+				if d.Me != nil {
+					r.Get("/auth/me", d.Me.Get)
+					r.Patch("/auth/me", d.Me.Patch)
+					r.Post("/auth/me/password", d.Me.ChangePassword)
+				}
 			})
-			r.Route("/clients", func(r chi.Router) {
-				r.Get("/", d.Clients.List)
-				r.Post("/", d.Clients.Create)
-				r.Put("/{id}", d.Clients.Update)
-				r.Delete("/{id}", d.Clients.Delete)
-			})
-			if d.APIKeys != nil {
-				r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
-				r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)
-				r.Delete("/clients/{clientID}/api-keys/{keyID}", d.APIKeys.Revoke)
-			}
-			if d.Webhooks != nil {
-				// Webhook config + observability + test dispatcher (§13.1.4).
-				//
-				// Reads (operator+admin): exposing config and delivery
-				// history is fine for any authenticated internal user.
-				r.Get("/clients/{id}/webhook", d.Webhooks.GetConfig)
-				r.Get("/clients/{id}/webhook-deliveries", d.Webhooks.ListDeliveries)
-				// Mutations (admin-only): until tenancy is implemented
-				// (see follow-ups F-XX), restrict mutations to admins so a
-				// regular operator cannot rotate another client's webhook
-				// secret or fire a test POST to an attacker-controlled URL.
+
+			// ── Admin/operator protected group ────────────────────────────────
+			// All paths below require admin or operator. Within specific route
+			// blocks, inner groups open certain GETs to viewer or restrict
+			// mutations to admin-only (both patterns preserved from original).
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRole("admin", "operator"))
+
+				r.Route("/stations", func(r chi.Router) {
+					r.Get("/", d.Stations.List)
+					r.Post("/", d.Stations.Create)
+					r.Get("/{id}", d.Stations.Get)
+					r.Put("/{id}", d.Stations.Update)
+					r.Get("/{id}/threshold", d.Stations.GetThreshold)
+				})
+				r.Route("/clients", func(r chi.Router) {
+					r.Get("/", d.Clients.List)
+					r.Post("/", d.Clients.Create)
+					r.Put("/{id}", d.Clients.Update)
+					r.Delete("/{id}", d.Clients.Delete)
+				})
+				if d.APIKeys != nil {
+					r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
+					r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)
+					r.Delete("/clients/{clientID}/api-keys/{keyID}", d.APIKeys.Revoke)
+				}
+				if d.Webhooks != nil {
+					// Webhook config + observability + test dispatcher (§13.1.4).
+					//
+					// Reads (operator+admin): exposing config and delivery
+					// history is fine for any authenticated internal user.
+					r.Get("/clients/{id}/webhook", d.Webhooks.GetConfig)
+					r.Get("/clients/{id}/webhook-deliveries", d.Webhooks.ListDeliveries)
+					// Mutations (admin-only): until tenancy is implemented
+					// (see follow-ups F-XX), restrict mutations to admins so a
+					// regular operator cannot rotate another client's webhook
+					// secret or fire a test POST to an attacker-controlled URL.
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Patch("/clients/{id}/webhook", d.Webhooks.PatchConfig)
+						r.Post("/clients/{id}/webhook-test", d.Webhooks.SendTest)
+					})
+				}
+
+				// /campaigns — GETs (list/get/financials/daily-summary) open to
+				// viewer via inner group; writes stay admin/operator (outer gate);
+				// lifecycle mutations are admin-only (innermost gate).
+				r.Route("/campaigns", func(r chi.Router) {
+					// Viewer-friendly GET reads — inner group widens the role set
+					// to include viewer for these specific methods.
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin", "operator", "viewer"))
+						r.Get("/", d.Campaigns.List)
+						// Literal antes do param pra chi resolver corretamente:
+						// /campaigns/financials → Financials, /campaigns/{id} → Get.
+						r.Get("/financials", d.Campaigns.Financials)
+						r.Get("/{id}", d.Campaigns.Get)
+					})
+					// Admin/operator writes (inherited from outer gate).
+					r.Post("/", d.Campaigns.Create)
+					// Edita o trio básico (name, start_date, end_date) — usado
+					// pelo Step 1 do wizard em modo edit. client_id continua
+					// imutável.
+					r.Put("/{id}", d.Campaigns.Update)
+					// Lifecycle (§18.2.1): /cancel is the only manual
+					// transition. Until tenancy is wired (follow-ups F-XX),
+					// cancellation requires admin so operators can't terminate
+					// arbitrary campaigns. /start and /pause already act on
+					// global supervisor state and are also admin-gated.
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Post("/{id}/cancel", d.Campaigns.Cancel)
+						r.Put("/{id}/start", d.Campaigns.Start)
+						r.Put("/{id}/pause", d.Campaigns.Pause)
+					})
+					r.Put("/{id}/stations", d.Campaigns.UpdateStations)
+					r.Delete("/{id}", d.Campaigns.Delete)
+				})
+
+				// Daily summary — viewer-friendly (feeds the /detections UI).
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin", "operator", "viewer"))
+					r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
+				})
+
+				r.Route("/commercials", func(r chi.Router) {
+					r.Get("/", d.Commercials.List)
+					r.Post("/", d.Commercials.Upload)
+					r.Get("/{id}", d.Commercials.Get)
+					r.Get("/{id}/audio", d.Commercials.Audio)
+					r.Put("/{id}/stations", d.Commercials.UpdateStations)
+					r.Delete("/{id}", d.Commercials.Delete)
+				})
+
+				// Material types — global registry (Tasks 13-19).
+				r.Route("/material-types", func(r chi.Router) {
+					r.Get("/", d.MaterialTypes.List)
+					r.Post("/", d.MaterialTypes.Create)
+					r.Put("/{id}", d.MaterialTypes.Update)
+					r.Delete("/{id}", d.MaterialTypes.Delete)
+				})
+
+				// Per-client material library read — viewer-friendly.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin", "operator", "viewer"))
+					r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
+				})
+
+				// Materials — per-client library (writes and individual reads).
+				r.Route("/materials", func(r chi.Router) {
+					r.Post("/", d.Materials.Upload)
+					r.Get("/{id}", d.Materials.Get)
+					r.Get("/{id}/audio", d.Materials.Audio)
+					r.Post("/{id}/similarity/acknowledge", d.Materials.Acknowledge)
+					r.Patch("/{id}/type", d.Materials.UpdateType)
+					r.Patch("/{id}/script", d.Materials.UpdateScript)
+					r.Delete("/{id}", d.Materials.Delete)
+				})
+
+				// Campaign ↔ Materials link.
+				r.Route("/campaigns/{campaignID}/materials", func(r chi.Router) {
+					r.Post("/", d.CampaignMaterials.Link)
+					r.Get("/", d.CampaignMaterials.ListByCampaign)
+					r.Put("/{materialID}/stations", d.CampaignMaterials.UpdateStations)
+					r.Delete("/{materialID}", d.CampaignMaterials.Unlink)
+				})
+
+				// Distribution rules.
+				r.Route("/campaigns/{campaignID}/distribution-rules", func(r chi.Router) {
+					r.Get("/", d.DistributionRules.ListByCampaign)
+					r.Post("/", d.DistributionRules.Create)
+					r.Put("/{ruleID}", d.DistributionRules.Update)
+					r.Delete("/{ruleID}", d.DistributionRules.Delete)
+				})
+
+				// Distribution overrides.
+				r.Route("/campaigns/{campaignID}/distribution-overrides", func(r chi.Router) {
+					r.Get("/", d.DistributionOverrides.ListByDateRange)
+					r.Put("/", d.DistributionOverrides.Upsert)
+					r.Delete("/", d.DistributionOverrides.Delete)
+				})
+
+				// Pricing por (campanha × emissora) — alimenta o Step 5 do
+				// wizard e os valores do resumo em /detections + CPM em
+				// /campaigns. Mode: consolidated | per_insertion. Validação
+				// forte no repo, retorna 422 em payload inválido.
+				if d.Pricing != nil {
+					r.Route("/campaigns/{campaignID}/pricing", func(r chi.Router) {
+						r.Get("/", d.Pricing.ListByCampaign)
+						r.Put("/{stationID}", d.Pricing.Upsert)
+						r.Delete("/{stationID}", d.Pricing.Delete)
+					})
+				}
+
+				// /detections — GETs open to viewer via inner group;
+				// admin-only mutations in innermost gate (verbatim from original).
+				r.Route("/detections", func(r chi.Router) {
+					// Viewer-friendly reads — inner group widens role set.
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin", "operator", "viewer"))
+						r.Get("/", d.Detections.List)
+						// Static prefixes BEFORE /{id} so chi doesn't try to parse
+						// "aggregate-by-material" as a UUID. Same reason for /export
+						// inside the admin group below.
+						r.Get("/aggregate-by-material", d.Detections.AggregateByMaterial)
+						r.Get("/{id}", d.Detections.Get)
+						r.Get("/{id}/evidence", d.Detections.Evidence)
+						r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
+					})
+					// Admin-only soft-delete ("desconsiderar veiculação"). Reverter
+					// é a operação simétrica via /restore. Veiculação fica zerada
+					// nos agregados (daily_play_summary filtra ignored_at IS NULL)
+					// mas a evidência e o registro continuam intactos.
+					//
+					// Admin-only manual entry ("Adicionar veiculação manualmente"):
+					// veiculações retroativas. A linha entra em daily_play_summary
+					// igual à automática — o categorizer roda pra decidir
+					// in_slot/out_slot/out_date/orphan.
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Post("/manual", d.Detections.CreateManual)
+						r.Post("/{id}/ignore", d.Detections.Ignore)
+						r.Post("/{id}/restore", d.Detections.Restore)
+						// CSV export do relatório data/hora — streaming. Fica
+						// dentro do grupo admin, mas como prefixo estático
+						// /export nunca colide com /{id} porque o /{id} também
+						// está no grupo admin acima e o /export é mais
+						// específico — chi resolve por especificidade.
+						r.Get("/export", d.Detections.Export)
+					})
+				})
+				r.Route("/stream-health", func(r chi.Router) {
+					r.Get("/", d.StreamHealth.List)
+					r.Get("/{stationId}", d.StreamHealth.Detail)
+				})
+				r.Get("/workers", d.Health.WorkerStatus)
+
+				// Admin-only operational endpoints (§11.4 / §14.4 / §9.4).
+				if d.Admin != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Post("/admin/evidence/tiering/run", d.Admin.RunTiering)
+						r.Post("/admin/stations/{id}/threshold/refresh", d.Admin.RefreshThreshold)
+						r.Post("/admin/calibration/run", d.Admin.RunCalibration)
+					})
+				}
+
+				// Admin system-health dashboard endpoint. Single GET that pings
+				// every dependency (infra + observability) in parallel and rolls
+				// up an "attention" list of currently-broken things. See
+				// handlers/system_health.go.
+				if d.SystemHealth != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/system-health", d.SystemHealth.Get)
+					})
+				}
+			}) // end admin/operator group
+
+			// ── Subgroup C — admin-only: user management CRUD ────────────────
+			// New endpoints for managing platform users. Nil-guarded so the
+			// handler can be omitted in test harnesses without panicking.
+			if d.Users != nil {
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
-					r.Patch("/clients/{id}/webhook", d.Webhooks.PatchConfig)
-					r.Post("/clients/{id}/webhook-test", d.Webhooks.SendTest)
+					r.Route("/admin/users", func(r chi.Router) {
+						r.Get("/", d.Users.List)
+						r.Post("/", d.Users.Create)
+						r.Get("/{id}", d.Users.Get)
+						r.Patch("/{id}", d.Users.Patch)
+						r.Delete("/{id}", d.Users.Delete)
+						r.Post("/{id}/password", d.Users.ResetPassword)
+					})
 				})
 			}
-			r.Route("/campaigns", func(r chi.Router) {
-				r.Get("/", d.Campaigns.List)
-				r.Post("/", d.Campaigns.Create)
-				// Literal antes do param pra chi resolver corretamente:
-				// /campaigns/financials → Financials, /campaigns/{id} → Get.
-				r.Get("/financials", d.Campaigns.Financials)
-				r.Get("/{id}", d.Campaigns.Get)
-				// Edita o trio básico (name, start_date, end_date) — usado
-				// pelo Step 1 do wizard em modo edit. client_id continua
-				// imutável.
-				r.Put("/{id}", d.Campaigns.Update)
-				// Lifecycle (§18.2.1): /cancel is the only manual
-				// transition. Until tenancy is wired (follow-ups F-XX),
-				// cancellation requires admin so operators can't terminate
-				// arbitrary campaigns. /start and /pause already act on
-				// global supervisor state and are also admin-gated.
-				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin"))
-					r.Post("/{id}/cancel", d.Campaigns.Cancel)
-					r.Put("/{id}/start", d.Campaigns.Start)
-					r.Put("/{id}/pause", d.Campaigns.Pause)
-				})
-				r.Put("/{id}/stations", d.Campaigns.UpdateStations)
-				r.Delete("/{id}", d.Campaigns.Delete)
-			})
-			r.Route("/commercials", func(r chi.Router) {
-				r.Get("/", d.Commercials.List)
-				r.Post("/", d.Commercials.Upload)
-				r.Get("/{id}", d.Commercials.Get)
-				r.Get("/{id}/audio", d.Commercials.Audio)
-				r.Put("/{id}/stations", d.Commercials.UpdateStations)
-				r.Delete("/{id}", d.Commercials.Delete)
-			})
-
-			// Material types — global registry (Tasks 13-19).
-			r.Route("/material-types", func(r chi.Router) {
-				r.Get("/", d.MaterialTypes.List)
-				r.Post("/", d.MaterialTypes.Create)
-				r.Put("/{id}", d.MaterialTypes.Update)
-				r.Delete("/{id}", d.MaterialTypes.Delete)
-			})
-
-			// Materials — per-client library.
-			r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
-			r.Route("/materials", func(r chi.Router) {
-				r.Post("/", d.Materials.Upload)
-				r.Get("/{id}", d.Materials.Get)
-				r.Get("/{id}/audio", d.Materials.Audio)
-				r.Post("/{id}/similarity/acknowledge", d.Materials.Acknowledge)
-				r.Patch("/{id}/type", d.Materials.UpdateType)
-				r.Patch("/{id}/script", d.Materials.UpdateScript)
-				r.Delete("/{id}", d.Materials.Delete)
-			})
-
-			// Campaign ↔ Materials link.
-			r.Route("/campaigns/{campaignID}/materials", func(r chi.Router) {
-				r.Post("/", d.CampaignMaterials.Link)
-				r.Get("/", d.CampaignMaterials.ListByCampaign)
-				r.Put("/{materialID}/stations", d.CampaignMaterials.UpdateStations)
-				r.Delete("/{materialID}", d.CampaignMaterials.Unlink)
-			})
-
-			// Distribution rules.
-			r.Route("/campaigns/{campaignID}/distribution-rules", func(r chi.Router) {
-				r.Get("/", d.DistributionRules.ListByCampaign)
-				r.Post("/", d.DistributionRules.Create)
-				r.Put("/{ruleID}", d.DistributionRules.Update)
-				r.Delete("/{ruleID}", d.DistributionRules.Delete)
-			})
-
-			// Distribution overrides.
-			r.Route("/campaigns/{campaignID}/distribution-overrides", func(r chi.Router) {
-				r.Get("/", d.DistributionOverrides.ListByDateRange)
-				r.Put("/", d.DistributionOverrides.Upsert)
-				r.Delete("/", d.DistributionOverrides.Delete)
-			})
-
-			// Pricing por (campanha × emissora) — alimenta o Step 5 do
-			// wizard e os valores do resumo em /detections + CPM em
-			// /campaigns. Mode: consolidated | per_insertion. Validação
-			// forte no repo, retorna 422 em payload inválido.
-			if d.Pricing != nil {
-				r.Route("/campaigns/{campaignID}/pricing", func(r chi.Router) {
-					r.Get("/", d.Pricing.ListByCampaign)
-					r.Put("/{stationID}", d.Pricing.Upsert)
-					r.Delete("/{stationID}", d.Pricing.Delete)
-				})
-			}
-
-			// Daily summary — feeds the /detections UI.
-			r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
-
-			r.Route("/detections", func(r chi.Router) {
-				r.Get("/", d.Detections.List)
-				// Static prefixes BEFORE /{id} so chi doesn't try to parse
-				// "aggregate-by-material" as a UUID. Same reason for /export
-				// inside the admin group below.
-				r.Get("/aggregate-by-material", d.Detections.AggregateByMaterial)
-				r.Get("/{id}", d.Detections.Get)
-				r.Get("/{id}/evidence", d.Detections.Evidence)
-				r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
-				// Admin-only soft-delete ("desconsiderar veiculação"). Reverter
-				// é a operação simétrica via /restore. Veiculação fica zerada
-				// nos agregados (daily_play_summary filtra ignored_at IS NULL)
-				// mas a evidência e o registro continuam intactos.
-				//
-				// Admin-only manual entry ("Adicionar veiculação manualmente"):
-				// veiculações retroativas. A linha entra em daily_play_summary
-				// igual à automática — o categorizer roda pra decidir
-				// in_slot/out_slot/out_date/orphan.
-				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin"))
-					r.Post("/manual", d.Detections.CreateManual)
-					r.Post("/{id}/ignore", d.Detections.Ignore)
-					r.Post("/{id}/restore", d.Detections.Restore)
-					// CSV export do relatório data/hora — streaming. Fica
-					// dentro do grupo admin, mas como prefixo estático
-					// /export nunca colide com /{id} porque o /{id} também
-					// está no grupo admin acima e o /export é mais
-					// específico — chi resolve por especificidade.
-					r.Get("/export", d.Detections.Export)
-				})
-			})
-			r.Route("/stream-health", func(r chi.Router) {
-				r.Get("/", d.StreamHealth.List)
-				r.Get("/{stationId}", d.StreamHealth.Detail)
-			})
-			r.Get("/workers", d.Health.WorkerStatus)
-
-			// Admin-only operational endpoints (§11.4 / §14.4 / §9.4).
-			if d.Admin != nil {
-				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin"))
-					r.Post("/admin/evidence/tiering/run", d.Admin.RunTiering)
-					r.Post("/admin/stations/{id}/threshold/refresh", d.Admin.RefreshThreshold)
-					r.Post("/admin/calibration/run", d.Admin.RunCalibration)
-				})
-			}
-
-			// Admin system-health dashboard endpoint. Single GET that pings
-			// every dependency (infra + observability) in parallel and rolls
-			// up an "attention" list of currently-broken things. See
-			// handlers/system_health.go.
-			if d.SystemHealth != nil {
-				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin"))
-					r.Get("/admin/system-health", d.SystemHealth.Get)
-				})
-			}
-		})
+		}) // end RequireJWT group
 	})
 
 	// Wrap the whole router with OpenTelemetry's HTTP instrumentation. The
