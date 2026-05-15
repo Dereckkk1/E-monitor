@@ -296,6 +296,8 @@ func main() {
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo},
+		Users:                 handlers.NewUsersHandler(usersRepo),
+		Me:                    handlers.NewMeHandler(usersRepo),
 	}
 
 	srv := &http.Server{
