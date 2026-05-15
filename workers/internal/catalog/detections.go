@@ -277,6 +277,9 @@ type ListFilter struct {
 	EndDate    *time.Time
 	Limit      int
 	Offset     int
+	// ClientID, when non-nil, restricts results to detections whose campaign
+	// belongs to this client (viewer JWT scope).
+	ClientID *uuid.UUID
 }
 
 // ListPagedFilter mirrors ListFilter but with page-based pagination and an
@@ -292,6 +295,9 @@ type ListPagedFilter struct {
 	Sort       string // "detected_at_desc" (default) | "detected_at_asc"
 	Page       int    // 1-based
 	PageSize   int    // 1..200
+	// ClientID, when non-nil, restricts results to detections whose campaign
+	// belongs to this client (viewer JWT scope).
+	ClientID *uuid.UUID
 }
 
 // ListPagedResult is the wire format returned to the frontend. Total is a
@@ -370,6 +376,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND ($7::uuid IS NULL OR cmp.client_id = $7)
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -390,7 +397,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 
 	offset := (f.Page - 1) * f.PageSize
 	rows, err := d.pool.Query(ctx, sql,
-		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset)
+		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -454,14 +461,16 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
 		LEFT JOIN materials m ON m.id = d.commercial_id
+		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::uuid IS NULL OR d.station_id = $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
 		  AND ($4::timestamptz IS NULL OR d.detected_at <= $4)
+		  AND ($7::uuid IS NULL OR cmp.client_id = $7)
 		  AND d.evidence_status <> 'audit_rejected'
 		ORDER BY d.detected_at DESC
 		LIMIT $5 OFFSET $6`,
-		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset)
+		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset, f.ClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -592,6 +601,10 @@ type AggregateFilter struct {
 	StartDate  *time.Time
 	EndDate    *time.Time
 	Q          string
+	// ClientID, when non-nil, is used by the handler to verify campaign
+	// ownership before calling AggregateByMaterial (viewer scope guard).
+	// Not applied as a SQL filter here because campaign_id is already required.
+	ClientID *uuid.UUID
 }
 
 // AggregateByMaterial counts non-ignored, non-retracted detections grouped by
@@ -716,4 +729,21 @@ func (d *Detections) Restore(ctx context.Context, id uuid.UUID) error {
 		`UPDATE detections SET ignored_at = NULL, ignored_by = NULL WHERE id = $1`,
 		id)
 	return err
+}
+
+// GetClientID returns the client_id of the campaign that owns the detection.
+// Used by handlers to verify viewer scope without modifying the Get signature.
+// Returns pgx.ErrNoRows when the detection does not exist.
+func (d *Detections) GetClientID(ctx context.Context, detectionID uuid.UUID) (*uuid.UUID, error) {
+	var clientID uuid.UUID
+	err := d.pool.QueryRow(ctx, `
+		SELECT cmp.client_id
+		FROM detections det
+		JOIN campaigns cmp ON cmp.id = det.campaign_id
+		WHERE det.id = $1`, detectionID,
+	).Scan(&clientID)
+	if err != nil {
+		return nil, err
+	}
+	return &clientID, nil
 }

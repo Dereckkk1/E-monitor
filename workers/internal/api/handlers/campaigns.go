@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
 
@@ -43,6 +44,7 @@ type CampaignSupervisor interface {
 
 func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	scope := auth.ClientScopeFromContext(r.Context())
 
 	// Paged mode kicks in as soon as ?page or ?page_size shows up; legacy
 	// callers (DetectionsPage, AirtimeReportPage, wizard layout etc.) keep
@@ -60,7 +62,7 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 		if size > 200 {
 			size = 200
 		}
-		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), page, size)
+		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), scope, page, size)
 		if err != nil {
 			http.Error(w, "internal error", 500)
 			return
@@ -94,7 +96,7 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 			statuses = append(statuses, s)
 		}
 	}
-	items, err := h.Repo.ListFiltered(r.Context(), statuses)
+	items, err := h.Repo.ListFiltered(r.Context(), statuses, scope)
 	if err != nil {
 		http.Error(w, "internal error", 500)
 		return
@@ -133,6 +135,11 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "internal error", 500)
 		}
+		return
+	}
+	// Viewer scope: hide cross-client campaigns as 404 (anti-oracle).
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && out.ClientID != *scope {
+		http.Error(w, "not found", 404)
 		return
 	}
 	writeJSON(w, 200, out)

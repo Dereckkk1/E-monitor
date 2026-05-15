@@ -270,7 +270,7 @@ func main() {
 		Clients:      &handlers.ClientsHandler{Repo: clients},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
-		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client, SummaryRepo: dailySumRepo},
+		Detections:   &handlers.DetectionsHandler{Repo: detections, CampaignRepo: campaigns, Storage: s3Client, SummaryRepo: dailySumRepo},
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
 		Auth:         handlers.NewAuthHandler(pool, usersRepo),
