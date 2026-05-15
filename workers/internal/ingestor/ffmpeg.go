@@ -64,6 +64,42 @@ func ProbeAudioCodec(ctx context.Context, url string) (string, error) {
 	return strings.ToLower(resp.Streams[0].CodecName), nil
 }
 
+// pickReconnectArgs returns the HTTP reconnect flags for the live input.
+// The base trio (-reconnect, -reconnect_streamed, -reconnect_delay_max) is
+// always set — they recover from transient TCP/TLS hiccups on any stream
+// type. The deciding factor is whether to also set -reconnect_at_eof:
+//
+//   - Progressive streams (direct .mp3/.aac, Icecast/SHOUTcast, anything
+//     that's a single long-running HTTP response) → YES, set it. EOF
+//     genuinely means the server closed the connection and we want to
+//     re-establish it.
+//   - HLS streams (.m3u8) → NO. HLS delivers content as a *sequence of
+//     finite segments*; every segment naturally ends in EOF. With the
+//     flag on, ffmpeg treats every segment boundary as a disconnect,
+//     reconnects immediately, re-pulls the manifest, and never decodes
+//     anything. Incident 2026-05-15 third wave (Atlântida Joinville).
+//
+// Detection is by URL pattern (case-insensitive ".m3u8"). Robust enough
+// for the brazilian radio catalog without an extra HEAD request.
+func pickReconnectArgs(streamURL string) []string {
+	base := []string{
+		"-reconnect", "1",
+		"-reconnect_streamed", "1",
+		"-reconnect_delay_max", "5",
+	}
+	if isHLS(streamURL) {
+		return base
+	}
+	return append(base, "-reconnect_at_eof", "1")
+}
+
+// isHLS reports whether streamURL points to an HLS playlist. Case-insensitive
+// substring match against ".m3u8" so query strings and uppercase variants
+// both classify correctly.
+func isHLS(streamURL string) bool {
+	return strings.Contains(strings.ToLower(streamURL), ".m3u8")
+}
+
 // pickSegmentAudioArgs decides whether the ADTS segment muxer can copy the
 // input audio verbatim or must re-encode. The ADTS muxer accepts ONLY AAC;
 // every other codec (mp3, opus, vorbis, flac, …) crashes ffmpeg at startup
@@ -137,10 +173,13 @@ func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, l
 		)
 	}
 	audioCodecArgs := pickSegmentAudioArgs(codec)
+	reconnectArgs := pickReconnectArgs(streamURL)
 	log.Info("ffmpeg: starting",
 		zap.String("stream_url", streamURL),
 		zap.String("input_codec", codec),
+		zap.Bool("is_hls", isHLS(streamURL)),
 		zap.Strings("segment_audio_args", audioCodecArgs),
+		zap.Strings("reconnect_args", reconnectArgs),
 	)
 
 	// Two outputs:
@@ -150,18 +189,15 @@ func StartFFmpeg(ctx context.Context, streamURL, segmentsOutputPattern string, l
 	//      file's PTS at zero, which is what the readers expect when they
 	//      `cat`-concat. -strftime expands %Y%m%d-%H%M%S in the filename.
 	//   2. f32le PCM @ 16kHz mono → pipe:3 (analysis).
-	args := []string{
-		"-y",
-		"-reconnect", "1",
-		"-reconnect_streamed", "1",
-		"-reconnect_delay_max", "5",
-		"-reconnect_at_eof", "1",
+	args := []string{"-y"}
+	args = append(args, reconnectArgs...)
+	args = append(args,
 		"-timeout", "10000000",
 		"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
 		"-i", streamURL,
 
 		"-map", "0:a:0",
-	}
+	)
 	args = append(args, audioCodecArgs...)
 	args = append(args,
 		"-f", "segment",

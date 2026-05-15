@@ -32,6 +32,7 @@ type Deps struct {
 	APIKey               *auth.APIKeyMiddleware
 	APIKeys              *handlers.APIKeysHandler
 	Admin                *handlers.AdminHandler
+	SystemHealth         *handlers.SystemHealthHandler
 	Webhooks             *handlers.WebhooksHandler
 	MaterialTypes        *handlers.MaterialTypesHandler
 	Materials            *handlers.MaterialsHandler
@@ -255,6 +256,17 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/evidence/tiering/run", d.Admin.RunTiering)
 					r.Post("/admin/stations/{id}/threshold/refresh", d.Admin.RefreshThreshold)
 					r.Post("/admin/calibration/run", d.Admin.RunCalibration)
+				})
+			}
+
+			// Admin system-health dashboard endpoint. Single GET that pings
+			// every dependency (infra + observability) in parallel and rolls
+			// up an "attention" list of currently-broken things. See
+			// handlers/system_health.go.
+			if d.SystemHealth != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Get("/admin/system-health", d.SystemHealth.Get)
 				})
 			}
 		})

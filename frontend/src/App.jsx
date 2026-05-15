@@ -21,6 +21,7 @@ import LoginPage      from './pages/LoginPage'
 import CampaignWizardPage from './pages/CampaignWizardPage'
 import MaterialTypesPage from './pages/MaterialTypesPage'
 import AirtimeReportPage from './pages/AirtimeReportPage'
+import AdminOverviewPage from './pages/AdminOverviewPage'
 
 function HamburgerIcon() {
   return (
@@ -84,6 +85,7 @@ function AppShell() {
             <Route path="/detections"  element={<DetectionsPage />} />
             <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
+            <Route path="/admin/overview" element={<AdminOverviewPage />} />
             <Route path="/dashboard"   element={<DashboardPage />} />
             {/* Catch-all */}
             <Route path="*"            element={<Navigate to="/stations" replace />} />

@@ -1,0 +1,730 @@
+/* ── AdminOverviewPage ────────────────────────────────────────── */
+/*
+ * Admin → Visão geral (/admin/overview).
+ * Class prefix: aoh-  (admin overview health)
+ *
+ * Layout philosophy (per docs/architecture/design.md + skill/pro-system-ui):
+ *  - Top rollup banner is the one-glance answer. Color encodes severity;
+ *    text answers "what should I do next?"
+ *  - Infra/Observability are dense grids of compact service cards. Color
+ *    is functional (ok/down/disabled), never decorative.
+ *  - KPIs sit in moderate density — three side-by-side blocks with
+ *    contextual sublines below the big number.
+ *  - Attention list is the action zone. Wide horizontal rows, clickable,
+ *    sorted by severity, taking you directly to the existing fix tool
+ *    (/operations or /monitoring).
+ */
+
+.aoh {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin: 0 auto;
+}
+
+/* ── Rollup banner ─────────────────────────────────────────────── */
+.aoh-rollup {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 32px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.aoh-rollup::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--c-text-3);
+}
+
+.aoh-rollup--ok::before {
+  background: var(--c-success);
+}
+
+.aoh-rollup--warn::before {
+  background: var(--c-warning);
+}
+
+.aoh-rollup--crit::before {
+  background: var(--c-danger);
+}
+
+.aoh-rollup-main {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.aoh-rollup-pulse {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.aoh-rollup--ok .aoh-rollup-pulse {
+  color: var(--c-success);
+}
+
+.aoh-rollup--warn .aoh-rollup-pulse {
+  color: var(--c-warning);
+}
+
+.aoh-rollup--crit .aoh-rollup-pulse {
+  color: var(--c-danger);
+}
+
+.aoh-rollup-pulse-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: aoh-pulse 2.2s ease-out infinite;
+}
+
+@keyframes aoh-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+  }
+
+  70% {
+    box-shadow: 0 0 0 14px color-mix(in srgb, currentColor 0%, transparent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+.aoh-rollup-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-family: var(--font-heading);
+  color: var(--c-text);
+}
+
+.aoh-rollup-sub {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  color: var(--c-text-2);
+}
+
+.aoh-rollup-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.aoh-rollup-updated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.aoh-rollup-updated-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-text-3);
+}
+
+.aoh-rollup-updated-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-2);
+}
+
+.aoh-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  color: var(--c-text-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.aoh-refresh:hover {
+  background: var(--c-action-light);
+  color: var(--c-action);
+  border-color: var(--c-action-border);
+}
+
+.aoh-refresh--spin svg {
+  animation: aoh-spin 0.9s linear infinite;
+}
+
+@keyframes aoh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Section heads ────────────────────────────────────────────── */
+.aoh-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.aoh-section-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.aoh-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-danger);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.aoh-section-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+/* ── Service grids (infra + observability) ────────────────────── */
+.aoh-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.aoh-grid--infra {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.aoh-grid--obs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aoh-grid--kpi {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .aoh-grid--infra {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .aoh-grid--kpi {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+
+  .aoh-grid--infra,
+  .aoh-grid--obs,
+  .aoh-grid--kpi {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Service card */
+.aoh-svc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 14px 12px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.aoh-svc:hover {
+  border-color: var(--c-action-border);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.aoh-svc--down {
+  border-color: color-mix(in srgb, var(--c-danger) 35%, var(--c-border));
+  background: color-mix(in srgb, var(--c-danger) 4%, var(--c-surface));
+}
+
+.aoh-svc--disabled {
+  opacity: 0.7;
+}
+
+.aoh-svc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.aoh-svc-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.aoh-svc-dot.aoh-pill--ok {
+  background: color-mix(in srgb, var(--c-success) 14%, transparent);
+  color: var(--c-success);
+}
+
+.aoh-svc-dot.aoh-pill--down {
+  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
+  color: var(--c-danger);
+}
+
+.aoh-svc-dot.aoh-pill--muted {
+  background: var(--c-surface-2);
+  color: var(--c-text-3);
+}
+
+.aoh-svc-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+}
+
+.aoh-svc-desc {
+  font-size: 12px;
+  color: var(--c-text-2);
+  line-height: 1.35;
+  min-height: 28px;
+}
+
+.aoh-svc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.aoh-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.aoh-pill--ok {
+  background: color-mix(in srgb, var(--c-success) 14%, transparent);
+  color: var(--c-success);
+}
+
+.aoh-pill--down {
+  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
+  color: var(--c-danger);
+}
+
+.aoh-pill--muted {
+  background: var(--c-surface-2);
+  color: var(--c-text-3);
+}
+
+.aoh-svc-latency,
+.aoh-svc-detail {
+  font-size: 11.5px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aoh-svc-detail {
+  color: var(--c-danger);
+  font-weight: 500;
+}
+
+/* ── KPI blocks ───────────────────────────────────────────────── */
+.aoh-kpi {
+  position: relative;
+  padding: 18px 20px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.aoh-kpi:hover {
+  border-color: var(--c-action-border);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.aoh-kpi::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 3px;
+  background: var(--c-text-3);
+  opacity: 0.25;
+  border-radius: 0 0 3px 3px;
+}
+
+.aoh-kpi--ok::before {
+  background: var(--c-success);
+  opacity: 1;
+}
+
+.aoh-kpi--warn::before {
+  background: var(--c-warning);
+  opacity: 1;
+}
+
+.aoh-kpi--crit::before {
+  background: var(--c-danger);
+  opacity: 1;
+}
+
+.aoh-kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-text-3);
+}
+
+.aoh-kpi-value {
+  font-family: var(--font-heading);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.aoh-kpi-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--c-border);
+}
+
+.aoh-kpi-sub-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.aoh-kpi-sub-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.aoh-kpi-sub-dot--ok {
+  background: var(--c-success);
+}
+
+.aoh-kpi-sub-dot--warn {
+  background: var(--c-warning);
+}
+
+.aoh-kpi-sub-dot--crit {
+  background: var(--c-danger);
+}
+
+.aoh-kpi-sub-dot--neutral {
+  background: var(--c-border);
+}
+
+.aoh-kpi-sub-label {
+  color: var(--c-text-2);
+}
+
+.aoh-kpi-sub-value {
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Attention list ───────────────────────────────────────────── */
+.aoh-section--attention .aoh-section-head h2 {
+  color: var(--c-text);
+}
+
+.aoh-att-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aoh-att-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-text-3);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.aoh-att-row:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--c-action-border);
+  border-left-color: var(--c-action);
+}
+
+.aoh-att--warning {
+  border-left-color: var(--c-warning);
+}
+
+.aoh-att--critical {
+  border-left-color: var(--c-danger);
+}
+
+.aoh-att-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--c-warning) 14%, transparent);
+  color: var(--c-warning);
+}
+
+.aoh-att--critical .aoh-att-icon {
+  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
+  color: var(--c-danger);
+}
+
+.aoh-att-body {
+  min-width: 0;
+}
+
+.aoh-att-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aoh-att-title-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+}
+
+.aoh-att-tag {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.aoh-att-detail {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  line-height: 1.45;
+}
+
+.aoh-att-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-action);
+  white-space: nowrap;
+}
+
+/* Empty state for attention zone — explicitly NOT a sad icon. */
+.aoh-att-empty {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px;
+  background: color-mix(in srgb, var(--c-success) 5%, var(--c-surface));
+  border: 1px dashed color-mix(in srgb, var(--c-success) 30%, var(--c-border));
+  border-radius: var(--radius-lg);
+}
+
+.aoh-att-empty strong {
+  display: block;
+  font-size: 14px;
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.aoh-att-empty span {
+  display: block;
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  margin-top: 2px;
+}
+
+.aoh-att-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-success) 18%, transparent);
+  color: var(--c-success);
+  flex-shrink: 0;
+}
+
+/* ── Skeleton placeholders ────────────────────────────────────── */
+.aoh-skel {
+  background: linear-gradient(90deg,
+      var(--c-surface-2) 0%,
+      color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface)) 50%,
+      var(--c-surface-2) 100%);
+  background-size: 200% 100%;
+  border-radius: var(--radius-lg);
+  animation: aoh-shimmer 1.4s ease-in-out infinite;
+}
+
+.aoh-skel--svc {
+  height: 116px;
+}
+
+.aoh-skel--kpi {
+  height: 168px;
+}
+
+.aoh-skel--att {
+  height: 64px;
+}
+
+@keyframes aoh-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ── Error state ──────────────────────────────────────────────── */
+.aoh-error {
+  padding: 32px;
+  text-align: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+
+.aoh-error h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: var(--c-text);
+}
+
+.aoh-error p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+.aoh-error code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--c-surface-2);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.aoh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.aoh-btn--primary {
+  background: var(--c-action);
+  color: #fff;
+}
+
+.aoh-btn--primary:hover {
+  background: var(--c-action-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}

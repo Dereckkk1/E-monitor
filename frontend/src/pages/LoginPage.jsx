@@ -50,14 +50,11 @@ export default function LoginPage() {
 
   return (
     <div className="login-shell">
-      <div className="login-brand-panel" aria-hidden="true">
-        <div className="login-orb login-orb-1" />
-        <div className="login-orb login-orb-2" />
-        <div className="login-orb login-orb-3" />
+      <aside className="login-brand-panel" aria-hidden="true">
         <div className="login-brand-overlay">
           <div className="login-brand-content">
             <span className="login-brand-eyebrow">E-radios</span>
-            <div className="login-brand-wordmark">Radiocheck</div>
+            <h2 className="login-brand-wordmark">Radiocheck</h2>
             <p className="login-brand-tagline">
               Monitoramento de veiculação<br />em tempo real.
             </p>
@@ -68,21 +65,15 @@ export default function LoginPage() {
             </div>
           </div>
           <div className="login-brand-footer">
-            <div className="login-signal-rings">
-              <div className="login-signal-core" />
-              <div className="login-signal-ring login-signal-ring-1" />
-              <div className="login-signal-ring login-signal-ring-2" />
-              <div className="login-signal-ring login-signal-ring-3" />
-            </div>
             <div className="login-stat-badge">
               <span className="login-stat-dot" />
               <span>200+ emissoras monitoradas</span>
             </div>
           </div>
         </div>
-      </div>
+      </aside>
 
-      <div className="login-form-panel">
+      <main className="login-form-panel">
         <div className="login-form-inner">
           <div className="login-mobile-brand">
             <span className="login-mobile-wordmark">Radiocheck</span>
@@ -91,6 +82,7 @@ export default function LoginPage() {
 
           <span className="login-welcome">Bem-vindo de volta</span>
           <h1 className="login-title">Entrar</h1>
+          <p className="login-subtitle">Acesse sua conta para continuar.</p>
 
           <form onSubmit={handleSubmit} noValidate className="login-form">
             <label className="login-field">
@@ -154,8 +146,12 @@ export default function LoginPage() {
                 : 'Entrar'}
             </button>
           </form>
+
+          <p className="login-form-footer">
+            Problemas para entrar?<br />Fale com o administrador.
+          </p>
         </div>
-      </div>
+      </main>
     </div>
   )
 }
