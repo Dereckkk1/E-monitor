@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/audit/auditor.go
+  - workers/internal/evidence/service.go
+  - workers/internal/metrics/metrics.go
+  - migrations/0009_fase2_audit.up.sql
+---
+
 # Evidence Audit (§9.9 — Audit de Evidência Pré-Persist)
 
 Camada de verificação determinística que roda sobre o **clipe de evidência salvo** antes de marcar a veiculação como confirmada. Implementa a invariante:
@@ -6,7 +16,7 @@ Camada de verificação determinística que roda sobre o **clipe de evidência s
 
 Caso a invariante seja violada, a detecção é registrada com `evidence_status = 'audit_rejected'` e é automaticamente ocultada dos endpoints client-facing — vira dado forense para operadores investigarem o motivo.
 
-Plano arquitetural: [`plano_implementacao.md` §9.9](../plano_implementacao.md#L979).
+Plano arquitetural: [`plano_implementacao.md` §9.9](../../plano_implementacao.md#L979).
 
 ---
 

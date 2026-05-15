@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/index.css
+  - frontend/src/components/RSelect.jsx
+  - frontend/src/App.css
+---
+
 # Frontend — Design System de Controles de Formulário
 
 Documenta os padrões de botões, inputs e selects do Radiocheck. Qualquer novo elemento de formulário deve seguir essas convenções.

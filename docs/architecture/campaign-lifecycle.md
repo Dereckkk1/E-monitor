@@ -1,3 +1,14 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/supervisor/lifecycle_scheduler.go
+  - workers/internal/api/handlers/campaigns.go
+  - workers/internal/supervisor/station_changes.go
+  - migrations/0011_campaign_lifecycle.up.sql
+  - workers/internal/metrics/metrics.go
+---
+
 # Ciclo de vida de campanha
 
 > Documentação operacional da feature §18.2.1 do `plano_implementacao.md`.
@@ -21,7 +32,7 @@ estados são equivalentes para o supervisor (worker desligado).
 > de race entre fim de geração de fingerprint e a transição
 > `programada → ativa`. Hashes de campanhas terminais (`concluida`,
 > `cancelada`) continuam fora do índice. Ver
-> [docs/worker-commercial-reconciler.md](worker-commercial-reconciler.md#filtro-de-status-do-loader-era-exclusivamente-ativa).
+> [docs/worker-commercial-reconciler.md](../operations/worker-commercial-reconciler.md#filtro-de-status-do-loader-era-exclusivamente-ativa).
 
 `cancelada` é terminal — não volta para `programada`/`ativa`. Para retomar uma
 campanha cancelada por engano, criar uma nova.
@@ -266,6 +277,6 @@ SELECT id, name, start_date, end_date, updated_at
 incidente 2026-05-08 o handler fazia `Pause(id)` (que flipava status para
 `cancelada`) + UPDATE + `Start(id)` (que devolvia para `ativa`); qualquer
 falha no meio deixava a campanha permanentemente cancelada. Veja
-[`workers/internal/supervisor/station_changes.go`](../workers/internal/supervisor/station_changes.go)
+[`workers/internal/supervisor/station_changes.go`](../../workers/internal/supervisor/station_changes.go)
 e o teste de regressão
-[`workers/internal/api/handlers/campaigns_test.go::TestCampaigns_UpdateStations_DelegatesToSupervisor`](../workers/internal/api/handlers/campaigns_test.go).
+[`workers/internal/api/handlers/campaigns_test.go::TestCampaigns_UpdateStations_DelegatesToSupervisor`](../../workers/internal/api/handlers/campaigns_test.go).

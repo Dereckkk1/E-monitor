@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/supervisor/disambiguation.go
+  - workers/internal/supervisor/dedup_buffer.go
+  - migrations/0014_disambiguation.up.sql
+  - frontend/src/components/DayDetailModal.jsx
+---
+
 # Desambiguação de versões (§18.2.2)
 
 Documentação operacional do mecanismo que evita publicação duplicada quando

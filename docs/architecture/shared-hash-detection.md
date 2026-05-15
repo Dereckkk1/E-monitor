@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/sharing/sharing.go
+  - workers/internal/sharing/sharing_test.go
+  - workers/cmd/backfill-shared-hashes/main.go
+  - migrations/0015_shared_hashes.up.sql
+---
+
 # Shared-Hash Detection
 
 ## What it solves
@@ -23,7 +33,7 @@ algorithm, every confirmed `AMBIENTAL 30` detection produced a paired false
 AMB30[22.00s..28.25s] ≡ JINGLE[23.50s..29.75s]
 ```
 
-The integration test in [workers/internal/match/integration_audio_test.go](../workers/internal/match/integration_audio_test.go)
+The integration test in [workers/internal/match/integration_audio_test.go](../../workers/internal/match/integration_audio_test.go)
 replays the same scenario end-to-end and asserts the false positive is gone.
 
 ## Algorithm
@@ -46,7 +56,7 @@ For each new commercial Y the routine:
    pipeline used to build the catalog.
 3. Slides a 4-second window with 1-second hop over the PCM. For every window
    where some other commercial X scores at or above
-   [`sharing.MinScore`](../workers/internal/sharing/sharing.go) (currently
+   [`sharing.MinScore`](../../workers/internal/sharing/sharing.go) (currently
    `5`, aligned with the runtime matcher):
     - Y's `time_frame` range = the window's frame interval.
     - X's `time_frame` range is derived from the histogram delta:
@@ -70,8 +80,8 @@ time-coverage and never advances out of `StateIdle`.
      both `index.reload` (so live matching sees the new commercial) and
      `fingerprint.shared-scan` (the new event for this feature).
   3. The Go `api` process subscribes to `fingerprint.shared-scan` via
-     [`sharing.Subscriber`](../workers/internal/sharing/subscriber.go); it
-     calls [`sharing.MarkSharedHashes`](../workers/internal/sharing/sharing.go)
+     [`sharing.Subscriber`](../../workers/internal/sharing/subscriber.go); it
+     calls [`sharing.MarkSharedHashes`](../../workers/internal/sharing/sharing.go)
      and, on success, republishes `index.reload` so the in-memory matching
      index picks up the freshly-set `is_shared` flags.
   4. Brief race window between steps 2 and 3 (~5–10 seconds) where the new
@@ -87,7 +97,7 @@ time-coverage and never advances out of `StateIdle`.
   Run this exactly once. It walks every `fingerprint_status='ready'`
   commercial in `created_at` order and applies the same algorithm new
   uploads get. The binary is shipped inside the `api` image (built by
-  [workers.Dockerfile](../infra/docker/Dockerfiles/workers.Dockerfile)).
+  [workers.Dockerfile](../../infra/docker/Dockerfiles/workers.Dockerfile)).
 - **Manual re-trigger** for a single commercial (e.g. after edits or
   catalog repair):
   ```bash
@@ -171,7 +181,7 @@ hits the other in ~11-15% of windows — well below the threshold — so flags
 are applied normally and the false-positive defense works as designed.
 
 The threshold lives in `sharing.SubsetThreshold` and is unit-tested in
-[`sharing_test.go`](../workers/internal/sharing/sharing_test.go).
+[`sharing_test.go`](../../workers/internal/sharing/sharing_test.go).
 
 ## Known limits
 
