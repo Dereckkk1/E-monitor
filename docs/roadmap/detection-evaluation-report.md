@@ -1,3 +1,16 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - fingerprint/fingerprint/broadcast_sim.py
+  - fingerprint/fingerprint/peaks.py
+  - workers/internal/match/statemachine.go
+  - workers/pkg/audio/hashes.go
+  - fingerprint/fingerprint/generator.py
+  # recomendacoes-aplicadas: 4.1, 4.4, 4.5, 4.7
+  # recomendacoes-pendentes: 4.2 (coverage adaptativo), 4.3 (denoise), 4.6 (neural-fp)
+---
+
 # Relatório de Avaliação de Detecção — Baseline e Recomendações
 
 **Data:** 2026-05-05

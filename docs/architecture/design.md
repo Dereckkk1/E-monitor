@@ -1,3 +1,11 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/
+  - (design system compartilhado entre Radiocheck e E-radios/Signalads)
+---
+
 # E-radios — Design System & Guidelines (V2)
 
 > **Relacionados**: Para detalhes do frontend (componentes, contexts, utils), veja `frontend.md`. Para tech stack, veja `techstack.md`. Para CSS variables (tokens), veja `signalads-frontend/src/styles/variables.css`.

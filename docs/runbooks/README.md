@@ -1,3 +1,11 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  - workers/internal/metrics/metrics.go
+---
+
 # Runbooks — Radiocheck
 
 Procedimentos operacionais associados aos alertas do Prometheus/Alertmanager

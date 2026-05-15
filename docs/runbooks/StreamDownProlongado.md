@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  - workers/internal/ingestor/
+  - workers/internal/metrics/metrics.go
+---
+
 # StreamDownProlongado
 
 ## Sintomas
@@ -26,7 +35,7 @@ curl -s http://localhost:9090/api/v1/query \
 ```
 
 ## Correção
-1. **URL mudou**: atualizar via `PATCH /v1/internal/stations/{id}` com nova `stream_url`
+1. **URL mudou**: atualizar via `PUT /v1/internal/stations/{id}` com nova `stream_url` (rota PATCH não existe no router atual; usar PUT com payload completo da estação ou via tela `/stations/:id/edit`)
 2. **IP bloqueado**: trocar IP de saída do servidor; em Fase 3 usar pool de IPs rotativo
 3. **ffmpeg travado**: o health ticker detecta e reinicia automaticamente em até 60s; se o restart falhar, reiniciar o container `api`
 4. **Queda de rede**: verificar conectividade com `curl -I <stream_url>`; aguardar restauração

@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  - workers/internal/evidence/service.go
+  - workers/internal/storage/s3.go
+---
+
 # EvidenceUploadFailures
 
 ## Sintomas

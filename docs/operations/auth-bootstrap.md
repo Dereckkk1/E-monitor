@@ -1,3 +1,14 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/auth/bootstrap.go
+  - workers/internal/auth/jwt.go
+  - workers/internal/api/handlers/auth.go
+  - frontend/src/contexts/AuthContext.jsx
+  - migrations/0007_fase2_auth.up.sql
+---
+
 # Bootstrap de admin & login
 
 Documenta como o primeiro usuário admin é criado, como trocar a senha e o

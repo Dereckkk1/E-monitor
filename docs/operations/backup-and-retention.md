@@ -1,4 +1,36 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/scripts/backup.sh
+  - workers/internal/evidence/tiering.go
+  - infra/cron/postgres-backup.cron
+  - infra/prometheus/alerts.yml
+  # divergencia: doc descreve pg_basebackup, codigo usa pg_dump -Fc
+---
+
 # Backup, restore-test e tiering de evidências
+
+> **⚠️ Atenção — descompasso entre doc e implementação atual:**
+> Este doc descreve a abordagem original com `pg_basebackup` (full physical
+> backup + WAL streaming para PITR). A implementação efetiva em
+> `infra/scripts/backup.sh` (pós-incidente 2026-05-12) usa `pg_dump -Fc`
+> (logical backup em formato custom `.dump`) — escolha deliberada porque
+> `pg_basebackup` exige `replication` role + ajustes em `pg_hba.conf` que o
+> compose default não tem.
+>
+> O que muda na prática:
+> - Arquivo gerado é `.dump` (pg_dump custom), não `.tar.gz` (pg_basebackup).
+> - Restore usa `pg_restore`, não extração de tarball.
+> - WAL streaming (PITR ≤ 60s RPO) **não está ativo**. RPO efetivo é ≤24h
+>   (último pg_dump diário).
+> - Procedimento canônico atual está em [`data-durability.md`](data-durability.md)
+>   §"Camada 2 — Backup pg_dump diário no R2".
+>
+> Os comandos abaixo (§1.4, §1.5, §1.6) precisam ser reescritos para `pg_dump`/
+> `pg_restore` antes de serem confiáveis. O resto do doc (variáveis de
+> ambiente, mutex via flock, política de retenção, tiering de evidências)
+> permanece correto.
 
 Este documento operacional cobre os jobs introduzidos para implementar §14.4
 (backup do Postgres) e §11.4 (retenção e tiering das evidências) do

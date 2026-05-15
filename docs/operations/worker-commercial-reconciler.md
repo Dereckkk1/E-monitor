@@ -1,3 +1,15 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/supervisor/reconcile.go
+  - workers/internal/supervisor/supervisor.go
+  - workers/internal/supervisor/station_changes.go
+  - workers/internal/index/loader.go
+  - workers/internal/api/handlers/campaigns.go
+  - workers/internal/metrics/metrics.go
+---
+
 # Worker commercial reconciler
 
 > **Em uma linha:** o supervisor checa a cada 30s se a lista de comerciais
@@ -43,14 +55,14 @@ A cada 30 segundos, para cada worker em execução:
 
 A comparação é insensível a ordem (os SELECTs não têm `ORDER BY`) e a
 duplicatas (são tratadas como o mesmo elemento). Veja
-[`reconcile.go::commercialSetEqual`](../workers/internal/supervisor/reconcile.go).
+[`reconcile.go::commercialSetEqual`](../../workers/internal/supervisor/reconcile.go).
 
 ## Janela de detecção perdida
 
 No pior caso, um comercial recém-vinculado a uma estação cuja chamada de
 `Reload` falhou silenciosamente fica invisível por **até 30 segundos**. É o
 trade-off explícito documentado em
-[`reconcile.go::reconcileInterval`](../workers/internal/supervisor/reconcile.go).
+[`reconcile.go::reconcileInterval`](../../workers/internal/supervisor/reconcile.go).
 Antes do reconciler, essa janela era infinita até o próximo restart do worker
 (que podia nunca acontecer).
 
@@ -62,7 +74,7 @@ com tráfego real.
 ## Métricas Prometheus
 
 Duas métricas novas vivem em
-[`internal/metrics/metrics.go`](../workers/internal/metrics/metrics.go):
+[`internal/metrics/metrics.go`](../../workers/internal/metrics/metrics.go):
 
 | Métrica | Tipo | Significado |
 |---------|------|-------------|
@@ -94,20 +106,20 @@ rate(radiocheck_worker_reconcile_runs_total{outcome="restarted"}[5m]) > 0.05
 ## Onde a regra mora
 
 - **Constante de intervalo:**
-  [`reconcileInterval` em `reconcile.go`](../workers/internal/supervisor/reconcile.go).
+  [`reconcileInterval` em `reconcile.go`](../../workers/internal/supervisor/reconcile.go).
   Pinned por teste em `reconcile_test.go::TestReconcileInterval_Constant`.
 - **Comparador:**
-  [`commercialSetEqual` em `reconcile.go`](../workers/internal/supervisor/reconcile.go).
+  [`commercialSetEqual` em `reconcile.go`](../../workers/internal/supervisor/reconcile.go).
   Coberto por `reconcile_test.go::TestCommercialSetEqual` (10 cenários
   incluindo nil/empty, ordem, duplicata, sub/super-set).
 - **Goroutine spawnada por worker:**
   `runCommercialReconciler` é chamada dentro de `startStationWorker`
-  ([`supervisor.go`](../workers/internal/supervisor/supervisor.go)) ao lado
+  ([`supervisor.go`](../../workers/internal/supervisor/supervisor.go)) ao lado
   do stall watchdog e do threshold refresher. Mesmo padrão de cancelamento:
   `workerCtx.Done()` → exit.
 - **Snapshot da lista para comparação:**
   `Worker.CommercialShortIDs()` em
-  [`ingestor/worker.go`](../workers/internal/ingestor/worker.go).
+  [`ingestor/worker.go`](../../workers/internal/ingestor/worker.go).
   Retorna cópia — chamadores podem mutar livremente.
 
 ## Defesas em cima do reconciler
@@ -122,8 +134,8 @@ O reconciler é a **rede de segurança**, não a primeira linha. Os caminhos
 5. `RestoreActive` no startup → `Supervisor.Start` para cada campanha ativa.
 
 Pós-incidente, todos os call-sites do `Reload`/`Pause`/`Start` nos handlers
-agora **logam erros explicitamente** ([`commercials.go`](../workers/internal/api/handlers/commercials.go),
-[`campaigns.go`](../workers/internal/api/handlers/campaigns.go)) — antes
+agora **logam erros explicitamente** ([`commercials.go`](../../workers/internal/api/handlers/commercials.go),
+[`campaigns.go`](../../workers/internal/api/handlers/campaigns.go)) — antes
 estavam com `_ = h.Supervisor.X(...)`. Se o reconciler estiver consertando
 algo silenciosamente, o log de error correspondente deve aparecer minutos
 antes; é assim que se diferencia "Reload tá com bug" de "Reload está OK,
@@ -155,7 +167,7 @@ expôs duas armadilhas correlatas que valem registro:
 
 ### "Todas" no upload em massa enviava `target_stations=[]`
 
-[`frontend/src/pages/CampaignsPage.jsx`](../frontend/src/pages/CampaignsPage.jsx)
+[`frontend/src/pages/CampaignsPage.jsx`](../../frontend/src/pages/CampaignsPage.jsx)
 representa o estado da seleção como:
 
 - `null` → não escolhido (botão Enviar fica desabilitado)
@@ -165,7 +177,7 @@ representa o estado da seleção como:
 O `submitAll` antigo só chamava `PUT /commercials/{id}/stations` se
 `stationIds.length > 0`. Resultado: ao escolher "Todas", o material era
 criado com `target_stations=[]`, e o backend
-([`workers/internal/catalog/commercials.go`](../workers/internal/catalog/commercials.go)
+([`workers/internal/catalog/commercials.go`](../../workers/internal/catalog/commercials.go)
 em `ListReadyByCampaignsForStation`) trata isso como **inativo** — material
 não detectável em nenhuma estação. UI exibia "Inativo" no card, mas era
 fácil não notar.
@@ -177,7 +189,7 @@ mandar o PUT. Comentário inline marca o link com este incidente.
 ### Filtro de status do loader era exclusivamente `ativa`
 
 O loader que popula o índice em memória (em
-[`workers/internal/index/loader.go`](../workers/internal/index/loader.go))
+[`workers/internal/index/loader.go`](../../workers/internal/index/loader.go))
 filtrava commercials por `ca.status = 'ativa'` tanto no `LoadAll` (boot)
 quanto no subscriber `index.reload`. Consequência: se um fingerprint
 terminava ANTES da campanha transicionar para `ativa`, a publicação de
@@ -188,13 +200,13 @@ nunca chegavam à memória e o worker, quando subia, matcheia contra um
 índice incompleto.
 
 Fix: a constante
-[`indexEligibleStatuses`](../workers/internal/index/loader.go) agora é
+[`indexEligibleStatuses`](../../workers/internal/index/loader.go) agora é
 `('programada', 'ativa')`. Hashes são pré-carregadas para campanhas
 programadas, então quando o lifecycle scheduler vira a chave
 `programada → ativa` o índice já está quente. `concluida` e `cancelada`
 continuam excluídas (terminais — nenhum worker matcheia contra elas).
 Pinned por
-[`loader_test.go::TestIndexEligibleStatuses`](../workers/internal/index/loader_test.go).
+[`loader_test.go::TestIndexEligibleStatuses`](../../workers/internal/index/loader_test.go).
 
 ### `Pause+Start` ao editar `target_stations` da campanha
 
@@ -207,8 +219,8 @@ como `cancelada` por uma janela curta porém visível.
 
 Fix: novo método `Supervisor.UpdateStations(campaignID, newStations)` que
 faz UPDATE + diff + start/stop incremental sem nunca mudar o status. Ver
-[`workers/internal/supervisor/station_changes.go`](../workers/internal/supervisor/station_changes.go)
-e [`docs/campaign-lifecycle.md`](campaign-lifecycle.md#edição-de-target_stations-em-campanha-ativa).
+[`workers/internal/supervisor/station_changes.go`](../../workers/internal/supervisor/station_changes.go)
+e [`docs/campaign-lifecycle.md`](../architecture/campaign-lifecycle.md#edição-de-target_stations-em-campanha-ativa).
 
 ## Não objetivos
 

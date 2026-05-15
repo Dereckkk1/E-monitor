@@ -1,8 +1,20 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/api/handlers/materials.go
+  - workers/internal/catalog/materials.go
+  - frontend/src/pages/MaterialTypesPage.jsx
+  - migrations/0016_material_library.up.sql
+  - migrations/0026_material_script.up.sql
+  # nota: script field (migration 0026) implementado mas nao mencionado no doc abaixo
+---
+
 # Material Library — Gestao de Materiais e Tipos
 
 Documenta a biblioteca de materiais por cliente e o registro global de tipos. Introduzido pelo Plano 1 — Foundations.
 
-> Spec arquitetural: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](superpowers/specs/2026-05-11-campaign-wizard-design.md)
+> Spec arquitetural: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](../superpowers/specs/2026-05-11-campaign-wizard-design.md)
 
 ## Modelo
 

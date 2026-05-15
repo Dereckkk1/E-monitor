@@ -1,3 +1,16 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/docker/docker-compose.yml
+  - infra/scripts/backup.sh
+  - CLAUDE.md (regras §4.1-§4.7)
+  - infra/scripts/migrate-volumes-to-bind.sh
+  - infra/prometheus/alerts.yml
+  # data-do-incidente: 2026-05-12
+  # pendencias: F-111, F-112, F-118
+---
+
 # Incidente 2026-05-12 — Quase-perda do pgdata (e camadas de defesa que ficaram)
 
 > **CORREÇÃO IMPORTANTE (2026-05-12 fim do dia):** O dado **nunca foi
@@ -262,7 +275,7 @@ bootstrap admin criado, api listening em :8080.
 ## Follow-ups
 
 - **F-109 — *RESOLVIDO* — Backup container reescrito.** Branch
-  [`fix/backup-actually-runs`](../infra/docker/docker-compose.yml).
+  [`fix/backup-actually-runs`](../../infra/docker/docker-compose.yml).
   Inverter ordem entrypoint, plumbar todas as env vars (PG* + R2_*),
   instalar `aws-cli` via `apk add` no entrypoint, `depends_on`
   exigindo `service_healthy` em vez de `service_started`.
@@ -272,7 +285,7 @@ bootstrap admin criado, api listening em :8080.
   `s3://radiocheck-backups/postgres/daily/radiocheck-20260512-084414.dump`
   (177KB, primeiro backup com sucesso da história do sistema).
 - **F-110 — *RESOLVIDO* — Alerta Prometheus de ausência de backup.**
-  Branch [`fix/postgres-bind-mount`](../infra/prometheus/alerts.yml)
+  Branch [`fix/postgres-bind-mount`](../../infra/prometheus/alerts.yml)
   (commit `80c1e0f`). Novo service `node-exporter` no compose com
   `--collector.textfile.directory=/textfile`, volume compartilhado
   `prometheus-textfile` entre `backup` (rw) e `node-exporter` (ro).
@@ -298,11 +311,11 @@ bootstrap admin criado, api listening em :8080.
   `mc mirror` para R2 periódico. Mitigado por F-116 (bind mount em
   `miniodata` impede compose de apagar).
 - **F-114 — *RESOLVIDO* — Imagem do api inclui `tzdata`.** Branch
-  [`fix/postgres-bind-mount`](../infra/docker/Dockerfiles/workers.Dockerfile)
+  [`fix/postgres-bind-mount`](../../infra/docker/Dockerfiles/workers.Dockerfile)
   (commit `9fddea3`). `apk add tzdata` no stage final. Próximo build
   da imagem do api elimina o warning de timezone no startup.
 - **F-115 — *RESOLVIDO* — `RADIOCHECK_ENV` parametrizado.** Branch
-  [`fix/postgres-bind-mount`](../infra/docker/docker-compose.yml)
+  [`fix/postgres-bind-mount`](../../infra/docker/docker-compose.yml)
   (commit `9fddea3`). Compose passou de hardcoded `development` para
   `${RADIOCHECK_ENV:-development}`. Prod seta `RADIOCHECK_ENV=production`
   no `.env`. Vira o `deployment.environment` attribute de OTel e
@@ -310,15 +323,15 @@ bootstrap admin criado, api listening em :8080.
   destrutivo".
 - **F-116 — *RESOLVIDO (código) / Pendente (deploy)* — Bind mount em
   pgdata, miniodata e mastersdata.** Branch
-  [`fix/postgres-bind-mount`](../infra/docker/docker-compose.yml)
+  [`fix/postgres-bind-mount`](../../infra/docker/docker-compose.yml)
   (commit `b553f56`). Compose aceita 3 env vars opcionais:
   `PGDATA_HOST_PATH`, `MINIODATA_HOST_PATH`, `MASTERSDATA_HOST_PATH`.
   Quando setadas, usa bind mount no host (dado sobrevive a
   `docker compose down -v` e `--force-recreate`). Default = volume
   nomeado (dev local). Script de migração
-  [`infra/scripts/migrate-volumes-to-bind.sh`](../infra/scripts/migrate-volumes-to-bind.sh)
+  [`infra/scripts/migrate-volumes-to-bind.sh`](../../infra/scripts/migrate-volumes-to-bind.sh)
   automatiza a transição. Documentação completa em
-  [data-durability.md](data-durability.md).
+  [data-durability.md](../operations/data-durability.md).
 - **F-117 — *RESOLVIDO (operacional)* — Snapshot diário do disco da
   VM no GCP.** Schedule `default-schedule-1` criado no GCP Console,
   retenção 14 dias, executa 04:00 UTC. Primeira execução: 2026-05-13.
@@ -329,7 +342,7 @@ bootstrap admin criado, api listening em :8080.
   recente do R2, (2) sobe postgres efêmero, (3) restora, (4) roda
   smoke-test (`SELECT COUNT(*)` em 3 tabelas), (5) destrói. Sem
   isso, sabemos que backups existem mas não que são restoráveis. Ver
-  [data-durability.md §Restore drill](data-durability.md).
+  [data-durability.md §Restore drill](../operations/data-durability.md).
 
 ## Recadastro do catálogo
 
@@ -372,14 +385,14 @@ exige falha simultânea em três planos separados.
 
 ### Doc relacionado
 
-- [data-durability.md](data-durability.md) — modelo completo de
+- [data-durability.md](../operations/data-durability.md) — modelo completo de
   ameaças, runbooks de recovery, procedimento de migração
   named-volume → bind-mount, restore drill (pendente).
 - [incident-2026-05-09-jingle-falsepos.md](incident-2026-05-09-jingle-falsepos.md)
   — incidente da véspera (falso-positivo de AMBIENTAL JINGLE) cuja
   saga de fixes (F-108 v1→v2→v3) acabou expondo o problema do
   backup e levou a este incidente.
-- [shared-hash-detection.md](shared-hash-detection.md) — algoritmo de
+- [shared-hash-detection.md](../architecture/shared-hash-detection.md) — algoritmo de
   shared-hash em sua forma final pós-2026-05-12.
 - `CLAUDE.md` §4 — regras críticas operacionais para qualquer
   agente futuro, derivadas deste incidente.

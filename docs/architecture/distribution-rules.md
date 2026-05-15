@@ -1,8 +1,19 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - migrations/0017_distribution_plan.up.sql
+  - migrations/0018_detections_categorization.up.sql
+  - migrations/0019_rules_by_type.up.sql
+  - workers/internal/api/handlers/distribution_rules.go
+  - workers/internal/catalog/distribution_rules.go
+---
+
 # Distribution Rules — Semantica e Operacao
 
 Documenta as regras de distribuicao (programado) e categorizacao de deteccoes introduzidas pelo Plano 1 — Foundations.
 
-> Spec arquitetural: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](superpowers/specs/2026-05-11-campaign-wizard-design.md)
+> Spec arquitetural: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](../superpowers/specs/2026-05-11-campaign-wizard-design.md)
 
 ## O que e uma "regra de distribuicao"
 

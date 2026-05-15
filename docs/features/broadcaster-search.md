@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/utils/search.js
+  - workers/internal/catalog/stations.go
+  - migrations/0023_unaccent.up.sql
+  # pendencia: aplicar unaccent() no WHERE do backend (migration criada mas SQL ainda usa ILIKE puro)
+---
+
 # Padrão de busca de broadcasters
 
 Padrão único de busca de emissoras usado em todas as telas que filtram broadcasters. Importado do `/marketplace` do E-radios (referência: `signalads-frontend/src/pages/Marketplace` + `productController.ts:668`) para garantir que o usuário tenha o mesmo comportamento em qualquer lugar do produto que envolva pesquisa de emissora.
@@ -30,14 +40,14 @@ Toda nova tela que listar/filtrar emissoras deve usar este padrão. Hoje:
 |------|-------|------|
 | `/stations` | Backend (`q` query param) | Server-side |
 | `/campaigns` (autocomplete de emissoras) | Backend (`q` query param) | Server-side |
-| `/monitoring` | Client-side em [`MonitoringPage.jsx`](../frontend/src/pages/MonitoringPage.jsx) | `useStreamHealth` retorna lista completa |
-| `/detections` | Client-side em [`DetectionsPage.jsx`](../frontend/src/pages/DetectionsPage.jsx) | filtra `target_stations` da campanha selecionada |
+| `/monitoring` | Client-side em [`MonitoringPage.jsx`](../../frontend/src/pages/MonitoringPage.jsx) | `useStreamHealth` retorna lista completa |
+| `/detections` | Client-side em [`DetectionsPage.jsx`](../../frontend/src/pages/DetectionsPage.jsx) | filtra `target_stations` da campanha selecionada |
 
 ## Como reusar
 
 ### Frontend (client-side)
 
-Helper em [`frontend/src/utils/search.js`](../frontend/src/utils/search.js):
+Helper em [`frontend/src/utils/search.js`](../../frontend/src/utils/search.js):
 
 ```js
 import { tokenize, matchesAllTokens } from '../utils/search'
@@ -57,7 +67,7 @@ const filtered = stations.filter(s => matchesAllTokens(s, fields, tokens))
 
 ### Backend (server-side)
 
-Implementado em [`workers/internal/catalog/stations.go`](../workers/internal/catalog/stations.go) na função `List`. Cada token vira um `WHERE (name ILIKE … OR city ILIKE … OR …)` separado, todos combinados por `AND`. Para outras tabelas que precisem do mesmo padrão, replicar a estrutura — não há helper genérico hoje.
+Implementado em [`workers/internal/catalog/stations.go`](../../workers/internal/catalog/stations.go) na função `List`. Cada token vira um `WHERE (name ILIKE … OR city ILIKE … OR …)` separado, todos combinados por `AND`. Para outras tabelas que precisem do mesmo padrão, replicar a estrutura — não há helper genérico hoje.
 
 ## Histórico
 

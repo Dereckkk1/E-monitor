@@ -1,3 +1,11 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  - workers/internal/ingestor/
+---
+
 # WorkerHighMemory
 
 ## Sintomas
@@ -29,9 +37,9 @@ curl -s http://localhost:8080/debug/pprof/goroutine?debug=1 | grep -c "^goroutin
 # Há quanto tempo o container está de pé?
 docker inspect <container> --format '{{ .State.StartedAt }}'
 
-# Quantos hashes em índice?
-curl -s http://localhost:9090/api/v1/query \
-  --data-urlencode 'query=radiocheck_index_hashes_total' | jq
+# Métrica radiocheck_index_hashes_total NÃO está exposta no momento (verificar
+# em workers/internal/metrics/metrics.go antes de tentar). Alternativa: contar
+# direto no Postgres via SELECT COUNT(*) FROM fingerprint_hashes.
 ```
 
 ## Correção

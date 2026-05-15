@@ -1,0 +1,7 @@
+dash campanha e multi campanha
+relatorio de erros (relatorio-cammpanha.pages.dev)
+usuarios
+- admin
+- operador
+- cliente
+arruma campanha

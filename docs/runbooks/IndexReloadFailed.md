@@ -1,3 +1,11 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/index/loader.go
+  # alerta nao existe em alerts.yml; reload via NATS (index.reload), nao endpoint HTTP
+---
+
 # IndexReloadFailed
 
 ## Sintomas

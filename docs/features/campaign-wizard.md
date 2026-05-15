@@ -1,9 +1,22 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/pages/CampaignWizardPage.jsx
+  - frontend/src/pages/CampaignWizardSteps/
+  - workers/internal/api/handlers/materials.go
+  - migrations/0019_rules_by_type.up.sql
+  - migrations/0022_pricing.up.sql
+  - migrations/0026_material_script.up.sql
+  # limitacoes: probeDuration stub 30s (F-88); validacao future-only edit so frontend (F-91)
+---
+
 # Wizard de Campanha — Guia Operacional
 
 Documenta o fluxo de 4 etapas pra criar/editar campanha. Implementado pelo Plano 2.
 
-> Spec: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](superpowers/specs/2026-05-11-campaign-wizard-design.md)
-> Plano: [`docs/superpowers/plans/2026-05-11-plano-2-wizard-frontend.md`](superpowers/plans/2026-05-11-plano-2-wizard-frontend.md)
+> Spec: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](../superpowers/specs/2026-05-11-campaign-wizard-design.md)
+> Plano: [`docs/superpowers/plans/2026-05-11-plano-2-wizard-frontend.md`](../superpowers/plans/2026-05-11-plano-2-wizard-frontend.md)
 
 ## Quando usar
 

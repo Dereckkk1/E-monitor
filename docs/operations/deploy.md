@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - scripts/deploy.sh
+  - infra/docker/docker-compose.yml
+  - infra/docker/docker-compose.override.yml
+---
+
 # Deploy em Produção — Radiocheck
 
 > Última atualização: 2026-05-08  

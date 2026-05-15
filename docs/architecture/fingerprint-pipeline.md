@@ -1,3 +1,15 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/pkg/audio/stft.go
+  - workers/pkg/audio/peaks.go
+  - workers/pkg/audio/hashes.go
+  - workers/internal/fingerprint/pipeline.go
+  - workers/cmd/fingerprint/main.go
+  - migrations/0001_initial.up.sql
+---
+
 # Fingerprint Pipeline (offline / batch)
 
 Documentação operacional do pipeline que gera fingerprints acústicos a partir
@@ -13,7 +25,7 @@ master.{wav,mp3,m4a,ogg}
 ffmpeg (decode + filtros, mono 16 kHz f32le)
     │
     ▼
-STFT (4096 / 1024 hop, Hann)            ── pkg/audio/stft.go
+STFT (4096 / 2048 hop, Hann)            ── pkg/audio/stft.go
     │
     ▼
 Peak picking (vizinhança 17×17, p80)    ── pkg/audio/peaks.go
@@ -100,7 +112,7 @@ Definidas em `pkg/audio` (espelhando §25 do plano):
 |-----------|-------|------|
 | `SampleRate` | 16000 Hz | `internal/fingerprint/audio.go` |
 | `WindowSize` | 4096 | `pkg/audio/stft.go` |
-| `HopSize` | 1024 | `pkg/audio/stft.go` |
+| `HopSize` | 2048 | `pkg/audio/stft.go` |
 | `FreqMinBin` / `FreqMaxBin` | 25 / 1024 | `pkg/audio/stft.go` |
 | `PeakAmplitudePercentile` | 80 | `pkg/audio/peaks.go` |
 | `FanOut` | 8 | `pkg/audio/hashes.go` |

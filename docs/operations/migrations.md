@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/docker/docker-compose.yml
+  - migrations/
+  - scripts/bootstrap-migrations.sh
+---
+
 # Migrations — runner automático
 
 Toda vez que o `docker compose up` sobe, um service dedicado (`migrate`) aplica todas as migrations pendentes em `migrations/*.up.sql` **antes** do `api` iniciar. Não há mais necessidade de aplicação manual.

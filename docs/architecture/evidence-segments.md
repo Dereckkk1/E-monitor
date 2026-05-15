@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/segments/segments.go
+  - workers/internal/evidence/service.go
+  - workers/internal/config/config.go
+---
+
 # Evidence Segments
 
 ## Why this exists
@@ -22,7 +31,7 @@ that began surfacing in production:
 Two real false-negative incidents on the same station (UNIUBE +
 JINGLE ROGGA VERÃO 30) traced back to this. The full investigation is
 captured in the conversation that drove the refactor; see
-[diag_falsepos_test.go](../workers/internal/match/diag_falsepos_test.go) for
+[diag_falsepos_test.go](../../workers/internal/match/diag_falsepos_test.go) for
 the diagnostic runner used to confirm the root cause.
 
 ## How it works now
@@ -43,7 +52,7 @@ strftime pattern `YYYYMMDD-HHMMSS.aac`:
 ```
 
 When a detection confirms, `evidence.Service` calls
-[`segments.Extract(dir, from, to)`](../workers/internal/segments/segments.go),
+[`segments.Extract(dir, from, to)`](../../workers/internal/segments/segments.go),
 which:
 
 1. Lists the segment files whose `[start, start+30s]` interval overlaps the

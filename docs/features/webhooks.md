@@ -1,3 +1,15 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/webhook/worker.go
+  - workers/internal/webhook/outbox.go
+  - workers/internal/webhook/safehttp.go
+  - workers/internal/api/handlers/webhooks.go
+  - migrations/0008_fase2_webhooks.up.sql
+  - migrations/0012_webhooks_complete.up.sql
+---
+
 # Webhooks
 
 Documentação operacional do subsistema de webhooks do Radiocheck (§13.1.4 do plano).
@@ -234,7 +246,7 @@ Hoje:
 - `detection.confirmed` — uma veiculação foi detectada e persistida (caminho normal).
 - `detection.retracted` — uma detecção previamente publicada foi retratada
   pela desambiguação de versões (§18.2.2). Veja
-  [version-disambiguation.md](version-disambiguation.md) para o contrato
+  [version-disambiguation.md](../architecture/version-disambiguation.md) para o contrato
   completo do payload e o cenário que dispara o evento. Receivers que
   mantêm cópia local devem usar `(station_id, commercial.short_id,
   detection.detected_at)` para localizar a row a marcar como retratada.

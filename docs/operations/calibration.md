@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/calibration/job.go
+  - workers/internal/calibration/scheduler.go
+  - workers/cmd/api/main.go
+---
+
 # Calibração Adaptativa de Threshold
 
 O sistema ajusta automaticamente o `min_hashes` (mínimo de hashes para confirmar uma detecção) por emissora.

@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/neural/client.go
+  - workers/internal/api/handlers/health.go
+  # sem alerta Prometheus correspondente; verificacao manual via /health
+---
+
 # NeuralVerifierDown
 
 ## Sintomas

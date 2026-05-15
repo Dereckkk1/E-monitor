@@ -1,3 +1,12 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/supervisor/supervisor.go
+  - workers/internal/catalog/stations.go
+  - workers/internal/metrics/metrics.go
+---
+
 # Threshold Dinâmico por Emissora
 
 Documentação operacional do plumbing que aplica em tempo real o `min_hashes`

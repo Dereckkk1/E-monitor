@@ -1,3 +1,11 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  # depende de node_exporter com modulo time habilitado (infra externa)
+---
+
 # ClockDrift
 
 ## Sintomas

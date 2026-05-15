@@ -1,3 +1,11 @@
+---
+status: legado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  # tipo: prompt operacional de uma sessao concluida (Fase 1 PoC)
+  # nota: todos os 10 fix-groups confirmados como mergeados; mantido como artefato historico
+---
+
 # Prompt de Execução — Radiocheck PoC: Correções Pós-Implementação
 
 Este arquivo contém o prompt para uma sessão nova do Claude Code corrigir os bugs

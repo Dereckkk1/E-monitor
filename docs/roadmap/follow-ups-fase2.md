@@ -1,3 +1,16 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/webhook/safehttp.go
+  - workers/internal/auth/jwt.go
+  - workers/internal/api/handlers/webhooks.go
+  - workers/internal/webhook/worker.go
+  - workers/internal/evidence/tiering.go
+  - infra/scripts/backup.sh
+  # nota: 5 security fixes + F-02 resolvidos, ~40 itens ainda pendentes
+---
+
 # Follow-ups da Fase 2 — dívida técnica registrada
 
 Itens identificados durante a Fase 2 (semanas 7–18) que **não bloqueiam o critério de saída** mas **devem ser resolvidos antes da Fase 3** (semanas 19–30, escala para 30→200 emissoras). Cada item lista o que, por quê, onde no código, e dependências.

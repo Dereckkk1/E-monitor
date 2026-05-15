@@ -1,3 +1,14 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/api/handlers/materials.go
+  - workers/cmd/fingerprint/main.go
+  - migrations/0016_material_library.up.sql
+  - migrations/0024_unify_short_id_drop_detections_fk.up.sql
+  # nota: CLI fingerprint ainda usa nomenclatura legada (--commercial-short-id) mas funciona polimorfico
+---
+
 # Pipeline de Fingerprint de Materiais
 
 Quando um material novo é subido via wizard (Step 3), o backend salva a row,
@@ -12,7 +23,7 @@ mas o daemon Python descartava o payload silenciosamente (KeyError em
 fez todo o pipeline polimórfico sobre as duas tabelas. Ver
 [postmortem](./incident-2026-05-13-materials-fingerprint.md) (se existir) ou
 o plano em
-[`docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md`](superpowers/plans/2026-05-13-material-fingerprint-pipeline.md).
+[`docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md`](../superpowers/plans/2026-05-13-material-fingerprint-pipeline.md).
 
 ## Fluxo
 
@@ -42,7 +53,7 @@ do mesmo material, a atribuição vai pra **campanha mais recentemente vinculada
 (`ORDER BY campaign_materials.added_at DESC LIMIT 1`).
 
 Multi-atribuição (uma detecção contar pra múltiplas campanhas
-simultaneamente) é follow-up **F-119** em [follow-ups-fase2.md](follow-ups-fase2.md).
+simultaneamente) é follow-up **F-119** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
 
 ## Comandos úteis
 

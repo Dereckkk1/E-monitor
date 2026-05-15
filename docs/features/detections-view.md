@@ -1,9 +1,20 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/pages/DetectionsPage.jsx
+  - frontend/src/components/DistributionGrid.jsx
+  - frontend/src/components/CoverageSummary.jsx
+  - workers/internal/catalog/daily_summary.go
+  - migrations/0018_detections_categorization.up.sql
+---
+
 # Detections View — Guia Operacional
 
 Documenta a `/detections` refatorada pelo Plano 3.
 
-> Spec: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](superpowers/specs/2026-05-11-campaign-wizard-design.md) §7
-> Plano: [`docs/superpowers/plans/2026-05-11-plano-3-detections-refactor.md`](superpowers/plans/2026-05-11-plano-3-detections-refactor.md)
+> Spec: [`docs/superpowers/specs/2026-05-11-campaign-wizard-design.md`](../superpowers/specs/2026-05-11-campaign-wizard-design.md) §7
+> Plano: [`docs/superpowers/plans/2026-05-11-plano-3-detections-refactor.md`](../superpowers/plans/2026-05-11-plano-3-detections-refactor.md)
 
 ## O que mudou
 
@@ -11,7 +22,7 @@ A `/detections` antes era um calendário station × day com hits flat. Não comp
 
 ## Cores
 
-Veja [`distribution-rules.md`](distribution-rules.md) pra detalhes da semântica. Resumo:
+Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalhes da semântica. Resumo:
 
 | Cor | Significado |
 |-----|-------------|

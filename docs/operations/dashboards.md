@@ -1,8 +1,18 @@
+---
+status: parcialmente-implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/grafana/dashboards/
+  - infra/docker/docker-compose.yml
+  - workers/internal/metrics/metrics.go
+  # nota: 4 paineis sao placeholders por metricas ainda nao implementadas (documentado)
+---
+
 # Dashboards Grafana — Radiocheck
 
 Documentação operacional dos painéis Grafana provisionados em
 `infra/grafana/dashboards/`. Referência arquitetural: §15.4 do
-[plano_implementacao.md](../plano_implementacao.md).
+[plano_implementacao.md](../../plano_implementacao.md).
 
 ## Provisioning
 

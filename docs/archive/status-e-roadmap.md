@@ -1,3 +1,11 @@
+---
+status: legado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  # tipo: snapshot historico — Fase 1 PoC concluida
+  # nota: Fase 2/3/4 roadmap esta em plano_implementacao.md (canonico)
+---
+
 # Radiocheck — Status & Roadmap
 
 > Documento único de rastreamento do projeto: o que está feito, o que falta para o

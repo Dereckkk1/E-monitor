@@ -1,10 +1,21 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/docker/docker-compose.yml
+  - infra/scripts/backup.sh
+  - infra/scripts/migrate-volumes-to-bind.sh
+  - infra/prometheus/alerts.yml
+  - workers/internal/supervisor/supervisor.go
+---
+
 # Durabilidade de dados
 
 Como Radiocheck protege os dados de cada classe de falha — qual camada
 cobre o quê, qual ainda é gap, e procedimentos de recuperação.
 
 > Motivação: incidente 2026-05-12 destruiu 100% do `pgdata`. Postmortem
-> em [`incident-2026-05-12-pgdata-loss.md`](incident-2026-05-12-pgdata-loss.md).
+> em [`incident-2026-05-12-pgdata-loss.md`](../incidents/incident-2026-05-12-pgdata-loss.md).
 > Este doc é o produto da análise, mapeando defesa em profundidade contra
 > reincidência.
 

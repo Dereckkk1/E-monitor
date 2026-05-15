@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - frontend/src/pages/DetectionsPage.jsx
+  - frontend/src/components/DayDetailModal.jsx
+  - workers/internal/api/handlers/detections.go
+  - migrations/0018_detections_categorization.up.sql
+---
+
 # Página de Veiculações — Visão Calendário
 
 A página `/detections` mostra as detecções de uma campanha em formato de **grade calendário**: cada linha é uma emissora-alvo da campanha, cada coluna é um dia do período selecionado, e cada célula traz a quantidade de veiculações daquele dia/emissora.
@@ -18,7 +28,7 @@ A página `/detections` mostra as detecções de uma campanha em formato de **gr
 
 ## Componentes
 
-- [frontend/src/pages/DetectionsPage.jsx](../frontend/src/pages/DetectionsPage.jsx) — orquestra dropdown, período, estado do modal.
-- [frontend/src/components/DetectionsCalendar.jsx](../frontend/src/components/DetectionsCalendar.jsx) — grade emissoras × dias.
-- [frontend/src/components/DayDetailModal.jsx](../frontend/src/components/DayDetailModal.jsx) — detalhamento diário com player de áudio.
-- [frontend/src/pages/detections/utils.js](../frontend/src/pages/detections/utils.js) — helpers puros (range de dias, bucketização, formatação em fuso SP).
+- [frontend/src/pages/DetectionsPage.jsx](../../frontend/src/pages/DetectionsPage.jsx) — orquestra dropdown, período, estado do modal.
+- [frontend/src/components/DetectionsCalendar.jsx](../../frontend/src/components/DetectionsCalendar.jsx) — grade emissoras × dias.
+- [frontend/src/components/DayDetailModal.jsx](../../frontend/src/components/DayDetailModal.jsx) — detalhamento diário com player de áudio.
+- [frontend/src/pages/detections/utils.js](../../frontend/src/pages/detections/utils.js) — helpers puros (range de dias, bucketização, formatação em fuso SP).

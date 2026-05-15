@@ -1,3 +1,11 @@
+---
+status: planejado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - infra/prometheus/alerts.yml
+  # alerta comentado TODO; metrica radiocheck_db_query_duration_seconds nao exposta
+---
+
 # DBLatencyHigh
 
 > **Status:** alerta atualmente comentado em `infra/prometheus/alerts.yml`. Depende da exportação da métrica `radiocheck_db_query_duration_seconds_bucket` pelo serviço `api` (TODO em §15.1 do plano).

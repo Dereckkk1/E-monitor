@@ -1,3 +1,11 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - scripts/radio-sim/simulate.sh
+  - infra/docker/docker-compose.yml
+---
+
 # Simulação de Stream de Rádio
 
 Ferramenta para validar o pipeline de detecção ponta-a-ponta sem depender de uma rádio real tocar os comerciais cadastrados.

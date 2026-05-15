@@ -1,3 +1,14 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/storage/s3.go
+  - workers/internal/api/handlers/detections.go
+  - workers/internal/config/config.go
+  - frontend/src/components/DayDetailModal.jsx
+  - frontend/src/components/AudioPlayer.jsx
+---
+
 # Evidence — URLs pré-assinadas
 
 Como o frontend interno entrega áudios de evidência ao navegador sem precisar
@@ -33,7 +44,7 @@ Authorization: Bearer <jwt>
 **404** — detecção não existe ou `evidence_status != "available"`.
 
 A URL é válida por **5 minutos** (constante em
-[handlers/detections.go](../workers/internal/api/handlers/detections.go),
+[handlers/detections.go](../../workers/internal/api/handlers/detections.go),
 função `EvidenceURL`). O frontend deve cachear e refazer a chamada perto do
 expiry — a implementação atual reaproveita a URL enquanto o expires_at estiver
 a mais de 30 s do agora.
@@ -63,7 +74,7 @@ Em produção, defina `S3_PUBLIC_ENDPOINT` para o domínio público do bucket
 
 ## Fluxo no frontend
 
-[DayDetailModal.jsx](../frontend/src/components/DayDetailModal.jsx) mantém um
+[DayDetailModal.jsx](../../frontend/src/components/DayDetailModal.jsx) mantém um
 mapa `{detectionId -> {url, expiresAt}}` em estado local.
 
 - **Click em Play:** `ensureEvidenceUrl(id)` → seta no estado → AudioPlayer

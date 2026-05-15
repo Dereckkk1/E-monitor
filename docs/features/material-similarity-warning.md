@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/similarity/similarity.go
+  - workers/internal/similarity/similarity_test.go
+  - migrations/0025_material_similarity.up.sql
+  - frontend/src/components/SimilarityWarningModal.jsx
+---
+
 # Material Similarity Warning
 
 ## What it does
@@ -5,7 +15,7 @@
 When an operator uploads a new material in the campaign wizard, the system
 scans the new audio against the other materials of the **same client** (no
 cross-client comparison) and persists the top match if the similarity score
-is ≥15%. The frontend then shows an amber badge on the material card with a
+is ≥50%. The frontend then shows an amber badge on the material card with a
 modal that A/B's both audios and lets the operator decide:
 
 - **Manter assim mesmo** → acknowledges the warning (badge disappears).
@@ -14,8 +24,12 @@ modal that A/B's both audios and lets the operator decide:
 ## Scope and limitations
 
 - Per-client only. Two clients with identical jingles will not cross-warn.
-- Threshold is hard-coded at 15% (`similarity.WarnThreshold` in
-  `workers/internal/similarity/similarity.go`).
+- Threshold is hard-coded at **50%** (`similarity.WarnThreshold` in
+  `workers/internal/similarity/similarity.go`). Calibração: <5% é ruído,
+  15-25% é sting compartilhado intencional (não bloqueia — vinheta reutilizada
+  legitimamente), 50%+ é subset / near-duplicate (bloqueia, exige decisão
+  manter-os-dois vs remover-o-novo). O comentário no código tem o racional
+  completo.
 - Operates on `fingerprint_status='ready'` materials only. Materials still in
   `pending`/`generating` are skipped on both sides (own + index).
 - Top-1 match. If the new material is similar to N existing ones, only the
@@ -94,7 +108,7 @@ SELECT m.title,
        m.similarity_acknowledged_at
 FROM materials m
 LEFT JOIN materials sim ON sim.id = m.most_similar_material_id
-WHERE m.similarity_score >= 0.15
+WHERE m.similarity_score >= 0.50
 ORDER BY m.created_at DESC;
 ```
 

@@ -1,3 +1,13 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/observability/tracing.go
+  - workers/internal/observability/nats.go
+  - workers/cmd/api/main.go
+  - infra/docker/docker-compose.yml
+---
+
 # Tracing distribuído (§15.3)
 
 Este documento descreve a instrumentação de tracing OpenTelemetry implantada

@@ -1,3 +1,14 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/sharing/sharing.go
+  - workers/cmd/backfill-shared-hashes/main.go
+  - migrations/0015_shared_hashes.up.sql
+  # data-do-incidente: 2026-05-09
+  # pendencia: F-105 (index.reload auto ao fim do backfill)
+---
+
 # Incidente AMBIENTAL JINGLE × AMBIENTAL 30 — sting compartilhado + saga F-108
 
 Três episódios sucessivos da mesma família de causa raiz (compartilhamento
@@ -11,7 +22,7 @@ de áudio entre comerciais), revelando bugs distintos no algoritmo
 > levaram à perda total do pgdata no dia 12. Os dois docs se
 > referenciam mutuamente.
 >
-> **Algoritmo final:** [shared-hash-detection.md](shared-hash-detection.md).
+> **Algoritmo final:** [shared-hash-detection.md](../architecture/shared-hash-detection.md).
 
 ## Resumo executivo
 
@@ -106,7 +117,7 @@ Capital nesse dia:
    AMB30 confirmou falsamente.
 3. Os dois detections têm janelas de veiculação sobrepostas.
    Supervisor acionou a desambiguação por sobreposição
-   ([version-disambiguation.md](version-disambiguation.md)) e — como
+   ([version-disambiguation.md](../architecture/version-disambiguation.md)) e — como
    ambos são 30s — empate de duração resolvido por `short_id`. AMB30
    (`short_id=11`) venceu JINGLE (`short_id=12`).
 4. O JINGLE real foi retratado, o falso-positivo AMB30 ficou
@@ -193,7 +204,7 @@ abaixo.
 
 A correção atravessou 3 iterações. Cada uma resolveu um subproblema
 e expôs o próximo. Estado final em
-[`workers/internal/sharing/sharing.go`](../workers/internal/sharing/sharing.go).
+[`workers/internal/sharing/sharing.go`](../../workers/internal/sharing/sharing.go).
 
 #### v1 — `window-fraction` de um lado (descartada)
 
@@ -264,13 +275,13 @@ for otherID, scan := range perOther:
 ```
 
 Trade-off: comerciais curtos perdem a defesa `shared-hash`. Mitigado
-pela camada de [version-disambiguation](version-disambiguation.md) no
+pela camada de [version-disambiguation](../architecture/version-disambiguation.md) no
 supervisor — se PULSO false-confirmar enquanto X toca, supervisor
 retrata PULSO pela regra de maior duração. Quando PULSO toca sozinho,
 confirma normalmente.
 
 **Validação:** 8 testes unitários em
-[`sharing_test.go`](../workers/internal/sharing/sharing_test.go),
+[`sharing_test.go`](../../workers/internal/sharing/sharing_test.go),
 incluindo `TestClassifyAndFilter_AsymmetricSubset_15sInside30s`
 (bidirectional) e `TestClassifyAndFilter_ShortCommercialOwnScanSkipped`
 (skip de curto).
@@ -354,15 +365,15 @@ Esperado:
   exatamente a janela que permitiu o Episódio 2 acontecer.
 - **F-108 — *RESOLVIDO* — Detecção bidirecional de subset + skip de
   curtos em `sharing.MarkSharedHashes`.** Versão final em
-  [`sharing.go`](../workers/internal/sharing/sharing.go) commits
+  [`sharing.go`](../../workers/internal/sharing/sharing.go) commits
   `290aea6` (v2) + `f7e289d` (v3). Documentação em
-  [shared-hash-detection.md](shared-hash-detection.md).
+  [shared-hash-detection.md](../architecture/shared-hash-detection.md).
 
 ## Doc relacionado
 
-- [shared-hash-detection.md](shared-hash-detection.md) — algoritmo
+- [shared-hash-detection.md](../architecture/shared-hash-detection.md) — algoritmo
   em sua forma final pós-incidente, com casos de teste.
-- [version-disambiguation.md](version-disambiguation.md) — camada de
+- [version-disambiguation.md](../architecture/version-disambiguation.md) — camada de
   defesa complementar (dedup por duração no supervisor).
 - [incident-2026-05-12-pgdata-loss.md](incident-2026-05-12-pgdata-loss.md)
   — incidente do dia seguinte: a deploy do fix do Episódio 1

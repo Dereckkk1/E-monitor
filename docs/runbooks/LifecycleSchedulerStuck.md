@@ -1,3 +1,12 @@
+---
+status: planejado
+ultima-verificacao: 2026-05-15
+codigo-relacionado:
+  - workers/internal/supervisor/lifecycle_scheduler.go
+  - infra/prometheus/alerts.yml
+  # metrica radiocheck_lifecycle_scheduler_last_run_timestamp nao exposta ainda
+---
+
 # LifecycleSchedulerStuck
 
 > **Status:** alerta cadastrado, mas a métrica `radiocheck_lifecycle_scheduler_last_run_timestamp` ainda **não é exposta** pelo serviço. Este runbook se aplica assim que o gauge for adicionado ao scheduler de campanhas (§18.2.1). Item de débito técnico — não fechado na implementação 2B.
