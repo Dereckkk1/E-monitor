@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
 )
@@ -30,10 +31,15 @@ type MaterialsHandler struct {
 
 // ListByClient returns all materials for a given client.
 // Optional query param ?q= filters by case-insensitive title substring.
+// Viewer scope: if the JWT client_id does not match :clientID, returns 403.
 func (h *MaterialsHandler) ListByClient(w http.ResponseWriter, r *http.Request) {
 	clientID, err := uuid.Parse(chi.URLParam(r, "clientID"))
 	if err != nil {
 		http.Error(w, "invalid clientID", http.StatusBadRequest)
+		return
+	}
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && *scope != clientID {
+		http.Error(w, "forbidden_client_scope", http.StatusForbidden)
 		return
 	}
 	q := r.URL.Query().Get("q")

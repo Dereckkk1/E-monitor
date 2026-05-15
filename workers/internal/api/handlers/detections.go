@@ -21,9 +21,10 @@ import (
 )
 
 type DetectionsHandler struct {
-	Repo        *catalog.Detections
-	Storage     *storage.Client
-	SummaryRepo *catalog.DailySummaryRepo
+	Repo         *catalog.Detections
+	CampaignRepo *catalog.Campaigns
+	Storage      *storage.Client
+	SummaryRepo  *catalog.DailySummaryRepo
 }
 
 func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +38,9 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f := catalog.ListFilter{}
+	f := catalog.ListFilter{
+		ClientID: auth.ClientScopeFromContext(r.Context()),
+	}
 	if v := q.Get("campaign_id"); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {
@@ -92,7 +95,9 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 // the airtime report.
 func (h *DetectionsHandler) listPaged(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := catalog.ListPagedFilter{}
+	f := catalog.ListPagedFilter{
+		ClientID: auth.ClientScopeFromContext(r.Context()),
+	}
 
 	if v := q.Get("campaign_id"); v != "" {
 		id, err := uuid.Parse(v)
@@ -155,6 +160,22 @@ func (h *DetectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
+	// Viewer scope: verify campaign ownership before fetching full detail.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+		clientID, err := h.Repo.GetClientID(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", 404)
+			} else {
+				http.Error(w, "internal error", 500)
+			}
+			return
+		}
+		if *clientID != *scope {
+			http.Error(w, "not found", 404)
+			return
+		}
+	}
 	det, err := h.Repo.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -179,6 +200,22 @@ func (h *DetectionsHandler) EvidenceURL(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		http.Error(w, "invalid id", 400)
 		return
+	}
+	// Viewer scope: verify campaign ownership before returning evidence URL.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+		clientID, err := h.Repo.GetClientID(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", 404)
+			} else {
+				http.Error(w, "internal error", 500)
+			}
+			return
+		}
+		if *clientID != *scope {
+			http.Error(w, "not found", 404)
+			return
+		}
 	}
 	det, err := h.Repo.Get(r.Context(), id)
 	if err != nil {
@@ -210,6 +247,22 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "invalid id", 400)
 		return
+	}
+	// Viewer scope: verify campaign ownership before serving evidence audio.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+		clientID, err := h.Repo.GetClientID(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", 404)
+			} else {
+				http.Error(w, "internal error", 500)
+			}
+			return
+		}
+		if *clientID != *scope {
+			http.Error(w, "not found", 404)
+			return
+		}
 	}
 	det, err := h.Repo.Get(r.Context(), id)
 	if err != nil {
@@ -591,6 +644,22 @@ func (h *DetectionsHandler) AggregateByMaterial(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid campaign_id", http.StatusBadRequest)
 		return
 	}
+	// Viewer scope: verify campaign ownership before aggregating.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+		camp, err := h.CampaignRepo.Get(r.Context(), cid)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+		if camp.ClientID != *scope {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
 	f := catalog.AggregateFilter{CampaignID: cid}
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
@@ -624,6 +693,22 @@ func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		http.Error(w, "invalid campaignID", http.StatusBadRequest)
 		return
+	}
+	// Viewer scope: verify campaign ownership before returning summary.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+		if camp.ClientID != *scope {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")

@@ -52,18 +52,19 @@ func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campai
 }
 
 func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
-	return c.ListFiltered(ctx, nil)
+	return c.ListFiltered(ctx, nil, nil)
 }
 
 // ListPaged returns campaigns filtered by competence (YYYY-MM, month-overlap
 // semantics — same rule used by /detections) and free-text search across
 // campaign name + client name. Empty competence skips the date filter; empty
-// q skips the text filter.
+// q skips the text filter. clientID, when non-nil, restricts results to that
+// client (used when the requester is a viewer with a JWT client scope).
 //
 // Returns (rows, totalCount). Ordering matches the unpaged List(): lifecycle
 // status → programmed-soonest-first → start_date desc, so paging mirrors what
 // the user sees in the canonical list.
-func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, pageSize int) ([]Campaign, int, error) {
+func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientID *uuid.UUID, page, pageSize int) ([]Campaign, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -83,13 +84,14 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, p
 		monthEnd = monthStart.AddDate(0, 1, 0).Add(-time.Nanosecond)
 	}
 
-	// $1 = q, $2 = competence (non-empty marker), $3 = monthStart, $4 = monthEnd
+	// $1 = q, $2 = competence (non-empty marker), $3 = monthStart, $4 = monthEnd, $5 = clientID
 	const where = `
 		WHERE
 		    ($2 = '' OR (c.start_date <= $4 AND c.end_date >= $3))
 		    AND ($1 = '' OR unaccent(lower(
 		        COALESCE(c.name,'') || ' ' || COALESCE(cl.name,'')
 		    )) LIKE '%' || unaccent(lower($1)) || '%')
+		    AND ($5::uuid IS NULL OR c.client_id = $5)
 	`
 
 	// Count: same WHERE, no LIMIT.
@@ -98,7 +100,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, p
 		SELECT COUNT(*)
 		FROM campaigns c
 		LEFT JOIN clients cl ON cl.id = c.client_id`+where,
-		q, competence, monthStart, monthEnd,
+		q, competence, monthStart, monthEnd, clientID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -118,8 +120,8 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, p
 		END,
 		CASE WHEN c.status = 'programada' THEN c.start_date ELSE NULL END ASC NULLS LAST,
 		c.start_date DESC
-		LIMIT $5 OFFSET $6`,
-		q, competence, monthStart, monthEnd, pageSize, offset,
+		LIMIT $6 OFFSET $7`,
+		q, competence, monthStart, monthEnd, clientID, pageSize, offset,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -139,10 +141,11 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, page, p
 	return out, total, rows.Err()
 }
 
-// ListFiltered returns campaigns filtered by status. If statuses is nil/empty,
-// all campaigns are returned. Ordering follows the lifecycle UX rule:
-// ativas → programadas (próximas a entrar) → concluidas/canceladas (histórico).
-func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string) ([]Campaign, error) {
+// ListFiltered returns campaigns filtered by status and/or client. If statuses
+// is nil/empty, all lifecycle states are returned. clientID, when non-nil,
+// restricts results to that client (viewer JWT scope). Ordering follows the
+// lifecycle UX rule: ativas → programadas (próximas a entrar) → concluidas/canceladas.
+func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientID *uuid.UUID) ([]Campaign, error) {
 	const baseQuery = `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
 		       created_at, updated_at
@@ -166,10 +169,15 @@ func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string) ([]Camp
 		rows pgx.Rows
 		err  error
 	)
-	if len(statuses) == 0 {
+	switch {
+	case len(statuses) == 0 && clientID == nil:
 		rows, err = c.pool.Query(ctx, baseQuery+orderClause)
-	} else {
+	case len(statuses) == 0:
+		rows, err = c.pool.Query(ctx, baseQuery+` WHERE client_id = $1 `+orderClause, clientID)
+	case clientID == nil:
 		rows, err = c.pool.Query(ctx, baseQuery+` WHERE status = ANY($1) `+orderClause, statuses)
+	default:
+		rows, err = c.pool.Query(ctx, baseQuery+` WHERE status = ANY($1) AND client_id = $2 `+orderClause, statuses, clientID)
 	}
 	if err != nil {
 		return nil, err
