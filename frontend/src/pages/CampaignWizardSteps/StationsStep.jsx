@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useStations, useUpdateCampaignStations } from '../../api/hooks'
 import RSelect from '../../components/RSelect'
 import StationAvatar from '../../components/StationAvatar'
@@ -56,6 +56,12 @@ export default function StationsStep({ campaignId, allStations, currentSelection
 
   const updateCampaign = useUpdateCampaignStations()
 
+  // Holds the latest diff that hasn't reached the backend yet. Cleared
+  // inside the timeout once mutate() runs. The unmount-flush effect below
+  // reads this to fire a fire-and-forget save when the user navigates to
+  // another step (or refreshes) while the 500ms debounce is still pending.
+  const pendingSaveRef = useRef(null)
+
   // Save with debounce (not on every keystroke).
   //
   // Two hydration guards prevent data loss when `allStations` arrives later
@@ -74,16 +80,35 @@ export default function StationsStep({ campaignId, allStations, currentSelection
     const ids = selectedOpts.map(o => o.value)
     const sameAsCurrent = ids.length === currentSelection.length &&
       ids.every(id => currentSelection.includes(id))
-    if (sameAsCurrent) return
+    if (sameAsCurrent) {
+      pendingSaveRef.current = null
+      return
+    }
     const allCurrentResolved = currentSelection.every(
       id => allStations.some(s => s.id === id)
     )
     if (!allCurrentResolved) return
+    pendingSaveRef.current = { campaignId, ids }
     const t = setTimeout(() => {
       updateCampaign.mutate({ id: campaignId, targetStations: ids })
+      pendingSaveRef.current = null
     }, 500)
     return () => clearTimeout(t)
   }, [selectedOpts, campaignId, allStations, currentSelection])
+
+  // Flush pending save on unmount. Without this, navigating to step 3 (or
+  // back to step 1) within the 500ms debounce window cancels the timeout
+  // and the latest selection never reaches the backend — the user comes
+  // back to step 2 and the added station "disappeared". Refresh has the
+  // same shape: setTimeout never fires because the JS heap is torn down.
+  useEffect(() => () => {
+    const pending = pendingSaveRef.current
+    if (pending) {
+      updateCampaign.mutate({ id: pending.campaignId, targetStations: pending.ids })
+      pendingSaveRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function removeOne(id) {
     setSelectedOpts(opts => opts.filter(o => o.value !== id))
