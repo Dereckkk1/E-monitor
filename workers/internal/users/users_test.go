@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/catalog"
@@ -165,4 +166,77 @@ func TestRepo_List_FiltersByStatusAndRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, uV.ID, list[0].ID)
+}
+
+func TestRepo_Update_ClearClient(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+
+	c, err := clients.Create(ctx, catalog.CreateClientInput{Name: "Acme"})
+	require.NoError(t, err)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "promote@x.test", PasswordHash: "h", Role: "viewer",
+		ClientID: &c.ID, Name: "P",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, u.ClientID)
+
+	newRole := "admin"
+	updated, err := repo.Update(ctx, u.ID, users.UpdateInput{
+		Role:        &newRole,
+		ClearClient: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "admin", updated.Role)
+	require.Nil(t, updated.ClientID)
+}
+
+func TestRepo_SoftDelete_Idempotent(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "dd@x.test", PasswordHash: "h", Role: "admin", Name: "D",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.SoftDelete(ctx, u.ID))
+	err = repo.SoftDelete(ctx, u.ID)
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+}
+
+func TestRepo_List_QSearchesNameAndEmail(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+
+	_, err := repo.Create(ctx, users.CreateInput{
+		Email: "alice@x.test", PasswordHash: "h", Role: "admin", Name: "Alice",
+	})
+	require.NoError(t, err)
+	_, err = repo.Create(ctx, users.CreateInput{
+		Email: "bob@y.test", PasswordHash: "h", Role: "admin", Name: "Robert",
+	})
+	require.NoError(t, err)
+
+	// Match por nome
+	list, total, err := repo.List(ctx, users.ListInput{Q: "alic", Status: "active"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "alice@x.test", list[0].Email)
+
+	// Match por email
+	list, total, err = repo.List(ctx, users.ListInput{Q: "bob@", Status: "active"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "Robert", list[0].Name)
+
+	// Sem match
+	_, total, err = repo.List(ctx, users.ListInput{Q: "xxx", Status: "active"})
+	require.NoError(t, err)
+	require.Equal(t, 0, total)
 }
