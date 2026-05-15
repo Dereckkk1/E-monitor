@@ -27,6 +27,7 @@ import (
 	"radiocheck/internal/similarity"
 	"radiocheck/internal/storage"
 	"radiocheck/internal/supervisor"
+	"radiocheck/internal/users"
 	"radiocheck/internal/webhook"
 )
 
@@ -254,6 +255,9 @@ func main() {
 		}
 	}()
 
+	// Users repo — shared across auth, me, and users handlers (Tasks 5–8).
+	usersRepo := users.NewRepo(pool)
+
 	// Campaigns handler with supervisor wired in.
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
@@ -269,7 +273,7 @@ func main() {
 		Detections:   &handlers.DetectionsHandler{Repo: detections, Storage: s3Client, SummaryRepo: dailySumRepo},
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
-		Auth:         handlers.NewAuthHandler(pool),
+		Auth:         handlers.NewAuthHandler(pool, usersRepo),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
 		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Threshold: sup, Calibration: calibrationScheduler, Log: logger},

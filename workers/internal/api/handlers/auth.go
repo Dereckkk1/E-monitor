@@ -2,35 +2,46 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
 	"radiocheck/internal/auth"
+	"radiocheck/internal/users"
 )
 
 type AuthHandler struct {
-	db *pgxpool.Pool
+	db    *pgxpool.Pool
+	users *users.Repo
 }
 
-func NewAuthHandler(db *pgxpool.Pool) *AuthHandler {
-	return &AuthHandler{db: db}
+// NewAuthHandler constructs the login handler. The users repo handles all
+// user-table reads/writes; the raw pool is kept for transactional operations
+// outside the repo (currently none — kept for symmetry with other handlers).
+func NewAuthHandler(db *pgxpool.Pool, repo *users.Repo) *AuthHandler {
+	return &AuthHandler{db: db, users: repo}
 }
 
 // loginResponse is the JSON envelope returned to the frontend on a
-// successful login. token is the HS256 JWT; expires_at is the unix epoch
-// (RFC3339) at which the token stops being accepted; user is the minimum
-// projection the UI needs to render the header / route guards.
+// successful login. token is the HS256 JWT; expires_at is RFC3339; user is
+// the minimum projection the UI needs to render header + role guards.
 type loginResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
-	User      struct {
-		ID    uuid.UUID `json:"id"`
-		Email string    `json:"email"`
-		Role  string    `json:"role"`
-	} `json:"user"`
+	User      loginUser `json:"user"`
+}
+
+type loginUser struct {
+	ID       uuid.UUID  `json:"id"`
+	Email    string     `json:"email"`
+	Role     string     `json:"role"`
+	Name     string     `json:"name"`
+	ClientID *uuid.UUID `json:"client_id,omitempty"`
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -42,46 +53,60 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-
-	var id uuid.UUID
-	var hash, role string
-	err := h.db.QueryRow(r.Context(),
-		`SELECT id, password_hash, role FROM users WHERE email = $1`, body.Email,
-	).Scan(&id, &hash, &role)
-	if err != nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	tok, err := auth.IssueToken(id, role)
-	if err != nil {
+	if h.users == nil {
+		// Defensive: tests that construct AuthHandler without a repo
+		// (e.g. TestAuth_Login_BadJSON, TestNewAuthHandler_Defaults) will
+		// short-circuit on the body decode above. Anything else hitting a
+		// nil repo is a wiring bug — fail loudly.
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// Re-parse the token to surface the exp claim back to the UI without
-	// duplicating the 8h constant. ParseToken validates HS256 signature so
-	// this also doubles as a self-consistency check.
+	u, err := h.users.GetByEmail(r.Context(), body.Email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(body.Password)) != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if !u.IsActive {
+		// Conta desativada (soft) — distinguimos de credencial inválida porque
+		// o usuário precisa saber que existe mas está bloqueada (procurar
+		// admin). Contas deletadas (deleted_at NOT NULL) caem em
+		// pgx.ErrNoRows acima porque GetByEmail filtra; tratadas como
+		// "invalid credentials" sem revelar a existência prévia.
+		http.Error(w, "account_disabled", http.StatusForbidden)
+		return
+	}
+
+	tok, err := auth.IssueTokenForUser(u)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	claims, err := auth.ParseToken(tok)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	var expiresAt time.Time
+	expiresAt := time.Now().Add(8 * time.Hour)
 	if claims.RegisteredClaims.ExpiresAt != nil {
 		expiresAt = claims.RegisteredClaims.ExpiresAt.Time
-	} else {
-		// Should never happen: IssueToken always sets ExpiresAt.
-		expiresAt = time.Now().Add(8 * time.Hour)
 	}
-	resp := loginResponse{Token: tok, ExpiresAt: expiresAt}
-	resp.User.ID = id
-	resp.User.Email = body.Email
-	resp.User.Role = role
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	// Telemetria: TouchLastLogin best-effort. Falha não bloqueia o login —
+	// é só um carimbo pra "última atividade".
+	_ = h.users.TouchLastLogin(r.Context(), u.ID)
+
+	resp := loginResponse{Token: tok, ExpiresAt: expiresAt, User: loginUser{
+		ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name, ClientID: u.ClientID,
+	}}
+
+	writeJSON(w, http.StatusOK, resp)
 }
