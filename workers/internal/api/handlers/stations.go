@@ -26,7 +26,13 @@ func (h *StationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if p, _ := strconv.Atoi(q.Get("page")); p > 0 {
 		in.Page = p
 	}
-	if l, _ := strconv.Atoi(q.Get("limit")); l > 0 && l <= 2000 {
+	// Cap was 2000 originally — bumped to 10000 in 2026-05-15 because the
+	// Audiency import populates ~4-5k Brazilian stations with monitoring_status
+	// default 'paused', which sort below 'active'/'calibrating' in the List
+	// ordering. Campaigns referencing target_stations beyond the 2000 window
+	// got their stations invisibly dropped from the wizard's allStations
+	// pre-fetch — making them un-removable from the campaign UI.
+	if l, _ := strconv.Atoi(q.Get("limit")); l > 0 && l <= 10000 {
 		in.Limit = l
 	}
 

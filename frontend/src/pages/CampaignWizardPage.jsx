@@ -42,7 +42,7 @@ export default function CampaignWizardPage() {
   }, [existingCampaign])
 
   const { data: clients = [] } = useClients()
-  const { data: stationsData } = useStations({ limit: 2000 })
+  const { data: stationsData } = useStations({ limit: 10000 })
   const allStations = stationsData?.data ?? stationsData ?? []
   const { data: campaignMaterials = [] } = useCampaignMaterials(campaignId)
   const { data: distributionRules = [] } = useDistributionRules(campaignId)
