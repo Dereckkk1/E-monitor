@@ -13,6 +13,7 @@ codigo-relacionado:
   # contexto: relatado pelo usuário durante operação, sem ticket externo
   # ondas: 1) snapshot pattern + stall watchdog ignorava zumbi (manhã)
   #        2) ADTS segment muxer rejeita streams não-AAC (tarde, mesmo dia)
+  #        3) -reconnect_at_eof 1 quebra HLS (fim de tarde, mesmo dia)
 ---
 
 # Workers presos na URL antiga após edição de emissora — snapshot pattern + zumbi sem PCM
@@ -247,6 +248,70 @@ A opção de detectar formato e usar muxer dinâmico (`adts` p/ AAC,
 mudanças em ≥5 outros lugares (segments, presigned URLs, retention, audit,
 frontend player) pra uma optimização CPU que economiza ~3% por worker MP3.
 Trade-off ruim — fiquei no caminho cirúrgico de re-encode condicional.
+
+## Terceira onda — `-reconnect_at_eof 1` quebra HLS
+
+Após o deploy da segunda onda, restavam ainda 2 estações em CAÍDO. Uma
+delas — **Atlântida Joinville** (`c03a724a`, URL
+`https://playerservices.streamtheworld.com/api/livestream-redirect/ATL_JOIAAC.m3u8`)
+— tocava no `/stations` e era confirmadamente AAC. A outra, **Mix João
+Pessoa**, tinha o stream da própria emissora quebrado (fora do nosso
+controle).
+
+Para a Atlântida (HLS), smoke test local com as flags exatas do worker
+produziu o sintoma:
+
+```
+[https @ ...] Will reconnect at 188 in 0 second(s), error=End of file.
+exit=124 (timeout)
+ls /tmp/hls/  → vazio
+```
+
+### Causa raiz
+
+A flag `-reconnect_at_eof 1` instrui o ffmpeg a re-estabelecer a conexão
+HTTP sempre que a leitura atinge EOF. Faz sentido pra **streams
+progressivos** (direct .mp3/.aac, Icecast, SHOUTcast): uma única resposta
+HTTP de duração indefinida, EOF = servidor fechou.
+
+Mas **HLS é diferente**: a playlist `.m3u8` aponta pra uma sequência de
+segmentos finitos (`.ts` ou `.aac`), e cada segmento naturalmente termina
+em EOF. Com a flag ativa, ffmpeg trata cada limite de segmento como
+desconexão, reconecta imediatamente, re-busca a playlist, e nunca
+chega a decodificar conteúdo. O worker fica vivo mas produz zero PCM.
+
+Por que demorou pra aparecer: a flag está no `ffmpeg.go` desde sempre,
+mas até as ondas 1 e 2 serem corrigidas, os workers HLS eram zumbis
+silenciosos junto com os MP3. Depois do fix da 2ª onda, sobraram as
+estações HLS expondo o bug.
+
+### Fix
+
+Adicionado em [`ffmpeg.go`](../../workers/internal/ingestor/ffmpeg.go):
+
+1. **`pickReconnectArgs(streamURL)`** — função pura que retorna o conjunto
+   de flags `-reconnect*`. Sempre inclui o trio base (`-reconnect`,
+   `-reconnect_streamed`, `-reconnect_delay_max`) que cobre hiccups
+   transientes de TCP/TLS em qualquer tipo de stream. Adiciona
+   `-reconnect_at_eof 1` apenas se a URL **não** for HLS.
+2. **`isHLS(streamURL)`** — detector por substring case-insensitive
+   contra `.m3u8`. Cobre query string, path com `.m3u8` em qualquer
+   posição, e MAIÚSCULAS.
+3. `StartFFmpeg` chama `pickReconnectArgs(streamURL)` e spliça o
+   resultado no comando ffmpeg em vez do trio anterior + flag fixa.
+
+Pinned por `worker_test.go::TestPickReconnectArgs` (8 cenários: 4
+progressivos com flag, 4 HLS sem flag).
+
+### Por que não desabilitar `-reconnect_at_eof` globalmente
+
+Os streams progressivos brasileiros (Icecast/SHOUTcast com IP fixo do
+servidor) **fecham conexão periodicamente** (timeout de socket após X horas,
+restart de servidor, etc.). Sem a flag, o worker desses streams precisaria
+de uma camada extra de retry — exatamente o que a flag dá pronto. Ficar
+sem ela degradaria a robustez de 80%+ do parque (todas as não-HLS) só
+pra resolver as poucas HLS. Detecção dirigida pela URL é o trade-off
+certo.
 
 ## Follow-ups
 

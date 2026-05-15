@@ -115,6 +115,14 @@ services:
       SEGMENTS_PATH: /data/segments
       API_PORT: "8080"
       CLAP_VERIFIER_URL: http://clap-verifier:8080
+      # Endpoints probados pelo painel /admin/overview (handler
+      # system_health.go). Mantém URLs internas — o probe roda dentro
+      # da network do compose, não pelo host. Se um dos serviços não
+      # subir, o card aparece como "Fora" em vez de "Não usa", o que é
+      # o sinal correto pro operador.
+      PROMETHEUS_URL: http://prometheus:9090
+      GRAFANA_URL: http://grafana:3000
+      JAEGER_URL: http://jaeger:16686
       # OpenTelemetry tracing (§15.3). Empty endpoint disables tracing
       # cleanly; pointing at jaeger:4317 lights up the Jaeger UI.
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317

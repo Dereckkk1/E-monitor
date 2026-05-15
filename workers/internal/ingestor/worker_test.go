@@ -146,6 +146,57 @@ func TestLastPCMAt_Concurrent(t *testing.T) {
 	}
 }
 
+// TestPickReconnectArgs covers the pure decision the ffmpeg wrapper makes
+// about ffmpeg's HTTP reconnect flags. `-reconnect_at_eof 1` retries the
+// HTTP request whenever the server closes the connection — perfect for
+// long-running progressive streams (Icecast, SHOUTcast, direct .mp3/.aac)
+// where EOF really does mean "disconnect". But HLS (.m3u8) delivers content
+// as a *sequence of finite segments* and every segment naturally ends in
+// EOF; with the flag on, ffmpeg treats each segment boundary as a
+// reconnect, re-pulls the manifest, and never produces decoder output —
+// the Atlântida Joinville case in the 2026-05-15 incident third wave.
+func TestPickReconnectArgs(t *testing.T) {
+	hasFlag := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+	cases := []struct {
+		name           string
+		url            string
+		wantAtEOF      bool
+	}{
+		{"http progressive mp3", "https://example.com/stream.mp3", true},
+		{"http progressive aac", "https://example.com/stream.aac", true},
+		{"http no extension", "https://example.com:8000/stream", true},
+		{"shoutcast typical", "http://r10.ciclano.io:6258/stream", true},
+		{"HLS plain m3u8", "https://example.com/live.m3u8", false},
+		{"HLS m3u8 with query", "https://example.com/live.m3u8?token=abc", false},
+		{"HLS m3u8 in path segment", "https://playerservices.streamtheworld.com/api/livestream-redirect/ATL_JOIAAC.m3u8", false},
+		{"HLS uppercase M3U8", "https://example.com/live.M3U8", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args := pickReconnectArgs(c.url)
+			gotAtEOF := hasFlag(args, "-reconnect_at_eof")
+			if gotAtEOF != c.wantAtEOF {
+				t.Fatalf("pickReconnectArgs(%q): -reconnect_at_eof present=%v, want %v\nargs=%v",
+					c.url, gotAtEOF, c.wantAtEOF, args)
+			}
+			// The base reconnect flags must ALWAYS be present — they cover
+			// transient TCP/TLS hiccups, which happen on both HLS and progressive.
+			for _, must := range []string{"-reconnect", "-reconnect_streamed", "-reconnect_delay_max"} {
+				if !hasFlag(args, must) {
+					t.Fatalf("pickReconnectArgs(%q): missing base flag %q\nargs=%v", c.url, must, args)
+				}
+			}
+		})
+	}
+}
+
 // TestPickSegmentAudioArgs covers the pure decision the ffmpeg wrapper makes
 // at StartFFmpeg time: can we -c:a copy into the ADTS segment muxer (only
 // AAC streams qualify) or do we have to re-encode to AAC first? Incident

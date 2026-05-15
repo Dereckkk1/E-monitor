@@ -283,6 +283,8 @@ docs/
 | Pipeline polimórfico (material_id OR commercial_id) | [docs/features/material-fingerprint-pipeline.md](docs/features/material-fingerprint-pipeline.md) |
 | Alerta de duplicata por similaridade ≥50% | [docs/features/material-similarity-warning.md](docs/features/material-similarity-warning.md) |
 | Simulador de stream pra teste local | [docs/operations/simulacao-radio.md](docs/operations/simulacao-radio.md) |
+| Painel admin `/admin/overview` (health de toda a stack: infra + workers + streams + pipeline) | [docs/features/admin-system-overview.md](docs/features/admin-system-overview.md) |
+| Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |
 | Avaliação E2E do matcher (recomendações 4.x) | [docs/roadmap/detection-evaluation-report.md](docs/roadmap/detection-evaluation-report.md) |
 | Responder a alerta Prometheus disparado | [docs/runbooks/README.md](docs/runbooks/README.md) (índice por alerta) |

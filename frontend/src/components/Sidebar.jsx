@@ -90,6 +90,20 @@ function IconMaterialTypes() {
   )
 }
 
+function IconAdminOverview() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 8l2.5 2.5L8 6l2.5 2.5L14 4" />
+      <circle cx="2" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="6" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="8.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="4" r="0.9" fill="currentColor" stroke="none" />
+      <path d="M1.5 13.5h13" strokeOpacity="0.4" />
+    </svg>
+  )
+}
+
 /* ── Nav link helper ─────────────────────────────────────────── */
 function SidebarLink({ to, icon, children, onClose }) {
   return (
@@ -104,24 +118,40 @@ function SidebarLink({ to, icon, children, onClose }) {
   )
 }
 
+/* ── Logout icon ─────────────────────────────────────────────── */
+function IconLogout() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6.5 2.5h-3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3" />
+      <path d="M10 11.5 13.5 8 10 4.5" />
+      <path d="M13.5 8H6" />
+    </svg>
+  )
+}
+
 /* ── Admin navigation ────────────────────────────────────────── */
 function AdminNav({ onClose }) {
   return (
     <>
-      <span className="sidebar-section-label">Visão geral</span>
-      <SidebarLink to="/dashboard"  icon={<IconDashboard />}  onClose={onClose}>Dashboard</SidebarLink>
+      <span className="sidebar-section-label">Administração</span>
+      <SidebarLink to="/admin/overview" icon={<IconAdminOverview />} onClose={onClose}>Visão geral</SidebarLink>
 
-      <span className="sidebar-section-label">Operações</span>
+      <span className="sidebar-section-label">Visão de negócio</span>
+      <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
+
+      <span className="sidebar-section-label">Cadastros</span>
       <SidebarLink to="/stations"       icon={<IconStations />}      onClose={onClose}>Emissoras</SidebarLink>
       <SidebarLink to="/clients"        icon={<IconClients />}       onClose={onClose}>Clientes</SidebarLink>
-      <SidebarLink to="/campaigns"      icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/material-types" icon={<IconMaterialTypes />} onClose={onClose}>Tipos de material</SidebarLink>
 
-      <span className="sidebar-section-label">Monitoramento</span>
-      <SidebarLink to="/operations" icon={<IconOperations />} onClose={onClose}>Workers</SidebarLink>
+      <span className="sidebar-section-label">Veiculação</span>
+      <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
+      <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
+      <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
+
+      <span className="sidebar-section-label">Infraestrutura</span>
       <SidebarLink to="/monitoring" icon={<IconMonitoring />} onClose={onClose}>Streams</SidebarLink>
-      <SidebarLink to="/detections" icon={<IconDetections />} onClose={onClose}>Veiculações</SidebarLink>
-      <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório Data/Hora</SidebarLink>
+      <SidebarLink to="/operations" icon={<IconOperations />} onClose={onClose}>Workers</SidebarLink>
     </>
   )
 }
@@ -130,10 +160,12 @@ function AdminNav({ onClose }) {
 function ClientNav({ onClose }) {
   return (
     <>
-      <span className="sidebar-section-label">Minha conta</span>
-      <SidebarLink to="/dashboard"  icon={<IconDashboard />}  onClose={onClose}>Dashboard</SidebarLink>
-      <SidebarLink to="/detections" icon={<IconDetections />} onClose={onClose}>Veiculações</SidebarLink>
-      <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório Data/Hora</SidebarLink>
+      <span className="sidebar-section-label">Visão geral</span>
+      <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
+
+      <span className="sidebar-section-label">Veiculação</span>
+      <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
+      <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
     </>
   )
 }
@@ -152,6 +184,8 @@ export default function Sidebar({ onClose }) {
   // user is null when AuthContext is in its bootstrap default state
   // (shouldn't happen behind RequireAuth, but guarded for safety).
   const displayLabel = user?.email || user?.name || 'Conta'
+  const initial = (displayLabel[0] || '?').toUpperCase()
+  const roleLabel = isAdmin ? 'Administrador' : 'Cliente'
 
   return (
     <>
@@ -164,10 +198,20 @@ export default function Sidebar({ onClose }) {
       </nav>
 
       <div className="sidebar-footer">
-        <div className="sidebar-user">
-          <span className="sidebar-user-email" title={displayLabel}>{displayLabel}</span>
-          <button type="button" className="sidebar-logout" onClick={handleLogout}>
-            Sair
+        <div className="sidebar-user-card">
+          <div className="sidebar-user-avatar" aria-hidden="true">{initial}</div>
+          <div className="sidebar-user-info">
+            <span className="sidebar-user-email" title={displayLabel}>{displayLabel}</span>
+            <span className="sidebar-user-role">{roleLabel}</span>
+          </div>
+          <button
+            type="button"
+            className="sidebar-logout-btn"
+            onClick={handleLogout}
+            aria-label="Sair"
+            title="Sair"
+          >
+            <IconLogout />
           </button>
         </div>
       </div>
