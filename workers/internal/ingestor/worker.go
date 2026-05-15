@@ -172,6 +172,15 @@ func (w *Worker) Threshold() int32 {
 	return w.cfg.MatchThreshold.Load()
 }
 
+// StreamURL returns the stream URL the worker is currently feeding into
+// ffmpeg. Used by the supervisor's reconciler (reconcile.go) to detect when
+// stations.stream_url has been edited by an operator while the worker was
+// running — without this, ffmpeg's internal reconnect loop would keep
+// hammering the stale URL forever and never produce PCM.
+func (w *Worker) StreamURL() string {
+	return w.cfg.StreamURL
+}
+
 // CommercialShortIDs returns a copy of the short ids the worker is currently
 // matching against. Used by the supervisor's reconciler (reconcile.go) to
 // detect drift between the in-memory list and the DB. Safe to mutate; the

@@ -12,22 +12,56 @@ import (
 )
 
 // reconcileInterval is how often the supervisor re-reads, per running worker,
-// which commercials should be loaded for that station and rebuilds the worker
-// when the list drifts from what is currently loaded.
+// which commercials should be loaded for that station AND the station's
+// stream_url, rebuilding the worker when either drifts from what is currently
+// loaded.
 //
-// Background — 2026-05-08 incident: a commercial whose target_stations were
-// edited while a worker was already running could end up missing from that
-// worker's CommercialShortIDs list (the list is snapshotted on
-// startStationWorker and never re-read). The handler-level Reload call that
-// is supposed to cover this path silently swallows errors, so any
-// transient failure (DB hiccup, supervisor mid-restart) leaves the worker
-// detecting against a stale list — and detections for the new commercial
-// are dropped on the floor with no alert.
+// Background — 2026-05-08 incident (commercials): a commercial whose
+// target_stations were edited while a worker was already running could end
+// up missing from that worker's CommercialShortIDs list (the list is
+// snapshotted on startStationWorker and never re-read). The handler-level
+// Reload call that is supposed to cover this path silently swallows errors,
+// so any transient failure (DB hiccup, supervisor mid-restart) leaves the
+// worker detecting against a stale list — and detections for the new
+// commercial are dropped on the floor with no alert.
 //
-// 30s is the trade-off: short enough that a forgotten/failed Reload is
-// invisible to the operator for at most one half-cycle, long enough that
-// 200 stations × 1 query/30s stays well below 10 QPS on Postgres.
+// Background — 2026-05-15 incident (stream_url): the same snapshot pattern
+// applied to stations.stream_url. An operator updating an emissora's URL
+// via PUT /stations/{id} would write to the DB, but the running worker
+// kept feeding the old URL into ffmpeg's reconnect loop forever, never
+// producing PCM. Symptom: red dots in /monitoring while the play button in
+// /stations (which reads URL live from the DB) kept working.
+//
+// 30s is the trade-off: short enough that a forgotten/failed Reload or
+// edited URL is invisible to the operator for at most one half-cycle, long
+// enough that 200 stations × 1 query/30s stays well below 10 QPS on Postgres.
 const reconcileInterval = 30 * time.Second
+
+// reconcileReason is the pure decision function the reconciler uses to
+// decide whether a worker needs to be restarted, and why. Returns an empty
+// string when no restart is needed; otherwise returns a short operator-
+// readable reason that is also written to the warn log when the restart
+// fires. Keeping this as a pure function lets us cover every combination
+// (URL drift, commercials drift, both, neither) without DB or supervisor
+// scaffolding in tests.
+//
+// Defensive: an empty wantedURL is treated as "no restart" rather than
+// "restart against empty URL" — stations.stream_url is NOT NULL in the
+// schema, so an empty value here would be a query bug or partial result.
+// Restarting would produce a worker that fails to start ffmpeg every time.
+func reconcileReason(currentURL, wantedURL string, currentIDs, wantedIDs []int32) string {
+	urlChanged := wantedURL != "" && currentURL != wantedURL
+	idsChanged := !commercialSetEqual(currentIDs, wantedIDs)
+	switch {
+	case urlChanged && idsChanged:
+		return "stream_url and commercial list changed"
+	case urlChanged:
+		return "stream_url changed"
+	case idsChanged:
+		return "commercial list changed"
+	}
+	return ""
+}
 
 // commercialSetEqual returns true iff a and b contain the same set of short
 // ids (order-independent, duplicate-tolerant). Used by the reconciler to
@@ -65,16 +99,17 @@ func commercialSetEqual(a, b []int32) bool {
 	return true
 }
 
-// runCommercialReconciler periodically reconciles the running worker's
-// commercial list against the DB and rebuilds the worker when they diverge.
-// Mirrors the runStallWatchdog / runThresholdRefresher pattern: cancels the
-// current worker context and respawns via startStationWorker, then exits
-// (the new worker brings up its own reconciler goroutine).
+// runWorkerReconciler periodically reconciles the running worker's
+// commercial list AND stream URL against the DB and rebuilds the worker
+// when they diverge. Mirrors the runStallWatchdog / runThresholdRefresher
+// pattern: cancels the current worker context and respawns via
+// startStationWorker, then exits (the new worker brings up its own
+// reconciler goroutine).
 //
 // The function exits when ctx is cancelled (worker stopped externally) or
 // after it triggers a restart. It deliberately does NOT loop after a
 // restart — startStationWorker spawns a fresh reconciler for the new worker.
-func (s *Supervisor) runCommercialReconciler(workerCtx context.Context, stationID uuid.UUID) {
+func (s *Supervisor) runWorkerReconciler(workerCtx context.Context, stationID uuid.UUID) {
 	stationLabel := stationID.String()
 	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
@@ -99,6 +134,19 @@ func (s *Supervisor) runCommercialReconciler(workerCtx context.Context, stationI
 func (s *Supervisor) reconcileOnce(ctx context.Context, stationID uuid.UUID, stationLabel string) bool {
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Load station to pick up stream_url edits — see reconcileReason and the
+	// 2026-05-15 incident comment on reconcileInterval. Errors keep the
+	// worker as-is for this cycle (transient DB hiccup must not tear down a
+	// healthy worker).
+	station, err := s.stations.Get(queryCtx, stationID)
+	if err != nil {
+		metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "error").Inc()
+		s.log.Warn("supervisor.reconcile: get station failed; keeping worker",
+			zap.String("station_id", stationLabel),
+			zap.Error(err))
+		return false
+	}
 
 	activeIDs, err := s.campaigns.ActiveCampaignsForStation(queryCtx, stationID)
 	if err != nil {
@@ -145,18 +193,23 @@ func (s *Supervisor) reconcileOnce(ctx context.Context, stationID uuid.UUID, sta
 		return false // worker already gone — Pause/StopWorkersForCampaign handles it
 	}
 	currentIDs := entry.worker.CommercialShortIDs()
+	currentURL := entry.worker.StreamURL()
 	currentCancel := entry.cancel
 	s.mu.Unlock()
 
-	if commercialSetEqual(currentIDs, wantedIDs) {
+	reason := reconcileReason(currentURL, station.StreamURL, currentIDs, wantedIDs)
+	if reason == "" {
 		metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "unchanged").Inc()
 		metrics.WorkerCommercials.WithLabelValues(stationLabel).Set(float64(len(currentIDs)))
 		return false
 	}
 
 	metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "restarted").Inc()
-	s.log.Warn("supervisor.reconcile: commercial list drift — restarting worker",
+	s.log.Warn("supervisor.reconcile: drift detected — restarting worker",
 		zap.String("station_id", stationLabel),
+		zap.String("reason", reason),
+		zap.String("current_stream_url", currentURL),
+		zap.String("wanted_stream_url", station.StreamURL),
 		zap.Int("current_count", len(currentIDs)),
 		zap.Int("wanted_count", len(wantedIDs)),
 		zap.Int32s("current_short_ids", currentIDs),

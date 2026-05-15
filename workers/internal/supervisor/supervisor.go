@@ -49,6 +49,10 @@ type workerEntry struct {
 	cancel     context.CancelFunc
 	lastDownID *int64
 	lastDownAt *time.Time
+	// startedAt is when the worker goroutine was launched. Read by the stall
+	// watchdog to detect "never produced PCM since start" — see isStalled.
+	// Zero until startStationWorker finalises the entry.
+	startedAt time.Time
 	// refreshNow signals the per-worker threshold refresh goroutine to
 	// re-read station_thresholds immediately (used by RefreshThreshold).
 	// Buffered (cap 1) so a signal is never lost and never blocks.
@@ -502,7 +506,10 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		OnNoiseSample:         onNoiseSample,
 	}
 	w := ingestor.NewWorker(cfg, s.store, s.nc, s.log)
+	s.mu.Lock()
 	entry.worker = w
+	entry.startedAt = time.Now()
+	s.mu.Unlock()
 
 	// Register the segment dir with the evidence service before the worker
 	// (and thus ffmpeg) starts writing segments — guarantees that any
@@ -530,12 +537,13 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// calls (admin endpoint).
 	go s.runThresholdRefresher(workerCtx, capturedStationID, w, entry.refreshNow)
 
-	// ── Commercial reconciler (post-2026-05-08 hardening) ───────────────────
-	// Periodically re-reads which commercials should be loaded for this
-	// station and rebuilds the worker if the set drifted. Catches
-	// missed/failed Reload calls that would otherwise leave a worker matching
-	// against a stale list — see reconcile.go for the incident context.
-	go s.runCommercialReconciler(workerCtx, capturedStationID)
+	// ── Worker reconciler (post-2026-05-08 / 2026-05-15 hardening) ──────────
+	// Periodically re-reads stations.stream_url AND the per-station commercial
+	// list, rebuilding the worker on drift. Catches missed/failed Reload calls
+	// (commercials) and direct PUT /stations updates (stream_url) that would
+	// otherwise leave a worker hammering a stale URL or matching against a
+	// stale list — see reconcile.go for the incident context.
+	go s.runWorkerReconciler(workerCtx, capturedStationID)
 
 	metrics.WorkerCommercials.WithLabelValues(stationID.String()).Set(float64(len(shortIDs)))
 
@@ -547,9 +555,39 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	return nil
 }
 
+// stallStartupGrace is how long a worker may exist without producing any PCM
+// before the watchdog treats it as stalled. Before this constant existed, the
+// watchdog bailed out whenever `LastPCMAt.IsZero()` — a worker whose first
+// ffmpeg connect never succeeded (dead URL, DNS NXDOMAIN, 410 Gone) stayed
+// zombified forever because nothing else flips the state. 2 minutes is the
+// trade-off: comfortably longer than a slow normal startup (DNS + TLS + ICY
+// metadata is typically <5s) and short enough that the second watchdog tick
+// after grace catches the zombie.
+const stallStartupGrace = 2 * time.Minute
+
+// isStalled decides whether the watchdog should restart a worker. Pure
+// function, deterministic in (last, startedAt, now). Two flavors of stall:
+//   - last is set but >60s old: the worker WAS producing PCM and stopped.
+//   - last is zero but the worker has been running longer than the startup
+//     grace: it has NEVER produced PCM since it started.
+//
+// A zero startedAt is treated as "worker not registered yet" and never
+// stalled — defensive, prevents a race in startStationWorker where the
+// watchdog goroutine could see a not-yet-finalised entry.
+func isStalled(last, startedAt, now time.Time) bool {
+	if !last.IsZero() {
+		return now.Sub(last) > 60*time.Second
+	}
+	if startedAt.IsZero() {
+		return false
+	}
+	return now.Sub(startedAt) > stallStartupGrace
+}
+
 // runStallWatchdog periodically checks whether the worker has produced PCM
-// recently. If LastPCMAt is older than 60s, the worker is canceled and
-// restarted. A 2-minute cooldown prevents restart storms.
+// recently. See isStalled for the decision rule. A 2-minute cooldown between
+// consecutive restarts prevents restart storms when a stream is genuinely
+// down (then the reconnect backoff in the worker is the right mechanism).
 func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.UUID, w *ingestor.Worker, cancel context.CancelFunc) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -558,10 +596,18 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 		case <-workerCtx.Done():
 			return
 		case <-ticker.C:
-			last := w.LastPCMAt()
-			if last.IsZero() || time.Since(last) <= 60*time.Second {
+			s.mu.Lock()
+			entry, ok := s.workers[stationID]
+			var startedAt time.Time
+			if ok && entry != nil {
+				startedAt = entry.startedAt
+			}
+			s.mu.Unlock()
+
+			if !isStalled(w.LastPCMAt(), startedAt, time.Now()) {
 				continue
 			}
+
 			s.mu.Lock()
 			lastRestart, seen := s.lastStallRestart[stationID]
 			if seen && time.Since(lastRestart) < 2*time.Minute {

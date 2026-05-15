@@ -70,6 +70,18 @@ function defaultRangeForCampaign(ymStr, campaign) {
   return { start: isoFromDate(start), end: isoFromDate(end) }
 }
 
+// Format a campaign's [start_date, end_date] window as pt-BR "dd-mm-aaaa – dd-mm-aaaa".
+// Returns '' if either side is missing or unparseable so the caller can skip
+// the period bit entirely (defensive — legacy campaigns may have nulls).
+function formatCampaignPeriod(startISO, endISO) {
+  if (!startISO || !endISO) return ''
+  const a = parseLocalDate(startISO)
+  const b = parseLocalDate(endISO)
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return ''
+  const fmt = d => `${pad2(d.getDate())}-${pad2(d.getMonth() + 1)}-${d.getFullYear()}`
+  return `${fmt(a)} – ${fmt(b)}`
+}
+
 // ── Client mini avatar (for campaign select) ──────────────────────
 
 function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
@@ -620,28 +632,45 @@ export default function DetectionsPage() {
     [allCampaignOptions, selectedCampaignId])
 
   function formatCampaignOption(opt, { context }) {
-    const size = context === 'value' ? 18 : 22
+    const isValue = context === 'value'
+    const size = isValue ? 18 : 22
+    const period = formatCampaignPeriod(opt.startDate, opt.endDate)
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
         <ClientMiniAvatar name={opt.clientName} logo={opt.clientLogo} size={size} />
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0, overflow: 'hidden' }}>
-          {opt.clientName && (
-            <span style={{ fontWeight: 600, color: '#06055B', whiteSpace: 'nowrap', fontSize: 13 }}>
-              {opt.clientName}
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0, overflow: 'hidden' }}>
+            {opt.clientName && (
+              <span style={{ fontWeight: 600, color: '#06055B', whiteSpace: 'nowrap', fontSize: 13 }}>
+                {opt.clientName}
+              </span>
+            )}
+            {opt.clientName && (
+              <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 400, flexShrink: 0 }}>|</span>
+            )}
+            <span style={{
+              color: '#4b5563',
+              fontSize: 13,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              {opt.label}
+            </span>
+            {isValue && period && (
+              <>
+                <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 400, flexShrink: 0 }}>•</span>
+                <span style={{ color: '#94a3b8', fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {period}
+                </span>
+              </>
+            )}
+          </div>
+          {!isValue && period && (
+            <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>
+              {period}
             </span>
           )}
-          {opt.clientName && (
-            <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 400, flexShrink: 0 }}>|</span>
-          )}
-          <span style={{
-            color: '#4b5563',
-            fontSize: 13,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}>
-            {opt.label}
-          </span>
         </div>
       </div>
     )

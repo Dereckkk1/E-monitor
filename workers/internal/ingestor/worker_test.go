@@ -146,6 +146,29 @@ func TestLastPCMAt_Concurrent(t *testing.T) {
 	}
 }
 
+// TestStreamURL_Accessor verifies that Worker.StreamURL() returns whatever was
+// in the WorkerConfig at construction time. The supervisor's reconciler reads
+// this to detect when stations.stream_url has drifted from the URL the worker
+// is currently feeding into ffmpeg — without it, the worker would loop on a
+// stale URL forever after an operator edited the station.
+func TestStreamURL_Accessor(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"populated", "https://example.com/stream"},
+		{"empty", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := NewWorker(WorkerConfig{StreamURL: c.url}, nil, nil, nil)
+			if got := w.StreamURL(); got != c.url {
+				t.Fatalf("StreamURL() = %q, want %q", got, c.url)
+			}
+		})
+	}
+}
+
 // TestRun_RespectsCancelledContext verifies that the outer Run loop returns
 // promptly when the context is cancelled BEFORE entering the ffmpeg startup
 // path. This is the only branch we can exercise without ffmpeg installed.
