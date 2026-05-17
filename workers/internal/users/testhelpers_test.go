@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/db"
+	"radiocheck/internal/dbtest"
 )
 
 func newTestDB(t *testing.T) (context.Context, *pgxpool.Pool) {
@@ -21,6 +22,8 @@ func newTestDB(t *testing.T) (context.Context, *pgxpool.Pool) {
 	pool, err := db.New(ctx, url)
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Close() })
+	// Guard: recusa rodar se DB tem dado real (ver dbtest/guard.go).
+	dbtest.GuardOrSkip(t, ctx, pool)
 	return ctx, pool
 }
 

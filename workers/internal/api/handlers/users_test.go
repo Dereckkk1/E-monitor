@@ -18,6 +18,7 @@ import (
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/db"
+	"radiocheck/internal/dbtest"
 	"radiocheck/internal/users"
 )
 
@@ -31,6 +32,8 @@ func newUsersTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	pool, err := db.New(ctx, url)
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Close() })
+	// Guard: recusa TRUNCATE se DB tem dado real (ver dbtest/guard.go).
+	dbtest.GuardOrSkip(t, ctx, pool)
 	_, err = pool.Exec(ctx, `TRUNCATE users, clients RESTART IDENTITY CASCADE`)
 	require.NoError(t, err)
 	return ctx, pool
