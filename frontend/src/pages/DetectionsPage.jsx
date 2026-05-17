@@ -5,6 +5,7 @@ import {
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary, useCampaignPricing,
 } from '../api/hooks'
+import { useAuth } from '../contexts/AuthContext'
 import RSelect from '../components/RSelect'
 import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
@@ -163,7 +164,11 @@ function SkeletonCalendar({ monthDate }) {
   const days = Array.from({ length: dayCount }, (_, i) => i)
   const ROW_SUM_W = 200
   const STATION_TOTAL_W = 180
-  const gridTemplate = `220px repeat(${dayCount}, 88px) 1fr ${ROW_SUM_W}px ${STATION_TOTAL_W}px`
+  // Espelha o layout inline do DistributionGrid: bloco da emissora à esquerda
+  // (240px, row-span sobre os materiais) + coluna de label do material (116px).
+  const STATION_INFO_W = 240
+  const MATERIAL_LABEL_W = 116
+  const gridTemplate = `${STATION_INFO_W}px ${MATERIAL_LABEL_W}px repeat(${dayCount}, 88px) 1fr ${ROW_SUM_W}px ${STATION_TOTAL_W}px`
 
   let matRowIdx = 0
 
@@ -177,6 +182,7 @@ function SkeletonCalendar({ monthDate }) {
         fontSize: 12, minWidth: 'fit-content',
       }}>
         <div style={{ ...skelHead, left: 0, zIndex: 3 }} />
+        <div style={{ ...skelHead, left: STATION_INFO_W, zIndex: 3 }} />
         {days.map(i => (
           <div key={`hd-${i}`} style={skelHead}>
             <div className="skeleton" style={{ width: 22, height: 9,  borderRadius: 3 }} />
@@ -189,32 +195,34 @@ function SkeletonCalendar({ monthDate }) {
 
         {SKEL_STATIONS.map((s, si) => (
           <Fragment key={`s-${si}`}>
-            <div style={{
-              gridColumn: '1 / -1', background: '#fff',
-              borderBottom: '1px solid #e2e8f0',
-            }}>
-              <div style={{
-                position: 'sticky', left: 0, width: 'fit-content',
-                padding: '11px 14px', display: 'flex', alignItems: 'center',
-                gap: 10, background: '#fff',
-              }}>
-                <div className="skeleton" style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0 }} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <div className="skeleton" style={{ width: s.nameW,  height: 11, borderRadius: 4 }} />
-                  <div className="skeleton" style={{ width: s.placeW, height: 9,  borderRadius: 3 }} />
-                </div>
-              </div>
-            </div>
-
             {s.materials.map((m, mi) => {
               const hits = skeletonHits(dayCount, matRowIdx++)
               return (
                 <Fragment key={`m-${si}-${mi}`}>
+                  {mi === 0 && (
+                    <div style={{
+                      gridColumn: '1 / 2',
+                      gridRow: `span ${s.materials.length}`,
+                      background: '#fff',
+                      borderBottom: '1px solid #e2e8f0',
+                      borderRight: '1px solid #e2e8f0',
+                      padding: '12px 14px',
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      position: 'sticky', left: 0, zIndex: 3,
+                    }}>
+                      <div className="skeleton" style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0 }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <div className="skeleton" style={{ width: s.nameW,  height: 12, borderRadius: 4 }} />
+                        <div className="skeleton" style={{ width: s.placeW, height: 9,  borderRadius: 3 }} />
+                        <div className="skeleton" style={{ width: s.placeW - 8, height: 9, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  )}
                   <div style={{
-                    padding: '11px 14px 11px 24px', background: '#fafbfc',
+                    padding: '11px 12px', background: '#fafbfc',
                     borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9',
                     display: 'flex', alignItems: 'center', gap: 8,
-                    position: 'sticky', left: 0, zIndex: 2,
+                    position: 'sticky', left: STATION_INFO_W, zIndex: 2,
                   }}>
                     <div className="skeleton" style={{ width: 3, height: 16, borderRadius: 2 }} />
                     <div className="skeleton" style={{ width: m.titleW, height: 11, borderRadius: 4 }} />
@@ -477,8 +485,9 @@ function DetectionsEmpty({
 
 export default function DetectionsPage() {
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns()
-  const { data: clients = [] } = useClients()
+  const { data: clients = [] } = useClients({ enabled: isAdmin })
 
   const [searchParams] = useSearchParams()
   const deepLinkCampaignId = searchParams.get('campaign_id') ?? ''
@@ -504,7 +513,7 @@ export default function DetectionsPage() {
     document.getElementById('detection-campaign')?.focus()
   }, [])
 
-  const { data: stationsResp } = useStations({ limit: 2000 })
+  const { data: stationsResp } = useStations({ limit: 2000, enabled: isAdmin })
   const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
 
   // Client lookup map
@@ -1029,6 +1038,7 @@ export default function DetectionsPage() {
             rows={filteredRows}
             cellData={cellData}
             pricingByStation={pricingByStation}
+            inlineStationInfo
             onCellClick={(stationId, typeId, dateISO) =>
               setModalCell({ stationId, typeId, dateISO })}
             onStationClick={(stationId) => setHealthStationId(stationId)}
