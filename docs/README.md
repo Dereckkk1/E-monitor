@@ -53,6 +53,7 @@ docs/
 | [campaign-wizard.md](features/campaign-wizard.md) | Wizard de 4 etapas para criar/editar campanha |
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
+| [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
 | [webhooks.md](features/webhooks.md) | Entrega de eventos com HMAC-SHA256 + retry + outbox |
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
 | [broadcaster-search.md](features/broadcaster-search.md) | Busca multi-token AND/field-OR de emissoras |

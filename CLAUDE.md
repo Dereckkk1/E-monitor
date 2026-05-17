@@ -260,6 +260,7 @@ docs/
 |---------------------------|------------|
 | Schema / migrations | [docs/operations/migrations.md](docs/operations/migrations.md) — leitura obrigatória antes de mexer em schema |
 | Auth, JWT, bootstrap admin, role gating | [docs/operations/auth-bootstrap.md](docs/operations/auth-bootstrap.md) |
+| Gerenciamento de usuários (admin/cliente, /admin/users, /account) | [docs/features/user-management.md](docs/features/user-management.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |
 | Backup, restore, retenção de evidência | [docs/operations/data-durability.md](docs/operations/data-durability.md) (canônico) + [docs/operations/backup-and-retention.md](docs/operations/backup-and-retention.md) (parcialmente desatualizado) |
 | OpenTelemetry, Jaeger, spans | [docs/operations/tracing.md](docs/operations/tracing.md) |

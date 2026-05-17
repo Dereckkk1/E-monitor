@@ -21,6 +21,23 @@ Referências cruzadas:
 
 ---
 
+## Status: implementado em 2026-05-17
+
+CRUD de usuários e self-service `/auth/me` agora disponíveis. Ver
+[docs/features/user-management.md](../features/user-management.md).
+
+Itens implementados:
+- POST/GET/PATCH/DELETE `/v1/internal/admin/users` (admin-only)
+- POST `/v1/internal/admin/users/:id/password` (reset)
+- GET/PATCH `/v1/internal/auth/me` (self-service)
+- POST `/v1/internal/auth/me/password` (troca de senha)
+- UI admin em `/admin/users` e "Minha conta" em `/account`
+- Filtragem server-side por `client_id` (viewer scope)
+
+Pendente: refresh tokens em httpOnly cookie, blacklist de JWT.
+
+---
+
 ## 1. Como o bootstrap funciona
 
 No startup, `cmd/api` chama `auth.EnsureAdmin(ctx, pool, cfg, logger)`
