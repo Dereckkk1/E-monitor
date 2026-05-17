@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import { RadioPlayerProvider } from './contexts/RadioPlayerContext'
 import { ConfirmProvider } from './components/ConfirmModal'
 import RequireAuth from './components/RequireAuth'
+import RequireRole from './components/RequireRole'
 import Sidebar from './components/Sidebar'
 import RadioPlayer from './components/RadioPlayer'
 import StationsPage    from './pages/StationsPage'
@@ -22,6 +23,14 @@ import CampaignWizardPage from './pages/CampaignWizardPage'
 import MaterialTypesPage from './pages/MaterialTypesPage'
 import AirtimeReportPage from './pages/AirtimeReportPage'
 import AdminOverviewPage from './pages/AdminOverviewPage'
+import AdminUsersPage from './pages/AdminUsersPage'
+import AccountPage from './pages/AccountPage'
+import { useAuth } from './contexts/AuthContext'
+
+function HomeRedirect() {
+  const { isAdmin } = useAuth()
+  return <Navigate to={isAdmin ? '/stations' : '/campaigns'} replace />
+}
 
 function HamburgerIcon() {
   return (
@@ -70,25 +79,51 @@ function AppShell() {
         <RadioPlayer />
         <main className="app-content">
           <Routes>
-            <Route path="/"            element={<Navigate to="/stations" replace />} />
-            <Route path="/stations"         element={<StationsPage />} />
-            <Route path="/stations/:id/edit" element={<StationEditPage />} />
-            <Route path="/clients"     element={<ClientsPage />} />
-            <Route path="/clients/:id/webhooks"  element={<WebhookDeliveriesPage />} />
-            <Route path="/clients/:id/api-keys"  element={<ApiKeysPage />} />
+            <Route path="/" element={<HomeRedirect />} />
+            <Route path="/stations" element={
+              <RequireRole roles={['admin']}><StationsPage /></RequireRole>
+            } />
+            <Route path="/stations/:id/edit" element={
+              <RequireRole roles={['admin']}><StationEditPage /></RequireRole>
+            } />
+            <Route path="/clients" element={
+              <RequireRole roles={['admin']}><ClientsPage /></RequireRole>
+            } />
+            <Route path="/clients/:id/webhooks" element={
+              <RequireRole roles={['admin']}><WebhookDeliveriesPage /></RequireRole>
+            } />
+            <Route path="/clients/:id/api-keys" element={
+              <RequireRole roles={['admin']}><ApiKeysPage /></RequireRole>
+            } />
             <Route path="/campaigns"   element={<CampaignsPage />} />
-            <Route path="/campaigns/new"      element={<CampaignWizardPage />} />
-            <Route path="/campaigns/:id/edit" element={<CampaignWizardPage />} />
-            <Route path="/material-types"     element={<MaterialTypesPage />} />
-            <Route path="/monitoring"  element={<MonitoringPage />} />
-            <Route path="/operations"  element={<OperationsPage />} />
+            <Route path="/campaigns/new" element={
+              <RequireRole roles={['admin']}><CampaignWizardPage /></RequireRole>
+            } />
+            <Route path="/campaigns/:id/edit" element={
+              <RequireRole roles={['admin']}><CampaignWizardPage /></RequireRole>
+            } />
+            <Route path="/material-types" element={
+              <RequireRole roles={['admin']}><MaterialTypesPage /></RequireRole>
+            } />
+            <Route path="/monitoring" element={
+              <RequireRole roles={['admin']}><MonitoringPage /></RequireRole>
+            } />
+            <Route path="/operations" element={
+              <RequireRole roles={['admin']}><OperationsPage /></RequireRole>
+            } />
             <Route path="/detections"  element={<DetectionsPage />} />
             <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
-            <Route path="/admin/overview" element={<AdminOverviewPage />} />
+            <Route path="/admin/overview" element={
+              <RequireRole roles={['admin']}><AdminOverviewPage /></RequireRole>
+            } />
+            <Route path="/admin/users" element={
+              <RequireRole roles={['admin']}><AdminUsersPage /></RequireRole>
+            } />
             <Route path="/dashboard"   element={<DashboardPage />} />
+            <Route path="/account"     element={<AccountPage />} />
             {/* Catch-all */}
-            <Route path="*"            element={<Navigate to="/stations" replace />} />
+            <Route path="*" element={<HomeRedirect />} />
           </Routes>
         </main>
       </div>
