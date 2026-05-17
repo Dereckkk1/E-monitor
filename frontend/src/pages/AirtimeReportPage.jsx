@@ -4,6 +4,7 @@ import {
   useCampaigns, useClients, useDetectionsPaged, useMaterialAggregate, useCampaignPricing,
   exportDetectionsCsv,
 } from '../api/hooks'
+import { useAuth } from '../contexts/AuthContext'
 import AirtimeFiltersBar from '../components/AirtimeFiltersBar'
 import AirtimeDetectionRow from '../components/AirtimeDetectionRow'
 import AirtimeMaterialPanel from '../components/AirtimeMaterialPanel'
@@ -73,8 +74,9 @@ function fmtRangeLabel(from, to) {
 
 export default function AirtimeReportPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const { isAdmin } = useAuth()
   const { data: campaigns = [] } = useCampaigns()
-  const { data: clients = [] } = useClients()
+  const { data: clients = [] } = useClients({ enabled: isAdmin })
 
   // URL is the source of truth — users can share the link with state preserved.
   const competence = searchParams.get('competence') ?? ''

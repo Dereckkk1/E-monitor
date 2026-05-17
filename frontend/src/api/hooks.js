@@ -2,10 +2,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 
 // Stations
-export function useStations(params = {}) {
+export function useStations({ enabled = true, ...params } = {}) {
   return useQuery({
     queryKey: ['stations', params],
     queryFn: () => api.get('/stations', { params }).then(r => r.data),
+    enabled,
   })
 }
 export function useStation(id) {
@@ -34,8 +35,12 @@ export function useUpdateStation() {
 }
 
 // Clients
-export function useClients() {
-  return useQuery({ queryKey: ['clients'], queryFn: () => api.get('/clients').then(r => r.data.data ?? []) })
+export function useClients({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get('/clients').then(r => r.data.data ?? []),
+    enabled,
+  })
 }
 // Paged version — backend kicks into pagination mode when any of page,
 // page_size, or q is set. Returns { data, total, total_pages, page, page_size }.
