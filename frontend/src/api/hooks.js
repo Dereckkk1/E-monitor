@@ -706,3 +706,71 @@ export function useCampaign(id) {
     enabled: !!id,
   })
 }
+
+// ─── Users (admin only) ────────────────────────────────────────────────────
+
+export function useUsersPaged(params = {}) {
+  return useQuery({
+    queryKey: ['users', 'paged', params],
+    queryFn: () => api.get('/admin/users', { params }).then(r => r.data),
+    placeholderData: (prev) => prev,
+  })
+}
+export function useUser(id) {
+  return useQuery({
+    queryKey: ['users', id],
+    queryFn: () => api.get(`/admin/users/${id}`).then(r => r.data),
+    enabled: !!id,
+  })
+}
+export function useCreateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data) => api.post('/admin/users', data).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+export function useUpdateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch(`/admin/users/${id}`, body).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['users', vars.id] })
+    },
+  })
+}
+export function useResetUserPassword() {
+  return useMutation({
+    mutationFn: ({ id, password }) =>
+      api.post(`/admin/users/${id}/password`, { password }).then(r => r.data),
+  })
+}
+export function useDeleteUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.delete(`/admin/users/${id}`).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+// ─── Me (any authenticated) ────────────────────────────────────────────────
+
+export function useMe() {
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: () => api.get('/auth/me').then(r => r.data),
+  })
+}
+export function useUpdateMe() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => api.patch('/auth/me', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  })
+}
+export function useChangeMyPassword() {
+  return useMutation({
+    mutationFn: (body) => api.post('/auth/me/password', body),
+  })
+}
