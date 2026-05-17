@@ -39,9 +39,12 @@ func TestClientScopeFromContext_NoClaims(t *testing.T) {
 	require.Nil(t, auth.ClientScopeFromContext(context.Background()))
 }
 
-func TestClientScopeFromContext_ViewerNoClient_ReturnsNil(t *testing.T) {
-	// Defensive: a viewer without client_id (shouldn't happen — DB CHECK
-	// constraint blocks it) returns nil rather than crashing.
+func TestClientScopeFromContext_ViewerNoClient_ReturnsZeroUUID(t *testing.T) {
+	// Defense in depth: viewer sem client_id (token pré-migração ou bug)
+	// retorna uuid.Nil em vez de nil — forçando todas as queries scoped
+	// a não retornarem nada, em vez de ganhar acesso unscoped.
 	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Role: "viewer"})
-	require.Nil(t, auth.ClientScopeFromContext(ctx))
+	got := auth.ClientScopeFromContext(ctx)
+	require.NotNil(t, got)
+	require.Equal(t, uuid.Nil, *got)
 }
