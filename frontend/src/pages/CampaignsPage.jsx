@@ -12,6 +12,7 @@ import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import AirtimePaginator from '../components/AirtimePaginator'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
+import { useAuth } from '../contexts/AuthContext'
 
 const CAMPAIGNS_PAGE_SIZE = 12
 
@@ -845,6 +846,7 @@ function MaterialsPanel({ campaign, campaignStationIds, allStations }) {
 // ─── CampaignStationsSection ───────────────────────────────────────────────────
 
 function CampaignStationsSection({ campaign, allStations }) {
+  const { isAdmin } = useAuth()
   const updateCampaignStations = useUpdateCampaignStations()
   const [editing, setEditing]   = useState(false)
 
@@ -892,16 +894,18 @@ function CampaignStationsSection({ campaign, allStations }) {
     <div className="expanded-section" style={{ borderBottom: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <p className="expanded-section-label" style={{ marginBottom: 0 }}>Emissoras monitoradas</p>
-        <button
-          className="btn btn-secondary btn-sm"
-          onClick={() => setEditing(v => !v)}
-          type="button"
-        >
-          {editing ? 'Cancelar' : 'Editar'}
-        </button>
+        {isAdmin && (
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setEditing(v => !v)}
+            type="button"
+          >
+            {editing ? 'Cancelar' : 'Editar'}
+          </button>
+        )}
       </div>
 
-      {editing ? (
+      {isAdmin && editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <RSelect
             isMulti
@@ -935,9 +939,11 @@ function CampaignStationsSection({ campaign, allStations }) {
       ) : stationsInCampaign.length === 0 ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <p style={{ fontSize: 13, color: 'var(--c-text-3)' }}>Nenhuma emissora vinculada.</p>
-          <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)} type="button">
-            <IconPlus size={12} /> Adicionar
-          </button>
+          {isAdmin && (
+            <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)} type="button">
+              <IconPlus size={12} /> Adicionar
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1001,6 +1007,7 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   const confirm = useConfirm()
   const alertDialog = useAlert()
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
   const client = clients.find(cl => cl.id === campaign.client_id)
   const stationCount = (campaign.target_stations ?? []).length
   const startTip = startDateTooltip(campaign.start_date, campaign.status)
@@ -1077,16 +1084,18 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         </div>
 
         <div className="campaign-row-actions">
-          <Link
-            to={`/campaigns/${campaign.id}/edit`}
-            className="btn btn-secondary btn-sm"
-          >
-            Editar
-          </Link>
+          {isAdmin && (
+            <Link
+              to={`/campaigns/${campaign.id}/edit`}
+              className="btn btn-secondary btn-sm"
+            >
+              Editar
+            </Link>
+          )}
           <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-concluida'}`}>
             {STATUS_LABEL[campaign.status] ?? campaign.status}
           </span>
-          {canCancel && (
+          {isAdmin && canCancel && (
             <button
               className="btn btn-muted btn-sm"
               onClick={handleCancel}
@@ -1096,18 +1105,20 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
               Cancelar campanha
             </button>
           )}
-          <button
-            className="btn btn-icon btn-danger-ghost btn-sm"
-            title="Excluir campanha"
-            onClick={async () => {
-              if (await confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
-                deleteCampaign.mutate(campaign.id)
-              }
-            }}
-            disabled={deleteCampaign.isPending}
-          >
-            <IconTrash />
-          </button>
+          {isAdmin && (
+            <button
+              className="btn btn-icon btn-danger-ghost btn-sm"
+              title="Excluir campanha"
+              onClick={async () => {
+                if (await confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
+                  deleteCampaign.mutate(campaign.id)
+                }
+              }}
+              disabled={deleteCampaign.isPending}
+            >
+              <IconTrash />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1118,13 +1129,14 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
 // ─── EmptyState ────────────────────────────────────────────────────────────────
 
 function EmptyState() {
+  const { isAdmin } = useAuth()
   return (
     <div className="campaigns-empty">
       <div className="campaigns-empty-action">
         <div style={{ color: 'var(--c-action)', opacity: 0.7 }}><IconMegaphone /></div>
         <h3>Nenhuma campanha cadastrada</h3>
         <p>Crie a primeira campanha para começar a monitorar a veiculação de comerciais nas emissoras.</p>
-        <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>
+        {isAdmin && <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>}
       </div>
       <div className="campaigns-empty-preview" aria-hidden="true">
         <div className="ghost-card">
@@ -1151,6 +1163,7 @@ function EmptyState() {
 // ─── CampaignsPage ─────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
+  const { isAdmin } = useAuth()
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
@@ -1231,7 +1244,7 @@ export default function CampaignsPage() {
     <div>
       <div className="page-header">
         <h2>Campanhas</h2>
-        <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>
+        {isAdmin && <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>}
       </div>
 
       {initialEmpty ? (
