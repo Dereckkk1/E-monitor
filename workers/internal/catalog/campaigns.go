@@ -376,9 +376,11 @@ type CampaignFinancials struct {
 	TotalInsertions int      `json:"total_insertions"`
 }
 
-// FinancialsByCampaign retorna o agregado de TODAS as campanhas. Tabela
-// pequena (~100 entradas no pior caso), uma query só.
-func (c *Campaigns) FinancialsByCampaign(ctx context.Context) ([]CampaignFinancials, error) {
+// FinancialsByCampaign retorna o agregado das campanhas. Quando clientID
+// não é nil, filtra somente as campanhas do cliente — usado por viewers
+// para evitar vazamento cross-client. Admins/operators passam nil e recebem
+// todas as campanhas.
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID) ([]CampaignFinancials, error) {
 	const q = `
 		WITH per_ins AS (
 			-- Investimento e inserções no modo per_insertion: precisa do
@@ -430,8 +432,9 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context) ([]CampaignFinanci
 		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
 		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
+		WHERE ($1::uuid IS NULL OR c.client_id = $1)
 	`
-	rows, err := c.pool.Query(ctx, q)
+	rows, err := c.pool.Query(ctx, q, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
 	}
