@@ -104,6 +104,26 @@ function IconAdminOverview() {
   )
 }
 
+function IconUsers() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="5" r="2.2" />
+      <circle cx="11.5" cy="6.5" r="1.6" />
+      <path d="M2 13c0-2.6 1.79-4 4-4s4 1.4 4 4" />
+      <path d="M10 13c0-1.7 1.18-2.6 2.5-2.6 1.1 0 2 .8 2.2 1.9" strokeOpacity="0.7" />
+    </svg>
+  )
+}
+
+function IconAccount() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="5" r="2.5" />
+      <path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
+    </svg>
+  )
+}
+
 /* ── Nav link helper ─────────────────────────────────────────── */
 function SidebarLink({ to, icon, children, onClose }) {
   return (
@@ -135,6 +155,7 @@ function AdminNav({ onClose }) {
     <>
       <span className="sidebar-section-label">Administração</span>
       <SidebarLink to="/admin/overview" icon={<IconAdminOverview />} onClose={onClose}>Visão geral</SidebarLink>
+      <SidebarLink to="/admin/users"    icon={<IconUsers />}         onClose={onClose}>Usuários</SidebarLink>
 
       <span className="sidebar-section-label">Visão de negócio</span>
       <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
@@ -164,8 +185,12 @@ function ClientNav({ onClose }) {
       <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
 
       <span className="sidebar-section-label">Veiculação</span>
+      <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
+
+      <span className="sidebar-section-label">Conta</span>
+      <SidebarLink to="/account" icon={<IconAccount />} onClose={onClose}>Minha conta</SidebarLink>
     </>
   )
 }
