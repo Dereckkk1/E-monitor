@@ -1,0 +1,458 @@
+/* ─────────────────────────────────────────────────────────────
+   AccountPage — Minha conta
+   ─────────────────────────────────────────────────────────────
+   Single-column form layout (forms são narrow por princípio).
+   Identidade do usuário em faixa orientadora no topo, depois
+   2 cartões separados: dados pessoais + senha. Pattern de
+   "form em duas etapas conceituais" — não mistura tudo num único
+   form gigante porque trocar senha é um fluxo mental diferente
+   de atualizar nome/telefone.
+   ───────────────────────────────────────────────────────────── */
+
+.account-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+  font-family: var(--font-body);
+  color: var(--c-text);
+}
+
+@media (max-width: 768px) {
+  .account-page {
+    padding: 24px 16px 48px;
+  }
+}
+
+/* ─── Page header ─────────────────────────────────────────── */
+
+.account-header {
+  margin-bottom: 32px;
+}
+
+.account-header h1 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  margin: 0 0 6px;
+}
+
+.account-header-sub {
+  font-size: 14px;
+  color: var(--c-text-2);
+  margin: 0;
+}
+
+/* ─── Identity strip (orientação, não é editável) ─────────── */
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  margin-bottom: 24px;
+}
+
+.account-identity-avatar {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--c-action) 0%, var(--c-action-hover) 100%);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: -0.02em;
+}
+
+.account-identity-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-identity-name {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-text);
+  margin: 0 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity-email {
+  font-size: 13px;
+  color: var(--c-text-2);
+  margin: 0 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: var(--c-surface-2);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  letter-spacing: 0.02em;
+}
+
+.account-identity-tag svg {
+  flex-shrink: 0;
+}
+
+.account-identity-tag-client {
+  color: var(--c-action);
+  background: var(--c-action-light);
+}
+
+/* ─── Section card ────────────────────────────────────────── */
+
+.account-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  margin-bottom: 20px;
+  /* Subtle stagger entrance */
+  opacity: 0;
+  transform: translateY(8px);
+  animation: account-card-in 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.account-card:nth-of-type(1) { animation-delay: 40ms; }
+.account-card:nth-of-type(2) { animation-delay: 100ms; }
+.account-card:nth-of-type(3) { animation-delay: 160ms; }
+
+@keyframes account-card-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.account-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.account-card-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-text);
+  letter-spacing: -0.005em;
+  margin: 0;
+}
+
+.account-card-meta {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+/* ─── Form layout ─────────────────────────────────────────── */
+
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.account-form .field label {
+  /* override pra ficar menor que default uppercase do design system,
+     mais leitura corrida pra forma pessoal */
+  text-transform: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--c-text-2);
+}
+
+/* Email travado mantém visual mas comunica imutabilidade */
+.account-form .input:disabled {
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  cursor: not-allowed;
+}
+
+/* Senha: agrupa input + toggle eye + (opcional) gerador */
+.account-pwd-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.account-pwd-row .input {
+  flex: 1;
+}
+
+.account-eye {
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--c-text-3);
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+
+.account-eye:hover {
+  color: var(--c-text);
+  border-color: var(--c-text-3);
+}
+
+/* Indicador inline de força de senha ─────────────────────── */
+
+.account-pwd-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -4px;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.account-pwd-strength-track {
+  flex: 1;
+  height: 4px;
+  background: var(--c-surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.account-pwd-strength-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 200ms ease-out, background 200ms;
+}
+
+.account-pwd-strength-fill.s-weak   { background: var(--c-danger); }
+.account-pwd-strength-fill.s-medium { background: var(--c-warning); }
+.account-pwd-strength-fill.s-strong { background: var(--c-success); }
+
+.account-pwd-strength-label.s-weak   { color: var(--c-danger); }
+.account-pwd-strength-label.s-medium { color: var(--c-warning); }
+.account-pwd-strength-label.s-strong { color: var(--c-success); }
+
+/* Inline field-level errors ──────────────────────────────── */
+
+.account-field-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+  font-size: 12px;
+  color: var(--c-danger);
+}
+
+/* Form footer (botão de salvar) ──────────────────────────── */
+
+.account-form-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.account-form-foot .btn {
+  min-width: 132px;
+}
+
+.account-form-foot-hint {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+/* Botão com spinner inline mantendo largura ─────────────── */
+
+.account-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: account-spin 700ms linear infinite;
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+
+@keyframes account-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Toast (não-bloqueante) ──────────────────────────────── */
+
+.account-toast-region {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.account-toast {
+  min-width: 280px;
+  max-width: 380px;
+  padding: 12px 14px 12px 16px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-action);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 24px -8px rgba(6, 5, 91, 0.18),
+              0 4px 8px -4px rgba(6, 5, 91, 0.10);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: auto;
+  animation: account-toast-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.account-toast.t-success { border-left-color: var(--c-success); }
+.account-toast.t-error   { border-left-color: var(--c-danger); }
+
+.account-toast-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.account-toast.t-success .account-toast-icon { color: var(--c-success); }
+.account-toast.t-error   .account-toast-icon { color: var(--c-danger); }
+
+.account-toast-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin: 0 0 2px;
+}
+
+.account-toast-msg {
+  font-size: 12px;
+  color: var(--c-text-2);
+  margin: 0;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.account-toast-close {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--c-text-3);
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  transition: color 120ms;
+}
+
+.account-toast-close:hover { color: var(--c-text); }
+
+@keyframes account-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* ─── Skeleton loading ────────────────────────────────────── */
+
+.account-skel {
+  background: linear-gradient(
+    90deg,
+    var(--c-surface-2) 25%,
+    rgba(241, 245, 249, 0.5) 50%,
+    var(--c-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: account-shimmer 1500ms ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.account-skel-circle { border-radius: 50%; }
+.account-skel-pill   { border-radius: 999px; }
+
+@keyframes account-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* ─── Error full-screen ───────────────────────────────────── */
+
+.account-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  background: var(--c-surface);
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.account-error-icon {
+  width: 48px;
+  height: 48px;
+  color: var(--c-text-3);
+  margin-bottom: 12px;
+}
+
+.account-error-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-text);
+  margin: 0 0 4px;
+}
+
+.account-error-msg {
+  font-size: 13px;
+  color: var(--c-text-2);
+  margin: 0 0 18px;
+}
