@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
-import { useCampaigns, useStreamHealth } from '../api/hooks'
+import { useCampaigns, useStreamHealth, useClients } from '../api/hooks'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
 import './DashboardPage.css'
@@ -49,158 +49,214 @@ const STATUS_META = {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  CLIENT DASHBOARD — preserved 1:1 from the previous implementation
+//  CLIENT DASHBOARD
 // ═══════════════════════════════════════════════════════════════════
+//
+//  Layout: bento grid com hero metric (total de campanhas + distribuição
+//  por status) na esquerda e lista vertical "próximas a iniciar" na
+//  direita; seguido por grid de campanhas ativas e lista compacta de
+//  concluídas recentes. Cliente é read-only: sem CTAs de criação,
+//  apenas navegação.
+//
+//  Classes: prefix .cdash-* (em DashboardPage.css). NÃO colidem com
+//  .dh-* do admin nem com as classes legadas .dashboard-/.campaign- em
+//  index.css (mantidas vivas porque podem ser usadas por outras telas).
+//
+//  Estados: skeleton com forma exata, empty com ghost preview real,
+//  stagger 40/100/160/220ms nos blocos principais.
 
-function StatusOverview({ campaigns }) {
-  const total = campaigns.length
-  const counts = useMemo(() => {
-    const c = { ativa: 0, programada: 0, concluida: 0, cancelada: 0 }
-    campaigns.forEach(camp => {
-      if (c[camp.status] !== undefined) c[camp.status]++
-    })
-    return c
-  }, [campaigns])
+// Phosphor-style inline SVG icons (mantém o padrão SVG do projeto)
+const CIcon = {
+  calendar: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  ),
+  broadcast: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="2" /><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14" />
+    </svg>
+  ),
+  arrow: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
+    </svg>
+  ),
+  chevron: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  ),
+  inbox: (
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" /><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+  ),
+}
 
+// Compute days until a YYYY-MM-DD date string (Brazil time). Negative if past.
+function daysUntil(dateStr) {
+  if (!dateStr) return null
+  const target = new Date(dateStr + 'T00:00:00-03:00')
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const ms = target - today
+  return Math.round(ms / (1000 * 60 * 60 * 24))
+}
+
+function relativeDays(n) {
+  if (n == null) return ''
+  if (n === 0)  return 'hoje'
+  if (n === 1)  return 'amanhã'
+  if (n > 0)    return `em ${n} dias`
+  if (n === -1) return 'ontem'
+  return `há ${Math.abs(n)} dias`
+}
+
+// "abr/24" → curto pra recent rows
+function monthYearShort(dateStr) {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr + 'T00:00:00-03:00')
+  return d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'America/Sao_Paulo' }).replace('.', '')
+}
+
+// ─── Skeleton (mirrors loaded layout exactly) ─────────────
+
+function ClientSkeleton() {
   return (
-    <div className="status-overview">
-      <div className="status-overview-label">
-        Campanhas &mdash; {total} no total
+    <div className="cdash-shell" aria-busy="true" aria-live="polite">
+      <div className="cdash-hello">
+        <div className="cdash-skel" style={{ width: 240, height: 28, marginBottom: 6 }} />
+        <div className="cdash-skel" style={{ width: 320, height: 14 }} />
       </div>
 
-      <div className="status-bar">
-        {Object.entries(STATUS_META).map(([key, meta]) => {
-          const pct = total > 0 ? (counts[key] / total) * 100 : 0
-          if (pct === 0) return null
-          return (
-            <div
-              key={key}
-              className="status-bar-segment"
-              style={{ width: `${pct}%`, background: meta.color }}
-              title={`${meta.label}: ${counts[key]}`}
-            />
-          )
-        })}
-        {total === 0 && (
-          <div
-            className="status-bar-segment"
-            style={{ width: '100%', background: 'var(--c-border)' }}
-          />
-        )}
-      </div>
-
-      <div className="status-legend">
-        {Object.entries(STATUS_META).map(([key, meta]) => (
-          <div key={key} className="status-legend-item">
-            <div className="status-legend-dot" style={{ background: meta.color }} />
-            <span>{counts[key]} {meta.label.toLowerCase()}</span>
+      <div className="cdash-bento">
+        <div className="cdash-hero-card">
+          <div className="cdash-skel" style={{ width: 110, height: 11 }} />
+          <div className="cdash-skel" style={{ width: 180, height: 52, marginTop: 4 }} />
+          <div style={{ marginTop: 'auto' }}>
+            <div className="cdash-skel" style={{ width: '100%', height: 10, borderRadius: 999, marginBottom: 12 }} />
+            <div style={{ display: 'flex', gap: 16 }}>
+              {[60, 70, 80, 50].map((w, i) => (
+                <div key={i} className="cdash-skel" style={{ width: w, height: 12 }} />
+              ))}
+            </div>
           </div>
-        ))}
+        </div>
+        <div className="cdash-side-card">
+          <div className="cdash-skel" style={{ width: 140, height: 14, marginBottom: 4 }} />
+          <div className="cdash-skel" style={{ width: 90, height: 11, marginBottom: 14 }} />
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10 }}>
+              <div className="cdash-skel" style={{ width: 6, height: 6, borderRadius: '50%' }} />
+              <div style={{ flex: 1 }}>
+                <div className="cdash-skel" style={{ width: '70%', height: 12, marginBottom: 4 }} />
+                <div className="cdash-skel" style={{ width: '45%', height: 11 }} />
+              </div>
+              <div className="cdash-skel" style={{ width: 40, height: 12 }} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="cdash-section">
+        <div className="cdash-skel" style={{ width: 180, height: 18 }} />
+        <div className="cdash-active-grid">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="cdash-active-card" style={{ animation: 'none', cursor: 'default' }}>
+              <div className="cdash-skel" style={{ width: 70, height: 11 }} />
+              <div className="cdash-skel" style={{ width: '80%', height: 18 }} />
+              <div className="cdash-skel" style={{ width: '55%', height: 12, marginTop: 'auto' }} />
+              <div className="cdash-skel" style={{ width: '40%', height: 12 }} />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
-function CampaignCard({ campaign }) {
-  const navigate = useNavigate()
-  const meta = STATUS_META[campaign.status] ?? STATUS_META.concluida
+// ─── Empty state — ghost preview real (não placeholder genérico) ─
 
+function ClientEmpty({ clientName }) {
   return (
-    <div className="campaign-card">
-      <div className="campaign-card-header">
-        <span className={`badge ${meta.badgeClass}`}>{meta.badge ?? campaign.status}</span>
+    <div className="cdash-shell">
+      <div className="cdash-hello">
+        <h1>Bem-vindo{clientName ? `, ${clientName}` : ''}</h1>
+        <div className="cdash-hello-sub">
+          Esta é a sua visão geral. Quando houver campanhas, elas aparecem aqui.
+        </div>
       </div>
 
-      <div className="campaign-card-name">{campaign.name}</div>
-
-      <div className="campaign-card-meta">
-        <div className="campaign-card-meta-row">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <rect x="1" y="2" width="10" height="9" rx="1.5" />
-            <path d="M4 1v2M8 1v2M1 5h10" />
-          </svg>
-          {formatDate(campaign.start_date)} &ndash; {formatDate(campaign.end_date)}
-        </div>
-        {campaign.target_stations != null && (
-          <div className="campaign-card-meta-row">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <circle cx="6" cy="6" r="4.5" />
-              <path d="M2 6c0-2.21 1.79-4 4-4" />
-              <path d="M10 6c0 2.21-1.79 4-4 4" />
-              <circle cx="6" cy="6" r="1" fill="currentColor" stroke="none" />
-            </svg>
-            {campaign.target_stations} {campaign.target_stations === 1 ? 'emissora alvo' : 'emissoras alvo'}
+      <div className="cdash-empty">
+        {/* Ghost layer: layout real renderizado com dados fake, transparente */}
+        <div className="cdash-empty-ghost" aria-hidden="true">
+          <div className="cdash-bento">
+            <div className="cdash-hero-card">
+              <div className="cdash-hero-label">Campanhas no total</div>
+              <div className="cdash-hero-figure">
+                <span className="cdash-hero-number">12</span>
+                <span className="cdash-hero-unit">campanhas</span>
+              </div>
+              <div className="cdash-distrib">
+                <div className="cdash-distrib-bar">
+                  <div className="cdash-distrib-seg" style={{ width: '25%', background: '#10b981' }} />
+                  <div className="cdash-distrib-seg" style={{ width: '15%', background: '#6b7280' }} />
+                  <div className="cdash-distrib-seg" style={{ width: '60%', background: '#3b82f6' }} />
+                </div>
+                <div className="cdash-distrib-legend">
+                  <span className="cdash-distrib-legend-item">
+                    <span className="cdash-distrib-dot" style={{ background: '#10b981' }} />
+                    <span className="cdash-distrib-legend-num">3</span> ativas
+                  </span>
+                  <span className="cdash-distrib-legend-item">
+                    <span className="cdash-distrib-dot" style={{ background: '#6b7280' }} />
+                    <span className="cdash-distrib-legend-num">2</span> programadas
+                  </span>
+                  <span className="cdash-distrib-legend-item">
+                    <span className="cdash-distrib-dot" style={{ background: '#3b82f6' }} />
+                    <span className="cdash-distrib-legend-num">7</span> concluídas
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="cdash-side-card">
+              <div className="cdash-side-head">
+                <h3 className="cdash-side-title">Próximas a iniciar</h3>
+                <span className="cdash-side-sub">2 nas próximas semanas</span>
+              </div>
+              <div className="cdash-side-list">
+                <div className="cdash-side-item">
+                  <span className="cdash-side-dot" />
+                  <div className="cdash-side-body">
+                    <div className="cdash-side-name">Campanha exemplo</div>
+                    <div className="cdash-side-meta">30 emissoras</div>
+                  </div>
+                  <span className="cdash-side-countdown">em 3 dias</span>
+                </div>
+                <div className="cdash-side-item">
+                  <span className="cdash-side-dot" />
+                  <div className="cdash-side-body">
+                    <div className="cdash-side-name">Outra campanha</div>
+                    <div className="cdash-side-meta">22 emissoras</div>
+                  </div>
+                  <span className="cdash-side-countdown">em 7 dias</span>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
 
-      <div className="campaign-card-actions">
-        <button
-          className="btn-link"
-          onClick={() => navigate(`/detections?campaign_id=${campaign.id}`)}
-        >
-          Ver Veiculações
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 6h8M6 2l4 4-4 4" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ClientSkeletonCards() {
-  return (
-    <div className="campaign-grid">
-      {[1, 2].map(i => (
-        <div key={i} className="campaign-card">
-          <div className="skeleton-cell" style={{ width: '30%', height: 20 }} />
-          <div className="skeleton-cell" style={{ width: '70%', height: 16, marginTop: 4 }} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-            <div className="skeleton-cell" style={{ width: '55%', height: 12 }} />
-            <div className="skeleton-cell" style={{ width: '40%', height: 12 }} />
+        {/* Action overlay focado no centro */}
+        <div className="cdash-empty-overlay">
+          <div className="cdash-empty-action">
+            <div className="cdash-empty-icon">{CIcon.inbox}</div>
+            <h3 className="cdash-empty-title">Nenhuma campanha por aqui ainda</h3>
+            <p className="cdash-empty-msg">
+              Assim que o administrador cadastrar suas campanhas, você verá
+              o resumo, próximas a iniciar e atalhos pras veiculações nesta tela.
+            </p>
           </div>
-          <div className="skeleton-cell" style={{ width: '35%', height: 14, marginTop: 4 }} />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ClientEmptyState() {
-  const navigate = useNavigate()
-  return (
-    <div className="dashboard-empty">
-      <div className="dashboard-empty-action">
-        <div className="dashboard-empty-icon">
-          <svg width="64" height="64" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="8" y="16" width="48" height="38" rx="4" />
-            <path d="M8 26h48" />
-            <path d="M20 12v8M44 12v8" />
-            <path d="M22 38h20M22 44h12" />
-          </svg>
-        </div>
-        <h3>Nenhuma campanha encontrada</h3>
-        <p>Quando suas campanhas forem criadas, você verá um resumo do status e acesso rápido às veiculações aqui.</p>
-        <button className="btn btn-primary" onClick={() => navigate('/campaigns')}>
-          Ir para Campanhas
-        </button>
-      </div>
-
-      <div className="dashboard-empty-preview" aria-hidden="true">
-        <div className="ghost-card">
-          <div className="ghost-line" style={{ width: '35%' }} />
-          <div className="ghost-line" style={{ width: '65%', height: 16 }} />
-          <div className="ghost-line" style={{ width: '50%', height: 11 }} />
-          <div className="ghost-line" style={{ width: '30%', height: 11 }} />
-          <div className="ghost-line" style={{ width: '40%', height: 13, marginTop: 4 }} />
-        </div>
-        <div className="ghost-card">
-          <div className="ghost-line" style={{ width: '28%' }} />
-          <div className="ghost-line" style={{ width: '72%', height: 16 }} />
-          <div className="ghost-line" style={{ width: '45%', height: 11 }} />
-          <div className="ghost-line" style={{ width: '35%', height: 11 }} />
-          <div className="ghost-line" style={{ width: '38%', height: 13, marginTop: 4 }} />
         </div>
       </div>
     </div>
@@ -208,63 +264,269 @@ function ClientEmptyState() {
 }
 
 function ClientDashboard() {
-  const { user } = useAuth()
-  const { data: campaigns = [], isLoading } = useCampaigns()
-  const [showEnded, setShowEnded] = useState(false)
+  const navigate = useNavigate()
+  const { user, clientId } = useAuth()
+  const { data: campaigns = [], isLoading, error, refetch } = useCampaigns()
+  const clientsQ = useClients({ enabled: !!clientId })
+
+  const linkedClient = clientId
+    ? (clientsQ.data ?? []).find(c => c.id === clientId)
+    : null
 
   const today = useMemo(() => formatDateFull(new Date()), [])
+  const firstName = (user?.name || user?.email || '').split(/\s+/)[0] || ''
 
-  const activeCampaigns = useMemo(
-    () => campaigns.filter(c => c.status !== 'ended'),
-    [campaigns]
-  )
-  const endedCampaigns = useMemo(
-    () => campaigns.filter(c => c.status === 'ended'),
-    [campaigns]
-  )
+  // ── Agrupamentos ────────────────────────────────────────
+  const counts = useMemo(() => {
+    const c = { ativa: 0, programada: 0, concluida: 0, cancelada: 0 }
+    campaigns.forEach(camp => { if (c[camp.status] !== undefined) c[camp.status]++ })
+    return c
+  }, [campaigns])
 
-  const visibleCampaigns = showEnded ? [...activeCampaigns, ...endedCampaigns] : activeCampaigns
+  const total = campaigns.length
+
+  // Próximas a iniciar: programadas com start_date no futuro, ordenadas por proximidade
+  const upcoming = useMemo(() => {
+    return campaigns
+      .filter(c => c.status === 'programada')
+      .map(c => ({ ...c, _days: daysUntil(c.start_date) }))
+      .filter(c => c._days != null && c._days >= 0)
+      .sort((a, b) => a._days - b._days)
+      .slice(0, 4)
+  }, [campaigns])
+
+  // Ativas em destaque (cards grandes)
+  const activeCampaigns = useMemo(() => {
+    return campaigns
+      .filter(c => c.status === 'ativa')
+      .sort((a, b) => (b.start_date || '').localeCompare(a.start_date || ''))
+      .slice(0, 8)
+  }, [campaigns])
+
+  // Concluídas recentes (lista compacta)
+  const recentFinished = useMemo(() => {
+    return campaigns
+      .filter(c => c.status === 'concluida' || c.status === 'cancelada')
+      .sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''))
+      .slice(0, 5)
+  }, [campaigns])
+
+  // ── Estados de loading/erro/vazio ───────────────────────
+  if (isLoading) return <ClientSkeleton />
+  if (error && total === 0) {
+    return (
+      <div className="cdash-shell">
+        <div className="cdash-err">
+          <div className="cdash-err-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <h3 className="cdash-err-title">Não foi possível carregar suas campanhas</h3>
+          <p className="cdash-err-msg">Tente novamente em instantes.</p>
+          <button className="btn btn-secondary btn-sm" onClick={() => refetch()}>Tentar novamente</button>
+        </div>
+      </div>
+    )
+  }
+  if (total === 0) return <ClientEmpty clientName={linkedClient?.name} />
+
+  // ── Distribuição (barra empilhada) ──────────────────────
+  const distribSegments = [
+    { key: 'ativa',      pct: (counts.ativa      / total) * 100, color: '#10b981' },
+    { key: 'programada', pct: (counts.programada / total) * 100, color: '#6b7280' },
+    { key: 'concluida',  pct: (counts.concluida  / total) * 100, color: '#3b82f6' },
+    { key: 'cancelada',  pct: (counts.cancelada  / total) * 100, color: 'rgba(239, 68, 68, 0.55)' },
+  ].filter(s => s.pct > 0)
 
   return (
-    <div>
-      {/* Greeting */}
-      <div className="dashboard-greeting">
-        <h1>Olá, {user?.name ?? 'Admin'}</h1>
-        <div className="dashboard-greeting-sub">Aqui está um resumo das suas campanhas.</div>
-        <div className="dashboard-greeting-date">{today}</div>
+    <div className="cdash-shell">
+      {/* ── Hello / orientação ─────────────────────────── */}
+      <div className="cdash-hello">
+        <h1>Olá{firstName ? `, ${firstName}` : ''}</h1>
+        <div className="cdash-hello-sub">
+          {linkedClient && (
+            <>
+              <span className="cdash-hello-client">{linkedClient.name}</span>
+              <span className="cdash-hello-sep" />
+            </>
+          )}
+          <span style={{ textTransform: 'capitalize' }}>{today}</span>
+        </div>
       </div>
 
-      {/* Status Overview */}
-      {!isLoading && campaigns.length > 0 && (
-        <StatusOverview campaigns={campaigns} />
-      )}
-
-      {/* Campaign grid */}
-      {isLoading ? (
-        <ClientSkeletonCards />
-      ) : campaigns.length === 0 ? (
-        <ClientEmptyState />
-      ) : (
-        <>
-          <div className="campaign-grid">
-            {visibleCampaigns.map(c => (
-              <CampaignCard key={c.id} campaign={c} />
-            ))}
+      {/* ── Bento: hero metric + próximas ──────────────── */}
+      <div className="cdash-bento">
+        <div className="cdash-hero-card">
+          <div className="cdash-hero-label">Campanhas no total</div>
+          <div className="cdash-hero-figure">
+            <span className="cdash-hero-number">{total}</span>
+            <span className="cdash-hero-unit">{total === 1 ? 'campanha' : 'campanhas'}</span>
           </div>
 
-          {endedCampaigns.length > 0 && (
-            <div className="ended-toggle">
-              <button
-                className="btn btn-muted btn-sm"
-                onClick={() => setShowEnded(v => !v)}
-              >
-                {showEnded
-                  ? `Ocultar encerradas`
-                  : `Mostrar encerradas (${endedCampaigns.length})`}
-              </button>
+          <div className="cdash-distrib">
+            <div className="cdash-distrib-bar" role="img" aria-label="Distribuição por status">
+              {distribSegments.map(s => (
+                <div
+                  key={s.key}
+                  className="cdash-distrib-seg"
+                  style={{ width: `${s.pct}%`, background: s.color }}
+                  title={`${STATUS_META[s.key].label}: ${counts[s.key]}`}
+                />
+              ))}
+            </div>
+            <div className="cdash-distrib-legend">
+              {['ativa', 'programada', 'concluida', 'cancelada'].map(key => (
+                counts[key] > 0 && (
+                  <span key={key} className="cdash-distrib-legend-item">
+                    <span className="cdash-distrib-dot" style={{ background: STATUS_META[key].color }} />
+                    <span className="cdash-distrib-legend-num">{counts[key]}</span>
+                    {STATUS_META[key].label.toLowerCase()}
+                  </span>
+                )
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="cdash-side-card">
+          <div className="cdash-side-head">
+            <h3 className="cdash-side-title">Próximas a iniciar</h3>
+            <span className="cdash-side-sub">
+              {upcoming.length > 0
+                ? `${upcoming.length} programada${upcoming.length === 1 ? '' : 's'}`
+                : 'nenhuma agendada'}
+            </span>
+          </div>
+          {upcoming.length === 0 ? (
+            <div className="cdash-side-empty">
+              Nenhuma campanha programada no momento.
+            </div>
+          ) : (
+            <div className="cdash-side-list">
+              {upcoming.map(c => {
+                const urgent = c._days <= 3
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="cdash-side-item"
+                    onClick={() => navigate(`/campaigns?status=programada`)}
+                  >
+                    <span
+                      className="cdash-side-dot"
+                      style={{ background: STATUS_META.programada.color }}
+                    />
+                    <div className="cdash-side-body">
+                      <div className="cdash-side-name" title={c.name}>{c.name}</div>
+                      <div className="cdash-side-meta">
+                        {c.target_stations != null
+                          ? `${c.target_stations} emissora${c.target_stations === 1 ? '' : 's'}`
+                          : 'sem emissoras definidas'}
+                      </div>
+                    </div>
+                    <span className={`cdash-side-countdown ${urgent ? 'urgent' : ''}`}>
+                      {relativeDays(c._days)}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
-        </>
+        </div>
+      </div>
+
+      {/* ── Active campaigns grid ──────────────────────── */}
+      {activeCampaigns.length > 0 && (
+        <div className="cdash-section delay-1">
+          <div className="cdash-section-head">
+            <div>
+              <h2 className="cdash-section-title">
+                Em atividade agora{' '}
+                <span className="cdash-section-count">· {counts.ativa} ativa{counts.ativa === 1 ? '' : 's'}</span>
+              </h2>
+            </div>
+            <button
+              type="button"
+              className="cdash-section-link"
+              onClick={() => navigate('/campaigns?status=ativa')}
+            >
+              Ver todas {CIcon.arrow}
+            </button>
+          </div>
+          <div className="cdash-active-grid">
+            {activeCampaigns.map(c => (
+              <button
+                key={c.id}
+                type="button"
+                className="cdash-active-card"
+                style={{ ['--cdash-tone']: STATUS_META.ativa.color }}
+                onClick={() => navigate(`/detections?campaign_id=${c.id}`)}
+              >
+                <div className="cdash-active-status">
+                  <span className="cdash-active-status-dot" />
+                  ATIVA
+                </div>
+                <h3 className="cdash-active-name" title={c.name}>{c.name}</h3>
+                <div className="cdash-active-meta">
+                  <div className="cdash-active-meta-row">
+                    {CIcon.calendar}
+                    {formatDate(c.start_date)} – {formatDate(c.end_date)}
+                  </div>
+                  {c.target_stations != null && (
+                    <div className="cdash-active-meta-row">
+                      {CIcon.broadcast}
+                      {c.target_stations} emissora{c.target_stations === 1 ? '' : 's'}
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Recent finished list ───────────────────────── */}
+      {recentFinished.length > 0 && (
+        <div className="cdash-section delay-2">
+          <div className="cdash-section-head">
+            <div>
+              <h2 className="cdash-section-title">
+                Concluídas recentes{' '}
+                <span className="cdash-section-count">· últimas {recentFinished.length}</span>
+              </h2>
+            </div>
+            <button
+              type="button"
+              className="cdash-section-link"
+              onClick={() => navigate('/campaigns?status=concluida')}
+            >
+              Histórico {CIcon.arrow}
+            </button>
+          </div>
+          <div className="cdash-recent">
+            {recentFinished.map(c => (
+              <button
+                key={c.id}
+                type="button"
+                className="cdash-recent-row"
+                onClick={() => navigate(`/detections?campaign_id=${c.id}`)}
+              >
+                <span
+                  className="cdash-recent-status-dot"
+                  style={{ background: STATUS_META[c.status]?.color ?? 'var(--c-text-3)' }}
+                  title={STATUS_META[c.status]?.label}
+                />
+                <span className="cdash-recent-name" title={c.name}>{c.name}</span>
+                <span className="cdash-recent-period">{monthYearShort(c.end_date)}</span>
+                <span className="cdash-recent-stations">
+                  {c.target_stations != null ? `${c.target_stations} emissora${c.target_stations === 1 ? '' : 's'}` : '—'}
+                </span>
+                <span className="cdash-recent-chev">{CIcon.chevron}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   )

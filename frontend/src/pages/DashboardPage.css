@@ -591,3 +591,679 @@
   gap: 12px;
   padding: 10px 8px;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   CLIENT DASHBOARD — prefix .cdash-
+   ════════════════════════════════════════════════════════════════
+   Bento grid (hero metric + side list) seguido por grid de
+   campanhas ativas e lista de concluídas recentes. Cliente é
+   read-only — não há CTAs de criação, só de navegação.
+   ════════════════════════════════════════════════════════════════ */
+
+.cdash-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  font-family: var(--font-body);
+}
+
+/* ── Header / greeting (não é card, é faixa orientadora) ── */
+
+.cdash-hello {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Stagger entrance */
+  opacity: 0;
+  transform: translateY(8px);
+  animation: cdash-in 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.cdash-hello h1 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: -0.015em;
+  color: var(--c-text);
+  margin: 0;
+  line-height: 1.1;
+}
+
+.cdash-hello-sub {
+  font-size: 14px;
+  color: var(--c-text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cdash-hello-sep {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--c-text-3);
+  display: inline-block;
+}
+
+.cdash-hello-client {
+  font-weight: 600;
+  color: var(--c-action);
+}
+
+@keyframes cdash-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Bento row 1: hero metric + side list ────────────────── */
+
+.cdash-bento {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 980px) {
+  .cdash-bento {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Hero metric card — DOMINANTE (a peça mais importante da tela) */
+.cdash-hero-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 260px;
+  position: relative;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: cdash-in 280ms cubic-bezier(0.16, 1, 0.3, 1) 40ms forwards;
+}
+
+/* Subtle accent canto superior esquerdo — semantic identity da página */
+.cdash-hero-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 80px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--c-action), transparent);
+}
+
+.cdash-hero-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+.cdash-hero-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-heading);
+}
+
+.cdash-hero-number {
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--c-text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cdash-hero-unit {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--c-text-2);
+}
+
+/* Distribuição: barra empilhada com legenda inline ────── */
+
+.cdash-distrib {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: auto;
+}
+
+.cdash-distrib-bar {
+  display: flex;
+  height: 10px;
+  width: 100%;
+  background: var(--c-surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+  gap: 2px;
+}
+
+.cdash-distrib-seg {
+  height: 100%;
+  transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cdash-distrib-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+.cdash-distrib-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cdash-distrib-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cdash-distrib-legend-num {
+  font-weight: 700;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Side card — Próximas a iniciar ────────────────────────── */
+
+.cdash-side-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 260px;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: cdash-in 280ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards;
+}
+
+.cdash-side-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+
+.cdash-side-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.cdash-side-sub {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.cdash-side-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.cdash-side-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 140ms, border-color 140ms;
+}
+
+.cdash-side-item:hover {
+  background: var(--c-action-light);
+  border-color: var(--c-action-border);
+}
+
+.cdash-side-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-text-3);
+  flex-shrink: 0;
+}
+
+.cdash-side-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.cdash-side-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin: 0 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cdash-side-meta {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.cdash-side-countdown {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.cdash-side-countdown.urgent {
+  color: var(--c-action);
+}
+
+.cdash-side-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  font-size: 13px;
+  color: var(--c-text-3);
+  text-align: center;
+  padding: 16px 8px;
+}
+
+/* ── Section block (active grid / recent list) ───────────── */
+
+.cdash-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: cdash-in 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.cdash-section.delay-1 { animation-delay: 160ms; }
+.cdash-section.delay-2 { animation-delay: 220ms; }
+
+.cdash-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cdash-section-title {
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.cdash-section-count {
+  font-size: 13px;
+  color: var(--c-text-3);
+  font-weight: 500;
+}
+
+.cdash-section-link {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-action);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: var(--radius-md);
+  transition: background 140ms;
+}
+
+.cdash-section-link:hover {
+  background: var(--c-action-light);
+}
+
+/* ── Active campaign card grid ──────────────────────────── */
+
+.cdash-active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.cdash-active-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 180ms;
+  min-height: 142px;
+  position: relative;
+}
+
+.cdash-active-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--cdash-tone, var(--c-action));
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  opacity: 0;
+  transition: opacity 180ms;
+}
+
+.cdash-active-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px -4px rgba(6, 5, 91, 0.12), 0 2px 4px -1px rgba(6, 5, 91, 0.06);
+  border-color: var(--c-action-border);
+}
+
+.cdash-active-card:hover::before {
+  opacity: 1;
+}
+
+.cdash-active-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cdash-tone, var(--c-action));
+}
+
+.cdash-active-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: cdash-pulse 2.4s ease-out infinite;
+}
+
+@keyframes cdash-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent); }
+  70%  { box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); }
+}
+
+.cdash-active-name {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-text);
+  margin: 0;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cdash-active-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--c-text-2);
+  margin-top: auto;
+}
+
+.cdash-active-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cdash-active-meta-row svg {
+  flex-shrink: 0;
+  color: var(--c-text-3);
+}
+
+/* ── Recent list (concluídas) ───────────────────────────── */
+
+.cdash-recent {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.cdash-recent-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  border-bottom: 1px solid var(--c-border);
+  transition: background 140ms;
+}
+
+.cdash-recent-row:last-child {
+  border-bottom: none;
+}
+
+.cdash-recent-row:hover {
+  background: var(--c-surface-2);
+}
+
+.cdash-recent-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-text-3);
+  flex-shrink: 0;
+}
+
+.cdash-recent-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cdash-recent-period {
+  font-size: 12px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cdash-recent-stations {
+  font-size: 12px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cdash-recent-chev {
+  color: var(--c-text-3);
+  transition: transform 140ms, color 140ms;
+}
+
+.cdash-recent-row:hover .cdash-recent-chev {
+  color: var(--c-action);
+  transform: translateX(2px);
+}
+
+@media (max-width: 640px) {
+  .cdash-recent-row {
+    grid-template-columns: auto 1fr auto;
+  }
+  .cdash-recent-period,
+  .cdash-recent-stations {
+    grid-column: 2 / -1;
+    font-size: 11px;
+  }
+}
+
+/* ── Empty state — ghost preview real ────────────────────── */
+
+.cdash-empty {
+  position: relative;
+  min-height: 480px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+}
+
+.cdash-empty-ghost {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  opacity: 0.18;
+  filter: blur(0.5px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.cdash-empty-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.7) 55%,
+    rgba(255, 255, 255, 0.3) 100%
+  );
+}
+
+.cdash-empty-action {
+  text-align: center;
+  max-width: 360px;
+  padding: 32px 24px;
+}
+
+.cdash-empty-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  background: var(--c-action-light);
+  color: var(--c-action);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.cdash-empty-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 20px;
+  color: var(--c-text);
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.cdash-empty-msg {
+  font-size: 14px;
+  color: var(--c-text-2);
+  margin: 0 0 20px;
+  line-height: 1.55;
+}
+
+/* ── Skeleton loading (forma exata do conteúdo carregado) ─ */
+
+.cdash-skel {
+  background: linear-gradient(
+    90deg,
+    var(--c-surface-2) 25%,
+    rgba(241, 245, 249, 0.5) 50%,
+    var(--c-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: cdash-shimmer 1500ms ease-in-out infinite;
+  border-radius: 4px;
+}
+
+@keyframes cdash-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* ── Error state (load do /campaigns falhou) ─────────────── */
+
+.cdash-err {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  background: var(--c-surface);
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.cdash-err-icon {
+  width: 48px;
+  height: 48px;
+  color: var(--c-text-3);
+  margin-bottom: 12px;
+}
+
+.cdash-err-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-text);
+  margin: 0 0 4px;
+}
+
+.cdash-err-msg {
+  font-size: 13px;
+  color: var(--c-text-2);
+  margin: 0 0 18px;
+}
+
