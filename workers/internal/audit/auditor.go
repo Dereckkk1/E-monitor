@@ -23,11 +23,14 @@ import (
 	"radiocheck/pkg/audio"
 )
 
-// Production-default thresholds; mirror §9.3 constants. NewAuditor falls back
-// to these when zero values are passed.
+// Production-default thresholds. Espelham o matching live (state machine
+// minTemporalCoverage = 0.15) para que o audit não rejeite detecções que o
+// produtor live já tinha aceitado — esse é o threshold do §9.3, não 0.4.
+// Bug histórico do incidente 2026-05-17: defaults começaram em 0.4 (audit
+// ~2.6× mais rigoroso que o live), rejeitando detecções legítimas em massa.
 const (
 	DefaultMinScore    = 5
-	DefaultMinCoverage = 0.4
+	DefaultMinCoverage = 0.15
 )
 
 // Result is the outcome of one audit run.

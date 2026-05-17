@@ -1,11 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-17
 codigo-relacionado:
   - workers/internal/audit/auditor.go
   - workers/internal/evidence/service.go
   - workers/internal/metrics/metrics.go
-  - migrations/0009_fase2_audit.up.sql
+  - migrations/0028_audit_rejected_status.up.sql
 ---
 
 # Evidence Audit (§9.9 — Audit de Evidência Pré-Persist)
@@ -71,10 +71,12 @@ WARN  audit DISABLED via AUDIT_ENABLED=false — all detections will be persiste
 | Constante | Valor | Origem |
 |---|---|---|
 | `DefaultMinScore` | 5 | §9.3 `MATCH_THRESHOLD` |
-| `DefaultMinCoverage` | 0.4 | §9.3 `MIN_COVERAGE` |
+| `DefaultMinCoverage` | 0.15 | §9.3 `MIN_COVERAGE` (idêntico ao live `state machine minTemporalCoverage`) |
 | `DeltaBinSize` | 2 | §9.3 (compartilhado com `internal/match`) |
 
-Hoje os thresholds são globais. Calibração por emissora (análogo ao §9.4 do matching live) fica fora de escopo — o audit é um *guardrail* contra discrepância grosseira, não substituto da calibração fina. Construtor expõe override no `NewAuditor(db, log, minScore, minCoverage)` para testes futuros.
+**Importante:** o threshold do audit DEVE espelhar o threshold do matching live. Se o audit for mais rigoroso que o produtor (live), ele vai rejeitar detecções que o live já tinha aceitado — situação que destruiu 104 detections em prod entre 15/05 e 17/05 quando o default foi acidentalmente shippado em 0.4 (incidente 2026-05-17). Audit é *guardrail contra mismatch grosseiro* entre clipe salvo e master atribuído, não filtro independente.
+
+Calibração por emissora (análogo ao §9.4 do matching live) fica fora de escopo. Construtor expõe override no `NewAuditor(db, log, minScore, minCoverage)` para testes futuros.
 
 ## Métricas
 
@@ -138,6 +140,7 @@ Quando aparecer uma detecção rejeitada e o operador quiser entender o porquê,
 
 - **2026-05-14** Incidente UNIFIQUE Solaris FM: detecção confirmada com clipe salvo que não continha o comercial (score 2 / cov 1% em audit offline contra todos os 6 variantes do master). Foi o que motivou §9.9.
 - **2026-05-15** Implementação inicial. Comentário do incidente original: ["e se a gente auditar a censura do comercial que deu como veiculado com o áudio q ele disse q veiculou?"](#).
+- **2026-05-17** Postmortem [incident-2026-05-17-audit-status-constraint.md](../incidents/incident-2026-05-17-audit-status-constraint.md). Duas falhas correlacionadas: (1) feature shippou sem migração que adicionasse `'audit_rejected'` ao CHECK de `evidence_status`, então toda rejeição quebrava no UPDATE e deixava a row órfã em `'pending'`; (2) `DefaultMinCoverage` foi inicialmente 0.4 — 2.6× mais rigoroso que o threshold do matching live (0.15) — rejeitando detecções legítimas. Migration 0028 corrige o CHECK e backfilla as 104 órfãs pra `'missing'`. Threshold corrigido pra 0.15.
 
 ## Limitações conhecidas
 
