@@ -148,8 +148,10 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Financials returns the per-campaign aggregate of investimento + total
 // inserções, usado pelo badge de CPM em /campaigns. Calculado em uma query
 // só (CTE) pra evitar N+1 chamadas no frontend.
+// Viewer scope: filtra pelo client_id do JWT para evitar vazamento cross-client.
 func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
-	out, err := h.Repo.FinancialsByCampaign(r.Context())
+	scope := auth.ClientScopeFromContext(r.Context())
+	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
