@@ -42,7 +42,13 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
    - Totais do mês por categoria
 4. **Busca** filtra emissora E material (nome, cidade, dial, banda, título do material)
 5. **Clique em célula**: abre `DayDetailModal` com breakdown por categoria + lista de detecções
-6. **Clique no header da emissora**: abre `HealthDrawer` com saúde do stream
+6. **Clique no bloco da emissora**: abre `HealthDrawer` com saúde do stream
+
+## Layout
+
+A grid usa o `DistributionGrid` em modo `inlineStationInfo`: cada emissora vive numa coluna sticky-left (240px) que faz row-span sobre os materiais dela, e a 2ª coluna sticky-left (116px) carrega o label de cada material (TypeIconPill + título). Os dias começam na 3ª coluna. As pills de resumo continuam sticky-right.
+
+O modo full-width antigo (header da emissora numa linha própria acima dos materiais) permanece como default do `DistributionGrid` e é o que o wizard de campanha usa em edição.
 
 ## Empty states
 

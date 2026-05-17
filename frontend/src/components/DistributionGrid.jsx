@@ -44,6 +44,12 @@ export default function DistributionGrid({
   // CONFIGURAÇÃO (wizard step de distribuição) onde o operador precisa
   // planejar plays nos dias que ainda não chegaram.
   capAtToday = true,
+  // inlineStationInfo: false (default, usado no wizard) = bloco da emissora
+  // ocupa linha full-width acima dos materiais. true (usado em /detections) =
+  // bloco da emissora vira coluna à esquerda fazendo row-span sobre todas as
+  // material rows, e o label do material vai pra uma 2ª coluna sticky-left.
+  // Layout pedido na review da grid de detecções (mai/26).
+  inlineStationInfo = false,
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -97,14 +103,31 @@ export default function DistributionGrid({
   // com poucos dias visíveis.
   const ROW_SUMMARY_W = 200
   const STATION_TOTAL_W = 180
-  const gridTemplate = `220px repeat(${days.length}, 88px) 1fr ${ROW_SUMMARY_W}px ${STATION_TOTAL_W}px`
+  // Modo inline (detections) divide a coluna esquerda em DUAS sticky-left:
+  //   240px → bloco da emissora (avatar + nome + band/freq/cidade), row-span
+  //   116px → label do material (TypeIconPill + título), uma por linha
+  // Modo wizard (default) mantém a coluna única de 220px e o header full-width
+  // da emissora rendido como divisor por bloco.
+  const STATION_INFO_W = 240
+  const MATERIAL_LABEL_W = 116
+  const leftColumns = inlineStationInfo
+    ? `${STATION_INFO_W}px ${MATERIAL_LABEL_W}px`
+    : '220px'
+  const gridTemplate = `${leftColumns} repeat(${days.length}, 88px) 1fr ${ROW_SUMMARY_W}px ${STATION_TOTAL_W}px`
 
   return (
     <div style={{ overflowX: 'auto', background: '#fff', borderTop: '1px solid #f1f5f9' }}>
       <div style={{ display: 'grid', gridTemplateColumns: gridTemplate, fontSize: 12, minWidth: 'fit-content' }}>
 
         {/* Header row */}
-        <div style={headStation}>Emissora / Material</div>
+        {inlineStationInfo ? (
+          <>
+            <div style={headStation}>Emissora</div>
+            <div style={{ ...headStation, left: STATION_INFO_W }}>Material</div>
+          </>
+        ) : (
+          <div style={headStation}>Emissora / Material</div>
+        )}
         {days.map((d, i) => {
           const wkd = d.getDay() === 0 || d.getDay() === 6
           const isToday = d.toDateString() === today.toDateString()
@@ -133,35 +156,71 @@ export default function DistributionGrid({
             <Fragment key={`sb-${stationId}`}>
               {/* Station header (full-width) — inner content sticks to the
                   left so the station name stays visible while the user scrolls
-                  the day columns horizontally. */}
-              <div style={{
-                gridColumn: '1 / -1', background: '#fff', borderBottom: '1px solid #e2e8f0',
-                cursor: onStationClick ? 'pointer' : 'default',
-              }} onClick={onStationClick ? () => onStationClick(station.id) : undefined}>
+                  the day columns horizontally. Em inline mode esse header é
+                  pulado: o bloco vira a primeira célula da primeira material
+                  row com row-span. */}
+              {!inlineStationInfo && (
                 <div style={{
-                  position: 'sticky', left: 0,
-                  width: 'fit-content',
-                  padding: '11px 14px',
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  background: '#fff',
-                }}>
-                  <StationAvatar station={station} size={30} />
-                  <div>
-                    <span style={{ fontWeight: 600, color: '#0f172a' }}>{station.name}</span>
-                    <span style={{ color: '#64748b', fontSize: 11, marginLeft: 6 }}>
-                      {station.band} {station.frequency_mhz ?? ''} · {station.city ?? ''}
-                    </span>
+                  gridColumn: '1 / -1', background: '#fff', borderBottom: '1px solid #e2e8f0',
+                  cursor: onStationClick ? 'pointer' : 'default',
+                }} onClick={onStationClick ? () => onStationClick(station.id) : undefined}>
+                  <div style={{
+                    position: 'sticky', left: 0,
+                    width: 'fit-content',
+                    padding: '11px 14px',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    background: '#fff',
+                  }}>
+                    <StationAvatar station={station} size={30} />
+                    <div>
+                      <span style={{ fontWeight: 600, color: '#0f172a' }}>{station.name}</span>
+                      <span style={{ color: '#64748b', fontSize: 11, marginLeft: 6 }}>
+                        {station.band} {station.frequency_mhz ?? ''} · {station.city ?? ''}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {stationRows.map((row, ri) => (
                 <Fragment key={`row-${stationId}-${row.materialId}`}>
+                  {inlineStationInfo && ri === 0 && (
+                    <div
+                      onClick={onStationClick ? () => onStationClick(station.id) : undefined}
+                      style={{
+                        gridColumn: '1 / 2',
+                        gridRow: `span ${stationRows.length}`,
+                        background: '#fff',
+                        borderBottom: '1px solid #e2e8f0',
+                        borderRight: '1px solid #e2e8f0',
+                        padding: '12px 14px',
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        position: 'sticky', left: 0, zIndex: 3,
+                        cursor: onStationClick ? 'pointer' : 'default',
+                      }}>
+                      <StationAvatar station={station} size={40} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <span style={{
+                          fontWeight: 700, color: '#0f172a', fontSize: 13,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>{station.name}</span>
+                        <span style={{ color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
+                          {station.band ?? ''} {station.frequency_mhz ?? ''}
+                        </span>
+                        <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>
+                          {station.city ?? ''}{station.state ? ` / ${station.state}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <div style={{
-                    padding: '11px 14px 11px 24px', background: '#fafbfc', color: '#334155',
+                    padding: inlineStationInfo ? '11px 12px' : '11px 14px 11px 24px',
+                    background: '#fafbfc', color: '#334155',
                     borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9',
                     display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 500,
-                    position: 'sticky', left: 0, zIndex: 2,
+                    position: 'sticky',
+                    left: inlineStationInfo ? STATION_INFO_W : 0,
+                    zIndex: 2,
                   }}>
                     <TypeIconPill color={row.typeColor} />
                     {row.materialTitle}

@@ -2,22 +2,22 @@ telas:
 
 1 - tela de dash campanha e multi campanha
 2 - tela de erros (relatorio-campanha.pages.dev)
-3 - tela lista de usuarios (cadastro, update, acessos, bababa e bababa)
-    3.1 - admin
-    3.2 - cliente
 4 - tela de mapa ao vivo
 5 - tela de monitoramento de usuarios (ip, rotas, horario de acesso)
 6 - tela de dash de testes e performance (p95, tempo de rota, cls, etc)
-7 - nova tela de login
-8 - visual inline das veiculações
 
 features:
 
 1 - csv + pdf em todos os relatorios
 2 - melhora de segurança (10 mandamentos da segurança)
-3 - skeleton loader em /material-types
 
+-- tela lista de usuarios (cadastro, update, acessos, bababa e bababa)
+-- admin
+-- cliente
 -- aparecer o periodo da campanha junto com o nome
 -- atualizar os links dos workers dinamicamente
 -- parar workers depois do fim da campanha
 -- tela de saúde do sistema
+-- visual inline das veiculações
+-- nova tela de login
+-- skeleton loader em /material-types
