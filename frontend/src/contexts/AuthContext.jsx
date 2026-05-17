@@ -35,12 +35,21 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
-  // Role helpers consumed by Sidebar / role-gated routes. Falls back to the
-  // PoC-era "admin" default when no user is loaded so existing UI code that
-  // assumes admin keeps rendering for now.
+  // Role helpers consumed by Sidebar / role-gated routes.
+  //
+  // Vocabulário: o backend usa role 'viewer' pra "Cliente". 'admin' e
+  // 'operator' são tratados como sinônimos (admin do sistema). Este context
+  // expõe isAdmin/isClient/clientId pra componentes não terem que conhecer
+  // o detalhe.
+  //
+  // Nota: o fallback `isAdmin = role == null` foi removido — UI legada que
+  // renderizava com admin por default agora vê isAdmin=false até o login
+  // popular o user. Componentes que precisam de garantia de role devem
+  // usar <RequireRole>.
   const role = user?.role ?? null
-  const isAdmin = role === 'admin' || role == null
+  const isAdmin = role === 'admin' || role === 'operator'
   const isClient = role === 'viewer'
+  const clientId = user?.client_id ?? null
 
   const value = {
     token,
@@ -48,6 +57,7 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!token,
     isAdmin,
     isClient,
+    clientId,
     login,
     logout,
   }
