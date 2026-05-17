@@ -16,8 +16,12 @@ import (
 // Deps groups all handlers and middleware required by the API router.
 //
 // External (`/v1`) routes are protected by API key (§13.1).
-// Internal (`/v1/internal`) routes require a JWT with role admin/operator,
-// except for /health and /auth/login which remain public.
+// Internal (`/v1/internal`) routes require a JWT. Role requirements vary:
+//   - viewer: read-only endpoints (campaigns, detections, materials list)
+//   - operator: writes and admin reads
+//   - admin: mutations, lifecycle ops, user management
+//
+// /health and /auth/login remain public (no JWT required).
 //
 // StreamHealth (master) and APIKeys/Auth (fase2) coexist in this router.
 type Deps struct {
@@ -85,22 +89,46 @@ func NewRouter(d Deps) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireJWT)
 
-			// ── Self-service /auth/me* — any authenticated user ───────────────
-			// Any authenticated user (admin/operator/viewer) can manage their
-			// own profile. Role, client_id, is_active are NOT mutable via /me.
+			// ── Subgrupo A — viewer-friendly reads ────────────────────────────
+			// Chi accumulates middlewares — inner groups do NOT override an outer
+			// RequireRole gate. To allow viewer access, these reads live in their
+			// own top-level group with RequireRole(admin/operator/viewer), NOT
+			// nested inside the admin/operator group below.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRole("admin", "operator", "viewer"))
+
+				// Self-service /auth/me* — any authenticated user can manage their
+				// own profile. Role, client_id, is_active are NOT mutable via /me.
 				if d.Me != nil {
 					r.Get("/auth/me", d.Me.Get)
 					r.Patch("/auth/me", d.Me.Patch)
 					r.Post("/auth/me/password", d.Me.ChangePassword)
 				}
+
+				// Campaign reads — literal prefixes BEFORE /{id} so chi resolves
+				// /campaigns/financials correctly and doesn't try to parse
+				// "financials" as a UUID.
+				r.Get("/campaigns", d.Campaigns.List)
+				r.Get("/campaigns/financials", d.Campaigns.Financials)
+				r.Get("/campaigns/{id}", d.Campaigns.Get)
+
+				// Daily summary — feeds the /detections UI.
+				r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
+
+				// Detection reads — static prefixes BEFORE /{id} so chi doesn't
+				// try to parse "aggregate-by-material" as a UUID.
+				r.Get("/detections", d.Detections.List)
+				r.Get("/detections/aggregate-by-material", d.Detections.AggregateByMaterial)
+				r.Get("/detections/{id}", d.Detections.Get)
+				r.Get("/detections/{id}/evidence", d.Detections.Evidence)
+				r.Get("/detections/{id}/evidence/url", d.Detections.EvidenceURL)
+
+				// Per-client material library list — handler enforces cross-client
+				// isolation via client_id from JWT claims.
+				r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
 			})
 
-			// ── Admin/operator protected group ────────────────────────────────
-			// All paths below require admin or operator. Within specific route
-			// blocks, inner groups open certain GETs to viewer or restrict
-			// mutations to admin-only (both patterns preserved from original).
+			// ── Subgrupo B — admin/operator (writes + admin reads) ────────────
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRole("admin", "operator"))
 
@@ -140,45 +168,22 @@ func NewRouter(d Deps) http.Handler {
 					})
 				}
 
-				// /campaigns — GETs (list/get/financials/daily-summary) open to
-				// viewer via inner group; writes stay admin/operator (outer gate);
-				// lifecycle mutations are admin-only (innermost gate).
-				r.Route("/campaigns", func(r chi.Router) {
-					// Viewer-friendly GET reads — inner group widens the role set
-					// to include viewer for these specific methods.
-					r.Group(func(r chi.Router) {
-						r.Use(auth.RequireRole("admin", "operator", "viewer"))
-						r.Get("/", d.Campaigns.List)
-						// Literal antes do param pra chi resolver corretamente:
-						// /campaigns/financials → Financials, /campaigns/{id} → Get.
-						r.Get("/financials", d.Campaigns.Financials)
-						r.Get("/{id}", d.Campaigns.Get)
-					})
-					// Admin/operator writes (inherited from outer gate).
-					r.Post("/", d.Campaigns.Create)
-					// Edita o trio básico (name, start_date, end_date) — usado
-					// pelo Step 1 do wizard em modo edit. client_id continua
-					// imutável.
-					r.Put("/{id}", d.Campaigns.Update)
-					// Lifecycle (§18.2.1): /cancel is the only manual
-					// transition. Until tenancy is wired (follow-ups F-XX),
-					// cancellation requires admin so operators can't terminate
-					// arbitrary campaigns. /start and /pause already act on
-					// global supervisor state and are also admin-gated.
-					r.Group(func(r chi.Router) {
-						r.Use(auth.RequireRole("admin"))
-						r.Post("/{id}/cancel", d.Campaigns.Cancel)
-						r.Put("/{id}/start", d.Campaigns.Start)
-						r.Put("/{id}/pause", d.Campaigns.Pause)
-					})
-					r.Put("/{id}/stations", d.Campaigns.UpdateStations)
-					r.Delete("/{id}", d.Campaigns.Delete)
-				})
-
-				// Daily summary — viewer-friendly (feeds the /detections UI).
+				// Campaign writes — reads are in subgrupo A (viewer-friendly).
+				// Lifecycle mutations (cancel/start/pause) are admin-only (§18.2.1):
+				// until tenancy is wired (follow-ups F-XX), cancellation requires
+				// admin so operators can't terminate arbitrary campaigns. /start and
+				// /pause also act on global supervisor state.
+				r.Post("/campaigns", d.Campaigns.Create)
+				// Edita o trio básico (name, start_date, end_date) — usado
+				// pelo Step 1 do wizard em modo edit. client_id continua imutável.
+				r.Put("/campaigns/{id}", d.Campaigns.Update)
+				r.Put("/campaigns/{id}/stations", d.Campaigns.UpdateStations)
+				r.Delete("/campaigns/{id}", d.Campaigns.Delete)
 				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin", "operator", "viewer"))
-					r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/campaigns/{id}/cancel", d.Campaigns.Cancel)
+					r.Put("/campaigns/{id}/start", d.Campaigns.Start)
+					r.Put("/campaigns/{id}/pause", d.Campaigns.Pause)
 				})
 
 				r.Route("/commercials", func(r chi.Router) {
@@ -198,13 +203,8 @@ func NewRouter(d Deps) http.Handler {
 					r.Delete("/{id}", d.MaterialTypes.Delete)
 				})
 
-				// Per-client material library read — viewer-friendly.
-				r.Group(func(r chi.Router) {
-					r.Use(auth.RequireRole("admin", "operator", "viewer"))
-					r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
-				})
-
 				// Materials — per-client library (writes and individual reads).
+				// ListByClient (GET /clients/{clientID}/materials) lives in subgrupo A.
 				r.Route("/materials", func(r chi.Router) {
 					r.Post("/", d.Materials.Upload)
 					r.Get("/{id}", d.Materials.Get)
@@ -250,43 +250,28 @@ func NewRouter(d Deps) http.Handler {
 					})
 				}
 
-				// /detections — GETs open to viewer via inner group;
-				// admin-only mutations in innermost gate (verbatim from original).
-				r.Route("/detections", func(r chi.Router) {
-					// Viewer-friendly reads — inner group widens role set.
-					r.Group(func(r chi.Router) {
-						r.Use(auth.RequireRole("admin", "operator", "viewer"))
-						r.Get("/", d.Detections.List)
-						// Static prefixes BEFORE /{id} so chi doesn't try to parse
-						// "aggregate-by-material" as a UUID. Same reason for /export
-						// inside the admin group below.
-						r.Get("/aggregate-by-material", d.Detections.AggregateByMaterial)
-						r.Get("/{id}", d.Detections.Get)
-						r.Get("/{id}/evidence", d.Detections.Evidence)
-						r.Get("/{id}/evidence/url", d.Detections.EvidenceURL)
-					})
-					// Admin-only soft-delete ("desconsiderar veiculação"). Reverter
-					// é a operação simétrica via /restore. Veiculação fica zerada
-					// nos agregados (daily_play_summary filtra ignored_at IS NULL)
-					// mas a evidência e o registro continuam intactos.
-					//
-					// Admin-only manual entry ("Adicionar veiculação manualmente"):
-					// veiculações retroativas. A linha entra em daily_play_summary
-					// igual à automática — o categorizer roda pra decidir
-					// in_slot/out_slot/out_date/orphan.
-					r.Group(func(r chi.Router) {
-						r.Use(auth.RequireRole("admin"))
-						r.Post("/manual", d.Detections.CreateManual)
-						r.Post("/{id}/ignore", d.Detections.Ignore)
-						r.Post("/{id}/restore", d.Detections.Restore)
-						// CSV export do relatório data/hora — streaming. Fica
-						// dentro do grupo admin, mas como prefixo estático
-						// /export nunca colide com /{id} porque o /{id} também
-						// está no grupo admin acima e o /export é mais
-						// específico — chi resolve por especificidade.
-						r.Get("/export", d.Detections.Export)
-					})
+				// Detection writes — reads live in subgrupo A (viewer-friendly).
+				//
+				// Admin-only soft-delete ("desconsiderar veiculação"). Reverter
+				// é a operação simétrica via /restore. Veiculação fica zerada
+				// nos agregados (daily_play_summary filtra ignored_at IS NULL)
+				// mas a evidência e o registro continuam intactos.
+				//
+				// Admin-only manual entry ("Adicionar veiculação manualmente"):
+				// veiculações retroativas. A linha entra em daily_play_summary
+				// igual à automática — o categorizer roda pra decidir
+				// in_slot/out_slot/out_date/orphan.
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/detections/manual", d.Detections.CreateManual)
+					r.Post("/detections/{id}/ignore", d.Detections.Ignore)
+					r.Post("/detections/{id}/restore", d.Detections.Restore)
+					// CSV export do relatório data/hora — streaming. Prefixo
+					// estático /export não colide com /{id} porque ambos estão
+					// neste grupo e chi resolve por especificidade.
+					r.Get("/detections/export", d.Detections.Export)
 				})
+
 				r.Route("/stream-health", func(r chi.Router) {
 					r.Get("/", d.StreamHealth.List)
 					r.Get("/{stationId}", d.StreamHealth.Detail)
@@ -315,7 +300,7 @@ func NewRouter(d Deps) http.Handler {
 				}
 			}) // end admin/operator group
 
-			// ── Subgroup C — admin-only: user management CRUD ────────────────
+			// ── Subgrupo C — admin-only: user management CRUD ────────────────
 			// New endpoints for managing platform users. Nil-guarded so the
 			// handler can be omitted in test harnesses without panicking.
 			if d.Users != nil {
