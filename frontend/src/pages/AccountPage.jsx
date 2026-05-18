@@ -16,17 +16,38 @@ function formatErr(err) {
   return err.message || String(err)
 }
 
-function initialsFor(name, email) {
-  const source = (name || '').trim() || email || ''
-  if (!source) return '?'
-  const parts = source.split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-  return source.slice(0, 2).toUpperCase()
-}
-
 function classifyRole(role) {
   if (role === 'viewer') return { label: 'Cliente', kind: 'client' }
   return { label: 'Administrador', kind: 'admin' }
+}
+
+const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+function parseDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+function formatMemberSince(iso) {
+  const d = parseDate(iso)
+  return d ? `${MONTHS[d.getMonth()]} ${d.getFullYear()}` : null
+}
+function formatDateShort(iso) {
+  const d = parseDate(iso)
+  return d ? `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}` : null
+}
+function formatRelativeOrTime(iso) {
+  const d = parseDate(iso)
+  if (!d) return null
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
+  const isYesterday = d.toDateString() === yesterday.toDateString()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  if (sameDay) return `hoje, ${hh}:${mm}`
+  if (isYesterday) return `ontem, ${hh}:${mm}`
+  // Mesma semana → "qua, HH:MM" não vale o ROI; vai pra data curta
+  return `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]}, ${hh}:${mm}`
 }
 
 // Quick heuristic — não pretende substituir zxcvbn, só dar feedback inline
@@ -38,25 +59,23 @@ function passwordStrength(pwd) {
   if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) score += 1
   if (/\d/.test(pwd)) score += 1
   if (/[^A-Za-z0-9]/.test(pwd)) score += 1
-  // 0-1 fraca, 2-3 média, 4-5 forte
   if (score <= 1) return { score: 1, label: 'Fraca',  cls: 's-weak'   }
   if (score <= 3) return { score: 3, label: 'Média',  cls: 's-medium' }
   return { score: 5, label: 'Forte', cls: 's-strong' }
 }
 
-// ── Inline icons (mantém consistência com o resto do projeto: SVG) ───
+// ── Inline icons ──────────────────────────────────────────────
 
 const Icon = {
-  shield: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
   check:  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>,
   x:      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>,
   alert:  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
   eyeOn:  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
   eyeOff: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
-  err:    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+  err:    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
 }
 
-// ── Toast system (não-bloqueante, 1 toast por hook simples) ──
+// ── Toast (não-bloqueante, full border — sem stripe lateral) ──
 
 function useToast() {
   const [toast, setToast] = useState(null)
@@ -80,7 +99,7 @@ function useToast() {
 
 function Toast({ toast, onClose }) {
   if (!toast) return null
-  const icon = toast.kind === 'success' ? Icon.check : toast.kind === 'error' ? Icon.alert : Icon.check
+  const icon = toast.kind === 'success' ? Icon.check : Icon.alert
   return (
     <div className="account-toast-region" aria-live="polite">
       <div className={`account-toast t-${toast.kind}`} role="status">
@@ -97,67 +116,108 @@ function Toast({ toast, onClose }) {
   )
 }
 
-// ── Skeleton (replica forma exata do conteúdo) ───────────────
+// ── Skeleton (document shape, não card grid) ─────────────────
 
 function AccountSkeleton() {
   return (
     <div className="account-page">
-      <div className="account-header">
-        <div className="account-skel" style={{ width: 180, height: 28, marginBottom: 8 }} />
-        <div className="account-skel" style={{ width: 280, height: 14 }} />
-      </div>
+      <header className="account-masthead">
+        <div className="account-skel" style={{ width: 220, height: 36, marginBottom: 14 }} />
+        <div className="account-skel" style={{ width: 320, height: 12 }} />
+      </header>
 
-      {/* Identity strip skeleton */}
-      <div className="account-identity">
-        <div className="account-skel account-skel-circle" style={{ width: 48, height: 48 }} />
-        <div style={{ flex: 1 }}>
-          <div className="account-skel" style={{ width: '40%', height: 16, marginBottom: 6 }} />
-          <div className="account-skel" style={{ width: '60%', height: 12, marginBottom: 8 }} />
-          <div className="account-skel account-skel-pill" style={{ width: 90, height: 18 }} />
-        </div>
-      </div>
-
-      {/* Card 1 skeleton */}
-      <div className="account-card">
-        <div className="account-card-head">
-          <div className="account-skel" style={{ width: 120, height: 16 }} />
-        </div>
-        {[60, 100, 80].map((w, i) => (
-          <div key={i} style={{ marginBottom: 14 }}>
-            <div className="account-skel" style={{ width: w, height: 11, marginBottom: 6 }} />
-            <div className="account-skel" style={{ width: '100%', height: 38 }} />
+      {[1, 2, 3].map(i => (
+        <section key={i} className="account-section">
+          <div className="account-section-head">
+            <div className="account-skel" style={{ width: 36, height: 12 }} />
+            <div className="account-skel" style={{ width: 140, height: 20 }} />
           </div>
-        ))}
-      </div>
-
-      {/* Card 2 skeleton */}
-      <div className="account-card">
-        <div className="account-card-head">
-          <div className="account-skel" style={{ width: 80, height: 16 }} />
-        </div>
-        {[90, 110, 130].map((w, i) => (
-          <div key={i} style={{ marginBottom: 14 }}>
-            <div className="account-skel" style={{ width: w, height: 11, marginBottom: 6 }} />
-            <div className="account-skel" style={{ width: '100%', height: 38 }} />
-          </div>
-        ))}
-      </div>
+          {[64, 96, 80].map((w, j) => (
+            <div key={j} style={{ marginTop: 20 }}>
+              <div className="account-skel" style={{ width: w, height: 10, marginBottom: 8 }} />
+              <div className="account-skel" style={{ width: '100%', height: 36 }} />
+            </div>
+          ))}
+        </section>
+      ))}
     </div>
   )
 }
 
-// ── Error state (load do /me falhou) ─────────────────────────
+// ── Error state ──────────────────────────────────────────────
 
 function AccountError({ onRetry }) {
   return (
     <div className="account-page">
       <div className="account-error-state">
         <div className="account-error-icon">{Icon.err}</div>
-        <h3 className="account-error-title">Não foi possível carregar sua conta</h3>
+        <h2 className="account-error-title">Não foi possível carregar sua conta</h2>
         <p className="account-error-msg">Tente novamente em instantes. Se persistir, contate o administrador.</p>
-        <button className="btn btn-secondary btn-sm" onClick={onRetry}>Tentar novamente</button>
+        <button className="btn btn-primary" onClick={onRetry}>Tentar novamente</button>
       </div>
     </div>
+  )
+}
+
+// ── Section header (numeral + title inline + dirty signal) ───
+
+function SectionHead({ numeral, title, dirty }) {
+  return (
+    <header className="account-section-head">
+      <h2 className="account-section-title">
+        <span className="account-section-numeral" aria-hidden="true">§ {numeral}</span>
+        <span className="account-section-title-text">{title}</span>
+        {dirty && <span className="account-section-dot" aria-label="alterações não salvas" />}
+      </h2>
+    </header>
+  )
+}
+
+// ── Ficha técnica (aside desktop, oculta no mobile) ──────────
+
+function FichaTecnica({ me }) {
+  const criada    = formatDateShort(me.created_at)
+  const ultimo    = formatRelativeOrTime(me.last_login_at)
+  const atualizada = formatDateShort(me.updated_at)
+
+  return (
+    <aside className="account-ficha" aria-label="Ficha técnica da conta">
+      <div className="account-ficha-eyebrow">ficha</div>
+
+      <dl className="account-ficha-list">
+        {criada && (
+          <div className="account-ficha-row">
+            <dt>conta criada</dt>
+            <dd>{criada}</dd>
+          </div>
+        )}
+        {ultimo && (
+          <div className="account-ficha-row">
+            <dt>último acesso</dt>
+            <dd>{ultimo}</dd>
+          </div>
+        )}
+        {atualizada && (
+          <div className="account-ficha-row">
+            <dt>atualizada</dt>
+            <dd>{atualizada}</dd>
+          </div>
+        )}
+        <div className="account-ficha-row">
+          <dt>status</dt>
+          <dd>
+            <span className="account-ficha-status">
+              <span className="account-ficha-status-dot" />
+              ativa
+            </span>
+          </dd>
+        </div>
+      </dl>
+
+      <p className="account-ficha-foot">
+        Dados de leitura. Para alterar, fale com o administrador.
+      </p>
+    </aside>
   )
 }
 
@@ -170,8 +230,6 @@ export default function AccountPage() {
   const updateM = useUpdateMe()
   const changeM = useChangeMyPassword()
   const { clientId } = useAuth()
-  // Só carrega clients se o user é viewer (admin pega 403 — useClients já trata)
-  // e usamos pra mostrar o nome do cliente vinculado na identity strip.
   const clientsQ = useClients({ enabled: !!clientId })
   const { toast, show, dismiss } = useToast()
 
@@ -188,7 +246,6 @@ export default function AccountPage() {
     }
   }, [meQ.data])
 
-  // Profile dirty detection — desabilita Salvar quando nada mudou
   const profileDirty = useMemo(() => {
     if (!meQ.data) return false
     return (
@@ -197,10 +254,11 @@ export default function AccountPage() {
     )
   }, [meQ.data, profile])
 
-  // Password strength
+  // Senha dirty: qualquer um dos três campos preenchido
+  const passwordDirty = !!(pwd.current_password || pwd.new_password || pwd.confirm)
+
   const strength = useMemo(() => passwordStrength(pwd.new_password), [pwd.new_password])
 
-  // Confirm validation em tempo real (mais útil que esperar submit)
   useEffect(() => {
     if (!pwd.confirm) {
       setPwdInlineErr(e => ({ ...e, confirm: '' }))
@@ -249,7 +307,6 @@ export default function AccountPage() {
     )
   }
 
-  // ─── Estados de loading/erro ──────────────────────────────
   if (meQ.isLoading) return <AccountSkeleton />
   if (meQ.error)     return <AccountError onRetry={() => meQ.refetch()} />
 
@@ -258,66 +315,94 @@ export default function AccountPage() {
   const linkedClient = clientId
     ? (clientsQ.data ?? []).find(c => c.id === clientId)
     : null
+  const memberSince = formatMemberSince(me.created_at)
+
+  // Meta strip: papel · vínculo · membro desde
+  const metaParts = [roleInfo.label]
+  if (linkedClient) metaParts.push(linkedClient.name)
+  else if (roleInfo.kind === 'admin') metaParts.push('E-radios')
+  if (memberSince) metaParts.push(`membro desde ${memberSince}`)
 
   return (
     <div className="account-page">
-      <header className="account-header">
-        <h1>Minha conta</h1>
-        <p className="account-header-sub">
-          Atualize seus dados de contato ou troque sua senha. Email não pode ser alterado.
+      <header className="account-masthead">
+        <div className="account-masthead-eyebrow">
+          <span className="account-masthead-eyebrow-mark" aria-hidden="true" />
+          conta · {roleInfo.kind === 'client' ? 'cliente' : 'operação'}
+        </div>
+        <h1 className="account-masthead-title">Minha conta</h1>
+        <p className="account-masthead-meta">
+          {metaParts.map((p, i) => (
+            <span key={i} className="account-masthead-meta-part">
+              {i > 0 && <span className="account-masthead-meta-sep" aria-hidden="true">·</span>}
+              {p}
+            </span>
+          ))}
         </p>
       </header>
 
-      {/* ─── Identity strip ─────────────────────────────────── */}
-      <div className="account-identity" aria-label="Identidade da conta">
-        <div className="account-identity-avatar" aria-hidden="true">
-          {initialsFor(me.name, me.email)}
-        </div>
-        <div className="account-identity-body">
-          <div className="account-identity-name">{me.name || me.email}</div>
-          <div className="account-identity-email" title={me.email}>{me.email}</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <span className={`account-identity-tag ${roleInfo.kind === 'client' ? 'account-identity-tag-client' : ''}`}>
-              {Icon.shield} {roleInfo.label}
-            </span>
-            {linkedClient && (
-              <span className="account-identity-tag">
-                {linkedClient.name}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
+      <div className="account-grid">
+        <div className="account-main">
 
-      {/* ─── Card: Dados pessoais ───────────────────────────── */}
-      <section className="account-card">
-        <div className="account-card-head">
-          <h2 className="account-card-title">Dados pessoais</h2>
-          <span className="account-card-meta">
-            {profileDirty ? 'alterações não salvas' : 'tudo certo'}
-          </span>
-        </div>
+      {/* ─── § 01 Identidade ──────────────────────────────────── */}
+      <section className="account-section" aria-labelledby="acc-sec-id">
+        <SectionHead numeral="01" title="Identidade" dirty={false} />
+
+        <dl className="account-defs">
+          <div className="account-def">
+            <dt className="account-def-key">email</dt>
+            <dd className="account-def-val" title={me.email}>{me.email}</dd>
+          </div>
+          <div className="account-def">
+            <dt className="account-def-key">papel</dt>
+            <dd className="account-def-val">
+              <span className={`account-role-mark account-role-${roleInfo.kind}`} aria-hidden="true" />
+              {roleInfo.label}
+            </dd>
+          </div>
+          {linkedClient && (
+            <div className="account-def">
+              <dt className="account-def-key">vínculo</dt>
+              <dd className="account-def-val">{linkedClient.name}</dd>
+            </div>
+          )}
+          {memberSince && (
+            <div className="account-def">
+              <dt className="account-def-key">membro desde</dt>
+              <dd className="account-def-val account-def-val-mono">{memberSince}</dd>
+            </div>
+          )}
+        </dl>
+
+        <p className="account-section-note">
+          Email, papel e vínculo só podem ser alterados pelo administrador.
+        </p>
+      </section>
+
+      {/* ─── § 02 Dados pessoais ──────────────────────────────── */}
+      <section className="account-section" aria-labelledby="acc-sec-personal">
+        <SectionHead numeral="02" title="Dados pessoais" dirty={profileDirty} />
 
         <form className="account-form" onSubmit={saveProfile} noValidate>
-          <div className="field">
-            <label htmlFor="acc-name">Nome</label>
+          <div className="account-field">
+            <label htmlFor="acc-name">nome</label>
             <input
               id="acc-name"
-              className="input"
+              className="account-input"
               value={profile.name}
               onChange={e => setProfile(p => ({ ...p, name: e.target.value }))}
-              placeholder="Seu nome completo"
+              placeholder="seu nome completo"
               autoComplete="name"
               disabled={updateM.isPending}
               maxLength={120}
             />
           </div>
 
-          <div className="field">
-            <label htmlFor="acc-phone">Telefone</label>
+          <div className="account-field">
+            <label htmlFor="acc-phone">telefone</label>
             <input
               id="acc-phone"
-              className="input"
+              className="account-input"
               value={profile.phone}
               onChange={e => setProfile(p => ({ ...p, phone: e.target.value }))}
               placeholder="(11) 91234-5678"
@@ -327,23 +412,9 @@ export default function AccountPage() {
             />
           </div>
 
-          <div className="field">
-            <label htmlFor="acc-email">Email</label>
-            <input
-              id="acc-email"
-              className="input"
-              value={me.email}
-              disabled
-              aria-readonly="true"
-            />
-            <span className="field-hint">
-              Email não pode ser alterado. Para trocar, o administrador precisa criar uma nova conta.
-            </span>
-          </div>
-
-          <div className="account-form-foot">
-            <span className="account-form-foot-hint">
-              {!profileDirty && 'Nada a salvar.'}
+          <div className="account-section-foot">
+            <span className="account-section-foot-hint">
+              {profileDirty ? 'alterações não salvas' : 'nada a salvar'}
             </span>
             <button
               type="submit"
@@ -352,26 +423,23 @@ export default function AccountPage() {
             >
               {updateM.isPending
                 ? (<><span className="account-spinner" />Salvando…</>)
-                : 'Salvar alterações'}
+                : 'Salvar'}
             </button>
           </div>
         </form>
       </section>
 
-      {/* ─── Card: Senha ────────────────────────────────────── */}
-      <section className="account-card">
-        <div className="account-card-head">
-          <h2 className="account-card-title">Senha</h2>
-          <span className="account-card-meta">mínimo 12 caracteres</span>
-        </div>
+      {/* ─── § 03 Senha ───────────────────────────────────────── */}
+      <section className="account-section" aria-labelledby="acc-sec-pwd">
+        <SectionHead numeral="03" title="Senha" dirty={passwordDirty} />
 
         <form className="account-form" onSubmit={changePwd} noValidate>
-          <div className="field">
-            <label htmlFor="acc-pwd-cur">Senha atual</label>
+          <div className="account-field">
+            <label htmlFor="acc-pwd-cur">senha atual</label>
             <div className="account-pwd-row">
               <input
                 id="acc-pwd-cur"
-                className="input"
+                className="account-input"
                 type={showCur ? 'text' : 'password'}
                 value={pwd.current_password}
                 onChange={e => setPwd(p => ({ ...p, current_password: e.target.value }))}
@@ -390,12 +458,12 @@ export default function AccountPage() {
             </div>
           </div>
 
-          <div className="field">
-            <label htmlFor="acc-pwd-new">Nova senha</label>
+          <div className="account-field">
+            <label htmlFor="acc-pwd-new">nova senha</label>
             <div className="account-pwd-row">
               <input
                 id="acc-pwd-new"
-                className="input"
+                className="account-input"
                 type={showNew ? 'text' : 'password'}
                 value={pwd.new_password}
                 onChange={e => setPwd(p => ({ ...p, new_password: e.target.value }))}
@@ -413,7 +481,7 @@ export default function AccountPage() {
                 {showNew ? Icon.eyeOff : Icon.eyeOn}
               </button>
             </div>
-            {pwd.new_password.length > 0 && (
+            {pwd.new_password.length > 0 ? (
               <div className="account-pwd-strength" aria-live="polite">
                 <div className="account-pwd-strength-track">
                   <div
@@ -425,15 +493,17 @@ export default function AccountPage() {
                   {strength.label}
                 </span>
               </div>
+            ) : (
+              <span className="account-field-hint">mínimo 12 caracteres</span>
             )}
           </div>
 
-          <div className="field">
-            <label htmlFor="acc-pwd-conf">Confirmar nova senha</label>
+          <div className="account-field">
+            <label htmlFor="acc-pwd-conf">confirmar nova senha</label>
             <div className="account-pwd-row">
               <input
                 id="acc-pwd-conf"
-                className="input"
+                className="account-input"
                 type={showConf ? 'text' : 'password'}
                 value={pwd.confirm}
                 onChange={e => setPwd(p => ({ ...p, confirm: e.target.value }))}
@@ -458,9 +528,9 @@ export default function AccountPage() {
             )}
           </div>
 
-          <div className="account-form-foot">
-            <span className="account-form-foot-hint">
-              Você precisará entrar de novo com a nova senha em outros dispositivos.
+          <div className="account-section-foot">
+            <span className="account-section-foot-hint">
+              Você precisará entrar de novo em outros dispositivos.
             </span>
             <button
               type="submit"
@@ -479,6 +549,11 @@ export default function AccountPage() {
           </div>
         </form>
       </section>
+
+        </div>{/* /.account-main */}
+
+        <FichaTecnica me={me} />
+      </div>{/* /.account-grid */}
 
       <Toast toast={toast} onClose={dismiss} />
     </div>

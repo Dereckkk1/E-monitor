@@ -1,243 +1,425 @@
 /* ─────────────────────────────────────────────────────────────
    AccountPage — Minha conta
    ─────────────────────────────────────────────────────────────
-   Single-column form layout (forms são narrow por princípio).
-   Identidade do usuário em faixa orientadora no topo, depois
-   2 cartões separados: dados pessoais + senha. Pattern de
-   "form em duas etapas conceituais" — não mistura tudo num único
-   form gigante porque trocar senha é um fluxo mental diferente
-   de atualizar nome/telefone.
+   Editorial document layout. No cards, no nested containers.
+   Mobile: single column, doc-like.
+   Desktop: two-column grid — article + ficha técnica aside.
+   Hierarchy from typography + spacing + section numerals.
+   Identity is a section (key/value list), never a hero with avatar.
    ───────────────────────────────────────────────────────────── */
 
 .account-page {
-  max-width: 720px;
   margin: 0 auto;
-  padding: 40px 24px 64px;
+  padding: 56px 32px 96px;
   font-family: var(--font-body);
   color: var(--c-text);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 720px) {
   .account-page {
-    padding: 24px 16px 48px;
+    padding: 32px 20px 64px;
   }
 }
 
-/* ─── Page header ─────────────────────────────────────────── */
+/* ─── Masthead ────────────────────────────────────────────── */
 
-.account-header {
-  margin-bottom: 32px;
+.account-masthead {
+  margin-bottom: 56px;
+  opacity: 0;
+  transform: translateY(6px);
+  animation: account-fade-up 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.account-header h1 {
+.account-masthead-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  margin-bottom: 18px;
+}
+
+.account-masthead-eyebrow-mark {
+  width: 18px;
+  height: 2px;
+  background: var(--c-action);
+  display: inline-block;
+}
+
+.account-masthead-title {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 28px;
-  letter-spacing: -0.01em;
+  font-size: clamp(34px, 4.4vw, 52px);
+  line-height: 1.04;
+  letter-spacing: -0.028em;
   color: var(--c-text);
-  margin: 0 0 6px;
+  margin: 0 0 14px;
 }
 
-.account-header-sub {
-  font-size: 14px;
+.account-masthead-meta {
+  font-size: 13px;
+  font-weight: 500;
   color: var(--c-text-2);
-  margin: 0;
-}
-
-/* ─── Identity strip (orientação, não é editável) ─────────── */
-
-.account-identity {
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  margin: 0 0 24px;
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 18px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-md);
-  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 0;
 }
 
-.account-identity-avatar {
-  flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--c-action) 0%, var(--c-action-hover) 100%);
-  color: #fff;
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 18px;
-  display: flex;
+.account-masthead-meta-part {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  letter-spacing: -0.02em;
 }
 
-.account-identity-body {
-  flex: 1;
+.account-masthead-meta-sep {
+  display: inline-block;
+  margin: 0 10px;
+  color: var(--c-text-3);
+}
+
+/* Masthead rule removed — section cards below carry the visual break */
+
+/* ─── Grid: main article + ficha técnica aside ────────────── */
+
+.account-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 56px;
+}
+
+@media (min-width: 960px) {
+  .account-grid {
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 72px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .account-grid {
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 96px;
+  }
+}
+
+.account-main {
   min-width: 0;
 }
 
-.account-identity-name {
-  font-family: var(--font-heading);
-  font-weight: 600;
-  font-size: 16px;
-  color: var(--c-text);
-  margin: 0 0 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* ─── Section (system card pattern: white + Rosa inset stripe) */
 
-.account-identity-email {
-  font-size: 13px;
-  color: var(--c-text-2);
-  margin: 0 0 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-identity-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  background: var(--c-surface-2);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--c-text-2);
-  letter-spacing: 0.02em;
-}
-
-.account-identity-tag svg {
-  flex-shrink: 0;
-}
-
-.account-identity-tag-client {
-  color: var(--c-action);
-  background: var(--c-action-light);
-}
-
-/* ─── Section card ────────────────────────────────────────── */
-
-.account-card {
+.account-section {
+  position: relative;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-md);
-  padding: 24px;
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
   margin-bottom: 20px;
-  /* Subtle stagger entrance */
   opacity: 0;
   transform: translateY(8px);
-  animation: account-card-in 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: account-fade-up 380ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.account-card:nth-of-type(1) { animation-delay: 40ms; }
-.account-card:nth-of-type(2) { animation-delay: 100ms; }
-.account-card:nth-of-type(3) { animation-delay: 160ms; }
+/* System signature — 3px inset Rosa stripe, top/bottom inset like .op-kpi */
+.account-section::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 18px;
+  bottom: 18px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--c-action);
+  transition: background 200ms ease;
+}
 
-@keyframes account-card-in {
+.account-section:focus-within {
+  border-color: var(--c-action-border);
+}
+
+.account-section:nth-of-type(1) {
+  animation-delay: 60ms;
+}
+
+.account-section:nth-of-type(2) {
+  animation-delay: 130ms;
+}
+
+.account-section:nth-of-type(3) {
+  animation-delay: 200ms;
+}
+
+.account-section:last-of-type {
+  margin-bottom: 0;
+}
+
+@media (max-width: 520px) {
+  .account-section {
+    padding: 22px 22px 22px 24px;
+  }
+}
+
+@keyframes account-fade-up {
   to {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-.account-card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 18px;
-  padding-bottom: 14px;
+/* Section head — numeral lives INSIDE the h2, baseline-aligned */
+
+.account-section-head {
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--c-border);
+  margin-bottom: 24px;
 }
 
-.account-card-title {
+.account-section-title {
   font-family: var(--font-heading);
   font-weight: 600;
-  font-size: 16px;
+  font-size: 24px;
+  letter-spacing: -0.018em;
   color: var(--c-text);
-  letter-spacing: -0.005em;
+  margin: 0;
+  line-height: 1.15;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.account-section-numeral {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+  position: relative;
+  top: -2px;
+  white-space: nowrap;
+}
+
+.account-section-title-text {
+  /* No extra style — h2 carries it */
+}
+
+.account-section-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-action);
+  display: inline-block;
+  margin-left: 4px;
+  box-shadow: 0 0 0 4px rgba(232, 30, 117, 0.14);
+  animation: account-dot-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  align-self: center;
+}
+
+@keyframes account-dot-in {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.account-section-note {
+  font-size: 12px;
+  color: var(--c-text-3);
+  margin: 20px 0 0;
+  line-height: 1.5;
+}
+
+/* ─── Identity: key/value definition list ─────────────────── */
+
+.account-defs {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 14px;
+}
+
+.account-def {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: baseline;
+  gap: 16px;
+}
+
+@media (max-width: 520px) {
+  .account-def {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+.account-def-key {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
   margin: 0;
 }
 
-.account-card-meta {
-  font-size: 12px;
-  color: var(--c-text-3);
+.account-def-val {
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--c-text);
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
 }
 
-/* ─── Form layout ─────────────────────────────────────────── */
+.account-def-val-mono {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.account-role-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+  top: -1px;
+}
+
+.account-role-admin {
+  background: var(--c-text);
+}
+
+.account-role-client {
+  background: var(--c-action);
+}
+
+/* ─── Form bits ───────────────────────────────────────────── */
 
 .account-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 26px;
 }
 
-.account-form .field label {
-  /* override pra ficar menor que default uppercase do design system,
-     mais leitura corrida pra forma pessoal */
-  text-transform: none;
-  font-size: 12px;
+.account-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-field label {
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0;
-  color: var(--c-text-2);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  font-family: var(--font-body);
 }
 
-/* Email travado mantém visual mas comunica imutabilidade */
-.account-form .input:disabled {
-  background: var(--c-surface-2);
-  color: var(--c-text-2);
+/* Underline inputs — quieter than .input, reads as document */
+.account-input {
+  padding: 8px 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--c-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--c-text);
+  font-size: 15px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  width: 100%;
+  min-height: 38px;
+  transition: border-color 160ms ease, color 160ms ease;
+  appearance: none;
+}
+
+.account-input::placeholder {
+  color: var(--c-text-3);
+  font-weight: 400;
+}
+
+.account-input:hover:not(:focus):not(:disabled) {
+  border-bottom-color: #cbd5e1;
+}
+
+.account-input:focus {
+  outline: none;
+  border-bottom-color: var(--c-action);
+}
+
+.account-input:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
-/* Senha: agrupa input + toggle eye + (opcional) gerador */
 .account-pwd-row {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   align-items: stretch;
+  position: relative;
 }
 
-.account-pwd-row .input {
+.account-pwd-row .account-input {
   flex: 1;
+  padding-right: 40px;
 }
 
 .account-eye {
-  width: 40px;
-  flex-shrink: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
   cursor: pointer;
   color: var(--c-text-3);
-  transition: color 120ms, border-color 120ms, background 120ms;
+  transition: color 140ms ease;
+  padding: 0;
 }
 
 .account-eye:hover {
   color: var(--c-text);
-  border-color: var(--c-text-3);
 }
 
-/* Indicador inline de força de senha ─────────────────────── */
+.account-eye:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
 
 .account-pwd-strength {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: -4px;
-  font-size: 12px;
-  color: var(--c-text-2);
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .account-pwd-strength-track {
   flex: 1;
-  height: 4px;
-  background: var(--c-surface-2);
+  height: 2px;
+  background: var(--c-border);
   border-radius: 999px;
   overflow: hidden;
 }
@@ -245,71 +427,200 @@
 .account-pwd-strength-fill {
   height: 100%;
   border-radius: inherit;
-  transition: width 200ms ease-out, background 200ms;
+  transition: width 240ms cubic-bezier(0.16, 1, 0.3, 1), background 200ms;
 }
 
-.account-pwd-strength-fill.s-weak   { background: var(--c-danger); }
-.account-pwd-strength-fill.s-medium { background: var(--c-warning); }
-.account-pwd-strength-fill.s-strong { background: var(--c-success); }
+.account-pwd-strength-fill.s-weak {
+  background: var(--c-danger);
+}
 
-.account-pwd-strength-label.s-weak   { color: var(--c-danger); }
-.account-pwd-strength-label.s-medium { color: var(--c-warning); }
-.account-pwd-strength-label.s-strong { color: var(--c-success); }
+.account-pwd-strength-fill.s-medium {
+  background: var(--c-warning);
+}
 
-/* Inline field-level errors ──────────────────────────────── */
+.account-pwd-strength-fill.s-strong {
+  background: var(--c-success);
+}
+
+.account-pwd-strength-label.s-weak {
+  color: var(--c-danger);
+}
+
+.account-pwd-strength-label.s-medium {
+  color: var(--c-warning);
+}
+
+.account-pwd-strength-label.s-strong {
+  color: var(--c-success);
+}
+
+.account-field-hint {
+  font-size: 11px;
+  color: var(--c-text-3);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
 
 .account-field-error {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: -4px;
+  margin-top: 6px;
   font-size: 12px;
   color: var(--c-danger);
 }
 
-/* Form footer (botão de salvar) ──────────────────────────── */
+/* ─── Section footer (CTA + hint) ─────────────────────────── */
 
-.account-form-foot {
+.account-section-foot {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
+  gap: 16px;
+  margin-top: 14px;
+  flex-wrap: wrap;
 }
 
-.account-form-foot .btn {
-  min-width: 132px;
-}
-
-.account-form-foot-hint {
-  font-size: 12px;
+.account-section-foot-hint {
+  font-size: 11px;
   color: var(--c-text-3);
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  flex: 1;
+  min-width: 0;
 }
 
-/* Botão com spinner inline mantendo largura ─────────────── */
+.account-section-foot .btn {
+  min-width: 116px;
+  justify-content: center;
+}
 
+/* Spinner inline no botão */
 .account-spinner {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
   animation: account-spin 700ms linear infinite;
   margin-right: 8px;
-  vertical-align: -2px;
+  vertical-align: -1px;
 }
 
 @keyframes account-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-/* ─── Toast (não-bloqueante) ──────────────────────────────── */
+/* ─── Ficha técnica (desktop aside) ───────────────────────── */
+
+.account-ficha {
+  position: relative;
+  min-width: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 24px 24px 22px;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: account-fade-up 420ms cubic-bezier(0.16, 1, 0.3, 1) 260ms forwards;
+}
+
+/* Same inset stripe as sections — uses Azul Marinho here to differentiate
+   "reading material" from "actionable section" without leaving the system. */
+.account-ficha::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--c-text);
+}
+
+@media (min-width: 960px) {
+  .account-ficha {
+    position: sticky;
+    top: 32px;
+    align-self: start;
+  }
+}
+
+.account-ficha-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  margin-bottom: 18px;
+}
+
+.account-ficha-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.account-ficha-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.account-ficha-row dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  margin: 0;
+}
+
+.account-ficha-row dd {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.005em;
+}
+
+.account-ficha-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.account-ficha-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-success);
+  display: inline-block;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.16);
+}
+
+.account-ficha-foot {
+  margin: 22px 0 0;
+  font-size: 11px;
+  color: var(--c-text-3);
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  padding-top: 16px;
+  border-top: 1px solid var(--c-border);
+}
+
+/* ─── Toast (NO side-stripe — full border + circled icon) ── */
 
 .account-toast-region {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  top: 20px;
+  right: 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -320,35 +631,38 @@
 .account-toast {
   min-width: 280px;
   max-width: 380px;
-  padding: 12px 14px 12px 16px;
+  padding: 12px 14px;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-left: 3px solid var(--c-action);
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 24px -8px rgba(6, 5, 91, 0.18),
-              0 4px 8px -4px rgba(6, 5, 91, 0.10);
+  box-shadow: var(--shadow-md);
   display: flex;
   align-items: flex-start;
   gap: 10px;
   pointer-events: auto;
-  animation: account-toast-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: account-toast-in 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-
-.account-toast.t-success { border-left-color: var(--c-success); }
-.account-toast.t-error   { border-left-color: var(--c-danger); }
 
 .account-toast-icon {
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
   margin-top: 1px;
 }
 
-.account-toast.t-success .account-toast-icon { color: var(--c-success); }
-.account-toast.t-error   .account-toast-icon { color: var(--c-danger); }
+.account-toast.t-success .account-toast-icon {
+  background: rgba(22, 163, 74, 0.12);
+  color: var(--c-success);
+}
+
+.account-toast.t-error .account-toast-icon {
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--c-danger);
+}
 
 .account-toast-body {
   flex: 1;
@@ -382,43 +696,46 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
+  margin-top: 2px;
   transition: color 120ms;
 }
 
-.account-toast-close:hover { color: var(--c-text); }
+.account-toast-close:hover {
+  color: var(--c-text);
+}
 
 @keyframes account-toast-in {
   from {
     opacity: 0;
-    transform: translateX(100%) scale(0.95);
+    transform: translateX(20px);
   }
+
   to {
     opacity: 1;
-    transform: translateX(0) scale(1);
+    transform: translateX(0);
   }
 }
 
-/* ─── Skeleton loading ────────────────────────────────────── */
+/* ─── Skeleton ────────────────────────────────────────────── */
 
 .account-skel {
-  background: linear-gradient(
-    90deg,
-    var(--c-surface-2) 25%,
-    rgba(241, 245, 249, 0.5) 50%,
-    var(--c-surface-2) 75%
-  );
+  background: linear-gradient(90deg,
+      var(--c-surface-2) 25%,
+      rgba(241, 245, 249, 0.5) 50%,
+      var(--c-surface-2) 75%);
   background-size: 200% 100%;
   animation: account-shimmer 1500ms ease-in-out infinite;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
-.account-skel-circle { border-radius: 50%; }
-.account-skel-pill   { border-radius: 999px; }
-
 @keyframes account-shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position:  200% 0; }
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
 }
 
 /* ─── Error full-screen ───────────────────────────────────── */
@@ -428,31 +745,50 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 280px;
-  background: var(--c-surface);
-  border: 1px dashed var(--c-border);
-  border-radius: var(--radius-md);
-  padding: 40px 24px;
+  min-height: 320px;
+  padding: 56px 24px;
   text-align: center;
 }
 
 .account-error-icon {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   color: var(--c-text-3);
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .account-error-title {
   font-family: var(--font-heading);
   font-weight: 600;
-  font-size: 16px;
+  font-size: 18px;
   color: var(--c-text);
-  margin: 0 0 4px;
+  margin: 0 0 6px;
 }
 
 .account-error-msg {
   font-size: 13px;
   color: var(--c-text-2);
-  margin: 0 0 18px;
+  margin: 0 0 20px;
+  max-width: 360px;
+}
+
+/* ─── Reduced motion ──────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+
+  .account-masthead,
+  .account-section,
+  .account-ficha {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .account-section-dot,
+  .account-toast,
+  .account-pwd-strength-fill,
+  .account-skel {
+    animation: none;
+    transition: none;
+  }
 }

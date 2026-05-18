@@ -272,7 +272,7 @@ func main() {
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, CampaignRepo: campaigns, Storage: s3Client, SummaryRepo: dailySumRepo},
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
-		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations},
+		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations, Sup: sup},
 		Auth:         handlers.NewAuthHandler(pool, usersRepo),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),

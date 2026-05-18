@@ -46,6 +46,33 @@ function StatusDot({ status, isCurrentlyDown }) {
   return <span className={`station-status-dot ${cls}`} />
 }
 
+// ── Worker pill ───────────────────────────────────────────────────────────────
+// Reflete o estado do worker LOCAL — o processo que monitora o stream daquela
+// station. Distinto do StatusDot (que é o estado do stream REMOTO). Combinações
+// úteis pra debug:
+//   stream OK + worker running   → monitorando normalmente
+//   stream down + worker running → worker vivo, aguardando o stream voltar
+//   worker stalled               → recebeu bytes mas parou há >30s (bug/stall)
+//   worker missing               → station ativa sem worker registrado (drift)
+function WorkerPill({ status, lastPCMAt }) {
+  if (!status) return null
+  const styles = {
+    running:  { label: 'Worker ativo',    cls: 'worker-pill worker-pill--ok' },
+    stalled:  { label: 'Worker travado',  cls: 'worker-pill worker-pill--warn' },
+    missing:  { label: 'Worker inativo',  cls: 'worker-pill worker-pill--bad' },
+  }
+  const s = styles[status] ?? styles.missing
+  const title = lastPCMAt
+    ? `Última atividade: ${relativeTime(lastPCMAt)}`
+    : 'Worker nunca recebeu áudio desde o boot'
+  return (
+    <span className={s.cls} title={title}>
+      <span className="worker-pill-dot" />
+      {s.label}
+    </span>
+  )
+}
+
 // ── Relative time ─────────────────────────────────────────────────────────────
 function relativeTime(iso) {
   if (!iso) return null
@@ -111,6 +138,7 @@ function HealthDrawer({ station, onClose }) {
           <span className={`health-drawer-status health-drawer-status--${currentStatus}`}>
             {currentStatus === 'up' ? '● Online' : '● Offline'}
           </span>
+          <WorkerPill status={station.worker_status} lastPCMAt={station.worker_last_pcm_at} />
           <button className="health-drawer-close" onClick={onClose} aria-label="Fechar">✕</button>
         </div>
 
@@ -193,7 +221,7 @@ function HealthDrawer({ station, onClose }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-const HEALTH_FILTERS = ['Todas', 'Com falha', 'Estável']
+const HEALTH_FILTERS = ['Todas', 'Com falha', 'Estável', 'Worker problema']
 
 export default function MonitoringPage() {
   const [search, setSearch]         = useState('')
@@ -223,6 +251,11 @@ export default function MonitoringPage() {
       list = list.filter(s => s.uptime_pct < 99.9 || s.monitoring_status === 'error' || s.is_currently_down)
     } else if (healthFilter === 'Estável') {
       list = list.filter(s => s.uptime_pct >= 99.9 && s.monitoring_status !== 'error' && !s.is_currently_down)
+    } else if (healthFilter === 'Worker problema') {
+      // Mostra apenas stations cujo worker LOCAL (não o stream remoto) está
+      // com problema: travado ou não registrado. Útil pra distinguir issue de
+      // infra interna vs queda real do broadcaster.
+      list = list.filter(s => s.worker_status === 'stalled' || s.worker_status === 'missing')
     }
     return [...list].sort((a, b) => {
       // Stations atualmente caídas vão pro topo, depois com erro de cadastro,
@@ -345,6 +378,7 @@ export default function MonitoringPage() {
                     ? `Queda ${relativeTime(st.last_incident_at)}`
                     : 'Sem quedas'}
                 </div>
+                <WorkerPill status={st.worker_status} lastPCMAt={st.worker_last_pcm_at} />
                 <StatusDot status={st.monitoring_status} isCurrentlyDown={st.is_currently_down} />
               </div>
             ))}

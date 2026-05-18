@@ -53,22 +53,24 @@ export default function LoginPage() {
       <aside className="login-brand-panel" aria-hidden="true">
         <div className="login-brand-overlay">
           <div className="login-brand-content">
-            <span className="login-brand-eyebrow">E-radios</span>
-            <h2 className="login-brand-wordmark">Radiocheck</h2>
+            <img
+              src="/E-monitor%20logo.png"
+              alt="E-monitor"
+              className="login-brand-wordmark-img"
+            />
             <p className="login-brand-tagline">
-              Monitoramento de veiculação<br />em tempo real.
+              Cada comercial que vai ao ar, registrado.
             </p>
-            <div className="login-feature-pills">
-              <span className="login-feature-pill">98% precisão</span>
-              <span className="login-feature-pill">&lt; 10s detecção</span>
-              <span className="login-feature-pill">24/7 ativo</span>
-            </div>
           </div>
-          <div className="login-brand-footer">
-            <div className="login-stat-badge">
-              <span className="login-stat-dot" />
-              <span>200+ emissoras monitoradas</span>
-            </div>
+          <div className="login-brand-signature">
+            <img
+              src="/eradios-logo.png"
+              alt=""
+              className="login-brand-signature-mark"
+            />
+            <span className="login-brand-signature-text">
+              parte do ecossistema E-radios
+            </span>
           </div>
         </div>
       </aside>
@@ -76,8 +78,12 @@ export default function LoginPage() {
       <main className="login-form-panel">
         <div className="login-form-inner">
           <div className="login-mobile-brand">
-            <span className="login-mobile-wordmark">Radiocheck</span>
-            <span className="login-mobile-sub">E-radios</span>
+            <img
+              src="/E-monitor%20logo.png"
+              alt="E-monitor"
+              className="login-mobile-wordmark-img"
+            />
+            <span className="login-mobile-sub">parte do ecossistema E-radios</span>
           </div>
 
           <span className="login-welcome">Bem-vindo de volta</span>

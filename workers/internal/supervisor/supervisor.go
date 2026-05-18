@@ -319,7 +319,23 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	capturedStationID := stationID
 
 	// ── Startup recovery: find open 'down' event from a previous crash ──────
+	// Antes de adotar o último open, fecha quaisquer zumbis (open downs além
+	// do mais recente). Defesa contra estado pré-existente bagunçado: se algum
+	// crash/UPDATE-falho anterior deixou múltiplos opens, normalizamos pra
+	// preservar a invariante "≤1 open down event por station" no DB.
+	// Incidente 2026-05-18: Mix 93.70 FM acumulou 17 zumbis em 3 dias.
 	entry := &workerEntry{cancel: cancel, refreshNow: make(chan struct{}, 1)}
+	if closed, err := s.healthEvents.CloseOrphanedOpenDowns(context.Background(), capturedStationID); err != nil {
+		s.log.Warn("supervisor: startup recovery — failed to close orphaned downs",
+			zap.String("station_id", capturedStationID.String()),
+			zap.Error(err),
+		)
+	} else if closed > 0 {
+		s.log.Info("supervisor: startup recovery — closed orphan down events",
+			zap.String("station_id", capturedStationID.String()),
+			zap.Int("count", closed),
+		)
+	}
 	if ev, err := s.healthEvents.GetLastOpenDown(context.Background(), capturedStationID); err == nil {
 		entry.lastDownID = &ev.ID
 		entry.lastDownAt = &ev.EventAt
@@ -365,10 +381,18 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 			}
 			s.mu.Unlock()
 
+			// IMPORTANTE: só limpa o lastDownID em memória se o UPDATE no DB
+			// teve sucesso. Se UpdateDownDuration falhar (DB timeout, conexão
+			// perdida) e limpássemos mesmo assim, o próximo onStreamDown não
+			// veria event aberto na memória e criaria um NOVO event — o
+			// anterior viraria zumbi pra sempre. Esse é o bug raiz do
+			// incidente 2026-05-18 (Mix 93.70 FM acumulou 17 zumbis em 3 dias).
+			updatedOK := true
 			if ok && downID != nil && downAt != nil {
 				dur := int(time.Since(*downAt).Seconds())
 				if err := s.healthEvents.UpdateDownDuration(bgCtx, *downID, *downAt, dur); err != nil {
-					s.log.Warn("supervisor: update down duration failed",
+					updatedOK = false
+					s.log.Warn("supervisor: update down duration failed; keeping lastDownID to retry on next up cycle",
 						zap.String("station_id", capturedStationID.String()),
 						zap.Error(err),
 					)
@@ -382,13 +406,17 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 				)
 			}
 
-			// Clear the tracked down event — outage is resolved.
-			s.mu.Lock()
-			if e, ok := s.workers[capturedStationID]; ok {
-				e.lastDownID = nil
-				e.lastDownAt = nil
+			// Clear the tracked down event — outage is resolved. Skip if the
+			// duration update failed: retain lastDownID so the next onStreamDown
+			// stays idempotent and the next onStreamUp can retry the UPDATE.
+			if updatedOK {
+				s.mu.Lock()
+				if e, ok := s.workers[capturedStationID]; ok {
+					e.lastDownID = nil
+					e.lastDownAt = nil
+				}
+				s.mu.Unlock()
 			}
-			s.mu.Unlock()
 		}()
 	}
 

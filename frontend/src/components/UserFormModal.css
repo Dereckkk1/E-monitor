@@ -1,0 +1,464 @@
+/* ─────────────────────────────────────────────────────────────
+   UserFormModal — criar / editar usuário
+   Class prefix: .ufm-
+   Reusa .confirm-backdrop, .btn, .input, .field (de index.css).
+   ───────────────────────────────────────────────────────────── */
+
+.ufm-backdrop {
+  align-items: flex-start;
+  padding: 6vh 16px 16px;
+  overflow-y: auto;
+}
+
+.ufm-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 24px 64px rgba(6, 5, 91, 0.20),
+    0 8px 24px rgba(6, 5, 91, 0.10);
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  animation: ufm-rise 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+
+@keyframes ufm-rise {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ufm-card { animation: none; }
+}
+
+/* ─── Header ──────────────────────────────────────────────── */
+
+.ufm-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 26px 18px;
+  border-bottom: 1px solid var(--c-border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--c-action) 5%, var(--c-surface)) 0%,
+    var(--c-surface) 100%
+  );
+}
+
+.ufm-avatar {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--c-action) 0%, var(--c-action-hover) 100%);
+  box-shadow:
+    0 4px 12px rgba(232, 30, 117, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  text-transform: uppercase;
+}
+
+.ufm-avatar-new {
+  font-size: 24px;
+  font-weight: 300;
+  background: linear-gradient(135deg, var(--c-action) 0%, var(--c-action-hover) 100%);
+}
+
+.ufm-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ufm-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 19px;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.ufm-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Form ────────────────────────────────────────────────── */
+
+.ufm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 26px 24px;
+}
+
+.ufm-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ufm-fieldset:disabled .ufm-role {
+  opacity: 0.6;
+}
+
+.ufm-legend {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-body);
+  padding: 0;
+  margin-bottom: 2px;
+}
+
+/* ─── Role radio cards ───────────────────────────────────── */
+
+.ufm-roles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 480px) {
+  .ufm-roles { grid-template-columns: 1fr; }
+}
+
+.ufm-role {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.ufm-role:hover:not([class*="is-checked"]):not(:has(input:disabled)) {
+  border-color: #cbd5e1;
+  background: color-mix(in srgb, var(--c-surface-2) 60%, var(--c-surface));
+}
+
+.ufm-role input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ufm-role.is-checked {
+  border-color: var(--c-action-border);
+  background: color-mix(in srgb, var(--c-action) 6%, var(--c-surface));
+  box-shadow:
+    0 0 0 3px rgba(232, 30, 117, 0.10),
+    inset 0 0 0 1px var(--c-action-border);
+}
+
+.ufm-role:has(input:focus-visible) {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
+}
+
+.ufm-role:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.ufm-role-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ufm-role.is-checked .ufm-role-icon {
+  background: var(--c-action-light);
+  color: var(--c-action);
+}
+
+.ufm-role-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ufm-role-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--c-text);
+  letter-spacing: -0.005em;
+}
+
+.ufm-role.is-checked .ufm-role-name {
+  color: var(--c-action);
+}
+
+.ufm-role-hint {
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  line-height: 1.35;
+}
+
+.ufm-hint {
+  margin: 6px 2px 0;
+  font-size: 11.5px;
+  color: var(--c-text-3);
+  line-height: 1.4;
+}
+
+.ufm-client-field {
+  margin-top: -4px; /* tighten under role grid */
+}
+
+/* ─── Grid row (Nome + Telefone) ─────────────────────────── */
+
+.ufm-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .ufm-grid { grid-template-columns: 1fr; }
+}
+
+/* ─── Password field (custom) ────────────────────────────── */
+
+.ufm-pwd {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.ufm-pwd-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ufm-pwd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.ufm-pwd-btn:hover:not(:disabled) {
+  background: var(--c-surface-2);
+  border-color: #cbd5e1;
+  color: var(--c-text);
+}
+
+.ufm-pwd-btn:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 1px;
+}
+
+.ufm-pwd-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ufm-pwd-btn-generate {
+  color: var(--c-action);
+  border-color: var(--c-action-border);
+  background: var(--c-action-light);
+}
+
+.ufm-pwd-btn-generate:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--c-action) 14%, var(--c-surface));
+  border-color: var(--c-action);
+  color: var(--c-action-hover);
+}
+
+/* ─── Toggle (is_active) ─────────────────────────────────── */
+
+.ufm-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface-2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ufm-toggle:hover {
+  border-color: #cbd5e1;
+  background: var(--c-surface);
+}
+
+.ufm-toggle input[type="checkbox"] {
+  margin-top: 3px;
+  accent-color: var(--c-action);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.ufm-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--c-text);
+}
+
+.ufm-toggle-text strong {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--c-text);
+}
+
+.ufm-toggle-text small {
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* ─── Error ──────────────────────────────────────────────── */
+
+.ufm-error {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--c-danger) 10%, var(--c-surface));
+  color: var(--c-danger);
+  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, var(--c-border));
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* ─── Actions ────────────────────────────────────────────── */
+
+.ufm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 480px) {
+  .ufm-actions { flex-direction: column-reverse; }
+  .ufm-actions .btn { width: 100%; justify-content: center; }
+}
+
+/* ─── Reset password modal alignment ────────────────────── */
+/* Same family; .rpm- below */
+.rpm-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 24px 64px rgba(6, 5, 91, 0.20),
+    0 8px 24px rgba(6, 5, 91, 0.10);
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  animation: ufm-rise 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+
+.rpm-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--c-border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--c-action) 5%, var(--c-surface)) 0%,
+    var(--c-surface) 100%
+  );
+}
+
+.rpm-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--c-action-light);
+  color: var(--c-action);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--c-action-border);
+}
+
+.rpm-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.rpm-target {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rpm-target strong {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.rpm-form {
+  padding: 18px 24px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}

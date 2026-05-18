@@ -78,6 +78,45 @@ func (h *HealthEvents) UpdateDownDuration(ctx context.Context, id int64, eventAt
 	return err
 }
 
+// CloseOrphanedOpenDowns fecha down events órfãos (sem duration_seconds)
+// exceto o mais recente, preservando a invariante "no máximo 1 open down event
+// por station". Cada órfão fechado recebe duration_seconds = (now - event_at),
+// uma estimativa honesta de quanto tempo o event ficou aberto sem cleanup.
+//
+// Existe pra defender contra dois cenários históricos:
+//
+//  1. UpdateDownDuration falha em onStreamUp (DB hiccup / timeout) mas o
+//     supervisor mesmo assim limpa o lastDownID em memória. O próximo
+//     onStreamDown cria um novo event sem fechar o anterior → zumbi.
+//
+//  2. Crash + restart entre tentativas: o startup recovery anterior pegava
+//     só o último open com GetLastOpenDown e os mais antigos ficavam órfãos
+//     indefinidamente (incidente 2026-05-18 — Mix 93.70 FM com 17 zumbis em
+//     3 dias).
+//
+// Retorna a quantidade fechada pra observabilidade (log + métrica futura).
+func (h *HealthEvents) CloseOrphanedOpenDowns(ctx context.Context, stationID uuid.UUID) (int, error) {
+	cmd, err := h.pool.Exec(ctx,
+		`WITH zumbis AS (
+		     SELECT id, event_at,
+		            row_number() OVER (ORDER BY event_at DESC) AS rn
+		     FROM stream_health_events
+		     WHERE station_id = $1
+		       AND event_type = 'down'
+		       AND duration_seconds IS NULL
+		 )
+		 UPDATE stream_health_events e
+		 SET duration_seconds = EXTRACT(EPOCH FROM (now() - e.event_at))::int
+		 FROM zumbis z
+		 WHERE e.id = z.id AND e.event_at = z.event_at AND z.rn > 1`,
+		stationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return int(cmd.RowsAffected()), nil
+}
+
 // GetLastOpenDown returns the most recent 'down' event with no duration_seconds for a station.
 // Used for startup recovery when a worker crashed mid-outage.
 func (h *HealthEvents) GetLastOpenDown(ctx context.Context, stationID uuid.UUID) (*HealthEvent, error) {
