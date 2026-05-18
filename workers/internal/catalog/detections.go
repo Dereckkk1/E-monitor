@@ -355,7 +355,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 	}
 
 	sql := `
-		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(m.title, c.title, ''),
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
@@ -386,7 +386,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
 		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
 		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
-		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(m.title, c.title, '') || ' ' || COALESCE(mt.name,'') || ' ' ||
 		              COALESCE(cli.name,'')
 		          )) LIKE '%' || unaccent(lower(tok)) || '%'
 		      )
@@ -450,7 +450,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		f.Limit = 100
 	}
 	rows, err := d.pool.Query(ctx, `
-		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(m.title, c.title, ''),
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
@@ -511,7 +511,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 	}
 
 	rows, err := d.pool.Query(ctx, `
-		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(m.title, c.title, ''),
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,
@@ -540,7 +540,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
 		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
 		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
-		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(m.title, c.title, '') || ' ' || COALESCE(mt.name,'') || ' ' ||
 		              COALESCE(cli.name,'')
 		          )) LIKE '%' || unaccent(lower(tok)) || '%'
 		      )
@@ -621,7 +621,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 	}
 
 	rows, err := d.pool.Query(ctx, `
-		SELECT d.commercial_id, m.short_id, COALESCE(c.title, ''),
+		SELECT d.commercial_id, m.short_id, COALESCE(m.title, c.title, ''),
 		       m.duration_seconds, m.type_id, mt.name, mt.color,
 		       COUNT(*) AS cnt
 		FROM detections d
@@ -643,13 +643,13 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		              COALESCE(s.name,'') || ' ' || COALESCE(s.city,'') || ' ' ||
 		              COALESCE(s.state,'') || ' ' || COALESCE(s.band,'') || ' ' ||
 		              COALESCE(s.frequency_mhz::text,'') || ' ' ||
-		              COALESCE(c.title,'') || ' ' || COALESCE(mt.name,'') || ' ' ||
+		              COALESCE(m.title, c.title, '') || ' ' || COALESCE(mt.name,'') || ' ' ||
 		              COALESCE(cli.name,'')
 		          )) LIKE '%' || unaccent(lower(tok)) || '%'
 		      )
 		      FROM unnest($4::text[]) AS tok
 		  ))
-		GROUP BY d.commercial_id, m.short_id, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
+		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
 		ORDER BY cnt DESC, c.title ASC`,
 		f.CampaignID, f.StartDate, f.EndDate, qTokens)
 	if err != nil {
@@ -687,7 +687,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) {
 	var det Detection
 	err := d.pool.QueryRow(ctx, `
-		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(c.title, ''),
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(m.title, c.title, ''),
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
 		       d.temporal_coverage, d.variant_used, d.rate_used,

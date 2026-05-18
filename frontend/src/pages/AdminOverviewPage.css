@@ -1,730 +1,1154 @@
-/* ── AdminOverviewPage ────────────────────────────────────────── */
-/*
- * Admin → Visão geral (/admin/overview).
- * Class prefix: aoh-  (admin overview health)
+/* ============================================================================
+ * AdminOverviewPage v2 — /admin/overview
  *
- * Layout philosophy (per docs/architecture/design.md + skill/pro-system-ui):
- *  - Top rollup banner is the one-glance answer. Color encodes severity;
- *    text answers "what should I do next?"
- *  - Infra/Observability are dense grids of compact service cards. Color
- *    is functional (ok/down/disabled), never decorative.
- *  - KPIs sit in moderate density — three side-by-side blocks with
- *    contextual sublines below the big number.
- *  - Attention list is the action zone. Wide horizontal rows, clickable,
- *    sorted by severity, taking you directly to the existing fix tool
- *    (/operations or /monitoring).
- */
+ * Class prefix: aov-  (admin overview v2). The previous prefix was `aoh-`
+ * and is intentionally not used anywhere here so stale rules can't bleed in
+ * from cached browser sessions during dev.
+ *
+ * Design intent (see docs/features/admin-system-overview.md and the
+ * impeccable shape brief):
+ *
+ *   - PulseHero is THE element. Hero band in nominal mode, compresses to a
+ *     thin strip in incident mode. SVG trace + pulsing playhead carries
+ *     "the system is alive" without animating layout properties.
+ *
+ *   - Two compositions selected by [data-mode]. Switch is instant — no
+ *     transition. When someone is paged, the page rearranging would feel
+ *     theatrical.
+ *
+ *   - Type-led KPIs in nominal mode. Big Space Grotesk numerals carry the
+ *     weight; sublines whisper. No card chrome, no boxed grid. Hover
+ *     reveals a routing affordance.
+ *
+ *   - Service pills replace the v1 card grid for infra/obs. Inline
+ *     horizontal status; far less vertical real estate.
+ *
+ *   - Attention cards use TOP borders in semantic color (warn/crit), never
+ *     side stripes. Side-stripe borders >1px as semantic accent are an
+ *     impeccable absolute-ban.
+ *
+ *   - No decorative motion. Every animation conveys state: the playhead
+ *     pulses (system is alive), the lamp pulses (overall health), the
+ *     refresh button spins (request in flight). That's the entire motion
+ *     budget on this page.
+ * ============================================================================ */
 
-.aoh {
+/* ── Root + layout tokens scoped to the page ───────────────────────────── */
+.aov {
+  --aov-hero-h: clamp(280px, 32vh, 360px);
+  --aov-hero-h-compact: clamp(96px, 12vh, 140px);
+  --aov-gap-section: 24px;
+  --aov-gap-tight: 12px;
+
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  margin: 0 auto;
+  gap: var(--aov-gap-section);
+  min-height: 100%;
 }
 
-/* ── Rollup banner ─────────────────────────────────────────────── */
-.aoh-rollup {
+.aov[data-mode='incident'] {
+  --aov-hero-h: var(--aov-hero-h-compact);
+}
+
+/* ============================================================================
+ * PulseHero
+ * ============================================================================ */
+.aov-hero {
   position: relative;
+  width: 100%;
+  height: var(--aov-hero-h);
+  border-radius: var(--radius-xl);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow: var(--shadow-sm);
+}
+
+.aov-hero--compact {
+  height: var(--aov-hero-h-compact);
+  border-radius: var(--radius-lg);
+}
+
+/* The SVG fills the whole hero. The viewBox is 60×100 with
+ * preserveAspectRatio="none" so the trace stretches to whatever pixel
+ * footprint we end up at. */
+.aov-hero-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.aov-hero-baseline {
+  stroke: var(--c-border);
+  stroke-width: 0.15;
+  stroke-dasharray: 0.6 0.6;
+  opacity: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Background wash track — detection intensity. Faint pink, low opacity,
+ * thicker stroke for a "halo" feel behind the foreground trace. */
+.aov-hero-bg {
+  stroke: var(--c-action);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.22;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Foreground trace — semantic color comes from the parent tone class.
+ * Crisp stroke, full opacity, the visual anchor of the page. */
+.aov-hero-fg {
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 1;
+  vector-effect: non-scaling-stroke;
+  transition: stroke 0.35s var(--ease-out-quart, cubic-bezier(0.25, 1, 0.5, 1));
+}
+
+.aov-hero--ok   .aov-hero-fg { stroke: var(--c-action); }
+.aov-hero--warn .aov-hero-fg { stroke: var(--c-warning); }
+.aov-hero--crit .aov-hero-fg { stroke: var(--c-danger); }
+
+/* Playhead — vertical line at the rightmost sample, with a pulsing dot
+ * sitting on the latest value. The line itself doesn't animate; the dot
+ * carries the "system is alive" pulse. */
+.aov-hero-playhead {
+  stroke: currentColor;
+  stroke-width: 0.15;
+  opacity: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.aov-hero--ok   { color: var(--c-action); }
+.aov-hero--warn { color: var(--c-warning); }
+.aov-hero--crit { color: var(--c-danger); }
+
+.aov-hero-playhead-dot {
+  fill: currentColor;
+  transform-origin: 59.5px 50px; /* placeholder — replaced inline by cy */
+  animation: aov-playhead 1.6s ease-out infinite;
+}
+
+@keyframes aov-playhead {
+  0%   { r: 0.9; opacity: 1; }
+  60%  { r: 2.2; opacity: 0; }
+  100% { r: 2.2; opacity: 0; }
+}
+
+/* Overlay sits on top of the SVG and holds all the typography. */
+.aov-hero-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  padding: 28px 32px;
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--c-border);
-  background: var(--c-surface);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  padding: 24px 28px;
+  pointer-events: none; /* let SVG hover work; re-enable on interactive children */
 }
 
-.aoh-rollup::before {
-  content: '';
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 5px;
-  background: var(--c-text-3);
+.aov-hero--compact .aov-hero-overlay {
+  align-items: center;
+  padding: 14px 20px;
 }
 
-.aoh-rollup--ok::before {
-  background: var(--c-success);
-}
-
-.aoh-rollup--warn::before {
-  background: var(--c-warning);
-}
-
-.aoh-rollup--crit::before {
-  background: var(--c-danger);
-}
-
-.aoh-rollup-main {
+.aov-hero-overlay-left,
+.aov-hero-overlay-right {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   min-width: 0;
+  pointer-events: auto;
 }
 
-.aoh-rollup-pulse {
-  position: relative;
-  width: 44px;
-  height: 44px;
+.aov-hero-overlay-right {
+  align-items: flex-start;
+}
+
+.aov-hero--compact .aov-hero-overlay-right {
+  align-items: center;
+}
+
+/* ON-AIR lamp — the only continuous animation on healthy state. */
+.aov-hero-lamp {
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 10%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  position: relative;
 }
 
-.aoh-rollup--ok .aoh-rollup-pulse {
-  color: var(--c-success);
-}
-
-.aoh-rollup--warn .aoh-rollup-pulse {
-  color: var(--c-warning);
-}
-
-.aoh-rollup--crit .aoh-rollup-pulse {
-  color: var(--c-danger);
-}
-
-.aoh-rollup-pulse-dot {
+.aov-hero-lamp-dot {
   width: 12px;
   height: 12px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 0 0 currentColor;
-  animation: aoh-pulse 2.2s ease-out infinite;
+  position: relative;
 }
 
-@keyframes aoh-pulse {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
-  }
-
-  70% {
-    box-shadow: 0 0 0 14px color-mix(in srgb, currentColor 0%, transparent);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
-  }
+.aov-hero-lamp-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  animation: aov-lamp 2s ease-out infinite;
+  z-index: -1;
 }
 
-.aoh-rollup-title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  font-family: var(--font-heading);
-  color: var(--c-text);
+@keyframes aov-lamp {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  70%  { transform: scale(2.2); opacity: 0; }
+  100% { transform: scale(2.2); opacity: 0; }
 }
 
-.aoh-rollup-sub {
-  margin: 2px 0 0;
-  font-size: 13.5px;
-  color: var(--c-text-2);
+.aov-hero--compact .aov-hero-lamp {
+  width: 28px;
+  height: 28px;
 }
 
-.aoh-rollup-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
+.aov-hero--compact .aov-hero-lamp-dot {
+  width: 9px;
+  height: 9px;
 }
 
-.aoh-rollup-updated {
+.aov-hero-text {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aov-hero-eyebrow {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.aov-hero-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: clamp(22px, 2.2vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.1;
+}
+
+.aov-hero--compact .aov-hero-title {
+  font-size: clamp(16px, 1.4vw, 18px);
+}
+
+.aov-hero-headline {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  color: var(--c-text-2);
   font-variant-numeric: tabular-nums;
 }
 
-.aoh-rollup-updated-label {
-  font-size: 10.5px;
-  font-weight: 600;
+.aov-hero--compact .aov-hero-headline {
+  display: none; /* the title already names the deficit in incident mode */
+}
+
+.aov-hero-updated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aov-hero-updated-label {
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   color: var(--c-text-3);
 }
 
-.aoh-rollup-updated-value {
+.aov-hero-updated-value {
   font-size: 13px;
   font-weight: 500;
   color: var(--c-text-2);
 }
 
-.aoh-refresh {
+.aov-refresh {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  background: transparent;
+  width: 34px;
+  height: 34px;
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   color: var(--c-text-2);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
-.aoh-refresh:hover {
+.aov-refresh:hover,
+.aov-refresh:focus-visible {
   background: var(--c-action-light);
   color: var(--c-action);
   border-color: var(--c-action-border);
+  outline: none;
 }
 
-.aoh-refresh--spin svg {
-  animation: aoh-spin 0.9s linear infinite;
+.aov-refresh:focus-visible {
+  box-shadow: 0 0 0 3px var(--c-action-light);
 }
 
-@keyframes aoh-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
+.aov-refresh--spin svg {
+  animation: aov-spin 0.9s linear infinite;
 }
 
-/* ── Section heads ────────────────────────────────────────────── */
-.aoh-section {
+@keyframes aov-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Legend strip at the bottom of the hero. Only shown in nominal mode. */
+.aov-hero-legend {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 18px;
+  z-index: 2;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 20px;
+  font-size: 11.5px;
+  color: var(--c-text-3);
+  pointer-events: none;
 }
 
-.aoh-section-head h2 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--c-text);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.aoh-section-count {
+.aov-hero-legend-row {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-full);
-  background: var(--c-danger);
-  color: #fff;
-  font-size: 11.5px;
-  font-weight: 700;
+  gap: 8px;
   font-variant-numeric: tabular-nums;
 }
 
-.aoh-section-head p {
-  margin: 4px 0 0;
-  font-size: 13px;
-  color: var(--c-text-2);
+.aov-hero-legend-swatch {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
 }
 
-/* ── Service grids (infra + observability) ────────────────────── */
-.aoh-grid {
+.aov-hero-legend-swatch--fg {
+  background: var(--c-action);
+}
+
+.aov-hero-legend-swatch--bg {
+  background: var(--c-action);
+  opacity: 0.35;
+}
+
+.aov-hero--warn .aov-hero-legend-swatch--fg { background: var(--c-warning); }
+.aov-hero--crit .aov-hero-legend-swatch--fg { background: var(--c-danger); }
+
+/* Skeleton variant — same geometry, no overlay, faint shimmer. */
+.aov-hero--skel {
+  background: linear-gradient(90deg,
+    var(--c-surface-2) 0%,
+    color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface)) 50%,
+    var(--c-surface-2) 100%);
+  background-size: 200% 100%;
+  animation: aov-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes aov-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ============================================================================
+ * Nominal grid: KPIs side-by-side
+ * ============================================================================ */
+.aov-nominal-grid {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px 0;
+}
+
+/* Divider dividers between KPI blocks — single hairline. Type-led design
+ * needs almost no chrome; the divider is just enough to delineate columns. */
+.aov-nominal-grid > .aov-kpi + .aov-kpi {
+  border-left: 1px solid var(--c-border);
+  padding-left: 28px;
+}
+
+/* ============================================================================
+ * KpiBlock — type-led, no card chrome in nominal mode
+ * ============================================================================ */
+.aov-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 4px 18px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  position: relative;
+  border-radius: var(--radius-md);
+  transition: background 0.15s ease;
+}
+
+.aov-kpi:hover,
+.aov-kpi:focus-visible {
+  background: var(--c-surface-2);
+  outline: none;
+}
+
+.aov-kpi:focus-visible {
+  box-shadow: 0 0 0 3px var(--c-action-light);
+}
+
+.aov-kpi-label {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--c-text-3);
+}
+
+.aov-kpi--ok   .aov-kpi-label { color: color-mix(in srgb, var(--c-success) 60%, var(--c-text-3)); }
+.aov-kpi--warn .aov-kpi-label { color: var(--c-warning); }
+.aov-kpi--crit .aov-kpi-label { color: var(--c-danger); }
+
+.aov-kpi-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1;
+}
+
+.aov-kpi-value {
+  font-family: var(--font-heading);
+  font-size: clamp(40px, 5vw, 64px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.aov-kpi-value-suffix {
+  font-family: var(--font-heading);
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.aov-kpi-sublines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.aov-kpi-subline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.aoh-grid--infra {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.aov-kpi-subline-label {
+  color: var(--c-text-2);
 }
 
-.aoh-grid--obs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.aov-kpi-subline-value {
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
 }
 
-.aoh-grid--kpi {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.aov-kpi-subline--warn .aov-kpi-subline-value { color: var(--c-warning); }
+.aov-kpi-subline--crit .aov-kpi-subline-value { color: var(--c-danger); }
+.aov-kpi-subline--ok   .aov-kpi-subline-value { color: var(--c-success); }
+
+.aov-kpi-link {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-action);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.15s ease, transform 0.2s var(--ease-out-quart, cubic-bezier(0.25, 1, 0.5, 1));
 }
 
-@media (max-width: 1100px) {
-  .aoh-grid--infra {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .aoh-grid--kpi {
-    grid-template-columns: 1fr 1fr;
-  }
+.aov-kpi:hover .aov-kpi-link,
+.aov-kpi:focus-visible .aov-kpi-link {
+  opacity: 1;
+  transform: translateX(0);
 }
 
-@media (max-width: 720px) {
-
-  .aoh-grid--infra,
-  .aoh-grid--obs,
-  .aoh-grid--kpi {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Service card */
-.aoh-svc {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 14px 12px;
+/* Compact variant — used in the incident-mode status column. Card chrome
+ * comes back because density is required and the page is no longer in
+ * "scannable from a distance" mode. */
+.aov-kpi--compact {
+  padding: 14px 16px;
+  gap: 10px;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.aoh-svc:hover {
+.aov-kpi--compact:hover {
   border-color: var(--c-action-border);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  background: var(--c-surface);
 }
 
-.aoh-svc--down {
-  border-color: color-mix(in srgb, var(--c-danger) 35%, var(--c-border));
-  background: color-mix(in srgb, var(--c-danger) 4%, var(--c-surface));
+.aov-kpi--compact .aov-kpi-value {
+  font-size: clamp(28px, 3vw, 36px);
 }
 
-.aoh-svc--disabled {
-  opacity: 0.7;
+.aov-kpi--compact .aov-kpi-value-suffix {
+  font-size: 16px;
 }
 
-.aoh-svc-head {
+.aov-kpi--compact .aov-kpi-link {
+  opacity: 1;
+  transform: none;
+}
+
+/* KPI skeleton */
+.aov-kpi--skel {
+  height: 168px;
+  background: linear-gradient(90deg,
+    var(--c-surface-2) 0%,
+    color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface)) 50%,
+    var(--c-surface-2) 100%);
+  background-size: 200% 100%;
+  animation: aov-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-lg);
+}
+
+/* ============================================================================
+ * Service strip — replaces the v1 5-card + 3-card grids
+ * ============================================================================ */
+.aov-strip {
+  display: flex;
+  gap: 32px;
+  padding: 18px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  flex-wrap: wrap;
+}
+
+.aov-strip--vertical {
+  flex-direction: column;
+  gap: 18px;
+}
+
+.aov-strip-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
 }
 
-.aoh-svc-dot {
+.aov-strip--vertical .aov-strip-group {
+  flex-direction: column;
+  align-items: flex-start;
+  flex: none;
+}
+
+.aov-strip-label {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--c-text-3);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.aov-strip-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aov-strip--skel {
+  height: 76px;
+  background: linear-gradient(90deg,
+    var(--c-surface-2) 0%,
+    color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface)) 50%,
+    var(--c-surface-2) 100%);
+  background-size: 200% 100%;
+  animation: aov-shimmer 1.4s ease-in-out infinite;
+  border: none;
+}
+
+/* ── ServicePill ─────────────────────────────────────────────────────── */
+.aov-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-full);
+  font-size: 12.5px;
+  color: var(--c-text);
+  cursor: default;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.aov-pill:hover,
+.aov-pill:focus-visible {
+  border-color: var(--c-action-border);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.aov-pill:focus-visible {
+  box-shadow: 0 0 0 3px var(--c-action-light);
+}
+
+.aov-pill-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
 }
 
-.aoh-svc-dot.aoh-pill--ok {
-  background: color-mix(in srgb, var(--c-success) 14%, transparent);
+.aov-pill--ok .aov-pill-dot {
+  background: color-mix(in srgb, var(--c-success) 16%, transparent);
   color: var(--c-success);
 }
 
-.aoh-svc-dot.aoh-pill--down {
-  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
+.aov-pill--down .aov-pill-dot {
+  background: color-mix(in srgb, var(--c-danger) 16%, transparent);
   color: var(--c-danger);
 }
 
-.aoh-svc-dot.aoh-pill--muted {
+.aov-pill--disabled .aov-pill-dot {
   background: var(--c-surface-2);
   color: var(--c-text-3);
 }
 
-.aoh-svc-name {
+.aov-pill--down {
+  background: color-mix(in srgb, var(--c-danger) 4%, var(--c-surface));
+  border-color: color-mix(in srgb, var(--c-danger) 28%, var(--c-border));
+}
+
+.aov-pill--disabled {
+  opacity: 0.75;
+}
+
+.aov-pill-name {
   font-weight: 600;
-  font-size: 14px;
-  color: var(--c-text);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
 }
 
-.aoh-svc-desc {
-  font-size: 12px;
-  color: var(--c-text-2);
-  line-height: 1.35;
-  min-height: 28px;
-}
-
-.aoh-svc-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 2px;
-}
-
-.aoh-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
+.aov-pill-latency {
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.aoh-pill--ok {
-  background: color-mix(in srgb, var(--c-success) 14%, transparent);
-  color: var(--c-success);
-}
-
-.aoh-pill--down {
-  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
-  color: var(--c-danger);
-}
-
-.aoh-pill--muted {
-  background: var(--c-surface-2);
-  color: var(--c-text-3);
-}
-
-.aoh-svc-latency,
-.aoh-svc-detail {
-  font-size: 11.5px;
   color: var(--c-text-3);
   font-variant-numeric: tabular-nums;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid var(--c-border);
+}
+
+.aov-pill-detail {
+  font-size: 11px;
+  color: var(--c-danger);
+  font-weight: 500;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid color-mix(in srgb, var(--c-danger) 30%, var(--c-border));
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.aoh-svc-detail {
-  color: var(--c-danger);
-  font-weight: 500;
+/* ============================================================================
+ * Incident composition: attention (left) + status column (right)
+ * ============================================================================ */
+.aov-incident-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 22px;
+  align-items: start;
 }
 
-/* ── KPI blocks ───────────────────────────────────────────────── */
-.aoh-kpi {
-  position: relative;
-  padding: 18px 20px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+/* ── Attention column ───────────────────────────────────────────────── */
+.aov-attention {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  gap: 16px;
 }
 
-.aoh-kpi:hover {
-  border-color: var(--c-action-border);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+.aov-attention-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.aoh-kpi::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 18px;
-  right: 18px;
-  height: 3px;
-  background: var(--c-text-3);
-  opacity: 0.25;
-  border-radius: 0 0 3px 3px;
-}
-
-.aoh-kpi--ok::before {
-  background: var(--c-success);
-  opacity: 1;
-}
-
-.aoh-kpi--warn::before {
-  background: var(--c-warning);
-  opacity: 1;
-}
-
-.aoh-kpi--crit::before {
-  background: var(--c-danger);
-  opacity: 1;
-}
-
-.aoh-kpi-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--c-text-3);
-}
-
-.aoh-kpi-value {
+.aov-attention-title {
+  margin: 0;
   font-family: var(--font-heading);
-  font-size: 34px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--c-text);
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.aoh-kpi-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--c-border);
-}
-
-.aoh-kpi-sub-row {
-  display: grid;
-  grid-template-columns: 8px 1fr auto;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
+  gap: 12px;
 }
 
-.aoh-kpi-sub-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.aoh-kpi-sub-dot--ok {
-  background: var(--c-success);
-}
-
-.aoh-kpi-sub-dot--warn {
-  background: var(--c-warning);
-}
-
-.aoh-kpi-sub-dot--crit {
-  background: var(--c-danger);
-}
-
-.aoh-kpi-sub-dot--neutral {
-  background: var(--c-border);
-}
-
-.aoh-kpi-sub-label {
-  color: var(--c-text-2);
-}
-
-.aoh-kpi-sub-value {
-  font-weight: 600;
-  color: var(--c-text);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ── Attention list ───────────────────────────────────────────── */
-.aoh-section--attention .aoh-section-head h2 {
-  color: var(--c-text);
-}
-
-.aoh-att-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.aoh-att-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 36px 1fr auto;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-left: 3px solid var(--c-text-3);
-  border-radius: var(--radius-md);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-}
-
-.aoh-att-row:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
-  border-color: var(--c-action-border);
-  border-left-color: var(--c-action);
-}
-
-.aoh-att--warning {
-  border-left-color: var(--c-warning);
-}
-
-.aoh-att--critical {
-  border-left-color: var(--c-danger);
-}
-
-.aoh-att-icon {
+.aov-attention-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-full);
+  background: var(--c-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.aov-attention-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+.aov-attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aov-attention-quieted {
+  padding: 16px 18px;
   border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-start;
+}
+
+.aov-attention-quieted button {
+  background: none;
+  border: none;
+  color: var(--c-action);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 6px;
+}
+
+.aov-attention-quieted button:hover {
+  text-decoration: underline;
+}
+
+/* ── AttentionCard ───────────────────────────────────────────────────
+ * Uses a TOP border in semantic color — never a side stripe. Side
+ * stripes > 1px as accents are an impeccable absolute-ban. The semantic
+ * weight comes from: top border + icon background + tag color. */
+.aov-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-top-width: 3px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  overflow: hidden;
+}
+
+.aov-card--warn {
+  border-top-color: var(--c-warning);
+}
+
+.aov-card--crit {
+  border-top-color: var(--c-danger);
+}
+
+.aov-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.aov-card-main {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.aov-card-main:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: -2px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.aov-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.aov-card--warn .aov-card-icon {
   background: color-mix(in srgb, var(--c-warning) 14%, transparent);
   color: var(--c-warning);
 }
 
-.aoh-att--critical .aoh-att-icon {
+.aov-card--crit .aov-card-icon {
   background: color-mix(in srgb, var(--c-danger) 14%, transparent);
   color: var(--c-danger);
 }
 
-.aoh-att-body {
+.aov-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
 
-.aoh-att-title {
-  display: flex;
+.aov-card-title {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.aoh-att-title-name {
-  font-size: 14px;
+.aov-card-title-name {
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--c-text);
   letter-spacing: -0.01em;
 }
 
-.aoh-att-tag {
+.aov-card-tag {
   display: inline-flex;
   padding: 2px 8px;
   border-radius: var(--radius-full);
-  background: var(--c-surface-2);
-  color: var(--c-text-2);
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
-.aoh-att-detail {
-  margin-top: 2px;
+.aov-card-tag--warn {
+  background: color-mix(in srgb, var(--c-warning) 14%, transparent);
+  color: var(--c-warning);
+}
+
+.aov-card-tag--crit {
+  background: color-mix(in srgb, var(--c-danger) 14%, transparent);
+  color: var(--c-danger);
+}
+
+.aov-card-detail {
   font-size: 12.5px;
   color: var(--c-text-2);
   line-height: 1.45;
 }
 
-.aoh-att-action {
+.aov-card-action {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--c-action);
   white-space: nowrap;
 }
 
-/* Empty state for attention zone — explicitly NOT a sad icon. */
-.aoh-att-empty {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 22px 24px;
-  background: color-mix(in srgb, var(--c-success) 5%, var(--c-surface));
-  border: 1px dashed color-mix(in srgb, var(--c-success) 30%, var(--c-border));
-  border-radius: var(--radius-lg);
-}
-
-.aoh-att-empty strong {
-  display: block;
-  font-size: 14px;
-  color: var(--c-text);
-  font-weight: 600;
-}
-
-.aoh-att-empty span {
-  display: block;
-  font-size: 12.5px;
-  color: var(--c-text-2);
-  margin-top: 2px;
-}
-
-.aoh-att-empty-icon {
+.aov-card-dismiss {
+  width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--c-surface-2);
+  border: none;
+  border-top: 1px solid var(--c-border);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.aov-card-dismiss:hover {
+  background: color-mix(in srgb, var(--c-text-3) 8%, var(--c-surface-2));
+  color: var(--c-text-2);
+}
+
+/* ── Status column (right side in incident mode) ─────────────────────── */
+.aov-status {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ============================================================================
+ * Empty / educational states
+ * ============================================================================ */
+.aov-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 22px 24px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--c-success) 6%, var(--c-surface));
+  border: 1px dashed color-mix(in srgb, var(--c-success) 28%, var(--c-border));
+}
+
+.aov-empty-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--c-success) 18%, transparent);
   color: var(--c-success);
   flex-shrink: 0;
 }
 
-/* ── Skeleton placeholders ────────────────────────────────────── */
-.aoh-skel {
-  background: linear-gradient(90deg,
-      var(--c-surface-2) 0%,
-      color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface)) 50%,
-      var(--c-surface-2) 100%);
-  background-size: 200% 100%;
-  border-radius: var(--radius-lg);
-  animation: aoh-shimmer 1.4s ease-in-out infinite;
+.aov-empty-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.aoh-skel--svc {
-  height: 116px;
+.aov-empty-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
 }
 
-.aoh-skel--kpi {
-  height: 168px;
+.aov-empty-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+  line-height: 1.5;
+  max-width: 72ch;
 }
 
-.aoh-skel--att {
-  height: 64px;
-}
-
-@keyframes aoh-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-
-  to {
-    background-position: -200% 0;
-  }
-}
-
-/* ── Error state ──────────────────────────────────────────────── */
-.aoh-error {
+/* ============================================================================
+ * Error state
+ * ============================================================================ */
+.aov-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
   padding: 32px;
-  text-align: center;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
+  border-top: 3px solid var(--c-danger);
+  border-radius: var(--radius-lg);
+  max-width: 560px;
 }
 
-.aoh-error h2 {
-  margin: 0 0 8px;
+.aov-error-title {
+  margin: 0;
+  font-family: var(--font-heading);
   font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--c-text);
 }
 
-.aoh-error p {
-  margin: 0 0 16px;
-  font-size: 13px;
+.aov-error-text {
+  margin: 0;
+  font-size: 13.5px;
   color: var(--c-text-2);
+  line-height: 1.55;
 }
 
-.aoh-error code {
+.aov-error-text code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   background: var(--c-surface-2);
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
 }
 
-.aoh-btn {
+.aov-error-btn {
+  margin-top: 6px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 16px;
+  padding: 10px 18px;
+  background: var(--c-action);
+  color: #fff;
+  border: none;
   border-radius: var(--radius-md);
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  border: 1px solid transparent;
   transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.aoh-btn--primary {
-  background: var(--c-action);
-  color: #fff;
-}
-
-.aoh-btn--primary:hover {
+.aov-error-btn:hover {
   background: var(--c-action-hover);
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
+}
+
+/* ============================================================================
+ * Responsive
+ * ============================================================================ */
+@media (max-width: 1100px) {
+  .aov-nominal-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .aov-nominal-grid > .aov-kpi:nth-child(3) {
+    grid-column: 1 / -1;
+    border-left: none;
+    border-top: 1px solid var(--c-border);
+    padding-left: 4px;
+    padding-top: 18px;
+  }
+
+  .aov-incident-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aov-status {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .aov-status > .aov-kpi {
+    flex: 1 1 240px;
+  }
+
+  .aov-status > .aov-strip {
+    flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .aov {
+    --aov-hero-h: clamp(220px, 28vh, 260px);
+    gap: 18px;
+  }
+
+  .aov-hero-overlay {
+    padding: 18px 18px;
+  }
+
+  .aov-hero-legend {
+    display: none; /* type takes over; legend would clutter at this width */
+  }
+
+  .aov-nominal-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .aov-nominal-grid > .aov-kpi + .aov-kpi {
+    border-left: none;
+    border-top: 1px solid var(--c-border);
+    padding-left: 4px;
+    padding-top: 18px;
+  }
+
+  .aov-strip {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .aov-incident-grid {
+    gap: 16px;
+  }
+}
+
+/* ============================================================================
+ * Reduced motion
+ * ============================================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .aov-hero-playhead-dot,
+  .aov-hero-lamp-dot::after {
+    animation: none;
+  }
+
+  .aov-refresh--spin svg,
+  .aov-hero--skel,
+  .aov-kpi--skel,
+  .aov-strip--skel {
+    animation: none;
+  }
+
+  .aov-card,
+  .aov-pill,
+  .aov-kpi,
+  .aov-kpi-link,
+  .aov-refresh,
+  .aov-error-btn {
+    transition: none;
+  }
 }

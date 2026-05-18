@@ -1,19 +1,59 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { generateStrongPassword } from '../utils/passwordGen'
+import './UserFormModal.css'
 
-// Modal de reset de senha disparado pelo admin a partir da página
-// /admin/users. NÃO exige senha atual (decisão admin override).
-//
-// Props:
-//   user      — a linha de users.User
-//   onSubmit(password) — chamado no submit com a nova senha.
-//   onClose() — fecha o modal.
-//   error     — erro do backend.
-//   busy      — quando true, desabilita controles.
+function KeyBigIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="7" cy="13" r="3" />
+      <path d="M9.5 10.5l7-7M14 5l1.5 1.5M16 3l2 2" />
+    </svg>
+  )
+}
+function DiceIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2" width="10" height="10" rx="2" />
+      <circle cx="4.5" cy="4.5" r="0.6" fill="currentColor" />
+      <circle cx="9.5" cy="4.5" r="0.6" fill="currentColor" />
+      <circle cx="7"   cy="7"   r="0.6" fill="currentColor" />
+      <circle cx="4.5" cy="9.5" r="0.6" fill="currentColor" />
+      <circle cx="9.5" cy="9.5" r="0.6" fill="currentColor" />
+    </svg>
+  )
+}
+function EyeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 7s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" />
+      <circle cx="7" cy="7" r="1.6" />
+    </svg>
+  )
+}
+function EyeOffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 7s2.5-4 6-4c1.4 0 2.6.5 3.6 1.2M13 7s-1 1.7-3 3M7 11c-3.5 0-6-4-6-4M1 1l12 12" />
+    </svg>
+  )
+}
+
 export default function ResetPasswordModal({ user, onSubmit, onClose, error, busy }) {
   const [pwd, setPwd] = useState('')
   const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape' && !busy) onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [busy, onClose])
 
   function handleSubmit(e) {
     e.preventDefault()
@@ -21,69 +61,81 @@ export default function ResetPasswordModal({ user, onSubmit, onClose, error, bus
     onSubmit(pwd)
   }
 
-  const errorMsg = typeof error === 'string' ? error : (error?.error || error?.message || (error ? JSON.stringify(error) : null))
+  const errorMsg = typeof error === 'string'
+    ? error
+    : (error?.error || error?.message || (error ? JSON.stringify(error) : null))
 
   return createPortal(
-    <div className="confirm-backdrop" onClick={busy ? undefined : onClose} role="dialog" aria-modal="true">
-      <div
-        className="confirm-card"
-        onClick={e => e.stopPropagation()}
-        style={{ maxWidth: 460, width: 'min(460px, 100%)' }}
-      >
-        <div style={{ padding: '24px 28px 8px' }}>
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 20, color: 'var(--c-text)' }}>
-            Resetar senha
-          </h2>
-          <p style={{ margin: '8px 0 0', color: '#475569', fontSize: 14 }}>
-            Definir nova senha para <strong>{user.email}</strong>. Comunique a nova senha ao usuário; ele pode trocar depois em "Minha conta".
-          </p>
-        </div>
+    <div
+      className="confirm-backdrop ufm-backdrop"
+      onClick={busy ? undefined : onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="rpm-title"
+    >
+      <div className="rpm-card" onClick={e => e.stopPropagation()}>
+        <header className="rpm-header">
+          <div className="rpm-icon" aria-hidden="true"><KeyBigIcon /></div>
+          <div>
+            <h2 id="rpm-title" className="rpm-title">Resetar senha</h2>
+            <p className="rpm-target">
+              Para <strong>{user.email}</strong>
+            </p>
+          </div>
+        </header>
 
-        <form onSubmit={handleSubmit} style={{ padding: '8px 28px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form className="rpm-form" onSubmit={handleSubmit}>
           <div className="field">
-            <label>Nova senha (mín 12 caracteres)</label>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <label htmlFor="rpm-pwd">Nova senha *</label>
+            <div className="ufm-pwd">
               <input
-                className="input"
+                id="rpm-pwd"
+                className="input ufm-pwd-input"
                 type={show ? 'text' : 'password'}
                 value={pwd}
                 onChange={e => setPwd(e.target.value)}
                 minLength={12}
                 required
-                style={{ flex: 1 }}
+                placeholder="Mínimo 12 caracteres"
                 disabled={busy}
+                autoFocus
+                autoComplete="new-password"
               />
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className="ufm-pwd-btn"
                 onClick={() => setShow(s => !s)}
                 disabled={busy}
+                aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}
+                title={show ? 'Ocultar' : 'Mostrar'}
               >
-                {show ? 'Ocultar' : 'Mostrar'}
+                {show ? <EyeOffIcon /> : <EyeIcon />}
               </button>
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className="ufm-pwd-btn ufm-pwd-btn-generate"
                 onClick={() => { setPwd(generateStrongPassword(16)); setShow(true) }}
                 disabled={busy}
+                title="Gerar senha de 16 caracteres"
               >
-                Gerar
+                <DiceIcon />
+                <span>Gerar</span>
               </button>
             </div>
+            <p className="ufm-hint">
+              Comunique a nova senha por fora (WhatsApp, email). O usuário pode trocá-la
+              depois em <em>Minha conta</em>.
+            </p>
           </div>
 
           {errorMsg && (
-            <div style={{
-              padding: '10px 12px',
-              borderRadius: 'var(--radius-md, 8px)',
-              background: '#fee2e2',
-              color: '#991b1b',
-              fontSize: 13,
-            }}>{errorMsg}</div>
+            <div className="ufm-error" role="alert">{errorMsg}</div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancelar</button>
+          <div className="ufm-actions">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>
+              Cancelar
+            </button>
             <button type="submit" className="btn btn-primary" disabled={busy}>
               {busy ? 'Resetando…' : 'Resetar senha'}
             </button>

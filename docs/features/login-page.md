@@ -1,16 +1,20 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-18
 codigo-relacionado:
   - frontend/src/pages/LoginPage.jsx
   - frontend/src/index.css
   - frontend/src/contexts/AuthContext.jsx
   - frontend/public/login-hero.jpg
+  - frontend/public/E-monitor logo.png
+  - frontend/public/eradios-logo.png
 ---
 
 # Tela de Login
 
 A `/login` é a porta de entrada do app: split 2-colunas em desktop, single-column em mobile. Painel-hero à esquerda com imagem cinematográfica (globo terrestre com pulsos de sinal sobre o Brasil) + formulário claro à direita usando o design system canônico.
+
+O painel-hero é silencioso por design: wordmark + uma frase + assinatura discreta de pertencimento ao E-radios. **Sem pills de métrica, sem badges com pulse dot** — esse padrão foi retirado em 2026-05-18 por soar genérico de SaaS (hero-metric template).
 
 Spec original: [docs/superpowers/specs/2026-05-15-login-redesign-design.md](../superpowers/specs/2026-05-15-login-redesign-design.md)
 
@@ -21,35 +25,39 @@ Spec original: [docs/superpowers/specs/2026-05-15-login-redesign-design.md](../s
 ```
 ┌────────────────────────┬────────────────────────┐
 │                        │                        │
-│  E-RADIOS              │  BEM-VINDO DE VOLTA    │
-│  Radiocheck            │  Entrar                │
-│  Monitoramento de…     │  Acesse sua conta…     │
-│                        │                        │
-│  [98% precisão]        │  E-MAIL                │
-│  [<10s] [24/7]         │  [✉  seu@email.com]    │
-│                        │                        │
+│                        │  BEM-VINDO DE VOLTA    │
+│                        │  Entrar                │
+│                        │  Acesse sua conta…     │
+│  E-monitor             │                        │
+│                        │  E-MAIL                │
+│  Cada comercial que    │  [✉  seu@email.com]    │
+│  vai ao ar, registrado.│                        │
 │                        │  SENHA                 │
 │                        │  [🔒 ••••••••    👁]   │
 │                        │                        │
 │                        │  [   Entrar   ]        │
 │                        │                        │
-│  ● 200+ EMISSORAS…     │  Problemas para entrar?│
-│                        │  Fale com o admin.     │
+│  [E] parte do          │  Problemas para entrar?│
+│      ecossistema       │  Fale com o admin.     │
+│      E-radios          │                        │
 └────────────────────────┴────────────────────────┘
         50% width                50% width
 ```
 
-- Brand panel: `background-image: url('/login-hero.jpg')` com `background-size: cover` e gradiente vertical sutil (`::before`) pra garantir contraste do wordmark e do stat badge.
+- Brand panel: `background-image: url('/login-hero.jpg')` com `background-size: cover` e gradiente sutil (`::before`) pra garantir contraste do wordmark e da assinatura.
+- Conteúdo do hero: max-width 460px, deslocado ~8vh do topo (não cola no topo, não centra) — respira.
+- Assinatura: logo E-radios (26px de altura, `frontend/public/eradios-logo.png` — versão "logo 2 fundo escuro" importada do repo `E-radios/signalads-frontend/public/`) + frase "parte do ecossistema E-radios" em 12px. Sem borda, sem badge container, opacidade 0.72.
 - Form panel: fundo branco (`--c-surface`), max-width 380px, padding generoso.
 
 ### Mobile (<900px)
 
-Brand panel some inteiro (`display: none`). No topo do form aparece a marca inline (`.login-mobile-brand`): wordmark "Radiocheck" + eyebrow "E-RADIOS".
+Brand panel some inteiro (`display: none`). No topo do form aparece a marca inline (`.login-mobile-brand`): wordmark "E-monitor" + linha "parte do ecossistema E-radios".
 
 ```
 ┌────────────────────────┐
-│  Radiocheck            │
-│  E-RADIOS              │
+│  E-monitor             │
+│  parte do ecossistema  │
+│  E-radios              │
 ├────────────────────────┤
 │  BEM-VINDO DE VOLTA    │
 │  Entrar                │
@@ -129,16 +137,18 @@ Todas em `frontend/src/index.css` na seção `── Login page ──`.
 |---|---|
 | `.login-shell` | Grid 2-colunas (`1fr 1fr`) com `min-height: 100svh` |
 | `.login-brand-panel` | Painel-esquerdo: `background-image` + `::before` gradient overlay |
-| `.login-brand-overlay` | Wrapper de conteúdo dentro do brand panel (`flex column space-between`) |
-| `.login-brand-content` | Topo: eyebrow + wordmark + tagline + feature pills |
-| `.login-brand-eyebrow` | "E-RADIOS" — 11px uppercase tracking 0.18em, branco 70% |
-| `.login-brand-wordmark` | "Radiocheck" — 64px Space Grotesk bold, text-shadow sutil |
-| `.login-brand-tagline` | Tagline 18px branco 82% |
-| `.login-feature-pills` / `.login-feature-pill` | Pills com fundo `rgba(255,255,255,0.08)` |
-| `.login-brand-footer` / `.login-stat-badge` / `.login-stat-dot` | Rodapé: badge "200+ emissoras" com ponto rosa pulsante |
+| `.login-brand-overlay` | Wrapper de conteúdo dentro do brand panel (`flex column space-between`, padding 64px 64px 48px) |
+| `.login-brand-content` | Topo: wordmark + tagline. `margin-top: clamp(40px, 8vh, 96px)` pra não colar no topo |
+| `.login-brand-wordmark-img` | `<img>` da logo E-monitor (mesma da sidebar — `/E-monitor logo.png`), altura `clamp(80px, 9vw, 120px)`, `align-self: flex-start` pra não esticar no flex column. CSS `filter: brightness(0) invert(1)` inverte navy → branco no hero escuro |
+| `.login-brand-tagline` | "Cada comercial que vai ao ar, registrado." — Space Grotesk regular, max-width 22ch |
+| `.login-brand-signature` | Rodapé do hero: logo E-radios + frase. `opacity: 0.72`, sem container |
+| `.login-brand-signature-mark` | `<img>` da logo E-radios, altura 26px |
+| `.login-brand-signature-text` | "parte do ecossistema E-radios" — 12px, branco 78% |
 | `.login-form-panel` | Painel-direito: fundo branco, padding 56px 48px |
 | `.login-form-inner` | Container do form, max-width 380px |
-| `.login-mobile-brand` / `.login-mobile-wordmark` / `.login-mobile-sub` | Marca inline no mobile (escondida em desktop) |
+| `.login-mobile-brand` | Marca inline no mobile (escondida em desktop) |
+| `.login-mobile-wordmark-img` | Logo E-monitor sem filter (fundo do form é branco), altura 36px |
+| `.login-mobile-sub` | "parte do ecossistema E-radios" — 12px sentence-case (não uppercase) |
 | `.login-welcome` | Eyebrow "BEM-VINDO DE VOLTA" |
 | `.login-title` | "Entrar" — 40px Space Grotesk bold |
 | `.login-subtitle` | Subtítulo 16px |
@@ -180,4 +190,5 @@ Sem testes unitários — a tela depende de DOM/CSS, validação é manual:
 
 | Data | Mudança |
 |---|---|
+| 2026-05-18 | Rename Radiocheck → E-monitor no hero; wordmark passa de texto Space Grotesk pra logo oficial (`/E-monitor logo.png` — mesma da sidebar) invertida pra branco no hero escuro; pills de métrica + stat badge removidos (hero-metric template AI-genérico); assinatura E-radios passa a usar a logo oficial do repo `E-radios/` em vez de eyebrow textual; tagline trocada por "Cada comercial que vai ao ar, registrado." (voz com ponto de vista, alinhada ao princípio "evidência, não afirmação") |
 | 2026-05-15 | Redesign cinematográfico: hero image substitui orbs+signal-rings, hierarquia tipográfica refinada, breakpoint mobile mudado de 768px → 900px, footer informativo adicionado |

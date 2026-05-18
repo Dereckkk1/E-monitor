@@ -1,118 +1,729 @@
-.admin-users-page {
-  padding: 24px;
-  max-width: 1280px;
+/* ─────────────────────────────────────────────────────────────
+   AdminUsersPage — /admin/users
+   Class prefix: .au-
+   Tokens from index.css. Reuses .btn, .input, .field, .badge.
+   ───────────────────────────────────────────────────────────── */
+
+.au-page {
   margin: 0 auto;
-}
-
-.admin-users-page .page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.admin-users-page .page-header h1 {
-  margin: 0;
-  font-family: var(--font-heading, sans-serif);
-  font-size: 24px;
+  padding: 32px 8px 56px;
+  font-family: var(--font-body);
   color: var(--c-text);
-}
-
-.admin-users-page .filters-row {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.admin-users-page .filters-row .input {
-  height: 38px;
-}
-
-.admin-users-page .data-table-wrap {
-  background: var(--c-surface, #fff);
-  border: 1px solid var(--c-border, #e2e8f0);
-  border-radius: var(--radius-md, 8px);
-  overflow: hidden;
-}
-
-.admin-users-page .data-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.admin-users-page .data-table th,
-.admin-users-page .data-table td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--c-border, #e2e8f0);
-  text-align: left;
-  font-size: 14px;
-  color: var(--c-text);
-}
-
-.admin-users-page .data-table th {
-  background: #f8fafc;
-  font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #475569;
-}
-
-.admin-users-page .data-table tbody tr:hover {
-  background: #f8fafc;
-}
-
-.admin-users-page .data-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.admin-users-page .row-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.admin-users-page .badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.admin-users-page .badge-success { background: #dcfce7; color: #166534; }
-.admin-users-page .badge-muted   { background: #f1f5f9; color: #475569; }
-.admin-users-page .badge-danger  { background: #fee2e2; color: #991b1b; }
-
-.admin-users-page .pagination {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 20px;
-  color: #475569;
-  font-size: 13px;
-}
-
-.admin-users-page .muted {
-  color: #94a3b8;
-}
-
-.admin-users-page .empty {
-  text-align: center;
-  padding: 40px 12px;
-  color: #64748b;
-  font-size: 14px;
 }
 
 @media (max-width: 768px) {
-  .admin-users-page .filters-row {
-    grid-template-columns: 1fr;
+  .au-page {
+    padding: 20px 4px 40px;
   }
-  .admin-users-page {
-    padding: 16px;
+}
+
+/* ─── Header ──────────────────────────────────────────────── */
+
+.au-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.au-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.au-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: -0.015em;
+  color: var(--c-text);
+  line-height: 1.15;
+}
+
+.au-subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--c-text-2);
+  max-width: 56ch;
+}
+
+.au-new-btn {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 18px;
+  font-size: 13.5px;
+}
+
+@media (max-width: 540px) {
+  .au-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .au-new-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ─── Toolbar (search + filters) ──────────────────────────── */
+
+.au-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.au-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.au-search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--c-text-3);
+  pointer-events: none;
+  display: flex;
+  transition: color 0.15s;
+}
+
+.au-search-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 44px 0 42px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 14.5px;
+  font-family: var(--font-body);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  appearance: none;
+}
+
+.au-search-input::placeholder {
+  color: var(--c-text-3);
+}
+
+.au-search-input:hover:not(:focus) {
+  border-color: #cbd5e1;
+}
+
+.au-search-input:focus {
+  outline: none;
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 4px rgba(232, 30, 117, 0.12);
+}
+
+.au-search-input:focus+.au-search-icon,
+.au-search:focus-within .au-search-icon {
+  color: var(--c-action);
+}
+
+.au-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--c-text-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+
+.au-search-clear:hover {
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+
+/* Filter row */
+
+.au-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.au-pills {
+  display: inline-flex;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 0;
+  flex-wrap: nowrap;
+}
+
+.au-pill {
+  border: none;
+  background: transparent;
+  color: var(--c-text-2);
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.au-pill:hover:not(.is-active) {
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+
+.au-pill.is-active {
+  background: var(--c-action);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(232, 30, 117, 0.32);
+}
+
+.au-pill:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
+}
+
+.au-toolbar-selects {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.au-select {
+  min-width: 180px;
+}
+
+.au-select-client {
+  min-width: 220px;
+}
+
+@media (max-width: 720px) {
+  .au-toolbar-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .au-toolbar-selects {
+    justify-content: stretch;
+  }
+
+  .au-select,
+  .au-select-client {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .au-pills {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .au-pills::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ─── Card container ──────────────────────────────────────── */
+
+.au-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.au-table-wrap {
+  position: relative;
+  overflow-x: auto;
+}
+
+/* ─── Table ───────────────────────────────────────────────── */
+
+.au-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.au-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--c-surface);
+  text-align: left;
+  padding: 14px 18px;
+  font-family: var(--font-heading);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  border-bottom: 1px solid var(--c-border);
+  z-index: 1;
+}
+
+.au-table tbody td {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--c-border) 70%, transparent);
+  vertical-align: middle;
+  background: var(--c-surface);
+}
+
+.au-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Row container with hover transform on cells (avoid translating <tr>) */
+
+.au-row {
+  transition: background 0.15s ease;
+}
+
+.au-row:hover td {
+  background: color-mix(in srgb, var(--c-action) 4%, var(--c-surface));
+}
+
+.au-row:focus-within td {
+  background: color-mix(in srgb, var(--c-action) 4%, var(--c-surface));
+}
+
+.au-row.is-deleted td {
+  opacity: 0.62;
+}
+
+/* ─── Cells ──────────────────────────────────────────────── */
+
+.au-cell-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  letter-spacing: -0.005em;
+  font-size: 14px;
+}
+
+.au-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 24ch;
+}
+
+.au-self-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  background: color-mix(in srgb, var(--c-action) 12%, var(--c-surface));
+  color: var(--c-action);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--c-action-border);
+  flex-shrink: 0;
+}
+
+.au-cell-email {
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 30ch;
+}
+
+.au-cell-client .au-client-name {
+  color: var(--c-text);
+  font-size: 13px;
+}
+
+.au-cell-time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.au-time-fresh {
+  color: var(--c-action);
+  font-weight: 600;
+}
+
+.au-time-recent {
+  color: var(--c-text);
+}
+
+.au-time-stale {
+  color: var(--c-text-2);
+}
+
+.au-time-never {
+  color: var(--c-text-3);
+  font-style: italic;
+}
+
+.au-muted {
+  color: var(--c-text-3);
+}
+
+/* ─── Role chip (Admin / Cliente) ────────────────────────── */
+
+.au-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--radius-full);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  letter-spacing: 0.005em;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+.au-role-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.au-role-admin {
+  background: color-mix(in srgb, var(--c-action) 10%, var(--c-surface));
+  color: var(--c-action);
+  border-color: var(--c-action-border);
+}
+
+.au-role-client {
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  border-color: var(--c-border);
+}
+
+/* ─── Actions (revealed on hover) ────────────────────────── */
+
+.au-cell-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.au-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--c-surface-2) 60%, transparent);
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.au-row:hover .au-actions,
+.au-row:focus-within .au-actions {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Touch devices: always show actions (no hover) */
+@media (hover: none) {
+  .au-actions {
+    opacity: 1;
+    transform: none;
+    background: transparent;
+  }
+}
+
+.au-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--c-text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.au-icon-btn:hover:not(:disabled) {
+  background: var(--c-surface);
+  border-color: var(--c-action-border);
+  color: var(--c-action);
+}
+
+.au-icon-btn:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 1px;
+}
+
+.au-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.au-icon-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--c-danger) 40%, transparent);
+  color: var(--c-danger);
+}
+
+/* ─── Skeleton loading ───────────────────────────────────── */
+
+.au-row-skeleton td {
+  background: var(--c-surface) !important;
+}
+
+.au-skel {
+  display: inline-block;
+  height: 12px;
+  background: linear-gradient(90deg,
+      var(--c-surface-2) 0%,
+      color-mix(in srgb, var(--c-action) 8%, var(--c-surface-2)) 50%,
+      var(--c-surface-2) 100%);
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: au-skel-pulse 1.4s ease-in-out infinite;
+}
+
+.au-skel-chip {
+  width: 56px;
+  height: 18px;
+  border-radius: var(--radius-full);
+}
+
+@keyframes au-skel-pulse {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .au-skel {
+    animation: none;
+  }
+}
+
+/* ─── Empty states ───────────────────────────────────────── */
+
+.au-empty {
+  padding: 56px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.au-empty-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-action) 8%, var(--c-surface));
+  color: var(--c-action);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+  border: 1px solid var(--c-action-border);
+}
+
+.au-empty-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.au-empty-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.au-empty-text {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 13.5px;
+  color: var(--c-text-2);
+  line-height: 1.5;
+}
+
+.au-empty .btn {
+  margin-top: 14px;
+}
+
+/* ─── Pagination ─────────────────────────────────────────── */
+
+.au-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-surface-2) 40%, var(--c-surface));
+}
+
+.au-pagination-summary {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+  font-weight: 500;
+}
+
+.au-pagination-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.au-page-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.12s;
+  line-height: 1;
+}
+
+.au-page-btn:hover:not(:disabled) {
+  background: var(--c-action-light);
+  color: var(--c-action);
+  border-color: var(--c-action-border);
+  transform: translateY(-1px);
+}
+
+.au-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.au-page-counter {
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.au-page-counter strong {
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  font-weight: 700;
+}
+
+@media (max-width: 540px) {
+  .au-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .au-pagination-nav {
+    justify-content: center;
+  }
+
+  .au-pagination-summary {
+    text-align: center;
+  }
+}
+
+/* ─── Responsive table ───────────────────────────────────── */
+
+@media (max-width: 880px) {
+
+  /* Email column hidden on narrow; shown as subline under the name. */
+  .au-table thead th:nth-child(2),
+  .au-table tbody td:nth-child(2) {
+    display: none;
+  }
+
+  .au-table thead th,
+  .au-table tbody td {
+    padding: 12px 14px;
+  }
+
+  .au-cell-name {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .au-cell-name .au-self-chip {
+    margin-top: 2px;
+  }
+
+  .au-name-email-sub {
+    display: block;
+    font-family: var(--font-body);
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--c-text-2);
+    letter-spacing: 0;
+    max-width: 28ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.au-name-email-sub {
+  display: none;
+}
+
+@media (max-width: 640px) {
+
+  /* Cliente column hidden — admin sees Tipo and the cliente is in modal */
+  .au-table thead th:nth-child(4),
+  .au-table tbody td:nth-child(4) {
+    display: none;
   }
 }

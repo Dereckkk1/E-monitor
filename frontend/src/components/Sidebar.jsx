@@ -153,10 +153,6 @@ function IconLogout() {
 function AdminNav({ onClose }) {
   return (
     <>
-      <span className="sidebar-section-label">Administração</span>
-      <SidebarLink to="/admin/overview" icon={<IconAdminOverview />} onClose={onClose}>Visão geral</SidebarLink>
-      <SidebarLink to="/admin/users"    icon={<IconUsers />}         onClose={onClose}>Usuários</SidebarLink>
-
       <span className="sidebar-section-label">Visão de negócio</span>
       <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
 
@@ -173,6 +169,13 @@ function AdminNav({ onClose }) {
       <span className="sidebar-section-label">Infraestrutura</span>
       <SidebarLink to="/monitoring" icon={<IconMonitoring />} onClose={onClose}>Streams</SidebarLink>
       <SidebarLink to="/operations" icon={<IconOperations />} onClose={onClose}>Workers</SidebarLink>
+
+      <span className="sidebar-section-label">Administração</span>
+      <SidebarLink to="/admin/overview" icon={<IconAdminOverview />} onClose={onClose}>Visão geral</SidebarLink>
+      <SidebarLink to="/admin/users"    icon={<IconUsers />}         onClose={onClose}>Usuários</SidebarLink>
+
+      <span className="sidebar-section-label">Conta</span>
+      <SidebarLink to="/account" icon={<IconAccount />} onClose={onClose}>Minha conta</SidebarLink>
     </>
   )
 }

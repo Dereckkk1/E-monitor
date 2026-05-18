@@ -4191,6 +4191,42 @@ textarea.input {
   white-space: nowrap;
 }
 
+/* Worker pill — estado do worker LOCAL (independente do estado do stream).
+   Aparece ao lado do StatusDot na lista de /monitoring. */
+.worker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.worker-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+.worker-pill--ok {
+  background: color-mix(in srgb, var(--c-success) 12%, transparent);
+  color: var(--c-success);
+  border-color: color-mix(in srgb, var(--c-success) 30%, transparent);
+}
+.worker-pill--warn {
+  background: color-mix(in srgb, var(--c-warning, #d97706) 12%, transparent);
+  color: var(--c-warning, #d97706);
+  border-color: color-mix(in srgb, var(--c-warning, #d97706) 30%, transparent);
+}
+.worker-pill--bad {
+  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
+  color: var(--c-danger);
+  border-color: color-mix(in srgb, var(--c-danger) 30%, transparent);
+}
+
 @media (max-width: 900px) {
   .health-drawer {
     width: 100%;
@@ -4219,18 +4255,16 @@ textarea.input {
   background-repeat: no-repeat;
 }
 
-/* Cinematic contrast overlay. Two stacked gradients:
-   - Horizontal: darkens the left third (where the wordmark sits) so the
-     bright atmospheric edge of the planet doesn't compete with the text.
-   - Vertical: gentle top-down fade that lands harder at the bottom for the
-     stat badge. */
+/* Cinematic contrast overlay. Horizontal gradient darkens the left third
+   where the wordmark + tagline sit; vertical fade only nudges the bottom so
+   the signature mark stays legible without becoming a heavy bar. */
 .login-brand-panel::before {
   content: '';
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, rgba(2, 0, 26, 0.68) 0%, rgba(2, 0, 26, 0.40) 28%, rgba(2, 0, 26, 0.08) 55%, rgba(2, 0, 26, 0) 75%),
-    linear-gradient(180deg, rgba(2, 0, 26, 0.15) 0%, rgba(2, 0, 26, 0) 35%, rgba(2, 0, 26, 0.50) 100%);
+    linear-gradient(90deg, rgba(2, 0, 26, 0.72) 0%, rgba(2, 0, 26, 0.42) 32%, rgba(2, 0, 26, 0.08) 60%, rgba(2, 0, 26, 0) 78%),
+    linear-gradient(180deg, rgba(2, 0, 26, 0.10) 0%, rgba(2, 0, 26, 0) 30%, rgba(2, 0, 26, 0.28) 100%);
   pointer-events: none;
   z-index: 0;
 }
@@ -4242,49 +4276,38 @@ textarea.input {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 56px 56px;
+  padding: 64px 64px 48px;
 }
 
 .login-brand-content {
   display: flex;
   flex-direction: column;
-  max-width: 440px;
+  max-width: 460px;
+  margin-top: clamp(40px, 8vh, 96px);
 }
 
-.login-brand-eyebrow {
-  font-family: var(--font-body);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.88);
-  margin-bottom: 18px;
-  text-shadow: 0 1px 6px rgba(2, 0, 26, 0.6);
-}
-
-.login-brand-wordmark {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 64px;
-  letter-spacing: -0.025em;
-  line-height: 1;
-  color: #ffffff;
-  margin: 0;
-  text-shadow:
-    0 1px 2px rgba(2, 0, 26, 0.85),
-    0 4px 16px rgba(2, 0, 26, 0.65);
+.login-brand-wordmark-img {
+  display: block;
+  width: auto;
+  height: clamp(80px, 9vw, 120px);
+  align-self: flex-start;
+  /* Logo é navy + E rosa, desenhada pra fundo claro. Invertendo pra branco
+     puro mantém clareza no hero escuro; o accent rosa volta no botão Entrar. */
+  filter: brightness(0) invert(1) drop-shadow(0 2px 10px rgba(2, 0, 26, 0.6));
 }
 
 .login-brand-tagline {
-  margin: 22px 0 0;
-  font-family: var(--font-body);
-  font-size: 18px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.95);
+  margin: 26px 0 0;
+  font-family: var(--font-heading);
+  font-size: clamp(20px, 1.6vw, 24px);
+  line-height: 1.35;
+  letter-spacing: -0.012em;
+  color: rgba(255, 255, 255, 0.92);
   font-weight: 400;
+  max-width: 22ch;
   text-shadow:
-    0 1px 2px rgba(2, 0, 26, 0.75),
-    0 2px 12px rgba(2, 0, 26, 0.55);
+    0 1px 2px rgba(2, 0, 26, 0.7),
+    0 2px 14px rgba(2, 0, 26, 0.45);
 }
 
 /* Right: form panel */
@@ -4307,22 +4330,20 @@ textarea.input {
   margin-bottom: 40px;
 }
 
-.login-mobile-wordmark {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 26px;
-  letter-spacing: -0.02em;
-  color: var(--c-text);
+.login-mobile-wordmark-img {
+  display: block;
+  width: auto;
+  height: 36px;
+  align-self: flex-start;
 }
 
 .login-mobile-sub {
   font-family: var(--font-body);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--c-text-3);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 /* Form welcome eyebrow */
@@ -4509,76 +4530,31 @@ textarea.input {
   color: var(--c-text-3);
 }
 
-/* Feature pills */
-.login-feature-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 32px;
-}
-
-.login-feature-pill {
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.90);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: var(--radius-full);
-  padding: 6px 14px;
-  backdrop-filter: blur(4px);
-  letter-spacing: 0.01em;
-}
-
-/* Brand footer: stat badge only (signal rings removed — the hero image
-   already carries the pulse motif on the planet itself). */
-.login-brand-footer {
+/* Brand signature — discreet pertencimento ao E-radios. No badge container,
+   no border, no pulse. The mark sits left-aligned, type follows on the line. */
+.login-brand-signature {
   position: relative;
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  opacity: 0.72;
 }
 
-.login-stat-badge {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: var(--radius-full);
-  padding: 9px 18px;
-  backdrop-filter: blur(8px);
+.login-brand-signature-mark {
+  height: 26px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 2px 10px rgba(2, 0, 26, 0.5));
+}
+
+.login-brand-signature-text {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.85);
-  text-transform: uppercase;
-}
-
-.login-stat-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--c-action);
-  box-shadow: 0 0 12px rgba(232, 30, 117, 0.7);
-  flex-shrink: 0;
-  animation: stat-dot-pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes stat-dot-pulse {
-
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  50% {
-    opacity: 0.45;
-    transform: scale(0.75);
-  }
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.78);
+  text-shadow: 0 1px 4px rgba(2, 0, 26, 0.6);
 }
 
 /* Left icon inside input wrapper */

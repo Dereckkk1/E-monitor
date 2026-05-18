@@ -8,11 +8,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/supervisor"
 )
 
 type StreamHealthHandler struct {
 	HealthEvents *catalog.HealthEvents
 	Stations     *catalog.Stations
+	// Sup expõe o estado dos workers locais (ativos, último PCM, stall risk).
+	// Mantido como interface pra facilitar mock em testes. Opcional: nil =
+	// `worker_status` retorna nulo em cada row (zero-feature degradation).
+	Sup interface {
+		WorkerStatuses() []supervisor.WorkerStatus
+	}
 }
 
 // List returns health summaries for all stations with monitoring_status = 'active'.
@@ -33,6 +40,30 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mapeia workers ativos no supervisor por station_id pra mergear o
+	// `worker_status` em cada row. Worker missing = station ativa sem worker
+	// registrado (drift do reconciler). Worker stalled = registrado mas sem
+	// receber PCM há >30s. Worker running = vivo e recebendo bytes.
+	type workerSnapshot struct {
+		Registered bool      `json:"registered"`
+		Stalled    bool      `json:"stalled"`
+		LastPCMAt  time.Time `json:"last_pcm_at,omitempty"`
+	}
+	workerByStation := map[uuid.UUID]workerSnapshot{}
+	if h.Sup != nil {
+		for _, ws := range h.Sup.WorkerStatuses() {
+			id, perr := uuid.Parse(ws.StationID)
+			if perr != nil {
+				continue
+			}
+			workerByStation[id] = workerSnapshot{
+				Registered: true,
+				Stalled:    ws.StallRisk,
+				LastPCMAt:  ws.LastPCMAt,
+			}
+		}
+	}
+
 	type row struct {
 		catalog.Station
 		UptimePct       float64                `json:"uptime_pct"`
@@ -40,6 +71,14 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 		LastIncidentAt  *time.Time             `json:"last_incident_at,omitempty"`
 		DailySummary    []catalog.DailySummary `json:"daily_summary"`
 		IsCurrentlyDown bool                   `json:"is_currently_down"`
+		// WorkerStatus reflete o estado do worker LOCAL (processo que monitora
+		// o stream daquela station). Independente de IsCurrentlyDown — que é
+		// o estado do stream REMOTO. Combinados na UI: stream OK + worker OK =
+		// monitorando; stream caiu + worker OK = aguardando reconexão; worker
+		// stalled = bug ou stream sumiu silenciosamente; worker missing = drift
+		// do reconciler.
+		WorkerStatus string     `json:"worker_status"` // "running" | "stalled" | "missing"
+		WorkerLastPCMAt *time.Time `json:"worker_last_pcm_at,omitempty"`
 	}
 
 	result := make([]row, 0, len(stations))
@@ -51,6 +90,19 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 			entry.LastIncidentAt = s.LastIncidentAt
 			entry.DailySummary = s.DailySummary
 			entry.IsCurrentlyDown = s.IsCurrentlyDown
+		}
+		ws, regd := workerByStation[st.ID]
+		switch {
+		case !regd:
+			entry.WorkerStatus = "missing"
+		case ws.Stalled:
+			entry.WorkerStatus = "stalled"
+		default:
+			entry.WorkerStatus = "running"
+		}
+		if regd && !ws.LastPCMAt.IsZero() {
+			t := ws.LastPCMAt
+			entry.WorkerLastPCMAt = &t
 		}
 		result = append(result, entry)
 	}
