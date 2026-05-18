@@ -170,11 +170,15 @@ $COMPOSE up -d
 step "aguardando migrations"
 migrate_ok=0
 for i in $(seq 1 30); do
-  status=$($COMPOSE ps migrate --format json 2>/dev/null \
+  # -a / --all é obrigatório: por padrão `docker compose ps` só lista
+  # containers em execução. O migrate é oneshot — já saiu por causa do
+  # `depends_on: condition: service_completed_successfully` no api — então
+  # sem --all a query volta vazia e o loop nunca enxerga "exited".
+  status=$($COMPOSE ps -a migrate --format json 2>/dev/null \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print((d[0] if isinstance(d, list) else d).get('State',''))" 2>/dev/null \
     || echo "")
   if [ "$status" = "exited" ]; then
-    code=$($COMPOSE ps migrate --format json 2>/dev/null \
+    code=$($COMPOSE ps -a migrate --format json 2>/dev/null \
       | python3 -c "import sys,json; d=json.load(sys.stdin); print((d[0] if isinstance(d, list) else d).get('ExitCode','1'))" 2>/dev/null \
       || echo "1")
     if [ "$code" = "0" ]; then

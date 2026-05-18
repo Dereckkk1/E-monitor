@@ -27,6 +27,9 @@
   --c-danger: #dc2626;
   --c-info: #0284c7;
 
+  /* Tela 404 / sinal */
+  --c-signal-bg: #0a0e14;
+
   /* Sombras */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
@@ -4979,4 +4982,146 @@ textarea.input {
   background: var(--c-action-hover);
   border-color: var(--c-action-hover);
   transform: translateY(-1px);
+}
+
+/* ── Color picker ────────────────────────────────────────────── */
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.color-picker-palette {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 8px;
+}
+
+.color-picker-chip {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  min-width: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.08),
+    0 1px 2px rgba(15, 23, 42, 0.06);
+  transition:
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.color-picker-chip:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.12),
+    0 6px 12px -2px rgba(15, 23, 42, 0.14);
+}
+
+.color-picker-chip:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.12),
+    0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.color-picker-chip:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.12),
+    0 0 0 2px var(--c-surface),
+    0 0 0 4px var(--c-action);
+}
+
+.color-picker-chip.is-selected {
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.12),
+    0 0 0 2px var(--c-surface),
+    0 0 0 4px var(--c-action),
+    0 6px 12px -2px rgba(232, 30, 117, 0.25);
+}
+
+.color-picker-chip-check {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: block;
+  color: #fff;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+  pointer-events: none;
+}
+
+.color-picker-custom {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.color-picker-custom-swatch {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background-color: currentColor;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 150ms, box-shadow 150ms, transform 150ms;
+}
+
+.color-picker-custom-swatch::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: conic-gradient(
+    from 0deg,
+    #ef4444, #f59e0b, #84cc16, #14b8a6,
+    #3b82f6, #a855f7, #ec4899, #ef4444
+  );
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 2px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+}
+
+.color-picker-custom-swatch:hover {
+  border-color: var(--c-action-border);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.color-picker-custom-swatch:focus-within {
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.1);
+}
+
+.color-picker-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.color-picker-hex {
+  flex: 1;
+  font-family: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }

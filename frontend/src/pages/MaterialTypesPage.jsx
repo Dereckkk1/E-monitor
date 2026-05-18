@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   useMaterialTypes, useCreateMaterialType,
   useUpdateMaterialType, useDeleteMaterialType,
@@ -79,8 +79,10 @@ export default function MaterialTypesPage() {
             </div>
             <div className="field">
               <label>Cor</label>
-              <input type="color" value={form.color}
-                onChange={e => setForm({ ...form, color: e.target.value })} />
+              <ColorPicker
+                value={form.color}
+                onChange={color => setForm({ ...form, color })}
+              />
             </div>
             <div className="field">
               <label>Descrição (opcional)</label>
@@ -107,6 +109,99 @@ const SKEL_ROWS = [
   { nameW: 112, descW: 96  },
   { nameW: 86,  descW: 0   },
 ]
+
+const PALETTE = [
+  '#64748b', '#94a3b8', '#0ea5e9', '#3b82f6',
+  '#10b981', '#22c55e', '#84cc16', '#14b8a6',
+  '#eab308', '#f59e0b', '#f97316', '#ef4444',
+  '#f43f5e', '#ec4899', '#d946ef', '#8b5cf6',
+]
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+function ColorPicker({ value, onChange }) {
+  const normalized = (value || '').toLowerCase()
+  const hexInputRef = useRef(null)
+  const [draft, setDraft] = useState((value || '').toUpperCase())
+
+  // Sync external value -> draft, except while the user is actively typing.
+  useEffect(() => {
+    if (document.activeElement === hexInputRef.current) return
+    const up = (value || '').toUpperCase()
+    if (HEX_RE.test(value) && up !== draft) setDraft(up)
+  }, [value, draft])
+
+  function handleHexChange(e) {
+    let v = e.target.value.trim()
+    if (v && !v.startsWith('#')) v = '#' + v
+    v = v.slice(0, 7).toUpperCase()
+    setDraft(v)
+    if (HEX_RE.test(v)) onChange(v.toLowerCase())
+  }
+
+  function handleNativeChange(e) {
+    const v = e.target.value
+    setDraft(v.toUpperCase())
+    onChange(v)
+  }
+
+  return (
+    <div className="color-picker">
+      <div className="color-picker-palette" role="radiogroup" aria-label="Cores predefinidas">
+        {PALETTE.map(c => {
+          const selected = c.toLowerCase() === normalized
+          return (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={`Cor ${c}`}
+              title={c.toUpperCase()}
+              className={`color-picker-chip${selected ? ' is-selected' : ''}`}
+              style={{ color: c }}
+              onClick={() => onChange(c)}
+            >
+              {selected && (
+                <svg
+                  className="color-picker-chip-check"
+                  width="14" height="14" viewBox="0 0 16 16" fill="none"
+                  stroke="currentColor" strokeWidth="2.5"
+                  strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+                >
+                  <path d="M3 8.5l3 3 7-7" />
+                </svg>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="color-picker-custom">
+        <label className="color-picker-custom-swatch" style={{ color: HEX_RE.test(value) ? value : '#94a3b8' }} title="Escolher cor personalizada">
+          <input
+            type="color"
+            className="color-picker-native"
+            value={HEX_RE.test(value) ? value : '#94a3b8'}
+            onChange={handleNativeChange}
+            aria-label="Selecionar cor personalizada"
+          />
+        </label>
+        <input
+          ref={hexInputRef}
+          type="text"
+          className="input color-picker-hex"
+          value={draft}
+          onChange={handleHexChange}
+          maxLength={7}
+          spellCheck={false}
+          placeholder="#94A3B8"
+          aria-label="Cor em hexadecimal"
+        />
+      </div>
+    </div>
+  )
+}
 
 function SkeletonList() {
   return (

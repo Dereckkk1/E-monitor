@@ -25,6 +25,7 @@ import AirtimeReportPage from './pages/AirtimeReportPage'
 import AdminOverviewPage from './pages/AdminOverviewPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
+import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
 function HomeRedirect() {
@@ -122,8 +123,8 @@ function AppShell() {
             } />
             <Route path="/dashboard"   element={<DashboardPage />} />
             <Route path="/account"     element={<AccountPage />} />
-            {/* Catch-all */}
-            <Route path="*" element={<HomeRedirect />} />
+            {/* Catch-all dentro do AppShell: redireciona pra 404 fullscreen */}
+            <Route path="*" element={<Navigate to="/404" replace />} />
           </Routes>
         </main>
       </div>
@@ -139,6 +140,7 @@ export default function App() {
           <Routes>
             {/* Public */}
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/404"   element={<NotFoundPage />} />
             {/* Everything else is gated by RequireAuth */}
             <Route
               path="/*"

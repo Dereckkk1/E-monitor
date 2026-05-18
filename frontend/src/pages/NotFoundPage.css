@@ -1,0 +1,170 @@
+/* ── 404 / Sinal Perdido ─────────────────────────────────────── */
+
+.nf-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100svh;
+  background:
+    radial-gradient(ellipse at 65% 40%, rgba(232, 30, 117, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at center, #0a0e14 0%, #04060a 80%);
+  overflow: hidden;
+  color: #fff;
+  font-family: var(--font-body);
+  isolation: isolate;
+}
+
+.nf-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.nf-canvas-wrap > div,
+.nf-canvas-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.nf-canvas-fallback {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+
+.nf-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: 64px 80px;
+  pointer-events: none;
+}
+
+.nf-overlay-inner {
+  max-width: 580px;
+  pointer-events: auto;
+}
+
+.nf-tag {
+  display: inline-block;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--c-action);
+  padding: 6px 12px;
+  border: 1px solid rgba(232, 30, 117, 0.4);
+  border-radius: 4px;
+  background: rgba(232, 30, 117, 0.07);
+  text-shadow: 0 0 14px rgba(232, 30, 117, 0.45);
+  margin-bottom: 22px;
+}
+
+.nf-title {
+  font-family: var(--font-heading);
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: rgba(255, 255, 255, 0.95);
+  margin: 0 0 18px 0;
+  text-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+}
+
+.nf-sub {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.62);
+  max-width: 440px;
+  margin: 0 0 28px 0;
+}
+
+.nf-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  pointer-events: auto;
+}
+
+/* Botões herdam .btn .btn-primary / .btn-secondary do design system.
+   Aqui só ajustamos pra ficarem maiores e legíveis sobre o fundo escuro. */
+
+.nf-btn {
+  padding: 11px 22px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.nf-btn-ghost.btn-secondary {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(6px);
+}
+
+.nf-btn-ghost.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+}
+
+.nf-debug {
+  position: absolute;
+  right: 24px;
+  bottom: 18px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.38);
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .nf-overlay {
+    padding: 32px 24px 28px;
+    justify-content: flex-end;
+  }
+  .nf-tag {
+    font-size: 10px;
+    letter-spacing: 0.26em;
+    margin-bottom: 18px;
+  }
+  .nf-title {
+    font-size: clamp(24px, 7vw, 32px);
+    margin-bottom: 14px;
+  }
+  .nf-sub {
+    font-size: 14px;
+    margin-bottom: 22px;
+  }
+  .nf-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .nf-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .nf-debug {
+    right: 16px;
+    bottom: 10px;
+    font-size: 9.5px;
+  }
+}
+
+/* ── Reduced motion: garante leitura tranquila do conteúdo ───── */
+@media (prefers-reduced-motion: reduce) {
+  .nf-tag {
+    text-shadow: none;
+  }
+}
