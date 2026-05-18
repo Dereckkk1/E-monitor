@@ -1,11 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-17
+ultima-verificacao: 2026-05-18
 codigo-relacionado:
   - workers/internal/audit/auditor.go
   - workers/internal/evidence/service.go
   - workers/internal/metrics/metrics.go
   - migrations/0028_audit_rejected_status.up.sql
+  - migrations/0029_daily_summary_exclude_audit_rejected.up.sql
 ---
 
 # Evidence Audit (§9.9 — Audit de Evidência Pré-Persist)
@@ -104,7 +105,9 @@ Filtros adicionados (todos no SQL):
 AND d.evidence_status <> 'audit_rejected'
 ```
 
-Aplicado em `ListPaged`, `List` legacy, `Export`, `DailySummary`. Não aplicado em `GetByID` (acesso direto preserva visibilidade pra operadores).
+Aplicado em `ListPaged`, `List` legacy, `Export` (handlers Go) e no CTE `actual` da view `daily_play_summary` (migration 0029). Não aplicado em `GetByID` (acesso direto preserva visibilidade pra operadores).
+
+> Entre 17/05 e 18/05 o filtro na view ficou faltando — handlers Go já excluíam audit_rejected mas o agregado da grid `/detections` (e a `CoverageSummary` no topo) continuavam contando. Sintoma visível: célula mostrava "2 veiculações" e o modal listava 1. Corrigido pela migration 0029.
 
 ## Estrutura do package `internal/audit`
 
