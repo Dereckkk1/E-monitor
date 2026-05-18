@@ -22,6 +22,9 @@ function daysAgoISO(n) {
   const d = new Date(); d.setDate(d.getDate() - n)
   return isoFromDate(d)
 }
+function monthFromDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
+}
 function monthLabel(ymStr) {
   if (!ymStr) return ''
   const [y, m] = ymStr.split('-').map(Number)
@@ -79,7 +82,7 @@ export default function AirtimeReportPage() {
   const { data: clients = [] } = useClients({ enabled: isAdmin })
 
   // URL is the source of truth — users can share the link with state preserved.
-  const competence = searchParams.get('competence') ?? ''
+  const competence = searchParams.get('competence') ?? monthFromDate(new Date())
   const campaignId = searchParams.get('campaign_id') ?? ''
   const from = searchParams.get('from') ?? ''
   const to   = searchParams.get('to')   ?? ''

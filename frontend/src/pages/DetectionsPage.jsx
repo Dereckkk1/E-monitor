@@ -541,7 +541,7 @@ export default function DetectionsPage() {
     return monthFromDate(cs > now ? cs : now)
   }, [deepLinkCampaignId, campaigns])
 
-  const selectedMonth = selectedMonthRaw || monthFromDeepLink
+  const selectedMonth = selectedMonthRaw || monthFromDeepLink || monthFromDate(new Date())
 
   // Default date range = intersection of month and campaign. The effective
   // range is whatever the user picked, falling back to the default.
