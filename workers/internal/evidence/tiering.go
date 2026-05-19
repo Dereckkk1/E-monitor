@@ -27,14 +27,14 @@ import (
 // deleting from the old, the next run will retry the delete (or, if the
 // detection row is already updated, just observe the duplicate and move on).
 type TieringJob struct {
-	DB        *pgxpool.Pool
-	Hot       *storage.Client
-	Cold      *storage.Client
-	Archive   *storage.Client
-	Log       *zap.Logger
-	BatchSize int           // default 100
-	Now       func() time.Time
-	HotMaxAge time.Duration // default 30d
+	DB         *pgxpool.Pool
+	Hot        *storage.Client
+	Cold       *storage.Client
+	Archive    *storage.Client
+	Log        *zap.Logger
+	BatchSize  int // default 100
+	Now        func() time.Time
+	HotMaxAge  time.Duration // default 30d
 	ColdMaxAge time.Duration // default 365d
 	// ArchiveStorageClass is forwarded to the archive bucket on PUT (e.g.
 	// "STANDARD_IA"). Empty string lets the bucket default decide.

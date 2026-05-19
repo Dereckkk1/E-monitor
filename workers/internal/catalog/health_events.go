@@ -275,4 +275,3 @@ func buildDailySummary(events []HealthEvent, days int) []DailySummary {
 	}
 	return daily
 }
-

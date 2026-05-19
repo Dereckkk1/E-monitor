@@ -68,8 +68,8 @@ func TestClassifyAndFilter_StingPair(t *testing.T) {
 // 30s entirely contained in 60s → own coverage 100%, other coverage 50%.
 // Max = 100% → subset → don't flag.
 func TestClassifyAndFilter_SubsetPair_Symmetric(t *testing.T) {
-	own := uuid.New()    // VERÃO 30
-	other := uuid.New()  // VERÃO 60
+	own := uuid.New()   // VERÃO 30
+	other := uuid.New() // VERÃO 60
 
 	// Own (30s) coverage of self = full 30s.
 	// Other (60s) coverage by match = ~30s of its 60s = 50%.
@@ -143,7 +143,7 @@ func TestClassifyAndFilter_AsymmetricSubset_15sInside30s(t *testing.T) {
 // short-circuit — no flags from either side. PULSO/ROGGA Pulso Sonoro on
 // 2026-05-12 was the production case that exposed why this matters.
 func TestClassifyAndFilter_ShortCommercialOwnScanSkipped(t *testing.T) {
-	own := uuid.New()  // PULSO (7s) scanning
+	own := uuid.New() // PULSO (7s) scanning
 	other := uuid.New()
 
 	// Even if there's a "sting"-looking pair (low coverages both sides), the

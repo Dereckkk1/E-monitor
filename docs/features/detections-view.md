@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-19
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
   - frontend/src/components/CoverageSummary.jsx
+  - frontend/src/components/AirtimePaginator.jsx
   - workers/internal/catalog/daily_summary.go
   - migrations/0018_detections_categorization.up.sql
 ---
@@ -49,6 +50,15 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 A grid usa o `DistributionGrid` em modo `inlineStationInfo`: cada emissora vive numa coluna sticky-left (240px) que faz row-span sobre os materiais dela, e a 2ª coluna sticky-left (116px) carrega o label de cada material (TypeIconPill + título). Os dias começam na 3ª coluna. As pills de resumo continuam sticky-right.
 
 O modo full-width antigo (header da emissora numa linha própria acima dos materiais) permanece como default do `DistributionGrid` e é o que o wizard de campanha usa em edição.
+
+## Paginação
+
+A grid é paginada **por emissora** (a unidade visual do `DistributionGrid` em modo `inlineStationInfo`, que faz row-span sobre os materiais — fatiar por linha quebraria esse span). Controles ficam no rodapé da grid via `AirtimePaginator`:
+
+- **Default**: 5 emissoras por página
+- **Opções**: 5 / 10 / 15
+- **Reset automático pra página 1** quando muda campanha, busca ou tamanho de página
+- Quando existe ≤1 página, o componente colapsa pra só "N emissoras" + seletor de tamanho
 
 ## Empty states
 

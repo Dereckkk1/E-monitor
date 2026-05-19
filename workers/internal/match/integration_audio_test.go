@@ -54,14 +54,14 @@ func repoRoot(t *testing.T) string {
 // hash counts (for diagnostic logging), and the per-commercial total-frames
 // values that the state machine needs.
 type audioRefsScenario struct {
-	store              *index.Store
-	amb30Hashes        []fingerprint.Hash
-	jingleHashes       []fingerprint.Hash
-	sharedValueCount   int
-	amb30TotalFrames   int
-	jingleTotalFrames  int
-	amb30DurationSec   float64
-	jingleDurationSec  float64
+	store             *index.Store
+	amb30Hashes       []fingerprint.Hash
+	jingleHashes      []fingerprint.Hash
+	sharedValueCount  int
+	amb30TotalFrames  int
+	jingleTotalFrames int
+	amb30DurationSec  float64
+	jingleDurationSec float64
 }
 
 func setupAudioRefsScenario(t *testing.T, ctx context.Context) audioRefsScenario {
@@ -116,7 +116,7 @@ func setupAudioRefsScenario(t *testing.T, ctx context.Context) audioRefsScenario
 	const shareThreshold = 5
 
 	type sharedRange struct {
-		commercialID         int32
+		commercialID          int32
 		fromFrame, untilFrame int32
 	}
 	var sharedRanges []sharedRange

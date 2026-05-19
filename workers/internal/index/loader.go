@@ -90,11 +90,11 @@ func (l *Loader) LoadAll(ctx context.Context) error {
 	newIndex := make(Index)
 	for rows.Next() {
 		var hashValue uint32
-		var timeFrame  int32
-		var variantID  int16
-		var rateID     int16
-		var isShared   bool
-		var shortID    int32
+		var timeFrame int32
+		var variantID int16
+		var rateID int16
+		var isShared bool
+		var shortID int32
 		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared, &shortID); err != nil {
 			return fmt.Errorf("index loader: scan row: %w", err)
 		}
@@ -211,10 +211,10 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		var newEntries []hashEntry
 		for rows.Next() {
 			var hashValue uint32
-			var timeFrame  int32
-			var variantID  int16
-			var rateID     int16
-			var isShared   bool
+			var timeFrame int32
+			var variantID int16
+			var rateID int16
+			var isShared bool
 			if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared); err != nil {
 				l.log.Error("index.reload: scan row failed",
 					zap.String("entity_id", entityID),

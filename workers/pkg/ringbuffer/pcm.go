@@ -57,7 +57,7 @@ func (r *PCMRing) ReadLast(n int) []float32 {
 	out := make([]float32, n)
 	// The oldest of the last n samples sits at (head - size + size - n) = head - n
 	// expressed circularly.
-	start := ((r.head - n) % r.capacity + r.capacity) % r.capacity
+	start := ((r.head-n)%r.capacity + r.capacity) % r.capacity
 	for i := 0; i < n; i++ {
 		out[i] = r.samples[(start+i)%r.capacity]
 	}

@@ -1,24 +1,19 @@
 telas:
 
 1 - tela de dash campanha e multi campanha
-2 - tela de erros (relatorio-campanha.pages.dev)
 4 - tela de mapa ao vivo
 
 features:
 
 2 - melhora de segurança (10 mandamentos da segurança)
 
--- tela lista de usuarios (cadastro, update, acessos, bababa e bababa)
--- admin
--- cliente
--- aparecer o periodo da campanha junto com o nome
--- atualizar os links dos workers dinamicamente
--- parar workers depois do fim da campanha
--- tela de saúde do sistema
--- visual inline das veiculações
--- nova tela de login
--- skeleton loader em /material-types
--- tela de monitoramento de usuarios (ip, rotas, horario de acesso)
--- horario ao distribuir por dia individualmente
--- >> OTIMIZAÇÃO DE USO/SERVIDOR<<
--- csv + pdf em todos os relatorios
+
+em andamento:
+
+tela de erros (relatorio-campanha.pages.dev)
+
+concluido
+-- melhor grafico de volume de requests
+-- melhor grid em /operations
+-- paginação na listagem de emissoras em /detections
+-- nome | dial | cidade no nova regra

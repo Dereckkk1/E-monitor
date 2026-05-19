@@ -20,9 +20,9 @@ func TestMaskSecret(t *testing.T) {
 		want string
 	}{
 		{"", ""},
-		{"abc", "..."},                   // <= 4 chars
-		{"abcd", "..."},                  // exactly 4 chars
-		{"abcde", "abcd..."},             // > 4 chars
+		{"abc", "..."},       // <= 4 chars
+		{"abcd", "..."},      // exactly 4 chars
+		{"abcde", "abcd..."}, // > 4 chars
 		{"this-is-a-very-strong-secret", "this..."},
 	}
 	for _, c := range cases {

@@ -20,9 +20,9 @@ func TestTotalFrames(t *testing.T) {
 		want int
 	}{
 		{0, 0},
-		{1, 7},     // floor(1 * 16000 / 2048) = 7
-		{30, 234},  // floor(30 * 16000 / 2048) = 234
-		{60, 468},  // floor(60 * 16000 / 2048) = 468
+		{1, 7},      // floor(1 * 16000 / 2048) = 7
+		{30, 234},   // floor(30 * 16000 / 2048) = 234
+		{60, 468},   // floor(60 * 16000 / 2048) = 468
 		{15.5, 121}, // floor(15.5 * 16000 / 2048) = 121
 	}
 	for _, c := range cases {
@@ -55,8 +55,9 @@ func TestComputePreventiveRestartDelay(t *testing.T) {
 // and seed entries directly to avoid depending on DB / NATS.
 func TestWorkerStatuses_Snapshot(t *testing.T) {
 	s := &Supervisor{
-		workers:          make(map[uuid.UUID]*workerEntry),
-		lastStallRestart: make(map[uuid.UUID]time.Time),
+		workers:            make(map[uuid.UUID]*workerEntry),
+		lastStallRestart:   make(map[uuid.UUID]time.Time),
+		stallRestartCounts: make(map[uuid.UUID]uint32),
 	}
 
 	if got := s.WorkerStatuses(); len(got) != 0 {

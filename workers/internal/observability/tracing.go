@@ -152,7 +152,7 @@ func buildResource(ctx context.Context, serviceName string) (*resource.Resource,
 		version = ServiceVersion
 	}
 	return resource.New(ctx,
-		resource.WithFromEnv(),   // honours OTEL_RESOURCE_ATTRIBUTES
+		resource.WithFromEnv(), // honours OTEL_RESOURCE_ATTRIBUTES
 		resource.WithTelemetrySDK(),
 		resource.WithProcess(),
 		resource.WithAttributes(

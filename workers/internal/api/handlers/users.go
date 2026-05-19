@@ -19,8 +19,10 @@ import (
 // UsersHandler implements admin CRUD for /v1/internal/admin/users/*.
 //
 // Vocabulário externo ↔ DB:
-//   API "admin"  → DB "admin"
-//   API "client" → DB "viewer"
+//
+//	API "admin"  → DB "admin"
+//	API "client" → DB "viewer"
+//
 // 'operator' permanece no DB por compat mas não é exposto na API de
 // criação (cai em invalid_role).
 type UsersHandler struct {
@@ -142,7 +144,7 @@ type createUserPayload struct {
 	Password string     `json:"password"`
 	Name     string     `json:"name"`
 	Phone    *string    `json:"phone,omitempty"`
-	Role     string     `json:"role"`     // "admin" | "client"
+	Role     string     `json:"role"` // "admin" | "client"
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
 }
 

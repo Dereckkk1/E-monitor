@@ -1,86 +1,209 @@
-.station-failure-card {
-  background: var(--color-white);
-  border: 1px solid var(--color-gray-200);
+/* ============================================================================
+ * StationFailureCard — single emissora row on /admin/station-failures
+ *
+ * Class prefix: sfc-  (station failure card).
+ *
+ * Visual contract:
+ *   - Card opens at rest; full-border + sm shadow. On hover the card lifts
+ *     2px and the border picks up the action tint (DESIGN.md §4.1 — the
+ *     gold-standard card pattern).
+ *   - Leading rank number breaks the "identical card grid" failure mode
+ *     without resorting to side-stripe borders (which are absolute-banned).
+ *   - Severity rendered as a 5-block bar (blocks light up by tier) rather
+ *     than a colored pill — DESIGN.md Metarregra-2.
+ *   - Mini 24h ribbon under the identity row shows WHEN the down events
+ *     occurred. Pure visual evidence (PRODUCT.md #2).
+ *   - Campaign chips list below; the chip itself is its own component
+ *     (CampaignDeficitChip) with its own hover affordance.
+ * ============================================================================ */
+
+.sfc {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-xl);
-  padding: 20px 24px;
+  padding: 18px 22px;
   box-shadow: var(--shadow-sm);
-  transition: all 0.18s ease;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 180ms ease,
+              box-shadow 180ms ease;
 }
-.station-failure-card:hover {
+.sfc:hover {
   transform: translateY(-2px);
-  border-color: var(--color-tertiary-300);
+  border-color: var(--c-action-border);
   box-shadow: var(--shadow-md);
 }
-.sfc-header {
+
+/* ── Head row: rank, logo, identity, severity ──────────────────── */
+.sfc-head {
   display: flex;
   align-items: center;
   gap: 14px;
 }
+
+.sfc-rank {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  width: 24px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
 .sfc-logo {
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--color-gray-100);
+  background: var(--c-surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.sfc-identity { flex: 1 1 auto; min-width: 0; }
+.sfc-logo .station-avatar-img,
+.sfc-logo .station-avatar-fallback {
+  border-radius: var(--radius-md);
+}
+
+.sfc-identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 .sfc-name {
   margin: 0;
-  font-family: var(--font-family-primary);
-  font-size: 16px;
+  font-family: var(--font-heading);
+  font-size: 15px;
   font-weight: 700;
-  color: var(--color-gray-900);
+  color: var(--c-text);
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sfc-meta {
-  margin: 2px 0 0;
+  margin: 0;
+  font-family: var(--font-body);
   font-size: 12px;
-  color: var(--color-gray-500);
+  font-weight: 500;
+  color: var(--c-text-3);
 }
-.sfc-badge {
-  padding: 6px 12px;
-  border-radius: var(--radius-full);
+
+/* ── Severity 5-block bar ──────────────────────────────────────── */
+.sfc-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.sfc-sev-blocks {
+  display: inline-flex;
+  gap: 2px;
+}
+.sfc-sev-block {
+  width: 6px;
+  height: 14px;
+  border-radius: 1.5px;
+  background: var(--c-surface-2);
+  transition: background 0.2s ease;
+}
+.sfc-sev-mild .sfc-sev-block.on { background: var(--c-text-3); }
+.sfc-sev-warn .sfc-sev-block.on { background: var(--c-warning); }
+.sfc-sev-crit .sfc-sev-block.on { background: var(--c-danger); }
+
+.sfc-sev-value {
+  font-family: var(--font-body);
   font-size: 12px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-2);
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
-.sfc-badge-neutral { background: var(--color-gray-100); color: var(--color-gray-700); }
-.sfc-badge-warn    { background: rgba(245, 158, 11, 0.12); color: #b45309; }
-.sfc-badge-danger  { background: rgba(220, 38, 38, 0.10);  color: #b91c1c; }
+.sfc-sev-crit .sfc-sev-value { color: var(--c-danger); }
 
-.sfc-summary-line {
-  margin: 14px 0 0;
-  font-size: 13px;
-  color: var(--color-gray-600);
+/* ── 24h Ribbon (per-card mini-timeline) ───────────────────────── */
+.sfc-ribbon {
+  margin-top: 14px;
+  padding: 0 28px 0 36px; /* visually align with logo column */
 }
-.sfc-campaigns {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-gray-100);
+.sfc-ribbon-svg {
+  display: block;
+  width: 100%;
+  height: 8px;
 }
-.sfc-campaigns-title {
-  margin: 0 0 10px;
-  font-family: var(--font-family-secondary);
+.sfc-ribbon-axis {
+  stroke: var(--c-border);
+  stroke-width: 1;
+}
+.sfc-ribbon-grid {
+  stroke: var(--c-border);
+  stroke-width: 1;
+  stroke-dasharray: 1 2;
+}
+.sfc-ribbon-mark {
+  fill: var(--c-action);
+  opacity: 0.78;
+}
+
+/* ── Summary line under ribbon ─────────────────────────────────── */
+.sfc-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 36px;
+  font-family: var(--font-body);
   font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-gray-500);
+  color: var(--c-text-2);
 }
-.sfc-campaigns-list {
+.sfc-line-sep {
+  color: var(--c-text-3);
+  opacity: 0.7;
+}
+.sfc-silent {
+  color: var(--c-warning);
+  font-weight: 600;
+}
+
+/* ── Campaigns list ────────────────────────────────────────────── */
+.sfc-camps {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 16px 0 0;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
-.sfc-no-campaigns {
-  margin-top: 12px;
+
+.sfc-empty-camps {
+  margin: 14px 0 0;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-md);
   font-size: 12px;
-  color: var(--color-gray-500);
-  font-style: italic;
+  color: var(--c-text-3);
+}
+.sfc-empty-camps svg {
+  color: var(--c-success);
+  flex-shrink: 0;
+}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .sfc { padding: 16px 18px; }
+  .sfc-head { flex-wrap: wrap; }
+  .sfc-sev { width: 100%; justify-content: space-between; margin-top: 4px; }
+  .sfc-ribbon { padding-left: 0; padding-right: 0; }
+  .sfc-line { padding-left: 0; }
 }

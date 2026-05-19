@@ -10,14 +10,14 @@ import (
 // Result captures the outcome of running the fingerprint pipeline on a single
 // (master, variant) pair.
 type Result struct {
-	Variant       VariantID
-	Hashes        []Hash
-	DurationSec   float64
-	Frames        int
-	Peaks         int
-	HashesPerSec  float64
-	Elapsed       time.Duration
-	UniqueHashes  int     // number of distinct Hash.Value entries
+	Variant        VariantID
+	Hashes         []Hash
+	DurationSec    float64
+	Frames         int
+	Peaks          int
+	HashesPerSec   float64
+	Elapsed        time.Duration
+	UniqueHashes   int     // number of distinct Hash.Value entries
 	HashEntropyEst float64 // rough entropy estimate (Shannon, bits) over the hash distribution
 }
 

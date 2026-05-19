@@ -77,7 +77,7 @@ func (h *StreamHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 		// monitorando; stream caiu + worker OK = aguardando reconexão; worker
 		// stalled = bug ou stream sumiu silenciosamente; worker missing = drift
 		// do reconciler.
-		WorkerStatus string     `json:"worker_status"` // "running" | "stalled" | "missing"
+		WorkerStatus    string     `json:"worker_status"` // "running" | "stalled" | "missing"
 		WorkerLastPCMAt *time.Time `json:"worker_last_pcm_at,omitempty"`
 	}
 

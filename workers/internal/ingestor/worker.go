@@ -25,8 +25,8 @@ import (
 
 // WorkerConfig holds static configuration for one stream worker.
 type WorkerConfig struct {
-	StationID  uuid.UUID
-	StreamURL  string
+	StationID uuid.UUID
+	StreamURL string
 	// CommercialShortIDs lists active commercial short IDs for this station
 	// (populated from campaign.target_stations lookup by supervisor).
 	CommercialShortIDs []int32
@@ -48,7 +48,7 @@ type WorkerConfig struct {
 	// the commercial's duration before a detection is emitted. This is the main
 	// false-positive defense — random audio cannot sustain delta-aligned hits.
 	MinTemporalCoverage float64
-	ConfirmTimeout time.Duration // max detecting window (e.g. 30s)
+	ConfirmTimeout      time.Duration // max detecting window (e.g. 30s)
 	// SegmentsOutputPattern is the absolute strftime path passed to ffmpeg's
 	// segment muxer; ffmpeg writes ADTS-AAC evidence files there at
 	// SegmentDuration cadence. The directory must already exist when the
@@ -111,7 +111,25 @@ type Worker struct {
 	// worker that stopped producing audio (LastPCMAt() / UpdateLastPCMAt()).
 	lastPCMMu sync.Mutex
 	lastPCMAt time.Time
+
+	// Live counters surfaced by the supervisor through /workers (OperationsPage).
+	// Mirrors the Prometheus counters in internal/metrics so the API can serve
+	// the same numbers without an extra scrape of /metrics. Reset only on
+	// supervisor-triggered worker recreation (stall restart) — explicit by
+	// design: the supervisor tracks stall_restarts separately, so a fresh
+	// Worker starts at zero like its lifetime suggests.
+	bytesReceived atomic.Uint64
+	reconnects    atomic.Uint32
 }
+
+// BytesReceived returns the total bytes pulled from the PCM reader since the
+// worker started running. Safe to call concurrently.
+func (w *Worker) BytesReceived() uint64 { return w.bytesReceived.Load() }
+
+// Reconnects returns the number of ffmpeg reconnect attempts (start-failure
+// retries + post-exit retries) since the worker started running. The first
+// connect attempt is not counted. Safe to call concurrently.
+func (w *Worker) Reconnects() uint32 { return w.reconnects.Load() }
 
 // UpdateLastPCMAt records the time of the most recent PCM sample received.
 // Called from the PCM reader on each successful read.
@@ -225,6 +243,8 @@ func (w *Worker) Run(ctx context.Context) {
 			if w.cfg.OnStreamDown != nil {
 				w.cfg.OnStreamDown()
 			}
+			w.reconnects.Add(1)
+			metrics.WorkerReconnectsTotal.WithLabelValues(stationIDStr).Inc()
 			if sleep(ctx, jitter(backoff)); ctx.Err() != nil {
 				return
 			}
@@ -287,6 +307,8 @@ func (w *Worker) Run(ctx context.Context) {
 			zap.String("stationID", stationIDStr),
 			zap.Duration("backoff", backoff),
 		)
+		w.reconnects.Add(1)
+		metrics.WorkerReconnectsTotal.WithLabelValues(stationIDStr).Inc()
 		if sleep(ctx, jitter(backoff)); ctx.Err() != nil {
 			return
 		}
@@ -329,6 +351,8 @@ func (w *Worker) runPCMReader(
 			}
 			return
 		}
+		w.bytesReceived.Add(uint64(n))
+		metrics.WorkerBytesTotal.WithLabelValues(stationIDStr).Add(float64(n))
 		samplesRead := n / 4
 		for i := 0; i < samplesRead; i++ {
 			bits := binary.LittleEndian.Uint32(rawBuf[i*4:])
@@ -377,8 +401,7 @@ func (w *Worker) runPCMReader(
 		// trace UI. The current sampling default is parent-based ratio 1.0
 		// in dev; production should drop the ratio so this 2 Hz span source
 		// doesn't flood the collector.
-		windowCtx, windowSpan := observability.Tracer().Start(context.Background(), "worker.window",
-		)
+		windowCtx, windowSpan := observability.Tracer().Start(context.Background(), "worker.window")
 		windowSpan.SetAttributes(attribute.String("station_id", stationIDStr))
 
 		matchStart := time.Now()
@@ -481,8 +504,7 @@ func (w *Worker) runPCMReader(
 // analysis window length so we capture audio just before the first frame
 // that produced a hit).
 func (w *Worker) publishDetection(ctx context.Context, det *match.ConfirmedDetection, stationIDStr string) {
-	ctx, span := observability.Tracer().Start(ctx, "worker.publish_pending",
-	)
+	ctx, span := observability.Tracer().Start(ctx, "worker.publish_pending")
 	span.SetAttributes(
 		attribute.String("station_id", stationIDStr),
 		attribute.Int("commercial_short_id", int(det.CommercialShortID)),

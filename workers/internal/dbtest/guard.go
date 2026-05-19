@@ -29,11 +29,13 @@ import (
 // DB é um ambiente real (dev/staging/prod), NÃO um test DB descartável.
 //
 // stations: dev local típico carrega ~7500 emissoras do import Audiency;
-//   um test DB fresh deveria criar UMAS POUCAS stations dentro do próprio
-//   teste, jamais milhares. Threshold de 50 é generoso.
+//
+//	um test DB fresh deveria criar UMAS POUCAS stations dentro do próprio
+//	teste, jamais milhares. Threshold de 50 é generoso.
 //
 // clients: dev local típico tem ~100 clients importados; tests fixtures
-//   tipicamente criam 1-3. Threshold de 10 é generoso.
+//
+//	tipicamente criam 1-3. Threshold de 10 é generoso.
 const (
 	maxAllowedStations = 50
 	maxAllowedClients  = 10

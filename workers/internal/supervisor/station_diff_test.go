@@ -11,8 +11,8 @@ import (
 // We need a partition of:
 //   - removed: in old, not in new  → workers may need to be stopped.
 //   - kept:    in both             → workers stay; will be restarted to refresh
-//                                    commercial list (the campaign's commercials
-//                                    may have changed too).
+//     commercial list (the campaign's commercials
+//     may have changed too).
 //   - added:   in new, not in old  → fresh worker.
 //
 // Order is irrelevant in the inputs (DB-sourced UUID arrays) but the partitioned
@@ -24,8 +24,8 @@ func TestDiffStations(t *testing.T) {
 	d := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 
 	cases := []struct {
-		name                    string
-		oldS, newS              []uuid.UUID
+		name                             string
+		oldS, newS                       []uuid.UUID
 		wantRemoved, wantKept, wantAdded []uuid.UUID
 	}{
 		{

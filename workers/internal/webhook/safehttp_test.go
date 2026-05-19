@@ -24,11 +24,11 @@ func TestIsPrivateIP_PrivateRanges(t *testing.T) {
 		"169.254.169.254", // canonical cloud metadata
 		"169.254.0.1",
 		"0.0.0.0",
-		"224.0.0.1",       // multicast
+		"224.0.0.1", // multicast
 		"::1",
-		"fc00::1",         // unique-local
-		"fe80::1",         // link-local
-		"ff02::1",         // multicast
+		"fc00::1", // unique-local
+		"fe80::1", // link-local
+		"ff02::1", // multicast
 	}
 	for _, s := range private {
 		ip := net.ParseIP(s)
@@ -45,9 +45,9 @@ func TestIsPrivateIP_PublicRanges(t *testing.T) {
 	public := []string{
 		"8.8.8.8",
 		"1.1.1.1",
-		"93.184.216.34",         // example.com
-		"2606:4700:4700::1111",  // cloudflare
-		"2001:4860:4860::8888",  // google
+		"93.184.216.34",        // example.com
+		"2606:4700:4700::1111", // cloudflare
+		"2001:4860:4860::8888", // google
 	}
 	for _, s := range public {
 		ip := net.ParseIP(s)

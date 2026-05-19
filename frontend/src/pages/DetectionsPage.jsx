@@ -12,11 +12,14 @@ import DayDetailModal from '../components/DayDetailModal'
 import CoverageSummary from '../components/CoverageSummary'
 import FlowStepper from '../components/FlowStepper'
 import CampaignReportsMenu from '../components/CampaignReportsMenu'
+import AirtimePaginator from '../components/AirtimePaginator'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { parseLocalDate } from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
+const PAGE_SIZE_OPTIONS = [5, 10, 15]
+const DEFAULT_PAGE_SIZE = 5
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -503,6 +506,11 @@ export default function DetectionsPage() {
   const [userRange, setUserRange] = useState({ start: '', end: '' })
   const [modalCell, setModalCell] = useState(null)
   const [search, setSearch] = useState('')
+  // Paginação por emissora (a unidade visual do DistributionGrid em modo
+  // inlineStationInfo é o bloco da emissora, que faz row-span sobre seus
+  // materiais — fatiar por linha quebraria esse span).
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [page, setPage] = useState(1)
   // TODO F-100: wire up HealthDrawer once the component is built
   // eslint-disable-next-line no-unused-vars
   const [healthStationId, setHealthStationId] = useState(null)
@@ -764,6 +772,36 @@ export default function DetectionsPage() {
     })
   }, [rows, search, stationCatalog])
 
+  // ── Paginação (por emissora) ──────────────────────────────────
+  // Lista de IDs únicos de emissora preservando a ordem em que aparecem em
+  // `filteredRows`. É essa lista que é fatiada por (page, pageSize); depois
+  // re-filtramos `filteredRows` pra manter só as linhas dessas emissoras.
+  const uniqueStationIds = useMemo(() => {
+    const seen = new Set()
+    const list = []
+    for (const r of filteredRows) {
+      if (!seen.has(r.stationId)) {
+        seen.add(r.stationId)
+        list.push(r.stationId)
+      }
+    }
+    return list
+  }, [filteredRows])
+
+  const totalStations = uniqueStationIds.length
+  const totalPages = Math.max(1, Math.ceil(totalStations / pageSize))
+  const safePage = Math.min(page, totalPages)
+
+  const pagedStationIds = useMemo(() => {
+    const start = (safePage - 1) * pageSize
+    return new Set(uniqueStationIds.slice(start, start + pageSize))
+  }, [uniqueStationIds, safePage, pageSize])
+
+  const pagedRows = useMemo(
+    () => filteredRows.filter(r => pagedStationIds.has(r.stationId)),
+    [filteredRows, pagedStationIds]
+  )
+
   // ── Filter step state ─────────────────────────────────────────
   // Drives both the filter bar UI (which field is disabled vs active vs done)
   // and the empty-state variant. Single source of truth.
@@ -775,6 +813,7 @@ export default function DetectionsPage() {
     // Changing the month invalidates user-picked range — the picked dates
     // probably don't belong to the new month at all.
     setUserRange({ start: '', end: '' })
+    setPage(1)
     // …and may invalidate the campaign selection if the new month doesn't
     // overlap with it.
     if (selectedCampaignId) {
@@ -796,6 +835,17 @@ export default function DetectionsPage() {
     // Different campaign → different date bounds → reset the user range.
     setUserRange({ start: '', end: '' })
     setModalCell(null)
+    setPage(1)
+  }
+
+  function handleSearchChange(e) {
+    setSearch(e.target.value)
+    setPage(1)
+  }
+
+  function handlePageSizeChange(n) {
+    setPageSize(n)
+    setPage(1)
   }
 
   function handleRangeStart(e) {
@@ -961,7 +1011,7 @@ export default function DetectionsPage() {
               type="text"
               placeholder="Buscar emissora, cidade…"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={handleSearchChange}
             />
           </div>
 
@@ -1048,7 +1098,7 @@ export default function DetectionsPage() {
             campaignStart={gridStart}
             campaignEnd={gridEnd}
             stations={stationCatalog}
-            rows={filteredRows}
+            rows={pagedRows}
             cellData={cellData}
             pricingByStation={pricingByStation}
             inlineStationInfo
@@ -1056,6 +1106,19 @@ export default function DetectionsPage() {
               setModalCell({ stationId, typeId, dateISO })}
             onStationClick={(stationId) => setHealthStationId(stationId)}
           />
+          {totalStations > 0 && (
+            <AirtimePaginator
+              page={safePage}
+              totalPages={totalPages}
+              total={totalStations}
+              pageSize={pageSize}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              onPageSizeChange={handlePageSizeChange}
+              onChange={setPage}
+              singular="emissora"
+              plural="emissoras"
+            />
+          )}
         </>
       )}
 

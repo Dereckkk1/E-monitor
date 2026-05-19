@@ -415,57 +415,8 @@
   100% { background-position: -200% 0; }
 }
 
-/* --- Paginator ------------------------------------------------------ */
-.airtime-paginator {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 18px;
-  padding: 12px 4px;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.airtime-paginator-info {
-  color: #64748b;
-  font-size: 13px;
-}
-.airtime-paginator-controls {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-.airtime-paginator-btn {
-  min-width: 32px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  color: #334155;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 150ms ease;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
-}
-.airtime-paginator-btn:hover:not(:disabled):not(.active) {
-  border-color: #F472B6;
-  color: #C4185E;
-}
-.airtime-paginator-btn.active {
-  background: #E81E75;
-  border-color: #E81E75;
-  color: #fff;
-}
-.airtime-paginator-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.airtime-paginator-ellipsis {
-  color: #94a3b8;
-  padding: 0 4px;
-}
+/* Paginator styles moved to components/AirtimePaginator.css (co-located
+ * with the component). */
 
 /* --- Material panel (below the list, full-width grid) =============== */
 .airtime-panel {

@@ -5,8 +5,8 @@ import "time"
 // Frames per second of analysis (sampleRate / hopSize at 16kHz / 2048 = 7.8125).
 // Each window covers ~31 frames (4s window at 7.8125 frames/s).
 const (
-	framesPerSecond  = 16000.0 / 2048.0
-	framesPerWindow  = 32 // 4-second window rounded up
+	framesPerSecond = 16000.0 / 2048.0
+	framesPerWindow = 32 // 4-second window rounded up
 )
 
 // CoverageWindow estimates how much of a commercial's duration has been observed

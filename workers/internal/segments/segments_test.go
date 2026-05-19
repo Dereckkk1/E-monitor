@@ -40,10 +40,10 @@ func TestListInRange_PicksOverlappingSegments(t *testing.T) {
 	}
 
 	base := time.Date(2026, 5, 9, 12, 30, 0, 0, time.Local)
-	mk(base)                                  // 12:30:00 (covers 12:30:00..12:30:30)
-	mk(base.Add(30 * time.Second))            // 12:30:30
-	mk(base.Add(60 * time.Second))            // 12:31:00
-	mk(base.Add(120 * time.Second))           // 12:32:00 (well after window)
+	mk(base)                        // 12:30:00 (covers 12:30:00..12:30:30)
+	mk(base.Add(30 * time.Second))  // 12:30:30
+	mk(base.Add(60 * time.Second))  // 12:31:00
+	mk(base.Add(120 * time.Second)) // 12:32:00 (well after window)
 	writeEmpty(t, filepath.Join(dir, "stray.txt"))
 	writeEmpty(t, filepath.Join(dir, "20260509-bad.aac")) // unparseable
 
@@ -75,14 +75,14 @@ func TestCoverageStats_DetectsGap(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.Local)
 
-	a := filepath.Join(dir, base.Format(fileNameLayout)+fileExt)                          // 12:00:00..12:00:30
-	c := filepath.Join(dir, base.Add(60*time.Second).Format(fileNameLayout)+fileExt)      // 12:01:00..12:01:30
+	a := filepath.Join(dir, base.Format(fileNameLayout)+fileExt)                     // 12:00:00..12:00:30
+	c := filepath.Join(dir, base.Add(60*time.Second).Format(fileNameLayout)+fileExt) // 12:01:00..12:01:30
 	writeEmpty(t, a)
 	writeEmpty(t, c)
 	// Skipped on purpose: 12:00:30..12:01:00 — the gap.
 
-	from := base                          // 12:00:00
-	to := base.Add(90 * time.Second)      // 12:01:30
+	from := base                     // 12:00:00
+	to := base.Add(90 * time.Second) // 12:01:30
 
 	files := []string{a, c}
 	frac, partial := coverageStats(files, from, to)

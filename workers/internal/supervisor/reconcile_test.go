@@ -59,32 +59,32 @@ func TestReconcileReason(t *testing.T) {
 		wantRestart bool
 	}{
 		{
-			name:        "nothing changed",
-			currentURL:  urlA, wantedURL: urlA,
+			name:       "nothing changed",
+			currentURL: urlA, wantedURL: urlA,
 			currentIDs: []int32{8, 9}, wantedIDs: []int32{9, 8},
 			wantRestart: false,
 		},
 		{
-			name:        "commercials changed only",
-			currentURL:  urlA, wantedURL: urlA,
+			name:       "commercials changed only",
+			currentURL: urlA, wantedURL: urlA,
 			currentIDs: []int32{8, 9}, wantedIDs: []int32{8, 9, 10},
 			wantRestart: true,
 		},
 		{
-			name:        "stream_url changed only",
-			currentURL:  urlA, wantedURL: urlB,
+			name:       "stream_url changed only",
+			currentURL: urlA, wantedURL: urlB,
 			currentIDs: []int32{8, 9}, wantedIDs: []int32{8, 9},
 			wantRestart: true,
 		},
 		{
-			name:        "both changed",
-			currentURL:  urlA, wantedURL: urlB,
+			name:       "both changed",
+			currentURL: urlA, wantedURL: urlB,
 			currentIDs: []int32{8}, wantedIDs: []int32{8, 9},
 			wantRestart: true,
 		},
 		{
-			name:        "wanted url empty, current populated -> NOT a restart",
-			currentURL:  urlA, wantedURL: "",
+			name:       "wanted url empty, current populated -> NOT a restart",
+			currentURL: urlA, wantedURL: "",
 			currentIDs: []int32{8}, wantedIDs: []int32{8},
 			wantRestart: false,
 		},
