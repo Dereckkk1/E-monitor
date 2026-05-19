@@ -64,7 +64,7 @@ func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
 // Returns (rows, totalCount). Ordering matches the unpaged List(): lifecycle
 // status → programmed-soonest-first → start_date desc, so paging mirrors what
 // the user sees in the canonical list.
-func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientID *uuid.UUID, page, pageSize int) ([]Campaign, int, error) {
+func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientID *uuid.UUID, campaignID *uuid.UUID, page, pageSize int) ([]Campaign, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -84,7 +84,8 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		monthEnd = monthStart.AddDate(0, 1, 0).Add(-time.Nanosecond)
 	}
 
-	// $1 = q, $2 = competence (non-empty marker), $3 = monthStart, $4 = monthEnd, $5 = clientID
+	// $1 = q, $2 = competence flag, $3 = monthStart, $4 = monthEnd,
+	// $5 = clientID, $6 = campaignID (admin deep-link)
 	const where = `
 		WHERE
 		    ($2 = '' OR (c.start_date <= $4 AND c.end_date >= $3))
@@ -92,6 +93,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		        COALESCE(c.name,'') || ' ' || COALESCE(cl.name,'')
 		    )) LIKE '%' || unaccent(lower($1)) || '%')
 		    AND ($5::uuid IS NULL OR c.client_id = $5)
+		    AND ($6::uuid IS NULL OR c.id = $6)
 	`
 
 	// Count: same WHERE, no LIMIT.
@@ -100,7 +102,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		SELECT COUNT(*)
 		FROM campaigns c
 		LEFT JOIN clients cl ON cl.id = c.client_id`+where,
-		q, competence, monthStart, monthEnd, clientID,
+		q, competence, monthStart, monthEnd, clientID, campaignID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -120,8 +122,8 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		END,
 		CASE WHEN c.status = 'programada' THEN c.start_date ELSE NULL END ASC NULLS LAST,
 		c.start_date DESC
-		LIMIT $6 OFFSET $7`,
-		q, competence, monthStart, monthEnd, clientID, pageSize, offset,
+		LIMIT $7 OFFSET $8`,
+		q, competence, monthStart, monthEnd, clientID, campaignID, pageSize, offset,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -371,9 +373,9 @@ func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasi
 //   - CPM = invested / insertions × 1000, calculado no caller (frontend)
 //     pra ter precisão decimal.
 type CampaignFinancials struct {
-	CampaignID     uuid.UUID `json:"campaign_id"`
-	TotalInvested  float64   `json:"total_invested"`
-	TotalInsertions int      `json:"total_insertions"`
+	CampaignID      uuid.UUID `json:"campaign_id"`
+	TotalInvested   float64   `json:"total_invested"`
+	TotalInsertions int       `json:"total_insertions"`
 }
 
 // FinancialsByCampaign retorna o agregado das campanhas. Quando clientID
