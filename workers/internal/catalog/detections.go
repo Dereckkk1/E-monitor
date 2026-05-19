@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"radiocheck/internal/categorizer"
 )
@@ -115,13 +116,14 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 	return &det, err
 }
 
-// categorize resolves the detection's category by loading the campaign and
-// applicable rules, then invoking the pure categorizer.
+// categorize resolves the detection's category by loading the campaign,
+// applicable rules, AND any override on (campaign, type, station, date),
+// then invoking the pure categorizer.
 //
-// Migration 0019: rules are now keyed by material TYPE. We look up the type
-// of the detected material via JOIN materials and only return rules that
-// match it. If the material has no type_id (legacy), zero rules come back
-// and the categorizer falls through to "orphan".
+// Migration 0019: rules and overrides are keyed by material TYPE. We look
+// up the type of the detected material via JOIN materials.
+// Migration 0031: overrides now carry their own time_start/time_end and
+// supersede rules for the cell+day when present.
 func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (string, error) {
 	var cmpStart, cmpEnd time.Time
 	err := d.pool.QueryRow(ctx,
@@ -162,10 +164,41 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 		return categorizer.CatOrphan, err
 	}
 
+	// Override lookup. (campaign, type, station, for_date) é PK em
+	// distribution_overrides. for_date é a data local em São Paulo
+	// derivada da timestamp da detection. Quando há override, o
+	// categorizador ignora rules pra essa célula+dia (D1/D7 do spec).
+	var (
+		ov          *categorizer.Override
+		ovPlays     int16
+		ovTsStr     string
+		ovTeStr     string
+	)
+	err = d.pool.QueryRow(ctx, `
+		SELECT plays_expected, time_start::text, time_end::text
+		FROM distribution_overrides
+		WHERE campaign_id = $1
+		  AND type_id = (SELECT type_id FROM materials WHERE id = $2)
+		  AND station_id = $3
+		  AND for_date = ($4::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date`,
+		in.CampaignID, in.CommercialID, in.StationID, in.DetectedAt,
+	).Scan(&ovPlays, &ovTsStr, &ovTeStr)
+	switch {
+	case err == nil:
+		ts, _ := time.Parse("15:04:05", ovTsStr)
+		te, _ := time.Parse("15:04:05", ovTeStr)
+		ov = &categorizer.Override{PlaysExpected: ovPlays, TimeStart: ts, TimeEnd: te}
+	case errors.Is(err, pgx.ErrNoRows):
+		// Sem override — ov fica nil, comportamento antigo.
+	default:
+		return categorizer.CatOrphan, err
+	}
+
 	return categorizer.Categorize(
 		in.DetectedAt,
 		categorizer.Campaign{StartDate: cmpStart, EndDate: cmpEnd},
 		rules,
+		ov,
 	), nil
 }
 
@@ -729,6 +762,126 @@ func (d *Detections) Restore(ctx context.Context, id uuid.UUID) error {
 		`UPDATE detections SET ignored_at = NULL, ignored_by = NULL WHERE id = $1`,
 		id)
 	return err
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Campaign reports (CSV consolidated + PDF summary)
+// ──────────────────────────────────────────────────────────────────────────
+
+// MaterialStationRow é a granularidade do relatório consolidado: uma linha
+// por (material × emissora) com o total de veiculações no período. Inclui
+// metadata leve da emissora pra o CSV ficar legível sem JOIN no front.
+type MaterialStationRow struct {
+	MaterialID          uuid.UUID `json:"material_id"`
+	MaterialShortID     *int32    `json:"material_short_id,omitempty"`
+	MaterialTitle       string    `json:"material_title"`
+	MaterialDurationSec *float64  `json:"material_duration_sec,omitempty"`
+	MaterialTypeName    *string   `json:"material_type_name,omitempty"`
+	StationID           uuid.UUID `json:"station_id"`
+	StationName         string    `json:"station_name"`
+	StationBand         *string   `json:"station_band,omitempty"`
+	StationFrequencyMHz *float64  `json:"station_frequency_mhz,omitempty"`
+	StationCity         *string   `json:"station_city,omitempty"`
+	StationState        *string   `json:"station_state,omitempty"`
+	Count               int       `json:"count"`
+	FirstDetectedAt     time.Time `json:"first_detected_at"`
+	LastDetectedAt      time.Time `json:"last_detected_at"`
+}
+
+// AggregateByMaterialStation agrupa as veiculações da campanha por
+// (material × emissora). Usa o mesmo WHERE da lista para que o relatório
+// consolidado bata exatamente com o que o usuário vê em /reports/airtime
+// e /detections sob os mesmos filtros.
+func (d *Detections) AggregateByMaterialStation(ctx context.Context, f AggregateFilter) ([]MaterialStationRow, error) {
+	rows, err := d.pool.Query(ctx, `
+		SELECT d.commercial_id, m.short_id, COALESCE(m.title, c.title, ''),
+		       m.duration_seconds, mt.name,
+		       d.station_id, COALESCE(s.name, ''),
+		       s.band, s.frequency_mhz, s.city, s.state,
+		       COUNT(*) AS cnt,
+		       MIN(d.detected_at), MAX(d.detected_at)
+		FROM detections d
+		LEFT JOIN commercials c     ON c.id = d.commercial_id
+		LEFT JOIN materials m       ON m.id = d.commercial_id
+		LEFT JOIN material_types mt ON mt.id = m.type_id
+		LEFT JOIN stations s        ON s.id = d.station_id
+		WHERE d.campaign_id = $1
+		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND d.ignored_at IS NULL
+		  AND d.retracted_at IS NULL
+		  AND d.evidence_status <> 'audit_rejected'
+		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, mt.name,
+		         d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state
+		ORDER BY COALESCE(m.title, c.title, '') ASC, s.name ASC`,
+		f.CampaignID, f.StartDate, f.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []MaterialStationRow{}
+	for rows.Next() {
+		var r MaterialStationRow
+		if err := rows.Scan(
+			&r.MaterialID, &r.MaterialShortID, &r.MaterialTitle,
+			&r.MaterialDurationSec, &r.MaterialTypeName,
+			&r.StationID, &r.StationName,
+			&r.StationBand, &r.StationFrequencyMHz, &r.StationCity, &r.StationState,
+			&r.Count, &r.FirstDetectedAt, &r.LastDetectedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// StationAggregateRow alimenta a seção "por emissora" do PDF.
+type StationAggregateRow struct {
+	StationID           uuid.UUID `json:"station_id"`
+	StationName         string    `json:"station_name"`
+	StationBand         *string   `json:"station_band,omitempty"`
+	StationFrequencyMHz *float64  `json:"station_frequency_mhz,omitempty"`
+	StationCity         *string   `json:"station_city,omitempty"`
+	StationState        *string   `json:"station_state,omitempty"`
+	Count               int       `json:"count"`
+}
+
+// AggregateByStation devolve total de veiculações por emissora — usado tanto
+// pelo PDF quanto pela seção sumária do relatório consolidado.
+func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) ([]StationAggregateRow, error) {
+	rows, err := d.pool.Query(ctx, `
+		SELECT d.station_id, COALESCE(s.name, ''), s.band, s.frequency_mhz, s.city, s.state,
+		       COUNT(*) AS cnt
+		FROM detections d
+		LEFT JOIN stations s ON s.id = d.station_id
+		WHERE d.campaign_id = $1
+		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
+		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND d.ignored_at IS NULL
+		  AND d.retracted_at IS NULL
+		  AND d.evidence_status <> 'audit_rejected'
+		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state
+		ORDER BY cnt DESC, s.name ASC`,
+		f.CampaignID, f.StartDate, f.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []StationAggregateRow{}
+	for rows.Next() {
+		var r StationAggregateRow
+		if err := rows.Scan(
+			&r.StationID, &r.StationName, &r.StationBand, &r.StationFrequencyMHz,
+			&r.StationCity, &r.StationState, &r.Count,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetClientID returns the client_id of the campaign that owns the detection.
