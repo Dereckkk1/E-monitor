@@ -11,6 +11,7 @@ import DistributionGrid from '../components/DistributionGrid'
 import DayDetailModal from '../components/DayDetailModal'
 import CoverageSummary from '../components/CoverageSummary'
 import FlowStepper from '../components/FlowStepper'
+import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { parseLocalDate } from '../utils/dates'
@@ -964,12 +965,24 @@ export default function DetectionsPage() {
             />
           </div>
 
+          {/* Relatórios: CSV consolidado / detalhado / PDF da campanha
+              selecionada, no recorte de datas atual. */}
+          <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <CampaignReportsMenu
+              campaignId={selectedCampaignId}
+              from={rangeStart}
+              to={rangeEnd}
+              variant="compact"
+              placement="bottom-end"
+              label="Relatórios"
+            />
+          </div>
+
           <button
             className="btn-refresh"
             onClick={() => refetch()}
             disabled={isFetching}
             title="Atualizar veiculações"
-            style={{ marginLeft: 'auto' }}
           >
             <svg
               width="14"

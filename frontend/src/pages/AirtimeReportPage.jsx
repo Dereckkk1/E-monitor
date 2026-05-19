@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCampaigns, useClients, useDetectionsPaged, useMaterialAggregate, useCampaignPricing,
-  exportDetectionsCsv,
 } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import AirtimeFiltersBar from '../components/AirtimeFiltersBar'
@@ -143,19 +142,8 @@ export default function AirtimeReportPage() {
   // Cross-highlight: passa a flutuar quando o usuário hovera o painel direito.
   const [highlightedMaterialId, setHighlightedMaterialId] = useState(null)
 
-  // Export
-  const [exporting, setExporting] = useState(false)
-  async function handleExport() {
-    if (!campaignId || invalidRange) return
-    setExporting(true)
-    try {
-      await exportDetectionsCsv({ campaignId, from: fromRFC, to: toRFC, q })
-    } catch {
-      window.alert('Não foi possível gerar o CSV. Tente novamente.')
-    } finally {
-      setExporting(false)
-    }
-  }
+  // Export de relatórios agora vive em CampaignReportsMenu (dentro do
+  // AirtimeFiltersBar) — substituiu o botão único "Exportar CSV".
 
   function handleCompetenceChange(v) {
     // Changing competence invalidates campaign + range — different month,
@@ -248,8 +236,6 @@ export default function AirtimeReportPage() {
         onToChange={handleToChange}
         onRangeChange={handleRangeChange}
         onQChange={handleQChange}
-        onExportClick={handleExport}
-        exporting={exporting}
       />
 
       {invalidRange && (

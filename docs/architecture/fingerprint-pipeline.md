@@ -1,10 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-19
 codigo-relacionado:
   - workers/pkg/audio/stft.go
   - workers/pkg/audio/peaks.go
   - workers/pkg/audio/hashes.go
+  - workers/pkg/audio/stft_regression_test.go
+  - workers/pkg/audio/stft_bench_test.go
   - workers/internal/fingerprint/pipeline.go
   - workers/cmd/fingerprint/main.go
   - migrations/0001_initial.up.sql
@@ -122,6 +124,32 @@ Definidas em `pkg/audio` (espelhando §25 do plano):
 Encoding do hash (32 bits): `(f1 & 0x1FF) << 23 | (f2 & 0x1FF) << 14 | (dt & 0x3FFF)`.
 Persistido como `BIGINT` em `fingerprint_hashes.hash_value` para evitar
 ambiguidade de sinal — o índice em memória reconverte para `uint32`.
+
+### Performance — pool de FFT (2026-05-19)
+
+O hot path do stream worker chama `audio.STFT` ~26 vezes por segundo
+(52 workers × 0.5 Hz de cadência de match). A implementação original
+construía um `fourier.NewFFT(4096)` por chamada — twiddle factors
+recomputados, slice de coeficientes alocada e descartada. Bench mediu
+**1.57 MB/op, 72 allocs/op** (pkg/audio/stft_bench_test.go).
+
+Refactor:
+
+- Hann window agora é variável de pacote precomputada (read-only após init).
+- `*fourier.FFT` + buffer windowed + buffer de coeficientes vivem num
+  `sync.Pool` de `stftScratch` (workers/pkg/audio/stft.go).
+- Matemática preservada bit-exata: golden digest validado em
+  `TestSTFT_RegressionDigest`.
+
+Bench pós-refactor: **132 KB/op, 37 allocs/op** — 91% menos garbage,
+30% mais rápido sob contenção paralela (16 cores). Implicação direta: GC
+do processo da API gera menos work, pausas mais curtas, e a margem de
+escala antes de saturar CPU sobe.
+
+Concorrência: cada `Get()` do pool serializa, então duas goroutines nunca
+veem a mesma instância de scratch — não há race possível. Stress test em
+128 chamadas concorrentes (`TestSTFT_ConcurrentSameInput`) confirma
+digest estável.
 
 ## Validação pós-geração
 

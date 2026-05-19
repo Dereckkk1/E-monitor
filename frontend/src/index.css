@@ -1343,6 +1343,21 @@ textarea.input {
   }
 }
 
+/* CampaignReportsMenu — fade+slide curto pro dropdown não aparecer "duro". */
+@keyframes reportsMenuIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* Hover sutil no trigger do CampaignReportsMenu — eleva borda pra rosa
+   seguindo o "padrão ouro" do design system (DESIGN.md §4.1). */
+.reports-menu-trigger:not(:disabled):hover {
+  border-color: var(--c-action-border);
+  color: var(--c-action);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
 .spinning {
   animation: spin 0.75s linear infinite;
 }

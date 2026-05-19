@@ -128,7 +128,13 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
       OTEL_SERVICE_NAME: radiocheck-api
       OTEL_TRACES_SAMPLER: parentbased_traceidratio
-      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      # Sampling ratio: 1.0 = capture every span, 0.05 = capture 5%.
+      # Defaults to 0.05 (suficiente para investigar tendências em prod sem
+      # saturar Jaeger). Em dev/incident response, suba pra "1.0" temporariamente:
+      #   OTEL_TRACES_SAMPLER_ARG=1.0 docker compose up -d --no-deps api
+      # Detection records (Postgres) + métricas Prometheus seguem 100% — só
+      # spans são amostrados.
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.05}
       # Em PROD: setar RADIOCHECK_ENV=production no .env da VM.
       # Vira o `deployment.environment` resource attribute dos spans OTel e
       # é base pra qualquer guard futuro de "este é prod, não roda comando

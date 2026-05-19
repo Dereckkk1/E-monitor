@@ -12,6 +12,7 @@ import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import AirtimePaginator from '../components/AirtimePaginator'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
+import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import { useAuth } from '../contexts/AuthContext'
 
 const CAMPAIGNS_PAGE_SIZE = 12
@@ -1084,6 +1085,16 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         </div>
 
         <div className="campaign-row-actions">
+          {/* Relatórios: CSV consolidado / detalhado / PDF. Sem from/to →
+              o backend considera a campanha inteira. Stops row click. */}
+          <span onClick={e => e.stopPropagation()}>
+            <CampaignReportsMenu
+              campaignId={campaign.id}
+              variant="compact"
+              placement="bottom-end"
+              label="Relatórios"
+            />
+          </span>
           {isAdmin && (
             <Link
               to={`/campaigns/${campaign.id}/edit`}

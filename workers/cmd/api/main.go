@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"radiocheck/internal/events"
 	"radiocheck/internal/index"
 	"radiocheck/internal/observability"
+	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
 	"radiocheck/internal/similarity"
 	"radiocheck/internal/storage"
@@ -258,6 +260,23 @@ func main() {
 	// Users repo — shared across auth, me, and users handlers (Tasks 5–8).
 	usersRepo := users.NewRepo(pool)
 
+	// Request metrics writer + IP block-list (painel /admin/monitoring).
+	// Async batched writer evita pressionar latência do caminho hot.
+	// Documentado em docs/features/admin-monitoring.md.
+	metricsCfg := reqmetrics.Config{
+		BufferSize: 4096,
+		BatchSize:  200,
+		FlushEvery: 2 * time.Second,
+		Retention:  30 * 24 * time.Hour,
+		PruneEvery: 6 * time.Hour,
+		SlowMs:     2000,
+	}
+	metricsWriter := reqmetrics.NewWriter(pool, logger, metricsCfg)
+	go metricsWriter.Run(ctx, metricsCfg)
+
+	blockList := reqmetrics.NewBlockList(ctx, pool, logger)
+	go blockList.Run(ctx)
+
 	// Campaigns handler with supervisor wired in.
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
@@ -289,6 +308,13 @@ func main() {
 			JaegerURL:     os.Getenv("JAEGER_URL"),
 			Log:           logger,
 		},
+		AdminMonitoring: &handlers.AdminMonitoringHandler{
+			DB:    pool,
+			Block: blockList,
+			Log:   logger,
+		},
+		Metrics:   metricsWriter,
+		BlockList: blockList,
 		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc},
@@ -298,6 +324,7 @@ func main() {
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo},
 		Users:                 handlers.NewUsersHandler(usersRepo),
 		Me:                    handlers.NewMeHandler(usersRepo),
+		Reports:               &handlers.ReportsHandler{Detections: detections, CampaignRepo: campaigns, Pool: pool},
 	}
 
 	srv := &http.Server{
@@ -311,6 +338,27 @@ func main() {
 			log.Fatalf("listen: %v", err)
 		}
 	}()
+
+	// pprof endpoint on a separate internal listener. The handlers were
+	// registered on http.DefaultServeMux by the `_ "net/http/pprof"` import;
+	// we deliberately keep them off the public api.NewRouter mux so they're
+	// never reachable through Cloudflare Tunnel. Access from the host with:
+	//   docker compose exec api wget -qO - http://localhost:6060/debug/pprof/profile?seconds=30 > cpu.pprof
+	//   go tool pprof cpu.pprof
+	// Disable with PPROF_ENABLED=false. Bound to 127.0.0.1 so even within the
+	// docker network it's only reachable from inside the api container.
+	if os.Getenv("PPROF_ENABLED") != "false" {
+		pprofSrv := &http.Server{
+			Addr:    "127.0.0.1:6060",
+			Handler: http.DefaultServeMux,
+		}
+		go func() {
+			logger.Info("pprof listening on 127.0.0.1:6060 (container-internal)")
+			if err := pprofSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Warn("pprof server exited", zap.Error(err))
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
