@@ -55,7 +55,9 @@ estende o categorizador pra consultar overrides e atualiza a UI do
 
 ## Esquema de dados
 
-### Migration `0030_override_time_window`
+### Migration `0031_override_time_window`
+
+Numeração 0031 porque 0030 já está ocupado por `admin_monitoring`.
 
 ```sql
 BEGIN;
@@ -425,7 +427,7 @@ Cobertura manual no plan:
 
 ## Migração e rollout
 
-1. Aplicar migration 0030 (backfill automático).
+1. Aplicar migration 0031 (backfill automático).
 2. Deploy do backend (catalog + handler + categorizador atualizados).
 3. Deploy do frontend (popover + step).
 

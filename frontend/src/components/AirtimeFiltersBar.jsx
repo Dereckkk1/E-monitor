@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import RSelect from './RSelect'
-import { useAuth } from '../contexts/AuthContext'
+import CampaignReportsMenu from './CampaignReportsMenu'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { parseLocalDate } from '../utils/dates'
 
@@ -90,7 +90,9 @@ function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
  *   - onFromChange, onToChange, onRangeChange({from,to})
  *   - q: search string (debounced internally before propagation)
  *   - onQChange(v)
- *   - onExportClick, exporting
+ *
+ * Export agora vive em CampaignReportsMenu — renderizado inline aqui;
+ * não precisa mais de onExportClick/exporting vindo de fora.
  */
 export default function AirtimeFiltersBar({
   campaigns = [],
@@ -106,11 +108,7 @@ export default function AirtimeFiltersBar({
   onToChange,
   onRangeChange,
   onQChange,
-  onExportClick,
-  exporting = false,
 }) {
-  const { isAdmin } = useAuth()
-
   const clientMap = useMemo(() => {
     const m = new Map()
     clients.forEach(c => m.set(c.id, c))
@@ -388,18 +386,22 @@ export default function AirtimeFiltersBar({
             />
           </div>
 
-          {isAdmin && (
-            <button
-              type="button"
-              className="airtime-filters-export"
-              onClick={onExportClick}
-              disabled={!campaignId || invalidRange || exporting}
-              title={!campaignId ? 'Selecione uma campanha' : 'Exportar CSV'}
-              style={{ marginLeft: 'auto' }}
-            >
-              {exporting ? 'Gerando…' : '↓ Exportar CSV'}
-            </button>
-          )}
+          {/* Menu unificado de relatórios — substituiu o botão "Exportar CSV"
+              admin-only que vivia aqui. Agora viewer também consegue baixar
+              consolidado/PDF (escopado ao próprio cliente no backend); CSV
+              detalhado continua admin-only — o componente esconde a opção. */}
+          <div style={{ marginLeft: 'auto' }}>
+            <CampaignReportsMenu
+              campaignId={campaignId}
+              from={from}
+              to={to}
+              variant="compact"
+              placement="bottom-end"
+              disabled={!campaignId || invalidRange}
+              disabledReason={!campaignId ? 'Selecione uma campanha' : 'Intervalo inválido'}
+              label="Relatórios"
+            />
+          </div>
         </div>
       )}
     </div>

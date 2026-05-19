@@ -23,6 +23,7 @@ import CampaignWizardPage from './pages/CampaignWizardPage'
 import MaterialTypesPage from './pages/MaterialTypesPage'
 import AirtimeReportPage from './pages/AirtimeReportPage'
 import AdminOverviewPage from './pages/AdminOverviewPage'
+import AdminMonitoringPage from './pages/AdminMonitoringPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -117,6 +118,9 @@ function AppShell() {
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
             <Route path="/admin/overview" element={
               <RequireRole roles={['admin']}><AdminOverviewPage /></RequireRole>
+            } />
+            <Route path="/admin/monitoring" element={
+              <RequireRole roles={['admin']}><AdminMonitoringPage /></RequireRole>
             } />
             <Route path="/admin/users" element={
               <RequireRole roles={['admin']}><AdminUsersPage /></RequireRole>

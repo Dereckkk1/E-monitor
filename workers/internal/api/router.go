@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/auth"
+	"radiocheck/internal/reqmetrics"
 )
 
 // Deps groups all handlers and middleware required by the API router.
@@ -37,6 +38,7 @@ type Deps struct {
 	APIKeys               *handlers.APIKeysHandler
 	Admin                 *handlers.AdminHandler
 	SystemHealth          *handlers.SystemHealthHandler
+	AdminMonitoring       *handlers.AdminMonitoringHandler
 	Webhooks              *handlers.WebhooksHandler
 	MaterialTypes         *handlers.MaterialTypesHandler
 	Materials             *handlers.MaterialsHandler
@@ -46,6 +48,13 @@ type Deps struct {
 	Pricing               *handlers.PricingHandler
 	Users                 *handlers.UsersHandler
 	Me                    *handlers.MeHandler
+	Reports               *handlers.ReportsHandler
+
+	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
+	// instala telemetria nem enforcement — útil em testes que não querem
+	// inicializar o pgxpool.
+	Metrics   *reqmetrics.Writer
+	BlockList *reqmetrics.BlockList
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -60,6 +69,20 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Timeout(60 * time.Second))
 	r.Use(corsMiddleware)
 	r.Use(otelRoutePatternMiddleware)
+
+	// IP block enforcement — roda cedo no pipeline para cortar requests
+	// banidos antes de qualquer handler/SQL. Exempta rotas de admin para o
+	// operador conseguir se desbloquear (ver reqmetrics/blocked.go).
+	if d.BlockList != nil {
+		r.Use(reqmetrics.BlockMiddleware(d.BlockList))
+	}
+
+	// Request telemetry — captura status/duration/route/IP/user e submete
+	// async ao writer. Roda como último middleware antes dos handlers para
+	// ler o pattern resolvido pelo chi.
+	if d.Metrics != nil {
+		r.Use(reqmetrics.Middleware(d.Metrics, 2000))
+	}
 
 	// External client API — protected by API key (§13.1).
 	if d.APIKey != nil {
@@ -126,6 +149,21 @@ func NewRouter(d Deps) http.Handler {
 				// Per-client material library list — handler enforces cross-client
 				// isolation via client_id from JWT claims.
 				r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
+
+				// Relatórios consolidados de campanha — CSV resumo + JSON pra PDF.
+				// Viewer scope checado dentro do handler (mesmo padrão do
+				// /detections/aggregate-by-material). O CSV detalhado continua
+				// em /detections/export e é admin-only.
+				if d.Reports != nil {
+					r.Get("/reports/campaigns/{id}/consolidated.csv", d.Reports.Consolidated)
+					r.Get("/reports/campaigns/{id}/summary", d.Reports.Summary)
+				}
+
+				// Web Vitals telemetry — qualquer usuário autenticado posta
+				// LCP/INP/CLS/FCP/TTFB do seu navegador. Painel admin agrega.
+				if d.AdminMonitoring != nil {
+					r.Post("/web-vitals", d.AdminMonitoring.PostVitals)
+				}
 			})
 
 			// ── Subgrupo B — admin/operator (writes + admin reads) ────────────
@@ -296,6 +334,27 @@ func NewRouter(d Deps) http.Handler {
 					r.Group(func(r chi.Router) {
 						r.Use(auth.RequireRole("admin"))
 						r.Get("/admin/system-health", d.SystemHealth.Get)
+					})
+				}
+
+				// /admin/monitoring — painel de telemetria HTTP, identidades,
+				// vitals e bloqueio de IP. Admin-only por completo.
+				// Documentado em docs/features/admin-monitoring.md.
+				if d.AdminMonitoring != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/monitoring/overview",    d.AdminMonitoring.Overview)
+						r.Get("/admin/monitoring/routes",      d.AdminMonitoring.Routes)
+						r.Get("/admin/monitoring/errors",      d.AdminMonitoring.Errors)
+						r.Get("/admin/monitoring/slow",        d.AdminMonitoring.Slow)
+						r.Get("/admin/monitoring/timeline",    d.AdminMonitoring.Timeline)
+						r.Get("/admin/monitoring/vitals",      d.AdminMonitoring.Vitals)
+						r.Get("/admin/monitoring/top-actors",  d.AdminMonitoring.TopActors)
+						r.Get("/admin/monitoring/actor-detail", d.AdminMonitoring.ActorDetail)
+						r.Get("/admin/monitoring/blocked-ips", d.AdminMonitoring.BlockedIPs)
+						r.Post("/admin/monitoring/block-ip",   d.AdminMonitoring.BlockIP)
+						r.Delete("/admin/monitoring/block-ip/{ip}", d.AdminMonitoring.UnblockIP)
+						r.Post("/admin/monitoring/block-user/{userId}", d.AdminMonitoring.BlockUser)
 					})
 				}
 			}) // end admin/operator group

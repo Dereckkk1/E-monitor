@@ -288,6 +288,56 @@ export async function exportDetectionsCsv({ campaignId, from, to, q = '', sort =
   URL.revokeObjectURL(url)
 }
 
+// ── Campaign reports (CSV consolidado + JSON pro PDF) ────────────────────
+//
+// O CSV "Detalhado" continua sendo o já existente /detections/export
+// (exportDetectionsCsv acima — admin-only). O "Consolidado" e o "Summary
+// pro PDF" entram em /reports/campaigns/{id}/... e ficam disponíveis
+// também pro viewer no escopo do próprio cliente.
+
+// Dispara o download do CSV consolidado (uma linha por material × emissora).
+// `from` e `to` são opcionais — quando omitidos, o backend usa a campanha
+// inteira. Caller faz await + trata erro.
+export async function exportConsolidatedCsv({ campaignId, from, to } = {}) {
+  const resp = await api.get(`/reports/campaigns/${campaignId}/consolidated.csv`, {
+    params: {
+      from: from || undefined,
+      to:   to || undefined,
+    },
+    responseType: 'blob',
+  })
+  // Tenta usar o filename do Content-Disposition; caso contrário, fallback
+  // com timestamp. O servidor envia "relatorio-consolidado-{slug}-{stamp}.csv".
+  const cd = resp.headers?.['content-disposition'] || ''
+  let filename = ''
+  const m = /filename="([^"]+)"/i.exec(cd)
+  if (m) filename = m[1]
+  if (!filename) {
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    filename = `relatorio-consolidado-${stamp}.csv`
+  }
+  const url = URL.createObjectURL(resp.data)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+// Busca o JSON-resumo que alimenta o PDF builder (logo, design tokens etc.
+// vivem no front pra seguir o design system). Devolve a payload crua.
+export async function fetchCampaignReportSummary({ campaignId, from, to } = {}) {
+  const resp = await api.get(`/reports/campaigns/${campaignId}/summary`, {
+    params: {
+      from: from || undefined,
+      to:   to || undefined,
+    },
+  })
+  return resp.data
+}
+
 // Admin-only retroactive entry. Aceita um payload com:
 //   { campaign_id, station_id, commercial_id, detected_at (ISO8601), note,
 //     audio?: File }

@@ -1,0 +1,143 @@
+---
+status: implementado
+ultima-verificacao: 2026-05-19
+codigo-relacionado:
+  - workers/internal/catalog/detections.go
+  - workers/internal/api/handlers/reports.go
+  - workers/internal/api/router.go
+  - workers/cmd/api/main.go
+  - frontend/src/api/hooks.js
+  - frontend/src/components/CampaignReportsMenu.jsx
+  - frontend/src/utils/pdfReport.js
+  - frontend/src/pages/CampaignsPage.jsx
+  - frontend/src/pages/DetectionsPage.jsx
+  - frontend/src/components/AirtimeFiltersBar.jsx
+---
+
+# Relatórios de Campanha (CSV consolidado, CSV detalhado, PDF)
+
+## O que é
+
+Componente unificado de exportação de relatórios de uma campanha, disponível
+nas três telas de "veiculação":
+
+- **/campaigns** — botão **Relatórios** em cada card de campanha (sem range
+  de datas — usa a campanha inteira).
+- **/detections** — botão **Relatórios** na toolbar secundária (filterStep 3),
+  recortado pelo range de datas atual da página.
+- **/reports/airtime** — botão **Relatórios** substituiu o antigo
+  "Exportar CSV" admin-only; agora viewer também consegue baixar
+  consolidado/PDF dentro do escopo do próprio cliente.
+
+O menu oferece três opções:
+
+| Item | Forma | Granularidade | Acesso |
+|------|-------|---------------|--------|
+| CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total no período | viewer (próprio cliente) + operator + admin |
+| CSV Detalhado | mesmo formato | 1 linha por **veiculação** | **admin-only** (reusa `/detections/export`) |
+| PDF | A4, gerado no browser via jsPDF | capa + KPIs + tabela por material + tabela por emissora + tabela material × emissora | viewer (próprio cliente) + operator + admin |
+
+> O CSV detalhado continua admin-only por decisão histórica (o endpoint
+> `/detections/export` já era restrito; mantemos pra evitar mudança de
+> superfície de auditoria). Viewer ainda baixa consolidado e PDF —
+> que contêm os mesmos números, só sem o timeline detalhado.
+
+## Por que existe
+
+Substituiu uma necessidade recorrente de exportar dados pra fechamento
+comercial e prestação de contas pra clientes. O fornecedor anterior já
+oferecia algo parecido; replicar isso é parte da entrega de paridade
+(§17 do plano). A versão Radiocheck é mais simples (3 formatos, escopo
+sempre por campanha) e leva a marca E-monitor no PDF.
+
+## Como funciona
+
+### Backend (Go)
+
+- **Catálogo** ([detections.go](../../workers/internal/catalog/detections.go)):
+  duas novas agregações sem paginação, usando o mesmo `WHERE` da
+  `AggregateByMaterial` (filtra `ignored_at`, `retracted_at`,
+  `evidence_status != 'audit_rejected'`), pra que o relatório bata
+  com a UI:
+  - `AggregateByMaterialStation(ctx, filter) → []MaterialStationRow`
+  - `AggregateByStation(ctx, filter) → []StationAggregateRow`
+
+- **Handler** ([reports.go](../../workers/internal/api/handlers/reports.go)):
+  - `GET /v1/internal/reports/campaigns/{id}/consolidated.csv` — stream
+    CSV com BOM UTF-8 e separador `;` (igual ao detalhado, abre limpo
+    no Excel pt-BR). Filename `relatorio-consolidado-{slug}-{stamp}.csv`.
+  - `GET /v1/internal/reports/campaigns/{id}/summary` — JSON com
+    `campaign`, `client` (nome + CNPJ), `period`, `totals` (3 KPIs),
+    `by_material`, `by_station`, `by_material_station` e `generated_at`.
+
+- **Acesso**: ambos os endpoints vivem em **Subgrupo A** do router
+  (viewer-friendly). O handler verifica `ClientScopeFromContext` e
+  responde 404 (não 403) quando o viewer tenta acessar campanha de
+  outro cliente — não vaza existência.
+
+### Frontend (React + jsPDF)
+
+- **`CampaignReportsMenu`**
+  ([component](../../frontend/src/components/CampaignReportsMenu.jsx)):
+  botão "Relatórios" com dropdown renderizado por portal (escapa
+  overflow de cards/listas). Estados de loading independentes por
+  ação. Suporta `variant` (`button | icon | compact`) e `placement`
+  (`bottom-end | bottom-start`).
+
+- **`pdfReport.js`**
+  ([builder](../../frontend/src/utils/pdfReport.js)): monta o PDF no
+  cliente:
+  1. **Header**: logo E-monitor (do `/public/E-monitor logo.png`,
+     pré-carregado no mount do menu).
+  2. **Hero**: barra rosa-action (#E81E75), nome da campanha em
+     Helvetica bold 20pt navy (#06055B), meta `cliente · período`,
+     badge de status à direita.
+  3. **KPIs**: 3 cards (Veiculações, Materiais, Emissoras) — número
+     grande rosa, label cinza.
+  4. **Tabelas** via `jspdf-autotable` (linha zebra clara,
+     cabeçalho cinza, colunas de total em bold rosa).
+  5. **Footer**: `Gerado por E-monitor · DD/MM/YYYY` à esquerda,
+     paginação à direita.
+
+  Decisão: gerar PDF no browser, não no backend. Razão:
+  - O styling segue o design system que já vive no front (cores,
+    tokens). Replicar no Go exigiria duplicação ou serviço de
+    rendering (Chromium, wkhtmltopdf) — overhead alto.
+  - Bundle adicionou ~280kb gzip (jsPDF + autotable), aceitável.
+
+- **Helpers** ([hooks.js](../../frontend/src/api/hooks.js)):
+  - `exportConsolidatedCsv({ campaignId, from, to })` — imperativo,
+    dispara download via blob + `<a download>`. Reusa filename do
+    `Content-Disposition`.
+  - `fetchCampaignReportSummary({ campaignId, from, to })` — devolve a
+    payload crua pro builder do PDF.
+  - `exportDetectionsCsv` (já existia) — usado pelo "CSV Detalhado".
+
+## Como tirar do ar / debug
+
+- Comportamento esperado: o botão fica desabilitado em `/reports/airtime`
+  enquanto não tem campanha selecionada (mostra "Selecione uma campanha"
+  no tooltip).
+- Se a logo não carregar (404, CORS), o PDF degrada pra texto "E-monitor"
+  rosa no topo. Não é erro fatal — só uma marca menos pomposa.
+- Erros de backend (404, 500) caem em `window.alert` com mensagem PT-BR.
+
+## O que NÃO faz
+
+- Não permite agrupamentos customizados (por dia da semana, faixa de
+  horário etc.). Os 3 formatos são fixos.
+- Não envia o relatório por email — só download local. Webhook continua
+  sendo a forma de entregar veiculações em tempo real.
+- Não há cache de PDFs no servidor. Cada clique no PDF re-busca o
+  summary e re-renderiza. O JSON é leve (<200 KB no pior caso).
+
+## Próximos passos possíveis (não compromissados)
+
+- Embed da Fira Sans Condensed no PDF pra alinhar 100% com o design
+  system (atualmente helvetica built-in).
+- Code-splitting de `jspdf` (dynamic import) — reduzir o bundle
+  inicial. Hoje o PDF builder é importado eagerly via
+  `CampaignReportsMenu`.
+- Quebra paginada da tabela "Material × Emissora" com cabeçalho
+  repetido em cada página (autotable já faz isso por padrão; só
+  conferir visual em campanhas com 500+ linhas).

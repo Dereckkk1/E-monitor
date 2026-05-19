@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-19
 codigo-relacionado:
   - workers/internal/observability/tracing.go
   - workers/internal/observability/nats.go
@@ -57,21 +57,41 @@ no-op nesse caso e o startup continua normal.
 | `OTEL_SERVICE_NAME` | `radiocheck-api` | Resource attribute `service.name`. |
 | `OTEL_SERVICE_VERSION` | `dev` | Resource attribute `service.version`. |
 | `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | Algoritmo. Aceita `always_on`, `always_off`, `traceidratio`, `parentbased_*`. |
-| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Argumento (ratio) do sampler. |
+| `OTEL_TRACES_SAMPLER_ARG` | `0.05` | Argumento (ratio) do sampler. Default reduzido em 2026-05-19 para mitigar I/O do Jaeger sob carga de 52+ workers. |
 | `OTEL_RESOURCE_ATTRIBUTES` | (vazio) | Resource bag adicional, formato `k1=v1,k2=v2`. |
 | `RADIOCHECK_ENV` | `development` | Mapeado para `deployment.environment`. |
 
 ## Sampling em produção
 
-O default em dev é **`parentbased_traceidratio` com ratio 1.0** (todo span
-é exportado). Em produção isso vai gerar volume desnecessário porque
-`worker.window` dispara a 0.5 Hz por estação × 200+ estações.
+**Default a partir de 2026-05-19: `parentbased_traceidratio` com ratio `0.05`**
+(5% dos traces capturados). Em volumes de ~52 workers cada um abrindo um
+span `worker.window` a 0.5 Hz, sampling 1.0 produz ~26 spans/segundo de raiz
++ filhos, o que pressiona o coletor Jaeger e o disco (cada span ~1-5 KB
+serializado). 5% mantém amostra estatística suficiente pra investigar
+tendências sem saturar.
 
-**Recomendação:** definir `OTEL_TRACES_SAMPLER_ARG=0.1` em produção. O
-`parentbased` garante que se a raiz foi sampleada, todos os filhos também
-são — então quando uma detecção é interessante (sampleada na origem) o
-trace inteiro chega. Os 90% de janelas sem hit que serão descartadas não
-têm informação útil mesmo.
+**Garantias do sampling 5%:**
+
+- Detecções confirmadas (linha em `detections`) seguem 100% — não passam
+  por sampler.
+- Métricas Prometheus (`detections_confirmed_total`, `MatchWindowDuration`
+  etc.) seguem 100% — não passam por sampler.
+- Logs estruturados (zap) seguem 100% — não passam por sampler.
+
+O sampling só decide se o **span OTel** vai pro Jaeger. Em incident response
+ou debug específico, suba temporariamente:
+
+```bash
+OTEL_TRACES_SAMPLER_ARG=1.0 docker compose -f infra/docker/docker-compose.yml \
+  -f infra/docker/docker-compose.override.yml \
+  --env-file infra/docker/.env up -d --force-recreate --no-deps api
+```
+
+Lembre de baixar de volta quando terminar.
+
+O `parentbased` garante que se a raiz foi sampleada, todos os filhos também
+são — então quando um trace é capturado ele chega completo (worker → publish
+→ supervisor → evidence → webhook).
 
 ## Lendo um trace de detecção end-to-end
 

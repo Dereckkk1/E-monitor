@@ -104,6 +104,16 @@ function IconAdminOverview() {
   )
 }
 
+function IconAdminMonitoring() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 10.5L4 8l2.5 2 3-5 2.5 3.5L14.5 6" />
+      <circle cx="14.5" cy="6" r="1" fill="currentColor" stroke="none" />
+      <path d="M1.5 13.5h13" strokeOpacity="0.45" />
+    </svg>
+  )
+}
+
 function IconUsers() {
   return (
     <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -171,8 +181,9 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/operations" icon={<IconOperations />} onClose={onClose}>Workers</SidebarLink>
 
       <span className="sidebar-section-label">Administração</span>
-      <SidebarLink to="/admin/overview" icon={<IconAdminOverview />} onClose={onClose}>Visão geral</SidebarLink>
-      <SidebarLink to="/admin/users"    icon={<IconUsers />}         onClose={onClose}>Usuários</SidebarLink>
+      <SidebarLink to="/admin/overview"   icon={<IconAdminOverview />}   onClose={onClose}>Visão geral</SidebarLink>
+      <SidebarLink to="/admin/monitoring" icon={<IconAdminMonitoring />} onClose={onClose}>Monitoramento</SidebarLink>
+      <SidebarLink to="/admin/users"      icon={<IconUsers />}           onClose={onClose}>Usuários</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>
       <SidebarLink to="/account" icon={<IconAccount />} onClose={onClose}>Minha conta</SidebarLink>
