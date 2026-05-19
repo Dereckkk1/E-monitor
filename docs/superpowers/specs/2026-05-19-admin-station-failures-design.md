@@ -1,5 +1,5 @@
 ---
-status: planejado
+status: implementado
 ultima-verificacao: 2026-05-19
 codigo-relacionado:
   - workers/internal/api/handlers/admin_station_failures.go (novo)
