@@ -216,12 +216,30 @@ export default function RuleSidePanel({
           <div style={{ marginBottom: 20 }}>
             <Label>Emissoras *</Label>
             <div style={chipRow}>
-              {stations.map(s => (
-                <button key={s.id}
-                  onClick={() => toggleStation(s.id)}
-                  style={{ ...chip, ...(stationIds.includes(s.id) ? chipOn : {}) }}
-                >{s.name}</button>
-              ))}
+              {stations.map(s => {
+                const freq = s.frequency_mhz != null ? ` ${s.frequency_mhz}` : ''
+                const dial = `${s.band || ''}${freq}`.trim()
+                const meta = [dial, s.city].filter(Boolean).join(' · ')
+                const on = stationIds.includes(s.id)
+                return (
+                  <button key={s.id}
+                    onClick={() => toggleStation(s.id)}
+                    title={meta || s.name}
+                    style={{ ...chip, ...(on ? chipOn : {}) }}
+                  >
+                    <span>{s.name}</span>
+                    {meta && (
+                      <span style={{
+                        marginLeft: 6, fontSize: 10, fontWeight: 500,
+                        color: on ? 'inherit' : 'var(--c-text-3)',
+                        opacity: on ? 0.85 : 1,
+                      }}>
+                        {meta}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
 
