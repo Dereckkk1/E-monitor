@@ -243,8 +243,8 @@ export default function DistributionGrid({
                         hasOverride={!!cell.hasOverride}
                         hasPendingDraft={!!cell.hasPendingDraft}
                         onClick={(e) => onCellClick?.(row.stationId, row.materialId, dateISO, e.currentTarget.getBoundingClientRect())}
-                        onIncrement={onCellIncrement ? () => onCellIncrement(row.stationId, row.materialId, dateISO, cell.expected ?? 0) : undefined}
-                        onDecrement={onCellDecrement ? () => onCellDecrement(row.stationId, row.materialId, dateISO, cell.expected ?? 0) : undefined}
+                        onIncrement={onCellIncrement ? (rect) => onCellIncrement(row.stationId, row.materialId, dateISO, rect) : undefined}
+                        onDecrement={onCellDecrement ? (rect) => onCellDecrement(row.stationId, row.materialId, dateISO, rect) : undefined}
                         hint={`${row.materialTitle} · ${dateISO}`}
                       />
                     )
