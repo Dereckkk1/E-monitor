@@ -583,7 +583,7 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 	cw.Comma = ';'
 	_ = cw.Write([]string{
 		"Data", "Hora", "Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "Categoria",
+		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "Status",
 	})
 
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
@@ -615,11 +615,30 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 			strOrEmpty(d.MaterialTypeName),
 			strOrEmpty(d.ClientName),
 			pmm,
-			d.Category,
+			categoryLabelPT(d.Category),
 		})
 	})
 
 	cw.Flush()
+}
+
+// categoryLabelPT mapeia o enum da coluna `category` (in_slot|out_slot|
+// out_date|orphan) pra rótulo PT-BR usado nos relatórios exportados. Mesmo
+// vocabulário do DayDetailModal.jsx — "Bônus" pra orphan (veiculação sem
+// regra correspondente, conta como bônus comercial pro cliente).
+func categoryLabelPT(c string) string {
+	switch c {
+	case "in_slot":
+		return "Dentro da faixa"
+	case "out_slot":
+		return "Fora da faixa"
+	case "out_date":
+		return "Fora da data"
+	case "orphan":
+		return "Bônus"
+	default:
+		return c // fallback defensivo se aparecer um valor novo
+	}
 }
 
 func strOrEmpty(s *string) string {

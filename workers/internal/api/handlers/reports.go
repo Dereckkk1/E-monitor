@@ -153,7 +153,11 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 	_ = cw.Write([]string{
 		"ID Material", "Material", "Tipo", "Duração (s)",
 		"Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Total Veiculações", "Primeira", "Última",
+		"Total Veiculações",
+		// Breakdown por status — útil pra fechamento (saber quanto foi
+		// bônus, quanto foi fora-faixa, etc. dentro de cada combinação).
+		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
+		"Primeira", "Última",
 	})
 
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
@@ -181,6 +185,10 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 			strOrEmpty(row.StationCity),
 			strOrEmpty(row.StationState),
 			fmt.Sprintf("%d", row.Count),
+			fmt.Sprintf("%d", row.InSlotCount),
+			fmt.Sprintf("%d", row.OutSlotCount),
+			fmt.Sprintf("%d", row.OutDateCount),
+			fmt.Sprintf("%d", row.OrphanCount),
 			row.FirstDetectedAt.In(loc).Format("02/01/2006 15:04"),
 			row.LastDetectedAt.In(loc).Format("02/01/2006 15:04"),
 		})
