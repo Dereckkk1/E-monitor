@@ -45,7 +45,7 @@ Sidebar: novo item dentro do grupo "Administração", abaixo de `Monitoramento` 
 Duas causas distintas, que podem coexistir numa mesma emissora num mesmo dia:
 
 1. **`stream-down`** — derivado de `stream_health_events`. Janela `[event_at, event_at + duration_seconds]` em que o stream esteve fora.
-2. **`silent-gap`** — derivado de `daily_play_summary.deficit > 0` em uma `(campaign, material, station, data)` SEM down event explicando. Significa que o slot era esperado, não tocou, e o stream parecia estar no ar — provavelmente worker travado, problema de codec, ou janela de override que ninguém respeitou.
+2. **`silent-gap`** — derivado de `daily_play_summary.deficit > 0` em uma `(campaign, type, station, for_date)` SEM down event explicando. Significa que o slot era esperado, não tocou, e o stream parecia estar no ar — provavelmente worker travado, problema de codec, ou janela de override que ninguém respeitou.
 
 Worker travado/ausente como categoria separada **não** entra. A motivação: a tela é centrada em IMPACTO, não em causa-raiz. Se o worker travou mas não houve campanha agendada naquele horário, ninguém foi afetado — não vira linha aqui. Pra ver workers travados sem impacto, o operador continua usando `/admin/overview`. Essa separação evita duplicar responsabilidade com `/admin/overview` (que já lista workers em estado degradado AGORA).
 
@@ -138,7 +138,7 @@ WITH down_aggr AS (
 deficit_aggr AS (
   SELECT station_id, COUNT(DISTINCT campaign_id) AS aff_camp
   FROM daily_play_summary
-  WHERE data = $1::date AND deficit > 0
+  WHERE for_date = $1::date AND deficit > 0
   GROUP BY station_id
 )
 SELECT s.id, s.name, s.frequency_mhz, s.band, s.city, s.logo,
@@ -167,23 +167,27 @@ Onde `$2` = lista de station_ids da Query 1.
 
 ### Query 3 — campanhas com deficit + cruzamento temporal
 
+`daily_play_summary` agrupa por (campaign_id, **type_id**, station_id, for_date). Para a UI agregamos por campanha (somando os tipos), e olhamos as janelas de regra da campanha+station naquele dia.
+
 ```sql
 SELECT dps.station_id, dps.campaign_id,
        c.name AS campaign_name, cl.name AS client_name,
        SUM(dps.expected) AS expected,
        SUM(dps.in_slot)  AS delivered,
        SUM(dps.deficit)  AS deficit,
-       array_agg(DISTINCT dr.time_start::text || '/' || dr.time_end::text)
-         FILTER (WHERE dr.id IS NOT NULL) AS rule_windows
+       (
+         SELECT array_agg(to_char(dr.time_start, 'HH24:MI') || '/' ||
+                          to_char(dr.time_end,   'HH24:MI'))
+         FROM distribution_rules dr
+         WHERE dr.campaign_id = dps.campaign_id
+           AND dps.station_id = ANY(dr.station_ids)
+           AND dr.start_date <= $1::date AND dr.end_date >= $1::date
+           AND (1 << EXTRACT(DOW FROM $1::date)::int) & dr.weekday_mask != 0
+       ) AS rule_windows
 FROM daily_play_summary dps
 JOIN campaigns c ON c.id = dps.campaign_id
 JOIN clients cl ON cl.id = c.client_id
-LEFT JOIN distribution_rules dr
-  ON dr.campaign_id = dps.campaign_id
- AND dr.material_id = dps.material_id
- AND dps.station_id = ANY(dr.station_ids)
- AND dr.start_date <= $1::date AND dr.end_date >= $1::date
-WHERE dps.data = $1::date
+WHERE dps.for_date = $1::date
   AND dps.deficit > 0
   AND dps.station_id = ANY($2::uuid[])
 GROUP BY dps.station_id, dps.campaign_id, c.name, cl.name
