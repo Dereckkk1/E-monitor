@@ -53,6 +53,10 @@ export default function DistributionStep({
   // Key: `${stationId}|${typeId}|${dateISO}` → new plays_expected value.
   const [pendingDrafts, setPendingDrafts] = useState(() => new Map())
   const [committing, setCommitting] = useState(false)
+  // Última faixa horária aplicada pelo usuário nesta sessão. Usada pelo
+  // OverridePopover quando a célula não tem rule única + override próprio
+  // (decisão D2 do spec override-time-window).
+  const [lastUsedWindow, setLastUsedWindow] = useState(null)
 
   const typeById = useMemo(
     () => Object.fromEntries(materialTypes.map(t => [t.id, t])),
@@ -143,6 +147,42 @@ export default function DistributionStep({
     })
   }
 
+  // Computa todas as faixas horárias de rules aplicáveis a uma célula
+  // específica (D2/D4 do spec). Alimentação inteligente do popover.
+  function ruleWindowsForCell(stationId, typeId, dateISO) {
+    const d = new Date(dateISO + 'T12:00:00') // meio-dia local pra evitar quirks de TZ
+    const dowBit = 1 << d.getDay()
+    return rules
+      .filter(r =>
+        r.type_id === typeId &&
+        r.station_ids.includes(stationId) &&
+        dateISO >= r.start_date.slice(0,10) &&
+        dateISO <= r.end_date.slice(0,10) &&
+        (r.weekday_mask & dowBit) !== 0
+      )
+      .map(r => ({
+        time_start: String(r.time_start).slice(0,5),
+        time_end:   String(r.time_end).slice(0,5),
+      }))
+  }
+
+  // Decide se um clique de +/- inline staga direto OU força o popover.
+  // Regra D3 do spec: só staga se a célula tem rule única OU override
+  // existente. Multi-rule sem override / célula limpa → popover.
+  function handleInlineStep(stationId, typeId, dateISO, delta, anchorRect) {
+    const windows = ruleWindowsForCell(stationId, typeId, dateISO)
+    const hasOverride = overrides.some(o =>
+      o.station_id === stationId && o.type_id === typeId &&
+      o.for_date.slice(0,10) === dateISO)
+
+    if (hasOverride || windows.length === 1) {
+      stageCellChange(stationId, typeId, dateISO, delta)
+      return
+    }
+    setPopoverAnchor(anchorRect)
+    setPopoverContext({ stationId, typeId, date: dateISO })
+  }
+
   async function commitDrafts() {
     if (pendingDrafts.size === 0 || committing) return
     setCommitting(true)
@@ -150,6 +190,22 @@ export default function DistributionStep({
     const snapshot = [...pendingDrafts.entries()]
     for (const [key, value] of snapshot) {
       const [stationId, typeId, dateISO] = key.split('|')
+      // Deriva faixa: override existente → rule única → bloqueia draft.
+      // (handleInlineStep só staga quando há fonte clara, mas defensivo.)
+      // Importante: NÃO usar `window` como nome — sombrearia o global.
+      const existingOv = overrides.find(o =>
+        o.station_id === stationId && o.type_id === typeId &&
+        o.for_date.slice(0,10) === dateISO)
+      const windows = ruleWindowsForCell(stationId, typeId, dateISO)
+      const draftWindow = existingOv
+        ? { time_start: String(existingOv.time_start).slice(0,5),
+            time_end:   String(existingOv.time_end).slice(0,5) }
+        : (windows.length === 1 ? windows[0] : null)
+      if (!draftWindow) {
+        // Defensivo: pula células ambíguas. handleInlineStep impede a
+        // entrada desse draft, mas o safety net evita NOT NULL no server.
+        continue
+      }
       try {
         await upsertOverride.mutateAsync({
           campaignId,
@@ -157,9 +213,9 @@ export default function DistributionStep({
           station_id: stationId,
           for_date: dateISO,
           plays_expected: value,
+          time_start: draftWindow.time_start,
+          time_end:   draftWindow.time_end,
         })
-        // Drop the entry only if the user hasn't bumped it since we snapshotted;
-        // otherwise their newer change would silently disappear.
         setPendingDrafts(prev => {
           if (prev.get(key) !== value) return prev
           const next = new Map(prev)
@@ -216,6 +272,13 @@ export default function DistributionStep({
   const matchingOverride = ctx ? overrides.find(o =>
     o.station_id === ctx.stationId && o.type_id === ctx.typeId &&
     o.for_date.slice(0, 10) === ctx.date) : null
+
+  // Contexto pra alimentar o OverridePopover com herança inteligente.
+  const ctxWindows = ctx ? ruleWindowsForCell(ctx.stationId, ctx.typeId, ctx.date) : []
+  const ctxOverrideWindow = matchingOverride
+    ? { time_start: String(matchingOverride.time_start).slice(0,5),
+        time_end:   String(matchingOverride.time_end).slice(0,5) }
+    : null
 
   // Pre-compute lists for the RuleSidePanel — types present in the campaign
   // (a type is "present" when at least one material of that type is linked).
@@ -337,10 +400,10 @@ export default function DistributionStep({
           rows={rows}
           cellData={cellDataWithDrafts}
           onCellClick={handleCellClick}
-          onCellIncrement={(stationId, typeId, dateISO) =>
-            stageCellChange(stationId, typeId, dateISO, +1)}
-          onCellDecrement={(stationId, typeId, dateISO) =>
-            stageCellChange(stationId, typeId, dateISO, -1)}
+          onCellIncrement={(stationId, typeId, dateISO, rect) =>
+            handleInlineStep(stationId, typeId, dateISO, +1, rect)}
+          onCellDecrement={(stationId, typeId, dateISO, rect) =>
+            handleInlineStep(stationId, typeId, dateISO, -1, rect)}
           capAtToday={false}
         />
       )}
@@ -363,14 +426,36 @@ export default function DistributionStep({
         open={!!popoverAnchor && !!ctx}
         anchorRect={popoverAnchor}
         onClose={() => { setPopoverAnchor(null); setPopoverContext(null) }}
-        onApply={async (newValue) => {
+        onApply={async (newValue, newTimeStart, newTimeEnd, applyToOthers) => {
           await upsertOverride.mutateAsync({
             campaignId,
             type_id: ctx.typeId,
             station_id: ctx.stationId,
             for_date: ctx.date,
             plays_expected: newValue,
+            time_start: newTimeStart,
+            time_end:   newTimeEnd,
           })
+          setLastUsedWindow({ time_start: newTimeStart, time_end: newTimeEnd })
+
+          if (applyToOthers) {
+            // Replica a faixa em todas as outras células do mesmo tipo no
+            // mês que JÁ TÊM override (não cria override novo em células
+            // limpas). Decisão D2 do spec.
+            const others = overrides.filter(o =>
+              o.type_id === ctx.typeId &&
+              !(o.station_id === ctx.stationId && o.for_date.slice(0,10) === ctx.date)
+            )
+            await Promise.all(others.map(o => upsertOverride.mutateAsync({
+              campaignId,
+              type_id:    o.type_id,
+              station_id: o.station_id,
+              for_date:   o.for_date.slice(0,10),
+              plays_expected: o.plays_expected,
+              time_start: newTimeStart,
+              time_end:   newTimeEnd,
+            })))
+          }
           setPopoverAnchor(null); setPopoverContext(null)
         }}
         onRevert={async () => {
@@ -384,6 +469,9 @@ export default function DistributionStep({
         }}
         currentRuleValue={cellInfo?.expected ?? 0}
         currentOverrideValue={matchingOverride?.plays_expected ?? null}
+        currentRuleWindows={ctxWindows}
+        currentOverrideWindow={ctxOverrideWindow}
+        lastUsedWindow={lastUsedWindow}
         materialTitle={rows.find(r => r.materialId === ctx?.typeId)?.materialTitle ?? '—'}
         stationName={allStations.find(s => s.id === ctx?.stationId)?.name ?? '—'}
         date={ctx?.date}
