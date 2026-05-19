@@ -20,8 +20,8 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/db"
-	"radiocheck/internal/evidence"
 	"radiocheck/internal/events"
+	"radiocheck/internal/evidence"
 	"radiocheck/internal/index"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/reqmetrics"
@@ -100,13 +100,13 @@ func main() {
 	healthEvents := catalog.NewHealthEvents(pool)
 
 	// New catalog repos (Tasks 4-9 / 13-18).
-	matTypesRepo  := catalog.NewMaterialTypes(pool)
-	matsRepo      := catalog.NewMaterials(pool)
-	cmpMatsRepo   := catalog.NewCampaignMaterials(pool)
+	matTypesRepo := catalog.NewMaterialTypes(pool)
+	matsRepo := catalog.NewMaterials(pool)
+	cmpMatsRepo := catalog.NewCampaignMaterials(pool)
 	distRulesRepo := catalog.NewDistributionRules(pool)
-	distOverRepo  := catalog.NewDistributionOverrides(pool)
-	pricingRepo   := catalog.NewPricing(pool)
-	dailySumRepo  := catalog.NewDailySummary(pool)
+	distOverRepo := catalog.NewDistributionOverrides(pool)
+	pricingRepo := catalog.NewPricing(pool)
+	dailySumRepo := catalog.NewDailySummary(pool)
 
 	// Index store + loader.
 	indexStore := index.New()
@@ -313,9 +313,13 @@ func main() {
 			Block: blockList,
 			Log:   logger,
 		},
-		Metrics:   metricsWriter,
-		BlockList: blockList,
-		Webhooks:     handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
+		StationFailures: &handlers.StationFailuresHandler{
+			Repo: catalog.NewStationFailures(pool),
+			Log:  logger,
+		},
+		Metrics:               metricsWriter,
+		BlockList:             blockList,
+		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc},
 		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, Supervisor: sup, Log: logger},
