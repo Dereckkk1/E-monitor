@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import BadgePill from './BadgePill'
 
 const OUTSIDE_BG = 'repeating-linear-gradient(45deg, #fafbfc 0 5px, #f1f5f9 5px 10px)'
@@ -22,6 +22,7 @@ export default function DayCell({
   onClick, onIncrement, onDecrement, hint,
 }) {
   const [hovered, setHovered] = useState(false)
+  const cellRef = useRef(null)
   const disabled = isOutsideRange
   const showStepper = !disabled && (onIncrement || onDecrement) && hovered
 
@@ -36,18 +37,22 @@ export default function DayCell({
   const showOutSlot  = outSlot != null && outSlot > 0
   const showOutDate  = outDate != null && outDate > 0
 
-  // Stop propagation so clicking +/- doesn't also fire onClick (which would open the popover)
+  // Stop propagation so clicking +/- doesn't also fire onClick (which would open the popover).
+  // Forwarda o rect da CÉLULA (não do botão) pra permitir que o caller
+  // âncore um popover quando o +/- cair em célula ambígua (D3 do spec
+  // override-time-window).
   function handleIncrement(e) {
     e.stopPropagation()
-    onIncrement?.()
+    onIncrement?.(cellRef.current?.getBoundingClientRect())
   }
   function handleDecrement(e) {
     e.stopPropagation()
-    onDecrement?.()
+    onDecrement?.(cellRef.current?.getBoundingClientRect())
   }
 
   return (
     <div
+      ref={cellRef}
       onClick={disabled ? undefined : onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
