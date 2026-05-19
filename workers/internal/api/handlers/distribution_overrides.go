@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,8 +21,14 @@ type overridePayload struct {
 	StationID     uuid.UUID `json:"station_id"`
 	ForDate       string    `json:"for_date"` // YYYY-MM-DD
 	PlaysExpected int16     `json:"plays_expected"`
+	TimeStart     string    `json:"time_start"` // "HH:MM"
+	TimeEnd       string    `json:"time_end"`   // "HH:MM"
 	Reason        *string   `json:"reason,omitempty"`
 }
+
+// hhmmPattern aceita 00:00 até 23:59. Validação no handler (não só no DB)
+// pra dar erro 400 amigável antes de bater no Postgres.
+var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	campaignID, err := uuid.Parse(chi.URLParam(r, "campaignID"))
@@ -39,9 +46,24 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		http.Error(w, "for_date must be YYYY-MM-DD", http.StatusBadRequest)
 		return
 	}
+	if !hhmmPattern.MatchString(p.TimeStart) {
+		http.Error(w, "time_start must be HH:MM (00:00-23:59)", http.StatusBadRequest)
+		return
+	}
+	if !hhmmPattern.MatchString(p.TimeEnd) {
+		http.Error(w, "time_end must be HH:MM (00:00-23:59)", http.StatusBadRequest)
+		return
+	}
+	// String compare é seguro porque o regex força HH:MM com zero-padding.
+	if p.TimeEnd <= p.TimeStart {
+		http.Error(w, "time_end must be greater than time_start", http.StatusBadRequest)
+		return
+	}
 	if err := h.Repo.Upsert(r.Context(), catalog.UpsertOverrideInput{
 		CampaignID: campaignID, TypeID: p.TypeID, StationID: p.StationID,
-		ForDate: date, PlaysExpected: p.PlaysExpected, Reason: p.Reason,
+		ForDate: date, PlaysExpected: p.PlaysExpected,
+		TimeStart: p.TimeStart, TimeEnd: p.TimeEnd,
+		Reason: p.Reason,
 	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
