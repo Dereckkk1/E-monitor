@@ -33,8 +33,8 @@ O menu oferece três opções:
 
 | Item | Forma | Granularidade | Acesso |
 |------|-------|---------------|--------|
-| CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total no período | viewer (próprio cliente) + operator + admin |
-| CSV Detalhado | mesmo formato | 1 linha por **veiculação** | **admin-only** (reusa `/detections/export`) |
+| CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total + breakdown por status (Dentro/Fora faixa/Fora data/Bônus) no período | viewer (próprio cliente) + operator + admin |
+| CSV Detalhado | mesmo formato | 1 linha por **veiculação**, coluna **Status** em PT-BR | **admin-only** (reusa `/detections/export`) |
 | PDF | A4, gerado no browser via jsPDF | capa + KPIs + tabela por material + tabela por emissora + tabela material × emissora | viewer (próprio cliente) + operator + admin |
 
 > O CSV detalhado continua admin-only por decisão histórica (o endpoint
@@ -49,6 +49,41 @@ comercial e prestação de contas pra clientes. O fornecedor anterior já
 oferecia algo parecido; replicar isso é parte da entrega de paridade
 (§17 do plano). A versão Radiocheck é mais simples (3 formatos, escopo
 sempre por campanha) e leva a marca E-monitor no PDF.
+
+## Rótulos de status nos CSVs
+
+A coluna **Status** (CSV Detalhado) e as colunas de breakdown (CSV
+Consolidado) usam o mesmo vocabulário PT-BR do
+[`DayDetailModal.jsx`](../../frontend/src/components/DayDetailModal.jsx),
+não o enum técnico do banco. Mapeamento:
+
+| `category` (banco) | Status (CSV) |
+|--------------------|--------------|
+| `in_slot`          | Dentro da faixa |
+| `out_slot`         | Fora da faixa |
+| `out_date`         | Fora da data |
+| `orphan`           | Bônus |
+
+A conversão vive em `categoryLabelPT` ([detections.go](../../workers/internal/api/handlers/detections.go))
+— se aparecer um valor de categoria novo (improvável; a coluna é enum
+restrito por categorizer.go), o fallback escreve o valor cru pra não
+silenciar.
+
+## Filtro de período (dentro do menu)
+
+O dropdown abre com um seletor de período opcional no topo:
+
+- **Default** quando não há range vindo da página (cenário `/campaigns`):
+  **mês corrente inteiro** (1º ao último dia do mês atual).
+- **Default** em `/detections` e `/reports/airtime`: herda o `from`/`to`
+  que o usuário já escolheu nos filtros da página.
+- Dois chips rápidos: **"Mês atual"** restaura o default e **"Toda"**
+  zera o filtro (backend passa a usar a campanha inteira).
+- Validação: `from > to` desabilita as 3 ações e exibe inline a mensagem
+  "Intervalo inválido".
+
+O range editado dentro do menu **não** propaga de volta pros filtros da
+página — é só o recorte do relatório.
 
 ## Como funciona
 

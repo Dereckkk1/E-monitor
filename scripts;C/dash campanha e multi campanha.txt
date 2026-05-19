@@ -3,6 +3,7 @@ telas:
 1 - tela de dash campanha e multi campanha
 2 - tela de erros (relatorio-campanha.pages.dev)
 4 - tela de mapa ao vivo
+
 features:
 
 2 - melhora de segurança (10 mandamentos da segurança)

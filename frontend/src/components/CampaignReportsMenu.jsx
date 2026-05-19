@@ -7,8 +7,11 @@
 // /reports/airtime (no header da sidebar de materiais). Props mínimos:
 //
 //   - campaignId (uuid, obrigatório)
-//   - from, to   (ISO date 'YYYY-MM-DD' ou full RFC3339; opcionais — sem
-//                 eles o backend usa a campanha inteira)
+//   - from, to   (ISO date 'YYYY-MM-DD' ou full RFC3339; opcionais — usados
+//                 como valor *inicial* do seletor de período dentro do menu.
+//                 Sem eles, o menu defaulta para o mês corrente inteiro.
+//                 O usuário pode editar o período no dropdown a qualquer
+//                 momento; o range efetivo enviado ao backend é o local.)
 //   - variant    ('button' | 'icon' | 'compact') controla a aparência;
 //                  'icon' = só ícone (cards de /campaigns)
 //                  'button' = botão pílula com ícone+texto (default)
@@ -21,7 +24,7 @@
 // helpers de hooks.js, gera o PDF inline e mostra toasts via window.alert
 // se algo falhar.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   exportConsolidatedCsv,
@@ -48,6 +51,27 @@ function isoToRFC3339End(iso) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
   const d = new Date(`${date}T23:59:59.999-03:00`)
   return isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+// ── Date helpers ─────────────────────────────────────────────────
+function pad2(n) { return String(n).padStart(2, '0') }
+function toYMD(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+// Apenas a parte "YYYY-MM-DD" — aceita strings já no formato curto ou um
+// RFC3339 vindo de prop. Devolve '' quando não consegue parsear.
+function toDateOnly(s) {
+  if (!s) return ''
+  const head = String(s).slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(head) ? head : ''
+}
+// Mês corrente — primeiro dia, último dia. É o default quando nenhuma
+// prop from/to chega (cenário /campaigns).
+function currentMonthRange() {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end   = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  return { from: toYMD(start), to: toYMD(end) }
 }
 
 // ── Ícones inline (mesma família visual do resto do app) ──────────
@@ -114,6 +138,41 @@ export default function CampaignReportsMenu({
   const btnRef = useRef(null)
   const menuRef = useRef(null)
 
+  // Range local editável dentro do dropdown. Inicializa com a regra:
+  //   1. Se a página passou from/to (ex: /detections, /reports/airtime) →
+  //      adota como ponto de partida.
+  //   2. Caso contrário (ex: /campaigns) → mês corrente inteiro.
+  // O usuário pode editar livremente. O componente nunca propaga de volta
+  // pra página: é só o recorte do relatório.
+  const [localRange, setLocalRange] = useState(() => {
+    const pf = toDateOnly(from)
+    const pt = toDateOnly(to)
+    if (pf || pt) return { from: pf, to: pt }
+    return currentMonthRange()
+  })
+  // Re-sync quando a página muda o from/to (filtros de /detections etc.).
+  // Segue o padrão "Ajustando estado quando uma prop muda" da doc do React
+  // — comparar snapshot durante o render é preferível a setState dentro
+  // de useEffect (que dispara re-render extra).
+  const [propsSnapshot, setPropsSnapshot] = useState({ from, to })
+  if (propsSnapshot.from !== from || propsSnapshot.to !== to) {
+    setPropsSnapshot({ from, to })
+    const pf = toDateOnly(from)
+    const pt = toDateOnly(to)
+    if (pf || pt) setLocalRange({ from: pf, to: pt })
+  }
+
+  // Validação básica de range: from > to bloqueia as ações.
+  const rangeInvalid = !!(localRange.from && localRange.to && localRange.from > localRange.to)
+
+  function setMonthDefault() {
+    setLocalRange(currentMonthRange())
+  }
+  function clearRange() {
+    // "Sem filtro" = backend usa a campanha inteira.
+    setLocalRange({ from: '', to: '' })
+  }
+
   // Pré-carrega a logo (módulo) assim que o componente monta — usuário
   // costuma clicar em PDF logo na sequência.
   useEffect(() => { prefetchReportLogo() }, [])
@@ -145,14 +204,14 @@ export default function CampaignReportsMenu({
 
   function rangeRFC3339() {
     return {
-      from: isoToRFC3339Start(from) || undefined,
-      to:   isoToRFC3339End(to)     || undefined,
+      from: isoToRFC3339Start(localRange.from) || undefined,
+      to:   isoToRFC3339End(localRange.to)     || undefined,
     }
   }
 
   async function handleConsolidated(e) {
     e.stopPropagation()
-    if (busy) return
+    if (busy || rangeInvalid) return
     setBusy('consolidated')
     try {
       const { from: f, to: t } = rangeRFC3339()
@@ -171,7 +230,7 @@ export default function CampaignReportsMenu({
 
   async function handleDetailed(e) {
     e.stopPropagation()
-    if (busy) return
+    if (busy || rangeInvalid) return
     setBusy('detailed')
     try {
       const { from: f, to: t } = rangeRFC3339()
@@ -190,7 +249,7 @@ export default function CampaignReportsMenu({
 
   async function handlePdf(e) {
     e.stopPropagation()
-    if (busy) return
+    if (busy || rangeInvalid) return
     setBusy('pdf')
     try {
       const { from: f, to: t } = rangeRFC3339()
@@ -257,6 +316,11 @@ export default function CampaignReportsMenu({
           placement={placement}
           busy={busy}
           showDetailed={showDetailed && isAdmin}
+          range={localRange}
+          rangeInvalid={rangeInvalid}
+          onRangeChange={setLocalRange}
+          onResetToMonth={setMonthDefault}
+          onClearRange={clearRange}
           onConsolidated={handleConsolidated}
           onDetailed={handleDetailed}
           onPdf={handlePdf}
@@ -269,12 +333,18 @@ export default function CampaignReportsMenu({
 
 // ─── ReportsDropdown ──────────────────────────────────────────────
 // Item visual: ícone tipo-arquivo + label + descrição curta (uma linha).
-import { forwardRef } from 'react'
 
 const ReportsDropdown = forwardRef(function ReportsDropdown(
-  { anchorRect, placement, busy, showDetailed, onConsolidated, onDetailed, onPdf }, ref
+  {
+    anchorRect, placement, busy, showDetailed,
+    range, rangeInvalid,
+    onRangeChange, onResetToMonth, onClearRange,
+    onConsolidated, onDetailed, onPdf,
+  }, ref
 ) {
-  const MENU_W = 268
+  // Menu mais largo do que a v1 (268) pra acomodar o seletor de período
+  // sem espremer os inputs de data nativos.
+  const MENU_W = 312
   const MENU_GAP = 6
   const pad = 8
   const top = anchorRect.bottom + window.scrollY + MENU_GAP
@@ -284,10 +354,16 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
   // Mantém dentro do viewport.
   left = Math.max(pad, Math.min(left, window.innerWidth - MENU_W - pad))
 
+  // Stops propagation pra outside-click no listener pai não fechar o menu
+  // quando o usuário clica nos inputs de data.
+  const stop = (e) => e.stopPropagation()
+
   return (
     <div
       ref={ref}
       role="menu"
+      onClick={stop}
+      onMouseDown={stop}
       style={{
         position: 'absolute',
         top, left,
@@ -302,12 +378,23 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         animation: 'reportsMenuIn 130ms ease-out',
       }}
     >
+      <RangeSection
+        range={range}
+        rangeInvalid={rangeInvalid}
+        onRangeChange={onRangeChange}
+        onResetToMonth={onResetToMonth}
+        onClearRange={onClearRange}
+        disabled={!!busy}
+      />
+
+      <div style={{ height: 1, background: 'var(--c-border)', margin: '6px 6px' }} />
+
       <ReportItem
         icon={<IconCsv />}
         label="CSV Consolidado"
         hint="Totais por material × emissora"
         loading={busy === 'consolidated'}
-        disabled={!!busy}
+        disabled={!!busy || rangeInvalid}
         onClick={onConsolidated}
       />
       {showDetailed && (
@@ -316,7 +403,7 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
           label="CSV Detalhado"
           hint="Uma linha por veiculação"
           loading={busy === 'detailed'}
-          disabled={!!busy}
+          disabled={!!busy || rangeInvalid}
           onClick={onDetailed}
         />
       )}
@@ -326,13 +413,124 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         label="PDF"
         hint="Relatório visual completo"
         loading={busy === 'pdf'}
-        disabled={!!busy}
+        disabled={!!busy || rangeInvalid}
         onClick={onPdf}
         accent
       />
     </div>
   )
 })
+
+// ─── RangeSection ────────────────────────────────────────────────
+// Cabeçalho com label "Período" + dois <input type="date"> + dois chips
+// rápidos ("Mês atual" e "Toda a campanha"). Visualmente alinha com os
+// filtros de data já existentes em /detections e /reports/airtime.
+function RangeSection({ range, rangeInvalid, onRangeChange, onResetToMonth, onClearRange, disabled }) {
+  function setFrom(e) {
+    onRangeChange({ ...range, from: e.target.value || '' })
+  }
+  function setTo(e) {
+    onRangeChange({ ...range, to: e.target.value || '' })
+  }
+  const isCleared = !range.from && !range.to
+  return (
+    <div style={{ padding: '6px 8px 2px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline',
+        justifyContent: 'space-between', marginBottom: 6,
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+          color: 'var(--c-text-3)', textTransform: 'uppercase',
+        }}>Período (opcional)</span>
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          <RangeChip
+            label="Mês atual"
+            onClick={onResetToMonth}
+            disabled={disabled}
+            title="Voltar pro mês atual inteiro"
+          />
+          <RangeChip
+            label={isCleared ? '✓ Campanha' : 'Toda'}
+            onClick={onClearRange}
+            disabled={disabled}
+            title="Usar a campanha inteira (sem filtro de data)"
+            active={isCleared}
+          />
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input
+          type="date"
+          value={range.from || ''}
+          onChange={setFrom}
+          disabled={disabled}
+          className="reports-menu-date"
+          style={dateInputStyle(rangeInvalid)}
+          aria-label="Data inicial"
+        />
+        <span style={{ color: 'var(--c-text-3)', fontSize: 12 }}>→</span>
+        <input
+          type="date"
+          value={range.to || ''}
+          onChange={setTo}
+          disabled={disabled}
+          className="reports-menu-date"
+          style={dateInputStyle(rangeInvalid)}
+          aria-label="Data final"
+        />
+      </div>
+      {rangeInvalid && (
+        <p style={{
+          margin: '6px 0 0', fontSize: 11, color: 'var(--c-danger)',
+        }}>
+          Intervalo inválido — a data inicial precisa ser anterior à final.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function dateInputStyle(invalid) {
+  return {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    fontFamily: 'var(--font-body)',
+    padding: '6px 8px',
+    borderRadius: 'var(--radius-md)',
+    border: `1px solid ${invalid ? 'var(--c-danger)' : 'var(--c-border)'}`,
+    background: 'var(--c-surface)',
+    color: 'var(--c-text)',
+    outline: 'none',
+  }
+}
+
+function RangeChip({ label, onClick, disabled, title, active }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        padding: '2px 8px',
+        fontSize: 10.5,
+        fontFamily: 'var(--font-body)',
+        fontWeight: 600,
+        background: active ? 'var(--c-action-light)' : 'var(--c-surface-2)',
+        color: active ? 'var(--c-action)' : 'var(--c-text-2)',
+        border: '1px solid transparent',
+        borderRadius: 'var(--radius-full)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'all 120ms',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
 
 function ReportItem({ icon, label, hint, loading, disabled, accent, onClick }) {
   return (

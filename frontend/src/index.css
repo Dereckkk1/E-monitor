@@ -1358,6 +1358,13 @@ textarea.input {
   transform: translateY(-1px);
 }
 
+/* Inputs de data dentro do dropdown — aura rosa no focus, igual aos
+   outros inputs do app. */
+.reports-menu-date:focus {
+  border-color: var(--c-action) !important;
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.12);
+}
+
 .spinning {
   animation: spin 0.75s linear infinite;
 }

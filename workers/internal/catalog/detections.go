@@ -770,7 +770,10 @@ func (d *Detections) Restore(ctx context.Context, id uuid.UUID) error {
 
 // MaterialStationRow é a granularidade do relatório consolidado: uma linha
 // por (material × emissora) com o total de veiculações no período. Inclui
-// metadata leve da emissora pra o CSV ficar legível sem JOIN no front.
+// metadata leve da emissora pra o CSV ficar legível sem JOIN no front, e
+// um breakdown por categoria (in_slot/out_slot/out_date/orphan) pra
+// fechamento comercial saber quantas veiculações foram bônus, fora-faixa
+// etc. dentro de cada combinação material × emissora.
 type MaterialStationRow struct {
 	MaterialID          uuid.UUID `json:"material_id"`
 	MaterialShortID     *int32    `json:"material_short_id,omitempty"`
@@ -784,8 +787,13 @@ type MaterialStationRow struct {
 	StationCity         *string   `json:"station_city,omitempty"`
 	StationState        *string   `json:"station_state,omitempty"`
 	Count               int       `json:"count"`
-	FirstDetectedAt     time.Time `json:"first_detected_at"`
-	LastDetectedAt      time.Time `json:"last_detected_at"`
+	// Breakdown por status — soma sempre == Count.
+	InSlotCount  int       `json:"in_slot_count"`
+	OutSlotCount int       `json:"out_slot_count"`
+	OutDateCount int       `json:"out_date_count"`
+	OrphanCount  int       `json:"orphan_count"`
+	FirstDetectedAt time.Time `json:"first_detected_at"`
+	LastDetectedAt  time.Time `json:"last_detected_at"`
 }
 
 // AggregateByMaterialStation agrupa as veiculações da campanha por
@@ -799,6 +807,10 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		       d.station_id, COALESCE(s.name, ''),
 		       s.band, s.frequency_mhz, s.city, s.state,
 		       COUNT(*) AS cnt,
+		       COUNT(*) FILTER (WHERE d.category = 'in_slot')  AS in_slot_count,
+		       COUNT(*) FILTER (WHERE d.category = 'out_slot') AS out_slot_count,
+		       COUNT(*) FILTER (WHERE d.category = 'out_date') AS out_date_count,
+		       COUNT(*) FILTER (WHERE d.category = 'orphan')   AS orphan_count,
 		       MIN(d.detected_at), MAX(d.detected_at)
 		FROM detections d
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
@@ -828,7 +840,9 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 			&r.MaterialDurationSec, &r.MaterialTypeName,
 			&r.StationID, &r.StationName,
 			&r.StationBand, &r.StationFrequencyMHz, &r.StationCity, &r.StationState,
-			&r.Count, &r.FirstDetectedAt, &r.LastDetectedAt,
+			&r.Count,
+			&r.InSlotCount, &r.OutSlotCount, &r.OutDateCount, &r.OrphanCount,
+			&r.FirstDetectedAt, &r.LastDetectedAt,
 		); err != nil {
 			return nil, err
 		}
