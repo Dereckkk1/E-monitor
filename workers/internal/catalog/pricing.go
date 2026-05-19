@@ -23,13 +23,13 @@ const (
 // Em modo `consolidated`, ConsolidatedValue é set e PerType vazio. Em modo
 // `per_insertion`, ConsolidatedValue é nil e PerType tem uma entrada por tipo.
 type StationPricing struct {
-	CampaignID         uuid.UUID            `json:"campaign_id"`
-	StationID          uuid.UUID            `json:"station_id"`
-	Mode               string               `json:"mode"`
-	ConsolidatedValue  *float64             `json:"consolidated_value,omitempty"`
-	PerType            []TypePricing        `json:"per_type"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
+	CampaignID        uuid.UUID     `json:"campaign_id"`
+	StationID         uuid.UUID     `json:"station_id"`
+	Mode              string        `json:"mode"`
+	ConsolidatedValue *float64      `json:"consolidated_value,omitempty"`
+	PerType           []TypePricing `json:"per_type"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // TypePricing é uma entrada de valor por tipo de material — só preenchida

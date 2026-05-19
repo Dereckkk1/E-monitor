@@ -25,7 +25,7 @@ func newTestPool(t *testing.T) (context.Context, *Stations) {
 	return ctx, NewStations(pool)
 }
 
-func strPtr(s string) *string { return &s }
+func strPtr(s string) *string   { return &s }
 func f64Ptr(f float64) *float64 { return &f }
 
 func TestStations_CreateListGet(t *testing.T) {

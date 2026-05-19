@@ -1,0 +1,93 @@
+/* AirtimePaginator — numbered nav + count line + optional page-size picker.
+ * Estilos co-localizados com o componente pra ele ser self-contained e
+ * reutilizável fora da página de airtime sem couplings. */
+
+.airtime-paginator {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 12px 4px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.airtime-paginator-info {
+  color: #64748b;
+  font-size: 13px;
+}
+.airtime-paginator-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.airtime-paginator-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.airtime-paginator-btn:hover:not(:disabled):not(.active) {
+  border-color: #F472B6;
+  color: #C4185E;
+}
+.airtime-paginator-btn.active {
+  background: #E81E75;
+  border-color: #E81E75;
+  color: #fff;
+}
+.airtime-paginator-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.airtime-paginator-ellipsis {
+  color: #94a3b8;
+  padding: 0 4px;
+}
+
+/* Page-size picker (opcional, ativado quando pageSizeOptions é passado).
+ * Vive à direita dos controles e segue o design system: borda --c-border,
+ * altura 32px casando com .airtime-paginator-btn. */
+.airtime-paginator-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+.airtime-paginator-size-select {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'><path d='M1 1l4 4 4-4' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")
+    no-repeat right 10px center;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.airtime-paginator-size-select:hover {
+  border-color: #F472B6;
+}
+.airtime-paginator-size-select:focus {
+  outline: none;
+  border-color: #F472B6;
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.12);
+}

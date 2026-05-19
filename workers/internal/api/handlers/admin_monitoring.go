@@ -27,9 +27,9 @@ import (
 // não construirmos SQL com strings, mantemos a validação como defesa em
 // profundidade caso o filtro vá pra LIMIT/ORDER algum dia.
 type AdminMonitoringHandler struct {
-	DB     *pgxpool.Pool
-	Block  *reqmetrics.BlockList
-	Log    *zap.Logger
+	DB    *pgxpool.Pool
+	Block *reqmetrics.BlockList
+	Log   *zap.Logger
 }
 
 // rangeWindow converte "1h"/"24h"/"7d"/"30d" em duração. Fallback é 24h —
@@ -54,7 +54,7 @@ func sinceFromRange(r string) time.Time {
 }
 
 // hideLocalhostFilter retorna um fragmento SQL e args quando o operador
-// pediu para esconder requests internos. NULL-safe: o filtro só vê ip = ''
+// pediu para esconder requests internos. NULL-safe: o filtro só vê ip = ”
 // como localhost depois de coalescer.
 func hideLocalhostClause(hide bool) (string, []any) {
 	if !hide {
@@ -78,13 +78,13 @@ func queryHideLocalhost(r *http.Request) bool {
 // ─── GET /admin/monitoring/overview ──────────────────────────────────────────
 
 type periodSummary struct {
-	Range          string  `json:"range"`
-	Since          string  `json:"since"`
-	TotalRequests  int     `json:"totalRequests"`
-	TotalErrors    int     `json:"totalErrors"`
-	TotalSlow      int     `json:"totalSlow"`
-	ErrorRate      string  `json:"errorRate"`
-	AvgDuration    int     `json:"avgDuration"`
+	Range         string `json:"range"`
+	Since         string `json:"since"`
+	TotalRequests int    `json:"totalRequests"`
+	TotalErrors   int    `json:"totalErrors"`
+	TotalSlow     int    `json:"totalSlow"`
+	ErrorRate     string `json:"errorRate"`
+	AvgDuration   int    `json:"avgDuration"`
 }
 
 type serverSummary struct {
@@ -166,17 +166,17 @@ func (h *AdminMonitoringHandler) Overview(w http.ResponseWriter, r *http.Request
 // ─── GET /admin/monitoring/routes ────────────────────────────────────────────
 
 type routeRow struct {
-	Route       string `json:"route"`
-	Count       int    `json:"count"`
-	P50         int    `json:"p50"`
-	P95         int    `json:"p95"`
-	P99         int    `json:"p99"`
-	Avg         int    `json:"avg"`
-	Max         int    `json:"max"`
-	ErrorCount  int    `json:"errorCount"`
-	SlowCount   int    `json:"slowCount"`
-	ErrorRate   string `json:"errorRate"`
-	Health      string `json:"health"`
+	Route      string `json:"route"`
+	Count      int    `json:"count"`
+	P50        int    `json:"p50"`
+	P95        int    `json:"p95"`
+	P99        int    `json:"p99"`
+	Avg        int    `json:"avg"`
+	Max        int    `json:"max"`
+	ErrorCount int    `json:"errorCount"`
+	SlowCount  int    `json:"slowCount"`
+	ErrorRate  string `json:"errorRate"`
+	Health     string `json:"health"`
 }
 
 func (h *AdminMonitoringHandler) Routes(w http.ResponseWriter, r *http.Request) {
@@ -535,8 +535,8 @@ func (h *AdminMonitoringHandler) TopActors(w http.ResponseWriter, r *http.Reques
 	}
 
 	type raw struct {
-		IP         string
-		UserID     *uuid.UUID
+		IP                           string
+		UserID                       *uuid.UUID
 		Total, Routes, Errs, Slo, NF int
 		FirstSeen, LastSeen          time.Time
 	}
@@ -660,12 +660,12 @@ type actorRouteCount struct {
 }
 
 type actorRequestRow struct {
-	Route      string    `json:"route"`
-	Method     string    `json:"method"`
-	StatusCode int       `json:"statusCode"`
-	Duration   int       `json:"duration"`
-	Timestamp  time.Time `json:"timestamp"`
-	IP         string    `json:"ip"`
+	Route      string     `json:"route"`
+	Method     string     `json:"method"`
+	StatusCode int        `json:"statusCode"`
+	Duration   int        `json:"duration"`
+	Timestamp  time.Time  `json:"timestamp"`
+	IP         string     `json:"ip"`
 	UserID     *uuid.UUID `json:"userId"`
 	UserEmail  *string    `json:"userEmail"`
 }
@@ -947,16 +947,16 @@ func (h *AdminMonitoringHandler) BlockUser(w http.ResponseWriter, r *http.Reques
 // ─── GET /admin/monitoring/vitals ────────────────────────────────────────────
 
 type vitalRow struct {
-	Name        string  `json:"name"`
-	Page        string  `json:"page"`
-	Count       int     `json:"count"`
-	Avg         float64 `json:"avg"`
-	P75         float64 `json:"p75"`
-	GoodPercent string  `json:"goodPercent"`
-	PoorPercent string  `json:"poorPercent"`
-	GoodCount   int     `json:"goodCount"`
-	PoorCount   int     `json:"poorCount"`
-	NeedsImprovementCount int `json:"needsImprovementCount"`
+	Name                  string  `json:"name"`
+	Page                  string  `json:"page"`
+	Count                 int     `json:"count"`
+	Avg                   float64 `json:"avg"`
+	P75                   float64 `json:"p75"`
+	GoodPercent           string  `json:"goodPercent"`
+	PoorPercent           string  `json:"poorPercent"`
+	GoodCount             int     `json:"goodCount"`
+	PoorCount             int     `json:"poorCount"`
+	NeedsImprovementCount int     `json:"needsImprovementCount"`
 }
 
 func (h *AdminMonitoringHandler) Vitals(w http.ResponseWriter, r *http.Request) {

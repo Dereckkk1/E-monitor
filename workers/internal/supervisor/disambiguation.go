@@ -138,10 +138,9 @@ func evaluateDedup(candidateDuration int, candidateShortID int32, conflict *Dedu
 // match.ConfirmedDetection so we can republish it verbatim on the confirmed
 // subject (preserving the EvidenceWindow* fields the worker computed).
 func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDetection, original ingestor.DetectionEvent) {
-	ctx, span := observability.Tracer().Start(ctx, "supervisor.submit_detection",
-		// station_id and commercial_short_id are useful as searchable
-		// attributes; detected_at uses RFC3339 so trace UIs render it.
-	)
+	ctx, span := observability.Tracer().Start(ctx, "supervisor.submit_detection")// station_id and commercial_short_id are useful as searchable
+	// attributes; detected_at uses RFC3339 so trace UIs render it.
+
 	span.SetAttributes(
 		attribute.String("station_id", det.StationID),
 		attribute.Int("commercial_short_id", int(det.CommercialShortID)),
@@ -347,4 +346,3 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 		zap.String("reason", reason),
 	)
 }
-

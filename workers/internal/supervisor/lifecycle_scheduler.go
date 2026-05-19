@@ -249,4 +249,3 @@ func (s *LifecycleScheduler) refreshGauges(ctx context.Context) {
 		metrics.CampaignsByStatus.WithLabelValues(st).Set(float64(counts[st]))
 	}
 }
-

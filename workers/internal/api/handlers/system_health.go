@@ -69,16 +69,16 @@ type ServiceStatus struct {
 // renders these as a prioritized list with action shortcuts. Severity drives
 // color; kind drives icon and grouping.
 type AttentionItem struct {
-	Kind         string     `json:"kind"`           // worker_offline | infra_down | stream_outage | data_pipeline
-	Severity     string     `json:"severity"`       // warning | critical
-	Title        string     `json:"title"`          // short summary
-	Detail       string     `json:"detail"`         // one-line explanation including classified reason
-	Reason       string     `json:"reason,omitempty"` // machine-readable enum for tooling
-	Since        *time.Time `json:"since,omitempty"`
-	StationID    string     `json:"station_id,omitempty"`
-	StationName  string     `json:"station_name,omitempty"`
-	ActionURL    string     `json:"action_url,omitempty"`
-	ActionLabel  string     `json:"action_label,omitempty"`
+	Kind        string     `json:"kind"`             // worker_offline | infra_down | stream_outage | data_pipeline
+	Severity    string     `json:"severity"`         // warning | critical
+	Title       string     `json:"title"`            // short summary
+	Detail      string     `json:"detail"`           // one-line explanation including classified reason
+	Reason      string     `json:"reason,omitempty"` // machine-readable enum for tooling
+	Since       *time.Time `json:"since,omitempty"`
+	StationID   string     `json:"station_id,omitempty"`
+	StationName string     `json:"station_name,omitempty"`
+	ActionURL   string     `json:"action_url,omitempty"`
+	ActionLabel string     `json:"action_label,omitempty"`
 }
 
 type WorkersHealth struct {

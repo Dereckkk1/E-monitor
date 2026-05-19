@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"radiocheck/internal/reqmetrics"
 )
 
 type ctxKey string
@@ -29,6 +31,9 @@ func RequireJWT(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		// Propaga o user_id pro reqmetrics.Middleware (outer) via holder
+		// compartilhado — single source of truth pra telemetria por usuário.
+		reqmetrics.SetUserID(ctx, claims.UserID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

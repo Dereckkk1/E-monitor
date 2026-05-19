@@ -53,9 +53,9 @@ var spLocation, _ = time.LoadLocation("America/Sao_Paulo")
 // Regra:
 //  1. detectedAt fora de [campaign.StartDate, campaign.EndDate] → out_date
 //  2. override != nil:
-//       - override.PlaysExpected == 0 → out_slot (faixa inerte; ver D5)
-//       - detection ∈ [ts-15min, te+15min] do override → in_slot
-//       - caso contrário → out_slot
+//     - override.PlaysExpected == 0 → out_slot (faixa inerte; ver D5)
+//     - detection ∈ [ts-15min, te+15min] do override → in_slot
+//     - caso contrário → out_slot
 //     Rules são IGNORADAS quando há override (override REPLACE total — D1).
 //  3. override == nil, nenhuma rule aplicável (date+weekday) → orphan
 //  4. override == nil, rule aplicável, detection na faixa tolerada → in_slot

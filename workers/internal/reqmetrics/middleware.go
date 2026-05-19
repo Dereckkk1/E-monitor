@@ -1,23 +1,42 @@
 package reqmetrics
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-
-	"radiocheck/internal/auth"
+	"github.com/google/uuid"
 )
 
+// userIDHolder é um receptáculo mutável usado para propagar o user_id capturado
+// pelo auth.RequireJWT (que roda em sub-Group, depois) de volta ao middleware
+// de métricas (que roda no topo, antes). O chi propaga r.Context() para dentro,
+// mas mutações no contexto não voltam — então usamos um ponteiro compartilhado:
+// o outer cria, escreve no holder, e o inner middleware lê após next.ServeHTTP.
+type userIDHolder struct{ UserID *uuid.UUID }
+
+type holderCtxKey struct{}
+
+// SetUserID grava o user_id no holder se ele existir no contexto. Chamado pelo
+// auth.RequireJWT após parsear o JWT. Silencioso se não houver holder (request
+// não veio através do reqmetrics.Middleware — ex: testes unitários de auth).
+func SetUserID(ctx context.Context, uid uuid.UUID) {
+	if h, ok := ctx.Value(holderCtxKey{}).(*userIDHolder); ok {
+		h.UserID = &uid
+	}
+}
+
 // Middleware wraps chi handlers, mede a duration, captura status/IP/usuário
-// e submete um Sample ao Writer. Tem que rodar APÓS chi resolver a rota (para
-// `RoutePattern()` estar disponível) e APÓS RequireJWT (para os claims).
-// Como dentro do mesmo Group (`r.Use(...)`) o chi acumula middlewares de fora
-// para dentro, o pattern é resolvido pelo dispatcher antes do handler — então
-// basta encadear esse middleware no nível certo e ler o pattern depois do
-// `next.ServeHTTP`.
+// e submete um Sample ao Writer. Roda como middleware externo (antes do
+// RequireJWT) para capturar tanto requests anônimos quanto autenticados — o
+// user_id é propagado de volta via userIDHolder (ver acima).
+//
+// O chi resolve o RoutePattern durante o dispatch interno; lemos via
+// `chi.RouteContext(r.Context()).RoutePattern()` DEPOIS de `next.ServeHTTP`
+// para ter a rota normalizada (ex: /v1/users/{id}, não /v1/users/abc-123).
 //
 // Skip routes: /metrics (Prometheus) e /v1/internal/health são chamadas
 // internas de probe que não devem poluir o painel.
@@ -35,7 +54,12 @@ func Middleware(w *Writer, slowMs int) func(http.Handler) http.Handler {
 
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(rw, r.ProtoMajor)
-			next.ServeHTTP(ww, r)
+
+			// Insere holder no contexto antes do next — o auth.RequireJWT do
+			// sub-Group escreve nele quando o request tem JWT válido.
+			holder := &userIDHolder{}
+			ctx := context.WithValue(r.Context(), holderCtxKey{}, holder)
+			next.ServeHTTP(ww, r.WithContext(ctx))
 
 			// Resolve route pattern DEPOIS do handler — só agora chi populou
 			// o RouteContext. Fallback no path cru se o pattern não foi
@@ -66,10 +90,11 @@ func Middleware(w *Writer, slowMs int) func(http.Handler) http.Handler {
 				IsSlow:     ms > slowMs,
 			}
 
-			// Captura claims se o request passou por RequireJWT.
-			if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims != nil {
-				uid := claims.UserID
-				sample.UserID = &uid
+			// Captura user_id capturado pelo auth.RequireJWT via holder.
+			// (Não dá pra ler r.Context() direto — chi propaga contexto pra
+			// dentro, não pra fora. Ver comentário em userIDHolder.)
+			if holder.UserID != nil {
+				sample.UserID = holder.UserID
 				// O JWT atual não carrega email no claim — preencher o email
 				// exigiria lookup por request (overhead) ou cache. Deixamos
 				// vazio aqui e o handler /top-actors faz o JOIN com users.

@@ -78,9 +78,10 @@ type Supervisor struct {
 	// docs/evidence-segments.md.
 	segmentsRoot string
 
-	mu               sync.Mutex
-	workers          map[uuid.UUID]*workerEntry // stationID → entry
-	lastStallRestart map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
+	mu                 sync.Mutex
+	workers            map[uuid.UUID]*workerEntry // stationID → entry
+	lastStallRestart   map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
+	stallRestartCounts map[uuid.UUID]uint32       // stationID → cumulative stall restarts (survives worker recreation)
 
 	// Lifecycle (§18.2.1). Optional: nil when not configured.
 	lifecycle *LifecycleScheduler
@@ -115,20 +116,21 @@ func New(
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
-		db:               db,
-		store:            store,
-		nc:               nc,
-		evidence:         ev,
-		campaigns:        campaigns,
-		stations:         stations,
-		commercials:      commercials,
-		materials:        materials,
-		healthEvents:     healthEvents,
-		segmentsRoot:     segmentsRoot,
-		log:              log,
-		workers:          make(map[uuid.UUID]*workerEntry),
-		lastStallRestart: make(map[uuid.UUID]time.Time),
-		dedupBuffer:      NewDedupBuffer(dedupBufferRetention),
+		db:                 db,
+		store:              store,
+		nc:                 nc,
+		evidence:           ev,
+		campaigns:          campaigns,
+		stations:           stations,
+		commercials:        commercials,
+		materials:          materials,
+		healthEvents:       healthEvents,
+		segmentsRoot:       segmentsRoot,
+		log:                log,
+		workers:            make(map[uuid.UUID]*workerEntry),
+		lastStallRestart:   make(map[uuid.UUID]time.Time),
+		stallRestartCounts: make(map[uuid.UUID]uint32),
+		dedupBuffer:        NewDedupBuffer(dedupBufferRetention),
 	}
 }
 
@@ -246,8 +248,7 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 // startStationWorker builds and starts (or replaces) the worker for stationID,
 // using all ready commercials from every active campaign targeting that station.
 func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID) error {
-	ctx, span := observability.Tracer().Start(ctx, "supervisor.start_worker",
-	)
+	ctx, span := observability.Tracer().Start(ctx, "supervisor.start_worker")
 	span.SetAttributes(attribute.String("station_id", stationID.String()))
 	defer span.End()
 	// a. Load station from DB (to get StreamURL, ShortID).
@@ -643,6 +644,7 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 				continue
 			}
 			s.lastStallRestart[stationID] = time.Now()
+			s.stallRestartCounts[stationID]++
 			s.mu.Unlock()
 			metrics.WorkerStallRestarts.WithLabelValues(stationID.String()).Inc()
 			s.log.Warn("supervisor: worker stall detected, restarting",
@@ -862,11 +864,28 @@ func (s *Supervisor) Reload(campaignID uuid.UUID) error {
 }
 
 // WorkerStatus holds runtime status of a single station worker.
+//
+// The first four fields are the original wire contract. The remaining fields
+// were added so the /workers handler can populate the OperationsPage tiles
+// (bytes / reconnects / stall restarts / min_hashes) without scraping
+// Prometheus — see frontend/src/pages/OperationsPage.jsx.
+//
+// Semantics:
+//   - BytesReceived and Reconnects come from the live Worker and reset when
+//     the supervisor recreates it (stall restart).
+//   - StallRestarts is cumulative per station for the supervisor's lifetime
+//     and survives worker recreation — it's the count the operator cares about.
+//   - MinHashes mirrors the per-station threshold currently applied by the
+//     matcher (also exported as the radiocheck_station_threshold gauge).
 type WorkerStatus struct {
-	StationID string    `json:"station_id"`
-	Active    bool      `json:"active"`
-	LastPCMAt time.Time `json:"last_pcm_at"`
-	StallRisk bool      `json:"stall_risk"`
+	StationID     string    `json:"station_id"`
+	Active        bool      `json:"active"`
+	LastPCMAt     time.Time `json:"last_pcm_at"`
+	StallRisk     bool      `json:"stall_risk"`
+	BytesReceived uint64    `json:"bytes_received"`
+	Reconnects    uint32    `json:"reconnects"`
+	StallRestarts uint32    `json:"stall_restarts"`
+	MinHashes     int32     `json:"min_hashes"`
 }
 
 // WorkerStatuses returns a snapshot of all currently running workers.
@@ -881,10 +900,14 @@ func (s *Supervisor) WorkerStatuses() []WorkerStatus {
 		}
 		last := entry.worker.LastPCMAt()
 		statuses = append(statuses, WorkerStatus{
-			StationID: id.String(),
-			Active:    true,
-			LastPCMAt: last,
-			StallRisk: !last.IsZero() && time.Since(last) > 30*time.Second,
+			StationID:     id.String(),
+			Active:        true,
+			LastPCMAt:     last,
+			StallRisk:     !last.IsZero() && time.Since(last) > 30*time.Second,
+			BytesReceived: entry.worker.BytesReceived(),
+			Reconnects:    entry.worker.Reconnects(),
+			StallRestarts: s.stallRestartCounts[id],
+			MinHashes:     entry.worker.Threshold(),
 		})
 	}
 	return statuses

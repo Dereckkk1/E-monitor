@@ -13,33 +13,33 @@ import (
 )
 
 type Detection struct {
-	ID                 uuid.UUID  `json:"id"`
-	StationID          uuid.UUID  `json:"station_id"`
-	StationName        string     `json:"station_name"`
-	CommercialID       uuid.UUID  `json:"commercial_id"`
-	CommercialName     string     `json:"commercial_name"`
-	CampaignID         uuid.UUID  `json:"campaign_id"`
-	DetectedAt         time.Time  `json:"detected_at"`
-	MatchStartOffsetMs int32      `json:"match_start_offset_ms"`
-	MatchEndOffsetMs   int32      `json:"match_end_offset_ms"`
-	Confidence         float64    `json:"confidence"`
-	HashCount          int32      `json:"hash_count"`
-	TemporalCoverage   *float64   `json:"temporal_coverage,omitempty"`
-	VariantUsed        *int16     `json:"variant_used,omitempty"`
-	RateUsed           *int16     `json:"rate_used,omitempty"`
-	EvidenceStatus     string     `json:"evidence_status"`
-	EvidenceKey        *string    `json:"evidence_key,omitempty"`
-	EvidenceSizeBytes  *int64     `json:"evidence_size_bytes,omitempty"`
+	ID                 uuid.UUID `json:"id"`
+	StationID          uuid.UUID `json:"station_id"`
+	StationName        string    `json:"station_name"`
+	CommercialID       uuid.UUID `json:"commercial_id"`
+	CommercialName     string    `json:"commercial_name"`
+	CampaignID         uuid.UUID `json:"campaign_id"`
+	DetectedAt         time.Time `json:"detected_at"`
+	MatchStartOffsetMs int32     `json:"match_start_offset_ms"`
+	MatchEndOffsetMs   int32     `json:"match_end_offset_ms"`
+	Confidence         float64   `json:"confidence"`
+	HashCount          int32     `json:"hash_count"`
+	TemporalCoverage   *float64  `json:"temporal_coverage,omitempty"`
+	VariantUsed        *int16    `json:"variant_used,omitempty"`
+	RateUsed           *int16    `json:"rate_used,omitempty"`
+	EvidenceStatus     string    `json:"evidence_status"`
+	EvidenceKey        *string   `json:"evidence_key,omitempty"`
+	EvidenceSizeBytes  *int64    `json:"evidence_size_bytes,omitempty"`
 	// Category is one of in_slot|out_slot|out_date|orphan (migration 0018).
 	// Consumed by the DayDetailModal to group detections under their category
 	// section; without it, the modal renders an empty list even when filtered
 	// detections exist.
-	Category    string     `json:"category"`
+	Category string `json:"category"`
 	// TypeID is the type_id of the detected material, resolved via JOIN
 	// materials (migration 0019 made distribution rules type-keyed; the
 	// frontend filters/groups detections by type using this field).
 	// Nil when the material has no type assigned (legacy).
-	TypeID      *uuid.UUID `json:"type_id,omitempty"`
+	TypeID *uuid.UUID `json:"type_id,omitempty"`
 	// RetractedAt is set when §18.2.2 disambiguation overruled this row in
 	// favour of a longer cut from the same client; nil otherwise.
 	RetractedAt *time.Time `json:"retracted_at,omitempty"`
@@ -169,10 +169,10 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 	// derivada da timestamp da detection. Quando há override, o
 	// categorizador ignora rules pra essa célula+dia (D1/D7 do spec).
 	var (
-		ov          *categorizer.Override
-		ovPlays     int16
-		ovTsStr     string
-		ovTeStr     string
+		ov      *categorizer.Override
+		ovPlays int16
+		ovTsStr string
+		ovTeStr string
 	)
 	err = d.pool.QueryRow(ctx, `
 		SELECT plays_expected, time_start::text, time_end::text
@@ -788,10 +788,10 @@ type MaterialStationRow struct {
 	StationState        *string   `json:"station_state,omitempty"`
 	Count               int       `json:"count"`
 	// Breakdown por status — soma sempre == Count.
-	InSlotCount  int       `json:"in_slot_count"`
-	OutSlotCount int       `json:"out_slot_count"`
-	OutDateCount int       `json:"out_date_count"`
-	OrphanCount  int       `json:"orphan_count"`
+	InSlotCount     int       `json:"in_slot_count"`
+	OutSlotCount    int       `json:"out_slot_count"`
+	OutDateCount    int       `json:"out_date_count"`
+	OrphanCount     int       `json:"orphan_count"`
 	FirstDetectedAt time.Time `json:"first_detected_at"`
 	LastDetectedAt  time.Time `json:"last_detected_at"`
 }

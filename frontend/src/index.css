@@ -1914,14 +1914,15 @@ textarea.input {
   gap: 12px;
   padding: 10px 16px;
   margin-bottom: 16px;
-  background: rgba(236, 72, 153, 0.08);
-  border: 1px solid var(--color-tertiary-300, #f9a8d4);
+  background: var(--c-action-light);
+  border: 1px solid var(--c-action-border);
   border-radius: var(--radius-md);
+  font-family: var(--font-body);
   font-size: 13px;
-  color: var(--color-gray-700, #334155);
+  color: var(--c-text-2);
 }
 .campaigns-filter-banner strong {
-  color: var(--color-gray-900, #06055B);
+  color: var(--c-text);
   font-weight: 600;
 }
 .campaigns-filter-clear {
@@ -1929,15 +1930,15 @@ textarea.input {
   border: none;
   font-size: 18px;
   line-height: 1;
-  color: var(--color-tertiary-500, #ec4899);
+  color: var(--c-action);
   cursor: pointer;
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-weight: 700;
   transition: background 0.15s ease;
 }
 .campaigns-filter-clear:hover {
-  background: rgba(236, 72, 153, 0.15);
+  background: rgba(232, 30, 117, 0.15);
 }
 
 .campaign-list {

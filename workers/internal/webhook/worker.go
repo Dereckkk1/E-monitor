@@ -137,13 +137,13 @@ func (w *Worker) tick(ctx context.Context) {
 
 // pendingDelivery is the row shape produced by claimBatch.
 type pendingDelivery struct {
-	ID            uuid.UUID
-	ClientID      uuid.UUID
-	EventType     string
-	Payload       []byte
-	AttemptCount  int
-	URL           string
-	Secret        string
+	ID           uuid.UUID
+	ClientID     uuid.UUID
+	EventType    string
+	Payload      []byte
+	AttemptCount int
+	URL          string
+	Secret       string
 }
 
 // claimBatch grabs up to `limit` pending rows whose backoff has elapsed,

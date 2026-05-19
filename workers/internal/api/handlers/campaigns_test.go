@@ -15,16 +15,16 @@ import (
 
 // fakeSupervisor implements CampaignSupervisor for tests.
 type fakeSupervisor struct {
-	startCalls         atomic.Int32
-	pauseCalls         atomic.Int32
-	reload             atomic.Int32
-	stopCalls          atomic.Int32
+	startCalls          atomic.Int32
+	pauseCalls          atomic.Int32
+	reload              atomic.Int32
+	stopCalls           atomic.Int32
 	updateStationsCalls atomic.Int32
-	startErr           error
-	pauseErr           error
-	reloadErr          error
-	updateStationsErr  error
-	lastCancelArg      uuid.UUID
+	startErr            error
+	pauseErr            error
+	reloadErr           error
+	updateStationsErr   error
+	lastCancelArg       uuid.UUID
 }
 
 func (f *fakeSupervisor) Start(id uuid.UUID) error {

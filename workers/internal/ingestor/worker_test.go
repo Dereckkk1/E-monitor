@@ -165,9 +165,9 @@ func TestPickReconnectArgs(t *testing.T) {
 		return false
 	}
 	cases := []struct {
-		name           string
-		url            string
-		wantAtEOF      bool
+		name      string
+		url       string
+		wantAtEOF bool
 	}{
 		{"http progressive mp3", "https://example.com/stream.mp3", true},
 		{"http progressive aac", "https://example.com/stream.aac", true},

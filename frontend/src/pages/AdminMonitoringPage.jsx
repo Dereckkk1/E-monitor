@@ -1212,39 +1212,362 @@ function ActorTableSkeleton() {
   )
 }
 
-// TimelineChart: três SVG paths superpostos — requests (área rosa), erros
-// (linha vermelha), lentos (linha âmbar). Eixos implícitos.
+// ── Chart helpers ──────────────────────────────────────────────────────────
+
+function niceTicks(max, count = 5) {
+  if (max <= 0) return [0, 1]
+  const raw = max / count
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+  const norm = raw / mag
+  let step
+  if (norm < 1.5) step = mag
+  else if (norm < 3) step = 2 * mag
+  else if (norm < 7) step = 5 * mag
+  else step = 10 * mag
+  const end = Math.ceil(max / step) * step
+  const ticks = []
+  for (let v = 0; v <= end + step / 2; v += step) ticks.push(Number(v.toFixed(6)))
+  return ticks
+}
+
+function fmtCompact(n) {
+  if (n == null) return '0'
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (abs >= 10_000)    return `${Math.round(n / 1000)}k`
+  if (abs >= 1_000)     return `${(n / 1000).toFixed(1)}k`
+  return String(Math.round(n))
+}
+
+function fmtMsShort(ms) {
+  if (ms == null) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function parsePeriod(p) {
+  if (!p) return { day: '', time: '', full: '', byDay: true }
+  const byDay = !p.includes('T')
+  if (byDay) {
+    const [y, m, d] = p.split('-')
+    return { day: `${d}/${m}`, time: '', full: `${d}/${m}/${y}`, byDay: true }
+  }
+  const [date, time] = p.split('T')
+  const [, mo, d] = date.split('-')
+  const hhmm = (time || '').slice(0, 5)
+  return { day: `${d}/${mo}`, time: hhmm, full: `${d}/${mo} • ${hhmm}`, byDay: false }
+}
+
+function pickXTickIndices(n) {
+  if (n <= 1) return [0]
+  const target = n > 24 ? 7 : 6
+  const step = Math.max(1, Math.round(n / target))
+  const out = []
+  for (let i = 0; i < n; i += step) out.push(i)
+  if (out[out.length - 1] !== n - 1) out.push(n - 1)
+  return out
+}
+
+// TimelineChart: chart de volume + latência com insights agregados,
+// marcadores de erros/lentos no topo e hover crosshair com tooltip.
+const CHART_COLORS = {
+  requests: '#E81E75',
+  latency:  '#6366f1',
+  errors:   '#dc2626',
+  slow:     '#f59e0b',
+}
+
 function TimelineChart({ timeline }) {
-  const maxV = Math.max(1, ...timeline.map((t) => t.totalRequests))
-  const W = 100, H = 100
+  const wrapRef = useRef(null)
+  const [width, setWidth] = useState(900)
+  const [hoverIdx, setHoverIdx] = useState(null)
+  const [visible, setVisible] = useState({ requests: true, latency: true, errors: true, slow: true })
+
+  useEffect(() => {
+    if (!wrapRef.current) return
+    const ro = new ResizeObserver(([e]) => setWidth(Math.max(320, Math.round(e.contentRect.width))))
+    ro.observe(wrapRef.current)
+    return () => ro.disconnect()
+  }, [])
+
   const N = timeline.length
-  const xs = (i) => N <= 1 ? W / 2 : (i / (N - 1)) * W
-  const ys = (v) => H - (v / maxV) * (H * 0.92)
+  const byDay = N > 0 && !timeline[0].period.includes('T')
 
-  const reqArea = (() => {
-    if (N === 0) return ''
-    let d = `M0,${H} `
-    timeline.forEach((t, i) => { d += `L${xs(i).toFixed(2)},${ys(t.totalRequests).toFixed(2)} ` })
-    d += `L${W},${H} Z`
-    return d
-  })()
+  // Insights agregados sobre o período.
+  const insights = useMemo(() => {
+    if (N === 0) return null
+    const totalReq  = timeline.reduce((s, t) => s + (t.totalRequests || 0), 0)
+    const totalErr  = timeline.reduce((s, t) => s + (t.totalErrors   || 0), 0)
+    const totalSlow = timeline.reduce((s, t) => s + (t.totalSlow     || 0), 0)
+    let peak = timeline[0]
+    for (const t of timeline) if (t.totalRequests > peak.totalRequests) peak = t
+    const avgLat = totalReq > 0
+      ? Math.round(timeline.reduce((s, t) => s + (t.avgDuration || 0) * (t.totalRequests || 0), 0) / totalReq)
+      : 0
+    const errRate = totalReq > 0 ? (totalErr / totalReq) * 100 : 0
+    const mid = Math.max(1, Math.floor(N / 2))
+    const firstHalf = timeline.slice(0, mid)
+    const secondHalf = timeline.slice(mid)
+    const avgA = firstHalf.reduce((s, t) => s + t.totalRequests, 0) / firstHalf.length
+    const avgB = secondHalf.reduce((s, t) => s + t.totalRequests, 0) / Math.max(1, secondHalf.length)
+    const trendPct = avgA > 0 ? ((avgB - avgA) / avgA) * 100 : 0
+    return { totalReq, totalErr, totalSlow, peak, avgLat, errRate, trendPct }
+  }, [timeline, N])
 
-  const reqLine = timeline.map((t, i) => `${i === 0 ? 'M' : 'L'}${xs(i).toFixed(2)},${ys(t.totalRequests).toFixed(2)}`).join(' ')
-  const errLine = timeline.map((t, i) => `${i === 0 ? 'M' : 'L'}${xs(i).toFixed(2)},${ys(t.totalErrors).toFixed(2)}`).join(' ')
-  const sloLine = timeline.map((t, i) => `${i === 0 ? 'M' : 'L'}${xs(i).toFixed(2)},${ys(t.totalSlow).toFixed(2)}`).join(' ')
+  // Geometria.
+  const H = 290
+  const M = { top: 28, right: 64, bottom: 38, left: 60 }
+  const iW = Math.max(10, width - M.left - M.right)
+  const iH = H - M.top - M.bottom
+
+  const maxReqRaw = Math.max(1, ...timeline.map((t) => t.totalRequests || 0))
+  const maxLatRaw = Math.max(1, ...timeline.map((t) => t.avgDuration || 0))
+  const yTicksReq = niceTicks(maxReqRaw, 5)
+  const yReqMax   = Math.max(yTicksReq[yTicksReq.length - 1], 1)
+  const yTicksLat = niceTicks(maxLatRaw, 5)
+  const yLatMax   = Math.max(yTicksLat[yTicksLat.length - 1], 1)
+
+  const xAt = (i) => (N <= 1 ? iW / 2 : (i / (N - 1)) * iW)
+  const yReq = (v) => iH - (v / yReqMax) * iH
+  const yLat = (v) => iH - (v / yLatMax) * iH
+
+  const reqLinePath = N === 0 ? '' :
+    timeline.map((t, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yReq(t.totalRequests).toFixed(2)}`).join(' ')
+  const reqAreaPath = N === 0 ? '' :
+    `M${xAt(0).toFixed(2)},${iH} ${timeline.map((t, i) => `L${xAt(i).toFixed(2)},${yReq(t.totalRequests).toFixed(2)}`).join(' ')} L${xAt(N - 1).toFixed(2)},${iH} Z`
+  const latLinePath = N === 0 ? '' :
+    timeline.map((t, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yLat(t.avgDuration || 0).toFixed(2)}`).join(' ')
+
+  const xTickIdx = pickXTickIndices(N)
+
+  const onMove = (e) => {
+    if (N === 0) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const px = e.clientX - rect.left - M.left
+    if (px < -4 || px > iW + 4) { setHoverIdx(null); return }
+    const idx = N <= 1 ? 0 : Math.round((px / iW) * (N - 1))
+    setHoverIdx(Math.max(0, Math.min(N - 1, idx)))
+  }
+
+  const hover = hoverIdx != null ? timeline[hoverIdx] : null
+  const hoverPeriod = hover ? parsePeriod(hover.period) : null
+
+  const trendCls = insights == null ? '' :
+    insights.trendPct > 5 ? 'am-tl-ins--up' :
+    insights.trendPct < -5 ? 'am-tl-ins--down' : ''
 
   return (
-    <div className="am-timeline">
-      <svg className="am-timeline-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        <path d={reqArea} fill="rgba(232,30,117,0.08)" />
-        <path d={reqLine} fill="none" stroke="var(--c-action)"   strokeWidth="1.2" />
-        <path d={sloLine} fill="none" stroke="var(--c-warning)" strokeWidth="0.8" />
-        <path d={errLine} fill="none" stroke="var(--c-danger)"  strokeWidth="0.8" />
-      </svg>
-      <div className="am-timeline-legend">
-        <span><span className="am-legend-swatch" style={{ background: 'var(--c-action)' }} /> Requests</span>
-        <span><span className="am-legend-swatch" style={{ background: 'var(--c-warning)' }} /> Lentos</span>
-        <span><span className="am-legend-swatch" style={{ background: 'var(--c-danger)' }} /> Erros</span>
+    <div className="am-tl">
+      {insights && (
+        <div className="am-tl-insights">
+          <div className="am-tl-ins">
+            <span className="am-tl-ins-value">{fmtNum(insights.totalReq)}</span>
+            <span className="am-tl-ins-label">total no período</span>
+          </div>
+          <div className="am-tl-ins">
+            <span className="am-tl-ins-value">{fmtNum(insights.peak.totalRequests)}</span>
+            <span className="am-tl-ins-label">
+              pico · <strong>{parsePeriod(insights.peak.period).full}</strong>
+            </span>
+          </div>
+          <div className={`am-tl-ins ${insights.totalErr > 0 ? 'am-tl-ins--danger' : ''}`}>
+            <span className="am-tl-ins-value">{fmtNum(insights.totalErr)}</span>
+            <span className="am-tl-ins-label">erros 5xx · {insights.errRate.toFixed(2)}%</span>
+          </div>
+          <div className="am-tl-ins">
+            <span className="am-tl-ins-value">{fmtMs(insights.avgLat)}</span>
+            <span className="am-tl-ins-label">latência ponderada</span>
+          </div>
+          <div className={`am-tl-ins am-tl-ins--trend ${trendCls}`}>
+            <span className="am-tl-ins-value">
+              {insights.trendPct >= 0 ? '▲' : '▼'} {Math.abs(insights.trendPct).toFixed(0)}%
+            </span>
+            <span className="am-tl-ins-label">tendência (2ª × 1ª metade)</span>
+          </div>
+        </div>
+      )}
+
+      <div className="am-tl-legend">
+        {[
+          ['requests', 'Requests',        CHART_COLORS.requests],
+          ['latency',  'Latência média',  CHART_COLORS.latency],
+          ['errors',   'Erros 5xx',       CHART_COLORS.errors],
+          ['slow',     'Lentos >2s',      CHART_COLORS.slow],
+        ].map(([k, label, color]) => (
+          <button
+            key={k}
+            type="button"
+            className={`am-tl-legend-btn ${visible[k] ? '' : 'am-tl-legend-btn--off'}`}
+            onClick={() => setVisible((v) => ({ ...v, [k]: !v[k] }))}
+            style={{ '--am-tl-color': color }}
+            title={visible[k] ? 'Ocultar série' : 'Exibir série'}
+          >
+            <span className="am-tl-legend-dot" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div ref={wrapRef} className="am-tl-chart-wrap">
+        <svg
+          className="am-tl-svg"
+          width={width}
+          height={H}
+          onMouseMove={onMove}
+          onMouseLeave={() => setHoverIdx(null)}
+        >
+          <defs>
+            <linearGradient id="am-tl-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"  stopColor={CHART_COLORS.requests} stopOpacity="0.22" />
+              <stop offset="85%" stopColor={CHART_COLORS.requests} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+
+          <g transform={`translate(${M.left},${M.top})`}>
+            {/* Grid + eixo Y esquerdo (requests) */}
+            {yTicksReq.map((t, i) => (
+              <g key={`yr-${i}`}>
+                <line
+                  x1={0} x2={iW}
+                  y1={yReq(t)} y2={yReq(t)}
+                  stroke={i === 0 ? '#cbd5e1' : '#e2e8f0'}
+                  strokeWidth={1}
+                  strokeDasharray={i === 0 ? '0' : '3 4'}
+                />
+                <text x={-10} y={yReq(t)} textAnchor="end" dominantBaseline="middle" className="am-tl-axis">
+                  {fmtCompact(t)}
+                </text>
+              </g>
+            ))}
+
+            {/* Eixo Y direito (latência) */}
+            {visible.latency && yTicksLat.map((t, i) => (
+              <text
+                key={`yl-${i}`}
+                x={iW + 10} y={yLat(t)}
+                textAnchor="start" dominantBaseline="middle"
+                className="am-tl-axis am-tl-axis--lat"
+              >
+                {fmtMsShort(t)}
+              </text>
+            ))}
+
+            {/* Área + linha de requests */}
+            {visible.requests && (
+              <>
+                <path d={reqAreaPath} fill="url(#am-tl-fill)" />
+                <path d={reqLinePath} fill="none" stroke={CHART_COLORS.requests} strokeWidth={2}
+                      strokeLinejoin="round" strokeLinecap="round" />
+              </>
+            )}
+
+            {/* Linha tracejada de latência */}
+            {visible.latency && (
+              <path d={latLinePath} fill="none" stroke={CHART_COLORS.latency}
+                    strokeWidth={1.6} strokeDasharray="5 3" strokeLinejoin="round" strokeLinecap="round" />
+            )}
+
+            {/* Marcadores no topo: erros + lentos */}
+            {(visible.errors || visible.slow) && timeline.map((t, i) => {
+              const hasErr = visible.errors && t.totalErrors > 0
+              const hasSlo = visible.slow && t.totalSlow > 0
+              if (!hasErr && !hasSlo) return null
+              return (
+                <g key={`mk-${i}`}>
+                  {hasErr && (
+                    <>
+                      <line x1={xAt(i)} x2={xAt(i)} y1={2} y2={iH}
+                            stroke={CHART_COLORS.errors} strokeWidth={1} strokeDasharray="1 3" opacity={0.25} />
+                      <circle cx={xAt(i)} cy={6}
+                              r={Math.min(7, 3 + Math.log2(t.totalErrors + 1))}
+                              fill={CHART_COLORS.errors} stroke="#fff" strokeWidth={1.4} />
+                    </>
+                  )}
+                  {hasSlo && (
+                    <circle cx={xAt(i)} cy={hasErr ? 20 : 6}
+                            r={Math.min(6, 3 + Math.log2(t.totalSlow + 1))}
+                            fill={CHART_COLORS.slow} stroke="#fff" strokeWidth={1.2} />
+                  )}
+                </g>
+              )
+            })}
+
+            {/* Eixo X */}
+            {xTickIdx.map((i) => {
+              const lbl = parsePeriod(timeline[i].period)
+              return (
+                <g key={`xt-${i}`}>
+                  <line x1={xAt(i)} x2={xAt(i)} y1={iH} y2={iH + 4} stroke="#cbd5e1" />
+                  <text x={xAt(i)} y={iH + 18} textAnchor="middle" className="am-tl-axis">
+                    {byDay ? lbl.day : lbl.time}
+                  </text>
+                </g>
+              )
+            })}
+
+            {/* Hover crosshair + pontos */}
+            {hoverIdx != null && (
+              <g pointerEvents="none">
+                <line x1={xAt(hoverIdx)} x2={xAt(hoverIdx)} y1={0} y2={iH}
+                      stroke="#06055B" strokeWidth={1} strokeOpacity={0.35} />
+                {visible.requests && (
+                  <circle cx={xAt(hoverIdx)} cy={yReq(timeline[hoverIdx].totalRequests)}
+                          r={4.5} fill="#fff" stroke={CHART_COLORS.requests} strokeWidth={2} />
+                )}
+                {visible.latency && (
+                  <circle cx={xAt(hoverIdx)} cy={yLat(timeline[hoverIdx].avgDuration || 0)}
+                          r={3.5} fill="#fff" stroke={CHART_COLORS.latency} strokeWidth={2} />
+                )}
+              </g>
+            )}
+          </g>
+
+          {/* Rótulo do eixo direito (latência) */}
+          {visible.latency && (
+            <text x={width - 8} y={14} textAnchor="end" className="am-tl-axis-title">
+              latência
+            </text>
+          )}
+          <text x={8} y={14} textAnchor="start" className="am-tl-axis-title">
+            requests por {byDay ? 'dia' : 'hora'}
+          </text>
+        </svg>
+
+        {hoverIdx != null && hover && hoverPeriod && (
+          <div
+            className="am-tl-tooltip"
+            style={{
+              left: Math.min(Math.max(xAt(hoverIdx) + M.left + 14, 8), Math.max(8, width - 232)),
+            }}
+          >
+            <div className="am-tl-tt-period">{hoverPeriod.full}</div>
+            <ul className="am-tl-tt-list">
+              <li>
+                <span className="am-tl-tt-dot" style={{ background: CHART_COLORS.requests }} />
+                Requests <strong>{fmtNum(hover.totalRequests)}</strong>
+              </li>
+              <li>
+                <span className="am-tl-tt-dot" style={{ background: CHART_COLORS.latency }} />
+                Latência <strong>{fmtMs(hover.avgDuration)}</strong>
+              </li>
+              {hover.totalErrors > 0 && (
+                <li>
+                  <span className="am-tl-tt-dot" style={{ background: CHART_COLORS.errors }} />
+                  Erros 5xx <strong>{fmtNum(hover.totalErrors)}</strong>
+                </li>
+              )}
+              {hover.totalSlow > 0 && (
+                <li>
+                  <span className="am-tl-tt-dot" style={{ background: CHART_COLORS.slow }} />
+                  Lentos &gt;2s <strong>{fmtNum(hover.totalSlow)}</strong>
+                </li>
+              )}
+              {hover.totalErrors === 0 && hover.totalSlow === 0 && (
+                <li className="am-tl-tt-ok">Sem erros nem lentos neste bucket</li>
+              )}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   )

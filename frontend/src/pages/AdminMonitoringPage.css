@@ -1032,36 +1032,209 @@
 }
 
 /* ── Timeline chart ───────────────────────────────────────────────────── */
-.am-timeline {
-  padding: 16px 20px;
-}
-
-.am-timeline-svg {
-  width: 100%;
-  height: 240px;
-  display: block;
-}
-
-.am-timeline-legend {
+.am-tl {
+  padding: 18px 20px 14px;
   display: flex;
-  gap: 16px;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--c-text-2);
-  margin-top: 8px;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.am-timeline-legend > span {
+.am-tl-insights {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--c-border);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.am-tl-ins {
+  background: var(--c-surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.am-tl-ins-value {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--c-text);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.am-tl-ins-label {
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  text-transform: lowercase;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.am-tl-ins-label strong {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.am-tl-ins--danger .am-tl-ins-value { color: var(--c-danger); }
+
+.am-tl-ins--trend .am-tl-ins-value { color: var(--c-text-2); }
+.am-tl-ins--up .am-tl-ins-value    { color: var(--c-action); }
+.am-tl-ins--down .am-tl-ins-value  { color: #0f766e; }
+
+.am-tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: -4px;
+}
+
+.am-tl-legend-btn {
+  --am-tl-color: var(--c-action);
+  appearance: none;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  border-radius: var(--radius-full);
+  padding: 4px 11px 4px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-text);
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  transition: background 120ms, border-color 120ms, opacity 120ms;
 }
 
-.am-legend-swatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
+.am-tl-legend-btn:hover { background: var(--c-surface-2); }
+
+.am-tl-legend-btn--off {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+.am-tl-legend-btn--off .am-tl-legend-dot {
+  background: transparent;
+  border: 1.5px solid var(--am-tl-color);
+}
+
+.am-tl-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--am-tl-color);
+  flex-shrink: 0;
+}
+
+.am-tl-chart-wrap {
+  position: relative;
+  width: 100%;
+  min-height: 290px;
+}
+
+.am-tl-svg {
+  display: block;
+  width: 100%;
+  height: 290px;
+  overflow: visible;
+}
+
+.am-tl-axis {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 500;
+  fill: var(--c-text-2);
+}
+
+.am-tl-axis--lat { fill: #6366f1; }
+
+.am-tl-axis-title {
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--c-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.am-tl-tooltip {
+  position: absolute;
+  top: 18px;
+  min-width: 200px;
+  max-width: 232px;
+  background: #0f172a;
+  color: #f8fafc;
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.45);
+  pointer-events: none;
+  font-size: 12px;
+  z-index: 5;
+}
+
+.am-tl-tt-period {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(248, 250, 252, 0.12);
+}
+
+.am-tl-tt-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.am-tl-tt-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #cbd5e1;
+}
+
+.am-tl-tt-list li strong {
+  margin-left: auto;
+  color: #f8fafc;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.am-tl-tt-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.am-tl-tt-ok {
+  color: #4ade80;
+  font-style: italic;
+}
+
+@media (max-width: 900px) {
+  .am-tl-insights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .am-tl-ins-value { font-size: 18px; }
+}
+
+@media (max-width: 520px) {
+  .am-tl-insights {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Actor detail panel (slide-in) ────────────────────────────────────── */

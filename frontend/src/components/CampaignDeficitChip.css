@@ -1,68 +1,127 @@
+/* ============================================================================
+ * CampaignDeficitChip — clickable row inside a StationFailureCard
+ *
+ * Class prefix: cdc-
+ *
+ * Composition:
+ *   - Compact horizontal row, not a stacked card. Two-up: identity left,
+ *     numerals + signal right. Arrow trails to communicate "this navigates".
+ *   - Deficit is the headline number on the right. expected/delivered
+ *     whisper underneath as supporting context.
+ *   - Hover: subtle lift + action-tint border + arrow nudges right.
+ *   - silent-gap rendered as a pill, never as a border or background
+ *     change of the chip itself (avoids competing with the action tint).
+ * ============================================================================ */
+
 .campaign-deficit-chip {
   position: relative;
-  display: block;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 14px;
   text-decoration: none;
-  background: var(--color-white);
-  border: 1px solid var(--color-gray-200);
-  border-radius: var(--radius-lg);
-  padding: 12px 36px 12px 14px;
-  color: var(--color-gray-900);
-  transition: all 0.15s ease;
+  color: inherit;
+  padding: 10px 36px 10px 14px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 160ms ease,
+              box-shadow 160ms ease;
 }
 .campaign-deficit-chip:hover {
   transform: translateY(-1px);
-  border-color: var(--color-tertiary-300);
+  border-color: var(--c-action-border);
   box-shadow: var(--shadow-sm);
 }
 .campaign-deficit-chip:hover .cdc-arrow {
-  color: var(--color-tertiary-500);
-  transform: translateY(-50%) translateX(2px);
+  color: var(--c-action);
+  transform: translateY(-50%) translateX(3px);
 }
+
+/* ── Left: name + client ───────────────────────────────────────── */
 .cdc-name-row {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 4px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .cdc-name {
-  font-family: var(--font-family-primary);
-  font-size: 14px;
+  font-family: var(--font-heading);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--color-gray-900);
+  color: var(--c-text);
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cdc-client {
-  font-size: 12px;
-  color: var(--color-gray-500);
+  font-family: var(--font-body);
+  font-size: 11px;
   font-weight: 500;
+  color: var(--c-text-3);
+  letter-spacing: 0.01em;
 }
+
+/* ── Middle: numbers row ───────────────────────────────────────── */
 .cdc-numbers-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--color-gray-600);
+  align-items: baseline;
+  gap: 12px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
 }
-.cdc-num b { color: var(--color-gray-900); font-weight: 600; }
-.cdc-deficit b { color: var(--color-danger, #dc2626); }
-.cdc-dot { color: var(--color-gray-300); }
+.cdc-num {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.cdc-num b {
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--c-text-2);
+}
+.cdc-deficit { color: var(--c-text-3); }
+.cdc-deficit b { color: var(--c-danger); }
+.cdc-dot { display: none; }
+
+/* ── Right: silent-gap pill (optional) ─────────────────────────── */
 .cdc-pill {
-  margin-left: 8px;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: var(--radius-full);
+  font-family: var(--font-body);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 .cdc-pill-warn {
-  background: rgba(245, 158, 11, 0.12);
-  color: #b45309;
+  background: rgba(202, 138, 4, 0.14);
+  color: #854d0e;
 }
+
+/* ── Arrow on the right ────────────────────────────────────────── */
 .cdc-arrow {
   position: absolute;
   right: 14px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--color-gray-400);
-  transition: all 0.15s ease;
+  color: var(--c-text-3);
+  transition: color 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .campaign-deficit-chip {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding-right: 14px;
+  }
+  .cdc-arrow { display: none; }
+  .cdc-numbers-row { gap: 10px; }
 }
