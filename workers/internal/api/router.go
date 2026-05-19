@@ -39,6 +39,7 @@ type Deps struct {
 	Admin                 *handlers.AdminHandler
 	SystemHealth          *handlers.SystemHealthHandler
 	AdminMonitoring       *handlers.AdminMonitoringHandler
+	StationFailures       *handlers.StationFailuresHandler
 	Webhooks              *handlers.WebhooksHandler
 	MaterialTypes         *handlers.MaterialTypesHandler
 	Materials             *handlers.MaterialsHandler
@@ -343,18 +344,29 @@ func NewRouter(d Deps) http.Handler {
 				if d.AdminMonitoring != nil {
 					r.Group(func(r chi.Router) {
 						r.Use(auth.RequireRole("admin"))
-						r.Get("/admin/monitoring/overview",    d.AdminMonitoring.Overview)
-						r.Get("/admin/monitoring/routes",      d.AdminMonitoring.Routes)
-						r.Get("/admin/monitoring/errors",      d.AdminMonitoring.Errors)
-						r.Get("/admin/monitoring/slow",        d.AdminMonitoring.Slow)
-						r.Get("/admin/monitoring/timeline",    d.AdminMonitoring.Timeline)
-						r.Get("/admin/monitoring/vitals",      d.AdminMonitoring.Vitals)
-						r.Get("/admin/monitoring/top-actors",  d.AdminMonitoring.TopActors)
+						r.Get("/admin/monitoring/overview", d.AdminMonitoring.Overview)
+						r.Get("/admin/monitoring/routes", d.AdminMonitoring.Routes)
+						r.Get("/admin/monitoring/errors", d.AdminMonitoring.Errors)
+						r.Get("/admin/monitoring/slow", d.AdminMonitoring.Slow)
+						r.Get("/admin/monitoring/timeline", d.AdminMonitoring.Timeline)
+						r.Get("/admin/monitoring/vitals", d.AdminMonitoring.Vitals)
+						r.Get("/admin/monitoring/top-actors", d.AdminMonitoring.TopActors)
 						r.Get("/admin/monitoring/actor-detail", d.AdminMonitoring.ActorDetail)
 						r.Get("/admin/monitoring/blocked-ips", d.AdminMonitoring.BlockedIPs)
-						r.Post("/admin/monitoring/block-ip",   d.AdminMonitoring.BlockIP)
+						r.Post("/admin/monitoring/block-ip", d.AdminMonitoring.BlockIP)
 						r.Delete("/admin/monitoring/block-ip/{ip}", d.AdminMonitoring.UnblockIP)
 						r.Post("/admin/monitoring/block-user/{userId}", d.AdminMonitoring.BlockUser)
+					})
+				}
+
+				// /admin/station-failures — cruzamento de quedas de stream com
+				// déficits de campanha por dia. Lista cada emissora que falhou
+				// + as campanhas com slots perdidos. Documentado em
+				// docs/features/admin-station-failures.md.
+				if d.StationFailures != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/station-failures", d.StationFailures.Get)
 					})
 				}
 			}) // end admin/operator group
