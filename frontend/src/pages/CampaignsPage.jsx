@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   useCampaignsPaged, useCancelCampaign, useDeleteCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
@@ -1228,18 +1228,29 @@ export default function CampaignsPage() {
     setPage(1)
   }
 
+  // Admin deep-link: /admin/station-failures envia ?campaign=<uuid> pra abrir
+  // uma campanha específica. Quando setado, faz o backend filtrar pelo id
+  // (ignora q/competence) e a UI mostra um banner sticky com nome + botão ×.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const campaignFilterId = searchParams.get('campaign') || ''
+
   // Server-side pagination: backend handles filter + sort + paging, returns
   // {data, total, total_pages, page, page_size}. Stale data stays visible
   // during navigation thanks to keepPreviousData on the hook.
   const { data: pagedResp, isLoading, isFetching } = useCampaignsPaged({
     q: search,
     competence,
+    id: campaignFilterId,
     page,
     pageSize: CAMPAIGNS_PAGE_SIZE,
   })
   const pageCampaigns = pagedResp?.data ?? []
   const totalFiltered = pagedResp?.total ?? 0
   const totalPages    = pagedResp?.total_pages ?? 1
+
+  const filteredCampaignName = campaignFilterId
+    ? (pageCampaigns[0]?.name || '')
+    : ''
 
   const hasFilters = !!search || !!competence
   const safePage   = Math.min(page, Math.max(1, totalPages))
@@ -1257,6 +1268,22 @@ export default function CampaignsPage() {
         <h2>Campanhas</h2>
         {isAdmin && <Link to="/campaigns/new" className="btn btn-primary btn-sm">+ Nova campanha</Link>}
       </div>
+
+      {campaignFilterId && (
+        <div className="campaigns-filter-banner">
+          <span>
+            Filtrado: <strong>{filteredCampaignName || 'campanha específica'}</strong>
+          </span>
+          <button
+            type="button"
+            className="campaigns-filter-clear"
+            onClick={() => { setSearchParams({}) }}
+            aria-label="Limpar filtro"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {initialEmpty ? (
         <EmptyState />

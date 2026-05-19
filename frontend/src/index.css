@@ -1904,6 +1904,42 @@ textarea.input {
 }
 
 /* ── Campaigns Page ───────────────────────────────────────────── */
+.campaigns-filter-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  background: rgba(236, 72, 153, 0.08);
+  border: 1px solid var(--color-tertiary-300, #f9a8d4);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--color-gray-700, #334155);
+}
+.campaigns-filter-banner strong {
+  color: var(--color-gray-900, #06055B);
+  font-weight: 600;
+}
+.campaigns-filter-clear {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-tertiary-500, #ec4899);
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  transition: background 0.15s ease;
+}
+.campaigns-filter-clear:hover {
+  background: rgba(236, 72, 153, 0.15);
+}
+
 .campaign-list {
   display: flex;
   flex-direction: column;
