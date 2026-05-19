@@ -50,7 +50,7 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// callers (DetectionsPage, AirtimeReportPage, wizard layout etc.) keep
 	// hitting the unpaged path so they can still build dropdowns from the
 	// full catalog.
-	if q.Get("page") != "" || q.Get("page_size") != "" || q.Get("q") != "" || q.Get("competence") != "" {
+	if q.Get("page") != "" || q.Get("page_size") != "" || q.Get("q") != "" || q.Get("competence") != "" || q.Get("id") != "" {
 		page, _ := strconv.Atoi(q.Get("page"))
 		if page < 1 {
 			page = 1
@@ -62,7 +62,16 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 		if size > 200 {
 			size = 200
 		}
-		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), scope, page, size)
+		var campIDPtr *uuid.UUID
+		if idStr := q.Get("id"); idStr != "" {
+			cid, err := uuid.Parse(idStr)
+			if err != nil {
+				http.Error(w, "invalid id", 400)
+				return
+			}
+			campIDPtr = &cid
+		}
+		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), scope, campIDPtr, page, size)
 		if err != nil {
 			http.Error(w, "internal error", 500)
 			return
