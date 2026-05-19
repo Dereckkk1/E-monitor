@@ -1,0 +1,86 @@
+.station-failure-card {
+  background: var(--color-white);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-xl);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.18s ease;
+}
+.station-failure-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-tertiary-300);
+  box-shadow: var(--shadow-md);
+}
+.sfc-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.sfc-logo {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-gray-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sfc-identity { flex: 1 1 auto; min-width: 0; }
+.sfc-name {
+  margin: 0;
+  font-family: var(--font-family-primary);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  letter-spacing: -0.01em;
+}
+.sfc-meta {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--color-gray-500);
+}
+.sfc-badge {
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sfc-badge-neutral { background: var(--color-gray-100); color: var(--color-gray-700); }
+.sfc-badge-warn    { background: rgba(245, 158, 11, 0.12); color: #b45309; }
+.sfc-badge-danger  { background: rgba(220, 38, 38, 0.10);  color: #b91c1c; }
+
+.sfc-summary-line {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--color-gray-600);
+}
+.sfc-campaigns {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-gray-100);
+}
+.sfc-campaigns-title {
+  margin: 0 0 10px;
+  font-family: var(--font-family-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-500);
+}
+.sfc-campaigns-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.sfc-no-campaigns {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--color-gray-500);
+  font-style: italic;
+}
