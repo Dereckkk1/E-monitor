@@ -24,6 +24,7 @@ import MaterialTypesPage from './pages/MaterialTypesPage'
 import AirtimeReportPage from './pages/AirtimeReportPage'
 import AdminOverviewPage from './pages/AdminOverviewPage'
 import AdminMonitoringPage from './pages/AdminMonitoringPage'
+import AdminStationFailuresPage from './pages/AdminStationFailuresPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -121,6 +122,9 @@ function AppShell() {
             } />
             <Route path="/admin/monitoring" element={
               <RequireRole roles={['admin']}><AdminMonitoringPage /></RequireRole>
+            } />
+            <Route path="/admin/station-failures" element={
+              <RequireRole roles={['admin']}><AdminStationFailuresPage /></RequireRole>
             } />
             <Route path="/admin/users" element={
               <RequireRole roles={['admin']}><AdminUsersPage /></RequireRole>

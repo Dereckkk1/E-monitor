@@ -90,13 +90,14 @@ export function useCampaigns() {
 // client-side filter the page used before. queryKey starts with 'campaigns'
 // so the existing invalidations on Create/Update/Cancel/Delete also bust
 // this cache.
-export function useCampaignsPaged({ q = '', competence = '', page = 1, pageSize = 12 } = {}) {
+export function useCampaignsPaged({ q = '', competence = '', id = '', page = 1, pageSize = 12 } = {}) {
   return useQuery({
-    queryKey: ['campaigns', 'paged', q, competence, page, pageSize],
+    queryKey: ['campaigns', 'paged', q, competence, id, page, pageSize],
     queryFn: () => api.get('/campaigns', {
       params: {
         q: q || undefined,
         competence: competence || undefined,
+        id: id || undefined,
         page,
         page_size: pageSize,
       },
@@ -105,6 +106,20 @@ export function useCampaignsPaged({ q = '', competence = '', page = 1, pageSize 
     // last paged result while a new query is in flight so the list (and the
     // search input's focus) doesn't flicker out on every keystroke.
     placeholderData: (prev) => prev,
+  })
+}
+
+// Admin — emissoras que falharam num dado dia (default ontem). Cruza
+// stream-down events + daily_play_summary deficits no único endpoint
+// /admin/station-failures.
+export function useStationFailures({ date, minDownSeconds = 60 } = {}) {
+  return useQuery({
+    queryKey: ['station-failures', date, minDownSeconds],
+    queryFn: () => api.get('/admin/station-failures', {
+      params: { date, min_down_seconds: minDownSeconds },
+    }).then(r => r.data),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   })
 }
 

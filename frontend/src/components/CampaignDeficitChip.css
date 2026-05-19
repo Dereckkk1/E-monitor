@@ -1,0 +1,68 @@
+.campaign-deficit-chip {
+  position: relative;
+  display: block;
+  text-decoration: none;
+  background: var(--color-white);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-lg);
+  padding: 12px 36px 12px 14px;
+  color: var(--color-gray-900);
+  transition: all 0.15s ease;
+}
+.campaign-deficit-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-tertiary-300);
+  box-shadow: var(--shadow-sm);
+}
+.campaign-deficit-chip:hover .cdc-arrow {
+  color: var(--color-tertiary-500);
+  transform: translateY(-50%) translateX(2px);
+}
+.cdc-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.cdc-name {
+  font-family: var(--font-family-primary);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-gray-900);
+}
+.cdc-client {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  font-weight: 500;
+}
+.cdc-numbers-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-gray-600);
+}
+.cdc-num b { color: var(--color-gray-900); font-weight: 600; }
+.cdc-deficit b { color: var(--color-danger, #dc2626); }
+.cdc-dot { color: var(--color-gray-300); }
+.cdc-pill {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cdc-pill-warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+.cdc-arrow {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-gray-400);
+  transition: all 0.15s ease;
+}
