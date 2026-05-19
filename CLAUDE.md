@@ -263,7 +263,8 @@ docs/
 | Gerenciamento de usuários (admin/cliente, /admin/users, /account) | [docs/features/user-management.md](docs/features/user-management.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |
 | Backup, restore, retenção de evidência | [docs/operations/data-durability.md](docs/operations/data-durability.md) (canônico) + [docs/operations/backup-and-retention.md](docs/operations/backup-and-retention.md) (parcialmente desatualizado) |
-| OpenTelemetry, Jaeger, spans | [docs/operations/tracing.md](docs/operations/tracing.md) |
+| OpenTelemetry, Jaeger, spans, sampling | [docs/operations/tracing.md](docs/operations/tracing.md) |
+| Profiling com pprof (CPU, heap, goroutines, mutex) | [docs/operations/profiling.md](docs/operations/profiling.md) |
 | Dashboards Grafana, métricas | [docs/operations/dashboards.md](docs/operations/dashboards.md) |
 | Calibração de threshold | [docs/operations/calibration.md](docs/operations/calibration.md) + [docs/operations/threshold-dynamic.md](docs/operations/threshold-dynamic.md) |
 | Worker reconciler (stream_url + comerciais) + stall watchdog | [docs/operations/worker-commercial-reconciler.md](docs/operations/worker-commercial-reconciler.md) (incidentes 2026-05-08 e 2026-05-15) |
@@ -283,9 +284,12 @@ docs/
 | Biblioteca de materiais por cliente | [docs/features/material-library.md](docs/features/material-library.md) |
 | Pipeline polimórfico (material_id OR commercial_id) | [docs/features/material-fingerprint-pipeline.md](docs/features/material-fingerprint-pipeline.md) |
 | Alerta de duplicata por similaridade ≥50% | [docs/features/material-similarity-warning.md](docs/features/material-similarity-warning.md) |
+| Faixa horária em overrides (popover do grid, categorizador) | [docs/features/override-time-window.md](docs/features/override-time-window.md) |
 | Simulador de stream pra teste local | [docs/operations/simulacao-radio.md](docs/operations/simulacao-radio.md) |
 | Painel admin `/admin/overview` (health de toda a stack: infra + workers + streams + pipeline) | [docs/features/admin-system-overview.md](docs/features/admin-system-overview.md) |
+| Painel admin `/admin/monitoring` (telemetria HTTP por rota, IP × usuário com risco, bloqueio de IP/usuário, Web Vitals) | [docs/features/admin-monitoring.md](docs/features/admin-monitoring.md) |
 | Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
+| Relatórios de campanha (CSV consolidado/detalhado, PDF com logo E-monitor) | [docs/features/campaign-reports.md](docs/features/campaign-reports.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |
 | Avaliação E2E do matcher (recomendações 4.x) | [docs/roadmap/detection-evaluation-report.md](docs/roadmap/detection-evaluation-report.md) |
 | Responder a alerta Prometheus disparado | [docs/runbooks/README.md](docs/runbooks/README.md) (índice por alerta) |

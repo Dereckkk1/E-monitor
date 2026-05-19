@@ -60,9 +60,12 @@ docs/
 | [material-library.md](features/material-library.md) | Catálogo de materiais por cliente (decuplado de campanha) |
 | [material-fingerprint-pipeline.md](features/material-fingerprint-pipeline.md) | Pipeline polimórfico (material_id OU commercial_id) + hot-reload |
 | [material-similarity-warning.md](features/material-similarity-warning.md) | Alerta de duplicata por similaridade ≥50% no upload |
+| [override-time-window.md](features/override-time-window.md) | Faixa horária por célula em distribution_overrides + popover com herança inteligente |
 | [admin-system-overview.md](features/admin-system-overview.md) | Painel admin com health de toda a stack (infra + workers + streams + pipeline + atenção) |
+| [admin-monitoring.md](features/admin-monitoring.md) | Painel `/admin/monitoring` — telemetria HTTP (rotas/p95/erros/slow), identidades (IP × usuário com risco), Web Vitals, bloqueio de IP/usuário |
 | [login-page.md](features/login-page.md) | Tela `/login` com hero cinematográfico (globo + pulsos rosa) + form claro |
 | [not-found-page.md](features/not-found-page.md) | Tela 404 fullscreen com cena Three.js (constellation map + torre wireframe + ondas de glitch) |
+| [campaign-reports.md](features/campaign-reports.md) | Menu unificado de relatórios (CSV consolidado/detalhado + PDF com logo E-monitor) em /campaigns, /detections, /reports/airtime |
 
 ## `operations/` — operar o sistema em prod
 
@@ -71,7 +74,8 @@ docs/
 | [deploy.md](operations/deploy.md) | Guia completo de deploy da VM GCP + Docker Compose + Cloudflare Tunnel |
 | [migrations.md](operations/migrations.md) | Runner automático golang-migrate + bootstrap idempotente |
 | [auth-bootstrap.md](operations/auth-bootstrap.md) | Bootstrap admin via env vars + JWT HS256 + role gating |
-| [tracing.md](operations/tracing.md) | OpenTelemetry OTLP gRPC → Jaeger |
+| [tracing.md](operations/tracing.md) | OpenTelemetry OTLP gRPC → Jaeger (sampling 5% por padrão em prod) |
+| [profiling.md](operations/profiling.md) | pprof endpoint em loopback do container (CPU/heap/goroutines/mutex) |
 | [dashboards.md](operations/dashboards.md) | 3 dashboards Grafana provisionados automaticamente |
 | [calibration.md](operations/calibration.md) | Scheduler de calibração (initial 7d + recurring 24h) + advisory lock |
 | [threshold-dynamic.md](operations/threshold-dynamic.md) | 3 caminhos que atualizam MatchThreshold atômico |
