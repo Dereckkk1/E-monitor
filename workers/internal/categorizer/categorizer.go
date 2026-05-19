@@ -19,6 +19,18 @@ type Rule struct {
 	PlaysPerDay int16
 }
 
+// Override é a entrada do distribution_overrides relevante pra célula
+// (campaign, type, station, date) sendo categorizada. Quando passado a
+// Categorize, substitui as rules pra essa célula+dia: a faixa do override
+// vira a única considerada pra in_slot/out_slot. PlaysExpected=0 marca
+// uma exclusão explícita — toda detection no dia vira out_slot (faixa
+// inerte). Decisões D1/D5/D7 do spec.
+type Override struct {
+	PlaysExpected int16
+	TimeStart     time.Time // só componente HH:MM importa
+	TimeEnd       time.Time
+}
+
 // Category labels (idênticos aos valores do CHECK constraint em detections.category).
 const (
 	CatInSlot  = "in_slot"
@@ -28,31 +40,31 @@ const (
 )
 
 // SlotToleranceSeconds é a folga (15 min) aplicada a cada extremo da faixa de
-// horário de uma rule ao classificar uma detection como in_slot. Cobre o
-// jitter normal de stream + broadcaster (latência de buffer, atraso de
-// programação ao vivo, etc.) que faria uma veiculação tocada às 05:45 cair
-// como "fora da faixa" quando o atendente entende que ela tocou 'às 6h'.
+// horário ao classificar uma detection como in_slot. Cobre o jitter normal
+// de stream + broadcaster (latência de buffer, atraso de programação ao
+// vivo) que faria uma veiculação às 05:45 cair como "fora da faixa" quando
+// o atendente entende que ela tocou 'às 6h'.
 const SlotToleranceSeconds = 15 * 60
 
 var spLocation, _ = time.LoadLocation("America/Sao_Paulo")
 
-// Categorize classifica uma detection. A campanha é assumida existente
-// (o detection é insert pela matching engine, sempre tem campaign_id).
+// Categorize classifica uma detection.
 //
-// Regra (spec §6.1):
+// Regra:
 //  1. detectedAt fora de [campaign.StartDate, campaign.EndDate] → out_date
-//  2. nenhuma rule aplicável (mesmo material/station/data) → orphan
-//  3. rule existe e time ∈ [time_start - 15min, time_end + 15min] → in_slot
-//  4. rule existe mas time fora da faixa tolerada → out_slot
+//  2. override != nil:
+//       - override.PlaysExpected == 0 → out_slot (faixa inerte; ver D5)
+//       - detection ∈ [ts-15min, te+15min] do override → in_slot
+//       - caso contrário → out_slot
+//     Rules são IGNORADAS quando há override (override REPLACE total — D1).
+//  3. override == nil, nenhuma rule aplicável (date+weekday) → orphan
+//  4. override == nil, rule aplicável, detection na faixa tolerada → in_slot
+//  5. override == nil, rule aplicável, detection fora da faixa → out_slot
 //
 // Comparações de data são feitas no fuso America/Sao_Paulo. detectedAt pode
 // chegar em qualquer fuso (típicamente UTC do worker); o categorizer
 // converte internamente pra SP antes de extrair date/weekday/time-of-day.
-//
-// Tempo de faixa tem tolerância de SlotToleranceSeconds (15min) em cada extremo
-// e é boundary-inclusive — uma rule 08:00-10:00 aceita detections entre
-// 07:45:00 e 10:15:00 como in_slot.
-func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule) string {
+func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Override) string {
 	local := detectedAt.In(spLocation)
 	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLocation)
 
@@ -60,26 +72,33 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule) string {
 		return CatOutDate
 	}
 
-	dow := int(local.Weekday()) // 0=Sun, 6=Sat — bate com EXTRACT(DOW) do PG
 	hh := local.Hour()
 	mm := local.Minute()
 	ss := local.Second()
 	timeOfDay := hh*3600 + mm*60 + ss
 
+	if override != nil {
+		if override.PlaysExpected == 0 {
+			return CatOutSlot
+		}
+		os := override.TimeStart.Hour()*3600 + override.TimeStart.Minute()*60 + override.TimeStart.Second()
+		oe := override.TimeEnd.Hour()*3600 + override.TimeEnd.Minute()*60 + override.TimeEnd.Second()
+		if timeOfDay >= os-SlotToleranceSeconds && timeOfDay <= oe+SlotToleranceSeconds {
+			return CatInSlot
+		}
+		return CatOutSlot
+	}
+
+	dow := int(local.Weekday()) // 0=Sun, 6=Sat — bate com EXTRACT(DOW) do PG
 	hasApplicable := false
 	for _, r := range rules {
-		// Date range
 		if date.Before(r.StartDate) || date.After(r.EndDate) {
 			continue
 		}
-		// Weekday mask
 		if (1<<dow)&int(r.WeekdayMask) == 0 {
 			continue
 		}
 		hasApplicable = true
-		// Time window — boundary inclusive, com folga de SlotToleranceSeconds em
-		// cada extremo. Não há wraparound: se rs < tolerância (rule perto da
-		// meia-noite), o limite inferior é efetivamente 00:00 do mesmo dia.
 		rs := r.TimeStart.Hour()*3600 + r.TimeStart.Minute()*60 + r.TimeStart.Second()
 		re := r.TimeEnd.Hour()*3600 + r.TimeEnd.Minute()*60 + r.TimeEnd.Second()
 		if timeOfDay >= rs-SlotToleranceSeconds && timeOfDay <= re+SlotToleranceSeconds {
