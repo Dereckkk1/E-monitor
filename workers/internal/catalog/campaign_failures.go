@@ -2,12 +2,16 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrCampaignNotFound = errors.New("campaign not found or cancelled")
 
 // IsBonified reports whether enough non-strict-in-slot plays exist to cover
 // the remaining deficit. Pure function — used by all 3 endpoints (daily,
@@ -435,4 +439,101 @@ func sortCampaignsByImpact(cs []CampaignDailyFailure) {
 			}
 		}
 	}
+}
+
+// Get returns the per-campaign failure breakdown for the drill-in view.
+// 404-equivalent: returns ErrCampaignNotFound when the campaign doesn't exist
+// or is cancelled.
+func (r *CampaignFailures) Get(ctx context.Context, id uuid.UUID) (*DetailResult, error) {
+	var info CampaignInfo
+	var start, end time.Time
+	err := r.pool.QueryRow(ctx, `
+SELECT c.id, c.name, c.start_date, c.end_date, c.status,
+       cl.id, COALESCE(cl.name, '—') AS client_name,
+       COALESCE(cl.logo_url, '') AS client_logo_url
+FROM campaigns c
+LEFT JOIN clients cl ON cl.id = c.client_id
+WHERE c.id = $1 AND c.status != 'cancelada'`, id).Scan(
+		&info.ID, &info.Name, &start, &end, &info.Status,
+		&info.ClientID, &info.ClientName, &info.ClientLogoURL,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrCampaignNotFound
+		}
+		return nil, fmt.Errorf("query campaign: %w", err)
+	}
+	info.StartDate = dateOnly(start)
+	info.EndDate = dateOnly(end)
+
+	result := &DetailResult{
+		Campaign: info,
+		Stations: []CampaignFailureStation{},
+	}
+
+	rows, err := r.pool.Query(ctx, `
+SELECT dps.station_id,
+       s.name, COALESCE(s.band, '') AS band,
+       COALESCE(to_char(s.frequency_mhz, 'FM999990.0'), '') AS freq,
+       COALESCE(s.city, '') AS city, COALESCE(s.logo_url, '') AS logo_url,
+       SUM(dps.expected)::int  AS programmed,
+       SUM(dps.in_slot)::int   AS identified,
+       SUM(dps.deficit)::int   AS deficit,
+       (SUM(dps.out_slot) + SUM(dps.out_date) + SUM(dps.bonus))::int AS extras,
+       COALESCE(
+         array_agg(DISTINCT dps.for_date::text ORDER BY dps.for_date::text)
+           FILTER (WHERE dps.deficit > 0),
+         ARRAY[]::text[]
+       ) AS failure_days,
+       COUNT(*) FILTER (WHERE dps.deficit > 0) AS failure_day_count
+FROM daily_play_summary dps
+JOIN stations s ON s.id = dps.station_id
+WHERE dps.campaign_id = $1
+GROUP BY dps.station_id, s.name, s.band, s.frequency_mhz, s.city, s.logo_url
+HAVING COUNT(*) FILTER (WHERE dps.deficit > 0) > 0
+ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)
+	if err != nil {
+		return nil, fmt.Errorf("query stations: %w", err)
+	}
+	defer rows.Close()
+
+	totalDeficit := 0
+	totalFailureDays := 0
+	for rows.Next() {
+		var sid uuid.UUID
+		var name, band, freq, city, logo string
+		var programmed, identified, deficit, extras, failureDayCount int
+		var failureDays []string
+		if err := rows.Scan(
+			&sid, &name, &band, &freq, &city, &logo,
+			&programmed, &identified, &deficit, &extras,
+			&failureDays, &failureDayCount,
+		); err != nil {
+			return nil, err
+		}
+		result.Stations = append(result.Stations, CampaignFailureStation{
+			Station: StationFailureInfo{
+				ID: sid, Name: name, Dial: makeDial(freq, band),
+				City: city, LogoURL: logo,
+			},
+			Programmed:  programmed,
+			Identified:  identified,
+			Deficit:     deficit,
+			Extras:      extras,
+			IsBonified:  IsBonified(deficit, extras),
+			FailureDays: failureDays,
+		})
+		totalDeficit += deficit
+		totalFailureDays += failureDayCount
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result.Summary = DetailSummary{
+		StationsWithFailure: len(result.Stations),
+		TotalFailureDays:    totalFailureDays,
+		TotalDeficit:        totalDeficit,
+	}
+	return result, nil
 }
