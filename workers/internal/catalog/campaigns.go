@@ -20,6 +20,9 @@ type Campaign struct {
 	TargetStations []uuid.UUID `json:"target_stations"`
 	CreatedAt      time.Time   `json:"created_at"`
 	UpdatedAt      time.Time   `json:"updated_at"`
+	// MaterialCount só é populado pelo ListPaged (não pelas outras queries —
+	// ficam em zero). Usado pela UI pra mostrar chip "sem material".
+	MaterialCount int `json:"material_count"`
 }
 
 type Campaigns struct {
@@ -110,7 +113,12 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 	offset := (page - 1) * pageSize
 	rows, err := c.pool.Query(ctx, `
 		SELECT c.id, c.client_id, c.name, c.start_date, c.end_date, c.status, c.target_stations,
-		       c.created_at, c.updated_at
+		       c.created_at, c.updated_at,
+		       COALESCE((
+		         SELECT COUNT(*)::int
+		         FROM campaign_materials cm
+		         WHERE cm.campaign_id = c.id
+		       ), 0) AS material_count
 		FROM campaigns c
 		LEFT JOIN clients cl ON cl.id = c.client_id`+where+`
 		ORDER BY CASE c.status
@@ -135,7 +143,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
 			&camp.EndDate, &camp.Status, &camp.TargetStations,
-			&camp.CreatedAt, &camp.UpdatedAt); err != nil {
+			&camp.CreatedAt, &camp.UpdatedAt, &camp.MaterialCount); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, camp)
