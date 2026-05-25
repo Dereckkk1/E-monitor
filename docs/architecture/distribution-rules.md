@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-25
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
@@ -31,6 +31,14 @@ Estrutura:
 - `plays_per_day` — insercoes esperadas por dia (1-100)
 
 Multiplas regras podem coexistir pra mesma combinacao (material, station) — ex: manha + tarde.
+
+### Independência de material
+
+Uma regra de distribuição é independente de qualquer material vinculado. O `type_id` referencia `material_types` (tabela global, não por campanha), e a view `daily_play_summary` calcula `expected` somando `plays_per_day` das regras sem precisar de material linkado.
+
+Isso habilita o fluxo "planejar antes do áudio chegar" no wizard — ver [campaign-wizard.md#planejamento-sem-material-distribuição-fantasma](../features/campaign-wizard.md#planejamento-sem-material-distribuição-fantasma).
+
+Quando o material finalmente é subido na campanha (Step 3 do wizard) com o `type_id` planejado, as detections daquele material são automaticamente categorizadas pelas regras existentes — zero ação manual.
 
 ## Overrides
 
