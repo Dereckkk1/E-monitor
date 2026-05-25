@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useStationFailures } from '../api/hooks'
+import { useStationFailures, useCampaignFailures } from '../api/hooks'
 import StationFailureCard from '../components/StationFailureCard'
+import CampaignFailureCard from '../components/CampaignFailureCard'
+import CampaignFailureRow from '../components/CampaignFailureRow'
+import CampaignFailureDrawer from '../components/CampaignFailureDrawer'
 import './AdminStationFailuresPage.css'
 
 const MIN_DOWN_OPTIONS = [
@@ -182,20 +185,43 @@ export default function AdminStationFailuresPage() {
   const [date, setDate] = useState(isoYesterday())
   const [minDown, setMinDown] = useState(60)
 
-  const { data, isLoading, isFetching, refetch, error } = useStationFailures({
+  // Toggle viewMode + sub-tab + drill-in state
+  const [viewMode, setViewMode] = useState('by_station') // 'by_station' | 'by_campaign'
+  const [subTab, setSubTab] = useState('daily')          // 'daily' | 'historical'
+  const [historyPage, setHistoryPage] = useState(1)
+  const [drillCampaignId, setDrillCampaignId] = useState(null)
+
+  const isByStation = viewMode === 'by_station'
+
+  const stationQ = useStationFailures({
     date, minDownSeconds: minDown,
   })
+  const campaignQ = useCampaignFailures({
+    mode: subTab === 'historical' ? 'historical' : 'by_date',
+    date: subTab === 'daily' ? date : undefined,
+    page: historyPage,
+    pageSize: 50,
+  })
 
-  const stations = data?.stations ?? []
-  const summary  = data?.summary
+  const { isLoading, isFetching, refetch, error } = isByStation
+    ? stationQ
+    : campaignQ
+
+  // Station view derived
+  const stations = stationQ.data?.stations ?? []
+  const summary  = stationQ.data?.summary
   const masthead = useMemo(() => fmtMasthead(date), [date])
   const incidents = useMemo(() => flattenIncidents(stations, date), [stations, date])
+  const hasData   = !stationQ.isLoading && stations.length > 0
 
-  const hasData = !isLoading && stations.length > 0
+  // Campaign view derived
+  const campaigns = campaignQ.data?.campaigns ?? []
+  const campaignTotal = campaignQ.data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(campaignTotal / 50))
 
   return (
-    <div className="asf" data-mode={hasData ? 'incident' : 'nominal'}>
-      {/* ── Hero masthead ─────────────────────────────────────────── */}
+    <div className="asf" data-mode={(isByStation && hasData) ? 'incident' : 'nominal'}>
+      {/* ── Hero masthead (compartilhado entre os 2 modos) ─────────── */}
       <header className="asf-hero">
         <div className="asf-hero-top">
           <div className="asf-masthead">
@@ -217,12 +243,14 @@ export default function AdminStationFailuresPage() {
                 min={isoMinusDays(90)}
               />
             </label>
-            <label className="asf-field">
-              <span>Filtro</span>
-              <select value={minDown} onChange={e => setMinDown(Number(e.target.value))}>
-                {MIN_DOWN_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </label>
+            {isByStation && (
+              <label className="asf-field">
+                <span>Filtro</span>
+                <select value={minDown} onChange={e => setMinDown(Number(e.target.value))}>
+                  {MIN_DOWN_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            )}
             <button className="asf-refresh" onClick={() => refetch()} disabled={isFetching} title="Atualizar">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"
                    className={isFetching ? 'asf-spin' : ''}>
@@ -233,7 +261,7 @@ export default function AdminStationFailuresPage() {
           </div>
         </div>
 
-        {summary && summary.stations_with_failure > 0 && (
+        {isByStation && summary && summary.stations_with_failure > 0 && (
           <dl className="asf-stats">
             <div className="asf-stat">
               <dt>emissoras</dt>
@@ -252,8 +280,28 @@ export default function AdminStationFailuresPage() {
           </dl>
         )}
 
-        <HeroTimeline incidents={incidents} />
+        {isByStation && <HeroTimeline incidents={incidents} />}
       </header>
+
+      {/* ── Toggle Por emissora / Por campanha ─────────────────────── */}
+      <div className="asf-mode-toggle" role="tablist" aria-label="Modo de visualização">
+        <button
+          role="tab"
+          aria-selected={isByStation}
+          className={`asf-mode-btn ${isByStation ? 'asf-mode-btn--active' : ''}`}
+          onClick={() => setViewMode('by_station')}
+        >
+          Por emissora
+        </button>
+        <button
+          role="tab"
+          aria-selected={!isByStation}
+          className={`asf-mode-btn ${!isByStation ? 'asf-mode-btn--active' : ''}`}
+          onClick={() => setViewMode('by_campaign')}
+        >
+          Por campanha
+        </button>
+      </div>
 
       {error && (
         <div className="asf-error" role="alert">
@@ -261,15 +309,14 @@ export default function AdminStationFailuresPage() {
         </div>
       )}
 
-      {isLoading && (
+      {/* ── Conteúdo: por emissora (atual) ─────────────────────────── */}
+      {isByStation && isLoading && (
         <div className="asf-list">
           {[0, 1, 2, 3].map(i => <SkeletonCard key={i} />)}
         </div>
       )}
-
-      {!isLoading && stations.length === 0 && !error && <EmptyState dateIso={date} />}
-
-      {hasData && (
+      {isByStation && !isLoading && stations.length === 0 && !error && <EmptyState dateIso={date} />}
+      {isByStation && hasData && (
         <ol className="asf-list" aria-label="Emissoras com falha, ordenadas por gravidade">
           {stations.map((s, idx) => (
             <li key={s.station.id}>
@@ -277,6 +324,94 @@ export default function AdminStationFailuresPage() {
             </li>
           ))}
         </ol>
+      )}
+
+      {/* ── Conteúdo: por campanha (novo) ──────────────────────────── */}
+      {!isByStation && (
+        <>
+          <div className="asf-subtabs" role="tablist" aria-label="Sub-modo">
+            <button
+              role="tab"
+              aria-selected={subTab === 'daily'}
+              className={`asf-subtab ${subTab === 'daily' ? 'asf-subtab--active' : ''}`}
+              onClick={() => setSubTab('daily')}
+            >
+              Falhas de {masthead.day}/{String(parseLocalDate(date).getMonth() + 1).padStart(2, '0')}
+            </button>
+            <button
+              role="tab"
+              aria-selected={subTab === 'historical'}
+              className={`asf-subtab ${subTab === 'historical' ? 'asf-subtab--active' : ''}`}
+              onClick={() => { setSubTab('historical'); setHistoryPage(1) }}
+            >
+              Por Campanha (histórico)
+            </button>
+          </div>
+
+          {isLoading ? (
+            <p className="asf-state">Carregando…</p>
+          ) : campaigns.length === 0 ? (
+            <p className="asf-state">
+              {subTab === 'daily' ? 'Nenhuma campanha falhou nesse dia.' : 'Nenhuma campanha tem falha registrada.'}
+            </p>
+          ) : subTab === 'daily' ? (
+            <div className="asf-camp-grid">
+              {campaigns.map(entry => (
+                <CampaignFailureCard
+                  key={String(entry.campaign.id)}
+                  entry={entry}
+                  onOpen={() => setDrillCampaignId(entry.campaign.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="asf-hist-table-wrap">
+                <table className="asf-hist-table">
+                  <thead>
+                    <tr>
+                      <th>Campanha</th>
+                      <th>Status</th>
+                      <th>Emissoras c/ falha</th>
+                      <th>Dias c/ falha</th>
+                      <th>Déficit</th>
+                      <th>Bonificada</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campaigns.map(entry => (
+                      <CampaignFailureRow
+                        key={String(entry.campaign.id)}
+                        entry={entry}
+                        onOpen={() => setDrillCampaignId(entry.campaign.id)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {campaignTotal > 50 && (
+                <div className="asf-pager">
+                  <button
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                  >← Anterior</button>
+                  <span>página {historyPage} de {totalPages}</span>
+                  <button
+                    disabled={historyPage >= totalPages}
+                    onClick={() => setHistoryPage(p => p + 1)}
+                  >Próxima →</button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {drillCampaignId && (
+        <CampaignFailureDrawer
+          campaignId={drillCampaignId}
+          onClose={() => setDrillCampaignId(null)}
+        />
       )}
     </div>
   )
