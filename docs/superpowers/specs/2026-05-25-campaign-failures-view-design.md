@@ -1,5 +1,5 @@
 ---
-status: planejado
+status: implementado
 ultima-verificacao: 2026-05-25
 codigo-relacionado:
   - workers/internal/catalog/campaign_failures.go (novo)

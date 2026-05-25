@@ -290,6 +290,7 @@ docs/
 | Painel admin `/admin/overview` (health de toda a stack: infra + workers + streams + pipeline) | [docs/features/admin-system-overview.md](docs/features/admin-system-overview.md) |
 | Painel admin `/admin/monitoring` (telemetria HTTP por rota, IP × usuário com risco, bloqueio de IP/usuário, Web Vitals) | [docs/features/admin-monitoring.md](docs/features/admin-monitoring.md) |
 | Painel admin `/admin/station-failures` (emissoras com falha no dia + campanhas com slots perdidos, deep-link pra /campaigns) | [docs/features/admin-station-failures.md](docs/features/admin-station-failures.md) |
+| Modo "Por campanha" de `/admin/station-failures` (cards por campanha + drill-in drawer + PDF de cobrança) | [docs/features/admin-campaign-failures.md](docs/features/admin-campaign-failures.md) |
 | Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
 | Relatórios de campanha (CSV consolidado/detalhado, PDF com logo E-monitor) | [docs/features/campaign-reports.md](docs/features/campaign-reports.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |

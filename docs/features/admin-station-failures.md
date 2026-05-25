@@ -128,7 +128,8 @@ A subquery de `rule_windows` (Q3) lê `distribution_rules` 1× por (station, cam
 
 - Worker travado *sem* campanha agendada — usar `/admin/overview`
 - Range de múltiplos dias — só dia único
-- Exportação CSV/PDF — fora de escopo
+- **Perspectiva campaign-first** — coberto pelo modo "Por campanha" da mesma página, ver [admin-campaign-failures.md](admin-campaign-failures.md)
+- Exportação CSV/PDF no modo "Por emissora" — fora de escopo (o modo "Por campanha" tem PDF de cobrança)
 - Alerta proativo (webhook/email) — pull-only
 - Histórico de PCM por minuto — não persistimos; daí a heurística "silent-gap"
 
