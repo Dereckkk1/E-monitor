@@ -38,6 +38,13 @@ func RequireJWT(next http.Handler) http.Handler {
 	})
 }
 
+// WithClaims é a contraparte exportada de ClaimsFromContext, usada por
+// tests de handler que precisam injetar claims sem passar pelo middleware
+// JWT real. Em código de produção, RequireJWT é o único setter.
+func WithClaims(ctx context.Context, c *Claims) context.Context {
+	return context.WithValue(ctx, claimsKey, c)
+}
+
 func RequireRole(roles ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
