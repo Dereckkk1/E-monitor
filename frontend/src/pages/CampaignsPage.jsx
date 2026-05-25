@@ -977,13 +977,15 @@ const _BRL_CAMPAIGN_LIST = new Intl.NumberFormat('pt-BR', {
   style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
 function CPMBadge({ financials }) {
-  const { total_invested: inv, total_insertions: ins } = financials
-  const cpm = ins > 0 ? (inv / ins) * 1000 : null
+  const { total_invested: inv, total_insertions: ins, total_audience: aud } = financials
+  const cpm = aud > 0 ? (inv / aud) * 1000 : null
   return (
     <span
       title={cpm != null
-        ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ ${ins} inserções × 1000`
-        : 'Nenhuma inserção realizada ainda — CPM indeterminado.'}
+        ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
+        : ins > 0
+          ? 'Emissoras sem PMM cadastrado — CPM indeterminado.'
+          : 'Nenhuma inserção realizada ainda — CPM indeterminado.'}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5,
         padding: '2px 8px', borderRadius: 'var(--radius-full)',

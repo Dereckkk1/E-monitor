@@ -376,14 +376,18 @@ func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasi
 // Fórmulas (alinhadas com a especificação 2026-05-12):
 //   - per_insertion: invested += unit_value × (in_slot + bonus)
 //                    insertions += in_slot + bonus
+//                    audience  += (in_slot + bonus) × stations.pmm
 //   - consolidated:  invested += consolidated_value (independente das plays)
 //                    insertions += in_slot + bonus
-//   - CPM = invested / insertions × 1000, calculado no caller (frontend)
-//     pra ter precisão decimal.
+//                    audience  += (in_slot + bonus) × stations.pmm
+//   - CPM = invested / audience × 1000, calculado no caller (frontend)
+//     pra ter precisão decimal. audience = soma de impressões reais
+//     (cada inserção em uma emissora vale stations.pmm impressões).
 type CampaignFinancials struct {
 	CampaignID      uuid.UUID `json:"campaign_id"`
 	TotalInvested   float64   `json:"total_invested"`
 	TotalInsertions int       `json:"total_insertions"`
+	TotalAudience   float64   `json:"total_audience"`
 }
 
 // FinancialsByCampaign retorna o agregado das campanhas. Quando clientID
@@ -393,12 +397,13 @@ type CampaignFinancials struct {
 func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID) ([]CampaignFinancials, error) {
 	const q = `
 		WITH per_ins AS (
-			-- Investimento e inserções no modo per_insertion: precisa do
-			-- unit_value × (in_slot + bonus) somado por campanha.
+			-- Investimento, inserções e audiência no modo per_insertion:
+			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
 			SELECT
 				p.campaign_id,
 				COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::float8 AS invested,
-				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions
+				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions,
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience
 			FROM campaign_station_pricing p
 			JOIN campaign_station_type_pricing tp
 				ON tp.campaign_id = p.campaign_id
@@ -407,6 +412,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 				ON s.campaign_id = p.campaign_id
 			   AND s.station_id  = p.station_id
 			   AND s.type_id     = tp.type_id
+			LEFT JOIN stations st
+				ON st.id = p.station_id
 			WHERE p.mode = 'per_insertion'
 			GROUP BY p.campaign_id
 		),
@@ -421,23 +428,26 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			GROUP BY p.campaign_id
 		),
 		consolidated_ins AS (
-			-- Inserções de emissoras em modo consolidado também entram no
-			-- denominador do CPM (mesma definição "qtd inserções" pra ambos
-			-- os modos).
+			-- Inserções e audiência de emissoras em modo consolidado entram no
+			-- denominador do CPM (mesma definição pra ambos os modos).
 			SELECT
 				p.campaign_id,
-				COALESCE(SUM(s.in_slot + s.bonus), 0)::int AS insertions
+				COALESCE(SUM(s.in_slot + s.bonus), 0)::int AS insertions,
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience
 			FROM campaign_station_pricing p
 			LEFT JOIN daily_play_summary s
 				ON s.campaign_id = p.campaign_id
 			   AND s.station_id  = p.station_id
+			LEFT JOIN stations st
+				ON st.id = p.station_id
 			WHERE p.mode = 'consolidated'
 			GROUP BY p.campaign_id
 		)
 		SELECT
 			c.id,
 			COALESCE(per_ins.invested, 0) + COALESCE(consolidated_inv.invested, 0) AS total_invested,
-			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions
+			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
+			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience
 		FROM campaigns c
 		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
@@ -452,7 +462,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 	out := make([]CampaignFinancials, 0)
 	for rows.Next() {
 		var f CampaignFinancials
-		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions); err != nil {
+		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience); err != nil {
 			return nil, fmt.Errorf("campaigns.FinancialsByCampaign: scan: %w", err)
 		}
 		out = append(out, f)

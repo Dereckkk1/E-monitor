@@ -54,8 +54,23 @@ function fmtMasthead(iso) {
     day:   String(d.getDate()).padStart(2, '0'),
     month: MONTHS_PT[d.getMonth()],
     year:  d.getFullYear(),
-    wday:  ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'][d.getDay()],
+    wday:  ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'][d.getDay()],
   }
+}
+
+// Concise relative-day pill ("Ontem" / "Hoje" / "DD/MM"), surfaced next to
+// the page title so the date being inspected is obvious without reading the
+// long subtitle. Anything older than 7 days shows the absolute date.
+function fmtRelativeDate(iso) {
+  const target = parseLocalDate(iso)
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const ms = today - target
+  const days = Math.round(ms / 86_400_000)
+  if (days === 0) return 'Hoje'
+  if (days === 1) return 'Ontem'
+  if (days >= 2 && days <= 6) return `Há ${days} dias`
+  const [, m, d] = iso.split('-')
+  return `${d}/${m}`
 }
 
 // Build a flat list of {fromMinute, toMinute} for each incident on the page,
@@ -357,76 +372,100 @@ export default function AdminStationFailuresPage() {
   const totalPages = Math.max(1, Math.ceil(campaignTotal / 50))
 
   return (
-    <div className="asf" data-mode={(isByStation && hasData) ? 'incident' : 'nominal'}>
-      {/* ── Hero masthead (compartilhado entre os 2 modos) ─────────── */}
-      <header className="asf-hero">
-        <div className="asf-hero-top">
-          <div className="asf-masthead">
-            <span className="asf-masthead-day">{masthead.day}</span>
-            <div className="asf-masthead-stack">
-              <span className="asf-masthead-month">{masthead.month} {masthead.year}</span>
-              <span className="asf-masthead-wday">{masthead.wday} · falhas do dia</span>
-            </div>
+    <div className="asf">
+      {/* ── Page header (padrão admin: title-icon + título + subtítulo + controles) ── */}
+      <header className="asf-header">
+        <div className="asf-title-row">
+          <div className="asf-title-icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="1.8"
+                 strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2 L2.5 19 H21.5 Z" />
+              <path d="M12 9 V13.5" />
+              <circle cx="12" cy="16.5" r="0.9" fill="currentColor" stroke="none" />
+            </svg>
           </div>
-
-          <div className="asf-hero-controls">
-            <label className="asf-field">
-              <span>Data</span>
-              <input
-                type="date"
-                value={date}
-                onChange={e => e.target.value && setDate(e.target.value)}
-                max={isoToday()}
-                min={isoMinusDays(90)}
-              />
-            </label>
-            {isByStation && (
-              <label className="asf-field">
-                <span>Filtro</span>
-                <select value={minDown} onChange={e => setMinDown(Number(e.target.value))}>
-                  {MIN_DOWN_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </label>
-            )}
-            <button className="asf-refresh" onClick={() => refetch()} disabled={isFetching} title="Atualizar">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"
-                   className={isFetching ? 'asf-spin' : ''}>
-                <path d="M1.5 7a5.5 5.5 0 1 0 1.65-3.9M1.5 1.5v3.2h3.2"
-                      stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
+          <div className="asf-title-stack">
+            <div className="asf-title-line">
+              <h1 className="asf-title">Falhas das emissoras</h1>
+              <span className="asf-date-pill" title={`${masthead.wday}, ${masthead.day} de ${masthead.month} de ${masthead.year}`}>
+                {fmtRelativeDate(date)}
+              </span>
+            </div>
+            <p className="asf-subtitle">
+              {masthead.wday}, {masthead.day} de {masthead.month} de {masthead.year} <span aria-hidden="true">·</span>{' '}
+              cruzamento de stream-down e slot perdido por dia
+            </p>
           </div>
         </div>
 
-        {isByStation && summary && summary.stations_with_failure > 0 && (
+        <div className="asf-controls">
+          <label className="asf-field">
+            <span>Data</span>
+            <input
+              type="date"
+              value={date}
+              onChange={e => e.target.value && setDate(e.target.value)}
+              max={isoToday()}
+              min={isoMinusDays(90)}
+            />
+          </label>
+          {isByStation && (
+            <label className="asf-field">
+              <span>Severidade</span>
+              <select value={minDown} onChange={e => setMinDown(Number(e.target.value))}>
+                {MIN_DOWN_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+          )}
+          <button className="asf-refresh" onClick={() => refetch()} disabled={isFetching}
+                  title="Atualizar" aria-label="Atualizar dados">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"
+                 className={isFetching ? 'asf-spin' : ''}>
+              <path d="M1.5 7a5.5 5.5 0 1 0 1.65-3.9M1.5 1.5v3.2h3.2"
+                    stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      {/* ── KPI strip (por emissora) ─────────────────────────────────── */}
+      {isByStation && summary && summary.stations_with_failure > 0 && (
+        <section className="asf-hero">
           <dl className="asf-stats">
             <div className="asf-stat">
               <dt>emissoras</dt>
-              <dd><strong>{summary.stations_with_failure}</strong></dd>
+              <dd>{summary.stations_with_failure}</dd>
             </div>
             <div className="asf-stat-sep" aria-hidden="true" />
             <div className="asf-stat">
               <dt>tempo fora total</dt>
-              <dd><strong>{fmtDuration(summary.total_down_seconds)}</strong></dd>
+              <dd>{fmtDuration(summary.total_down_seconds)}</dd>
             </div>
             <div className="asf-stat-sep" aria-hidden="true" />
             <div className="asf-stat">
               <dt>campanhas afetadas</dt>
-              <dd><strong>{summary.affected_campaigns}</strong></dd>
+              <dd>{summary.affected_campaigns}</dd>
             </div>
           </dl>
-        )}
+          {incidents.length > 0 && (
+            <div className="asf-hero-ribbon">
+              <span className="asf-hero-ribbon-label">24 horas do dia</span>
+              <HeroTimeline incidents={incidents} />
+            </div>
+          )}
+        </section>
+      )}
 
-        {isByStation && <HeroTimeline incidents={incidents} />}
-
-        {/* Campaign-mode KPIs replace the station ribbon */}
-        {!isByStation && campaignQ.data?.summary && (
+      {/* ── KPI strip (por campanha) ─────────────────────────────────── */}
+      {!isByStation && campaignQ.data?.summary && (
+        <section className="asf-hero">
           <CampaignKpiStrip
             summary={campaignQ.data.summary}
             mode={subTab === 'historical' ? 'historical' : 'daily'}
           />
-        )}
-      </header>
+        </section>
+      )}
 
       {/* ── Toggle Por emissora / Por campanha ─────────────────────── */}
       <div className="asf-mode-toggle" role="tablist" aria-label="Modo de visualização">
