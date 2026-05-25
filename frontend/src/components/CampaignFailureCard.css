@@ -146,3 +146,140 @@
 .cfr-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .cfr-num-deficit { color: #dc2626; }
 .cfr-bonif { width: 130px; }
+
+/* ── Drawer (CampaignFailureDrawer) ────────────────────────────── */
+.cfd-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, .45);
+  display: flex; justify-content: flex-end;
+  z-index: 80;
+  animation: cfd-fade .15s ease;
+}
+@keyframes cfd-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.cfd-drawer {
+  width: min(900px, 96vw);
+  height: 100%;
+  background: var(--surface-1, #fff);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: -10px 0 40px rgba(0,0,0,.15);
+  animation: cfd-slide .2s ease;
+}
+@keyframes cfd-slide { from { transform: translateX(40px); } to { transform: translateX(0); } }
+
+.cfd-head {
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  display: flex; justify-content: space-between; gap: 24px;
+  align-items: flex-start;
+}
+.cfd-head-id { flex: 1; min-width: 0; }
+.cfd-eyebrow {
+  display: block;
+  text-transform: uppercase; letter-spacing: .08em;
+  font-size: 11px; font-weight: 700; color: var(--action, #E81E75);
+}
+.cfd-title { margin: 4px 0 2px; font-size: 22px; color: var(--text, #06055B); }
+.cfd-subtitle { margin: 0; font-size: 14px; color: var(--text-2, #4b5563); }
+.cfd-meta { margin: 4px 0 0; font-size: 12px; color: var(--text-3, #9ca3af); }
+.cfd-head-actions { display: flex; gap: 8px; align-items: center; }
+
+.cfd-btn {
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface-1, #fff);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px; cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.cfd-btn:disabled { opacity: .55; cursor: not-allowed; }
+.cfd-btn-primary {
+  background: var(--action, #E81E75); color: #fff;
+  border-color: var(--action, #E81E75);
+  font-weight: 600;
+}
+.cfd-btn-primary:hover:not(:disabled) { background: #d11a6a; }
+.cfd-btn-close {
+  width: 36px; height: 36px;
+  font-size: 22px; line-height: 1;
+  padding: 0; color: var(--text-2, #4b5563);
+}
+.cfd-btn-close:hover { background: var(--surface-2, #f1f5f9); }
+
+.cfd-warn {
+  margin: 14px 28px 0;
+  background: rgba(234, 179, 8, .12);
+  color: #a16207;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.cfd-kpis {
+  padding: 16px 28px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+}
+.cfd-kpi {
+  background: var(--surface-2, #f1f5f9);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.cfd-kpi-num {
+  display: block; font-size: 24px; font-weight: 700; line-height: 1;
+  color: var(--text, #06055B);
+}
+.cfd-kpi-num-deficit { color: #dc2626; }
+.cfd-kpi-label {
+  display: block; margin-top: 6px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-3, #9ca3af);
+}
+
+.cfd-body { flex: 1; overflow: auto; padding: 0 28px 28px; }
+.cfd-state { padding: 40px 0; text-align: center; color: var(--text-3, #9ca3af); }
+.cfd-state-err { color: #dc2626; }
+
+.cfd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cfd-table thead th {
+  text-align: left; padding: 10px 8px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-3, #9ca3af);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.cfd-table tbody td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  vertical-align: middle;
+}
+.cfd-table .cfd-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cfd-num-pct { color: var(--text-3, #9ca3af); font-size: 11px; }
+
+.cfd-st-cell {
+  display: flex !important; align-items: center; gap: 10px; min-width: 0;
+}
+.cfd-st-id { display: flex; flex-direction: column; min-width: 0; }
+.cfd-st-name { font-weight: 600; color: var(--text, #06055B); }
+.cfd-st-city { font-size: 11px; color: var(--text-3, #9ca3af); }
+
+.cfd-day-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.cfd-day-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(239, 68, 68, .12);
+  color: #dc2626;
+  border-radius: 4px;
+}
+
+.cfd-bonif-note {
+  font-size: 11px;
+  color: #a855f7;
+  margin-top: 4px;
+}
+.cfd-foot-note {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--text-3, #9ca3af);
+}
