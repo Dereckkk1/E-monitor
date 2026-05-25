@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-19
+ultima-verificacao: 2026-05-25
 codigo-relacionado:
   - workers/internal/catalog/station_failures.go
   - workers/internal/api/handlers/admin_station_failures.go
@@ -136,3 +136,9 @@ A subquery de `rule_windows` (Q3) lê `distribution_rules` 1× por (station, cam
 ## Spec arquitetural
 
 [docs/superpowers/specs/2026-05-19-admin-station-failures-design.md](../superpowers/specs/2026-05-19-admin-station-failures-design.md)
+
+## Mudança 2026-05-25: filtro por déficit
+
+A listing de `/admin/station-failures` deixou de incluir emissoras com **só downtime** (sem `daily_play_summary.deficit > 0` naquele dia). Era ruído visual — operador via rádios que caíram fora de qualquer janela programada e não tinham impacto. Detalhe no spec [`2026-05-25-admin-notifications-and-failure-filter-design.md`](../superpowers/specs/2026-05-25-admin-notifications-and-failure-filter-design.md) §4.5.
+
+Estações com deficit continuam aparecendo, com info de downtime quando aplicável.
