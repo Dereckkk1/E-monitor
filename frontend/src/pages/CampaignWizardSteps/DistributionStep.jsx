@@ -24,7 +24,7 @@ import { useConfirm } from '../../components/ConfirmModal'
  */
 export default function DistributionStep({
   campaignId, campaignStart, campaignEnd,
-  campaignMaterials, materialsById = {}, allStations,
+  campaignMaterials, campaignStationIds = [], materialsById = {}, allStations,
 }) {
   const cStart = new Date(campaignStart)
   const cEnd = new Date(campaignEnd)
@@ -280,29 +280,33 @@ export default function DistributionStep({
         time_end:   String(matchingOverride.time_end).slice(0,5) }
     : null
 
-  // Pre-compute lists for the RuleSidePanel — types present in the campaign
-  // (a type is "present" when at least one material of that type is linked).
+  // Pre-compute lists for the RuleSidePanel — TODOS os tipos globais (não
+  // só os presentes na campanha), pra permitir criar regra pra um tipo que
+  // ainda não tem material vinculado (spec 2026-05-25). materialCount segue
+  // sendo "quantos materiais desse tipo estão linkados na campanha", podendo
+  // ser 0.
   const ruleEditorTypes = useMemo(() => {
-    const seen = new Map()
+    const counts = new Map()
     for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
-      const t = mat?.type_id ? typeById[mat.type_id] : null
-      if (!t) continue
-      if (!seen.has(t.id)) {
-        seen.set(t.id, { id: t.id, name: t.name, color: t.color, materialCount: 0 })
-      }
-      seen.get(t.id).materialCount += 1
+      const tid = mat?.type_id
+      if (!tid) continue
+      counts.set(tid, (counts.get(tid) ?? 0) + 1)
     }
-    return [...seen.values()]
-  }, [campaignMaterials, materialsById, typeById])
+    return materialTypes.map(t => ({
+      id: t.id, name: t.name, color: t.color,
+      materialCount: counts.get(t.id) ?? 0,
+    }))
+  }, [materialTypes, campaignMaterials, materialsById])
 
+  // Todas as emissoras da campanha (target_stations), independente de
+  // material vinculado. Permite criar regra antes de qualquer áudio existir
+  // (spec 2026-05-25).
   const ruleEditorStations = useMemo(() => {
-    const stationSet = new Set()
-    for (const cm of campaignMaterials) {
-      for (const sid of cm.target_stations) stationSet.add(sid)
-    }
-    return [...stationSet].map(id => allStations.find(s => s.id === id)).filter(Boolean)
-  }, [campaignMaterials, allStations])
+    return campaignStationIds
+      .map(id => allStations.find(s => s.id === id))
+      .filter(Boolean)
+  }, [campaignStationIds, allStations])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
