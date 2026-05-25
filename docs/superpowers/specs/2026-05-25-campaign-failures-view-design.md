@@ -114,7 +114,6 @@ Resposta:
         "id": "...", "name": "Campanha XPTO",
         "client_id": "...", "client_name": "ACME",
         "client_logo_url": "...",
-        "agency": "Agência YZ",
         "start_date": "2026-05-01", "end_date": "2026-05-31",
         "status": "ativa"
       },
@@ -149,7 +148,7 @@ Sem `date`. Lista campanhas com qualquer `deficit > 0` em qualquer dia da vigên
     {
       "campaign": {
         "id": "...", "name": "...", "client_name": "...",
-        "client_logo_url": "...", "agency": "...",
+        "client_logo_url": "...",
         "start_date": "...", "end_date": "...", "status": "ativa"
       },
       "stations_with_failure": 12,
@@ -203,7 +202,7 @@ Ordenação stations: `failure_days.length DESC, station.name ASC` (espelha o ex
 ```sql
 -- Q1: campanhas com déficit no dia (lista de IDs + dados básicos)
 SELECT DISTINCT c.id, c.name, c.start_date, c.end_date, c.status,
-       cl.id, cl.name, c.agency
+       cl.id, cl.name
 FROM daily_play_summary dps
 JOIN campaigns c ON c.id = dps.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
@@ -240,7 +239,7 @@ Cruzamento em Go: mapeia Q1 (campanhas), itera stations de Q2, anexa agregados d
 
 ```sql
 -- Q1: campanhas com qualquer falha + sumário por campanha
-SELECT c.id, c.name, c.start_date, c.end_date, c.status, c.agency,
+SELECT c.id, c.name, c.start_date, c.end_date, c.status,
        cl.id, cl.name, cl.logo_url,
        COUNT(DISTINCT dps.station_id) FILTER (WHERE dps.deficit > 0) AS stations_with_failure,
        COUNT(DISTINCT (dps.station_id, dps.for_date)) FILTER (WHERE dps.deficit > 0) AS total_failure_days,
@@ -265,7 +264,7 @@ SELECT COUNT(*) FROM (subquery acima sem LIMIT/OFFSET);
 
 ```sql
 -- Q1: dados da campanha
-SELECT c.id, c.name, c.start_date, c.end_date, c.status, c.agency,
+SELECT c.id, c.name, c.start_date, c.end_date, c.status,
        cl.id, cl.name, cl.logo_url
 FROM campaigns c
 LEFT JOIN clients cl ON cl.id = c.client_id
@@ -319,7 +318,7 @@ Estes sim podem refletir no URL via search params (`?view=campaigns&sub=daily` /
 ### Componentes novos (`frontend/src/components/`)
 
 - **`CampaignFailureCard.jsx`** — card do grid "Falhas de [data]":
-  - Header: logo do cliente (com fallback de iniciais), `client_name` (bold), `campaign.name` (subdued), `agency` (subdued menor).
+  - Header: logo do cliente (com fallback de iniciais), `client_name` (bold), `campaign.name` (subdued).
   - Body: lista de stations que falharam no dia (até 6 visíveis, "+N mais" se >6).
     - Cada row: logo da station + `name` + `city` à esquerda; `identified/programmed · %` à direita; "faltam N" (vermelho) ou "falhou, bonificada" (roxo).
   - Footer: contagem `N emissoras` + botão "Ver detalhes" (abre drawer).
