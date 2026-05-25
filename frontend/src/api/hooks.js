@@ -123,6 +123,42 @@ export function useStationFailures({ date, minDownSeconds = 60 } = {}) {
   })
 }
 
+// Admin — visão "Por campanha" (mesma página /admin/station-failures, modo
+// alternativo). Dois sub-modos via param `mode`:
+//   - 'by_date':    grade de cards por campanha, falhas no dia
+//   - 'historical': tabela paginada de campanhas com qualquer falha
+// Doc em docs/features/admin-campaign-failures.md.
+export function useCampaignFailures({ mode = 'by_date', date, page = 1, pageSize = 50 } = {}) {
+  const params = {}
+  if (mode === 'historical') {
+    params.mode = 'historical'
+    params.page = page
+    params.page_size = pageSize
+  } else if (date) {
+    params.date = date
+  }
+  return useQuery({
+    queryKey: ['campaign-failures', mode, date, page, pageSize],
+    queryFn: () => api.get('/admin/campaign-failures', { params }).then(r => r.data),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    keepPreviousData: true,
+  })
+}
+
+// Drill-in: detalhe completo de UMA campanha (todas emissoras com falha em
+// qualquer dia da vigência). 404 quando a campanha está cancelada ou não
+// existe — o drawer trata isso e mostra "campanha não encontrada".
+export function useCampaignFailureDetail(id) {
+  return useQuery({
+    queryKey: ['campaign-failure-detail', id],
+    queryFn: () => api.get(`/admin/campaign-failures/${id}`).then(r => r.data),
+    enabled: Boolean(id),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
+}
+
 // Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
 // Retorna [{campaign_id, total_invested, total_insertions}]; o CPM em si é
 // calculado no frontend pra preservar precisão.
