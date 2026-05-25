@@ -187,7 +187,10 @@ export default function CampaignWizardPage() {
     })
     const someWithoutStations = campaignMaterials.some(cm =>
       !cm.target_stations || cm.target_stations.length === 0)
-    nextDisabled = materialCount === 0 || someWithoutType || someWithoutStations
+    // Distribuição sem material é permitida: o operador pode planejar regras
+    // por TIPO no Step 4 antes do áudio chegar (spec 2026-05-25). Só
+    // bloqueamos quando há material linkado mas mal configurado.
+    nextDisabled = someWithoutType || someWithoutStations
   } else if (currentStep === 4) {
     stepContent = (
       <DistributionStep
@@ -217,7 +220,12 @@ export default function CampaignWizardPage() {
     nextDisabled = false
   }
 
-  const nextLabel = currentStep === 5 ? 'Concluir campanha →' : 'Avançar →'
+  const nextLabel =
+    currentStep === 5
+      ? 'Concluir campanha →'
+      : (currentStep === 3 && materialCount === 0)
+        ? 'Pular materiais →'
+        : 'Avançar →'
   const onNext = currentStep === 5 ? handleFinish : handleNext
 
   return (
