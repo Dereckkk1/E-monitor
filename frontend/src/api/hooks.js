@@ -880,3 +880,34 @@ export function useChangeMyPassword() {
     mutationFn: (body) => api.post('/auth/me/password', body),
   })
 }
+
+// ─── Notificações (sininho /dashboard admin) ────────────────────────
+// Spec: docs/superpowers/specs/2026-05-25-admin-notifications-and-failure-filter-design.md
+
+export function useNotifications({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['admin', 'notifications'],
+    queryFn: () => api.get('/admin/notifications').then(r => r.data),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    enabled,
+  })
+}
+
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ keys }) =>
+      api.post('/admin/notifications/mark-read', { keys }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notifications'] }),
+  })
+}
+
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      api.post('/admin/notifications/mark-all-read').then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notifications'] }),
+  })
+}

@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useMemo, useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useStationFailures, useCampaignFailures } from '../api/hooks'
 import StationFailureCard from '../components/StationFailureCard'
 import CampaignFailureCard from '../components/CampaignFailureCard'
@@ -300,14 +300,33 @@ function EmptyState({ dateIso }) {
 }
 
 export default function AdminStationFailuresPage() {
-  const [date, setDate] = useState(isoYesterday())
+  // Deep-link via query params (vindo do sininho de notificações):
+  //   /admin/station-failures?view=by_campaign&date=YYYY-MM-DD&campaign=<uuid>
+  // Spec: docs/superpowers/specs/2026-05-25-admin-notifications-and-failure-filter-design.md §4.4
+  const [searchParams, setSearchParams] = useSearchParams()
+  const qpView     = searchParams.get('view')      // 'by_campaign' | 'by_station' | null
+  const qpDate     = searchParams.get('date')      // YYYY-MM-DD | null
+  const qpCampaign = searchParams.get('campaign')  // uuid | null
+
+  const [date, setDate] = useState(qpDate || isoYesterday())
   const [minDown, setMinDown] = useState(60)
 
   // Toggle viewMode + sub-tab + drill-in state
-  const [viewMode, setViewMode] = useState('by_station') // 'by_station' | 'by_campaign'
+  const [viewMode, setViewMode] = useState(
+    qpView === 'by_campaign' ? 'by_campaign' : 'by_station'
+  ) // 'by_station' | 'by_campaign'
   const [subTab, setSubTab] = useState('daily')          // 'daily' | 'historical'
   const [historyPage, setHistoryPage] = useState(1)
-  const [drillCampaignId, setDrillCampaignId] = useState(null)
+  const [drillCampaignId, setDrillCampaignId] = useState(qpCampaign || null)
+
+  // Limpa os query params 1× no mount pra que navegações subsequentes
+  // (mudar de data, fechar drawer) não fiquem referenciando a entrada antiga.
+  useEffect(() => {
+    if (qpView || qpDate || qpCampaign) {
+      setSearchParams({}, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const isByStation = viewMode === 'by_station'
 
