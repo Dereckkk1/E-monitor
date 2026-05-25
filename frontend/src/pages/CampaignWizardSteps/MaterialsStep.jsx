@@ -18,7 +18,7 @@ import SimilarityWarningModal from '../../components/SimilarityWarningModal'
  *  - materialsById: Record<uuid, Material> (hydrated by parent)
  *  - campaignStations: Array<station> (used as default for new links)
  */
-export default function MaterialsStep({ campaignId, clientId, materialsById = {}, campaignStations }) {
+export default function MaterialsStep({ campaignId, clientId, materialsById = {}, campaignStations, onSkip }) {
   const { data: cmpMats = [] } = useCampaignMaterials(campaignId)
   const { data: materialTypes = [] } = useMaterialTypes()
   const { data: libMats = [] } = useMaterials(clientId)
@@ -150,7 +150,7 @@ export default function MaterialsStep({ campaignId, clientId, materialsById = {}
 
       {/* List */}
       {cmpMats.length === 0 ? (
-        <EmptyState onAdd={() => setShowAdd(true)} />
+        <EmptyState onAdd={() => setShowAdd(true)} onSkip={onSkip} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {cmpMats.map(link => {
@@ -1000,7 +1000,7 @@ function StationCheckbox({ station, checked, onToggle }) {
   )
 }
 
-function EmptyState({ onAdd }) {
+function EmptyState({ onAdd, onSkip }) {
   // Ghost preview of what loaded cards look like.
   return (
     <div style={{
@@ -1089,6 +1089,28 @@ function EmptyState({ onAdd }) {
           </svg>
           Adicionar primeiro material
         </button>
+        {onSkip && (
+          <button
+            type="button"
+            onClick={onSkip}
+            style={{
+              marginTop: 12,
+              padding: '6px 12px',
+              background: 'transparent', border: 0,
+              color: 'var(--c-text-2)',
+              fontSize: 12, fontWeight: 500,
+              fontFamily: 'var(--font-body)',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              textUnderlineOffset: 3,
+              textDecorationColor: 'var(--c-text-3)',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'var(--c-text)' }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'var(--c-text-2)' }}
+          >
+            Pular por enquanto — planejar distribuição sem áudio
+          </button>
+        )}
       </div>
     </div>
   )

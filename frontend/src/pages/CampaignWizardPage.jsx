@@ -177,6 +177,7 @@ export default function CampaignWizardPage() {
         clientId={draftCampaign.client_id}
         materialsById={materialsById}
         campaignStations={targetStationIds.map(id => allStations.find(s => s.id === id)).filter(Boolean)}
+        onSkip={handleNext}
       />
     )
     // Migration 0019: distribution is by type, so every linked material MUST
