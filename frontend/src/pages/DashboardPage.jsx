@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useCampaigns, useStreamHealth, useClients } from '../api/hooks'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
+import NotificationBell from '../components/NotificationBell'
 import './DashboardPage.css'
 
 // ── Shared helpers ────────────────────────────────────────────────
@@ -1088,8 +1089,11 @@ function AdminDashboard() {
           <h1 className="dh-header-title">Operação Radiocheck</h1>
           <div className="dh-header-sub">Visão consolidada do sistema</div>
         </div>
-        <div className="dh-header-stamp">
-          atualizado {newest ? relTimeFromMs(newest) : '…'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div className="dh-header-stamp">
+            atualizado {newest ? relTimeFromMs(newest) : '…'}
+          </div>
+          <NotificationBell />
         </div>
       </div>
 
