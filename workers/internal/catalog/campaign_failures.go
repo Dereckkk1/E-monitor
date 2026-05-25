@@ -322,6 +322,106 @@ func sortStationsByDeficit(ss []CampaignFailureStation) {
 	}
 }
 
+// ListHistorical returns one row per non-cancelled campaign that has at
+// least one (station, date) with deficit > 0 anywhere in its lifetime.
+// Paginated by page (1-based) and pageSize (clamped 1..200, default 50).
+func (r *CampaignFailures) ListHistorical(ctx context.Context, page, pageSize int) (*HistoricalResult, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	offset := (page - 1) * pageSize
+
+	result := &HistoricalResult{
+		Mode:      "historical",
+		Campaigns: []CampaignHistoricalRow{},
+		Page:      page,
+		PageSize:  pageSize,
+	}
+
+	// Q1: paginated list of campaigns with any deficit + per-campaign summary
+	rows, err := r.pool.Query(ctx, `
+WITH agg AS (
+  SELECT dps.campaign_id,
+         COUNT(DISTINCT dps.station_id) FILTER (WHERE dps.deficit > 0) AS stations_with_failure,
+         COUNT(*) FILTER (WHERE dps.deficit > 0) AS total_failure_days,
+         SUM(dps.deficit)::int AS total_deficit,
+         SUM(dps.out_slot + dps.out_date + dps.bonus)::int AS total_extras
+  FROM daily_play_summary dps
+  GROUP BY dps.campaign_id
+  HAVING SUM(dps.deficit) > 0
+)
+SELECT c.id, c.name, c.start_date, c.end_date, c.status,
+       cl.id, COALESCE(cl.name, '—') AS client_name,
+       COALESCE(cl.logo_url, '') AS client_logo_url,
+       a.stations_with_failure::int,
+       a.total_failure_days::int,
+       a.total_deficit::int,
+       a.total_extras::int
+FROM agg a
+JOIN campaigns c ON c.id = a.campaign_id
+LEFT JOIN clients cl ON cl.id = c.client_id
+WHERE c.status != 'cancelada'
+ORDER BY a.stations_with_failure DESC, a.total_deficit DESC, c.name ASC
+LIMIT $1 OFFSET $2`, pageSize, offset)
+	if err != nil {
+		return nil, fmt.Errorf("q1 historical: %w", err)
+	}
+	defer rows.Close()
+
+	totalFailureDaysSum := 0
+	for rows.Next() {
+		var info CampaignInfo
+		var start, end time.Time
+		var stationsWithFailure, totalFailureDays, totalDeficit, totalExtras int
+		if err := rows.Scan(
+			&info.ID, &info.Name, &start, &end, &info.Status,
+			&info.ClientID, &info.ClientName, &info.ClientLogoURL,
+			&stationsWithFailure, &totalFailureDays, &totalDeficit, &totalExtras,
+		); err != nil {
+			return nil, err
+		}
+		info.StartDate = dateOnly(start)
+		info.EndDate = dateOnly(end)
+		result.Campaigns = append(result.Campaigns, CampaignHistoricalRow{
+			Campaign:            info,
+			StationsWithFailure: stationsWithFailure,
+			TotalFailureDays:    totalFailureDays,
+			TotalDeficit:        totalDeficit,
+			IsFullyBonified:     IsBonified(totalDeficit, totalExtras),
+		})
+		totalFailureDaysSum += totalFailureDays
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Q2: total count (for pagination UI). Must mirror Q1's HAVING + WHERE.
+	if err := r.pool.QueryRow(ctx, `
+WITH agg AS (
+  SELECT dps.campaign_id
+  FROM daily_play_summary dps
+  GROUP BY dps.campaign_id
+  HAVING SUM(dps.deficit) > 0
+)
+SELECT COUNT(*) FROM agg a
+JOIN campaigns c ON c.id = a.campaign_id
+WHERE c.status != 'cancelada'`).Scan(&result.Total); err != nil {
+		return nil, fmt.Errorf("q2 count: %w", err)
+	}
+
+	result.Summary = HistoricalSummary{
+		Campaigns:        result.Total,
+		TotalFailureDays: totalFailureDaysSum, // sum over current page only — full sum would need another query
+	}
+	return result, nil
+}
+
 // sortCampaignsByImpact sorts in-place: stations.length DESC, client_name ASC.
 func sortCampaignsByImpact(cs []CampaignDailyFailure) {
 	for i := 1; i < len(cs); i++ {
