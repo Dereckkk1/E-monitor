@@ -36,10 +36,12 @@ func NewNotifications(pool *pgxpool.Pool) *Notifications {
 	return &Notifications{pool: pool}
 }
 
-// List retorna notificações dos últimos 7 dias (dias civis), com read_at
-// preenchido pra cada item que o user já leu. Ordem: data mais recente
-// primeiro, alfabético por campanha como tiebreaker. Limite hard de 50
-// itens — improvável estourar em 7 dias.
+// List retorna notificações dos últimos 7 dias FECHADOS, com read_at
+// preenchido pra cada item que o user já leu. "Fechado" = exclui o dia
+// corrente — uma campanha não pode ser considerada "falha" no meio do
+// próprio dia (o dia ainda não acabou). Janela efetiva: [hoje-7d, ontem].
+// Ordem: data mais recente primeiro, alfabético por campanha como
+// tiebreaker. Limite hard de 50 itens — improvável estourar em 7 dias.
 //
 // Source: daily_play_summary.deficit > 0, agrupado por (campaign, day).
 // Campanhas com status='cancelada' são excluídas. Campanhas bonificadas
@@ -60,7 +62,7 @@ LEFT JOIN notification_reads nr
    AND nr.notification_key =
        'campaign_failure:' || c.id::text || ':' || dps.for_date::text
 WHERE dps.for_date >= (CURRENT_DATE - INTERVAL '7 days')
-  AND dps.for_date <= CURRENT_DATE
+  AND dps.for_date <  CURRENT_DATE
   AND dps.deficit > 0
   AND c.status != 'cancelada'
 GROUP BY c.id, c.name, cl.id, cl.name, cl.logo_url, dps.for_date, nr.read_at
@@ -126,7 +128,7 @@ SELECT $1, 'campaign_failure:' || c.id::text || ':' || dps.for_date::text
 FROM daily_play_summary dps
 JOIN campaigns c ON c.id = dps.campaign_id
 WHERE dps.for_date >= (CURRENT_DATE - INTERVAL '7 days')
-  AND dps.for_date <= CURRENT_DATE
+  AND dps.for_date <  CURRENT_DATE
   AND dps.deficit > 0
   AND c.status != 'cancelada'
 GROUP BY c.id, dps.for_date
