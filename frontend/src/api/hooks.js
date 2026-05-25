@@ -160,7 +160,8 @@ export function useCampaignFailureDetail(id) {
 }
 
 // Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
-// Retorna [{campaign_id, total_invested, total_insertions}]; o CPM em si é
+// Retorna [{campaign_id, total_invested, total_insertions, total_audience}];
+// audience = Σ(inserções × stations.pmm). CPM = (invested / audience) × 1000,
 // calculado no frontend pra preservar precisão.
 export function useCampaignsFinancials() {
   return useQuery({

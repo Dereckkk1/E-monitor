@@ -42,82 +42,132 @@
 .asf {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 20px;
   padding: 24px clamp(16px, 4vw, 40px) 64px;
-  max-width: 1180px;
   margin: 0 auto;
   min-height: 100%;
+  font-family: var(--font-body);
+  color: var(--c-text);
 }
 
 /* ============================================================================
- * Hero masthead
+ * Page header — padrão admin (title-icon + título + subtítulo + controles)
+ * Espelha o cabeçalho de /admin/monitoring + /admin/overview.
  * ============================================================================ */
-.asf-hero {
-  position: relative;
+.asf-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.asf-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.asf-title-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-lg);
+  background: var(--c-action-light, rgba(232, 30, 117, 0.08));
+  color: var(--c-action);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.asf-title-stack {
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  padding: 26px 28px 22px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.asf-title-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.asf-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.1;
+}
+
+.asf-date-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--c-action-light, rgba(232, 30, 117, 0.10));
+  color: var(--c-action);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.asf-subtitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  line-height: 1.45;
+}
+
+/* ── Controls cluster (data, severidade, refresh) ──────────────── */
+.asf-controls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+ * Hero band — KPIs + ribbon de 24h embaixo do header
+ * ============================================================================ */
+.asf-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 22px;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
-  isolation: isolate;
 }
 
-.asf-hero-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.asf-masthead {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-}
-
-.asf-masthead-day {
-  font-family: var(--font-heading);
-  font-size: clamp(56px, 8vw, 86px);
-  font-weight: 700;
-  line-height: 0.85;
-  letter-spacing: -0.04em;
-  color: var(--c-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.asf-masthead-stack {
+.asf-hero-ribbon {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-bottom: 4px;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--c-border);
 }
 
-.asf-masthead-month {
-  font-family: var(--font-heading);
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--c-text);
-  letter-spacing: -0.01em;
-  text-transform: lowercase;
-}
-
-.asf-masthead-wday {
+.asf-hero-ribbon-label {
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: 10px;
+  font-weight: 600;
   color: var(--c-text-3);
-  text-transform: lowercase;
-  letter-spacing: 0.04em;
-}
-
-/* ── Controls cluster (date, filter, refresh) ──────────────────── */
-.asf-hero-controls {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .asf-field {
@@ -193,40 +243,45 @@
   to   { transform: rotate(360deg); }
 }
 
-/* ── Type-led KPI row ──────────────────────────────────────────── */
+/* ── Type-led KPI row (dentro do .asf-hero) ────────────────────── */
 .asf-stats {
   display: flex;
   align-items: stretch;
-  gap: 32px;
+  gap: 28px;
   margin: 0;
   padding: 0;
+  flex-wrap: wrap;
 }
 
 .asf-stat {
   display: flex;
-  flex-direction: column-reverse;
-  gap: 2px;
+  flex-direction: column;
+  gap: 4px;
   margin: 0;
+  min-width: 0;
 }
 
 .asf-stat dt {
+  margin: 0;
   font-family: var(--font-body);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--c-text-3);
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  order: 1;
 }
 
 .asf-stat dd {
   margin: 0;
   font-family: var(--font-heading);
-  font-size: clamp(28px, 3vw, 36px);
+  font-size: clamp(26px, 3vw, 32px);
   font-weight: 700;
   color: var(--c-text);
   letter-spacing: -0.02em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  order: 2;
 }
 
 .asf-stat-sep {
@@ -238,8 +293,8 @@
 /* ── 24h Timeline ribbon ───────────────────────────────────────── */
 .asf-timeline {
   position: relative;
-  margin-top: 4px;
-  padding-bottom: 18px;
+  margin-top: 2px;
+  padding-bottom: 16px;
 }
 
 .asf-timeline-svg {
@@ -496,15 +551,76 @@
   background: var(--c-surface-2);
 }
 
+/* ===========================================================================
+ * Mode toggle (Por emissora / Por campanha) — padrão segmentado do sistema:
+ * container bordado, divisor interno, active fica em --c-action sobre branco.
+ * Espelha .am-range em /admin/monitoring.
+ * =========================================================================== */
+.asf-mode-toggle {
+  display: inline-flex;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  align-self: flex-start;
+}
+.asf-mode-btn {
+  border: none;
+  border-right: 1px solid var(--c-border);
+  background: transparent;
+  padding: 8px 18px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.asf-mode-btn:last-child { border-right: none; }
+.asf-mode-btn:hover { background: var(--c-surface-2); color: var(--c-text); }
+.asf-mode-btn--active,
+.asf-mode-btn--active:hover {
+  background: var(--c-action);
+  color: #fff;
+}
+
+/* ── Sub-tabs (Falhas de DD/MM / Histórico) ───────────────────── */
+.asf-subtabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--c-border);
+  margin: 4px 0 0;
+}
+.asf-subtab {
+  border: none;
+  background: transparent;
+  padding: 10px 14px;
+  margin-bottom: -1px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.asf-subtab:hover { color: var(--c-text); }
+.asf-subtab--active,
+.asf-subtab--active:hover {
+  color: var(--c-action);
+  border-bottom-color: var(--c-action);
+  font-weight: 600;
+}
+
 /* ============================================================================
- * Responsive — collapse hero composition under 720px
+ * Responsive
  * ============================================================================ */
 @media (max-width: 760px) {
-  .asf-hero-top { align-items: stretch; }
-  .asf-hero-controls { width: 100%; justify-content: space-between; }
+  .asf-header { gap: 12px; }
+  .asf-controls { width: 100%; justify-content: space-between; }
   .asf-field input,
-  .asf-field select { min-width: 0; }
-  .asf-stats { gap: 18px; }
+  .asf-field select { min-width: 0; width: 100%; }
+  .asf-stats { gap: 20px; }
   .asf-stat-sep { display: none; }
   .asf-empty {
     grid-template-columns: 1fr;
@@ -513,54 +629,9 @@
 }
 
 @media (max-width: 480px) {
-  .asf-hero { padding: 18px 16px; }
-  .asf-masthead-day { font-size: 56px; }
-  .asf-stats { flex-wrap: wrap; row-gap: 12px; }
-}
-
-/* ===========================================================================
- * Por campanha — toggle, sub-tabs, grid, historical table, pager
- * =========================================================================== */
-.asf-mode-toggle {
-  display: inline-flex;
-  gap: 2px;
-  background: var(--c-surface-2, #f1f5f9);
-  border-radius: 10px;
-  padding: 2px;
-  margin: 0 0 18px;
-}
-.asf-mode-btn {
-  border: none; background: transparent;
-  padding: 8px 16px;
-  font-size: 13px; font-weight: 500;
-  color: var(--c-text-2, #4b5563);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background .12s ease, color .12s ease;
-}
-.asf-mode-btn--active {
-  background: var(--c-surface-1, #fff);
-  color: var(--c-action, #E81E75);
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
-}
-
-.asf-subtabs {
-  display: flex; gap: 4px;
-  border-bottom: 1px solid var(--c-border, #e2e8f0);
-  margin-bottom: 16px;
-}
-.asf-subtab {
-  border: none; background: transparent;
-  padding: 10px 14px;
-  font-size: 13px; color: var(--c-text-2, #4b5563);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: color .12s ease, border-color .12s ease;
-}
-.asf-subtab--active {
-  color: var(--c-action, #E81E75);
-  border-bottom-color: var(--c-action, #E81E75);
-  font-weight: 600;
+  .asf-hero { padding: 16px; }
+  .asf-title { font-size: 22px; }
+  .asf-stats { flex-wrap: wrap; row-gap: 14px; }
 }
 
 .asf-camp-grid {
@@ -608,42 +679,48 @@
 }
 
 /* ============================================================================
- * Campaign-mode hero KPIs (replace station ribbon)
+ * Campaign-mode KPIs — vive dentro do mesmo .asf-hero (sem dupla moldura)
  * ============================================================================ */
 .asf-ckpis {
   display: flex;
   align-items: stretch;
-  margin: 18px 0 0;
-  padding: 18px 22px;
-  background: var(--c-surface, #fff);
-  border: 1px solid var(--c-border, #e2e8f0);
-  border-radius: var(--radius-xl, 14px);
-  gap: 22px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+  margin: 0;
+  padding: 0;
+  gap: 28px;
+  flex-wrap: wrap;
 }
 .asf-ckpi {
-  display: flex; flex-direction: column;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   gap: 4px;
   min-width: 0;
 }
 .asf-ckpi dd {
   margin: 0;
-  font-family: 'Space Grotesk', system-ui, sans-serif;
-  font-weight: 700; font-size: 32px; line-height: 1; letter-spacing: -.02em;
-  color: var(--c-text, #06055B);
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(26px, 3vw, 32px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
   font-variant-numeric: tabular-nums;
+  order: 2;
 }
 .asf-ckpi dt {
   margin: 0;
-  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--c-text-3, #9ca3af);
-  font-weight: 500;
+  font-family: var(--font-body);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-3);
+  font-weight: 600;
+  order: 1;
 }
-.asf-ckpi--deficit dd { color: #b91c1c; }
+.asf-ckpi--deficit dd { color: var(--c-danger); }
 .asf-ckpi-sep {
   width: 1px;
-  background: var(--c-border, #e2e8f0);
+  background: var(--c-border);
 }
 
 /* ============================================================================
@@ -837,6 +914,7 @@
 
 @media (max-width: 720px) {
   .asf-cempty { grid-template-columns: 1fr; gap: 32px; padding: 32px 18px; }
-  .asf-ckpis { gap: 14px; padding: 14px; }
+  .asf-ckpis { gap: 20px; }
   .asf-ckpi dd { font-size: 24px; }
+  .asf-ckpi-sep { display: none; }
 }
