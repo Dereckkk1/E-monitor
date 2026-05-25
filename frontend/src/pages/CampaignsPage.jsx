@@ -1106,6 +1106,32 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
           <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-concluida'}`}>
             {STATUS_LABEL[campaign.status] ?? campaign.status}
           </span>
+          {campaign.material_count === 0 && (
+            <span
+              title="Esta campanha ainda não tem nenhum material vinculado — abra o wizard pra subir o áudio quando estiver pronto."
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-full)',
+                background: '#fef9c3',
+                color: '#a16207',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.03em',
+                fontFamily: 'var(--font-heading)',
+              }}
+            >
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none"
+                   stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                   strokeLinejoin="round">
+                <path d="M8 1.5L1.5 13.5h13L8 1.5z" />
+                <path d="M8 6v3.5M8 11.5v.5" />
+              </svg>
+              sem material
+            </span>
+          )}
           {isAdmin && canCancel && (
             <button
               className="btn btn-muted btn-sm"
