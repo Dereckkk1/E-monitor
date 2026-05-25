@@ -40,6 +40,7 @@ type Deps struct {
 	SystemHealth          *handlers.SystemHealthHandler
 	AdminMonitoring       *handlers.AdminMonitoringHandler
 	StationFailures       *handlers.StationFailuresHandler
+	CampaignFailures      *handlers.CampaignFailuresHandler
 	Webhooks              *handlers.WebhooksHandler
 	MaterialTypes         *handlers.MaterialTypesHandler
 	Materials             *handlers.MaterialsHandler
@@ -367,6 +368,17 @@ func NewRouter(d Deps) http.Handler {
 					r.Group(func(r chi.Router) {
 						r.Use(auth.RequireRole("admin"))
 						r.Get("/admin/station-failures", d.StationFailures.Get)
+					})
+				}
+
+				// /admin/campaign-failures — same intent as station-failures but
+				// pivoted by campaign. Two list modes (date / historical) plus a
+				// drill-in by campaign id. Docs em docs/features/admin-campaign-failures.md.
+				if d.CampaignFailures != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/campaign-failures", d.CampaignFailures.GetList)
+						r.Get("/admin/campaign-failures/{id}", d.CampaignFailures.GetByID)
 					})
 				}
 			}) // end admin/operator group
