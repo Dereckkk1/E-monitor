@@ -51,6 +51,7 @@ type Deps struct {
 	Users                 *handlers.UsersHandler
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
+	Notifications         *handlers.NotificationsHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -379,6 +380,17 @@ func NewRouter(d Deps) http.Handler {
 						r.Use(auth.RequireRole("admin"))
 						r.Get("/admin/campaign-failures", d.CampaignFailures.GetList)
 						r.Get("/admin/campaign-failures/{id}", d.CampaignFailures.GetByID)
+					})
+				}
+
+				// /admin/notifications — sininho do dashboard admin.
+				// Spec: docs/superpowers/specs/2026-05-25-admin-notifications-and-failure-filter-design.md
+				if d.Notifications != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/notifications", d.Notifications.List)
+						r.Post("/admin/notifications/mark-read", d.Notifications.MarkRead)
+						r.Post("/admin/notifications/mark-all-read", d.Notifications.MarkAllRead)
 					})
 				}
 			}) // end admin/operator group

@@ -3,10 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
@@ -22,7 +22,7 @@ type NotificationsRepo interface {
 // NotificationsHandler powers /v1/internal/admin/notifications.
 type NotificationsHandler struct {
 	Repo NotificationsRepo
-	Log  *slog.Logger
+	Log  *zap.Logger
 }
 
 // userIDFromReq extrai o UserID das claims do JWT. Retorna ok=false se
@@ -54,7 +54,7 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	res, err := h.Repo.List(r.Context(), userID)
 	if err != nil {
 		if h.Log != nil {
-			h.Log.Error("notifications.list_failed", "error", err)
+			h.Log.Error("notifications.list_failed", zap.Error(err))
 		}
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -91,7 +91,7 @@ func (h *NotificationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) 
 	n, err := h.Repo.MarkRead(r.Context(), userID, body.Keys)
 	if err != nil {
 		if h.Log != nil {
-			h.Log.Error("notifications.mark_read_failed", "error", err)
+			h.Log.Error("notifications.mark_read_failed", zap.Error(err))
 		}
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -114,7 +114,7 @@ func (h *NotificationsHandler) MarkAllRead(w http.ResponseWriter, r *http.Reques
 	n, err := h.Repo.MarkAllReadInWindow(r.Context(), userID)
 	if err != nil {
 		if h.Log != nil {
-			h.Log.Error("notifications.mark_all_read_failed", "error", err)
+			h.Log.Error("notifications.mark_all_read_failed", zap.Error(err))
 		}
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return

@@ -321,6 +321,10 @@ func main() {
 			Repo: catalog.NewCampaignFailures(pool),
 			Log:  logger,
 		},
+		Notifications: &handlers.NotificationsHandler{
+			Repo: catalog.NewNotifications(pool),
+			Log:  logger,
+		},
 		Metrics:               metricsWriter,
 		BlockList:             blockList,
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
