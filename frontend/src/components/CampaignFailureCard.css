@@ -116,3 +116,33 @@
 }
 .cfc-more { color: var(--text-3, #9ca3af); }
 .cfc-cta { color: var(--action, #E81E75); font-weight: 500; }
+
+/* ── Historical table row (CampaignFailureRow) ─────────────────── */
+.cfr-row {
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.cfr-row:hover { background: var(--surface-2, #f1f5f9); }
+.cfr-row:focus-visible { outline: 2px solid var(--action, #E81E75); outline-offset: -2px; }
+.cfr-row > td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  vertical-align: middle;
+}
+.cfr-cli-stack { display: flex; flex-direction: column; min-width: 0; }
+.cfr-cli-name { font-weight: 600; color: var(--text, #06055B); }
+.cfr-camp-name { font-size: 13px; color: var(--text-2, #4b5563); }
+.cfr-period { font-size: 11px; color: var(--text-3, #9ca3af); margin-top: 2px; }
+
+.cfr-status-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+}
+.cfr-status-ativa      { background: rgba(34,197,94,.12); color: #16a34a; }
+.cfr-status-programada { background: rgba(59,130,246,.12); color: #2563eb; }
+.cfr-status-concluida  { background: rgba(107,114,128,.15); color: #4b5563; }
+.cfr-status-cancelada  { background: rgba(239,68,68,.12); color: #dc2626; }
+
+.cfr-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.cfr-num-deficit { color: #dc2626; }
+.cfr-bonif { width: 130px; }
