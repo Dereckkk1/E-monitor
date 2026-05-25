@@ -78,6 +78,7 @@ function validateStation(draft, typesInScopeForStation) {
  */
 const PricingStep = forwardRef(function PricingStep({
   campaignId, campaignStations, campaignMaterials, materialsById = {},
+  distributionRules = [],
 }, ref) {
   const { data: pricingList = [], isLoading } = useCampaignPricing(campaignId)
   const { data: materialTypes = [] } = useMaterialTypes()
@@ -85,25 +86,33 @@ const PricingStep = forwardRef(function PricingStep({
   const del = useDeleteStationPricing()
 
   // typesInScope[stationId] = Array<MaterialType> presentes na estação dentro
-  // da campanha (precisam ter unit_value cadastrado se mode=per_insertion).
+  // da campanha. União de tipos vindos de materiais linkados E tipos cobertos
+  // por regras de distribuição (spec 2026-05-25 §4.6). Permite cadastrar
+  // unit_value pra um tipo antes mesmo do áudio chegar.
   const typesInScope = useMemo(() => {
     const m = new Map()
+    const addType = (sid, type) => {
+      if (!m.has(sid)) m.set(sid, new Map())
+      m.get(sid).set(type.id, type)
+    }
     for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
       if (!mat?.type_id) continue
       const type = materialTypes.find(t => t.id === mat.type_id)
       if (!type) continue
-      for (const sid of cm.target_stations ?? []) {
-        if (!m.has(sid)) m.set(sid, new Map())
-        m.get(sid).set(type.id, type)
-      }
+      for (const sid of cm.target_stations ?? []) addType(sid, type)
+    }
+    for (const r of distributionRules) {
+      const type = materialTypes.find(t => t.id === r.type_id)
+      if (!type) continue
+      for (const sid of r.station_ids) addType(sid, type)
     }
     const out = {}
     for (const [sid, types] of m.entries()) {
       out[sid] = [...types.values()].sort((a, b) => a.name.localeCompare(b.name))
     }
     return out
-  }, [campaignMaterials, materialsById, materialTypes])
+  }, [campaignMaterials, materialsById, materialTypes, distributionRules])
 
   // Drafts: estado local por station_id. Hidrata a partir do server uma vez
   // ao carregar; mudanças subsequentes vivem aqui até saveAll/persist.

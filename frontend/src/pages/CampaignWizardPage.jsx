@@ -216,6 +216,7 @@ export default function CampaignWizardPage() {
         campaignStations={campaignStations}
         campaignMaterials={campaignMaterials}
         materialsById={materialsById}
+        distributionRules={distributionRules}
       />
     )
     // O nextDisabled aqui é só visual; saveAll() valida de novo na hora.
