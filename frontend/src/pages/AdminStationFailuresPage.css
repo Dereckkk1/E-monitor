@@ -606,3 +606,237 @@
   text-align: center;
   color: var(--c-text-3, #9ca3af);
 }
+
+/* ============================================================================
+ * Campaign-mode hero KPIs (replace station ribbon)
+ * ============================================================================ */
+.asf-ckpis {
+  display: flex;
+  align-items: stretch;
+  margin: 18px 0 0;
+  padding: 18px 22px;
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e2e8f0);
+  border-radius: var(--radius-xl, 14px);
+  gap: 22px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.asf-ckpi {
+  display: flex; flex-direction: column;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+.asf-ckpi dd {
+  margin: 0;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 700; font-size: 32px; line-height: 1; letter-spacing: -.02em;
+  color: var(--c-text, #06055B);
+  font-variant-numeric: tabular-nums;
+}
+.asf-ckpi dt {
+  margin: 0;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--c-text-3, #9ca3af);
+  font-weight: 500;
+}
+.asf-ckpi--deficit dd { color: #b91c1c; }
+.asf-ckpi-sep {
+  width: 1px;
+  background: var(--c-border, #e2e8f0);
+}
+
+/* ============================================================================
+ * Campaign card skeleton — matches CampaignFailureCard exactly
+ * ============================================================================ */
+.asf-cskel-card {
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e2e8f0);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.asf-cskel-card .asf-cskel-head {
+  display: grid;
+  grid-template-columns: 44px 1fr 56px;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--c-border, #e2e8f0);
+  align-items: center;
+}
+.asf-cskel-logo {
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-id { display: flex; flex-direction: column; gap: 6px; }
+.asf-cskel-line {
+  height: 10px;
+  border-radius: 4px;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-line.w25 { width: 25%; }
+.asf-cskel-line.w30 { width: 30%; }
+.asf-cskel-line.w40 { width: 40%; }
+.asf-cskel-line.w50 { width: 50%; }
+.asf-cskel-line.w55 { width: 55%; }
+.asf-cskel-line.w70 { width: 70%; }
+.asf-cskel-strip {
+  display: inline-flex; gap: 3px;
+  margin-top: 4px;
+}
+.asf-cskel-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-count {
+  width: 56px; height: 38px;
+  border-radius: 8px;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-row {
+  display: grid;
+  grid-template-columns: 32px 1fr 110px;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--c-border, #e2e8f0);
+  align-items: center;
+}
+.asf-cskel-row:last-of-type { border-bottom: none; }
+.asf-cskel-avatar {
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--c-surface-2, #f1f5f9);
+  animation: asf-shimmer 1.4s ease-in-out infinite;
+}
+.asf-cskel-foot {
+  padding: 12px 18px;
+  background: var(--c-surface-2, #f8fafc);
+}
+
+@keyframes asf-shimmer {
+  0%   { opacity: .55; }
+  50%  { opacity: .95; }
+  100% { opacity: .55; }
+}
+
+/* ============================================================================
+ * Shadow UI empty state for campaign mode (§4.7 DESIGN.md)
+ * ============================================================================ */
+.asf-cempty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  padding: 48px 32px;
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e2e8f0);
+  border-radius: 16px;
+  align-items: center;
+}
+.asf-cempty-text { min-width: 0; }
+.asf-cempty-mark {
+  width: 64px; height: 64px;
+  border-radius: 16px;
+  background: rgba(34, 197, 94, .1);
+  color: #15803d;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 18px;
+}
+.asf-cempty-text h2 {
+  margin: 0 0 8px;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 700; font-size: 22px; letter-spacing: -.02em;
+  color: var(--c-text, #06055B);
+}
+.asf-cempty-text p {
+  margin: 0;
+  font-size: 14px; line-height: 1.55;
+  color: var(--c-text-2, #4b5563);
+  max-width: 44ch;
+}
+.asf-cempty-preview {
+  position: relative;
+  opacity: .6;
+}
+.asf-cempty-preview-label {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  font-size: 11px;
+  color: var(--c-text-3, #9ca3af);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.asf-cempty-card {
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e2e8f0);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.asf-cempty-card-head {
+  display: grid;
+  grid-template-columns: 36px 1fr 40px;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-border, #e2e8f0);
+  align-items: center;
+}
+.asf-cempty-logo {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: var(--c-surface-2, #f1f5f9);
+}
+.asf-cempty-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.asf-cempty-line {
+  height: 8px;
+  border-radius: 3px;
+  background: var(--c-surface-2, #f1f5f9);
+}
+.asf-cempty-strip { display: flex; gap: 2px; margin-top: 3px; }
+.asf-cempty-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--c-surface-2, #f1f5f9);
+}
+.asf-cempty-dot--on { background: rgba(220, 38, 38, .35); }
+.asf-cempty-count {
+  width: 40px; height: 28px;
+  border-radius: 6px;
+  background: var(--c-surface-2, #f1f5f9);
+}
+.asf-cempty-row {
+  display: grid;
+  grid-template-columns: 24px 1fr 60px;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--c-border, #e2e8f0);
+  align-items: center;
+}
+.asf-cempty-row:last-child { border-bottom: none; }
+.asf-cempty-avatar {
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: var(--c-surface-2, #f1f5f9);
+}
+.asf-cempty-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right,
+    rgba(22, 163, 74, .35) 0 60%,
+    var(--c-surface-2, #f1f5f9) 60% 100%);
+}
+
+@media (max-width: 720px) {
+  .asf-cempty { grid-template-columns: 1fr; gap: 32px; padding: 32px 18px; }
+  .asf-ckpis { gap: 14px; padding: 14px; }
+  .asf-ckpi dd { font-size: 24px; }
+}
