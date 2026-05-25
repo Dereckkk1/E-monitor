@@ -199,6 +199,7 @@ export default function CampaignWizardPage() {
         campaignStart={existingCampaign?.start_date ?? draftCampaign.start_date}
         campaignEnd={existingCampaign?.end_date ?? draftCampaign.end_date}
         campaignMaterials={campaignMaterials}
+        campaignStationIds={targetStationIds}
         materialsById={materialsById}
         allStations={allStations}
       />

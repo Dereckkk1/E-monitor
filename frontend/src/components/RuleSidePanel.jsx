@@ -188,7 +188,11 @@ export default function RuleSidePanel({
                       {t.materialCount != null && (
                         <span style={{
                           marginLeft: 6, padding: '0 6px',
-                          background: 'var(--c-surface)', color: 'var(--c-text-3)',
+                          background: t.materialCount === 0
+                            ? 'var(--c-surface-2)'
+                            : 'var(--c-surface)',
+                          color: 'var(--c-text-3)',
+                          opacity: t.materialCount === 0 ? 0.65 : 1,
                           borderRadius: 'var(--radius-full)', fontSize: 9, fontWeight: 700,
                         }}>
                           {t.materialCount}
@@ -208,7 +212,11 @@ export default function RuleSidePanel({
               }}>
                 Essa regra vai contar como cumprida quando <strong style={{ color: 'var(--c-text)' }}>qualquer
                 material do tipo {selectedType.name}</strong> tocar nas emissoras
-                selecionadas{selectedType.materialCount != null && ` (${selectedType.materialCount} material${selectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`}.
+                selecionadas{selectedType.materialCount != null && (
+                  selectedType.materialCount === 0
+                    ? ' (nenhum material desse tipo na campanha ainda — será contado quando subir)'
+                    : ` (${selectedType.materialCount} material${selectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`
+                )}.
               </div>
             )}
           </div>
