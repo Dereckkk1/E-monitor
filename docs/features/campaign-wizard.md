@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-05-25
 codigo-relacionado:
   - frontend/src/pages/CampaignWizardPage.jsx
   - frontend/src/pages/CampaignWizardSteps/
@@ -57,6 +57,24 @@ A rota `/campaigns/:id/edit` carrega a campanha pelo ID e abre o wizard com todo
 **Limitações** (validação atualmente só no frontend — backend não bloqueia):
 - Cliente não pode mudar
 - Regras com `start_date < hoje` não devem ser editadas (ver F-91)
+
+## Planejamento sem material (distribuição "fantasma")
+
+Campanhas costumam ser planejadas antes dos áudios chegarem. O wizard suporta esse fluxo (spec [2026-05-25](../superpowers/specs/2026-05-25-distribution-without-materials-design.md)):
+
+1. **Step 3 (Materiais) é opcional.** Quando não há material linkado, o empty state mostra um link "Pular por enquanto" e o footer renomeia "Avançar →" para "Pular materiais →". Materiais mal configurados (sem tipo ou sem estação) continuam bloqueando.
+
+2. **Step 4 (Distribuição) aceita regras sem material.** O `RuleSidePanel` lista todos os tipos globais e todas as emissoras da campanha. A regra é por `type_id` (migration 0019), não exige material.
+
+3. **Linhas "fantasma" no grid.** `(station, type)` que existe só por causa de uma regra (sem material desse tipo linkado à estação) aparece com `TypeIconPill` em opacidade reduzida, label em cor secundária e sufixo "· aguardando áudio". Quando o material chega, a linha vira normal.
+
+4. **Banner âmbar.** O Step 4 mostra um banner no topo listando os tipos sem áudio: "Você planejou X regras sem áudio vinculado. Quando subir um material do tipo Y, ele começa a ser contado automaticamente."
+
+5. **Pricing aceita tipos vindos de regras.** No Step 5, `typesInScope` é união de tipos de materiais E tipos cobertos por regras — operador consegue cadastrar `unit_value` por tipo antes do áudio chegar.
+
+6. **Chip no listing.** `/campaigns` mostra chip âmbar "sem material" pra campanhas com `material_count === 0` (campo novo no `ListPaged`), como recall visual.
+
+Quando o material é subido depois (no Step 3 da edição), ele é vinculado automaticamente a todas as emissoras da campanha — comportamento atual, inalterado. As regras já existentes do mesmo tipo começam a contar detections imediatamente, sem ação extra.
 
 ## Tipos de material
 
