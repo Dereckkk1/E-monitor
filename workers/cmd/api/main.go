@@ -317,6 +317,10 @@ func main() {
 			Repo: catalog.NewStationFailures(pool),
 			Log:  logger,
 		},
+		CampaignFailures: &handlers.CampaignFailuresHandler{
+			Repo: catalog.NewCampaignFailures(pool),
+			Log:  logger,
+		},
 		Metrics:               metricsWriter,
 		BlockList:             blockList,
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
