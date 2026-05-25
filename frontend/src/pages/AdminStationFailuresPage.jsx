@@ -141,6 +141,124 @@ function SkeletonCard() {
   )
 }
 
+// Campaign-mode skeleton — matches CampaignFailureCard layout precisely so it
+// doesn't morph on swap. Header (logo + identity + count) + 3 station rows.
+function CampaignSkeletonCard() {
+  return (
+    <article className="asf-cskel-card" aria-hidden="true">
+      <div className="asf-cskel-head">
+        <div className="asf-cskel-logo" />
+        <div className="asf-cskel-id">
+          <div className="asf-cskel-line w50" />
+          <div className="asf-cskel-line w70" />
+          <div className="asf-cskel-strip">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <span key={i} className="asf-cskel-dot" />
+            ))}
+          </div>
+        </div>
+        <div className="asf-cskel-count" />
+      </div>
+      {[0, 1, 2].map(i => (
+        <div key={i} className="asf-cskel-row">
+          <div className="asf-cskel-avatar" />
+          <div className="asf-cskel-id">
+            <div className="asf-cskel-line w40" />
+            <div className="asf-cskel-line w25" />
+          </div>
+          <div className="asf-cskel-bar" />
+        </div>
+      ))}
+      <div className="asf-cskel-foot">
+        <div className="asf-cskel-line w30" />
+      </div>
+    </article>
+  )
+}
+
+// Shadow UI empty state for campaign mode (§4.7 DESIGN.md).
+// Two-column layout: action/value left, mockup right.
+function CampaignEmptyState({ dateIso, isHistorical }) {
+  const { day, month } = fmtMasthead(dateIso)
+  return (
+    <div className="asf-cempty">
+      <div className="asf-cempty-text">
+        <div className="asf-cempty-mark" aria-hidden="true">
+          <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+            <circle cx="22" cy="22" r="20" stroke="currentColor" strokeWidth="1.5" opacity=".25" />
+            <path d="M14 22.5l5.5 5.5L31 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <h2>
+          {isHistorical
+            ? 'Sem campanhas com falha registrada.'
+            : `Nenhuma campanha falhou em ${day} de ${month}.`}
+        </h2>
+        <p>
+          {isHistorical
+            ? 'Quando uma campanha perder slot em qualquer dia da vigência, ela vai listar aqui.'
+            : 'Tudo dentro do programado. Quando algo falhar, cada campanha vira um card com as emissoras que precisam ser cobradas.'}
+        </p>
+      </div>
+      <div className="asf-cempty-preview" aria-hidden="true">
+        <div className="asf-cempty-preview-label">Quando algo falhar, aparece assim:</div>
+        <div className="asf-cempty-card">
+          <div className="asf-cempty-card-head">
+            <div className="asf-cempty-logo" />
+            <div className="asf-cempty-meta">
+              <div className="asf-cempty-line w55" />
+              <div className="asf-cempty-line w70" />
+              <div className="asf-cempty-strip">
+                {[0,1,2,3,4,5,6,7,8,9].map(i => (
+                  <span key={i} className={`asf-cempty-dot ${i < 3 ? 'asf-cempty-dot--on' : ''}`} />
+                ))}
+              </div>
+            </div>
+            <div className="asf-cempty-count" />
+          </div>
+          {[0, 1].map(i => (
+            <div key={i} className="asf-cempty-row">
+              <div className="asf-cempty-avatar" />
+              <div className="asf-cempty-meta">
+                <div className="asf-cempty-line w40" />
+              </div>
+              <div className="asf-cempty-bar" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Campaign-mode KPI strip — replaces the station-first stats when viewMode is by_campaign.
+function CampaignKpiStrip({ summary, mode }) {
+  if (!summary) return null
+  const isHistorical = mode === 'historical'
+  return (
+    <dl className="asf-ckpis" aria-label="Resumo de campanhas">
+      <div className="asf-ckpi">
+        <dd>{summary.campaigns ?? 0}</dd>
+        <dt>{isHistorical ? 'campanhas com falha' : 'campanhas'}</dt>
+      </div>
+      <div className="asf-ckpi-sep" aria-hidden="true" />
+      <div className="asf-ckpi">
+        <dd>
+          {isHistorical
+            ? (summary.total_failure_days ?? 0)
+            : (summary.stations ?? 0)}
+        </dd>
+        <dt>{isHistorical ? 'dias com falha acumulados' : 'emissoras'}</dt>
+      </div>
+      <div className="asf-ckpi-sep" aria-hidden="true" />
+      <div className="asf-ckpi asf-ckpi--deficit">
+        <dd>{(isHistorical ? null : summary.total_deficit) ?? '—'}</dd>
+        <dt>veiculações faltam</dt>
+      </div>
+    </dl>
+  )
+}
+
 function EmptyState({ dateIso }) {
   const { day, month, year } = fmtMasthead(dateIso)
   return (
@@ -281,6 +399,14 @@ export default function AdminStationFailuresPage() {
         )}
 
         {isByStation && <HeroTimeline incidents={incidents} />}
+
+        {/* Campaign-mode KPIs replace the station ribbon */}
+        {!isByStation && campaignQ.data?.summary && (
+          <CampaignKpiStrip
+            summary={campaignQ.data.summary}
+            mode={subTab === 'historical' ? 'historical' : 'daily'}
+          />
+        )}
       </header>
 
       {/* ── Toggle Por emissora / Por campanha ─────────────────────── */}
@@ -349,11 +475,11 @@ export default function AdminStationFailuresPage() {
           </div>
 
           {isLoading ? (
-            <p className="asf-state">Carregando…</p>
+            <div className="asf-camp-grid" aria-hidden="true">
+              {[0, 1, 2, 3].map(i => <CampaignSkeletonCard key={i} />)}
+            </div>
           ) : campaigns.length === 0 ? (
-            <p className="asf-state">
-              {subTab === 'daily' ? 'Nenhuma campanha falhou nesse dia.' : 'Nenhuma campanha tem falha registrada.'}
-            </p>
+            <CampaignEmptyState dateIso={date} isHistorical={subTab === 'historical'} />
           ) : subTab === 'daily' ? (
             <div className="asf-camp-grid">
               {campaigns.map(entry => (
@@ -376,6 +502,7 @@ export default function AdminStationFailuresPage() {
                       <th>Dias c/ falha</th>
                       <th>Déficit</th>
                       <th>Bonificada</th>
+                      <th aria-label="Ações" />
                     </tr>
                   </thead>
                   <tbody>

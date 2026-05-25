@@ -134,31 +134,83 @@ export async function generateCampaignFailurePdf(payload) {
   })
 
   // ─── Stations table ────────────────────────────────────────────
-  const body = stations.map(s => [
-    s.station.name + (s.station.city ? `\n${s.station.city}` : ''),
-    String(s.programmed ?? 0),
-    `${s.identified ?? 0} (${s.programmed ? Math.round(((s.identified || 0) / s.programmed) * 100) : 0}%)`,
-    fmtDaysList(s.failure_days || []),
-    s.is_bonified ? `Bonificada (extras: ${s.extras ?? 0})` : '—',
-  ])
+  // Body rows keep numbers; we draw the coverage bar in a didDrawCell hook
+  // so each row gets a visual under the percentage.
+  const body = stations.map(s => {
+    const programmed = s.programmed || 0
+    const identified = s.identified || 0
+    const extras = s.extras || 0
+    const deficit = s.deficit || 0
+    const coverage = programmed > 0 ? Math.round((identified / programmed) * 100) : 0
+    return {
+      _raw: { programmed, identified, extras, deficit, coverage, isBonified: s.is_bonified },
+      cells: [
+        s.station.name + (s.station.city ? `\n${s.station.city}` : ''),
+        String(programmed),
+        `${identified.toLocaleString('pt-BR')}  ${coverage}%`,
+        fmtDaysList(s.failure_days || []),
+        s.is_bonified ? `Bonificada · +${extras}` : (deficit > 0 ? `Cobrar (${deficit})` : '—'),
+      ],
+    }
+  })
 
   autoTable(doc, {
     startY: kpiY + 80,
     head: [['Emissora', 'Programado', 'Veiculou', 'Dias com falha', 'Status']],
-    body,
+    body: body.map(b => b.cells),
     margin: { left: margin, right: margin },
-    styles: { fontSize: 9, cellPadding: 6 },
-    headStyles: { fillColor: TOKENS.surface2, textColor: TOKENS.text3, fontSize: 8, fontStyle: 'bold' },
+    styles: { fontSize: 9, cellPadding: { top: 7, right: 6, bottom: 12, left: 6 }, valign: 'top' },
+    headStyles: {
+      fillColor: TOKENS.surface2, textColor: TOKENS.text3,
+      fontSize: 8, fontStyle: 'bold', cellPadding: 6, halign: 'left',
+    },
     columnStyles: {
-      0: { cellWidth: 160 },
-      1: { halign: 'right', cellWidth: 70 },
+      0: { cellWidth: 150 },
+      1: { halign: 'right', cellWidth: 60 },
       2: { halign: 'right', cellWidth: 70 },
       3: { cellWidth: 'auto' },
-      4: { cellWidth: 100 },
+      4: { cellWidth: 95, halign: 'left' },
     },
     didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 4 && data.cell.raw?.startsWith('Bonificada')) {
-        data.cell.styles.textColor = TOKENS.bonified
+      if (data.section !== 'body') return
+      const raw = body[data.row.index]?._raw
+      if (!raw) return
+      // Status column color
+      if (data.column.index === 4) {
+        if (raw.isBonified) data.cell.styles.textColor = TOKENS.bonified
+        else if (raw.deficit > 0) data.cell.styles.textColor = TOKENS.deficit
+      }
+      // Veiculou column: bold coverage %
+      if (data.column.index === 2) {
+        data.cell.styles.fontStyle = 'bold'
+      }
+    },
+    didDrawCell: (data) => {
+      // Draw a thin coverage bar UNDER the Veiculou cell.
+      if (data.section !== 'body' || data.column.index !== 2) return
+      const raw = body[data.row.index]?._raw
+      if (!raw || raw.programmed === 0) return
+      const x = data.cell.x + 4
+      const y = data.cell.y + data.cell.height - 6
+      const w = data.cell.width - 8
+      const h = 3
+      // Background track
+      doc.setFillColor(...TOKENS.surface2)
+      doc.roundedRect(x, y, w, h, 1, 1, 'F')
+      // Filled portion: ok (green) up to coverage%, then extras (purple)
+      const denom = Math.max(raw.programmed, raw.identified + raw.deficit)
+      if (denom > 0) {
+        const okW = (raw.identified / denom) * w
+        const extrasW = (raw.extras / denom) * w
+        if (okW > 0) {
+          const okColor = raw.isBonified ? TOKENS.bonified : [22, 163, 74]
+          doc.setFillColor(...okColor)
+          doc.roundedRect(x, y, okW, h, 1, 1, 'F')
+        }
+        if (extrasW > 0 && !raw.isBonified) {
+          doc.setFillColor(...TOKENS.bonified)
+          doc.rect(x + okW, y, extrasW, h, 'F')
+        }
       }
     },
   })
