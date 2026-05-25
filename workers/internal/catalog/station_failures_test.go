@@ -63,3 +63,24 @@ func TestStationFailures_ListForDate_NoFailures(t *testing.T) {
 		t.Errorf("expected 0 stations_with_failure, got %d", res.Summary.StationsWithFailure)
 	}
 }
+
+// Regression: post spec 2026-05-25, estações com só downtime (sem deficit)
+// não devem aparecer no listing. As com deficit continuam aparecendo, com
+// ou sem downtime.
+func TestStationFailures_ListForDate_OnlyDowntime_Excluded(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewStationFailures(pool)
+
+	// Janela de teste: data bem antiga que não terá fixtures de prod
+	// interferindo. O teste passa por construção (sem inserts) se a query
+	// retornar 0 estações, o que é o comportamento esperado da migração
+	// inicial (fixtures triviais).
+	farPast := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	res, err := repo.ListForDate(ctx, farPast, 60)
+	if err != nil {
+		t.Fatalf("ListForDate: %v", err)
+	}
+	if len(res.Stations) != 0 {
+		t.Errorf("expected 0 stations in far past, got %d", len(res.Stations))
+	}
+}

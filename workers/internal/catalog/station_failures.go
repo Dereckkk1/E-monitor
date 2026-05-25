@@ -110,9 +110,12 @@ type Result struct {
 	Stations []StationFailure `json:"stations"`
 }
 
-// ListForDate returns all stations that had a failure (stream-down OR
-// silent-gap) on the given local-day, with the campaigns whose slots were
-// lost. minDownSeconds filters out tiny down events (default 60).
+// ListForDate returns stations that lost campaign inserções (deficit > 0)
+// on the given local-day, with the campaigns whose slots were lost.
+// Stations with only downtime (no deficit) are excluded — they were noise
+// for the operator (spec 2026-05-25). minDownSeconds still filters tiny
+// down events (default 60) when computing the down_sec of qualifying
+// stations.
 func (r *StationFailures) ListForDate(ctx context.Context, day time.Time, minDownSeconds int) (*Result, error) {
 	dayStr := day.Format("2006-01-02")
 	result := &Result{
@@ -146,7 +149,7 @@ SELECT s.id, s.name,
 FROM stations s
 LEFT JOIN down_aggr d   ON d.station_id = s.id
 LEFT JOIN deficit_aggr df ON df.station_id = s.id
-WHERE (d.station_id IS NOT NULL OR df.station_id IS NOT NULL)
+WHERE df.station_id IS NOT NULL
 ORDER BY COALESCE(d.down_sec, 0) DESC, COALESCE(df.aff_camp, 0) DESC, s.name ASC`,
 		dayStr, minDownSeconds)
 	if err != nil {
