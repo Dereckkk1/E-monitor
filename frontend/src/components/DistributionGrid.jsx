@@ -215,15 +215,31 @@ export default function DistributionGrid({
                   )}
                   <div style={{
                     padding: inlineStationInfo ? '11px 12px' : '11px 14px 11px 24px',
-                    background: '#fafbfc', color: '#334155',
+                    background: '#fafbfc',
+                    color: row.ghost ? '#64748b' : '#334155',
                     borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9',
                     display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 500,
                     position: 'sticky',
                     left: inlineStationInfo ? STATION_INFO_W : 0,
                     zIndex: 2,
                   }}>
-                    <TypeIconPill color={row.typeColor} />
+                    <TypeIconPill
+                      color={row.ghost
+                        ? `color-mix(in srgb, ${row.typeColor} 45%, #fafbfc)`
+                        : row.typeColor}
+                    />
                     {row.materialTitle}
+                    {row.ghost && (
+                      <span style={{
+                        marginLeft: 6,
+                        fontSize: 10,
+                        color: '#94a3b8',
+                        fontWeight: 500,
+                        fontStyle: 'italic',
+                      }}>
+                        · aguardando áudio
+                      </span>
+                    )}
                   </div>
                   {days.map((d, i) => {
                     const dateISO = d.toISOString().slice(0, 10)

@@ -63,29 +63,41 @@ export default function DistributionStep({
     [materialTypes]
   )
 
-  // Build "rows" — one per (station, TYPE) combination. A row only exists when
-  // at least one material of that type is linked to the station; otherwise the
-  // type is "unreachable" on that station and showing an empty row would be
-  // misleading.
-  //
-  // typesInScopeByStation: stationId → Set<typeId>
+  // typesInScopeByStation: stationId → Map<typeId, { hasMaterial: boolean }>
+  // União de:
+  //   1. (station, type) onde há ao menos um material desse tipo linkado à
+  //      estação → hasMaterial = true
+  //   2. (station, type) onde há ao menos uma regra cobrindo essa estação +
+  //      tipo, mesmo sem material → hasMaterial = false (linha "fantasma")
+  // Spec: 2026-05-25-distribution-without-materials-design §4.4
   const typesInScopeByStation = useMemo(() => {
     const m = new Map()
+    const add = (sid, tid, hasMaterial) => {
+      if (!m.has(sid)) m.set(sid, new Map())
+      const station = m.get(sid)
+      const existing = station.get(tid)
+      // Material sobrescreve "fantasma" — se tem material, deixa de ser ghost.
+      if (existing) {
+        if (hasMaterial) existing.hasMaterial = true
+      } else {
+        station.set(tid, { hasMaterial })
+      }
+    }
     for (const cm of campaignMaterials) {
       const mat = materialsById[cm.material_id]
       if (!mat?.type_id) continue
-      for (const sid of cm.target_stations) {
-        if (!m.has(sid)) m.set(sid, new Set())
-        m.get(sid).add(mat.type_id)
-      }
+      for (const sid of cm.target_stations) add(sid, mat.type_id, true)
+    }
+    for (const r of rules) {
+      for (const sid of r.station_ids) add(sid, r.type_id, false)
     }
     return m
-  }, [campaignMaterials, materialsById])
+  }, [campaignMaterials, materialsById, rules])
 
   const rows = useMemo(() => {
     const r = []
-    for (const [sid, typeSet] of typesInScopeByStation.entries()) {
-      for (const tid of typeSet) {
+    for (const [sid, typeMap] of typesInScopeByStation.entries()) {
+      for (const [tid, { hasMaterial }] of typeMap.entries()) {
         const type = typeById[tid]
         if (!type) continue
         const matching = rules.filter(rule =>
@@ -102,6 +114,10 @@ export default function DistributionStep({
             ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
             : null,
           extraRules: Math.max(0, matching.length - 1),
+          // Linha "fantasma": existe só porque uma regra cobre esse tipo nessa
+          // estação, mas ainda não há material desse tipo linkado. Visual
+          // diferente no DistributionGrid (Task 7).
+          ghost: !hasMaterial,
         })
       }
     }
@@ -308,6 +324,32 @@ export default function DistributionStep({
       .filter(Boolean)
   }, [campaignStationIds, allStations])
 
+  // Tipos que aparecem em alguma regra mas NÃO têm nenhum material linkado
+  // na campanha. Alimenta o banner âmbar do topo (spec §4.3).
+  const orphanRuleTypes = useMemo(() => {
+    const linkedTypeIds = new Set()
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (mat?.type_id) linkedTypeIds.add(mat.type_id)
+    }
+    const orphanIds = new Set()
+    for (const r of rules) {
+      if (!linkedTypeIds.has(r.type_id)) orphanIds.add(r.type_id)
+    }
+    return [...orphanIds]
+      .map(id => typeById[id])
+      .filter(Boolean)
+  }, [rules, campaignMaterials, materialsById, typeById])
+
+  const orphanRuleTypeIdSet = useMemo(
+    () => new Set(orphanRuleTypes.map(t => t.id)),
+    [orphanRuleTypes],
+  )
+  const orphanRuleCount = useMemo(
+    () => rules.filter(r => orphanRuleTypeIdSet.has(r.type_id)).length,
+    [rules, orphanRuleTypeIdSet],
+  )
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       {/* Section title + controls */}
@@ -374,6 +416,38 @@ export default function DistributionStep({
           </button>
         </div>
       </div>
+
+      {orphanRuleTypes.length > 0 && (
+        <div style={{
+          padding: '12px 16px',
+          background: '#fef9c3',
+          border: '1px solid #fde047',
+          borderRadius: 'var(--radius-md)',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+        }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+               stroke="#a16207" strokeWidth="1.75" strokeLinecap="round"
+               strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+            <path d="M8 1.5L1.5 13.5h13L8 1.5z" />
+            <path d="M8 6v3.5M8 11.5v.5" />
+          </svg>
+          <div style={{ fontSize: 13, color: '#854d0e', lineHeight: 1.5 }}>
+            Você planejou{' '}
+            <strong>
+              {orphanRuleCount} regra{orphanRuleCount !== 1 ? 's' : ''}
+            </strong>{' '}
+            sem áudio vinculado ainda. Quando subir um material{' '}
+            {orphanRuleTypes.length === 1 ? 'do tipo' : 'dos tipos'}{' '}
+            <strong>
+              {orphanRuleTypes.map(t => t.name).join(', ')}
+            </strong>{' '}
+            na campanha, ele começa a ser contado automaticamente nas
+            emissoras planejadas.
+          </div>
+        </div>
+      )}
 
       {rules.length > 0 && (
         <RuleChipList
