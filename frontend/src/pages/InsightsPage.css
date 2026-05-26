@@ -1,0 +1,418 @@
+/* InsightsPage — /insights
+ *
+ * Prefix `.in-`. Reusa tokens globais (--c-text, --c-surface, etc.)
+ * definidos em styles/variables.css. Layout em 3 rows:
+ *   Row 1 (cards): grid 5fr (cai pra 3 / 2 / 1 conforme breakpoint)
+ *   Row 2 (gráficos demográficos + pizza): grid 1fr 1fr 1fr
+ *   Row 3 (gráfico daily/monthly full-width)
+ */
+
+.in-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  font-family: var(--font-body);
+  color: var(--c-text);
+  padding: 18px;
+}
+
+.in-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.in-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.1;
+}
+
+.in-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* Reservado pra captura via html2canvas — manter sólido no export */
+  background: transparent;
+}
+
+.in-loading {
+  padding: 32px;
+  text-align: center;
+  color: var(--c-text-2);
+  font-size: 14px;
+}
+
+.in-error {
+  padding: 16px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #b91c1c;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+/* ── Filters bar ────────────────────────────────────────────────── */
+.in-filters {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow-sm);
+}
+
+.in-filters-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.in-filter { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+.in-filter--wide { min-width: 220px; flex: 1; }
+
+.in-filter--locked .in-locked-chip {
+  padding: 8px 12px;
+  background: rgba(232, 30, 117, 0.1);
+  color: var(--c-action);
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.in-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text-2);
+}
+
+.in-date {
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  font: inherit;
+  background: white;
+  color: var(--c-text);
+  min-height: 38px;
+  box-sizing: border-box;
+}
+.in-date:focus {
+  outline: none;
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px rgba(232,30,117,.1);
+}
+
+.in-chip {
+  padding: 8px 14px;
+  border: 1px solid var(--c-border);
+  background: white;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--c-text);
+  transition: border-color 200ms, color 200ms;
+}
+.in-chip:hover:not(:disabled) { border-color: var(--c-action); color: var(--c-action); }
+.in-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.in-filters-actions { display: flex; gap: 10px; align-items: flex-end; }
+
+.in-btn-outline {
+  padding: 9px 16px;
+  border: 1px solid var(--c-border);
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--c-text);
+  transition: border-color 200ms, color 200ms, background 200ms;
+}
+.in-btn-outline:hover { border-color: var(--c-action); color: var(--c-action); }
+
+/* ── Rows ───────────────────────────────────────────────────────── */
+.in-row {
+  display: grid;
+  gap: 16px;
+}
+.in-row--cards { grid-template-columns: repeat(5, 1fr); }
+.in-row--charts { grid-template-columns: repeat(3, 1fr); }
+
+@media (max-width: 1280px) { .in-row--cards { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1024px) { .in-row--charts { grid-template-columns: 1fr; } }
+@media (max-width: 720px)  { .in-row--cards  { grid-template-columns: 1fr 1fr; } }
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.in-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: transform 200ms, border-color 200ms, box-shadow 200ms;
+}
+.in-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(232, 30, 117, 0.35);
+  box-shadow: var(--shadow-md);
+}
+
+.in-card-head { display: flex; align-items: center; gap: 8px; }
+
+.in-card-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(232, 30, 117, 0.08);
+  color: var(--c-action);
+  border-radius: 999px;
+  font-size: 18px;
+}
+
+.in-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text-2);
+}
+
+.in-card-value {
+  font-family: var(--font-heading);
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--c-text);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.in-card-sub { font-size: 12px; color: var(--c-text-2); }
+
+/* ── Invest toggle ──────────────────────────────────────────────── */
+.in-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  background: var(--c-surface-2);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.in-toggle-btn {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  cursor: pointer;
+  font-family: inherit;
+}
+.in-toggle-btn--active {
+  background: white;
+  color: var(--c-action);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Gender card (stacked bar) ──────────────────────────────────── */
+.in-bar-stacked {
+  display: flex;
+  height: 28px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--c-surface-2);
+  margin-top: 4px;
+}
+.in-bar-stacked-fill { height: 100%; transition: width 280ms ease; }
+.in-bar-stacked-fill--m { background: linear-gradient(135deg, #ec4899, #db2777); }
+.in-bar-stacked-fill--f { background: linear-gradient(135deg, #a78bfa, #8b5cf6); }
+
+.in-bar-legend {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+.in-bar-legend strong { color: var(--c-text); }
+
+/* ── Chart card ─────────────────────────────────────────────────── */
+.in-chart-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.in-chart-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+}
+
+/* ── Custom tooltip (glassmorphism) ─────────────────────────────── */
+.in-tooltip {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  min-width: 140px;
+}
+.in-tooltip-label {
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 6px;
+}
+.in-tooltip-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.in-tooltip-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.in-tooltip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.in-tooltip-name { color: var(--c-text-2); }
+.in-tooltip-value { font-weight: 600; color: var(--c-text); }
+
+/* ── Donut center label ─────────────────────────────────────────── */
+.in-donut-wrap {
+  position: relative;
+  height: 260px;
+}
+.in-donut-center {
+  position: absolute;
+  top: 50%;
+  left: 32%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+.in-donut-center-value {
+  font-family: var(--font-heading);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+.in-donut-center-label {
+  font-size: 11px;
+  color: var(--c-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Empty tutorial ─────────────────────────────────────────────── */
+.in-empty {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 40px;
+  align-items: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 48px;
+  min-height: 420px;
+}
+@media (max-width: 1024px) { .in-empty { grid-template-columns: 1fr; } }
+
+.in-empty-action {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: flex-start;
+}
+.in-empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  background: rgba(232, 30, 117, 0.1);
+  color: var(--c-action);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+}
+.in-empty-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: -0.02em;
+}
+.in-empty-text {
+  margin: 0;
+  color: var(--c-text-2);
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.in-empty-preview {
+  opacity: 0.35;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+.in-empty-card-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.in-empty-card {
+  height: 80px;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-lg);
+}
+.in-empty-chart-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.in-empty-chart {
+  height: 140px;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-lg);
+}
+.in-empty-chart--wide {
+  height: 160px;
+  background: var(--c-surface-2);
+  border-radius: var(--radius-lg);
+}

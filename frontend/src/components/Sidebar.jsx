@@ -104,6 +104,17 @@ function IconAdminOverview() {
   )
 }
 
+function IconInsights() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2"  y="9" width="2.4" height="5" rx="0.6" />
+      <rect x="6.8" y="6" width="2.4" height="8" rx="0.6" />
+      <rect x="11.6" y="3" width="2.4" height="11" rx="0.6" />
+      <circle cx="3.2" cy="3.5" r="1.8" strokeOpacity="0.7" />
+    </svg>
+  )
+}
+
 function IconAdminMonitoring() {
   return (
     <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -182,6 +193,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/material-types" icon={<IconMaterialTypes />} onClose={onClose}>Tipos de material</SidebarLink>
 
       <span className="sidebar-section-label">Veiculação</span>
+      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
@@ -210,6 +222,7 @@ function ClientNav({ onClose }) {
       <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
 
       <span className="sidebar-section-label">Veiculação</span>
+      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
