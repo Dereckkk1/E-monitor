@@ -288,20 +288,24 @@ func NewRouter(d Deps) http.Handler {
 				// Campaign ↔ Materials link.
 				// GET (ListByCampaign) ficou no subgrupo A com scope-check no
 				// handler. Writes seguem admin/operator-only aqui.
-				r.Route("/campaigns/{campaignID}/materials", func(r chi.Router) {
-					r.Post("/", d.CampaignMaterials.Link)
-					r.Put("/{materialID}/stations", d.CampaignMaterials.UpdateStations)
-					r.Delete("/{materialID}", d.CampaignMaterials.Unlink)
-				})
+				//
+				// IMPORTANTE: NÃO usar r.Route() aqui — Route cria sub-tree
+				// montada no path, capturando todos os métodos do pattern e
+				// mascarando o GET registrado no subgrupo A (viewer cai no
+				// RequireRole admin/operator deste grupo e leva 403). Registrar
+				// método a método mantém os routes folha no mux do parent e
+				// cada um respeita o middleware do seu próprio Group.
+				r.Post("/campaigns/{campaignID}/materials", d.CampaignMaterials.Link)
+				r.Put("/campaigns/{campaignID}/materials/{materialID}/stations", d.CampaignMaterials.UpdateStations)
+				r.Delete("/campaigns/{campaignID}/materials/{materialID}", d.CampaignMaterials.Unlink)
 
 				// Distribution rules.
 				// GET (ListByCampaign) ficou no subgrupo A com scope-check.
-				// Writes seguem admin/operator-only.
-				r.Route("/campaigns/{campaignID}/distribution-rules", func(r chi.Router) {
-					r.Post("/", d.DistributionRules.Create)
-					r.Put("/{ruleID}", d.DistributionRules.Update)
-					r.Delete("/{ruleID}", d.DistributionRules.Delete)
-				})
+				// Writes seguem admin/operator-only. Mesma justificativa de
+				// /materials acima — sem r.Route() pra não engolir o GET do A.
+				r.Post("/campaigns/{campaignID}/distribution-rules", d.DistributionRules.Create)
+				r.Put("/campaigns/{campaignID}/distribution-rules/{ruleID}", d.DistributionRules.Update)
+				r.Delete("/campaigns/{campaignID}/distribution-rules/{ruleID}", d.DistributionRules.Delete)
 
 				// Distribution overrides.
 				r.Route("/campaigns/{campaignID}/distribution-overrides", func(r chi.Router) {
@@ -315,12 +319,12 @@ func NewRouter(d Deps) http.Handler {
 				// /campaigns. Mode: consolidated | per_insertion. Validação
 				// forte no repo, retorna 422 em payload inválido.
 				// GET (ListByCampaign) ficou no subgrupo A com scope-check.
-				// Writes seguem admin/operator-only.
+				// Writes seguem admin/operator-only. Mesma justificativa de
+				// /materials e /distribution-rules — sem r.Route() pra não
+				// engolir o GET do A.
 				if d.Pricing != nil {
-					r.Route("/campaigns/{campaignID}/pricing", func(r chi.Router) {
-						r.Put("/{stationID}", d.Pricing.Upsert)
-						r.Delete("/{stationID}", d.Pricing.Delete)
-					})
+					r.Put("/campaigns/{campaignID}/pricing/{stationID}", d.Pricing.Upsert)
+					r.Delete("/campaigns/{campaignID}/pricing/{stationID}", d.Pricing.Delete)
 				}
 
 				// Detection writes — reads live in subgrupo A (viewer-friendly).
