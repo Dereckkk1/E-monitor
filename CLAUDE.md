@@ -294,6 +294,7 @@ docs/
 | Sininho de notificações (`/dashboard` admin, last-7d com read-state persistido) | [docs/features/admin-notifications.md](docs/features/admin-notifications.md) |
 | Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
 | Relatórios de campanha (CSV consolidado/detalhado, PDF com logo E-monitor) | [docs/features/campaign-reports.md](docs/features/campaign-reports.md) |
+| Dashboard de veiculação (`/insights`, admin + cliente, KPIs + 4 charts + export PNG/PDF) | [docs/features/insights-dashboard.md](docs/features/insights-dashboard.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |
 | Avaliação E2E do matcher (recomendações 4.x) | [docs/roadmap/detection-evaluation-report.md](docs/roadmap/detection-evaluation-report.md) |
 | Responder a alerta Prometheus disparado | [docs/runbooks/README.md](docs/runbooks/README.md) (índice por alerta) |
