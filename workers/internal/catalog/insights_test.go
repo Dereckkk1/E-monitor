@@ -61,9 +61,11 @@ func insSeedCampaign(t *testing.T, ctx context.Context, pool *pgxpool.Pool, clie
 }
 
 // insSeedStation cria uma estação com PMM + audience_profile completos.
-// gender, class e age devem somar 1.0 dentro de cada dimensão.
+// Percentuais em escala 0-100 (não 0-1) — espelha o formato real em
+// stations.metadata.audience_profile. Cada dimensão (gender, social_class,
+// age_ranges) deve somar ~100.
 func insSeedStation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string, pmm float64,
-	maleP, femaleP, abP, cP, deP, r18P, r25P, r50P float64) uuid.UUID {
+	malePct, femalePct, abPct, cPct, dePct, r18Pct, r25Pct, r50Pct float64) uuid.UUID {
 	t.Helper()
 	stat, err := NewStations(pool).Create(ctx, CreateStationInput{
 		Name: name, Band: "FM",
@@ -78,12 +80,12 @@ func insSeedStation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name 
 			"socialClass": {"classeAB": %f, "classeC": %f, "classeDE": %f},
 			"ageRanges":   {"range18to24": %f, "range25to49": %f, "range50plus": %f}
 		}
-	}`, maleP, femaleP, abP, cP, deP, r18P, r25P, r50P)
+	}`, malePct, femalePct, abPct, cPct, dePct, r18Pct, r25Pct, r50Pct)
 	if _, err := pool.Exec(ctx,
-		"UPDATE stations SET pmm = $1, meta = $2::jsonb WHERE id = $3",
+		"UPDATE stations SET pmm = $1, metadata = $2::jsonb WHERE id = $3",
 		pmm, meta, stat.ID,
 	); err != nil {
-		t.Fatalf("seed station meta: %v", err)
+		t.Fatalf("seed station metadata: %v", err)
 	}
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM station_thresholds WHERE station_id = $1", stat.ID)
@@ -205,11 +207,11 @@ func insSeedDistributionRule(t *testing.T, ctx context.Context, pool *pgxpool.Po
 
 func TestInsights_Fixture_StationMetaShape(t *testing.T) {
 	ctx, pool := newTestDB(t)
-	st := insSeedStation(t, ctx, pool, "FixtureCheck", 1234, 0.6, 0.4, 0.2, 0.5, 0.3, 0.3, 0.5, 0.2)
+	st := insSeedStation(t, ctx, pool, "FixtureCheck", 1234, 60, 40, 20, 50, 30, 30, 50, 20)
 
 	var pmm float64
 	var metaRaw string
-	if err := pool.QueryRow(ctx, "SELECT pmm, meta::text FROM stations WHERE id = $1", st).Scan(&pmm, &metaRaw); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT pmm, metadata::text FROM stations WHERE id = $1", st).Scan(&pmm, &metaRaw); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
 	if pmm != 1234 {
@@ -224,7 +226,7 @@ func TestInsights_Fixture_StationMetaShape(t *testing.T) {
 		t.Fatalf("audience_profile missing in %s", metaRaw)
 	}
 	g, _ := ap["gender"].(map[string]any)
-	if g["male"].(float64) != 0.6 {
+	if g["male"].(float64) != 60 {
 		t.Fatalf("male pct = %v", g["male"])
 	}
 }
@@ -264,5 +266,99 @@ func TestInsights_FetchCampaigns_RejectsCrossClient(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cross-client") {
 		t.Fatalf("error should mention cross-client: %v", err)
+	}
+}
+
+// ─── aggregateCore ──────────────────────────────────────────────────────────
+
+func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+
+	// PMM=1000, gender M=60% F=40%, AB=20% C=50% DE=30%, age 30/50/20%
+	st := insSeedStation(t, ctx, pool, "RadioX", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	for i := 0; i < 5; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
+	}
+	for i := 0; i < 2; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
+	}
+	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+
+	from := parseDate("2026-06-01")
+	to := parseDate("2026-06-30")
+	core, err := repo.aggregateCore(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: from, To: to, StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateCore: %v", err)
+	}
+
+	// 8 detecções × 1000 = 8000 impactos
+	if core.Impactos != 8000 {
+		t.Errorf("impactos = %d, want 8000", core.Impactos)
+	}
+	if core.VeiculacoesTotal != 8 {
+		t.Errorf("veic = %d, want 8", core.VeiculacoesTotal)
+	}
+	// Gender M = 8000 × 60% = 4800
+	if core.Gender.M != 4800 {
+		t.Errorf("gender_m = %d, want 4800", core.Gender.M)
+	}
+	if core.Gender.F != 3200 {
+		t.Errorf("gender_f = %d, want 3200", core.Gender.F)
+	}
+	// AB = 8000 × 20% = 1600
+	if core.Class.AB != 1600 {
+		t.Errorf("class_ab = %d, want 1600", core.Class.AB)
+	}
+	// Breakdown
+	if core.Breakdown.InSlot != 5 || core.Breakdown.OutSlot != 2 || core.Breakdown.ExtrasOrphan != 1 {
+		t.Errorf("breakdown = %+v", core.Breakdown)
+	}
+}
+
+func TestInsights_AggregateCore_StationWithoutPMM(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+
+	stOK := insSeedStation(t, ctx, pool, "OK", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	stNoPMM := insSeedStationNoProfile(t, ctx, pool, "SemPerfil")
+
+	insSeedDetection(t, ctx, pool, camp, mat, stOK, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, stNoPMM, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, stNoPMM, "in_slot", "2026-06-11")
+
+	from := parseDate("2026-06-01")
+	to := parseDate("2026-06-30")
+	core, err := repo.aggregateCore(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: from, To: to, StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateCore: %v", err)
+	}
+
+	if core.Impactos != 1000 { // só stOK contribui
+		t.Errorf("impactos = %d, want 1000", core.Impactos)
+	}
+	if core.VeiculacoesTotal != 3 { // todas contam como veiculações
+		t.Errorf("veic = %d, want 3", core.VeiculacoesTotal)
+	}
+	if core.StationsCount != 2 {
+		t.Errorf("stations = %d, want 2", core.StationsCount)
+	}
+	if core.StationsWithPMM != 1 {
+		t.Errorf("stations_with_pmm = %d, want 1", core.StationsWithPMM)
 	}
 }
