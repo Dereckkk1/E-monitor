@@ -52,6 +52,7 @@ type Deps struct {
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
+	Insights              *handlers.InsightsHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -160,6 +161,13 @@ func NewRouter(d Deps) http.Handler {
 				if d.Reports != nil {
 					r.Get("/reports/campaigns/{id}/consolidated.csv", d.Reports.Consolidated)
 					r.Get("/reports/campaigns/{id}/summary", d.Reports.Summary)
+				}
+
+				// Insights dashboard — admin vê tudo; cliente fica restrito ao
+				// próprio scope via auth.ClientScopeFromContext (anti-oracle dentro
+				// do handler+repo).
+				if d.Insights != nil {
+					r.Get("/insights", d.Insights.Get)
 				}
 
 				// Web Vitals telemetry — qualquer usuário autenticado posta
