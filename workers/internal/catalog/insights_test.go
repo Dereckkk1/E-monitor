@@ -383,6 +383,55 @@ func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
 	}
 }
 
+// ─── Compute end-to-end ─────────────────────────────────────────────────────
+
+func TestInsights_Compute_EndToEnd(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 2000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 100.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	for i := 0; i < 10; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	}
+
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if out.KPIs.Impactos != 20000 {
+		t.Errorf("impactos = %d, want 20000", out.KPIs.Impactos)
+	}
+	if out.KPIs.VeiculacoesTotal != 10 {
+		t.Errorf("veic = %d, want 10", out.KPIs.VeiculacoesTotal)
+	}
+	if out.KPIs.Investido.Executado < 999 || out.KPIs.Investido.Executado > 1001 {
+		t.Errorf("executado = %v, want ~1000", out.KPIs.Investido.Executado)
+	}
+	// CPM = (1000 / 20000) × 1000 = 50.0
+	if out.KPIs.CPM < 49 || out.KPIs.CPM > 51 {
+		t.Errorf("cpm = %v, want ~50", out.KPIs.CPM)
+	}
+	if out.Period.Granularity != "day" {
+		t.Errorf("granularity = %q, want day", out.Period.Granularity)
+	}
+	if len(out.Campaigns) != 1 {
+		t.Errorf("campaigns = %d, want 1", len(out.Campaigns))
+	}
+}
+
 func TestInsights_AggregateBuckets_MonthlyGranularity(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)

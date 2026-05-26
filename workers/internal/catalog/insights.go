@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -119,13 +118,57 @@ type BucketRow struct {
 	Extras     int    `json:"extras"`
 }
 
-// Compute é o entry-point do repo. Implementado em incrementos pelos
-// helpers privados fetchCampaigns / aggregateCore / aggregateInvestment /
-// aggregateBuckets. Mantemos sql.NullString como import disponível
-// para os scans dos modos de pricing nos próximos passos.
+// Compute é o entry-point do repo. Roda os 4 helpers em sequência
+// (validate-campaigns → core → investment → buckets) e devolve o
+// payload completo formatado para serialização JSON.
+//
+// CPM = (investido_executado / impactos) × 1000. Quando impactos = 0
+// (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
 func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayload, error) {
-	_ = sql.ErrNoRows // placeholder — usado nos próximos commits
-	return nil, fmt.Errorf("not implemented")
+	briefs, err := r.fetchCampaigns(ctx, p.ClientID, p.CampaignIDs)
+	if err != nil {
+		return nil, err
+	}
+	core, err := r.aggregateCore(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("aggregateCore: %w", err)
+	}
+	inv, bon, err := r.aggregateInvestment(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("aggregateInvestment: %w", err)
+	}
+	buckets, gran, err := r.aggregateBuckets(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("aggregateBuckets: %w", err)
+	}
+
+	cpm := 0.0
+	if core.Impactos > 0 {
+		cpm = (inv.Executado / float64(core.Impactos)) * 1000.0
+	}
+
+	return &InsightsPayload{
+		Period: PeriodSpec{
+			From:        p.From.Format("2006-01-02"),
+			To:          p.To.Format("2006-01-02"),
+			Granularity: gran,
+		},
+		Campaigns: briefs,
+		KPIs: InsightsKPIs{
+			Impactos:         core.Impactos,
+			VeiculacoesTotal: core.VeiculacoesTotal,
+			StationsCount:    core.StationsCount,
+			StationsWithPMM:  core.StationsWithPMM,
+			CPM:              cpm,
+			Bonificacao:      bon,
+			Investido:        inv,
+			Gender:           core.Gender,
+		},
+		ClassPyramid:         core.Class,
+		AgeRanges:            core.Ages,
+		VeiculacoesBreakdown: core.Breakdown,
+		Buckets:              buckets,
+	}, nil
 }
 
 // coreAggregates é o resultado interno usado pelo Compute().
