@@ -325,12 +325,32 @@
   height: 260px;
 }
 
-/* ── Class pyramid (Recharts Funnel) ────────────────────────────── */
+/* ── Class pyramid (SVG manual) ─────────────────────────────────── */
 .in-pyramid {
   display: flex;
   flex-direction: column;
   gap: 14px;
   align-items: stretch;
+}
+.in-pyramid-svg {
+  width: 100%;
+  height: 220px;
+  display: block;
+}
+/* Labels em coords de viewBox 240×160. Font escalado pra render bem. */
+.in-pyramid-label-name {
+  font-size: 6px;
+  font-weight: 600;
+  fill: #06055B;
+  pointer-events: none;
+}
+.in-pyramid-label-value {
+  font-size: 9px;
+  font-weight: 700;
+  fill: #06055B;
+  font-variant-numeric: tabular-nums;
+  font-family: 'Space Grotesk', sans-serif;
+  pointer-events: none;
 }
 .in-pyramid-legend {
   display: flex;
