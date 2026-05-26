@@ -3,17 +3,24 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
 
 type DistributionRulesHandler struct {
 	Repo *catalog.DistributionRules
+	// CampaignRepo: só usado por ListByCampaign pra scope check (404
+	// anti-oracle quando viewer pede regras de campanha de outro cliente).
+	// Nil-safe — quem só faz writes (admin/operator) pode passar nil.
+	CampaignRepo *catalog.Campaigns
 }
 
 type rulePayload struct {
@@ -81,6 +88,22 @@ func (h *DistributionRulesHandler) ListByCampaign(w http.ResponseWriter, r *http
 	if err != nil {
 		http.Error(w, "invalid campaignID", http.StatusBadRequest)
 		return
+	}
+	// Viewer scope: 404 quando a campanha não pertence ao cliente do JWT.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+		if camp.ClientID != *scope {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 	rules, err := h.Repo.ListByCampaign(r.Context(), campaignID)
 	if err != nil {

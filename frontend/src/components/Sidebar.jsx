@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 /* ── SVG icon primitives ──────────────────────────────────────── */
@@ -53,17 +53,6 @@ function IconAirtimeReport() {
     <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="6.25" />
       <path d="M8 4.5V8l2.25 1.5" />
-    </svg>
-  )
-}
-
-function IconDashboard() {
-  return (
-    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1" y="1" width="6" height="6" rx="1" />
-      <rect x="9" y="1" width="6" height="6" rx="1" />
-      <rect x="1" y="9" width="6" height="6" rx="1" />
-      <rect x="9" y="9" width="6" height="6" rx="1" />
     </svg>
   )
 }
@@ -184,16 +173,13 @@ function IconLogout() {
 function AdminNav({ onClose }) {
   return (
     <>
-      <span className="sidebar-section-label">Visão de negócio</span>
-      <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
-
       <span className="sidebar-section-label">Cadastros</span>
       <SidebarLink to="/stations"       icon={<IconStations />}      onClose={onClose}>Emissoras</SidebarLink>
       <SidebarLink to="/clients"        icon={<IconClients />}       onClose={onClose}>Clientes</SidebarLink>
       <SidebarLink to="/material-types" icon={<IconMaterialTypes />} onClose={onClose}>Tipos de material</SidebarLink>
 
       <span className="sidebar-section-label">Veiculação</span>
-      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
+      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Indicadores</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
@@ -218,9 +204,6 @@ function AdminNav({ onClose }) {
 function ClientNav({ onClose }) {
   return (
     <>
-      <span className="sidebar-section-label">Visão geral</span>
-      <SidebarLink to="/dashboard" icon={<IconDashboard />} onClose={onClose}>Dashboard</SidebarLink>
-
       <span className="sidebar-section-label">Veiculação</span>
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
@@ -252,9 +235,14 @@ export default function Sidebar({ onClose }) {
 
   return (
     <>
-      <div className="sidebar-logo">
+      <Link
+        to="/dashboard"
+        className="sidebar-logo"
+        onClick={onClose}
+        aria-label="Ir para o dashboard"
+      >
         <img src="/E-monitor%20logo.png" alt="E-monitor" className="sidebar-logo-img" />
-      </div>
+      </Link>
 
       <nav className="sidebar-nav">
         {isAdmin ? <AdminNav onClose={onClose} /> : <ClientNav onClose={onClose} />}

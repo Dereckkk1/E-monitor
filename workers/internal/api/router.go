@@ -175,19 +175,39 @@ func NewRouter(d Deps) http.Handler {
 				if d.AdminMonitoring != nil {
 					r.Post("/web-vitals", d.AdminMonitoring.PostVitals)
 				}
+
+				// Lookups + leituras necessárias para a página /detections do
+				// cliente. Todas GET-only. Writes desses recursos continuam
+				// admin/operator-only no subgrupo abaixo. Notas:
+				//   - /stations e /stations/{id}: emissoras são broadcasters
+				//     "públicos" (sem proprietário). Cliente precisa pra
+				//     renderizar nome/cidade nas células da grade.
+				//   - /material-types: registry global, sem client_id.
+				//   - /campaigns/{campaignID}/{materials|distribution-rules|pricing}:
+				//     fazem scope-check no handler (404 anti-oracle) via
+				//     auth.ClientScopeFromContext, mesmo padrão de
+				//     /campaigns/{id} e /campaigns/{campaignID}/daily-summary.
+				r.Get("/stations", d.Stations.List)
+				r.Get("/stations/{id}", d.Stations.Get)
+				r.Get("/material-types", d.MaterialTypes.List)
+				r.Get("/campaigns/{campaignID}/materials", d.CampaignMaterials.ListByCampaign)
+				r.Get("/campaigns/{campaignID}/distribution-rules", d.DistributionRules.ListByCampaign)
+				if d.Pricing != nil {
+					r.Get("/campaigns/{campaignID}/pricing", d.Pricing.ListByCampaign)
+				}
 			})
 
 			// ── Subgrupo B — admin/operator (writes + admin reads) ────────────
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRole("admin", "operator"))
 
-				r.Route("/stations", func(r chi.Router) {
-					r.Get("/", d.Stations.List)
-					r.Post("/", d.Stations.Create)
-					r.Get("/{id}", d.Stations.Get)
-					r.Put("/{id}", d.Stations.Update)
-					r.Get("/{id}/threshold", d.Stations.GetThreshold)
-				})
+				// /stations: GET (List, Get) ficam no subgrupo A (viewer-friendly)
+				// porque a página /detections do cliente precisa do catálogo
+				// pra renderizar nome/cidade nas células. Writes + GetThreshold
+				// continuam admin/operator-only aqui.
+				r.Post("/stations", d.Stations.Create)
+				r.Put("/stations/{id}", d.Stations.Update)
+				r.Get("/stations/{id}/threshold", d.Stations.GetThreshold)
 				r.Route("/clients", func(r chi.Router) {
 					r.Get("/", d.Clients.List)
 					r.Post("/", d.Clients.Create)
@@ -245,12 +265,13 @@ func NewRouter(d Deps) http.Handler {
 				})
 
 				// Material types — global registry (Tasks 13-19).
-				r.Route("/material-types", func(r chi.Router) {
-					r.Get("/", d.MaterialTypes.List)
-					r.Post("/", d.MaterialTypes.Create)
-					r.Put("/{id}", d.MaterialTypes.Update)
-					r.Delete("/{id}", d.MaterialTypes.Delete)
-				})
+				// GET (List) ficou no subgrupo A (viewer-friendly): registry
+				// global sem client_id, e a página /detections do cliente
+				// precisa pra renderizar cor/nome dos tipos. Writes seguem
+				// admin/operator-only aqui.
+				r.Post("/material-types", d.MaterialTypes.Create)
+				r.Put("/material-types/{id}", d.MaterialTypes.Update)
+				r.Delete("/material-types/{id}", d.MaterialTypes.Delete)
 
 				// Materials — per-client library (writes and individual reads).
 				// ListByClient (GET /clients/{clientID}/materials) lives in subgrupo A.
@@ -265,16 +286,18 @@ func NewRouter(d Deps) http.Handler {
 				})
 
 				// Campaign ↔ Materials link.
+				// GET (ListByCampaign) ficou no subgrupo A com scope-check no
+				// handler. Writes seguem admin/operator-only aqui.
 				r.Route("/campaigns/{campaignID}/materials", func(r chi.Router) {
 					r.Post("/", d.CampaignMaterials.Link)
-					r.Get("/", d.CampaignMaterials.ListByCampaign)
 					r.Put("/{materialID}/stations", d.CampaignMaterials.UpdateStations)
 					r.Delete("/{materialID}", d.CampaignMaterials.Unlink)
 				})
 
 				// Distribution rules.
+				// GET (ListByCampaign) ficou no subgrupo A com scope-check.
+				// Writes seguem admin/operator-only.
 				r.Route("/campaigns/{campaignID}/distribution-rules", func(r chi.Router) {
-					r.Get("/", d.DistributionRules.ListByCampaign)
 					r.Post("/", d.DistributionRules.Create)
 					r.Put("/{ruleID}", d.DistributionRules.Update)
 					r.Delete("/{ruleID}", d.DistributionRules.Delete)
@@ -291,9 +314,10 @@ func NewRouter(d Deps) http.Handler {
 				// wizard e os valores do resumo em /detections + CPM em
 				// /campaigns. Mode: consolidated | per_insertion. Validação
 				// forte no repo, retorna 422 em payload inválido.
+				// GET (ListByCampaign) ficou no subgrupo A com scope-check.
+				// Writes seguem admin/operator-only.
 				if d.Pricing != nil {
 					r.Route("/campaigns/{campaignID}/pricing", func(r chi.Router) {
-						r.Get("/", d.Pricing.ListByCampaign)
 						r.Put("/{stationID}", d.Pricing.Upsert)
 						r.Delete("/{stationID}", d.Pricing.Delete)
 					})

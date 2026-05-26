@@ -229,8 +229,11 @@ export default function AccountPage() {
   const meQ = useMe()
   const updateM = useUpdateMe()
   const changeM = useChangeMyPassword()
-  const { clientId } = useAuth()
-  const clientsQ = useClients({ enabled: !!clientId })
+  const { clientId, isAdmin } = useAuth()
+  // /clients é admin-only no backend — viewer tem clientId mas não autoriza
+  // listar /clients, então gateamos por isAdmin pra evitar 403 ruidoso. O
+  // bloco que renderiza o nome do cliente vinculado some pra viewer.
+  const clientsQ = useClients({ enabled: isAdmin && !!clientId })
   const { toast, show, dismiss } = useToast()
 
   const [profile, setProfile] = useState({ name: '', phone: '' })
