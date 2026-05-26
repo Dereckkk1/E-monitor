@@ -338,6 +338,64 @@
   letter-spacing: 0.04em;
 }
 
+/* ── Skeleton loader ────────────────────────────────────────────── */
+@keyframes in-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.in-skel-card,
+.in-skel-chart {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100px;
+}
+.in-skel-chart {
+  gap: 14px;
+  min-height: 296px;
+}
+.in-skel-chart--wide {
+  min-height: 392px;
+}
+
+.in-skel-bar {
+  height: 14px;
+  background: linear-gradient(
+    90deg,
+    rgba(226, 232, 240, 0.7) 0%,
+    rgba(241, 245, 249, 0.95) 50%,
+    rgba(226, 232, 240, 0.7) 100%
+  );
+  background-size: 200% 100%;
+  animation: in-shimmer 1.6s linear infinite;
+  border-radius: 6px;
+}
+.in-skel-bar--xs { width: 40%; height: 10px; }
+.in-skel-bar--sm { width: 70%; height: 12px; }
+.in-skel-bar--lg { width: 60%; height: 28px; }
+.in-skel-bar--title { width: 45%; }
+
+.in-skel-chart-body {
+  flex: 1;
+  min-height: 220px;
+  background: linear-gradient(
+    90deg,
+    rgba(226, 232, 240, 0.55) 0%,
+    rgba(241, 245, 249, 0.85) 50%,
+    rgba(226, 232, 240, 0.55) 100%
+  );
+  background-size: 200% 100%;
+  animation: in-shimmer 1.6s linear infinite;
+  border-radius: 10px;
+}
+.in-skel-chart-body--tall { min-height: 340px; }
+
 /* ── Empty tutorial ─────────────────────────────────────────────── */
 .in-empty {
   display: grid;
