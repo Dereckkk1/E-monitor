@@ -2,7 +2,6 @@ import { IconChartBars, IconMoney, IconGift } from './icons'
 
 const fmtBR = new Intl.NumberFormat('pt-BR')
 const fmtCurrency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-const fmtCompact = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })
 
 export default function KpiCards({ data }) {
   const k = data?.kpis
@@ -14,7 +13,7 @@ export default function KpiCards({ data }) {
           <span className="in-card-icon"><IconChartBars /></span>
           <span className="in-card-label">Impactos</span>
         </div>
-        <div className="in-card-value">{fmtCompact.format(k.impactos)}</div>
+        <div className="in-card-value in-card-value--num">{fmtBR.format(k.impactos)}</div>
         <div className="in-card-sub">
           {fmtBR.format(k.veiculacoes_total)} veiculações · {k.stations_with_pmm} de {k.stations_count} emissoras com perfil
         </div>

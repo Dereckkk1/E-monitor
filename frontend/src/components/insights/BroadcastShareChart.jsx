@@ -17,7 +17,7 @@ export default function BroadcastShareChart({ data }) {
     { name: 'Dentro da faixa', value: b.in_slot, fill: COLORS.inSlot },
     { name: 'Fora da faixa',   value: b.out_slot, fill: COLORS.outSlot },
     { name: 'Fora da data',    value: b.out_date, fill: COLORS.outDate },
-    { name: 'Extras / orphan', value: b.extras_orphan, fill: COLORS.orphan },
+    { name: 'Extras / Sem faixa definida', value: b.extras_orphan, fill: COLORS.orphan },
   ]
   return (
     <div className="in-chart-card">

@@ -1,7 +1,80 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import RSelect from '../RSelect'
 import { useAuth } from '../../contexts/AuthContext'
 import { useClients, useCampaignsPaged, useStations } from '../../api/hooks'
+import { safeLogoUrl } from '../../utils/logoUrl'
+
+// MiniAvatar quadrado (logo ou iniciais). Espelha o ClientMiniAvatar de
+// AirtimeFiltersBar pra manter consistência visual em selects do projeto.
+function MiniAvatar({ name = '', logo = null, size = 22 }) {
+  const [imgError, setImgError] = useState(false)
+  const safe = safeLogoUrl(logo)
+  if (safe && !imgError) {
+    return (
+      <img
+        src={safe}
+        alt={name}
+        width={size}
+        height={size}
+        style={{
+          width: size, height: size,
+          borderRadius: 4,
+          objectFit: 'cover',
+          flexShrink: 0,
+          border: '1px solid #e2e8f0',
+          display: 'block',
+        }}
+        onError={() => setImgError(true)}
+      />
+    )
+  }
+  const initials = name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: 4,
+      background: '#fce7f3', color: '#E81E75',
+      fontSize: Math.round(size * 0.42), fontWeight: 700,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, userSelect: 'none',
+    }}>
+      {initials}
+    </div>
+  )
+}
+
+function formatClientOption(opt, { context }) {
+  const size = context === 'value' ? 18 : 22
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <MiniAvatar name={opt.label} logo={opt.raw?.logo_url} size={size} />
+      <span style={{ fontWeight: 600, color: '#06055B', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {opt.label}
+      </span>
+    </div>
+  )
+}
+
+function formatStationOption(opt, { context }) {
+  const size = context === 'value' ? 18 : 24
+  const s = opt.raw
+  const freq = s?.frequency_mhz ? `${s.band || 'FM'} ${Number(s.frequency_mhz).toFixed(1)}` : (s?.band || '')
+  const cityState = [s?.city, s?.state].filter(Boolean).join('/')
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <MiniAvatar name={opt.label} logo={s?.logo_url} size={size} />
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
+        <span style={{ fontWeight: 600, color: '#06055B', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {opt.label}
+        </span>
+        {(freq || cityState) && context !== 'value' && (
+          <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>
+            {freq}{freq && cityState ? ' · ' : ''}{cityState}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function firstOfMonthISO() {
   const d = new Date()
@@ -17,7 +90,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
 
   const clientsQ = useClients({ enabled: isAdmin })
   const clientOpts = useMemo(
-    () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name })),
+    () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name, raw: c })),
     [clientsQ.data]
   )
 
@@ -61,7 +134,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
     for (const set of targetSets) for (const id of set) union.add(id)
     return stationsList
       .filter(s => union.has(s.id))
-      .map(s => ({ value: s.id, label: s.name }))
+      .map(s => ({ value: s.id, label: s.name, raw: s }))
   }, [allCampaigns, stationsList, value.campaignIds])
 
   const fullRange = useMemo(() => {
@@ -101,6 +174,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
               placeholder="Selecione…"
               isLoading={clientsQ.isPending}
               isClearable
+              formatOptionLabel={formatClientOption}
             />
           </div>
         ) : (
@@ -174,6 +248,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
             placeholder="Todas (padrão)"
             isDisabled={!value.campaignIds || value.campaignIds.length === 0}
             closeMenuOnSelect={false}
+            formatOptionLabel={formatStationOption}
           />
         </div>
       </div>

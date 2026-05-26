@@ -1,6 +1,6 @@
 import { IconPeople } from './icons'
 
-const fmtCompact = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })
+const fmtBR = new Intl.NumberFormat('pt-BR')
 
 export default function GenderCard({ data }) {
   const g = data?.kpis?.gender
@@ -20,8 +20,8 @@ export default function GenderCard({ data }) {
         <div className="in-bar-stacked-fill in-bar-stacked-fill--f" style={{ width: `${fPct}%` }} />
       </div>
       <div className="in-bar-legend">
-        <span><strong>M:</strong> {mPct.toFixed(0)}% · {fmtCompact.format(g.m)}</span>
-        <span><strong>F:</strong> {fPct.toFixed(0)}% · {fmtCompact.format(g.f)}</span>
+        <span><strong>M:</strong> {mPct.toFixed(0)}% · {fmtBR.format(g.m)}</span>
+        <span><strong>F:</strong> {fPct.toFixed(0)}% · {fmtBR.format(g.f)}</span>
       </div>
     </div>
   )

@@ -2,6 +2,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import CustomTooltip from './CustomTooltip'
 
 const COLORS = ['#f9a8d4', '#ec4899', '#E81E75']
+const fmtBR = new Intl.NumberFormat('pt-BR')
 const fmtCompact = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })
 
 export default function AgeRangeChart({ data }) {
@@ -23,7 +24,7 @@ export default function AgeRangeChart({ data }) {
           <YAxis tickFormatter={v => fmtCompact.format(v)} tick={{ fontSize: 11, fill: '#6b7280' }} />
           <Tooltip
             cursor={{ fill: 'rgba(232,30,117,0.05)' }}
-            content={<CustomTooltip formatter={v => `${fmtCompact.format(v)} impactos`} />}
+            content={<CustomTooltip formatter={v => `${fmtBR.format(v)} impactos`} />}
           />
           <Bar dataKey="value" name="Impactos" radius={[8, 8, 0, 0]}>
             {rows.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
@@ -32,7 +33,7 @@ export default function AgeRangeChart({ data }) {
               position="top"
               formatter={(v) => {
                 const pct = total > 0 ? ((v / total) * 100).toFixed(0) : 0
-                return `${fmtCompact.format(v)} · ${pct}%`
+                return `${fmtBR.format(v)} · ${pct}%`
               }}
               style={{ fontSize: 11, fontWeight: 600, fill: '#06055B' }}
             />
