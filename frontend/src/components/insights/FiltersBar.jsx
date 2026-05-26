@@ -40,6 +40,17 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
 
   const stationsQ = useStations()
 
+  // useStations devolve { data: [...], total, page, ... } (paginado). Sem
+  // params, pega a 1ª página. Pra essa tela isso costuma cobrir todas, mas
+  // se o cliente tiver >page_size estações o multi-select ficará incompleto
+  // — TODO se isso virar problema, listar via endpoint dedicado.
+  const stationsList = useMemo(() => {
+    const d = stationsQ.data
+    if (Array.isArray(d)) return d
+    if (Array.isArray(d?.data)) return d.data
+    return []
+  }, [stationsQ.data])
+
   const stationOpts = useMemo(() => {
     if (!value.campaignIds || value.campaignIds.length === 0) return []
     const targetSets = allCampaigns
@@ -48,10 +59,10 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
     if (targetSets.length === 0) return []
     const union = new Set()
     for (const set of targetSets) for (const id of set) union.add(id)
-    return (stationsQ.data || [])
+    return stationsList
       .filter(s => union.has(s.id))
       .map(s => ({ value: s.id, label: s.name }))
-  }, [allCampaigns, stationsQ.data, value.campaignIds])
+  }, [allCampaigns, stationsList, value.campaignIds])
 
   const fullRange = useMemo(() => {
     const selected = allCampaigns.filter(c => value.campaignIds.includes(c.id))
