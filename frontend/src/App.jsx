@@ -27,6 +27,7 @@ import AdminMonitoringPage from './pages/AdminMonitoringPage'
 import AdminStationFailuresPage from './pages/AdminStationFailuresPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
+import InsightsPage from './pages/InsightsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -115,6 +116,7 @@ function AppShell() {
               <RequireRole roles={['admin']}><OperationsPage /></RequireRole>
             } />
             <Route path="/detections"  element={<DetectionsPage />} />
+            <Route path="/insights"    element={<InsightsPage />} />
             <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
             <Route path="/admin/overview" element={

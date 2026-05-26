@@ -912,3 +912,30 @@ export function useMarkAllNotificationsRead() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notifications'] }),
   })
 }
+
+// Insights — dashboard /insights. Devolve um payload já agregado (sem
+// paginação). Só dispara quando clientId + campaignIds estão presentes,
+// pois sem eles o backend devolveria 400.
+//
+// queryKey ordena as listas pra evitar invalidação espúria quando o usuário
+// reordena seleções. placeholderData mantém o último resultado durante
+// refetches (sensação de "ajusto filtro → vejo as novas barras subindo").
+export function useInsights({ clientId, campaignIds, from, to, stationIds } = {}) {
+  const ready = Boolean(clientId) && Array.isArray(campaignIds) && campaignIds.length > 0
+  const camps = ready ? [...campaignIds].sort().join(',') : ''
+  const sts = stationIds && stationIds.length ? [...stationIds].sort().join(',') : ''
+  return useQuery({
+    enabled: ready,
+    queryKey: ['insights', clientId, camps, from, to, sts],
+    queryFn: () => api.get('/insights', {
+      params: {
+        client_id: clientId,
+        campaigns: camps,
+        from: from || undefined,
+        to: to || undefined,
+        stations: sts || undefined,
+      },
+    }).then(r => r.data),
+    placeholderData: (prev) => prev,
+  })
+}
