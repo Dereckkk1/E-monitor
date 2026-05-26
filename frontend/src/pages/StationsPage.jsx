@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStations, useCreateStation } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import RSelect from '../components/RSelect'
 import { useRadioPlayer } from '../contexts/RadioPlayerContext'
+import { useAuth } from '../contexts/AuthContext'
 
 const BAND_OPTIONS = [
   { value: 'FM', label: 'FM' },
@@ -32,12 +33,35 @@ function streamDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return null }
 }
 
-function SearchIcon() {
+function CityIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-      <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" />
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2 14V7l3-2 3 2v7" />
+      <path d="M8 14V4l3-2 3 2v10" />
+      <path d="M1 14h14" />
+      <path d="M4 10v0M4 12v0M10.5 7v0M10.5 9.5v0M10.5 12v0" />
     </svg>
   )
+}
+function CityPinIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2 14V8l2.5-1.5L7 8v6" />
+      <path d="M7 14V4.5L10 3l3 1.5V14" />
+      <path d="M1 14h14" />
+    </svg>
+  )
+}
+
+// Normaliza pra match accent-insensitive client-side (mesma regra do
+// helper utils/search.js: NFD + remove combining marks).
+function normalize(s) {
+  return (s ?? '')
+    .toString()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
 }
 function PlusIcon() {
   return (
@@ -74,26 +98,77 @@ const LIMIT = 25
 export default function StationsPage() {
   const navigate = useNavigate()
   const { toggleStation, isStationPlaying } = useRadioPlayer()
+  const { isAdmin } = useAuth()
 
+  // Search dropdown:
+  //   - `searchInput`: o que o usuário digita no campo
+  //   - `searchInputDebounced`: usado pra alimentar o autocomplete (limita
+  //     hits no backend)
+  //   - `selectedOption`: opção clicada — só ela filtra a lista renderizada.
+  //   Sem clique, sem filtro (mostra catálogo inteiro).
   const [searchInput, setSearchInput] = useState('')
-  const [debouncedQ,  setDebouncedQ]  = useState('')
-  const debounceRef  = useRef(null)
+  const [searchInputDebounced, setSearchInputDebounced] = useState('')
+  const [selectedOption, setSelectedOption] = useState(null)
 
-  function handleSearch(e) {
-    const val = e.target.value
-    setSearchInput(val)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQ(val)
-      setPage(1)
-    }, 400)
-  }
+  useEffect(() => {
+    const t = setTimeout(() => setSearchInputDebounced(searchInput), 250)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   const [band, setBand] = useState('')
   const [page, setPage] = useState(1)
   useEffect(() => { setPage(1) }, [band])
 
-  const { data, isLoading } = useStations({ q: debouncedQ, band, page, limit: LIMIT })
+  // Autocomplete por CIDADE: busca emissoras que casam com a string digitada
+  // (server-side faz match amplo: name/city/state/band/freq), e a gente filtra
+  // pra deduplicar por cidade e mostrar só as cidades cujo nome casa com o
+  // input. Limit alto pra pegar várias cidades distintas num único hit.
+  const { data: suggestData, isFetching: suggestLoading } = useStations({
+    q: searchInputDebounced,
+    band,
+    page: 1,
+    limit: 50,
+    enabled: searchInputDebounced.trim().length >= 2,
+  })
+
+  // Reduz pra lista de cidades distintas, em ordem alfabética, contando
+  // quantas emissoras a cidade tem nos resultados (apenas as que vieram da
+  // página atual — número aproximado, suficiente como pista).
+  const normalizedQ = normalize(searchInputDebounced)
+  const cityOptions = (() => {
+    const byKey = new Map()
+    for (const st of suggestData?.data ?? []) {
+      const city = (st.city ?? '').trim()
+      if (!city) continue
+      // Mantém só cidades cujo nome casa com a busca (accent-insensitive).
+      // Sem esse filtro, o backend devolveria também stations cujo match foi
+      // por name/band/freq, poluindo as sugestões de cidade.
+      if (normalizedQ && !normalize(city).includes(normalizedQ)) continue
+      const key = `${city}|${st.state ?? ''}`
+      const cur = byKey.get(key)
+      if (cur) cur.count += 1
+      else byKey.set(key, { city, state: st.state ?? null, count: 1 })
+    }
+    return [...byKey.values()]
+      .sort((a, b) => a.city.localeCompare(b.city, 'pt-BR'))
+      .slice(0, 10)
+      .map(c => ({
+        value: c.state ? `${c.city}|${c.state}` : c.city,
+        label: c.state ? `${c.city}/${c.state}` : c.city,
+        city: c.city,
+        state: c.state,
+        count: c.count,
+      }))
+  })()
+
+  // Filtro real aplicado à lista: nome da cidade escolhida.
+  // Quando nada selecionado → mostra todas (q vazio). Passar só a cidade
+  // como q usa o ILIKE amplo do backend; cidade casa primeiro com o campo
+  // `city`. Edge case raro: station com a cidade no `name` apareceria mesmo
+  // estando em outra cidade — aceitável até existir filtro `city` no backend.
+  const activeQ = selectedOption?.city ?? ''
+
+  const { data, isLoading } = useStations({ q: activeQ, band, page, limit: LIMIT })
   const stations = data?.data ?? []
   const total    = data?.total ?? 0
   const pages    = data?.pages ?? 1
@@ -144,21 +219,75 @@ export default function StationsPage() {
             </span>
           )}
         </div>
-        <button className="btn btn-primary" onClick={() => setCreating(true)}>
-          <PlusIcon /> Nova emissora
-        </button>
+        {isAdmin && (
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>
+            <PlusIcon /> Nova emissora
+          </button>
+        )}
       </div>
 
       {/* Filters */}
       <div className="stations-filters">
-        <div className="stations-search">
-          <span className="stations-search-icon"><SearchIcon /></span>
-          <input
-            className="input stations-search-input"
-            type="text"
-            placeholder="Buscar por nome, cidade…"
-            value={searchInput}
-            onChange={handleSearch}
+        <div className="stations-search-dropdown">
+          <RSelect
+            inputId="stations-search"
+            placeholder="Buscar por cidade…"
+            options={cityOptions}
+            value={selectedOption}
+            onChange={opt => {
+              setSelectedOption(opt)
+              setPage(1)
+              if (!opt) {
+                setSearchInput('')
+                setSearchInputDebounced('')
+              }
+            }}
+            inputValue={searchInput}
+            onInputChange={(val, meta) => {
+              if (meta.action === 'input-change') setSearchInput(val)
+            }}
+            isClearable
+            isLoading={suggestLoading && searchInputDebounced.trim().length >= 2}
+            filterOption={null}
+            loadingMessage={() => 'Buscando cidades…'}
+            noOptionsMessage={() => {
+              const q = searchInput.trim()
+              if (q.length === 0) return 'Digite o nome de uma cidade'
+              if (q.length < 2)  return 'Digite ao menos 2 caracteres'
+              if (suggestLoading) return 'Buscando cidades…'
+              return `Nenhuma cidade encontrada para "${q}"`
+            }}
+            components={{
+              DropdownIndicator: () => (
+                <div style={{ paddingRight: 10, color: 'var(--c-text-3)', display: 'flex' }}>
+                  <CityIcon />
+                </div>
+              ),
+            }}
+            formatOptionLabel={(opt, { context }) => {
+              if (context === 'value') {
+                return (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--c-text-3)', display: 'inline-flex' }}><CityPinIcon /></span>
+                    {opt.label}
+                  </span>
+                )
+              }
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: 'var(--c-text-3)', display: 'inline-flex' }}><CityPinIcon /></span>
+                  <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text)' }}>
+                      {opt.city}
+                      {opt.state ? <span style={{ color: 'var(--c-text-3)', fontWeight: 400 }}>{` / ${opt.state}`}</span> : null}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
+                      {opt.count} emissora{opt.count === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                </div>
+              )
+            }}
           />
         </div>
 
@@ -201,11 +330,11 @@ export default function StationsPage() {
       ) : stations.length === 0 ? (
         <div className="card" style={{ padding: '48px 24px', textAlign: 'center' }}>
           <p className="text-muted" style={{ fontSize: 15 }}>
-            {debouncedQ
-              ? `Nenhum resultado para "${debouncedQ}"`
+            {activeQ
+              ? `Nenhum resultado para "${activeQ}"`
               : 'Nenhuma emissora cadastrada.'}
           </p>
-          {!debouncedQ && (
+          {!activeQ && isAdmin && (
             <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => setCreating(true)}>
               <PlusIcon /> Adicionar emissora
             </button>
@@ -282,13 +411,15 @@ export default function StationsPage() {
                       )}
                     </button>
                   )}
-                  <button
-                    className="btn-icon"
-                    title="Editar"
-                    onClick={() => navigate(`/stations/${st.id}/edit`)}
-                  >
-                    <EditIcon />
-                  </button>
+                  {isAdmin && (
+                    <button
+                      className="btn-icon"
+                      title="Editar"
+                      onClick={() => navigate(`/stations/${st.id}/edit`)}
+                    >
+                      <EditIcon />
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -320,7 +451,7 @@ export default function StationsPage() {
       )}
 
       {/* Create modal */}
-      {creating && (
+      {creating && isAdmin && (
         <div className="modal-overlay" onClick={() => setCreating(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
