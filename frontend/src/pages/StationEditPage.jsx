@@ -206,7 +206,14 @@ function EditPageSkeleton() {
                   <FieldSk labelW={60} />
                 </div>
               </div>
-              <FieldSk labelW={80} />
+              <div>
+                <Sk w={80} h={11} style={{ marginBottom: 8 }} />
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <FieldSk labelW={84} />
+                  <FieldSk labelW={84} />
+                  <FieldSk labelW={84} />
+                </div>
+              </div>
               <div>
                 <Sk w={92} h={11} style={{ marginBottom: 8 }} />
                 <div style={{ display: 'flex', gap: 16 }}>
@@ -284,7 +291,10 @@ export default function StationEditPage() {
       categories: m.categories ?? [],
       gender_male: ap.gender?.male ?? '',
       gender_female: ap.gender?.female ?? '',
-      age_range: ap.ageRange ?? '',
+      age_18_24: ap.ageRanges?.range18to24 ?? '',
+      age_25_49: ap.ageRanges?.range25to49 ?? '',
+      age_50_plus: ap.ageRanges?.range50plus ?? '',
+      age_range_legado: ap.ageRangeLegado ?? ap.ageRange ?? '',
       classe_ab: ap.socialClass?.classeAB ?? '',
       classe_c: ap.socialClass?.classeC ?? '',
       classe_de: ap.socialClass?.classeDE ?? '',
@@ -312,7 +322,12 @@ export default function StationEditPage() {
           male: Number(form.gender_male) || 0,
           female: Number(form.gender_female) || 0,
         },
-        ageRange: form.age_range || null,
+        ageRanges: {
+          range18to24: Number(form.age_18_24)   || 0,
+          range25to49: Number(form.age_25_49)   || 0,
+          range50plus: Number(form.age_50_plus) || 0,
+        },
+        ...(form.age_range_legado && { ageRangeLegado: form.age_range_legado }),
         socialClass: {
           classeAB: Number(form.classe_ab) || 0,
           classeC:  Number(form.classe_c)  || 0,
@@ -445,9 +460,24 @@ export default function StationEditPage() {
                     <PercentInput label="Feminino" value={form.gender_female} onChange={v => setF('gender_female', v)} />
                   </div>
                 </div>
-                <Field label="Faixa etária" hint="Ex: 77% 30+">
-                  <input className="input" value={form.age_range} onChange={e => setF('age_range', e.target.value)} placeholder="Ex: 77% 30+" />
-                </Field>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Faixa etária</label>
+                  <div style={{ display: 'flex', gap: 16 }}>
+                    <PercentInput label="18 a 24 anos"   value={form.age_18_24}   onChange={v => setF('age_18_24',   v)} />
+                    <PercentInput label="25 a 49 anos"   value={form.age_25_49}   onChange={v => setF('age_25_49',   v)} />
+                    <PercentInput label="Acima de 50"    value={form.age_50_plus} onChange={v => setF('age_50_plus', v)} />
+                  </div>
+                  {(() => {
+                    const sum = (Number(form.age_18_24) || 0) + (Number(form.age_25_49) || 0) + (Number(form.age_50_plus) || 0)
+                    if (sum > 0 && Math.abs(sum - 100) > 0.05) {
+                      return <span className="field-hint" style={{ marginTop: 6, color: 'var(--c-warning, #b8860b)' }}>Soma atual: {sum.toFixed(1)}% — esperado 100%</span>
+                    }
+                    return null
+                  })()}
+                  {form.age_range_legado && (
+                    <span className="field-hint" style={{ marginTop: 6 }}>Faixa etária anterior preservada: <em>{form.age_range_legado}</em></span>
+                  )}
+                </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Classe social</label>
                   <div style={{ display: 'flex', gap: 16 }}>

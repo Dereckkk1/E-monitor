@@ -8,6 +8,7 @@ import AgeRangeChart from '../components/insights/AgeRangeChart'
 import BroadcastShareChart from '../components/insights/BroadcastShareChart'
 import DailySummaryChart from '../components/insights/DailySummaryChart'
 import EmptyTutorial from '../components/insights/EmptyTutorial'
+import SkeletonLoader from '../components/insights/SkeletonLoader'
 import { useInsights } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { exportInsightsPNG, exportInsightsPDF } from '../utils/exportInsights'
@@ -90,8 +91,8 @@ export default function InsightsPage() {
 
         {emptyVariant ? (
           <EmptyTutorial variant={emptyVariant} />
-        ) : isPending ? (
-          <div className="in-loading">Carregando…</div>
+        ) : isPending && !data ? (
+          <SkeletonLoader />
         ) : data ? (
           <>
             <div className="in-row in-row--cards">
