@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
 
@@ -17,6 +18,10 @@ import (
 // O resumo de /detections lê List também pra calcular valor/impactos.
 type PricingHandler struct {
 	Repo *catalog.Pricing
+	// CampaignRepo: só usado por ListByCampaign pra scope check (404
+	// anti-oracle quando viewer pede pricing de campanha de outro cliente).
+	// Nil-safe — handlers admin/operator que só fazem writes não precisam.
+	CampaignRepo *catalog.Campaigns
 }
 
 // ListByCampaign — GET /v1/internal/campaigns/{campaignID}/pricing
@@ -25,6 +30,22 @@ func (h *PricingHandler) ListByCampaign(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		http.Error(w, "invalid campaignID", http.StatusBadRequest)
 		return
+	}
+	// Viewer scope: 404 quando a campanha não pertence ao cliente do JWT.
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+		if camp.ClientID != *scope {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 	out, err := h.Repo.ListByCampaign(r.Context(), campaignID)
 	if err != nil {

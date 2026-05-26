@@ -266,9 +266,14 @@ function ClientEmpty({ clientName }) {
 
 function ClientDashboard() {
   const navigate = useNavigate()
-  const { user, clientId } = useAuth()
+  const { user, clientId, isAdmin } = useAuth()
   const { data: campaigns = [], isLoading, error, refetch } = useCampaigns()
-  const clientsQ = useClients({ enabled: !!clientId })
+  // /clients (lista global) é admin-only no backend — viewer cai em 403.
+  // Aqui só usamos a lista pra resolver o nome+logo do cliente vinculado,
+  // e o JSX já lida bem com linkedClient = null (cdash-hello-client some).
+  // Sem o gate, o ClientDashboard de qualquer viewer dispara um 403 ruidoso
+  // a cada montagem.
+  const clientsQ = useClients({ enabled: isAdmin && !!clientId })
 
   const linkedClient = clientId
     ? (clientsQ.data ?? []).find(c => c.id === clientId)
@@ -1086,7 +1091,7 @@ function AdminDashboard() {
     <div className="dh-shell">
       <div className="dh-header">
         <div className="dh-header-titles">
-          <h1 className="dh-header-title">Operação Radiocheck</h1>
+          <h1 className="dh-header-title">Operação E-monitor</h1>
           <div className="dh-header-sub">Visão consolidada do sistema</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

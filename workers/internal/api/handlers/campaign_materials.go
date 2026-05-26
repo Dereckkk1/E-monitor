@@ -2,17 +2,24 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
 
 type CampaignMaterialsHandler struct {
 	Repo *catalog.CampaignMaterials
+	// CampaignRepo só é consultado pela checagem de scope viewer em
+	// ListByCampaign (anti-oracle: 404 quando a campanha não pertence ao
+	// cliente do JWT). Permanece nil-safe pra testes que não exercitam scope.
+	CampaignRepo *catalog.Campaigns
 	// Supervisor é opcional. Quando wired, qualquer mutação na vinculação
 	// material↔campanha dispara Supervisor.Reload(campaignID) pra que os
 	// workers da campanha recarreguem a lista de commercials imediatamente
@@ -69,6 +76,23 @@ func (h *CampaignMaterialsHandler) ListByCampaign(w http.ResponseWriter, r *http
 	if err != nil {
 		http.Error(w, "invalid campaignID", http.StatusBadRequest)
 		return
+	}
+	// Viewer scope: 404 quando a campanha não pertence ao cliente do JWT
+	// (anti-oracle: não revela existência de campanhas alheias).
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+		if camp.ClientID != *scope {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 	links, err := h.Repo.ListByCampaign(r.Context(), campaignID)
 	if err != nil {

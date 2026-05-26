@@ -1203,7 +1203,10 @@ function EmptyState() {
 
 export default function CampaignsPage() {
   const { isAdmin } = useAuth()
-  const { data: clients   = [] }            = useClients()
+  // /clients é admin-only no backend — pra viewer o array fica vazio e o
+  // find(...) por client_id no CampaignRow devolve undefined (cliente fica
+  // sem badge nominal, mas suas próprias campanhas seguem aparecendo).
+  const { data: clients   = [] }            = useClients({ enabled: isAdmin })
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
   const { data: financialsList = [] }       = useCampaignsFinancials()
