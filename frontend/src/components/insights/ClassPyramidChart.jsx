@@ -11,12 +11,14 @@ const COLORS = ['#E81E75', '#ec4899', '#f9a8d4'] // AB / C / DE
 const fmtBR = new Intl.NumberFormat('pt-BR')
 const fmtPct = (v, t) => (t > 0 ? ((v / t) * 100).toFixed(1) : '0.0')
 
-// viewBox 200×100 (proporção 2:1 horizontal) — dá mais espaço lateral
-// pros labels caberem dentro dos trapézios.
+// viewBox 200×100 (proporção 2:1 horizontal). Pirâmide afilada: AB é um
+// triângulo real (vértice no topo), C trapézio intermediário, DE base
+// trapézio largo. Os labels caem na metade inferior de cada camada (onde
+// o shape é mais largo).
 const LAYOUT = [
-  { name: 'AB', y: 4,    h: 28, topPct: 22, botPct: 52 },
-  { name: 'C',  y: 34,   h: 28, topPct: 52, botPct: 78 },
-  { name: 'DE', y: 64,   h: 28, topPct: 78, botPct: 99 },
+  { name: 'AB', y: 4,    h: 28, topPct: 0,  botPct: 38 },
+  { name: 'C',  y: 34,   h: 28, topPct: 38, botPct: 70 },
+  { name: 'DE', y: 64,   h: 28, topPct: 70, botPct: 99 },
 ]
 
 export default function ClassPyramidChart({ data }) {
@@ -48,13 +50,18 @@ export default function ClassPyramidChart({ data }) {
               `${xBot},${l.y + l.h}`,
             ].join(' ')
             const cx = VB_W / 2
-            const cy = l.y + l.h / 2
+            // AB é triângulo: posiciona o label MUITO abaixo do meio
+            // (onde o shape ficou mais largo). C e DE são trapézios, o
+            // meio já é largo o bastante.
+            const isTriangle = l.topPct === 0
+            const nameY = isTriangle ? l.y + l.h * 0.62 : l.y + l.h * 0.42
+            const valueY = isTriangle ? l.y + l.h * 0.85 : l.y + l.h * 0.68
             return (
               <g key={l.name}>
                 <polygon points={points} fill={l.color} />
                 <text
                   x={cx}
-                  y={cy - 2}
+                  y={nameY}
                   textAnchor="middle"
                   dominantBaseline="middle"
                   className="in-pyramid-label-name"
@@ -63,7 +70,7 @@ export default function ClassPyramidChart({ data }) {
                 </text>
                 <text
                   x={cx}
-                  y={cy + 6}
+                  y={valueY}
                   textAnchor="middle"
                   dominantBaseline="middle"
                   className="in-pyramid-label-value"
