@@ -936,6 +936,10 @@ export function useInsights({ clientId, campaignIds, from, to, stationIds } = {}
         stations: sts || undefined,
       },
     }).then(r => r.data),
-    placeholderData: (prev) => prev,
+    // NOTA: SEM placeholderData. Quando o usuário muda data/emissoras/
+    // campanhas, queremos que o dashboard caia no skeleton e refeche os
+    // dados — não mostrar o resultado antigo enquanto refetcha. Cache de
+    // queries idênticas (voltar pra filtro anterior) ainda funciona via
+    // queryKey.
   })
 }
