@@ -219,6 +219,112 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 	return out, nil
 }
 
+// aggregateInvestment calcula investido (contratado / executado) e
+// bonificação somando contribuições por (campaign, station) seguindo
+// o modo de pricing definido em campaign_station_pricing:
+//
+//   - mode = 'consolidated':
+//     * contratado  = consolidated_value × overlap_days / total_days
+//     * executado   = consolidated_value × (in_slot+out_slot) / expected
+//                     (zero quando expected=0)
+//     * bonificação = consolidated_value × bonus / expected  (avg-per-slot)
+//
+//   - mode = 'per_insertion':
+//     * contratado  = Σ_type (unit_value × expected)
+//     * executado   = Σ_type (unit_value × (in_slot+out_slot))
+//     * bonificação = Σ_type (unit_value × bonus)
+//
+// "bonus" é o campo da view daily_play_summary que inclui orphan +
+// (in_slot acima do expected). Esse é o sentido comercial de "mídia
+// ganha" — alinha com a decisão da spec de incluir extras na bonificação.
+// Bonificação count usa bonus diretamente (não orphan_count puro).
+func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (InvestidoK, BonificacaoK, error) {
+	row := r.pool.QueryRow(ctx, `
+		WITH camp_meta AS (
+		    SELECT id, start_date, end_date,
+		           GREATEST(0, (LEAST(end_date, $3::date) - GREATEST(start_date, $2::date) + 1))::int AS overlap_days,
+		           (end_date - start_date + 1)::int AS total_days
+		    FROM campaigns
+		    WHERE id = ANY($1::uuid[])
+		),
+		cs_totals AS (
+		    SELECT s.campaign_id, s.station_id,
+		           SUM(s.expected)::bigint                   AS expected,
+		           SUM(s.in_slot + s.out_slot)::bigint       AS executed,
+		           SUM(s.bonus)::bigint                      AS bonus
+		    FROM daily_play_summary s
+		    JOIN camp_meta cm ON cm.id = s.campaign_id
+		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
+		      AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
+		    GROUP BY s.campaign_id, s.station_id
+		),
+		cs_per_ins AS (
+		    SELECT s.campaign_id, s.station_id,
+		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric                AS pi_contratado,
+		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado,
+		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric                  AS pi_bonus
+		    FROM daily_play_summary s
+		    JOIN camp_meta cm ON cm.id = s.campaign_id
+		    JOIN campaign_station_type_pricing tp
+		      ON tp.campaign_id = s.campaign_id
+		     AND tp.station_id  = s.station_id
+		     AND tp.type_id     = s.type_id
+		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
+		      AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
+		    GROUP BY s.campaign_id, s.station_id
+		),
+		final AS (
+		    SELECT
+		        csp.campaign_id, csp.station_id, csp.mode,
+		        cm.overlap_days, cm.total_days,
+		        COALESCE(csp.consolidated_value, 0)::numeric AS consolidated_value,
+		        COALESCE(t.expected, 0)::numeric  AS expected,
+		        COALESCE(t.executed, 0)::numeric  AS executed,
+		        COALESCE(t.bonus,    0)::bigint   AS bonus,
+		        COALESCE(pi.pi_contratado, 0)::numeric AS pi_contratado,
+		        COALESCE(pi.pi_executado,  0)::numeric AS pi_executado,
+		        COALESCE(pi.pi_bonus,      0)::numeric AS pi_bonus
+		    FROM campaign_station_pricing csp
+		    JOIN camp_meta cm ON cm.id = csp.campaign_id
+		    LEFT JOIN cs_totals  t  ON t.campaign_id  = csp.campaign_id AND t.station_id  = csp.station_id
+		    LEFT JOIN cs_per_ins pi ON pi.campaign_id = csp.campaign_id AND pi.station_id = csp.station_id
+		    WHERE csp.campaign_id = ANY($1::uuid[])
+		      AND ($4::uuid[] = '{}' OR csp.station_id = ANY($4::uuid[]))
+		)
+		SELECT
+		    COALESCE(SUM(
+		        CASE
+		            WHEN mode='consolidated' AND total_days > 0 THEN consolidated_value * overlap_days::numeric / total_days
+		            WHEN mode='per_insertion' THEN pi_contratado
+		            ELSE 0
+		        END
+		    ), 0)::float8 AS contratado,
+		    COALESCE(SUM(
+		        CASE
+		            WHEN mode='consolidated' AND expected > 0 THEN consolidated_value * executed / expected
+		            WHEN mode='per_insertion' THEN pi_executado
+		            ELSE 0
+		        END
+		    ), 0)::float8 AS executado,
+		    COALESCE(SUM(
+		        CASE
+		            WHEN mode='consolidated' AND expected > 0 THEN consolidated_value * bonus::numeric / expected
+		            WHEN mode='per_insertion' THEN pi_bonus
+		            ELSE 0
+		        END
+		    ), 0)::float8 AS bonificacao_valor,
+		    COALESCE(SUM(bonus), 0)::bigint AS bonificacao_count
+		FROM final
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+
+	var inv InvestidoK
+	var bon BonificacaoK
+	if err := row.Scan(&inv.Contratado, &inv.Executado, &bon.Valor, &bon.Count); err != nil {
+		return inv, bon, err
+	}
+	return inv, bon, nil
+}
+
 // fetchCampaigns devolve briefs (id, nome, datas) das campanhas pedidas,
 // validando que TODAS pertencem ao clientID. Se uma única campanha não
 // pertence ao cliente (ou não existe), devolve erro com a palavra
