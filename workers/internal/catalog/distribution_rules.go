@@ -205,9 +205,14 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 //     opcional stations + date range):
 //   - Se a data local (SP timezone) está fora do range da campanha → out_date
 //   - Senão se existe ANY rule com type_id = material.type_id, station_id, weekday e
-//     time_of_day casando → in_slot
+//     time_of_day dentro da faixa tolerada (±15min em cada extremo) → in_slot
 //   - Senão se existe ANY rule com type_id+station+weekday casando (mas time não) → out_slot
 //   - Senão → orphan
+//
+// IMPORTANTE: a tolerância de 900s (15 min) DEVE bater com
+// categorizer.SlotToleranceSeconds. Sem ela, recategorizações disparadas
+// por create/edit de rule reclassificavam como out_slot detections que o
+// categorizer Go (no insert) tinha marcado in_slot — divergência silenciosa.
 func (dr *DistributionRules) recategorizeScope(ctx context.Context,
 	campaignID uuid.UUID, typeID *uuid.UUID, stationIDs []uuid.UUID,
 	from, to time.Time) error {
@@ -240,8 +245,9 @@ classified AS (
                   AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
                       BETWEEN r.start_date AND r.end_date
                   AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
-                  AND (s.detected_at AT TIME ZONE 'America/Sao_Paulo')::time
-                      BETWEEN r.time_start AND r.time_end
+                  AND EXTRACT(EPOCH FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo')::time)
+                      BETWEEN EXTRACT(EPOCH FROM r.time_start) - 900
+                          AND EXTRACT(EPOCH FROM r.time_end)   + 900
             )
                 THEN 'in_slot'
             WHEN EXISTS (

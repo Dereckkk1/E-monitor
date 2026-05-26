@@ -1,12 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-25
+ultima-verificacao: 2026-05-26
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
   - migrations/0019_rules_by_type.up.sql
   - workers/internal/api/handlers/distribution_rules.go
   - workers/internal/catalog/distribution_rules.go
+  - workers/internal/categorizer/categorizer.go
 ---
 
 # Distribution Rules — Semantica e Operacao
@@ -82,6 +83,14 @@ Validacao atualmente NAO esta implementada no backend — fica a criterio do fro
 Quando uma regra e criada/editada/excluida via API, o handler `DistributionRulesHandler` dispara `RecategorizeForRule` (ou `RecategorizeForCampaign` no caso de delete) em goroutine com timeout de 30s. Detections existentes no escopo da regra sao atualizadas conforme a nova logica.
 
 A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_rules.go` — sem N+1 queries. Para uma campanha inteira leva milissegundos mesmo com centenas de milhares de detections.
+
+### Tolerância de 15 min
+
+A faixa horária das rules é comparada com folga de **±900 segundos (15 min)** em cada extremo, igual ao `categorizer.SlotToleranceSeconds` aplicado no insert. Uma rule `09:30–10:00` cobre detections entre `09:15` e `10:15` como `in_slot`.
+
+A tolerância existe pra absorver jitter de stream (buffer + atraso de programação ao vivo) — o operador entende "tocou às 6h" mesmo quando o trecho real veiculou às 05:45.
+
+Antes deste fix (2026-05-26), o SQL usava `BETWEEN r.time_start AND r.time_end` direto: detections que o Go categorizer tinha marcado `in_slot` viravam `out_slot` na primeira recategorize disparada por criação/edição de rule. Sintoma reportado pelo operador: "a tolerância não está funcionando, contagem some quando edito a regra".
 
 ## Endpoints relevantes
 
