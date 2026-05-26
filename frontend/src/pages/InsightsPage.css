@@ -67,6 +67,7 @@
   gap: 16px;
   flex-wrap: wrap;
   box-shadow: var(--shadow-sm);
+  margin-bottom: 1rem;
 }
 
 .in-filters-row {
@@ -326,45 +327,51 @@
 
 /* ── Class pyramid (SVG custom) ─────────────────────────────────── */
 .in-pyramid {
-  display: grid;
-  grid-template-columns: 1fr 130px;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  align-items: center;
-  min-height: 220px;
+  align-items: stretch;
 }
 .in-pyramid-svg {
   width: 100%;
   height: 220px;
+  display: block;
 }
-.in-pyramid-label { font-family: var(--font-body); pointer-events: none; }
 .in-pyramid-label-name {
   font-size: 4.5px;
-  font-weight: 700;
+  font-weight: 600;
   fill: #06055B;
   letter-spacing: 0.02em;
+  pointer-events: none;
 }
 .in-pyramid-label-value {
-  font-size: 4.5px;
+  font-size: 6px;
   font-weight: 700;
   fill: #06055B;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .in-pyramid-legend {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  gap: 18px;
+  justify-content: center;
+  flex-wrap: wrap;
   font-size: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--c-border);
+  margin-top: 4px;
 }
 .in-pyramid-legend-row {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
-  gap: 8px;
+  display: flex;
   align-items: center;
+  gap: 6px;
 }
 .in-pyramid-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 .in-pyramid-name { color: var(--c-text-2); }
 .in-pyramid-pct {

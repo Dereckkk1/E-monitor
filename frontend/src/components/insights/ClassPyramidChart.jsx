@@ -1,21 +1,22 @@
-// Pirâmide de classe social. Geometria FIXA (não depende da quantidade) —
-// 3 camadas de altura igual: AB no topo afunilando até vértice, C trapézio
-// no meio, DE trapézio largo na base. Os valores das camadas viram apenas
-// labels — a forma da pirâmide é sempre a mesma.
+// Pirâmide de classe social. Geometria FIXA — 3 trapézios empilhados,
+// AB no topo (mais estreito), C no meio, DE na base. A largura aumenta
+// progressivamente pra dar volume "piramidal" sem sacrificar legibilidade
+// dos labels.
+//
+// Layout: pirâmide no topo (largura toda do card), legenda horizontal
+// abaixo dela. Labels em 2 linhas (Classe XX em cima, valor embaixo)
+// pra caber dentro do shape mesmo quando o número é longo.
 
 const COLORS = ['#E81E75', '#ec4899', '#f9a8d4'] // AB / C / DE
 const fmtBR = new Intl.NumberFormat('pt-BR')
 const fmtPct = (v, t) => (t > 0 ? ((v / t) * 100).toFixed(1) : '0.0')
 
-// Geometria fixa em coordenadas SVG (viewBox 100×100):
-// - 3 camadas de altura 27 (com gap 1.5 entre elas)
-// - AB: triângulo (vértice no topo, base em 30% de largura)
-// - C: trapézio (topo 30%, base 64%)
-// - DE: trapézio (topo 64%, base 96%)
+// viewBox 200×100 (proporção 2:1 horizontal) — dá mais espaço lateral
+// pros labels caberem dentro dos trapézios.
 const LAYOUT = [
-  { name: 'AB', y: 5,    h: 27, topPct: 0,    botPct: 30 },
-  { name: 'C',  y: 33.5, h: 27, topPct: 30,   botPct: 64 },
-  { name: 'DE', y: 62,   h: 27, topPct: 64,   botPct: 96 },
+  { name: 'AB', y: 4,    h: 28, topPct: 22, botPct: 52 },
+  { name: 'C',  y: 34,   h: 28, topPct: 52, botPct: 78 },
+  { name: 'DE', y: 64,   h: 28, topPct: 78, botPct: 99 },
 ]
 
 export default function ClassPyramidChart({ data }) {
@@ -28,36 +29,46 @@ export default function ClassPyramidChart({ data }) {
     { ...LAYOUT[2], value: cp.de, color: COLORS[2], label: 'D/E' },
   ]
   const total = layers.reduce((s, l) => s + l.value, 0)
+  const VB_W = 200
 
   return (
     <div className="in-chart-card">
       <h3 className="in-chart-title">Pirâmide de classe social</h3>
       <div className="in-pyramid">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" className="in-pyramid-svg">
+        <svg viewBox={`0 0 ${VB_W} 100`} preserveAspectRatio="xMidYMid meet" className="in-pyramid-svg">
           {layers.map(l => {
-            const xTop = (100 - l.topPct) / 2
-            const xBot = (100 - l.botPct) / 2
-            const points = l.topPct === 0
-              ? `50,${l.y} ${xBot},${l.y + l.h} ${xBot + l.botPct},${l.y + l.h}`
-              : [
-                  `${xTop},${l.y}`,
-                  `${xTop + l.topPct},${l.y}`,
-                  `${xBot + l.botPct},${l.y + l.h}`,
-                  `${xBot},${l.y + l.h}`,
-                ].join(' ')
-            const labelY = l.topPct === 0 ? l.y + l.h * 0.7 : l.y + l.h / 2 + 1
+            const topW = (l.topPct / 100) * VB_W
+            const botW = (l.botPct / 100) * VB_W
+            const xTop = (VB_W - topW) / 2
+            const xBot = (VB_W - botW) / 2
+            const points = [
+              `${xTop},${l.y}`,
+              `${xTop + topW},${l.y}`,
+              `${xBot + botW},${l.y + l.h}`,
+              `${xBot},${l.y + l.h}`,
+            ].join(' ')
+            const cx = VB_W / 2
+            const cy = l.y + l.h / 2
             return (
               <g key={l.name}>
                 <polygon points={points} fill={l.color} />
                 <text
-                  x="50"
-                  y={labelY}
+                  x={cx}
+                  y={cy - 2}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  className="in-pyramid-label"
+                  className="in-pyramid-label-name"
                 >
-                  <tspan className="in-pyramid-label-name">{l.label}:</tspan>
-                  <tspan dx="2" className="in-pyramid-label-value">{fmtBR.format(l.value)}</tspan>
+                  Classe {l.label}
+                </text>
+                <text
+                  x={cx}
+                  y={cy + 6}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  className="in-pyramid-label-value"
+                >
+                  {fmtBR.format(l.value)}
                 </text>
               </g>
             )
