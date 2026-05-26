@@ -159,26 +159,39 @@ func insSeedDetection(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 }
 
-// insSeedPricing insere uma linha em campaigns_pricing.
-// mode = "consolidated" usa consolidated_value; "per_insertion" usa price_per_insertion.
-func insSeedPricing(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID uuid.UUID, mode string, consolidated, perIns float64) {
+// insSeedStationPricing insere uma linha em campaign_station_pricing.
+// Pra mode='consolidated', consolidated >= 0; pra 'per_insertion' deve ser 0 (NULL).
+// Cleanup é tratado pelo CASCADE da campanha (ver insSeedCampaign).
+func insSeedStationPricing(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID, stationID uuid.UUID, mode string, consolidated float64) {
 	t.Helper()
-	var consPtr, perPtr *float64
-	if consolidated > 0 {
+	var consPtr *float64
+	if mode == "consolidated" {
 		consPtr = &consolidated
 	}
-	if perIns > 0 {
-		perPtr = &perIns
-	}
 	_, err := pool.Exec(ctx, `
-		INSERT INTO campaigns_pricing(campaign_id, mode, consolidated_value, price_per_insertion)
+		INSERT INTO campaign_station_pricing(campaign_id, station_id, mode, consolidated_value)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (campaign_id) DO UPDATE SET mode = EXCLUDED.mode,
-		    consolidated_value = EXCLUDED.consolidated_value,
-		    price_per_insertion = EXCLUDED.price_per_insertion
-	`, campaignID, mode, consPtr, perPtr)
+		ON CONFLICT (campaign_id, station_id) DO UPDATE
+		    SET mode = EXCLUDED.mode,
+		        consolidated_value = EXCLUDED.consolidated_value
+	`, campaignID, stationID, mode, consPtr)
 	if err != nil {
-		t.Fatalf("seed pricing: %v", err)
+		t.Fatalf("seed campaign_station_pricing: %v", err)
+	}
+}
+
+// insSeedTypePricing insere unit_value para (campaign, station, type).
+// Necessário pra modo per_insertion.
+func insSeedTypePricing(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID, stationID, typeID uuid.UUID, unitValue float64) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO campaign_station_type_pricing(campaign_id, station_id, type_id, unit_value)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (campaign_id, station_id, type_id) DO UPDATE
+		    SET unit_value = EXCLUDED.unit_value
+	`, campaignID, stationID, typeID, unitValue)
+	if err != nil {
+		t.Fatalf("seed campaign_station_type_pricing: %v", err)
 	}
 }
 
@@ -321,6 +334,62 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	// Breakdown
 	if core.Breakdown.InSlot != 5 || core.Breakdown.OutSlot != 2 || core.Breakdown.ExtrasOrphan != 1 {
 		t.Errorf("breakdown = %+v", core.Breakdown)
+	}
+}
+
+// ─── aggregateInvestment ────────────────────────────────────────────────────
+
+// TestInsights_AggregateInvestment_PerInsertion verifica que o modo
+// per_insertion soma unit_value × expected (contratado) e unit_value ×
+// (in_slot+out_slot) (executado), via daily_play_summary.
+//
+// Nota: este teste cria distribution_rules (programado) para que o view
+// daily_play_summary tenha "expected" populado. Sem isso, expected=0 e o
+// resultado fica vazio.
+func TestInsights_AggregateInvestment_PerInsertion(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	// Pricing: per_insertion @ R$ 50 (apenas no type/station)
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 50.0)
+
+	// Programado: 1 play/dia × 30 dias = 30 expected
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	// 6 executadas dentro do período (todas 'in_slot' pra simplicidade)
+	for i := 0; i < 6; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
+	}
+
+	from := parseDate("2026-06-01")
+	to := parseDate("2026-06-30")
+	inv, bon, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: from, To: to, StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment: %v", err)
+	}
+
+	// Contratado per_insertion = 50 × 30 = 1500
+	if inv.Contratado < 1499 || inv.Contratado > 1501 {
+		t.Errorf("contratado = %v, want ~1500", inv.Contratado)
+	}
+	// Executado per_insertion = 50 × 6 = 300
+	if inv.Executado < 299 || inv.Executado > 301 {
+		t.Errorf("executado = %v, want ~300", inv.Executado)
+	}
+	// Bonificação count = "bonus" da view = max(0, in_slot - expected) + orphan
+	// Como in_slot=6 e expected=30, max(0, 6-30)=0. Orphan=0. bonus=0.
+	if bon.Count != 0 || bon.Valor != 0 {
+		t.Errorf("bonificacao = %+v, want zero", bon)
 	}
 }
 
