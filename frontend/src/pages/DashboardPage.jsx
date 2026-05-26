@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
-import { useCampaigns, useStreamHealth, useClients } from '../api/hooks'
+import { useCampaigns, useStreamHealth, useClients, useCampaignsFinancials } from '../api/hooks'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
 import NotificationBell from '../components/NotificationBell'
@@ -45,7 +45,7 @@ function relTimeFromMs(ms) {
 const STATUS_META = {
   ativa:      { label: 'Ativas',      badge: 'Ativa',      color: '#10b981',          badgeClass: 'badge-ativa'      },
   programada: { label: 'Programadas', badge: 'Programada', color: '#6b7280',          badgeClass: 'badge-programada' },
-  concluida:  { label: 'Concluídas',  badge: 'Concluída',  color: '#3b82f6',          badgeClass: 'badge-concluida'  },
+  concluida:  { label: 'Concluídas',  badge: 'Concluída',  color: '#E81E75',          badgeClass: 'badge-concluida'  },
   cancelada:  { label: 'Canceladas',  badge: 'Cancelada',  color: 'rgba(239, 68, 68, 0.6)', badgeClass: 'badge-cancelada' },
 }
 
@@ -95,10 +95,19 @@ const CIcon = {
   ),
 }
 
+// Aceita "YYYY-MM-DD" cru ou RFC3339 (ex.: "2026-05-17T00:00:00Z").
+// O backend serializa DATE como time.Time → RFC3339, mas chamadas antigas
+// já assumiam o formato curto. Slice em 10 mantém ambos funcionais e
+// evita "Invalid Date" no toLocaleDateString das rows de concluídas.
+function ymdOnly(dateStr) {
+  return dateStr ? String(dateStr).slice(0, 10) : ''
+}
+
 // Compute days until a YYYY-MM-DD date string (Brazil time). Negative if past.
 function daysUntil(dateStr) {
   if (!dateStr) return null
-  const target = new Date(dateStr + 'T00:00:00-03:00')
+  const target = new Date(ymdOnly(dateStr) + 'T00:00:00-03:00')
+  if (Number.isNaN(target.getTime())) return null
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const ms = target - today
@@ -117,8 +126,48 @@ function relativeDays(n) {
 // "abr/24" → curto pra recent rows
 function monthYearShort(dateStr) {
   if (!dateStr) return '—'
-  const d = new Date(dateStr + 'T00:00:00-03:00')
+  const d = new Date(ymdOnly(dateStr) + 'T00:00:00-03:00')
+  if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'America/Sao_Paulo' }).replace('.', '')
+}
+
+// target_stations veio do banco como uuid[]. Antes era renderizado direto
+// no JSX, virando uma fileira gigante de UUIDs separados por vírgula nos
+// cards. Sempre passar pela helper — defensiva contra null/undefined.
+function stationCount(c) {
+  return Array.isArray(c?.target_stations) ? c.target_stations.length : 0
+}
+
+// Compact number formatter pt-BR (1.234.567 → "1,2 mi"). Usado nos KPIs
+// dos cards ativos pra preservar largura previsível.
+const _COMPACT = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })
+function compactNumber(n) {
+  if (n == null || !Number.isFinite(n) || n === 0) return '—'
+  // Intl.compact retorna "1,2 mi" / "850 mil". Forçamos quando muito pequeno
+  // mostrar inteiro padrão pra não cair em "8" sem unidade.
+  if (n < 1000) return Math.round(n).toLocaleString('pt-BR')
+  return _COMPACT.format(n)
+}
+
+const _BRL_COMPACT = new Intl.NumberFormat('pt-BR', {
+  style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
+})
+function formatBRL(n) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return _BRL_COMPACT.format(n)
+}
+
+// Progresso temporal da campanha (0..1). dayDone conta o dia atual como
+// concluído se a campanha está em andamento e end_date >= hoje.
+function campaignProgress(c) {
+  if (!c?.start_date || !c?.end_date) return null
+  const start = new Date(ymdOnly(c.start_date) + 'T00:00:00-03:00').getTime()
+  const end   = new Date(ymdOnly(c.end_date)   + 'T23:59:59-03:00').getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !(end > start)) return null
+  const totalDays = Math.max(1, Math.round((end - start) / 86_400_000))
+  const today = Date.now()
+  const elapsedDays = Math.max(0, Math.min(totalDays, Math.round((today - start) / 86_400_000)))
+  return { elapsed: elapsedDays, total: totalDays, pct: Math.min(100, (elapsedDays / totalDays) * 100) }
 }
 
 // ─── Skeleton (mirrors loaded layout exactly) ─────────────
@@ -164,11 +213,22 @@ function ClientSkeleton() {
         <div className="cdash-skel" style={{ width: 180, height: 18 }} />
         <div className="cdash-active-grid">
           {[0, 1, 2, 3].map(i => (
-            <div key={i} className="cdash-active-card" style={{ animation: 'none', cursor: 'default' }}>
-              <div className="cdash-skel" style={{ width: 70, height: 11 }} />
+            <div key={i} className="cdash-active-card cdash-active-card--skel" aria-hidden="true">
+              <div className="cdash-active-top">
+                <div className="cdash-skel" style={{ width: 56, height: 11 }} />
+                <div className="cdash-skel" style={{ width: 60, height: 11 }} />
+              </div>
               <div className="cdash-skel" style={{ width: '80%', height: 18 }} />
-              <div className="cdash-skel" style={{ width: '55%', height: 12, marginTop: 'auto' }} />
-              <div className="cdash-skel" style={{ width: '40%', height: 12 }} />
+              <div className="cdash-skel" style={{ width: '60%', height: 12 }} />
+              <div className="cdash-skel" style={{ width: '100%', height: 4, borderRadius: 999 }} />
+              <div className="cdash-active-stats">
+                {[0, 1, 2].map(j => (
+                  <div key={j} className="cdash-active-stat">
+                    <div className="cdash-skel" style={{ width: '60%', height: 18, marginBottom: 4 }} />
+                    <div className="cdash-skel" style={{ width: '70%', height: 10 }} />
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -203,7 +263,7 @@ function ClientEmpty({ clientName }) {
                 <div className="cdash-distrib-bar">
                   <div className="cdash-distrib-seg" style={{ width: '25%', background: '#10b981' }} />
                   <div className="cdash-distrib-seg" style={{ width: '15%', background: '#6b7280' }} />
-                  <div className="cdash-distrib-seg" style={{ width: '60%', background: '#3b82f6' }} />
+                  <div className="cdash-distrib-seg" style={{ width: '60%', background: '#E81E75' }} />
                 </div>
                 <div className="cdash-distrib-legend">
                   <span className="cdash-distrib-legend-item">
@@ -215,7 +275,7 @@ function ClientEmpty({ clientName }) {
                     <span className="cdash-distrib-legend-num">2</span> programadas
                   </span>
                   <span className="cdash-distrib-legend-item">
-                    <span className="cdash-distrib-dot" style={{ background: '#3b82f6' }} />
+                    <span className="cdash-distrib-dot" style={{ background: '#E81E75' }} />
                     <span className="cdash-distrib-legend-num">7</span> concluídas
                   </span>
                 </div>
@@ -266,14 +326,20 @@ function ClientEmpty({ clientName }) {
 
 function ClientDashboard() {
   const navigate = useNavigate()
-  const { user, clientId, isAdmin } = useAuth()
+  const { user, clientId } = useAuth()
   const { data: campaigns = [], isLoading, error, refetch } = useCampaigns()
-  // /clients (lista global) é admin-only no backend — viewer cai em 403.
-  // Aqui só usamos a lista pra resolver o nome+logo do cliente vinculado,
-  // e o JSX já lida bem com linkedClient = null (cdash-hello-client some).
-  // Sem o gate, o ClientDashboard de qualquer viewer dispara um 403 ruidoso
-  // a cada montagem.
-  const clientsQ = useClients({ enabled: isAdmin && !!clientId })
+  // /clients devolve scope-aware: admin vê tudo, viewer recebe apenas o
+  // próprio cliente. Suficiente pra resolver nome+logo do cliente vinculado.
+  const clientsQ = useClients({ enabled: !!clientId })
+  // Financials por campanha — alimenta os KPIs (impactos, CPM, investimento)
+  // de cada card ativo. A query é cacheada por react-query, então não há
+  // custo extra se outras telas (CampaignsPage) também a chamarem.
+  const financialsQ = useCampaignsFinancials()
+  const financialsByCampaign = useMemo(() => {
+    const m = new Map()
+    ;(financialsQ.data ?? []).forEach(f => m.set(f.campaign_id, f))
+    return m
+  }, [financialsQ.data])
 
   const linkedClient = clientId
     ? (clientsQ.data ?? []).find(c => c.id === clientId)
@@ -341,7 +407,7 @@ function ClientDashboard() {
   const distribSegments = [
     { key: 'ativa',      pct: (counts.ativa      / total) * 100, color: '#10b981' },
     { key: 'programada', pct: (counts.programada / total) * 100, color: '#6b7280' },
-    { key: 'concluida',  pct: (counts.concluida  / total) * 100, color: '#3b82f6' },
+    { key: 'concluida',  pct: (counts.concluida  / total) * 100, color: '#E81E75' },
     { key: 'cancelada',  pct: (counts.cancelada  / total) * 100, color: 'rgba(239, 68, 68, 0.55)' },
   ].filter(s => s.pct > 0)
 
@@ -426,9 +492,12 @@ function ClientDashboard() {
                     <div className="cdash-side-body">
                       <div className="cdash-side-name" title={c.name}>{c.name}</div>
                       <div className="cdash-side-meta">
-                        {c.target_stations != null
-                          ? `${c.target_stations} emissora${c.target_stations === 1 ? '' : 's'}`
-                          : 'sem emissoras definidas'}
+                        {(() => {
+                          const n = stationCount(c)
+                          return n > 0
+                            ? `${n} emissora${n === 1 ? '' : 's'}`
+                            : 'sem emissoras definidas'
+                        })()}
                       </div>
                     </div>
                     <span className={`cdash-side-countdown ${urgent ? 'urgent' : ''}`}>
@@ -461,33 +530,85 @@ function ClientDashboard() {
             </button>
           </div>
           <div className="cdash-active-grid">
-            {activeCampaigns.map(c => (
-              <button
-                key={c.id}
-                type="button"
-                className="cdash-active-card"
-                style={{ ['--cdash-tone']: STATUS_META.ativa.color }}
-                onClick={() => navigate(`/detections?campaign_id=${c.id}`)}
-              >
-                <div className="cdash-active-status">
-                  <span className="cdash-active-status-dot" />
-                  ATIVA
-                </div>
-                <h3 className="cdash-active-name" title={c.name}>{c.name}</h3>
-                <div className="cdash-active-meta">
-                  <div className="cdash-active-meta-row">
-                    {CIcon.calendar}
-                    {formatDate(c.start_date)} – {formatDate(c.end_date)}
+            {activeCampaigns.map(c => {
+              const stations = stationCount(c)
+              const fin = financialsByCampaign.get(c.id)
+              const audience = fin?.total_audience ?? 0
+              const invested = fin?.total_invested ?? 0
+              const cpm = audience > 0 ? (invested / audience) * 1000 : null
+              const prog = campaignProgress(c)
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className="cdash-active-card"
+                  onClick={() => navigate(`/detections?campaign_id=${c.id}`)}
+                  title={`Ver veiculações de ${c.name}`}
+                >
+                  <div className="cdash-active-top">
+                    <div className="cdash-active-status">
+                      <span className="cdash-active-status-dot" />
+                      ATIVA
+                    </div>
+                    {prog && (
+                      <div
+                        className="cdash-active-progress-label"
+                        title={`${prog.elapsed} dia${prog.elapsed === 1 ? '' : 's'} corrido${prog.elapsed === 1 ? '' : 's'} de ${prog.total}`}
+                      >
+                        <span className="cdash-active-progress-num">{prog.elapsed}</span>
+                        <span className="cdash-active-progress-sep">/</span>
+                        <span className="cdash-active-progress-tot">{prog.total} dias</span>
+                      </div>
+                    )}
                   </div>
-                  {c.target_stations != null && (
-                    <div className="cdash-active-meta-row">
-                      {CIcon.broadcast}
-                      {c.target_stations} emissora{c.target_stations === 1 ? '' : 's'}
+
+                  <h3 className="cdash-active-name" title={c.name}>{c.name}</h3>
+
+                  <div className="cdash-active-period">
+                    {CIcon.calendar}
+                    <span>{formatDate(c.start_date)} <span className="cdash-active-period-sep">→</span> {formatDate(c.end_date)}</span>
+                  </div>
+
+                  {prog && (
+                    <div className="cdash-active-progress-bar" role="progressbar"
+                         aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(prog.pct)}>
+                      <div className="cdash-active-progress-fill" style={{ width: `${prog.pct}%` }} />
                     </div>
                   )}
-                </div>
-              </button>
-            ))}
+
+                  <div className="cdash-active-stats">
+                    <div className="cdash-active-stat">
+                      <div className="cdash-active-stat-value">{stations || '—'}</div>
+                      <div className="cdash-active-stat-label">{stations === 1 ? 'emissora' : 'emissoras'}</div>
+                    </div>
+                    <div className="cdash-active-stat">
+                      <div
+                        className="cdash-active-stat-value"
+                        title={audience > 0 ? `${Math.round(audience).toLocaleString('pt-BR')} impactos` : 'Aguardando primeira detecção'}
+                      >
+                        {compactNumber(audience)}
+                      </div>
+                      <div className="cdash-active-stat-label">impactos</div>
+                    </div>
+                    <div className="cdash-active-stat">
+                      <div
+                        className="cdash-active-stat-value"
+                        title={
+                          cpm != null
+                            ? `${formatBRL(invested)} ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`
+                            : invested > 0
+                              ? 'Sem PMM ou sem inserções — CPM indeterminado'
+                              : 'Sem pricing cadastrado'
+                        }
+                      >
+                        {cpm != null ? formatBRL(cpm) : '—'}
+                      </div>
+                      <div className="cdash-active-stat-label">CPM</div>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
@@ -526,7 +647,10 @@ function ClientDashboard() {
                 <span className="cdash-recent-name" title={c.name}>{c.name}</span>
                 <span className="cdash-recent-period">{monthYearShort(c.end_date)}</span>
                 <span className="cdash-recent-stations">
-                  {c.target_stations != null ? `${c.target_stations} emissora${c.target_stations === 1 ? '' : 's'}` : '—'}
+                  {(() => {
+                    const n = stationCount(c)
+                    return n > 0 ? `${n} emissora${n === 1 ? '' : 's'}` : '—'
+                  })()}
                 </span>
                 <span className="cdash-recent-chev">{CIcon.chevron}</span>
               </button>

@@ -154,6 +154,15 @@ func NewRouter(d Deps) http.Handler {
 				// isolation via client_id from JWT claims.
 				r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
 
+				// GET /clients — admin/operator vê a lista inteira; viewer recebe
+				// uma lista com apenas o próprio cliente (scope-check no handler
+				// via auth.ClientScopeFromContext). Isso permite que componentes
+				// no frontend (CampaignsPage, DetectionsPage, FiltersBar, …)
+				// resolvam o nome/logo do cliente vinculado sem precisar de gates
+				// de role nem rotas separadas. Writes seguem admin/operator-only
+				// no subgrupo B abaixo.
+				r.Get("/clients", d.Clients.List)
+
 				// Relatórios consolidados de campanha — CSV resumo + JSON pra PDF.
 				// Viewer scope checado dentro do handler (mesmo padrão do
 				// /detections/aggregate-by-material). O CSV detalhado continua
@@ -208,12 +217,15 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/stations", d.Stations.Create)
 				r.Put("/stations/{id}", d.Stations.Update)
 				r.Get("/stations/{id}/threshold", d.Stations.GetThreshold)
-				r.Route("/clients", func(r chi.Router) {
-					r.Get("/", d.Clients.List)
-					r.Post("/", d.Clients.Create)
-					r.Put("/{id}", d.Clients.Update)
-					r.Delete("/{id}", d.Clients.Delete)
-				})
+				// Writes em /clients. NÃO usar r.Route() aqui — Route monta
+				// sub-tree que captura todos os métodos do prefixo e mascara o
+				// GET registrado no subgrupo A (viewer cai no RequireRole
+				// admin/operator deste grupo e leva 403). Mesma justificativa de
+				// /materials e /distribution-rules. GET (List) vive no subgrupo
+				// A com scope-check no handler.
+				r.Post("/clients", d.Clients.Create)
+				r.Put("/clients/{id}", d.Clients.Update)
+				r.Delete("/clients/{id}", d.Clients.Delete)
 				if d.APIKeys != nil {
 					r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
 					r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)

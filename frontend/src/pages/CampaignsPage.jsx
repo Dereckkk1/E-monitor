@@ -1203,10 +1203,10 @@ function EmptyState() {
 
 export default function CampaignsPage() {
   const { isAdmin } = useAuth()
-  // /clients é admin-only no backend — pra viewer o array fica vazio e o
-  // find(...) por client_id no CampaignRow devolve undefined (cliente fica
-  // sem badge nominal, mas suas próprias campanhas seguem aparecendo).
-  const { data: clients   = [] }            = useClients({ enabled: isAdmin })
+  // /clients devolve scope-aware: admin vê a lista inteira, viewer recebe
+  // apenas o próprio cliente — suficiente pro find(...) por client_id no
+  // CampaignRow resolver nome+logo nas duas roles.
+  const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
   const { data: financialsList = [] }       = useCampaignsFinancials()
