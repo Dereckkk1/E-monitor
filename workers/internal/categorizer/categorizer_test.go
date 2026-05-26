@@ -247,4 +247,51 @@ func TestCategorize_Override_OutOfDate_StillOutDate(t *testing.T) {
 	}
 }
 
+// Regressão: pgx escaneia colunas DATE como time.Time em UTC à meia-noite.
+// Antes do fix, o último dia da campanha caía como out_date porque o `date`
+// (SP-midnight, 03:00Z) era considerado After do cmp.EndDate (UTC-midnight,
+// 00:00Z). Bug confirmado em prod 2026-05-26 — 6 detections do dia 26 numa
+// campanha terminando em 26 marcadas out_date.
+func TestCategorize_LastDay_CampaignEndDateScannedAsUTC(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),  // como o pgx devolve
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC), // como o pgx devolve
+	}
+	// 30/06/2026 às 10:00 BRT — DENTRO da campanha (último dia, inclusivo)
+	det := time.Date(2026, 6, 30, 10, 0, 0, 0, saoPaulo)
+	got := Categorize(det, cmp, nil, nil)
+	if got == "out_date" {
+		t.Errorf("detection em 30/06 10:00 BRT (= end_date) marcada %q; o end_date é inclusivo, esperava != out_date", got)
+	}
+}
+
+// Regressão: mesmo problema, mas no loop de rules — r.EndDate também vem
+// em UTC do scan. Antes do fix, o último dia da regra caía em orphan/out_slot
+// em vez de in_slot porque a regra era pulada (date.After(r.EndDate) = true).
+func TestCategorize_LastDay_RuleEndDateScannedAsUTC(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+	}
+	parseTime := func(hhmm string) time.Time {
+		t, _ := time.Parse("15:04", hhmm)
+		return t
+	}
+	// 30/06/2026 é terça-feira (DOW=2 → bit 2 → 4). Mask 62 = seg-sex inclui.
+	rule := Rule{
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62,
+		TimeStart:   parseTime("08:00"),
+		TimeEnd:     parseTime("10:00"),
+		PlaysPerDay: 3,
+	}
+	// Detection 09:00 BRT no último dia da rule — deve ser in_slot
+	det := time.Date(2026, 6, 30, 9, 0, 0, 0, saoPaulo)
+	got := Categorize(det, cmp, []Rule{rule}, nil)
+	if got != "in_slot" {
+		t.Errorf("detection no último dia da rule (30/06 09:00 BRT, dentro da faixa 08-10): got %q, want in_slot", got)
+	}
+}
+
 var _ = uuid.UUID{} // suppress unused import if categorizer doesn't import uuid

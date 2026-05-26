@@ -26,10 +26,18 @@ type SocialClass struct {
 	ClasseDE float64 `json:"classeDE"`
 }
 
+type AgeRanges struct {
+	Range18To24 float64 `json:"range18to24"`
+	Range25To49 float64 `json:"range25to49"`
+	Range50Plus float64 `json:"range50plus"`
+}
+
 type AudienceProfile struct {
-	Gender      *Gender      `json:"gender,omitempty"`
-	AgeRange    *string      `json:"ageRange,omitempty"`
-	SocialClass *SocialClass `json:"socialClass,omitempty"`
+	Gender         *Gender      `json:"gender,omitempty"`
+	AgeRanges      *AgeRanges   `json:"ageRanges,omitempty"`
+	AgeRangeLegado *string      `json:"ageRangeLegado,omitempty"`
+	AgeRange       *string      `json:"ageRange,omitempty"`
+	SocialClass    *SocialClass `json:"socialClass,omitempty"`
 }
 
 type StationMeta struct {

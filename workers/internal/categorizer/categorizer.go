@@ -48,6 +48,17 @@ const SlotToleranceSeconds = 15 * 60
 
 var spLocation, _ = time.LoadLocation("America/Sao_Paulo")
 
+// dateOnlySP normaliza um time.Time para meia-noite local SP do mesmo dia
+// calendário. Necessário porque pgx escaneia colunas DATE como time.Time em
+// UTC à meia-noite (00:00Z); compará-las direto contra um `date` em SP
+// (00:00-03:00 = 03:00Z) faria o último dia do range cair fora — todo o
+// fluxo do categorizer assume datas em SP (ver comentário do tipo Campaign).
+// Bug em prod 2026-05-26: 6 detections do dia 26 numa campanha terminando em
+// 26 marcadas out_date porque `date.After(cmpEnd)` retornava true.
+func dateOnlySP(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, spLocation)
+}
+
 // Categorize classifica uma detection.
 //
 // Regra:
@@ -68,7 +79,7 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Over
 	local := detectedAt.In(spLocation)
 	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLocation)
 
-	if date.Before(cmp.StartDate) || date.After(cmp.EndDate) {
+	if date.Before(dateOnlySP(cmp.StartDate)) || date.After(dateOnlySP(cmp.EndDate)) {
 		return CatOutDate
 	}
 
@@ -92,7 +103,7 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Over
 	dow := int(local.Weekday()) // 0=Sun, 6=Sat — bate com EXTRACT(DOW) do PG
 	hasApplicable := false
 	for _, r := range rules {
-		if date.Before(r.StartDate) || date.After(r.EndDate) {
+		if date.Before(dateOnlySP(r.StartDate)) || date.After(dateOnlySP(r.EndDate)) {
 			continue
 		}
 		if (1<<dow)&int(r.WeekdayMask) == 0 {
