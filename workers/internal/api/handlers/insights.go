@@ -94,8 +94,8 @@ func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	defaultTo := defaultFrom.AddDate(0, 1, 0).Add(-time.Second)
 	from := parseDateOr(q.Get("from"), defaultFrom)
 	to := parseDateOr(q.Get("to"), defaultTo)
-	if !to.After(from) {
-		http.Error(w, "to must be after from", http.StatusBadRequest)
+	if to.Before(from) {
+		http.Error(w, "to must be on or after from", http.StatusBadRequest)
 		return
 	}
 
