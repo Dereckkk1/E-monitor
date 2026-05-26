@@ -21,12 +21,26 @@ function fmtBucket(b, gran) {
   return b.slice(8, 10) + '/' + b.slice(5, 7)
 }
 
+// Cutoff de "hoje" — não mostramos buckets futuros porque não faz sentido
+// indicar déficit pra um dia/mês que ainda não chegou.
+function buildTodayKeys() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return { dayKey: `${y}-${m}-${d}`, monthKey: `${y}-${m}` }
+}
+
 export default function DailySummaryChart({ data }) {
   const gran = data?.period?.granularity || 'day'
-  const rows = (data?.buckets || []).map(b => ({
-    ...b,
-    bucket_label: fmtBucket(b.bucket, gran),
-  }))
+  const { dayKey, monthKey } = buildTodayKeys()
+  const cutoff = gran === 'month' ? monthKey : dayKey
+  const rows = (data?.buckets || [])
+    .filter(b => (b.bucket || '') <= cutoff)
+    .map(b => ({
+      ...b,
+      bucket_label: fmtBucket(b.bucket, gran),
+    }))
   if (!rows.length) {
     return (
       <div className="in-chart-card">

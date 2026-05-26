@@ -1,4 +1,4 @@
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, Label } from 'recharts'
 
 const fmtBR = new Intl.NumberFormat('pt-BR')
 
@@ -28,12 +28,31 @@ export default function BroadcastShareChart({ data }) {
             <Pie
               data={rows}
               dataKey="value"
+              cx="35%"
+              cy="50%"
               innerRadius={60}
               outerRadius={92}
               paddingAngle={2}
               isAnimationActive={false}
             >
               {rows.map((r, i) => <Cell key={i} fill={r.fill} />)}
+              <Label
+                content={({ viewBox }) => {
+                  const { cx, cy } = viewBox
+                  return (
+                    <g>
+                      <text x={cx} y={cy - 6} textAnchor="middle" dominantBaseline="middle"
+                            style={{ fontFamily: 'Space Grotesk, sans-serif', fontSize: 22, fontWeight: 700, fill: '#06055B' }}>
+                        {fmtBR.format(total)}
+                      </text>
+                      <text x={cx} y={cy + 14} textAnchor="middle" dominantBaseline="middle"
+                            style={{ fontSize: 10, fill: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        veiculações
+                      </text>
+                    </g>
+                  )
+                }}
+              />
             </Pie>
             <Tooltip
               content={({ active, payload }) => {
@@ -66,10 +85,6 @@ export default function BroadcastShareChart({ data }) {
             />
           </PieChart>
         </ResponsiveContainer>
-        <div className="in-donut-center">
-          <div className="in-donut-center-value">{fmtBR.format(total)}</div>
-          <div className="in-donut-center-label">veiculações</div>
-        </div>
       </div>
     </div>
   )

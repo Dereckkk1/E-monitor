@@ -312,30 +312,58 @@
 .in-tooltip-name { color: var(--c-text-2); }
 .in-tooltip-value { font-weight: 600; color: var(--c-text); }
 
-/* ── Donut center label ─────────────────────────────────────────── */
+/* ── Donut ──────────────────────────────────────────────────────── */
 .in-donut-wrap {
-  position: relative;
   height: 260px;
 }
-.in-donut-center {
-  position: absolute;
-  top: 50%;
-  left: 32%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  pointer-events: none;
+
+/* ── Class pyramid (SVG custom) ─────────────────────────────────── */
+.in-pyramid {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 14px;
+  align-items: center;
+  min-height: 220px;
 }
-.in-donut-center-value {
-  font-family: var(--font-heading);
-  font-size: 22px;
+.in-pyramid-svg {
+  width: 100%;
+  height: 220px;
+}
+.in-pyramid-label { font-family: var(--font-body); pointer-events: none; }
+.in-pyramid-label-name {
+  font-size: 7px;
+  font-weight: 700;
+  fill: white;
+  letter-spacing: 0.04em;
+}
+.in-pyramid-label-value {
+  font-size: 5.5px;
+  font-weight: 600;
+  fill: white;
+  opacity: 0.95;
+}
+.in-pyramid-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+.in-pyramid-legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.in-pyramid-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.in-pyramid-name { color: var(--c-text-2); }
+.in-pyramid-pct {
   font-weight: 700;
   color: var(--c-text);
-}
-.in-donut-center-label {
-  font-size: 11px;
-  color: var(--c-text-2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-family: var(--font-heading);
 }
 
 /* ── Skeleton loader ────────────────────────────────────────────── */
