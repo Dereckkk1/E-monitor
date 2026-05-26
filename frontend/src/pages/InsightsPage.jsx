@@ -79,6 +79,9 @@ export default function InsightsPage() {
         <h1 className="in-title">Dashboard de Veiculação</h1>
       </header>
 
+      {/* dashboardRef envolve filtros + body pra que o print/PDF inclua
+          o contexto dos filtros aplicados. */}
+      <div ref={dashboardRef} className="in-capture">
       <FiltersBar
         value={filters}
         onChange={setFilters}
@@ -86,7 +89,7 @@ export default function InsightsPage() {
         onExportPDF={handleExportPDF}
       />
 
-      <div ref={dashboardRef} className="in-body">
+      <div className="in-body">
         {error && <div className="in-error">Erro ao carregar: {String(error.message || error)}</div>}
 
         {emptyVariant ? (
@@ -110,6 +113,7 @@ export default function InsightsPage() {
             </div>
           </>
         ) : null}
+      </div>
       </div>
 
     </div>
