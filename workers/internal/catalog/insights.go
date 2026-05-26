@@ -219,6 +219,85 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 	return out, nil
 }
 
+// aggregateBuckets devolve a série temporal para o gráfico 4 da página.
+// Lê da view daily_play_summary (já agregada por campaign × type × station
+// × day) e soma por bucket diário ou mensal.
+//
+// Granularidade: ≤ 31 dias filtrados → diário (YYYY-MM-DD); > 31 → mensal
+// (YYYY-MM). A decisão é local pra evitar dependência circular com o
+// período computado no Compute() — o teste pode controlar via params.
+//
+// "extras" usa `orphan` puro (não `bonus`), pra evitar double-count com
+// `in_slot` no mesmo gráfico — bonus inclui in_slot-acima-de-expected
+// que já é mostrado em in_slot. Bonificação KPI (no aggregateInvestment)
+// usa bonus separadamente.
+func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]BucketRow, string, error) {
+	days := int(p.To.Sub(p.From).Hours()/24) + 1
+	gran := "day"
+	// daily_play_summary key + detection grouping expression. Strings paralelas
+	// pq summary tem for_date::date e detections tem detected_at::timestamptz.
+	summaryBucket := "for_date::text"
+	detectionBucket := "(date_trunc('day', detected_at AT TIME ZONE 'America/Sao_Paulo')::date)::text"
+	if days > 31 {
+		gran = "month"
+		summaryBucket = "to_char(for_date, 'YYYY-MM')"
+		detectionBucket = "to_char(date_trunc('day', detected_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM')"
+	}
+
+	query := fmt.Sprintf(`
+		WITH agg AS (
+		    SELECT %s AS bucket,
+		           SUM(expected)::int  AS programado,
+		           SUM(in_slot)::int   AS in_slot,
+		           SUM(out_slot)::int  AS out_slot,
+		           SUM(out_date)::int  AS out_date,
+		           GREATEST(0, SUM(expected) - SUM(in_slot) - SUM(out_slot))::int AS deficit
+		    FROM daily_play_summary
+		    WHERE campaign_id = ANY($1::uuid[])
+		      AND for_date BETWEEN $2 AND $3
+		      AND ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+		    GROUP BY 1
+		),
+		orphan AS (
+		    SELECT %s AS bucket,
+		           COUNT(*)::int AS extras
+		    FROM detections
+		    WHERE campaign_id = ANY($1::uuid[])
+		      AND retracted_at IS NULL
+		      AND category = 'orphan'
+		      AND detected_at::date BETWEEN $2 AND $3
+		      AND ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+		    GROUP BY 1
+		)
+		SELECT COALESCE(a.bucket, o.bucket) AS bucket,
+		       COALESCE(a.programado, 0),
+		       COALESCE(a.in_slot,    0),
+		       COALESCE(a.out_slot,   0),
+		       COALESCE(a.out_date,   0),
+		       COALESCE(a.deficit,    0),
+		       COALESCE(o.extras,     0)
+		FROM agg a
+		FULL OUTER JOIN orphan o ON a.bucket = o.bucket
+		ORDER BY bucket
+	`, summaryBucket, detectionBucket)
+
+	rows, err := r.pool.Query(ctx, query, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	var out []BucketRow
+	for rows.Next() {
+		var b BucketRow
+		if err := rows.Scan(&b.Bucket, &b.Programado, &b.InSlot, &b.OutSlot, &b.OutDate, &b.Deficit, &b.Extras); err != nil {
+			return nil, "", err
+		}
+		out = append(out, b)
+	}
+	return out, gran, rows.Err()
+}
+
 // aggregateInvestment calcula investido (contratado / executado) e
 // bonificação somando contribuições por (campaign, station) seguindo
 // o modo de pricing definido em campaign_station_pricing:

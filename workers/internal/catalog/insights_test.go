@@ -337,6 +337,72 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	}
 }
 
+// ─── aggregateBuckets ───────────────────────────────────────────────────────
+
+func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	// 1 play/dia programado
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	// dia 10: 2 in_slot
+	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
+	// dia 11: 1 out_slot
+	insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
+	// dia 12: 1 orphan
+	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+
+	buckets, gran, err := repo.aggregateBuckets(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-10"), To: parseDate("2026-06-12"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateBuckets: %v", err)
+	}
+	if gran != "day" {
+		t.Errorf("gran = %q, want day", gran)
+	}
+	if len(buckets) != 3 {
+		t.Fatalf("buckets = %d, want 3 (10/11/12). got=%+v", len(buckets), buckets)
+	}
+	// 10: programado=1, in_slot=2, deficit=0 (max(0, 1-2-0))
+	if buckets[0].Bucket != "2026-06-10" || buckets[0].InSlot != 2 || buckets[0].Programado != 1 {
+		t.Errorf("day 10: %+v", buckets[0])
+	}
+	// 12: programado=1, extras=1 (orphan), deficit=1 (1-0-0)
+	if buckets[2].Bucket != "2026-06-12" || buckets[2].Extras != 1 || buckets[2].Deficit != 1 {
+		t.Errorf("day 12: %+v", buckets[2])
+	}
+}
+
+func TestInsights_AggregateBuckets_MonthlyGranularity(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-01-01", "2026-12-31")
+
+	_, gran, err := repo.aggregateBuckets(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-01-01"), To: parseDate("2026-06-30"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateBuckets: %v", err)
+	}
+	if gran != "month" {
+		t.Errorf("gran = %q, want month (period > 31 days)", gran)
+	}
+}
+
 // ─── aggregateInvestment ────────────────────────────────────────────────────
 
 // TestInsights_AggregateInvestment_PerInsertion verifica que o modo
