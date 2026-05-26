@@ -125,6 +125,41 @@ type BucketRow struct {
 // para os scans dos modos de pricing nos próximos passos.
 func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayload, error) {
 	_ = sql.ErrNoRows // placeholder — usado nos próximos commits
-	_ = fmt.Sprintf
 	return nil, fmt.Errorf("not implemented")
+}
+
+// fetchCampaigns devolve briefs (id, nome, datas) das campanhas pedidas,
+// validando que TODAS pertencem ao clientID. Se uma única campanha não
+// pertence ao cliente (ou não existe), devolve erro com a palavra
+// "cross-client" — o handler converte isso em 403.
+//
+// Isso é o anti-oracle: um cliente B nunca consegue extrair metadata de
+// campanhas de A nem pelo simples ato de ter o uuid.
+func (r *Insights) fetchCampaigns(ctx context.Context, clientID uuid.UUID, ids []uuid.UUID) ([]CampaignBrief, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, name, start_date::text, end_date::text
+		FROM campaigns
+		WHERE id = ANY($1::uuid[]) AND client_id = $2
+		ORDER BY start_date ASC
+	`, ids, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []CampaignBrief
+	for rows.Next() {
+		var b CampaignBrief
+		if err := rows.Scan(&b.ID, &b.Name, &b.StartDate, &b.EndDate); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) != len(ids) {
+		return nil, fmt.Errorf("insights: %d campaigns requested, %d found for client (cross-client or invalid id)", len(ids), len(out))
+	}
+	return out, nil
 }
