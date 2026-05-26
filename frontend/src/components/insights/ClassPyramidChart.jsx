@@ -1,52 +1,71 @@
-// Pirâmide de classe social — SVG manual com geometria fixa de pirâmide.
+// Pirâmide de classe social — triângulo PERFEITO (slope constante das
+// laterais) dividido em 3 fatias horizontais cuja ALTURA é proporcional
+// ao % de impactos daquela classe.
 //
-// Recharts Funnel não serve aqui: ele sempre afunila pra ponta no FIM
-// (DE acabaria em triângulo). Pirâmide tem o ponto no TOPO (AB) e base
-// larga embaixo (DE). Como é um shape simples e estático, SVG manual
-// é mais leve que adicionar lib só pra isso.
+// Geometria:
+//   - Triângulo total: apex em (120, 4), base de (10, 152) a (230, 152)
+//   - Altura total = 148; base = 220
+//   - Slope esquerda: x(y) = 120 - 110/148 * (y - 4)
+//   - Slope direita:  x(y) = 120 + 110/148 * (y - 4)
 //
-// Layout:
-//   - viewBox 240×160 (proporção horizontal pra dar espaço aos labels)
-//   - AB: triângulo (vértice no topo)
-//   - C:  trapézio meio
-//   - DE: trapézio base
-//   - labels em 2 linhas centralizados no centroide de cada shape
+// Para uma classe com % = p, a fatia ocupa p × 148 units de altura.
+// Os limites verticais são calculados em sequência: AB começa no apex,
+// C continua, DE fecha na base.
 
 const COLORS = ['#E81E75', '#ec4899', '#f9a8d4'] // AB / C / DE
 const fmtBR = new Intl.NumberFormat('pt-BR')
 const fmtPct = (v, t) => (t > 0 ? ((v / t) * 100).toFixed(1) : '0.0')
 
-// Geometria — alturas iguais (cada camada 48 unidades). Larguras crescem
-// progressivamente de 0 (vértice) até 220 (base).
-//   AB:  vértice em x=120, base 60-180 (largura 120) — h=4..52
-//   C:   topo 60-180, base 30-210 (largura 180)        — h=52..100
-//   DE:  topo 30-210, base 10-230 (largura 220)        — h=100..152
 const VB_W = 240
 const VB_H = 160
-const LAYERS = [
-  { name: 'AB', color: COLORS[0], points: '120,4 180,52 60,52' },
-  { name: 'C',  color: COLORS[1], points: '60,52 180,52 210,100 30,100' },
-  { name: 'DE', color: COLORS[2], points: '30,100 210,100 230,152 10,152' },
-]
+const APEX_X = 120
+const APEX_Y = 4
+const BASE_Y = 152
+const BASE_HALF_WIDTH = 110 // de 10 a 230
 
-// Centro do shape (X sempre 120, Y é o meio vertical de cada camada).
-// Pro triângulo AB, descemos um pouco pra ficar onde o shape é mais largo.
-const LABEL_POS = [
-  { x: 120, y: 38 },  // AB — y=38 (~75% da camada, onde tem mais espaço)
-  { x: 120, y: 76 },  // C  — meio da camada (h=52..100, centro=76)
-  { x: 120, y: 126 }, // DE — meio da camada (h=100..152, centro=126)
-]
+// Retorna o x da lateral esquerda do triângulo para um dado y.
+function leftX(y) {
+  const t = (y - APEX_Y) / (BASE_Y - APEX_Y)
+  return APEX_X - BASE_HALF_WIDTH * t
+}
+function rightX(y) {
+  const t = (y - APEX_Y) / (BASE_Y - APEX_Y)
+  return APEX_X + BASE_HALF_WIDTH * t
+}
 
 export default function ClassPyramidChart({ data }) {
   const cp = data?.class_pyramid
   if (!cp) return null
 
+  const total = cp.ab + cp.c + cp.de
+  // Frações (somam 1.0). Quando total=0, default igualitário pra não
+  // quebrar a renderização.
+  const frac = total > 0
+    ? [cp.ab / total, cp.c / total, cp.de / total]
+    : [1 / 3, 1 / 3, 1 / 3]
+
+  const H = BASE_Y - APEX_Y // 148
+  const y0 = APEX_Y
+  const y1 = APEX_Y + frac[0] * H
+  const y2 = APEX_Y + (frac[0] + frac[1]) * H
+  const y3 = BASE_Y
+
+  // Vértices: AB triângulo, C e DE trapézios. Cada lado segue a slope
+  // constante do triângulo total → pirâmide perfeitamente reta.
+  const ab = `${APEX_X},${y0} ${rightX(y1)},${y1} ${leftX(y1)},${y1}`
+  const c  = `${leftX(y1)},${y1} ${rightX(y1)},${y1} ${rightX(y2)},${y2} ${leftX(y2)},${y2}`
+  const de = `${leftX(y2)},${y2} ${rightX(y2)},${y2} ${rightX(y3)},${y3} ${leftX(y3)},${y3}`
+
   const rows = [
-    { ...LAYERS[0], ...LABEL_POS[0], label: 'A/B', value: cp.ab },
-    { ...LAYERS[1], ...LABEL_POS[1], label: 'C',   value: cp.c },
-    { ...LAYERS[2], ...LABEL_POS[2], label: 'D/E', value: cp.de },
+    { name: 'A/B', value: cp.ab, color: COLORS[0], points: ab, yMid: (y0 + y1) / 2, yLow: y1 - 4 },
+    { name: 'C',   value: cp.c,  color: COLORS[1], points: c,  yMid: (y1 + y2) / 2, yLow: null },
+    { name: 'D/E', value: cp.de, color: COLORS[2], points: de, yMid: (y2 + y3) / 2, yLow: null },
   ]
-  const total = rows.reduce((s, r) => s + r.value, 0)
+
+  // Pro AB (triângulo, apex no topo) o label vai mais perto da BASE da
+  // camada, onde tem mais espaço horizontal. Pras outras (trapézios) o
+  // meio basta.
+  const labelY = (r, isAB) => (isAB ? r.yMid + (r.yLow - r.yMid) * 0.4 : r.yMid)
 
   return (
     <div className="in-chart-card">
@@ -57,40 +76,52 @@ export default function ClassPyramidChart({ data }) {
           preserveAspectRatio="xMidYMid meet"
           className="in-pyramid-svg"
         >
-          {rows.map(r => (
-            <g key={r.name}>
-              <polygon
-                points={r.points}
-                fill={r.color}
-                stroke="white"
-                strokeWidth="1.2"
-              />
-              <text
-                x={r.x}
-                y={r.y - 4}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className="in-pyramid-label-name"
-              >
-                Classe {r.label}
-              </text>
-              <text
-                x={r.x}
-                y={r.y + 7}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className="in-pyramid-label-value"
-              >
-                {fmtBR.format(r.value)}
-              </text>
-            </g>
-          ))}
+          {rows.map((r, i) => {
+            const isAB = i === 0
+            const ly = labelY(r, isAB)
+            // Se a fatia tiver altura zero (0%), pula o label pra não
+            // sobrepor com a próxima.
+            const sliceH = i === 0 ? (y1 - y0) : i === 1 ? (y2 - y1) : (y3 - y2)
+            const showLabel = sliceH > 8
+            return (
+              <g key={r.name}>
+                <polygon
+                  points={r.points}
+                  fill={r.color}
+                  stroke="white"
+                  strokeWidth="1.2"
+                />
+                {showLabel && (
+                  <>
+                    <text
+                      x={APEX_X}
+                      y={ly - 4}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      className="in-pyramid-label-name"
+                    >
+                      Classe {r.name}
+                    </text>
+                    <text
+                      x={APEX_X}
+                      y={ly + 6}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      className="in-pyramid-label-value"
+                    >
+                      {fmtBR.format(r.value)}
+                    </text>
+                  </>
+                )}
+              </g>
+            )
+          })}
         </svg>
         <div className="in-pyramid-legend">
           {rows.map(r => (
             <div key={r.name} className="in-pyramid-legend-row">
               <span className="in-pyramid-dot" style={{ background: r.color }} />
-              <span className="in-pyramid-name">Classe {r.label}</span>
+              <span className="in-pyramid-name">Classe {r.name}</span>
               <span className="in-pyramid-pct">{fmtPct(r.value, total)}%</span>
             </div>
           ))}
