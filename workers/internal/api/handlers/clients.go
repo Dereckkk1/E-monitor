@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
 
@@ -23,6 +24,23 @@ type ClientsHandler struct {
 //   - Paged (?page + ?page_size): returns {data, total, total_pages, page,
 //     page_size}. Optional ?q filters by name/city/state/cnpj/email/contact.
 func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
+	// Viewer scope: cliente só enxerga o próprio registro. Devolvemos no
+	// mesmo envelope {data: [...]} pra UI tratar igual à lista global — sem
+	// gates de role no frontend. Paginação não se aplica (lista de 1).
+	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+		cli, err := h.Repo.Get(r.Context(), *scope)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSON(w, 200, map[string]any{"data": []catalog.Client{}})
+				return
+			}
+			http.Error(w, "internal error", 500)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"data": []catalog.Client{*cli}})
+		return
+	}
+
 	q := r.URL.Query()
 	pageStr := q.Get("page")
 	sizeStr := q.Get("page_size")

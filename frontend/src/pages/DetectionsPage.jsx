@@ -491,7 +491,9 @@ export default function DetectionsPage() {
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns()
-  const { data: clients = [] } = useClients({ enabled: isAdmin })
+  // /clients é scope-aware: viewer recebe lista de 1 (o próprio cliente),
+  // admin recebe a lista inteira. Sem gate, o find(...) funciona pras duas.
+  const { data: clients = [] } = useClients()
 
   const [searchParams] = useSearchParams()
   const deepLinkCampaignId = searchParams.get('campaign_id') ?? ''

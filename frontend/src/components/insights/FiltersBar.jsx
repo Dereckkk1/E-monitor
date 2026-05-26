@@ -88,11 +88,19 @@ function lastOfMonthISO() {
 export default function FiltersBar({ value, onChange, onExportImage, onExportPDF }) {
   const { isAdmin, user } = useAuth()
 
-  const clientsQ = useClients({ enabled: isAdmin })
+  // /clients é scope-aware: viewer recebe lista de 1 (o próprio cliente),
+  // admin recebe a lista inteira. Usamos a mesma fonte pras duas roles —
+  // admin pra montar o select, viewer pra resolver nome+logo do próprio
+  // cliente no chip travado.
+  const clientsQ = useClients()
   const clientOpts = useMemo(
     () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name, raw: c })),
     [clientsQ.data]
   )
+  const ownClient = useMemo(() => {
+    if (isAdmin) return null
+    return (clientsQ.data || []).find(c => c.id === user?.client_id) || null
+  }, [clientsQ.data, isAdmin, user?.client_id])
 
   // Carrega todas as campanhas — backend já filtra pelo scope do cliente.
   // Para admin, filtramos pelo client selecionado no client-side aqui mesmo.
@@ -180,7 +188,10 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
         ) : (
           <div className="in-filter in-filter--locked">
             <label className="in-filter-label">Cliente</label>
-            <div className="in-locked-chip">{user?.client_name || user?.email || 'Sua conta'}</div>
+            <div className="in-locked-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <MiniAvatar name={ownClient?.name || user?.email || ''} logo={ownClient?.logo_url} size={20} />
+              <span>{ownClient?.name || user?.email || 'Sua conta'}</span>
+            </div>
           </div>
         )}
 

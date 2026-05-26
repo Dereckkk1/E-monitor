@@ -78,7 +78,9 @@ export default function AirtimeReportPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { isAdmin } = useAuth()
   const { data: campaigns = [] } = useCampaigns()
-  const { data: clients = [] } = useClients({ enabled: isAdmin })
+  // /clients é scope-aware: viewer recebe lista de 1 (o próprio cliente),
+  // admin a lista inteira.
+  const { data: clients = [] } = useClients()
 
   // URL is the source of truth — users can share the link with state preserved.
   const competence = searchParams.get('competence') ?? monthFromDate(new Date())

@@ -110,6 +110,19 @@ func (c *Clients) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// Get returns a single client by ID, or pgx.ErrNoRows if not found.
+func (c *Clients) Get(ctx context.Context, id uuid.UUID) (*Client, error) {
+	var cli Client
+	err := c.pool.QueryRow(ctx,
+		`SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
+		 FROM clients WHERE id = $1`, id,
+	).Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &cli, nil
+}
+
 func (c *Clients) List(ctx context.Context) ([]Client, error) {
 	rows, err := c.pool.Query(ctx,
 		`SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
