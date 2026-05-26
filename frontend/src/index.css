@@ -2971,6 +2971,14 @@ textarea.input {
   pointer-events: none;
 }
 
+/* Search-as-you-type dropdown (RSelect-based) — substitui o input plano
+   nas listagens de emissoras. Mantém footprint visual equivalente. */
+.stations-search-dropdown {
+  flex: 1;
+  min-width: 220px;
+  max-width: 420px;
+}
+
 /* Band filter tabs */
 .stations-band-filter {
   display: flex;

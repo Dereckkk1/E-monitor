@@ -204,6 +204,9 @@ function AdminNav({ onClose }) {
 function ClientNav({ onClose }) {
   return (
     <>
+      <span className="sidebar-section-label">Catálogo</span>
+      <SidebarLink to="/stations" icon={<IconStations />} onClose={onClose}>Emissoras</SidebarLink>
+
       <span className="sidebar-section-label">Veiculação</span>
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>

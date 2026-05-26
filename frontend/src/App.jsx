@@ -84,9 +84,11 @@ function AppShell() {
         <main className="app-content">
           <Routes>
             <Route path="/" element={<HomeRedirect />} />
-            <Route path="/stations" element={
-              <RequireRole roles={['admin']}><StationsPage /></RequireRole>
-            } />
+            {/* /stations: catálogo de emissoras é leitura pra qualquer
+                usuário autenticado (admin OU cliente). Backend já gateia
+                writes via RequireRole no router. Botões de create/edit
+                ficam ocultos no client via isAdmin check na própria página. */}
+            <Route path="/stations" element={<StationsPage />} />
             <Route path="/stations/:id/edit" element={
               <RequireRole roles={['admin']}><StationEditPage /></RequireRole>
             } />
