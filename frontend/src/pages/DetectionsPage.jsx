@@ -15,77 +15,14 @@ import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import AirtimePaginator from '../components/AirtimePaginator'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
-import { parseLocalDate } from '../utils/dates'
+import {
+  parseLocalDate, monthFromDate, isoFromDate, monthToRange,
+  monthLabel, rangeLabel, defaultRangeForCampaign, formatCampaignPeriod,
+} from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
 const PAGE_SIZE_OPTIONS = [5, 10, 15]
 const DEFAULT_PAGE_SIZE = 5
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-function pad2(n) { return String(n).padStart(2, '0') }
-
-function monthFromDate(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
-}
-
-function isoFromDate(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-}
-
-function monthToRange(ymStr) {
-  const [y, m] = ymStr.split('-').map(Number)
-  const start = new Date(y, m - 1, 1, 0, 0, 0, 0)
-  const end   = new Date(y, m, 0, 23, 59, 59, 999)
-  return { start, end }
-}
-
-function monthLabel(ymStr) {
-  const [y, m] = ymStr.split('-').map(Number)
-  return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
-}
-
-function rangeLabel(startISO, endISO) {
-  if (!startISO || !endISO) return ''
-  const a = new Date(`${startISO}T00:00:00`)
-  const b = new Date(`${endISO}T00:00:00`)
-  const sameMonth = a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
-  const monthShort = a.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
-  const monthShortB = b.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
-  if (sameMonth) {
-    return a.getDate() === b.getDate()
-      ? `${a.getDate()} de ${monthShort}`
-      : `${a.getDate()}–${b.getDate()} ${monthShort}`
-  }
-  return `${a.getDate()} ${monthShort} – ${b.getDate()} ${monthShortB}`
-}
-
-// Intersection of (month range) ∩ (campaign range), returned as ISO date strings.
-function defaultRangeForCampaign(ymStr, campaign) {
-  if (!ymStr || !campaign?.start_date || !campaign?.end_date) return { start: '', end: '' }
-  const { start: monthStart, end: monthEnd } = monthToRange(ymStr)
-  // parseLocalDate avoids the UTC-midnight shift that would push these to
-  // the previous calendar day in São Paulo.
-  const cStart = parseLocalDate(campaign.start_date)
-  const cEnd   = parseLocalDate(campaign.end_date)
-  cEnd.setHours(23, 59, 59, 999)
-  const start = cStart > monthStart ? cStart : monthStart
-  const end   = cEnd   < monthEnd   ? cEnd   : monthEnd
-  if (start > end) return { start: '', end: '' }
-  return { start: isoFromDate(start), end: isoFromDate(end) }
-}
-
-// Format a campaign's [start_date, end_date] window as pt-BR "dd-mm-aaaa – dd-mm-aaaa".
-// Returns '' if either side is missing or unparseable so the caller can skip
-// the period bit entirely (defensive — legacy campaigns may have nulls).
-function formatCampaignPeriod(startISO, endISO) {
-  if (!startISO || !endISO) return ''
-  const a = parseLocalDate(startISO)
-  const b = parseLocalDate(endISO)
-  if (isNaN(a.getTime()) || isNaN(b.getTime())) return ''
-  const fmt = d => `${pad2(d.getDate())}-${pad2(d.getMonth() + 1)}-${d.getFullYear()}`
-  return `${fmt(a)} – ${fmt(b)}`
-}
 
 // ── Client mini avatar (for campaign select) ──────────────────────
 

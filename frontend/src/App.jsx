@@ -21,6 +21,7 @@ import DashboardPage  from './pages/DashboardPage'
 import LoginPage      from './pages/LoginPage'
 import CampaignWizardPage from './pages/CampaignWizardPage'
 import MaterialTypesPage from './pages/MaterialTypesPage'
+import MaterialsPage from './pages/MaterialsPage'
 import AirtimeReportPage from './pages/AirtimeReportPage'
 import AdminOverviewPage from './pages/AdminOverviewPage'
 import AdminMonitoringPage from './pages/AdminMonitoringPage'
@@ -118,6 +119,7 @@ function AppShell() {
               <RequireRole roles={['admin']}><OperationsPage /></RequireRole>
             } />
             <Route path="/detections"  element={<DetectionsPage />} />
+            <Route path="/materials"   element={<MaterialsPage />} />
             <Route path="/insights"    element={<InsightsPage />} />
             <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />

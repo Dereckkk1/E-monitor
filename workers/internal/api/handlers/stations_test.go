@@ -219,3 +219,77 @@ func TestDetections_List_FiltersAccepted(t *testing.T) {
 	// If we get here without panicking, validation passed but the nil repo
 	// didn't blow up — that's fine, just don't expect a 200.
 }
+
+// TestStations_UpdateStreamURL_BadJSON rejeita body malformado.
+func TestStations_UpdateStreamURL_BadJSON(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Patch("/stations/{id}/stream-url", h.UpdateStreamURL)
+	req := httptest.NewRequest(http.MethodPatch,
+		"/stations/3b1f0c2e-0000-0000-0000-000000000000/stream-url",
+		strings.NewReader(`not json`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestStations_UpdateStreamURL_MissingURL rejeita url vazia.
+func TestStations_UpdateStreamURL_MissingURL(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Patch("/stations/{id}/stream-url", h.UpdateStreamURL)
+	req := httptest.NewRequest(http.MethodPatch,
+		"/stations/3b1f0c2e-0000-0000-0000-000000000000/stream-url",
+		strings.NewReader(`{"url":""}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestStations_UpdateStreamURL_BadScheme rejeita scheme != http/https.
+func TestStations_UpdateStreamURL_BadScheme(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Patch("/stations/{id}/stream-url", h.UpdateStreamURL)
+	req := httptest.NewRequest(http.MethodPatch,
+		"/stations/3b1f0c2e-0000-0000-0000-000000000000/stream-url",
+		strings.NewReader(`{"url":"ftp://host/x"}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestStations_ConnectionTest_BadJSON rejeita body malformado.
+func TestStations_ConnectionTest_BadJSON(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Post("/stations/{id}/connection-test", h.ConnectionTest)
+	req := httptest.NewRequest(http.MethodPost,
+		"/stations/3b1f0c2e-0000-0000-0000-000000000000/connection-test",
+		strings.NewReader(`not json`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestStations_ConnectionTest_InvalidID rejeita uuid inválido.
+func TestStations_ConnectionTest_InvalidID(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Post("/stations/{id}/connection-test", h.ConnectionTest)
+	req := httptest.NewRequest(http.MethodPost, "/stations/not-a-uuid/connection-test",
+		strings.NewReader(`{"tests":["ping"]}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}

@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { useClientsPaged, useCreateClient, useUpdateClient, useDeleteClient } from '../api/hooks'
+import {
+  useClientsPaged, useCreateClient, useUpdateClient, useDeleteClient,
+  useDeactivateClient, useActivateClient,
+} from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import WebhookModal from '../components/WebhookModal'
 import AirtimePaginator from '../components/AirtimePaginator'
@@ -60,6 +63,15 @@ function TrashIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 3.5h10M5.5 3.5V2.5h3v1M3 3.5l.75 8h6.5L11 3.5M5.5 6v4M8.5 6v4" />
+    </svg>
+  )
+}
+
+function ReactivateIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11.5 7a4.5 4.5 0 1 1-1.32-3.18" />
+      <path d="M11.5 1.5V4H9" />
     </svg>
   )
 }
@@ -273,7 +285,7 @@ function ClientFormModal({ initial, onClose, onSave, isSaving, isError }) {
 // magnifying glass + soft "Limpar" affordance that appears once the user
 // has typed something. Visually matches the .stations-search pattern used
 // elsewhere so the page reads as part of the same product.
-function ClientsFilters({ search, onSearchChange, onClear }) {
+function ClientsFilters({ search, onSearchChange, onClear, showInactive, onToggleInactive }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10,
@@ -307,6 +319,22 @@ function ClientsFilters({ search, onSearchChange, onClear }) {
           Limpar
         </button>
       )}
+      <button
+        type="button"
+        onClick={onToggleInactive}
+        aria-pressed={showInactive}
+        title={showInactive ? 'Ocultar clientes inativos' : 'Mostrar clientes inativos'}
+        style={{
+          height: 38, padding: '0 14px', borderRadius: 'var(--radius-md)',
+          background: showInactive ? 'var(--c-action)' : 'var(--c-surface)',
+          border: `1px solid ${showInactive ? 'var(--c-action)' : 'var(--c-border)'}`,
+          color: showInactive ? '#fff' : 'var(--c-text-2)',
+          fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          fontFamily: 'var(--font-body)', whiteSpace: 'nowrap',
+        }}
+      >
+        Mostrar inativos
+      </button>
     </div>
   )
 }
@@ -435,8 +463,10 @@ export default function ClientsPage() {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  // Inativos ficam escondidos por padrão; o toggle os traz pra poder reativar.
+  const [showInactive, setShowInactive] = useState(false)
   const { data: pagedResp, isLoading, isFetching } = useClientsPaged({
-    q: search, page, pageSize: CLIENTS_PAGE_SIZE,
+    q: search, page, pageSize: CLIENTS_PAGE_SIZE, includeInactive: showInactive,
   })
   const clients     = pagedResp?.data ?? []
   const total       = pagedResp?.total ?? 0
@@ -464,6 +494,8 @@ export default function ClientsPage() {
   const createClient = useCreateClient()
   const updateClient = useUpdateClient()
   const deleteClient = useDeleteClient()
+  const deactivateClient = useDeactivateClient()
+  const activateClient = useActivateClient()
 
   const [creating, setCreating] = useState(false)
   const [editing, setEditing]   = useState(null)
@@ -486,7 +518,48 @@ export default function ClientsPage() {
 
   async function handleDelete(c) {
     if (!await window.confirm(`Excluir o cliente "${c.name}"? Essa ação não pode ser desfeita.`)) return
-    deleteClient.mutate(c.id)
+    try {
+      await deleteClient.mutateAsync(c.id)
+    } catch (err) {
+      if (err?.response?.status === 409) {
+        // Cliente tem vínculos (campanhas/materiais/usuários). Em vez de
+        // falhar mudo, explica o que bloqueia e oferece desativar.
+        const d = err.response.data || {}
+        const parts = []
+        if (d.campaigns) parts.push(`${d.campaigns} campanha${d.campaigns > 1 ? 's' : ''}`)
+        if (d.materials) parts.push(`${d.materials} ${d.materials > 1 ? 'materiais' : 'material'}`)
+        if (d.users) parts.push(`${d.users} usuário${d.users > 1 ? 's' : ''}`)
+        const vinc = parts.length ? parts.join(', ') : 'registros vinculados'
+        const ok = await window.confirm(
+          `Não dá pra excluir "${c.name}": tem ${vinc}.\n\n` +
+          `Deseja DESATIVAR o cliente? Ele some da lista e os usuários dele não ` +
+          `conseguem mais entrar, mas os dados ficam preservados e dá pra reativar depois.`
+        )
+        if (ok) {
+          try {
+            await deactivateClient.mutateAsync(c.id)
+          } catch {
+            window.alert('Não foi possível desativar o cliente. Tente novamente.')
+          }
+        }
+      } else {
+        window.alert('Não foi possível excluir o cliente. Tente novamente.')
+      }
+    }
+  }
+
+  async function handleReactivate(c) {
+    if (!await window.confirm(`Reativar o cliente "${c.name}"? Os usuários dele voltam a conseguir entrar.`)) return
+    try {
+      await activateClient.mutateAsync(c.id)
+    } catch {
+      window.alert('Não foi possível reativar o cliente. Tente novamente.')
+    }
+  }
+
+  function toggleInactive() {
+    setShowInactive(v => !v)
+    setPage(1)
   }
 
   return (
@@ -505,13 +578,16 @@ export default function ClientsPage() {
         </button>
       </div>
 
-      {!initialEmpty && (
-        <ClientsFilters
-          search={searchInput}
-          onSearchChange={changeSearch}
-          onClear={clearSearch}
-        />
-      )}
+      {/* Sempre renderizado (mesmo no estado vazio) pra que o toggle "mostrar
+          inativos" continue acessível quando todos os clientes estão desativados
+          — senão não haveria como reativá-los. */}
+      <ClientsFilters
+        search={searchInput}
+        onSearchChange={changeSearch}
+        onClear={clearSearch}
+        showInactive={showInactive}
+        onToggleInactive={toggleInactive}
+      />
 
       {isLoading ? (
         <ClientRowSkeleton />
@@ -523,12 +599,27 @@ export default function ClientsPage() {
         <div className="clients-list" style={{ opacity: isFetching ? 0.7 : 1, transition: 'opacity 150ms' }}>
           {clients.map(c => {
             const loc = [c.city, c.state].filter(Boolean).join(', ')
+            // Inativo SÓ quando is_active === false explícito. Campo ausente
+            // (API antiga, sem a coluna) ou true = ativo — bate com o DEFAULT
+            // TRUE da coluna no banco e evita marcar todo mundo como inativo
+            // quando o backend ainda não foi migrado.
+            const inactive = c.is_active === false
             return (
-              <div key={c.id} className="client-row">
+              <div key={c.id} className="client-row" style={inactive ? { opacity: 0.62 } : undefined}>
                 <StationAvatar station={{ name: c.name, logo_url: c.logo_url }} size={40} />
 
                 <div className="client-row-main">
-                  <div className="client-row-name">{c.name}</div>
+                  <div className="client-row-name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {c.name}
+                    {inactive && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: '0.04em',
+                        textTransform: 'uppercase', padding: '2px 7px',
+                        borderRadius: 999, color: 'var(--c-text-2)',
+                        background: 'var(--c-surface-2)', border: '1px solid var(--c-border)',
+                      }}>Inativo</span>
+                    )}
+                  </div>
                   {(loc || c.contact_name) && (
                     <div className="client-row-sub">
                       {loc && <><PinIcon />{loc}</>}
@@ -585,15 +676,27 @@ export default function ClientsPage() {
                   >
                     <EditIcon />
                   </button>
-                  <button
-                    className="btn-icon btn-danger-ghost"
-                    style={{ borderRadius: 'var(--radius-md)' }}
-                    title="Excluir"
-                    onClick={() => handleDelete(c)}
-                    disabled={deleteClient.isPending}
-                  >
-                    <TrashIcon />
-                  </button>
+                  {inactive ? (
+                    <button
+                      className="btn-icon btn-secondary"
+                      style={{ borderRadius: 'var(--radius-md)' }}
+                      title="Reativar"
+                      onClick={() => handleReactivate(c)}
+                      disabled={activateClient.isPending}
+                    >
+                      <ReactivateIcon />
+                    </button>
+                  ) : (
+                    <button
+                      className="btn-icon btn-danger-ghost"
+                      style={{ borderRadius: 'var(--radius-md)' }}
+                      title="Excluir"
+                      onClick={() => handleDelete(c)}
+                      disabled={deleteClient.isPending}
+                    >
+                      <TrashIcon />
+                    </button>
+                  )}
                 </div>
               </div>
             )
