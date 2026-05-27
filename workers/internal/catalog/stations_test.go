@@ -84,3 +84,31 @@ func TestStations_Create_SeedsThresholdRow(t *testing.T) {
 	require.True(t, calibrationMode, "new station must start in calibration_mode")
 	require.Equal(t, 5, minHashes, "default min_hashes from DDL")
 }
+
+func TestStations_Create_Geocodes(t *testing.T) {
+	ctx, repo := newTestPool(t)
+
+	st, err := repo.Create(ctx, CreateStationInput{
+		Name: "Geo FM", Band: "FM",
+		City: strPtr("São Paulo"), State: strPtr("SP"),
+		StreamURL: "http://example.com/geo",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st.Latitude)
+	require.NotNil(t, st.Longitude)
+	require.InDelta(t, -23.55, *st.Latitude, 0.6)
+	require.InDelta(t, -46.63, *st.Longitude, 0.6)
+}
+
+func TestStations_Create_UnknownCity_NoCoords(t *testing.T) {
+	ctx, repo := newTestPool(t)
+
+	st, err := repo.Create(ctx, CreateStationInput{
+		Name: "Nowhere FM", Band: "FM",
+		City: strPtr("Cidade Inexistente XYZ"), State: strPtr("SP"),
+		StreamURL: "http://example.com/nowhere",
+	})
+	require.NoError(t, err) // cadastro NÃO falha por geocode
+	require.Nil(t, st.Latitude)
+	require.Nil(t, st.Longitude)
+}
