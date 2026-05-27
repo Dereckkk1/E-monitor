@@ -4,11 +4,12 @@ import CampaignSummaryStrip from './CampaignSummaryStrip'
 import StationAvatar from './StationAvatar'
 
 const STEP_META = {
-  1: { eyebrow: 'Passo 1 de 5', kicker: 'Identificação' },
-  2: { eyebrow: 'Passo 2 de 5', kicker: 'Onde vai tocar' },
-  3: { eyebrow: 'Passo 3 de 5', kicker: 'O que vai tocar' },
-  4: { eyebrow: 'Passo 4 de 5', kicker: 'Quando e quanto' },
-  5: { eyebrow: 'Passo 5 de 5', kicker: 'Investimento por emissora' },
+  1: { eyebrow: 'Passo 1 de 6', kicker: 'Identificação' },
+  2: { eyebrow: 'Passo 2 de 6', kicker: 'Onde vai tocar' },
+  3: { eyebrow: 'Passo 3 de 6', kicker: 'Conexão das emissoras' },
+  4: { eyebrow: 'Passo 4 de 6', kicker: 'O que vai tocar' },
+  5: { eyebrow: 'Passo 5 de 6', kicker: 'Quando e quanto' },
+  6: { eyebrow: 'Passo 6 de 6', kicker: 'Investimento por emissora' },
 }
 
 /**
@@ -43,7 +44,7 @@ export default function WizardLayout({
 }) {
   const navigate = useNavigate()
   const meta = STEP_META[currentStep] ?? STEP_META[1]
-  const isLast = currentStep === 5
+  const isLast = currentStep === 6
 
   return (
     <div style={{
@@ -179,7 +180,7 @@ export default function WizardLayout({
         </button>
 
         <div style={{ fontSize: 11, color: 'var(--c-text-3)', fontWeight: 500 }}>
-          {currentStep} / 4
+          {currentStep} / 6
         </div>
 
         <button
