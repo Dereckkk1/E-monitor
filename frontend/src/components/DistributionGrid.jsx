@@ -50,6 +50,14 @@ export default function DistributionGrid({
   // material rows, e o label do material vai pra uma 2ª coluna sticky-left.
   // Layout pedido na review da grid de detecções (mai/26).
   inlineStationInfo = false,
+  // summary controla as DUAS colunas de resumo à direita (layout idêntico nos
+  // dois modos — só o conteúdo muda):
+  //   'full' (default) → RowSummaryCell com 6 pílulas + StationTotalCell com
+  //                       impactos/R$. Usado em /detections e no wizard.
+  //   'plan'           → RowSummaryCell só com a pílula cinza "programado" +
+  //                       StationTotalCell virando "N programados" (Σ expected),
+  //                       sem R$/impactos. Usado em /materials.
+  summary = 'full',
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -270,6 +278,7 @@ export default function DistributionGrid({
                     days={days}
                     cellData={cellData}
                     stationTotalWidth={STATION_TOTAL_W}
+                    summary={summary}
                   />
                   {ri === 0 && (
                     <StationTotalCell
@@ -278,6 +287,7 @@ export default function DistributionGrid({
                       cellData={cellData}
                       pricing={pricingByStation[row.stationId] ?? null}
                       pmm={Number(station.pmm) || 0}
+                      summary={summary}
                     />
                   )}
                 </Fragment>
@@ -336,7 +346,7 @@ const headSummary = {
 //
 // Sticky-right com offset = STATION_TOTAL_W pra ficar logo à esquerda das pills
 // da estação ao rolar horizontalmente.
-function RowSummaryCell({ row, days, cellData, stationTotalWidth }) {
+function RowSummaryCell({ row, days, cellData, stationTotalWidth, summary = 'full' }) {
   let expected = 0, inSlot = 0, deficit = 0, bonus = 0, outSlot = 0, outDate = 0
   for (const d of days) {
     const dateISO = d.toISOString().slice(0, 10)
@@ -366,11 +376,15 @@ function RowSummaryCell({ row, days, cellData, stationTotalWidth }) {
     }}>
       <div style={{ display: 'flex', gap: 3, alignItems: 'center', flex: 1, minWidth: 0 }}>
         <SumPill variant="dark"   value={expected} />
-        <SumPill variant="green"  value={inSlot} dim={inSlot === 0} />
-        <SumPill variant="blue"   value={bonus}   prefix="+" dim={bonus === 0} />
-        <SumPill variant="red"    value={deficit} prefix="-" dim={deficit === 0} />
-        <SumPill variant="yellow" value={outSlot} prefix="+" dim={outSlot === 0} />
-        <SumPill variant="purple" value={outDate} prefix="+" dim={outDate === 0} />
+        {summary !== 'plan' && (
+          <>
+            <SumPill variant="green"  value={inSlot} dim={inSlot === 0} />
+            <SumPill variant="blue"   value={bonus}   prefix="+" dim={bonus === 0} />
+            <SumPill variant="red"    value={deficit} prefix="-" dim={deficit === 0} />
+            <SumPill variant="yellow" value={outSlot} prefix="+" dim={outSlot === 0} />
+            <SumPill variant="purple" value={outDate} prefix="+" dim={outDate === 0} />
+          </>
+        )}
       </div>
     </div>
   )
@@ -387,7 +401,40 @@ function RowSummaryCell({ row, days, cellData, stationTotalWidth }) {
 //       - consolidated  → consolidated_value (não depende das plays)
 //       - per_insertion → Σ (unit_value_tipo × in_slot_tipo) por tipo
 //   • Bônus em R$ (só per_insertion) → Σ (unit_value × bonus_tipo)
-function StationTotalCell({ rows, days, cellData, pricing, pmm }) {
+function StationTotalCell({ rows, days, cellData, pricing, pmm, summary = 'full' }) {
+  // Plan-only (/materials): a célula por emissora mostra QUANTO está programado
+  // pra rodar nela no período visível — sem R$, sem impactos. Atende ao foco
+  // "quanto está programado pra rodar em cada emissora".
+  if (summary === 'plan') {
+    let stationExpected = 0
+    for (const row of rows) {
+      for (const d of days) {
+        const dateISO = d.toISOString().slice(0, 10)
+        const c = cellData.get(`${row.stationId}|${row.materialId}|${dateISO}`) ?? {}
+        stationExpected += c.expected ?? 0
+      }
+    }
+    return (
+      <div style={{
+        gridColumn: '-2 / -1',
+        gridRow: `span ${rows.length}`,
+        borderBottom: '1px solid #f1f5f9',
+        borderLeft: '1px solid #f1f5f9',
+        background: '#fff',
+        padding: '10px 12px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'sticky', right: 0, zIndex: 2,
+      }}>
+        <ValuePill
+          tone="pink"
+          icon={<IconHeadset />}
+          label={`${fmtInt(stationExpected)} programad${stationExpected === 1 ? 'o' : 'os'}`}
+          hint={`${fmtInt(stationExpected)} inserções programadas na emissora no período`}
+        />
+      </div>
+    )
+  }
+
   // Agrega in_slot/bonus por material row e por type.
   let inSlotStation = 0, bonusStation = 0
   let valor = null, valorBonus = null, isConsolidated = false
