@@ -96,6 +96,47 @@ docker compose -f infra/docker/docker-compose.yml \
 
 Após F-116 (base yml suporta `PGDATA_HOST_PATH` via env vars), o override é redundante e será removido em limpeza futura. Por enquanto continua existindo na VM por compatibilidade.
 
+### 5. `npm install` no Windows quebra o build do Cloudflare Pages — leitura obrigatória antes de mexer em deps do frontend
+
+Esta seção existe porque o erro **se repete**: rodar `npm install`/`npm i <pkg>` em `frontend/` no Windows **poda do `package-lock.json` as dependências opcionais específicas de Linux** (ex.: `@emnapi/*`, bindings nativos que o `vite`/`rolldown` usa no build). O Cloudflare Pages roda **`npm ci` em Linux**, que exige o lockfile completo e falha com:
+
+```
+npm error code EUSAGE
+npm error `npm ci` can only install packages when your package.json and
+npm error package-lock.json ... are in sync.
+npm error Missing: @emnapi/core@x.y.z from lock file
+```
+
+**5.1. Sintoma.** Deploy do CF Pages morre no passo `npm clean-install` logo após instalar o Node. Quase sempre depois de um commit que tocou `frontend/package.json` + `package-lock.json`.
+
+**5.2. Causa raiz.** `npm` no Windows reescreve o lockfile sem os pacotes `os: ["linux"]` opcionais. Lockfile v3 *deveria* preservá-los cross-platform, mas na prática o install no Windows os remove. Os bindings nativos do toolchain de build (rolldown/vite 8) são linux-only em prod.
+
+**5.3. Como adicionar/atualizar uma dep do frontend sem quebrar o CF Pages.** NÃO commite um lockfile podado. Reconstrua a partir do lockfile completo (master) injetando só a dep nova, e valide:
+
+```bash
+# 1. parte do lockfile completo do master e injeta SÓ a dep nova (node script)
+node -e "
+const cp=require('child_process'), fs=require('fs');
+const head=JSON.parse(cp.execSync('git show HEAD:frontend/package-lock.json',{maxBuffer:1e8}));
+const base=JSON.parse(cp.execSync('git show master:frontend/package-lock.json',{maxBuffer:1e8}));
+const k='node_modules/<PKG>';
+base.packages[k]=head.packages[k];
+base.packages[''].dependencies['<PKG>']=head.packages[''].dependencies['<PKG>'];
+const o={};Object.keys(base.packages).sort().forEach(x=>o[x]=base.packages[x]);base.packages=o;
+fs.writeFileSync('frontend/package-lock.json',JSON.stringify(base,null,2)+'\n');
+"
+
+# 2. valida a sincronia (é o check exato que o CF roda). exit 0 = ok.
+cd frontend && npm ci --dry-run
+
+# 3. confirma que as opcionais linux continuam no lockfile
+grep -c emnapi frontend/package-lock.json   # deve bater com o do master, não cair
+```
+
+**5.4. Verificação rápida antes de qualquer push que toque o lockfile.** `git show master:frontend/package-lock.json | grep -c emnapi` vs `grep -c emnapi frontend/package-lock.json` — se o número **caiu**, o lockfile foi podado: NÃO pushe, refaça pelo passo 5.3. Detalhe do incidente: ver o commit que restaurou `@emnapi` (`fix(frontend): restaura optional deps @emnapi no lockfile`).
+
+**5.5. Alternativa definitiva (quando der pra testar).** Rodar o `npm install` num ambiente Linux (WSL/container) gera o lockfile completo de uma vez. Enquanto não houver esse fluxo, use 5.3.
+
 ---
 
 ## Índice do Plano (`plano_implementacao.md`)
