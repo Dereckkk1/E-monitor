@@ -33,6 +33,30 @@ export function useUpdateStation() {
     },
   })
 }
+// Conexão (etapa do wizard) — testa ping/stream/worker de uma emissora.
+// Não invalida cache: resultado é efêmero (vive no estado da ConnectionStep).
+export function useStationConnectionTest() {
+  return useMutation({
+    mutationFn: ({ id, tests, url }) =>
+      api.post(`/stations/${id}/connection-test`, {
+        tests: tests ?? undefined,
+        url: url || undefined,
+      }).then(r => r.data),
+  })
+}
+// PATCH cirúrgico da stream_url (não reescreve as outras colunas, ao contrário
+// do PUT /stations/{id}). Usado pela ConnectionStep ao salvar uma URL nova.
+export function useUpdateStationStreamURL() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, url }) =>
+      api.patch(`/stations/${id}/stream-url`, { url }).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['stations'] })
+      qc.invalidateQueries({ queryKey: ['stations', vars.id] })
+    },
+  })
+}
 
 // Clients
 export function useClients({ enabled = true } = {}) {
