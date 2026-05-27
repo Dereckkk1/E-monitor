@@ -217,6 +217,8 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/stations", d.Stations.Create)
 				r.Put("/stations/{id}", d.Stations.Update)
 				r.Get("/stations/{id}/threshold", d.Stations.GetThreshold)
+				r.Patch("/stations/{id}/stream-url", d.Stations.UpdateStreamURL)
+				r.Post("/stations/{id}/connection-test", d.Stations.ConnectionTest)
 				// Writes em /clients. NÃO usar r.Route() aqui — Route monta
 				// sub-tree que captura todos os métodos do prefixo e mascara o
 				// GET registrado no subgrupo A (viewer cai no RequireRole
