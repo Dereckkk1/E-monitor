@@ -8,10 +8,10 @@
 
 Tela nova na seção **Veiculação**, acessível a **admin e cliente** (cliente só com as próprias campanhas/materiais). Permite, por campanha:
 
-1. **Ouvir** cada material vinculado (play/download), pra saber o que está no ar.
-2. Ver o **plano de distribuição (programado)** — a mesma grade visual da `/detections`, mas **só o programado** (células cinza), **sem** os veiculados, **sem** R$ e **sem** impactos.
+1. **Ouvir** cada material que a campanha tem — **todos os vinculados, programados ou não** (play/download), pra saber o que está no ar.
+2. Ver **quanto está programado pra rodar em cada emissora** — a mesma grade visual da `/detections`, mas **só o programado** (células cinza), **sem** os veiculados, **sem** R$ e **sem** impactos; com o **Σ programado por emissora** ao lado.
 
-Foco: o material e o que está programado. Nada de cobrança, cobertura ou detecção real aqui — isso vive na `/detections` e `/insights`.
+Intenção da tela (palavras do dono): *ver quanto está programado pra rodar em cada emissora, e quantos materiais a campanha tem, sejam eles programados ou não.* Nada de cobrança, cobertura ou detecção real aqui — isso vive na `/detections` e `/insights`.
 
 ### 1.1 Não-objetivos
 - Não mostra detecções/veiculados (verde/vermelho/bônus/etc).
@@ -76,21 +76,23 @@ Reusa classes CSS `flow-filters` + `FlowStepper` + `RSelect`:
 ### 4.3 Painel de materiais (`MaterialPlaybackList`)
 - Renderiza quando `filterStep === 3` e a campanha tem materiais vinculados.
 - Lista `campaignMaterials` → hidrata via `materialsById` (de `useMaterials(client_id)`), **ordenada/agrupada por tipo**.
-- Cada item: `TypeIconPill` (cor do tipo) + título + duração (`fmtDuration`) + badge de fingerprint (`ready`/`generating`/`pending`/`failed`) + botão **play/pause** + botão **download**.
+- Cada item: `TypeIconPill` (cor do tipo) + título + duração (`fmtDuration`) + badge de fingerprint (`ready`/`generating`/`pending`/`failed`) + **selo de programação** + botão **play/pause** + botão **download**.
+- **Selo de programação** (atende à intenção "programados ou não"): material é "programado" se seu `type_id` aparece em alguma `distributionRule` da campanha. Selo verde "programado" vs cinza "sem programação". Materiais sem tipo entram como "sem programação".
 - **Áudio** (padrão existente do `MaterialsStep`): `api.get('/materials/{id}/audio', {responseType:'blob'})` → `URL.createObjectURL` → `<audio>`; blob cacheado por item, revogado no unmount. Só **um** material toca por vez (estado de `playingId` centralizado no painel).
 - Read-only: sem editar tipo/emissoras/script.
-- Empty interno se a campanha não tem material (mas tem regra) → mensagem neutra apontando que há plano sem áudio vinculado.
+- Lista **todos** os materiais vinculados (programados ou não). Contador no topo: "N materiais · K programados".
 
 ### 4.4 Grade de plano
 - `DistributionGrid` com `mode="view"`, `inlineStationInfo`, `capAtToday={false}`, `summary="plan"`.
 - `rows`: station × tipo, construídas como na `/detections` (a partir de `campaignMaterials` + `distributionRules` + `materialTypes`). Reusa a lógica de `typesInScopeByStation` → `rows`.
 - `cellData`: de `useDailySummary`, **mapeado mantendo apenas `expected`** (in_slot/deficit/bonus/out_slot/out_date descartados). Resultado: célula cinza pura (confirmado em `DayCell` — cada badge só aparece se `> 0`).
+- **Σ programado por emissora**: a coluna de total por emissora (`StationTotalCell`) **não é removida** — é repurposada pelo `summary="plan"` pra mostrar só "N programados" (soma de `expected` da emissora no período), sem R$ e sem impactos. Atende a "quanto está programado pra rodar em cada emissora".
 - `gridStart`/`gridEnd` = período (início/fim) escolhido, com fallback pro intervalo da campanha (igual /detections).
 - Paginação por emissora via `AirtimePaginator` (5/10/15, default 5).
 - Busca (`search`) filtra emissora + material (mesmos campos da /detections).
 
 ### 4.5 Resumo do plano (no lugar do CoverageSummary)
-Faixa enxuta acima da grade (componente leve inline, **não** o `CoverageSummary`): **N materiais · M emissoras · Σ inserções programadas no período** (soma de `expected` do `rangedSummary`). Sem cobertura, sem R$.
+Faixa enxuta acima da grade (componente leve inline, **não** o `CoverageSummary`): **N materiais (K programados) · M emissoras com programação · Σ inserções programadas no período** (soma de `expected` do `rangedSummary`). Sem cobertura, sem R$.
 
 ### 4.6 Empty states
 Mesma linguagem visual da `/detections` (ghost backdrop + card central, reusando o padrão `DetectionsEmpty`/`FlowStepper`):
@@ -101,20 +103,19 @@ Mesma linguagem visual da `/detections` (ghost backdrop + card central, reusando
 
 ## 5. DistributionGrid — novo prop `summary`
 
-Prop opt-in, **default preserva o comportamento atual** (telas existentes não mudam):
+Prop opt-in, **default preserva o comportamento atual** (telas existentes não mudam). **O layout de colunas não muda** entre os modos — ambas as colunas de resumo continuam montadas; só o *conteúdo* delas difere:
 
-| Valor | RowSummaryCell (200px) | StationTotalCell (180px, R$/impactos) | Usado por |
-|-------|------------------------|---------------------------------------|-----------|
-| `'full'` (default) | 6 pílulas (programada/veiculada/bônus/déficit/fora-faixa/fora-data) | sim | `/detections`, wizard |
-| `'plan'` | só a pílula cinza "programado" (Σ expected da linha) | **não renderiza** | `/materials` |
+| Valor | RowSummaryCell (200px) | StationTotalCell (180px) | Usado por |
+|-------|------------------------|--------------------------|-----------|
+| `'full'` (default) | 6 pílulas (programada/veiculada/bônus/déficit/fora-faixa/fora-data) | impactos + R$ (+ bônus em R$) | `/detections`, wizard |
+| `'plan'` | só a pílula cinza "programado" (Σ expected da linha) | só "N programados" da emissora (Σ expected), **sem R$/impactos** | `/materials` |
 
-Impacto no layout quando `summary="plan"`:
-- `gridTemplate` dropa a coluna `STATION_TOTAL_W` → `${leftColumns} repeat(days,88px) 1fr ${ROW_SUMMARY_W}px`.
-- Header "Resumo" passa a `gridColumn` só da coluna restante.
-- `RowSummaryCell` fica sticky-right a `0` (sem offset do StationTotal) e renderiza apenas `SumPill variant="dark"`.
-- `StationTotalCell` não é montado.
+Implementação quando `summary="plan"`:
+- `gridTemplate`, header "Resumo" e posições sticky-right **permanecem idênticos** (zero mudança de layout — menor risco de regressão).
+- `RowSummaryCell` recebe `summary` e renderiza apenas `SumPill variant="dark"` (Σ expected da linha) quando `'plan'`.
+- `StationTotalCell` recebe `summary` e, quando `'plan'`, calcula `Σ expected` de todas as linhas×dias da emissora e renderiza uma única `ValuePill` "N programados" (tone neutro), ignorando `pricing`/`pmm`.
 
-`mode`, `capAtToday`, `inlineStationInfo`, `pricingByStation` permanecem como estão. `pricingByStation` é ignorado quando `summary="plan"`.
+`mode`, `capAtToday`, `inlineStationInfo` permanecem como estão. `pricingByStation`/`pmm` são ignorados quando `summary="plan"`.
 
 ## 6. Role gating
 - Rota sem `RequireRole` (igual `/detections`). Backend escopa: cliente recebe só as próprias campanhas (`useCampaigns`) e materiais (`useMaterials`).
