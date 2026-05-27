@@ -159,10 +159,15 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO F-88: probe actual duration via ffprobe (extract existing probeDuration
-	// helper from commercials.go into a shared location).
-	// Stubbed at 30.0 until that refactor lands.
-	duration := 30.0
+	// Probe the real audio duration with ffprobe — same helper commercials.go
+	// uses (both live in package handlers). This was stubbed at 30.0 (F-88),
+	// which made every uploaded material report 30s regardless of the file.
+	duration, err := probeDuration(finalPath)
+	if err != nil {
+		os.Remove(finalPath)
+		http.Error(w, "could not probe audio duration: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	mat, err := h.Repo.Create(r.Context(), catalog.CreateMaterialInput{
 		ClientID:          clientID,
