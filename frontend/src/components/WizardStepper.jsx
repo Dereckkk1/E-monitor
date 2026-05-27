@@ -25,6 +25,15 @@ function IconRadio() {
     </svg>
   )
 }
+function IconSignal() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 9a6 6 0 0 1 12 0" />
+      <path d="M4.5 9a3.5 3.5 0 0 1 7 0" />
+      <circle cx="8" cy="9" r="1" />
+    </svg>
+  )
+}
 function IconStack() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -62,9 +71,10 @@ function IconMoney() {
 const STEPS = [
   { id: 1, label: 'Dados básicos', hint: 'Nome, cliente, período',     Icon: IconInfo },
   { id: 2, label: 'Emissoras',     hint: 'Quem vai monitorar',         Icon: IconRadio },
-  { id: 3, label: 'Materiais',     hint: 'Áudios da campanha',         Icon: IconStack },
-  { id: 4, label: 'Distribuição',  hint: 'Regras de veiculação',       Icon: IconCalendar },
-  { id: 5, label: 'Valores',       hint: 'Investimento por emissora',  Icon: IconMoney },
+  { id: 3, label: 'Conexão',       hint: 'Testar e ajustar streams',   Icon: IconSignal },
+  { id: 4, label: 'Materiais',     hint: 'Áudios da campanha',         Icon: IconStack },
+  { id: 5, label: 'Distribuição',  hint: 'Regras de veiculação',       Icon: IconCalendar },
+  { id: 6, label: 'Valores',       hint: 'Investimento por emissora',  Icon: IconMoney },
 ]
 
 export default function WizardStepper({ currentStep, completedSteps = [], onStepClick }) {

@@ -8,6 +8,7 @@ import {
 import WizardLayout from '../components/WizardLayout'
 import BasicDataStep from './CampaignWizardSteps/BasicDataStep'
 import StationsStep from './CampaignWizardSteps/StationsStep'
+import ConnectionStep from './CampaignWizardSteps/ConnectionStep'
 import MaterialsStep from './CampaignWizardSteps/MaterialsStep'
 import DistributionStep from './CampaignWizardSteps/DistributionStep'
 import PricingStep from './CampaignWizardSteps/PricingStep'
@@ -37,7 +38,7 @@ export default function CampaignWizardPage() {
       // Em modo edit todas as etapas anteriores são consideradas concluídas,
       // assim o usuário pode navegar livremente pra editar valor sem refazer
       // o fluxo todo.
-      setCompletedSteps([1, 2, 3, 4])
+      setCompletedSteps([1, 2, 3, 4, 5])
     }
   }, [existingCampaign])
 
@@ -80,7 +81,7 @@ export default function CampaignWizardPage() {
     if (!completedSteps.includes(currentStep)) {
       setCompletedSteps([...completedSteps, currentStep])
     }
-    setCurrentStep(s => Math.min(5, s + 1))
+    setCurrentStep(s => Math.min(6, s + 1))
   }
 
   function handlePrev() {
@@ -172,6 +173,14 @@ export default function CampaignWizardPage() {
     nextDisabled = stationCount === 0
   } else if (currentStep === 3) {
     stepContent = (
+      <ConnectionStep
+        campaignStations={targetStationIds.map(id => allStations.find(s => s.id === id)).filter(Boolean)}
+      />
+    )
+    // Etapa diagnóstica: nunca bloqueia avançar (spec §3).
+    nextDisabled = false
+  } else if (currentStep === 4) {
+    stepContent = (
       <MaterialsStep
         campaignId={campaignId}
         clientId={draftCampaign.client_id}
@@ -189,10 +198,10 @@ export default function CampaignWizardPage() {
     const someWithoutStations = campaignMaterials.some(cm =>
       !cm.target_stations || cm.target_stations.length === 0)
     // Distribuição sem material é permitida: o operador pode planejar regras
-    // por TIPO no Step 4 antes do áudio chegar (spec 2026-05-25). Só
+    // por TIPO no Step 5 antes do áudio chegar (spec 2026-05-25). Só
     // bloqueamos quando há material linkado mas mal configurado.
     nextDisabled = someWithoutType || someWithoutStations
-  } else if (currentStep === 4) {
+  } else if (currentStep === 5) {
     stepContent = (
       <DistributionStep
         campaignId={campaignId}
@@ -205,7 +214,7 @@ export default function CampaignWizardPage() {
       />
     )
     nextDisabled = false
-  } else if (currentStep === 5) {
+  } else if (currentStep === 6) {
     const campaignStations = targetStationIds
       .map(id => allStations.find(s => s.id === id))
       .filter(Boolean)
@@ -224,12 +233,12 @@ export default function CampaignWizardPage() {
   }
 
   const nextLabel =
-    currentStep === 5
+    currentStep === 6
       ? 'Concluir campanha →'
-      : (currentStep === 3 && materialCount === 0)
+      : (currentStep === 4 && materialCount === 0)
         ? 'Pular materiais →'
         : 'Avançar →'
-  const onNext = currentStep === 5 ? handleFinish : handleNext
+  const onNext = currentStep === 6 ? handleFinish : handleNext
 
   return (
     <WizardLayout
