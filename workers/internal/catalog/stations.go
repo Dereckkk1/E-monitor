@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"radiocheck/internal/geo"
 )
 
 // ─── Metadata types (mirrors E-radios broadcaster profile) ──────────────────
@@ -96,10 +98,11 @@ func parseMeta(raw *string) *StationMeta {
 
 type Stations struct {
 	pool *pgxpool.Pool
+	geo  *geo.Geocoder
 }
 
 func NewStations(pool *pgxpool.Pool) *Stations {
-	return &Stations{pool: pool}
+	return &Stations{pool: pool, geo: geo.Default()}
 }
 
 // ─── List (search + filter + pagination) ────────────────────────────────────
@@ -269,11 +272,18 @@ func (s *Stations) Create(ctx context.Context, in CreateStationInput) (*Station,
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	var lat, lng *float64
+	if in.City != nil && in.State != nil {
+		if glat, glng, ok := s.geo.Lookup(*in.City, *in.State); ok {
+			lat, lng = &glat, &glng
+		}
+	}
+
 	st, err := scanStationRow(tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO stations (name, band, frequency_mhz, city, state, stream_url)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO stations (name, band, frequency_mhz, city, state, stream_url, latitude, longitude)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING %s`, stationSelectCols),
-		in.Name, in.Band, in.FrequencyMHz, in.City, in.State, in.StreamURL,
+		in.Name, in.Band, in.FrequencyMHz, in.City, in.State, in.StreamURL, lat, lng,
 	).Scan)
 	if err != nil {
 		return nil, err
