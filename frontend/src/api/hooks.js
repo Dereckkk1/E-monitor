@@ -506,13 +506,14 @@ export function useStreamHealth(params = {}) {
   })
 }
 
-// Live map — admin vê todas as emissoras monitoradas + todas as veiculações;
-// viewer é escopado ao próprio client no servidor. Polling de 20s; mantém o
-// último payload bom enquanto refaz o fetch (evita "piscar" o mapa).
-export function useLiveMap() {
+// Live map de UMA campanha: emissoras-alvo (com coordenada) + veiculações dela.
+// Backend escopa pelo client do viewer. Só dispara quando há campanha
+// selecionada; polling de 20s; mantém o último payload bom durante o refetch.
+export function useLiveMap(campaignId) {
   return useQuery({
-    queryKey: ['live-map'],
-    queryFn: () => api.get('/live-map').then(r => r.data),
+    queryKey: ['live-map', campaignId],
+    queryFn: () => api.get('/live-map', { params: { campaign_id: campaignId } }).then(r => r.data),
+    enabled: !!campaignId,
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
   })

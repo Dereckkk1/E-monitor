@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useLiveMap } from '../api/hooks'
+import RSelect from '../components/RSelect'
 import { useAuth } from '../contexts/AuthContext'
+import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
 import BrazilMap from '../components/BrazilMap'
 import './LiveMapPage.css'
 
@@ -22,26 +23,26 @@ function stationLabel(d) {
 }
 
 /* ── Feed de últimas veiculações ─────────────────────────────────── */
-function AiringsFeed({ detections }) {
+function AiringsFeed({ detections, stagger = true }) {
   return (
-    <div className="live-feed-list content-group" key={detections[0]?.id ?? 'empty'}>
+    <div className={`lm-feed-list${stagger ? ' lm-stagger' : ''}`} key={detections[0]?.id ?? 'empty'}>
       {detections.map((d) => {
         const t = fmtTime(d.detected_at)
         const loc = [d.city, d.state].filter(Boolean).join(' / ')
         const material = [d.commercial_name, d.client_name].filter(Boolean).join(' · ')
         return (
-          <div className="live-row" key={d.id}>
-            <span className="live-row-pulse" aria-hidden="true" />
-            <div className="live-row-body">
-              <div className="live-row-top">
-                <span className="live-row-station">{stationLabel(d)}</span>
-                <span className="live-row-time">{t.time}</span>
+          <div className="lm-row" key={d.id}>
+            <span className="lm-row-pulse" aria-hidden="true" />
+            <div className="lm-row-body">
+              <div className="lm-row-top">
+                <span className="lm-row-station">{stationLabel(d)}</span>
+                <span className="lm-row-time">{t.time}</span>
               </div>
-              <div className="live-row-sub">
-                <span className="live-row-loc">{loc}</span>
-                <span className="live-row-date">{t.date}</span>
+              <div className="lm-row-sub">
+                <span className="lm-row-loc">{loc}</span>
+                <span className="lm-row-date">{t.date}</span>
               </div>
-              {material && <span className="live-row-material">{material}</span>}
+              {material && <span className="lm-row-material">{material}</span>}
             </div>
           </div>
         )
@@ -52,18 +53,18 @@ function AiringsFeed({ detections }) {
 
 /* ── Skeletons (shape-matched) ───────────────────────────────────── */
 function FeedSkeleton() {
-  const widths = ['72%', '58%', '80%', '64%', '50%', '76%', '60%']
+  const widths = ['72%', '58%', '80%', '64%', '50%', '76%']
   return (
-    <div className="live-feed-list">
+    <div className="lm-feed-list">
       {widths.map((w, i) => (
-        <div className="live-row live-row--skeleton" key={i}>
-          <span className="skeleton skeleton-circle" style={{ width: 10, height: 10 }} />
-          <div className="live-row-body">
-            <div className="live-row-top">
-              <span className="skeleton skeleton-text" style={{ width: w, height: 14 }} />
-              <span className="skeleton skeleton-text" style={{ width: 56, height: 12 }} />
+        <div className="lm-row lm-row--skeleton" key={i}>
+          <span className="lm-skel lm-skel-circle" style={{ width: 8, height: 8, marginTop: 5 }} />
+          <div className="lm-row-body">
+            <div className="lm-row-top">
+              <span className="lm-skel" style={{ width: w, height: 13 }} />
+              <span className="lm-skel" style={{ width: 50, height: 11 }} />
             </div>
-            <span className="skeleton skeleton-text" style={{ width: '40%', height: 11 }} />
+            <span className="lm-skel" style={{ width: '38%', height: 10, marginTop: 6 }} />
           </div>
         </div>
       ))}
@@ -73,56 +74,42 @@ function FeedSkeleton() {
 
 function MapSkeleton() {
   return (
-    <div className="map-skeleton">
-      <div className="skeleton map-skeleton-shape" />
-      {[[38, 62], [54, 70], [60, 58], [46, 80], [70, 66]].map(([l, t], i) => (
-        <span
-          key={i}
-          className="skeleton skeleton-circle map-skeleton-dot"
-          style={{ left: `${l}%`, top: `${t}%` }}
-        />
-      ))}
+    <div className="lm-map-skeleton">
+      <div className="lm-skel lm-map-skeleton-shape" />
     </div>
   )
 }
 
-/* ── Empty state (ghost preview) ─────────────────────────────────── */
+/* ── Empty (tutorial estilizado — design.md §4.7) ────────────────── */
 const GHOST_FEED = [
-  { id: 'g1', station_name: 'Rádio Exemplo FM', city: 'São Paulo', state: 'SP', commercial_name: 'Campanha demonstrativa' },
-  { id: 'g2', station_name: 'Rádio Exemplo AM', city: 'Goiânia', state: 'GO', commercial_name: 'Campanha demonstrativa' },
-  { id: 'g3', station_name: 'Rádio Exemplo FM', city: 'Curitiba', state: 'PR', commercial_name: 'Campanha demonstrativa' },
-  { id: 'g4', station_name: 'Rádio Exemplo FM', city: 'Recife', state: 'PE', commercial_name: 'Campanha demonstrativa' },
+  { id: 'g1', station_name: 'Rádio Exemplo FM', city: 'São Paulo', state: 'SP', commercial_name: 'Sua campanha aqui' },
+  { id: 'g2', station_name: 'Rádio Exemplo AM', city: 'Goiânia', state: 'GO', commercial_name: 'Sua campanha aqui' },
+  { id: 'g3', station_name: 'Rádio Exemplo FM', city: 'Curitiba', state: 'PR', commercial_name: 'Sua campanha aqui' },
 ]
 
-function EmptyGhost({ isAdmin }) {
+function EmptyTutorial({ title, description, cta }) {
   return (
-    <div className="live-empty-wrapper">
-      <div className="live-empty-ghost" aria-hidden="true">
-        <section className="live-panel live-feed">
-          <span className="live-feed-title">Últimas Veiculações</span>
-          <AiringsFeed detections={GHOST_FEED} />
+    <div className="lm-empty">
+      <div className="lm-empty-ghost" aria-hidden="true">
+        <section className="lm-panel lm-feed">
+          <div className="lm-panel-head"><span className="lm-panel-title">Últimas Veiculações</span></div>
+          <AiringsFeed detections={GHOST_FEED} stagger={false} />
         </section>
-        <section className="live-panel live-map-panel">
+        <section className="lm-panel lm-map-panel">
           <BrazilMap stations={[]} />
         </section>
       </div>
-      <div className="live-empty-overlay">
-        <div className="live-empty-card">
-          <div className="live-empty-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <div className="lm-empty-overlay">
+        <div className="lm-empty-card">
+          <div className="lm-empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 21s7-6.3 7-11a7 7 0 0 0-14 0c0 4.7 7 11 7 11z" />
               <circle cx="12" cy="10" r="2.5" />
             </svg>
           </div>
-          <h3>Nenhuma emissora ao vivo agora</h3>
-          <p>
-            {isAdmin
-              ? 'Quando houver emissoras com monitoramento ativo, elas aparecem pulsando no mapa e as veiculações entram no feed em tempo real.'
-              : 'Assim que suas campanhas estiverem ativas, as emissoras monitoradas aparecem no mapa e as veiculações entram aqui em tempo real.'}
-          </p>
-          <Link className="btn btn-primary" to={isAdmin ? '/monitoring' : '/campaigns'}>
-            {isAdmin ? 'Ver streams' : 'Ver campanhas'}
-          </Link>
+          <h3>{title}</h3>
+          <p>{description}</p>
+          {cta}
         </div>
       </div>
     </div>
@@ -131,9 +118,28 @@ function EmptyGhost({ isAdmin }) {
 
 /* ── Página ──────────────────────────────────────────────────────── */
 export default function LiveMapPage() {
-  const { isAdmin } = useAuth()
-  const { data, isLoading, isError, isFetching, refetch } = useLiveMap()
+  const { isAdmin, user } = useAuth()
+  // Viewer: clientId derivado do próprio user (sem state/efeito). Admin: escolhe.
+  const [adminClientId, setAdminClientId] = useState(null)
+  const clientId = isAdmin ? adminClientId : (user?.client_id ?? null)
+  const [campaignId, setCampaignId] = useState(null)
 
+  const clientsQ = useClients()
+  const clientOpts = useMemo(
+    () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name })),
+    [clientsQ.data],
+  )
+
+  const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
+  const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
+  const campOpts = useMemo(() => {
+    const rows = isAdmin
+      ? allCampaigns.filter(c => !clientId || c.client_id === clientId)
+      : allCampaigns
+    return rows.map(c => ({ value: c.id, label: c.name }))
+  }, [allCampaigns, clientId, isAdmin])
+
+  const { data, isLoading, isError, isFetching, refetch } = useLiveMap(campaignId)
   const stations = useMemo(() => data?.stations ?? [], [data])
   const detections = useMemo(() => data?.recent_detections ?? [], [data])
 
@@ -143,66 +149,124 @@ export default function LiveMapPage() {
     return set.size
   }, [stations])
 
-  const isEmpty = !isLoading && !isError && stations.length === 0 && detections.length === 0
+  // ── Estados de seleção / tutorial ──────────────────────────────────
+  let emptyTutorial = null
+  if (isAdmin && !clientId) {
+    emptyTutorial = (
+      <EmptyTutorial
+        title="Escolha um cliente e uma campanha"
+        description="Selecione o cliente e a campanha nos filtros acima para ver, em tempo real, onde as emissoras estão sendo monitoradas e as últimas veiculações no mapa do Brasil."
+      />
+    )
+  } else if (!campaignId) {
+    const noCampaigns = !campaignsQ.isPending && campOpts.length === 0
+    emptyTutorial = (
+      <EmptyTutorial
+        title={noCampaigns ? 'Nenhuma campanha por aqui' : 'Selecione uma campanha'}
+        description={
+          noCampaigns
+            ? 'Quando houver uma campanha ativa, suas emissoras aparecem pulsando no mapa e as veiculações entram no feed em tempo real.'
+            : 'Escolha uma campanha no filtro acima para ver as emissoras dela no mapa e o feed de veiculações ao vivo.'
+        }
+        cta={noCampaigns ? <Link className="btn btn-primary" to="/campaigns">Ver campanhas</Link> : null}
+      />
+    )
+  }
 
   return (
-    <div className="live-map-page">
-      {isFetching && data && <div className="live-top-progress" aria-hidden="true" />}
-
-      <header className="live-header">
-        <div className="live-header-titles">
-          <span className="live-eyebrow">Em tempo real</span>
-          <h1>Mapa ao Vivo</h1>
-        </div>
-        <div className="live-header-meta">
-          <span className="live-badge">
-            <span className="live-badge-dot" />
-            AO VIVO
+    <div className="lm-page">
+      <header className="lm-header">
+        <h1 className="lm-title">Mapa ao Vivo</h1>
+        {campaignId && !isLoading && !isError && (
+          <span className="lm-live">
+            <span className="lm-live-dot" />
+            ao vivo · atualiza a cada 20s
           </span>
-          {!isLoading && !isError && (
-            <div className="live-kpis">
-              <span className="live-kpi">
-                <strong>{stations.length}</strong> emissora{stations.length === 1 ? '' : 's'}
-              </span>
-              <span className="live-kpi-sep" />
-              <span className="live-kpi">
-                <strong>{activeStates}</strong> estado{activeStates === 1 ? '' : 's'}
-              </span>
-            </div>
-          )}
-        </div>
+        )}
       </header>
 
-      {isError && !data ? (
-        <div className="live-error">
-          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      {/* Filtros — mesmo padrão das telas de Veiculação */}
+      <div className="lm-filters">
+        {isAdmin ? (
+          <div className="lm-filter">
+            <label className="lm-filter-label">Cliente</label>
+            <RSelect
+              options={clientOpts}
+              value={clientOpts.find(o => o.value === clientId) || null}
+              onChange={opt => { setAdminClientId(opt?.value || null); setCampaignId(null) }}
+              placeholder="Selecione…"
+              isLoading={clientsQ.isPending}
+              isClearable
+            />
+          </div>
+        ) : (
+          <div className="lm-filter">
+            <label className="lm-filter-label">Cliente</label>
+            <div className="lm-locked-chip">{user?.client_name || user?.email || 'Sua conta'}</div>
+          </div>
+        )}
+
+        <div className="lm-filter lm-filter--wide">
+          <label className="lm-filter-label">Campanha</label>
+          <RSelect
+            options={campOpts}
+            value={campOpts.find(o => o.value === campaignId) || null}
+            onChange={opt => setCampaignId(opt?.value || null)}
+            placeholder="Selecione uma campanha…"
+            isDisabled={isAdmin && !clientId}
+            isLoading={campaignsQ.isPending}
+            isClearable
+          />
+        </div>
+      </div>
+
+      {emptyTutorial ? (
+        emptyTutorial
+      ) : isError && !data ? (
+        <div className="lm-error">
+          <svg viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 9v4M12 17h.01" />
             <path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
           </svg>
-          <p className="live-error-title">Não foi possível carregar o mapa</p>
-          <p className="live-error-msg">Verifique a conexão e tente novamente.</p>
+          <p className="lm-error-title">Não foi possível carregar o mapa</p>
           <button className="btn btn-secondary" onClick={() => refetch()}>Tentar de novo</button>
         </div>
-      ) : isEmpty ? (
-        <EmptyGhost isAdmin={isAdmin} />
       ) : (
-        <div className="live-grid">
-          <section className="live-panel live-feed">
-            <div className="live-feed-head">
-              <span className="live-feed-title">Últimas Veiculações</span>
-              {!isLoading && <span className="live-feed-count">{detections.length}</span>}
+        <div className="lm-grid">
+          <section className="lm-panel lm-feed">
+            <div className="lm-panel-head">
+              <span className="lm-panel-title">Últimas Veiculações</span>
+              {!isLoading && <span className="lm-count">{detections.length}</span>}
             </div>
             {isLoading ? (
               <FeedSkeleton />
             ) : detections.length === 0 ? (
-              <div className="live-feed-empty">Nenhuma veiculação recente.</div>
+              <div className="lm-feed-empty">Nenhuma veiculação recente nesta campanha.</div>
             ) : (
               <AiringsFeed detections={detections} />
             )}
           </section>
 
-          <section className="live-panel live-map-panel">
-            {isLoading ? <MapSkeleton /> : <BrazilMap stations={stations} />}
+          <section className="lm-panel lm-map-panel">
+            <div className="lm-panel-head">
+              <span className="lm-panel-title">Emissoras monitoradas</span>
+              {!isLoading && (
+                <span className="lm-map-meta">
+                  {isFetching && <span className="lm-map-refreshing" />}
+                  {stations.length} emissora{stations.length === 1 ? '' : 's'} · {activeStates} estado{activeStates === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+            {isLoading ? (
+              <MapSkeleton />
+            ) : stations.length === 0 ? (
+              <div className="lm-map-empty">
+                <BrazilMap stations={[]} />
+                <span className="lm-map-empty-msg">As emissoras desta campanha ainda não têm localização cadastrada.</span>
+              </div>
+            ) : (
+              <BrazilMap stations={stations} />
+            )}
           </section>
         </div>
       )}
