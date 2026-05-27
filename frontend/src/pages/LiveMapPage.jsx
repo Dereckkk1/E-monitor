@@ -134,8 +134,8 @@ export default function LiveMapPage() {
   const { isAdmin } = useAuth()
   const { data, isLoading, isError, isFetching, refetch } = useLiveMap()
 
-  const stations = data?.stations ?? []
-  const detections = data?.recent_detections ?? []
+  const stations = useMemo(() => data?.stations ?? [], [data])
+  const detections = useMemo(() => data?.recent_detections ?? [], [data])
 
   const activeStates = useMemo(() => {
     const set = new Set()
