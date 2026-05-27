@@ -333,6 +333,18 @@ func (s *Stations) Update(ctx context.Context, id uuid.UUID, in UpdateStationInp
 		metaJSON = b
 	}
 
+	// Re-deriva a coordenada da cidade+UF recebida. lat/lng ficam nil quando não
+	// há match; o COALESCE abaixo então preserva o valor atual (não destrói dado
+	// por causa de um lookup que falhou). Como não há caminho na API pra setar
+	// coordenada à mão, re-derivar é idempotente: editar só o nome reenvia a
+	// mesma cidade e produz a mesma coordenada.
+	var lat, lng *float64
+	if in.City != nil && in.State != nil {
+		if glat, glng, ok := s.geo.Lookup(*in.City, *in.State); ok {
+			lat, lng = &glat, &glng
+		}
+	}
+
 	st, err := scanStationRow(s.pool.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE stations SET
 		  name          = $2,
@@ -344,11 +356,13 @@ func (s *Stations) Update(ctx context.Context, id uuid.UUID, in UpdateStationInp
 		  logo_url      = $8,
 		  pmm           = $9,
 		  metadata      = $10::jsonb,
+		  latitude      = COALESCE($11, latitude),
+		  longitude     = COALESCE($12, longitude),
 		  updated_at    = NOW()
 		WHERE id = $1
 		RETURNING %s`, stationSelectCols),
 		id, in.Name, in.Band, in.FrequencyMHz, in.City, in.State,
-		in.StreamURL, in.LogoURL, in.PMM, string(metaJSON),
+		in.StreamURL, in.LogoURL, in.PMM, string(metaJSON), lat, lng,
 	).Scan)
 	if err != nil {
 		if err == pgx.ErrNoRows {
