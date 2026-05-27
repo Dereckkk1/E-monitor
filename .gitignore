@@ -3,6 +3,13 @@
 # Go
 workers/bin/
 workers/*.exe
+# Binários compilados dos comandos (go build ./cmd/<x> deixa o binário em workers/<x>)
+/workers/api
+/workers/diag
+/workers/fingerprint
+/workers/backfill-geocoding
+/workers/backfill-material-durations
+/workers/backfill-shared-hashes
 
 # Python
 fingerprint/.venv/
