@@ -2,14 +2,22 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// LiveStation é uma emissora monitorada a plotar no mapa ao vivo. Só retornamos
-// emissoras com coordenada não-nula (geocoding pula internacionais/distritos).
+// Quando a campanha pedida não existe OU não pertence ao cliente do viewer,
+// devolvemos o catalog.ErrCampaignNotFound já declarado no pacote
+// (campaign_failures.go) — anti-oracle: o handler responde 404 nos dois casos,
+// sem revelar a existência de campanha de outro cliente.
+
+// LiveStation é uma emissora da campanha a plotar no mapa ao vivo. Só
+// retornamos emissoras com coordenada não-nula (geocoding pula
+// internacionais/distritos).
 type LiveStation struct {
 	ID              uuid.UUID  `json:"id"`
 	Name            string     `json:"name"`
@@ -49,25 +57,36 @@ func NewLiveMap(pool *pgxpool.Pool) *LiveMap {
 	return &LiveMap{pool: pool}
 }
 
-// Get retorna o payload do mapa escopado ao requester. scope == nil =
-// admin/operator (vê todas as emissoras monitoradas + todas as veiculações);
-// scope != nil = client_id do viewer (só emissoras das campanhas ativas dele +
-// só as veiculações dele). $1 nulo na SQL alterna os dois caminhos.
-func (m *LiveMap) Get(ctx context.Context, scope *uuid.UUID) (LiveMapResult, error) {
+// Get retorna o mapa ao vivo de UMA campanha: as emissoras-alvo dela (com
+// coordenada) + as últimas veiculações dela. scope == nil = admin/operator;
+// scope != nil = client_id do viewer — a campanha precisa pertencer a ele,
+// senão ErrCampaignNotFound (anti-oracle).
+func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID) (LiveMapResult, error) {
 	var res LiveMapResult
 
-	var scopeArg any
-	if scope != nil {
-		scopeArg = *scope
+	// Existência + posse: resolve o client_id da campanha uma vez. 404 quando
+	// não existe ou quando o viewer tenta uma campanha de outro cliente.
+	var clientID uuid.UUID
+	err := m.pool.QueryRow(ctx,
+		`SELECT client_id FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&clientID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return res, ErrCampaignNotFound
+		}
+		return res, err
+	}
+	if scope != nil && *scope != clientID {
+		return res, ErrCampaignNotFound
 	}
 
-	stations, err := m.queryStations(ctx, scopeArg)
+	stations, err := m.queryStations(ctx, campaignID)
 	if err != nil {
 		return res, err
 	}
 	res.Stations = stations
 
-	dets, err := m.queryRecentDetections(ctx, scopeArg)
+	dets, err := m.queryRecentDetections(ctx, campaignID)
 	if err != nil {
 		return res, err
 	}
@@ -75,28 +94,20 @@ func (m *LiveMap) Get(ctx context.Context, scope *uuid.UUID) (LiveMapResult, err
 	return res, nil
 }
 
-func (m *LiveMap) queryStations(ctx context.Context, scopeArg any) ([]LiveStation, error) {
+func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]LiveStation, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT s.id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		       s.latitude, s.longitude, s.health_status,
 		       (SELECT MAX(d.detected_at)
 		          FROM detections d
-		          LEFT JOIN campaigns c2 ON c2.id = d.campaign_id
 		         WHERE d.station_id = s.id
-		           AND ($1::uuid IS NULL OR c2.client_id = $1)
+		           AND d.campaign_id = $1
 		           AND d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL) AS last_detection_at
 		FROM stations s
+		JOIN campaigns cmp ON cmp.id = $1 AND s.id = ANY(cmp.target_stations)
 		WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
-		  AND (
-		        ($1::uuid IS NULL AND s.monitoring_status = 'active')
-		     OR ($1::uuid IS NOT NULL AND EXISTS (
-		            SELECT 1 FROM campaigns cmp
-		             WHERE cmp.client_id = $1
-		               AND cmp.status = 'ativa'
-		               AND s.id = ANY(cmp.target_stations)))
-		      )
-		ORDER BY s.name`, scopeArg)
+		ORDER BY s.name`, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +126,7 @@ func (m *LiveMap) queryStations(ctx context.Context, scopeArg any) ([]LiveStatio
 	return out, rows.Err()
 }
 
-func (m *LiveMap) queryRecentDetections(ctx context.Context, scopeArg any) ([]LiveDetection, error) {
+func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUID) ([]LiveDetection, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id, COALESCE(s.name, ''), COALESCE(s.band, ''),
 		       s.frequency_mhz, s.city, s.state,
@@ -126,12 +137,12 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, scopeArg any) ([]Li
 		LEFT JOIN materials m   ON m.id = d.commercial_id
 		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli   ON cli.id = cmp.client_id
-		WHERE ($1::uuid IS NULL OR cmp.client_id = $1)
+		WHERE d.campaign_id = $1
 		  AND d.evidence_status <> 'audit_rejected'
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		ORDER BY d.detected_at DESC
-		LIMIT 50`, scopeArg)
+		LIMIT 50`, campaignID)
 	if err != nil {
 		return nil, err
 	}
