@@ -56,6 +56,7 @@ docs/
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
 | [materials-page.md](features/materials-page.md) | Tela `/materials` — materiais tocáveis por campanha + grade só-programado (Σ por emissora), admin + cliente |
 | [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
+| [client-deactivation.md](features/client-deactivation.md) | Desativar cliente (reversível) + delete bloqueado vira 409 com contagem de vínculos; login gating de cliente inativo |
 | [webhooks.md](features/webhooks.md) | Entrega de eventos com HMAC-SHA256 + retry + outbox |
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
 | [broadcaster-search.md](features/broadcaster-search.md) | Busca multi-token AND/field-OR de emissoras |
