@@ -48,6 +48,16 @@ function IconDetections() {
   )
 }
 
+function IconMaterials() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 13V4l7-1.2V11" />
+      <circle cx="4" cy="13" r="2" />
+      <circle cx="11" cy="11" r="2" />
+    </svg>
+  )
+}
+
 function IconAirtimeReport() {
   return (
     <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -182,6 +192,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Indicadores</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
+      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
 
       <span className="sidebar-section-label">Infraestrutura</span>
@@ -211,6 +222,7 @@ function ClientNav({ onClose }) {
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
+      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>
