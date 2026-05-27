@@ -73,11 +73,14 @@ export function useClients({ enabled = true } = {}) {
 // cache automatically. placeholderData = previous result keeps the list
 // visible (and the search input focused) while a new page/query is in
 // flight — react-query v5 dropped keepPreviousData in favor of this form.
-export function useClientsPaged({ q = '', page = 1, pageSize = 20 } = {}) {
+export function useClientsPaged({ q = '', page = 1, pageSize = 20, includeInactive = false } = {}) {
   return useQuery({
-    queryKey: ['clients', 'paged', q, page, pageSize],
+    queryKey: ['clients', 'paged', q, page, pageSize, includeInactive],
     queryFn: () => api.get('/clients', {
-      params: { q: q || undefined, page, page_size: pageSize },
+      params: {
+        q: q || undefined, page, page_size: pageSize,
+        include_inactive: includeInactive ? 1 : undefined,
+      },
     }).then(r => r.data),
     placeholderData: (prev) => prev,
   })
@@ -100,6 +103,23 @@ export function useDeleteClient() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id) => api.delete(`/clients/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['clients'] }),
+  })
+}
+// Desativar/reativar — alternativa reversível ao hard-delete quando o cliente
+// tem vínculos. Desativado some da lista (por padrão) e bloqueia o login dos
+// usuários dele; reativar é o caminho de volta.
+export function useDeactivateClient() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/clients/${id}/deactivate`).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['clients'] }),
+  })
+}
+export function useActivateClient() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/clients/${id}/activate`).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['clients'] }),
   })
 }

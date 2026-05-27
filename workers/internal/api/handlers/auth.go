@@ -85,6 +85,28 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cliente desativado bloqueia o login de TODOS os seus usuários (a empresa
+	// foi suspensa, não cada conta individualmente). Fail-closed: se a linha
+	// do cliente sumiu (não deveria — FK users.client_id é RESTRICT), também
+	// bloqueia. Reusa o pool cru porque o gating é de auth, não pertence ao
+	// users.Repo.
+	if u.ClientID != nil {
+		var clientActive bool
+		switch err := h.db.QueryRow(r.Context(),
+			`SELECT is_active FROM clients WHERE id = $1`, *u.ClientID,
+		).Scan(&clientActive); {
+		case errors.Is(err, pgx.ErrNoRows):
+			http.Error(w, "client_disabled", http.StatusForbidden)
+			return
+		case err != nil:
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		case !clientActive:
+			http.Error(w, "client_disabled", http.StatusForbidden)
+			return
+		}
+	}
+
 	tok, err := auth.IssueTokenForUser(u)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

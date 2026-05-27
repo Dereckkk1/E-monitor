@@ -228,6 +228,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/clients", d.Clients.Create)
 				r.Put("/clients/{id}", d.Clients.Update)
 				r.Delete("/clients/{id}", d.Clients.Delete)
+				// Desativar/reativar — alternativa reversível ao hard-delete
+				// quando o cliente tem vínculos (campanhas/materiais/usuários).
+				r.Post("/clients/{id}/deactivate", d.Clients.Deactivate)
+				r.Post("/clients/{id}/activate", d.Clients.Activate)
 				if d.APIKeys != nil {
 					r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
 					r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)

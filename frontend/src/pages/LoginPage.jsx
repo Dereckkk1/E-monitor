@@ -38,6 +38,10 @@ export default function LoginPage() {
       const status = err?.response?.status
       if (status === 401) {
         setError('Credenciais inválidas.')
+      } else if (status === 403) {
+        // Conta desativada (account_disabled) ou empresa do cliente
+        // desativada (client_disabled). Mesmo recado: procurar o admin.
+        setError('Acesso desativado. Procure o administrador.')
       } else if (status === 400) {
         setError('Requisição inválida.')
       } else {
