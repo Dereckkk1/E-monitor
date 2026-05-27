@@ -2,12 +2,20 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrClientHasDependents is returned by Delete when a client cannot be removed
+// because rows in other tables still reference it (campaigns NO ACTION,
+// materials/users RESTRICT). Callers map this to 409 Conflict and offer the
+// reversible "deactivate" path instead. See CountDependents for the breakdown.
+var ErrClientHasDependents = errors.New("client has dependent records")
 
 type Client struct {
 	ID           uuid.UUID `json:"id"`
@@ -20,9 +28,39 @@ type Client struct {
 	CEP          *string   `json:"cep,omitempty"`
 	City         *string   `json:"city,omitempty"`
 	State        *string   `json:"state,omitempty"`
+	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
+
+// clientColumns is the canonical SELECT/RETURNING projection, kept in one place
+// so the column order never drifts from scanClient's Scan order.
+const clientColumns = `id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, is_active, created_at, updated_at`
+
+// scanClient reads one row in clientColumns order. Works with both QueryRow
+// (single) and Rows (loop) since both satisfy pgx.Row.
+func scanClient(row pgx.Row) (*Client, error) {
+	var c Client
+	err := row.Scan(&c.ID, &c.Name, &c.LogoURL, &c.ContactEmail, &c.ContactName,
+		&c.Phone, &c.CNPJ, &c.CEP, &c.City, &c.State, &c.IsActive,
+		&c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// DependentCounts reports how many rows in each blocking table reference a
+// client. Used to build the 409 message when a hard-delete is refused.
+type DependentCounts struct {
+	Campaigns int `json:"campaigns"`
+	Materials int `json:"materials"`
+	Users     int `json:"users"`
+}
+
+// Total is the sum across blocking tables; zero means the client is safe to
+// hard-delete.
+func (d DependentCounts) Total() int { return d.Campaigns + d.Materials + d.Users }
 
 type Clients struct {
 	pool *pgxpool.Pool
@@ -77,31 +115,35 @@ type UpdateWebhookInput struct {
 }
 
 func (c *Clients) Create(ctx context.Context, in CreateClientInput) (*Client, error) {
-	var cli Client
-	err := c.pool.QueryRow(ctx, `
+	return scanClient(c.pool.QueryRow(ctx, `
 		INSERT INTO clients (name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at`,
+		RETURNING `+clientColumns,
 		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State,
-	).Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt)
-	return &cli, err
+	))
 }
 
 func (c *Clients) Update(ctx context.Context, id uuid.UUID, in UpdateClientInput) (*Client, error) {
-	var cli Client
-	err := c.pool.QueryRow(ctx, `
+	return scanClient(c.pool.QueryRow(ctx, `
 		UPDATE clients
 		SET name=$1, logo_url=$2, contact_email=$3, contact_name=$4, phone=$5, cnpj=$6, cep=$7, city=$8, state=$9, updated_at=NOW()
 		WHERE id=$10
-		RETURNING id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at`,
+		RETURNING `+clientColumns,
 		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State, id,
-	).Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt)
-	return &cli, err
+	))
 }
 
+// Delete hard-deletes a client. Returns pgx.ErrNoRows if the id doesn't exist,
+// or ErrClientHasDependents when a foreign-key (SQLSTATE 23503) blocks the
+// removal (the client still owns campaigns/materials/users). Any other DB
+// error is returned as-is.
 func (c *Clients) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := c.pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, id)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrClientHasDependents
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {
@@ -110,34 +152,59 @@ func (c *Clients) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Get returns a single client by ID, or pgx.ErrNoRows if not found.
-func (c *Clients) Get(ctx context.Context, id uuid.UUID) (*Client, error) {
-	var cli Client
-	err := c.pool.QueryRow(ctx,
-		`SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
-		 FROM clients WHERE id = $1`, id,
-	).Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &cli, nil
+// CountDependents returns how many rows reference the client across the tables
+// that block a hard-delete. Counts raw FK references (e.g. soft-deleted users
+// still hold the FK and still block RESTRICT), so the breakdown truthfully
+// explains why Delete was refused.
+func (c *Clients) CountDependents(ctx context.Context, id uuid.UUID) (DependentCounts, error) {
+	var d DependentCounts
+	err := c.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM campaigns WHERE client_id = $1),
+			(SELECT COUNT(*) FROM materials WHERE client_id = $1),
+			(SELECT COUNT(*) FROM users     WHERE client_id = $1)`, id,
+	).Scan(&d.Campaigns, &d.Materials, &d.Users)
+	return d, err
 }
 
+// SetActive flips a client's is_active flag (deactivate/reactivate). Returns
+// the updated row, or pgx.ErrNoRows if the id doesn't exist.
+func (c *Clients) SetActive(ctx context.Context, id uuid.UUID, active bool) (*Client, error) {
+	cli, err := scanClient(c.pool.QueryRow(ctx, `
+		UPDATE clients SET is_active=$2, updated_at=NOW()
+		WHERE id=$1
+		RETURNING `+clientColumns, id, active,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, pgx.ErrNoRows
+	}
+	return cli, err
+}
+
+// Get returns a single client by ID, or pgx.ErrNoRows if not found.
+func (c *Clients) Get(ctx context.Context, id uuid.UUID) (*Client, error) {
+	return scanClient(c.pool.QueryRow(ctx,
+		`SELECT `+clientColumns+` FROM clients WHERE id = $1`, id))
+}
+
+// List returns the full catalog (active AND inactive), ordered by name. This
+// is the lookup-map mode: callers resolve a client name/logo by id (campaign
+// rows, detection cells, dropdowns), so inactive clients must stay resolvable.
+// The management page uses ListPaged, which hides inactive by default.
 func (c *Clients) List(ctx context.Context) ([]Client, error) {
 	rows, err := c.pool.Query(ctx,
-		`SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
-		 FROM clients ORDER BY name`)
+		`SELECT `+clientColumns+` FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Client
 	for rows.Next() {
-		var cli Client
-		if err := rows.Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt); err != nil {
+		cli, err := scanClient(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, cli)
+		out = append(out, *cli)
 	}
 	return out, rows.Err()
 }
@@ -146,7 +213,11 @@ func (c *Clients) List(ctx context.Context) ([]Client, error) {
 // query. Search is case- and accent-insensitive across name/city/state/cnpj/
 // contact_email/contact_name (same vocabulary the frontend offered locally,
 // now pushed to SQL so it composes with paging). Returns (rows, totalCount).
-func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) ([]Client, int, error) {
+//
+// includeInactive=false (the default for the management page) hides clients
+// with is_active=false; pass true for the "mostrar inativos" toggle so the
+// operator can find and reactivate them.
+func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int, includeInactive bool) ([]Client, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -155,8 +226,8 @@ func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) (
 	}
 	offset := (page - 1) * pageSize
 
-	const where = `
-		WHERE
+	where := `
+		WHERE (
 		    $1 = '' OR
 		    unaccent(lower(
 		        COALESCE(name,'') || ' ' ||
@@ -166,7 +237,10 @@ func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) (
 		        COALESCE(contact_name,'') || ' ' ||
 		        COALESCE(contact_email,'')
 		    )) LIKE '%' || unaccent(lower($1)) || '%'
-	`
+		)`
+	if !includeInactive {
+		where += ` AND is_active = TRUE`
+	}
 
 	var total int
 	if err := c.pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`+where, q).Scan(&total); err != nil {
@@ -174,7 +248,7 @@ func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) (
 	}
 
 	rows, err := c.pool.Query(ctx, `
-		SELECT id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, created_at, updated_at
+		SELECT `+clientColumns+`
 		FROM clients`+where+`
 		ORDER BY name
 		LIMIT $2 OFFSET $3`, q, pageSize, offset)
@@ -184,11 +258,11 @@ func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int) (
 	defer rows.Close()
 	var out []Client
 	for rows.Next() {
-		var cli Client
-		if err := rows.Scan(&cli.ID, &cli.Name, &cli.LogoURL, &cli.ContactEmail, &cli.ContactName, &cli.Phone, &cli.CNPJ, &cli.CEP, &cli.City, &cli.State, &cli.CreatedAt, &cli.UpdatedAt); err != nil {
+		cli, err := scanClient(rows)
+		if err != nil {
 			return nil, 0, err
 		}
-		out = append(out, cli)
+		out = append(out, *cli)
 	}
 	return out, total, rows.Err()
 }

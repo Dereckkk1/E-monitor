@@ -217,6 +217,8 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/stations", d.Stations.Create)
 				r.Put("/stations/{id}", d.Stations.Update)
 				r.Get("/stations/{id}/threshold", d.Stations.GetThreshold)
+				r.Patch("/stations/{id}/stream-url", d.Stations.UpdateStreamURL)
+				r.Post("/stations/{id}/connection-test", d.Stations.ConnectionTest)
 				// Writes em /clients. NÃO usar r.Route() aqui — Route monta
 				// sub-tree que captura todos os métodos do prefixo e mascara o
 				// GET registrado no subgrupo A (viewer cai no RequireRole
@@ -226,6 +228,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/clients", d.Clients.Create)
 				r.Put("/clients/{id}", d.Clients.Update)
 				r.Delete("/clients/{id}", d.Clients.Delete)
+				// Desativar/reativar — alternativa reversível ao hard-delete
+				// quando o cliente tem vínculos (campanhas/materiais/usuários).
+				r.Post("/clients/{id}/deactivate", d.Clients.Deactivate)
+				r.Post("/clients/{id}/activate", d.Clients.Activate)
 				if d.APIKeys != nil {
 					r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
 					r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)
