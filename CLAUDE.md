@@ -279,6 +279,7 @@ docs/
 | Wizard de campanha (6 etapas) | [docs/features/campaign-wizard.md](docs/features/campaign-wizard.md) |
 | Etapa Conexão do wizard (Step 3 — testar/trocar stream_url por emissora; ping/stream/worker efêmeros) | [docs/features/campaign-connection-step.md](docs/features/campaign-connection-step.md) |
 | Página /detections (grade station × material × dia) | [docs/features/detections-view.md](docs/features/detections-view.md) |
+| Página /materials (materiais tocáveis por campanha + Σ programado por emissora, admin + cliente) | [docs/features/materials-page.md](docs/features/materials-page.md) |
 | Webhooks (HMAC, retry, outbox) | [docs/features/webhooks.md](docs/features/webhooks.md) |
 | Presigned URLs (frontend acessa evidência direto no S3) | [docs/features/evidence-presigned-urls.md](docs/features/evidence-presigned-urls.md) |
 | Busca de emissoras (tokens AND, field OR) | [docs/features/broadcaster-search.md](docs/features/broadcaster-search.md) |

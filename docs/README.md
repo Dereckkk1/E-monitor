@@ -54,6 +54,7 @@ docs/
 | [campaign-connection-step.md](features/campaign-connection-step.md) | Step 3 "Conexão" — testar (ping/stream/worker efêmeros) e trocar a stream_url por emissora |
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
+| [materials-page.md](features/materials-page.md) | Tela `/materials` — materiais tocáveis por campanha + grade só-programado (Σ por emissora), admin + cliente |
 | [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
 | [webhooks.md](features/webhooks.md) | Entrega de eventos com HMAC-SHA256 + retry + outbox |
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
