@@ -276,7 +276,8 @@ docs/
 | Audit de evidência pré-persist (§9.9) | [docs/architecture/evidence-audit.md](docs/architecture/evidence-audit.md) |
 | Segmentos ADTS-AAC e extração de evidência | [docs/architecture/evidence-segments.md](docs/architecture/evidence-segments.md) |
 | Design tokens, CSS, .btn, RSelect, .field | [docs/architecture/frontend-design-system.md](docs/architecture/frontend-design-system.md) |
-| Wizard de campanha (4 etapas) | [docs/features/campaign-wizard.md](docs/features/campaign-wizard.md) |
+| Wizard de campanha (6 etapas) | [docs/features/campaign-wizard.md](docs/features/campaign-wizard.md) |
+| Etapa Conexão do wizard (Step 3 — testar/trocar stream_url por emissora; ping/stream/worker efêmeros) | [docs/features/campaign-connection-step.md](docs/features/campaign-connection-step.md) |
 | Página /detections (grade station × material × dia) | [docs/features/detections-view.md](docs/features/detections-view.md) |
 | Webhooks (HMAC, retry, outbox) | [docs/features/webhooks.md](docs/features/webhooks.md) |
 | Presigned URLs (frontend acessa evidência direto no S3) | [docs/features/evidence-presigned-urls.md](docs/features/evidence-presigned-urls.md) |

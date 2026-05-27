@@ -50,7 +50,8 @@ docs/
 
 | Doc | Sobre |
 |-----|-------|
-| [campaign-wizard.md](features/campaign-wizard.md) | Wizard de 4 etapas para criar/editar campanha |
+| [campaign-wizard.md](features/campaign-wizard.md) | Wizard de 6 etapas para criar/editar campanha |
+| [campaign-connection-step.md](features/campaign-connection-step.md) | Step 3 "Conexão" — testar (ping/stream/worker efêmeros) e trocar a stream_url por emissora |
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
 | [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
