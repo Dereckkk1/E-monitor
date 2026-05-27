@@ -349,6 +349,30 @@ func (s *Stations) Update(ctx context.Context, id uuid.UUID, in UpdateStationInp
 	return &st, nil
 }
 
+// UpdateStreamURL atualiza SOMENTE a stream_url da emissora (e updated_at).
+// Existe separado do Update porque o Update reescreve todas as colunas — usar
+// ele pra trocar só a URL zeraria city/state/frequency_mhz/logo_url/pmm/metadata
+// quando o caller não reenvia tudo. A etapa Conexão do wizard troca a URL de
+// forma cirúrgica, então usa este caminho. Ver
+// docs/features/campaign-connection-step.md.
+func (s *Stations) UpdateStreamURL(ctx context.Context, id uuid.UUID, streamURL string) (*Station, error) {
+	st, err := scanStationRow(s.pool.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE stations SET
+		  stream_url = $2,
+		  updated_at = NOW()
+		WHERE id = $1
+		RETURNING %s`, stationSelectCols),
+		id, streamURL,
+	).Scan)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, err
+	}
+	return &st, nil
+}
+
 // ─── Status helpers (used by workers) ───────────────────────────────────────
 
 func (s *Stations) UpdateMonitoringStatus(ctx context.Context, id uuid.UUID, status string) error {
