@@ -103,12 +103,27 @@ react-query (`useLiveMap(campaignId)` em `frontend/src/api/hooks.js`) com
 CSS contínua, independente do refresh. `prefers-reduced-motion` desliga as
 animações.
 
-## Mapa — nota de render
+## Mapa — notas de render
 
 O país é desenhado com fill `#e6ebf2` + stroke `#aeb9c9`
-(`vector-effect: non-scaling-stroke`). Contraste forte de propósito: a versão
-inicial usava `#f1f5f9`/`#e2e8f0`, quase invisível sobre o painel branco, e
-parecia que "o mapa não carregava".
+(`vector-effect: non-scaling-stroke`).
+
+**Winding do asset (importante):** a malha do IBGE vem no padrão GeoJSON
+RFC 7946 (anel externo **anti-horário**), mas o `d3-geo` v3 interpreta isso na
+esfera como o *complemento* do polígono — cada estado vira "todo o resto do
+globo" e o `geoPath` preenche o retângulo inteiro (sintoma: "o mapa não carrega,
+só aparece uma caixa cinza"). Por isso o `br-states.json` versionado foi
+**reorientado para anel externo horário (CW)**. Se algum dia a malha for
+rebaixada de novo do IBGE, reaplicar o rewind:
+
+```js
+// reverte cada anel externo (i===0) para sentido horário; mantém buracos CCW
+function area(r){let a=0;for(let i=0;i<r.length-1;i++){const[x1,y1]=r[i],[x2,y2]=r[i+1];a+=x1*y2-x2*y1;}return a/2}
+poly.forEach((ring,i)=>{ if((area(ring)>0)===(i===0)) ring.reverse() })
+```
+
+Os **pontos** das emissoras não dependem do winding (projeção de ponto), por
+isso apareciam mesmo quando os polígonos preenchiam tudo.
 
 ## Limitações
 
