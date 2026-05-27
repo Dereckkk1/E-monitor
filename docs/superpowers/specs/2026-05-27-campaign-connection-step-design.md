@@ -97,6 +97,13 @@ ConnectionStep.jsx  ──POST /v1/internal/stations/{id}/connection-test──�
   servidor mesmo se o front disparar muitas requests de uma vez — é a barreira
   autoritativa.
 
+**Novo handler `UpdateStreamURL`** em
+[`workers/internal/api/handlers/stations.go`](../../../workers/internal/api/handlers/stations.go):
+`PATCH /v1/internal/stations/{id}/stream-url` (admin/operator), body
+`{ "url": "..." }`. Chama um método novo `catalog.Stations.UpdateStreamURL`
+que faz `UPDATE stations SET stream_url=$2, updated_at=NOW() WHERE id=$1` —
+**só** essa coluna, sem tocar nas demais.
+
 **Novo handler `StationConnectionTest`** em
 [`workers/internal/api/handlers/stations.go`](../../../workers/internal/api/handlers/stations.go):
 
@@ -147,9 +154,9 @@ ConnectionStep.jsx  ──POST /v1/internal/stations/{id}/connection-test──�
   `urlDraft` atual como override — read-only), botão **Salvar** (habilita só
   quando `dirty`).
 - **Salvar:** `showConfirm` avisando que muda a `stream_url` da emissora **pra
-  todas as campanhas** (não é por-campanha) → `PUT /stations/{id}` via
-  `useUpdateStation` → ao sucesso, `urlDraft` vira a nova base, `dirty=false`,
-  e re-roda os testes na URL salva.
+  todas as campanhas** (não é por-campanha) → `PATCH /stations/{id}/stream-url`
+  via `useUpdateStationStreamURL` → ao sucesso, `urlDraft` vira a nova base,
+  `dirty=false`, e re-roda os testes na URL salva.
 - **Header:** "Testar todas" (Ping+Stream+Worker, respeitando limite de
   concorrência) + contador de problemas ("3 emissoras com problema").
 - **Cores de estado da linha:** verde (todos os testes pedidos ok) / vermelho
@@ -157,9 +164,11 @@ ConnectionStep.jsx  ──POST /v1/internal/stations/{id}/connection-test──�
   atenuados conforme `design.md`; rosa (`--c-action`) só pra ações.
 - Empty state estilizado se a campanha não tem emissoras ("volte ao Step 2").
 
-**Novo hook** `useStationConnectionTest()` em
-[`frontend/src/api/hooks.js`](../../../frontend/src/api/hooks.js) — mutation que
-chama o endpoint. Reusa `useUpdateStation` existente pro salvar.
+**Novos hooks** em
+[`frontend/src/api/hooks.js`](../../../frontend/src/api/hooks.js):
+`useStationConnectionTest()` (mutation pro endpoint de teste) e
+`useUpdateStationStreamURL()` (mutation pro PATCH de stream-url, invalida o
+cache de stations).
 
 ### 5.4 Renumeração do wizard (5 → 6 steps)
 
@@ -241,14 +250,18 @@ health).
 ## 10. Resumo do que muda
 
 **Novo:**
-- `workers/internal/probe/` (Ping / ProbeStream / ProbeIngest + semáforo)
+- `workers/internal/probe/` (Ping / ProbeStream / ProbeIngest + Limiter)
 - handler `StationConnectionTest` + rota `POST /stations/{id}/connection-test`
-- `frontend/.../ConnectionStep.jsx` + hook `useStationConnectionTest`
+- handler `UpdateStreamURL` + rota `PATCH /stations/{id}/stream-url` +
+  `catalog.Stations.UpdateStreamURL`
+- `frontend/.../ConnectionStep.jsx` + hooks `useStationConnectionTest` e
+  `useUpdateStationStreamURL`
 
 **Alterado:**
 - `CampaignWizardPage.jsx`, `WizardLayout.jsx`, `WizardStepper.jsx`
   (renumeração 5→6 + correção do "/4")
+- `StationsHandler` ganha dep `Workers` (acesso a `WorkerStatuses()`); wiring
+  em `workers/cmd/api/main.go`
 
 **Reusado sem mudança:**
-- `PUT /stations/{id}` (salvar URL), `ProbeAudioCodec`, `WorkerStatuses()`,
-  reconciler de `stream_url`.
+- `ProbeAudioCodec`, `WorkerStatuses()`, reconciler de `stream_url`.
