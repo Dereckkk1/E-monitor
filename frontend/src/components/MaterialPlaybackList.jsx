@@ -202,15 +202,14 @@ function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: '11px 16px',
         borderBottom: '1px solid var(--c-border)',
-        display: 'flex', alignItems: 'center', gap: 14,
         background: isPlaying
           ? 'color-mix(in srgb, var(--c-action) 6%, var(--c-surface))'
           : hovered ? 'var(--c-bg)' : 'var(--c-surface)',
         transition: 'background 150ms ease',
       }}
     >
+      <div style={{ padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 14 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: 13.5, fontWeight: 600, color: 'var(--c-text)',
@@ -279,6 +278,37 @@ function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
           </svg>
         )}
       </IconBtn>
+
+      </div>
+
+      {material.script && (
+        <div style={{
+          margin: '0 16px 12px',
+          padding: '10px 12px',
+          background: 'var(--c-bg)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--radius-md)',
+          display: 'flex', gap: 9,
+        }}>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--c-text-3)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
+            <path d="M3 3h10v8l-2.5 2.5V11H3z" /><path d="M5.5 6.5h5M5.5 9h3" />
+          </svg>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+              color: 'var(--c-text-3)', fontFamily: 'var(--font-heading)', marginBottom: 3,
+            }}>
+              Texto do comercial
+            </div>
+            <p style={{
+              margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--c-text-2)',
+              whiteSpace: 'pre-wrap', maxWidth: '72ch',
+            }}>
+              {material.script}
+            </p>
+          </div>
+        </div>
+      )}
 
       <audio ref={audioRef} src={audioBlobUrl ?? undefined} onEnded={onPause} style={{ display: 'none' }} />
     </div>
