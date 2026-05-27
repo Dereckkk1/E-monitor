@@ -112,3 +112,48 @@ func TestStations_Create_UnknownCity_NoCoords(t *testing.T) {
 	require.Nil(t, st.Latitude)
 	require.Nil(t, st.Longitude)
 }
+
+func TestStations_Update_Geocoding(t *testing.T) {
+	ctx, repo := newTestPool(t)
+
+	// Cria sem coordenada (cidade desconhecida).
+	st, err := repo.Create(ctx, CreateStationInput{
+		Name: "Upd FM", Band: "FM",
+		City: strPtr("Cidade Inexistente XYZ"), State: strPtr("SP"),
+		StreamURL: "http://example.com/upd",
+	})
+	require.NoError(t, err)
+	require.Nil(t, st.Latitude)
+
+	// Editar para cidade conhecida → coordenada preenchida.
+	st, err = repo.Update(ctx, st.ID, UpdateStationInput{
+		Name: "Upd FM", Band: "FM",
+		City: strPtr("São Paulo"), State: strPtr("SP"),
+		StreamURL: "http://example.com/upd",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st.Latitude)
+	require.InDelta(t, -23.55, *st.Latitude, 0.6)
+	savedLat, savedLng := *st.Latitude, *st.Longitude
+
+	// Editar só o nome (mantendo a cidade) → coordenada preservada.
+	st, err = repo.Update(ctx, st.ID, UpdateStationInput{
+		Name: "Upd FM 2", Band: "FM",
+		City: strPtr("São Paulo"), State: strPtr("SP"),
+		StreamURL: "http://example.com/upd",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st.Latitude)
+	require.Equal(t, savedLat, *st.Latitude)
+	require.Equal(t, savedLng, *st.Longitude)
+
+	// Editar para cidade desconhecida → coordenada anterior preservada (não destrói dado).
+	st, err = repo.Update(ctx, st.ID, UpdateStationInput{
+		Name: "Upd FM 2", Band: "FM",
+		City: strPtr("Outra Cidade Inexistente"), State: strPtr("SP"),
+		StreamURL: "http://example.com/upd",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st.Latitude)
+	require.Equal(t, savedLat, *st.Latitude)
+}
