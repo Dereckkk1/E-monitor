@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  useCampaignsPaged, useCancelCampaign, useDeleteCampaign,
+  useCampaignsPaged, useCancelCampaign,
   useClients, useStations, useCommercials, useUploadCommercial,
   useUpdateCommercialStations, useUpdateCampaignStations, useDeleteCommercial,
   useCampaignMaterials, useMaterials, useCampaignsFinancials,
@@ -98,6 +98,15 @@ function IconTrash() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
       <path d="M2 3.5H12M5.5 3.5V2.5C5.5 2.22 5.72 2 6 2H8C8.28 2 8.5 2.22 8.5 2.5V3.5M5.5 6.5V10.5M8.5 6.5V10.5M3 3.5L3.5 11.5C3.5 11.78 3.72 12 4 12H10C10.28 12 10.5 11.78 10.5 11.5L11 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  )
+}
+
+function IconPencil() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M9.5 2L12 4.5L4.5 12H2V9.5L9.5 2Z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M8.5 3L11 5.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
     </svg>
   )
 }
@@ -1006,7 +1015,7 @@ function CPMBadge({ financials }) {
   )
 }
 
-function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCampaign, financials }) {
+function CampaignRow({ campaign, clients, allStations, cancelCampaign, financials }) {
   const confirm = useConfirm()
   const alertDialog = useAlert()
   const navigate = useNavigate()
@@ -1017,19 +1026,22 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
   const endTip   = endDateTooltip(campaign.end_date, campaign.status)
   const canCancel = campaign.status === 'programada' || campaign.status === 'ativa'
 
-  // Whole-row navigation: clicking anywhere on the listing card jumps to
-  // the wizard at /campaigns/{id}/edit. Action buttons in the right cluster
-  // (Editar, Cancelar, Excluir) stop propagation so they keep their own
-  // semantics. We also honor middle-click / cmd+click for new-tab.
+  // Whole-row navigation: clicking anywhere on the listing card opens the
+  // campaign's airings at /detections?campaign_id={id} (the campaign comes
+  // pre-selected via the deep-link param). Editing is NOT triggered by the
+  // card click anymore — it lives only on the explicit pencil button in the
+  // right cluster. Action buttons there stop propagation to keep their own
+  // semantics. We also honor cmd/ctrl+click for new-tab.
+  const detectionsHref = `/detections?campaign_id=${campaign.id}`
   function handleRowClick(e) {
     // Ignore if the click landed on an interactive descendant we don't own
     // (button / link / etc.) — those handle themselves.
     if (e.target.closest('button, a, input, select, [role="button"]')) return
     if (e.metaKey || e.ctrlKey) {
-      window.open(`/campaigns/${campaign.id}/edit`, '_blank', 'noopener')
+      window.open(detectionsHref, '_blank', 'noopener')
       return
     }
-    navigate(`/campaigns/${campaign.id}/edit`)
+    navigate(detectionsHref)
   }
 
   async function handleCancel() {
@@ -1059,10 +1071,10 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
         if (e.key === 'Enter' || e.key === ' ') {
           if (e.target.closest('button, a, input, select')) return
           e.preventDefault()
-          navigate(`/campaigns/${campaign.id}/edit`)
+          navigate(detectionsHref)
         }
       }}
-      title="Abrir campanha"
+      title="Ver veiculação da campanha"
     >
       <div className="campaign-row-header">
         <StationAvatar station={{ name: client?.name ?? '?', logo_url: client?.logo_url }} size={32} />
@@ -1097,14 +1109,6 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
               label="Relatórios"
             />
           </span>
-          {isAdmin && (
-            <Link
-              to={`/campaigns/${campaign.id}/edit`}
-              className="btn btn-secondary btn-sm"
-            >
-              Editar
-            </Link>
-          )}
           <span className={`badge ${STATUS_CLASS[campaign.status] ?? 'badge-concluida'}`}>
             {STATUS_LABEL[campaign.status] ?? campaign.status}
           </span>
@@ -1134,26 +1138,23 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, deleteCam
               sem material
             </span>
           )}
+          {isAdmin && (
+            <Link
+              to={`/campaigns/${campaign.id}/edit`}
+              className="btn btn-icon btn-sm"
+              title="Editar campanha"
+              onClick={e => e.stopPropagation()}
+              style={{ color: 'var(--c-text-2)' }}
+            >
+              <IconPencil />
+            </Link>
+          )}
           {isAdmin && canCancel && (
             <button
-              className="btn btn-muted btn-sm"
+              className="btn btn-icon btn-danger-ghost btn-sm"
               onClick={handleCancel}
               disabled={cancelCampaign.isPending}
-              title="Encerrar a campanha imediatamente"
-            >
-              Cancelar campanha
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              className="btn btn-icon btn-danger-ghost btn-sm"
-              title="Excluir campanha"
-              onClick={async () => {
-                if (await confirm(`Excluir "${campaign.name}"? Esta ação não pode ser desfeita.`)) {
-                  deleteCampaign.mutate(campaign.id)
-                }
-              }}
-              disabled={deleteCampaign.isPending}
+              title="Cancelar campanha (vai para o histórico)"
             >
               <IconTrash />
             </button>
@@ -1216,7 +1217,6 @@ export default function CampaignsPage() {
   )
 
   const cancelCampaign = useCancelCampaign()
-  const deleteCampaign = useDeleteCampaign()
 
   // Two-tier search state:
   //   searchInput → what's in the textbox (re-renders only the input itself)
@@ -1345,7 +1345,6 @@ export default function CampaignsPage() {
                     clients={clients}
                     allStations={allStations}
                     cancelCampaign={cancelCampaign}
-                    deleteCampaign={deleteCampaign}
                     financials={financialsByCampaign[c.id]}
                   />
                 ))}
