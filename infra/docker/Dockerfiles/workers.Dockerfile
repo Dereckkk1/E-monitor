@@ -7,6 +7,7 @@ COPY workers/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/diag ./cmd/diag
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-shared-hashes ./cmd/backfill-shared-hashes
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-material-durations ./cmd/backfill-material-durations
 
 FROM alpine:3.19
 # tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
@@ -18,5 +19,6 @@ RUN apk add --no-cache ffmpeg ca-certificates tzdata
 COPY --from=builder /out/api                     /usr/local/bin/api
 COPY --from=builder /out/diag                    /usr/local/bin/diag
 COPY --from=builder /out/backfill-shared-hashes  /usr/local/bin/backfill-shared-hashes
+COPY --from=builder /out/backfill-material-durations  /usr/local/bin/backfill-material-durations
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]
