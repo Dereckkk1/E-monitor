@@ -284,6 +284,7 @@ docs/
 | Webhooks (HMAC, retry, outbox) | [docs/features/webhooks.md](docs/features/webhooks.md) |
 | Presigned URLs (frontend acessa evidência direto no S3) | [docs/features/evidence-presigned-urls.md](docs/features/evidence-presigned-urls.md) |
 | Busca de emissoras (tokens AND, field OR) | [docs/features/broadcaster-search.md](docs/features/broadcaster-search.md) |
+| Geocoding de emissoras (lat/long por cidade+UF, dataset IBGE, backfill) | [docs/features/geocoding-emissoras.md](docs/features/geocoding-emissoras.md) |
 | Biblioteca de materiais por cliente | [docs/features/material-library.md](docs/features/material-library.md) |
 | Pipeline polimórfico (material_id OR commercial_id) | [docs/features/material-fingerprint-pipeline.md](docs/features/material-fingerprint-pipeline.md) |
 | Alerta de duplicata por similaridade ≥50% | [docs/features/material-similarity-warning.md](docs/features/material-similarity-warning.md) |

@@ -71,6 +71,7 @@ docs/
 | [campaign-reports.md](features/campaign-reports.md) | Menu unificado de relatórios (CSV consolidado/detalhado + PDF com logo E-monitor) em /campaigns, /detections, /reports/airtime |
 | [operations-page.md](features/operations-page.md) | Página `/operations` — supervisor ao vivo (bytes, reconnects, stall restarts, min_hashes) com wire contract de `GET /workers` |
 | [station-audience-age-ranges.md](features/station-audience-age-ranges.md) | Faixa etária da emissora vira 3 percentuais (18-24/25-49/50+); texto antigo preservado em `ageRangeLegado` |
+| [geocoding-emissoras.md](features/geocoding-emissoras.md) | lat/long de emissoras por cidade+UF (dataset IBGE embutido + backfill); geocode no Create/Update |
 
 ## `operations/` — operar o sistema em prod
 
