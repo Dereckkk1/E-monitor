@@ -53,6 +53,7 @@ type Deps struct {
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
 	Insights              *handlers.InsightsHandler
+	LiveMap               *handlers.LiveMapHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -177,6 +178,14 @@ func NewRouter(d Deps) http.Handler {
 				// do handler+repo).
 				if d.Insights != nil {
 					r.Get("/insights", d.Insights.Get)
+				}
+
+				// Mapa ao vivo — admin vê todas as emissoras monitoradas + todas
+				// as veiculações; viewer fica restrito ao próprio client via
+				// auth.ClientScopeFromContext (scope no repo). Doc:
+				// docs/features/live-map.md.
+				if d.LiveMap != nil {
+					r.Get("/live-map", d.LiveMap.Get)
 				}
 
 				// Web Vitals telemetry — qualquer usuário autenticado posta

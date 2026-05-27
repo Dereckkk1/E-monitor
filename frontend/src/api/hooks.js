@@ -506,6 +506,19 @@ export function useStreamHealth(params = {}) {
   })
 }
 
+// Live map de UMA campanha: emissoras-alvo (com coordenada) + veiculações dela.
+// Backend escopa pelo client do viewer. Só dispara quando há campanha
+// selecionada; polling de 20s; mantém o último payload bom durante o refetch.
+export function useLiveMap(campaignId) {
+  return useQuery({
+    queryKey: ['live-map', campaignId],
+    queryFn: () => api.get('/live-map', { params: { campaign_id: campaignId } }).then(r => r.data),
+    enabled: !!campaignId,
+    refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useStationHealthEvents(stationId, days = 7) {
   return useQuery({
     queryKey: ['stream-health-events', stationId, days],
