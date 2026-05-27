@@ -506,6 +506,18 @@ export function useStreamHealth(params = {}) {
   })
 }
 
+// Live map — admin vê todas as emissoras monitoradas + todas as veiculações;
+// viewer é escopado ao próprio client no servidor. Polling de 20s; mantém o
+// último payload bom enquanto refaz o fetch (evita "piscar" o mapa).
+export function useLiveMap() {
+  return useQuery({
+    queryKey: ['live-map'],
+    queryFn: () => api.get('/live-map').then(r => r.data),
+    refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useStationHealthEvents(stationId, days = 7) {
   return useQuery({
     queryKey: ['stream-health-events', stationId, days],
