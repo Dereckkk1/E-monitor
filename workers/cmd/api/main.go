@@ -285,7 +285,7 @@ func main() {
 	}
 
 	deps := api.Deps{
-		Stations:     &handlers.StationsHandler{Repo: stations},
+		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
 		Clients:      &handlers.ClientsHandler{Repo: clients},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
