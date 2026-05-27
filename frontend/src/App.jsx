@@ -29,6 +29,7 @@ import AdminStationFailuresPage from './pages/AdminStationFailuresPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
 import InsightsPage from './pages/InsightsPage'
+import LiveMapPage from './pages/LiveMapPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -121,6 +122,7 @@ function AppShell() {
             <Route path="/detections"  element={<DetectionsPage />} />
             <Route path="/materials"   element={<MaterialsPage />} />
             <Route path="/insights"    element={<InsightsPage />} />
+            <Route path="/live-map"    element={<LiveMapPage />} />
             <Route path="/detections/:id" element={<DetectionDetailPage />} />
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
             <Route path="/admin/overview" element={
