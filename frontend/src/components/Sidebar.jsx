@@ -192,7 +192,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Indicadores</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
-      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais</SidebarLink>
+      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais e Distribuição</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
 
       <span className="sidebar-section-label">Infraestrutura</span>
@@ -222,7 +222,7 @@ function ClientNav({ onClose }) {
       <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Dashboard</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
-      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais</SidebarLink>
+      <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais e Distribuição</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>
