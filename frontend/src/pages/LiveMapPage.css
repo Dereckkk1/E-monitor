@@ -120,7 +120,26 @@
   font-size: 12px; font-weight: 600; letter-spacing: 0.05em;
   text-transform: uppercase; color: var(--c-text-2);
 }
-.lm-canvas-meta { font-size: 12px; color: var(--c-text-3); }
+.lm-canvas-meta {
+  display: inline-flex; align-items: center; gap: 12px;
+  font-size: 12px; color: var(--c-text-3);
+}
+.lm-map-dl {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px 5px 9px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  border-radius: 999px;
+  font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms cubic-bezier(0.4,0,0.2,1);
+}
+.lm-map-dl:hover:not(:disabled) {
+  border-color: var(--c-action); color: var(--c-action);
+  transform: translateY(-1px);
+}
+.lm-map-dl:disabled { opacity: 0.55; cursor: not-allowed; }
 .lm-count {
   font-size: 12px; font-weight: 600; color: var(--c-text-3);
   background: var(--c-surface-2); padding: 1px 8px; border-radius: 999px;
@@ -252,6 +271,22 @@
   vector-effect: non-scaling-stroke; transition: fill 400ms ease;
 }
 .br-state--active { fill: #fbd2e7; stroke: #ec4f93; }
+
+/* Sigla da UF (centroide via d3-geo). Sem pointer events pra não roubar
+   hover dos pontos. Cor escura legível tanto em estado neutro quanto ativo. */
+.br-label {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  fill: #6b7280;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.04em;
+  paint-order: stroke;
+  stroke: rgba(255,255,255,0.55);
+  stroke-width: 2px;
+}
+.br-label--active { fill: var(--c-action); }
 
 .br-dot-group { cursor: pointer; }
 .live-dot { stroke: #fff; stroke-width: 1.25; transition: r 120ms ease; }
