@@ -18,8 +18,12 @@ type Campaign struct {
 	EndDate        time.Time   `json:"end_date"`
 	Status         string      `json:"status"`
 	TargetStations []uuid.UUID `json:"target_stations"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	// FixedCPM, quando setado, sobrescreve o CPM calculado dinamicamente nas
+	// telas de exibição (/campaigns, /insights, dashboard). NULL = usa o
+	// cálculo dinâmico (executado / impactos × 1000).
+	FixedCPM  *float64  `json:"fixed_cpm"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// MaterialCount só é populado pelo ListPaged (não pelas outras queries —
 	// ficam em zero). Usado pela UI pra mostrar chip "sem material".
 	MaterialCount int `json:"material_count"`
@@ -47,10 +51,10 @@ func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campai
 		INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
-		          created_at, updated_at`,
+		          fixed_cpm, created_at, updated_at`,
 		in.ClientID, in.Name, in.StartDate, in.EndDate, in.TargetStations,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
 	return &camp, err
 }
 
@@ -113,7 +117,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 	offset := (page - 1) * pageSize
 	rows, err := c.pool.Query(ctx, `
 		SELECT c.id, c.client_id, c.name, c.start_date, c.end_date, c.status, c.target_stations,
-		       c.created_at, c.updated_at,
+		       c.fixed_cpm, c.created_at, c.updated_at,
 		       COALESCE((
 		         SELECT COUNT(*)::int
 		         FROM campaign_materials cm
@@ -143,7 +147,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
 			&camp.EndDate, &camp.Status, &camp.TargetStations,
-			&camp.CreatedAt, &camp.UpdatedAt, &camp.MaterialCount); err != nil {
+			&camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt, &camp.MaterialCount); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, camp)
@@ -158,7 +162,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientID *uuid.UUID) ([]Campaign, error) {
 	const baseQuery = `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
-		       created_at, updated_at
+		       fixed_cpm, created_at, updated_at
 		FROM campaigns
 	`
 	const orderClause = `
@@ -198,7 +202,7 @@ func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientI
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
 			&camp.EndDate, &camp.Status, &camp.TargetStations,
-			&camp.CreatedAt, &camp.UpdatedAt); err != nil {
+			&camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, camp)
@@ -210,10 +214,10 @@ func (c *Campaigns) Get(ctx context.Context, id uuid.UUID) (*Campaign, error) {
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
-		       created_at, updated_at
+		       fixed_cpm, created_at, updated_at
 		FROM campaigns WHERE id = $1`, id,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -359,10 +363,31 @@ func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasi
 		SET name = $2, start_date = $3, end_date = $4, updated_at = now()
 		WHERE id = $1
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
-		          created_at, updated_at`,
+		          fixed_cpm, created_at, updated_at`,
 		id, in.Name, in.StartDate, in.EndDate,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &camp, nil
+}
+
+// UpdateFixedCPM seta (ou limpa, quando value=nil) o CPM fixo da campanha.
+// É um endpoint dedicado pq o wizard salva isso no Step 6 de Pricing, separado
+// do basic data (Step 1). Quando NULL, o frontend volta a usar o cálculo
+// dinâmico de CPM. Retorna pgx.ErrNoRows se o id não existir.
+func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *float64) (*Campaign, error) {
+	var camp Campaign
+	err := c.pool.QueryRow(ctx, `
+		UPDATE campaigns
+		SET fixed_cpm = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
+		          fixed_cpm, created_at, updated_at`,
+		id, value,
+	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +413,9 @@ type CampaignFinancials struct {
 	TotalInvested   float64   `json:"total_invested"`
 	TotalInsertions int       `json:"total_insertions"`
 	TotalAudience   float64   `json:"total_audience"`
+	// FixedCPM, quando setado, sobrescreve o CPM derivado (invested/audience).
+	// O frontend usa esse valor diretamente em vez de calcular.
+	FixedCPM *float64 `json:"fixed_cpm"`
 }
 
 // FinancialsByCampaign retorna o agregado das campanhas. Quando clientID
@@ -447,7 +475,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			c.id,
 			COALESCE(per_ins.invested, 0) + COALESCE(consolidated_inv.invested, 0) AS total_invested,
 			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
-			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience
+			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
+			c.fixed_cpm
 		FROM campaigns c
 		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
@@ -462,7 +491,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 	out := make([]CampaignFinancials, 0)
 	for rows.Next() {
 		var f CampaignFinancials
-		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience); err != nil {
+		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience, &f.FixedCPM); err != nil {
 			return nil, fmt.Errorf("campaigns.FinancialsByCampaign: scan: %w", err)
 		}
 		out = append(out, f)

@@ -52,7 +52,7 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 |---|---|
 | **Impactos** | `Σ_estação (detections_count × PMM)`. Estação sem PMM → não soma (mas conta em `stations_count`) |
 | **Impactos por gênero** | `Σ (count × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`) |
-| **CPM** | `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0 |
+| **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md) |
 | **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; `(consolidated/expected) × bonus` em consolidated |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)` |
 | **Investido executado** | `consolidated`: `cv × executed/expected`. `per_insertion`: `Σ_type (unit_value × (in_slot+out_slot))` |

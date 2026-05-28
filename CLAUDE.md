@@ -319,6 +319,7 @@ docs/
 | Segmentos ADTS-AAC e extração de evidência | [docs/architecture/evidence-segments.md](docs/architecture/evidence-segments.md) |
 | Design tokens, CSS, .btn, RSelect, .field | [docs/architecture/frontend-design-system.md](docs/architecture/frontend-design-system.md) |
 | Wizard de campanha (6 etapas) | [docs/features/campaign-wizard.md](docs/features/campaign-wizard.md) |
+| CPM fixo opcional por campanha (Step 6 do wizard, override em /campaigns + /insights + dashboard) | [docs/features/campaign-fixed-cpm.md](docs/features/campaign-fixed-cpm.md) |
 | Etapa Conexão do wizard (Step 3 — testar/trocar stream_url por emissora; ping/stream/worker efêmeros) | [docs/features/campaign-connection-step.md](docs/features/campaign-connection-step.md) |
 | Página /detections (grade station × material × dia) | [docs/features/detections-view.md](docs/features/detections-view.md) |
 | Página /materials (materiais tocáveis por campanha + Σ programado por emissora, admin + cliente) | [docs/features/materials-page.md](docs/features/materials-page.md) |

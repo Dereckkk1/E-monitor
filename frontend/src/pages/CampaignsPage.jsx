@@ -986,15 +986,22 @@ const _BRL_CAMPAIGN_LIST = new Intl.NumberFormat('pt-BR', {
   style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
 function CPMBadge({ financials }) {
-  const { total_invested: inv, total_insertions: ins, total_audience: aud } = financials
-  const cpm = aud > 0 ? (inv / aud) * 1000 : null
+  const { total_invested: inv, total_insertions: ins, total_audience: aud, fixed_cpm: fixed } = financials
+  // CPM fixo (quando setado na campanha) sobrescreve o cálculo dinâmico, pra
+  // refletir o número comercial pré-acordado em vez do derivado de pricing.
+  const dynamicCPM = aud > 0 ? (inv / aud) * 1000 : null
+  const cpm = fixed != null ? fixed : dynamicCPM
+  const isFixed = fixed != null
+  const tooltip = isFixed
+    ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. Investimento ${_BRL_CAMPAIGN_LIST.format(inv)} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
+    : cpm != null
+      ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
+      : ins > 0
+        ? 'Emissoras sem PMM cadastrado — CPM indeterminado.'
+        : 'Nenhuma inserção realizada ainda — CPM indeterminado.'
   return (
     <span
-      title={cpm != null
-        ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
-        : ins > 0
-          ? 'Emissoras sem PMM cadastrado — CPM indeterminado.'
-          : 'Nenhuma inserção realizada ainda — CPM indeterminado.'}
+      title={tooltip}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5,
         padding: '2px 8px', borderRadius: 'var(--radius-full)',
@@ -1010,6 +1017,7 @@ function CPMBadge({ financials }) {
       {_BRL_CAMPAIGN_LIST.format(inv)}
       <span style={{ color: 'var(--c-action)', opacity: 0.7, fontWeight: 500 }}>
         · CPM {cpm != null ? _BRL_CAMPAIGN_LIST.format(cpm) : '—'}
+        {isFixed && <span style={{ marginLeft: 3, fontSize: 8.5, opacity: 0.85 }}>(fixo)</span>}
       </span>
     </span>
   )

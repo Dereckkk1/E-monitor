@@ -219,6 +219,39 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// UpdateFixedCPM seta (ou limpa, quando fixed_cpm = null) o CPM fixo da
+// campanha. Usado pelo Step 6 do wizard (pricing): quando preenchido,
+// sobrescreve o CPM derivado nas telas /campaigns, /insights e dashboard.
+// Body: { "fixed_cpm": <number> | null }.
+func (h *CampaignsHandler) UpdateFixedCPM(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return
+	}
+	var in struct {
+		FixedCPM *float64 `json:"fixed_cpm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	if in.FixedCPM != nil && *in.FixedCPM < 0 {
+		http.Error(w, "fixed_cpm must be >= 0", 400)
+		return
+	}
+	out, err := h.Repo.UpdateFixedCPM(r.Context(), id, in.FixedCPM)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
 func (h *CampaignsHandler) Start(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

@@ -122,8 +122,17 @@ type BucketRow struct {
 // (validate-campaigns → core → investment → buckets) e devolve o
 // payload completo formatado para serialização JSON.
 //
-// CPM = (investido_executado / impactos) × 1000. Quando impactos = 0
+// CPM padrão = (investido_executado / impactos) × 1000. Quando impactos = 0
 // (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
+//
+// Override por fixed_cpm: cada campanha pode ter um CPM fixo pré-acordado.
+// Quando setado, o CPM exibido é a média ponderada por impactos:
+//
+//	cpm = Σ(per_campaign_cpm × impactos_campaign) / Σ(impactos_campaign)
+//
+// onde per_campaign_cpm = fixed_cpm (se setado) OU dinâmico da campanha.
+// Investido (contratado/executado) NÃO é alterado — continua sendo o número
+// real derivado do pricing por emissora.
 func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayload, error) {
 	briefs, err := r.fetchCampaigns(ctx, p.ClientID, p.CampaignIDs)
 	if err != nil {
@@ -142,9 +151,9 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("aggregateBuckets: %w", err)
 	}
 
-	cpm := 0.0
-	if core.Impactos > 0 {
-		cpm = (inv.Executado / float64(core.Impactos)) * 1000.0
+	cpm, err := r.computeCPM(ctx, p, inv.Executado, core.Impactos)
+	if err != nil {
+		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
 
 	return &InsightsPayload{
@@ -445,6 +454,138 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		return inv, bon, err
 	}
 	return inv, bon, nil
+}
+
+// computeCPM aplica a regra de fixed_cpm por campanha em cima dos números
+// agregados. Quando NENHUMA campanha selecionada tem fixed_cpm, devolve o
+// CPM dinâmico clássico (executado / impactos × 1000) — fast path. Quando
+// pelo menos uma tem fixed_cpm, faz uma query por-campanha pra calcular a
+// média ponderada por impactos:
+//
+//	per_campaign_cpm = COALESCE(fixed_cpm, dynamic_cpm)
+//	cpm_final = Σ(per_campaign_cpm × impactos) / Σ(impactos)
+//
+// Campanhas sem impactos não contribuem (peso zero); se a soma total de
+// impactos for zero, devolve 0.
+func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecutado float64, totalImpactos int64) (float64, error) {
+	// Fast path: nenhum CPM fixo nas campanhas selecionadas → cálculo clássico.
+	var anyFixed bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+		    SELECT 1 FROM campaigns
+		    WHERE id = ANY($1::uuid[]) AND fixed_cpm IS NOT NULL
+		)`, p.CampaignIDs).Scan(&anyFixed); err != nil {
+		return 0, err
+	}
+	if !anyFixed {
+		if totalImpactos == 0 {
+			return 0, nil
+		}
+		return (totalExecutado / float64(totalImpactos)) * 1000.0, nil
+	}
+
+	// Path com fixed_cpm: precisa de impactos e executado por campanha.
+	// Reusa a mesma estrutura de filtros do aggregateCore + aggregateInvestment
+	// mas agrupado por campaign_id em vez de agregado.
+	rows, err := r.pool.Query(ctx, `
+		WITH per_campaign_impactos AS (
+		    SELECT d.campaign_id,
+		           COALESCE(SUM(s.pmm), 0)::float8 AS impactos
+		    FROM detections d
+		    JOIN stations s ON s.id = d.station_id
+		    WHERE d.campaign_id = ANY($1::uuid[])
+		      AND d.retracted_at IS NULL
+		      AND d.detected_at::date BETWEEN $2 AND $3
+		      AND s.pmm IS NOT NULL
+		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
+		    GROUP BY d.campaign_id
+		),
+		camp_meta AS (
+		    SELECT id, start_date, end_date, fixed_cpm,
+		           GREATEST(0, (LEAST(end_date, $3::date) - GREATEST(start_date, $2::date) + 1))::int AS overlap_days,
+		           (end_date - start_date + 1)::int AS total_days
+		    FROM campaigns
+		    WHERE id = ANY($1::uuid[])
+		),
+		per_campaign_exec AS (
+		    SELECT csp.campaign_id,
+		           COALESCE(SUM(
+		               CASE
+		                   WHEN csp.mode='consolidated' AND COALESCE(t.expected, 0) > 0
+		                       THEN csp.consolidated_value * COALESCE(t.executed, 0)::numeric / COALESCE(t.expected, 1)::numeric
+		                   WHEN csp.mode='per_insertion'
+		                       THEN COALESCE(pi.pi_executado, 0)
+		                   ELSE 0
+		               END
+		           ), 0)::float8 AS executado
+		    FROM campaign_station_pricing csp
+		    JOIN camp_meta cm ON cm.id = csp.campaign_id
+		    LEFT JOIN (
+		        SELECT s.campaign_id, s.station_id,
+		               SUM(s.expected)::bigint               AS expected,
+		               SUM(s.in_slot + s.out_slot)::bigint   AS executed
+		        FROM daily_play_summary s
+		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
+		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
+		          AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
+		        GROUP BY s.campaign_id, s.station_id
+		    ) t ON t.campaign_id = csp.campaign_id AND t.station_id = csp.station_id
+		    LEFT JOIN (
+		        SELECT s.campaign_id, s.station_id,
+		               COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado
+		        FROM daily_play_summary s
+		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
+		        JOIN campaign_station_type_pricing tp
+		          ON tp.campaign_id = s.campaign_id
+		         AND tp.station_id  = s.station_id
+		         AND tp.type_id     = s.type_id
+		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
+		          AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
+		        GROUP BY s.campaign_id, s.station_id
+		    ) pi ON pi.campaign_id = csp.campaign_id AND pi.station_id = csp.station_id
+		    WHERE ($4::uuid[] = '{}' OR csp.station_id = ANY($4::uuid[]))
+		    GROUP BY csp.campaign_id
+		)
+		SELECT cm.id,
+		       cm.fixed_cpm,
+		       COALESCE(pi.impactos, 0)::float8  AS impactos,
+		       COALESCE(pe.executado, 0)::float8 AS executado
+		FROM camp_meta cm
+		LEFT JOIN per_campaign_impactos pi ON pi.campaign_id = cm.id
+		LEFT JOIN per_campaign_exec     pe ON pe.campaign_id = cm.id
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var weightedSum, totalWeight float64
+	for rows.Next() {
+		var id uuid.UUID
+		var fixed *float64
+		var impactos, executado float64
+		if err := rows.Scan(&id, &fixed, &impactos, &executado); err != nil {
+			return 0, err
+		}
+		if impactos <= 0 {
+			continue
+		}
+		var perCPM float64
+		if fixed != nil {
+			perCPM = *fixed
+		} else {
+			perCPM = (executado / impactos) * 1000.0
+		}
+		weightedSum += perCPM * impactos
+		totalWeight += impactos
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if totalWeight == 0 {
+		return 0, nil
+	}
+	return weightedSum / totalWeight, nil
 }
 
 // fetchCampaigns devolve briefs (id, nome, datas) das campanhas pedidas,
