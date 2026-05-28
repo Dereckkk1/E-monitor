@@ -15,8 +15,6 @@ const CODE_TO_UF = {
   '51': 'MT', '52': 'GO', '53': 'DF',
 }
 
-// ufOf cobre as estruturas de malha possíveis: SIGLA/sigla (GeoJSON com sigla),
-// codarea/codigo/id (malha IBGE, código numérico → sigla via CODE_TO_UF).
 function ufOf(feature) {
   const p = feature.properties || {}
   const sigla = p.SIGLA || p.sigla || p.UF || p.uf
@@ -25,11 +23,16 @@ function ufOf(feature) {
   return CODE_TO_UF[code] || code
 }
 
+// Tudo que está sendo retornado pelo /live-map é uma emissora-alvo da campanha
+// — por default consideramos "monitorando" (pulso). Só caímos pra estados não-OK
+// quando o backend EXPLICITAMENTE marca a emissora como degradada ou caída.
+// Health_status nulo/desconhecido = ok (não vamos pintar emissora ativa de
+// cinza só porque o health_status ainda não foi populado).
 function healthOf(st) {
-  const h = st.health_status
-  if (h === 'ok') return 'ok'
-  if (h === 'degraded') return 'degraded'
-  return 'down'
+  const h = (st.health_status || '').toLowerCase()
+  if (h === 'degraded' || h === 'unstable') return 'degraded'
+  if (h === 'failing' || h === 'down' || h === 'offline' || h === 'error') return 'down'
+  return 'ok'
 }
 
 function relativeTime(iso) {
@@ -74,8 +77,6 @@ export default function BrazilMap({ stations = [] }) {
       .sort((a, b) => order[a.health] - order[b.health])
   }, [stations, projection])
 
-  const okCount = points.filter((p) => p.health === 'ok').length
-
   return (
     <div className="brazil-map">
       <svg
@@ -107,9 +108,13 @@ export default function BrazilMap({ stations = [] }) {
               onMouseEnter={() => setHover({ st, x, y, health })}
               onMouseLeave={() => setHover((h) => (h && h.st.id === st.id ? null : h))}
             >
-              {health === 'ok' && <circle className="live-halo" r={5} />}
+              {/* Halo pulsando pra qualquer emissora não-offline — independe de
+                  detecção. Mostra que estamos escutando aquela emissora. */}
+              {health !== 'down' && (
+                <circle className={`live-halo live-halo--${health}`} r={5} />
+              )}
               <circle className={`live-dot live-dot--${health}`} r={4} />
-              <circle className="live-dot-hit" r={11} />
+              <circle className="live-dot-hit" r={12} />
             </g>
           ))}
         </g>
@@ -133,13 +138,6 @@ export default function BrazilMap({ stations = [] }) {
           </span>
         </div>
       )}
-
-      <div className="map-legend" aria-hidden="true">
-        <span className="map-legend-item"><i className="ldot ldot--ok" />Monitorando</span>
-        <span className="map-legend-item"><i className="ldot ldot--degraded" />Instável</span>
-        <span className="map-legend-item"><i className="ldot ldot--down" />Offline</span>
-        <span className="map-legend-count">{okCount} ao vivo</span>
-      </div>
     </div>
   )
 }

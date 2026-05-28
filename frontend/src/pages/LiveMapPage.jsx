@@ -1,70 +1,89 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import RSelect from '../components/RSelect'
+import StationAvatar from '../components/StationAvatar'
 import { useAuth } from '../contexts/AuthContext'
 import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
+import { materialColor } from '../utils/materialColor'
 import BrazilMap from '../components/BrazilMap'
 import './LiveMapPage.css'
 
-function fmtTime(iso) {
-  if (!iso) return { time: '', date: '' }
+function pad2(n) { return String(n).padStart(2, '0') }
+function fmtDate(iso) {
   const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return { time: '', date: '' }
-  return {
-    time: d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    date: d.toLocaleDateString('pt-BR'),
-  }
+  if (Number.isNaN(d.getTime())) return ''
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`
+}
+function fmtTime(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+}
+function freqStr(d) {
+  return d.frequency_mhz != null ? String(d.frequency_mhz).replace('.', ',') : null
 }
 
-function stationLabel(d) {
-  const freq = d.frequency_mhz ? ` (${d.frequency_mhz})` : ''
-  const band = d.band ? ` ${d.band}` : ''
-  return `${d.station_name}${freq}${band}`.trim()
-}
-
-/* ── Feed de últimas veiculações ─────────────────────────────────── */
-function AiringsFeed({ detections, stagger = true }) {
+/* ── Linha do feed — espelha o AirtimeDetectionRow (sem play/pricing) ─── */
+function LiveAiringRow({ detection }) {
+  const place = [detection.city, detection.state].filter(Boolean).join(' / ')
+  const freq = freqStr(detection)
+  const matColor = materialColor(detection.commercial_id)
   return (
-    <div className={`lm-feed-list${stagger ? ' lm-stagger' : ''}`} key={detections[0]?.id ?? 'empty'}>
-      {detections.map((d) => {
-        const t = fmtTime(d.detected_at)
-        const loc = [d.city, d.state].filter(Boolean).join(' / ')
-        const material = [d.commercial_name, d.client_name].filter(Boolean).join(' · ')
-        return (
-          <div className="lm-row" key={d.id}>
-            <span className="lm-row-pulse" aria-hidden="true" />
-            <div className="lm-row-body">
-              <div className="lm-row-top">
-                <span className="lm-row-station">{stationLabel(d)}</span>
-                <span className="lm-row-time">{t.time}</span>
-              </div>
-              <div className="lm-row-sub">
-                <span className="lm-row-loc">{loc}</span>
-                <span className="lm-row-date">{t.date}</span>
-              </div>
-              {material && <span className="lm-row-material">{material}</span>}
-            </div>
-          </div>
-        )
-      })}
-    </div>
+    <article className="la-row" style={{ '--material-color': matColor }}>
+      <div className="la-row-time-block">
+        <span className="la-row-date">{fmtDate(detection.detected_at)}</span>
+        <span className="la-row-time">{fmtTime(detection.detected_at)}</span>
+      </div>
+
+      <div className="la-row-station">
+        <StationAvatar
+          station={{ name: detection.station_name, logo_url: detection.station_logo_url }}
+          size={36}
+        />
+        <div className="la-row-station-text">
+          <span className="la-row-station-name">
+            {detection.station_name}
+            {freq && <span className="la-row-station-freq"> · {detection.band} ({freq})</span>}
+          </span>
+          {place && <span className="la-row-station-place">{place}</span>}
+        </div>
+      </div>
+
+      <div className="la-row-material">
+        <span className="la-row-material-name" style={{ color: matColor }} title={detection.commercial_name}>
+          {detection.commercial_name}
+        </span>
+        {detection.client_name && (
+          <span className="la-row-material-client">{detection.client_name}</span>
+        )}
+      </div>
+
+      <span className="la-row-stripe" aria-hidden />
+    </article>
   )
 }
 
-/* ── Skeletons (shape-matched) ───────────────────────────────────── */
+/* ── Skeleton (shape-matched) ─────────────────────────────────────── */
 function FeedSkeleton() {
-  const widths = ['72%', '58%', '80%', '64%', '50%', '76%']
+  const rows = [0, 1, 2, 3, 4, 5]
   return (
-    <div className="lm-feed-list">
-      {widths.map((w, i) => (
-        <div className="lm-row lm-row--skeleton" key={i}>
-          <span className="lm-skel lm-skel-circle" style={{ width: 8, height: 8, marginTop: 5 }} />
-          <div className="lm-row-body">
-            <div className="lm-row-top">
-              <span className="lm-skel" style={{ width: w, height: 13 }} />
-              <span className="lm-skel" style={{ width: 50, height: 11 }} />
+    <div className="la-list">
+      {rows.map((i) => (
+        <div className="la-row la-row--skel" key={i}>
+          <div className="la-row-time-block">
+            <span className="la-skel" style={{ width: 62, height: 11 }} />
+            <span className="la-skel" style={{ width: 52, height: 14, marginTop: 4 }} />
+          </div>
+          <div className="la-row-station">
+            <span className="la-skel la-skel-circle" style={{ width: 36, height: 36 }} />
+            <div className="la-row-station-text">
+              <span className="la-skel" style={{ width: '78%', height: 13 }} />
+              <span className="la-skel" style={{ width: '46%', height: 11, marginTop: 4 }} />
             </div>
-            <span className="lm-skel" style={{ width: '38%', height: 10, marginTop: 6 }} />
+          </div>
+          <div className="la-row-material">
+            <span className="la-skel" style={{ width: '70%', height: 13 }} />
+            <span className="la-skel" style={{ width: '40%', height: 11, marginTop: 4 }} />
           </div>
         </div>
       ))}
@@ -75,29 +94,29 @@ function FeedSkeleton() {
 function MapSkeleton() {
   return (
     <div className="lm-map-skeleton">
-      <div className="lm-skel lm-map-skeleton-shape" />
+      <div className="la-skel lm-map-skeleton-shape" />
     </div>
   )
 }
 
 /* ── Empty (tutorial estilizado — design.md §4.7) ────────────────── */
 const GHOST_FEED = [
-  { id: 'g1', station_name: 'Rádio Exemplo FM', city: 'São Paulo', state: 'SP', commercial_name: 'Sua campanha aqui' },
-  { id: 'g2', station_name: 'Rádio Exemplo AM', city: 'Goiânia', state: 'GO', commercial_name: 'Sua campanha aqui' },
-  { id: 'g3', station_name: 'Rádio Exemplo FM', city: 'Curitiba', state: 'PR', commercial_name: 'Sua campanha aqui' },
+  { id: 'g1', station_name: 'Rádio Exemplo FM', city: 'São Paulo', state: 'SP', band: 'FM', frequency_mhz: 100.5, commercial_name: 'Sua campanha aqui', commercial_id: 'g1', detected_at: new Date().toISOString() },
+  { id: 'g2', station_name: 'Rádio Exemplo AM', city: 'Goiânia', state: 'GO', band: 'AM', frequency_mhz: 820, commercial_name: 'Sua campanha aqui', commercial_id: 'g2', detected_at: new Date().toISOString() },
+  { id: 'g3', station_name: 'Rádio Exemplo FM', city: 'Curitiba', state: 'PR', band: 'FM', frequency_mhz: 98.1, commercial_name: 'Sua campanha aqui', commercial_id: 'g3', detected_at: new Date().toISOString() },
 ]
 
 function EmptyTutorial({ title, description, cta }) {
   return (
     <div className="lm-empty">
       <div className="lm-empty-ghost" aria-hidden="true">
-        <section className="lm-panel lm-feed">
-          <div className="lm-panel-head"><span className="lm-panel-title">Últimas Veiculações</span></div>
-          <AiringsFeed detections={GHOST_FEED} stagger={false} />
-        </section>
-        <section className="lm-panel lm-map-panel">
-          <BrazilMap stations={[]} />
-        </section>
+        <LiveCanvas
+          feedTitle="Últimas Veiculações"
+          mapTitle="Emissoras monitoradas"
+          mapMeta=""
+          feed={<div className="la-list">{GHOST_FEED.map(d => <LiveAiringRow key={d.id} detection={d} />)}</div>}
+          map={<BrazilMap stations={[]} />}
+        />
       </div>
       <div className="lm-empty-overlay">
         <div className="lm-empty-card">
@@ -116,10 +135,34 @@ function EmptyTutorial({ title, description, cta }) {
   )
 }
 
+/* ── Canvas único: feed + divisor + mapa numa só superfície ──────── */
+function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
+  return (
+    <section className="lm-canvas">
+      <div className="lm-canvas-grid">
+        <div className="lm-canvas-feed">
+          <div className="lm-canvas-head">
+            <span className="lm-canvas-title">{feedTitle}</span>
+            {feedCount != null && <span className="lm-count">{feedCount}</span>}
+          </div>
+          {feed}
+        </div>
+        <div className="lm-canvas-sep" aria-hidden />
+        <div className="lm-canvas-map">
+          <div className="lm-canvas-head">
+            <span className="lm-canvas-title">{mapTitle}</span>
+            {mapMeta && <span className="lm-canvas-meta">{mapMeta}</span>}
+          </div>
+          {map}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 /* ── Página ──────────────────────────────────────────────────────── */
 export default function LiveMapPage() {
   const { isAdmin, user } = useAuth()
-  // Viewer: clientId derivado do próprio user (sem state/efeito). Admin: escolhe.
   const [adminClientId, setAdminClientId] = useState(null)
   const clientId = isAdmin ? adminClientId : (user?.client_id ?? null)
   const [campaignId, setCampaignId] = useState(null)
@@ -155,7 +198,7 @@ export default function LiveMapPage() {
     emptyTutorial = (
       <EmptyTutorial
         title="Escolha um cliente e uma campanha"
-        description="Selecione o cliente e a campanha nos filtros acima para ver, em tempo real, onde as emissoras estão sendo monitoradas e as últimas veiculações no mapa do Brasil."
+        description="Selecione o cliente e a campanha nos filtros acima para ver, em tempo real, onde as emissoras estão sendo monitoradas e as últimas veiculações."
       />
     )
   } else if (!campaignId) {
@@ -173,6 +216,10 @@ export default function LiveMapPage() {
     )
   }
 
+  const mapMeta = !isLoading && stations.length > 0
+    ? `${stations.length} emissora${stations.length === 1 ? '' : 's'} · ${activeStates} estado${activeStates === 1 ? '' : 's'}`
+    : ''
+
   return (
     <div className="lm-page">
       <header className="lm-header">
@@ -181,6 +228,7 @@ export default function LiveMapPage() {
           <span className="lm-live">
             <span className="lm-live-dot" />
             ao vivo · atualiza a cada 20s
+            {isFetching && <span className="lm-refreshing" aria-label="atualizando" />}
           </span>
         )}
       </header>
@@ -232,32 +280,24 @@ export default function LiveMapPage() {
           <button className="btn btn-secondary" onClick={() => refetch()}>Tentar de novo</button>
         </div>
       ) : (
-        <div className="lm-grid">
-          <section className="lm-panel lm-feed">
-            <div className="lm-panel-head">
-              <span className="lm-panel-title">Últimas Veiculações</span>
-              {!isLoading && <span className="lm-count">{detections.length}</span>}
-            </div>
-            {isLoading ? (
+        <LiveCanvas
+          feedTitle="Últimas Veiculações"
+          feedCount={!isLoading ? detections.length : null}
+          mapTitle="Emissoras monitoradas"
+          mapMeta={mapMeta}
+          feed={
+            isLoading ? (
               <FeedSkeleton />
             ) : detections.length === 0 ? (
-              <div className="lm-feed-empty">Nenhuma veiculação recente nesta campanha.</div>
+              <div className="la-empty">Nenhuma veiculação recente nesta campanha.</div>
             ) : (
-              <AiringsFeed detections={detections} />
-            )}
-          </section>
-
-          <section className="lm-panel lm-map-panel">
-            <div className="lm-panel-head">
-              <span className="lm-panel-title">Emissoras monitoradas</span>
-              {!isLoading && (
-                <span className="lm-map-meta">
-                  {isFetching && <span className="lm-map-refreshing" />}
-                  {stations.length} emissora{stations.length === 1 ? '' : 's'} · {activeStates} estado{activeStates === 1 ? '' : 's'}
-                </span>
-              )}
-            </div>
-            {isLoading ? (
+              <div className="la-list la-stagger">
+                {detections.map(d => <LiveAiringRow key={d.id} detection={d} />)}
+              </div>
+            )
+          }
+          map={
+            isLoading ? (
               <MapSkeleton />
             ) : stations.length === 0 ? (
               <div className="lm-map-empty">
@@ -266,9 +306,9 @@ export default function LiveMapPage() {
               </div>
             ) : (
               <BrazilMap stations={stations} />
-            )}
-          </section>
-        </div>
+            )
+          }
+        />
       )}
     </div>
   )
