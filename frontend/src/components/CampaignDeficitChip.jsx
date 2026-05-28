@@ -17,7 +17,7 @@ export default function CampaignDeficitChip({ data }) {
         <span className="cdc-num">entregue <b>{delivered}</b></span>
         <span className="cdc-dot">·</span>
         <span className="cdc-num cdc-deficit">faltam <b>{deficit}</b></span>
-        {isSilent && <span className="cdc-pill cdc-pill-warn">silent-gap</span>}
+        {isSilent && <span className="cdc-pill cdc-pill-warn">déficit</span>}
       </div>
       <svg className="cdc-arrow" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

@@ -53,6 +53,25 @@ function parseLocalDate(iso) {
   return new Date(y, m - 1, d)
 }
 
+function mergeRanges(ranges) {
+  if (!ranges.length) return []
+  const sorted = [...ranges].sort((a, b) => a.from - b.from)
+  const out = [{ ...sorted[0] }]
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1]
+    const cur = sorted[i]
+    if (cur.from <= last.to) last.to = Math.max(last.to, cur.to)
+    else out.push({ ...cur })
+  }
+  return out
+}
+
+// Labels a cada 3h (9 marks) + tracinhos sutis a cada 1h (25 marks).
+// Primárias (sempre visíveis) ficam a cada 6h.
+const RIBBON_HOUR_LABELS  = [0, 3, 6, 9, 12, 15, 18, 21, 24]
+const RIBBON_HOUR_PRIMARY = new Set([0, 6, 12, 18, 24])
+const RIBBON_HOUR_TICKS   = Array.from({ length: 25 }, (_, i) => i)
+
 function IncidentRibbon({ incidents, dateIso }) {
   const ranges = useMemo(() => {
     const day = parseLocalDate(dateIso)
@@ -74,27 +93,91 @@ function IncidentRibbon({ incidents, dateIso }) {
     return out
   }, [incidents, dateIso])
 
+  const downRanges = useMemo(() => mergeRanges(ranges), [ranges])
+  const upRanges = useMemo(() => {
+    const out = []
+    let cursor = 0
+    for (const r of downRanges) {
+      if (r.from > cursor) out.push({ from: cursor, to: r.from })
+      cursor = Math.max(cursor, r.to)
+    }
+    if (cursor < 1440) out.push({ from: cursor, to: 1440 })
+    return out
+  }, [downRanges])
+
+  const nowMinute = useMemo(() => {
+    const today = new Date()
+    if (today.toISOString().slice(0, 10) !== dateIso) return null
+    return today.getHours() * 60 + today.getMinutes()
+  }, [dateIso])
+
   if (ranges.length === 0) return null
 
   return (
-    <div className="sfc-ribbon" aria-hidden="true">
-      <svg className="sfc-ribbon-svg" viewBox="0 0 1440 8" preserveAspectRatio="none">
-        <line x1="0" y1="4" x2="1440" y2="4" className="sfc-ribbon-axis" />
-        {[6, 12, 18].map(h => (
-          <line key={h} x1={h * 60} y1="1" x2={h * 60} y2="7" className="sfc-ribbon-grid" />
-        ))}
-        {ranges.map((r, i) => (
-          <rect
-            key={i}
-            x={r.from}
-            y="1"
-            width={Math.max(r.to - r.from, 2)}
-            height="6"
-            rx="1"
-            className="sfc-ribbon-mark"
+    <div
+      className="sfc-ribbon"
+      role="img"
+      aria-label={`${ranges.length} incidentes no dia, ${downRanges.length} períodos fora do ar`}
+    >
+      <div className="sfc-ribbon-tracks">
+        <div className="sfc-ribbon-lane sfc-ribbon-lane--up">
+          <svg className="sfc-ribbon-svg" viewBox="0 0 1440 18" preserveAspectRatio="none">
+            {RIBBON_HOUR_TICKS.map(h => (
+              <line
+                key={h}
+                x1={h * 60} y1="0" x2={h * 60} y2="18"
+                className={`sfc-ribbon-grid ${RIBBON_HOUR_LABELS.includes(h) ? 'sfc-ribbon-grid--major' : ''}`}
+              />
+            ))}
+            {upRanges.map((r, i) => (
+              <rect
+                key={i}
+                x={r.from} y="1" width={Math.max(r.to - r.from, 1)} height="16" rx="2"
+                className="sfc-ribbon-rect sfc-ribbon-rect--up"
+              />
+            ))}
+          </svg>
+        </div>
+        <div className="sfc-ribbon-lane sfc-ribbon-lane--down">
+          <svg className="sfc-ribbon-svg" viewBox="0 0 1440 18" preserveAspectRatio="none">
+            {RIBBON_HOUR_TICKS.map(h => (
+              <line
+                key={h}
+                x1={h * 60} y1="0" x2={h * 60} y2="18"
+                className={`sfc-ribbon-grid ${RIBBON_HOUR_LABELS.includes(h) ? 'sfc-ribbon-grid--major' : ''}`}
+              />
+            ))}
+            {downRanges.map((r, i) => (
+              <rect
+                key={i}
+                x={r.from} y="1" width={Math.max(r.to - r.from, 3)} height="16" rx="2"
+                className="sfc-ribbon-rect sfc-ribbon-rect--down"
+              />
+            ))}
+          </svg>
+        </div>
+        {nowMinute != null && (
+          <div className="sfc-ribbon-now" style={{ left: `${(nowMinute / 1440) * 100}%` }} aria-hidden="true" />
+        )}
+      </div>
+      <div className="sfc-ribbon-hours" aria-hidden="true">
+        {RIBBON_HOUR_TICKS.map(h => (
+          <span
+            key={`t-${h}`}
+            className={`sfc-ribbon-tick ${RIBBON_HOUR_LABELS.includes(h) ? 'sfc-ribbon-tick--major' : ''}`}
+            style={{ left: `${(h / 24) * 100}%` }}
           />
         ))}
-      </svg>
+        {RIBBON_HOUR_LABELS.map(h => (
+          <span
+            key={h}
+            className={`sfc-ribbon-hour ${RIBBON_HOUR_PRIMARY.has(h) ? 'sfc-ribbon-hour--primary' : 'sfc-ribbon-hour--minor'}`}
+            style={{ left: `${(h / 24) * 100}%` }}
+          >
+            {String(h).padStart(2, '0')}h
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
@@ -132,7 +215,7 @@ export default function StationFailureCard({ data, rank, dateIso }) {
         {has_silent_gap && (
           <>
             <span className="sfc-line-sep">·</span>
-            <span className="sfc-silent">silent-gap detectado</span>
+            <span className="sfc-silent">déficit detectado</span>
           </>
         )}
         {campaigns.length > 0 && (
