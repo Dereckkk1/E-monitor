@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import AudioPlayer from '../components/AudioPlayer'
@@ -268,7 +269,7 @@ function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
         <div className="lm-canvas-map">
           <div className="lm-canvas-head">
             <span className="lm-canvas-title">{mapTitle}</span>
-            {mapMeta && <span className="lm-canvas-meta">{mapMeta}</span>}
+            {mapMeta}
           </div>
           {map}
         </div>
@@ -285,6 +286,8 @@ export default function LiveMapPage() {
   const [campaignId, setCampaignId] = useState(null)
   // Single-player coordination: só uma row toca por vez.
   const [playingId, setPlayingId] = useState(null)
+  const [downloading, setDownloading] = useState(false)
+  const mapRef = useRef(null)
 
   const clientsQ = useClients()
   const clientOpts = useMemo(
@@ -341,9 +344,70 @@ export default function LiveMapPage() {
     )
   }
 
-  const mapMeta = !isLoading && stations.length > 0
+  const mapMetaText = !isLoading && stations.length > 0
     ? `${stations.length} emissora${stations.length === 1 ? '' : 's'} · ${activeStates} estado${activeStates === 1 ? '' : 's'}`
     : ''
+
+  const campaignName = useMemo(() => {
+    if (!campaignId) return ''
+    return (allCampaigns.find(c => c.id === campaignId)?.name || '').trim()
+  }, [campaignId, allCampaigns])
+
+  async function handleDownloadMap() {
+    const el = mapRef.current
+    if (!el || downloading) return
+    setDownloading(true)
+    try {
+      const canvas = await html2canvas(el, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        logging: false,
+      })
+      canvas.toBlob((blob) => {
+        if (!blob) return
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const slug = (campaignName || 'campanha').toLowerCase()
+          .normalize('NFD').replace(/[̀-ͯ]/g, '')
+          .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'campanha'
+        const ts = new Date().toISOString().slice(0, 10)
+        a.download = `mapa-ao-vivo-${slug}-${ts}.png`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(url), 1500)
+      }, 'image/png')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  const mapMeta = (
+    <span className="lm-canvas-meta">
+      {mapMetaText && <span>{mapMetaText}</span>}
+      {!isLoading && stations.length > 0 && (
+        <button
+          type="button"
+          className="lm-map-dl"
+          onClick={handleDownloadMap}
+          disabled={downloading}
+          title="Baixar imagem do mapa"
+          aria-label="Baixar imagem do mapa"
+        >
+          {downloading ? (
+            <span className="la-row-spinner" aria-hidden />
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M8 2v8M4.5 6.5L8 10l3.5-3.5" />
+              <path d="M3 12v1.5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5V12" />
+            </svg>
+          )}
+          <span>Baixar</span>
+        </button>
+      )}
+    </span>
+  )
 
   return (
     <div className="lm-page">
@@ -441,12 +505,14 @@ export default function LiveMapPage() {
             isLoading ? (
               <MapSkeleton />
             ) : stations.length === 0 ? (
-              <div className="lm-map-empty">
+              <div className="lm-map-empty" ref={mapRef}>
                 <BrazilMap stations={[]} />
                 <span className="lm-map-empty-msg">As emissoras desta campanha ainda não têm localização cadastrada.</span>
               </div>
             ) : (
-              <BrazilMap stations={stations} />
+              <div ref={mapRef}>
+                <BrazilMap stations={stations} />
+              </div>
             )
           }
         />
