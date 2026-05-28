@@ -8,19 +8,22 @@ const WEEKDAY_NAMES = ['D','S','T','Q','Q','S','S']
  * Slide-from-right panel for creating or editing a distribution rule.
  *
  * Migration 0019: rules are now keyed by material TYPE — not by individual
- * material. The user picks one type (Spot 30s, Testemunhal, etc) and the rule
- * applies to every material of that type linked to the campaign.
+ * material. The user picks one or more types and we create one rule per type
+ * with identical parameters. In edit mode the type is locked (1 rule = 1 type
+ * in the backend) and the chip set degrades to single-select.
  *
  * Props:
  *  - open: bool
  *  - onClose: () => void
- *  - onSubmit: (payload) => void   // payload matches POST/PUT distribution-rules
+ *  - onSubmit: (payload) => void
+ *      Create payload: { type_ids: [...], station_ids, ..., plays_per_day }
+ *      Edit   payload: { type_id, station_ids, ..., plays_per_day }
  *  - onDelete?: () => void         // only shown in edit mode
  *  - mode: "create" | "edit"
  *  - initial: { type_id, station_ids, start_date, end_date,
  *               weekday_mask, time_start, time_end, plays_per_day } | null
- *  - types:     Array<{id, name, color, materialCount}>   // material types present in this campaign
- *  - stations:  Array<{id, name}>                          // from campaign.target_stations
+ *  - types:     Array<{id, name, color, materialCount}>
+ *  - stations:  Array<{id, name}>
  *  - campaignStart: ISO date
  *  - campaignEnd:   ISO date
  *  - submitting: bool
@@ -43,7 +46,12 @@ export default function RuleSidePanel({
   campaignStart, campaignEnd,
   submitting = false,
 }) {
-  const [typeId, setTypeId] = useState(initial?.type_id ?? '')
+  const isEdit = mode === 'edit'
+  // typeIds is always an array. In edit mode it's locked to the rule's single
+  // type; in create mode the user can multi-select and we fan out N POSTs.
+  const [typeIds, setTypeIds] = useState(
+    initial?.type_id ? [initial.type_id] : []
+  )
   const [stationIds, setStationIds] = useState(initial?.station_ids ?? [])
   const [startDate, setStartDate] = useState(toDateInput(initial?.start_date) || toDateInput(campaignStart))
   const [endDate, setEndDate] = useState(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
@@ -54,7 +62,7 @@ export default function RuleSidePanel({
 
   useEffect(() => {
     if (open) {
-      setTypeId(initial?.type_id ?? '')
+      setTypeIds(initial?.type_id ? [initial.type_id] : [])
       setStationIds(initial?.station_ids ?? [])
       setStartDate(toDateInput(initial?.start_date) || toDateInput(campaignStart))
       setEndDate(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
@@ -84,8 +92,16 @@ export default function RuleSidePanel({
     )
   }
 
+  function toggleType(id) {
+    // Edit mode: tipo travado — clicar não faz nada.
+    if (isEdit) return
+    setTypeIds(prev =>
+      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+    )
+  }
+
   function isValid() {
-    return typeId &&
+    return typeIds.length > 0 &&
       stationIds.length > 0 &&
       startDate && endDate &&
       timeStart && timeEnd &&
@@ -93,8 +109,7 @@ export default function RuleSidePanel({
   }
 
   function submit() {
-    onSubmit({
-      type_id: typeId,
+    const common = {
       station_ids: stationIds,
       start_date: startDate,
       end_date: endDate,
@@ -102,10 +117,18 @@ export default function RuleSidePanel({
       time_start: timeStart,
       time_end: timeEnd,
       plays_per_day: Number(playsPerDay),
-    })
+    }
+    if (isEdit) {
+      // Edit: backend ainda é 1 rule = 1 type. Mantém o contrato single.
+      onSubmit({ type_id: typeIds[0], ...common })
+    } else {
+      // Create: pode ser N — o pai (DistributionStep) faz fan-out.
+      onSubmit({ type_ids: typeIds, ...common })
+    }
   }
 
-  const selectedType = types.find(t => t.id === typeId) ?? null
+  const selectedTypes = types.filter(t => typeIds.includes(t.id))
+  const singleSelectedType = selectedTypes.length === 1 ? selectedTypes[0] : null
 
   return createPortal(
     <div style={{
@@ -157,7 +180,18 @@ export default function RuleSidePanel({
         <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1 }}>
 
           <div style={{ marginBottom: 20 }}>
-            <Label>Tipo de material *</Label>
+            <Label>
+              {isEdit ? 'Tipo de material *' : 'Tipos de material *'}
+              {!isEdit && (
+                <span style={{
+                  marginLeft: 8, fontSize: 10, fontWeight: 600,
+                  color: 'var(--c-text-3)', textTransform: 'none',
+                  letterSpacing: 0,
+                }}>
+                  (pode selecionar mais de um — cria uma regra idêntica pra cada)
+                </span>
+              )}
+            </Label>
             {types.length === 0 ? (
               <div style={{
                 padding: 14, borderRadius: 'var(--radius-md)',
@@ -170,10 +204,15 @@ export default function RuleSidePanel({
             ) : (
               <div style={chipRow}>
                 {types.map(t => {
-                  const on = typeId === t.id
+                  const on = typeIds.includes(t.id)
+                  // Edit mode: tipo não selecionado fica desabilitado (a regra
+                  // pertence a um único tipo no backend).
+                  const dimmed = isEdit && !on
                   return (
                     <button key={t.id}
-                      onClick={() => setTypeId(t.id)}
+                      onClick={() => toggleType(t.id)}
+                      disabled={dimmed}
+                      title={dimmed ? 'Para editar regras de outro tipo, abra a regra correspondente.' : undefined}
                       style={{
                         ...chip,
                         ...(on ? {
@@ -181,6 +220,7 @@ export default function RuleSidePanel({
                           color: t.color,
                           borderColor: `color-mix(in srgb, ${t.color} 40%, transparent)`,
                         } : {}),
+                        ...(dimmed ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
                       }}
                     >
                       <TypeIconPill color={t.color ?? '#94a3b8'} height={10} />
@@ -203,20 +243,32 @@ export default function RuleSidePanel({
                 })}
               </div>
             )}
-            {selectedType && (
+            {typeIds.length > 0 && (
               <div style={{
                 marginTop: 10, padding: '8px 12px',
                 background: 'var(--c-bg)', border: '1px solid var(--c-border)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: 11, color: 'var(--c-text-2)', lineHeight: 1.5,
               }}>
-                Essa regra vai contar como cumprida quando <strong style={{ color: 'var(--c-text)' }}>qualquer
-                material do tipo {selectedType.name}</strong> tocar nas emissoras
-                selecionadas{selectedType.materialCount != null && (
-                  selectedType.materialCount === 0
-                    ? ' (nenhum material desse tipo na campanha ainda — será contado quando subir)'
-                    : ` (${selectedType.materialCount} material${selectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`
-                )}.
+                {singleSelectedType ? (
+                  <>
+                    Essa regra vai contar como cumprida quando <strong style={{ color: 'var(--c-text)' }}>qualquer
+                    material do tipo {singleSelectedType.name}</strong> tocar nas emissoras
+                    selecionadas{singleSelectedType.materialCount != null && (
+                      singleSelectedType.materialCount === 0
+                        ? ' (nenhum material desse tipo na campanha ainda — será contado quando subir)'
+                        : ` (${singleSelectedType.materialCount} material${singleSelectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`
+                    )}.
+                  </>
+                ) : (
+                  <>
+                    Vou criar <strong style={{ color: 'var(--c-text)' }}>{typeIds.length} regras idênticas</strong> —
+                    uma pra cada tipo: <strong style={{ color: 'var(--c-text)' }}>
+                      {selectedTypes.map(t => t.name).join(', ')}
+                    </strong>. Cada tipo conta a meta separadamente
+                    ({playsPerDay}×/dia em cada).
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -309,7 +361,13 @@ export default function RuleSidePanel({
           <div style={{ display: 'flex', gap: 6 }}>
             <button onClick={onClose} className="btn btn-secondary btn-sm">Cancelar</button>
             <button onClick={submit} disabled={!isValid() || submitting} className="btn btn-primary btn-sm">
-              {submitting ? 'Salvando…' : (mode === 'edit' ? 'Salvar' : 'Adicionar regra')}
+              {submitting
+                ? 'Salvando…'
+                : isEdit
+                  ? 'Salvar'
+                  : typeIds.length > 1
+                    ? `Adicionar ${typeIds.length} regras`
+                    : 'Adicionar regra'}
             </button>
           </div>
         </div>
