@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
+import AudioPlayer from '../components/AudioPlayer'
+import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
 import { materialColor } from '../utils/materialColor'
@@ -63,13 +65,76 @@ function freqStr(d) {
   return d.frequency_mhz != null ? String(d.frequency_mhz).replace('.', ',') : null
 }
 
-/* ── Linha do feed — espelha o AirtimeDetectionRow (sem play/pricing) ─── */
-function LiveAiringRow({ detection }) {
+/* ── Linha do feed ────────────────────────────────────────────────
+ * Espelha o AirtimeDetectionRow: avatar, bloco data/hora, station +
+ * freq + cidade/UF, material com cor + cliente, e um player de áudio
+ * inline (lazy-load do blob via /detections/{id}/evidence — backend
+ * já enforça scope: viewer só recebe as próprias). */
+function LiveAiringRow({ detection, isPlaying, onPlayRequest, onPlayClose }) {
   const place = [detection.city, detection.state].filter(Boolean).join(' / ')
   const freq = freqStr(detection)
   const matColor = materialColor(detection.commercial_id)
+
+  const [loading, setLoading] = useState(false)
+  const [blobUrl, setBlobUrl] = useState(null)
+  const blobRef = useRef(null)
+
+  useEffect(() => () => {
+    if (blobRef.current) URL.revokeObjectURL(blobRef.current)
+  }, [])
+
+  const ensureBlob = useCallback(async () => {
+    if (blobRef.current) return blobRef.current
+    const resp = await api.get(`/detections/${detection.id}/evidence`, { responseType: 'blob' })
+    const url = URL.createObjectURL(resp.data)
+    blobRef.current = url
+    setBlobUrl(url)
+    return url
+  }, [detection.id])
+
+  const hasAudio = detection.evidence_status === 'available'
+
+  async function handlePlayClick() {
+    if (loading || !hasAudio) return
+    if (isPlaying) { onPlayClose(); return }
+    setLoading(true)
+    try {
+      await ensureBlob()
+      onPlayRequest(detection.id)
+    } catch {
+      // silencioso — usuário pode tentar de novo
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <article className="la-row" style={{ '--material-color': matColor }}>
+    <article
+      className={'la-row' + (isPlaying ? ' la-row--playing' : '')}
+      style={{ '--material-color': matColor }}
+    >
+      <button
+        type="button"
+        className="la-row-play"
+        onClick={handlePlayClick}
+        disabled={!hasAudio || loading}
+        title={!hasAudio ? 'Sem áudio disponível' : (isPlaying ? 'Pausar' : 'Reproduzir')}
+        aria-label={isPlaying ? 'Pausar' : `Reproduzir veiculação de ${fmtTime(detection.detected_at)} na ${detection.station_name}`}
+      >
+        {loading ? (
+          <span className="la-row-spinner" aria-hidden />
+        ) : isPlaying ? (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
+            <rect x="3" y="2" width="3" height="10" rx="1" />
+            <rect x="8" y="2" width="3" height="10" rx="1" />
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
+            <path d="M3.5 2.5v9l8-4.5z" />
+          </svg>
+        )}
+      </button>
+
       <div className="la-row-time-block">
         <span className="la-row-date">{fmtDate(detection.detected_at)}</span>
         <span className="la-row-time">{fmtTime(detection.detected_at)}</span>
@@ -99,6 +164,17 @@ function LiveAiringRow({ detection }) {
       </div>
 
       <span className="la-row-stripe" aria-hidden />
+
+      {isPlaying && blobUrl && (
+        <div className="la-row-player">
+          <AudioPlayer
+            src={blobUrl}
+            isPlaying={isPlaying}
+            onPlay={() => onPlayRequest(detection.id)}
+            onPause={() => onPlayClose()}
+          />
+        </div>
+      )}
     </article>
   )
 }
@@ -110,6 +186,7 @@ function FeedSkeleton() {
     <div className="la-list">
       {rows.map((i) => (
         <div className="la-row la-row--skel" key={i}>
+          <span className="la-skel la-skel-circle" style={{ width: 30, height: 30 }} />
           <div className="la-row-time-block">
             <span className="la-skel" style={{ width: 62, height: 11 }} />
             <span className="la-skel" style={{ width: 52, height: 14, marginTop: 4 }} />
@@ -206,6 +283,8 @@ export default function LiveMapPage() {
   const [adminClientId, setAdminClientId] = useState(null)
   const clientId = isAdmin ? adminClientId : (user?.client_id ?? null)
   const [campaignId, setCampaignId] = useState(null)
+  // Single-player coordination: só uma row toca por vez.
+  const [playingId, setPlayingId] = useState(null)
 
   const clientsQ = useClients()
   const clientOpts = useMemo(
@@ -346,7 +425,15 @@ export default function LiveMapPage() {
               <div className="la-empty">Nenhuma veiculação recente nesta campanha.</div>
             ) : (
               <div className="la-list la-stagger">
-                {detections.map(d => <LiveAiringRow key={d.id} detection={d} />)}
+                {detections.map(d => (
+                  <LiveAiringRow
+                    key={d.id}
+                    detection={d}
+                    isPlaying={playingId === d.id}
+                    onPlayRequest={(id) => setPlayingId(id)}
+                    onPlayClose={() => setPlayingId(null)}
+                  />
+                ))}
               </div>
             )
           }
