@@ -64,6 +64,14 @@ export default function BrazilMap({ stations = [] }) {
     return set
   }, [stations])
 
+  // Centroide visual de cada UF (em coords do viewBox) pra plotar a sigla.
+  const ufLabels = useMemo(() => brStates.features.map((f, i) => {
+    const uf = ufOf(f)
+    const c = pathGen.centroid(f)
+    if (!c || !isFinite(c[0]) || !isFinite(c[1])) return null
+    return { uf, x: c[0], y: c[1], key: uf || i }
+  }).filter(Boolean), [pathGen])
+
   // Projeta cada emissora; ordena 'down' primeiro pra que os 'ok' (com pulso)
   // fiquem por cima e capturem o hover.
   const points = useMemo(() => {
@@ -97,6 +105,21 @@ export default function BrazilMap({ stations = [] }) {
               />
             )
           })}
+        </g>
+
+        <g className="br-labels" aria-hidden>
+          {ufLabels.map(({ uf, x, y, key }) => (
+            <text
+              key={key}
+              x={x}
+              y={y}
+              className={`br-label${activeUFs.has(uf) ? ' br-label--active' : ''}`}
+              textAnchor="middle"
+              dominantBaseline="central"
+            >
+              {uf}
+            </text>
+          ))}
         </g>
 
         <g className="br-dots">
