@@ -198,12 +198,12 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/material-types" icon={<IconMaterialTypes />} onClose={onClose}>Tipos de material</SidebarLink>
 
       <span className="sidebar-section-label">Veiculação</span>
-      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Indicadores</SidebarLink>
-      <SidebarLink to="/live-map"        icon={<IconLiveMap />}       onClose={onClose}>Mapa ao Vivo</SidebarLink>
       <SidebarLink to="/campaigns"       icon={<IconCampaigns />}     onClose={onClose}>Campanhas</SidebarLink>
       <SidebarLink to="/detections"      icon={<IconDetections />}    onClose={onClose}>Veiculações</SidebarLink>
       <SidebarLink to="/materials"       icon={<IconMaterials />}     onClose={onClose}>Materiais e Distribuição</SidebarLink>
+      <SidebarLink to="/live-map"        icon={<IconLiveMap />}       onClose={onClose}>Mapa ao Vivo</SidebarLink>
       <SidebarLink to="/reports/airtime" icon={<IconAirtimeReport />} onClose={onClose}>Relatório data/hora</SidebarLink>
+      <SidebarLink to="/insights"        icon={<IconInsights />}      onClose={onClose}>Indicadores</SidebarLink>
 
       <span className="sidebar-section-label">Infraestrutura</span>
       <SidebarLink to="/monitoring" icon={<IconMonitoring />} onClose={onClose}>Streams</SidebarLink>
