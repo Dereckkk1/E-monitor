@@ -129,28 +129,93 @@
 }
 .sfc-sev-crit .sfc-sev-value { color: var(--c-danger); }
 
-/* ── 24h Ribbon (per-card mini-timeline) ───────────────────────── */
+/* ── 24h Ribbon (per-card mini-timeline) — duas faixas no ar/fora ─ */
 .sfc-ribbon {
   margin-top: 14px;
   padding: 0 28px 0 36px; /* visually align with logo column */
 }
+.sfc-ribbon-tracks {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sfc-ribbon-lane {
+  background: var(--c-surface-2);
+  border-radius: 4px;
+  height: 14px;
+  overflow: hidden;
+}
 .sfc-ribbon-svg {
   display: block;
   width: 100%;
-  height: 8px;
-}
-.sfc-ribbon-axis {
-  stroke: var(--c-border);
-  stroke-width: 1;
+  height: 100%;
 }
 .sfc-ribbon-grid {
   stroke: var(--c-border);
   stroke-width: 1;
-  stroke-dasharray: 1 2;
+  stroke-dasharray: 1 4;
+  opacity: 0.3;
+  vector-effect: non-scaling-stroke;
 }
-.sfc-ribbon-mark {
-  fill: var(--c-action);
-  opacity: 0.78;
+.sfc-ribbon-grid--major {
+  opacity: 0.7;
+  stroke-dasharray: 2 3;
+}
+.sfc-ribbon-rect {
+  vector-effect: non-scaling-stroke;
+}
+.sfc-ribbon-rect--up   { fill: var(--c-success); opacity: 0.85; }
+.sfc-ribbon-rect--down { fill: var(--c-danger);  opacity: 0.95; }
+
+/* "Agora" — linha vertical pontilhada (só quando data === hoje) */
+.sfc-ribbon-now {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  border-left: 1.5px dashed #06b6d4;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Régua de horas sob as faixas — labels a cada 3h + tracinhos a cada 1h */
+.sfc-ribbon-hours {
+  position: relative;
+  height: 14px;
+  margin-top: 4px;
+}
+.sfc-ribbon-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 3px;
+  background: var(--c-border);
+  opacity: 0.65;
+  transform: translateX(-50%);
+}
+.sfc-ribbon-tick--major {
+  height: 4px;
+  background: var(--c-text-3);
+  opacity: 0.85;
+}
+.sfc-ribbon-hour {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  font-family: var(--font-body);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--c-text-3);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.sfc-ribbon-hour:first-child { transform: translateX(0); }
+.sfc-ribbon-hour:last-child  { transform: translateX(-100%); }
+
+/* Em telas estreitas, deixa só as labels primárias (00, 06, 12, 18, 24) */
+@media (max-width: 560px) {
+  .sfc-ribbon-hour--minor { display: none; }
 }
 
 /* ── Summary line under ribbon ─────────────────────────────────── */

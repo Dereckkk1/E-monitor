@@ -96,41 +96,139 @@ function flattenIncidents(stations, dateIso) {
   return out
 }
 
-function HourTicks() {
-  // 6 ticks at 04, 08, 12, 16, 20 — labelled subtly under the ribbon.
-  return (
-    <div className="asf-hours" aria-hidden="true">
-      {[4, 8, 12, 16, 20].map(h => (
-        <span key={h} className="asf-hour-tick" style={{ left: `${(h / 24) * 100}%` }}>
-          {String(h).padStart(2, '0')}h
-        </span>
-      ))}
-    </div>
-  )
+// Merge overlapping/adjacent ranges so the "up" complement is computed against
+// a clean set. Multiple stations can fail at the same minute — each contributes
+// an incident — but the user-facing timeline shows aggregate down-time.
+function mergeRanges(ranges) {
+  if (!ranges.length) return []
+  const sorted = [...ranges].sort((a, b) => a.from - b.from)
+  const out = [{ ...sorted[0] }]
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1]
+    const cur = sorted[i]
+    if (cur.from <= last.to) last.to = Math.max(last.to, cur.to)
+    else out.push({ ...cur })
+  }
+  return out
 }
 
-function HeroTimeline({ incidents }) {
-  if (!incidents.length) return null
+// Texto de horas a cada 2h (13 marks) + tracinhos sutis a cada 1h (25 marks).
+// Labels "primárias" (mostradas sempre, mesmo em telas estreitas) ficam a cada 4h.
+const HOUR_LABELS  = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]
+const HOUR_PRIMARY = new Set([0, 4, 8, 12, 16, 20, 24])
+const HOUR_TICKS   = Array.from({ length: 25 }, (_, i) => i)
+
+function HeroTimeline({ incidents, dateIso }) {
+  const downRanges = useMemo(() => mergeRanges(incidents), [incidents])
+
+  // UP periods = complement of merged DOWN ranges over [0, 1440)
+  const upRanges = useMemo(() => {
+    const out = []
+    let cursor = 0
+    for (const r of downRanges) {
+      if (r.from > cursor) out.push({ from: cursor, to: r.from })
+      cursor = Math.max(cursor, r.to)
+    }
+    if (cursor < 1440) out.push({ from: cursor, to: 1440 })
+    return out
+  }, [downRanges])
+
+  // "Agora" marker only when inspecting today's date
+  const nowMinute = useMemo(() => {
+    const today = new Date()
+    if (today.toISOString().slice(0, 10) !== dateIso) return null
+    return today.getHours() * 60 + today.getMinutes()
+  }, [dateIso])
+
   return (
-    <div className="asf-timeline" role="img" aria-label={`${incidents.length} incidentes no dia`}>
-      <svg className="asf-timeline-svg" viewBox="0 0 1440 14" preserveAspectRatio="none">
-        <line x1="0" y1="7" x2="1440" y2="7" className="asf-timeline-axis" />
-        {[4, 8, 12, 16, 20].map(h => (
-          <line key={h} x1={h * 60} y1="2" x2={h * 60} y2="12" className="asf-timeline-grid" />
-        ))}
-        {incidents.map((inc, i) => (
-          <rect
-            key={i}
-            x={inc.from}
-            y="3"
-            width={Math.max(inc.to - inc.from, 2)}
-            height="8"
-            rx="1"
-            className="asf-timeline-mark"
-          />
-        ))}
-      </svg>
-      <HourTicks />
+    <div
+      className="asf-timeline"
+      role="img"
+      aria-label={`${incidents.length} incidentes no dia, ${downRanges.length} períodos fora do ar`}
+    >
+      <div className="asf-timeline-row">
+        <span className="asf-timeline-label asf-timeline-label--up">no ar</span>
+        <div className="asf-timeline-track">
+          <svg className="asf-timeline-svg" viewBox="0 0 1440 24" preserveAspectRatio="none">
+            {HOUR_TICKS.map(h => (
+              <line
+                key={h}
+                x1={h * 60} y1="0" x2={h * 60} y2="24"
+                className={`asf-timeline-grid ${HOUR_LABELS.includes(h) ? 'asf-timeline-grid--major' : ''}`}
+              />
+            ))}
+            {upRanges.map((r, i) => (
+              <rect
+                key={i}
+                x={r.from}
+                y="2"
+                width={Math.max(r.to - r.from, 1)}
+                height="20"
+                rx="2"
+                className="asf-timeline-rect asf-timeline-rect--up"
+              />
+            ))}
+          </svg>
+        </div>
+      </div>
+
+      <div className="asf-timeline-row">
+        <span className="asf-timeline-label asf-timeline-label--down">fora</span>
+        <div className="asf-timeline-track">
+          <svg className="asf-timeline-svg" viewBox="0 0 1440 24" preserveAspectRatio="none">
+            {HOUR_TICKS.map(h => (
+              <line
+                key={h}
+                x1={h * 60} y1="0" x2={h * 60} y2="24"
+                className={`asf-timeline-grid ${HOUR_LABELS.includes(h) ? 'asf-timeline-grid--major' : ''}`}
+              />
+            ))}
+            {downRanges.map((r, i) => (
+              <rect
+                key={i}
+                x={r.from}
+                y="2"
+                width={Math.max(r.to - r.from, 3)}
+                height="20"
+                rx="2"
+                className="asf-timeline-rect asf-timeline-rect--down"
+              />
+            ))}
+          </svg>
+        </div>
+      </div>
+
+      {nowMinute != null && (
+        <div
+          className="asf-timeline-now"
+          style={{ left: `calc(var(--asf-timeline-label-w) + (100% - var(--asf-timeline-label-w)) * ${nowMinute / 1440})` }}
+          aria-label="agora"
+        >
+          <span className="asf-timeline-now-tag">agora</span>
+        </div>
+      )}
+
+      <div className="asf-timeline-row asf-timeline-row--axis">
+        <span className="asf-timeline-label" aria-hidden="true" />
+        <div className="asf-timeline-hours" aria-hidden="true">
+          {HOUR_TICKS.map(h => (
+            <span
+              key={h}
+              className={`asf-timeline-tick ${HOUR_LABELS.includes(h) ? 'asf-timeline-tick--major' : ''}`}
+              style={{ left: `${(h / 24) * 100}%` }}
+            />
+          ))}
+          {HOUR_LABELS.map(h => (
+            <span
+              key={h}
+              className={`asf-timeline-hour ${HOUR_PRIMARY.has(h) ? 'asf-timeline-hour--primary' : 'asf-timeline-hour--minor'}`}
+              style={{ left: `${(h / 24) * 100}%` }}
+            >
+              {String(h).padStart(2, '0')}h
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -451,7 +549,7 @@ export default function AdminStationFailuresPage() {
           {incidents.length > 0 && (
             <div className="asf-hero-ribbon">
               <span className="asf-hero-ribbon-label">24 horas do dia</span>
-              <HeroTimeline incidents={incidents} />
+              <HeroTimeline incidents={incidents} dateIso={date} />
             </div>
           )}
         </section>
