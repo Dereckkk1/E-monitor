@@ -46,6 +46,9 @@ type LiveDetection struct {
 	CommercialID   uuid.UUID `json:"commercial_id"`
 	CommercialName string    `json:"commercial_name"`
 	ClientName     *string   `json:"client_name,omitempty"`
+	// EvidenceStatus permite o frontend habilitar/desabilitar o play button
+	// sem disparar /evidence pra deteccoes sem clipe salvo.
+	EvidenceStatus string `json:"evidence_status"`
 }
 
 type LiveMapResult struct {
@@ -134,7 +137,8 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id, d.station_id, COALESCE(s.name, ''), s.logo_url,
 		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
-		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name
+		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name,
+		       d.evidence_status
 		FROM detections d
 		LEFT JOIN stations s    ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -157,7 +161,8 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 		var d LiveDetection
 		if err := rows.Scan(&d.ID, &d.StationID, &d.StationName, &d.StationLogoURL,
 			&d.Band, &d.FrequencyMHz, &d.City, &d.State,
-			&d.DetectedAt, &d.CommercialID, &d.CommercialName, &d.ClientName); err != nil {
+			&d.DetectedAt, &d.CommercialID, &d.CommercialName, &d.ClientName,
+			&d.EvidenceStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

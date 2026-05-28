@@ -104,11 +104,13 @@
 }
 .lm-canvas-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 440px) 1px 1fr;
+  /* Feed mais largo (cabem material+player) e mapa um pouco mais estreito.
+     O SVG do Brasil tem max-width próprio, então só a caixa muda. */
+  grid-template-columns: minmax(440px, 580px) 1px 1fr;
   align-items: stretch;
 }
 .lm-canvas-sep { background: var(--c-border); width: 1px; }
-.lm-canvas-feed { padding: 16px 8px 16px 16px; display: flex; flex-direction: column; min-height: 480px; }
+.lm-canvas-feed { padding: 16px 8px 16px 16px; display: flex; flex-direction: column; min-height: 520px; }
 .lm-canvas-map { padding: 16px 16px 18px; display: flex; flex-direction: column; }
 .lm-canvas-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -139,16 +141,54 @@
   --material-color: var(--c-action);
   position: relative;
   display: grid;
-  grid-template-columns: 76px 1fr 1fr;
+  grid-template-columns: 34px 78px minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px 10px 10px;
+  gap: 10px 12px;
+  padding: 12px 14px 12px 10px;
   border-bottom: 1px solid var(--c-border);
   border-radius: 8px;
   transition: background 150ms cubic-bezier(0.4,0,0.2,1);
 }
 .la-row:last-child { border-bottom: none; }
 .la-row:hover { background: var(--c-surface-2); }
+.la-row--playing { background: rgba(232, 30, 117, 0.05); }
+
+/* Play button */
+.la-row-play {
+  grid-row: 1;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-action);
+  cursor: pointer;
+  transition: all 150ms cubic-bezier(0.4,0,0.2,1);
+  flex-shrink: 0;
+}
+.la-row-play:hover:not(:disabled) {
+  background: var(--c-action); color: #fff; border-color: var(--c-action);
+  transform: scale(1.05);
+}
+.la-row-play:disabled {
+  color: var(--c-text-3); cursor: not-allowed; opacity: 0.55;
+}
+.la-row--playing .la-row-play {
+  background: var(--c-action); color: #fff; border-color: var(--c-action);
+}
+.la-row-spinner {
+  display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(232,30,117,0.25); border-top-color: var(--c-action);
+  animation: lm-spin 0.7s linear infinite;
+}
+
+/* Inline audio player: ocupa toda a largura da row na linha de baixo */
+.la-row-player {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  padding: 2px 4px 0;
+}
 
 .la-row-time-block { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 .la-row-date { font-size: 11px; color: var(--c-text-3); font-variant-numeric: tabular-nums; }
@@ -204,7 +244,7 @@
 }
 
 /* ── Mapa ────────────────────────────────────────────────────────── */
-.brazil-map { position: relative; width: 100%; max-width: 640px; margin: 0 auto; }
+.brazil-map { position: relative; width: 100%; max-width: 540px; margin: 0 auto; }
 .brazil-map-svg { width: 100%; height: auto; display: block; overflow: visible; }
 
 .br-state {
