@@ -233,6 +233,23 @@ export function useUpdateCampaign() {
     },
   })
 }
+// Seta (ou limpa, com value=null) o CPM fixo da campanha. Usado pelo Step 6
+// do wizard de pricing — quando preenchido, sobrescreve o CPM derivado em
+// /campaigns, /insights e no dashboard.
+export function useUpdateCampaignFixedCPM() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }) =>
+      api.put(`/campaigns/${id}/fixed-cpm`, { fixed_cpm: value }).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaigns'] })
+      qc.invalidateQueries({ queryKey: ['campaigns', vars.id] })
+      qc.invalidateQueries({ queryKey: ['campaigns-financials'] })
+      qc.invalidateQueries({ queryKey: ['insights'] })
+    },
+  })
+}
+
 export function useStartCampaign() {
   const qc = useQueryClient()
   return useMutation({

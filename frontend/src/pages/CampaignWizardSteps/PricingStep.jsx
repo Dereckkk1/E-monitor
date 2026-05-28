@@ -1,7 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   useCampaignPricing, useUpsertStationPricing, useDeleteStationPricing,
-  useMaterialTypes,
+  useMaterialTypes, useUpdateCampaignFixedCPM,
 } from '../../api/hooks'
 import StationAvatar from '../../components/StationAvatar'
 
@@ -78,12 +78,29 @@ function validateStation(draft, typesInScopeForStation) {
  */
 const PricingStep = forwardRef(function PricingStep({
   campaignId, campaignStations, campaignMaterials, materialsById = {},
-  distributionRules = [],
+  distributionRules = [], initialFixedCPM = null,
 }, ref) {
   const { data: pricingList = [], isLoading } = useCampaignPricing(campaignId)
   const { data: materialTypes = [] } = useMaterialTypes()
   const upsert = useUpsertStationPricing()
   const del = useDeleteStationPricing()
+  const updateFixedCPM = useUpdateCampaignFixedCPM()
+
+  // CPM fixo opcional da campanha. null = não setado → /campaigns, /insights e
+  // dashboard usam o cálculo dinâmico (executado / impactos × 1000). Quando
+  // preenchido aqui, vira a fonte da verdade nas telas de exibição.
+  const initialFixedCPMNum = useMemo(() => {
+    const n = Number(initialFixedCPM)
+    return Number.isFinite(n) ? n : null
+  }, [initialFixedCPM])
+  const [fixedCPM, setFixedCPM] = useState(initialFixedCPMNum)
+  // Snapshot do valor original pra detectar mudança no saveAll. Atualiza só
+  // depois que conseguimos persistir, evitando reenviar PATCH idêntico.
+  const savedFixedCPMRef = useRef(initialFixedCPMNum)
+  useEffect(() => {
+    setFixedCPM(initialFixedCPMNum)
+    savedFixedCPMRef.current = initialFixedCPMNum
+  }, [initialFixedCPMNum])
 
   // typesInScope[stationId] = Array<MaterialType> presentes na estação dentro
   // da campanha. União de tipos vindos de materiais linkados E tipos cobertos
@@ -180,6 +197,17 @@ const PricingStep = forwardRef(function PricingStep({
   // ── Persistência em massa: chamada pelo wizard antes do Concluir ───────
   async function saveAll() {
     const errors = []
+    // Persiste o fixed_cpm primeiro (uma chamada só) se mudou. Falha aqui não
+    // bloqueia os per-station pricing — vamos coletar todos os erros e mostrar
+    // no final.
+    if (fixedCPM !== savedFixedCPMRef.current) {
+      try {
+        await updateFixedCPM.mutateAsync({ id: campaignId, value: fixedCPM })
+        savedFixedCPMRef.current = fixedCPM
+      } catch (e) {
+        errors.push(`CPM fixo: ${e?.response?.data || 'erro de rede'}`)
+      }
+    }
     for (const st of campaignStations) {
       const d = drafts[st.id]
       const types = typesInScope[st.id] ?? []
@@ -266,8 +294,10 @@ const PricingStep = forwardRef(function PricingStep({
           <p style={{ margin: 0, color: 'var(--c-text-2)', fontSize: 13, lineHeight: 1.55 }}>
             Pra cada emissora, escolha entre <strong style={{ color: 'var(--c-text)' }}>valor consolidado</strong>{' '}
             (um pacote fechado) ou <strong style={{ color: 'var(--c-text)' }}>valor por inserção</strong>{' '}
-            (preço unitário por tipo de material). O CPM da campanha e os totais
-            de <em>/detections</em> são calculados a partir daqui.
+            (preço unitário por tipo de material). Os totais de <em>/detections</em>{' '}
+            saem daqui. O <strong style={{ color: 'var(--c-text)' }}>CPM</strong> é
+            calculado dinamicamente (executado ÷ impactos × 1000) — ou pode ser
+            travado com o campo <strong style={{ color: 'var(--c-text)' }}>CPM fixo</strong> ao lado.
           </p>
         </div>
 
@@ -275,6 +305,8 @@ const PricingStep = forwardRef(function PricingStep({
           total={totalBase}
           validCount={validCount}
           totalCount={campaignStations.length}
+          fixedCPM={fixedCPM}
+          onFixedCPMChange={setFixedCPM}
         />
       </div>
 
@@ -314,7 +346,7 @@ export default PricingStep
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
-function SummaryStrip({ total, validCount, totalCount }) {
+function SummaryStrip({ total, validCount, totalCount, fixedCPM, onFixedCPMChange }) {
   const pct = totalCount > 0 ? Math.round((validCount / totalCount) * 100) : 0
   const allDone = validCount === totalCount && totalCount > 0
   return (
@@ -325,7 +357,7 @@ function SummaryStrip({ total, validCount, totalCount }) {
       background: 'var(--c-surface)',
       border: '1px solid var(--c-border)',
       boxShadow: 'var(--shadow-sm)',
-      minWidth: 320,
+      minWidth: 420,
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{
@@ -344,7 +376,9 @@ function SummaryStrip({ total, validCount, totalCount }) {
         </span>
       </div>
       <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--c-border)' }} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+      <FixedCPMField value={fixedCPM} onChange={onFixedCPMChange} />
+      <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--c-border)' }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 130 }}>
         <span style={{
           fontSize: 9.5, fontWeight: 700, letterSpacing: '0.14em',
           color: 'var(--c-text-3)', textTransform: 'uppercase',
@@ -373,6 +407,92 @@ function SummaryStrip({ total, validCount, totalCount }) {
             transition: 'width 240ms cubic-bezier(0.16,1,0.3,1)',
           }} />
         </div>
+      </div>
+    </div>
+  )
+}
+
+// CPM fixo opcional da campanha. Quando vazio, /campaigns, /insights e o
+// dashboard calculam o CPM dinamicamente (executado / impactos × 1000). Quando
+// preenchido aqui, esse valor é exibido em todos esses lugares — útil pra
+// campanhas com CPM pré-acordado que o cálculo derivado distorce.
+function FixedCPMField({ value, onChange }) {
+  const [focused, setFocused] = useState(false)
+  const [str, setStr] = useState(() => value != null ? value.toFixed(2).replace('.', ',') : '')
+
+  useEffect(() => {
+    if (focused) return
+    setStr(value != null ? value.toFixed(2).replace('.', ',') : '')
+  }, [value, focused])
+
+  const isSet = value != null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
+      <span
+        title="Quando preenchido, sobrescreve o CPM exibido em /campaigns, /insights e dashboard. Deixe vazio para usar o cálculo dinâmico (executado ÷ impactos × 1000)."
+        style={{
+          fontSize: 9.5, fontWeight: 700, letterSpacing: '0.14em',
+          color: 'var(--c-text-3)', textTransform: 'uppercase',
+          fontFamily: 'var(--font-heading)',
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          cursor: 'help',
+        }}>
+        CPM fixo
+        <span style={{
+          fontSize: 8.5, fontWeight: 600, letterSpacing: '0.08em',
+          color: isSet ? 'var(--c-action)' : 'var(--c-text-3)',
+          opacity: isSet ? 1 : 0.7,
+        }}>
+          {isSet ? '· ativo' : '· opcional'}
+        </span>
+      </span>
+      <div style={{
+        position: 'relative',
+        display: 'flex', alignItems: 'center',
+        width: 140,
+        borderRadius: 'var(--radius-md)',
+        border: `1px solid ${focused ? 'var(--c-action)' : 'var(--c-border)'}`,
+        background: 'var(--c-surface)',
+        transition: 'border-color 140ms, box-shadow 140ms',
+        boxShadow: focused ? '0 0 0 3px var(--c-action-light)' : 'none',
+      }}>
+        <span style={{
+          padding: '0 4px 0 10px',
+          fontSize: 11, fontWeight: 600,
+          color: focused ? 'var(--c-action)' : 'var(--c-text-3)',
+          fontFamily: 'var(--font-heading)',
+          transition: 'color 140ms',
+        }}>
+          R$
+        </span>
+        <input
+          value={str}
+          onChange={e => {
+            const v = e.target.value
+            setStr(v)
+            const parsed = parseCurrency(v)
+            onChange(parsed)
+          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false)
+            const parsed = parseCurrency(str)
+            if (parsed != null) setStr(parsed.toFixed(2).replace('.', ','))
+            else setStr('')
+          }}
+          placeholder="usa cálc. dinâmico"
+          inputMode="decimal"
+          style={{
+            flex: 1, width: '100%',
+            padding: '6px 8px 6px 0',
+            border: 0, background: 'transparent',
+            fontSize: 13, fontWeight: 600,
+            color: 'var(--c-text)',
+            fontFamily: 'var(--font-heading)',
+            fontVariantNumeric: 'tabular-nums',
+            outline: 'none', textAlign: 'right',
+          }}
+        />
       </div>
     </div>
   )

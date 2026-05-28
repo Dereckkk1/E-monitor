@@ -535,7 +535,11 @@ function ClientDashboard() {
               const fin = financialsByCampaign.get(c.id)
               const audience = fin?.total_audience ?? 0
               const invested = fin?.total_invested ?? 0
-              const cpm = audience > 0 ? (invested / audience) * 1000 : null
+              const fixedCPM = fin?.fixed_cpm ?? null
+              const dynamicCPM = audience > 0 ? (invested / audience) * 1000 : null
+              // CPM fixo (quando cadastrado no Step 6 do wizard) sobrescreve
+              // o derivado nas telas de exibição.
+              const cpm = fixedCPM != null ? fixedCPM : dynamicCPM
               const prog = campaignProgress(c)
               return (
                 <button
@@ -594,16 +598,18 @@ function ClientDashboard() {
                       <div
                         className="cdash-active-stat-value"
                         title={
-                          cpm != null
-                            ? `${formatBRL(invested)} ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`
-                            : invested > 0
-                              ? 'Sem PMM ou sem inserções — CPM indeterminado'
-                              : 'Sem pricing cadastrado'
+                          fixedCPM != null
+                            ? `CPM fixo da campanha: ${formatBRL(fixedCPM)} (dinâmico seria ${dynamicCPM != null ? formatBRL(dynamicCPM) : '—'})`
+                            : cpm != null
+                              ? `${formatBRL(invested)} ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`
+                              : invested > 0
+                                ? 'Sem PMM ou sem inserções — CPM indeterminado'
+                                : 'Sem pricing cadastrado'
                         }
                       >
                         {cpm != null ? formatBRL(cpm) : '—'}
                       </div>
-                      <div className="cdash-active-stat-label">CPM</div>
+                      <div className="cdash-active-stat-label">CPM{fixedCPM != null ? ' (fixo)' : ''}</div>
                     </div>
                   </div>
                 </button>

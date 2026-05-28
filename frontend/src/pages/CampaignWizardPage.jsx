@@ -226,6 +226,7 @@ export default function CampaignWizardPage() {
         campaignMaterials={campaignMaterials}
         materialsById={materialsById}
         distributionRules={distributionRules}
+        initialFixedCPM={existingCampaign?.fixed_cpm ?? null}
       />
     )
     // O nextDisabled aqui é só visual; saveAll() valida de novo na hora.

@@ -274,6 +274,9 @@ func NewRouter(d Deps) http.Handler {
 				// pelo Step 1 do wizard em modo edit. client_id continua imutável.
 				r.Put("/campaigns/{id}", d.Campaigns.Update)
 				r.Put("/campaigns/{id}/stations", d.Campaigns.UpdateStations)
+				// CPM fixo opcional, setado no Step 6 (pricing) do wizard.
+				// Sobrescreve o CPM derivado nas telas de exibição.
+				r.Put("/campaigns/{id}/fixed-cpm", d.Campaigns.UpdateFixedCPM)
 				r.Delete("/campaigns/{id}", d.Campaigns.Delete)
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
