@@ -259,9 +259,20 @@ export default function DistributionStep({
   async function submitRule(payload) {
     try {
       if (editingRule) {
+        // Edit é sempre 1 rule = 1 type (contrato do backend).
         await updateRule.mutateAsync({ campaignId, ruleId: editingRule.id, ...payload })
       } else {
-        await createRule.mutateAsync({ campaignId, ...payload })
+        // Create pode trazer N tipos selecionados. Fan-out sequencial: se
+        // qualquer um falhar, paramos e mostramos erro — o usuário vê quais
+        // regras já entraram na lista e pode tentar de novo só pras restantes.
+        const { type_ids, ...common } = payload
+        const ids = Array.isArray(type_ids) && type_ids.length > 0
+          ? type_ids
+          : (payload.type_id ? [payload.type_id] : [])
+        if (ids.length === 0) return
+        for (const tid of ids) {
+          await createRule.mutateAsync({ campaignId, type_id: tid, ...common })
+        }
       }
       setRuleEditOpen(false)
     } catch {
