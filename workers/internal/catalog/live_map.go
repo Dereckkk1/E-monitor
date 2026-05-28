@@ -31,15 +31,19 @@ type LiveStation struct {
 	LastDetectionAt *time.Time `json:"last_detection_at,omitempty"`
 }
 
-// LiveDetection é uma linha do feed "Últimas Veiculações" (modelo data/hora).
+// LiveDetection é uma linha do feed "Últimas Veiculações" (modelo data/hora —
+// espelha os campos que o AirtimeDetectionRow consome, mais leve).
 type LiveDetection struct {
 	ID             uuid.UUID `json:"id"`
+	StationID      uuid.UUID `json:"station_id"`
 	StationName    string    `json:"station_name"`
+	StationLogoURL *string   `json:"station_logo_url,omitempty"`
 	Band           string    `json:"band"`
 	FrequencyMHz   *float64  `json:"frequency_mhz,omitempty"`
 	City           *string   `json:"city,omitempty"`
 	State          *string   `json:"state,omitempty"`
 	DetectedAt     time.Time `json:"detected_at"`
+	CommercialID   uuid.UUID `json:"commercial_id"`
 	CommercialName string    `json:"commercial_name"`
 	ClientName     *string   `json:"client_name,omitempty"`
 }
@@ -128,9 +132,9 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]Li
 
 func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUID) ([]LiveDetection, error) {
 	rows, err := m.pool.Query(ctx, `
-		SELECT d.id, COALESCE(s.name, ''), COALESCE(s.band, ''),
-		       s.frequency_mhz, s.city, s.state,
-		       d.detected_at, COALESCE(m.title, c.title, ''), cli.name
+		SELECT d.id, d.station_id, COALESCE(s.name, ''), s.logo_url,
+		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
+		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name
 		FROM detections d
 		LEFT JOIN stations s    ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -151,8 +155,9 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 	var out []LiveDetection
 	for rows.Next() {
 		var d LiveDetection
-		if err := rows.Scan(&d.ID, &d.StationName, &d.Band, &d.FrequencyMHz,
-			&d.City, &d.State, &d.DetectedAt, &d.CommercialName, &d.ClientName); err != nil {
+		if err := rows.Scan(&d.ID, &d.StationID, &d.StationName, &d.StationLogoURL,
+			&d.Band, &d.FrequencyMHz, &d.City, &d.State,
+			&d.DetectedAt, &d.CommercialID, &d.CommercialName, &d.ClientName); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
