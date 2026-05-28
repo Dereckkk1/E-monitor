@@ -60,11 +60,38 @@
   letter-spacing: 0.04em; color: var(--c-text-2);
 }
 .lm-locked-chip {
-  padding: 8px 12px;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px 6px 6px;
   background: rgba(232, 30, 117, 0.1);
   color: var(--c-action);
   border-radius: 999px; font-weight: 600; font-size: 13px;
   white-space: nowrap; align-self: flex-start;
+}
+
+/* Mini avatar de cliente (na select e no chip travado do viewer) */
+.lm-client-avatar {
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: block;
+}
+.lm-client-avatar--img {
+  object-fit: cover;
+  border: 1px solid var(--c-border);
+  background: #fff;
+}
+.lm-client-avatar--fb {
+  background: rgba(232, 30, 117, 0.15);
+  color: var(--c-action);
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  user-select: none;
+}
+.lm-client-option {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.lm-client-option-label {
+  font-weight: 600; color: var(--c-text); font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ── Canvas único (sem 2 cards): feed + divisor + mapa ───────────── */

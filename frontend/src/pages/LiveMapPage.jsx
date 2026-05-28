@@ -5,8 +5,48 @@ import StationAvatar from '../components/StationAvatar'
 import { useAuth } from '../contexts/AuthContext'
 import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
 import { materialColor } from '../utils/materialColor'
+import { safeLogoUrl } from '../utils/logoUrl'
 import BrazilMap from '../components/BrazilMap'
 import './LiveMapPage.css'
+
+/* Avatar mini de cliente (logo + fallback iniciais) — espelha o que o
+ * InsightsPage/AirtimeFiltersBar usam na select de cliente. */
+function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
+  const [imgErr, setImgErr] = useState(false)
+  const safe = safeLogoUrl(logo)
+  if (safe && !imgErr) {
+    return (
+      <img
+        src={safe}
+        alt={name}
+        width={size}
+        height={size}
+        className="lm-client-avatar lm-client-avatar--img"
+        style={{ width: size, height: size }}
+        onError={() => setImgErr(true)}
+      />
+    )
+  }
+  const initials = name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
+  return (
+    <div
+      className="lm-client-avatar lm-client-avatar--fb"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.42) }}
+    >
+      {initials}
+    </div>
+  )
+}
+
+function formatClientOption(opt, { context }) {
+  const size = context === 'value' ? 18 : 22
+  return (
+    <div className="lm-client-option">
+      <ClientMiniAvatar name={opt.label} logo={opt.raw?.logo_url} size={size} />
+      <span className="lm-client-option-label">{opt.label}</span>
+    </div>
+  )
+}
 
 function pad2(n) { return String(n).padStart(2, '0') }
 function fmtDate(iso) {
@@ -169,9 +209,15 @@ export default function LiveMapPage() {
 
   const clientsQ = useClients()
   const clientOpts = useMemo(
-    () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name })),
+    () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name, raw: c })),
     [clientsQ.data],
   )
+  // Para o viewer: resolve o próprio cliente (com logo) a partir da lista
+  // scope-aware do /clients (que devolve só ele).
+  const ownClient = useMemo(() => {
+    if (isAdmin) return null
+    return (clientsQ.data || []).find(c => c.id === user?.client_id) || null
+  }, [clientsQ.data, isAdmin, user?.client_id])
 
   const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
   const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
@@ -245,12 +291,20 @@ export default function LiveMapPage() {
               placeholder="Selecione…"
               isLoading={clientsQ.isPending}
               isClearable
+              formatOptionLabel={formatClientOption}
             />
           </div>
         ) : (
           <div className="lm-filter">
             <label className="lm-filter-label">Cliente</label>
-            <div className="lm-locked-chip">{user?.client_name || user?.email || 'Sua conta'}</div>
+            <div className="lm-locked-chip">
+              <ClientMiniAvatar
+                name={ownClient?.name || user?.client_name || user?.email || ''}
+                logo={ownClient?.logo_url}
+                size={20}
+              />
+              <span>{ownClient?.name || user?.client_name || user?.email || 'Sua conta'}</span>
+            </div>
           </div>
         )}
 
