@@ -334,6 +334,7 @@ docs/
 | Simulador de stream pra teste local | [docs/operations/simulacao-radio.md](docs/operations/simulacao-radio.md) |
 | Página `/operations` (supervisor ao vivo — bytes, reconnects, stall restarts, min_hashes por worker) | [docs/features/operations-page.md](docs/features/operations-page.md) |
 | Painel admin `/admin/overview` (health de toda a stack: infra + workers + streams + pipeline) | [docs/features/admin-system-overview.md](docs/features/admin-system-overview.md) |
+| Visão Gerencial `/management` (painel admin da operação inteira — KPIs cross-campanha + mapa + feed global ao vivo, filtros opcionais) | [docs/features/management-overview.md](docs/features/management-overview.md) |
 | Painel admin `/admin/monitoring` (telemetria HTTP por rota, IP × usuário com risco, bloqueio de IP/usuário, Web Vitals) | [docs/features/admin-monitoring.md](docs/features/admin-monitoring.md) |
 | Painel admin `/admin/station-failures` (emissoras com falha no dia + campanhas com slots perdidos, deep-link pra /campaigns) | [docs/features/admin-station-failures.md](docs/features/admin-station-failures.md) |
 | Modo "Por campanha" de `/admin/station-failures` (cards por campanha + drill-in drawer + PDF de cobrança) | [docs/features/admin-campaign-failures.md](docs/features/admin-campaign-failures.md) |
