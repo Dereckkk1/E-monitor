@@ -16,6 +16,12 @@ type ManagementOverviewRepo interface {
 
 type ManagementOverviewHandler struct {
 	Repo ManagementOverviewRepo
+	// Workers expõe o snapshot de workers vivos do supervisor (mesma fonte da
+	// /operations). Usado pra calcular "monitorando agora" = emissoras
+	// monitoradas ∩ workers ativos. Satisfeito por *supervisor.Supervisor
+	// (interface workerLister, definida em health.go). nil em testes / quando
+	// não há supervisor — nesse caso StationsLive fica 0.
+	Workers workerLister
 }
 
 func NewManagementOverviewHandler(repo ManagementOverviewRepo) *ManagementOverviewHandler {
@@ -84,5 +90,26 @@ func (h *ManagementOverviewHandler) Get(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	// "Monitorando agora" = emissoras monitoradas ∩ workers ativos do
+	// supervisor (Active=true). Mesma fonte da /operations — a coluna
+	// stations.health_status não é populada pelo sistema, então não dá pra
+	// contar por ela.
+	if h.Workers != nil {
+		active := make(map[string]bool)
+		for _, ws := range h.Workers.WorkerStatuses() {
+			if ws.Active {
+				active[ws.StationID] = true
+			}
+		}
+		live := 0
+		for _, id := range out.MonitoredStationIDs {
+			if active[id.String()] {
+				live++
+			}
+		}
+		out.KPIs.StationsLive = live
+	}
+
 	writeJSON(w, http.StatusOK, out)
 }

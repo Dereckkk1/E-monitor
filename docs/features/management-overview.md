@@ -34,8 +34,11 @@ extraída do `/live-map`).
 ## KPIs
 
 - **Emissoras monitoradas:** emissoras-alvo distintas das campanhas no recorte.
-- **Monitorando agora:** subconjunto com `health_status='ok'` neste instante
-  (sempre tempo real).
+- **Monitorando agora:** emissoras monitoradas que têm **worker ativo agora** no
+  supervisor (`Supervisor.WorkerStatuses()`, `Active=true`) — **mesma fonte da
+  `/operations`**. Calculado no handler cruzando `MonitoredStationIDs` (do repo)
+  com o snapshot de workers. **Não** usa `stations.health_status` (coluna não
+  populada pelo sistema — ver Limitações).
 - **Materiais monitorados:** materiais distintos vinculados (`campaign_materials`).
 - **Veiculações no período:** detecções confirmadas no período (+ "hoje").
 
@@ -52,6 +55,15 @@ campanhas** entram. Sobre elas, o **mapa** e o **feed** são sempre "agora"; o
 roda 3 queries (KPIs, stations, recent detections) sobre uma CTE `scoped`
 comum. Frontend: `useManagementOverview` (react-query, refetch 20s,
 `placeholderData`).
+
+## Limitações conhecidas
+
+- A coluna `stations.health_status` **não é populada** pelo sistema (só
+  `last_health_check` é escrito, pelo supervisor). Por isso "monitorando agora"
+  é calculado pelo snapshot de workers do supervisor, não pela coluna. O **pulso
+  do Mapa ao Vivo** (`/live-map`) ainda lê `health_status='ok'` e portanto não
+  acende — corrigir isso (popular a coluna ou trocar a fonte no mapa) é um
+  follow-up separado.
 
 ## Performance
 
