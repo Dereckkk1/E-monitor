@@ -172,13 +172,13 @@ export default function ManagementPage() {
             isClearable
           />
         </div>
-        <div className="mg-filter mg-filter--narrow">
+        <div className="mg-filter mg-filter--date">
           <label className="mg-filter-label">De</label>
-          <input type="date" className="field" value={from} max={to} onChange={e => setFrom(e.target.value)} />
+          <input type="date" className="mg-date" value={from} max={to} onChange={e => setFrom(e.target.value)} />
         </div>
-        <div className="mg-filter mg-filter--narrow">
+        <div className="mg-filter mg-filter--date">
           <label className="mg-filter-label">Até</label>
-          <input type="date" className="field" value={to} min={from} onChange={e => setTo(e.target.value)} />
+          <input type="date" className="mg-date" value={to} min={from} onChange={e => setTo(e.target.value)} />
         </div>
         <div className="mg-filter mg-filter--narrow">
           <label className="mg-filter-label">Status</label>
