@@ -112,6 +112,16 @@ function IconAdminOverview() {
   )
 }
 
+function IconManagement() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 14s5-4.5 5-8A5 5 0 0 0 3 6c0 3.5 5 8 5 8z" />
+      <circle cx="8" cy="6" r="1.75" />
+      <path d="M2 2.5l1.6 1.6M13.4 2.5l-1.6 1.6" strokeOpacity="0.5" />
+    </svg>
+  )
+}
+
 function IconInsights() {
   return (
     <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -211,6 +221,7 @@ function AdminNav({ onClose }) {
 
       <span className="sidebar-section-label">Administração</span>
       <SidebarLink to="/admin/overview"   icon={<IconAdminOverview />}   onClose={onClose}>Visão geral</SidebarLink>
+      <SidebarLink to="/management"        icon={<IconManagement />}      onClose={onClose}>Visão Gerencial</SidebarLink>
       <SidebarLink to="/admin/monitoring"        icon={<IconAdminMonitoring />}   onClose={onClose}>Monitoramento</SidebarLink>
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
