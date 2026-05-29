@@ -30,6 +30,7 @@ import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
 import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
+import ManagementPage from './pages/ManagementPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -127,6 +128,9 @@ function AppShell() {
             <Route path="/reports/airtime" element={<AirtimeReportPage />} />
             <Route path="/admin/overview" element={
               <RequireRole roles={['admin']}><AdminOverviewPage /></RequireRole>
+            } />
+            <Route path="/management" element={
+              <RequireRole roles={['admin']}><ManagementPage /></RequireRole>
             } />
             <Route path="/admin/monitoring" element={
               <RequireRole roles={['admin']}><AdminMonitoringPage /></RequireRole>
