@@ -1,4 +1,4 @@
-.mg-page { padding: 24px 28px 48px; max-width: 1440px; margin: 0 auto; }
+.mg-page { padding: 24px 28px 48px; margin: 0 auto; }
 
 .mg-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .mg-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px; letter-spacing: -0.02em; color: var(--color-gray-900, #06055B); margin: 0; }
@@ -23,14 +23,19 @@
 .mg-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; transition: opacity .15s; }
 .mg-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
-/* Grid principal */
-.mg-grid { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: start; }
-@media (max-width: 900px) { .mg-grid { grid-template-columns: 1fr; } }
+/* Layout: linha (KPIs à esquerda + mapa à direita) e feed full width embaixo */
+.mg-grid { display: flex; flex-direction: column; gap: 16px; }
+.mg-top { display: grid; grid-template-columns: 250px 1fr; gap: 16px; align-items: stretch; }
 
-/* KPIs */
-.mg-kpis { display: flex; flex-direction: column; gap: 12px; }
-@media (max-width: 900px) { .mg-kpis { flex-direction: row; flex-wrap: wrap; } .mg-kpi { flex: 1 1 160px; } }
-.mg-kpi { background: var(--color-white, #fff); border: 1px solid var(--color-gray-200, #e2e8f0); border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); position: relative; overflow: hidden; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+/* KPIs — 4 cards empilhados que esticam até a altura do mapa */
+.mg-kpis { display: flex; flex-direction: column; gap: 14px; }
+
+@media (max-width: 900px) {
+  .mg-top { grid-template-columns: 1fr; }
+  .mg-kpis { display: grid; grid-template-columns: repeat(2, 1fr); }
+}
+.mg-kpi { flex: 1; display: flex; flex-direction: column; justify-content: center; background: var(--color-white, #fff); border: 1px solid var(--color-gray-200, #e2e8f0); border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); position: relative; overflow: hidden; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+@media (max-width: 900px) { .mg-kpi { flex: initial; } }
 .mg-kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.08); border-color: var(--color-tertiary-300, #f6a8cd); }
 .mg-kpi-ic { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 9px; background: #fbe3ee; display: flex; align-items: center; justify-content: center; color: var(--color-tertiary-500, #E81E75); }
 .mg-kpi-n { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 28px; line-height: 1; color: var(--color-gray-900, #06055B); }

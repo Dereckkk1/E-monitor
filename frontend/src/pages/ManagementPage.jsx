@@ -200,7 +200,8 @@ export default function ManagementPage() {
         </div>
       ) : (
         <div className="mg-grid">
-          <div className="mg-kpis">
+          <div className="mg-top">
+            <div className="mg-kpis">
             <KpiCard icon={ICON_MAP} value={isLoading ? '—' : nf(kpis.stations_monitored)}
               label="Emissoras monitoradas"
               sub={isLoading ? '' : `no período · ${nf(kpis.states_count)} estado${kpis.states_count === 1 ? '' : 's'}`} />
@@ -213,10 +214,9 @@ export default function ManagementPage() {
             <KpiCard icon={ICON_AIR} value={isLoading ? '—' : nf(kpis.airings_total)}
               label="Veiculações no período"
               sub={isLoading ? '' : `+${nf(kpis.airings_today)} hoje`} />
-          </div>
+            </div>
 
-          <div className="mg-right">
-            <section className="mg-card">
+            <section className="mg-card mg-map-card">
               <div className="mg-card-head">
                 <span className="mg-card-title">Emissoras monitoradas</span>
                 <span className="mg-card-meta">
@@ -245,8 +245,9 @@ export default function ManagementPage() {
                 <div ref={mapRef}><BrazilMap stations={stations} /></div>
               )}
             </section>
+          </div>
 
-            <section className="mg-card">
+          <section className="mg-card mg-feed-card">
               <div className="mg-card-head">
                 <span className="mg-card-title">Veiculações ao vivo · todas as campanhas</span>
                 {!isLoading && <span className="mg-feed-count">{detections.length}</span>}
@@ -265,8 +266,7 @@ export default function ManagementPage() {
                   ))}
                 </div>
               )}
-            </section>
-          </div>
+          </section>
         </div>
       )}
     </div>
