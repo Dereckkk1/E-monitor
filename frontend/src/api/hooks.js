@@ -536,6 +536,21 @@ export function useLiveMap(campaignId) {
   })
 }
 
+export function useManagementOverview({ clientId, campaignIds, status, from, to } = {}) {
+  const params = {}
+  if (clientId) params.client_id = clientId
+  if (campaignIds && campaignIds.length) params.campaigns = campaignIds.join(',')
+  if (status) params.status = status
+  if (from) params.from = from
+  if (to) params.to = to
+  return useQuery({
+    queryKey: ['management-overview', clientId || null, (campaignIds || []).join(','), status || '', from || '', to || ''],
+    queryFn: () => api.get('/management-overview', { params }).then(r => r.data),
+    refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useStationHealthEvents(stationId, days = 7) {
   return useQuery({
     queryKey: ['stream-health-events', stationId, days],

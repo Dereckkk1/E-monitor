@@ -339,6 +339,7 @@ func main() {
 		Reports:               &handlers.ReportsHandler{Detections: detections, CampaignRepo: campaigns, Pool: pool},
 		Insights:              handlers.NewInsightsHandler(catalog.NewInsights(pool)),
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
+		ManagementOverview:    handlers.NewManagementOverviewHandler(catalog.NewManagementOverview(pool)),
 	}
 
 	srv := &http.Server{
