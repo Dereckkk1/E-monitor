@@ -10,7 +10,20 @@ import (
 
 	"github.com/google/uuid"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/supervisor"
 )
+
+// fakeWorkers satisfaz workerLister (health.go) — devolve um snapshot com as
+// estações dadas todas ativas.
+type fakeWorkers struct{ active []string }
+
+func (f *fakeWorkers) WorkerStatuses() []supervisor.WorkerStatus {
+	out := make([]supervisor.WorkerStatus, 0, len(f.active))
+	for _, id := range f.active {
+		out = append(out, supervisor.WorkerStatus{StationID: id, Active: true})
+	}
+	return out
+}
 
 type fakeMgmtRepo struct {
 	got    catalog.ManagementParams
@@ -109,6 +122,30 @@ func TestMgmtHandler_RepoError_500(t *testing.T) {
 	h.Get(rr, newMgmtReq(""))
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestMgmtHandler_StationsLive_FromSupervisor(t *testing.T) {
+	s1, s2, s3 := uuid.New(), uuid.New(), uuid.New()
+	fake := &fakeMgmtRepo{result: catalog.ManagementResult{
+		MonitoredStationIDs: []uuid.UUID{s1, s2, s3},
+	}}
+	// s1 e s3 ativos + um worker de estação fora do recorte (ignorado).
+	workers := &fakeWorkers{active: []string{s1.String(), s3.String(), uuid.NewString()}}
+	h := &ManagementOverviewHandler{Repo: fake, Workers: workers}
+	rr := httptest.NewRecorder()
+	h.Get(rr, newMgmtReq(""))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		KPIs map[string]any `json:"kpis"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.KPIs["stations_live"].(float64) != 2 {
+		t.Errorf("stations_live = %v, want 2 (s1+s3)", body.KPIs["stations_live"])
 	}
 }
 

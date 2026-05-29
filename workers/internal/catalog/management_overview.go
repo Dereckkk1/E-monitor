@@ -52,6 +52,12 @@ type ManagementResult struct {
 	KPIs             ManagementKPIs  `json:"kpis"`
 	Stations         []LiveStation   `json:"stations"`
 	RecentDetections []LiveDetection `json:"recent_detections"`
+	// MonitoredStationIDs: todas as emissoras monitoradas no recorte (não só as
+	// geocodadas em Stations). Não serializado — o handler cruza esses ids com
+	// o snapshot de workers ativos do supervisor pra calcular StationsLive
+	// ("monitorando agora"), mesma fonte da /operations. A coluna
+	// stations.health_status não é populada pelo sistema, então não serve.
+	MonitoredStationIDs []uuid.UUID `json:"-"`
 }
 
 // scopeArgs monta os 5 args compartilhados pelas três queries, na ordem
@@ -67,10 +73,20 @@ func (m *ManagementOverview) scopeArgs(p ManagementParams) []any {
 func (m *ManagementOverview) Get(ctx context.Context, p ManagementParams) (ManagementResult, error) {
 	var res ManagementResult
 
+	ids, err := m.queryMonitoredStationIDs(ctx, p)
+	if err != nil {
+		return res, err
+	}
+	res.MonitoredStationIDs = ids
+
 	kpis, err := m.queryKPIs(ctx, p)
 	if err != nil {
 		return res, err
 	}
+	// StationsMonitored = nº distinto de emissoras monitoradas. StationsLive
+	// fica 0 aqui — o handler preenche cruzando ids com os workers ativos do
+	// supervisor (a coluna health_status no banco não é populada).
+	kpis.StationsMonitored = len(ids)
 	res.KPIs = kpis
 
 	stations, err := m.queryStations(ctx, p)
@@ -107,12 +123,10 @@ func (m *ManagementOverview) queryKPIs(ctx context.Context, p ManagementParams) 
 	var k ManagementKPIs
 	err := m.pool.QueryRow(ctx, mgmtScopedCTE+`
 		, joined AS (
-		    SELECT s.id, s.state, s.health_status
+		    SELECT s.state
 		    FROM mon_stations ms JOIN stations s ON s.id = ms.station_id
 		)
 		SELECT
-		  (SELECT COUNT(*) FROM joined)                                              AS stations_monitored,
-		  (SELECT COUNT(*) FROM joined WHERE health_status = 'ok')                   AS stations_live,
 		  (SELECT COUNT(DISTINCT state) FROM joined WHERE state IS NOT NULL)         AS states_count,
 		  (SELECT COUNT(*) FROM scoped)                                              AS campaigns_count,
 		  (SELECT COUNT(DISTINCT cm.material_id) FROM campaign_materials cm
@@ -129,10 +143,34 @@ func (m *ManagementOverview) queryKPIs(ctx context.Context, p ManagementParams) 
 		           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
 		               = (now() AT TIME ZONE 'America/Sao_Paulo')::date)            AS airings_today
 	`, m.scopeArgs(p)...).Scan(
-		&k.StationsMonitored, &k.StationsLive, &k.StatesCount,
-		&k.CampaignsCount, &k.MaterialsMonitored, &k.AiringsTotal, &k.AiringsToday,
+		&k.StatesCount, &k.CampaignsCount, &k.MaterialsMonitored,
+		&k.AiringsTotal, &k.AiringsToday,
 	)
 	return k, err
+}
+
+// queryMonitoredStationIDs devolve os ids das emissoras monitoradas no recorte
+// (distintas, que existem na tabela stations). Usado pra contar StationsMonitored
+// e pra cruzar com os workers ativos do supervisor (StationsLive).
+func (m *ManagementOverview) queryMonitoredStationIDs(ctx context.Context, p ManagementParams) ([]uuid.UUID, error) {
+	rows, err := m.pool.Query(ctx, mgmtScopedCTE+`
+		SELECT s.id
+		FROM mon_stations ms JOIN stations s ON s.id = ms.station_id
+	`, m.scopeArgs(p)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 func (m *ManagementOverview) queryStations(ctx context.Context, p ManagementParams) ([]LiveStation, error) {
