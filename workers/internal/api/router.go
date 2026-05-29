@@ -54,6 +54,7 @@ type Deps struct {
 	Notifications         *handlers.NotificationsHandler
 	Insights              *handlers.InsightsHandler
 	LiveMap               *handlers.LiveMapHandler
+	ManagementOverview    *handlers.ManagementOverviewHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -228,6 +229,14 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/stations/{id}/threshold", d.Stations.GetThreshold)
 				r.Patch("/stations/{id}/stream-url", d.Stations.UpdateStreamURL)
 				r.Post("/stations/{id}/connection-test", d.Stations.ConnectionTest)
+
+				// Visão Gerencial — painel da operação inteira (cross-campanha,
+				// cross-cliente). Admin/operator-only (sem scope de viewer): por
+				// isso fica aqui, não no subgrupo A. Doc:
+				// docs/features/management-overview.md.
+				if d.ManagementOverview != nil {
+					r.Get("/management-overview", d.ManagementOverview.Get)
+				}
 				// Writes em /clients. NÃO usar r.Route() aqui — Route monta
 				// sub-tree que captura todos os métodos do prefixo e mascara o
 				// GET registrado no subgrupo A (viewer cai no RequireRole
