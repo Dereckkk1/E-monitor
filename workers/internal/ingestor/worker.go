@@ -405,7 +405,13 @@ func (w *Worker) runPCMReader(
 		windowSpan.SetAttributes(attribute.String("station_id", stationIDStr))
 
 		matchStart := time.Now()
-		results := match.MatchWindow(window, w.store, int(w.cfg.MatchThreshold.Load()), w.cfg.MinScoreCoverage)
+		// Single fingerprint pass per window. MatchWindowDetailed runs the
+		// STFT/peaks/hashes pipeline ONCE and returns both the filtered match
+		// results AND rawScores (the unfiltered per-commercial best counts).
+		// Reusing rawScores below for the diagnostic log and the noise sampler
+		// avoids the 2-3 redundant ScanScores re-fingerprinting passes this loop
+		// used to make on every window — the dominant per-worker CPU cost.
+		results, rawScores := match.MatchWindowDetailed(window, w.store, int(w.cfg.MatchThreshold.Load()), w.cfg.MinScoreCoverage)
 		matchElapsed := time.Since(matchStart)
 		// Histogram observation with trace_id exemplar so Grafana can jump
 		// from a long-tail bucket directly to the offending trace.
@@ -437,7 +443,7 @@ func (w *Worker) runPCMReader(
 		// reference system reports a detection and we want to know what we
 		// scored during that exact window.
 		if len(results) == 0 {
-			scores := match.ScanScores(window, w.store)
+			scores := rawScores // reuse the single-pass scores (was: match.ScanScores)
 			var topID int32
 			topScore := 0
 			for id, sc := range scores {
@@ -482,7 +488,7 @@ func (w *Worker) runPCMReader(
 		noiseSampleTick++
 		if w.cfg.OnNoiseSample != nil && noiseSampleTick >= NoiseSampleEvery {
 			noiseSampleTick = 0
-			scores := match.ScanScores(window, w.store)
+			scores := rawScores // reuse the single-pass scores (was: match.ScanScores)
 			topScore := 0
 			for _, sc := range scores {
 				if sc > topScore {

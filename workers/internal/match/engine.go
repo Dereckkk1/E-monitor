@@ -127,10 +127,41 @@ func buildHistogram(samples []float32, store *index.Store) (
 // minScoreCoverage is the score/totalHashes ratio threshold for THIS window only.
 // It is unrelated to the temporal coverage check performed by the state machine.
 // Returns all MatchResults satisfying both filters (may be empty).
+//
+// MatchWindow is a thin wrapper over MatchWindowDetailed that discards the raw
+// per-commercial scores. Callers that need BOTH the filtered results and the
+// raw scores (the live ingestor, for its diagnostic log + calibration noise
+// sampling) must call MatchWindowDetailed so the fingerprint pipeline runs only
+// ONCE per window instead of being recomputed by a second ScanScores pass.
 func MatchWindow(samples []float32, store *index.Store, threshold int, minScoreCoverage float64) []MatchResult {
+	results, _ := MatchWindowDetailed(samples, store, threshold, minScoreCoverage)
+	return results
+}
+
+// MatchWindowDetailed runs the fingerprint pipeline exactly ONCE and returns:
+//   - results: the filtered []MatchResult, identical to what MatchWindow returns
+//     (same threshold + minScoreCoverage filters);
+//   - rawScores: the raw best histogram count for EVERY commercial with at least
+//     one matching hash in the window, with NO threshold/coverage filtering —
+//     byte-for-byte what ScanScores would have produced from a second pipeline
+//     pass over the same window.
+//
+// This is the single-pass primitive the live worker uses: it needs results to
+// drive the state machines, and rawScores to feed both the "window scan"
+// diagnostic and the calibration noise sampler — all from one buildHistogram.
+//
+// On an empty/no-hit window both returns are nil. (ScanScores historically
+// returned a non-nil empty map in that case; callers treat nil and empty the
+// same — range over either yields zero iterations.)
+func MatchWindowDetailed(samples []float32, store *index.Store, threshold int, minScoreCoverage float64) ([]MatchResult, map[int32]int) {
 	best, uniqueByKey, totalHashes := buildHistogram(samples, store)
 	if totalHashes == 0 {
-		return nil
+		return nil, nil
+	}
+
+	rawScores := make(map[int32]int, len(best))
+	for id, b := range best {
+		rawScores[id] = b.count
 	}
 
 	minHits := int(float64(totalHashes) * minScoreCoverage)
@@ -151,7 +182,7 @@ func MatchWindow(samples []float32, store *index.Store, threshold int, minScoreC
 		}
 	}
 
-	return results
+	return results, rawScores
 }
 
 // ScanScores returns the raw best score for every commercial that has at least
