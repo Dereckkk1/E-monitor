@@ -147,6 +147,11 @@ func (c *Commercials) ListReadyByCampaigns(ctx context.Context, campaignIDs []uu
 // explicitly target the given station. A commercial with an empty target_stations
 // is treated as inactive (runs on no station) — operators must explicitly link the
 // commercial to at least one station for it to be detected.
+//
+// Backfilled commercials (id present in materials) are excluded — those load via
+// the materials path (campaign_materials is authoritative), keeping each short_id
+// in the worker's allow-list exactly once. This path now serves only pure-legacy
+// commercials with no material row.
 func (c *Commercials) ListReadyByCampaignsForStation(ctx context.Context, campaignIDs []uuid.UUID, stationID uuid.UUID) ([]Commercial, error) {
 	if len(campaignIDs) == 0 {
 		return nil, nil
@@ -156,7 +161,8 @@ func (c *Commercials) ListReadyByCampaignsForStation(ctx context.Context, campai
 		FROM commercials
 		WHERE campaign_id = ANY($1)
 		  AND fingerprint_status = 'ready'
-		  AND $2 = ANY(target_stations)`,
+		  AND $2 = ANY(target_stations)
+		  AND id NOT IN (SELECT id FROM materials)`,
 		campaignIDs, stationID)
 	if err != nil {
 		return nil, err
