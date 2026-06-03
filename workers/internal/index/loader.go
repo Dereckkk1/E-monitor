@@ -51,36 +51,43 @@ func NewLoader(store *Store, db *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *
 // See docs/worker-commercial-reconciler.md.
 const indexEligibleStatuses = `('programada', 'ativa')`
 
-// LoadAll loads ALL ready commercials' fingerprints into the index via a
-// single JOIN query. It always swaps a non-nil index — even when no rows
+// LoadAll loads every matchable spot's fingerprints into the index via a single
+// UNION query. Path A is primary: materials linked via campaign_materials to an
+// active/programada campaign (fresh + backfilled, reused or not) — campaign_materials
+// is the source of truth, so there is NO "NOT IN commercials" exclusion. Path B
+// is a fallback for pure-legacy commercials that have no material row, gated on
+// their own campaign status. It always swaps a non-nil index — even when no rows
 // are found. Called once at startup.
 func (l *Loader) LoadAll(ctx context.Context) error {
 	rows, err := l.db.Query(ctx, `
-		-- Path 1: commercials (legacy + backfilled).
-		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, c.short_id
-		FROM fingerprint_hashes fh
-		JOIN commercials c  ON c.id  = fh.commercial_id
-		JOIN campaigns   ca ON ca.id = c.campaign_id
-		WHERE c.fingerprint_status = 'ready'
-		  AND ca.status IN `+indexEligibleStatuses+`
-
-		UNION ALL
-
-		-- Path 2: materials (new uploads from the campaign wizard, plus
-		-- legacy materials linked via campaign_materials). We exclude any
-		-- material whose UUID also exists in commercials to avoid duplicate
-		-- entries — those are handled by Path 1.
+		-- Path A (primary): materials linked via campaign_materials to an
+		-- active/programada campaign. Covers fresh uploads AND backfilled
+		-- materials reused across campaigns. campaign_materials is the source
+		-- of truth — no "NOT IN commercials" exclusion here.
 		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, m.short_id
 		FROM fingerprint_hashes fh
 		JOIN materials m ON m.id = fh.commercial_id
 		WHERE m.fingerprint_status = 'ready'
-		  AND m.id NOT IN (SELECT id FROM commercials)
 		  AND EXISTS (
 		      SELECT 1 FROM campaign_materials cm
 		      JOIN campaigns ca ON ca.id = cm.campaign_id
 		      WHERE cm.material_id = m.id
 		        AND ca.status IN `+indexEligibleStatuses+`
 		  )
+
+		UNION ALL
+
+		-- Path B (fallback): pure-legacy commercials with NO material row,
+		-- gated on their own campaign status. Backfilled commercials (id in
+		-- materials) are handled by Path A; excluding them keeps each short_id
+		-- in the index exactly once.
+		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id, fh.is_shared, c.short_id
+		FROM fingerprint_hashes fh
+		JOIN commercials c  ON c.id  = fh.commercial_id
+		JOIN campaigns   ca ON ca.id = c.campaign_id
+		WHERE c.fingerprint_status = 'ready'
+		  AND ca.status IN `+indexEligibleStatuses+`
+		  AND c.id NOT IN (SELECT id FROM materials)
 	`)
 	if err != nil {
 		return fmt.Errorf("index loader: query fingerprint_hashes: %w", err)
@@ -166,7 +173,6 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 				SELECT m.short_id FROM materials m
 				WHERE m.id = $1
 				  AND m.fingerprint_status = 'ready'
-				  AND m.id NOT IN (SELECT id FROM commercials)
 				  AND EXISTS (
 				      SELECT 1 FROM campaign_materials cm
 				      JOIN campaigns ca ON ca.id = cm.campaign_id

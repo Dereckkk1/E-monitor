@@ -21,6 +21,7 @@ A lista nasceu dos code-reviews das Etapas 2A (fingerprint batch), 2B (ciclo de 
 
 ## Resolvidos pós-Fase 2
 
+- **Zona morta do material legado reaproveitado** (2026-06-03): material backfill (UUID em `commercials`, `commercials.campaign_id` na campanha original) reusado numa campanha nova via biblioteca ficava invisível pro matcher (índice + worker) e era atribuído à campanha velha. Fix tornou `campaign_materials` a fonte-da-verdade em `index/loader.go`, `catalog/materials.go` + `catalog/commercials.go` e `evidence/attribution.go`; `commercials` virou fallback legado (`id NOT IN materials`). Sem migration. Caso real: `INFINITE PAY | CAPITAIS` junho/2026. Spec/plano em [`specs/2026-06-03-reused-material-dead-zone-design.md`](../superpowers/specs/2026-06-03-reused-material-dead-zone-design.md). Pré-deploy: `scripts/preflight-target-stations-drift.sql` (exige 0 linhas).
 - **Migration runner automático** (2026-05-07): service `migrate` (golang-migrate) no `infra/docker/docker-compose.yml` aplica `migrations/*.up.sql` antes do `api` subir. `api` depende de `migrate: condition: service_completed_successfully`. Bootstrap de DB existente via `scripts/bootstrap-migrations.sh` (one-shot, idempotente, popula `schema_migrations` com `version=14, dirty=false`). Documentação completa em [`docs/migrations.md`](migrations.md). Resolve o problema histórico de migrations novas precisarem de `psql` manual a cada deploy.
 
 ## Resolvidos no security-review (2026-05-07)
@@ -312,6 +313,19 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
   (or change the schema to support N:M between detection and campaign). See
   ADR-2 in `docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md`
   for the rationale behind the current single-attribution rule.
+- **F-122** — Auditar `Commercials.LookupForDedup` (dedup §18.2.2): resolve o
+  `short_id` em `commercials` **primeiro**, caindo em `materials`/`campaign_materials`
+  só no `ErrNoRows`. Para um material backfill reaproveitado, isso pega `client_id`
+  e `dedup_window_seconds` da campanha **original** (concluída). `client_id` e
+  duração são estáveis entre cortes do mesmo cliente, então o agrupamento de dedup
+  não muda hoje — mas alinhar com a regra `campaign_materials`-autoritativa
+  (mesma inversão feita em `evidence/attribution.go`) deixa robusto. Não bloqueia.
+- **F-123** — Confirmar que `supervisor/disambiguation.go` e `webhook/deliverer.go`
+  usam o `campaign_id` **gravado na detecção** (já correto após o fix de atribuição
+  de 2026-06-03) e não re-resolvem campanha via `commercials.campaign_id`. Auditoria
+  de leitura apenas; abrir fix só se algum caminho re-resolver. Relacionado a **F-90**
+  (deprecar `commercials.campaign_id`/`target_stations`), que o fix da zona morta
+  adianta ao demover `commercials` a fallback legado.
 
 ---
 

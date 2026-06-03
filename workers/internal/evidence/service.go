@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel/attribute"
@@ -156,32 +154,15 @@ func (s *Service) handle(msg *nats.Msg) {
 		return
 	}
 
-	// Look up commercial + campaign. First try commercials (legacy +
-	// backfilled materials). If short_id doesn't resolve there, fall back
-	// to materials joined with campaign_materials — campaign_id is derived
-	// from the linked campaign that targets this station and is currently
-	// active on detectedAt. If multiple overlap, pick the most recently
-	// added link (multi-attribution is a future feature — F-119).
-	var commercialID, campaignID uuid.UUID
-	lookupErr := s.db.QueryRow(ctx,
-		`SELECT c.id, c.campaign_id FROM commercials c WHERE c.short_id = $1 AND c.fingerprint_status = 'ready' LIMIT 1`,
-		ev.CommercialShortID,
-	).Scan(&commercialID, &campaignID)
-
-	if errors.Is(lookupErr, pgx.ErrNoRows) {
-		lookupErr = s.db.QueryRow(ctx, `
-			SELECT m.id, cm.campaign_id
-			FROM materials m
-			JOIN campaign_materials cm ON cm.material_id = m.id
-			JOIN campaigns ca           ON ca.id = cm.campaign_id
-			WHERE m.short_id = $1
-			  AND $2 = ANY(cm.target_stations)
-			  AND ca.status IN ('programada','ativa')
-			  AND $3::date BETWEEN ca.start_date AND ca.end_date
-			ORDER BY cm.added_at DESC
-			LIMIT 1
-		`, ev.CommercialShortID, stationID, detectedAt).Scan(&commercialID, &campaignID)
-	}
+	// Resolve which commercial/campaign this detection belongs to.
+	// campaign_materials is authoritative: resolveAttribution prefers the
+	// active/programada campaign link that targets this station on detectedAt,
+	// and only falls back to the legacy commercials.campaign_id for pure-legacy
+	// rows. Pre-fix the order was inverted, so a backfilled material reused in a
+	// new campaign was attributed to the stale (often concluded) campaign its
+	// commercial row still points at. Multi-attribution is a future feature (F-119).
+	commercialID, campaignID, lookupErr := resolveAttribution(
+		ctx, s.db, ev.CommercialShortID, stationID, detectedAt)
 
 	if lookupErr != nil {
 		// Drop the detection — the old code fell through with uuid.Nil
