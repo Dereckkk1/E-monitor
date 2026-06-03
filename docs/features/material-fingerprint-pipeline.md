@@ -1,9 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-03
 codigo-relacionado:
   - workers/internal/api/handlers/materials.go
   - workers/cmd/fingerprint/main.go
+  - workers/internal/index/loader.go
+  - workers/internal/catalog/materials.go
+  - workers/internal/catalog/commercials.go
+  - workers/internal/evidence/attribution.go
   - migrations/0016_material_library.up.sql
   - migrations/0024_unify_short_id_drop_detections_fk.up.sql
   # nota: CLI fingerprint ainda usa nomenclatura legada (--commercial-short-id) mas funciona polimorfico
@@ -34,16 +38,22 @@ o plano em
    gera variantes de broadcast, escreve hashes, marca `ready`, publica
    `index.reload` + `fingerprint.shared-scan` com a MESMA chave que recebeu.
 3. **Index loader** (`workers/internal/index/loader.go`): hot-reload puxa
-   os novos hashes pro mapa em memória via UNION query (commercials + materials).
+   os novos hashes pro mapa em memória via UNION query. **Path A (primário):**
+   materials ligados via `campaign_materials` a campanha `ativa`/`programada`
+   (cobre material fresco E backfill reaproveitado). **Path B (fallback):**
+   commercials legados sem linha em `materials`. Ver
+   [§ Fonte-da-verdade](#fonte-da-verdade-campaign_materials).
 4. **Sharing subscriber** (`workers/internal/sharing/subscriber.go`): roda
    `MarkSharedHashes` sobre o material e republica `index.reload` com a
    chave correta.
 5. **Supervisor + reconciler** (`workers/internal/supervisor/`): adicionam
    o `short_id` do material à lista do worker da estação (`ListReadyByCampaignsForStation`
    no repo de `materials`). Reconciler de 30s detecta drift e restart só se necessário.
-6. **Match → detection**: quando o matcher emite uma match, evidence service
-   resolve o `short_id` em `commercials` primeiro, depois `materials`
-   (via `campaign_materials.target_stations` + data de detecção).
+6. **Match → detection**: quando o matcher emite uma match, `evidence`
+   resolve o `short_id` via `campaign_materials` **primeiro** (vínculo
+   `ativa`/`programada` que mira a estação e contém a data da detecção), e cai
+   no `commercials.campaign_id` só como fallback legado — ver
+   `workers/internal/evidence/attribution.go` (`resolveAttribution`).
 
 ## Atribuição multi-campanha
 
@@ -54,6 +64,39 @@ do mesmo material, a atribuição vai pra **campanha mais recentemente vinculada
 
 Multi-atribuição (uma detecção contar pra múltiplas campanhas
 simultaneamente) é follow-up **F-119** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
+
+## Fonte-da-verdade: campaign_materials
+
+**Regra (fix 2026-06-03):** um spot (`short_id`) é casável / carregado pelo worker
+/ atribuído pelos vínculos em **`campaign_materials`** com campanhas
+`ativa`/`programada`. `commercials.campaign_id` e `commercials.target_stations`
+são **fallback legado**, consultados só para spots que não têm linha em `materials`.
+
+### A zona morta que isso corrige
+
+A migration 0016 clonou cada `commercial` num `material` de **mesmo UUID**
+(backfill) e criou um vínculo `campaign_materials` pra campanha original. Quando
+esse material é **reaproveitado** numa campanha nova pela biblioteca, o vínculo
+novo entra em `campaign_materials`, mas `commercials.campaign_id` continua na
+campanha **original** (que pode estar `concluida`). Antes do fix, o material caía
+num vão e ficava **invisível pro matcher**:
+
+- índice: Path commercials filtrava pela campanha do commercial (concluída → fora);
+  Path materials excluía backfill (`NOT IN commercials`) → hash em nenhum dos dois.
+- worker: idem (carregava 0 `short_id` → 0 state machines → nunca confirmava).
+- atribuição: resolvia `commercials` primeiro → caía na campanha velha.
+
+O fix (índice + worker + atribuição) torna `campaign_materials` autoritativo e
+demove `commercials` a fallback legado (`id NOT IN materials`), mantendo cada
+`short_id` exatamente uma vez. Design e plano:
+[spec](../superpowers/specs/2026-06-03-reused-material-dead-zone-design.md) ·
+[plano](../superpowers/plans/2026-06-03-reused-material-dead-zone.md).
+Caso real: campanha `INFINITE PAY | CAPITAIS` (junho/2026) reaproveitando o spot
+da campanha de maio concluída.
+
+> ⚠️ Antes de deployar, rodar `scripts/preflight-target-stations-drift.sql` —
+> exige 0 linhas (garante que nenhum backfill teve `commercials.target_stations`
+> divergente de `campaign_materials.target_stations` na campanha original).
 
 ## Comandos úteis
 
