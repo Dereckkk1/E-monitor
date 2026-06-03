@@ -176,11 +176,12 @@ type ReadyMaterialForWorker struct {
 	DurationSeconds float64
 }
 
-// ListReadyByCampaignsForStation returns ready materials that are linked
-// (via campaign_materials) to any of the given campaigns AND that include
-// the given station in that link's target_stations array. Backfilled
-// materials whose UUID also exists in commercials are EXCLUDED — those go
-// through the commercials path. Mirrors commercials.ListReadyByCampaignsForStation.
+// ListReadyByCampaignsForStation returns ready materials linked (via
+// campaign_materials) to any of the given campaigns AND including the given
+// station in that link's target_stations. campaign_materials is authoritative,
+// so backfilled materials (UUID also in commercials) reused in a new campaign
+// ARE returned here — the commercials path only covers pure-legacy rows
+// (id NOT IN materials), so each short_id still loads exactly once.
 func (m *Materials) ListReadyByCampaignsForStation(ctx context.Context, campaignIDs []uuid.UUID, stationID uuid.UUID) ([]ReadyMaterialForWorker, error) {
 	if len(campaignIDs) == 0 {
 		return nil, nil
@@ -191,8 +192,7 @@ func (m *Materials) ListReadyByCampaignsForStation(ctx context.Context, campaign
 		JOIN campaign_materials cm ON cm.material_id = mat.id
 		WHERE cm.campaign_id = ANY($1)
 		  AND mat.fingerprint_status = 'ready'
-		  AND $2 = ANY(cm.target_stations)
-		  AND mat.id NOT IN (SELECT id FROM commercials)`,
+		  AND $2 = ANY(cm.target_stations)`,
 		campaignIDs, stationID)
 	if err != nil {
 		return nil, err
