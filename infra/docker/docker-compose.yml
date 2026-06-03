@@ -152,7 +152,11 @@ services:
       # MASTERSDATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod
       # protege os arquivos master (mp3 dos comerciais).
       - ${MASTERSDATA_HOST_PATH:-mastersdata}:/data/masters
-      - segmentsdata:/data/segments
+      # SEGMENTSDATA_HOST_PATH: idem PGDATA_HOST_PATH — bind mount em prod tira
+      # os ~5GB de segmentos de evidência efêmeros do disco de OS (24G) e os
+      # joga em /mnt/data (49G). Cleanup usa o MESMO path (ver service abaixo).
+      # Migração: docs/operations/segments-disk-migration.md.
+      - ${SEGMENTSDATA_HOST_PATH:-segmentsdata}:/data/segments
       - ../../audio-refs:/audio-refs:ro
     depends_on:
       postgres:
@@ -282,7 +286,8 @@ services:
   segments-cleanup:
     image: alpine:3.19
     volumes:
-      - segmentsdata:/data/segments
+      # Mesmo path do service api (named volume em dev, bind /mnt/data em prod).
+      - ${SEGMENTSDATA_HOST_PATH:-segmentsdata}:/data/segments
     entrypoint: ["sh", "-c"]
     command:
       - |

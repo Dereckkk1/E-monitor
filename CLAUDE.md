@@ -304,6 +304,7 @@ docs/
 | Gerenciamento de usuários (admin/cliente, /admin/users, /account) | [docs/features/user-management.md](docs/features/user-management.md) |
 | Desativar cliente (reversível) + delete→409 com vínculos + login gating de cliente inativo | [docs/features/client-deactivation.md](docs/features/client-deactivation.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |
+| Disco cheio na VM / segmentos de evidência (`segmentsdata`) ocupando o disco de OS | [docs/operations/segments-disk-migration.md](docs/operations/segments-disk-migration.md) |
 | Backup, restore, retenção de evidência | [docs/operations/data-durability.md](docs/operations/data-durability.md) (canônico) + [docs/operations/backup-and-retention.md](docs/operations/backup-and-retention.md) (parcialmente desatualizado) |
 | OpenTelemetry, Jaeger, spans, sampling | [docs/operations/tracing.md](docs/operations/tracing.md) |
 | Profiling com pprof (CPU, heap, goroutines, mutex) | [docs/operations/profiling.md](docs/operations/profiling.md) |
