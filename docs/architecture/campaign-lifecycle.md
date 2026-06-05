@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-05
 codigo-relacionado:
   - workers/internal/supervisor/lifecycle_scheduler.go
+  - workers/internal/catalog/campaigns.go
   - workers/internal/api/handlers/campaigns.go
   - workers/internal/supervisor/station_changes.go
   - migrations/0011_campaign_lifecycle.up.sql
@@ -47,9 +48,31 @@ campanha cancelada por engano, criar uma nova.
                   │ end_date < today (America/Sao_Paulo)
                   ▼
               concluida
+                  │ end_date >= today  (RECOVERY — ex.: end_date estendido)
+                  ▼
+            ativa / programada
 
 programada / ativa  ── operador chama POST /cancel ──►  cancelada
 ```
+
+### Recovery `concluida → ativa/programada` (2026-06-05)
+
+`concluida` **não é terminal** se o período voltar a estar aberto. Quando o
+`end_date` de uma campanha concluída é estendido para o futuro (via edição no
+wizard — `UpdateBasic` não toca no status), a próxima rodada do
+`PromoteScheduledLifecycle` a **recupera**: vira `ativa` se já começou
+(`start_date <= today`), ou `programada` se ainda não. Os ids recuperados para
+`ativa` entram na lista `activated`, então o scheduler sobe os workers
+automaticamente, igual a uma transição `programada → ativa`.
+
+Campanhas legitimamente concluídas (`end_date < today`) **não** são tocadas.
+`cancelada` continua sendo o único estado realmente terminal.
+
+> **Incidente 2026-06-05** (`200 (MRA) TINTAS RENNER`): antes deste passo, uma
+> campanha concluída cujo `end_date` fosse estendido ficava presa em `concluida`
+> para sempre (não havia caminho de volta), e seus workers nunca subiam. O fix
+> de dado foi `UPDATE ... SET status='ativa'`; o fix de código é o RECOVERY
+> acima. Cobertura: `TestPromoteScheduledLifecycle_RecoversStuckConcluida`.
 
 ## Componentes
 

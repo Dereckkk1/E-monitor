@@ -277,18 +277,59 @@ func (c *Campaigns) CountByStatus(ctx context.Context) (map[string]int, error) {
 	return out, rows.Err()
 }
 
-// PromoteScheduledLifecycle runs both lifecycle transitions in a single TX:
-//   - programada → ativa  when start_date <= today (America/Sao_Paulo)
-//   - ativa     → concluida when end_date < today (America/Sao_Paulo)
+// PromoteScheduledLifecycle runs the lifecycle transitions in a single TX:
+//   - concluida → ativa/programada  when end_date >= today (RECOVERY, see below)
+//   - programada → ativa            when start_date <= today (America/Sao_Paulo)
+//   - ativa     → concluida         when end_date < today (America/Sao_Paulo)
 //
-// Returns the IDs that transitioned for each direction. Idempotent: if no rows
-// match, returns empty slices and nil error.
+// Returns the IDs that became 'ativa' (in `activated`, including recovered ones,
+// so the scheduler starts their workers) and the IDs that became 'concluida'
+// (in `ended`). Idempotent: if no rows match, returns empty slices and nil error.
 func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []uuid.UUID, ended []uuid.UUID, err error) {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// RECOVERY: concluida → ativa/programada when the window is STILL open
+	// (end_date >= today). Self-heals campaigns wrongly stuck in 'concluida' —
+	// the canonical cause is an operator extending end_date AFTER the campaign
+	// concluded: UpdateBasic does not touch status, and there is no other path
+	// back to ativa (incident 2026-06-05, campaign "200 (MRA) TINTAS RENNER").
+	// Legitimately concluded campaigns (end_date < today) are left untouched.
+	// Recovered-to-'ativa' ids are appended to `activated` so the scheduler
+	// starts their workers, exactly like a programada→ativa transition. This
+	// must run BEFORE the two steps below; the status filters keep them from
+	// re-processing the rows it just moved.
+	rows0, err := tx.Query(ctx, `
+		UPDATE campaigns
+		   SET status = CASE
+		         WHEN start_date <= (now() AT TIME ZONE 'America/Sao_Paulo')::date THEN 'ativa'
+		         ELSE 'programada'
+		       END,
+		       updated_at = now()
+		 WHERE status = 'concluida'
+		   AND end_date >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
+		RETURNING id, status`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows0.Next() {
+		var id uuid.UUID
+		var status string
+		if err := rows0.Scan(&id, &status); err != nil {
+			rows0.Close()
+			return nil, nil, err
+		}
+		if status == "ativa" {
+			activated = append(activated, id)
+		}
+	}
+	rows0.Close()
+	if err := rows0.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	// programada → ativa
 	rows1, err := tx.Query(ctx, `
@@ -353,9 +394,11 @@ type UpdateBasicInput struct {
 }
 
 // UpdateBasic edita o trio (name, start_date, end_date) de uma campanha.
-// Retorna pgx.ErrNoRows se o id não existir. A lifecycle não é tocada — uma
-// campanha 'concluida' continua concluida mesmo que o end_date avance pra
-// frente; a próxima rodada do PromoteScheduledLifecycle reverte se for o caso.
+// Retorna pgx.ErrNoRows se o id não existir. A lifecycle não é tocada aqui — mas
+// se este edit estende o end_date de uma campanha 'concluida' para o futuro, a
+// próxima rodada do PromoteScheduledLifecycle a recupera para ativa/programada
+// (passo RECOVERY). Antes de 2026-06-05 essa recuperação NÃO existia e a
+// campanha ficava presa em 'concluida' — ver o incidente TINTAS RENNER.
 func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasicInput) (*Campaign, error) {
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `
