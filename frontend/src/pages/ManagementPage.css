@@ -1,7 +1,13 @@
 .mg-page { padding: 24px 28px 48px; margin: 0 auto; }
 
 .mg-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.mg-header-right { display: inline-flex; align-items: center; gap: 14px; }
 .mg-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px; letter-spacing: -0.02em; color: var(--color-gray-900, #06055B); margin: 0; }
+
+/* Botão tela cheia */
+.mg-fs-btn { display: inline-flex; align-items: center; gap: 7px; background: var(--color-white, #fff); border: 1px solid var(--color-gray-200, #e2e8f0); border-radius: 999px; padding: 7px 14px; font-size: 12px; font-weight: 600; color: var(--color-gray-700, #334155); cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
+.mg-fs-btn:hover { border-color: var(--color-tertiary-400, #ee7eb5); color: var(--color-tertiary-500, #E81E75); }
+.mg-fs-btn svg { display: block; }
 .mg-live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-tertiary-500, #E81E75); font-weight: 600; }
 .mg-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-tertiary-500, #E81E75); box-shadow: 0 0 0 0 rgba(232,30,117,.5); animation: mg-pulse 1.8s infinite; }
 .mg-refreshing { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(232,30,117,.25); border-top-color: var(--color-tertiary-500, #E81E75); animation: mg-spin .8s linear infinite; }
@@ -68,4 +74,26 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mg-live-dot, .mg-refreshing { animation: none; }
+}
+
+/* ── Tela cheia ──────────────────────────────────────────────────
+   Esconde a navegação global e usa a viewport inteira. O <body> ganha
+   a classe .mg-fs (toggle no componente), então sobrescrevemos o shell. */
+body.mg-fs .app-sidebar,
+body.mg-fs .mobile-topbar,
+body.mg-fs .sidebar-overlay { display: none !important; }
+body.mg-fs .app-content { padding: 0 !important; }
+
+/* Página ocupa a viewport e divide mapa+cards | feed numa tela só */
+.mg-page--fs { padding: 16px 22px 18px; height: 100svh; box-sizing: border-box; display: flex; flex-direction: column; }
+.mg-page--fs .mg-header { margin-bottom: 12px; }
+.mg-page--fs .mg-filters { margin-bottom: 12px; }
+.mg-page--fs .mg-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); grid-template-rows: 1fr; align-items: stretch; }
+.mg-page--fs .mg-top { min-height: 0; align-content: start; }
+.mg-page--fs .mg-map-card { min-height: 0; display: flex; flex-direction: column; }
+.mg-page--fs .mg-feed-card { min-height: 0; display: flex; flex-direction: column; }
+.mg-page--fs .mg-feed-card .la-list { flex: 1; min-height: 0; overflow-y: auto; }
+
+@media (max-width: 900px) {
+  .mg-page--fs .mg-grid { grid-template-columns: 1fr; grid-template-rows: auto auto; overflow-y: auto; }
 }
