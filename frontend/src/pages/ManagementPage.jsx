@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import BrazilMap from '../components/BrazilMap'
@@ -76,7 +76,22 @@ export default function ManagementPage() {
   const [status, setStatus] = useState(null)
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const mapRef = useRef(null)
+
+  // Tela cheia: esconde a navegação (sidebar + topbar mobile) via classe no
+  // <body> e usa a viewport inteira. Puramente visual — nada muda nos dados.
+  useEffect(() => {
+    document.body.classList.toggle('mg-fs', fullscreen)
+    return () => document.body.classList.remove('mg-fs')
+  }, [fullscreen])
+
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fullscreen])
 
   // Período default = ano corrente (01/01 → hoje). Datas em ISO YYYY-MM-DD.
   const year = new Date().getFullYear()
@@ -135,16 +150,32 @@ export default function ManagementPage() {
   }
 
   return (
-    <div className="mg-page">
+    <div className={'mg-page' + (fullscreen ? ' mg-page--fs' : '')}>
       <header className="mg-header">
         <h1 className="mg-title">Visão Gerencial</h1>
-        {!isLoading && !isError && (
-          <span className="mg-live">
-            <span className="mg-live-dot" />
-            ao vivo · atualiza a cada 20s
-            {isFetching && <span className="mg-refreshing" aria-label="atualizando" />}
-          </span>
-        )}
+        <div className="mg-header-right">
+          {!isLoading && !isError && (
+            <span className="mg-live">
+              <span className="mg-live-dot" />
+              ao vivo · atualiza a cada 20s
+              {isFetching && <span className="mg-refreshing" aria-label="atualizando" />}
+            </span>
+          )}
+          <button
+            type="button"
+            className="mg-fs-btn"
+            onClick={() => setFullscreen(v => !v)}
+            aria-pressed={fullscreen}
+            title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia'}
+          >
+            {fullscreen ? (
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 2v2.5A1.5 1.5 0 0 1 4.5 6H2M14 6h-2.5A1.5 1.5 0 0 1 10 4.5V2M10 14v-2.5a1.5 1.5 0 0 1 1.5-1.5H14M2 10h2.5A1.5 1.5 0 0 1 6 11.5V14" /></svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M2 6V3.5A1.5 1.5 0 0 1 3.5 2H6M10 2h2.5A1.5 1.5 0 0 1 14 3.5V6M14 10v2.5a1.5 1.5 0 0 1-1.5 1.5H10M6 14H3.5A1.5 1.5 0 0 1 2 12.5V10" /></svg>
+            )}
+            <span>{fullscreen ? 'Sair' : 'Tela cheia'}</span>
+          </button>
+        </div>
       </header>
 
       <div className="mg-filters">

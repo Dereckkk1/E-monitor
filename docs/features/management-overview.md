@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-29
+ultima-verificacao: 2026-06-08
 codigo-relacionado:
   - workers/internal/catalog/management_overview.go
   - workers/internal/api/handlers/management_overview.go
@@ -30,6 +30,16 @@ Filtros no topo + split de duas colunas: KPIs empilhados à esquerda; mapa do
 Brasil (pulsando) + feed global ao vivo à direita. Reusa `BrazilMap`,
 `RSelect` e a linha de feed compartilhada (`components/LiveAiringRow.jsx`,
 extraída do `/live-map`).
+
+### Tela cheia
+
+Botão **Tela cheia** no header (canto direito, ao lado do indicador "ao vivo").
+Liga um estado local `fullscreen` que: (1) aplica a classe `mg-fs` no `<body>`,
+escondendo a sidebar global (`.app-sidebar`), a topbar mobile e zerando o padding
+do `.app-content`; (2) reorganiza o `.mg-grid` num grid de 2 colunas
+(mapa+KPIs | feed), ocupando `100svh` pra mostrar tudo numa tela só, com o feed
+rolando internamente. **Esc** sai. É puramente visual — não altera filtros nem
+dados. CSS em `ManagementPage.css` (`body.mg-fs`, `.mg-page--fs`).
 
 ## KPIs
 
