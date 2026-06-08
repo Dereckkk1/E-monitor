@@ -19,10 +19,12 @@ PEAK_NEIGHBORHOOD_F 17→13). Resultado: **~4× mais hashes por janela** → spo
 índice novo (denso). **Misturar = 0 match.** Logo o código novo PRECISA ir junto
 com a base re-fingerprintada (cutover atômico).
 
-> ⚠️ **Validado, mas com custo:** matcher ~2× CPU (4× hashes/janela). No box de
-> 4 vCPU isso leva o uso de ~68% → ~82%. O **audit §9.9 é a rede anti-FP** (já
-> comprovado que rejeita match ruim), então a densidade extra é segura quanto a
-> falso positivo. **Testar em ambiente de teste primeiro.**
+> ⚠️ **Validado, mas com custo:** matcher ~2× CPU (4× hashes/janela). O box foi
+> migrado para **c3-highcpu-8 (8 vCPU, 16 GB)** em 2026-06-08 — dobrar o CPU
+> absorveu o 2× do matcher, então o uso fica confortável (~40%, era ~82% no
+> c3-standard-4). O **audit §9.9 é a rede anti-FP** (já comprovado que rejeita
+> match ruim), então a densidade extra é segura quanto a falso positivo. A RAM
+> (16 GB) folga: o índice é ~40 MB mesmo com a densidade.
 
 ## Passo a passo
 

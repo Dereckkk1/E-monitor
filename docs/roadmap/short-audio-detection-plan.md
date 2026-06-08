@@ -18,7 +18,9 @@ codigo-relacionado:
 
 # Plano de Implantação — Recall de Áudios Curtos (5/10/15s)
 
-Plano executável derivado da [auditoria](short-audio-detection-audit-2026-06-02.md), **corrigido** após verificação de coerência contra o pipeline real. Objetivo: subir recall de 5/10/15s mantendo FP ~0, **sem estourar o c3-standard-4 (4 vCPU/16 GB @ 68%)**.
+Plano executável derivado da [auditoria](short-audio-detection-audit-2026-06-02.md), **corrigido** após verificação de coerência contra o pipeline real. Objetivo: subir recall de 5/10/15s mantendo FP ~0.
+
+> 📌 **Atualização 2026-06-08 — o que de fato foi feito.** O diagnóstico com áudio real (air-checks perdidos do Asaas) mostrou que o problema era **recall de áudio curto** (Spot 5/15s sub-detectados), não atribuição/EAD-3. O fix **#2 (peak-picking ~4× mais denso)** foi implementado, validado e está em produção (commit `3bd7178`). O hardware foi migrado para **`c3-highcpu-8` (8 vCPU, 16 GB)** — então as análises de CPU abaixo (feitas no `c3-standard-4` / 4 vCPU @ 68%) ficam como **registro histórico do porquê #2 venceu #9**; com 8 vCPU o #2 (e até o nível agressivo) cabem folgado (~40%). Migração de re-fingerprint: [refingerprint-density-migration.md](../operations/refingerprint-density-migration.md).
 
 ## Correções de coerência (o que a auditoria errou e o que sai do escopo)
 
@@ -101,13 +103,11 @@ Justificativa, com o que sabemos do sistema:
 
 ---
 
-## Gatilho de hardware (c3-standard-4 → c3-standard-8)
+## Gatilho de hardware — ✅ FEITO (c3-standard-4 → c3-highcpu-8, 2026-06-08)
 
-**Não suba pelo #9.** Suba quando:
-- **(a) Crescimento:** passar de **~145 emissoras** (saturação segura do 4 vCPU; o limite é o ffmpeg, não o algoritmo). Para a meta de 200 emissoras, o -8 é obrigatório **independente** deste plano.
-- **(b)** Fase 3/4 + `pprof` mostrarem que não cabe (improvável: estimativa ~78-80%).
+Migrado para **`c3-highcpu-8` (8 vCPU, 16 GB)** ao subir o #2 em prod (o #2 dobra o matcher por janela). Escolha por `highcpu` (16 GB) em vez de `standard` (32 GB): a carga é **CPU-bound** e o índice de fingerprint é **leve** (~40 MB mesmo com a densidade). Com 8 vCPU, a saturação de CPU sobe pra ~290 emissoras — então a **meta de 200 cabe** (o ffmpeg, não o algoritmo, é a parede).
 
-**Custo:** c3-standard-8 ≈ 2× o compute → conta de **~R$1,92k → ~R$2,7-3,0k/mês**; CUD de 1 ano amortece o delta para ~+R$520-700/mês. O -8 também dobra RAM (16→32 GB), embora o índice (~50 MB) não precise.
+**Próximo gatilho (futuro):** se ao escalar pra ~200 emissoras a **RAM** apertar (os ~200 FFmpeg + PostgreSQL, **não** o índice), migrar pra `c3-standard-8` (32 GB). Custo do C3-highcpu-8 ≈ ~$305/mês on-demand (verificar no billing).
 
 ## Itens rejeitados (não fazer)
 Offset constante entre janelas (refutado), quad-hash/Panako (0% @1-2s), janela adaptativa por duração (quebra os longos), fan-out 8→10 (não é o gargalo), #9 hop STFT (pior ROI), #18 banda 4→7 kHz (overrated). Detalhes na [auditoria](short-audio-detection-audit-2026-06-02.md).

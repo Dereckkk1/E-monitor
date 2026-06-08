@@ -166,14 +166,16 @@ Todo `git push origin master` dispara rebuild automático.
 
 | Campo | Valor |
 |---|---|
-| **Família** | N2D (AMD EPYC) |
-| **Tipo** | `n2d-standard-8` |
+| **Família** | C3 (Intel Sapphire Rapids) |
+| **Tipo** | `c3-highcpu-8` |
 | **vCPUs** | 8 |
-| **RAM** | 32 GB |
+| **RAM** | 16 GB |
 
-**Por que 8 vCPU e não 4?** Stress test com 50 workers mostrou ~140% CPU no ambiente de dev. Em produção com 200 FFmpeg simultâneos + matching em Go, 4 cores aperiam. 8 cores dão margem segura.
+> Máquina em produção desde 2026-06-08 (era `c3-standard-4` / 4 vCPU / 16 GB).
 
-**Por que 32 GB e não 16 GB?** 200 emissoras precisam de ~4–5 GB. 32 GB dá folga para a biblioteca de comerciais crescer (fingerprint index) e para PostgreSQL usar shared_buffers adequado.
+**Por que 8 vCPU e não 4?** Stress test com 50 workers mostrou ~140% CPU no ambiente de dev. Em produção com 200 FFmpeg simultâneos + matching em Go, 4 cores aperiam. Além disso, o fix de densidade **#2** (peak-picking ~4× mais denso — ver [migração de re-fingerprint](refingerprint-density-migration.md)) **dobrou o custo do matcher por janela**, então 8 vCPU passou a ser necessário tanto pela escala quanto pelo algoritmo. Uso atual ~40%.
+
+**Por que `highcpu` (16 GB) e não `standard` (32 GB)?** A carga é **CPU-bound** (matching + 200 FFmpeg); o índice de fingerprint é **leve** — ~10 MB para ~300 comerciais, ~40 MB mesmo com a densidade #2. Os 16 GB cobrem PostgreSQL (shared_buffers) + MinIO + os FFmpeg + OS com folga na carga atual. **Ao escalar para 200 emissoras:** os ~200 FFmpeg + PostgreSQL podem pressionar os 16 GB — se a RAM apertar (não o índice), migrar para `c3-standard-8` (32 GB).
 
 ### Discos
 
@@ -208,8 +210,8 @@ Region: southamerica-east1
 Zone: southamerica-east1-b
 
 Machine configuration:
-  Series: N2D
-  Machine type: n2d-standard-8
+  Series: C3
+  Machine type: c3-highcpu-8
 
 Boot disk:
   OS: Ubuntu 22.04 LTS
@@ -707,7 +709,7 @@ Sizing baseado em medição real: stress test com 50 workers ativos em 08/05/202
 
 | Componente | Tipo | Custo (on-demand) |
 |---|---|---|
-| VM n2d-standard-8 (8 vCPU, 32 GB) | Compute | $313,39 |
+| VM c3-highcpu-8 (8 vCPU, 16 GB) | Compute | ~$305 (verificar no billing) |
 | Boot disk: 50 GB Balanced PD | Storage | $7,50 |
 | PostgreSQL: 300 GB SSD PD | Storage | $76,50 |
 | Dados/áudio: 300 GB Standard HDD | Storage | $18,00 |
@@ -717,6 +719,8 @@ Sizing baseado em medição real: stress test com 50 workers ativos em 08/05/202
 | **TOTAL** | | **~$429/mês (~R$ 2.445)** |
 
 ### Cenários
+
+> **Máquina em produção (desde 2026-06-08): `c3-highcpu-8` (8 vCPU, 16 GB), ~$305/mês on-demand** — mesmo patamar do `n2d-standard-8` abaixo (o C3 tem vCPU mais caro, compensado pela RAM menor). Os cenários `n2d` abaixo ficam como referência; o C3 também tem CUD de 1/3 anos com desconto análogo.
 
 | Cenário | Configuração | $/mês | R$/mês |
 |---|---|---|---|
@@ -729,7 +733,7 @@ Sizing baseado em medição real: stress test com 50 workers ativos em 08/05/202
 
 ### Por que custa isso
 
-**A VM ($313/mês = 73% do custo total)**  
+**A VM (~$305/mês = ~71% do custo total)**  
 São Paulo paga ~37% de premium sobre regiões dos EUA. Motivo: infraestrutura mais cara no Brasil, mercado menor, conectividade internacional. A Virginia custaria ~$247/mês pela mesma máquina — mas a latência de 120–180 ms para streams brasileiras é pior do que os 15–40 ms de São Paulo.
 
 **Os discos ($102/mês = 24% do custo)**  
