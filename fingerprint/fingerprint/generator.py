@@ -6,8 +6,17 @@ SAMPLE_RATE = 16000
 WINDOW_SIZE = 4096
 HOP_SIZE = 2048
 
-PEAK_NEIGHBORHOOD_F = 17
-PEAK_NEIGHBORHOOD_T = 17
+# Peak max-filter footprint (freq, time).
+# #2 short-audio recall: shrunk from 17x17 to 13x7. A smaller TEMPORAL footprint
+# emits ~4x more peaks/hashes, giving 5-15s spots the match margin to survive
+# broadcast degradation (validated on real lost air-checks).
+# LOCKSTEP: must match workers/pkg/audio/peaks.go
+#   neighborFrames = 3 (= (PEAK_NEIGHBORHOOD_T-1)/2)
+#   neighborBins   = 6 (= (PEAK_NEIGHBORHOOD_F-1)/2)
+# Changing these changes the hash MATH — the whole catalog must be
+# re-fingerprinted atomically on deploy.
+PEAK_NEIGHBORHOOD_F = 13
+PEAK_NEIGHBORHOOD_T = 7
 PEAK_AMPLITUDE_PERCENTILE = 80
 
 TARGET_ZONE_T_MIN = 1

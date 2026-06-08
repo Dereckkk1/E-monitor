@@ -6,10 +6,22 @@ import (
 
 // Peak finder constants.
 // neighborFrames/neighborBins are the half-sizes (radius) of the neighbourhood window.
-// Python uses maximum_filter with footprint shape (17,17), so radius = (17-1)/2 = 8.
+//
+// #2 short-audio recall: shrunk from 8/8 (17x17 footprint) to 3/6 (7x13
+// footprint). A smaller TEMPORAL radius emits ~4x more peaks/hashes, giving
+// 5-15s spots the match margin to survive broadcast degradation (validated:
+// #77 per-window peak 57->178 on real lost air-checks). The frequency radius is
+// kept wide (6) so the extra peaks stay spectrally distinct.
+//
+// LOCKSTEP: must match fingerprint/fingerprint/generator.py
+//   PEAK_NEIGHBORHOOD_T = 7  (= 2*neighborFrames+1)
+//   PEAK_NEIGHBORHOOD_F = 13 (= 2*neighborBins+1)
+// Changing these changes the hash MATH — every fingerprint in the catalog
+// becomes incomparable, so the whole base MUST be re-fingerprinted atomically
+// on deploy. See docs/operations/refingerprint-density-migration.md.
 const (
-	neighborFrames          = 8
-	neighborBins            = 8
+	neighborFrames          = 3
+	neighborBins            = 6
 	PeakAmplitudePercentile = 80 // reject peaks below the 80th percentile of magnitudes
 )
 
