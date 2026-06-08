@@ -64,8 +64,13 @@ def _has_libfdk() -> bool:
 
 
 def _ffmpeg_chain(input_path: str, filters: str, codec_args: list[str], encoded_path: str):
+    # -vn drops any video stream. Masters can carry one — an .mp4 uploaded as a
+    # material's audio, or an audio file with h264 cover art — and the .m4a
+    # (ipod) output muxer has no h264 tag, so without -vn ffmpeg tries to mux the
+    # video and dies with exit 234 (prod incident 2026-06-08).
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
            "-i", input_path,
+           "-vn",
            "-af", filters,
            *codec_args,
            encoded_path]
@@ -79,6 +84,7 @@ def _decode_to_pcm(input_path: str) -> np.ndarray:
     try:
         cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                "-i", input_path,
+               "-vn",
                "-ac", "1", "-ar", str(SAMPLE_RATE),
                "-f", "wav", "-c:a", "pcm_f32le",
                wav_path]
