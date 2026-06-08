@@ -1,0 +1,87 @@
+---
+status: planejado
+ultima-verificacao: 2026-06-08
+codigo-relacionado:
+  - workers/pkg/audio/peaks.go
+  - fingerprint/fingerprint/generator.py
+  - fingerprint/fingerprint/main.py
+  - workers/internal/index/loader.go
+---
+
+# Migração: re-fingerprint para densidade (#2 — recall de áudio curto)
+
+**O que mudou:** o raio temporal do max-filter no peak-picking encolheu de 8→3
+frames (`peaks.go` neighborFrames; `generator.py` PEAK_NEIGHBORHOOD_T 17→7,
+PEAK_NEIGHBORHOOD_F 17→13). Resultado: **~4× mais hashes por janela** → spots de
+5-15s ganham margem de match pra sobreviver à degradação de broadcast.
+
+**Por que é migração:** muda a **math do hash**. Query nova (densa) só casa
+índice novo (denso). **Misturar = 0 match.** Logo o código novo PRECISA ir junto
+com a base re-fingerprintada (cutover atômico).
+
+> ⚠️ **Validado, mas com custo:** matcher ~2× CPU (4× hashes/janela). No box de
+> 4 vCPU isso leva o uso de ~68% → ~82%. O **audit §9.9 é a rede anti-FP** (já
+> comprovado que rejeita match ruim), então a densidade extra é segura quanto a
+> falso positivo. **Testar em ambiente de teste primeiro.**
+
+## Passo a passo
+
+### 1. Deploy do código novo (Go workers + Python fingerprint)
+```bash
+cd ~/radiocheck
+git pull                      # pega o commit do #2
+./scripts/deploy.sh           # builda + sobe api/worker/fingerprint NOVOS
+```
+
+### 2. Re-fingerprint de TODA a base (imediatamente após o deploy)
+Dispara `fingerprint.generate` pra cada material; o serviço Python re-fingerprinta
+(5 variantes) e **substitui** os hashes (`DELETE`+`COPY`). O índice Go recarrega
+via `index.reload`.
+
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+               -f infra/docker/docker-compose.override.yml \
+               --env-file infra/docker/.env \
+  exec -T fingerprint python -c '
+import asyncio, os, json, asyncpg, nats
+async def main():
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    nc = await nats.connect(os.environ["NATS_URL"])
+    rows = await pool.fetch("SELECT id FROM materials WHERE fingerprint_status = '"'"'ready'"'"'")
+    for r in rows:
+        await nc.publish("fingerprint.generate", json.dumps({"material_id": str(r["id"])}).encode())
+    await nc.flush(); print(f"disparado re-fingerprint de {len(rows)} materiais")
+    await nc.drain(); await pool.close()
+asyncio.run(main())'
+```
+
+**Janela degradada:** cada material fica "fora" (query densa × índice esparso)
+até a sua vez de re-processar. Acompanhe `docker compose logs -f fingerprint`
+até ver `done` de todos. Em prod recorrente, preferir índice versionado (TODO)
+ou janela de baixa audiência.
+
+### 3. Recalibração dos thresholds (opcional)
+A densidade muda a distribuição de ruído. O piso `min_hashes=5` + o audit já
+seguram, mas pra recalibrar, re-armar a calibração das estações (o scheduler
+faz isso a cada 7 dias; ou forçar via `RunOnceForStation`/endpoint admin).
+
+## Verificação pós-migração
+```sql
+-- hashes por material devem ter ~4x crescido:
+SELECT m.title, m.fingerprint_hash_count FROM materials m WHERE m.title ILIKE '%asaas%';
+```
+E na view `daily_play_summary`, o `faltou` dos tipos Spot 05"/15" deve cair.
+Monitorar CPU: `docker stats`.
+
+## Rollback
+`write_hashes` substitui (DELETE+COPY), então rollback é **simétrico**:
+1. Reverter o código (`git revert <commit>` ou checkout dos arquivos antigos de
+   `peaks.go`/`generator.py`).
+2. `./scripts/deploy.sh`.
+3. Rodar o **mesmo script** do passo 2 → volta aos hashes esparsos.
+Sem perda de dado (hashes são derivados dos masters). ~mesmo tempo.
+
+## Histórico
+- 2026-06-08: criado. Fix #2 validado em air-checks reais perdidos (Asaas SPOT
+  15 em Ouro Verde/Antena 1: pico por janela 57→178, 50→185). Ver
+  [docs/roadmap/short-audio-detection-plan.md](../roadmap/short-audio-detection-plan.md).
