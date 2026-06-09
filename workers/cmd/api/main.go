@@ -17,12 +17,14 @@ import (
 	"radiocheck/internal/audit"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/calibration"
+	"radiocheck/internal/campaignalerts"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
 	"radiocheck/internal/index"
+	"radiocheck/internal/mailer"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
@@ -259,6 +261,32 @@ func main() {
 
 	// Users repo — shared across auth, me, and users handlers (Tasks 5–8).
 	usersRepo := users.NewRepo(pool)
+
+	// Emails diários de alerta de campanha (docs/features/campaign-notification-emails.md).
+	// Opt-in via NOTIFICATIONS_ENABLED; sem credenciais SMTP, mailer.New retorna noop.
+	if cfg.NotificationsEnabled {
+		mail := mailer.New(mailer.Config{
+			Enabled: cfg.NotificationsEnabled,
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.MailFrom,
+		}, logger)
+		alertRepo := campaignalerts.New(pool)
+		alertLogs := campaignalerts.NewLogStore(pool)
+		alertSvc := campaignalerts.NewService(alertRepo, alertLogs, usersRepo, mail, cfg.NotificationsBaseURL, logger)
+		alertSched := campaignalerts.NewScheduler(pool, alertSvc, cfg.NotificationsSendHour, logger)
+		if v := os.Getenv("NOTIFICATIONS_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				alertSched.Interval = d
+			}
+		}
+		go alertSched.Run(ctx)
+		logger.Info("campaign notification emails enabled",
+			zap.Int("send_hour", cfg.NotificationsSendHour),
+			zap.String("base_url", cfg.NotificationsBaseURL))
+	}
 
 	// Request metrics writer + IP block-list (painel /admin/monitoring).
 	// Async batched writer evita pressionar latência do caminho hot.
