@@ -286,17 +286,7 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 
 	// Mark the row first; only emit NATS once persistence is confirmed so
 	// downstream consumers can rely on the DB state.
-	tag, err := s.db.Exec(ctx, `
-		UPDATE detections d
-		SET retracted_at = $1
-		FROM commercials c
-		WHERE d.commercial_id = c.id
-		  AND c.short_id = $2
-		  AND d.station_id = $3
-		  AND d.detected_at = $4
-		  AND d.retracted_at IS NULL`,
-		now, det.CommercialShortID, stationID, det.DetectedAt,
-	)
+	rows, err := s.markDetectionRetracted(ctx, det.CommercialShortID, stationID, det.DetectedAt, now)
 	if err != nil {
 		s.log.Warn("supervisor: retract — DB update failed",
 			zap.String("station_id", det.StationID),
@@ -304,7 +294,7 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 			zap.Error(err))
 		// Still emit the NATS event so webhook subscribers can act on the
 		// retraction even if the persistence step had a transient failure.
-	} else if tag.RowsAffected() == 0 {
+	} else if rows == 0 {
 		// The row hasn't been inserted yet (evidence service is async). The
 		// retraction event still fires so consumers see the change; the
 		// catalog will reflect retracted_at the next time we touch the row,
@@ -345,4 +335,36 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 		zap.Int32("replacement_short_id", replacementShortID),
 		zap.String("reason", reason),
 	)
+}
+
+// markDetectionRetracted stamps retracted_at on the detection identified by
+// (commercial short id, station, detected_at) and returns the number of rows
+// updated.
+//
+// detections.commercial_id is POLYMORPHIC: a material UUID for library cuts, a
+// commercial UUID for legacy ones (they share one short_id sequence). The short
+// id is therefore resolved through commercials UNION materials. The previous
+// query JOINed `commercials` only, so for a material cut it matched ZERO rows —
+// the shorter cut was never retracted and both cuts stayed `available`. That
+// was the prod double-count of 2026-06-09 (ASAAS SPOT 15 counted alongside the
+// 30s PLATAFORMA FINANCEIRA); retractions silently stopped working the moment
+// the catalog moved from commercials to the material library.
+func (s *Supervisor) markDetectionRetracted(ctx context.Context, shortID int32, stationID uuid.UUID, detectedAt, at time.Time) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE detections d
+		SET retracted_at = $1
+		WHERE d.station_id = $3
+		  AND d.detected_at = $4
+		  AND d.retracted_at IS NULL
+		  AND d.commercial_id IN (
+		      SELECT id FROM commercials WHERE short_id = $2
+		      UNION
+		      SELECT id FROM materials   WHERE short_id = $2
+		  )`,
+		at, shortID, stationID, detectedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
