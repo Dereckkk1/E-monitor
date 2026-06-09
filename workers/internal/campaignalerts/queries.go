@@ -41,7 +41,7 @@ const lookaheadDays = 4
 // faixa [hoje, hoje+lookahead]. dateCol é injetado a partir de constantes
 // internas — nunca de input externo.
 func (r *Repo) candidates(ctx context.Context, status, dateCol string, today time.Time) ([]CampaignAlert, error) {
-	t0 := calendar.DateOnly(today)
+	t0 := calendar.Today(today)
 	t1 := t0.AddDate(0, 0, lookaheadDays)
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(cl.name, ''), c.start_date, c.end_date,

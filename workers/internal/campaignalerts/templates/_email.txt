@@ -1,0 +1,9 @@
+{{.Heading}}
+
+Olá {{.Recipient}},
+{{range .Campaigns}}
+- {{.Name}} ({{.ClientName}}) — início {{fmtDate .StartDate}}, fim {{fmtDate .EndDate}}, {{.StationCount}} emissora(s){{end}}
+
+Acesse: {{.BaseURL}}/campaigns
+—
+Alerta automático do E-monitor.
