@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR" xmlns:v="urn:schemas-microsoft-com:vml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>Campanhas sem material</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Fira+Sans+Condensed:wght@400;500;600&display=swap');
+body{margin:0;padding:0;background:#f8fafc;}
+.h{font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+.b{font-family:'Fira Sans Condensed',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+a{text-decoration:none;}
+@media only screen and (max-width:620px){
+  .wrap{width:100%!important;}
+  .pad{padding-left:22px!important;padding-right:22px!important;}
+  .meta{display:block!important;text-align:left!important;padding-top:6px!important;}
+  .h1{font-size:23px!important;}
+}
+</style>
+</head>
+<body class="b" style="margin:0;padding:0;background:#f8fafc;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{len .Campaigns}} campanha{{if ne (len .Campaigns) 1}}s{{end}} começa{{if eq (len .Campaigns) 1}}{{else}}m{{end}} em breve sem material cadastrado.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;">
+<tr><td align="center" style="padding:32px 16px;">
+  <table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+    <!-- accent strip (amber = ação necessária) -->
+    <tr><td style="height:4px;line-height:4px;font-size:0;background:#f59e0b;">&nbsp;</td></tr>
+    <!-- header -->
+    <tr><td class="pad" style="padding:24px 36px 0 36px;">
+      <img src="{{.BaseURL}}/E-monitor%20logo.png" alt="E-monitor" height="26" style="display:block;border:0;height:26px;">
+    </td></tr>
+    <!-- headline -->
+    <tr><td class="pad" style="padding:26px 36px 0 36px;">
+      <div class="b" style="font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#b45309;">Ação necessária</div>
+      <h1 class="h h1" style="margin:6px 0 0 0;font-size:27px;line-height:1.15;font-weight:700;letter-spacing:-0.02em;color:#06055B;">{{len .Campaigns}} campanha{{if ne (len .Campaigns) 1}}s{{end}} sem material</h1>
+      <p class="b" style="margin:12px 0 0 0;font-size:15px;line-height:1.55;color:#334155;">Olá {{.Recipient}}, {{if eq (len .Campaigns) 1}}esta campanha começa em breve e ainda não tem material cadastrado{{else}}estas campanhas começam em breve e ainda não têm material cadastrado{{end}}. Cadastre os materiais antes do início para não perder veiculação.</p>
+    </td></tr>
+    <!-- list (linhas compactas) -->
+    <tr><td class="pad" style="padding:22px 36px 0 36px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        {{range .Campaigns}}
+        <tr><td style="padding:14px 0;border-top:1px solid #f1f5f9;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td valign="top" style="vertical-align:top;">
+              <div class="h" style="font-size:16px;font-weight:700;color:#06055B;letter-spacing:-0.01em;">{{.Name}}</div>
+              <div class="b" style="font-size:13px;color:#64748b;margin-top:2px;">{{.ClientName}}</div>
+            </td>
+            <td valign="top" class="meta" style="vertical-align:top;text-align:right;white-space:nowrap;padding-left:14px;">
+              <div class="b" style="font-size:14px;font-weight:600;color:#334155;">início {{fmtDate .StartDate}}</div>
+              <span class="b" style="display:inline-block;margin-top:6px;padding:3px 10px;border-radius:999px;background:#fef3c7;color:#b45309;font-size:12px;font-weight:600;">0 materiais · {{.StationCount}} emissora{{if ne .StationCount 1}}s{{end}}</span>
+            </td>
+          </tr></table>
+        </td></tr>
+        {{end}}
+      </table>
+    </td></tr>
+    <!-- CTA -->
+    <tr><td class="pad" style="padding:26px 36px 4px 36px;">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="border-radius:10px;background:#E81E75;">
+          <a class="b" href="{{.BaseURL}}/campaigns" style="display:inline-block;padding:13px 26px;font-size:15px;font-weight:600;color:#ffffff;border-radius:10px;">Cadastrar materiais →</a>
+        </td>
+      </tr></table>
+    </td></tr>
+    <!-- footer -->
+    <tr><td class="pad" style="padding:26px 36px 30px 36px;">
+      <div style="border-top:1px solid #f1f5f9;padding-top:18px;">
+        <p class="b" style="margin:0;font-size:12px;line-height:1.5;color:#94a3b8;">Alerta automático do E-monitor enviado às 8h em dias úteis. Você recebe porque é administrador da plataforma.</p>
+      </div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>

@@ -236,6 +236,22 @@ var (
 		Help:    "Wall-clock duration of §9.9 audit (decode + hashes + histogram).",
 		Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
 	})
+
+	// ── Notificações por email (emails diários de alerta de campanha) ──
+	NotificationsSentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_notifications_sent_total",
+		Help: "Total de emails de alerta de campanha enviados, por tipo.",
+	}, []string{"type"})
+
+	NotificationsFailedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_notifications_failed_total",
+		Help: "Total de falhas de envio de email de alerta, por tipo.",
+	}, []string{"type"})
+
+	NotificationsRecipients = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_notifications_recipients",
+		Help: "Número de destinatários do último disparo, por tipo.",
+	}, []string{"type"})
 )
 
 func init() {
@@ -254,5 +270,6 @@ func init() {
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 		MatchDisambiguation,
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
+		NotificationsSentTotal, NotificationsFailedTotal, NotificationsRecipients,
 	)
 }
