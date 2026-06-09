@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -22,6 +23,16 @@ type Config struct {
 	// /data/segments when unset.
 	SegmentsPath string
 	APIPort      string
+
+	// ── Notificações por email (emails diários de alerta de campanha) ──
+	NotificationsEnabled  bool   // NOTIFICATIONS_ENABLED ("true" liga o job)
+	NotificationsBaseURL  string // NOTIFICATIONS_BASE_URL (base dos links/CTA)
+	NotificationsSendHour int    // NOTIFICATIONS_SEND_HOUR (hora local BRT de corte)
+	SMTPHost              string // SMTP_HOST
+	SMTPPort              int    // SMTP_PORT
+	SMTPUser              string // SMTP_USER
+	SMTPPass              string // SMTP_PASS
+	MailFrom              string // MAIL_FROM (default = SMTPUser)
 }
 
 func Load() (*Config, error) {
@@ -62,5 +73,34 @@ func Load() (*Config, error) {
 	if cfg.SegmentsPath == "" {
 		cfg.SegmentsPath = "/data/segments"
 	}
+
+	cfg.NotificationsEnabled = os.Getenv("NOTIFICATIONS_ENABLED") == "true"
+	cfg.NotificationsBaseURL = os.Getenv("NOTIFICATIONS_BASE_URL")
+	if cfg.NotificationsBaseURL == "" {
+		cfg.NotificationsBaseURL = "https://e-monitor.online"
+	}
+	cfg.NotificationsSendHour = 8
+	if v := os.Getenv("NOTIFICATIONS_SEND_HOUR"); v != "" {
+		if h, err := strconv.Atoi(v); err == nil && h >= 0 && h <= 23 {
+			cfg.NotificationsSendHour = h
+		}
+	}
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	if cfg.SMTPHost == "" {
+		cfg.SMTPHost = "smtp.gmail.com"
+	}
+	cfg.SMTPPort = 587
+	if v := os.Getenv("SMTP_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			cfg.SMTPPort = p
+		}
+	}
+	cfg.SMTPUser = os.Getenv("SMTP_USER")
+	cfg.SMTPPass = os.Getenv("SMTP_PASS")
+	cfg.MailFrom = os.Getenv("MAIL_FROM")
+	if cfg.MailFrom == "" {
+		cfg.MailFrom = cfg.SMTPUser
+	}
+
 	return cfg, nil
 }

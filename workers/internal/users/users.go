@@ -267,3 +267,28 @@ func (r *Repo) List(ctx context.Context, in ListInput) ([]User, int, error) {
 	}
 	return out, total, rows.Err()
 }
+
+// ActiveInternal retorna todos os usuários internos ativos (role 'admin' ou
+// 'operator', não deletados, is_active=true). É o público-alvo dos emails de
+// alerta de campanha — o conjunto que a UI chama de "Administrador". Sem
+// paginação: o volume de internos é pequeno.
+func (r *Repo) ActiveInternal(ctx context.Context) ([]User, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+userColumns+` FROM users
+		 WHERE deleted_at IS NULL AND is_active = TRUE
+		   AND role IN ('admin','operator')
+		 ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
