@@ -41,7 +41,9 @@ func TestRender_StartingNoMaterial(t *testing.T) {
 
 func TestRender_StationsOffline(t *testing.T) {
 	outages := []StationOutage{
-		{StationName: "Jovem Pan Curitiba", Day: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC), Down: 9*time.Hour + 32*time.Minute},
+		{StationName: "Jovem Pan Curitiba", Dial: "FM 103,9", Location: "Curitiba/PR",
+			Campaigns: "211 (MRA) CORTEVA, 185.1 ASAAS",
+			Day:       time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC), Down: 9*time.Hour + 32*time.Minute},
 		{StationName: "Favorita FM", Day: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC), Down: 2*time.Hour + 5*time.Minute},
 	}
 	c, err := RenderStationsOffline("Dereck", outages, "de 11/06", "https://e-monitor.online")
@@ -49,18 +51,39 @@ func TestRender_StationsOffline(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	for _, want := range []string{"Jovem Pan Curitiba", "Favorita FM", "9h32", "2h05", "11/06/2026",
+		"FM 103,9", "Curitiba/PR", "211 (MRA) CORTEVA, 185.1 ASAAS",
 		"https://e-monitor.online/operations", "de 11/06"} {
 		if !strings.Contains(c.HTML, want) {
 			t.Errorf("HTML não contém %q", want)
 		}
 	}
-	for _, want := range []string{"Jovem Pan Curitiba", "9h32"} {
+	for _, want := range []string{"Jovem Pan Curitiba", "9h32", "FM 103,9", "Curitiba/PR", "185.1 ASAAS"} {
 		if !strings.Contains(c.Text, want) {
 			t.Errorf("Text não contém %q", want)
 		}
 	}
 	if !strings.Contains(c.Subject, "2 emissoras") {
 		t.Errorf("subject deveria contar 2 emissoras: %q", c.Subject)
+	}
+}
+
+func TestFormatDialAndLocation(t *testing.T) {
+	band, freq := "fm", 103.9
+	city, uf := "Curitiba", "PR"
+	if got := formatDial(&band, &freq); got != "FM 103,9" {
+		t.Errorf("formatDial = %q, want FM 103,9", got)
+	}
+	if got := formatDial(nil, &freq); got != "103,9" {
+		t.Errorf("formatDial sem band = %q, want 103,9", got)
+	}
+	if got := formatDial(&band, nil); got != "FM" {
+		t.Errorf("formatDial sem freq = %q, want FM", got)
+	}
+	if got := formatLocation(&city, &uf); got != "Curitiba/PR" {
+		t.Errorf("formatLocation = %q", got)
+	}
+	if got := formatLocation(nil, &uf); got != "PR" {
+		t.Errorf("formatLocation só UF = %q", got)
 	}
 }
 
