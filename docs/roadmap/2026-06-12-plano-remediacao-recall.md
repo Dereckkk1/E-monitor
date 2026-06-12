@@ -1,5 +1,5 @@
 ---
-status: planejado
+status: parcialmente-implementado
 ultima-verificacao: 2026-06-12
 codigo-relacionado:
   - docs/incidents/incident-2026-06-12-detection-recall-gaps.md
@@ -26,6 +26,16 @@ bite-sized) no momento da execução, em `docs/superpowers/plans/`. Este doc é 
 sequenciamento e os critérios de aceite — não os passos de código.
 
 ---
+
+> ✅ **Onda 1 implementada em 2026-06-12** (branch `fix/onda1-falhas-silenciosas`):
+> T1 reconciler (`workers/internal/fingerprintqueue/`), T2-T3 alertas
+> FingerprintStuck/WorkerStallLoop/AuditRejectedSpike + runbooks + filtro do
+> /insights + unique_score no window match, T4 gate
+> (`scripts/check-fingerprint-freshness.sh`) + doc da migração corrigido.
+> **Adiado da T3:** card de audit_rejected no `/admin/overview` (UI) — o alerta
+> + métrica cobrem a visibilidade operacional; o card entra como melhoria
+> incremental junto da Onda 2. T5 (cruzamento com fornecedor) segue aberta —
+> é tarefa de operação, não de código.
 
 ## Onda 1 — Parar de sangrar em silêncio (~1 dia, risco zero)
 
