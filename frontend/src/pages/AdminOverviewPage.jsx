@@ -703,6 +703,9 @@ export default function AdminOverviewPage() {
                 { label: 'Última detecção',     value: fmtRelative(pipeline.last_detection_at), tone: 'neutral' },
                 { label: 'Webhooks pendentes',  value: pipeline.webhooks_pending ?? 0, tone: 'neutral' },
                 { label: 'Webhooks falhos 24h', value: pipeline.webhooks_failed_24h ?? 0, tone: (pipeline.webhooks_failed_24h ?? 0) > 0 ? 'warn' : 'neutral' },
+                // Detecções que o audit §9.9 rejeitou — invisíveis em /detections
+                // e relatórios; este é o único lugar onde o operador as vê.
+                { label: 'Audit rejeitou 7d',   value: pipeline.audit_rejected_7d ?? 0, tone: (pipeline.audit_rejected_7d ?? 0) > 0 ? 'warn' : 'neutral' },
               ]}
               linkTo="/detections"
               linkLabel="Abrir detecções"

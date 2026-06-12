@@ -101,6 +101,10 @@ type DataPipelineHealth struct {
 	WebhooksPending   int        `json:"webhooks_pending"`
 	WebhooksFailed24h int        `json:"webhooks_failed_24h"`
 	LastBackupAt      *time.Time `json:"last_backup_at,omitempty"`
+	// AuditRejected7d: detecções rejeitadas pelo audit §9.9 nos últimos 7
+	// dias. Invisíveis em todas as telas de usuário (migration 0029) — este
+	// contador é a superfície operacional (incidente 2026-06-12).
+	AuditRejected7d int `json:"audit_rejected_7d"`
 }
 
 type SystemHealth struct {
@@ -530,6 +534,13 @@ func (h *SystemHealthHandler) summarizeDataPipeline(ctx context.Context) DataPip
 		SELECT COUNT(*) FROM webhook_deliveries
 		WHERE status IN ('failed','dead') AND created_at > NOW() - INTERVAL '24 hours'
 	`).Scan(&out.WebhooksFailed24h)
+
+	// Detecções rejeitadas pelo audit §9.9 — invisíveis nas telas de usuário.
+	_ = h.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM detections
+		WHERE evidence_status = 'audit_rejected'
+		  AND detected_at > NOW() - INTERVAL '7 days'
+	`).Scan(&out.AuditRejected7d)
 
 	return out
 }
