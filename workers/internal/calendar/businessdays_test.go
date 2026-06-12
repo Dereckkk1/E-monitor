@@ -59,6 +59,31 @@ func TestIsBusinessDay(t *testing.T) {
 	}
 }
 
+func TestPreviousBusinessDay(t *testing.T) {
+	cases := []struct{ today, want string }{
+		{"2026-06-09", "2026-06-08"}, // ter -> seg
+		{"2026-06-08", "2026-06-05"}, // seg -> sexta anterior (pula fds)
+		{"2026-06-12", "2026-06-11"}, // sex -> qui
+	}
+	for _, c := range cases {
+		if got := PreviousBusinessDay(d(t, c.today)); got.Format("2006-01-02") != c.want {
+			t.Errorf("PreviousBusinessDay(%s) = %s, want %s", c.today, got.Format("2006-01-02"), c.want)
+		}
+	}
+}
+
+func TestBRMidnight(t *testing.T) {
+	// O civil date 2026-06-12 vira o instante 2026-06-12T00:00 em
+	// America/Sao_Paulo (= 03:00 UTC).
+	got := BRMidnight(d(t, "2026-06-12"))
+	if got.Hour() != 0 || got.Location() != BR {
+		t.Errorf("BRMidnight deveria ser meia-noite em BR, got %v", got)
+	}
+	if utc := got.UTC(); utc.Hour() != 3 {
+		t.Errorf("meia-noite BRT = 03:00 UTC, got %v", utc)
+	}
+}
+
 func TestBusinessDaysUntil(t *testing.T) {
 	if got := BusinessDaysUntil(d(t, "2026-06-12"), d(t, "2026-06-15")); got != 1 { // sex->seg
 		t.Errorf("sex->seg = %d, want 1", got)
