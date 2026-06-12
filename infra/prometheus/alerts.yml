@@ -206,6 +206,70 @@ groups:
             cooldown. Verificar `chrony`/`systemd-timesyncd` no host.
           runbook_url: "docs/runbooks/ClockDrift.md"
 
+      # ─────────────────────────────────────────────────────────────────
+      # Alertas do incidente 2026-06-12 (falhas silenciosas de recall)
+      # ─────────────────────────────────────────────────────────────────
+
+      # ── FingerprintStuck ─────────────────────────────────────────────
+      # Material preso na fila de fingerprint = invisível pro matching.
+      # O reconciler (internal/fingerprintqueue) re-tenta sozinho; este
+      # alerta pega o que o retry NÃO resolve (arquivo corrompido, serviço
+      # fingerprint morto, falha permanente). No incidente, materiais
+      # ficaram 1 MÊS presos sem ninguém saber.
+      - alert: FingerprintStuck
+        expr: sum(radiocheck_fingerprint_stuck) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} materiais com fingerprint preso há >30min (retry não resolveu)"
+          description: |
+            O reconciler re-publica fingerprint.generate a cada 5min; se o
+            gauge segue >0 por 30min, o retry não está resolvendo. Causas:
+            serviço fingerprint fora, arquivo de áudio corrompido (status
+            failed re-falhando), master ausente no storage.
+          runbook_url: "docs/runbooks/FingerprintStuck.md"
+
+      # ── WorkerStallLoop ──────────────────────────────────────────────
+      # Emissora reiniciando em loop = zero captura naquela rádio. No
+      # incidente, a Jovem Pan flapou por ~1 dia (geo-block 403) em loop
+      # de restart a cada 120s sem ninguém perceber.
+      - alert: WorkerStallLoop
+        expr: increase(radiocheck_worker_stall_restarts_total[30m]) >= 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker em stall-loop: {{ $labels.station_id }} ({{ $value }} restarts em 30min)"
+          description: |
+            Worker reiniciando repetidamente sem conseguir capturar áudio.
+            A emissora está efetivamente SEM monitoramento. Causas comuns:
+            stream_url morta (404), geo-block (403 Country Not Allowed),
+            bloqueio por user-agent/IP, mudança de codec.
+          runbook_url: "docs/runbooks/WorkerStallLoop.md"
+
+      # ── AuditRejectedSpike ───────────────────────────────────────────
+      # audit_rejected é invisível em todas as telas de usuário — sem este
+      # alerta, uma onda de rejeições (evidência desalinhada, threshold
+      # descalibrado, fingerprint inconsistente) passa despercebida. No
+      # incidente: picos de 15-17% das detecções/dia rejeitadas em silêncio.
+      - alert: AuditRejectedSpike
+        expr: |
+          sum(increase(radiocheck_audit_attempts_total{result="rejected"}[6h]))
+            / sum(increase(radiocheck_audit_attempts_total[6h])) > 0.08
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit §9.9 rejeitando {{ $value | humanizePercentage }} das detecções (6h)"
+          description: |
+            Mais de 8% das detecções confirmadas estão sendo rejeitadas pelo
+            audit pré-persist e ficando invisíveis nas telas/relatórios.
+            Causas: extração de evidência desalinhada, fingerprint do master
+            inconsistente com o código (migração incompleta), threshold do
+            audit descalibrado pra emissoras ruidosas.
+          runbook_url: "docs/runbooks/AuditRejectedSpike.md"
+
       # ── LifecycleSchedulerStuck ──────────────────────────────────────
       # TODO(metrics): expor radiocheck_lifecycle_scheduler_last_run_timestamp
       # no scheduler de campanhas (§18.2.1). Item ficou de fora da

@@ -30,6 +30,9 @@ Cada runbook segue a estrutura padrão definida no plano (§15.6):
 | [DBLatencyHigh](DBLatencyHigh.md) | warning | Banco | aguardando métrica |
 | [ClockDrift](ClockDrift.md) | warning | Infra | depende de node_exporter |
 | [LifecycleSchedulerStuck](LifecycleSchedulerStuck.md) | critical | Campanhas | aguardando métrica |
+| [FingerprintStuck](FingerprintStuck.md) | warning | Pipeline de materiais | operational |
+| [WorkerStallLoop](WorkerStallLoop.md) | critical | Ingestão | operational |
+| [AuditRejectedSpike](AuditRejectedSpike.md) | warning | Detecção | operational |
 
 ### Legenda de status
 
