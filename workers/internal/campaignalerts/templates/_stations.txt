@@ -4,7 +4,8 @@ Olá {{.Recipient}},
 
 Emissoras com mais de 2h sem captação no período {{.Period}}:
 {{range .Outages}}
-- {{.StationName}} — {{fmtDate .Day}} — {{fmtDur .Down}} fora do ar{{end}}
+- {{.StationName}}{{if .Dial}} ({{.Dial}}{{if .Location}}, {{.Location}}{{end}}){{else}}{{if .Location}} ({{.Location}}){{end}}{{end}} — {{fmtDate .Day}} — {{fmtDur .Down}} fora do ar{{if .Campaigns}}
+  campanhas: {{.Campaigns}}{{end}}{{end}}
 
 Veiculações nesses intervalos não foram monitoradas.
 Acesse: {{.BaseURL}}/operations

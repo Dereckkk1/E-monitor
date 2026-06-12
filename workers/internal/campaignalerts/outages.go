@@ -3,6 +3,8 @@ package campaignalerts
 import (
 	"context"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,11 +20,50 @@ const OfflineThreshold = 2 * time.Hour
 type StationOutage struct {
 	StationID   uuid.UUID
 	StationName string
+	Dial        string // ex.: "FM 103,9" (band + frequency_mhz; vazio se não cadastrado)
+	Location    string // ex.: "Curitiba/PR" (city + state; vazio se não cadastrado)
+	Campaigns   string // campanhas ativas que monitoram a emissora, "a, b, c"
 	Day         time.Time // dia civil (meia-noite UTC, convenção do calendar)
 	Down        time.Duration
 }
 
 type interval struct{ start, end time.Time }
+
+// formatDial monta "FM 103,9" a partir de band + frequency_mhz (decimal com
+// vírgula, padrão brasileiro). Campos ausentes degradam graciosamente.
+func formatDial(band *string, freqMHz *float64) string {
+	b := ""
+	if band != nil {
+		b = strings.ToUpper(strings.TrimSpace(*band))
+	}
+	if freqMHz == nil {
+		return b
+	}
+	f := strings.ReplaceAll(strconv.FormatFloat(*freqMHz, 'f', 1, 64), ".", ",")
+	if b == "" {
+		return f
+	}
+	return b + " " + f
+}
+
+// formatLocation monta "Cidade/UF"; degrada pra só cidade ou só UF.
+func formatLocation(city, state *string) string {
+	c, s := "", ""
+	if city != nil {
+		c = strings.TrimSpace(*city)
+	}
+	if state != nil {
+		s = strings.TrimSpace(*state)
+	}
+	switch {
+	case c != "" && s != "":
+		return c + "/" + s
+	case c != "":
+		return c
+	default:
+		return s
+	}
+}
 
 // mergeIntervals funde intervalos sobrepostos/aninhados (entrada em qualquer
 // ordem). O histórico real de stream_health_events tem downs que se sobrepõem
@@ -77,7 +118,12 @@ func splitByCivilDay(iv interval) []dayPart {
 // Eventos 'down' ainda abertos (duration NULL) contam até now().
 func (r *Repo) StationsOffline(ctx context.Context, windowStart, windowEnd time.Time) ([]StationOutage, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT e.station_id, st.name,
+		SELECT e.station_id, st.name, st.band, st.frequency_mhz, st.city, st.state,
+		       COALESCE((
+		         SELECT string_agg(c.name, ', ' ORDER BY c.name)
+		         FROM campaigns c
+		         WHERE c.status = 'ativa' AND e.station_id = ANY(c.target_stations)
+		       ), '') AS campaigns,
 		       GREATEST(e.event_at, $1::timestamptz) AS s,
 		       LEAST(COALESCE(e.event_at + make_interval(secs => e.duration_seconds), now()), $2::timestamptz) AS f
 		FROM stream_health_events e
@@ -91,19 +137,29 @@ func (r *Repo) StationsOffline(ctx context.Context, windowStart, windowEnd time.
 	}
 	defer rows.Close()
 
-	type stationKey struct {
-		id   uuid.UUID
-		name string
+	type stationMeta struct {
+		name, dial, location, campaigns string
 	}
-	raw := map[stationKey][]interval{}
+	metas := map[uuid.UUID]stationMeta{}
+	raw := map[uuid.UUID][]interval{}
 	for rows.Next() {
-		var k stationKey
+		var id uuid.UUID
+		var name, campaigns string
+		var band *string
+		var freq *float64
+		var city, state *string
 		var iv interval
-		if err := rows.Scan(&k.id, &k.name, &iv.start, &iv.end); err != nil {
+		if err := rows.Scan(&id, &name, &band, &freq, &city, &state, &campaigns, &iv.start, &iv.end); err != nil {
 			return nil, err
 		}
+		metas[id] = stationMeta{
+			name:      name,
+			dial:      formatDial(band, freq),
+			location:  formatLocation(city, state),
+			campaigns: campaigns,
+		}
 		if iv.end.After(iv.start) {
-			raw[k] = append(raw[k], iv)
+			raw[id] = append(raw[id], iv)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -111,16 +167,21 @@ func (r *Repo) StationsOffline(ctx context.Context, windowStart, windowEnd time.
 	}
 
 	var out []StationOutage
-	for k, ivs := range raw {
+	for id, ivs := range raw {
 		perDay := map[time.Time]time.Duration{}
 		for _, iv := range mergeIntervals(ivs) {
 			for _, p := range splitByCivilDay(iv) {
 				perDay[p.day] += p.iv.end.Sub(p.iv.start)
 			}
 		}
+		m := metas[id]
 		for day, down := range perDay {
 			if down >= OfflineThreshold {
-				out = append(out, StationOutage{StationID: k.id, StationName: k.name, Day: day, Down: down})
+				out = append(out, StationOutage{
+					StationID: id, StationName: m.name, Dial: m.dial,
+					Location: m.location, Campaigns: m.campaigns,
+					Day: day, Down: down,
+				})
 			}
 		}
 	}
