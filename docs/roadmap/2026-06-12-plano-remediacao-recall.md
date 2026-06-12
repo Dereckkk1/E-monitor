@@ -27,6 +27,17 @@ sequenciamento e os critérios de aceite — não os passos de código.
 
 ---
 
+> ✅ **Rodada 2 (itens risco-zero) implementada em 2026-06-12** (branch
+> `feat/onda2-zero-risco`): T8-A (métrica+log de re-veiculação engolida pelo
+> cooldown, `radiocheck_cooldown_possible_reair_total`), card "Audit rejeitou
+> 7d" no `/admin/overview` (item adiado da T3), T11 (doc
+> `operations/vendor-reconciliation.md`) e T13 parcial (incidents indexados,
+> sendreal_test.go commitado). **Seguram validação/decisão:** T6 e T7 (mudam o
+> matching — exigem gate no harness anti-FP), T8-B (depende do volume da
+> métrica do T8-A), T9 (depende do cruzamento T5, tarefa do usuário), T10
+> (Loki — custo de disco/RAM, decisão do usuário), T12 (lado emissora).
+> Questão aberta do postmortem (quem re-disparou os 31) segue sem resposta.
+
 > ✅ **Onda 1 implementada em 2026-06-12** (branch `fix/onda1-falhas-silenciosas`):
 > T1 reconciler (`workers/internal/fingerprintqueue/`), T2-T3 alertas
 > FingerprintStuck/WorkerStallLoop/AuditRejectedSpike + runbooks + filtro do
