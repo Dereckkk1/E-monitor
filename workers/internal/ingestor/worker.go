@@ -431,6 +431,11 @@ func (w *Worker) runPCMReader(
 				zap.String("station_id", stationIDStr),
 				zap.Int32("commercial_short_id", r.CommercialShortID),
 				zap.Int("score", r.Score),
+				// unique_score é o que a state machine credita (hashes
+				// compartilhados não contam) — sem ele no log, um match com
+				// score alto que nunca confirma é indiagnosticável
+				// (incidente 2026-06-12, drop point "shared-hash only").
+				zap.Int("unique_score", r.UniqueScore),
 				zap.Int("total_hashes", r.TotalHashes),
 				zap.Float64("ratio", float64(r.Score)/float64(r.TotalHashes)),
 				zap.Uint8("variant", r.VariantID),
