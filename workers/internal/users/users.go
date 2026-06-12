@@ -28,10 +28,14 @@ type User struct {
 	Name         string     `json:"name"`
 	Phone        *string    `json:"phone,omitempty"`
 	IsActive     bool       `json:"is_active"`
-	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
-	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// ReceiveAlertEmails controla se o usuário recebe os disparos diários de
+	// email (campanhas + emissoras offline). Default TRUE; só admins/operators
+	// são destinatários de qualquer forma (ver ActiveInternal).
+	ReceiveAlertEmails bool       `json:"receive_alert_emails"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
+	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // Repo wraps a pgxpool.Pool and exposes CRUD operations for the users table.
@@ -43,12 +47,12 @@ type Repo struct {
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
 const userColumns = `id, email, password_hash, role, client_id, name, phone,
-                     is_active, deleted_at, last_login_at, created_at, updated_at`
+                     is_active, receive_alert_emails, deleted_at, last_login_at, created_at, updated_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.ClientID,
-		&u.Name, &u.Phone, &u.IsActive, &u.DeletedAt, &u.LastLoginAt,
+		&u.Name, &u.Phone, &u.IsActive, &u.ReceiveAlertEmails, &u.DeletedAt, &u.LastLoginAt,
 		&u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -106,6 +110,8 @@ type UpdateInput struct {
 	ClientID    *uuid.UUID // nil = não mudar
 	ClearClient bool       // true → set client_id = NULL (admin/operator)
 	IsActive    *bool
+	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta.
+	ReceiveAlertEmails *bool
 }
 
 // Update aplica as alterações de UpdateInput e retorna o usuário atualizado.
@@ -134,6 +140,9 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	}
 	if in.IsActive != nil {
 		push("is_active", *in.IsActive)
+	}
+	if in.ReceiveAlertEmails != nil {
+		push("receive_alert_emails", *in.ReceiveAlertEmails)
 	}
 
 	args = append(args, id)
@@ -268,14 +277,16 @@ func (r *Repo) List(ctx context.Context, in ListInput) ([]User, int, error) {
 	return out, total, rows.Err()
 }
 
-// ActiveInternal retorna todos os usuários internos ativos (role 'admin' ou
-// 'operator', não deletados, is_active=true). É o público-alvo dos emails de
-// alerta de campanha — o conjunto que a UI chama de "Administrador". Sem
-// paginação: o volume de internos é pequeno.
+// ActiveInternal retorna os usuários internos ativos (role 'admin' ou
+// 'operator', não deletados, is_active=true) que optaram por receber os
+// emails diários de alerta (receive_alert_emails). É o público-alvo dos
+// disparos — o conjunto que a UI chama de "Administrador". Sem paginação:
+// o volume de internos é pequeno.
 func (r *Repo) ActiveInternal(ctx context.Context) ([]User, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+userColumns+` FROM users
 		 WHERE deleted_at IS NULL AND is_active = TRUE
+		   AND receive_alert_emails = TRUE
 		   AND role IN ('admin','operator')
 		 ORDER BY name ASC`)
 	if err != nil {

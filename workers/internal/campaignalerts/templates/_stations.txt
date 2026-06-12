@@ -1,0 +1,12 @@
+{{.Heading}}
+
+Olá {{.Recipient}},
+
+Emissoras com mais de 2h sem captação no período {{.Period}}:
+{{range .Outages}}
+- {{.StationName}} — {{fmtDate .Day}} — {{fmtDur .Down}} fora do ar{{end}}
+
+Veiculações nesses intervalos não foram monitoradas.
+Acesse: {{.BaseURL}}/operations
+—
+Alerta automático do E-monitor.
