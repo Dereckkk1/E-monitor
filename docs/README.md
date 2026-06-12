@@ -107,6 +107,7 @@ docs/
 | Doc | Sobre |
 |-----|-------|
 | [follow-ups-fase2.md](roadmap/follow-ups-fase2.md) | Dívida técnica F-01 a F-121 (5 security fixes resolvidos, ~40 pendentes) |
+| [2026-06-12-plano-remediacao-recall.md](roadmap/2026-06-12-plano-remediacao-recall.md) | Plano-mestre pós-incidente: 3 ondas (falhas silenciosas → recall do algoritmo → infra/processo), 13 tasks ordenadas |
 | [detection-evaluation-report.md](roadmap/detection-evaluation-report.md) | Avaliação E2E do matcher; recomendações 4.1/4.4/4.5/4.7 aplicadas |
 
 ## `archive/` — histórico inativo
