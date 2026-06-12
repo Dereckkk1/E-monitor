@@ -347,6 +347,7 @@ docs/
 | Mapa ao Vivo (`/live-map`, admin + cliente — emissoras monitoradas pulsando no mapa do Brasil + feed de veiculações em tempo real) | [docs/features/live-map.md](docs/features/live-map.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |
 | Avaliação E2E do matcher (recomendações 4.x) | [docs/roadmap/detection-evaluation-report.md](docs/roadmap/detection-evaluation-report.md) |
+| Comparar detecções com o fornecedor externo / investigar "miss" | [docs/operations/vendor-reconciliation.md](docs/operations/vendor-reconciliation.md) |
 | Responder a alerta Prometheus disparado | [docs/runbooks/README.md](docs/runbooks/README.md) (índice por alerta) |
 | Postmortem de incidente passado | [docs/incidents/](docs/incidents/) (incident-AAAA-MM-DD-*.md) |
 
