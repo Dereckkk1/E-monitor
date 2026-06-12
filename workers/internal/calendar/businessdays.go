@@ -47,6 +47,27 @@ func IsBusinessDay(t time.Time) bool {
 	return wd != time.Saturday && wd != time.Sunday
 }
 
+// PreviousBusinessDay retorna o dia útil anterior ao dia civil de t
+// (segunda → sexta anterior). Usado pra definir a janela "desde o último
+// relatório" dos disparos diários: sexta cobre quinta; segunda cobre
+// sex+sáb+dom — sem buraco nem sobreposição.
+func PreviousBusinessDay(t time.Time) time.Time {
+	d := CivilDate(t).AddDate(0, 0, -1)
+	for !IsBusinessDay(d) {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d
+}
+
+// BRMidnight converte um dia civil (como retornado por Today/CivilDate) no
+// INSTANTE da meia-noite daquele dia em America/Sao_Paulo. Use quando a
+// aritmética precisa de instantes reais (ex.: recortar intervalos de
+// downtime), não de datas civis.
+func BRMidnight(civil time.Time) time.Time {
+	c := CivilDate(civil)
+	return time.Date(c.Year(), c.Month(), c.Day(), 0, 0, 0, 0, BR)
+}
+
 // CalendarDaysUntil retorna (target - today) em dias de calendário.
 func CalendarDaysUntil(today, target time.Time) int {
 	return int(CivilDate(target).Sub(CivilDate(today)).Hours() / 24)

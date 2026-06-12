@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-09
+ultima-verificacao: 2026-06-12
 codigo-relacionado:
   - workers/internal/campaignalerts/scheduler.go
   - workers/internal/campaignalerts/service.go
   - workers/internal/campaignalerts/queries.go
+  - workers/internal/campaignalerts/outages.go
   - workers/internal/campaignalerts/logstore.go
   - workers/internal/campaignalerts/render.go
   - workers/internal/campaignalerts/templates/
@@ -13,29 +14,44 @@ codigo-relacionado:
   - workers/internal/users/users.go
   - workers/cmd/api/main.go
   - migrations/0036_notification_log.up.sql
+  - migrations/0037_stations_offline_email.up.sql
 ---
 
-# Emails diários de alerta de campanha
+# Emails diários de alerta (campanhas + emissoras)
 
-Três emails transacionais diários para usuários internos (role `admin` ou
-`operator`, ativos) sobre o ciclo de vida das campanhas. Disparo só em **dia
-útil**, a partir das **08:00 BRT**, **uma vez por dia por tipo** (dedup via
+Quatro emails transacionais diários para usuários internos (role `admin` ou
+`operator`, ativos, com **"Receber emails de alerta"** ligado — toggle por
+usuário em `/admin/users`, default ligado). Disparo só em **dia útil**, a
+partir das **08:00 BRT**, **uma vez por dia por tipo** (dedup via
 `notification_log`). Reenvio diário é automático: a `notification_date` muda a
 cada dia, então um alerta não resolvido reaparece no dia seguinte.
 
 Spec de design: [docs/superpowers/specs/2026-06-09-campaign-notification-emails-design.md](../superpowers/specs/2026-06-09-campaign-notification-emails-design.md).
 
-## Os 3 disparos
+## Os 4 disparos
 
-| Tipo (`notification_log.type`) | Seleção | Status da campanha |
+| Tipo (`notification_log.type`) | Seleção | Escopo |
 |---|---|---|
-| `starting_no_material` | start_date na janela **e** zero materiais (`MaterialCount == 0`) | `programada` |
-| `starting` | start_date na janela (todas, com ou sem material) | `programada` |
-| `ending` | end_date na janela | `ativa` |
+| `starting_no_material` | start_date na janela **e** zero materiais (`MaterialCount == 0`) | campanha `programada` |
+| `starting` | start_date na janela (todas, com ou sem material) | campanha `programada` |
+| `ending` | end_date na janela | campanha `ativa` |
+| `stations_offline` | emissoras com **>2h de downtime acumulado** num dia civil do período coberto | `stream_health_events` |
 
 Cada disparo vira **um email por destinatário** (saudação personalizada). Se um
-disparo não tem campanhas no dia, o email não é enviado, mas o dia é marcado
+disparo não tem itens no dia, o email não é enviado, mas o dia é marcado
 como `skipped_empty` para não re-tentar.
+
+### Disparo 4 — emissoras fora do ar
+
+Período coberto = **[meia-noite do dia útil anterior, meia-noite de hoje)** em
+BRT: terça a sexta cobrem "ontem"; **segunda cobre sex+sáb+dom** — nenhuma
+queda fica sem relatório, nenhuma é reportada duas vezes. O downtime soma os
+eventos `down` de `stream_health_events` com **merge de intervalos
+sobrepostos** (o histórico real tem downs aninhados) e fatia na meia-noite
+(queda que atravessa o dia conta em cada data com sua fração). Eventos ainda
+abertos contam até `now()`. Limiar fixo: 2h (`campaignalerts.OfflineThreshold`).
+Visual: mesmo shell dos demais, acento âmbar, uma linha por (emissora, dia)
+com a duração ("9h32 fora do ar"), CTA pra `/operations`.
 
 ## Janela de alerta
 

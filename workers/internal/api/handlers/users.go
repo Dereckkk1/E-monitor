@@ -217,7 +217,9 @@ type updateUserPayload struct {
 	Role     *string    `json:"role,omitempty"`
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
 	IsActive *bool      `json:"is_active,omitempty"`
-	Email    *string    `json:"email,omitempty"` // só pra detectar e rejeitar
+	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
+	ReceiveAlertEmails *bool   `json:"receive_alert_emails,omitempty"`
+	Email              *string `json:"email,omitempty"` // só pra detectar e rejeitar
 }
 
 func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
@@ -253,9 +255,10 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := users.UpdateInput{
-		Name:     p.Name,
-		Phone:    p.Phone,
-		IsActive: p.IsActive,
+		Name:               p.Name,
+		Phone:              p.Phone,
+		IsActive:           p.IsActive,
+		ReceiveAlertEmails: p.ReceiveAlertEmails,
 	}
 	if p.Role != nil {
 		dbRole, ok := roleAlias(*p.Role)
