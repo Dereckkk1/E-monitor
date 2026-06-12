@@ -101,6 +101,7 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
         phone: initial.phone ?? '',
         password: '',
         is_active: initial.is_active,
+        receive_alert_emails: initial.receive_alert_emails ?? true,
       })
     } else {
       setV(EMPTY)
@@ -131,6 +132,7 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
       payload.password = v.password
     } else {
       payload.is_active = v.is_active
+      if (v.role === 'admin') payload.receive_alert_emails = v.receive_alert_emails
     }
     onSubmit(payload)
   }
@@ -335,6 +337,21 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
               <span className="ufm-toggle-text">
                 <strong>Conta ativa</strong>
                 <small>Quando desativada, o login é bloqueado mas o histórico continua acessível.</small>
+              </span>
+            </label>
+          )}
+
+          {isEdit && v.role === 'admin' && (
+            <label className="ufm-toggle">
+              <input
+                type="checkbox"
+                checked={v.receive_alert_emails}
+                onChange={e => set('receive_alert_emails', e.target.checked)}
+                disabled={busy}
+              />
+              <span className="ufm-toggle-text">
+                <strong>Receber emails de alerta</strong>
+                <small>Disparos diários das 8h: campanhas iniciando/terminando, sem material e emissoras fora do ar.</small>
               </span>
             </label>
           )}

@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"radiocheck/internal/calendar"
 	"radiocheck/internal/mailer"
 	"radiocheck/internal/metrics"
 	"radiocheck/internal/users"
@@ -37,32 +38,73 @@ func NewService(repo *Repo, logs *LogStore, usersRepo recipientLister, mail mail
 	return &Service{repo: repo, logs: logs, users: usersRepo, mail: mail, baseURL: baseURL, log: log, sendRetries: 3}
 }
 
-// alertType encapsula a query e o render de um disparo.
+// alertType encapsula um disparo: prepare consulta os dados do dia e devolve
+// (quantidade de itens, closure que renderiza por destinatário). count==0 →
+// skipped_empty sem envio. O closure permite payloads heterogêneos
+// (campanhas nos disparos 1-3, emissoras no 4) sob a mesma máquina de envio.
 type alertType struct {
-	name   string // valor do CHECK em notification_log
-	fetch  func(ctx context.Context, today time.Time) ([]CampaignAlert, error)
-	render func(recipient string, campaigns []CampaignAlert, baseURL string) (EmailContent, error)
+	name    string // valor do CHECK em notification_log
+	prepare func(ctx context.Context, today time.Time) (int, func(recipient string) (EmailContent, error), error)
+}
+
+// campaignType adapta o trio fetch+render dos disparos de campanha ao padrão
+// prepare.
+func (s *Service) campaignType(name string,
+	fetch func(ctx context.Context, today time.Time) ([]CampaignAlert, error),
+	render func(recipient string, campaigns []CampaignAlert, baseURL string) (EmailContent, error),
+) alertType {
+	return alertType{name: name, prepare: func(ctx context.Context, today time.Time) (int, func(string) (EmailContent, error), error) {
+		campaigns, err := fetch(ctx, today)
+		if err != nil {
+			return 0, nil, err
+		}
+		return len(campaigns), func(recipient string) (EmailContent, error) {
+			return render(recipient, campaigns, s.baseURL)
+		}, nil
+	}}
+}
+
+// stationsOfflineType é o disparo 4: emissoras com >2h fora desde o último
+// relatório. Janela = [meia-noite do dia útil anterior, meia-noite de hoje)
+// em BRT — sexta cobre quinta; segunda cobre sex+sáb+dom, sem buraco.
+func (s *Service) stationsOfflineType() alertType {
+	return alertType{name: "stations_offline", prepare: func(ctx context.Context, today time.Time) (int, func(string) (EmailContent, error), error) {
+		winStart := calendar.BRMidnight(calendar.PreviousBusinessDay(today))
+		winEnd := calendar.BRMidnight(today)
+		outages, err := s.repo.StationsOffline(ctx, winStart, winEnd)
+		if err != nil {
+			return 0, nil, err
+		}
+		period := "de " + winStart.Format("02/01")
+		if lastDay := winEnd.AddDate(0, 0, -1); !lastDay.Equal(winStart) {
+			period += " a " + lastDay.Format("02/01")
+		}
+		return len(outages), func(recipient string) (EmailContent, error) {
+			return RenderStationsOffline(recipient, outages, period, s.baseURL)
+		}, nil
+	}}
 }
 
 func (s *Service) types() []alertType {
 	return []alertType{
-		{"starting_no_material", s.repo.StartingNoMaterial, RenderStartingNoMaterial},
-		{"starting", s.repo.Starting, RenderStarting},
-		{"ending", s.repo.Ending, RenderEnding},
+		s.campaignType("starting_no_material", s.repo.StartingNoMaterial, RenderStartingNoMaterial),
+		s.campaignType("starting", s.repo.Starting, RenderStarting),
+		s.campaignType("ending", s.repo.Ending, RenderEnding),
+		s.stationsOfflineType(),
 	}
 }
 
 // ProcessType executa um disparo para o dia `today`. Assume que o caller já
 // verificou dedup/advisory lock. Grava o notification_log ao final.
 func (s *Service) ProcessType(ctx context.Context, today time.Time, at alertType) {
-	campaigns, err := at.fetch(ctx, today)
+	count, renderFor, err := at.prepare(ctx, today)
 	if err != nil {
-		s.log.Error("campaignalerts: fetch falhou", zap.String("type", at.name), zap.Error(err))
+		s.log.Error("campaignalerts: prepare falhou", zap.String("type", at.name), zap.Error(err))
 		_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, Status: "failed", Error: err.Error()})
 		metrics.NotificationsFailedTotal.WithLabelValues(at.name).Inc()
 		return
 	}
-	if len(campaigns) == 0 {
+	if count == 0 {
 		s.log.Info("campaignalerts: nada a enviar", zap.String("type", at.name))
 		_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, Status: "skipped_empty"})
 		return
@@ -71,7 +113,7 @@ func (s *Service) ProcessType(ctx context.Context, today time.Time, at alertType
 	recipients, err := s.users.ActiveInternal(ctx)
 	if err != nil {
 		s.log.Error("campaignalerts: lista de destinatários falhou", zap.String("type", at.name), zap.Error(err))
-		_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, CampaignCount: len(campaigns), Status: "failed", Error: err.Error()})
+		_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, CampaignCount: count, Status: "failed", Error: err.Error()})
 		metrics.NotificationsFailedTotal.WithLabelValues(at.name).Inc()
 		return
 	}
@@ -81,7 +123,7 @@ func (s *Service) ProcessType(ctx context.Context, today time.Time, at alertType
 		if r.Email == "" {
 			continue
 		}
-		content, rerr := at.render(displayName(r), campaigns, s.baseURL)
+		content, rerr := renderFor(displayName(r))
 		if rerr != nil {
 			s.log.Error("campaignalerts: render falhou", zap.String("type", at.name), zap.Error(rerr))
 			failed++
@@ -106,9 +148,9 @@ func (s *Service) ProcessType(ctx context.Context, today time.Time, at alertType
 	}
 	metrics.NotificationsRecipients.WithLabelValues(at.name).Set(float64(len(recipients)))
 	s.log.Info("campaignalerts: disparo concluído",
-		zap.String("type", at.name), zap.Int("campaigns", len(campaigns)),
+		zap.String("type", at.name), zap.Int("items", count),
 		zap.Int("sent", sent), zap.Int("failed", failed), zap.String("status", status))
-	_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, RecipientCount: sent, CampaignCount: len(campaigns), Status: status})
+	_ = s.logs.Record(ctx, LogEntry{Date: today, Type: at.name, RecipientCount: sent, CampaignCount: count, Status: status})
 }
 
 func (s *Service) sendWithRetry(ctx context.Context, email string, c EmailContent) bool {
