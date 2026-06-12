@@ -23,6 +23,7 @@ import (
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
+	"radiocheck/internal/fingerprintqueue"
 	"radiocheck/internal/index"
 	"radiocheck/internal/mailer"
 	"radiocheck/internal/observability"
@@ -287,6 +288,12 @@ func main() {
 			zap.Int("send_hour", cfg.NotificationsSendHour),
 			zap.String("base_url", cfg.NotificationsBaseURL))
 	}
+
+	// Reconciler da fila de fingerprint (incidente 2026-06-12): re-publica
+	// fingerprint.generate para materiais presos em pending/generating/failed.
+	// Sempre ligado — é rede de segurança, não feature.
+	fpQueue := fingerprintqueue.New(pool, nc, logger)
+	go fpQueue.Run(ctx)
 
 	// Request metrics writer + IP block-list (painel /admin/monitoring).
 	// Async batched writer evita pressionar latência do caminho hot.
