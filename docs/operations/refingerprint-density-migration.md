@@ -15,9 +15,18 @@ frames (`peaks.go` neighborFrames; `generator.py` PEAK_NEIGHBORHOOD_T 17→7,
 PEAK_NEIGHBORHOOD_F 17→13). Resultado: **~4× mais hashes por janela** → spots de
 5-15s ganham margem de match pra sobreviver à degradação de broadcast.
 
-**Por que é migração:** muda a **math do hash**. Query nova (densa) só casa
-índice novo (denso). **Misturar = 0 match.** Logo o código novo PRECISA ir junto
-com a base re-fingerprintada (cutover atômico).
+**Por que é migração:** muda a **math do hash**. Query nova (densa) casa mal
+com índice antigo (esparso). **Misturar = degradação severa, inversamente
+proporcional à riqueza do material** — não é zero uniforme: os picos antigos
+sobrevivem no conjunto denso, mas o fan-out re-pareia âncoras com vizinhos
+mais próximos, então só uma minoria dos pares antigos continua sendo gerada.
+Medido em produção (incidente
+[2026-06-12](../incidents/incident-2026-06-12-detection-recall-gaps.md)):
+materiais curtos/falados **zeram**; longos/ricos perdem 10-30% de detecções.
+A forma parcial é mais traiçoeira que "0 match": detecções continuam pingando
+e a migração incompleta passa despercebida. Logo o código novo PRECISA ir
+junto com a base re-fingerprintada (cutover atômico) **e a completude precisa
+ser verificada** (passo 3 abaixo).
 
 > ⚠️ **Validado, mas com custo:** matcher ~2× CPU (4× hashes/janela). O box foi
 > migrado para **c3-highcpu-8 (8 vCPU, 16 GB)** em 2026-06-08 — dobrar o CPU
@@ -62,7 +71,24 @@ até a sua vez de re-processar. Acompanhe `docker compose logs -f fingerprint`
 até ver `done` de todos. Em prod recorrente, preferir índice versionado (TODO)
 ou janela de baixa audiência.
 
-### 3. Recalibração dos thresholds (opcional)
+### 3. Verificar completude (OBRIGATÓRIO — não pular)
+
+O passo 2 é fire-and-forget: mensagens NATS podem se perder e o serviço pode
+falhar no meio da fila **sem nenhum erro visível** (foi exatamente o que
+deixou 32 materiais cegos de 08 a 12/06). A migração só está concluída quando:
+
+```bash
+./scripts/check-fingerprint-freshness.sh <data-do-deploy>
+# exit 0 + "Catálogo consistente" = concluída.
+# exit 1 = re-rodar o passo 2 para os listados e verificar de novo.
+```
+
+O reconciler da fila (`workers/internal/fingerprintqueue/`) re-tenta presos
+automaticamente, e o alerta `FingerprintStuck` pega o que o retry não resolve
+— mas nenhum dos dois sabe da *data de corte*; só este check valida a
+migração em si.
+
+### 4. Recalibração dos thresholds (opcional)
 A densidade muda a distribuição de ruído. O piso `min_hashes=5` + o audit já
 seguram, mas pra recalibrar, re-armar a calibração das estações (o scheduler
 faz isso a cada 7 dias; ou forçar via `RunOnceForStation`/endpoint admin).
