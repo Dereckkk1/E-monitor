@@ -208,6 +208,10 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    FROM detections d
 		    WHERE d.campaign_id = ANY($1::uuid[])
 		      AND d.retracted_at IS NULL
+		      -- audit_rejected é excluído de todas as views de usuário
+		      -- (migration 0029); este CTE era a única exceção — detecções
+		      -- rejeitadas pelo audit §9.9 inflavam o /insights vs /detections.
+		      AND d.evidence_status <> 'audit_rejected'
 		      AND d.detected_at::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		),

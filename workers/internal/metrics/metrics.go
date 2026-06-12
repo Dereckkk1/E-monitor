@@ -237,6 +237,19 @@ var (
 		Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
 	})
 
+	// ── Fila de fingerprint (reconciler — incidente 2026-06-12) ──
+	// FingerprintStuck mede materiais presos por status no último tick do
+	// reconciler. >0 sustentado = fila travada (alerta FingerprintStuck).
+	FingerprintStuck = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_fingerprint_stuck",
+		Help: "Materiais com fingerprint preso (pending/generating velhos ou failed).",
+	}, []string{"status"})
+
+	FingerprintRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_fingerprint_retries_total",
+		Help: "Re-disparos de fingerprint.generate pelo reconciler, por status original.",
+	}, []string{"status"})
+
 	// ── Notificações por email (emails diários de alerta de campanha) ──
 	NotificationsSentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_notifications_sent_total",
@@ -271,5 +284,6 @@ func init() {
 		MatchDisambiguation,
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
 		NotificationsSentTotal, NotificationsFailedTotal, NotificationsRecipients,
+		FingerprintStuck, FingerprintRetriesTotal,
 	)
 }
