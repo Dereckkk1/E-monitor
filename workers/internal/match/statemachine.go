@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"radiocheck/internal/metrics"
 )
 
 // State represents the detection phase.
@@ -71,6 +73,11 @@ type StateMachine struct {
 	confirmTimeout      time.Duration // max time in Detecting before reset (no confirm)
 	cooldownDuration    time.Duration
 	cooldownUntil       time.Time
+	totalFrames         int // duração do comercial em frames (p/ heurística de re-veiculação)
+
+	// cooldownReairSeen evita logar a mesma re-veiculação suspeita várias
+	// vezes dentro de um único período de cooldown (a métrica conta todas).
+	cooldownReairSeen bool
 }
 
 // NewStateMachine creates a new StateMachine for tracking one commercial on one station.
@@ -97,8 +104,26 @@ func NewStateMachine(
 		minTemporalCoverage: minTemporalCoverage,
 		confirmTimeout:      confirmTimeout,
 		cooldownDuration:    cooldownDuration,
+		totalFrames:         totalFrames,
 		log:                 log,
 	}
+}
+
+// isPossibleReair detecta a assinatura de uma re-veiculação engolida pelo
+// cooldown (T8-A, plano de remediação 2026-06-12). Matches em cooldown são
+// esperados para a cauda da veiculação recém-confirmada — esses têm offset
+// CRESCENTE (partes finais do comercial). Uma NOVA veiculação aparece como
+// offset no primeiro quarto do comercial chegando na metade FINAL do
+// cooldown. Instrumentação apenas: a Onda 2 decide se vale re-armar.
+func (sm *StateMachine) isPossibleReair(result MatchResult, now time.Time) bool {
+	if result.UniqueScore < sm.minScore {
+		return false
+	}
+	if result.OffsetFrames >= sm.totalFrames/4 {
+		return false // continuação da veiculação atual, não reinício
+	}
+	cooldownMidpoint := sm.cooldownUntil.Add(-sm.cooldownDuration / 2)
+	return now.After(cooldownMidpoint)
 }
 
 // Update processes one MatchResult for this commercial.
@@ -166,6 +191,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 				sm.cumulativeHashes = 0
 				sm.state = StateCooldown
 				sm.cooldownUntil = now.Add(sm.cooldownDuration)
+				sm.cooldownReairSeen = false
 				return detection
 			}
 
@@ -199,6 +225,22 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 
 	case StateCooldown:
 		// Matches during cooldown are discarded to prevent duplicate detections.
+		// Instrumentação T8-A: conta o padrão de re-veiculação engolida (mesma
+		// faixa 2× no mesmo break). Métrica decide se a Onda 2 implementa
+		// re-arm; o log sai uma vez por cooldown pra não inundar.
+		if sm.isPossibleReair(result, now) {
+			metrics.CooldownPossibleReairTotal.WithLabelValues(sm.stationID).Inc()
+			if !sm.cooldownReairSeen {
+				sm.cooldownReairSeen = true
+				sm.log.Info("possible re-airing swallowed by cooldown",
+					zap.String("stationID", sm.stationID),
+					zap.Int32("commercialShortID", sm.commercialShortID),
+					zap.Int("offsetFrames", result.OffsetFrames),
+					zap.Int("uniqueScore", result.UniqueScore),
+					zap.Time("cooldownUntil", sm.cooldownUntil),
+				)
+			}
+		}
 	}
 
 	return nil

@@ -250,6 +250,15 @@ var (
 		Help: "Re-disparos de fingerprint.generate pelo reconciler, por status original.",
 	}, []string{"status"})
 
+	// ── Cooldown × re-veiculação (T8-A, plano de remediação 2026-06-12) ──
+	// Conta matches com assinatura de NOVA veiculação (offset no início do
+	// comercial, metade final do cooldown) descartados pelo StateCooldown.
+	// Volume relevante aqui = justificativa pra implementar re-arm (T8-B).
+	CooldownPossibleReairTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_cooldown_possible_reair_total",
+		Help: "Possíveis re-veiculações engolidas pelo cooldown da state machine.",
+	}, []string{"station_id"})
+
 	// ── Notificações por email (emails diários de alerta de campanha) ──
 	NotificationsSentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_notifications_sent_total",
@@ -285,5 +294,6 @@ func init() {
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
 		NotificationsSentTotal, NotificationsFailedTotal, NotificationsRecipients,
 		FingerprintStuck, FingerprintRetriesTotal,
+		CooldownPossibleReairTotal,
 	)
 }
