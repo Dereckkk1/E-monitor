@@ -294,6 +294,34 @@ func TestClassifyAndFilter_ZeroFrames(t *testing.T) {
 	}
 }
 
+// TestMinScoreFromEnv covers resolution of the shared-region qualifying score
+// from SHARING_MIN_SCORE. Uses an injected getenv so it never mutates process
+// state. The value was raised from the historical 5 after the #2 density
+// change lifted the material-vs-material noise floor (incident 2026-06-15).
+func TestMinScoreFromEnv(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"unset falls back to default", "", DefaultMinScore},
+		{"valid value", "15", 15},
+		{"trims whitespace", "  18  ", 18},
+		{"non-numeric falls back", "abc", DefaultMinScore},
+		{"zero falls back", "0", DefaultMinScore},
+		{"negative falls back", "-3", DefaultMinScore},
+		{"default itself", "20", 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := minScoreFromEnv(func(string) string { return c.raw })
+			if got != c.want {
+				t.Errorf("minScoreFromEnv(%q) = %d, want %d", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
 // TestFrameCoverage_UnionMath exercises the merged-length calculation.
 func TestFrameCoverage_UnionMath(t *testing.T) {
 	cases := []struct {
