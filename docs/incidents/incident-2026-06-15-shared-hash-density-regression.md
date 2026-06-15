@@ -1,5 +1,5 @@
 ---
-status: aberto
+status: resolvido
 severidade: CRÍTICA
 ultima-verificacao: 2026-06-15
 codigo-relacionado:
@@ -7,15 +7,106 @@ codigo-relacionado:
   - workers/internal/sharing/sharing_test.go
   - workers/internal/sharing/subscriber.go
   - workers/cmd/backfill-shared-hashes/main.go
+  - workers/cmd/selfmatch/main.go
   - workers/pkg/audio/peaks.go
   - fingerprint/fingerprint/generator.py
+  - infra/docker/docker-compose.yml
+  - infra/docker/Dockerfiles/workers.Dockerfile
 ---
 
 # INCIDENTE 2026-06-15 — Regressão de shared-hash pela densidade do #2 (65% do catálogo cego)
 
-> **HANDOFF para o próximo agente.** Este documento contém TUDO o que você precisa
-> para executar o fix. A causa raiz já está **cravada com evidência de prod**. Não
-> precisa re-investigar — leia a "Trilha de evidência" e parta direto pro "Plano de fix".
+> **RESOLVIDO em 2026-06-15.** Ver seção 0 para o desfecho. A causa raiz (shared-hash
+> denso) está confirmada E o fix está deployado e validado. O histórico de investigação
+> (seções 1–10) fica preservado como referência.
+
+---
+
+## 0. Desfecho (RESOLVIDO — 2026-06-15)
+
+**Causa raiz confirmada e única:** shared-hash com `MinScore=5` baixo demais para a
+densidade do #2. Não havia segundo bug — investigado e descartado (ver "Investigação do
+falso-segundo-bug" abaixo).
+
+**Fix aplicado:**
+- Commit `f1e375c`: `const MinScore=5` → `DefaultMinScore=20` + `MinScore()`/
+  `minScoreFromEnv()` lendo `SHARING_MIN_SCORE`, plumbado por `MarkSharedHashes` →
+  `scanForSharedRegions` (ponto único que governa o subscriber de upload **e** o
+  `backfill-shared-hashes`). Passthrough `SHARING_MIN_SCORE` no service `api` do
+  `docker-compose.yml` (sem ele a env não chegava no container). TDD: `TestMinScoreFromEnv`.
+- Commit `500f4cc`: `cmd/selfmatch` — diagnóstico read-only reusável (ver abaixo).
+- **Decisão do usuário:** fix direto (sem a mitigação de emergência 5.5).
+
+**`MinScore` final = 20** (default; `SHARING_MIN_SCORE` deixado vazio no `.env`). Deploy
+(`build api` → `--force-recreate --no-deps api`) + reset `is_shared=false` + re-backfill
+feitos em prod.
+
+**Validação 5.4 (pós-backfill, MinScore=20):**
+```
+shared_100=0  shared_90mais=0  shared_medio=0  shared_baixo=94  total=94
+93/96/97/102 + 77: todos 0.0% shared
+```
+Quase nada flagar a 20 é o resultado **correto**, não overshoot: um sting/jingle genuíno é
+áudio idêntico → pontua 50+ no scan (quase self-match) → continua sendo flagado a 20.
+Subir 5→20 derruba só o ruído de densidade (6-12), não sting genuíno. (Nota: o agregado só
+diz `<30%`; um jingle legítimo de 5s/30s ≈ 17% cairia em `shared_baixo` sem aparecer como
+0 — então "0% em todo catálogo" é impreciso; o que se confirmou foi 0.0% nos amostrados +
+ROGGA, e a ausência de sting forte não-flagado, ver abaixo.)
+
+**Verificação de proteção contra falso-positivo (jingle do ROGGA, via `selfmatch` best-OTHER):**
+o usuário cobrou o que acontece com o jingle do ROGGA agora que o shared zerou. Medido o
+cross-match entre os spots ROGGA:
+- Spots de produto distintos (URBAN BAVIERA 5, EVOLUTION 6, POLINESIA 7, AZALÉIA 39,
+  HANNOVER 41, DESDREN 43): cross-match pico **9-12** = ruído. **Não compartilham jingle
+  forte** → nada a proteger → 0% correto.
+- `JINGLE VERÃO 30` (1) → 518 contra id 21 (**duplicata** exata) e ⊂ `VERÃO 60` (3) =
+  **subset** → corretamente não-flagado (dedup/version-disambiguation tratam).
+- PULSO SONORO (8/34/36/51) <10s → pulados por `MinShareableDuration` (inalterado).
+
+Conclusão: **o fix NÃO abriu buraco de FP.** O `MinScore=5` antigo flagava o ruído 9-12
+inter-ROGGA como falso "sting" (comendo hashes únicas → contribuindo pra cegueira); o 20
+rejeita esse ruído e ainda pegaria jingle real (50+). Para uploads futuros, sting genuíno
+(50+) segue flagado automaticamente — sistema calibrado, não inerte.
+
+**Higiene de catálogo (lateral):** id 1 e id 21 são o mesmo material duplicado (hashes
+idênticas) — operador deve remover um. Não afeta detecção.
+
+### Investigação do falso-segundo-bug (o usuário desconfiou; testamos)
+
+O usuário notou que materiais não detectavam e levantou "o problema não é só o shaded".
+Investigado por **debugging sistemático** (sem chute), três hipóteses testadas e refutadas:
+
+1. **Regressão global da migração?** ❌ Volume de detecção saudável atravessando o
+   re-fingerprint (~47 materiais/dia, 700+ det/dia útil); **ASAAS detectou 16:44 do dia
+   do fix**. Lockstep e pipeline OK globalmente.
+2. **"Material único da STIHL" é um material não-compartilhado falhando?** ❌ É o próprio
+   **short_id 102** (único material da campanha 236), que estava 100% shared → explicado
+   pelo fix, não é causa nova.
+3. **Fingerprint dos cegos quebrado (não casa com o ao vivo)?** ❌ **Refutado pelo
+   `selfmatch`**: self-score 77=355 (controle), **102=585, 97=418** — fingerprints
+   impecáveis, lockstep `peaks.go ↔ generator.py` perfeito. O ruído 6-8 no window scan é
+   só janela-sem-veiculação; quando airarem pontuam centenas e detectam.
+
+**`det_total=0` dos 4** = cegueira vitalícia do shared-hash (até o backfill) + ainda não
+terem ido ao ar no intervalo desde o fix. **Checkpoint operacional restante:** ver a 1ª
+veiculação pós-fix entrar (`det_total` subir). Não é código.
+
+### `cmd/selfmatch` (ferramenta reusável)
+
+`selfmatch --short-id N` decodifica o master e roda o `MatchWindow` Go real contra as
+hashes armazenadas, reportando o **self-score** (**40+ = fingerprint ok / lockstep vale;
+~6-8 = quebrado**) e o **best-OTHER score** (maior cross-match contra outro material —
+serve pra checar sting/jingle compartilhado: alto = compartilha segmento forte). Read-only
+(SELECT + decode). Útil pra toda futura migração de densidade (valida lockstep sem esperar
+veiculação) e pra auditar proteção de FP — relacionado ao follow-up "índice versionado".
+
+### Follow-ups abertos (não-bloqueantes)
+
+- `internal/similarity/similarity.go:28` (`MinScore=5`, aviso de duplicata no upload) sofre
+  da mesma densidade do #2, mas NÃO bloqueia detecção — avaliar depois.
+- Recalibração de `station_thresholds` pós-#2 (já listado na seção 8 #2): o piso de ruído
+  subiu pra 6-8; conferir que os thresholds por estação seguem confortavelmente acima.
+- Confirmar `det_total` dos 4 subindo após a 1ª veiculação pós-fix.
 
 ---
 
