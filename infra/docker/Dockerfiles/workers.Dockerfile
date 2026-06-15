@@ -9,6 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/diag ./cmd/diag
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-shared-hashes ./cmd/backfill-shared-hashes
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-material-durations ./cmd/backfill-material-durations
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-geocoding ./cmd/backfill-geocoding
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/selfmatch ./cmd/selfmatch
 
 FROM alpine:3.19
 # tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
@@ -22,5 +23,6 @@ COPY --from=builder /out/diag                    /usr/local/bin/diag
 COPY --from=builder /out/backfill-shared-hashes  /usr/local/bin/backfill-shared-hashes
 COPY --from=builder /out/backfill-material-durations  /usr/local/bin/backfill-material-durations
 COPY --from=builder /out/backfill-geocoding  /usr/local/bin/backfill-geocoding
+COPY --from=builder /out/selfmatch  /usr/local/bin/selfmatch
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]
