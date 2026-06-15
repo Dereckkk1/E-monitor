@@ -21,7 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -38,10 +41,20 @@ const (
 	WindowSeconds = 4
 	// HopSeconds is the hop between consecutive analysis windows.
 	HopSeconds = 1
-	// MinScore is the histogram peak score that qualifies a window as a
-	// shared region. Aligned with the runtime matcher's default minScore so
-	// every region the runtime would credit gets flagged here.
-	MinScore = 5
+	// DefaultMinScore is the fallback histogram peak score that qualifies a
+	// window as a shared region, used when SHARING_MIN_SCORE is unset/invalid.
+	//
+	// Raised from the historical 5 after the #2 density change (commit
+	// 3bd7178: ~4× denser peak-picking) lifted the material-vs-material noise
+	// floor from <5 to ~6-8. At MinScore=5 every window scored ≥5 against
+	// *some* catalog entry, so newly-fingerprinted masters came out ~100%
+	// is_shared → UniqueScore 0 → mathematically undetectable (65% of the
+	// catalog went blind). A genuine shared sting scores high (50+), so the
+	// threshold sits between the dense noise floor and a real match.
+	// See docs/incidents/incident-2026-06-15-shared-hash-density-regression.md.
+	// Tunable at runtime via SHARING_MIN_SCORE without a redeploy (re-run the
+	// backfill after changing it).
+	DefaultMinScore = 20
 	// SubsetThreshold é a fração de frames de áudio coberta pela região
 	// compartilhada (em qualquer um dos dois lados do par) que separa subset
 	// de sting. A classificação usa max(ownCoverage, otherCoverage) porque
@@ -89,6 +102,30 @@ func init() {
 	// math.Floor quebra a redução em constante de tempo de compilação que
 	// Go faria com a expressão pura; o resultado ainda é 78 para 10s.
 	MinShareableDurationFrames = int(math.Floor(MinShareableDurationSeconds * float64(fingerprint.SampleRate) / 2048.0))
+}
+
+// MinScore returns the shared-region qualifying score in effect, reading
+// SHARING_MIN_SCORE from the process environment (default DefaultMinScore).
+// Both code paths that flag shared hashes — the upload-driven Subscriber and
+// the backfill-shared-hashes CLI — go through MarkSharedHashes, so this single
+// resolution point governs both. Change the env var and re-run the backfill to
+// retune without redeploying.
+func MinScore() int { return minScoreFromEnv(os.Getenv) }
+
+// minScoreFromEnv resolves the shared-region qualifying score from the value
+// of SHARING_MIN_SCORE, falling back to DefaultMinScore when the variable is
+// unset, empty, non-numeric, or non-positive. getenv is injected so the
+// resolution is unit-testable without mutating process state.
+func minScoreFromEnv(getenv func(string) string) int {
+	raw := strings.TrimSpace(getenv("SHARING_MIN_SCORE"))
+	if raw == "" {
+		return DefaultMinScore
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return DefaultMinScore
+	}
+	return v
 }
 
 // MarkSharedHashes scans the given commercial's master audio against the
@@ -149,7 +186,7 @@ func MarkSharedHashes(ctx context.Context, pool *pgxpool.Pool, commercialID uuid
 	//    catalog index, and accumulate per-(other commercial) ranges + the
 	//    own/other total frame counts that step 5 needs to compute coverage
 	//    on both sides of each pair.
-	scan := scanForSharedRegions(pcm, store, shortID, shortIDToCommercialID, commercialID, totalFramesByID)
+	scan := scanForSharedRegions(pcm, store, shortID, shortIDToCommercialID, commercialID, totalFramesByID, MinScore())
 
 	// 5. Classify each pair (A, X) and produce the final rangesByCommercial.
 	//    A pair is "subset" when the matched audio covers ≥ SubsetThreshold
@@ -214,6 +251,7 @@ func scanForSharedRegions(
 	shortIDToCommercialID map[int32]uuid.UUID,
 	ownCommercialID uuid.UUID,
 	totalFramesByID map[uuid.UUID]int,
+	minScore int,
 ) scanReport {
 	const sampleRate = fingerprint.SampleRate
 	const stftHopSamples = 2048 // matches pkg/audio STFT hop
@@ -228,7 +266,7 @@ func scanForSharedRegions(
 
 	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
 		window := pcm[off : off+windowSamples]
-		results := match.MatchWindow(window, store, MinScore, 0.0)
+		results := match.MatchWindow(window, store, minScore, 0.0)
 
 		ownStartFrame := int32(off / stftHopSamples)
 		ownEndFrame := int32((off + windowSamples) / stftHopSamples)
