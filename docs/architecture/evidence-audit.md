@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-18
+ultima-verificacao: 2026-06-16
 codigo-relacionado:
   - workers/internal/audit/auditor.go
   - workers/internal/evidence/service.go
@@ -74,6 +74,8 @@ WARN  audit DISABLED via AUDIT_ENABLED=false — all detections will be persiste
 | `DefaultMinScore` | 5 | §9.3 `MATCH_THRESHOLD` |
 | `DefaultMinCoverage` | 0.15 | §9.3 `MIN_COVERAGE` (idêntico ao live `state machine minTemporalCoverage`) |
 | `DeltaBinSize` | 2 | §9.3 (compartilhado com `internal/match`) |
+| `coverageBinRadius` | 2 | une os frames distintos do master no bin de pico ±N ao medir cobertura — tolera drift de playout em spots longos (fix 2026-06-16) |
+| `coverageBypassScore` | 30 | score que **dispensa** o gate de cobertura em master **sem** hash compartilhado — degradação de broadcast num 30s deixa score altíssimo mas cobertura baixa (fix 2026-06-16) |
 
 **Importante:** o threshold do audit DEVE espelhar o threshold do matching live. Se o audit for mais rigoroso que o produtor (live), ele vai rejeitar detecções que o live já tinha aceitado — situação que destruiu 104 detections em prod entre 15/05 e 17/05 quando o default foi acidentalmente shippado em 0.4 (incidente 2026-05-17). Audit é *guardrail contra mismatch grosseiro* entre clipe salvo e master atribuído, não filtro independente.
 
@@ -144,6 +146,7 @@ Quando aparecer uma detecção rejeitada e o operador quiser entender o porquê,
 - **2026-05-14** Incidente UNIFIQUE Solaris FM: detecção confirmada com clipe salvo que não continha o comercial (score 2 / cov 1% em audit offline contra todos os 6 variantes do master). Foi o que motivou §9.9.
 - **2026-05-15** Implementação inicial. Comentário do incidente original: ["e se a gente auditar a censura do comercial que deu como veiculado com o áudio q ele disse q veiculou?"](#).
 - **2026-05-17** Postmortem [incident-2026-05-17-audit-status-constraint.md](../incidents/incident-2026-05-17-audit-status-constraint.md). Duas falhas correlacionadas: (1) feature shippou sem migração que adicionasse `'audit_rejected'` ao CHECK de `evidence_status`, então toda rejeição quebrava no UPDATE e deixava a row órfã em `'pending'`; (2) `DefaultMinCoverage` foi inicialmente 0.4 — 2.6× mais rigoroso que o threshold do matching live (0.15) — rejeitando detecções legítimas. Migration 0028 corrige o CHECK e backfilla as 104 órfãs pra `'missing'`. Threshold corrigido pra 0.15.
+- **2026-06-16** O audit rejeitava **~43%** das veiculações reais do corte de 30s (ASAAS PLATAFORMA, `short_id 78`): score 50-176 mas cobertura *single-bin* ~0.05-0.13 (< 0.15). Causa dupla: (a) drift de playout espalhava os frames casados entre bins de delta vizinhos; (b) degradação de broadcast destruía o fingerprint das partes quietas/faladas, sobrando só um trecho robusto (score alto, cobertura estruturalmente baixa). Fix (commits `179e95c` + `862bda3`): a cobertura passa a unir os frames distintos do master no pico **±2 bins** (`coverageBinRadius`), e um score **≥30** (`coverageBypassScore`) **dispensa** o gate de cobertura em master **sem** hash compartilhado — espelha o `UniqueScore` do matcher live; master com sting compartilhado mantém o gate (clipe sting-only pontua alto só nos frames compartilhados → cobertura baixa → rejeitado). **Validado em prod: `audit_rejected` do 78 caiu de ~43% → 0%.** Origem: [incidente de recall 2026-06-12](../incidents/incident-2026-06-12-detection-recall-gaps.md).
 
 ## Limitações conhecidas
 
