@@ -46,6 +46,16 @@ const (
 // radiocheck_audit_rejected rate if drift on a station exceeds this envelope.
 const coverageBinRadius = 2
 
+// coverageBypassScore lets an overwhelming match skip the coverage gate when the
+// master has NO shared hashes. Broadcast degradation on long (30s) cuts destroys
+// the fingerprint of the quieter parts, leaving only the robust segment to match:
+// the score stays huge (50–176) but coverage lands at ~0.09 even after bin-merge.
+// For a non-shared master a score this high cannot be coincidence or a shared
+// sting — the clip provably contains the spot, so the coverage gate is pure harm.
+// Shared masters keep the coverage gate (a sting-only clip scores high on the
+// shared frames at low coverage), so this never loosens the §9.9 FP guard.
+const coverageBypassScore = 30
+
 // Result is the outcome of one audit run.
 type Result struct {
 	Passed       bool
@@ -87,7 +97,7 @@ func NewAuditor(db *pgxpool.Pool, log *zap.Logger, minScore int, minCoverage flo
 func (a *Auditor) AuditEvidence(ctx context.Context, commercialID uuid.UUID, pcm []float32) (*Result, error) {
 	start := time.Now()
 
-	byHash, totalFramesByVR, err := a.loadMasterHashes(ctx, commercialID)
+	byHash, totalFramesByVR, hasShared, err := a.loadMasterHashes(ctx, commercialID)
 	if err != nil {
 		return nil, fmt.Errorf("load master hashes: %w", err)
 	}
@@ -100,7 +110,7 @@ func (a *Auditor) AuditEvidence(ctx context.Context, commercialID uuid.UUID, pcm
 	}
 
 	queryHashes := PCMToHashes(pcm)
-	res := runMatch(queryHashes, byHash, totalFramesByVR, a.minScore, a.minCoverage)
+	res := runMatch(queryHashes, byHash, totalFramesByVR, a.minScore, a.minCoverage, hasShared)
 	res.MasterHashes = masterHashCount
 	res.QueryHashes = len(queryHashes)
 	res.Duration = time.Since(start)
@@ -151,6 +161,7 @@ func runMatch(
 	totalFramesByVR map[vrKey]int,
 	minScore int,
 	minCoverage float64,
+	materialHasShared bool,
 ) *Result {
 	if len(queryHashes) == 0 {
 		return &Result{}
@@ -206,7 +217,7 @@ func runMatch(
 	}
 
 	return &Result{
-		Passed:    bestScore >= minScore && coverage >= minCoverage,
+		Passed:    bestScore >= minScore && (coverage >= minCoverage || (!materialHasShared && bestScore >= coverageBypassScore)),
 		Score:     bestScore,
 		Coverage:  coverage,
 		VariantID: bestKey.variant,
@@ -222,29 +233,35 @@ func runMatch(
 func (a *Auditor) loadMasterHashes(ctx context.Context, commercialID uuid.UUID) (
 	map[uint32][]hashEntry,
 	map[vrKey]int,
+	bool,
 	error,
 ) {
 	rows, err := a.db.Query(ctx, `
-		SELECT hash_value, time_frame, variant_id, rate_id
+		SELECT hash_value, time_frame, variant_id, rate_id, is_shared
 		FROM fingerprint_hashes
 		WHERE commercial_id = $1
 	`, commercialID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query: %w", err)
+		return nil, nil, false, fmt.Errorf("query: %w", err)
 	}
 	defer rows.Close()
 
 	byHash := make(map[uint32][]hashEntry)
 	maxFrame := make(map[vrKey]int32)
+	hasShared := false
 	for rows.Next() {
 		var hashValue uint32
 		var timeFrame int32
 		var variantID, rateID int16
-		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID); err != nil {
-			return nil, nil, fmt.Errorf("scan: %w", err)
+		var isShared bool
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID, &isShared); err != nil {
+			return nil, nil, false, fmt.Errorf("scan: %w", err)
 		}
 		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
-			return nil, nil, fmt.Errorf("variant=%d or rate=%d out of uint8 range", variantID, rateID)
+			return nil, nil, false, fmt.Errorf("variant=%d or rate=%d out of uint8 range", variantID, rateID)
+		}
+		if isShared {
+			hasShared = true
 		}
 		v := uint8(variantID)
 		r := uint8(rateID)
@@ -259,12 +276,12 @@ func (a *Auditor) loadMasterHashes(ctx context.Context, commercialID uuid.UUID) 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate: %w", err)
+		return nil, nil, false, fmt.Errorf("iterate: %w", err)
 	}
 
 	totalFrames := make(map[vrKey]int, len(maxFrame))
 	for k, v := range maxFrame {
 		totalFrames[k] = int(v) + 1
 	}
-	return byHash, totalFrames, nil
+	return byHash, totalFrames, hasShared, nil
 }

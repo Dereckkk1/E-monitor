@@ -32,7 +32,7 @@ func TestRunMatch_PerfectAlignment(t *testing.T) {
 		{Value: 0x50, TimeFrame: 14},
 	}
 
-	res := runMatch(query, masterByHash, totals, 3, 0.5)
+	res := runMatch(query, masterByHash, totals, 3, 0.5, false)
 	if !res.Passed {
 		t.Fatalf("expected Passed=true; got %+v", res)
 	}
@@ -70,7 +70,7 @@ func TestRunMatch_Noise(t *testing.T) {
 		{Value: 0xAA, TimeFrame: 150}, // delta=-50
 	}
 
-	res := runMatch(query, masterByHash, totals, 5, 0.4)
+	res := runMatch(query, masterByHash, totals, 5, 0.4, false)
 	if res.Passed {
 		t.Fatalf("expected Passed=false (scattered noise); got %+v", res)
 	}
@@ -102,7 +102,7 @@ func TestRunMatch_PartialCoverage(t *testing.T) {
 		{Value: 0xAA, TimeFrame: 4},
 	}
 
-	res := runMatch(query, masterByHash, totals, 3, 0.4)
+	res := runMatch(query, masterByHash, totals, 3, 0.4, false)
 	if res.Score < 3 {
 		t.Errorf("expected Score >= 3, got %d", res.Score)
 	}
@@ -135,7 +135,7 @@ func TestRunMatch_CoverageUnionsAdjacentBins(t *testing.T) {
 		{Value: 0x106, TimeFrame: 102}, {Value: 0x107, TimeFrame: 103}, {Value: 0x108, TimeFrame: 104},
 	}
 
-	res := runMatch(query, masterByHash, totals, 3, 0.4)
+	res := runMatch(query, masterByHash, totals, 3, 0.4, false)
 	if !res.Passed {
 		t.Fatalf("expected Passed=true (drift across adjacent bins should union coverage); got %+v", res)
 	}
@@ -151,7 +151,7 @@ func TestRunMatch_EmptyQuery(t *testing.T) {
 	}
 	totals := map[vrKey]int{{0, 0}: 1}
 
-	res := runMatch(nil, masterByHash, totals, 5, 0.4)
+	res := runMatch(nil, masterByHash, totals, 5, 0.4, false)
 	if res == nil {
 		t.Fatal("expected non-nil Result")
 	}
@@ -172,12 +172,58 @@ func TestRunMatch_NoMatchingHashes(t *testing.T) {
 		{Value: 0xBB, TimeFrame: 0}, // no master entry for 0xBB
 	}
 
-	res := runMatch(query, masterByHash, totals, 5, 0.4)
+	res := runMatch(query, masterByHash, totals, 5, 0.4, false)
 	if res.Passed {
 		t.Errorf("Passed=true on disjoint hash sets; got %+v", res)
 	}
 	if res.Score != 0 {
 		t.Errorf("Score=%d, want 0", res.Score)
+	}
+}
+
+// strongLocalizedMatch builds a master whose hashes cluster on 3 frames (30
+// distinct hashes, 10 per frame) and a query matching all of them at delta 0 →
+// score 30, coverage 3/totalFrames. Models a degraded broadcast clip matching
+// only a short robust segment of a long master (high score, tiny coverage).
+func strongLocalizedMatch() (map[uint32][]HashEntry, []audio.Hash) {
+	master := map[uint32][]HashEntry{}
+	var query []audio.Hash
+	for i := 0; i < 30; i++ {
+		h := uint32(0x200 + i)
+		frame := int32(i / 10) // 0..0,1..1,2..2 (10 hashes each)
+		master[h] = []HashEntry{{0, 0, frame}}
+		query = append(query, audio.Hash{Value: h, TimeFrame: int(frame)})
+	}
+	return master, query
+}
+
+// TestRunMatch_OverwhelmingScoreBypassesCoverage_NonShared: broadcast degradation
+// on a long cut leaves only a robust segment matching — score is huge but
+// coverage stays low even after bin-merge. For a master with NO shared hashes,
+// such a score proves the clip contains the spot, so the coverage gate is bypassed.
+func TestRunMatch_OverwhelmingScoreBypassesCoverage_NonShared(t *testing.T) {
+	master, query := strongLocalizedMatch()
+	totals := map[vrKey]int{{0, 0}: 100} // coverage = 3/100 = 0.03
+
+	res := runMatch(query, master, totals, 5, 0.15, false)
+	if !res.Passed {
+		t.Fatalf("expected Passed=true (overwhelming score on non-shared master bypasses coverage); got %+v", res)
+	}
+	if res.Score < coverageBypassScore {
+		t.Errorf("Score=%d, want >= %d for the bypass to be meaningful", res.Score, coverageBypassScore)
+	}
+}
+
+// TestRunMatch_OverwhelmingScore_NoBypassWhenShared: the SAME overwhelming-score
+// low-coverage match on a master WITH shared hashes must still be rejected — a
+// sting-only clip scores high on the shared frames, and coverage is the guard.
+func TestRunMatch_OverwhelmingScore_NoBypassWhenShared(t *testing.T) {
+	master, query := strongLocalizedMatch()
+	totals := map[vrKey]int{{0, 0}: 100}
+
+	res := runMatch(query, master, totals, 5, 0.15, true)
+	if res.Passed {
+		t.Fatalf("expected Passed=false (shared master keeps the coverage gate); got %+v", res)
 	}
 }
 
