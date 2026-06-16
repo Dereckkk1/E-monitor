@@ -111,6 +111,39 @@ func TestRunMatch_PartialCoverage(t *testing.T) {
 	}
 }
 
+// TestRunMatch_CoverageUnionsAdjacentBins: a strong match whose aligned frames
+// drift across adjacent delta bins (playout-speed jitter over a long spot) must
+// still pass coverage. Each bin alone covers < minCoverage, but the union of the
+// peak bin and its neighbors reconstructs the true coverage. This is the real
+// prod failure: 30s cuts (ASAAS PLATAFORMA) scoring 50–176 (min 5) were rejected
+// at single-bin coverage ~0.10 because drift spread the spot across delta bins.
+func TestRunMatch_CoverageUnionsAdjacentBins(t *testing.T) {
+	// Master: 9 distinct frames 0..8, one unique hash each.
+	masterByHash := map[uint32][]HashEntry{
+		0x100: {{0, 0, 0}}, 0x101: {{0, 0, 1}}, 0x102: {{0, 0, 2}},
+		0x103: {{0, 0, 3}}, 0x104: {{0, 0, 4}}, 0x105: {{0, 0, 5}},
+		0x106: {{0, 0, 6}}, 0x107: {{0, 0, 7}}, 0x108: {{0, 0, 8}},
+	}
+	totals := map[vrKey]int{{0, 0}: 9}
+
+	// Drift: frames 0-2 align at delta -100 (bin -50), 3-5 at delta -98 (bin -49),
+	// 6-8 at delta -96 (bin -48). Three adjacent bins, 3 distinct master frames
+	// each → best single-bin coverage = 3/9 ≈ 0.33; union ≥ 6/9 = 0.67.
+	query := []audio.Hash{
+		{Value: 0x100, TimeFrame: 100}, {Value: 0x101, TimeFrame: 101}, {Value: 0x102, TimeFrame: 102},
+		{Value: 0x103, TimeFrame: 101}, {Value: 0x104, TimeFrame: 102}, {Value: 0x105, TimeFrame: 103},
+		{Value: 0x106, TimeFrame: 102}, {Value: 0x107, TimeFrame: 103}, {Value: 0x108, TimeFrame: 104},
+	}
+
+	res := runMatch(query, masterByHash, totals, 3, 0.4)
+	if !res.Passed {
+		t.Fatalf("expected Passed=true (drift across adjacent bins should union coverage); got %+v", res)
+	}
+	if res.Coverage < 0.4 {
+		t.Errorf("Coverage=%f, want >= 0.4 after unioning adjacent bins", res.Coverage)
+	}
+}
+
 // TestRunMatch_EmptyQuery: empty query hashes returns a zero-Result, no panic.
 func TestRunMatch_EmptyQuery(t *testing.T) {
 	masterByHash := map[uint32][]HashEntry{

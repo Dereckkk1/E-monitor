@@ -33,6 +33,19 @@ const (
 	DefaultMinCoverage = 0.15
 )
 
+// coverageBinRadius is how many neighbour delta bins on each side of the peak
+// are unioned when measuring coverage. Playout-speed jitter over a long spot
+// drifts the alignment delta, spreading the matched master frames across
+// adjacent bins; the single peak bin then under-counts coverage even when the
+// whole spot matched (high score). Unioning the peak ±radius reconstructs the
+// real coverage without loosening the FP guard — a sting/jingle that only
+// matches a few frames stays low-coverage even after the union.
+//
+// Radius 2 (peak ±2 = 5 bins) recovers the prod failures observed on 30s cuts
+// where single-bin coverage bottomed at ~0.046; tune via prod's
+// radiocheck_audit_rejected rate if drift on a station exceeds this envelope.
+const coverageBinRadius = 2
+
 // Result is the outcome of one audit run.
 type Result struct {
 	Passed       bool
@@ -179,7 +192,16 @@ func runMatch(
 	if bestScore > 0 {
 		totalFrames := totalFramesByVR[vrKey{bestKey.variant, bestKey.rate}]
 		if totalFrames > 0 {
-			coverage = float64(len(refTimes[bestKey])) / float64(totalFrames)
+			// Union the distinct master frames across the peak bin and its
+			// immediate neighbours to tolerate playout-speed drift over long
+			// spots (see coverageBinRadius).
+			covered := make(map[int32]struct{})
+			for d := bestKey.deltaBin - coverageBinRadius; d <= bestKey.deltaBin+coverageBinRadius; d++ {
+				for f := range refTimes[binKey{bestKey.variant, bestKey.rate, d}] {
+					covered[f] = struct{}{}
+				}
+			}
+			coverage = float64(len(covered)) / float64(totalFrames)
 		}
 	}
 
