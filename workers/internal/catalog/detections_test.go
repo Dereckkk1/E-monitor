@@ -255,6 +255,34 @@ func mustClientIDFromCampaign(t *testing.T, pool *pgxpool.Pool, campID uuid.UUID
 	return s
 }
 
+func TestDetections_SetAuditCoverage(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "SetAuditCoverage")
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt:         time.Now(),
+		MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+		Confidence: 0.95, HashCount: 100, TemporalCoverage: 0.85,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+
+	if err := dets.SetAuditCoverage(ctx, det.ID, det.DetectedAt, 0.42); err != nil {
+		t.Fatalf("SetAuditCoverage: %v", err)
+	}
+
+	var got float64
+	if err := pool.QueryRow(ctx,
+		`SELECT audit_coverage FROM detections WHERE id = $1 AND detected_at = $2`,
+		det.ID, det.DetectedAt).Scan(&got); err != nil {
+		t.Fatalf("read audit_coverage: %v", err)
+	}
+	if got != 0.42 {
+		t.Errorf("audit_coverage = %v, want 0.42", got)
+	}
+}
+
 func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-ignored")
 	dets := NewDetections(pool)
