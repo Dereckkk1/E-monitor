@@ -128,6 +128,28 @@ func PCMToHashes(pcm []float32) []audio.Hash {
 	return audio.GenerateHashes(peaks)
 }
 
+// MatchHashes runs the audit match of query hashes against a master supplied as
+// a flat hash list (variant 0, rate 0), for offline/local diagnostics where the
+// master is fingerprinted from a file instead of loaded from the DB. The master
+// is treated as non-shared. Returns the same Result as the DB path, incl.
+// MatchExtent.
+func MatchHashes(queryHashes, masterHashes []audio.Hash) *Result {
+	byHash := make(map[uint32][]HashEntry, len(masterHashes))
+	maxFrame := int32(-1)
+	for _, h := range masterHashes {
+		tf := int32(h.TimeFrame)
+		byHash[h.Value] = append(byHash[h.Value], HashEntry{TimeFrame: tf})
+		if tf > maxFrame {
+			maxFrame = tf
+		}
+	}
+	totals := map[vrKey]int{{0, 0}: int(maxFrame) + 1}
+	res := runMatch(queryHashes, byHash, totals, DefaultMinScore, DefaultMinCoverage, false)
+	res.QueryHashes = len(queryHashes)
+	res.MasterHashes = len(masterHashes)
+	return res
+}
+
 type vrKey struct {
 	variant uint8
 	rate    uint8
