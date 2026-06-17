@@ -52,11 +52,6 @@ function formatOffsetMs(ms) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
 }
 
-function formatDurationSeconds(ms) {
-  if (ms == null) return '—'
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
 // Map rate_id (int16 stored in detections.rate_used) to playback speed.
 // Per §9.7 only rate_id=0 (canonical 1.0×) is generated today; reserved IDs
 // for future broadcast-variant fingerprints are mapped here so unknown values
@@ -333,7 +328,6 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError }) {
 function AnalysisPanel({ detection }) {
   const conf = detection.confidence ?? 0
   const cov  = detection.temporal_coverage ?? 0
-  const dur  = (detection.match_end_offset_ms ?? 0) - (detection.match_start_offset_ms ?? 0)
   const confTone = confidenceTone(conf)
   const covTone  = cov >= 0.8 ? 'is-action' : cov >= 0.5 ? 'is-warning' : 'is-danger'
 
@@ -385,7 +379,6 @@ function AnalysisPanel({ detection }) {
               <span className="dd-window-range-arrow">→</span>
               <span>{formatOffsetMs(detection.match_end_offset_ms)}</span>
             </div>
-            <span className="dd-window-duration">duração {formatDurationSeconds(dur)}</span>
           </div>
         </div>
       </div>
