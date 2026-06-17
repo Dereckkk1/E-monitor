@@ -359,15 +359,21 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 // o modo de pricing definido em campaign_station_pricing:
 //
 //   - mode = 'consolidated':
-//     * contratado  = consolidated_value × overlap_days / total_days
-//     * executado   = consolidated_value × (in_slot+out_slot) / expected
-//                     (zero quando expected=0)
-//     * bonificação = consolidated_value × bonus / expected  (avg-per-slot)
+//
+//   - contratado  = consolidated_value × overlap_days / total_days
+//
+//   - executado   = consolidated_value × (in_slot+out_slot) / expected
+//     (zero quando expected=0)
+//
+//   - bonificação = consolidated_value × bonus / expected  (avg-per-slot)
 //
 //   - mode = 'per_insertion':
-//     * contratado  = Σ_type (unit_value × expected)
-//     * executado   = Σ_type (unit_value × (in_slot+out_slot))
-//     * bonificação = Σ_type (unit_value × bonus)
+//
+//   - contratado  = Σ_type (unit_value × expected)
+//
+//   - executado   = Σ_type (unit_value × (in_slot+out_slot))
+//
+//   - bonificação = Σ_type (unit_value × bonus)
 //
 // "bonus" é o campo da view daily_play_summary que inclui orphan +
 // (in_slot acima do expected). Esse é o sentido comercial de "mídia

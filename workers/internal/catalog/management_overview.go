@@ -43,9 +43,9 @@ type ManagementKPIs struct {
 	StationsLive       int   `json:"stations_live"`       // health_status='ok' agora
 	StatesCount        int   `json:"states_count"`        // UFs distintas
 	MaterialsMonitored int   `json:"materials_monitored"` // materiais vinculados
-	CampaignsCount     int   `json:"campaigns_count"`      // campanhas no recorte
-	AiringsTotal       int64 `json:"airings_total"`        // veiculações no período
-	AiringsToday       int64 `json:"airings_today"`        // veiculações hoje
+	CampaignsCount     int   `json:"campaigns_count"`     // campanhas no recorte
+	AiringsTotal       int64 `json:"airings_total"`       // veiculações no período
+	AiringsToday       int64 `json:"airings_today"`       // veiculações hoje
 }
 
 type ManagementResult struct {

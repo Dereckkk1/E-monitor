@@ -266,12 +266,12 @@ func TestDistributionRules_RecategorizeRespectsSlotTolerance(t *testing.T) {
 		}
 		return d
 	}
-	detEarlyIn := mk(9, 20, "early-in")    // -10 min
+	detEarlyIn := mk(9, 20, "early-in")     // -10 min
 	detEarlyEdge := mk(9, 15, "early-edge") // -15 min limite
-	detEarlyOut := mk(9, 14, "early-out")  // -16 min fora
-	detLateIn := mk(10, 14, "late-in")     // +14 min
-	detLateEdge := mk(10, 15, "late-edge") // +15 min limite
-	detLateOut := mk(10, 16, "late-out")   // +16 min fora
+	detEarlyOut := mk(9, 14, "early-out")   // -16 min fora
+	detLateIn := mk(10, 14, "late-in")      // +14 min
+	detLateEdge := mk(10, 15, "late-edge")  // +15 min limite
+	detLateOut := mk(10, 16, "late-out")    // +16 min fora
 
 	// Cria rule que NÃO cobre nenhuma das detections sem tolerância,
 	// mas cobre as 3 "*OK*"/edge quando a tolerância é aplicada.
