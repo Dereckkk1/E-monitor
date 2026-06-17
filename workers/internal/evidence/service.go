@@ -425,8 +425,10 @@ func (s *Service) runAuditOrReject(
 		metrics.AuditAttempts.WithLabelValues("passed").Inc()
 		s.log.Info("evidence: audit passed",
 			zap.String("detection_id", detectionID.String()),
+			zap.String("commercial_id", commercialID.String()),
 			zap.Int("score", result.Score),
 			zap.Float64("coverage", result.Coverage),
+			zap.Float64("extent", result.MatchExtent),
 			zap.Duration("duration", result.Duration),
 		)
 		return false
@@ -440,6 +442,7 @@ func (s *Service) runAuditOrReject(
 		zap.Int("min_score", audit.DefaultMinScore),
 		zap.Float64("coverage", result.Coverage),
 		zap.Float64("min_coverage", audit.DefaultMinCoverage),
+		zap.Float64("extent", result.MatchExtent),
 		zap.Int("master_hashes", result.MasterHashes),
 		zap.Int("query_hashes", result.QueryHashes),
 	)

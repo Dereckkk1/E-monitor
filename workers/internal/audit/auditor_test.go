@@ -144,6 +144,29 @@ func TestRunMatch_CoverageUnionsAdjacentBins(t *testing.T) {
 	}
 }
 
+// TestRunMatch_MatchExtent_ReachesFurthestMatchedFrame: extent = how deep into the
+// master the match reached. A 15s cut of a 30s master matches only the first half
+// → extent ~0.5; a full 30s reaches ~1.0. This is the disambiguation signal.
+func TestRunMatch_MatchExtent_ReachesFurthestMatchedFrame(t *testing.T) {
+	// Master: 10 distinct frames 0..9. Query matches only the first 5 (frames 0..4)
+	// at delta 0 — like a 15s airing hitting only the first half of a 30s master.
+	master := map[uint32][]HashEntry{}
+	var query []audio.Hash
+	for i := 0; i < 10; i++ {
+		master[uint32(0x300+i)] = []HashEntry{{0, 0, int32(i)}}
+	}
+	for i := 0; i < 5; i++ {
+		query = append(query, audio.Hash{Value: uint32(0x300 + i), TimeFrame: i})
+	}
+	totals := map[vrKey]int{{0, 0}: 10}
+
+	res := runMatch(query, master, totals, 3, 0.0, false)
+	// Furthest matched master frame is 4 → extent = (4+1)/10 = 0.5.
+	if res.MatchExtent < 0.45 || res.MatchExtent > 0.55 {
+		t.Fatalf("MatchExtent=%f, want ~0.5 (clip matched only the first half of the master); got %+v", res.MatchExtent, res)
+	}
+}
+
 // TestRunMatch_EmptyQuery: empty query hashes returns a zero-Result, no panic.
 func TestRunMatch_EmptyQuery(t *testing.T) {
 	masterByHash := map[uint32][]HashEntry{

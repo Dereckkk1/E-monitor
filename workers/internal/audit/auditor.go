@@ -61,6 +61,7 @@ type Result struct {
 	Passed       bool
 	Score        int     // peak count in the winning histogram bin
 	Coverage     float64 // distinct master frames in winning bin / total master frames
+	MatchExtent  float64 // furthest matched master frame / total — how DEEP into the master the clip reached (distinguishes a 15s cut, which only matches the first half of a 30s master, from a full 30s)
 	VariantID    uint8
 	RateID       uint8
 	DeltaBin     int
@@ -200,29 +201,39 @@ func runMatch(
 	}
 
 	coverage := 0.0
+	matchExtent := 0.0
 	if bestScore > 0 {
 		totalFrames := totalFramesByVR[vrKey{bestKey.variant, bestKey.rate}]
 		if totalFrames > 0 {
 			// Union the distinct master frames across the peak bin and its
 			// immediate neighbours to tolerate playout-speed drift over long
-			// spots (see coverageBinRadius).
+			// spots (see coverageBinRadius). maxFrame is the furthest matched
+			// master frame — how deep into the master the clip reached.
 			covered := make(map[int32]struct{})
+			maxFrame := int32(-1)
 			for d := bestKey.deltaBin - coverageBinRadius; d <= bestKey.deltaBin+coverageBinRadius; d++ {
 				for f := range refTimes[binKey{bestKey.variant, bestKey.rate, d}] {
 					covered[f] = struct{}{}
+					if f > maxFrame {
+						maxFrame = f
+					}
 				}
 			}
 			coverage = float64(len(covered)) / float64(totalFrames)
+			if maxFrame >= 0 {
+				matchExtent = float64(maxFrame+1) / float64(totalFrames)
+			}
 		}
 	}
 
 	return &Result{
-		Passed:    bestScore >= minScore && (coverage >= minCoverage || (!materialHasShared && bestScore >= coverageBypassScore)),
-		Score:     bestScore,
-		Coverage:  coverage,
-		VariantID: bestKey.variant,
-		RateID:    bestKey.rate,
-		DeltaBin:  bestKey.deltaBin,
+		Passed:      bestScore >= minScore && (coverage >= minCoverage || (!materialHasShared && bestScore >= coverageBypassScore)),
+		Score:       bestScore,
+		Coverage:    coverage,
+		MatchExtent: matchExtent,
+		VariantID:   bestKey.variant,
+		RateID:      bestKey.rate,
+		DeltaBin:    bestKey.deltaBin,
 	}
 }
 
