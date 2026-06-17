@@ -18,9 +18,10 @@ var ErrCampaignNotFound = errors.New("campaign not found or cancelled")
 // historical, drill-in) to keep the rule consistent.
 //
 // Definition mirrors the external "Relatório Campanha" semantics:
-//   extras    = out_slot + out_date + bonus aggregated across campaign period
-//   deficit   = sum of daily_play_summary.deficit across campaign period
-//   bonified  = (extras >= deficit) AND extras > 0 AND deficit > 0
+//
+//	extras    = out_slot + out_date + bonus aggregated across campaign period
+//	deficit   = sum of daily_play_summary.deficit across campaign period
+//	bonified  = (extras >= deficit) AND extras > 0 AND deficit > 0
 //
 // Zero deficit means nothing failed → never bonified (nothing to compensate).
 func IsBonified(deficit, extras int) bool {

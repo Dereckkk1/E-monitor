@@ -443,11 +443,11 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 //
 // Fórmulas (alinhadas com a especificação 2026-05-12):
 //   - per_insertion: invested += unit_value × (in_slot + bonus)
-//                    insertions += in_slot + bonus
-//                    audience  += (in_slot + bonus) × stations.pmm
+//     insertions += in_slot + bonus
+//     audience  += (in_slot + bonus) × stations.pmm
 //   - consolidated:  invested += consolidated_value (independente das plays)
-//                    insertions += in_slot + bonus
-//                    audience  += (in_slot + bonus) × stations.pmm
+//     insertions += in_slot + bonus
+//     audience  += (in_slot + bonus) × stations.pmm
 //   - CPM = invested / audience × 1000, calculado no caller (frontend)
 //     pra ter precisão decimal. audience = soma de impressões reais
 //     (cada inserção em uma emissora vale stations.pmm impressões).

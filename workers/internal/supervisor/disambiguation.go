@@ -5,11 +5,11 @@
 // confirms a detection it publishes on `detections.pending`; the supervisor
 // runs the dedup logic and either:
 //
-//  • publishes `detections.confirmed` (downstream consumers behave as before)
-//  • suppresses (a longer cut already covered the same window)
-//  • retracts a previously published row by emitting `detections.retracted`
-//    and stamping `detections.retracted_at = now()` so the API/UI can show
-//    the row as overruled.
+//   - publishes `detections.confirmed` (downstream consumers behave as before)
+//   - suppresses (a longer cut already covered the same window)
+//   - retracts a previously published row by emitting `detections.retracted`
+//     and stamping `detections.retracted_at = now()` so the API/UI can show
+//     the row as overruled.
 //
 // The buffer is in-memory; persistence after a supervisor restart is not a
 // goal (R-C in the plan: a duplicate per restart is acceptable).
@@ -138,7 +138,7 @@ func evaluateDedup(candidateDuration int, candidateShortID int32, conflict *Dedu
 // match.ConfirmedDetection so we can republish it verbatim on the confirmed
 // subject (preserving the EvidenceWindow* fields the worker computed).
 func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDetection, original ingestor.DetectionEvent) {
-	ctx, span := observability.Tracer().Start(ctx, "supervisor.submit_detection")// station_id and commercial_short_id are useful as searchable
+	ctx, span := observability.Tracer().Start(ctx, "supervisor.submit_detection") // station_id and commercial_short_id are useful as searchable
 	// attributes; detected_at uses RFC3339 so trace UIs render it.
 
 	span.SetAttributes(
