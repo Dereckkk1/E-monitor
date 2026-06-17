@@ -25,7 +25,13 @@ type Detection struct {
 	Confidence         float64   `json:"confidence"`
 	HashCount          int32     `json:"hash_count"`
 	TemporalCoverage   *float64  `json:"temporal_coverage,omitempty"`
-	VariantUsed        *int16    `json:"variant_used,omitempty"`
+	// AuditCoverage is the §9.9 audit coverage of the saved clip against the
+	// attributed master (frames matched / total). Nil until the evidence audit
+	// runs. After §18.2.2-v2 reattribution it reflects the WINNING cut's
+	// coverage. Surfaced on /detections/:id so an operator sees how much of the
+	// master the clip actually contained.
+	AuditCoverage *float64 `json:"audit_coverage,omitempty"`
+	VariantUsed   *int16   `json:"variant_used,omitempty"`
 	RateUsed           *int16    `json:"rate_used,omitempty"`
 	EvidenceStatus     string    `json:"evidence_status"`
 	EvidenceKey        *string   `json:"evidence_key,omitempty"`
@@ -816,7 +822,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		SELECT d.id, d.station_id, COALESCE(s.name, ''), d.commercial_id, COALESCE(m.title, c.title, ''),
 		       d.campaign_id, d.detected_at,
 		       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
-		       d.temporal_coverage, d.variant_used, d.rate_used,
+		       d.temporal_coverage, d.audit_coverage, d.variant_used, d.rate_used,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
 		       d.manual_at, d.manual_by, d.manual_note, m.script, d.created_at
@@ -828,7 +834,7 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 	).Scan(&det.ID, &det.StationID, &det.StationName, &det.CommercialID, &det.CommercialName,
 		&det.CampaignID, &det.DetectedAt,
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
-		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
+		&det.TemporalCoverage, &det.AuditCoverage, &det.VariantUsed, &det.RateUsed,
 		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID,
 		&det.RetractedAt, &det.IgnoredAt, &det.IgnoredBy,
 		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CommercialScript, &det.CreatedAt)

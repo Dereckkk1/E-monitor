@@ -330,6 +330,8 @@ function AnalysisPanel({ detection }) {
   const cov  = detection.temporal_coverage ?? 0
   const confTone = confidenceTone(conf)
   const covTone  = cov >= 0.8 ? 'is-action' : cov >= 0.5 ? 'is-warning' : 'is-danger'
+  const auditCov = detection.audit_coverage
+  const auditCovTone = auditCov >= 0.4 ? 'is-action' : auditCov >= 0.15 ? 'is-warning' : 'is-danger'
 
   return (
     <div className="dd-panel">
@@ -351,6 +353,14 @@ function AnalysisPanel({ detection }) {
           tone={covTone}
           display={`${(cov * 100).toFixed(1)}%`}
         />
+        {auditCov != null && (
+          <MetricBar
+            label="Cobertura do áudio (§9.9)"
+            value={auditCov}
+            tone={auditCovTone}
+            display={`${(auditCov * 100).toFixed(1)}%`}
+          />
+        )}
 
         <div className="dd-metric-grid">
           <div className="dd-mini-card">
