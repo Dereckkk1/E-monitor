@@ -303,6 +303,19 @@ func (d *Detections) UpdateEvidence(ctx context.Context, id uuid.UUID, detectedA
 	return err
 }
 
+// SetAuditCoverage records the §9.9 audit coverage (master frames matched in the
+// clip / total) for a detection that passed the audit. The coverage-based version
+// disambiguation (§18.2.2 v2) reads it on a sibling cut to decide which cut
+// actually aired (the most-covered master wins, not the longest); /detections/:id
+// shows it. detected_at is in the WHERE for partition pruning (detections is
+// partitioned by detected_at), mirroring UpdateEvidence.
+func (d *Detections) SetAuditCoverage(ctx context.Context, id uuid.UUID, detectedAt time.Time, coverage float64) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections SET audit_coverage = $3 WHERE id = $1 AND detected_at = $2`,
+		id, detectedAt, coverage)
+	return err
+}
+
 type ListFilter struct {
 	CampaignID *uuid.UUID
 	StationID  *uuid.UUID

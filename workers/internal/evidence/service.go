@@ -423,6 +423,16 @@ func (s *Service) runAuditOrReject(
 
 	if result.Passed {
 		metrics.AuditAttempts.WithLabelValues("passed").Inc()
+		// Persist the audit coverage so a sibling cut (15s vs 30s of the same
+		// client in this break) can later compare how much of each master the
+		// clip covered — the basis of the coverage-based disambiguation
+		// (§18.2.2 v2). Non-blocking: a failure here must not abort the upload.
+		if err := s.detections.SetAuditCoverage(ctx, detectionID, detectedAt, result.Coverage); err != nil {
+			s.log.Warn("evidence: failed to persist audit_coverage (non-blocking)",
+				zap.String("detection_id", detectionID.String()),
+				zap.Error(err),
+			)
+		}
 		s.log.Info("evidence: audit passed",
 			zap.String("detection_id", detectionID.String()),
 			zap.String("commercial_id", commercialID.String()),
