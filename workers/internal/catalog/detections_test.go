@@ -283,6 +283,100 @@ func TestDetections_SetAuditCoverage(t *testing.T) {
 	}
 }
 
+func TestDetections_FindCutWithSiblings(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	mats := NewMaterials(pool)
+	cli, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "T-siblings"})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	cli2, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "T-siblings-other"})
+	if err != nil {
+		t.Fatalf("client2: %v", err)
+	}
+	a, _ := mats.Create(ctx, CreateMaterialInput{ClientID: cli.ID, Title: "Cut 30s", DurationSeconds: 30, MasterStoragePath: "/tmp", MasterSHA256: "sib-a"})
+	b, _ := mats.Create(ctx, CreateMaterialInput{ClientID: cli.ID, Title: "Cut 15s", DurationSeconds: 15, MasterStoragePath: "/tmp", MasterSHA256: "sib-b"})
+	pending, _ := mats.Create(ctx, CreateMaterialInput{ClientID: cli.ID, Title: "Cut pending", DurationSeconds: 20, MasterStoragePath: "/tmp", MasterSHA256: "sib-pending"})
+	other, _ := mats.Create(ctx, CreateMaterialInput{ClientID: cli2.ID, Title: "Other client", DurationSeconds: 15, MasterStoragePath: "/tmp", MasterSHA256: "sib-other"})
+	// a and b are ready; pending stays non-ready; other is a different client.
+	if _, err := pool.Exec(ctx, `UPDATE materials SET fingerprint_status='ready' WHERE id = ANY($1)`,
+		[]uuid.UUID{a.ID, b.ID, other.ID}); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = ANY($1)", []uuid.UUID{a.ID, b.ID, pending.ID, other.ID})
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = ANY($1)", []uuid.UUID{cli.ID, cli2.ID})
+	})
+
+	dets := NewDetections(pool)
+	self, sibs, err := dets.FindCutWithSiblings(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("FindCutWithSiblings: %v", err)
+	}
+	if self.ShortID != a.ShortID || self.DurationSeconds != 30 {
+		t.Errorf("self = %+v, want short_id=%d dur=30", self, a.ShortID)
+	}
+	// Only b qualifies: same client + ready. pending is not ready; other is a
+	// different client.
+	if len(sibs) != 1 || sibs[0].ShortID != b.ShortID || sibs[0].DurationSeconds != 15 {
+		t.Fatalf("siblings = %+v, want exactly [short_id=%d dur=15]", sibs, b.ShortID)
+	}
+
+	// A non-material UUID (legacy commercial / unknown) yields no self, no
+	// siblings, and no error — the caller leaves attribution unchanged.
+	self2, sibs2, err := dets.FindCutWithSiblings(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("FindCutWithSiblings(random): %v", err)
+	}
+	if self2.ID != uuid.Nil || len(sibs2) != 0 {
+		t.Errorf("random uuid: self=%+v sibs=%+v, want zero self and empty siblings", self2, sibs2)
+	}
+}
+
+func TestDetections_ReattributeDetection(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Reattribute")
+	clientID := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
+	matB, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: clientID, Title: "Reattribute-real-cut", DurationSeconds: 15,
+		MasterStoragePath: "/tmp", MasterSHA256: "reattr-b",
+	})
+	if err != nil {
+		t.Fatalf("seed matB: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", matB.ID) })
+
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt: time.Now(), Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+
+	// Re-point the detection from matID to matB in the same campaign.
+	if err := dets.ReattributeDetection(ctx, det.ID, det.DetectedAt, matB.ID, campID, statID); err != nil {
+		t.Fatalf("ReattributeDetection: %v", err)
+	}
+
+	var gotCommercial, gotCampaign uuid.UUID
+	var gotCategory string
+	if err := pool.QueryRow(ctx,
+		`SELECT commercial_id, campaign_id, category FROM detections WHERE id = $1 AND detected_at = $2`,
+		det.ID, det.DetectedAt).Scan(&gotCommercial, &gotCampaign, &gotCategory); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if gotCommercial != matB.ID {
+		t.Errorf("commercial_id = %s, want %s (reattributed)", gotCommercial, matB.ID)
+	}
+	if gotCampaign != campID {
+		t.Errorf("campaign_id = %s, want %s", gotCampaign, campID)
+	}
+	if gotCategory == "" {
+		t.Errorf("category was not recomputed (empty)")
+	}
+}
+
 func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-ignored")
 	dets := NewDetections(pool)
