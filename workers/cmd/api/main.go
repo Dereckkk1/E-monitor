@@ -153,8 +153,17 @@ func main() {
 		logger.Warn("audit DISABLED via AUDIT_ENABLED=false — all detections will be persisted regardless of evidence quality")
 	}
 
+	// §18.2.2-v2 — coverage-based version disambiguation. Default OFF; set
+	// DISAMBIG_BY_COVERAGE=true to enable. When off, evidence + supervisor
+	// behave exactly as pre-v2 (suppress stays suppress, no reattribution).
+	// Kill switch: flip the env var and restart — no code change needed.
+	disambigByCoverage := os.Getenv("DISAMBIG_BY_COVERAGE") == "true"
+	if disambigByCoverage {
+		logger.Info("§18.2.2-v2 coverage-based disambiguation ENABLED (DISAMBIG_BY_COVERAGE=true)")
+	}
+
 	// Evidence service.
-	evidSvc := evidence.NewService(pool, s3Client, nc, detections, auditor, logger)
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, auditor, disambigByCoverage, logger)
 	evidSub, err := evidSvc.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("evidence subscribe: %v", err)
@@ -169,7 +178,7 @@ func main() {
 	go tieringJob.Schedule(ctx)
 
 	// Supervisor.
-	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, matsRepo, healthEvents, cfg.SegmentsPath, logger)
+	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, matsRepo, healthEvents, cfg.SegmentsPath, disambigByCoverage, logger)
 
 	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
 	// version disambiguation before re-emitting on detections.confirmed.

@@ -50,8 +50,13 @@ type Service struct {
 	nc         *nats.Conn
 	detections *catalog.Detections
 	auditor    *audit.Auditor // §9.9 — nil disables the pre-upload audit
-	log        *zap.Logger
-	mu         sync.RWMutex
+	// disambigByCoverage gates the coverage-based version disambiguation
+	// correction (§18.2.2 v2). When false, runAuditOrReject never looks at
+	// sibling cuts and behaviour is identical to pre-fix. Flipped via the
+	// DISAMBIG_BY_COVERAGE env var in cmd/api/main.go.
+	disambigByCoverage bool
+	log                *zap.Logger
+	mu                 sync.RWMutex
 	// segmentDirs maps station UUIDs to the absolute filesystem directory
 	// where ffmpeg is dropping ADTS-AAC segment files. Populated by the
 	// supervisor via Register / Unregister as workers come up and down.
@@ -60,22 +65,26 @@ type Service struct {
 
 // NewService constructs a ready-to-use evidence Service. Pass auditor=nil to
 // disable §9.9 audit (e.g. in tests, or as the AUDIT_ENABLED=false kill switch).
+// disambigByCoverage=false keeps the pre-§18.2.2-v2 behaviour (no coverage-based
+// reattribution); main.go flips it from the DISAMBIG_BY_COVERAGE env var.
 func NewService(
 	db *pgxpool.Pool,
 	store *storage.Client,
 	nc *nats.Conn,
 	detections *catalog.Detections,
 	auditor *audit.Auditor,
+	disambigByCoverage bool,
 	log *zap.Logger,
 ) *Service {
 	return &Service{
-		db:          db,
-		store:       store,
-		nc:          nc,
-		detections:  detections,
-		auditor:     auditor,
-		log:         log,
-		segmentDirs: make(map[uuid.UUID]string),
+		db:                 db,
+		store:              store,
+		nc:                 nc,
+		detections:         detections,
+		auditor:            auditor,
+		disambigByCoverage: disambigByCoverage,
+		log:                log,
+		segmentDirs:        make(map[uuid.UUID]string),
 	}
 }
 
