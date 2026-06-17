@@ -1,10 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-17
 codigo-relacionado:
   - workers/internal/supervisor/disambiguation.go
   - workers/internal/supervisor/dedup_buffer.go
+  - workers/internal/evidence/service.go
+  - workers/internal/evidence/disambig_coverage.go
+  - workers/internal/catalog/detections.go
   - migrations/0014_disambiguation.up.sql
+  - migrations/0038_detection_audit_coverage.up.sql
   - frontend/src/components/DayDetailModal.jsx
 ---
 
@@ -15,6 +19,14 @@ duas versões do mesmo comercial (corte 30s e corte 60s) confirmam dentro de
 uma janela curta na mesma emissora.
 
 > Plano de referência: `plano_implementacao.md` §18.2.2 (linhas 1970-2062).
+
+> **Duas camadas.** A v1 (este doc, seções abaixo) decide por **duração** no
+> supervisor — boa pra "60s tocou, não conta o 30s embutido duas vezes". A
+> **v2** ([§18.2.2-v2](#1822-v2--reatribuição-por-cobertura-no-audit-2026-06-17))
+> decide por **cobertura do clipe** no audit — conserta o caso inverso, onde a
+> duração erra: o 15s toca, mas como compartilha a abertura com o 30s, o 30s
+> também confirma e **ganha por ser maior**, contando 15s como 30s. As duas
+> coexistem; a v2 corrige o que a v1 atribuiu errado.
 
 ---
 
@@ -86,6 +98,94 @@ não foi inserida pelo evidence service), o supervisor loga warn mas ainda
 emite o evento NATS pra que webhook subscribers tomem conhecimento. A
 inconsistência transitória é aceitável (R-A no plano).
 
+## §18.2.2-v2 — Reatribuição por cobertura no audit (2026-06-17)
+
+### O caso que a duração erra
+
+A v1 assume que o corte **mais longo** é o que tocou. Isso vale quando o 60s
+toca (o 30s embutido é subset). Mas o caso **inverso** quebra a regra: quando o
+**15s** toca, ele cobre a abertura/vinheta compartilhada com o 30s o suficiente
+pra a state machine do 30s **também** confirmar (`MinTemporalCoverage=0.15`, ~2s
+bastam). Os dois confirmam → a v1 escolhe o **30s** (maior) → o **15s é contado
+como 30s**. Medido em 3 dias na ASAAS: corte 77 (15s) retraído **86/156 (55%)**,
+corte 78 (30s) retraído **0**.
+
+A v1 não tem como decidir certo: na confirmação **não existe áudio** pra comparar
+(a state machine confirma em ~2s e para; os `match_*_offset_ms` gravados são
+offsets de alinhamento, não duração — por isso o `/detections/:id` mostrava
+`-2.0s`, corrigido em paralelo).
+
+### O sinal: cobertura do clipe contra cada master
+
+No **audit** (§9.9) o clipe de evidência **existe**. Re-fingerprintando o mesmo
+clipe contra cada master, a cobertura **separa limpo** — provado em áudio real do
+ASAAS por dois pipelines independentes (audit Go `runMatch` + diag multi-variante
+Python), travado em `disambig_coverage_test.go`:
+
+| Veiculação (ground truth) | cobertura vs **78 (30s)** | cobertura vs **77 (15s)** |
+|---|---|---|
+| **30s real** | **0.600** | 0.138 |
+| **15s real** | 0.132 | **0.664** |
+
+Margem **~4-5×**. Os cortes compartilham só a abertura (o que faz o 30s confirmar
+falso), mas o **conteúdo majoritariamente diferente** faz a cobertura discriminar.
+
+### Mecanismo (Design B — no audit, não no supervisor)
+
+Decidiu-se **não** mexer no supervisor (a alternativa — publicar+retrair o corte
+curto pra ele virar row — tinha corrida assíncrona: o `retract` rodava antes do
+evidence criar o row, gerando double-count transitório). Em vez disso, **tudo no
+audit**, corrigindo o row **in-place**:
+
+```
+audit §9.9 passa (corte X)
+   │
+   ├─ FindCutWithSiblings(masterX) → masters irmãos do MESMO cliente
+   │     (vêm do CATÁLOGO/materials, não dependem de detection row —
+   │      um corte suprimido pela v1 é encontrado mesmo assim)
+   │
+   ├─ pra cada irmão: re-audita o MESMO clipe → cobertura do irmão
+   │
+   ├─ chooseByCoverage(atribuído, irmãos…)
+   │     vencedor = maior cobertura SE vantagem ≥ coverageMargin (1.5×);
+   │     senão cai pra duração (falha-segura = comportamento v1)
+   │
+   └─ vencedor ≠ atribuído ?
+         → resolveAttribution(vencedor, station, detectedAt)
+         → ReattributeDetection: troca commercial_id/campaign_id + re-categoriza
+         → atualiza audit_coverage + métrica reattributed_by_coverage
+```
+
+Um **único row**, corrigido no lugar — sem publish especulativo, sem retração,
+sem corrida. Se o vencedor não tem campanha viva pra aquela emissora
+(`resolveAttribution` falha) ou se nenhum irmão supera a margem, **não mexe**.
+
+### Feature flag — `DISAMBIG_BY_COVERAGE`
+
+Default **`false`**. Com a flag desligada, nada acima roda — supervisor e evidence
+se comportam exatamente como a v1. Liga-se via env (`cmd/api/main.go`); kill
+switch é flipar a env + restart, sem revert de código. Lida no boot, plumbada só
+pro `evidence.Service` (o supervisor não conhece a v2).
+
+### Por que não é falso positivo
+
+A margem provada (4-5×) é muito acima do limiar (1.5×). Um 30s **legítimo** cobre
+o master de 30s alto e o de 15s baixo → `chooseByCoverage` mantém o 30s. Só
+**inverte** quando o clipe cobre o irmão materialmente mais — exatamente a
+assinatura da má-atribuição. Em quase-empate, cai pra duração (v1). O bypass de
+score do audit (Round 1, score≥30) continua deixando 30s legítimos de baixa
+cobertura passarem; a v2 só reatribui quando um IRMÃO cobre mais, não quando a
+cobertura absoluta é baixa.
+
+### Validação
+
+- **Decisão:** `disambig_coverage_test.go` (coberturas reais medidas no áudio).
+- **Encanação:** testes DB-gated `FindCutWithSiblings` + `ReattributeDetection`
+  (rodam com `TEST_DATABASE_URL`).
+- **Em prod:** `cmd/audit-extent --short-id <77|78>` nas censuras conhecidas
+  confirma a separação contra o DB real; após ligar a flag, a métrica
+  `reattributed_by_coverage` sobe e a retração do 77 (v1) cai.
+
 ## Como afeta cada subsistema
 
 ### API REST
@@ -142,6 +242,10 @@ Expostas em `/metrics` (Prometheus):
 - `radiocheck_match_disambiguation_total{action="retracted"}` — counter,
   incrementado quando o supervisor retratou uma publicação anterior em
   favor de uma versão maior.
+- `radiocheck_match_disambiguation_total{action="reattributed_by_coverage"}` —
+  counter (**v2**), incrementado quando o audit re-apontou uma detecção pro
+  corte que o clipe realmente cobre mais. Subir aqui + cair em `retracted` do
+  77 é o sinal de que a v2 está corrigindo a má-atribuição 15s→30s.
 
 Use o ratio `retracted/(retracted+suppressed+detections)` pra avaliar
 quantas vezes a desambiguação está atuando.
@@ -204,6 +308,14 @@ comerciais. Se overlap > 50% (versões reais), aplica dedup; se < 50%
 (jingles independentes), publica ambos. Adiciona uma chamada extra mas
 evita o caso. **Adiada para Fase 3** (escala/migração comercial).
 
+> **Mitigado pela v2 (parcial):** mesmo que a v1 suprima/retraia o corte
+> errado, o audit re-fingerprinta o clipe contra os irmãos e **reatribui** pro
+> corte que ele realmente cobre. Se o clipe não cobre o corte que a v1 escolheu
+> mas cobre o irmão, a v2 corrige. Não cobre o caso de **dois jingles
+> independentes** que a v1 suprimiu (a v2 só reatribui, não "ressuscita" um
+> corte suprimido independente) — esse caso continua dependendo do overlap-check
+> planejado. Mas o caso comum (15s/30s do mesmo conceito) está resolvido.
+
 ### R-C. Buffer em memória é volátil
 
 Se o supervisor reinicia entre uma confirmação e outra (raro, restart
@@ -240,5 +352,19 @@ detecção duplicada por restart. Aceitável.
   `detections.pending`.
 - `workers/internal/webhook/deliverer.go::handleRetracted` — fan-out do
   evento de retração para webhook outbox.
-- `workers/internal/catalog/detections.go` — `Detection.RetractedAt`.
+- `workers/internal/catalog/detections.go` — `Detection.RetractedAt`,
+  `Detection.AuditCoverage`, `SetAuditCoverage`, `FindCutWithSiblings`,
+  `ReattributeDetection` (v2).
 - `frontend/src/components/DayDetailModal.jsx` — render riscado + tooltip.
+
+**v2 (reatribuição por cobertura):**
+
+- `workers/internal/evidence/disambig_coverage.go` — `chooseByCoverage`,
+  `CutCoverage`, `coverageMargin`.
+- `workers/internal/evidence/service.go::reattributeByCoverage` — o fluxo no
+  audit, gated por `disambigByCoverage`.
+- `workers/internal/audit/auditor.go::AuditEvidence` — re-usado pra medir a
+  cobertura do clipe contra cada master irmão.
+- `migrations/0038_detection_audit_coverage.up.sql` — coluna `audit_coverage`.
+- `cmd/api/main.go` — lê `DISAMBIG_BY_COVERAGE`.
+- `frontend/src/pages/DetectionDetailPage.jsx` — "Cobertura do áudio (§9.9)".
