@@ -312,7 +312,7 @@ func (s *Service) processEvidence(
 	// audit fails the saved clip does not actually contain the master we said
 	// it does — mark the row audit_rejected, skip upload, surface metric.
 	if s.auditor != nil {
-		if s.runAuditOrReject(ctx, detectionID, detectedAt, commercialID, aacData) {
+		if s.runAuditOrReject(ctx, detectionID, detectedAt, stationID, commercialID, aacData) {
 			// runAuditOrReject already marked the detection and logged.
 			span.SetStatus(codes.Error, "audit_rejected")
 			return
@@ -387,6 +387,7 @@ func (s *Service) runAuditOrReject(
 	ctx context.Context,
 	detectionID uuid.UUID,
 	detectedAt time.Time,
+	stationID uuid.UUID,
 	commercialID uuid.UUID,
 	aacData []byte,
 ) bool {
@@ -442,6 +443,13 @@ func (s *Service) runAuditOrReject(
 				zap.Error(err),
 			)
 		}
+		// §18.2.2 v2 — coverage-based reattribution (gated). Re-fingerprint THIS
+		// clip against the client's sibling cuts; if one covers materially more,
+		// the live matcher attributed the wrong cut (the 15s/30s confusion) and
+		// we re-point the row. Gated by DISAMBIG_BY_COVERAGE; never blocks upload.
+		if s.disambigByCoverage {
+			s.reattributeByCoverage(auditCtx, detectionID, detectedAt, stationID, commercialID, result.Coverage, pcm)
+		}
 		s.log.Info("evidence: audit passed",
 			zap.String("detection_id", detectionID.String()),
 			zap.String("commercial_id", commercialID.String()),
@@ -471,6 +479,86 @@ func (s *Service) runAuditOrReject(
 			zap.Error(err),
 		)
 	}
+	return true
+}
+
+// reattributeByCoverage implements §18.2.2 v2. After the primary audit passes,
+// it re-fingerprints the SAME evidence clip against each sibling cut of the
+// client (masters from the catalog — siblings need no detection row). If a
+// sibling's coverage beats the attributed cut's by coverageMargin, the live
+// matcher picked the wrong cut (the 15s-counted-as-30s bug) and the detection is
+// re-pointed at the real cut. Returns true when it reattributed. Best-effort:
+// any failure logs and leaves the original attribution untouched.
+//
+// No speculative publish and no retraction race (cf. the rejected Design A):
+// exactly one row exists and it is corrected in place. Empirically the coverage
+// margin is ~4-5× on real ASAAS clips (see disambig_coverage_test.go), far above
+// coverageMargin (1.5), so a true 30s airing keeps its cut and only genuine
+// misattributions flip.
+func (s *Service) reattributeByCoverage(
+	ctx context.Context,
+	detectionID uuid.UUID,
+	detectedAt time.Time,
+	stationID, commercialID uuid.UUID,
+	attributedCoverage float64,
+	pcm []float32,
+) bool {
+	self, sibs, err := s.detections.FindCutWithSiblings(ctx, commercialID)
+	if err != nil {
+		s.log.Warn("evidence: reattribute — sibling lookup failed",
+			zap.String("detection_id", detectionID.String()), zap.Error(err))
+		return false
+	}
+	if len(sibs) == 0 {
+		return false // no siblings → nothing to disambiguate
+	}
+
+	best := CutCoverage{ShortID: self.ShortID, DurationSeconds: self.DurationSeconds, Coverage: attributedCoverage}
+	for _, sib := range sibs {
+		res, err := s.auditor.AuditEvidence(ctx, sib.ID, pcm)
+		if err != nil {
+			s.log.Warn("evidence: reattribute — sibling audit failed",
+				zap.String("detection_id", detectionID.String()),
+				zap.Int32("sibling_short_id", sib.ShortID), zap.Error(err))
+			continue
+		}
+		cand := CutCoverage{ShortID: sib.ShortID, DurationSeconds: sib.DurationSeconds, Coverage: res.Coverage}
+		if chooseByCoverage(best, cand) == cand.ShortID {
+			best = cand
+		}
+	}
+	if best.ShortID == self.ShortID {
+		return false // attributed cut already wins → leave as-is
+	}
+
+	// A sibling covers materially more. Resolve its campaign/material for this
+	// station+time and re-point the row. If the winner has no live campaign for
+	// this station, leave attribution unchanged (don't invent a detection).
+	newCommercialID, newCampaignID, err := resolveAttribution(ctx, s.db, best.ShortID, stationID, detectedAt)
+	if err != nil {
+		s.log.Warn("evidence: reattribute — winner has no resolvable campaign; leaving as-is",
+			zap.String("detection_id", detectionID.String()),
+			zap.Int32("winner_short_id", best.ShortID), zap.Error(err))
+		return false
+	}
+	if err := s.detections.ReattributeDetection(ctx, detectionID, detectedAt, newCommercialID, newCampaignID, stationID); err != nil {
+		s.log.Error("evidence: reattribute — update failed",
+			zap.String("detection_id", detectionID.String()), zap.Error(err))
+		return false
+	}
+	// Reflect the corrected coverage on the row.
+	if err := s.detections.SetAuditCoverage(ctx, detectionID, detectedAt, best.Coverage); err != nil {
+		s.log.Warn("evidence: reattribute — audit_coverage update failed (non-blocking)",
+			zap.String("detection_id", detectionID.String()), zap.Error(err))
+	}
+	metrics.MatchDisambiguation.WithLabelValues("reattributed_by_coverage").Inc()
+	s.log.Info("evidence: detection reattributed by coverage (§18.2.2 v2)",
+		zap.String("detection_id", detectionID.String()),
+		zap.Int32("from_short_id", self.ShortID),
+		zap.Float64("from_coverage", attributedCoverage),
+		zap.Int32("to_short_id", best.ShortID),
+		zap.Float64("to_coverage", best.Coverage),
+	)
 	return true
 }
 

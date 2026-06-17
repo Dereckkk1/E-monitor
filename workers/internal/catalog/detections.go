@@ -316,6 +316,86 @@ func (d *Detections) SetAuditCoverage(ctx context.Context, id uuid.UUID, detecte
 	return err
 }
 
+// SiblingCut is another cut (master) of the same client — the unit the
+// coverage-based version disambiguation (§18.2.2 v2) re-audits the evidence clip
+// against to decide which cut actually aired.
+type SiblingCut struct {
+	ID              uuid.UUID
+	ShortID         int32
+	DurationSeconds int
+}
+
+// FindCutWithSiblings, given an attributed master UUID, returns that master's own
+// (short_id, duration) plus the OTHER ready material masters of the same client.
+// The siblings come from the catalog (materials), NOT from detection rows — so a
+// cut that was suppressed/retracted and has no row is still found. This is what
+// lets the audit re-fingerprint the clip against every cut of the client and pick
+// the one it really matches.
+//
+// When the master UUID is not a material (legacy commercial), self is zero and
+// siblings is empty — the caller then leaves attribution unchanged (the material
+// library is where the 15s/30s confusion lives).
+func (d *Detections) FindCutWithSiblings(ctx context.Context, masterID uuid.UUID) (self SiblingCut, siblings []SiblingCut, err error) {
+	var clientID uuid.UUID
+	var dur float64
+	err = d.pool.QueryRow(ctx,
+		`SELECT short_id, duration_seconds, client_id FROM materials WHERE id = $1`, masterID,
+	).Scan(&self.ShortID, &dur, &clientID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SiblingCut{}, nil, nil // not a material master → no siblings
+	}
+	if err != nil {
+		return SiblingCut{}, nil, err
+	}
+	self.ID = masterID
+	self.DurationSeconds = int(dur + 0.5)
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT id, short_id, duration_seconds
+		FROM materials
+		WHERE client_id = $1 AND id <> $2 AND fingerprint_status = 'ready'`,
+		clientID, masterID)
+	if err != nil {
+		return self, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s SiblingCut
+		var d2 float64
+		if err := rows.Scan(&s.ID, &s.ShortID, &d2); err != nil {
+			return self, nil, err
+		}
+		s.DurationSeconds = int(d2 + 0.5)
+		siblings = append(siblings, s)
+	}
+	return self, siblings, rows.Err()
+}
+
+// ReattributeDetection re-points a detection at a different cut (§18.2.2 v2): the
+// coverage-based audit found the evidence clip matches newCommercialID better
+// than the cut it was first attributed to. Sets commercial_id + campaign_id and
+// re-runs the categorizer for the new (campaign, cut, station, day) so in_slot /
+// out_slot / out_date / orphan stays consistent. detected_at is in the WHERE for
+// partition pruning.
+func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
+	newCommercialID, newCampaignID, stationID uuid.UUID) error {
+	cat, err := d.categorize(ctx, CreateDetectionInput{
+		StationID:    stationID,
+		CommercialID: newCommercialID,
+		CampaignID:   newCampaignID,
+		DetectedAt:   detectedAt,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = d.pool.Exec(ctx, `
+		UPDATE detections
+		SET commercial_id = $3, campaign_id = $4, category = $5
+		WHERE id = $1 AND detected_at = $2`,
+		detectionID, detectedAt, newCommercialID, newCampaignID, cat)
+	return err
+}
+
 type ListFilter struct {
 	CampaignID *uuid.UUID
 	StationID  *uuid.UUID
