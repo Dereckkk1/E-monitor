@@ -121,6 +121,13 @@ services:
       # recria o api e re-roda o backfill-shared-hashes.
       # docs/incidents/incident-2026-06-15-shared-hash-density-regression.md
       SHARING_MIN_SCORE: ${SHARING_MIN_SCORE:-}
+      # §18.2.2-v2 — reatribuição por cobertura (corte 15s/30s/60s do mesmo
+      # cliente). Default false: o audit só MEDE a cobertura (coluna
+      # audit_coverage), não muda atribuição. true LIGA a correção: detecção
+      # mal-atribuída é re-apontada pro corte que o clipe cobre mais. Tunável
+      # sem rebuild — muda no .env, recria o api (--no-deps). Kill switch
+      # instantâneo. docs/architecture/version-disambiguation.md §18.2.2-v2
+      DISAMBIG_BY_COVERAGE: ${DISAMBIG_BY_COVERAGE:-false}
       # Emails diários de alerta de campanha (docs/features/campaign-notification-emails.md).
       # Opt-in: só sobe o job quando NOTIFICATIONS_ENABLED=true no .env. Sem
       # SMTP_USER/SMTP_PASS o mailer cai em noop (não envia). Defaults seguros
