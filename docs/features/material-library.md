@@ -45,7 +45,7 @@ Plano futuro: deprecar `commercials.target_stations` e `commercials.campaign_id`
 
 A biblioteca do wizard (`ListByClient`) lê **só** a tabela `materials`. A migration 0016 fez o mirror `commercials → materials` 1:1, mas só pros commercials que existiam naquele momento. A tela antiga `/campaigns` (`BulkUploadZone`) continua subindo áudio direto pra `commercials` (sem linha em `materials`), então qualquer upload por lá DEPOIS de 0016 sumia da biblioteca — o cliente "tinha material" mas ele não aparecia ao criar/editar outra campanha.
 
-Fix em duas camadas (ambas **detection-neutral** — mesmo UUID/short_id, o índice dedup por `id NOT IN materials` / `campaign_materials`, então o fingerprint chaveado pelo UUID carrega exatamente uma vez):
+Fix em duas camadas (ambas **detection-neutral** — mesmo UUID, o índice dedup por `id NOT IN materials` / `campaign_materials`, então o fingerprint chaveado pelo UUID carrega exatamente uma vez). O `short_id` do espelho é **novo** (default `catalog_short_id_seq`), não copiado do commercial: copiar violaria `materials.short_id UNIQUE` quando outro material já usa esse valor (sequences separadas pré-0024) — foi o que deixou a 0039 dirty no primeiro deploy de prod. O short_id próprio é inócuo porque o fingerprint é por UUID:
 
 1. **Backfill dos existentes** — migration `0039_backfill_legacy_commercials`: espelha os commercials `ready` sem linha em materials (mesmo UUID, `type_id` NULL) + cria o link `campaign_materials` preservando `target_stations`.
 

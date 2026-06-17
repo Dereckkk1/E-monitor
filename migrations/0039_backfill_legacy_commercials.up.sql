@@ -9,12 +9,16 @@
 -- fora. Aqui completamos o backfill pros commercials que ainda não têm linha
 -- em `materials`.
 --
--- Mirror com o MESMO UUID e MESMO short_id que o commercial (igual 0016). O
--- short_id compartilha catalog_short_id_seq (migration 0024), então inserir o
--- valor existente NÃO consome a sequence e não colide com inserts futuros. O
--- índice do matcher dedup por `id NOT IN materials` (path commercials) e por
--- campaign_materials (path materials), então o fingerprint — chaveado pelo UUID
--- — carrega exatamente uma vez.
+-- Mirror com o MESMO UUID do commercial (preserva detections.commercial_id e o
+-- dedup do índice). O `short_id` NÃO é copiado: o material recebe um short_id
+-- novo do catalog_short_id_seq (default desde a migration 0024). Copiar o
+-- short_id do commercial viola `materials.short_id UNIQUE` quando outro material
+-- já usa esse valor — em prod isso acontece porque commercials e materials
+-- tinham sequences SEPARADAS antes da 0024, gerando short_ids sobrepostos entre
+-- um commercial pós-0016 e um material do wizard. (Foi o que deixou a 0039
+-- dirty no primeiro deploy.) Um short_id próprio é seguro: o fingerprint é
+-- chaveado pelo UUID (não pelo short_id), e o índice dedup por `id NOT IN
+-- materials` / campaign_materials — então o áudio carrega exatamente uma vez.
 --
 -- SÓ espelhamos commercials 'ready'. Um commercial pending/generating/failed
 -- viraria um material pending, que some dos DOIS paths do índice: path
@@ -28,14 +32,15 @@
 BEGIN;
 
 -- 1. Materials espelho pros commercials sem linha em materials.
+--    short_id omitido de propósito → default nextval(catalog_short_id_seq).
 INSERT INTO materials (
-    id, short_id, client_id, title, type_id, duration_seconds,
+    id, client_id, title, type_id, duration_seconds,
     master_storage_path, master_sha256,
     fingerprint_status, fingerprint_generated_at, fingerprint_hash_count,
     created_at, updated_at
 )
 SELECT
-    c.id, c.short_id, cmp.client_id, c.title, NULL,
+    c.id, cmp.client_id, c.title, NULL,
     c.duration_seconds, c.master_storage_path, c.master_sha256,
     c.fingerprint_status, c.fingerprint_generated_at, c.fingerprint_hash_count,
     c.created_at, c.updated_at
