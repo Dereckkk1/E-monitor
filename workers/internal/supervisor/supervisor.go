@@ -89,14 +89,11 @@ type Supervisor struct {
 	// Version disambiguation (§18.2.2). The buffer keeps the last 60s of
 	// confirmed publications keyed by (station_id, client_id) so duplicate
 	// cuts of the same jingle don't both get published.
+	//
+	// §18.2.2-v2 (coverage-based reattribution) lives entirely in the evidence
+	// audit stage, NOT here — the supervisor's suppress/retract path is
+	// unchanged. See evidence.reattributeByCoverage.
 	dedupBuffer *DedupBuffer
-
-	// disambigByCoverage gates §18.2.2-v2: when true, a shorter cut that would
-	// be SUPPRESSED by the duration rule is instead published-and-retracted so
-	// the audit stage can re-attribute by clip coverage. When false (default),
-	// suppress stays suppress — behaviour identical to pre-v2. Flipped via the
-	// DISAMBIG_BY_COVERAGE env var in cmd/api/main.go.
-	disambigByCoverage bool
 }
 
 // dedupBufferRetention is how far back the supervisor keeps prior publications
@@ -120,7 +117,6 @@ func New(
 	materials *catalog.Materials,
 	healthEvents *catalog.HealthEvents,
 	segmentsRoot string,
-	disambigByCoverage bool,
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
@@ -134,7 +130,6 @@ func New(
 		materials:          materials,
 		healthEvents:       healthEvents,
 		segmentsRoot:       segmentsRoot,
-		disambigByCoverage: disambigByCoverage,
 		log:                log,
 		workers:            make(map[uuid.UUID]*workerEntry),
 		lastStallRestart:   make(map[uuid.UUID]time.Time),
