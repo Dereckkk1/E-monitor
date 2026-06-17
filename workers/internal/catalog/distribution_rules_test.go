@@ -34,8 +34,9 @@ func TestDistributionRules_CRUD(t *testing.T) {
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "Test"})
 	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
 		Name: "C", ClientID: cli.ID,
-		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
-		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
 	})
 	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
@@ -148,8 +149,9 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
 	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
 		Name: "C", ClientID: cli.ID,
-		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
-		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
 	})
 	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
@@ -213,6 +215,98 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 	}
 }
 
+// TestDistributionRules_RecategorizeForMaterial cobre o bug do print:
+// material cadastrado com um tipo, veicula (detection vira orphan porque não
+// há regra pro tipo antigo), e depois o operador troca o tipo pra um que JÁ
+// TEM regra. Sem recategorizar por material, a detection continua 'orphan' e
+// some pra "bônus (sem regra)" no resumo diário. RecategorizeForMaterial,
+// rodado após o UPDATE do type_id, precisa virar a detection pra in_slot.
+func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
+	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "C", ClientID: cli.ID,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	typeOld := seedType(t, ctx, pool, "Old")
+	typeNew := seedType(t, ctx, pool, "New")
+	mats := NewMaterials(pool)
+	// Material nasce com o tipo ANTIGO (sem regra).
+	mat, _ := mats.Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "M", TypeID: &typeOld, DurationSeconds: 30,
+		MasterStoragePath: "/tmp", MasterSHA256: "rk-mat-retype",
+	})
+	stat, _ := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "FM Retype", Band: "FM", StreamURL: "http://x",
+	})
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM detections WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM distribution_rules WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", mat.ID)
+		pool.Exec(ctx, "DELETE FROM campaigns WHERE id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", cli.ID)
+		pool.Exec(ctx, "DELETE FROM stations WHERE id = $1", stat.ID)
+	})
+
+	// Regra existe SÓ pro tipo NOVO.
+	repo := NewDistributionRules(pool)
+	if _, err := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeNew,
+		StationIDs:  []uuid.UUID{stat.ID},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "08:00", TimeEnd: "10:00",
+		PlaysPerDay: 3,
+	}); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	// Detection no horário coberto pela regra do tipo novo, mas o material
+	// ainda é do tipo antigo → categorizer marca orphan no insert.
+	dets := NewDetections(pool)
+	detTime := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) // qua 09:00 BRT
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: stat.ID, CommercialID: mat.ID, CampaignID: cmp.ID,
+		DetectedAt: detTime,
+		Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatalf("create detection: %v", err)
+	}
+
+	readCat := func() string {
+		t.Helper()
+		var c string
+		if err := pool.QueryRow(ctx,
+			`SELECT category FROM detections WHERE id = $1 AND detected_at = $2`,
+			det.ID, det.DetectedAt).Scan(&c); err != nil {
+			t.Fatalf("read category: %v", err)
+		}
+		return c
+	}
+
+	// Sanidade: começa orphan (tipo antigo não tem regra).
+	if got := readCat(); got != "orphan" {
+		t.Fatalf("pré-condição: category = %q, want orphan", got)
+	}
+
+	// Operador troca o tipo do material pro tipo NOVO (que tem regra)...
+	if err := mats.UpdateType(ctx, mat.ID, &typeNew); err != nil {
+		t.Fatalf("update type: %v", err)
+	}
+	// ...sem recategorizar, a detection segue orphan (é o bug). Recategoriza:
+	if err := repo.RecategorizeForMaterial(ctx, mat.ID); err != nil {
+		t.Fatalf("recategorize for material: %v", err)
+	}
+
+	if got := readCat(); got != "in_slot" {
+		t.Errorf("após troca de tipo + recategorize: category = %q, want in_slot", got)
+	}
+}
+
 // Garante que o recategorize SQL respeita a tolerância de 15 min nos extremos
 // da faixa (igual ao categorizer.SlotToleranceSeconds). Antes do fix, o SQL
 // usava BETWEEN time_start AND time_end direto e reclassificava como out_slot
@@ -223,8 +317,9 @@ func TestDistributionRules_RecategorizeRespectsSlotTolerance(t *testing.T) {
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
 	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
 		Name: "C", ClientID: cli.ID,
-		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
-		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
 	})
 	typeID := seedType(t, ctx, pool, "Spot")
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{

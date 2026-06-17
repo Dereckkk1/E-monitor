@@ -678,7 +678,16 @@ export function useUpdateMaterialTypeId() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, type_id }) => api.patch(`/materials/${id}/type`, { type_id }).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['materials'] }),
+    // Trocar o tipo do material dispara recategorização das detections no
+    // backend (RecategorizeForMaterial). Os agregados de veiculação mudam,
+    // então invalidamos daily-summary + detections além de materials. A mutation
+    // não conhece o(s) campaign_id(s) do material, então invalidamos amplo.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['materials'] })
+      qc.invalidateQueries({ queryKey: ['daily-summary'] })
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      qc.invalidateQueries({ queryKey: ['detection'] })
+    },
   })
 }
 

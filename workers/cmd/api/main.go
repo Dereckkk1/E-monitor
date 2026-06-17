@@ -373,7 +373,7 @@ func main() {
 		BlockList:             blockList,
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
-		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc},
+		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc, DistRules: distRulesRepo},
 		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup, Log: logger},
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo, CampaignRepo: campaigns},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},

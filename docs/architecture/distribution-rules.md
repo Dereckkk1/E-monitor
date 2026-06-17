@@ -1,12 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-26
+ultima-verificacao: 2026-06-17
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
   - migrations/0019_rules_by_type.up.sql
   - workers/internal/api/handlers/distribution_rules.go
+  - workers/internal/api/handlers/materials.go
   - workers/internal/catalog/distribution_rules.go
+  - workers/internal/catalog/materials.go
   - workers/internal/categorizer/categorizer.go
 ---
 
@@ -83,6 +85,16 @@ Validacao atualmente NAO esta implementada no backend — fica a criterio do fro
 Quando uma regra e criada/editada/excluida via API, o handler `DistributionRulesHandler` dispara `RecategorizeForRule` (ou `RecategorizeForCampaign` no caso de delete) em goroutine com timeout de 30s. Detections existentes no escopo da regra sao atualizadas conforme a nova logica.
 
 A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_rules.go` — sem N+1 queries. Para uma campanha inteira leva milissegundos mesmo com centenas de milhares de detections.
+
+### Gatilho por troca de tipo do material (não só por rule)
+
+A categoria é casada por **tipo** (`r.type_id = material.type_id`), então mudar o `type_id` de um material também invalida a categoria gravada das detections dele — calculada no insert com o tipo antigo. Sem recategorizar, uma detection que passa a casar uma regra do tipo novo continua `orphan` e some pra "bônus (sem regra)" no resumo diário.
+
+Por isso `PATCH /materials/{id}/type` (`MaterialsHandler.UpdateType`) dispara `RecategorizeForMaterial(materialID)` em goroutine best-effort após o `UPDATE` do `type_id`. Esse método recategoriza **todas as detections do material, em todas as campanhas** onde ele aparece (scope `d.commercial_id = $materialID`, sem filtro de campanha). Como o scope resolve `m.type_id` ao vivo (JOIN materials), rodar após o update reclassifica contra as regras do tipo atual.
+
+`RecategorizeForMaterial` e `recategorizeScope` compartilham o mesmo trecho de classificação SQL (`recatClassifyTailSQL`) — fonte única pra regra de tolerância de 15 min, evitando divergência entre os dois caminhos. O frontend (`useUpdateMaterialTypeId`) invalida `daily-summary` + `detections` no sucesso pra UI refletir a nova categoria sem reload.
+
+> Bug corrigido em 2026-06-17: material trocava de tipo e as veiculações viravam todas "bônus" mesmo com regra existindo pro tipo novo — porque o `UpdateType` só trocava a coluna, sem recategorizar.
 
 ### Tolerância de 15 min
 
