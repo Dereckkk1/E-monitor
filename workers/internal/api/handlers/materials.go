@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -27,6 +29,9 @@ type MaterialsHandler struct {
 	Repo        *catalog.Materials
 	MastersPath string
 	NATS        *nats.Conn
+	// DistRules recategoriza detections quando o tipo de um material muda
+	// (UpdateType). Nil-safe — se ausente, a recategorização é pulada.
+	DistRules *catalog.DistributionRules
 }
 
 // ListByClient returns all materials for a given client.
@@ -213,6 +218,18 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 	if err := h.Repo.UpdateType(r.Context(), id, p.TypeID); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	// O type_id mudou → a category gravada das detections desse material ficou
+	// obsoleta (foi computada no insert com o tipo antigo). Sem isto, detections
+	// que agora casam uma regra do tipo novo continuam 'orphan' e aparecem como
+	// "bônus (sem regra)" no resumo diário. Recategoriza em background
+	// (best-effort, mesmo padrão dos handlers de distribution_rules).
+	if h.DistRules != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = h.DistRules.RecategorizeForMaterial(ctx, id)
+		}()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

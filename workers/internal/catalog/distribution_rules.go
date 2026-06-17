@@ -197,12 +197,12 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 	return dr.recategorizeScope(ctx, campaignID, nil, nil, start, end)
 }
 
-// recategorizeScope é o motor SQL. Pra cada detection no escopo, computa
-// a nova categoria e UPDATE em batch.
+// recatClassifyTailSQL é o trecho compartilhado que replica
+// categorizer.Categorize em SQL. Espera uma CTE `scope(id, detected_at,
+// campaign_id, material_id, type_id, station_id)` definida antes dele e
+// é parameter-free (toda variação de escopo mora na CTE scope que o precede).
 //
-// SQL lógica (replica do categorizer.Categorize em SQL):
-//   - Pra cada detection no escopo (campaign + opcional type via JOIN materials +
-//     opcional stations + date range):
+// Lógica, pra cada detection do scope:
 //   - Se a data local (SP timezone) está fora do range da campanha → out_date
 //   - Senão se existe ANY rule com type_id = material.type_id, station_id, weekday e
 //     time_of_day dentro da faixa tolerada (±15min em cada extremo) → in_slot
@@ -213,22 +213,9 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 // categorizer.SlotToleranceSeconds. Sem ela, recategorizações disparadas
 // por create/edit de rule reclassificavam como out_slot detections que o
 // categorizer Go (no insert) tinha marcado in_slot — divergência silenciosa.
-func (dr *DistributionRules) recategorizeScope(ctx context.Context,
-	campaignID uuid.UUID, typeID *uuid.UUID, stationIDs []uuid.UUID,
-	from, to time.Time) error {
-
-	_, err := dr.pool.Exec(ctx, `
-WITH scope AS (
-    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id,
-           m.type_id, d.station_id
-    FROM detections d
-    JOIN materials m ON m.id = d.commercial_id
-    WHERE d.campaign_id = $1
-      AND ($2::uuid IS NULL OR m.type_id = $2)
-      AND ($3::uuid[] IS NULL OR d.station_id = ANY($3))
-      AND (date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
-           BETWEEN $4::date AND $5::date)
-),
+// Fonte única: tanto recategorizeScope (rule/campaign) quanto
+// RecategorizeForMaterial (mudança de tipo do material) usam este trecho.
+const recatClassifyTailSQL = `,
 classified AS (
     SELECT
         s.id, s.detected_at,
@@ -269,7 +256,47 @@ UPDATE detections d
 SET category = cl.new_category
 FROM classified cl
 WHERE d.id = cl.id AND d.detected_at = cl.detected_at
-  AND d.category IS DISTINCT FROM cl.new_category`,
+  AND d.category IS DISTINCT FROM cl.new_category`
+
+// recategorizeScope é o motor SQL pra escopos rule/campaign. Pra cada detection
+// no escopo (campaign + opcional type via JOIN materials + opcional stations +
+// date range), computa a nova categoria via recatClassifyTailSQL e UPDATE em batch.
+func (dr *DistributionRules) recategorizeScope(ctx context.Context,
+	campaignID uuid.UUID, typeID *uuid.UUID, stationIDs []uuid.UUID,
+	from, to time.Time) error {
+
+	_, err := dr.pool.Exec(ctx, `
+WITH scope AS (
+    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id,
+           m.type_id, d.station_id
+    FROM detections d
+    JOIN materials m ON m.id = d.commercial_id
+    WHERE d.campaign_id = $1
+      AND ($2::uuid IS NULL OR m.type_id = $2)
+      AND ($3::uuid[] IS NULL OR d.station_id = ANY($3))
+      AND (date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+           BETWEEN $4::date AND $5::date)
+)`+recatClassifyTailSQL,
 		campaignID, typeID, stationIDs, from, to)
+	return err
+}
+
+// RecategorizeForMaterial re-classifica TODAS as detections de um material,
+// em todas as campanhas onde ele aparece. Usado quando o type_id do material
+// muda: a categoria gravada (detections.category) foi computada no insert com
+// o tipo antigo e fica obsoleta — uma detection que casava uma regra do tipo
+// novo continua marcada 'orphan' (some pra "bônus" no resumo diário). Como o
+// scope resolve m.type_id ao vivo (JOIN materials), rodar isto APÓS o UPDATE
+// do type_id reclassifica corretamente contra as regras do tipo atual.
+func (dr *DistributionRules) RecategorizeForMaterial(ctx context.Context, materialID uuid.UUID) error {
+	_, err := dr.pool.Exec(ctx, `
+WITH scope AS (
+    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id,
+           m.type_id, d.station_id
+    FROM detections d
+    JOIN materials m ON m.id = d.commercial_id
+    WHERE d.commercial_id = $1
+)`+recatClassifyTailSQL,
+		materialID)
 	return err
 }
