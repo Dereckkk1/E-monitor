@@ -1,12 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-17
 codigo-relacionado:
   - workers/internal/api/handlers/materials.go
   - workers/internal/catalog/materials.go
+  - workers/internal/fingerprintqueue/reconciler.go
   - frontend/src/pages/MaterialTypesPage.jsx
   - migrations/0016_material_library.up.sql
   - migrations/0026_material_script.up.sql
+  - migrations/0039_backfill_legacy_commercials.up.sql
   # nota: script field (migration 0026) implementado mas nao mencionado no doc abaixo
 ---
 
@@ -38,6 +40,20 @@ A tabela `commercials` permanece. Cada commercial existente foi migrado pra `mat
 - Codigo antigo que le `commercials` continua funcionando
 
 Plano futuro: deprecar `commercials.target_stations` e `commercials.campaign_id` em migration nova (apos frontend novo estar 100% em uso). Ver follow-up F-90.
+
+### Biblioteca completa: mirror contínuo de `commercials` legados (2026-06-17)
+
+A biblioteca do wizard (`ListByClient`) lê **só** a tabela `materials`. A migration 0016 fez o mirror `commercials → materials` 1:1, mas só pros commercials que existiam naquele momento. A tela antiga `/campaigns` (`BulkUploadZone`) continua subindo áudio direto pra `commercials` (sem linha em `materials`), então qualquer upload por lá DEPOIS de 0016 sumia da biblioteca — o cliente "tinha material" mas ele não aparecia ao criar/editar outra campanha.
+
+Fix em duas camadas (ambas **detection-neutral** — mesmo UUID/short_id, o índice dedup por `id NOT IN materials` / `campaign_materials`, então o fingerprint chaveado pelo UUID carrega exatamente uma vez):
+
+1. **Backfill dos existentes** — migration `0039_backfill_legacy_commercials`: espelha os commercials `ready` sem linha em materials (mesmo UUID, `type_id` NULL) + cria o link `campaign_materials` preservando `target_stations`.
+
+2. **Going forward** — `Reconciler.mirrorReadyLegacyCommercials` (`fingerprintqueue/reconciler.go`) repete o mesmo INSERT idempotente a cada tick (5 min). O upload da tela antiga **não muda**: cria só o commercial, detectado via path commercials como sempre; quando o fingerprint fica `ready`, o reconciler materializa o mirror — o material nasce já `ready`, sem janela de invisibilidade pro matcher.
+
+**Por que só `ready`:** espelhar um commercial pending/generating/failed criaria um material pending, que some dos dois paths do índice (path materials exige `ready`; path commercials exclui `id IN materials`). Pior, o daemon de fingerprint marca `ready` na linha **commercials** (evento `commercial_id`), nunca no material — o mirror ficaria preso pending pra sempre. Pendentes seguem sendo detectados via path commercials (legado) e são espelhados quando ficarem `ready`.
+
+O `type_id` do mirror nasce NULL; o operador atribui o tipo depois pela biblioteca (e a recategorização das detections roda automática — ver [distribution-rules.md#gatilho-por-troca-de-tipo-do-material-não-só-por-rule](../architecture/distribution-rules.md)).
 
 ## Tipos de material
 

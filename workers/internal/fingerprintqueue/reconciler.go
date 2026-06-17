@@ -135,7 +135,57 @@ func (r *Reconciler) listStuck(ctx context.Context) ([]StuckMaterial, error) {
 	return out, rows.Err()
 }
 
+// mirrorReadyLegacyCommercials espelha commercials 'ready' que ainda não têm
+// linha em materials → cria o material (mesmo UUID/short_id, type_id NULL) e o
+// link campaign_materials da campanha original (preservando target_stations).
+// É o "going forward" do backfill da migration 0039: uploads pela tela antiga
+// /campaigns continuam criando só commercial e sendo detectados via path
+// commercials; quando o fingerprint fica 'ready', este passo materializa o
+// mirror pra ele aparecer na biblioteca do wizard (Bug 1) e ser reaproveitável.
+//
+// SÓ roda sobre 'ready' — espelhar um pending criaria um material que some dos
+// dois paths do índice (ver migration 0039). Detection-neutral: o material
+// nasce 'ready', e as hashes (chaveadas pelo UUID) já estão no índice via path
+// commercials; após o mirror o MESMO UUID passa a carregar via
+// materials/campaign_materials — mesmas hashes, sem janela de invisibilidade.
+// Idempotente (ON CONFLICT DO NOTHING) → seguro entre réplicas sem lock.
+func (r *Reconciler) mirrorReadyLegacyCommercials(ctx context.Context) {
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO materials (
+		    id, short_id, client_id, title, type_id, duration_seconds,
+		    master_storage_path, master_sha256,
+		    fingerprint_status, fingerprint_generated_at, fingerprint_hash_count,
+		    created_at, updated_at
+		)
+		SELECT c.id, c.short_id, cmp.client_id, c.title, NULL,
+		       c.duration_seconds, c.master_storage_path, c.master_sha256,
+		       c.fingerprint_status, c.fingerprint_generated_at, c.fingerprint_hash_count,
+		       c.created_at, c.updated_at
+		FROM commercials c
+		JOIN campaigns cmp ON cmp.id = c.campaign_id
+		WHERE c.fingerprint_status = 'ready'
+		  AND NOT EXISTS (SELECT 1 FROM materials m WHERE m.id = c.id)
+		ON CONFLICT (id) DO NOTHING`); err != nil {
+		r.log.Warn("fingerprint-queue: mirror legacy commercials (materials) falhou", zap.Error(err))
+		return
+	}
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO campaign_materials (campaign_id, material_id, target_stations, added_at)
+		SELECT c.campaign_id, c.id, c.target_stations, c.created_at
+		FROM commercials c
+		WHERE c.fingerprint_status = 'ready'
+		  AND EXISTS (SELECT 1 FROM materials m WHERE m.id = c.id)
+		ON CONFLICT (campaign_id, material_id) DO NOTHING`); err != nil {
+		r.log.Warn("fingerprint-queue: mirror legacy commercials (links) falhou", zap.Error(err))
+	}
+}
+
 func (r *Reconciler) tick(ctx context.Context) {
+	// Espelha commercials legados 'ready' → materials (Bug 1, going forward).
+	// Antes da lógica de stuck e sem gate: roda todo tick (após o primeiro, o
+	// NOT EXISTS faz o INSERT achar 0 linhas — custo desprezível).
+	r.mirrorReadyLegacyCommercials(ctx)
+
 	stuck, err := r.listStuck(ctx)
 	if err != nil {
 		r.log.Warn("fingerprint-queue: listStuck falhou", zap.Error(err))

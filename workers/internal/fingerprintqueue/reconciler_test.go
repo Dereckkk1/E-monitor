@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/catalog"
 	"radiocheck/internal/db"
 )
 
@@ -83,6 +85,93 @@ func TestListStuck(t *testing.T) {
 	}
 	if _, ok := got[ready]; ok {
 		t.Error("ready NUNCA deveria entrar")
+	}
+}
+
+// TestMirrorReadyLegacyCommercials cobre o "going forward" do Bug 1: um
+// commercial 'ready' sem linha em materials é espelhado (mesmo UUID + link,
+// preservando target_stations); um commercial 'pending' NÃO é espelhado (viraria
+// um material preso pending, invisível pro matcher). E o passo é idempotente.
+func TestMirrorReadyLegacyCommercials(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	r := New(pool, nil, zap.NewNop())
+
+	cli := mustClient(t, ctx, pool)
+	camp, err := catalog.NewCampaigns(pool).Create(ctx, catalog.CreateCampaignInput{
+		Name: "Mirror Test", ClientID: cli,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("create campaign: %v", err)
+	}
+	station := uuid.New()
+
+	coms := catalog.NewCommercials(pool)
+	readyCom, err := coms.Create(ctx, catalog.CreateCommercialInput{
+		CampaignID: camp.ID, Title: "ready-com", DurationSeconds: 30,
+		MasterStoragePath: "/tmp/r.mp3", MasterSHA256: "rmirror",
+	})
+	if err != nil {
+		t.Fatalf("create ready commercial: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE commercials SET fingerprint_status='ready', target_stations=$2 WHERE id=$1`,
+		readyCom.ID, []uuid.UUID{station}); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	pendingCom, err := coms.Create(ctx, catalog.CreateCommercialInput{
+		CampaignID: camp.ID, Title: "pending-com", DurationSeconds: 30,
+		MasterStoragePath: "/tmp/p.mp3", MasterSHA256: "pmirror",
+	})
+	if err != nil {
+		t.Fatalf("create pending commercial: %v", err)
+	}
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM campaign_materials WHERE campaign_id=$1`, camp.ID) //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM commercials WHERE campaign_id=$1`, camp.ID)        //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, camp.ID)                   //nolint:errcheck
+	})
+
+	r.mirrorReadyLegacyCommercials(ctx)
+
+	// ready → material espelho (mesmo UUID, type_id NULL) + link com stations.
+	var typeIsNull bool
+	if err := pool.QueryRow(ctx,
+		`SELECT type_id IS NULL FROM materials WHERE id=$1`, readyCom.ID).Scan(&typeIsNull); err != nil {
+		t.Fatalf("ready commercial deveria ter material espelho: %v", err)
+	}
+	if !typeIsNull {
+		t.Error("material espelho deveria nascer com type_id NULL")
+	}
+	var linkStations []uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT target_stations FROM campaign_materials WHERE campaign_id=$1 AND material_id=$2`,
+		camp.ID, readyCom.ID).Scan(&linkStations); err != nil {
+		t.Fatalf("ready commercial deveria ter link campaign_materials: %v", err)
+	}
+	if len(linkStations) != 1 || linkStations[0] != station {
+		t.Errorf("link target_stations = %v, want [%v]", linkStations, station)
+	}
+
+	// pending → NÃO espelhado.
+	var pendExists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1)`, pendingCom.ID).Scan(&pendExists); err != nil {
+		t.Fatalf("check pending: %v", err)
+	}
+	if pendExists {
+		t.Error("pending commercial NÃO deveria ter material espelho")
+	}
+
+	// Idempotente: rodar de novo não duplica nem quebra.
+	r.mirrorReadyLegacyCommercials(ctx)
+	var matCount int
+	pool.QueryRow(ctx, `SELECT COUNT(*) FROM materials WHERE id=$1`, readyCom.ID).Scan(&matCount) //nolint:errcheck
+	if matCount != 1 {
+		t.Errorf("após 2ª rodada: materials count = %d, want 1 (idempotente)", matCount)
 	}
 }
 
