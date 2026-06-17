@@ -1,20 +1,21 @@
 // audit-extent is a READ-ONLY diagnostic: decode an arbitrary audio clip (e.g. a
-// vendor censura) and run the REAL §9.9 audit against a given short_id's stored
-// master hashes, reporting score / coverage / EXTENT.
+// vendor censura) and run the REAL §9.9 audit match against a master, reporting
+// score / coverage / EXTENT.
 //
 // Extent = how deep into the master the clip matched. A 15s airing matches only
 // the first half of a 30s master (extent ~0.5) while a full 30s reaches ~1.0.
-// With ground-truth-labelled censuras (you KNOW which cut aired) this proves
-// whether the extent signal can disambiguate the 15s/30s version confusion
-// (§18.2.2) — before we build the fix on it.
+// With ground-truth-labelled censuras this proves whether the extent signal can
+// disambiguate the 15s/30s version confusion (§18.2.2).
+//
+// Two modes:
+//
+//	# DB mode (on the VM — loads master hashes from the catalog by short_id):
+//	audit-extent --audio /tmp/c.mp3 --short-id 78
+//
+//	# offline mode (local — fingerprints a master FILE, no DB):
+//	audit-extent --audio censura.mp3 --master-file "ASAAS ... (1).mp3"
 //
 // Touches no rows (SELECT + decode only). Safe to run in prod.
-//
-// Usage:
-//
-//	audit-extent --dsn "$DATABASE_URL" --audio /path/censura.mp3 --short-id 78
-//	# against both cuts at once:
-//	for s in 77 78; do audit-extent --audio /path/censura.mp3 --short-id $s; done
 package main
 
 import (
@@ -35,51 +36,62 @@ import (
 )
 
 func main() {
-	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "postgres connection string")
+	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "postgres connection string (DB mode)")
 	audioPath := flag.String("audio", "", "path to the audio clip (censura) to audit")
-	shortID := flag.Int("short-id", 0, "short_id of the master to audit against")
+	shortID := flag.Int("short-id", 0, "short_id of the master to audit against (DB mode)")
+	masterFile := flag.String("master-file", "", "local master audio file (offline mode, no DB)")
 	flag.Parse()
-	if *dsn == "" {
-		log.Fatal("--dsn or DATABASE_URL is required")
-	}
-	if *audioPath == "" || *shortID == 0 {
-		log.Fatal("--audio and --short-id are required")
+	if *audioPath == "" {
+		log.Fatal("--audio is required")
 	}
 
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, *dsn)
-	if err != nil {
-		log.Fatalf("pool: %v", err)
-	}
-	defer pool.Close()
 
-	// Resolve short_id → master UUID (materials first, then legacy commercials).
-	var entityID uuid.UUID
-	err = pool.QueryRow(ctx, `SELECT id FROM materials WHERE short_id = $1`, int32(*shortID)).Scan(&entityID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		err = pool.QueryRow(ctx, `SELECT id FROM commercials WHERE short_id = $1`, int32(*shortID)).Scan(&entityID)
-	}
+	censuraPCM, err := fingerprint.DecodePCM(ctx, *audioPath, fingerprint.VariantClean)
 	if err != nil {
-		log.Fatalf("resolve short_id %d: %v", *shortID, err)
+		log.Fatalf("decode censura %q: %v", *audioPath, err)
+	}
+	queryHashes := audit.PCMToHashes(censuraPCM)
+
+	var res *audit.Result
+	var label string
+
+	if *masterFile != "" {
+		// Offline mode: fingerprint the master file locally, no DB.
+		masterPCM, err := fingerprint.DecodePCM(ctx, *masterFile, fingerprint.VariantClean)
+		if err != nil {
+			log.Fatalf("decode master %q: %v", *masterFile, err)
+		}
+		res = audit.MatchHashes(queryHashes, audit.PCMToHashes(masterPCM))
+		label = *masterFile
+	} else {
+		// DB mode: load the master hashes for short_id from the catalog.
+		if *dsn == "" || *shortID == 0 {
+			log.Fatal("DB mode needs --dsn (or DATABASE_URL) and --short-id; or use --master-file for offline")
+		}
+		pool, err := pgxpool.New(ctx, *dsn)
+		if err != nil {
+			log.Fatalf("pool: %v", err)
+		}
+		defer pool.Close()
+		var entityID uuid.UUID
+		err = pool.QueryRow(ctx, `SELECT id FROM materials WHERE short_id = $1`, int32(*shortID)).Scan(&entityID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = pool.QueryRow(ctx, `SELECT id FROM commercials WHERE short_id = $1`, int32(*shortID)).Scan(&entityID)
+		}
+		if err != nil {
+			log.Fatalf("resolve short_id %d: %v", *shortID, err)
+		}
+		res, err = audit.NewAuditor(pool, zap.NewNop(), 0, 0).AuditEvidence(ctx, entityID, censuraPCM)
+		if err != nil {
+			log.Fatalf("audit: %v", err)
+		}
+		label = fmt.Sprintf("short_id=%d", *shortID)
 	}
 
-	pcm, err := fingerprint.DecodePCM(ctx, *audioPath, fingerprint.VariantClean)
-	if err != nil {
-		log.Fatalf("decode %q: %v", *audioPath, err)
-	}
-
-	auditor := audit.NewAuditor(pool, zap.NewNop(), 0, 0)
-	res, err := auditor.AuditEvidence(ctx, entityID, pcm)
-	if err != nil {
-		log.Fatalf("audit: %v", err)
-	}
-
-	fmt.Printf("\n=== AUDIT-EXTENT  short_id=%d  audio=%s ===\n", *shortID, *audioPath)
-	fmt.Printf("score         : %d   (min %d)\n", res.Score, audit.DefaultMinScore)
-	fmt.Printf("coverage      : %.3f (min %.2f)\n", res.Coverage, audit.DefaultMinCoverage)
-	fmt.Printf("MATCH EXTENT  : %.3f   <- how deep into the master the clip reached\n", res.MatchExtent)
-	fmt.Printf("master hashes : %d    query hashes: %d\n", res.MasterHashes, res.QueryHashes)
-	fmt.Printf("audit passed  : %v\n\n", res.Passed)
-	fmt.Printf("READ: vs the 30s master (78), extent ~0.5 => this clip is a 15s airing;\n")
-	fmt.Printf("      extent ~1.0 => the full 30s aired.\n\n")
+	fmt.Printf("\n=== AUDIT-EXTENT  master=%s  audio=%s ===\n", label, *audioPath)
+	fmt.Printf("score        : %d\n", res.Score)
+	fmt.Printf("coverage     : %.3f\n", res.Coverage)
+	fmt.Printf("MATCH EXTENT : %.3f\n", res.MatchExtent)
+	fmt.Printf("master hashes: %d   query hashes: %d\n", res.MasterHashes, res.QueryHashes)
 }
