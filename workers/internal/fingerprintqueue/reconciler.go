@@ -136,8 +136,8 @@ func (r *Reconciler) listStuck(ctx context.Context) ([]StuckMaterial, error) {
 }
 
 // mirrorReadyLegacyCommercials espelha commercials 'ready' que ainda não têm
-// linha em materials → cria o material (mesmo UUID/short_id, type_id NULL) e o
-// link campaign_materials da campanha original (preservando target_stations).
+// linha em materials → cria o material (mesmo UUID, short_id novo, type_id NULL)
+// e o link campaign_materials da campanha original (preservando target_stations).
 // É o "going forward" do backfill da migration 0039: uploads pela tela antiga
 // /campaigns continuam criando só commercial e sendo detectados via path
 // commercials; quando o fingerprint fica 'ready', este passo materializa o
@@ -150,14 +150,18 @@ func (r *Reconciler) listStuck(ctx context.Context) ([]StuckMaterial, error) {
 // materials/campaign_materials — mesmas hashes, sem janela de invisibilidade.
 // Idempotente (ON CONFLICT DO NOTHING) → seguro entre réplicas sem lock.
 func (r *Reconciler) mirrorReadyLegacyCommercials(ctx context.Context) {
+	// short_id omitido de propósito → default nextval(catalog_short_id_seq).
+	// Copiar c.short_id viola materials.short_id UNIQUE quando outro material já
+	// usa esse valor (sequences separadas pré-0024). Seguro: fingerprint é por
+	// UUID, dedup do índice é por id/links — short_id próprio não atrapalha.
 	if _, err := r.pool.Exec(ctx, `
 		INSERT INTO materials (
-		    id, short_id, client_id, title, type_id, duration_seconds,
+		    id, client_id, title, type_id, duration_seconds,
 		    master_storage_path, master_sha256,
 		    fingerprint_status, fingerprint_generated_at, fingerprint_hash_count,
 		    created_at, updated_at
 		)
-		SELECT c.id, c.short_id, cmp.client_id, c.title, NULL,
+		SELECT c.id, cmp.client_id, c.title, NULL,
 		       c.duration_seconds, c.master_storage_path, c.master_sha256,
 		       c.fingerprint_status, c.fingerprint_generated_at, c.fingerprint_hash_count,
 		       c.created_at, c.updated_at

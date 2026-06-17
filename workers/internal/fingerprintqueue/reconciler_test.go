@@ -175,6 +175,68 @@ func TestMirrorReadyLegacyCommercials(t *testing.T) {
 	}
 }
 
+// TestMirrorShortIDCollision reproduz o incidente que deixou a 0039 dirty em
+// prod: um commercial legado 'ready' cujo short_id COLIDE com o short_id de
+// outro material já existente (sequences separadas pré-0024). Copiar o short_id
+// do commercial violaria materials.short_id UNIQUE. O mirror deve materializar
+// o commercial com um short_id NOVO, sem erro.
+func TestMirrorShortIDCollision(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	r := New(pool, nil, zap.NewNop())
+
+	cli := mustClient(t, ctx, pool)
+	camp, err := catalog.NewCampaigns(pool).Create(ctx, catalog.CreateCampaignInput{
+		Name: "Collision Test", ClientID: cli,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("create campaign: %v", err)
+	}
+
+	// Material existente ocupando um short_id alto e explícito.
+	const sharedShortID = 990123
+	existingMat := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO materials (id, short_id, client_id, title, duration_seconds,
+		                        master_storage_path, master_sha256, fingerprint_status)
+		 VALUES ($1, $2, $3, 'existing', 30, '/tmp/e.mp3', 'esha', 'ready')`,
+		existingMat, sharedShortID, cli); err != nil {
+		t.Fatalf("insert existing material: %v", err)
+	}
+
+	// Commercial legado 'ready' com o MESMO short_id (raw pra forçar a colisão).
+	collidingCom := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO commercials (id, short_id, campaign_id, title, duration_seconds,
+		                          master_storage_path, master_sha256, fingerprint_status, target_stations)
+		 VALUES ($1, $2, $3, 'colliding', 30, '/tmp/c.mp3', 'csha', 'ready', '{}')`,
+		collidingCom, sharedShortID, camp.ID); err != nil {
+		t.Fatalf("insert colliding commercial: %v", err)
+	}
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM campaign_materials WHERE campaign_id=$1`, camp.ID) //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM commercials WHERE campaign_id=$1`, camp.ID)        //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM materials WHERE id=$1`, existingMat)               //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, camp.ID)                   //nolint:errcheck
+	})
+
+	// Não pode dar erro (era o bug: unique violation → migration dirty).
+	r.mirrorReadyLegacyCommercials(ctx)
+
+	// O commercial foi materializado com um short_id NOVO (≠ o que colidia).
+	var newShortID int32
+	if err := pool.QueryRow(ctx,
+		`SELECT short_id FROM materials WHERE id=$1`, collidingCom).Scan(&newShortID); err != nil {
+		t.Fatalf("commercial colidente deveria ter sido espelhado: %v", err)
+	}
+	if newShortID == sharedShortID {
+		t.Errorf("material espelho deveria ter short_id novo, não o que colide (%d)", sharedShortID)
+	}
+}
+
 // ── fixtures ─────────────────────────────────────────────────────────
 
 func mustClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
