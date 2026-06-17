@@ -159,6 +159,17 @@ git -C "$REPO_ROOT" pull --ff-only
 step "build das imagens"
 $COMPOSE build --pull
 
+# Limpa o build cache acumulado. Em prod o /var/lib/docker fica no disco de
+# OS (24G), e o cache de build cresce a cada deploy — chegou a 7GB ocupando
+# 88% do root. `builder prune` só toca cache de build (nunca imagens em uso
+# nem volumes), então é seguro. Non-fatal: falha aqui não aborta o deploy.
+step "limpando build cache do docker"
+if reclaimed=$(docker builder prune -f 2>&1); then
+  echo "$reclaimed" | grep -E 'Total reclaimed space' | sed 's/^/    /' || ok "cache limpo"
+else
+  warn "builder prune falhou (ignorando): $reclaimed"
+fi
+
 step "subindo containers"
 # `up -d` (sem --force-recreate) só recria serviços com config alterada.
 # Bind mounts em docker-compose.override.yml garantem que postgres/minio
