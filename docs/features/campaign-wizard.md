@@ -1,10 +1,12 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-05-27
+ultima-verificacao: 2026-06-18
 codigo-relacionado:
   - frontend/src/pages/CampaignWizardPage.jsx
   - frontend/src/pages/CampaignWizardSteps/
   - frontend/src/pages/CampaignWizardSteps/ConnectionStep.jsx
+  - frontend/src/pages/CampaignWizardSteps/DistributionStep.jsx
+  - frontend/src/utils/search.js
   - workers/internal/api/handlers/materials.go
   - migrations/0019_rules_by_type.up.sql
   - migrations/0022_pricing.up.sql
@@ -55,6 +57,7 @@ Plano 2 (4 etapas); Preços e Conexão entraram depois — Conexão é o Step 3
 
 ### 5. Distribuição
 - Grade emissora × material × dia, com toolbar mês-navegador
+- Busca de emissora acima do grid (nome, dial/frequência, cidade, UF ou band, em qualquer ordem). Filtra **só no front** — mesmo helper `tokenize`/`matchesAllTokens` de `/detections` e `/materials` (token-AND, campo-OR). Sem busca, o grid mostra tudo; sem resultado, exibe estado vazio com "Limpar busca".
 - Botão "+ Regra" abre side panel pra criar uma `distribution_rule`
 - Click em célula abre popover de override (laranja)
 

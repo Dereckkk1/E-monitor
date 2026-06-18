@@ -10,6 +10,7 @@ import MonthNavigator from '../../components/MonthNavigator'
 import RuleSidePanel from '../../components/RuleSidePanel'
 import OverridePopover from '../../components/OverridePopover'
 import { useConfirm } from '../../components/ConfirmModal'
+import { tokenize, matchesAllTokens } from '../../utils/search'
 
 /**
  * Step 4: distribution rules + grid + override.
@@ -49,6 +50,10 @@ export default function DistributionStep({
   const [editingRule, setEditingRule] = useState(null)
   const [popoverAnchor, setPopoverAnchor] = useState(null)
   const [popoverContext, setPopoverContext] = useState(null) // { stationId, materialId, date }
+  // Busca de emissora no grid — filtra SÓ no front (tokens AND, campo OR),
+  // mesmo padrão de /detections e /materials. Casa nome, dial (freq), cidade,
+  // UF e band em qualquer ordem.
+  const [stationSearch, setStationSearch] = useState('')
   // Pending +/- changes staged locally — committed only on "Confirmar".
   // Key: `${stationId}|${typeId}|${dateISO}` → new plays_expected value.
   const [pendingDrafts, setPendingDrafts] = useState(() => new Map())
@@ -123,6 +128,36 @@ export default function DistributionStep({
     }
     return r
   }, [typesInScopeByStation, typeById, rules])
+
+  // Linhas após a busca de emissora. Filtra contra os campos da emissora
+  // (nome/cidade/UF/band/dial) + título do tipo, igual /detections. Como o
+  // grid agrupa por estação, esconder as linhas de uma emissora a remove do
+  // grid inteiro. Sem busca → devolve `rows` intacto.
+  const filteredRows = useMemo(() => {
+    const tokens = tokenize(stationSearch)
+    if (tokens.length === 0) return rows
+    const stationById = new Map(allStations.map(s => [s.id, s]))
+    const fields = ['name', 'city', 'state', 'band', 'freq', 'title']
+    return rows.filter(r => {
+      const st = stationById.get(r.stationId)
+      if (!st) return false
+      const haystack = {
+        name:  st.name  ?? '',
+        city:  st.city  ?? '',
+        state: st.state ?? '',
+        band:  st.band  ?? '',
+        freq:  st.frequency_mhz != null ? String(st.frequency_mhz) : '',
+        title: r.materialTitle ?? '',
+      }
+      return matchesAllTokens(haystack, fields, tokens)
+    })
+  }, [rows, stationSearch, allStations])
+
+  // Nº de emissoras distintas visíveis após a busca — alimenta o hint do input.
+  const filteredStationCount = useMemo(
+    () => new Set(filteredRows.map(r => r.stationId)).size,
+    [filteredRows],
+  )
 
   // Build cellData map from summary + override marker. Migration 0019 made the
   // view group by type, so the key uses type_id where it used to use material_id.
@@ -480,21 +515,35 @@ export default function DistributionStep({
       {rows.length === 0 ? (
         <EmptyDistributionState onAddRule={() => openRuleEditor(null)} />
       ) : (
-        <DistributionGrid
-          mode="edit"
-          month={month}
-          campaignStart={campaignStart}
-          campaignEnd={campaignEnd}
-          stations={allStations}
-          rows={rows}
-          cellData={cellDataWithDrafts}
-          onCellClick={handleCellClick}
-          onCellIncrement={(stationId, typeId, dateISO, rect) =>
-            handleInlineStep(stationId, typeId, dateISO, +1, rect)}
-          onCellDecrement={(stationId, typeId, dateISO, rect) =>
-            handleInlineStep(stationId, typeId, dateISO, -1, rect)}
-          capAtToday={false}
-        />
+        <>
+          <StationSearchBar
+            value={stationSearch}
+            onChange={e => setStationSearch(e.target.value)}
+            count={filteredStationCount}
+          />
+          {filteredRows.length === 0 ? (
+            <NoStationMatchState
+              query={stationSearch}
+              onClear={() => setStationSearch('')}
+            />
+          ) : (
+            <DistributionGrid
+              mode="edit"
+              month={month}
+              campaignStart={campaignStart}
+              campaignEnd={campaignEnd}
+              stations={allStations}
+              rows={filteredRows}
+              cellData={cellDataWithDrafts}
+              onCellClick={handleCellClick}
+              onCellIncrement={(stationId, typeId, dateISO, rect) =>
+                handleInlineStep(stationId, typeId, dateISO, +1, rect)}
+              onCellDecrement={(stationId, typeId, dateISO, rect) =>
+                handleInlineStep(stationId, typeId, dateISO, -1, rect)}
+              capAtToday={false}
+            />
+          )}
+        </>
       )}
 
       <RuleSidePanel
@@ -683,6 +732,66 @@ function RuleChipList({ rules, typeById, onEdit }) {
           </button>
         )
       })}
+    </div>
+  )
+}
+
+// Busca de emissora acima do grid. Reaproveita as classes globais
+// `.stations-search*` (mesmo visual de /detections e /materials). O hint à
+// direita mostra quantas emissoras casam com a busca atual.
+function StationSearchBar({ value, onChange, count }) {
+  return (
+    <div className="stations-search" style={{ maxWidth: 420 }}>
+      <span className="stations-search-icon">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+        </svg>
+      </span>
+      <input
+        className="input stations-search-input"
+        type="text"
+        placeholder="Buscar emissora por nome, dial ou cidade…"
+        value={value}
+        onChange={onChange}
+      />
+      {value.trim() !== '' && (
+        <span className="stations-search-hint">
+          {count} emissora{count !== 1 ? 's' : ''}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// Mostrado quando a busca não casa com nenhuma emissora do grid.
+function NoStationMatchState({ query, onClear }) {
+  return (
+    <div style={{
+      padding: '36px 24px',
+      background: 'var(--c-bg)',
+      border: '1px dashed var(--c-border)',
+      borderRadius: 'var(--radius-xl)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+      textAlign: 'center',
+    }}>
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="var(--c-text-3)" strokeWidth="1.5">
+        <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
+      </svg>
+      <p style={{ margin: 0, color: 'var(--c-text-2)', fontSize: 13 }}>
+        Nenhuma emissora corresponde a <strong style={{ color: 'var(--c-text)' }}>“{query}”</strong>.
+      </p>
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          padding: '6px 14px', borderRadius: 'var(--radius-md)',
+          background: 'transparent', border: '1px solid var(--c-border)',
+          color: 'var(--c-text-2)', fontSize: 12, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'var(--font-heading)',
+        }}
+      >
+        Limpar busca
+      </button>
     </div>
   )
 }
