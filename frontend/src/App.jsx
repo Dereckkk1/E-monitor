@@ -7,6 +7,7 @@ import RequireAuth from './components/RequireAuth'
 import RequireRole from './components/RequireRole'
 import Sidebar from './components/Sidebar'
 import RadioPlayer from './components/RadioPlayer'
+import DailyFailuresModal from './components/DailyFailuresModal'
 import StationsPage    from './pages/StationsPage'
 import StationEditPage from './pages/StationEditPage'
 import ClientsPage    from './pages/ClientsPage'
@@ -84,6 +85,10 @@ function AppShell() {
 
         {/* Main content */}
         <RadioPlayer />
+        {/* Modal de resumo diário de falhas — auto-gateada em admin,
+            portaliza pro body. Render aqui (sob RequireAuth) garante que
+            só aparece logado. */}
+        <DailyFailuresModal />
         <main className="app-content">
           <Routes>
             <Route path="/" element={<HomeRedirect />} />
