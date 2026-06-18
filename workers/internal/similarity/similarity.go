@@ -61,6 +61,7 @@ type pairScan struct {
 	otherTotalFrames int
 	ownRanges        []frameRange
 	otherRanges      []frameRange
+	windows          []matchedWindow // janelas casadas (own + offset) p/ segmentos
 }
 
 // scanReport aggregates a complete scan: own material's total frames and per-
@@ -331,6 +332,7 @@ func runScan(
 				report.perOther[otherID] = s
 			}
 			s.ownRanges = append(s.ownRanges, frameRange{ownStart, ownEnd})
+			s.windows = append(s.windows, matchedWindow{ownStart, ownEnd, int32(r.OffsetFrames)})
 
 			// Other range derived from the histogram delta:
 			// live_frame - OffsetFrames = entry.TimeFrame.
