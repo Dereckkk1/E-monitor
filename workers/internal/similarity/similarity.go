@@ -231,7 +231,7 @@ func CheckMaterialSimilarity(ctx context.Context, pool *pgxpool.Pool, materialID
 
 	top := report.perOther[topID]
 	ownCov, otherCov := coverages(top, report.ownTotalFrames)
-	segs := buildSegments(top.windows, 4) // ~0,5s mínimo
+	segs := buildSegments(top.windows, 4, int32(top.otherTotalFrames)) // ~0,5s mínimo
 	overlap := buildOverlapJSON(ownCov, otherCov, ownDuration, durationByID[topID], segs)
 
 	_, err = pool.Exec(ctx, `

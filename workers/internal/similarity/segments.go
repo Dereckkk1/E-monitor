@@ -18,7 +18,13 @@ type Segment struct {
 // sobrepostas no eixo own (via mergeRanges), e converte cada faixa fundida num
 // Segment conectado (other = own - offset). Descarta segmentos com menos de
 // minFrames de duração e ordena por OwnFrom.
-func buildSegments(windows []matchedWindow, minFrames int32) []Segment {
+//
+// otherTotalFrames é a duração do material existente (em frames). Segmentos
+// cujo lado `other` cai INTEIRAMENTE fora de [0, otherTotalFrames] são
+// descartados — são casamentos espúrios contra áudio inexistente (as variantes
+// de broadcast-sim com ruído geram alinhamentos fantasma). O lado `other` que
+// estoura a duração é cortado na borda.
+func buildSegments(windows []matchedWindow, minFrames, otherTotalFrames int32) []Segment {
 	byOffset := make(map[int32][]frameRange)
 	for _, w := range windows {
 		byOffset[w.offset] = append(byOffset[w.offset], frameRange{w.ownStart, w.ownEnd})
@@ -31,11 +37,14 @@ func buildSegments(windows []matchedWindow, minFrames int32) []Segment {
 			}
 			otherFrom := r.from - off
 			otherTo := r.until - off
-			if otherTo <= 0 {
-				continue
+			if otherTo <= 0 || otherFrom >= otherTotalFrames {
+				continue // fora dos limites do material existente — fantasma
 			}
 			if otherFrom < 0 {
 				otherFrom = 0
+			}
+			if otherTo > otherTotalFrames {
+				otherTo = otherTotalFrames
 			}
 			segs = append(segs, Segment{r.from, r.until, otherFrom, otherTo})
 		}
