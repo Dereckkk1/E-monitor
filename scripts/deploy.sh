@@ -74,6 +74,87 @@ snapshot_counts() {
     | grep -E '^[a-z_]+=[0-9]+$' || true
 }
 
+# ── teste de migrations em sombra ────────────────────────────────────────────
+#
+# Aplica as migrations PENDENTES a uma CÓPIA ISOLADA dos dados de prod (postgres
+# descartável numa rede própria), ANTES de tocar no banco real. Pega falhas que
+# DEPENDEM DOS DADOS — ex: colisão de UNIQUE num backfill — que passam batido em
+# DB local vazio/sparso (foi exatamente o incidente da 0039 em 2026-06-17: o
+# teste local não tinha commercials, então o INSERT era no-op; em prod colidiu
+# em materials.short_id e deixou o schema dirty, travando o deploy).
+#
+# Contrato:
+#   - migration FALHA na sombra  → ABORTA o deploy (prod intacta, nunca fica dirty).
+#   - setup da sombra falha       → WARN + segue (não pior que antes; guard é extra).
+#   - pular de propósito           → SKIP_MIGRATION_SHADOW=yes
+SHADOW_PG_IMAGE="postgres:16-alpine"          # mesma major do prod (ver compose)
+SHADOW_MIGRATE_IMAGE="migrate/migrate:v4.17.1" # mesma do service migrate
+SHADOW_NAME=""
+SHADOW_NET=""
+
+shadow_cleanup() {
+  [ -n "${SHADOW_NAME:-}" ] && docker rm -f "$SHADOW_NAME" >/dev/null 2>&1 || true
+  [ -n "${SHADOW_NET:-}" ]  && docker network rm "$SHADOW_NET" >/dev/null 2>&1 || true
+  SHADOW_NAME=""; SHADOW_NET=""
+}
+
+shadow_migration_test() {
+  if [ "${SKIP_MIGRATION_SHADOW:-no}" = "yes" ]; then
+    warn "SKIP_MIGRATION_SHADOW=yes — pulando teste de migrations em sombra."
+    return 0
+  fi
+  if ! service_running postgres; then
+    warn "postgres não está rodando — pulando teste de sombra (primeira subida?)."
+    return 0
+  fi
+
+  SHADOW_NET="rc-shadow-net-$$"
+  SHADOW_NAME="rc-shadow-pg-$$"
+
+  # ── setup (best-effort: qualquer falha aqui → warn + segue) ──
+  if ! docker network create "$SHADOW_NET" >/dev/null 2>&1; then
+    warn "não criou a rede de sombra — pulando teste (deploy segue)."; shadow_cleanup; return 0
+  fi
+  if ! docker run -d --name "$SHADOW_NAME" --network "$SHADOW_NET" \
+        -e POSTGRES_USER=radiocheck -e POSTGRES_PASSWORD=shadow -e POSTGRES_DB=radiocheck \
+        "$SHADOW_PG_IMAGE" >/dev/null 2>&1; then
+    warn "não subiu o postgres de sombra — pulando teste (deploy segue)."; shadow_cleanup; return 0
+  fi
+  local up=0 i
+  for i in $(seq 1 20); do
+    if docker exec "$SHADOW_NAME" pg_isready -U radiocheck >/dev/null 2>&1; then up=1; break; fi
+    sleep 1
+  done
+  if [ "$up" != "1" ]; then
+    warn "postgres de sombra não ficou pronto — pulando teste (deploy segue)."; shadow_cleanup; return 0
+  fi
+  # Clona schema+dados de prod → sombra. pg_restore pode sair !=0 por ruído
+  # benigno (extensões já presentes); validamos pelo schema_migrations.
+  $COMPOSE exec -T postgres sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>/dev/null \
+    | docker exec -i "$SHADOW_NAME" pg_restore -U radiocheck -d radiocheck --no-owner --no-acl >/dev/null 2>&1 || true
+  if ! docker exec "$SHADOW_NAME" psql -U radiocheck -d radiocheck -Atc \
+        "SELECT 1 FROM information_schema.tables WHERE table_name='schema_migrations'" 2>/dev/null | grep -q 1; then
+    warn "clone de dados pra sombra falhou — pulando teste (deploy segue)."; shadow_cleanup; return 0
+  fi
+
+  # ── o teste de verdade: aplica as migrations pendentes sobre os dados reais ──
+  step "teste de migrations em sombra (cópia dos dados de prod)"
+  local out rc
+  out=$(docker run --rm --network "$SHADOW_NET" -v "$REPO_ROOT/migrations:/migrations:ro" \
+        "$SHADOW_MIGRATE_IMAGE" -path=/migrations \
+        -database="postgres://radiocheck:shadow@$SHADOW_NAME:5432/radiocheck?sslmode=disable" up 2>&1) && rc=0 || rc=$?
+
+  shadow_cleanup
+
+  if [ "$rc" != "0" ]; then
+    printf '%s\n' "$out" | tail -20 | sed 's/^/      /' >&2
+    err "TESTE DE SOMBRA FALHOU — as migrations pendentes quebram nos dados de prod.
+     Prod NÃO foi tocada (nada ficou dirty). Corrija a migration e rode de novo.
+     (bypass: SKIP_MIGRATION_SHADOW=yes — não recomendado)"
+  fi
+  ok "teste de sombra OK — migrations aplicam limpo sobre cópia real dos dados"
+}
+
 # ── pré-checks ──────────────────────────────────────────────────────────────
 
 step "verificando docker"
@@ -98,7 +179,7 @@ fi
 
 SNAPSHOT_BEFORE=$(mktemp)
 SNAPSHOT_AFTER=$(mktemp)
-trap 'rm -f "$SNAPSHOT_BEFORE" "$SNAPSHOT_AFTER" 2>/dev/null || true' EXIT
+trap 'rm -f "$SNAPSHOT_BEFORE" "$SNAPSHOT_AFTER" 2>/dev/null || true; shadow_cleanup 2>/dev/null || true' EXIT
 
 step "capturando snapshot de row counts (pré-deploy)"
 if service_running postgres; then
@@ -153,6 +234,11 @@ fi
 
 step "git pull"
 git -C "$REPO_ROOT" pull --ff-only
+
+# ── teste de migrations em sombra (antes de qualquer build/up) ────────────────
+# Roda APÓS o pull (pra testar as migrations recém-puxadas) e ANTES do up -d
+# (pra abortar com prod intacta se alguma migration quebrar nos dados reais).
+shadow_migration_test
 
 # ── rebuild e restart ────────────────────────────────────────────────────────
 

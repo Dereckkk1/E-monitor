@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-18
 codigo-relacionado:
   - infra/docker/docker-compose.yml
   - migrations/
   - scripts/bootstrap-migrations.sh
+  - scripts/deploy.sh
 ---
 
 # Migrations — runner automático
@@ -100,3 +101,53 @@ Aplica o `*.down.sql` da última versão. Em produção, prefira ALTER manual ou
 - **Volume readonly:** o service `migrate` monta `migrations/` como `:ro`. Não há risco de o runner reescrever os arquivos.
 - **Não toca em `docker-entrypoint-initdb.d`:** o postgres ainda monta `migrations/` em `/docker-entrypoint-initdb.d` para o caso de DB novo (volume `pgdata` recém-criado), mas isso só dispara na primeira inicialização do volume. Após esse momento, é o `migrate` que governa.
 - **Multi-réplica:** se um dia rodarmos múltiplas instâncias do compose contra o mesmo DB, o golang-migrate adquire um advisory lock (`pg_advisory_lock`) automaticamente — apenas uma instância aplica por vez, as outras esperam.
+
+## Testar migration contra dados de prod (obrigatório pra migrations de DADO)
+
+**Por que:** uma migration que mexe em DADO (backfill `INSERT ... SELECT`, `ADD CONSTRAINT`, `CREATE UNIQUE INDEX`, dedup) pode passar no DB local e **falhar em prod** — porque a falha depende dos dados existentes (volume, colisão de UNIQUE, violação de constraint). Se o local está vazio/sparso, o teste dá **falso verde**.
+
+> Incidente 2026-06-17: a `0039_backfill_legacy_commercials` era no-op no local (0 commercials) mas colidiu em `materials.short_id UNIQUE` em prod → schema dirty → deploy travado. Ver CLAUDE.md regra 4.8.
+
+### Proteção automática no deploy: teste de sombra
+
+`scripts/deploy.sh` roda `shadow_migration_test` **antes** do `up -d`:
+
+1. Sobe um postgres descartável numa rede docker própria.
+2. Restaura o dump de prod nele (`pg_dump -Fc | pg_restore`).
+3. Roda as migrations pendentes (`migrate up`) **nessa cópia**.
+4. Se falhar → **aborta o deploy** (prod intacta, nunca fica dirty). Se passar → segue.
+
+Best-effort no setup (se a sombra não subir, só avisa e segue — não pior que antes); só a falha da migration em si aborta. Bypass de emergência: `SKIP_MIGRATION_SHADOW=yes ./scripts/deploy.sh` (evite).
+
+### Testar uma migration manualmente (antes de pushar)
+
+Clona os dados de prod (ou de qualquer DB representativo) num postgres descartável e aplica a migration lá. No Linux:
+
+```bash
+NET=rc-mig-test; NAME=rc-mig-pg
+docker network create "$NET"
+docker run -d --name "$NAME" --network "$NET" \
+  -e POSTGRES_USER=radiocheck -e POSTGRES_PASSWORD=shadow -e POSTGRES_DB=radiocheck \
+  postgres:16-alpine
+until docker exec "$NAME" pg_isready -U radiocheck; do sleep 1; done
+
+# clona o DB alvo (na VM use o $COMPOSE com override; aqui é o postgres do compose)
+docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env \
+  exec -T postgres sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  | docker exec -i "$NAME" pg_restore -U radiocheck -d radiocheck --no-owner --no-acl
+
+# (opcional) pra forçar a migration nova a rodar, rebobina pra versão anterior:
+docker exec "$NAME" psql -U radiocheck -d radiocheck \
+  -c "UPDATE schema_migrations SET version=<N-1>, dirty=false;"
+
+# aplica as migrations na cópia — ESTE é o teste que pega falha de dado
+docker run --rm --network "$NET" -v "$PWD/migrations:/migrations:ro" \
+  migrate/migrate:v4.17.1 -path=/migrations \
+  -database="postgres://radiocheck:shadow@$NAME:5432/radiocheck?sslmode=disable" up
+
+docker rm -f "$NAME"; docker network rm "$NET"
+```
+
+> No Windows/Git Bash o mount do `-v` exige `MSYS_NO_PATHCONV=1` e o path absoluto estilo `/c/Users/...`. Na VM (Linux) é nativo.
+
+Saída `<N>/u <nome> (...)` + exit 0 = a migration aplica limpo sobre os dados reais. Exit ≠ 0 = vai quebrar em prod — corrija antes de pushar.

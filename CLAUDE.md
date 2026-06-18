@@ -96,6 +96,16 @@ docker compose -f infra/docker/docker-compose.yml \
 
 Após F-116 (base yml suporta `PGDATA_HOST_PATH` via env vars), o override é redundante e será removido em limpeza futura. Por enquanto continua existindo na VM por compatibilidade.
 
+**4.8. Migration que depende de dados: testar contra uma CÓPIA dos dados de prod, nunca só no DB local.**
+
+Incidente 2026-06-17: a migration `0039_backfill_legacy_commercials` (um `INSERT ... SELECT` de `commercials` pra `materials`) passou no teste local porque o DB de dev tinha **0 commercials** — o INSERT era no-op. Em prod, com dados reais, colidiu em `materials.short_id UNIQUE` (sequences separadas pré-0024 geram short_ids sobrepostos), **falhou e deixou o schema dirty**, travando o deploy (`migrate exit 1` em 0.7s, que o golang-migrate emite ao recusar rodar em DB dirty). Recovery exigiu `UPDATE schema_migrations SET version=38, dirty=false` + redeploy com a migration corrigida.
+
+Lição: **DB local vazio/sparso dá falso verde** pra qualquer migration cuja falha dependa de volume/colisão/constraint sobre dados existentes (backfills, `ADD CONSTRAINT`, `CREATE UNIQUE INDEX`, dedup).
+
+Proteções (já implementadas):
+- **`scripts/deploy.sh` roda um "teste de sombra"** (`shadow_migration_test`) ANTES do `up -d`: sobe um postgres descartável, restaura o dump de prod nele, roda as migrations pendentes ali, e **aborta o deploy se falhar** — prod nunca fica dirty. Bypass de emergência: `SKIP_MIGRATION_SHADOW=yes` (não use sem motivo forte).
+- **Pra testar uma migration local com confiança**, clone os dados de prod num postgres descartável e rode `migrate up` lá. Procedimento canônico: [docs/operations/migrations.md §Testar migration contra dados de prod](docs/operations/migrations.md). NUNCA confie só no `go test`/local vazio pra migrations de dado.
+
 ### 5. `npm install` no Windows quebra o build do Cloudflare Pages — leitura obrigatória antes de mexer em deps do frontend
 
 Esta seção existe porque o erro **se repete**: rodar `npm install`/`npm i <pkg>` em `frontend/` no Windows **poda do `package-lock.json` as dependências opcionais específicas de Linux** (ex.: `@emnapi/*`, bindings nativos que o `vite`/`rolldown` usa no build). O Cloudflare Pages roda **`npm ci` em Linux**, que exige o lockfile completo e falha com:
