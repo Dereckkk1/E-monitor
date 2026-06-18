@@ -52,6 +52,7 @@ type Deps struct {
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
+	DailyFailuresDigest   *handlers.DailyFailuresDigestHandler
 	Insights              *handlers.InsightsHandler
 	LiveMap               *handlers.LiveMapHandler
 	ManagementOverview    *handlers.ManagementOverviewHandler
@@ -466,6 +467,17 @@ func NewRouter(d Deps) http.Handler {
 						r.Get("/admin/notifications", d.Notifications.List)
 						r.Post("/admin/notifications/mark-read", d.Notifications.MarkRead)
 						r.Post("/admin/notifications/mark-all-read", d.Notifications.MarkAllRead)
+					})
+				}
+
+				// /admin/daily-failures-digest — modal de resumo diário de
+				// falhas (1x/dia/usuário). Reusa notification_reads pro flag
+				// "visto". Doc: docs/features/daily-failures-digest-modal.md
+				if d.DailyFailuresDigest != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/daily-failures-digest", d.DailyFailuresDigest.Get)
+						r.Post("/admin/daily-failures-digest/ack", d.DailyFailuresDigest.Ack)
 					})
 				}
 			}) // end admin/operator group
