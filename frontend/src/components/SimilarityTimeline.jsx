@@ -5,17 +5,19 @@
  * escala da sua própria duração, com os trechos IGUAIS em verde (dado) e o
  * resto hachurado (diferente). Lê `data` = materials.similarity_segments:
  *   { own_cov, other_cov, own_duration, other_duration,
- *     segments: [{ own:[a,b], other:[c,d] }] }   // segundos
+ *     own_segments: [[a,b],...], other_segments: [[c,d],...] }   // segundos
  *
  * Sem cor de ação aqui — verde é semântico ("igual"), cinza é "diferente".
  */
 export default function SimilarityTimeline({ newTitle, otherTitle, data }) {
-  if (!data || !Array.isArray(data.segments) || data.segments.length === 0) return null
+  const ownSegs = data?.own_segments
+  const otherSegs = data?.other_segments
+  if (!data || !Array.isArray(ownSegs) || ownSegs.length === 0) return null
 
   const ownDur = data.own_duration || 1
   const otherDur = data.other_duration || 1
-  const matchedSecs = data.segments.reduce((acc, s) => acc + Math.max(0, (s.own?.[1] ?? 0) - (s.own?.[0] ?? 0)), 0)
-  const nSeg = data.segments.length
+  const matchedSecs = ownSegs.reduce((acc, [from, to]) => acc + Math.max(0, (to ?? 0) - (from ?? 0)), 0)
+  const nSeg = ownSegs.length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
@@ -31,13 +33,13 @@ export default function SimilarityTimeline({ newTitle, otherTitle, data }) {
         tagFilled
         title={newTitle}
         duration={ownDur}
-        segments={data.segments.map(s => s.own)}
+        segments={ownSegs}
       />
       <Track
         tag="já existente"
         title={otherTitle}
         duration={otherDur}
-        segments={data.segments.map(s => s.other)}
+        segments={Array.isArray(otherSegs) ? otherSegs : []}
       />
 
       {/* Legenda + síntese — todo número acompanhado de contexto (§3.1) */}
