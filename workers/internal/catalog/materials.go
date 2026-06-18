@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,21 +14,22 @@ import (
 // Materials are scoped per-client and decoupled from campaigns — a material
 // can be reused across many campaigns via campaign_materials.
 type Material struct {
-	ID                     uuid.UUID  `json:"id"`
-	ShortID                int32      `json:"short_id"`
-	ClientID               uuid.UUID  `json:"client_id"`
-	Title                  string     `json:"title"`
-	TypeID                 *uuid.UUID `json:"type_id,omitempty"`
-	DurationSeconds        float64    `json:"duration_seconds"`
-	MasterStoragePath      string     `json:"master_storage_path"`
-	MasterSHA256           string     `json:"master_sha256"`
-	FingerprintStatus      string     `json:"fingerprint_status"`
-	FingerprintGeneratedAt *time.Time `json:"fingerprint_generated_at,omitempty"`
-	FingerprintHashCount   *int32     `json:"fingerprint_hash_count,omitempty"`
-	SimilarityCheckStatus  string     `json:"similarity_check_status"`
-	MostSimilarMaterialID  *uuid.UUID `json:"most_similar_material_id,omitempty"`
-	SimilarityScore        *float32   `json:"similarity_score,omitempty"`
-	SimilarityAckdAt       *time.Time `json:"similarity_acknowledged_at,omitempty"`
+	ID                     uuid.UUID       `json:"id"`
+	ShortID                int32           `json:"short_id"`
+	ClientID               uuid.UUID       `json:"client_id"`
+	Title                  string          `json:"title"`
+	TypeID                 *uuid.UUID      `json:"type_id,omitempty"`
+	DurationSeconds        float64         `json:"duration_seconds"`
+	MasterStoragePath      string          `json:"master_storage_path"`
+	MasterSHA256           string          `json:"master_sha256"`
+	FingerprintStatus      string          `json:"fingerprint_status"`
+	FingerprintGeneratedAt *time.Time      `json:"fingerprint_generated_at,omitempty"`
+	FingerprintHashCount   *int32          `json:"fingerprint_hash_count,omitempty"`
+	SimilarityCheckStatus  string          `json:"similarity_check_status"`
+	MostSimilarMaterialID  *uuid.UUID      `json:"most_similar_material_id,omitempty"`
+	SimilarityScore        *float32        `json:"similarity_score,omitempty"`
+	SimilarityAckdAt       *time.Time      `json:"similarity_acknowledged_at,omitempty"`
+	SimilaritySegments     json.RawMessage `json:"similarity_segments,omitempty"`
 	// Script is the spoken-copy of the commercial — optional free text the
 	// operator fills in at upload or later via the wizard. Surfaced on
 	// /detections/:id when the detected material has one.
@@ -63,7 +65,7 @@ const materialColumns = `id, short_id, client_id, title, type_id, duration_secon
        master_storage_path, master_sha256, fingerprint_status,
        fingerprint_generated_at, fingerprint_hash_count,
        similarity_check_status, most_similar_material_id, similarity_score,
-       similarity_acknowledged_at, script, created_at, updated_at`
+       similarity_acknowledged_at, similarity_segments, script, created_at, updated_at`
 
 func scanMaterial(row interface {
 	Scan(...any) error
@@ -72,7 +74,7 @@ func scanMaterial(row interface {
 		&m.DurationSeconds, &m.MasterStoragePath, &m.MasterSHA256,
 		&m.FingerprintStatus, &m.FingerprintGeneratedAt, &m.FingerprintHashCount,
 		&m.SimilarityCheckStatus, &m.MostSimilarMaterialID, &m.SimilarityScore,
-		&m.SimilarityAckdAt, &m.Script, &m.CreatedAt, &m.UpdatedAt)
+		&m.SimilarityAckdAt, &m.SimilaritySegments, &m.Script, &m.CreatedAt, &m.UpdatedAt)
 }
 
 // Create inserts a new material and returns the persisted row.
