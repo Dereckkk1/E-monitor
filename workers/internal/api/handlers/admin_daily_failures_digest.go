@@ -80,6 +80,12 @@ type DigestSeenRepo interface {
 	MarkRead(ctx context.Context, userID uuid.UUID, keys []string) (int, error)
 }
 
+// Garante em tempo de compilação que o catalog real satisfaz as interfaces.
+var (
+	_ DigestSeenRepo      = (*catalog.Notifications)(nil)
+	_ DigestCampaignsRepo = (*catalog.CampaignFailures)(nil)
+)
+
 // DailyFailuresDigestHandler powers /v1/internal/admin/daily-failures-digest.
 // Auth: admin-only (montado no grupo admin do router, junto do sininho).
 type DailyFailuresDigestHandler struct {
