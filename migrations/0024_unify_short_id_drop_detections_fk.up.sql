@@ -25,13 +25,27 @@ CREATE SEQUENCE catalog_short_id_seq AS INTEGER;
 
 -- Seed above MAX of both existing sequences so no future nextval()
 -- collides with an existing short_id.
-SELECT setval(
-    'catalog_short_id_seq',
-    GREATEST(
+--
+-- Guard: setval(seq, 0) is an ERROR ("value 0 is out of bounds, min 1"). When
+-- BOTH tables are empty (fresh DB / DR restore-from-scratch) GREATEST(...) would
+-- be 0 and this migration would fail mid-apply, leaving the schema dirty and
+-- blocking every later migration. So we only setval when there's actual data;
+-- on an empty DB the sequence keeps its default (next nextval = 1). On a DB with
+-- data the behaviour is unchanged. (Discovered via the 2026-06-17 0039 incident,
+-- where this latent bug surfaced in the migrate logs — see
+-- docs/incidents/incident-2026-06-17-migration-0039-dirty.md.)
+DO $$
+DECLARE
+    max_short BIGINT;
+BEGIN
+    SELECT GREATEST(
         COALESCE((SELECT MAX(short_id) FROM commercials), 0),
         COALESCE((SELECT MAX(short_id) FROM materials), 0)
-    )
-);
+    ) INTO max_short;
+    IF max_short > 0 THEN
+        PERFORM setval('catalog_short_id_seq', max_short);
+    END IF;
+END $$;
 
 -- Repoint both tables to the shared sequence. Existing rows are not
 -- rewritten — only the DEFAULT changes, plus we orphan the old per-table

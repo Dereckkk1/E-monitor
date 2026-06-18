@@ -104,6 +104,7 @@ docs/
 | [incident-2026-05-17-audit-status-constraint.md](incidents/incident-2026-05-17-audit-status-constraint.md) | 2026-05-17 | Audit §9.9 deixava detections órfãs em `pending` (CHECK constraint sem `audit_rejected`) — áudio 404 |
 | [incident-2026-05-22-stale-master-catalog.md](incidents/incident-2026-05-22-stale-master-catalog.md) | 2026-05-22 | Material trocado no ar sem atualizar o catálogo — master desatualizado |
 | [incident-2026-06-12-detection-recall-gaps.md](incidents/incident-2026-06-12-detection-recall-gaps.md) | 2026-06-12 | Gap de detecções vs fornecedor: re-fingerprint incompleto (32 materiais degradados 08-12/06), fila de fingerprint sem retry (8 nunca monitorados), audit_rejected invisível, Jovem Pan geo-block + Favorita 404 |
+| [incident-2026-06-17-migration-0039-dirty.md](incidents/incident-2026-06-17-migration-0039-dirty.md) | 2026-06-17 | Backfill 0039 colidiu em `materials.short_id UNIQUE` em prod (DB local vazio deu falso verde) → schema dirty → deploy travado. Defesa: teste de migrations em sombra no deploy.sh + 0024 endurecida contra DB vazio |
 
 ## `roadmap/` — follow-ups e planos de fase
 
