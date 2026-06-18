@@ -1,9 +1,10 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-06-18
 codigo-relacionado:
   - workers/internal/similarity/similarity.go
   - workers/internal/similarity/similarity_test.go
+  - workers/internal/similarity/dense_audio_test.go
   - migrations/0025_material_similarity.up.sql
   - frontend/src/components/SimilarityWarningModal.jsx
 ---
@@ -42,7 +43,13 @@ modal that A/B's both audios and lets the operator decide:
 For each candidate pair (own=new material, other=existing material), the
 scanner slides a 4s window in 1s hops across the new material's PCM, runs
 `MatchWindow` against an in-memory index built from the client's other ready
-materials, and accumulates the matched frame ranges on both sides. Then:
+materials, and accumulates the matched frame ranges on both sides.
+
+A window only counts as a hit when its histogram peak clears BOTH
+`MinScore` (absolute, =5) AND `MinScoreCoverage` (the peak must be ≥2% of the
+window's total hashes). The coverage floor mirrors the runtime ingestor
+(`MinScoreCoverage: 0.02`) and is what stops spectrally dense audio from
+false-matching — see the dense-audio bug below. Then:
 
 ```
 ownCov   = framesUnionOwn   / totalFramesOwn
@@ -132,6 +139,44 @@ A 200-material client would hit ~2-3 seconds per upload — still acceptable.
 
 The scan runs **after** fingerprint generation completes, so the upload
 acknowledgement to the operator (HTTP 201) is not blocked by similarity work.
+
+## Dense-audio false positive (fixed 2026-06-18)
+
+**Symptom:** two completely different full-length songs uploaded for the same
+client scored ~100% similar and tripped the blocking modal.
+
+**Root cause:** `runScan` called `MatchWindow(window, store, MinScore, 0.0)` —
+the `0.0` disabled the per-window coverage floor. Two compounding factors:
+
+1. **Dense audio + small effective hash space.** A 3-minute song produces ~350
+   hashes/s; in a 4s window that's ~1400 hashes. The hash masks frequency to
+   9 bits (`f & 0x1FF`), so the effective space is small and **~8% of hash
+   VALUES coincide between two unrelated tracks by pure chance**. Those random
+   collisions pile 5+ into the same delta bin, clearing `MinScore=5`, so a
+   chunk of windows false-hit. The coverage formula then paints 4s of frames
+   per hit and takes `max(ownCov, otherCov)`. With a single variant this
+   already reaches ~56% on two real songs.
+
+2. **5 broadcast-sim variants per material in the index.** The python daemon
+   (`broadcast_sim.py`) stores variants 0–4 per material; the matcher takes the
+   `max` peak across variants per window, i.e. **5 independent chances** to
+   spuriously clear `MinScore`. Variants 3 & 4 inject white noise (−32/−35 dB)
+   and variant 4 lowpasses to 3500 Hz — both *increase* hash density (variant 4
+   alone ≈ 105k hashes), so the spurious-hit rate climbs further. With the real
+   5-variant index, two completely different songs reach **exactly 100%** (this
+   is what was observed in production; reproduced faithfully with the prod
+   ffmpeg chains).
+
+The runtime matcher never had this problem because it always applied the 2%
+coverage floor plus its downstream guards (unique-hash score, temporal
+coverage, cooldown, evidence audit); the similarity scan reused `MinScore` but
+dropped the coverage guard.
+
+**Fix:** pass `MinScoreCoverage = 0.02` instead of `0.0`. This drops the two
+test songs from 55% → 0% while a real 30s subset stays at 100%. Regression
+guard: `dense_audio_test.go` (synthetic broadband noise reproduces the
+false positive at 100% with the guard off, 0% with it on; a real subset stays
+≥90%).
 
 ## Known limitations / follow-ups
 
