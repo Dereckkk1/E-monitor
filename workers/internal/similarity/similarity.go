@@ -26,6 +26,22 @@ const (
 	// MinScore is the histogram peak score that qualifies a window as a hit
 	// in the cov computation. Aligned with the runtime matcher.
 	MinScore = 5
+	// MinScoreCoverage is the per-window floor: the histogram peak must reach
+	// this FRACTION of the window's total hashes for the window to count as a
+	// hit. The runtime ingestor uses 0.02 for exactly this reason; this scan
+	// historically passed 0.0, which disabled the guard.
+	//
+	// Why it matters: spectrally dense audio (e.g. a full 3-minute song, ~350
+	// hashes/s) saturates the ~16-bit effective hash space, so ~8% of hash
+	// VALUES coincide between two unrelated tracks by pure chance. With a 4s
+	// window holding ~1400 hashes, those random collisions routinely pile 5+
+	// into the same delta bin — clearing MinScore=5 — so ~1/5 of windows
+	// false-hit. The coverage formula then paints 4s per hit, inflating two
+	// completely different songs to >50% and tripping the blocking modal.
+	// Requiring the peak to be ≥2% of the window (≈28 hashes for music) keeps
+	// the spurious peaks (~5) out while real subsets (peak = a large fraction
+	// of the window) sail through. See similarity_test.go (dense-audio case).
+	MinScoreCoverage = 0.02
 	// WarnThreshold is the score (max(ownCov, otherCov)) at or above which
 	// we surface the blocking decision modal at upload time. Calibration:
 	// <5% noise, 15-25% sting (intentional reuse of a vinheta — not blocking),
@@ -299,7 +315,7 @@ func runScan(
 
 	for off := 0; off+windowSamples <= len(pcm); off += hopSamples {
 		window := pcm[off : off+windowSamples]
-		results := match.MatchWindow(window, store, MinScore, 0.0)
+		results := match.MatchWindow(window, store, MinScore, MinScoreCoverage)
 
 		ownStart := int32(off / stftHopSamples)
 		ownEnd := int32((off + windowSamples) / stftHopSamples)
