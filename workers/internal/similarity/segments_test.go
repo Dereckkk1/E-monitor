@@ -56,3 +56,13 @@ func TestBuildSegments_ClampsOtherToZero(t *testing.T) {
 		t.Fatalf("esperava OtherFrom clampado em 0: %+v", segs)
 	}
 }
+
+// runScan deve registrar, por par, as janelas casadas (own + offset) pra
+// alimentar buildSegments. Aqui garantimos que o campo existe e acumula.
+func TestPairScan_HasWindowsField(t *testing.T) {
+	s := &pairScan{}
+	s.windows = append(s.windows, matchedWindow{0, 31, 0})
+	if len(s.windows) != 1 {
+		t.Fatalf("campo windows não acumulou")
+	}
+}
