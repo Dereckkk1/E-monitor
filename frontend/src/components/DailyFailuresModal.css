@@ -1,0 +1,82 @@
+/* Modal de resumo diário de falhas. Reusa .confirm-backdrop / .btn do
+   index.css; card e lista são próprios. */
+.dfm-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(6, 5, 91, 0.18), 0 4px 16px rgba(6, 5, 91, 0.10);
+  padding: 24px 24px 18px;
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: confirm-slide-in 150ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dfm-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dfm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.dfm-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 10px;
+}
+
+.dfm-item:hover {
+  background: var(--c-surface-2, #f1f5f9);
+}
+
+.dfm-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.dfm-item-name {
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dfm-item-client {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--c-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dfm-badge {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--c-danger);
+  background: rgba(239, 68, 68, 0.08);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}

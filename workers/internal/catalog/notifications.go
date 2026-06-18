@@ -138,3 +138,19 @@ ON CONFLICT (user_id, notification_key) DO NOTHING`, userID)
 	}
 	return int(tag.RowsAffected()), nil
 }
+
+// HasRead reporta se o usuário já marcou aquela notification_key como lida.
+// Usado pelo digest diário de falhas pra decidir se a modal já foi vista
+// hoje. Chave esperada: "daily_failures_digest:YYYY-MM-DD".
+func (n *Notifications) HasRead(ctx context.Context, userID uuid.UUID, key string) (bool, error) {
+	var exists bool
+	err := n.pool.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM notification_reads
+  WHERE user_id = $1 AND notification_key = $2
+)`, userID, key).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("notifications.HasRead: %w", err)
+	}
+	return exists, nil
+}

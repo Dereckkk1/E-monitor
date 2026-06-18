@@ -350,6 +350,7 @@ docs/
 | Painel admin `/admin/station-failures` (emissoras com falha no dia + campanhas com slots perdidos, deep-link pra /campaigns) | [docs/features/admin-station-failures.md](docs/features/admin-station-failures.md) |
 | Modo "Por campanha" de `/admin/station-failures` (cards por campanha + drill-in drawer + PDF de cobrança) | [docs/features/admin-campaign-failures.md](docs/features/admin-campaign-failures.md) |
 | Sininho de notificações (`/dashboard` admin, last-7d com read-state persistido) | [docs/features/admin-notifications.md](docs/features/admin-notifications.md) |
+| Modal de resumo diário de falhas (admin, 1x/dia/usuário no primeiro load, leva pra /admin/station-failures) | [docs/features/daily-failures-digest-modal.md](docs/features/daily-failures-digest-modal.md) |
 | Emails diários de alerta (campanhas iniciando sem material / iniciando / terminando + emissoras >2h fora — janela dias úteis, SMTP Workspace, dedup por dia, opt-out por usuário) | [docs/features/campaign-notification-emails.md](docs/features/campaign-notification-emails.md) |
 | Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
 | Relatórios de campanha (CSV consolidado/detalhado, PDF com logo E-monitor) | [docs/features/campaign-reports.md](docs/features/campaign-reports.md) |
