@@ -209,6 +209,16 @@ desenhar uma timeline no upload. Spec:
 - **Componente:** `SimilarityTimeline.jsx` (duas faixas, trechos iguais em
   verde) é compartilhado pelos dois estados.
 
+**Limitações conhecidas (verificadas no e2e 2026-06-18):**
+- O lado `other` da timeline pode mostrar **menos trechos** que o `own`: as
+  variantes de broadcast-sim com ruído às vezes fazem o matcher escolher um
+  alinhamento fantasma (fora dos limites do material), que é **descartado**
+  (`buildSegments` clampa em `otherTotalFrames`). O eixo `own` é confiável.
+- O `similarity_score` (e portanto a faixa bloqueante/heads-up) ainda pode ser
+  **inflado** por casamentos fantasma além da duração — `coverages()` usa os
+  ranges crus, sem clamp. Pré-existente (não introduzido por esta feature);
+  follow-up: clampar `otherRanges` em `coverages()` também.
+
 ## Known limitations / follow-ups
 
 - **F-120 (new):** Threshold is not tunable per client. Some clients may want
