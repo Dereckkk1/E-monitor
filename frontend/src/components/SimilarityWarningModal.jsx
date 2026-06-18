@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDeleteMaterial, useAcknowledgeSimilarity } from '../api/hooks'
 import api from '../api/client'
+import SimilarityTimeline from './SimilarityTimeline'
 
 /**
  * Blocking decision modal. Fires when a freshly-uploaded material is ≥50%
@@ -30,7 +31,10 @@ export default function SimilarityWarningModal({
   const busy = del.isPending || ack.isPending
   const headlineRef = useRef(null)
 
-  const pct = Math.round((newMaterial.similarity_score ?? 0) * 100)
+  // Headline = % do material novo que é igual (own_cov). Cai no score legado
+  // (max) se o backend ainda não trouxe segmentos.
+  const seg = newMaterial.similarity_segments
+  const pct = Math.round(((seg?.own_cov ?? newMaterial.similarity_score) ?? 0) * 100)
 
   // Capture ESC and prevent any global handler from closing this modal.
   useEffect(() => {
@@ -151,6 +155,17 @@ export default function SimilarityWarningModal({
             seguir sem responder.
           </p>
         </header>
+
+        {/* ── Timeline: onde os dois batem ────────────────────────── */}
+        {seg && (
+          <div style={{ padding: '2px 32px 18px' }}>
+            <SimilarityTimeline
+              newTitle={newMaterial.title}
+              otherTitle={similarMaterial.title}
+              data={seg}
+            />
+          </div>
+        )}
 
         {/* ── Body: side-by-side comparison cards ─────────────────── */}
         <div style={{
