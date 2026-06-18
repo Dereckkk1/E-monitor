@@ -369,6 +369,11 @@ func main() {
 			Repo: catalog.NewNotifications(pool),
 			Log:  logger,
 		},
+		DailyFailuresDigest: &handlers.DailyFailuresDigestHandler{
+			Campaigns: catalog.NewCampaignFailures(pool),
+			Seen:      catalog.NewNotifications(pool),
+			Log:       logger,
+		},
 		Metrics:               metricsWriter,
 		BlockList:             blockList,
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
