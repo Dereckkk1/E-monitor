@@ -1011,6 +1011,33 @@ export function useMarkAllNotificationsRead() {
   })
 }
 
+// ─── Digest diário de falhas (modal admin) ──────────────────────────
+// Spec: docs/superpowers/specs/2026-06-18-daily-failures-digest-modal-design.md
+// Mesmo gating que useNotifications: enabled em isAdmin (operator==admin).
+
+export function useDailyFailuresDigest({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['admin', 'daily-failures-digest'],
+    queryFn: () => api.get('/admin/daily-failures-digest').then(r => r.data),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    enabled,
+  })
+}
+
+export function useAckDailyFailuresDigest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      api.post('/admin/daily-failures-digest/ack').then(r => r.data),
+    onSuccess: () => {
+      // Marca seen localmente pra modal não reabrir sem refetch.
+      qc.setQueryData(['admin', 'daily-failures-digest'], (old) =>
+        old ? { ...old, seen: true } : old)
+    },
+  })
+}
+
 // Insights — dashboard /insights. Devolve um payload já agregado (sem
 // paginação). Só dispara quando clientId + campaignIds estão presentes,
 // pois sem eles o backend devolveria 400.
