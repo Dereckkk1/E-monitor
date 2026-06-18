@@ -3,10 +3,15 @@ status: implementado
 ultima-verificacao: 2026-06-18
 codigo-relacionado:
   - workers/internal/similarity/similarity.go
+  - workers/internal/similarity/segments.go
+  - workers/internal/similarity/overlap.go
   - workers/internal/similarity/similarity_test.go
   - workers/internal/similarity/dense_audio_test.go
   - migrations/0025_material_similarity.up.sql
+  - migrations/0040_similarity_segments.up.sql
   - frontend/src/components/SimilarityWarningModal.jsx
+  - frontend/src/components/SimilarityTimeline.jsx
+  - frontend/src/components/SimilarityHeadsUp.jsx
 ---
 
 # Material Similarity Warning
@@ -177,6 +182,32 @@ test songs from 55% → 0% while a real 30s subset stays at 100%. Regression
 guard: `dense_audio_test.go` (synthetic broadband noise reproduces the
 false positive at 100% with the guard off, 0% with it on; a real subset stays
 ≥90%).
+
+## Timeline de sobreposição (2026-06-18)
+
+Além do score, o scan agora persiste **onde** os dois materiais batem, pra
+desenhar uma timeline no upload. Spec:
+[docs/superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md](../superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md).
+
+- **Segmentos conectados:** `runScan` registra, por janela casada com o top
+  match, a tripla `(ownStart, ownEnd, offset)`. `buildSegments`
+  (`segments.go`) agrupa por offset (cada offset = um alinhamento) e funde
+  janelas contíguas → uma lista de trechos `own[de,até] ↔ other[de,até]`.
+- **Persistência:** coluna `materials.similarity_segments` (JSONB, migration
+  0040) guarda `{ own_cov, other_cov, own_duration, other_duration, segments }`
+  em segundos. O **piso de persistência caiu de 0.50 → 0.25**
+  (`PersistThreshold`): abaixo disso a linha fica limpa (`NULL`).
+- **Headline:** o número mostrado é `own_cov` (% do material novo que é igual),
+  não o `max`. O `similarity_score` persistido continua sendo o `max` e é ele
+  que decide o bloqueio.
+- **Dois estados no upload (wizard):**
+  - `score ≥ 0.50` → modal **bloqueante** (`SimilarityWarningModal`) com a
+    timeline embutida (manter/remover).
+  - `0.25 ≤ score < 0.50` → **heads-up não-bloqueante** (`SimilarityHeadsUp`):
+    mesma timeline, uma ação "Entendi, seguir" que sempre prossegue.
+  - `< 0.25` → nada.
+- **Componente:** `SimilarityTimeline.jsx` (duas faixas, trechos iguais em
+  verde) é compartilhado pelos dois estados.
 
 ## Known limitations / follow-ups
 
