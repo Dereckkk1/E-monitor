@@ -42,6 +42,12 @@ const (
 	// the spurious peaks (~5) out while real subsets (peak = a large fraction
 	// of the window) sail through. See similarity_test.go (dense-audio case).
 	MinScoreCoverage = 0.02
+	// PersistThreshold is the floor at/above which we PERSIST a match plus its
+	// connected segments. Below it the match is noise and the row is cleared.
+	// The blocking modal still uses WarnThreshold (0.50) — decided on the
+	// frontend; between 0.25 and 0.50 the frontend shows a non-blocking
+	// heads-up with the same timeline.
+	PersistThreshold = 0.25
 	// WarnThreshold is the score (max(ownCov, otherCov)) at or above which
 	// we surface the blocking decision modal at upload time. Calibration:
 	// <5% noise, 15-25% sting (intentional reuse of a vinheta — not blocking),
@@ -156,14 +162,15 @@ func mergeRanges(rs []frameRange) []frameRange {
 // fingerprint generation completes. Failures set similarity_check_status to
 // 'failed' so they can be retried via the NATS event.
 func CheckMaterialSimilarity(ctx context.Context, pool *pgxpool.Pool, materialID uuid.UUID) error {
-	// 1. Resolve client_id + master_storage_path.
+	// 1. Resolve client_id + master_storage_path + own duration.
 	var clientID uuid.UUID
 	var masterPath string
 	var fpStatus string
+	var ownDuration float64
 	if err := pool.QueryRow(ctx, `
-		SELECT client_id, master_storage_path, fingerprint_status
+		SELECT client_id, master_storage_path, fingerprint_status, duration_seconds
 		FROM materials WHERE id = $1
-	`, materialID).Scan(&clientID, &masterPath, &fpStatus); err != nil {
+	`, materialID).Scan(&clientID, &masterPath, &fpStatus, &ownDuration); err != nil {
 		return fmt.Errorf("similarity: lookup material: %w", err)
 	}
 	if fpStatus != "ready" {
@@ -178,7 +185,7 @@ func CheckMaterialSimilarity(ctx context.Context, pool *pgxpool.Pool, materialID
 	// 2. Build the per-client index. Excludes self and skips materials whose
 	//    own fingerprint isn't ready. Joins fingerprint_hashes by material id
 	//    (post-bridge, fingerprint_hashes.commercial_id is polymorphic).
-	idx, shortToID, totalFramesByID, err := loadClientIndex(ctx, pool, clientID, materialID)
+	idx, shortToID, totalFramesByID, durationByID, err := loadClientIndex(ctx, pool, clientID, materialID)
 	if err != nil {
 		_ = markFailed(ctx, pool, materialID)
 		return fmt.Errorf("similarity: load client index: %w", err)
@@ -204,25 +211,37 @@ func CheckMaterialSimilarity(ctx context.Context, pool *pgxpool.Pool, materialID
 	// 4. Slide window, run MatchWindow against the per-client index, build report.
 	report := runScan(pcm, store, materialID, shortToID, totalFramesByID)
 
-	// 5. Pick top match, persist.
+	// 5. Pick top match, persist. Below PersistThreshold (0.25) we treat the
+	//    match as noise and clear the row. At/above it we also persist the
+	//    connected segments (the timeline data). The blocking decision (≥0.50)
+	//    is the frontend's; between 0.25 and 0.50 it shows a non-blocking
+	//    heads-up.
 	topID, score := pickTopMatch(report)
-	if score < WarnThreshold {
+	if score < PersistThreshold {
 		_, err := pool.Exec(ctx, `
 			UPDATE materials
 			SET similarity_check_status = 'ready',
 			    most_similar_material_id = NULL,
-			    similarity_score = NULL
+			    similarity_score = NULL,
+			    similarity_segments = NULL
 			WHERE id = $1
 		`, materialID)
 		return err
 	}
+
+	top := report.perOther[topID]
+	ownCov, otherCov := coverages(top, report.ownTotalFrames)
+	segs := buildSegments(top.windows, 4) // ~0,5s mínimo
+	overlap := buildOverlapJSON(ownCov, otherCov, ownDuration, durationByID[topID], segs)
+
 	_, err = pool.Exec(ctx, `
 		UPDATE materials
 		SET similarity_check_status = 'ready',
 		    most_similar_material_id = $2,
-		    similarity_score = $3
+		    similarity_score = $3,
+		    similarity_segments = $4
 		WHERE id = $1
-	`, materialID, topID, score)
+	`, materialID, topID, score, overlap)
 	return err
 }
 
@@ -247,7 +266,7 @@ func loadClientIndex(
 	pool *pgxpool.Pool,
 	clientID uuid.UUID,
 	selfID uuid.UUID,
-) (index.Index, map[int32]uuid.UUID, map[uuid.UUID]int, error) {
+) (index.Index, map[int32]uuid.UUID, map[uuid.UUID]int, map[uuid.UUID]float64, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT fh.hash_value, fh.time_frame, fh.variant_id, fh.rate_id,
 		       m.short_id, m.id, m.duration_seconds
@@ -258,13 +277,14 @@ func loadClientIndex(
 		  AND m.fingerprint_status = 'ready'
 	`, clientID, selfID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	defer rows.Close()
 
 	idx := make(index.Index)
 	shortToID := make(map[int32]uuid.UUID)
 	totalFramesByID := make(map[uuid.UUID]int)
+	durationByID := make(map[uuid.UUID]float64)
 	for rows.Next() {
 		var hashValue uint32
 		var timeFrame int32
@@ -274,10 +294,10 @@ func loadClientIndex(
 		var durationSec float64
 		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID,
 			&shortID, &matID, &durationSec); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
-			return nil, nil, nil, fmt.Errorf(
+			return nil, nil, nil, nil, fmt.Errorf(
 				"similarity: variant_id=%d or rate_id=%d out of uint8 range",
 				variantID, rateID)
 		}
@@ -290,8 +310,9 @@ func loadClientIndex(
 		shortToID[shortID] = matID
 		// duration_seconds × (sampleRate / stftHop) = frames.
 		totalFramesByID[matID] = int(durationSec * float64(fingerprint.SampleRate) / 2048.0)
+		durationByID[matID] = durationSec
 	}
-	return idx, shortToID, totalFramesByID, rows.Err()
+	return idx, shortToID, totalFramesByID, durationByID, rows.Err()
 }
 
 // runScan slides a WindowSeconds window in HopSeconds increments over pcm,
