@@ -5,9 +5,10 @@ import (
 	"testing"
 )
 
-func TestBuildOverlapJSON_ShapeAndSeconds(t *testing.T) {
-	segs := []Segment{{OwnFrom: 0, OwnTo: 39, OtherFrom: 0, OtherTo: 39}}
-	raw := buildOverlapJSON(0.33, 0.5, 30.0, 60.0, segs)
+func TestBuildOverlapJSON_ShapeAndSegments(t *testing.T) {
+	ownSegs := [][2]float64{{0.0, 5.0}, {25.0, 30.0}}
+	otherSegs := [][2]float64{{0.0, 5.0}, {55.0, 60.0}}
+	raw := buildOverlapJSON(0.33, 0.5, 30.0, 60.0, ownSegs, otherSegs)
 
 	var got overlapJSON
 	if err := json.Unmarshal(raw, &got); err != nil {
@@ -19,11 +20,27 @@ func TestBuildOverlapJSON_ShapeAndSeconds(t *testing.T) {
 	if got.OwnDuration != 30.0 || got.OtherDuration != 60.0 {
 		t.Fatalf("duração errada: %+v", got)
 	}
-	if len(got.Segments) != 1 {
-		t.Fatalf("esperava 1 segmento, veio %d", len(got.Segments))
+	if len(got.OwnSegments) != 2 || len(got.OtherSegments) != 2 {
+		t.Fatalf("segmentos errados: %+v", got)
 	}
-	// 39 frames * 2048 / 16000 = 4.992s
-	if s := got.Segments[0].Own[1]; s < 4.9 || s > 5.1 {
-		t.Fatalf("own[1] em segundos errado: %v", s)
+	if got.OwnSegments[1][0] != 25.0 || got.OtherSegments[1][1] != 60.0 {
+		t.Fatalf("conteúdo dos segmentos errado: %+v", got)
 	}
+}
+
+// Listas nil viram [] no JSON (não null), pra o frontend sempre iterar.
+func TestBuildOverlapJSON_NilBecomesEmptyArray(t *testing.T) {
+	raw := buildOverlapJSON(0, 0, 10, 10, nil, nil)
+	if got := string(raw); !contains(got, `"own_segments":[]`) || !contains(got, `"other_segments":[]`) {
+		t.Fatalf("esperava arrays vazios, veio %s", got)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
