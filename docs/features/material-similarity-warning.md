@@ -189,14 +189,18 @@ Além do score, o scan agora persiste **onde** os dois materiais batem, pra
 desenhar uma timeline no upload. Spec:
 [docs/superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md](../superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md).
 
-- **Segmentos conectados:** `runScan` registra, por janela casada com o top
-  match, a tripla `(ownStart, ownEnd, offset)`. `buildSegments`
-  (`segments.go`) agrupa por offset (cada offset = um alinhamento) e funde
-  janelas contíguas → uma lista de trechos `own[de,até] ↔ other[de,até]`.
+- **Trechos por eixo (merge):** `runScan` acumula os ranges casados em cada
+  eixo (`ownRanges`/`otherRanges`). `mergeRegionsSec` (`segments.go`) funde a
+  união mínima de cada eixo, clampa em [0, duração] e converte pra segundos →
+  duas listas independentes (`own_segments`, `other_segments`).
+  **Por que por-eixo e não pares `own↔other`:** o offset estimado por janela é
+  ruidoso (variantes com ruído), então parear fragmentava material idêntico em
+  vários segmentos e dobrava o total. Como a timeline não tem conectores, a
+  união por eixo é o modelo certo — limpo e consistente com o `cov`.
 - **Persistência:** coluna `materials.similarity_segments` (JSONB, migration
-  0040) guarda `{ own_cov, other_cov, own_duration, other_duration, segments }`
-  em segundos. O **piso de persistência caiu de 0.50 → 0.25**
-  (`PersistThreshold`): abaixo disso a linha fica limpa (`NULL`).
+  0040) guarda `{ own_cov, other_cov, own_duration, other_duration,
+  own_segments, other_segments }` em segundos. O **piso de persistência caiu de
+  0.50 → 0.25** (`PersistThreshold`): abaixo disso a linha fica limpa (`NULL`).
 - **Headline:** o número mostrado é `own_cov` (% do material novo que é igual),
   não o `max`. O `similarity_score` persistido continua sendo o `max` e é ele
   que decide o bloqueio.
@@ -210,14 +214,14 @@ desenhar uma timeline no upload. Spec:
   verde) é compartilhado pelos dois estados.
 
 **Limitações conhecidas (verificadas no e2e 2026-06-18):**
-- O lado `other` da timeline pode mostrar **menos trechos** que o `own`: as
-  variantes de broadcast-sim com ruído às vezes fazem o matcher escolher um
-  alinhamento fantasma (fora dos limites do material), que é **descartado**
-  (`buildSegments` clampa em `otherTotalFrames`). O eixo `own` é confiável.
 - O `similarity_score` (e portanto a faixa bloqueante/heads-up) ainda pode ser
   **inflado** por casamentos fantasma além da duração — `coverages()` usa os
-  ranges crus, sem clamp. Pré-existente (não introduzido por esta feature);
-  follow-up: clampar `otherRanges` em `coverages()` também.
+  ranges crus, sem clamp (as `own_segments`/`other_segments` desenhadas, sim,
+  são clampadas). Pré-existente (não introduzido por esta feature); follow-up:
+  clampar os ranges em `coverages()` também, pra a faixa bater com o desenho.
+- Histórico: a 1ª versão pareava `own↔other` por offset e fragmentava material
+  idêntico (11 trechos, total > duração). Trocado por merge-por-eixo
+  (regressão: `TestIdentical_*` no dev; `mergeRegionsSec` nos unit tests).
 
 ## Known limitations / follow-ups
 
