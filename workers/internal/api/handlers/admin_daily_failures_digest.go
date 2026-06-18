@@ -94,5 +94,63 @@ func (h *DailyFailuresDigestHandler) logErr(msg string, err error) {
 	}
 }
 
-// Get e Ack são implementados na Task 2.
-var _ = http.StatusOK // mantém net/http importado até a Task 2
+// Get serve GET /admin/daily-failures-digest.
+// Calcula "ontem", busca as falhas do dia e o flag "seen" do usuário atual.
+func (h *DailyFailuresDigestHandler) Get(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userIDFromReq(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	day := yesterdayLocal()
+	dayStr := day.Format("2006-01-02")
+
+	if h.Campaigns == nil {
+		// Test harness sem DB — devolve vazio em vez de panicar.
+		writeJSON(w, http.StatusOK, digestResponse{Date: dayStr, Campaigns: []digestCampaign{}})
+		return
+	}
+
+	res, err := h.Campaigns.ListForDate(r.Context(), day)
+	if err != nil {
+		h.logErr("daily_failures_digest_list_failed", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	seen := false
+	if h.Seen != nil {
+		s, err := h.Seen.HasRead(r.Context(), userID, digestKey(dayStr))
+		if err != nil {
+			h.logErr("daily_failures_digest_hasread_failed", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		seen = s
+	}
+
+	writeJSON(w, http.StatusOK, digestFromDaily(res, seen))
+}
+
+// Ack serve POST /admin/daily-failures-digest/ack.
+// Sem body. Servidor deriva "ontem" e marca a chave como lida pro usuário.
+func (h *DailyFailuresDigestHandler) Ack(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userIDFromReq(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	dayStr := yesterdayLocal().Format("2006-01-02")
+
+	if h.Seen != nil {
+		if _, err := h.Seen.MarkRead(r.Context(), userID, []string{digestKey(dayStr)}); err != nil {
+			h.logErr("daily_failures_digest_ack_failed", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"acked": true})
+}
