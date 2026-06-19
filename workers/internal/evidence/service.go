@@ -479,6 +479,28 @@ func (s *Service) runAuditOrReject(
 			zap.Error(err),
 		)
 	}
+	// §18.2.2 v2 — reject-path recovery. A LONGER cut failing the audit almost
+	// always means a real SHORTER airing was counted as the longer cut: v1
+	// retracted the shorter cut (by duration) and the longer one just failed the
+	// §9.9 audit because the clip is the shorter cut's audio. Restore the shorter
+	// sibling v1 displaced (it already passed its own audit) so the genuine airing
+	// counts. Gated by DISAMBIG_BY_COVERAGE; best-effort, never blocks. The
+	// passed-path reattributeByCoverage above only catches misattributions that
+	// PASS the audit — this catches the ones that get rejected (the common case
+	// in prod: 104/110 measured losses).
+	if s.disambigByCoverage {
+		if restoredID, restoredShort, rerr := s.detections.RestoreDisplacedShorterCut(auditCtx, detectionID, detectedAt, stationID); rerr != nil {
+			s.log.Warn("evidence: restore displaced shorter cut failed (non-blocking)",
+				zap.String("detection_id", detectionID.String()), zap.Error(rerr))
+		} else if restoredID != nil {
+			metrics.MatchDisambiguation.WithLabelValues("restored_on_reject").Inc()
+			s.log.Info("evidence: restored shorter cut displaced by rejected longer cut (§18.2.2 v2 reject-path)",
+				zap.String("rejected_detection_id", detectionID.String()),
+				zap.String("restored_detection_id", restoredID.String()),
+				zap.Int32("restored_short_id", restoredShort),
+			)
+		}
+	}
 	return true
 }
 

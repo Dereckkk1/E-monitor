@@ -402,6 +402,77 @@ func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.
 	return err
 }
 
+// RestoreDisplacedShorterCut implements the reject-path recovery of §18.2.2 v2.
+//
+// When `rejectedID` (a longer cut, e.g. the 30s) is audit-rejected, the live
+// matcher almost always counted a real SHORTER airing as the longer cut: v1
+// retracted the shorter cut (the 15s) in favour of the longer one by duration,
+// and now the longer one fails the §9.9 audit because the clip is actually the
+// shorter cut's audio. Without this, the real airing vanishes (the shorter cut
+// stays retracted, the longer cut is rejected — counted nowhere). Measured at
+// 104/110 such losses being recoverable across clients (2026-06-19 audit).
+//
+// We find the shorter sibling cut of the SAME client that v1 retracted within
+// the broadcast window (±windowSeconds) on the same station AND that already
+// passed its own §9.9 audit (evidence_status='available' — i.e. it is a proven
+// match of the shorter master), and clear its retracted_at so the genuine airing
+// counts again. No new row, no re-upload, no double-count (the rejected longer
+// cut stays audit_rejected). Returns the restored id+short_id, or (nil,0,nil)
+// when there is nothing to restore — the shorter cut was also rejected, or the
+// retraction was a legitimate same-cut duplicate (its displacer is not a longer
+// rejected cut, so it is not matched here).
+//
+// detected_at is bounded on both the rejected row and the target row for
+// partition pruning (detections is partitioned by detected_at).
+func (d *Detections) RestoreDisplacedShorterCut(ctx context.Context,
+	rejectedID uuid.UUID, detectedAt time.Time, stationID uuid.UUID,
+) (restoredID *uuid.UUID, restoredShortID int32, err error) {
+	const windowSeconds = 60
+	var (
+		id    uuid.UUID
+		short int32
+	)
+	err = d.pool.QueryRow(ctx, `
+		WITH rej AS (
+		    SELECT m.client_id, m.duration_seconds
+		    FROM detections d
+		    JOIN materials m ON m.id = d.commercial_id
+		    WHERE d.id = $1 AND d.detected_at = $2
+		),
+		cand AS (
+		    SELECT t.id
+		    FROM detections t
+		    JOIN materials tm ON tm.id = t.commercial_id
+		    CROSS JOIN rej
+		    WHERE t.station_id = $3
+		      AND t.retracted_at IS NOT NULL
+		      AND t.evidence_status = 'available'
+		      AND tm.client_id = rej.client_id
+		      AND tm.duration_seconds < rej.duration_seconds
+		      AND t.detected_at BETWEEN $2 - ($4 * interval '1 second')
+		                            AND $2 + ($4 * interval '1 second')
+		    ORDER BY abs(extract(epoch FROM t.detected_at - $2)) ASC,
+		             t.audit_coverage DESC NULLS LAST
+		    LIMIT 1
+		)
+		UPDATE detections u
+		SET retracted_at = NULL
+		FROM cand
+		WHERE u.id = cand.id
+		  AND u.detected_at BETWEEN $2 - ($4 * interval '1 second')
+		                        AND $2 + ($4 * interval '1 second')
+		RETURNING u.id, (SELECT short_id FROM materials WHERE id = u.commercial_id)`,
+		rejectedID, detectedAt, stationID, windowSeconds,
+	).Scan(&id, &short)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	return &id, short, nil
+}
+
 type ListFilter struct {
 	CampaignID *uuid.UUID
 	StationID  *uuid.UUID
@@ -599,7 +670,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
 		  AND ($4::timestamptz IS NULL OR d.detected_at <= $4)
 		  AND ($7::uuid IS NULL OR cmp.client_id = $7)
-		  AND d.evidence_status <> 'audit_rejected'
+		  AND `+ApprovedDetectionsFilter+`
 		ORDER BY d.detected_at DESC
 		LIMIT $5 OFFSET $6`,
 		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset, f.ClientID)
@@ -816,6 +887,12 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 	}, nil
 }
 
+// Get returns a single detection by id for the /detections/:id detail page.
+//
+// EXCEÇÃO DELIBERADA ao ApprovedDetectionsFilter: NÃO filtra retracted/ignored/
+// audit_rejected — o operador precisa abrir uma veiculação retratada/ignorada/
+// rejeitada pra inspecioná-la (a página renderiza os badges de estado). Isto é
+// detalhe forense de UMA linha, não um agregado contável.
 func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) {
 	var det Detection
 	err := d.pool.QueryRow(ctx, `

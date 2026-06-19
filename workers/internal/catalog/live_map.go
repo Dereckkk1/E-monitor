@@ -109,8 +109,7 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]Li
 		          FROM detections d
 		         WHERE d.station_id = s.id
 		           AND d.campaign_id = $1
-		           AND d.evidence_status <> 'audit_rejected'
-		           AND d.ignored_at IS NULL) AS last_detection_at
+		           AND `+ApprovedDetectionsFilter+`) AS last_detection_at
 		FROM stations s
 		JOIN campaigns cmp ON cmp.id = $1 AND s.id = ANY(cmp.target_stations)
 		WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
