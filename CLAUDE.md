@@ -326,6 +326,7 @@ docs/
 | Ciclo de vida de campanha (programada/ativa/concluida/cancelada) | [docs/architecture/campaign-lifecycle.md](docs/architecture/campaign-lifecycle.md) |
 | Dedup pós-confirmação entre cortes 30s/60s | [docs/architecture/version-disambiguation.md](docs/architecture/version-disambiguation.md) |
 | Regras de distribuição + categorização de detection | [docs/architecture/distribution-rules.md](docs/architecture/distribution-rules.md) |
+| Contagem de veiculações divergindo entre telas (modal × grid × /insights × /management × /live-map) — filtro canônico "aprovado" (`catalog.ApprovedDetectionsFilter`) | [docs/architecture/detection-count-consistency.md](docs/architecture/detection-count-consistency.md) |
 | Audit de evidência pré-persist (§9.9) | [docs/architecture/evidence-audit.md](docs/architecture/evidence-audit.md) |
 | Segmentos ADTS-AAC e extração de evidência | [docs/architecture/evidence-segments.md](docs/architecture/evidence-segments.md) |
 | Design tokens, CSS, .btn, RSelect, .field | [docs/architecture/frontend-design-system.md](docs/architecture/frontend-design-system.md) |

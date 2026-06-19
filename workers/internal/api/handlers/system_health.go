@@ -511,6 +511,13 @@ func (h *SystemHealthHandler) summarizeDataPipeline(ctx context.Context) DataPip
 	out := DataPipelineHealth{}
 
 	// Last detection + count in last hour.
+	//
+	// EXCEÇÃO DELIBERADA ao catalog.ApprovedDetectionsFilter: estes dois são
+	// contadores de LIVENESS do pipeline ("o matcher está produzindo saída?"),
+	// não tally de veiculação por emissora. Contam detecções CRUAS de propósito
+	// — uma detecção retratada/ignorada/rejeitada ainda prova que o pipeline
+	// está vivo. Não aplicar o filtro aprovado aqui (ver
+	// docs/architecture/detection-count-consistency.md).
 	var lastDet *time.Time
 	row := h.DB.QueryRow(ctx, `SELECT MAX(detected_at) FROM detections`)
 	if err := row.Scan(&lastDet); err == nil {

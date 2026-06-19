@@ -1,12 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-17
+ultima-verificacao: 2026-06-19
 codigo-relacionado:
   - workers/internal/supervisor/disambiguation.go
   - workers/internal/supervisor/dedup_buffer.go
   - workers/internal/evidence/service.go
   - workers/internal/evidence/disambig_coverage.go
   - workers/internal/catalog/detections.go
+  - workers/internal/catalog/detection_restore_test.go
+  - workers/cmd/backfill-unretract-displaced/main.go
   - migrations/0014_disambiguation.up.sql
   - migrations/0038_detection_audit_coverage.up.sql
   - frontend/src/components/DayDetailModal.jsx
@@ -185,6 +187,65 @@ cobertura absoluta é baixa.
 - **Em prod:** `cmd/audit-extent --short-id <77|78>` nas censuras conhecidas
   confirma a separação contra o DB real; após ligar a flag, a métrica
   `reattributed_by_coverage` sobe e a retração do 77 (v1) cai.
+
+## §18.2.2-v2b — Recuperação no caminho de rejeição (2026-06-19)
+
+### O furo que a v2 original deixava
+
+A `reattributeByCoverage` (acima) só roda **dentro do `if result.Passed`** do
+audit. Ou seja, ela só conserta a má-atribuição quando o 30s mal-atribuído
+**passa** no §9.9. Mas o caso dominante em prod é o **inverso**: o 15s toca, o
+30s confirma junto (abertura compartilhada), a v1 retrata o 15s a favor do 30s
+(maior), e aí o clipe — que é áudio de 15s — **reprova** no audit contra o master
+de 30s → `audit_rejected`. Nesse caminho a v2 nunca era alcançada. Resultado: o
+15s fica retratado, o 30s fica rejeitado, e a **veiculação real some de todas as
+telas** (contada em lugar nenhum).
+
+Medido em 14 dias (2026-06-19): **110 veiculações perdidas assim** no sistema
+(ASAAS 64, Milium 38, + Corteva/Rôgga/Paraflu), e **104 delas recuperáveis** — o
+15s retratado está `evidence_status='available'`, ou seja **passou no próprio
+audit** (cobertura 0.52–0.83 vs master 15s). É um corte válido sendo jogado fora.
+As outras 6 têm o 15s também `audit_rejected` (clipe degradado) → perda real.
+
+### Mecanismo (un-retract, não reattribute)
+
+Como o 15s **já é uma detecção válida e auditada**, não há o que reatribuir — só
+desfazer a retração. No caminho `audit_rejected` do `evidence.Service`, gated por
+`DISAMBIG_BY_COVERAGE`, antes de encerrar:
+
+```
+30s reprova no audit (audit_rejected)
+   │
+   └─ RestoreDisplacedShorterCut(rejectedID, detectedAt, stationID)
+         busca o corte MAIS CURTO do MESMO cliente, MESMA emissora,
+         dentro de ±60s, retratado E evidence_status='available'
+         → limpa retracted_at dele (volta a contar)
+```
+
+Sem linha nova, sem re-upload, sem corrida, sem double-count (o 30s segue
+`audit_rejected`; o 15s retratado vira o único aprovado da veiculação). Não toca
+twins legítimos de mesmo-corte: a retração de um 15s gêmeo foi causada por **outro
+15s** (mesma duração, `available`), não por um corte mais longo rejeitado — então
+não casa o predicado `duration_seconds < rej.duration_seconds`.
+
+### Backfill das históricas
+
+`cmd/backfill-unretract-displaced` aplica o mesmo predicado em lote sobre uma
+janela. **Default é dry-run** (só reporta, por cliente). `--apply` mexe em dado —
+e, por §4.8, **só depois de dry-run contra um CLONE** do dump de prod. Recupera as
+104 já perdidas; a flag forward impede novas.
+
+### Métrica
+
+- `radiocheck_match_disambiguation_total{action="restored_on_reject"}` — counter
+  (**v2b**), incrementado quando o audit-reject de um corte longo restaurou o
+  corte curto que a v1 tinha retratado. Subir aqui = recuperação atuando.
+
+> **Relação com a consistência de contagem.** Padronizar o filtro entre as telas
+> ([detection-count-consistency.md](detection-count-consistency.md)) faz todo
+> mundo concordar no número **aprovado** — mas esse número estava **baixo** por
+> causa dessas perdas. A v2b conserta o número em si; a padronização garante que
+> todas as telas mostrem o número (agora correto) igual.
 
 ## Como afeta cada subsistema
 

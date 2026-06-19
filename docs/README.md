@@ -36,12 +36,14 @@ docs/
 
 | Doc | Sobre |
 |-----|-------|
+| [system-architecture-overview.md](architecture/system-architecture-overview.md) | **Comece aqui** — fluxogramas Mermaid de toda a arquitetura (visão geral, pipeline de detecção, state machine, NATS, modelo de dados, infra, frontend) |
 | [design.md](architecture/design.md) | Design system frontend (compartilhado Radiocheck + E-radios/Signalads) |
 | [fingerprint-pipeline.md](architecture/fingerprint-pipeline.md) | Pipeline offline que gera fingerprints acústicos (STFT → peaks → hashes) |
 | [shared-hash-detection.md](architecture/shared-hash-detection.md) | Algoritmo bidirecional de classificação subset/sting/skip de curtos |
 | [campaign-lifecycle.md](architecture/campaign-lifecycle.md) | Estados programada/ativa/concluida/cancelada + scheduler 60s |
 | [distribution-rules.md](architecture/distribution-rules.md) | Regras de distribuição + categorização in_slot/out_slot/out_date/orphan + view daily_play_summary |
 | [version-disambiguation.md](architecture/version-disambiguation.md) | Dedup pós-confirmação entre cortes 30s/60s do mesmo cliente |
+| [detection-count-consistency.md](architecture/detection-count-consistency.md) | Conjunto "aprovado" único (`catalog.ApprovedDetectionsFilter`) + matriz de toda query de contagem de veiculação + exceções deliberadas |
 | [evidence-audit.md](architecture/evidence-audit.md) | Re-fingerprint do clipe salvo × master antes de confirmar veiculação (§9.9) |
 | [evidence-segments.md](architecture/evidence-segments.md) | ffmpeg escreve segmentos ADTS-AAC 30s; evidence extrai por timestamp |
 | [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect) |

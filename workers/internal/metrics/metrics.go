@@ -201,7 +201,7 @@ var (
 	MatchDisambiguation = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_match_disambiguation_total",
 		Help: "Detections affected by §18.2.2 version disambiguation, by action.",
-	}, []string{"action"}) // suppressed | retracted
+	}, []string{"action"}) // suppressed | retracted | reattributed_by_coverage | restored_on_reject
 
 	// ── §9.9 Audit de Evidência Pré-Persist ────────────────────────────
 	// AuditAttempts counts each audit run by outcome:

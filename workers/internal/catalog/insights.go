@@ -207,11 +207,12 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    SELECT d.id, d.station_id, d.category
 		    FROM detections d
 		    WHERE d.campaign_id = ANY($1::uuid[])
-		      AND d.retracted_at IS NULL
-		      -- audit_rejected é excluído de todas as views de usuário
-		      -- (migration 0029); este CTE era a única exceção — detecções
-		      -- rejeitadas pelo audit §9.9 inflavam o /insights vs /detections.
-		      AND d.evidence_status <> 'audit_rejected'
+		      -- Conjunto "aprovado" (catalog.ApprovedDetectionsFilter): exclui
+		      -- retratadas (§18.2.2), ignoradas (admin "Desconsiderar") e
+		      -- rejeitadas pelo audit §9.9 — mesma régua da view
+		      -- daily_play_summary e do resto do sistema. Sem isso o /insights
+		      -- divergia do /detections (impactos/veiculações inflados).
+		      AND `+ApprovedDetectionsFilter+`
 		      AND d.detected_at::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		),
@@ -293,11 +294,11 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 	// daily_play_summary key + detection grouping expression. Strings paralelas
 	// pq summary tem for_date::date e detections tem detected_at::timestamptz.
 	summaryBucket := "for_date::text"
-	detectionBucket := "(date_trunc('day', detected_at AT TIME ZONE 'America/Sao_Paulo')::date)::text"
+	detectionBucket := "(date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date)::text"
 	if days > 31 {
 		gran = "month"
 		summaryBucket = "to_char(for_date, 'YYYY-MM')"
-		detectionBucket = "to_char(date_trunc('day', detected_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM')"
+		detectionBucket = "to_char(date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM')"
 	}
 
 	query := fmt.Sprintf(`
@@ -317,12 +318,15 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		orphan AS (
 		    SELECT %s AS bucket,
 		           COUNT(*)::int AS extras
-		    FROM detections
-		    WHERE campaign_id = ANY($1::uuid[])
-		      AND retracted_at IS NULL
-		      AND category = 'orphan'
-		      AND detected_at::date BETWEEN $2 AND $3
-		      AND ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+		    FROM detections d
+		    WHERE d.campaign_id = ANY($1::uuid[])
+		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter): antes só
+		      -- filtrava retracted_at, deixando ignoradas/audit_rejected inflarem
+		      -- os "extras" do gráfico vs o resto do sistema.
+		      AND `+ApprovedDetectionsFilter+`
+		      AND d.category = 'orphan'
+		      AND d.detected_at::date BETWEEN $2 AND $3
+		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		)
 		SELECT COALESCE(a.bucket, o.bucket) AS bucket,
@@ -504,7 +508,9 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM detections d
 		    JOIN stations s ON s.id = d.station_id
 		    WHERE d.campaign_id = ANY($1::uuid[])
-		      AND d.retracted_at IS NULL
+		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — impactos
+		      -- do CPM têm que bater com veiculações_total do aggregateCore.
+		      AND `+ApprovedDetectionsFilter+`
 		      AND d.detected_at::date BETWEEN $2 AND $3
 		      AND s.pmm IS NOT NULL
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))

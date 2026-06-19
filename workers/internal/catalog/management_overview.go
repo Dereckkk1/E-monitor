@@ -181,8 +181,7 @@ func (m *ManagementOverview) queryStations(ctx context.Context, p ManagementPara
 		          FROM detections d
 		         WHERE d.station_id = s.id
 		           AND d.campaign_id IN (SELECT id FROM scoped)
-		           AND d.evidence_status <> 'audit_rejected'
-		           AND d.ignored_at IS NULL) AS last_detection_at
+		           AND `+ApprovedDetectionsFilter+`) AS last_detection_at
 		FROM stations s
 		JOIN mon_stations ms ON ms.station_id = s.id
 		WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
