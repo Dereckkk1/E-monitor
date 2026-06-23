@@ -107,6 +107,7 @@ docs/
 | [incident-2026-05-22-stale-master-catalog.md](incidents/incident-2026-05-22-stale-master-catalog.md) | 2026-05-22 | Material trocado no ar sem atualizar o catálogo — master desatualizado |
 | [incident-2026-06-12-detection-recall-gaps.md](incidents/incident-2026-06-12-detection-recall-gaps.md) | 2026-06-12 | Gap de detecções vs fornecedor: re-fingerprint incompleto (32 materiais degradados 08-12/06), fila de fingerprint sem retry (8 nunca monitorados), audit_rejected invisível, Jovem Pan geo-block + Favorita 404 |
 | [incident-2026-06-17-migration-0039-dirty.md](incidents/incident-2026-06-17-migration-0039-dirty.md) | 2026-06-17 | Backfill 0039 colidiu em `materials.short_id UNIQUE` em prod (DB local vazio deu falso verde) → schema dirty → deploy travado. Defesa: teste de migrations em sombra no deploy.sh + 0024 endurecida contra DB vazio |
+| [incident-2026-06-22-s3-checksum-upload-failure.md](incidents/incident-2026-06-22-s3-checksum-upload-failure.md) | 2026-06-22 | AWS SDK v2 (checksum CRC default) quebra todo PutObject contra MinIO sem TLS → upload/tiering de evidência falham → `failed` na modal + audit pulado faz "15 contar como 30". Bug latente no go.mod, ativado pelo 1º rebuild. Fix: `RequestChecksumCalculation=when_required` |
 
 ## `roadmap/` — follow-ups e planos de fase
 
