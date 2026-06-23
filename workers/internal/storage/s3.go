@@ -39,6 +39,14 @@ func New(ctx context.Context, endpoint, publicEndpoint, bucket, region, accessKe
 	cli := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = true
+		// AWS SDK Go v2 (≥ jan/2025, e estamos em s3 v1.100.1) calcula um
+		// checksum CRC em TODO PutObject por padrão (when_supported). Contra um
+		// endpoint SEM TLS (MinIO em http://) com body em stream não-seekable, o
+		// SDK não consegue anexar o trailing checksum e o PutObject FALHA com
+		// "unseekable stream is not supported without TLS and trailing checksum"
+		// — derrubando todo upload e tiering de evidência (incidente 2026-06-22).
+		// when_required volta ao comportamento antigo (sem CRC default).
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	pe := publicEndpoint
 	if pe == "" {
@@ -47,6 +55,7 @@ func New(ctx context.Context, endpoint, publicEndpoint, bucket, region, accessKe
 	presign := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(pe)
 		o.UsePathStyle = true
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired // ver nota acima
 	})
 	return &Client{s3: cli, presignS3: presign, bucket: bucket}, nil
 }
