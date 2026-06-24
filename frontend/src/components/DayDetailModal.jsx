@@ -466,7 +466,7 @@ function ManualEntryForm({
           />
         </Field>
 
-        <Field label="Áudio da censura" hint={`Opcional — sem áudio a veiculação ainda conta nos agregados, só não tem player. Máx ${MAX_AUDIO_MB}MB.`}>
+        <Field as="div" label="Áudio da censura" hint={`Opcional — sem áudio a veiculação ainda conta nos agregados, só não tem player. Máx ${MAX_AUDIO_MB}MB.`}>
           <AudioDropzone
             audio={audio}
             audioError={audioError}
@@ -510,9 +510,13 @@ function ManualEntryForm({
 
 // ── Pieces ──────────────────────────────────────────────────────
 
-function Field({ label, required, hint, children }) {
+// `as` permite renderizar o wrapper como <div> em vez de <label>. Necessário
+// pro campo de áudio: a dropzone já dispara inputRef.current.click() no onClick,
+// e um <label> ao redor REPASSARIA o mesmo clique pro <input type="file">,
+// abrindo o seletor de arquivo duas vezes.
+function Field({ label, required, hint, children, as: Tag = 'label' }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <Tag style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <span style={{
         display: 'flex', alignItems: 'center', gap: 4,
         fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
@@ -528,7 +532,7 @@ function Field({ label, required, hint, children }) {
           {hint}
         </span>
       )}
-    </label>
+    </Tag>
   )
 }
 
