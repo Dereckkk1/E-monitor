@@ -359,6 +359,11 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
   "30s `audit_rejected` sem 77 irmão em ±60s" (read-only, por cliente); recuperação
   = `CreateManual` ou re-processar segmento ADTS retido. **Dependência:** nenhuma
   pro fix forward; recuperação histórica depende da retenção de segmentos.
+  **Status:** implementado no branch `fix/f124-suppress-path-reattribution`
+  (helpers de catalog `FindSiblingDetectionInWindow`/`ClearRetraction`/`ReattributeRejectedDetection`
+  + `evidence/reject_recovery.go` no reject-path + testes DB-gated); aguarda merge.
+  Doc: [version-disambiguation.md §18.2.2-v2c](../architecture/version-disambiguation.md).
+  Webhook corretivo e recuperação das 165 históricas ficam fora deste fix.
 
 ---
 

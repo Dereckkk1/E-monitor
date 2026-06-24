@@ -1,11 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-19
+ultima-verificacao: 2026-06-24
 codigo-relacionado:
   - workers/internal/supervisor/disambiguation.go
   - workers/internal/supervisor/dedup_buffer.go
   - workers/internal/evidence/service.go
   - workers/internal/evidence/disambig_coverage.go
+  - workers/internal/evidence/reject_recovery.go
   - workers/internal/catalog/detections.go
   - workers/internal/catalog/detection_restore_test.go
   - workers/cmd/backfill-unretract-displaced/main.go
@@ -246,6 +247,68 @@ e, por §4.8, **só depois de dry-run contra um CLONE** do dump de prod. Recuper
 > mundo concordar no número **aprovado** — mas esse número estava **baixo** por
 > causa dessas perdas. A v2b conserta o número em si; a padronização garante que
 > todas as telas mostrem o número (agora correto) igual.
+
+## §18.2.2-v2c — Reatribuição no caminho de rejeição quando NÃO há row (2026-06-24)
+
+### O furo que a v2b ainda deixava
+
+A v2b (`RestoreDisplacedShorterCut`) só recupera quando o corte curto **tem uma
+row retraída `available`**. Mas o caso medido em prod (90fm Blumenau, ASAAS) é
+pior: quando o **30s irmão confirma ANTES do 15s** no supervisor, o 15s cai em
+`DedupActionSuppress` — **não cria row, não retrata, não publica**
+(`disambiguation.go`, "novo é menor → suprime"). Depois o 30s reprova no audit
+(`audit_rejected`), e como não há row do 15s pra restaurar, a veiculação real
+**some de tudo**. Confirmado por áudio (cobertura 0.79 vs 15s / 0.18 vs 30s) + log
+do supervisor (`suppressed_short_id=77 kept_short_id=78`). Medido: **165
+veiculações/14d perdidas assim** (disjuntas das 110 da v2b); a flag
+`DISAMBIG_BY_COVERAGE` já ON em prod **não** pega esse caminho.
+
+### Mecanismo (reattribute-on-reject)
+
+No reject-path do `evidence.Service`, **depois** de a v2b não restaurar nada,
+gated pela mesma flag, mede a cobertura do MESMO clipe contra os irmãos
+(`FindCutWithSiblings` + `chooseByCoverage`, ≥ `coverageMargin` 1.5×):
+
+```
+30s reprova no audit  →  RestoreDisplacedShorterCut (v2b) achou algo?
+   ├─ sim  → restaura (comportamento v2b inalterado)
+   └─ não  → recoverRejectedByCoverage (v2c):
+        vencedor por cobertura = irmão acima da margem?
+          └─ FindSiblingDetectionInWindow(vencedor, ±60s):
+               ├─ row retraída+available → ClearRetraction (restaura, QUALQUER duração)
+               ├─ row presente/aprovada  → não mexe (já contada)
+               └─ sem row (suprimido)    → ReattributeRejectedDetection
+                    (re-aponta a row rejeitada pro irmão, evidence_status='missing')
+```
+
+Uma row aprovada por veiculação; a precedência "restaurar-antes-de-reatribuir"
+impede duplicata — cobre inclusive o caso **2026-05-09 Ep.2** (mesma duração, que
+o predicado `duration <` da v2b não alcança). Vencedor sem campanha viva
+(`resolveAttribution` falha) ou nenhum irmão acima da margem → **não mexe**, fica
+`audit_rejected` (falha-segura, nunca inventa veiculação).
+
+### Por que `evidence_status='missing'`
+
+A row reatribuída vem do reject-path: o clipe **não foi subido** (o audit rejeitou
+antes do upload). O status vai pra `missing` — veiculação válida, sem áudio, igual
+a uma detecção manual; **conta** nos agregados (não é
+`audit_rejected`/`retracted`/`ignored`). UPDATE atômico guardado por
+`evidence_status='audit_rejected'` + checagem de `RowsAffected` (`ErrReattributeNoRow`)
+garantem que uma falha mantenha a row rejeitada, nunca órfã (incidente 2026-05-17).
+
+### Métrica
+
+- `radiocheck_match_disambiguation_total{action="reattributed_on_reject"}` — counter
+  (**v2c**), incrementado quando a row rejeitada foi reatribuída a um irmão sem row.
+  Subir aqui = o furo da supressão sendo estancado.
+- O `restored_on_reject` (v2b) passa a contar também restores de mesma duração.
+
+### Fora de escopo
+
+As 165 históricas **não têm row** → o `cmd/backfill-unretract-displaced` (que só
+des-retrata) não alcança; recuperação é `CreateManual` ou re-processo do segmento
+ADTS retido. Webhook corretivo (emitir confirmed/retracted na reatribuição) é
+follow-up separável.
 
 ## Como afeta cada subsistema
 
