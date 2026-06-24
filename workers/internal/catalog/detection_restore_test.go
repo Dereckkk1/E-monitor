@@ -263,3 +263,88 @@ func TestReattributeRejectedDetection(t *testing.T) {
 		}
 	})
 }
+
+// TestRejectRecoveryScenarios trava as duas recuperações que o orquestrador v2c
+// dispara, exercitando os helpers de catalog na mesma ordem (sem auditor):
+//
+//	A) corte suprimido (sem row) -> ReattributeRejectedDetection re-aponta a row rejeitada.
+//	B) irmão deslocado de MESMA duração (Ep.2 05-09) -> FindSiblingDetectionInWindow
+//	   acha a row retraída+available e ClearRetraction restaura (sem duplicar).
+func TestRejectRecoveryScenarios(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewDetections(pool)
+
+	client := insSeedClient(t, ctx, pool, "RecCo")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	st := insSeedStationNoProfile(t, ctx, pool, "RadioRec")
+	m15 := restSeedMaterial(t, ctx, pool, client, "RecSpot15", 15)
+	m30 := restSeedMaterial(t, ctx, pool, client, "RecSpot30", 30)
+	mJingle := restSeedMaterial(t, ctx, pool, client, "RecJingle", 30) // mesma duração do m30
+	sid15 := shortIDOf(t, ctx, pool, m15)
+	sidJingle := shortIDOf(t, ctx, pool, mJingle)
+	cov := 0.66
+
+	t.Run("A: 30s rejeitado + 15s sem row -> reatribui (sem row irma)", func(t *testing.T) {
+		ts := time.Date(2026, 6, 18, 15, 0, 0, 0, time.UTC)
+		det30 := restSeedDet(t, ctx, pool, camp, m30, st, ts, false, "audit_rejected", nil)
+
+		// orquestrador: FindSiblingDetectionInWindow(15s) == nil -> RecoveryReattribute
+		existing, err := repo.FindSiblingDetectionInWindow(ctx, sid15, st, ts, 60)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if decideEv := evDecide(existing); decideEv != "reattribute" {
+			t.Fatalf("decisao = %s, queria reattribute", decideEv)
+		}
+		if err := repo.ReattributeRejectedDetection(ctx, det30, ts, m15, camp, st, 0.79); err != nil {
+			t.Fatalf("reattribute: %v", err)
+		}
+		cmc, _, ev := detRow(t, ctx, pool, det30)
+		if cmc != m15 || ev != "missing" {
+			t.Errorf("row deveria ser 15s/missing, veio cmc=%v ev=%q", cmc, ev)
+		}
+	})
+
+	t.Run("B: jingle MESMA duracao retraido+available -> restaura, sem duplicar", func(t *testing.T) {
+		ts := time.Date(2026, 6, 19, 15, 0, 0, 0, time.UTC)
+		det30 := restSeedDet(t, ctx, pool, camp, m30, st, ts, false, "audit_rejected", nil)
+		detJingle := restSeedDet(t, ctx, pool, camp, mJingle, st, ts.Add(-5*time.Second), true, "available", &cov)
+
+		// v2b NÃO acharia (mesma duração); v2c acha pela cobertura + janela:
+		existing, err := repo.FindSiblingDetectionInWindow(ctx, sidJingle, st, ts, 60)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if existing == nil || existing.ID != detJingle {
+			t.Fatalf("achou %v, queria %v", existing, detJingle)
+		}
+		if evDecide(existing) != "restore" {
+			t.Fatalf("decisao = %s, queria restore", evDecide(existing))
+		}
+		if err := repo.ClearRetraction(ctx, existing.ID, existing.DetectedAt); err != nil {
+			t.Fatalf("clear: %v", err)
+		}
+		if detIsRetracted(t, ctx, pool, detJingle) {
+			t.Error("jingle deveria estar des-retratado")
+		}
+		// o 30s rejeitado NÃO é reatribuído nesse ramo (sem duplicar):
+		_, _, ev := detRow(t, ctx, pool, det30)
+		if ev != "audit_rejected" {
+			t.Errorf("det30 deveria continuar audit_rejected, veio %q", ev)
+		}
+		_ = sid15
+	})
+}
+
+// evDecide espelha a decisão pura do pacote evidence (decideRejectRecovery) sem
+// importar evidence (evita ciclo): nil->reattribute, retraida+available->restore, senão skip.
+func evDecide(existing *SiblingDetectionRow) string {
+	switch {
+	case existing == nil:
+		return "reattribute"
+	case existing.Retracted && existing.EvidenceStatus == "available":
+		return "restore"
+	default:
+		return "skip"
+	}
+}
