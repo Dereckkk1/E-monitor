@@ -338,11 +338,13 @@ export default function AdminUsersPage() {
                 return (
                   <tr key={u.id} className={`au-row ${isDeleted ? 'is-deleted' : ''} ${isSelf ? 'is-self' : ''}`}>
                     <td className="au-cell-name">
-                      <span className="au-name-text">
-                        {u.name || <span className="au-muted">sem nome</span>}
-                      </span>
-                      <span className="au-name-email-sub">{u.email}</span>
-                      {isSelf && <span className="au-self-chip">você</span>}
+                      <div className="au-cell-name-inner">
+                        <span className="au-name-text">
+                          {u.name || <span className="au-muted">sem nome</span>}
+                        </span>
+                        <span className="au-name-email-sub">{u.email}</span>
+                        {isSelf && <span className="au-self-chip">você</span>}
+                      </div>
                     </td>
                     <td className="au-cell-email" title={u.email}>{u.email}</td>
                     <td><RoleChip role={u.role} /></td>

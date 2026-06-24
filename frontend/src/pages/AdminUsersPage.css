@@ -289,6 +289,10 @@
 
 .au-table tbody td {
   padding: 14px 18px;
+  /* Altura uniforme: sem isso, cada linha colapsava pra altura do seu próprio
+     conteúdo e as linhas ficavam desencontradas. O conteúdo é sempre 1 linha
+     (botões de ação 30px é o mais alto), então 60px acomoda com folga. */
+  height: 60px;
   border-bottom: 1px solid color-mix(in srgb, var(--c-border) 70%, transparent);
   vertical-align: middle;
   background: var(--c-surface);
@@ -319,15 +323,22 @@
 /* ─── Cells ──────────────────────────────────────────────── */
 
 .au-cell-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   min-width: 0;
   font-weight: 600;
   color: var(--c-text);
   font-family: var(--font-heading);
   letter-spacing: -0.005em;
   font-size: 14px;
+}
+
+/* O flexbox vive no wrapper interno, não no <td>. Um <td> com display:flex sai
+   do layout de tabela e não alinha/estica igual às células irmãs — era o que
+   deixava as linhas em alturas diferentes. */
+.au-cell-name-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .au-name-text {
@@ -691,7 +702,7 @@
     padding: 12px 14px;
   }
 
-  .au-cell-name {
+  .au-cell-name-inner {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
