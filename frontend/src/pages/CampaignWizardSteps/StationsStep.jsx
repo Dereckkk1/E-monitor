@@ -227,6 +227,10 @@ export default function StationsStep({ campaignId, allStations, currentSelection
             placeholder="Digite o nome, cidade, dial…"
             closeMenuOnSelect={false}
             controlShouldRenderValue={false}
+            // Os chips ficam FORA do controle (grid abaixo), então Backspace no
+            // input vazio removeria a última emissora sem nenhum feedback visual.
+            // Remoção só pelo X de cada card.
+            backspaceRemovesValue={false}
             noOptionsMessage={() => debouncedInput ? 'Nenhuma emissora encontrada' : 'Comece a digitar pra buscar'}
             loadingMessage={() => 'Buscando…'}
           />
