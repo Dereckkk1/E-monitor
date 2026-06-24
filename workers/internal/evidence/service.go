@@ -499,6 +499,11 @@ func (s *Service) runAuditOrReject(
 				zap.String("restored_detection_id", restoredID.String()),
 				zap.Int32("restored_short_id", restoredShort),
 			)
+		} else {
+			// v2c — nada pra restaurar: o corte curto foi SUPRIMIDO pela v1 (sem
+			// row) OU deslocado com mesma duração (fora do predicado do v2b).
+			// Reatribui a row rejeitada pro irmão que o clipe realmente cobre.
+			s.recoverRejectedByCoverage(auditCtx, detectionID, detectedAt, stationID, commercialID, result.Coverage, pcm)
 		}
 	}
 	return true
