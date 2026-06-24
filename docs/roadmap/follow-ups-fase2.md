@@ -326,6 +326,39 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
   de leitura apenas; abrir fix só se algum caminho re-resolver. Relacionado a **F-90**
   (deprecar `commercials.campaign_id`/`target_stations`), que o fix da zona morta
   adianta ao demover `commercials` a fallback legado.
+- **F-124** — Caminho de SUPRESSÃO da desambiguação v1 perde 15s real sem deixar
+  row (ponto cego do v2b). Quando um 15s toca mas o 30s irmão **cruza a confirmação
+  primeiro**, ele entra no dedup buffer e o 15s cai em `DedupActionSuppress`
+  (`evaluateDedup`, `disambiguation.go`): "novo é menor → suprime, não publica
+  nada". **Não cria row.** Depois o audit §9.9 rejeita corretamente o 30s
+  falso-confirmado (`audit_rejected`, cobertura ~0.18), mas o 15s já não existe em
+  lugar nenhum. O v2b (`RestoreDisplacedShorterCut`) e o
+  `cmd/backfill-unretract-displaced` só **des-retratam uma row `available`
+  existente** — um corte suprimido **não tem row pra restaurar** → perda
+  definitiva e invisível. É **distinto** do caminho de retração (o do v2b,
+  recuperável): a diferença é só a ORDEM da corrida de confirmação (12:47 ASAAS
+  90fm: 77 confirmou 1º → retraído → restaurado ✓; 15:17: 78 confirmou 1º → 77
+  suprimido ✗).
+  **Evidência (2026-06-24):** áudio das censuras provou 06:57 E 15:17 = 15s
+  (cov 0.72–0.79 vs corte 77, 0.16–0.18 vs corte 78, via `cmd/audit-extent`
+  offline); log do supervisor confirma `suppressed_short_id=77 kept_short_id=78`
+  às 18:17:46 UTC na station `e2f7c679` (90fm Blumenau, campanha 185.1 ASAAS), e o
+  MESMO padrão em `887a6f56` ~18:15 UTC → **não é isolado**.
+  **Onde:** `workers/internal/supervisor/disambiguation.go` (`SubmitDetection`,
+  case `DedupActionSuppress`, ~L214).
+  **Como (proposto):** trocar SUPRIMIR por RETRATAR-e-publicar também no ramo
+  "novo é menor" — sempre cria a row do corte curto com `retracted_at` setado;
+  aí o v2b existente no reject-path recupera sozinho quando o 30s é
+  `audit_rejected`, sem caso especial novo. Cuidado: muda a contagem de rows
+  retraídas (mais aparecem riscadas na UI) — gate atrás de `DISAMBIG_BY_COVERAGE`
+  e validar que não double-conta 30s legítimo (o 30s só sobrevive se passar no
+  audit; o 77 só é restaurado se o 78 reprovar — mesma lógica segura do v2b). Não
+  resolve o caso R-B (jingles independentes <50% overlap, TODO em L223) — esse
+  segue dependendo do overlap-check adiado pra Fase 3.
+  **Recuperar já-perdidos:** sem row → backfill não alcança. Dimensionar via query
+  "30s `audit_rejected` sem 77 irmão em ±60s" (read-only, por cliente); recuperação
+  = `CreateManual` ou re-processar segmento ADTS retido. **Dependência:** nenhuma
+  pro fix forward; recuperação histórica depende da retenção de segmentos.
 
 ---
 
