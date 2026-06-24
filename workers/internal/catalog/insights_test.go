@@ -43,10 +43,11 @@ func insSeedClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name s
 func insSeedCampaign(t *testing.T, ctx context.Context, pool *pgxpool.Pool, clientID uuid.UUID, start, end string) uuid.UUID {
 	t.Helper()
 	camp, err := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
-		Name:      "C-" + start,
-		ClientID:  clientID,
-		StartDate: parseDate(start),
-		EndDate:   parseDate(end),
+		Name:           "C-" + start,
+		ClientID:       clientID,
+		StartDate:      parseDate(start),
+		EndDate:        parseDate(end),
+		TargetStations: []uuid.UUID{}, // Create insere a coluna explicitamente; nil → NULL viola NOT NULL
 	})
 	if err != nil {
 		t.Fatalf("seed campaign: %v", err)
