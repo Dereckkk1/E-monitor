@@ -1090,3 +1090,98 @@ func (d *Detections) GetClientID(ctx context.Context, detectionID uuid.UUID) (*u
 	}
 	return &clientID, nil
 }
+
+// SiblingDetectionRow é uma row de detection de um corte irmão encontrada na
+// janela da veiculação — usada pelo reject-path (§18.2.2 v2c) pra decidir entre
+// restaurar uma row retraída, pular (já contada) ou reatribuir a row rejeitada.
+type SiblingDetectionRow struct {
+	ID             uuid.UUID
+	DetectedAt     time.Time
+	Retracted      bool
+	EvidenceStatus string
+}
+
+// FindSiblingDetectionInWindow devolve a row de detection MAIS PRÓXIMA do corte
+// `shortID` na mesma emissora dentro de ±windowSeconds de `detectedAt`, ou nil se
+// não houver. Resolução de short_id é POLIMÓRFICA (commercials ∪ materials) — sem
+// isso um corte do material library casaria zero rows (regressão do incidente
+// 2026-06-09). detected_at fica no WHERE pra partition pruning.
+func (d *Detections) FindSiblingDetectionInWindow(ctx context.Context,
+	shortID int32, stationID uuid.UUID, detectedAt time.Time, windowSeconds int,
+) (*SiblingDetectionRow, error) {
+	var row SiblingDetectionRow
+	err := d.pool.QueryRow(ctx, `
+		SELECT d.id, d.detected_at, (d.retracted_at IS NOT NULL), d.evidence_status
+		FROM detections d
+		WHERE d.station_id = $2
+		  AND d.commercial_id IN (
+		      SELECT id FROM commercials WHERE short_id = $1
+		      UNION
+		      SELECT id FROM materials   WHERE short_id = $1
+		  )
+		  AND d.detected_at >= $3::timestamptz - ($4::int * interval '1 second')
+		  AND d.detected_at <= $3::timestamptz + ($4::int * interval '1 second')
+		ORDER BY abs(extract(epoch FROM d.detected_at - $3::timestamptz)) ASC
+		LIMIT 1`,
+		shortID, stationID, detectedAt, int32(windowSeconds),
+	).Scan(&row.ID, &row.DetectedAt, &row.Retracted, &row.EvidenceStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// ClearRetraction des-retrata uma detection (retracted_at = NULL). Usada pelo
+// reject-path v2c pra restaurar o corte irmão deslocado de QUALQUER duração
+// (o RestoreDisplacedShorterCut só cobre o estritamente mais curto). detected_at
+// no WHERE pra partition pruning.
+func (d *Detections) ClearRetraction(ctx context.Context, id uuid.UUID, detectedAt time.Time) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections SET retracted_at = NULL WHERE id = $1 AND detected_at = $2`,
+		id, detectedAt)
+	return err
+}
+
+// ErrReattributeNoRow sinaliza que a reatribuição não tocou nenhuma row — a
+// detection alvo não estava (mais) audit_rejected. O caller trata como no-op
+// seguro: a row permanece como estava (guard G3 do incidente 2026-05-17).
+var ErrReattributeNoRow = errors.New("reattribute: no audit_rejected row matched")
+
+// ReattributeRejectedDetection re-aponta uma row AUDIT_REJECTED pro corte que o
+// clipe realmente cobre (§18.2.2 v2c, caso suprimido sem row irmã). Diferente do
+// ReattributeDetection (pass-path), aqui a row vem do reject-path: não teve clipe
+// subido (evidence_key vazio), então o status vai pra 'missing' (veiculação
+// válida, sem áudio — mesma semântica de detecção manual; CONTA nos agregados).
+// Tudo num UPDATE atômico guardado por evidence_status='audit_rejected':
+//   - re-categoriza pro novo (campaign, corte, station, dia);
+//   - seta commercial_id, campaign_id, category, evidence_status='missing', audit_coverage;
+//   - se 0 rows tocadas (já não estava rejeitada), devolve ErrReattributeNoRow e
+//     NÃO altera nada (G3 — falha mantém o estado, nunca orfana).
+func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
+	newCommercialID, newCampaignID, stationID uuid.UUID, coverage float64) error {
+	cat, err := d.categorize(ctx, CreateDetectionInput{
+		StationID:    stationID,
+		CommercialID: newCommercialID,
+		CampaignID:   newCampaignID,
+		DetectedAt:   detectedAt,
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := d.pool.Exec(ctx, `
+		UPDATE detections
+		SET commercial_id = $3, campaign_id = $4, category = $5,
+		    evidence_status = 'missing', audit_coverage = $6
+		WHERE id = $1 AND detected_at = $2 AND evidence_status = 'audit_rejected'`,
+		detectionID, detectedAt, newCommercialID, newCampaignID, cat, coverage)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReattributeNoRow
+	}
+	return nil
+}

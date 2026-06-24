@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -134,6 +135,131 @@ func TestRestoreDisplacedShorterCut(t *testing.T) {
 		}
 		if !detIsRetracted(t, ctx, pool, det15) {
 			t.Error("det15 deveria continuar retratada (fora da janela)")
+		}
+	})
+}
+
+// shortIDOf lê o short_id (SERIAL) de um material já semeado.
+func shortIDOf(t *testing.T, ctx context.Context, pool *pgxpool.Pool, materialID uuid.UUID) int32 {
+	t.Helper()
+	var sid int32
+	if err := pool.QueryRow(ctx, `SELECT short_id FROM materials WHERE id = $1`, materialID).Scan(&sid); err != nil {
+		t.Fatalf("read short_id: %v", err)
+	}
+	return sid
+}
+
+func TestFindSiblingDetectionInWindow(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewDetections(pool)
+
+	client := insSeedClient(t, ctx, pool, "FindSibCo")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	st := insSeedStationNoProfile(t, ctx, pool, "RadioFindSib")
+	m15 := restSeedMaterial(t, ctx, pool, client, "FSpot15", 15)
+	sid15 := shortIDOf(t, ctx, pool, m15)
+	cov := 0.66
+
+	t.Run("acha a row do corte na janela e reporta estado retraido+available", func(t *testing.T) {
+		ts := time.Date(2026, 6, 13, 15, 0, 0, 0, time.UTC)
+		det15 := restSeedDet(t, ctx, pool, camp, m15, st, ts.Add(-5*time.Second), true, "available", &cov)
+
+		got, err := repo.FindSiblingDetectionInWindow(ctx, sid15, st, ts, 60)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if got == nil || got.ID != det15 {
+			t.Fatalf("achou %v, queria %v", got, det15)
+		}
+		if !got.Retracted || got.EvidenceStatus != "available" {
+			t.Errorf("estado errado: retracted=%v status=%q", got.Retracted, got.EvidenceStatus)
+		}
+	})
+
+	t.Run("retorna nil quando nao ha row do corte na janela", func(t *testing.T) {
+		ts := time.Date(2026, 6, 14, 15, 0, 0, 0, time.UTC)
+		restSeedDet(t, ctx, pool, camp, m15, st, ts.Add(-120*time.Second), true, "available", &cov)
+
+		got, err := repo.FindSiblingDetectionInWindow(ctx, sid15, st, ts, 60)
+		if err != nil {
+			t.Fatalf("find: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("nao deveria achar (fora da janela), achou %v", got.ID)
+		}
+	})
+}
+
+func TestClearRetraction(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewDetections(pool)
+
+	client := insSeedClient(t, ctx, pool, "ClearCo")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	st := insSeedStationNoProfile(t, ctx, pool, "RadioClear")
+	m15 := restSeedMaterial(t, ctx, pool, client, "CSpot15", 15)
+	cov := 0.7
+	ts := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)
+	det := restSeedDet(t, ctx, pool, camp, m15, st, ts, true, "available", &cov)
+
+	if err := repo.ClearRetraction(ctx, det, ts); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if detIsRetracted(t, ctx, pool, det) {
+		t.Error("row deveria estar des-retratada")
+	}
+}
+
+// detRow lê commercial_id, campaign_id, evidence_status de uma detection.
+func detRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (uuid.UUID, uuid.UUID, string) {
+	t.Helper()
+	var cmc, cmp uuid.UUID
+	var ev string
+	if err := pool.QueryRow(ctx,
+		`SELECT commercial_id, campaign_id, evidence_status FROM detections WHERE id = $1`, id,
+	).Scan(&cmc, &cmp, &ev); err != nil {
+		t.Fatalf("read det row: %v", err)
+	}
+	return cmc, cmp, ev
+}
+
+func TestReattributeRejectedDetection(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewDetections(pool)
+
+	client := insSeedClient(t, ctx, pool, "ReatCo")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	st := insSeedStationNoProfile(t, ctx, pool, "RadioReat")
+	m15 := restSeedMaterial(t, ctx, pool, client, "RSpot15", 15)
+	m30 := restSeedMaterial(t, ctx, pool, client, "RSpot30", 30)
+
+	t.Run("reatribui a row audit_rejected do 30s pro 15s, status missing", func(t *testing.T) {
+		ts := time.Date(2026, 6, 16, 15, 0, 0, 0, time.UTC)
+		det := restSeedDet(t, ctx, pool, camp, m30, st, ts, false, "audit_rejected", nil)
+
+		if err := repo.ReattributeRejectedDetection(ctx, det, ts, m15, camp, st, 0.79); err != nil {
+			t.Fatalf("reattribute: %v", err)
+		}
+		cmc, _, ev := detRow(t, ctx, pool, det)
+		if cmc != m15 {
+			t.Errorf("commercial_id = %v, queria %v", cmc, m15)
+		}
+		if ev != "missing" {
+			t.Errorf("evidence_status = %q, queria \"missing\"", ev)
+		}
+	})
+
+	t.Run("nao mexe numa row que NAO esta audit_rejected (guard G3)", func(t *testing.T) {
+		ts := time.Date(2026, 6, 17, 15, 0, 0, 0, time.UTC)
+		det := restSeedDet(t, ctx, pool, camp, m30, st, ts, false, "available", nil)
+
+		err := repo.ReattributeRejectedDetection(ctx, det, ts, m15, camp, st, 0.79)
+		if !errors.Is(err, ErrReattributeNoRow) {
+			t.Fatalf("queria ErrReattributeNoRow, veio %v", err)
+		}
+		cmc, _, ev := detRow(t, ctx, pool, det)
+		if cmc != m30 || ev != "available" {
+			t.Errorf("row nao deveria ter mudado: cmc=%v ev=%q", cmc, ev)
 		}
 	})
 }
