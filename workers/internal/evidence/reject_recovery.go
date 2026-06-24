@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/audit"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/metrics"
 )
@@ -87,6 +88,21 @@ func (s *Service) recoverRejectedByCoverage(ctx context.Context,
 	}
 	if best.ShortID == self.ShortID {
 		return // nenhum irmão cobre materialmente mais → a rejeição procede (G2)
+	}
+	// Piso ABSOLUTO além da margem relativa (1.5×): no reject-path a cobertura do
+	// corte rejeitado é baixa por definição, então um clipe degradado/ruído/master
+	// stale pode bater a margem relativa contra um irmão que ele também mal cobre.
+	// Exigir que o vencedor cubra ≥ o piso do próprio audit garante que o clipe
+	// REALMENTE casa o irmão antes de reatribuir (G2 — nunca chuta). O caso real
+	// (15s ~0.79) passa folgado; ruído (~0.08) não. Só no reject-path; o passed-path
+	// v2 fica intocado.
+	if best.Coverage < audit.DefaultMinCoverage {
+		s.log.Info("evidence: reject-recovery — winner coverage below audit floor, leaving rejected",
+			zap.String("detection_id", detectionID.String()),
+			zap.Int32("winner_short_id", best.ShortID),
+			zap.Float64("winner_coverage", best.Coverage),
+			zap.Float64("min_coverage", audit.DefaultMinCoverage))
+		return
 	}
 
 	existing, err := s.detections.FindSiblingDetectionInWindow(ctx, best.ShortID, stationID, detectedAt, recoverRejWindowSeconds)
