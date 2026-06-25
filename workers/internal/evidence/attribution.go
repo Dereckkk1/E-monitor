@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"radiocheck/internal/catalog"
 )
 
 // resolveAttribution maps a confirmed detection's short_id to the
@@ -46,4 +47,40 @@ func resolveAttribution(ctx context.Context, db *pgxpool.Pool, shortID int32,
 		).Scan(&commercialID, &campaignID)
 	}
 	return commercialID, campaignID, err
+}
+
+// resolveAllAttributions é o fan-out do resolveAttribution (F-119): dado o
+// material canônico que tocou, devolve UMA projeção (campaign_id, commercial_id)
+// por campanha ativa/programada que linka — via campaign_materials — um material
+// com o MESMO master_sha256, targetando a estação, com detectedAt no período.
+// Troca o LIMIT 1 por DISTINCT ON (campaign_id) com o link mais recente vencendo
+// (mesma regra de desempate do resolveAttribution). Category fica vazia aqui: o
+// chamador a calcula com as regras de cada campanha. Só materials (o caso
+// multi-campanha); legados commercials seguem single via resolveAttribution.
+func resolveAllAttributions(ctx context.Context, db *pgxpool.Pool, canonicalCommercialID uuid.UUID,
+	stationID uuid.UUID, detectedAt time.Time) ([]catalog.Projection, error) {
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT ON (cm.campaign_id) cm.campaign_id, m.id
+		FROM materials m
+		JOIN campaign_materials cm ON cm.material_id = m.id
+		JOIN campaigns ca           ON ca.id = cm.campaign_id
+		WHERE m.master_sha256 = (SELECT master_sha256 FROM materials WHERE id = $1)
+		  AND $2 = ANY(cm.target_stations)
+		  AND ca.status IN ('programada','ativa')
+		  AND $3::date BETWEEN ca.start_date AND ca.end_date
+		ORDER BY cm.campaign_id, cm.added_at DESC
+	`, canonicalCommercialID, stationID, detectedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []catalog.Projection
+	for rows.Next() {
+		var p catalog.Projection
+		if err := rows.Scan(&p.CampaignID, &p.CommercialID); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
