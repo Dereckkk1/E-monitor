@@ -147,6 +147,28 @@ grep -c emnapi frontend/package-lock.json   # deve bater com o do master, não c
 
 **5.5. Alternativa definitiva (quando der pra testar).** Rodar o `npm install` num ambiente Linux (WSL/container) gera o lockfile completo de uma vez. Enquanto não houver esse fluxo, use 5.3.
 
+### 6. Antes de qualquer commit+push que vai pra prod via `scripts/deploy.sh` — prove que o deploy não quebra
+
+O `deploy.sh` roda em prod e tem várias etapas que podem **abortar o deploy** (ou pior, subir binário velho/quebrado). **Nunca pushe pra `master` confiando só no `go build` nativo.** Reproduza localmente o que o deploy realmente faz e confirme cada item abaixo que sua mudança toca:
+
+**6.1. Build da imagem = cross-compile, não o build nativo.** O [`workers.Dockerfile`](infra/docker/Dockerfiles/workers.Dockerfile) compila com `CGO_ENABLED=0 GOOS=linux go build` (e **só** `go build` — não roda `go test`/`go vet`). Reproduza idêntico antes de pushar:
+
+```bash
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...   # tem que passar pra TODOS os cmd/*
+```
+
+Build nativo Windows passar **não** garante que o cross-compile linux passa. Se Docker local estiver de pé, o gold standard é `docker build -f infra/docker/Dockerfiles/workers.Dockerfile -t rc-verify .` na raiz.
+
+**6.2. `go.mod`/`go.sum` e versão de Go.** Se mudou deps, confirme `go.mod`/`go.sum` consistentes (o Dockerfile faz `go mod download`). Se bumpou a diretiva `go` no `go.mod`, ela tem que ser **≤** a major-minor da imagem (`golang:1.26-alpine`) — senão o build quebra com "requires go >= X".
+
+**6.3. Migrations.** Se tocou `migrations/`, o `shadow_migration_test` do deploy aplica as pendentes sobre uma **cópia dos dados de prod** e **aborta** se falhar (regra 4.8). Teste contra dados de prod antes — não confie em DB local vazio.
+
+**6.4. Frontend.** Se tocou `frontend/package*.json`, vale a regra 5 inteira (lockfile podado quebra o CF Pages).
+
+**6.5. Boot da API.** O deploy faz health check em `/v1/internal/health` (60s) e aborta se não responder. Garanta que a API sobe: nomes de métrica Prometheus únicos no `MustRegister` (colisão = panic no `init`), maps inicializados no construtor (`supervisor.New` etc — nil map = panic em runtime), sem panic no boot.
+
+**6.6. Testes flaky ≠ regressão.** Rode `go test ./...` mesmo o deploy não rodando testes — mas saiba distinguir falha sua de flaky pré-existente. Conhecidas: `internal/catalog TestBuildDailySummary_WithDowntime` falha antes de ~13:00 UTC (usa `time.Now().Add(-13h)` que atravessa a meia-noite). Confirme que a falha está num pacote que você **não tocou** antes de descartá-la.
+
 ---
 
 ## Índice do Plano (`plano_implementacao.md`)

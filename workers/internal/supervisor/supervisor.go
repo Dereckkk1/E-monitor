@@ -82,6 +82,10 @@ type Supervisor struct {
 	workers            map[uuid.UUID]*workerEntry // stationID → entry
 	lastStallRestart   map[uuid.UUID]time.Time    // stationID → last stall-induced restart time
 	stallRestartCounts map[uuid.UUID]uint32       // stationID → cumulative stall restarts (survives worker recreation)
+	// connectFailures counts CONSECUTIVE never-connected restarts per station
+	// (flavor B stall). Feeds the circuit-breaker backoff (connect_backoff.go);
+	// reset to 0 by onStreamUp the moment a station produces PCM again.
+	connectFailures map[uuid.UUID]uint32
 
 	// Lifecycle (§18.2.1). Optional: nil when not configured.
 	lifecycle *LifecycleScheduler
@@ -134,6 +138,7 @@ func New(
 		workers:            make(map[uuid.UUID]*workerEntry),
 		lastStallRestart:   make(map[uuid.UUID]time.Time),
 		stallRestartCounts: make(map[uuid.UUID]uint32),
+		connectFailures:    make(map[uuid.UUID]uint32),
 		dedupBuffer:        NewDedupBuffer(dedupBufferRetention),
 	}
 }
@@ -297,13 +302,18 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		frames[m.ShortID] = totalFrames(m.DurationSeconds)
 	}
 
-	// e. Stop existing worker for this station if running.
+	// e. Stop existing worker for this station if running. The entry may be a
+	// backoff placeholder (worker==nil) parked by the stall watchdog — cancel it
+	// (aborts the pending respawn timer) but only decrement WorkerActive for a
+	// real running worker, since the placeholder never incremented it.
 	s.mu.Lock()
 	if old, ok := s.workers[stationID]; ok {
 		old.cancel()
 		delete(s.workers, stationID)
 		s.evidence.Unregister(stationID)
-		metrics.WorkerActive.Dec()
+		if old.worker != nil {
+			metrics.WorkerActive.Dec()
+		}
 	}
 	s.mu.Unlock()
 
@@ -373,6 +383,17 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// ── Stream up callback ────────────────────────────────────────────────────
 	onStreamUp := func() {
 		go func() {
+			// Connected: clear any circuit-breaker backoff for this station so a
+			// recovered / allow-listed stream is back to normal restart cadence
+			// immediately (see connect_backoff.go).
+			s.mu.Lock()
+			hadBackoff := s.connectFailures[capturedStationID] > 0
+			delete(s.connectFailures, capturedStationID)
+			s.mu.Unlock()
+			if hadBackoff {
+				metrics.WorkerConnectBackoff.WithLabelValues(capturedStationID.String()).Set(0)
+			}
+
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
@@ -637,29 +658,75 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 			}
 			s.mu.Unlock()
 
-			if !isStalled(w.LastPCMAt(), startedAt, time.Now()) {
+			now := time.Now()
+			if !isStalled(w.LastPCMAt(), startedAt, now) {
 				continue
 			}
 
+			// Two stall flavors (see isStalled):
+			//   A) was producing PCM, then went stale → flapping/transient.
+			//   B) never connected since (re)start → blocked IP / dead URL.
+			// Flavor B feeds the circuit breaker so a firewall-banned station
+			// is respawned with a growing, capped delay instead of every ~2min.
+			neverConnected := w.LastPCMAt().IsZero()
+
 			s.mu.Lock()
 			lastRestart, seen := s.lastStallRestart[stationID]
-			if seen && time.Since(lastRestart) < 2*time.Minute {
+			// Flavor A keeps the fixed 2min cooldown so a flapping-but-connecting
+			// stream isn't restart-stormed. Flavor B is paced by the backoff
+			// below, so it skips this gate.
+			if !neverConnected && seen && now.Sub(lastRestart) < 2*time.Minute {
 				s.mu.Unlock()
 				continue
 			}
-			s.lastStallRestart[stationID] = time.Now()
+			s.lastStallRestart[stationID] = now
 			s.stallRestartCounts[stationID]++
+			var delay time.Duration
+			if neverConnected {
+				s.connectFailures[stationID]++
+				delay = jitterDelay(backoffFor(s.connectFailures[stationID]))
+			}
 			s.mu.Unlock()
+
 			metrics.WorkerStallRestarts.WithLabelValues(stationID.String()).Inc()
 			s.log.Warn("supervisor: worker stall detected, restarting",
-				zap.String("station_id", stationID.String()))
+				zap.String("station_id", stationID.String()),
+				zap.Bool("never_connected", neverConnected),
+				zap.Duration("backoff", delay))
+
+			// Kill the worker now — ffmpeg dies, so a blocked stream stops
+			// hammering the panel's firewall during the backoff window.
 			cancel()
+
+			var boCtx context.Context
 			s.mu.Lock()
 			delete(s.workers, stationID)
-			s.evidence.Unregister(stationID)
+			if delay > 0 {
+				// Park a backoff placeholder so Pause/Stop/preventive-restart can
+				// abort the pending respawn via its cancel (= boCancel). worker==nil
+				// ⇒ not counted active and skipped by WorkerStatuses.
+				var boCancel context.CancelFunc
+				boCtx, boCancel = context.WithCancel(context.Background())
+				s.workers[stationID] = &workerEntry{cancel: boCancel, refreshNow: make(chan struct{}, 1)}
+			}
 			s.mu.Unlock()
+			s.evidence.Unregister(stationID)
 			metrics.WorkerActive.Dec()
+			if delay > 0 {
+				metrics.WorkerConnectBackoff.WithLabelValues(stationID.String()).Set(delay.Seconds())
+			}
+
 			go func() {
+				if delay > 0 {
+					t := time.NewTimer(delay)
+					defer t.Stop()
+					select {
+					case <-boCtx.Done():
+						return // paused / removed during backoff
+					case <-t.C:
+					}
+					metrics.WorkerConnectBackoff.WithLabelValues(stationID.String()).Set(0)
+				}
 				if err := s.startStationWorker(context.Background(), stationID); err != nil {
 					s.log.Error("supervisor: stall restart failed",
 						zap.String("station_id", stationID.String()),
@@ -807,9 +874,13 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 			if entry, ok := s.workers[stationID]; ok {
 				entry.cancel()
 				delete(s.workers, stationID)
+				delete(s.connectFailures, stationID)
 				s.evidence.Unregister(stationID)
-				metrics.WorkerActive.Dec()
+				if entry.worker != nil {
+					metrics.WorkerActive.Dec()
+				}
 				metrics.WorkerCommercials.DeleteLabelValues(stationID.String())
+				metrics.WorkerConnectBackoff.DeleteLabelValues(stationID.String())
 			}
 			s.mu.Unlock()
 			stationsToPause = append(stationsToPause, stationID)
@@ -1024,9 +1095,13 @@ func (s *Supervisor) StopWorkersForCampaign(campaignID uuid.UUID) {
 		if entry, ok := s.workers[stationID]; ok {
 			entry.cancel()
 			delete(s.workers, stationID)
+			delete(s.connectFailures, stationID)
 			s.evidence.Unregister(stationID)
-			metrics.WorkerActive.Dec()
+			if entry.worker != nil {
+				metrics.WorkerActive.Dec()
+			}
 			metrics.WorkerCommercials.DeleteLabelValues(stationID.String())
+			metrics.WorkerConnectBackoff.DeleteLabelValues(stationID.String())
 		}
 		s.mu.Unlock()
 		if err := s.stations.UpdateMonitoringStatus(ctx, stationID, "paused"); err != nil {

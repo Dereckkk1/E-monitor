@@ -48,6 +48,23 @@ Decision tree: `404` → causa 1 · `403 Country Not Allowed` → causa 2 · cur
 
 Emissora de campanha ativa sem captura >2h → avisar a operação (slots daquele período não são cobráveis sem cruzar com fonte externa; ver postmortem 2026-06-12).
 
+## Circuit breaker (desde jun/2026)
+
+Para o sabor **"nunca conectou"** (IP bloqueado / URL morta — `connect` TCP em
+timeout, `LastPCMAt` nunca sai do zero), o supervisor **não respawna mais a cada
+~120s**. Ele aplica **backoff exponencial** (1→2→4→…→30min, com jitter), matando
+o worker durante a espera para parar de martelar o firmware do painel. Detalhes e
+schedule: [docs/features/connect-backoff-circuit-breaker.md](../features/connect-backoff-circuit-breaker.md).
+
+Implicações para este runbook:
+- **Sintoma novo:** a emissora bloqueada não loga `worker started` a cada 2min —
+  o intervalo cresce até ~32min. Olhe a métrica `radiocheck_worker_connect_backoff_seconds{station_id}`
+  (no `/operations`): colada em `1800` = IP bloqueado ou URL morta.
+- O breaker **não desbloqueia** nada — é só anti-sangria. Siga a Correção acima
+  (allowlist do IP / URL nova / egress BR) para recuperar de fato.
+- Após conceder um allowlist, a reconexão é automática em ≤~32min (ou reinicie o
+  `api` para forçar agora — não há kick manual ainda).
+
 ## Prevenção
 
-Este alerta É a prevenção (antes dele, o loop era silencioso). Complemento: a página `/operations` mostra stall restarts por worker em tempo real.
+Este alerta É a prevenção (antes dele, o loop era silencioso). Complemento: a página `/operations` mostra stall restarts por worker em tempo real, e o `radiocheck_worker_connect_backoff_seconds` denuncia IP bloqueado/URL morta.

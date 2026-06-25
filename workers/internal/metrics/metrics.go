@@ -164,6 +164,17 @@ var (
 		Help: "Outcome of the per-station commercial reconciler ticks.",
 	}, []string{"station_id", "outcome"})
 
+	// WorkerConnectBackoff is the current circuit-breaker backoff (seconds) the
+	// supervisor is waiting before respawning a worker that has never connected
+	// (flavor B stall — see supervisor/connect_backoff.go). 0 = connected /
+	// normal cadence. A station stuck near the cap (1800s) is firewall-banned
+	// or has a dead URL; surfaced on /operations and used to spot IP blocks
+	// (incidente jun/2026: 34.39.163.110 dropped by livespanel/streamingdevideo).
+	WorkerConnectBackoff = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "radiocheck_worker_connect_backoff_seconds",
+		Help: "Current connect-backoff delay before respawning a never-connecting worker, per station.",
+	}, []string{"station_id"})
+
 	// ── Calibration scheduler (§9.4) ─────────────────────────────────────
 	// Counter: every recalibration attempt, labeled by terminal result.
 	CalibrationRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -288,7 +299,7 @@ func init() {
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,
-		WorkerCommercials, WorkerReconcileRuns,
+		WorkerCommercials, WorkerReconcileRuns, WorkerConnectBackoff,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 		MatchDisambiguation,
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
