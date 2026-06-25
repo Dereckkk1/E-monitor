@@ -106,7 +106,7 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]Li
 		SELECT s.id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		       s.latitude, s.longitude, s.health_status,
 		       (SELECT MAX(d.detected_at)
-		          FROM detections d
+		          FROM detection_attributions d
 		         WHERE d.station_id = s.id
 		           AND d.campaign_id = $1
 		           AND `+ApprovedDetectionsFilter+`) AS last_detection_at
@@ -138,7 +138,7 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
 		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name,
 		       d.evidence_status
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s    ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
 		LEFT JOIN materials m   ON m.id = d.commercial_id

@@ -56,11 +56,16 @@ ON CONFLICT DO NOTHING;
 -- View de compatibilidade: leituras por-campanha trocam FROM detections d ->
 -- FROM detection_attributions d. Expõe os campos da tocada base (retracted_at,
 -- ignored_at, evidence_status) pra o ApprovedDetectionsFilter seguir válido.
+-- Expõe TODAS as colunas de detections (a tocada base) EXCETO as 3 de
+-- atribuição (campaign_id/commercial_id/category), que vêm da projeção dc.
+-- Assim "FROM detections d" vira "FROM detection_attributions d" sem mais nada.
 CREATE VIEW detection_attributions AS
-SELECT d.id, d.station_id, d.detected_at, d.evidence_status, d.evidence_key,
-       d.retracted_at, d.ignored_at, d.confidence, d.hash_count, d.audit_coverage,
-       d.match_start_offset_ms, d.match_end_offset_ms, d.temporal_coverage,
-       d.variant_used, d.rate_used, d.created_at,
+SELECT d.id, d.station_id, d.detected_at,
+       d.match_start_offset_ms, d.match_end_offset_ms, d.confidence, d.hash_count,
+       d.temporal_coverage, d.variant_used, d.rate_used,
+       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.notes, d.created_at,
+       d.tier, d.retracted_at, d.ignored_at, d.ignored_by, d.manual_at, d.manual_by,
+       d.manual_note, d.audit_coverage,
        dc.campaign_id, dc.commercial_id, dc.category
 FROM detections d
 JOIN detection_campaigns dc

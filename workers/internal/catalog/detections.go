@@ -608,7 +608,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		       m.duration_seconds, mt.name, mt.color,
 		       cmp.client_id, cli.name,
 		       COUNT(*) OVER () AS total
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s        ON s.id = d.station_id
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
 		LEFT JOIN materials m       ON m.id = d.commercial_id
@@ -699,7 +699,7 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
 		       d.manual_at, d.manual_by, d.manual_note, d.created_at
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
 		LEFT JOIN materials m ON m.id = d.commercial_id
@@ -763,7 +763,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm,
 		       m.duration_seconds, mt.name, mt.color,
 		       cmp.client_id, cli.name
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s        ON s.id = d.station_id
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
 		LEFT JOIN materials m       ON m.id = d.commercial_id
@@ -866,7 +866,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		SELECT d.commercial_id, m.short_id, COALESCE(m.title, c.title, ''),
 		       m.duration_seconds, m.type_id, mt.name, mt.color,
 		       COUNT(*) AS cnt
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
 		LEFT JOIN materials m       ON m.id = d.commercial_id
 		LEFT JOIN material_types mt ON mt.id = m.type_id
@@ -1027,7 +1027,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		       COUNT(*) FILTER (WHERE d.category = 'out_date') AS out_date_count,
 		       COUNT(*) FILTER (WHERE d.category = 'orphan')   AS orphan_count,
 		       MIN(d.detected_at), MAX(d.detected_at)
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
 		LEFT JOIN materials m       ON m.id = d.commercial_id
 		LEFT JOIN material_types mt ON mt.id = m.type_id
@@ -1083,7 +1083,7 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 	rows, err := d.pool.Query(ctx, `
 		SELECT d.station_id, COALESCE(s.name, ''), s.band, s.frequency_mhz, s.city, s.state,
 		       COUNT(*) AS cnt
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s ON s.id = d.station_id
 		WHERE d.campaign_id = $1
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)

@@ -205,7 +205,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 	row := r.pool.QueryRow(ctx, `
 		WITH filt AS (
 		    SELECT d.id, d.station_id, d.category
-		    FROM detections d
+		    FROM detection_attributions d
 		    WHERE d.campaign_id = ANY($1::uuid[])
 		      -- Conjunto "aprovado" (catalog.ApprovedDetectionsFilter): exclui
 		      -- retratadas (§18.2.2), ignoradas (admin "Desconsiderar") e
@@ -318,7 +318,7 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		orphan AS (
 		    SELECT %s AS bucket,
 		           COUNT(*)::int AS extras
-		    FROM detections d
+		    FROM detection_attributions d
 		    WHERE d.campaign_id = ANY($1::uuid[])
 		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter): antes só
 		      -- filtrava retracted_at, deixando ignoradas/audit_rejected inflarem
@@ -505,7 +505,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		WITH per_campaign_impactos AS (
 		    SELECT d.campaign_id,
 		           COALESCE(SUM(s.pmm), 0)::float8 AS impactos
-		    FROM detections d
+		    FROM detection_attributions d
 		    JOIN stations s ON s.id = d.station_id
 		    WHERE d.campaign_id = ANY($1::uuid[])
 		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — impactos
