@@ -162,8 +162,17 @@ func main() {
 		logger.Info("§18.2.2-v2 coverage-based disambiguation ENABLED (DISAMBIG_BY_COVERAGE=true)")
 	}
 
+	// F-119 multi-attribution — default OFF. Quando ON, uma tocada física conta
+	// pra TODAS as campanhas que rodam o mesmo áudio na emissora (fan-out de
+	// projeções em detection_campaigns). OFF = só a projeção canônica (1:1).
+	multiAttribution := os.Getenv("MULTI_ATTRIBUTION") == "true"
+	if multiAttribution {
+		logger.Info("F-119 multi-attribution ENABLED (MULTI_ATTRIBUTION=true)")
+	}
+	detectionCampaigns := catalog.NewDetectionCampaigns(pool)
+
 	// Evidence service.
-	evidSvc := evidence.NewService(pool, s3Client, nc, detections, auditor, disambigByCoverage, logger)
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, detectionCampaigns, auditor, disambigByCoverage, multiAttribution, logger)
 	evidSub, err := evidSvc.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("evidence subscribe: %v", err)

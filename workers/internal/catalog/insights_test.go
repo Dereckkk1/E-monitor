@@ -148,15 +148,25 @@ func insSeedDetection(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	campaignID, materialID, stationID uuid.UUID, category, dateISO string) {
 	t.Helper()
 	ts := parseDate(dateISO).Add(12 * time.Hour)
-	_, err := pool.Exec(ctx, `
+	var detID uuid.UUID
+	err := pool.QueryRow(ctx, `
 		INSERT INTO detections (station_id, commercial_id, campaign_id, detected_at,
 		                        match_start_offset_ms, match_end_offset_ms, confidence,
 		                        hash_count, temporal_coverage, variant_used, rate_used,
 		                        category)
 		VALUES ($1, $2, $3, $4, 0, 30000, 0.95, 100, 0.85, 0, 0, $5)
-	`, stationID, materialID, campaignID, ts, category)
+		RETURNING id
+	`, stationID, materialID, campaignID, ts, category).Scan(&detID)
 	if err != nil {
 		t.Fatalf("seed detection: %v", err)
+	}
+	// F-119: a grade lê detection_campaigns. Raw insert bypassa o Create, então
+	// semeia a projeção canônica aqui (mesma categoria da detecção).
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, $5)
+	`, detID, ts, campaignID, materialID, category); err != nil {
+		t.Fatalf("seed projection: %v", err)
 	}
 }
 

@@ -15,8 +15,9 @@ func TestDetections_Create_CategorizesOrphan(t *testing.T) {
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
 	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
 		Name: "C", ClientID: cli.ID,
-		StartDate: time.Now().AddDate(0, 0, -1),
-		EndDate:   time.Now().AddDate(0, 0, 30),
+		StartDate:      time.Now().AddDate(0, 0, -1),
+		EndDate:        time.Now().AddDate(0, 0, 30),
+		TargetStations: []uuid.UUID{},
 	})
 	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
 		ClientID: cli.ID, Title: "M", DurationSeconds: 30,

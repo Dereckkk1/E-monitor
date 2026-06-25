@@ -14,7 +14,7 @@ import (
 // TestNewService_Defaults verifies the constructor wires a non-nil
 // segmentDirs map so Register/Unregister never panic.
 func TestNewService_Defaults(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	if s == nil {
 		t.Fatal("NewService returned nil")
 	}
@@ -26,7 +26,7 @@ func TestNewService_Defaults(t *testing.T) {
 // TestRegisterUnregister_Roundtrip exercises the public segment-dir registry
 // used by the supervisor and confirms Unregister clears the slot.
 func TestRegisterUnregister_Roundtrip(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	id := uuid.New()
 	dir := "/tmp/segments/" + id.String()
 
@@ -54,7 +54,7 @@ func TestRegisterUnregister_Roundtrip(t *testing.T) {
 // concurrent use (mirrors the supervisor's startStationWorker calling these
 // from multiple goroutines during reconciliation).
 func TestRegister_Concurrent(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -78,7 +78,7 @@ func TestRegister_Concurrent(t *testing.T) {
 // TestHandle_InvalidJSON verifies that handle() never panics on malformed
 // payloads — an upstream NATS bug must not crash the evidence service.
 func TestHandle_InvalidJSON(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	// handle takes a *nats.Msg; pass a synthetic one with garbage data.
 	msg := &nats.Msg{Subject: "detections.confirmed", Data: []byte("not-json")}
 	// Should return without panicking and without scheduling work.
@@ -87,7 +87,7 @@ func TestHandle_InvalidJSON(t *testing.T) {
 
 // TestHandle_InvalidStationID verifies the uuid.Parse guard.
 func TestHandle_InvalidStationID(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	body, _ := json.Marshal(detectionEvent{
 		StationID:           "not-a-uuid",
 		CommercialShortID:   1,
@@ -100,7 +100,7 @@ func TestHandle_InvalidStationID(t *testing.T) {
 
 // TestHandle_InvalidDetectedAt verifies the date-parsing guard.
 func TestHandle_InvalidDetectedAt(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	body, _ := json.Marshal(detectionEvent{
 		StationID:           uuid.New().String(),
 		CommercialShortID:   1,
@@ -114,7 +114,7 @@ func TestHandle_InvalidDetectedAt(t *testing.T) {
 // TestHandle_InvalidEvidenceWindowStart verifies that an unparseable
 // EvidenceWindowStart returns early without proceeding to the DB query.
 func TestHandle_InvalidEvidenceWindowStart(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	body, _ := json.Marshal(detectionEvent{
 		StationID:           uuid.New().String(),
 		CommercialShortID:   1,
@@ -127,7 +127,7 @@ func TestHandle_InvalidEvidenceWindowStart(t *testing.T) {
 
 // TestHandle_InvalidEvidenceWindowEnd verifies the EvidenceWindowEnd guard.
 func TestHandle_InvalidEvidenceWindowEnd(t *testing.T) {
-	s := NewService(nil, nil, nil, nil, nil, false, zap.NewNop())
+	s := NewService(nil, nil, nil, nil, nil, nil, false, false, zap.NewNop())
 	body, _ := json.Marshal(detectionEvent{
 		StationID:           uuid.New().String(),
 		CommercialShortID:   1,
