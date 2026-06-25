@@ -218,7 +218,7 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 const recatClassifyTailSQL = `,
 classified AS (
     SELECT
-        s.id, s.detected_at,
+        s.id, s.detected_at, s.campaign_id,
         CASE
             WHEN date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
                  NOT BETWEEN c.start_date AND c.end_date
@@ -252,11 +252,23 @@ classified AS (
     FROM scope s
     JOIN campaigns c ON c.id = s.campaign_id
 )
-UPDATE detections d
+-- F-119: atualiza detections.category (legado) num CTE data-modifying E a
+-- projeção canônica em detection_campaigns (o que a grade lê). Scope é por
+-- detection.campaign_id, então cobre a projeção canônica (flag OFF = 1:1).
+, upd_det AS (
+    UPDATE detections d
+    SET category = cl.new_category
+    FROM classified cl
+    WHERE d.id = cl.id AND d.detected_at = cl.detected_at
+      AND d.category IS DISTINCT FROM cl.new_category
+    RETURNING 1
+)
+UPDATE detection_campaigns dc
 SET category = cl.new_category
 FROM classified cl
-WHERE d.id = cl.id AND d.detected_at = cl.detected_at
-  AND d.category IS DISTINCT FROM cl.new_category`
+WHERE dc.detection_id = cl.id AND dc.detected_at = cl.detected_at
+  AND dc.campaign_id = cl.campaign_id
+  AND dc.category IS DISTINCT FROM cl.new_category`
 
 // recategorizeScope é o motor SQL pra escopos rule/campaign. Pra cada detection
 // no escopo (campaign + opcional type via JOIN materials + opcional stations +

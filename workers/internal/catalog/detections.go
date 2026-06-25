@@ -309,7 +309,17 @@ func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*D
 		note = &trimmed
 	}
 
-	row := d.pool.QueryRow(ctx, `
+	// Transação: detecção manual + projeção canônica (1:1), igual ao Create.
+	// F-119: sem a projeção a veiculação manual sumiria da grade (que lê
+	// detection_campaigns).
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var id uuid.UUID
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO detections (
 		    station_id, commercial_id, campaign_id, detected_at,
 		    match_start_offset_ms, match_end_offset_ms,
@@ -326,9 +336,19 @@ func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*D
 		RETURNING id`,
 		in.StationID, in.CommercialID, in.CampaignID, in.DetectedAt,
 		cat, in.ManualBy, note,
-	)
-	var id uuid.UUID
-	if err := row.Scan(&id); err != nil {
+	).Scan(&id); err != nil {
+		return nil, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (detection_id, detected_at, campaign_id) DO NOTHING`,
+		id, in.DetectedAt, in.CampaignID, in.CommercialID, cat); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return d.Get(ctx, id)
