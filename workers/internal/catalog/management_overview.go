@@ -131,17 +131,25 @@ func (m *ManagementOverview) queryKPIs(ctx context.Context, p ManagementParams) 
 		  (SELECT COUNT(*) FROM scoped)                                              AS campaigns_count,
 		  (SELECT COUNT(DISTINCT cm.material_id) FROM campaign_materials cm
 		         WHERE cm.campaign_id IN (SELECT id FROM scoped))                    AS materials_monitored,
+		  -- F-119: conta a TOCADA FÍSICA uma vez (COUNT em detections base), incluída
+		  -- se QUALQUER projeção dela cai numa campanha do escopo. Fan-out OFF (1:1) é
+		  -- equivalente ao "campaign_id IN scoped"; com ON uma tocada compartilhada
+		  -- conta +1 (não +N) e entra mesmo se só uma campanha projetada está no escopo.
 		  (SELECT COUNT(*) FROM detections d
-		         WHERE d.campaign_id IN (SELECT id FROM scoped)
-		           AND d.evidence_status <> 'audit_rejected'
+		         WHERE d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL AND d.retracted_at IS NULL
-		           AND d.detected_at::date BETWEEN $4::date AND $5::date)            AS airings_total,
+		           AND d.detected_at::date BETWEEN $4::date AND $5::date
+		           AND EXISTS (SELECT 1 FROM detection_campaigns dc
+		                       WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
+		                         AND dc.campaign_id IN (SELECT id FROM scoped)))     AS airings_total,
 		  (SELECT COUNT(*) FROM detections d
-		         WHERE d.campaign_id IN (SELECT id FROM scoped)
-		           AND d.evidence_status <> 'audit_rejected'
+		         WHERE d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL AND d.retracted_at IS NULL
 		           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
-		               = (now() AT TIME ZONE 'America/Sao_Paulo')::date)            AS airings_today
+		               = (now() AT TIME ZONE 'America/Sao_Paulo')::date
+		           AND EXISTS (SELECT 1 FROM detection_campaigns dc
+		                       WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
+		                         AND dc.campaign_id IN (SELECT id FROM scoped)))     AS airings_today
 	`, m.scopeArgs(p)...).Scan(
 		&k.StatesCount, &k.CampaignsCount, &k.MaterialsMonitored,
 		&k.AiringsTotal, &k.AiringsToday,
@@ -178,7 +186,7 @@ func (m *ManagementOverview) queryStations(ctx context.Context, p ManagementPara
 		SELECT s.id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		       s.latitude, s.longitude, s.health_status,
 		       (SELECT MAX(d.detected_at)
-		          FROM detections d
+		          FROM detection_attributions d
 		         WHERE d.station_id = s.id
 		           AND d.campaign_id IN (SELECT id FROM scoped)
 		           AND `+ApprovedDetectionsFilter+`) AS last_detection_at
@@ -211,7 +219,7 @@ func (m *ManagementOverview) queryRecentDetections(ctx context.Context, p Manage
 		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
 		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name,
 		       d.evidence_status
-		FROM detections d
+		FROM detection_attributions d
 		LEFT JOIN stations s    ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
 		LEFT JOIN materials m   ON m.id = d.commercial_id

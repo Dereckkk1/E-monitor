@@ -46,13 +46,20 @@ type CreateCampaignInput struct {
 }
 
 func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campaign, error) {
+	// target_stations é NOT NULL DEFAULT '{}'. Inserir nil vira NULL e viola a
+	// constraint — coalescemos pra array vazio (mesma semântica do default da
+	// coluna) pra ser nil-safe.
+	targetStations := in.TargetStations
+	if targetStations == nil {
+		targetStations = []uuid.UUID{}
+	}
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `
 		INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
 		          fixed_cpm, created_at, updated_at`,
-		in.ClientID, in.Name, in.StartDate, in.EndDate, in.TargetStations,
+		in.ClientID, in.Name, in.StartDate, in.EndDate, targetStations,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
 		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
 	return &camp, err
