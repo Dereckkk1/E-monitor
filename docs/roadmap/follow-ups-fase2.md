@@ -306,13 +306,16 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-91** — Validação "future-only edit" (§8 da spec) em `DistributionRulesHandler.Update/Delete`. Atualmente backend aceita qualquer edição; validação fica na UI. Mover pro backend antes do Plano 2.
 - **F-92** — Escape de metacaracteres LIKE (`%`, `_`, `\`) no parâmetro `q` de `Materials.ListByClient`. Atualmente vulnerável a injeção semântica (não SQL injection, mas comportamento inesperado). Sanitizar no handler layer.
 - **F-93** — `ListApplicable` em `distribution_rules.go` documentou contrato de TZ (caller deve passar SP-local-midnight). Considerar mudar assinatura pra aceitar `string` "YYYY-MM-DD" pra remover ambiguidade no runtime.
-- **F-119** — Multi-campaign attribution for materials. When a material is
-  linked to N overlapping active campaigns on the same station, the current
-  pipeline picks the most recently added link (`ORDER BY campaign_materials.added_at DESC LIMIT 1`).
-  A future enhancement should create one detection row per matching campaign
-  (or change the schema to support N:M between detection and campaign). See
-  ADR-2 in `docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md`
-  for the rationale behind the current single-attribution rule.
+- **F-119** — ✅ **IMPLEMENTADO (2026-06-25, atrás da flag `MULTI_ATTRIBUTION`).**
+  Multi-campaign attribution. Quando um material (mesmo `master_sha256`) roda em N
+  campanhas ativas que compartilham emissora, uma tocada conta para todas. Em vez
+  de "uma linha de detection por campanha" (que quebraria §18.2.2/audit/dedup), a
+  solução usa **tabela de ligação** `detection_campaigns` (1 tocada física em
+  `detections`, N projeções), mantendo o pipeline frágil intocado. Migração 0041,
+  spec `docs/superpowers/specs/2026-06-25-multi-attribution-f119-design.md`, doc
+  `docs/features/multi-attribution.md`. Flag OFF = 1:1 (idêntico ao pré-F-119).
+  Pendente antes de ligar em larga escala: recategorizador por-projeção (hoje
+  sincroniza só a canônica) e audit per-airing.
 - **F-122** — Auditar `Commercials.LookupForDedup` (dedup §18.2.2): resolve o
   `short_id` em `commercials` **primeiro**, caindo em `materials`/`campaign_materials`
   só no `ErrNoRows`. Para um material backfill reaproveitado, isso pega `client_id`
