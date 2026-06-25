@@ -6,6 +6,8 @@ codigo-relacionado:
   - workers/internal/supervisor/connect_backoff_test.go
   - workers/internal/supervisor/supervisor.go
   - workers/internal/metrics/metrics.go
+  - workers/internal/api/handlers/system_health.go
+  - frontend/src/pages/AdminOverviewPage.jsx
 ---
 
 # Circuit breaker de conexão (backoff para streams que nunca conectam)
@@ -105,6 +107,14 @@ liberada. Veja Follow-ups para o "kick" manual.
   `never_connected=true/false` e `backoff=<dur>`.
 - O contador cumulativo `radiocheck_worker_stall_restarts_total` continua somando
   (um respawn com backoff ainda é um stall restart).
+- **Painel `/admin/overview` ("Atenção agora"):** durante o backoff a station tem
+  placeholder `worker==nil`, que o `WorkerStatuses()` pula. Sem tratamento, o
+  `system_health.go` a classificaria como `!hasWorker` → **"drift do reconciler
+  (critical)"** — rótulo enganoso (sugere bug nosso, quando o stream é que está
+  inalcançável). Por isso o supervisor expõe `BackoffStations()` e o handler
+  classifica essas como **"Stream inalcançável — backoff Nx" (warning, reason
+  `connect_backoff`)**, com ação "corrigir URL / pedir allowlist". Sem isso, todo
+  IP bloqueado vira alarme falso de drift a cada janela de espera.
 
 ## Relação com o resto da solução
 

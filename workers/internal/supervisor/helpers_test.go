@@ -93,6 +93,44 @@ func TestWorkerStatuses_Snapshot(t *testing.T) {
 	}
 }
 
+// TestBackoffStations_OnlyPlaceholders verifies the accessor used by the
+// system-health handler reports ONLY the parked circuit-breaker placeholders
+// (worker==nil entries the stall watchdog left while waiting out the backoff),
+// mapped to their consecutive failure count — never a real running worker. This
+// is what lets the admin "Atenção agora" panel label a backed-off station
+// "stream inalcançável (warning)" instead of "drift do reconciler (critical)".
+func TestBackoffStations_OnlyPlaceholders(t *testing.T) {
+	s := &Supervisor{
+		workers:         make(map[uuid.UUID]*workerEntry),
+		connectFailures: make(map[uuid.UUID]uint32),
+	}
+
+	if got := s.BackoffStations(); len(got) != 0 {
+		t.Fatalf("empty supervisor: BackoffStations len=%d, want 0", len(got))
+	}
+
+	running := uuid.New()
+	backoff := uuid.New()
+	wRunning := ingestor.NewWorker(ingestor.WorkerConfig{StationID: running}, nil, nil, zap.NewNop())
+
+	// Real running worker — must NOT appear.
+	s.workers[running] = &workerEntry{worker: wRunning}
+	// Parked backoff placeholder (worker==nil) with a failure count — must appear.
+	s.workers[backoff] = &workerEntry{worker: nil}
+	s.connectFailures[backoff] = 3
+
+	got := s.BackoffStations()
+	if len(got) != 1 {
+		t.Fatalf("BackoffStations len=%d, want 1 (only the nil-worker placeholder)", len(got))
+	}
+	if fails, ok := got[backoff]; !ok || fails != 3 {
+		t.Fatalf("BackoffStations[backoff] = (%d, %v), want (3, true)", fails, ok)
+	}
+	if _, ok := got[running]; ok {
+		t.Fatal("BackoffStations must not include a running worker")
+	}
+}
+
 // TestHandlePendingDetection_InvalidJSON verifies the unmarshal guard.
 func TestHandlePendingDetection_InvalidJSON(t *testing.T) {
 	s := &Supervisor{log: zap.NewNop()}
