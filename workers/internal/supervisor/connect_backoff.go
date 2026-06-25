@@ -3,6 +3,8 @@ package supervisor
 import (
 	"math/rand"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Circuit breaker for streams that never connect (flavor B stall).
@@ -60,4 +62,25 @@ func jitterDelay(d time.Duration) time.Duration {
 	}
 	factor := 0.8 + rand.Float64()*0.4 // [0.8, 1.2)
 	return time.Duration(float64(d) * factor)
+}
+
+// BackoffStations returns the stations currently in connect-backoff — those
+// with a parked placeholder (a workerEntry whose worker is nil, left by the
+// stall watchdog while it waits out the exponential delay) — mapped to their
+// consecutive failure count.
+//
+// The system-health handler uses this to label a backed-off station "stream
+// inalcançável / backing off (warning)" instead of "worker drift (critical)":
+// a backed-off station has NO registered worker by design (we killed it to stop
+// hammering a blocked IP), not because the reconciler failed to start one.
+func (s *Supervisor) BackoffStations() map[uuid.UUID]uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[uuid.UUID]uint32)
+	for id, e := range s.workers {
+		if e != nil && e.worker == nil {
+			out[id] = s.connectFailures[id]
+		}
+	}
+	return out
 }

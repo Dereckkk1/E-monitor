@@ -64,9 +64,10 @@ const OVERALL_META = {
 }
 
 const REASON_LABEL = {
-  not_registered: 'Não registrado',
-  stalled:        'Travado',
-  stream_down:    'Stream fora',
+  not_registered:  'Não registrado',
+  stalled:         'Travado',
+  stream_down:     'Stream fora',
+  connect_backoff: 'Inalcançável',
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

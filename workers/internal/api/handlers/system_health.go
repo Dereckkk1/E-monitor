@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,11 @@ type SystemHealthHandler struct {
 	NATS *nats.Conn
 	Sup  interface {
 		WorkerStatuses() []supervisor.WorkerStatus
+		// BackoffStations reports stations the stall watchdog has parked in
+		// connect-backoff (blocked IP / dead URL) → consecutive failure count.
+		// Used to label them "stream inalcançável (warning)" instead of the
+		// misleading "worker drift (critical)" — see the classify loop below.
+		BackoffStations() map[uuid.UUID]uint32
 	}
 
 	// Endpoints to probe. Empty string ⇒ marked as "disabled" in the response.
@@ -395,6 +401,15 @@ func (h *SystemHealthHandler) summarizeRuntime(ctx context.Context) (WorkersHeal
 		}
 	}
 
+	// Stations the stall watchdog parked in connect-backoff (placeholder, no
+	// running worker BY DESIGN — we killed it to stop hammering a blocked IP).
+	// Classified below as "stream inalcançável (warning)" rather than the
+	// misleading "drift do reconciler (critical)".
+	backoffSet := map[uuid.UUID]uint32{}
+	if h.Sup != nil {
+		backoffSet = h.Sup.BackoffStations()
+	}
+
 	// Current stream-down set: stations with an open down event (event_at in
 	// the last 24h with no matching up event after). The query is small
 	// because we only check active stations.
@@ -443,8 +458,25 @@ func (h *SystemHealthHandler) summarizeRuntime(ctx context.Context) (WorkersHeal
 	for _, st := range active {
 		w, hasWorker := wmap[st.id]
 		_, isStreamDown := downSet[st.id]
+		backoffFails, inBackoff := backoffSet[st.id]
 
 		switch {
+		case inBackoff:
+			// Intentional: the breaker killed the worker to stop hammering a
+			// blocked IP / dead URL; it auto-reconnects with backoff. This is a
+			// real "stream down" but NOT a reconciler bug, so warning not crit.
+			streams.DownNow++
+			attention = append(attention, AttentionItem{
+				Kind:        "stream_unreachable",
+				Severity:    "warning",
+				Reason:      "connect_backoff",
+				Title:       st.name,
+				Detail:      "Stream inalcançável — sem conectar após " + strconv.Itoa(int(backoffFails)) + " tentativas (IP bloqueado ou URL morta). Reconecta sozinho com backoff quando o stream voltar.",
+				StationID:   st.id.String(),
+				StationName: st.name,
+				ActionURL:   "/operations",
+				ActionLabel: "Ver workers",
+			})
 		case !hasWorker:
 			workers.Missing++
 			streams.DownNow++
