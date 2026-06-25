@@ -45,11 +45,16 @@ type detectionEvent struct {
 // per-station segment directory ffmpeg writes to, uploads it to S3, and
 // persists detection records to Postgres.
 type Service struct {
-	db         *pgxpool.Pool
-	store      *storage.Client
-	nc         *nats.Conn
-	detections *catalog.Detections
-	auditor    *audit.Auditor // §9.9 — nil disables the pre-upload audit
+	db                 *pgxpool.Pool
+	store              *storage.Client
+	nc                 *nats.Conn
+	detections         *catalog.Detections
+	detectionCampaigns *catalog.DetectionCampaigns // F-119: projeções por campanha
+	auditor            *audit.Auditor              // §9.9 — nil disables the pre-upload audit
+	// multiAttribution liga o fan-out F-119: uma tocada física vira N projeções
+	// (uma por campanha que roda o mesmo áudio na emissora). OFF = só a projeção
+	// canônica (1:1), comportamento idêntico ao pré-F-119. Flag MULTI_ATTRIBUTION.
+	multiAttribution bool
 	// disambigByCoverage gates the coverage-based version disambiguation
 	// correction (§18.2.2 v2). When false, runAuditOrReject never looks at
 	// sibling cuts and behaviour is identical to pre-fix. Flipped via the
@@ -72,8 +77,10 @@ func NewService(
 	store *storage.Client,
 	nc *nats.Conn,
 	detections *catalog.Detections,
+	detectionCampaigns *catalog.DetectionCampaigns,
 	auditor *audit.Auditor,
 	disambigByCoverage bool,
+	multiAttribution bool,
 	log *zap.Logger,
 ) *Service {
 	return &Service{
@@ -81,8 +88,10 @@ func NewService(
 		store:              store,
 		nc:                 nc,
 		detections:         detections,
+		detectionCampaigns: detectionCampaigns,
 		auditor:            auditor,
 		disambigByCoverage: disambigByCoverage,
+		multiAttribution:   multiAttribution,
 		log:                log,
 		segmentDirs:        make(map[uuid.UUID]string),
 	}
@@ -215,6 +224,38 @@ func (s *Service) handle(msg *nats.Msg) {
 		zap.String("station_id", stationID.String()),
 		zap.Time("window_end", windowEnd),
 	)
+
+	// F-119: grava as projeções por campanha. Sempre a canônica (1:1, =
+	// comportamento pré-F-119). Com MULTI_ATTRIBUTION, faz fan-out pras demais
+	// campanhas que rodam o MESMO áudio na emissora. A tocada física (det) e
+	// seu fluxo de evidência/audit/dedup ficam INTOCADOS — isto é só atribuição.
+	if s.detectionCampaigns != nil {
+		projs := []catalog.Projection{{CampaignID: campaignID, CommercialID: commercialID, Category: det.Category}}
+		if s.multiAttribution {
+			all, aerr := resolveAllAttributions(ctx, s.db, commercialID, stationID, detectedAt)
+			if aerr != nil {
+				s.log.Warn("evidence: multi-attribution resolveAll falhou; só a canônica",
+					zap.String("detection_id", det.ID.String()), zap.Error(aerr))
+			} else {
+				seen := map[uuid.UUID]bool{campaignID: true}
+				for _, p := range all {
+					if seen[p.CampaignID] {
+						continue
+					}
+					seen[p.CampaignID] = true
+					cat, cerr := s.detections.CategorizeFor(ctx, p.CampaignID, p.CommercialID, stationID, detectedAt)
+					if cerr != nil {
+						cat = "orphan"
+					}
+					projs = append(projs, catalog.Projection{CampaignID: p.CampaignID, CommercialID: p.CommercialID, Category: cat})
+				}
+			}
+		}
+		if perr := s.detectionCampaigns.InsertProjections(ctx, det.ID, det.DetectedAt, projs); perr != nil {
+			s.log.Error("evidence: InsertProjections falhou",
+				zap.String("detection_id", det.ID.String()), zap.Error(perr))
+		}
+	}
 
 	// Async: wait for the window to be fully captured, then extract & upload.
 	// Capture the trace context so child spans (extract/encode/upload) chain

@@ -34,15 +34,26 @@ func insSeedDetectionExcluded(t *testing.T, ctx context.Context, pool *pgxpool.P
 	default:
 		t.Fatalf("insSeedDetectionExcluded: estado desconhecido %q", state)
 	}
-	_, err := pool.Exec(ctx, `
+	var detID uuid.UUID
+	err := pool.QueryRow(ctx, `
 		INSERT INTO detections (station_id, commercial_id, campaign_id, detected_at,
 		                        match_start_offset_ms, match_end_offset_ms, confidence,
 		                        hash_count, temporal_coverage, variant_used, rate_used,
 		                        category, retracted_at, ignored_at, evidence_status)
 		VALUES ($1, $2, $3, $4, 0, 30000, 0.95, 100, 0.85, 0, 0, 'in_slot', $5, $6, $7)
-	`, stationID, materialID, campaignID, ts, retractedAt, ignoredAt, evidenceStatus)
+		RETURNING id
+	`, stationID, materialID, campaignID, ts, retractedAt, ignoredAt, evidenceStatus).Scan(&detID)
 	if err != nil {
 		t.Fatalf("seed excluded detection (%s): %v", state, err)
+	}
+	// F-119: projeção canônica (category 'in_slot'). A grade filtra essas pela
+	// tocada base (retracted/ignored/audit_rejected) — o teste prova justamente
+	// que mesmo com projeção 'in_slot' elas NÃO contam.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, 'in_slot')
+	`, detID, ts, campaignID, materialID); err != nil {
+		t.Fatalf("seed excluded projection (%s): %v", state, err)
 	}
 }
 

@@ -101,8 +101,20 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 		return nil, err
 	}
 
+	// Transação: insere a detecção física E sua projeção canônica (1:1)
+	// atomicamente. F-119: a grade (daily_play_summary) e as leituras por-campanha
+	// lêem detection_campaigns, então TODA detecção precisa ao menos da projeção
+	// canônica — independente do caminho (evidence service, manual, backfill).
+	// O fan-out multi-atribuição (projeções extras) é feito pelo evidence.Service
+	// quando MULTI_ATTRIBUTION está ON; aqui é só a canônica.
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	var det Detection
-	err = d.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO detections (station_id, commercial_id, campaign_id, detected_at,
 		                        match_start_offset_ms, match_end_offset_ms, confidence,
 		                        hash_count, temporal_coverage, variant_used, rate_used,
@@ -119,7 +131,34 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 		&det.MatchStartOffsetMs, &det.MatchEndOffsetMs, &det.Confidence, &det.HashCount,
 		&det.TemporalCoverage, &det.VariantUsed, &det.RateUsed,
 		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.RetractedAt, &det.CreatedAt)
-	return &det, err
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (detection_id, detected_at, campaign_id) DO NOTHING`,
+		det.ID, det.DetectedAt, det.CampaignID, det.CommercialID, det.Category); err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &det, nil
+}
+
+// CategorizeFor expõe a categorização por-campanha pra fora do pacote. F-119: o
+// evidence.Service calcula a categoria de cada projeção fan-out com as regras da
+// campanha respectiva. Mesma lógica do categorize() usado no Create.
+func (d *Detections) CategorizeFor(ctx context.Context, campaignID, commercialID, stationID uuid.UUID, detectedAt time.Time) (string, error) {
+	return d.categorize(ctx, CreateDetectionInput{
+		CampaignID:   campaignID,
+		CommercialID: commercialID,
+		StationID:    stationID,
+		DetectedAt:   detectedAt,
+	})
 }
 
 // categorize resolves the detection's category by loading the campaign,
