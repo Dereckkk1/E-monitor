@@ -112,3 +112,64 @@ func TestResolveAttribution_PureLegacyCommercialFallback(t *testing.T) {
 	require.Equal(t, id, gotCom)
 	require.Equal(t, camp, gotCamp)
 }
+
+// TestResolveAllAttributions_TwoCampaignsSameMaster: o mesmo áudio (master_sha256
+// idêntico) subido como 2 materiais, cada um linkado a uma campanha ativa
+// targetando a MESMA estação → resolveAllAttributions devolve uma projeção por
+// campanha (cada uma com o seu material). É o fan-out do F-119.
+func TestResolveAllAttributions_TwoCampaignsSameMaster(t *testing.T) {
+	ctx, pool := attrTestDB(t)
+
+	var clientID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ('fanout-client') RETURNING id`).Scan(&clientID))
+	station := uuid.New()
+	sha := "fanout-sha-" + uuid.New().String()
+
+	var campA, campB uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO campaigns (client_id, name, start_date, end_date, status)
+		VALUES ($1, 'fanout-A', '2026-06-01', '2026-07-31', 'ativa') RETURNING id`,
+		clientID).Scan(&campA))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO campaigns (client_id, name, start_date, end_date, status)
+		VALUES ($1, 'fanout-B', '2026-06-01', '2026-07-31', 'ativa') RETURNING id`,
+		clientID).Scan(&campB))
+
+	matA, matB := uuid.New(), uuid.New()
+	for _, m := range []uuid.UUID{matA, matB} {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO materials (id, client_id, title, duration_seconds,
+			                       master_storage_path, master_sha256, fingerprint_status)
+			VALUES ($1, $2, 'fanout-spot', 30, '/tmp/f.mp3', $3, 'ready')`,
+			m, clientID, sha)
+		require.NoError(t, err)
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO campaign_materials (campaign_id, material_id, target_stations)
+		VALUES ($1, $2, ARRAY[$3]::uuid[])`, campA, matA, station)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO campaign_materials (campaign_id, material_id, target_stations)
+		VALUES ($1, $2, ARRAY[$3]::uuid[])`, campB, matB, station)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM campaign_materials WHERE material_id IN ($1,$2)`, matA, matB)
+		pool.Exec(ctx, `DELETE FROM materials WHERE id IN ($1,$2)`, matA, matB)
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE id IN ($1,$2)`, campA, campB)
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, clientID)
+	})
+
+	detectedAt := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	got, err := resolveAllAttributions(ctx, pool, matA, station, detectedAt)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "uma projeção por campanha que roda o áudio na emissora")
+
+	byCamp := map[uuid.UUID]uuid.UUID{}
+	for _, p := range got {
+		byCamp[p.CampaignID] = p.CommercialID
+	}
+	require.Equal(t, matA, byCamp[campA], "campA usa o material dela")
+	require.Equal(t, matB, byCamp[campB], "campB usa o material dela")
+}
