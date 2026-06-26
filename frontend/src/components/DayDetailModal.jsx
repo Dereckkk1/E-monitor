@@ -383,7 +383,7 @@ function ManualEntryForm({
     }
     if (fresh.length > 0) {
       setRows(rs => {
-        const pristine = rs.length === 1 && !rs[0].audio && rs[0].note.trim() === ''
+        const pristine = rs.length === 1 && !rs[0].audio && rs[0].note.trim() === '' && rs[0].time === '12:00'
         return pristine ? fresh : [...rs, ...fresh]
       })
     }
@@ -684,7 +684,11 @@ function ProofDropzone({ proof, error, onFile, onClear }) {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label="Selecionar comprovante PDF"
       onClick={() => inputRef.current?.click()}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click() } }}
       onDragOver={e => { e.preventDefault(); setDragOver(true) }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files?.[0] ?? null) }}
@@ -791,7 +795,11 @@ function CensurasDropzone({ onFiles }) {
   const [dragOver, setDragOver] = useState(false)
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label="Selecionar censuras de áudio (vários arquivos)"
       onClick={() => inputRef.current?.click()}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click() } }}
       onDragOver={e => { e.preventDefault(); setDragOver(true) }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files) }}
@@ -807,7 +815,7 @@ function CensurasDropzone({ onFiles }) {
         ref={inputRef}
         type="file"
         multiple
-        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/wave,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
         onChange={e => { onFiles(e.target.files); e.target.value = '' }}
         style={{ display: 'none' }}
       />
