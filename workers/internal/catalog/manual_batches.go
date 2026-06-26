@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -84,6 +85,12 @@ func trimToPtr(s string) *string {
 // roda igual ao CreateManual/Create. Retorna as detecções criadas (via Get), em
 // ordem das entries, pro handler mapear áudios audio_i -> linha i.
 func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatchInput) ([]*Detection, error) {
+	// Defesa do repo: um lote sem linhas (com PDF) gravaria um manual_proof_batches
+	// órfão. O handler já barra antes, mas a pré-condição fica explícita aqui.
+	if len(in.Entries) == 0 {
+		return nil, errors.New("CreateManualBatch: entries must not be empty")
+	}
+
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -101,11 +108,7 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 		}
 	}
 
-	type idAt struct {
-		id uuid.UUID
-		at time.Time
-	}
-	created := make([]idAt, 0, len(in.Entries))
+	created := make([]uuid.UUID, 0, len(in.Entries))
 
 	for _, e := range in.Entries {
 		cat, err := d.categorize(ctx, CreateDetectionInput{
@@ -148,7 +151,7 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 			return nil, err
 		}
 
-		created = append(created, idAt{id: id, at: e.DetectedAt})
+		created = append(created, id)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -156,8 +159,8 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 	}
 
 	out := make([]*Detection, 0, len(created))
-	for _, c := range created {
-		det, err := d.Get(ctx, c.id)
+	for _, id := range created {
+		det, err := d.Get(ctx, id)
 		if err != nil {
 			return nil, err
 		}
