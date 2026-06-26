@@ -129,6 +129,17 @@ func TestDetections_CreateManualBatch_NoProof(t *testing.T) {
 	if out[0].ProofBatchID != nil {
 		t.Errorf("proof_batch_id = %v, want nil (no PDF)", out[0].ProofBatchID)
 	}
+	// Projeção canônica detection_campaigns (F-119) é incondicional — vale também
+	// sem PDF. Cobre regressão no branch sem comprovante.
+	var projCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM detection_campaigns WHERE detection_id = $1`,
+		out[0].ID).Scan(&projCount); err != nil {
+		t.Fatalf("count projection: %v", err)
+	}
+	if projCount != 1 {
+		t.Errorf("detection_campaigns rows = %d, want 1", projCount)
+	}
 	if _, err := dets.ProofKeyForDetection(ctx, out[0].ID); err == nil {
 		t.Errorf("ProofKeyForDetection on no-proof detection: want error, got nil")
 	}
