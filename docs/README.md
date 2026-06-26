@@ -57,6 +57,7 @@ docs/
 | [campaign-connection-step.md](features/campaign-connection-step.md) | Step 3 "Conexão" — testar (ping/stream/worker efêmeros) e trocar a stream_url por emissora |
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
+| [manual-airings-bulk-and-proof.md](features/manual-airings-bulk-and-proof.md) | Veiculações manuais em lote + comprovante PDF (1 PDF→N) + censura tardia (subir áudio depois em /detections/:id) + rótulo /stations "Sem campanha ativa" |
 | [materials-page.md](features/materials-page.md) | Tela `/materials` — materiais tocáveis por campanha + grade só-programado (Σ por emissora), admin + cliente |
 | [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
 | [campaign-notification-emails.md](features/campaign-notification-emails.md) | 3 emails diários a admins: campanhas iniciando sem material / iniciando / terminando (janela <3d corridos ou ≤2d úteis, SMTP Workspace) |

@@ -357,6 +357,7 @@ docs/
 | CPM fixo opcional por campanha (Step 6 do wizard, override em /campaigns + /insights + dashboard) | [docs/features/campaign-fixed-cpm.md](docs/features/campaign-fixed-cpm.md) |
 | Etapa Conexão do wizard (Step 3 — testar/trocar stream_url por emissora; ping/stream/worker efêmeros) | [docs/features/campaign-connection-step.md](docs/features/campaign-connection-step.md) |
 | Página /detections (grade station × material × dia) | [docs/features/detections-view.md](docs/features/detections-view.md) |
+| Veiculações manuais em lote + comprovante PDF (1 PDF→N, materiais mistos, tabela `manual_proof_batches` + `detections.proof_batch_id`) + censura tardia (`POST /detections/:id/evidence`) + rótulo /stations "Sem campanha ativa" | [docs/features/manual-airings-bulk-and-proof.md](docs/features/manual-airings-bulk-and-proof.md) |
 | Página /materials (materiais tocáveis por campanha + Σ programado por emissora, admin + cliente) | [docs/features/materials-page.md](docs/features/materials-page.md) |
 | Webhooks (HMAC, retry, outbox) | [docs/features/webhooks.md](docs/features/webhooks.md) |
 | Presigned URLs (frontend acessa evidência direto no S3) | [docs/features/evidence-presigned-urls.md](docs/features/evidence-presigned-urls.md) |
