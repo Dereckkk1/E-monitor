@@ -63,6 +63,11 @@ type Detection struct {
 	ManualAt   *time.Time `json:"manual_at,omitempty"`
 	ManualBy   *uuid.UUID `json:"manual_by,omitempty"`
 	ManualNote *string    `json:"manual_note,omitempty"`
+	// ProofBatchID aponta pro lote de comprovante (manual_proof_batches) quando
+	// a veiculação foi criada via "comprovante PDF" em lote. Nil para detecções
+	// automáticas e manuais sem comprovante. /detections/:id usa pra mostrar o
+	// card "Comprovante (PDF)".
+	ProofBatchID *uuid.UUID `json:"proof_batch_id,omitempty"`
 	// CommercialScript mirrors materials.script for the detected material.
 	// Populated by the Get handler (single-detection detail page); the bulk
 	// list endpoints leave it nil to keep the payload tight.
@@ -961,7 +966,8 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		       d.temporal_coverage, d.audit_coverage, d.variant_used, d.rate_used,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
-		       d.manual_at, d.manual_by, d.manual_note, m.script, d.created_at
+		       d.manual_at, d.manual_by, d.manual_note, m.script, d.created_at,
+		       d.proof_batch_id
 		FROM detections d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -973,7 +979,8 @@ func (d *Detections) Get(ctx context.Context, id uuid.UUID) (*Detection, error) 
 		&det.TemporalCoverage, &det.AuditCoverage, &det.VariantUsed, &det.RateUsed,
 		&det.EvidenceStatus, &det.EvidenceKey, &det.EvidenceSizeBytes, &det.Category, &det.TypeID,
 		&det.RetractedAt, &det.IgnoredAt, &det.IgnoredBy,
-		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CommercialScript, &det.CreatedAt)
+		&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CommercialScript, &det.CreatedAt,
+		&det.ProofBatchID)
 	if err != nil {
 		return nil, err
 	}
