@@ -101,23 +101,24 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 	var proofKey string
 	var proofSize int64
 	if file, header, ferr := r.FormFile("proof"); ferr == nil {
-		defer file.Close()
+		// PDF malformado (tamanho/tipo) é erro do cliente -> 4xx duro antes de
+		// criar nada (fluxo PDF-first, sem endpoint pra anexar depois). Só a
+		// falha de Put (infra) é não-fatal. Close explícito em cada caminho.
 		if header.Size > manualProofMaxBytes {
+			file.Close()
 			http.Error(w, "PDF acima de 25MB", http.StatusRequestEntityTooLarge)
 			return
 		}
 		ctype := header.Header.Get("Content-Type")
 		if !strings.HasPrefix(strings.ToLower(ctype), "application/pdf") {
+			file.Close()
 			http.Error(w, "comprovante precisa ser PDF", http.StatusUnsupportedMediaType)
 			return
 		}
 		if h.Storage != nil {
 			bid := uuid.New()
-			key := fmt.Sprintf("proofs/%s/%s/%s/%s/%s.pdf",
-				entries[0].DetectedAt.UTC().Format("2006"),
-				entries[0].DetectedAt.UTC().Format("01"),
-				entries[0].DetectedAt.UTC().Format("02"),
-				meta.StationID, bid)
+			key := fmt.Sprintf("proofs/%s/%s/%s.pdf",
+				entries[0].DetectedAt.UTC().Format("2006/01/02"), meta.StationID, bid)
 			if err := h.Storage.Put(r.Context(), key, file, "application/pdf"); err != nil {
 				warnings = append(warnings, "upload do PDF comprovante falhou — veiculações criadas sem comprovante")
 			} else {
@@ -126,6 +127,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 				proofSize = header.Size
 			}
 		}
+		file.Close()
 	}
 
 	out, err := h.Repo.CreateManualBatch(r.Context(), catalog.CreateManualBatchInput{
@@ -167,11 +169,8 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 			file.Close()
 			continue
 		}
-		key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.%s",
-			det.DetectedAt.UTC().Format("2006"),
-			det.DetectedAt.UTC().Format("01"),
-			det.DetectedAt.UTC().Format("02"),
-			meta.StationID, det.ID, ext)
+		key := fmt.Sprintf("evidences/%s/%s/%s.%s",
+			det.DetectedAt.UTC().Format("2006/01/02"), meta.StationID, det.ID, ext)
 		if err := h.Storage.Put(r.Context(), key, file, ctype); err != nil {
 			file.Close()
 			warnings = append(warnings, fmt.Sprintf("linha %d: upload do áudio falhou", i))
@@ -231,15 +230,16 @@ func (h *DetectionsHandler) UploadEvidence(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac ou ogg)", http.StatusUnsupportedMediaType)
 		return
 	}
+	if header.Size > manualAudioMaxBytes {
+		http.Error(w, "áudio acima de 25MB", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if h.Storage == nil {
 		http.Error(w, "storage indisponível", http.StatusInternalServerError)
 		return
 	}
-	key := fmt.Sprintf("evidences/%s/%s/%s/%s/%s.%s",
-		det.DetectedAt.UTC().Format("2006"),
-		det.DetectedAt.UTC().Format("01"),
-		det.DetectedAt.UTC().Format("02"),
-		det.StationID, det.ID, ext)
+	key := fmt.Sprintf("evidences/%s/%s/%s.%s",
+		det.DetectedAt.UTC().Format("2006/01/02"), det.StationID, det.ID, ext)
 	if err := h.Storage.Put(r.Context(), key, file, ctype); err != nil {
 		http.Error(w, "falha no upload", http.StatusInternalServerError)
 		return
@@ -271,6 +271,10 @@ func (h *DetectionsHandler) ProofURL(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
+		return
+	}
+	if h.Storage == nil {
+		http.Error(w, "storage indisponível", http.StatusInternalServerError)
 		return
 	}
 	const ttl = 5 * time.Minute
