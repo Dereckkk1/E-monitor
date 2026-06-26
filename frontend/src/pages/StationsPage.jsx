@@ -14,7 +14,7 @@ const BAND_OPTIONS = [
 const STATUS_META = {
   active:      { label: 'Ativa',       cls: 'badge-success' },
   calibrating: { label: 'Calibrando',  cls: 'badge-warning' },
-  paused:      { label: 'Pausada',     cls: 'badge-neutral' },
+  paused:      { label: 'Sem campanha ativa', cls: 'badge-neutral' },
   error:       { label: 'Erro',        cls: 'badge-danger'  },
 }
 
