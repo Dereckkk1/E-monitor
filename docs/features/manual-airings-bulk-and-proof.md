@@ -102,9 +102,18 @@ Espelha o `/evidence/url`. Resolve `proof_batch_id → proof_pdf_key`, devolve p
 A "Adicionar veiculação manualmente" virou um **formulário multi-linha** (contexto fixo = campanha +
 emissora + dia da célula):
 - Dropzone de **Comprovante (PDF)** no topo (opcional, cobre o lote).
+- **Censuras (áudios) em massa** (fluxo áudio-first): seleciona/solta **N áudios de uma vez** → cria N
+  linhas, cada uma com seu áudio anexado. O **horário é pré-preenchido pelo nome do arquivo**
+  (best-effort: reconhece `0657`, `06h57`, `06:57`, `065700`, ignora datas; sempre conferível pelo
+  operador). Arquivos inválidos (tipo/tamanho) são ignorados com aviso.
+- **"Material de todas as linhas"** (quando há >1 material e >1 linha): aplica o mesmo material a todas
+  de um clique; ainda dá pra ajustar linha a linha.
 - Linhas: `material ▾` · `horário` · `descrição` · **áudio compacto por linha** (opcional) · remover.
 - **+ adicionar linha**. Erros `422` voltam destacados na linha correspondente (por `index`).
 - Posta no `/detections/manual/batch` via `useCreateManualBatchDetection`.
+
+Dois fluxos cobertos pelo mesmo form: **PDF-first** (cria linhas sem áudio agora, censura vem depois) e
+**áudio-first** (já tem as censuras: solta tudo e só classifica material + horário).
 
 ### `/detections/:id` (`DetectionDetailPage`)
 

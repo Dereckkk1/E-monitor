@@ -26,6 +26,30 @@ function fmtDate(iso) {
   return `${d}/${m}/${y}`
 }
 
+// parseTimeFromName: tenta extrair um horário do nome do arquivo de censura
+// (best-effort, sempre conferido pelo operador). Prioriza padrões com separador
+// de hora explícito (06h57, 06:57) pra não confundir com datas; depois 6 dígitos
+// colados (065700 = HH:MM:SS) e 4 dígitos colados (0657 = HH:MM). Devolve
+// 'HH:MM:SS' válido ou null. Ranges fora de 23:59:59 são rejeitados.
+function parseTimeFromName(name) {
+  const base = String(name || '').replace(/\.[^.]+$/, '')
+    // remove trechos com cara de data (ISO e DD-MM-AAAA) pra não ler ano/dia como hora
+    .replace(/\b\d{4}[-/.]\d{2}[-/.]\d{2}\b/g, ' ')
+    .replace(/\b\d{2}[-/.]\d{2}[-/.]\d{4}\b/g, ' ')
+  const pad = n => String(n).padStart(2, '0')
+  const tryRe = (re) => {
+    let m
+    while ((m = re.exec(base)) !== null) {
+      const h = +m[1], mi = +m[2], s = m[3] != null ? +m[3] : 0
+      if (h <= 23 && mi <= 59 && s <= 59) return `${pad(h)}:${pad(mi)}:${pad(s)}`
+    }
+    return null
+  }
+  return tryRe(/(\d{1,2})\s*[h:]\s*(\d{2})(?:\s*[m:]?\s*(\d{2}))?/gi)   // 06h57 / 06:57[:30]
+      || tryRe(/(?:^|\D)(\d{2})(\d{2})(\d{2})(?:\D|$)/g)               // 065700
+      || tryRe(/(?:^|\D)(\d{2})(\d{2})(?:\D|$)/g)                      // 0657
+}
+
 /**
  * Day-detail modal for the /detections grid.
  *
@@ -319,13 +343,14 @@ function ManualEntryForm({
 }) {
   const firstMat = availableMaterials[0]?.id ?? ''
   const rowSeq = useRef(0)
-  const mkRow = useCallback((time = '12:00') => ({
-    key: rowSeq.current++, materialId: firstMat, time, note: '', audio: null, audioError: '',
+  const mkRow = useCallback((time = '12:00', materialId = firstMat) => ({
+    key: rowSeq.current++, materialId, time, note: '', audio: null, audioError: '',
   }), [firstMat])
   const [rows, setRows] = useState(() => [mkRow()])
   const [proof, setProof] = useState(null)
   const [proofError, setProofError] = useState('')
   const [rowErrors, setRowErrors] = useState({}) // índice da linha -> mensagem (vinda do 422)
+  const [bulkMaterial, setBulkMaterial] = useState(firstMat) // "aplicar material a todas as linhas"
   const createBatch = useCreateManualBatchDetection()
   const noMaterials = availableMaterials.length === 0
   const MAX_MB = 25
@@ -336,7 +361,35 @@ function ManualEntryForm({
     setRows(rs => rs.map(r => (r.key === key ? { ...r, ...patch } : r)))
   }
   function addRow() {
-    setRows(rs => [...rs, mkRow(rs[rs.length - 1]?.time ?? '12:00')])
+    setRows(rs => [...rs, mkRow(rs[rs.length - 1]?.time ?? '12:00', bulkMaterial)])
+  }
+  // Aplica o mesmo material a todas as linhas (e vira o default das próximas).
+  function applyBulkMaterial(value) {
+    setBulkMaterial(value)
+    setRows(rs => rs.map(r => ({ ...r, materialId: value })))
+  }
+  // Fluxo "áudio-first": seleciona/solta N censuras de uma vez -> N linhas, cada
+  // uma com seu áudio, horário pré-preenchido pelo nome do arquivo (best-effort)
+  // e material = bulkMaterial. Arquivos inválidos (tipo/tamanho) são ignorados.
+  function addAudioRows(fileList) {
+    const files = Array.from(fileList || [])
+    if (files.length === 0) return
+    let skipped = 0
+    const fresh = []
+    for (const f of files) {
+      if (f.size > MAX_MB * 1024 * 1024) { skipped++; continue }
+      if (f.type && !AUDIO_MIME.includes(f.type.toLowerCase())) { skipped++; continue }
+      fresh.push({ ...mkRow(parseTimeFromName(f.name) ?? '12:00', bulkMaterial), audio: f })
+    }
+    if (fresh.length > 0) {
+      setRows(rs => {
+        const pristine = rs.length === 1 && !rs[0].audio && rs[0].note.trim() === ''
+        return pristine ? fresh : [...rs, ...fresh]
+      })
+    }
+    if (skipped > 0) {
+      window.alert(`${skipped} arquivo(s) ignorado(s): formato não suportado ou acima de ${MAX_MB}MB.`)
+    }
   }
   function removeRow(key) {
     setRows(rs => (rs.length > 1 ? rs.filter(r => r.key !== key) : rs))
@@ -464,6 +517,22 @@ function ManualEntryForm({
             onClear={() => { setProof(null); setProofError('') }}
           />
         </Field>
+
+        <Field as="div" label="Censuras (áudios)" hint="Selecione vários de uma vez: cada arquivo vira uma linha, com o horário pré-preenchido pelo nome quando dá pra reconhecer (ex.: '0657', '06h57'). Confira sempre.">
+          <CensurasDropzone onFiles={addAudioRows} />
+        </Field>
+
+        {availableMaterials.length > 1 && rows.length > 1 && (
+          <Field label="Material de todas as linhas" hint="Aplica o mesmo material a todas; ainda dá pra ajustar linha a linha.">
+            <StyledSelect value={bulkMaterial} onChange={e => applyBulkMaterial(e.target.value)}>
+              {availableMaterials.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.title || m.name || 'Sem título'}{m.duration_seconds ? ` · ${m.duration_seconds}s` : ''}
+                </option>
+              ))}
+            </StyledSelect>
+          </Field>
+        )}
 
         <div>
           {rows.map((row, i) => (
@@ -710,6 +779,56 @@ function ProofDropzone({ proof, error, onFile, onClear }) {
           </svg>
         </button>
       )}
+    </div>
+  )
+}
+
+// CensurasDropzone: seleção em massa de áudios (fluxo áudio-first). Clica ->
+// abre o seletor com multiple; também aceita arrastar vários. Cada arquivo vira
+// uma linha (o pai trata em addAudioRows). Não guarda estado — é só o gatilho.
+function CensurasDropzone({ onFiles }) {
+  const inputRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
+  return (
+    <div
+      onClick={() => inputRef.current?.click()}
+      onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={e => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files) }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
+        border: `1.5px dashed ${dragOver ? 'var(--c-action)' : 'var(--c-border)'}`,
+        borderRadius: 'var(--radius-md)',
+        background: dragOver ? 'var(--c-action-light)' : 'var(--c-surface)',
+        cursor: 'pointer', transition: 'all 160ms cubic-bezier(0.16,1,0.3,1)',
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        onChange={e => { onFiles(e.target.files); e.target.value = '' }}
+        style={{ display: 'none' }}
+      />
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, flexShrink: 0, borderRadius: 'var(--radius-md)',
+        background: dragOver ? 'var(--c-action)' : 'var(--c-surface-2)',
+        color: dragOver ? '#fff' : 'var(--c-text-3)', transition: 'all 160ms',
+      }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+        </svg>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: dragOver ? 'var(--c-action)' : 'var(--c-text)', fontFamily: 'var(--font-heading)' }}>
+          {dragOver ? 'Solta as censuras aqui' : 'Selecionar censuras (vários arquivos)'}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
+          Cada áudio vira uma linha. MP3, M4A, WAV, AAC ou OGG · até 25MB cada
+        </div>
+      </div>
     </div>
   )
 }
