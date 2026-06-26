@@ -381,6 +381,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/detections/manual", d.Detections.CreateManual)
+					r.Post("/detections/manual/batch", d.Detections.CreateManualBatch)
+					r.Post("/detections/{id}/evidence", d.Detections.UploadEvidence)
+					r.Get("/detections/{id}/proof/url", d.Detections.ProofURL)
 					r.Post("/detections/{id}/ignore", d.Detections.Ignore)
 					r.Post("/detections/{id}/restore", d.Detections.Restore)
 					// CSV export do relatório data/hora — streaming. Prefixo
