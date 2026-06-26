@@ -483,6 +483,56 @@ export function useCreateManualDetection() {
   })
 }
 
+// Admin-only — cria N veiculações de uma vez. payload:
+//   { campaign_id, station_id, note?, entries: [{commercial_id, detected_at, note?}],
+//     proof?: File (PDF do lote), audios?: { [entryIndex]: File } }
+// Monta multipart: `meta` (JSON), `proof` (PDF opcional), `audio_<i>` por linha
+// com áudio. Backend valida vínculo de TODAS as linhas (tudo-ou-nada) e roda o
+// categorizador igual à engine. Resposta: { batch_id, detections, warnings }.
+export function useCreateManualBatchDetection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ proof, audios = {}, ...meta }) => {
+      const fd = new FormData()
+      fd.append('meta', JSON.stringify(meta))
+      if (proof) fd.append('proof', proof)
+      Object.entries(audios).forEach(([idx, file]) => {
+        if (file) fd.append(`audio_${idx}`, file)
+      })
+      return api.post('/detections/manual/batch', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data)
+    },
+    onSuccess: (data, vars) => {
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      if (vars?.campaign_id) {
+        qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaign_id] })
+      }
+    },
+  })
+}
+
+// Admin-only — sobe a censura (áudio) numa detecção existente que ainda não tem
+// áudio (POST /detections/:id/evidence, multipart campo `audio`). Usado em
+// /detections/:id quando a emissora manda o áudio depois do PDF.
+export function useUploadDetectionEvidence() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, audio }) => {
+      const fd = new FormData()
+      fd.append('audio', audio)
+      return api.post(`/detections/${id}/evidence`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data)
+    },
+    onSuccess: (data, vars) => {
+      qc.invalidateQueries({ queryKey: ['detection', vars.id] })
+      qc.invalidateQueries({ queryKey: ['detection-evidence-url', vars.id] })
+      qc.invalidateQueries({ queryKey: ['detections'] })
+    },
+  })
+}
+
 // Admin-only soft-delete: marks a veiculação as ignored so it stops counting
 // in daily_play_summary aggregates. Invalidates anything that depends on a
 // detection list or campaign rollup so the UI snaps to the new state.
