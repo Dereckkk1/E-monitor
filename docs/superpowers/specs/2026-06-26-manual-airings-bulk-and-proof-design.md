@@ -44,7 +44,9 @@ E um ajuste trivial não relacionado (pedido junto):
 | Escopo do PDF | **1 PDF → N veiculações (lote), materiais mistos permitidos.** |
 | Censura tardia vale pra quais detecções | **Qualquer detecção sem áudio** (inclusive automática sem evidência). |
 | Onde o PDF mora (modelo de dados) | **Abordagem A — tabela de lote `manual_proof_batches`** + FK `detections.proof_batch_id`. |
-| Linhas inválidas no batch | **Tudo-ou-nada**: valida todas as linhas antes; se qualquer uma falhar, `422` com erros por linha e **não cria nada**. Falha de upload de áudio/PDF é não-fatal (igual ao `207` de hoje). |
+| Linhas inválidas no batch | **Tudo-ou-nada**: valida todas as linhas antes; se qualquer uma falhar, `422` com erros por linha e **não cria nada**. |
+| Falha de upload (S3 `Put`) | **Não-fatal**: a detecção é criada mesmo assim (`evidence_status='missing'`, sem lote se foi o PDF) + warning. Não perde as N linhas digitadas por um soluço de infra. |
+| PDF malformado (tamanho/tipo) | **Rejeição dura** (`413`/`415`) **antes** de criar qualquer coisa — é erro do cliente. O PDF é o artefato **primário** do fluxo PDF-first; se for inválido o operador conserta e reenvia (o form não limpa). Como **não há endpoint pra anexar PDF depois**, deixar passar silenciosamente orfanaria o comprovante. Assimetria proposital com o áudio (por-linha, secundário): áudio inválido vira **warning** e não derruba o lote. |
 
 ## Modelo de dados
 
