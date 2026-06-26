@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
-import { useIgnoreDetection, useRestoreDetection } from '../api/hooks'
+import { useIgnoreDetection, useRestoreDetection, useUploadDetectionEvidence } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { useConfirm } from '../components/ConfirmModal'
 import './DetectionDetailPage.css'
@@ -223,7 +223,7 @@ function MetricBar({ label, value, tone = 'is-action', display }) {
   )
 }
 
-function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError }) {
+function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError, awaitingCensura }) {
   const status = detection.evidence_status
   const chip = evidenceChip(status)
 
@@ -265,19 +265,28 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError }) {
   }
 
   if (status === 'failed' || status === 'missing' || urlError) {
+    const awaiting = awaitingCensura && status !== 'failed'
     return (
       <div className="dd-panel">
         <div className="dd-panel-head">
           <span className="dd-panel-title">Evidência</span>
-          <span className={`dd-chip ${chip.tone}`}>{chip.label}</span>
+          <span className={`dd-chip ${awaiting ? 'is-warning' : chip.tone}`}>
+            {awaiting ? 'Aguardando censura' : chip.label}
+          </span>
         </div>
         <div className="dd-evidence-state">
           <span className="dd-evidence-state-title">
-            {status === 'failed' ? 'Falha ao gerar evidência' : 'Evidência indisponível'}
+            {status === 'failed'
+              ? 'Falha ao gerar evidência'
+              : awaiting
+              ? 'Aguardando censura da emissora'
+              : 'Evidência indisponível'}
           </span>
           <span className="dd-evidence-state-desc">
             {status === 'failed'
               ? 'O encoder retornou erro durante a geração do clip. A detecção em si permanece válida — apenas o áudio não pôde ser preservado.'
+              : awaiting
+              ? 'Esta veiculação foi registrada pelo comprovante; o áudio da censura ainda não foi anexado.'
               : 'Este registro não possui clip de áudio armazenado. Detecções recentes aparecem como “Pendente” por alguns segundos antes de serem encodadas.'}
           </span>
         </div>
@@ -320,6 +329,116 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError }) {
         >
           <DownloadIcon /> Baixar áudio
         </a>
+      </div>
+    </div>
+  )
+}
+
+// ProofCard: comprovante PDF do lote (manual_proof_batches). Admin-only. Abre o
+// presigned em nova aba. Renderizado só quando a detecção tem proof_batch_id.
+function ProofCard({ query }) {
+  const url = query.data?.url
+  const ready = !!url && !query.isLoading && !query.error
+  return (
+    <div className="dd-panel">
+      <div className="dd-panel-head">
+        <span className="dd-panel-title">Comprovante</span>
+        <span className="dd-chip is-success">PDF</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+          Documento enviado pela emissora comprovando as veiculações deste lote.
+        </span>
+        <a
+          className="dd-download-btn"
+          href={ready ? url : '#'}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-disabled={!ready}
+          style={ready ? undefined : { pointerEvents: 'none', opacity: 0.55 }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+          </svg>
+          {query.isLoading ? 'Carregando…' : query.error ? 'Indisponível' : 'Ver comprovante (PDF)'}
+        </a>
+      </div>
+    </div>
+  )
+}
+
+// CensuraUploader: anexa o áudio da censura a uma detecção sem áudio (POST
+// /detections/:id/evidence). Admin-only. Ao subir, a query da detecção é
+// invalidada, evidence_status vira 'available' e o player aparece.
+function CensuraUploader({ detection }) {
+  const inputRef = useRef(null)
+  const [file, setFile] = useState(null)
+  const [err, setErr] = useState('')
+  const upload = useUploadDetectionEvidence()
+  const MAX_MB = 25
+  const MIME = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg']
+
+  function pick(f) {
+    setErr('')
+    if (!f) { setFile(null); return }
+    if (f.size > MAX_MB * 1024 * 1024) { setErr(`Acima de ${MAX_MB}MB.`); setFile(null); return }
+    if (f.type && !MIME.includes(f.type.toLowerCase())) { setErr('Formato inválido (mp3, m4a, wav, aac, ogg).'); setFile(null); return }
+    setFile(f)
+  }
+
+  async function submit() {
+    if (!file) { inputRef.current?.click(); return }
+    try {
+      await upload.mutateAsync({ id: detection.id, audio: file })
+      setFile(null)
+    } catch (e) {
+      const s = e?.response?.status
+      window.alert(
+        s === 409 ? 'Essa veiculação já tem censura.'
+        : s === 415 ? 'Formato de áudio não suportado.'
+        : s === 413 ? 'Áudio acima de 25MB.'
+        : 'Falha ao subir a censura. Tente novamente.'
+      )
+    }
+  }
+
+  return (
+    <div className="dd-panel">
+      <div className="dd-panel-head">
+        <span className="dd-panel-title">Subir censura</span>
+        <span className="dd-chip is-warning">aguardando áudio</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+          Quando a emissora mandar o áudio da censura, anexe aqui. A veiculação já conta nos relatórios; isso adiciona o player de evidência.
+        </span>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+          style={{ display: 'none' }}
+          onChange={e => pick(e.target.files?.[0] ?? null)}
+        />
+        {file && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8, alignSelf: 'flex-start', maxWidth: '100%',
+            padding: '7px 12px', borderRadius: 'var(--radius-full)',
+            background: '#f0fdf4', border: '1px solid var(--c-success)',
+            color: 'var(--c-success)', fontSize: 12, fontWeight: 600,
+          }}>
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{file.name}</span>
+            <span style={{ opacity: 0.75, flexShrink: 0 }}>· {(file.size / 1024 / 1024).toFixed(1)}MB</span>
+          </span>
+        )}
+        {err && <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-danger)' }}>{err}</span>}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-secondary" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
+            {file ? 'Trocar arquivo' : 'Escolher arquivo'}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={submit} disabled={upload.isPending || !file}>
+            {upload.isPending ? 'Enviando…' : 'Subir censura'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -453,6 +572,16 @@ export default function DetectionDetailPage() {
     retry: 1,
   })
 
+  // Comprovante PDF do lote (manual_proof_batches). Admin-only — o endpoint
+  // /proof/url vive no grupo admin. Habilita só quando há proof_batch_id.
+  const proofUrlQuery = useQuery({
+    queryKey: ['detection-proof-url', id],
+    queryFn:  () => api.get(`/detections/${id}/proof/url`).then(r => r.data),
+    enabled:  isAdmin && !!detection?.proof_batch_id,
+    staleTime: 4 * 60 * 1000,
+    retry: 1,
+  })
+
   // Refresh the URL automatically when it expires while the user is still
   // on the page. We compute the timeout from `expires_at` and re-trigger.
   const [, setRefetchTick] = useState(0)
@@ -527,6 +656,9 @@ export default function DetectionDetailPage() {
   const station    = stationQuery.data
   const commercial = commercialQuery.data
   const evidenceUrl = evidenceUrlQuery.data?.url ?? null
+  const hasAudio = detection.evidence_status === 'available' || !!detection.evidence_key
+  // Manual/lote sem áudio = "aguardando censura": estado neutro, não erro vermelho.
+  const awaitingCensura = !hasAudio && (!!detection.manual_at || !!detection.proof_batch_id)
 
   const stationCity = station?.city
   const stationState = station?.state
@@ -646,9 +778,22 @@ export default function DetectionDetailPage() {
           evidenceUrl={evidenceUrl}
           isLoadingUrl={evidenceUrlQuery.isLoading}
           urlError={!!evidenceUrlQuery.error}
+          awaitingCensura={awaitingCensura}
         />
         <AnalysisPanel detection={detection} />
       </div>
+
+      {/* ── Admin: comprovante PDF + subir censura ── */}
+      {isAdmin && (detection.proof_batch_id || !hasAudio) && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: 16, marginTop: 16,
+        }}>
+          {detection.proof_batch_id && <ProofCard query={proofUrlQuery} />}
+          {!hasAudio && <CensuraUploader detection={detection} />}
+        </div>
+      )}
 
       {/* ── Context cards ── */}
       <div className="dd-context">
