@@ -14,7 +14,7 @@
 
 ## File Structure
 
-- `migrations/0040_detection_campaigns.up.sql` / `.down.sql` — tabela `detection_campaigns` (+ partições + índices), view `detection_attributions`, rewrite `daily_play_summary`, backfill 1:1.
+- `migrations/0041_detection_campaigns.up.sql` / `.down.sql` — tabela `detection_campaigns` (+ partições + índices), view `detection_attributions`, rewrite `daily_play_summary`, backfill 1:1. **(0040 já é `similarity_segments`.) ✅ FEITO (commit 71efb19) — partições espelham as de `detections`; migrate up/down + backfill 1:1 verificados.**
 - `workers/internal/catalog/detection_campaigns.go` — repo da projeção: `InsertProjections`, `RecategorizeForCampaignMaterial`.
 - `workers/internal/catalog/detection_campaigns_test.go` — testes do repo (DB-gated).
 - `workers/internal/evidence/attribution.go` — `resolveAllAttributions` (novo, ao lado do `resolveAttribution` existente).
