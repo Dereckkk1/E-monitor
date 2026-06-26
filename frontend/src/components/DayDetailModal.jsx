@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useDetections, useCreateManualDetection } from '../api/hooks'
+import { useDetections, useCreateManualBatchDetection } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import BadgePill from './BadgePill'
 import AudioPlayer from './AudioPlayer'
@@ -317,64 +317,87 @@ function ManualEntryForm({
   campaignId, stationId, dateISO, availableMaterials, materialType, station,
   onCancel, onSaved,
 }) {
-  const [materialId, setMaterialId] = useState(availableMaterials[0]?.id ?? '')
-  const [time, setTime] = useState('12:00')
-  const [note, setNote] = useState('')
-  const [audio, setAudio] = useState(null)
-  const [audioError, setAudioError] = useState('')
-  const [dragOver, setDragOver] = useState(false)
-  const createManual = useCreateManualDetection()
+  const firstMat = availableMaterials[0]?.id ?? ''
+  const rowSeq = useRef(0)
+  const mkRow = useCallback((time = '12:00') => ({
+    key: rowSeq.current++, materialId: firstMat, time, note: '', audio: null, audioError: '',
+  }), [firstMat])
+  const [rows, setRows] = useState(() => [mkRow()])
+  const [proof, setProof] = useState(null)
+  const [proofError, setProofError] = useState('')
+  const [rowErrors, setRowErrors] = useState({}) // índice da linha -> mensagem (vinda do 422)
+  const createBatch = useCreateManualBatchDetection()
   const noMaterials = availableMaterials.length === 0
-  const MAX_AUDIO_MB = 25
-  const ACCEPTED_MIME = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a',
-                         'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg']
+  const MAX_MB = 25
+  const AUDIO_MIME = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a',
+                      'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg']
 
-  function pickAudio(file) {
-    setAudioError('')
-    if (!file) { setAudio(null); return }
-    if (file.size > MAX_AUDIO_MB * 1024 * 1024) {
-      setAudioError(`Arquivo acima de ${MAX_AUDIO_MB}MB.`)
-      setAudio(null)
-      return
-    }
-    if (file.type && !ACCEPTED_MIME.includes(file.type.toLowerCase())) {
-      setAudioError('Formato não suportado (use mp3, m4a, wav, aac ou ogg).')
-      setAudio(null)
-      return
-    }
-    setAudio(file)
+  function patchRow(key, patch) {
+    setRows(rs => rs.map(r => (r.key === key ? { ...r, ...patch } : r)))
   }
-
-  function onDrop(e) {
-    e.preventDefault()
-    setDragOver(false)
-    pickAudio(e.dataTransfer.files?.[0] ?? null)
+  function addRow() {
+    setRows(rs => [...rs, mkRow(rs[rs.length - 1]?.time ?? '12:00')])
+  }
+  function removeRow(key) {
+    setRows(rs => (rs.length > 1 ? rs.filter(r => r.key !== key) : rs))
+  }
+  function pickRowAudio(key, file) {
+    if (!file) { patchRow(key, { audio: null, audioError: '' }); return }
+    if (file.size > MAX_MB * 1024 * 1024) { patchRow(key, { audio: null, audioError: `Acima de ${MAX_MB}MB.` }); return }
+    if (file.type && !AUDIO_MIME.includes(file.type.toLowerCase())) {
+      patchRow(key, { audio: null, audioError: 'Formato inválido (mp3, m4a, wav, aac, ogg).' }); return
+    }
+    patchRow(key, { audio: file, audioError: '' })
+  }
+  function pickProof(file) {
+    if (!file) { setProof(null); setProofError(''); return }
+    if (file.size > MAX_MB * 1024 * 1024) { setProof(null); setProofError(`Acima de ${MAX_MB}MB.`); return }
+    if (file.type && file.type.toLowerCase() !== 'application/pdf') {
+      setProof(null); setProofError('O comprovante precisa ser PDF.'); return
+    }
+    setProof(file); setProofError('')
   }
 
   async function submit(e) {
     e.preventDefault()
-    if (!materialId) return
-    const isoLocal = `${dateISO}T${time.length === 5 ? time + ':00' : time}-03:00`
+    setRowErrors({})
+    const missing = rows.findIndex(r => !r.materialId)
+    if (missing >= 0) { setRowErrors({ [missing]: 'Selecione o material.' }); return }
+    const entries = rows.map(r => ({
+      commercial_id: r.materialId,
+      detected_at: new Date(`${dateISO}T${r.time.length === 5 ? r.time + ':00' : r.time}-03:00`).toISOString(),
+      note: r.note.trim(),
+    }))
+    const audios = {}
+    rows.forEach((r, i) => { if (r.audio) audios[i] = r.audio })
     try {
-      await createManual.mutateAsync({
+      const res = await createBatch.mutateAsync({
         campaign_id: campaignId,
         station_id: stationId,
-        commercial_id: materialId,
-        detected_at: new Date(isoLocal).toISOString(),
-        note: note.trim(),
-        audio: audio ?? undefined,
+        entries,
+        proof: proof ?? undefined,
+        audios,
       })
+      const warns = res?.warnings?.length ?? 0
       onSaved()
+      if (warns > 0) {
+        window.alert(`${rows.length} veiculação(ões) criada(s). ${warns} aviso(s) no upload de mídia — confira na detail page de cada uma.`)
+      }
     } catch (err) {
       const status = err?.response?.status
-      const msg = status === 422
-        ? 'Material não está vinculado a essa emissora nessa campanha.'
-        : status === 415
-        ? 'Formato de áudio não suportado.'
-        : status === 403
-        ? 'Apenas administradores podem inserir veiculações manualmente.'
+      const errs = err?.response?.data?.errors
+      if (status === 422 && Array.isArray(errs)) {
+        const map = {}
+        errs.forEach(x => { map[x.index] = x.message })
+        setRowErrors(map)
+        return
+      }
+      window.alert(
+        status === 413 ? 'Arquivo acima de 25MB.'
+        : status === 415 ? 'Formato não suportado (PDF no comprovante; mp3/m4a/wav/aac/ogg no áudio).'
+        : status === 403 ? 'Apenas administradores podem inserir veiculações manualmente.'
         : 'Erro ao salvar. Tente novamente.'
-      window.alert(msg)
+      )
     }
   }
 
@@ -411,72 +434,53 @@ function ManualEntryForm({
             color: 'var(--c-action)', textTransform: 'uppercase',
             fontFamily: 'var(--font-heading)',
           }}>
-            Inserção retroativa
+            Inserção retroativa em lote
           </span>
           <span style={{
             fontSize: 14, fontWeight: 700, color: 'var(--c-text)',
             fontFamily: 'var(--font-heading)', letterSpacing: '-0.01em',
           }}>
-            Adicionar veiculação manual
+            Adicionar veiculações
           </span>
           <span style={{ fontSize: 11.5, color: 'var(--c-text-2)', lineHeight: 1.45, marginTop: 2 }}>
-            Use quando o material tocou de fato mas o sistema não capturou —
-            o categorizador roda igual ao automático.
+            Suba várias de uma vez: material, horário e descrição por linha. O
+            comprovante (PDF) é opcional e cobre o lote; o áudio da censura pode
+            vir agora ou depois, em cada veiculação.
           </span>
         </div>
       </header>
 
-      {/* Body: campos */}
+      {/* Body: comprovante + linhas */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 14,
         padding: '16px 18px 18px',
       }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
-          <Field label="Material" required>
-            <StyledSelect
-              value={materialId}
-              onChange={e => setMaterialId(e.target.value)}
-            >
-              {availableMaterials.map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.title || m.name || 'Sem título'}
-                  {m.duration_seconds ? ` · ${m.duration_seconds}s` : ''}
-                </option>
-              ))}
-            </StyledSelect>
-          </Field>
+        <Field as="div" label="Comprovante (PDF)" hint="Opcional. Um comprovante cobre todas as linhas abaixo; sem ele as veiculações são criadas normalmente.">
+          <ProofDropzone
+            proof={proof}
+            error={proofError}
+            onFile={pickProof}
+            onClear={() => { setProof(null); setProofError('') }}
+          />
+        </Field>
 
-          <Field label="Horário" required hint="Fuso de São Paulo (UTC-3)">
-            <StyledInput
-              type="time"
-              value={time}
-              step="1"
-              onChange={e => setTime(e.target.value)}
+        <div>
+          {rows.map((row, i) => (
+            <BatchRow
+              key={row.key}
+              index={i}
+              row={row}
+              materials={availableMaterials}
+              error={rowErrors[i]}
+              canRemove={rows.length > 1}
+              onChange={patch => patchRow(row.key, patch)}
+              onPickAudio={file => pickRowAudio(row.key, file)}
+              onRemove={() => removeRow(row.key)}
             />
-          </Field>
+          ))}
         </div>
 
-        <Field label="Descrição" hint="Opcional — aparece na detail page como contexto da inserção.">
-          <StyledInput
-            as="textarea"
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder="Ex: acordo offline com a emissora, falha de captura no stream, etc."
-            rows={3}
-          />
-        </Field>
-
-        <Field as="div" label="Áudio da censura" hint={`Opcional — sem áudio a veiculação ainda conta nos agregados, só não tem player. Máx ${MAX_AUDIO_MB}MB.`}>
-          <AudioDropzone
-            audio={audio}
-            audioError={audioError}
-            dragOver={dragOver}
-            setDragOver={setDragOver}
-            onDrop={onDrop}
-            onFile={pickAudio}
-            onClear={() => { setAudio(null); setAudioError('') }}
-          />
-        </Field>
+        <AddRowButton onClick={addRow} />
       </div>
 
       {/* Footer com ações */}
@@ -486,11 +490,11 @@ function ManualEntryForm({
         background: 'var(--c-surface-2)',
         borderTop: '1px solid var(--c-border)',
       }}>
-        <GhostButton type="button" onClick={onCancel} disabled={createManual.isPending}>
+        <GhostButton type="button" onClick={onCancel} disabled={createBatch.isPending}>
           Cancelar
         </GhostButton>
-        <PrimaryButton type="submit" disabled={createManual.isPending || !materialId}>
-          {createManual.isPending ? (
+        <PrimaryButton type="submit" disabled={createBatch.isPending}>
+          {createBatch.isPending ? (
             <>
               <Spinner /> Salvando…
             </>
@@ -499,7 +503,7 @@ function ManualEntryForm({
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
                 <path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Salvar veiculação
+              Salvar {rows.length} veiculação{rows.length > 1 ? 'ões' : ''}
             </>
           )}
         </PrimaryButton>
@@ -597,25 +601,26 @@ function StyledSelect({ children, ...props }) {
   )
 }
 
-// Dropzone do áudio: dashed border que muda pra rosa solidão quando arquivo
-// presente OU drag-over. Sem arquivo, instrução central com ícone + texto.
-// Com arquivo, mostra nome + tamanho + remove (×). Erro pinta de vermelho.
-function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFile, onClear }) {
+// ProofDropzone: dropzone full-width pro comprovante PDF do lote. Mesma
+// linguagem da antiga dropzone de áudio — dashed border que acende em rosa no
+// drag, verde com arquivo, vermelho em erro.
+function ProofDropzone({ proof, error, onFile, onClear }) {
   const inputRef = useRef(null)
-  const hasAudio = !!audio
-  const hasError = !!audioError
-  const accentColor = hasError ? 'var(--c-danger)' : hasAudio ? 'var(--c-success)' : (dragOver ? 'var(--c-action)' : 'var(--c-border)')
-  const accentBg    = hasError ? '#fef2f2' : hasAudio ? '#f0fdf4' : (dragOver ? 'var(--c-action-light)' : 'var(--c-surface)')
+  const [dragOver, setDragOver] = useState(false)
+  const hasFile = !!proof
+  const hasError = !!error
+  const accentColor = hasError ? 'var(--c-danger)' : hasFile ? 'var(--c-success)' : (dragOver ? 'var(--c-action)' : 'var(--c-border)')
+  const accentBg    = hasError ? '#fef2f2' : hasFile ? '#f0fdf4' : (dragOver ? 'var(--c-action-light)' : 'var(--c-surface)')
 
   return (
     <div
       onClick={() => inputRef.current?.click()}
       onDragOver={e => { e.preventDefault(); setDragOver(true) }}
       onDragLeave={() => setDragOver(false)}
-      onDrop={onDrop}
+      onDrop={e => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files?.[0] ?? null) }}
       style={{
         display: 'flex', alignItems: 'center', gap: 12,
-        padding: hasAudio ? '10px 12px' : '14px 16px',
+        padding: hasFile ? '10px 12px' : '14px 16px',
         border: `1.5px dashed ${accentColor}`,
         borderRadius: 'var(--radius-md)',
         background: accentBg,
@@ -626,7 +631,7 @@ function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFil
       <input
         ref={inputRef}
         type="file"
-        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        accept="application/pdf,.pdf"
         onChange={e => onFile(e.target.files?.[0] ?? null)}
         style={{ display: 'none' }}
       />
@@ -635,22 +640,21 @@ function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFil
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: 34, height: 34, flexShrink: 0,
         borderRadius: 'var(--radius-md)',
-        background: hasError ? '#fee2e2' : hasAudio ? '#dcfce7' : (dragOver ? 'var(--c-action)' : 'var(--c-surface-2)'),
-        color:      hasError ? 'var(--c-danger)' : hasAudio ? 'var(--c-success)' : (dragOver ? '#fff' : 'var(--c-text-3)'),
+        background: hasError ? '#fee2e2' : hasFile ? '#dcfce7' : (dragOver ? 'var(--c-action)' : 'var(--c-surface-2)'),
+        color:      hasError ? 'var(--c-danger)' : hasFile ? 'var(--c-success)' : (dragOver ? '#fff' : 'var(--c-text-3)'),
         transition: 'all 160ms',
       }}>
         {hasError ? (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
-        ) : hasAudio ? (
+        ) : hasFile ? (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="20 6 9 17 4 12" />
           </svg>
         ) : (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 18V5l12-2v13" />
-            <circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
           </svg>
         )}
       </div>
@@ -658,24 +662,18 @@ function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFil
       <div style={{ flex: 1, minWidth: 0 }}>
         {hasError ? (
           <>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-danger)', fontFamily: 'var(--font-heading)' }}>
-              {audioError}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
-              Clique pra escolher outro arquivo.
-            </div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-danger)', fontFamily: 'var(--font-heading)' }}>{error}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Clique pra escolher outro arquivo.</div>
           </>
-        ) : hasAudio ? (
+        ) : hasFile ? (
           <>
             <div style={{
               fontSize: 12.5, fontWeight: 600, color: 'var(--c-text)',
               fontFamily: 'var(--font-heading)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              {audio.name}
-            </div>
+            }}>{proof.name}</div>
             <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
-              {(audio.size / 1024 / 1024).toFixed(2)} MB · pronto pra upload
+              {(proof.size / 1024 / 1024).toFixed(2)} MB · pronto pra upload
             </div>
           </>
         ) : (
@@ -685,35 +683,26 @@ function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFil
               color: dragOver ? 'var(--c-action)' : 'var(--c-text)',
               fontFamily: 'var(--font-heading)',
             }}>
-              {dragOver ? 'Solta aqui pra carregar' : 'Selecionar áudio da censura'}
+              {dragOver ? 'Solta aqui pra carregar' : 'Selecionar comprovante (PDF)'}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
-              MP3, M4A, WAV, AAC ou OGG · até 25MB
-            </div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>PDF · até 25MB</div>
           </>
         )}
       </div>
 
-      {hasAudio && !hasError && (
+      {hasFile && !hasError && (
         <button
           type="button"
           onClick={e => { e.stopPropagation(); onClear() }}
-          aria-label="Remover áudio"
+          aria-label="Remover comprovante"
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             width: 26, height: 26, borderRadius: 'var(--radius-full)',
             border: 0, background: 'transparent', color: 'var(--c-text-3)',
-            cursor: 'pointer', flexShrink: 0,
-            transition: 'all 120ms',
+            cursor: 'pointer', flexShrink: 0, transition: 'all 120ms',
           }}
-          onMouseEnter={e => {
-            e.currentTarget.style.background = '#fee2e2'
-            e.currentTarget.style.color = 'var(--c-danger)'
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.color = 'var(--c-text-3)'
-          }}
+          onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.color = 'var(--c-danger)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--c-text-3)' }}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
@@ -721,6 +710,150 @@ function AudioDropzone({ audio, audioError, dragOver, setDragOver, onDrop, onFil
         </button>
       )}
     </div>
+  )
+}
+
+// BatchRow: uma linha de veiculação. Separador hairline no topo (sem card
+// aninhado — DESIGN.md). Material + horário na 1ª linha; descrição + áudio
+// compactos abaixo; erro por linha (do 422) em vermelho.
+function BatchRow({ index, row, materials, error, canRemove, onChange, onPickAudio, onRemove }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 8,
+      padding: '12px 0',
+      borderTop: index === 0 ? 'none' : '1px solid var(--c-border)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 22, height: 22, flexShrink: 0, borderRadius: 'var(--radius-full)',
+          background: 'var(--c-action-light)', color: 'var(--c-action)',
+          fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)',
+        }}>{index + 1}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <StyledSelect value={row.materialId} onChange={e => onChange({ materialId: e.target.value })}>
+            {materials.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.title || m.name || 'Sem título'}{m.duration_seconds ? ` · ${m.duration_seconds}s` : ''}
+              </option>
+            ))}
+          </StyledSelect>
+        </div>
+        <div style={{ width: 116, flexShrink: 0 }}>
+          <StyledInput type="time" step="1" value={row.time} onChange={e => onChange({ time: e.target.value })} />
+        </div>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remover linha ${index + 1}`}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 28, height: 28, flexShrink: 0, borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--c-border)', background: 'var(--c-surface)',
+              color: 'var(--c-text-3)', cursor: 'pointer', transition: 'all 120ms',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--c-danger)'; e.currentTarget.style.color = 'var(--c-danger)'; e.currentTarget.style.background = '#fef2f2' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-3)'; e.currentTarget.style.background = 'var(--c-surface)' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', paddingLeft: 30 }}>
+        <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+          <StyledInput value={row.note} onChange={e => onChange({ note: e.target.value })} placeholder="Descrição (opcional)" />
+        </div>
+        <RowAudio audio={row.audio} error={row.audioError} onFile={onPickAudio} onClear={() => onChange({ audio: null, audioError: '' })} />
+      </div>
+
+      {error && (
+        <span style={{ paddingLeft: 30, fontSize: 11.5, fontWeight: 600, color: 'var(--c-danger)', fontFamily: 'var(--font-heading)' }}>
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// RowAudio: controle compacto de áudio por linha. Pílula tracejada quando
+// vazio; chip verde com nome + remover quando preenchido.
+function RowAudio({ audio, error, onFile, onClear }) {
+  const inputRef = useRef(null)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 auto', minWidth: 0 }}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        onChange={e => onFile(e.target.files?.[0] ?? null)}
+        style={{ display: 'none' }}
+      />
+      {audio ? (
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 220,
+          padding: '6px 8px 6px 10px', borderRadius: 'var(--radius-full)',
+          background: '#f0fdf4', border: '1px solid var(--c-success)',
+          color: 'var(--c-success)', fontSize: 11.5, fontWeight: 600,
+          fontFamily: 'var(--font-heading)',
+        }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
+          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{audio.name}</span>
+          <button type="button" onClick={onClear} aria-label="Remover áudio"
+            style={{ display: 'flex', border: 0, background: 'transparent', color: 'var(--c-success)', cursor: 'pointer', padding: 0, flexShrink: 0 }}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" /></svg>
+          </button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '7px 12px', borderRadius: 'var(--radius-full)',
+            border: `1px dashed ${error ? 'var(--c-danger)' : 'var(--c-border)'}`,
+            background: error ? '#fef2f2' : 'var(--c-surface)',
+            color: error ? 'var(--c-danger)' : 'var(--c-text-2)',
+            fontSize: 11.5, fontWeight: 600, fontFamily: 'var(--font-heading)',
+            cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 120ms',
+          }}
+          onMouseEnter={e => { if (!error) { e.currentTarget.style.borderColor = 'var(--c-action)'; e.currentTarget.style.color = 'var(--c-action)' } }}
+          onMouseLeave={e => { if (!error) { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-2)' } }}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+          {error || 'áudio da censura'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// AddRowButton: pílula ghost tracejada que acende em rosa pra adicionar linha.
+function AddRowButton({ onClick }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        alignSelf: 'flex-start',
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        padding: '9px 14px', borderRadius: 'var(--radius-md)',
+        border: `1px dashed ${hover ? 'var(--c-action)' : '#cbd5e1'}`,
+        background: hover ? 'var(--c-action-light)' : 'transparent',
+        color: hover ? '#9d174d' : 'var(--c-text-2)',
+        fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-heading)',
+        cursor: 'pointer', transition: 'all 140ms cubic-bezier(0.16,1,0.3,1)',
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+      Adicionar linha
+    </button>
   )
 }
 
