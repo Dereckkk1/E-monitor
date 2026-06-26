@@ -340,6 +340,7 @@ function ManualEntryForm({
   }
   function removeRow(key) {
     setRows(rs => (rs.length > 1 ? rs.filter(r => r.key !== key) : rs))
+    setRowErrors({}) // erros do 422 são por índice; ao remover linha os índices deslocam — limpa pra não apontar pra linha errada
   }
   function pickRowAudio(key, file) {
     if (!file) { patchRow(key, { audio: null, audioError: '' }); return }
@@ -381,7 +382,7 @@ function ManualEntryForm({
       const warns = res?.warnings?.length ?? 0
       onSaved()
       if (warns > 0) {
-        window.alert(`${rows.length} veiculação(ões) criada(s). ${warns} aviso(s) no upload de mídia — confira na detail page de cada uma.`)
+        window.alert(`${rows.length} veiculação(ões) criada(s). ${warns} aviso(s) no upload de mídia. Confira na detail page de cada uma.`)
       }
     } catch (err) {
       const status = err?.response?.status
@@ -824,8 +825,11 @@ function RowAudio({ audio, error, onFile, onClear }) {
           onMouseLeave={e => { if (!error) { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-2)' } }}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-          {error || 'áudio da censura'}
+          áudio da censura
         </button>
+      )}
+      {error && !audio && (
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-danger)', whiteSpace: 'nowrap' }}>{error}</span>
       )}
     </div>
   )

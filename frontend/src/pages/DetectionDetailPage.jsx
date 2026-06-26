@@ -343,7 +343,9 @@ function ProofCard({ query }) {
     <div className="dd-panel">
       <div className="dd-panel-head">
         <span className="dd-panel-title">Comprovante</span>
-        <span className="dd-chip is-success">PDF</span>
+        <span className={`dd-chip ${query.error ? 'is-danger' : ready ? 'is-success' : ''}`.trim()}>
+          {query.error ? 'erro' : query.isLoading ? '…' : 'PDF'}
+        </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
@@ -659,6 +661,10 @@ export default function DetectionDetailPage() {
   const hasAudio = detection.evidence_status === 'available' || !!detection.evidence_key
   // Manual/lote sem áudio = "aguardando censura": estado neutro, não erro vermelho.
   const awaitingCensura = !hasAudio && (!!detection.manual_at || !!detection.proof_batch_id)
+  // Uploader de censura: qualquer detecção SEM áudio (manual, lote ou automática
+  // sem evidência), exceto enquanto a evidência automática ainda está sendo
+  // gerada (pending/generating) — aí o áudio está a caminho, não cabe upload manual.
+  const canUploadCensura = detection.evidence_status === 'missing' || detection.evidence_status === 'failed'
 
   const stationCity = station?.city
   const stationState = station?.state
@@ -784,14 +790,14 @@ export default function DetectionDetailPage() {
       </div>
 
       {/* ── Admin: comprovante PDF + subir censura ── */}
-      {isAdmin && (detection.proof_batch_id || !hasAudio) && (
+      {isAdmin && (detection.proof_batch_id || canUploadCensura) && (
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: 16, marginTop: 16,
         }}>
           {detection.proof_batch_id && <ProofCard query={proofUrlQuery} />}
-          {!hasAudio && <CensuraUploader detection={detection} />}
+          {canUploadCensura && <CensuraUploader detection={detection} />}
         </div>
       )}
 
