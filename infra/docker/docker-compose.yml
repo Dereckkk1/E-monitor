@@ -128,6 +128,10 @@ services:
       # sem rebuild — muda no .env, recria o api (--no-deps). Kill switch
       # instantâneo. docs/architecture/version-disambiguation.md §18.2.2-v2
       DISAMBIG_BY_COVERAGE: ${DISAMBIG_BY_COVERAGE:-false}
+      # F-119 multi-atribuição: uma tocada conta p/ todas as campanhas que rodam o
+      # mesmo áudio na emissora. OFF = 1:1 (idêntico ao pré-F-119). Liga via .env +
+      # recreate --no-deps api. docs/features/multi-attribution.md
+      MULTI_ATTRIBUTION: ${MULTI_ATTRIBUTION:-false}
       # Emails diários de alerta de campanha (docs/features/campaign-notification-emails.md).
       # Opt-in: só sobe o job quando NOTIFICATIONS_ENABLED=true no .env. Sem
       # SMTP_USER/SMTP_PASS o mailer cai em noop (não envia). Defaults seguros
