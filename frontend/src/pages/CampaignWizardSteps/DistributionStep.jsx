@@ -709,6 +709,8 @@ function RuleChipList({ rules, typeById, onEdit }) {
         const type = typeById[rule.type_id]
         const color = type?.color ?? '#94a3b8'
         const name  = type?.name  ?? 'Tipo'
+        const matCount = Array.isArray(rule.material_ids) ? rule.material_ids.length : 0
+        const scopeLabel = matCount === 0 ? 'todos do tipo' : `${matCount} material${matCount !== 1 ? 'is' : ''}`
         return (
           <button
             key={rule.id}
@@ -740,6 +742,7 @@ function RuleChipList({ rules, typeById, onEdit }) {
             <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>
               {String(rule.time_start).slice(0, 5)}–{String(rule.time_end).slice(0, 5)} · {rule.plays_per_day}×/dia
             </span>
+            <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>· {scopeLabel}</span>
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden style={{ opacity: 0.55 }}>
               <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
             </svg>
