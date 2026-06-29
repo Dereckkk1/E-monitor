@@ -370,6 +370,19 @@ export default function DistributionStep({
       .filter(Boolean)
   }, [campaignStationIds, allStations])
 
+  // type_id → [{ id, title }] dos materiais daquele tipo vinculados à campanha.
+  // Alimenta o seletor opcional de materiais do RuleSidePanel (regra por material).
+  const materialsByType = useMemo(() => {
+    const m = new Map()
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (!mat?.type_id) continue
+      if (!m.has(mat.type_id)) m.set(mat.type_id, [])
+      m.get(mat.type_id).push({ id: cm.material_id, title: mat.title ?? 'Material' })
+    }
+    return m
+  }, [campaignMaterials, materialsById])
+
   // Tipos que aparecem em alguma regra mas NÃO têm nenhum material linkado
   // na campanha. Alimenta o banner âmbar do topo (spec §4.3).
   const orphanRuleTypes = useMemo(() => {
@@ -558,6 +571,7 @@ export default function DistributionStep({
         campaignStart={campaignStart}
         campaignEnd={campaignEnd}
         submitting={createRule.isPending || updateRule.isPending}
+        materialsByType={materialsByType}
       />
 
       <OverridePopover

@@ -45,6 +45,7 @@ export default function RuleSidePanel({
   types = [], stations = [],
   campaignStart, campaignEnd,
   submitting = false,
+  materialsByType = new Map(),
 }) {
   const isEdit = mode === 'edit'
   // typeIds is always an array. In edit mode it's locked to the rule's single
@@ -53,6 +54,7 @@ export default function RuleSidePanel({
     initial?.type_id ? [initial.type_id] : []
   )
   const [stationIds, setStationIds] = useState(initial?.station_ids ?? [])
+  const [materialIds, setMaterialIds] = useState(initial?.material_ids ?? [])
   const [startDate, setStartDate] = useState(toDateInput(initial?.start_date) || toDateInput(campaignStart))
   const [endDate, setEndDate] = useState(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
   const [weekdayMask, setWeekdayMask] = useState(initial?.weekday_mask ?? 62) // Mon-Fri default
@@ -64,6 +66,7 @@ export default function RuleSidePanel({
     if (open) {
       setTypeIds(initial?.type_id ? [initial.type_id] : [])
       setStationIds(initial?.station_ids ?? [])
+      setMaterialIds(initial?.material_ids ?? [])
       setStartDate(toDateInput(initial?.start_date) || toDateInput(campaignStart))
       setEndDate(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
       setWeekdayMask(initial?.weekday_mask ?? 62)
@@ -92,12 +95,19 @@ export default function RuleSidePanel({
     )
   }
 
+  function toggleMaterial(id) {
+    setMaterialIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
   function toggleType(id) {
     // Edit mode: tipo travado — clicar não faz nada.
     if (isEdit) return
-    setTypeIds(prev =>
-      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
-    )
+    setTypeIds(prev => {
+      const next = prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+      if (next.length !== 1) setMaterialIds([]) // materiais só com tipo único
+      return next
+    })
   }
 
   function isValid() {
@@ -111,6 +121,7 @@ export default function RuleSidePanel({
   function submit() {
     const common = {
       station_ids: stationIds,
+      material_ids: typeIds.length === 1 ? materialIds : [],
       start_date: startDate,
       end_date: endDate,
       weekday_mask: weekdayMask,
@@ -272,6 +283,37 @@ export default function RuleSidePanel({
               </div>
             )}
           </div>
+
+          {typeIds.length === 1 && (materialsByType.get(typeIds[0])?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <Label>
+                Materiais específicos
+                <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600,
+                  color: 'var(--c-text-3)', textTransform: 'none', letterSpacing: 0 }}>
+                  (opcional — vazio = vale pra qualquer material do tipo)
+                </span>
+              </Label>
+              <div style={chipRow}>
+                {(materialsByType.get(typeIds[0]) ?? []).map(mat => {
+                  const on = materialIds.includes(mat.id)
+                  return (
+                    <button key={mat.id} type="button"
+                      onClick={() => toggleMaterial(mat.id)}
+                      style={{ ...chip, ...(on ? chipOn : {}) }}>
+                      {mat.title}
+                    </button>
+                  )
+                })}
+              </div>
+              {materialIds.length > 0 && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--c-bg)',
+                  border: '1px solid var(--c-border)', borderRadius: 'var(--radius-md)',
+                  fontSize: 11, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+                  Essa regra vale <strong style={{ color: 'var(--c-text)' }}>só pra {materialIds.length} material{materialIds.length !== 1 ? 'is' : ''}</strong> selecionado{materialIds.length !== 1 ? 's' : ''}. Eles passam a ser cobrados só por esta regra (tocar fora vira desvio).
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ marginBottom: 20 }}>
             <Label>Emissoras *</Label>
