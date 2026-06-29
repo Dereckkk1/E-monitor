@@ -175,15 +175,26 @@ func (dr *DistributionRules) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 // RecategorizeForRule re-classifica todas as detections potencialmente
-// afetadas pela criação/edição/exclusão da regra dada. Como rules agora são
-// por tipo, o "scope" são todos os materiais daquele tipo (resolvidos via
-// JOIN materials), nas station_ids da rule, no date range dela.
+// afetadas pela criação/edição/exclusão da regra dada. O escopo é ampliado
+// para o período inteiro da campanha (todas as estações, tipo da regra) para
+// que o carve-out possa reclassificar detections do material fora do
+// período/estação da própria regra (ex.: out_date pra semana 3 quando a regra
+// específica só cobre a semana 1).
 func (dr *DistributionRules) RecategorizeForRule(ctx context.Context, ruleID uuid.UUID) error {
 	r, err := dr.Get(ctx, ruleID)
 	if err != nil {
 		return err
 	}
-	return dr.recategorizeScope(ctx, r.CampaignID, &r.TypeID, r.StationIDs, r.StartDate, r.EndDate)
+	var cs, ce time.Time
+	if err := dr.pool.QueryRow(ctx,
+		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, r.CampaignID,
+	).Scan(&cs, &ce); err != nil {
+		return err
+	}
+	// Escopo amplo (tipo inteiro, todas as estações, período da campanha) pra
+	// pegar detections do material fora do período/estação da regra — que o
+	// carve-out pode reclassificar (ex.: out_date fora da 1ª semana).
+	return dr.recategorizeScope(ctx, r.CampaignID, &r.TypeID, nil, cs, ce)
 }
 
 // RecategorizeForCampaign re-classifica todas as detections de uma campanha.
@@ -226,11 +237,49 @@ classified AS (
                  NOT BETWEEN c.start_date AND c.end_date
                 THEN 'out_date'
             WHEN s.type_id IS NULL THEN 'orphan'
+            -- ── Carve-out: material nomeado em alguma regra específica ──
             WHEN EXISTS (
                 SELECT 1 FROM distribution_rules r
                 WHERE r.campaign_id = s.campaign_id
                   AND r.type_id = s.type_id
                   AND s.station_id = ANY(r.station_ids)
+                  AND cardinality(r.material_ids) > 0
+                  AND s.material_id = ANY(r.material_ids)
+            ) THEN (
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM distribution_rules r
+                        WHERE r.campaign_id = s.campaign_id
+                          AND r.type_id = s.type_id
+                          AND s.station_id = ANY(r.station_ids)
+                          AND s.material_id = ANY(r.material_ids)
+                          AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                              BETWEEN r.start_date AND r.end_date
+                          AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
+                          AND EXTRACT(EPOCH FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo')::time)
+                              BETWEEN EXTRACT(EPOCH FROM r.time_start) - 900
+                                  AND EXTRACT(EPOCH FROM r.time_end)   + 900
+                    ) THEN 'in_slot'
+                    WHEN EXISTS (
+                        SELECT 1 FROM distribution_rules r
+                        WHERE r.campaign_id = s.campaign_id
+                          AND r.type_id = s.type_id
+                          AND s.station_id = ANY(r.station_ids)
+                          AND s.material_id = ANY(r.material_ids)
+                          AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                              BETWEEN r.start_date AND r.end_date
+                          AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
+                    ) THEN 'out_slot'
+                    ELSE 'out_date'
+                END
+            )
+            -- ── Material comum: só regras gerais (material_ids vazio) ──
+            WHEN EXISTS (
+                SELECT 1 FROM distribution_rules r
+                WHERE r.campaign_id = s.campaign_id
+                  AND r.type_id = s.type_id
+                  AND s.station_id = ANY(r.station_ids)
+                  AND cardinality(r.material_ids) = 0
                   AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
                       BETWEEN r.start_date AND r.end_date
                   AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
@@ -244,6 +293,7 @@ classified AS (
                 WHERE r.campaign_id = s.campaign_id
                   AND r.type_id = s.type_id
                   AND s.station_id = ANY(r.station_ids)
+                  AND cardinality(r.material_ids) = 0
                   AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
                       BETWEEN r.start_date AND r.end_date
                   AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
@@ -254,9 +304,6 @@ classified AS (
     FROM scope s
     JOIN campaigns c ON c.id = s.campaign_id
 )
--- F-119: atualiza detections.category (legado) num CTE data-modifying E a
--- projeção canônica em detection_campaigns (o que a grade lê). Scope é por
--- detection.campaign_id, então cobre a projeção canônica (flag OFF = 1:1).
 , upd_det AS (
     UPDATE detections d
     SET category = cl.new_category
