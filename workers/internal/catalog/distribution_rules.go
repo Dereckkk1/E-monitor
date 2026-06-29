@@ -16,6 +16,7 @@ type DistributionRule struct {
 	CampaignID  uuid.UUID   `json:"campaign_id"`
 	TypeID      uuid.UUID   `json:"type_id"`
 	StationIDs  []uuid.UUID `json:"station_ids"`
+	MaterialIDs []uuid.UUID `json:"material_ids"`
 	StartDate   time.Time   `json:"start_date"`
 	EndDate     time.Time   `json:"end_date"`
 	WeekdayMask int16       `json:"weekday_mask"`
@@ -38,6 +39,7 @@ type CreateDistributionRuleInput struct {
 	CampaignID  uuid.UUID
 	TypeID      uuid.UUID
 	StationIDs  []uuid.UUID
+	MaterialIDs []uuid.UUID
 	StartDate   time.Time
 	EndDate     time.Time
 	WeekdayMask int16
@@ -47,7 +49,7 @@ type CreateDistributionRuleInput struct {
 }
 
 // ruleColumns uses to_char to normalize TIME to HH:MM string in SELECTs.
-const ruleColumns = `id, campaign_id, type_id, station_ids,
+const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids,
        start_date, end_date, weekday_mask,
        to_char(time_start, 'HH24:MI') AS time_start,
        to_char(time_end,   'HH24:MI') AS time_end,
@@ -57,14 +59,14 @@ func (dr *DistributionRules) Create(ctx context.Context, in CreateDistributionRu
 	var r DistributionRule
 	err := dr.pool.QueryRow(ctx, `
 		INSERT INTO distribution_rules
-		  (campaign_id, type_id, station_ids, start_date, end_date,
+		  (campaign_id, type_id, station_ids, material_ids, start_date, end_date,
 		   weekday_mask, time_start, time_end, plays_per_day)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::time, $8::time, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::time, $9::time, $10)
 		RETURNING `+ruleColumns,
-		in.CampaignID, in.TypeID, in.StationIDs,
+		in.CampaignID, in.TypeID, in.StationIDs, in.MaterialIDs,
 		in.StartDate, in.EndDate, in.WeekdayMask,
 		in.TimeStart, in.TimeEnd, in.PlaysPerDay,
-	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs,
+	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
 		&r.StartDate, &r.EndDate, &r.WeekdayMask,
 		&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 		&r.CreatedAt, &r.UpdatedAt)
@@ -75,7 +77,7 @@ func (dr *DistributionRules) Get(ctx context.Context, id uuid.UUID) (*Distributi
 	var r DistributionRule
 	err := dr.pool.QueryRow(ctx,
 		`SELECT `+ruleColumns+` FROM distribution_rules WHERE id = $1`, id,
-	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs,
+	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
 		&r.StartDate, &r.EndDate, &r.WeekdayMask,
 		&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 		&r.CreatedAt, &r.UpdatedAt)
@@ -97,7 +99,7 @@ func (dr *DistributionRules) ListByCampaign(ctx context.Context, campaignID uuid
 	var out []DistributionRule
 	for rows.Next() {
 		var r DistributionRule
-		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs,
+		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
 			&r.StartDate, &r.EndDate, &r.WeekdayMask,
 			&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 			&r.CreatedAt, &r.UpdatedAt); err != nil {
@@ -144,7 +146,7 @@ func (dr *DistributionRules) ListApplicable(ctx context.Context,
 	var out []DistributionRule
 	for rows.Next() {
 		var r DistributionRule
-		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs,
+		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
 			&r.StartDate, &r.EndDate, &r.WeekdayMask,
 			&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 			&r.CreatedAt, &r.UpdatedAt); err != nil {
@@ -158,11 +160,11 @@ func (dr *DistributionRules) ListApplicable(ctx context.Context,
 func (dr *DistributionRules) Update(ctx context.Context, id uuid.UUID, in CreateDistributionRuleInput) error {
 	_, err := dr.pool.Exec(ctx, `
 		UPDATE distribution_rules
-		SET type_id = $2, station_ids = $3, start_date = $4, end_date = $5,
-		    weekday_mask = $6, time_start = $7::time, time_end = $8::time,
-		    plays_per_day = $9, updated_at = now()
+		SET type_id = $2, station_ids = $3, material_ids = $4, start_date = $5,
+		    end_date = $6, weekday_mask = $7, time_start = $8::time,
+		    time_end = $9::time, plays_per_day = $10, updated_at = now()
 		WHERE id = $1`,
-		id, in.TypeID, in.StationIDs, in.StartDate, in.EndDate,
+		id, in.TypeID, in.StationIDs, in.MaterialIDs, in.StartDate, in.EndDate,
 		in.WeekdayMask, in.TimeStart, in.TimeEnd, in.PlaysPerDay)
 	return err
 }
