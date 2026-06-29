@@ -358,6 +358,97 @@ func TestDistributionRules_MaterialIDs_Roundtrip(t *testing.T) {
 // da faixa (igual ao categorizer.SlotToleranceSeconds). Antes do fix, o SQL
 // usava BETWEEN time_start AND time_end direto e reclassificava como out_slot
 // uma detection a 10 min do início do slot.
+func TestDistributionRules_Recategorize_CarveOut(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
+	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "C", ClientID: cli.ID,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	typeID := seedType(t, ctx, pool, "Spot")
+	mats := NewMaterials(pool)
+	special, _ := mats.Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "Special", TypeID: &typeID, DurationSeconds: 30,
+		MasterStoragePath: "/tmp", MasterSHA256: "rk-special",
+	})
+	normal, _ := mats.Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "Normal", TypeID: &typeID, DurationSeconds: 30,
+		MasterStoragePath: "/tmp", MasterSHA256: "rk-normal",
+	})
+	stat, _ := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "FM Recat", Band: "FM", StreamURL: "http://x",
+	})
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM detections WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM distribution_rules WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = ANY($1)", []uuid.UUID{special.ID, normal.ID})
+		pool.Exec(ctx, "DELETE FROM campaigns WHERE id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", cli.ID)
+		pool.Exec(ctx, "DELETE FROM stations WHERE id = $1", stat.ID)
+	})
+
+	dets := NewDetections(pool)
+	mk := func(mat uuid.UUID, utc time.Time) *Detection {
+		t.Helper()
+		d, err := dets.Create(ctx, CreateDetectionInput{
+			StationID: stat.ID, CommercialID: mat, CampaignID: cmp.ID,
+			DetectedAt: utc, Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+		})
+		if err != nil {
+			t.Fatalf("create detection: %v", err)
+		}
+		return d
+	}
+	// special toca 16/06 (semana 3) 18:30 BRT — vai virar out_date após a regra dele.
+	dSpecialLate := mk(special.ID, time.Date(2026, 6, 16, 21, 30, 0, 0, time.UTC))
+	// normal toca 16/06 10:00 BRT — coberto pela regra geral → in_slot.
+	dNormal := mk(normal.ID, time.Date(2026, 6, 16, 13, 0, 0, 0, time.UTC))
+
+	repo := NewDistributionRules(pool)
+	// Regra GERAL (todos do tipo, mês todo, 07-19h).
+	if _, err := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID, StationIDs: []uuid.UUID{stat.ID},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "07:00", TimeEnd: "19:00", PlaysPerDay: 3,
+	}); err != nil {
+		t.Fatalf("create general rule: %v", err)
+	}
+	// Regra ESPECÍFICA de special: 1ª semana, 18-19h. Dispara o carve-out.
+	specRule, err := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID, StationIDs: []uuid.UUID{stat.ID},
+		MaterialIDs: []uuid.UUID{special.ID},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "18:00", TimeEnd: "19:00", PlaysPerDay: 1,
+	})
+	if err != nil {
+		t.Fatalf("create specific rule: %v", err)
+	}
+	if err := repo.RecategorizeForRule(ctx, specRule.ID); err != nil {
+		t.Fatalf("recategorize: %v", err)
+	}
+
+	readCat := func(d *Detection) string {
+		t.Helper()
+		var c string
+		pool.QueryRow(ctx, `SELECT category FROM detections WHERE id=$1 AND detected_at=$2`,
+			d.ID, d.DetectedAt).Scan(&c)
+		return c
+	}
+	// special fora do período da regra dele (semana 3) → out_date, mesmo com a
+	// regra geral cobrindo 07-19h (carve-out ignora a geral).
+	if got := readCat(dSpecialLate); got != "out_date" {
+		t.Errorf("special late: category = %q, want out_date", got)
+	}
+	// normal não é carved-out → regra geral → in_slot.
+	if got := readCat(dNormal); got != "in_slot" {
+		t.Errorf("normal: category = %q, want in_slot", got)
+	}
+}
+
 func TestDistributionRules_RecategorizeRespectsSlotTolerance(t *testing.T) {
 	ctx, pool := newTestDB(t)
 
