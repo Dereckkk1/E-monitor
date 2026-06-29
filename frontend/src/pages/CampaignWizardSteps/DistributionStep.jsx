@@ -378,7 +378,11 @@ export default function DistributionStep({
       const mat = materialsById[cm.material_id]
       if (!mat?.type_id) continue
       if (!m.has(mat.type_id)) m.set(mat.type_id, [])
-      m.get(mat.type_id).push({ id: cm.material_id, title: mat.title ?? 'Material' })
+      m.get(mat.type_id).push({
+        id: cm.material_id,
+        title: mat.title ?? 'Material',
+        durationSeconds: mat.duration_seconds,
+      })
     }
     return m
   }, [campaignMaterials, materialsById])

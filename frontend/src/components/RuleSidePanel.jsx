@@ -55,6 +55,11 @@ export default function RuleSidePanel({
   )
   const [stationIds, setStationIds] = useState(initial?.station_ids ?? [])
   const [materialIds, setMaterialIds] = useState(initial?.material_ids ?? [])
+  // 'all' = regra vale pra todos os materiais do tipo (material_ids vazio);
+  // 'specific' = carve-out só pros materiais marcados. Deriva do estado salvo.
+  const [scopeMode, setScopeMode] = useState(
+    (initial?.material_ids?.length ?? 0) > 0 ? 'specific' : 'all'
+  )
   const [startDate, setStartDate] = useState(toDateInput(initial?.start_date) || toDateInput(campaignStart))
   const [endDate, setEndDate] = useState(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
   const [weekdayMask, setWeekdayMask] = useState(initial?.weekday_mask ?? 62) // Mon-Fri default
@@ -67,6 +72,7 @@ export default function RuleSidePanel({
       setTypeIds(initial?.type_id ? [initial.type_id] : [])
       setStationIds(initial?.station_ids ?? [])
       setMaterialIds(initial?.material_ids ?? [])
+      setScopeMode((initial?.material_ids?.length ?? 0) > 0 ? 'specific' : 'all')
       setStartDate(toDateInput(initial?.start_date) || toDateInput(campaignStart))
       setEndDate(toDateInput(initial?.end_date) || toDateInput(campaignEnd))
       setWeekdayMask(initial?.weekday_mask ?? 62)
@@ -105,7 +111,9 @@ export default function RuleSidePanel({
     if (isEdit) return
     setTypeIds(prev => {
       const next = prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
-      if (next.length !== 1) setMaterialIds([]) // materiais só com tipo único
+      // Materiais só fazem sentido com tipo único — ao sair disso, volta pro
+      // escopo "todos do tipo" e limpa a seleção.
+      if (next.length !== 1) { setMaterialIds([]); setScopeMode('all') }
       return next
     })
   }
@@ -121,7 +129,7 @@ export default function RuleSidePanel({
   function submit() {
     const common = {
       station_ids: stationIds,
-      material_ids: typeIds.length === 1 ? materialIds : [],
+      material_ids: (typeIds.length === 1 && scopeMode === 'specific') ? materialIds : [],
       start_date: startDate,
       end_date: endDate,
       weekday_mask: weekdayMask,
@@ -140,6 +148,8 @@ export default function RuleSidePanel({
 
   const selectedTypes = types.filter(t => typeIds.includes(t.id))
   const singleSelectedType = selectedTypes.length === 1 ? selectedTypes[0] : null
+  // Materiais do tipo único selecionado, vinculados à campanha (escopo carve-out).
+  const typeMaterials = typeIds.length === 1 ? (materialsByType.get(typeIds[0]) ?? []) : []
 
   return createPortal(
     <div style={{
@@ -284,37 +294,85 @@ export default function RuleSidePanel({
             )}
           </div>
 
-          {/* Seletor só aparece com 1 tipo que tenha material na campanha. Se um
-              material da regra deixou de estar vinculado, o seletor some mas o
-              `materialIds` pré-preenchido segue indo no submit() — o escopo
-              carve-out é preservado, não silenciosamente descartado. */}
-          {typeIds.length === 1 && (materialsByType.get(typeIds[0])?.length ?? 0) > 0 && (
+          {/* Escopo da regra: todos os materiais do tipo (clássico) ou um
+              recorte específico (carve-out). Só aparece com 1 tipo que tenha
+              material na campanha. Em edição, se um material da regra deixou de
+              estar vinculado ele some da lista, mas o materialIds pré-preenchido
+              segue no submit() — o escopo carve-out é preservado. */}
+          {typeIds.length === 1 && typeMaterials.length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <Label>
-                Materiais específicos
-                <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600,
-                  color: 'var(--c-text-3)', textTransform: 'none', letterSpacing: 0 }}>
-                  (opcional — vazio = vale pra qualquer material do tipo)
-                </span>
-              </Label>
-              <div style={chipRow}>
-                {(materialsByType.get(typeIds[0]) ?? []).map(mat => {
-                  const on = materialIds.includes(mat.id)
-                  return (
-                    <button key={mat.id} type="button"
-                      onClick={() => toggleMaterial(mat.id)}
-                      style={{ ...chip, ...(on ? chipOn : {}) }}>
-                      {mat.title}
-                    </button>
-                  )
-                })}
+              <Label>Esta regra cobre</Label>
+              <div style={segWrap} role="tablist" aria-label="Escopo da regra">
+                <button type="button" role="tab" aria-selected={scopeMode === 'all'}
+                  onClick={() => setScopeMode('all')}
+                  style={{ ...segBtn, ...(scopeMode === 'all' ? segBtnOn : {}) }}>
+                  Todos do tipo
+                </button>
+                <button type="button" role="tab" aria-selected={scopeMode === 'specific'}
+                  onClick={() => setScopeMode('specific')}
+                  style={{ ...segBtn, ...(scopeMode === 'specific' ? segBtnOn : {}) }}>
+                  Materiais específicos
+                </button>
               </div>
-              {materialIds.length > 0 && (
-                <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--c-bg)',
-                  border: '1px solid var(--c-border)', borderRadius: 'var(--radius-md)',
-                  fontSize: 11, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
-                  Essa regra vale <strong style={{ color: 'var(--c-text)' }}>só pra {materialIds.length} material{materialIds.length !== 1 ? 'is' : ''}</strong> selecionado{materialIds.length !== 1 ? 's' : ''}. Eles passam a ser cobrados só por esta regra (tocar fora vira desvio).
-                </div>
+
+              {scopeMode === 'all' ? (
+                <p style={scopeHint}>
+                  Vale pra <strong style={{ color: 'var(--c-text)' }}>qualquer material</strong> do
+                  tipo {singleSelectedType?.name ? `“${singleSelectedType.name}”` : ''} (fungível) — o jeito clássico.
+                </p>
+              ) : (
+                <>
+                  <div style={listHeader}>
+                    {materialIds.length} de {typeMaterials.length} marcado{materialIds.length !== 1 ? 's' : ''}
+                  </div>
+                  <div style={matList}>
+                    {typeMaterials.map((mat, i) => {
+                      const on = materialIds.includes(mat.id)
+                      return (
+                        <button key={mat.id} type="button" aria-pressed={on}
+                          onClick={() => toggleMaterial(mat.id)}
+                          onMouseEnter={e => { if (!on) e.currentTarget.style.background = 'var(--c-surface-2)' }}
+                          onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent' }}
+                          style={{
+                            ...matRow,
+                            ...(i > 0 ? { borderTop: '1px solid var(--c-border)' } : {}),
+                            ...(on ? matRowOn : {}),
+                          }}>
+                          <span style={{ ...checkBox, ...(on ? checkBoxOn : {}) }}>
+                            {on && (
+                              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"
+                                stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 8.5l3.2 3.2L13 5" />
+                              </svg>
+                            )}
+                          </span>
+                          <span style={{
+                            flex: 1, textAlign: 'left', minWidth: 0,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            color: on ? 'var(--c-action)' : 'var(--c-text)', fontWeight: on ? 600 : 500,
+                          }}>
+                            {mat.title}
+                          </span>
+                          {mat.durationSeconds != null && (
+                            <span style={durBadge}>{mat.durationSeconds}s</span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p style={{ ...scopeHint, ...(materialIds.length === 0 ? { color: 'var(--c-text-3)' } : {}) }}>
+                    {materialIds.length === 0 ? (
+                      'Marque os materiais que são a exceção, ou volte para “Todos do tipo”.'
+                    ) : (
+                      <>
+                        Os <strong style={{ color: 'var(--c-text)' }}>{materialIds.length} marcados</strong> saem
+                        da regra geral e passam a valer só por esta. Tocar no horário errado conta como
+                        {' '}<span style={{ color: '#b45309', fontWeight: 600 }}>fora da faixa</span>; fora do período/dia,
+                        {' '}<span style={{ color: '#6d28d9', fontWeight: 600 }}>fora da data</span>.
+                      </>
+                    )}
+                  </p>
+                </>
               )}
             </div>
           )}
@@ -444,3 +502,51 @@ const chip = {
   display: 'inline-flex', alignItems: 'center', transition: 'all 100ms',
 }
 const chipOn = { background: 'var(--c-action-light)', color: 'var(--c-action)', borderColor: 'var(--c-action-border)' }
+
+// ── Escopo da regra (toggle "todos do tipo / específicos" + lista de materiais) ──
+const segWrap = {
+  display: 'flex', gap: 4, padding: 3, marginBottom: 10,
+  background: 'var(--c-surface-2)', borderRadius: 'var(--radius-md)',
+}
+const segBtn = {
+  flex: 1, padding: '7px 10px', border: '1px solid transparent',
+  borderRadius: 'calc(var(--radius-md) - 2px)', background: 'transparent',
+  color: 'var(--c-text-2)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+  fontFamily: 'var(--font-heading)', transition: 'all 120ms',
+}
+const segBtnOn = {
+  background: 'var(--c-surface)', color: 'var(--c-action)',
+  borderColor: 'var(--c-action-border)', boxShadow: 'var(--shadow-sm)',
+}
+const listHeader = {
+  display: 'flex', justifyContent: 'flex-end',
+  fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)',
+  textTransform: 'uppercase', letterSpacing: '0.06em',
+  margin: '0 2px 6px', fontFamily: 'var(--font-heading)',
+}
+const matList = {
+  border: '1px solid var(--c-border)', borderRadius: 'var(--radius-md)',
+  overflow: 'hidden', background: 'var(--c-surface)',
+}
+const matRow = {
+  width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+  padding: '9px 11px', background: 'transparent', border: 0,
+  cursor: 'pointer', fontSize: 13, fontFamily: 'inherit',
+  transition: 'background 120ms',
+}
+const matRowOn = { background: 'var(--c-action-light)' }
+const checkBox = {
+  width: 18, height: 18, flexShrink: 0, borderRadius: 'var(--radius-sm)',
+  border: '1.5px solid var(--c-border)', background: 'var(--c-surface)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  transition: 'all 120ms',
+}
+const checkBoxOn = { background: 'var(--c-action)', borderColor: 'var(--c-action)' }
+const durBadge = {
+  flexShrink: 0, padding: '2px 7px', borderRadius: 'var(--radius-full)',
+  background: 'var(--c-surface-2)', color: 'var(--c-text-3)',
+  fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-heading)',
+}
+const scopeHint = {
+  margin: '8px 2px 0', fontSize: 11, color: 'var(--c-text-2)', lineHeight: 1.5,
+}
