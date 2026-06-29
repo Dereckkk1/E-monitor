@@ -215,12 +215,16 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 // campaign_id, material_id, type_id, station_id)` definida antes dele e
 // é parameter-free (toda variação de escopo mora na CTE scope que o precede).
 //
-// Lógica, pra cada detection do scope:
+// Lógica, pra cada detection do scope (espelha o carve-out de categorizer.Categorize):
 //   - Se a data local (SP timezone) está fora do range da campanha → out_date
-//   - Senão se existe ANY rule com type_id = material.type_id, station_id, weekday e
-//     time_of_day dentro da faixa tolerada (±15min em cada extremo) → in_slot
-//   - Senão se existe ANY rule com type_id+station+weekday casando (mas time não) → out_slot
-//   - Senão → orphan
+//   - Senão se type_id é NULL → orphan
+//   - Carve-out (migration 0043): se o material é nomeado em ALGUMA regra
+//     específica (cardinality(material_ids) > 0 contendo material_id), ele é
+//     julgado SÓ por essas regras — in_slot se casa data+dia+faixa(±15min),
+//     out_slot se casa data+dia mas não a faixa, senão out_date (fora do
+//     período/dia programado dele). Regras gerais NÃO valem pra ele.
+//   - Material comum (só regras gerais, material_ids vazio): in_slot / out_slot
+//     / orphan, exatamente como antes.
 //
 // IMPORTANTE: a tolerância de 900s (15 min) DEVE bater com
 // categorizer.SlotToleranceSeconds. Sem ela, recategorizações disparadas
