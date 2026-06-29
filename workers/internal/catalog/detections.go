@@ -247,6 +247,7 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 	return categorizer.Categorize(
 		in.DetectedAt,
 		categorizer.Campaign{StartDate: cmpStart, EndDate: cmpEnd},
+		in.CommercialID,
 		rules,
 		ov,
 	), nil

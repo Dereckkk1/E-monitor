@@ -1,6 +1,10 @@
 package categorizer
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Campaign é o subset que o categorizer precisa da campanha.
 // StartDate/EndDate são date-only (hora 00:00), idealmente em America/Sao_Paulo.
@@ -17,6 +21,10 @@ type Rule struct {
 	TimeStart   time.Time // só componente HH:MM importa
 	TimeEnd     time.Time // só componente HH:MM importa
 	PlaysPerDay int16
+	// MaterialIDs vazio = regra vale pra todos os materiais do tipo (migration
+	// 0019). Não-vazio = regra "carve-out": vale só pra esses materiais, e eles
+	// passam a ser julgados SÓ por regras que os nomeiam (migration 0043).
+	MaterialIDs []uuid.UUID
 }
 
 // Override é a entrada do distribution_overrides relevante pra célula
@@ -59,23 +67,16 @@ func dateOnlySP(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, spLocation)
 }
 
-// Categorize classifica uma detection.
+// Categorize classifica uma detection do material materialID.
 //
-// Regra:
-//  1. detectedAt fora de [campaign.StartDate, campaign.EndDate] → out_date
-//  2. override != nil:
-//     - override.PlaysExpected == 0 → out_slot (faixa inerte; ver D5)
-//     - detection ∈ [ts-15min, te+15min] do override → in_slot
-//     - caso contrário → out_slot
-//     Rules são IGNORADAS quando há override (override REPLACE total — D1).
-//  3. override == nil, nenhuma rule aplicável (date+weekday) → orphan
-//  4. override == nil, rule aplicável, detection na faixa tolerada → in_slot
-//  5. override == nil, rule aplicável, detection fora da faixa → out_slot
+// Carve-out (migration 0043): se materialID é nomeado em alguma regra com
+// MaterialIDs não-vazio, ele é julgado SÓ por essas regras (regras gerais do
+// tipo — MaterialIDs vazio — deixam de valer pra ele). Tocar fora do período/
+// dia da regra dele vira out_date; fora da faixa, out_slot; nunca orphan.
+// Material sem regra específica usa as regras gerais, exatamente como antes.
 //
-// Comparações de data são feitas no fuso America/Sao_Paulo. detectedAt pode
-// chegar em qualquer fuso (típicamente UTC do worker); o categorizer
-// converte internamente pra SP antes de extrair date/weekday/time-of-day.
-func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Override) string {
+// Comparações de data no fuso America/Sao_Paulo (ver Categorize original).
+func Categorize(detectedAt time.Time, cmp Campaign, materialID uuid.UUID, rules []Rule, override *Override) string {
 	local := detectedAt.In(spLocation)
 	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLocation)
 
@@ -100,19 +101,61 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Over
 		return CatOutSlot
 	}
 
-	dow := int(local.Weekday()) // 0=Sun, 6=Sat — bate com EXTRACT(DOW) do PG
+	dow := int(local.Weekday())
+
+	// inWindow casa data+dia da rule e (opcionalmente) a faixa horária tolerada.
+	matchesDateWeekday := func(r Rule) bool {
+		if date.Before(dateOnlySP(r.StartDate)) || date.After(dateOnlySP(r.EndDate)) {
+			return false
+		}
+		return (1<<dow)&int(r.WeekdayMask) != 0
+	}
+	matchesTime := func(r Rule) bool {
+		rs := r.TimeStart.Hour()*3600 + r.TimeStart.Minute()*60 + r.TimeStart.Second()
+		re := r.TimeEnd.Hour()*3600 + r.TimeEnd.Minute()*60 + r.TimeEnd.Second()
+		return timeOfDay >= rs-SlotToleranceSeconds && timeOfDay <= re+SlotToleranceSeconds
+	}
+
+	// Carve-out: materialID é nomeado em ALGUMA regra específica? (independente de data)
+	carved := false
+	for _, r := range rules {
+		if len(r.MaterialIDs) > 0 && containsUUID(r.MaterialIDs, materialID) {
+			carved = true
+			break
+		}
+	}
+
+	if carved {
+		hasDateWeekday := false
+		for _, r := range rules {
+			if len(r.MaterialIDs) == 0 || !containsUUID(r.MaterialIDs, materialID) {
+				continue
+			}
+			if !matchesDateWeekday(r) {
+				continue
+			}
+			hasDateWeekday = true
+			if matchesTime(r) {
+				return CatInSlot
+			}
+		}
+		if hasDateWeekday {
+			return CatOutSlot
+		}
+		return CatOutDate
+	}
+
+	// Material comum — só regras gerais (MaterialIDs vazio), lógica original.
 	hasApplicable := false
 	for _, r := range rules {
-		if date.Before(dateOnlySP(r.StartDate)) || date.After(dateOnlySP(r.EndDate)) {
+		if len(r.MaterialIDs) > 0 {
 			continue
 		}
-		if (1<<dow)&int(r.WeekdayMask) == 0 {
+		if !matchesDateWeekday(r) {
 			continue
 		}
 		hasApplicable = true
-		rs := r.TimeStart.Hour()*3600 + r.TimeStart.Minute()*60 + r.TimeStart.Second()
-		re := r.TimeEnd.Hour()*3600 + r.TimeEnd.Minute()*60 + r.TimeEnd.Second()
-		if timeOfDay >= rs-SlotToleranceSeconds && timeOfDay <= re+SlotToleranceSeconds {
+		if matchesTime(r) {
 			return CatInSlot
 		}
 	}
@@ -120,4 +163,13 @@ func Categorize(detectedAt time.Time, cmp Campaign, rules []Rule, override *Over
 		return CatOutSlot
 	}
 	return CatOrphan
+}
+
+func containsUUID(ids []uuid.UUID, id uuid.UUID) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
 }
