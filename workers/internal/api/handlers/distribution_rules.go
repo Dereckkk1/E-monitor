@@ -26,6 +26,7 @@ type DistributionRulesHandler struct {
 type rulePayload struct {
 	TypeID      uuid.UUID   `json:"type_id"`
 	StationIDs  []uuid.UUID `json:"station_ids"`
+	MaterialIDs []uuid.UUID `json:"material_ids"`
 	StartDate   string      `json:"start_date"` // YYYY-MM-DD
 	EndDate     string      `json:"end_date"`
 	WeekdayMask int16       `json:"weekday_mask"`
@@ -45,7 +46,8 @@ func (p *rulePayload) toInput(campaignID uuid.UUID) (catalog.CreateDistributionR
 	}
 	return catalog.CreateDistributionRuleInput{
 		CampaignID: campaignID, TypeID: p.TypeID,
-		StationIDs: p.StationIDs,
+		StationIDs:  p.StationIDs,
+		MaterialIDs: p.MaterialIDs,
 		StartDate:  start, EndDate: end,
 		WeekdayMask: p.WeekdayMask,
 		TimeStart:   p.TimeStart, TimeEnd: p.TimeEnd,
