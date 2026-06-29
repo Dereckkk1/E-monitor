@@ -185,7 +185,7 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 
 	rows, err := d.pool.Query(ctx, `
 		SELECT r.start_date, r.end_date, r.weekday_mask,
-		       r.time_start::text, r.time_end::text, r.plays_per_day
+		       r.time_start::text, r.time_end::text, r.plays_per_day, r.material_ids
 		FROM distribution_rules r
 		WHERE r.campaign_id = $1
 		  AND r.type_id = (SELECT type_id FROM materials WHERE id = $2)
@@ -202,7 +202,7 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 		var tsStr, teStr string
 		var plays int16
 		if err := rows.Scan(&r.StartDate, &r.EndDate, &r.WeekdayMask,
-			&tsStr, &teStr, &plays); err != nil {
+			&tsStr, &teStr, &plays, &r.MaterialIDs); err != nil {
 			return categorizer.CatOrphan, err
 		}
 		r.TimeStart, _ = time.Parse("15:04:05", tsStr)
