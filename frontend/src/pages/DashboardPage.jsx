@@ -355,7 +355,10 @@ function ClientDashboard() {
     return c
   }, [campaigns])
 
-  const total = campaigns.length
+  // Canceladas (terminais) são histórico, não operação corrente: não contam
+  // no "Campanhas no total", na barra de distribuição, nem nos guards de vazio
+  // do dashboard do cliente.
+  const total = useMemo(() => campaigns.filter(c => c.status !== 'cancelada').length, [campaigns])
 
   // Próximas a iniciar: programadas com start_date no futuro, ordenadas por proximidade
   const upcoming = useMemo(() => {
@@ -375,10 +378,12 @@ function ClientDashboard() {
       .slice(0, 8)
   }, [campaigns])
 
-  // Concluídas recentes (lista compacta)
+  // Concluídas recentes (lista compacta). Só concluídas — campanhas canceladas
+  // não pertencem a uma seção rotulada "Concluídas" e ficam fora do dashboard
+  // do cliente (histórico acessível só por deep-link/relatório).
   const recentFinished = useMemo(() => {
     return campaigns
-      .filter(c => c.status === 'concluida' || c.status === 'cancelada')
+      .filter(c => c.status === 'concluida')
       .sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''))
       .slice(0, 5)
   }, [campaigns])
@@ -404,11 +409,12 @@ function ClientDashboard() {
   if (total === 0) return <ClientEmpty clientName={linkedClient?.name} />
 
   // ── Distribuição (barra empilhada) ──────────────────────
+  // Sem segmento 'cancelada': canceladas saíram do total do dashboard do
+  // cliente, então a barra distribui apenas ativa/programada/concluída (soma 100%).
   const distribSegments = [
     { key: 'ativa',      pct: (counts.ativa      / total) * 100, color: '#10b981' },
     { key: 'programada', pct: (counts.programada / total) * 100, color: '#6b7280' },
     { key: 'concluida',  pct: (counts.concluida  / total) * 100, color: '#E81E75' },
-    { key: 'cancelada',  pct: (counts.cancelada  / total) * 100, color: 'rgba(239, 68, 68, 0.55)' },
   ].filter(s => s.pct > 0)
 
   return (

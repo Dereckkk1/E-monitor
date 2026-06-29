@@ -111,6 +111,10 @@ const mgmtScopedCTE = `
 	    WHERE ($1::uuid IS NULL OR client_id = $1)
 	      AND ($2::uuid[] = '{}' OR id = ANY($2))
 	      AND ($3 = '' OR status = $3)
+	      -- Painel operacional: sem filtro explícito de status, canceladas
+	      -- (terminais) ficam fora do escopo padrão (KPIs/mapa/feed). O operador
+	      -- ainda pode inspecioná-las passando status=cancelada explicitamente.
+	      AND ($3 <> '' OR status <> 'cancelada')
 	      AND start_date <= $5::date
 	      AND end_date   >= $4::date
 	),
@@ -230,6 +234,7 @@ func (m *ManagementOverview) queryRecentDetections(ctx context.Context, p Manage
 		    WHERE ($1::uuid IS NULL OR client_id = $1)
 		      AND ($2::uuid[] = '{}' OR id = ANY($2))
 		      AND ($3 = '' OR status = $3)
+		      AND ($3 <> '' OR status <> 'cancelada')
 		      AND start_date <= $5::date
 		      AND end_date   >= $4::date
 		)

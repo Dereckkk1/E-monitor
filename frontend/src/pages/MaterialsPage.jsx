@@ -378,16 +378,22 @@ export default function MaterialsPage() {
   const allCampaignOptions = useMemo(() => campaigns.map(c => {
     const client = clientMap.get(c.client_id) ?? null
     return {
-      value: c.id, label: c.name,
+      value: c.id,
+      // Sufixo só no valor selecionado (deep-link); o dropdown exclui canceladas.
+      label: c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
+      status: c.status,
       clientName: client?.name ?? '', clientLogo: client?.logo_url ?? null,
       startDate: c.start_date, endDate: c.end_date,
     }
   }), [campaigns, clientMap])
 
+  // Canceladas ficam fora do seletor (e do contador), mas seguem resolvíveis
+  // via allCampaignOptions para o deep-link histórico não quebrar.
   const campaignOptions = useMemo(() => {
     if (!selectedMonth) return []
     const { start, end } = monthToRange(selectedMonth)
     return allCampaignOptions.filter(o => {
+      if (o.status === 'cancelada') return false
       if (!o.startDate || !o.endDate) return false
       const cs = parseLocalDate(o.startDate)
       const ce = parseLocalDate(o.endDate)

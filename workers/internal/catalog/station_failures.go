@@ -134,10 +134,16 @@ WITH down_aggr AS (
   HAVING SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) >= $2
 ),
 deficit_aggr AS (
-  SELECT station_id, COUNT(DISTINCT campaign_id) AS aff_camp
-  FROM daily_play_summary
-  WHERE for_date = $1::date AND deficit > 0
-  GROUP BY station_id
+  -- Exclude cancelled campaigns: a campaign manually ended early must not be
+  -- reported as "lost slots" (it would bill inserções for a campaign the
+  -- client cancelled). Mirrors campaign_failures.go's c.status <> 'cancelada'
+  -- filter so the two failure surfaces agree for the same day.
+  SELECT dps.station_id, COUNT(DISTINCT dps.campaign_id) AS aff_camp
+  FROM daily_play_summary dps
+  JOIN campaigns c ON c.id = dps.campaign_id
+  WHERE dps.for_date = $1::date AND dps.deficit > 0
+    AND c.status <> 'cancelada'
+  GROUP BY dps.station_id
 )
 SELECT s.id, s.name,
        COALESCE(s.band, ''),
@@ -246,6 +252,7 @@ LEFT JOIN clients cl ON cl.id = c.client_id
 WHERE dps.for_date = $1::date
   AND dps.deficit > 0
   AND dps.station_id = ANY($2::uuid[])
+  AND c.status <> 'cancelada'
 GROUP BY dps.station_id, dps.campaign_id, c.name, cl.name
 ORDER BY dps.station_id, deficit DESC`,
 		dayStr, stationIDs)

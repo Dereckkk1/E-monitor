@@ -58,6 +58,10 @@ type CampaignBrief struct {
 	Name      string    `json:"name"`
 	StartDate string    `json:"start_date"`
 	EndDate   string    `json:"end_date"`
+	// Status permite o frontend marcar visualmente uma campanha cancelada num
+	// relatório histórico (política "manter e marcar"): os números pré-cancel
+	// continuam contando, mas a campanha aparece rotulada como cancelada.
+	Status string `json:"status"`
 }
 
 type InsightsKPIs struct {
@@ -613,7 +617,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 // campanhas de A nem pelo simples ato de ter o uuid.
 func (r *Insights) fetchCampaigns(ctx context.Context, clientID uuid.UUID, ids []uuid.UUID) ([]CampaignBrief, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, start_date::text, end_date::text
+		SELECT id, name, start_date::text, end_date::text, status
 		FROM campaigns
 		WHERE id = ANY($1::uuid[]) AND client_id = $2
 		ORDER BY start_date ASC
@@ -626,7 +630,7 @@ func (r *Insights) fetchCampaigns(ctx context.Context, clientID uuid.UUID, ids [
 	var out []CampaignBrief
 	for rows.Next() {
 		var b CampaignBrief
-		if err := rows.Scan(&b.ID, &b.Name, &b.StartDate, &b.EndDate); err != nil {
+		if err := rows.Scan(&b.ID, &b.Name, &b.StartDate, &b.EndDate, &b.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

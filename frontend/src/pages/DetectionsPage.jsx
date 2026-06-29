@@ -562,7 +562,10 @@ export default function DetectionsPage() {
     const client = clientMap.get(c.client_id) ?? null
     return {
       value:      c.id,
-      label:      c.name,
+      // Sufixo "(cancelada)" só aparece no valor selecionado via deep-link —
+      // a lista do dropdown (campaignOptions) já exclui canceladas.
+      label:      c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
+      status:     c.status,
       clientName: client?.name ?? '',
       clientLogo: client?.logo_url ?? null,
       startDate:  c.start_date,
@@ -572,11 +575,13 @@ export default function DetectionsPage() {
 
   // Dropdown só lista campanhas cujo intervalo [start_date, end_date] cruza
   // a competência selecionada. Sem competência, lista vazia (o seletor fica
-  // bloqueado mesmo).
+  // bloqueado mesmo). Campanhas canceladas ficam fora do seletor — mas seguem
+  // resolvíveis via allCampaignOptions (deep-link histórico continua abrindo).
   const campaignOptions = useMemo(() => {
     if (!selectedMonth) return []
     const { start, end } = monthToRange(selectedMonth)
     return allCampaignOptions.filter(o => {
+      if (o.status === 'cancelada') return false
       if (!o.startDate || !o.endDate) return false
       const cs = parseLocalDate(o.startDate)
       const ce = parseLocalDate(o.endDate)

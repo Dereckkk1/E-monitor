@@ -119,7 +119,9 @@ export default function AirtimeFiltersBar({
     const client = clientMap.get(c.client_id) ?? null
     return {
       value: c.id,
-      label: c.name,
+      // Sufixo só no valor selecionado (deep-link); o dropdown exclui canceladas.
+      label: c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
+      status: c.status,
       clientName: client?.name ?? '',
       clientLogo: client?.logo_url ?? null,
       startDate: c.start_date,
@@ -128,10 +130,13 @@ export default function AirtimeFiltersBar({
   }), [campaigns, clientMap])
 
   // Campaign options scoped by competence (same semantics as /detections).
+  // Canceladas ficam fora do seletor, mas seguem resolvíveis via
+  // allCampaignOptions (deep-link de relatório histórico continua abrindo).
   const campaignOptions = useMemo(() => {
     if (!competence) return []
     const { start, end } = monthToRange(competence)
     return allCampaignOptions.filter(o => {
+      if (o.status === 'cancelada') return false
       if (!o.startDate || !o.endDate) return false
       const cs = parseLocalDate(o.startDate)
       const ce = parseLocalDate(o.endDate)
