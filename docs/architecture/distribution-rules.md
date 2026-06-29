@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-17
+ultima-verificacao: 2026-06-29
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
   - migrations/0019_rules_by_type.up.sql
+  - migrations/0043_rule_material_scope.up.sql
   - workers/internal/api/handlers/distribution_rules.go
   - workers/internal/api/handlers/materials.go
   - workers/internal/catalog/distribution_rules.go
@@ -26,7 +27,8 @@ Tabela: `distribution_rules` (migration 0017).
 
 Estrutura:
 - `campaign_id` — sempre dentro de uma campanha
-- `material_id` — qual material a regra cobre
+- `type_id` — qual tipo de material a regra cobre
+- `material_ids[]` — vazio = todos os materiais do tipo (fungível); preenchido = regra "carve-out" só pra esses materiais específicos
 - `station_ids[]` — quais emissoras (subconjunto das emissoras da campanha)
 - `start_date`, `end_date` — periodo dentro da campanha
 - `weekday_mask` — bitmask dos dias da semana (bit 0=Dom, 6=Sab). Ex: `62` = seg-sex (`0111110`)
@@ -69,6 +71,17 @@ A view `daily_play_summary` agrega por (campaign, material, station, data) e cal
 - `bonus`   (azul) = max(0, in_slot - expected) + count(orphan)
 - `out_slot` (amarelo) = count(out_slot)
 - `out_date` (roxo) = count(out_date)
+
+## Carve-out por material
+
+Regras podem ser escopadas a materiais específicos dentro de um tipo via `material_ids[]`:
+
+- **Vazio** (`material_ids = NULL` ou `[]`): regra se aplica a **todos** os materiais do tipo (comportamento clássico pré-migration 0043)
+- **Preenchido** (`material_ids = [uuid1, uuid2, ...]`): regra só se aplica a esses materiais específicos (carve-out)
+
+Quando um material tem ≥1 regra específica, ele é julgado **só** por essas regras, não pelas regras gerais do tipo. Material sem regra específica continua usando as regras gerais, inalterado.
+
+Detalhes: [material-specific-distribution-rules.md](../features/material-specific-distribution-rules.md).
 
 ## Editabilidade
 
