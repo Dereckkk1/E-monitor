@@ -143,9 +143,12 @@ export default function LiveMapPage() {
   const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
   const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
   const campOpts = useMemo(() => {
-    const rows = isAdmin
+    // Canceladas (terminais) não entram no seletor de mapa ao vivo — o backend
+    // também as bloqueia (404) porque "ao vivo" implica campanha rodando.
+    const rows = (isAdmin
       ? allCampaigns.filter(c => !clientId || c.client_id === clientId)
       : allCampaigns
+    ).filter(c => c.status !== 'cancelada')
     return rows.map(c => ({ value: c.id, label: c.name }))
   }, [allCampaigns, clientId, isAdmin])
 

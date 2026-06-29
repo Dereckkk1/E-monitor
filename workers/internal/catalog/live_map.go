@@ -71,12 +71,14 @@ func NewLiveMap(pool *pgxpool.Pool) *LiveMap {
 func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID) (LiveMapResult, error) {
 	var res LiveMapResult
 
-	// Existência + posse: resolve o client_id da campanha uma vez. 404 quando
-	// não existe ou quando o viewer tenta uma campanha de outro cliente.
+	// Existência + posse: resolve o client_id e o status da campanha uma vez.
+	// 404 quando não existe ou quando o viewer tenta uma campanha de outro
+	// cliente.
 	var clientID uuid.UUID
+	var status string
 	err := m.pool.QueryRow(ctx,
-		`SELECT client_id FROM campaigns WHERE id = $1`, campaignID,
-	).Scan(&clientID)
+		`SELECT client_id, status FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&clientID, &status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return res, ErrCampaignNotFound
@@ -84,6 +86,13 @@ func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUI
 		return res, err
 	}
 	if scope != nil && *scope != clientID {
+		return res, ErrCampaignNotFound
+	}
+	// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
+	// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
+	// campanha que rodou normalmente até o fim. Ver docs/architecture/
+	// campaign-lifecycle.md.
+	if status == "cancelada" {
 		return res, ErrCampaignNotFound
 	}
 

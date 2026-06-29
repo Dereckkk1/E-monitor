@@ -53,6 +53,7 @@ docs/
 | Doc | Sobre |
 |-----|-------|
 | [campaign-wizard.md](features/campaign-wizard.md) | Wizard de 6 etapas para criar/editar campanha |
+| [cancelled-campaign-handling.md](features/cancelled-campaign-handling.md) | Campanha cancelada fora de seletores/telas ao vivo/KPIs/cobrança; histórico mantido+marcado, déficit congelado em `cancelled_at` (migration 0044) |
 | [multi-attribution.md](features/multi-attribution.md) | F-119: mesma tocada conta p/ N campanhas (flag `MULTI_ATTRIBUTION`, tabela `detection_campaigns` + view `detection_attributions`) |
 | [campaign-connection-step.md](features/campaign-connection-step.md) | Step 3 "Conexão" — testar (ping/stream/worker efêmeros) e trocar a stream_url por emissora |
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |

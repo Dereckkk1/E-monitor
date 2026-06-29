@@ -47,13 +47,20 @@ func NewDailySummary(pool *pgxpool.Pool) *DailySummaryRepo {
 func (ds *DailySummaryRepo) ListByCampaign(ctx context.Context,
 	campaignID uuid.UUID, from, to time.Time) ([]DailySummaryRow, error) {
 
+	// Congelamento na data de cancelamento (política "manter e marcar"): para
+	// campanhas canceladas, dias após cancelled_at não geram mais programado/
+	// déficit — a obrigação acabou no cancelamento. Campanhas não-canceladas
+	// (cancelled_at NULL) e canceladas legadas sem timestamp passam intactas.
 	rows, err := ds.pool.Query(ctx, `
-		SELECT campaign_id, type_id, station_id, for_date,
-		       expected, in_slot, deficit, bonus, out_slot, out_date
-		FROM daily_play_summary
-		WHERE campaign_id = $1
-		  AND for_date BETWEEN $2 AND $3
-		ORDER BY station_id, type_id, for_date`,
+		SELECT dps.campaign_id, dps.type_id, dps.station_id, dps.for_date,
+		       dps.expected, dps.in_slot, dps.deficit, dps.bonus, dps.out_slot, dps.out_date
+		FROM daily_play_summary dps
+		JOIN campaigns c ON c.id = dps.campaign_id
+		WHERE dps.campaign_id = $1
+		  AND dps.for_date BETWEEN $2 AND $3
+		  AND (c.status <> 'cancelada' OR c.cancelled_at IS NULL
+		       OR dps.for_date <= (c.cancelled_at AT TIME ZONE 'America/Sao_Paulo')::date)
+		ORDER BY dps.station_id, dps.type_id, dps.for_date`,
 		campaignID, from, to)
 	if err != nil {
 		return nil, err

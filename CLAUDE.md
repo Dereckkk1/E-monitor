@@ -346,6 +346,7 @@ docs/
 | Algoritmo de fingerprint / pipeline offline | [docs/architecture/fingerprint-pipeline.md](docs/architecture/fingerprint-pipeline.md) |
 | Algoritmo `shared-hash` (subset vs sting vs skip <10s) | [docs/architecture/shared-hash-detection.md](docs/architecture/shared-hash-detection.md) (incidentes 2026-05-09/12) |
 | Ciclo de vida de campanha (programada/ativa/concluida/cancelada) | [docs/architecture/campaign-lifecycle.md](docs/architecture/campaign-lifecycle.md) |
+| **Nova listagem/seletor/dropdown/contagem/KPI de campanhas (ou de dados derivados: detecções, materiais, emissoras-alvo)** — SEMPRE decidir o tratamento de `cancelada` | [docs/features/cancelled-campaign-handling.md](docs/features/cancelled-campaign-handling.md) — regra: cancelada **fora** de seletores/telas ao vivo/KPIs operacionais/cobrança; **mantida e marcada** (selo + déficit congelado em `cancelled_at`) só no histórico/relatórios. Não nasça uma listagem sem aplicar isso. |
 | Dedup pós-confirmação entre cortes 30s/60s | [docs/architecture/version-disambiguation.md](docs/architecture/version-disambiguation.md) |
 | Multi-atribuição (mesma tocada conta p/ N campanhas; flag `MULTI_ATTRIBUTION`; tabela `detection_campaigns` + view `detection_attributions`) | [docs/features/multi-attribution.md](docs/features/multi-attribution.md) |
 | Regras de distribuição + categorização de detection | [docs/architecture/distribution-rules.md](docs/architecture/distribution-rules.md) |

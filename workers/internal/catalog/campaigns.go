@@ -251,7 +251,7 @@ func (c *Campaigns) CancelCampaign(ctx context.Context, id uuid.UUID) (bool, str
 		    SELECT id, status FROM campaigns WHERE id = $1 FOR UPDATE
 		),
 		updated AS (
-		    UPDATE campaigns SET status = 'cancelada', updated_at = now()
+		    UPDATE campaigns SET status = 'cancelada', updated_at = now(), cancelled_at = now()
 		     WHERE id = $1 AND status IN ('programada','ativa')
 		    RETURNING id
 		)

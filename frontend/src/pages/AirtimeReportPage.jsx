@@ -199,6 +199,7 @@ export default function AirtimeReportPage() {
     if (!competence) return 0
     const { start, end } = monthToRange(competence)
     return campaigns.filter(c => {
+      if (c.status === 'cancelada') return false
       if (!c.start_date || !c.end_date) return false
       const cs = parseLocalDate(c.start_date)
       const ce = parseLocalDate(c.end_date)

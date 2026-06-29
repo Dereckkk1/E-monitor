@@ -109,15 +109,22 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
   const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
 
   const campOpts = useMemo(() => {
-    const rows = isAdmin
+    const scoped = isAdmin
       ? allCampaigns.filter(c => !value.clientId || c.client_id === value.clientId)
       : allCampaigns
-    return rows.map(c => ({
-      value: c.id,
-      label: c.name,
-      raw: c,
-    }))
-  }, [allCampaigns, value.clientId, isAdmin])
+    // Política "manter e marcar": canceladas (terminais) não são oferecidas
+    // para uma nova seleção, mas se já estiverem selecionadas (deep-link /
+    // estado salvo) permanecem visíveis e contando no histórico, rotuladas
+    // como "(cancelada)" para não passarem por ativas.
+    const selected = new Set(value.campaignIds || [])
+    return scoped
+      .filter(c => c.status !== 'cancelada' || selected.has(c.id))
+      .map(c => ({
+        value: c.id,
+        label: c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
+        raw: c,
+      }))
+  }, [allCampaigns, value.clientId, value.campaignIds, isAdmin])
 
   const stationsQ = useStations()
 

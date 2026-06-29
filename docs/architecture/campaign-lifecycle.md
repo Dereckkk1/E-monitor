@@ -1,12 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-05
+ultima-verificacao: 2026-06-29
 codigo-relacionado:
   - workers/internal/supervisor/lifecycle_scheduler.go
   - workers/internal/catalog/campaigns.go
   - workers/internal/api/handlers/campaigns.go
   - workers/internal/supervisor/station_changes.go
   - migrations/0011_campaign_lifecycle.up.sql
+  - migrations/0044_campaign_cancelled_at.up.sql
   - workers/internal/metrics/metrics.go
 ---
 
@@ -37,6 +38,14 @@ estados são equivalentes para o supervisor (worker desligado).
 
 `cancelada` é terminal — não volta para `programada`/`ativa`. Para retomar uma
 campanha cancelada por engano, criar uma nova.
+
+> **Tratamento operacional de `cancelada`** (2026-06-29): além de não rodar
+> worker, uma campanha cancelada é removida de seletores, telas "ao vivo",
+> KPIs operacionais e da cobrança de slots perdidos. As veiculações pré-cancel
+> seguem contando no histórico/relatórios, marcadas, com o programado/déficit
+> congelado em `campaigns.cancelled_at` (migration 0044, setado por
+> `CancelCampaign`). Política completa e mapa de superfícies em
+> [docs/features/cancelled-campaign-handling.md](../features/cancelled-campaign-handling.md).
 
 ## Transições
 
