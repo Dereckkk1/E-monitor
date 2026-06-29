@@ -307,6 +307,53 @@ func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 	}
 }
 
+func TestDistributionRules_MaterialIDs_Roundtrip(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
+	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "C", ClientID: cli.ID,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	typeID := seedType(t, ctx, pool, "Spot")
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM distribution_rules WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM campaigns WHERE id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", cli.ID)
+	})
+	m1, m2 := uuid.New(), uuid.New()
+	repo := NewDistributionRules(pool)
+	rule, err := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID,
+		StationIDs:  []uuid.UUID{uuid.New()},
+		MaterialIDs: []uuid.UUID{m1, m2},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "08:00", TimeEnd: "10:00", PlaysPerDay: 3,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(rule.MaterialIDs) != 2 {
+		t.Fatalf("MaterialIDs len = %d, want 2", len(rule.MaterialIDs))
+	}
+	got, _ := repo.Get(ctx, rule.ID)
+	if len(got.MaterialIDs) != 2 {
+		t.Errorf("after Get: MaterialIDs len = %d, want 2", len(got.MaterialIDs))
+	}
+	// Default vazio quando não informado.
+	rule2, _ := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID, StationIDs: []uuid.UUID{uuid.New()},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "08:00", TimeEnd: "10:00", PlaysPerDay: 1,
+	})
+	if len(rule2.MaterialIDs) != 0 {
+		t.Errorf("default MaterialIDs len = %d, want 0", len(rule2.MaterialIDs))
+	}
+}
+
 // Garante que o recategorize SQL respeita a tolerância de 15 min nos extremos
 // da faixa (igual ao categorizer.SlotToleranceSeconds). Antes do fix, o SQL
 // usava BETWEEN time_start AND time_end direto e reclassificava como out_slot
