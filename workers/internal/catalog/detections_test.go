@@ -378,6 +378,63 @@ func TestDetections_ReattributeDetection(t *testing.T) {
 	}
 }
 
+func TestDetections_Insert_CarveOut_OutDate(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
+	cmp, _ := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "C", ClientID: cli.ID,
+		StartDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:        time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+		TargetStations: []uuid.UUID{},
+	})
+	typeID := seedType(t, ctx, pool, "Spot")
+	mat, _ := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "M", TypeID: &typeID, DurationSeconds: 30,
+		MasterStoragePath: "/tmp", MasterSHA256: "rk-carve-insert",
+	})
+	stat, _ := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "FM Carve", Band: "FM", StreamURL: "http://x",
+	})
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM detections WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM distribution_rules WHERE campaign_id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", mat.ID)
+		pool.Exec(ctx, "DELETE FROM campaigns WHERE id = $1", cmp.ID)
+		pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", cli.ID)
+		pool.Exec(ctx, "DELETE FROM stations WHERE id = $1", stat.ID)
+	})
+
+	// Regra específica de `mat`: só 1ª semana (1-7), seg-sex, 18-19h.
+	repo := NewDistributionRules(pool)
+	if _, err := repo.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID,
+		StationIDs:  []uuid.UUID{stat.ID},
+		MaterialIDs: []uuid.UUID{mat.ID},
+		StartDate:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, TimeStart: "18:00", TimeEnd: "19:00", PlaysPerDay: 1,
+	}); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	dets := NewDetections(pool)
+	// Toca 16/06 (semana 3) 18:30 BRT (21:30 UTC) — fora do período da regra → out_date.
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: stat.ID, CommercialID: mat.ID, CampaignID: cmp.ID,
+		DetectedAt: time.Date(2026, 6, 16, 21, 30, 0, 0, time.UTC),
+		Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatalf("create detection: %v", err)
+	}
+	var cat string
+	pool.QueryRow(ctx, `SELECT category FROM detections WHERE id=$1 AND detected_at=$2`,
+		det.ID, det.DetectedAt).Scan(&cat)
+	if cat != "out_date" {
+		t.Errorf("insert carve-out: category = %q, want out_date", cat)
+	}
+}
+
 func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-ignored")
 	dets := NewDetections(pool)
