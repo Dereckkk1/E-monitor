@@ -349,6 +349,7 @@ docs/
 | Dedup pós-confirmação entre cortes 30s/60s | [docs/architecture/version-disambiguation.md](docs/architecture/version-disambiguation.md) |
 | Multi-atribuição (mesma tocada conta p/ N campanhas; flag `MULTI_ATTRIBUTION`; tabela `detection_campaigns` + view `detection_attributions`) | [docs/features/multi-attribution.md](docs/features/multi-attribution.md) |
 | Regras de distribuição + categorização de detection | [docs/architecture/distribution-rules.md](docs/architecture/distribution-rules.md) |
+| Regra de distribuição escopada a materiais específicos (carve-out, `material_ids[]`) | [docs/features/material-specific-distribution-rules.md](docs/features/material-specific-distribution-rules.md) |
 | Contagem de veiculações divergindo entre telas (modal × grid × /insights × /management × /live-map) — filtro canônico "aprovado" (`catalog.ApprovedDetectionsFilter`) | [docs/architecture/detection-count-consistency.md](docs/architecture/detection-count-consistency.md) |
 | Audit de evidência pré-persist (§9.9) | [docs/architecture/evidence-audit.md](docs/architecture/evidence-audit.md) |
 | Segmentos ADTS-AAC e extração de evidência | [docs/architecture/evidence-segments.md](docs/architecture/evidence-segments.md) |

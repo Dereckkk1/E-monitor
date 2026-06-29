@@ -59,6 +59,7 @@ Plano 2 (4 etapas); Preços e Conexão entraram depois — Conexão é o Step 3
 - Grade emissora × material × dia, com toolbar mês-navegador
 - Busca de emissora acima do grid (nome, dial/frequência, cidade, UF ou band, em qualquer ordem). Filtra **só no front** — mesmo helper `tokenize`/`matchesAllTokens` de `/detections` e `/materials` (token-AND, campo-OR). Sem busca, o grid mostra tudo; sem resultado, exibe estado vazio com "Limpar busca".
 - Botão "+ Regra" abre side panel pra criar uma `distribution_rule`
+  - Painel "Nova regra" com 1 tipo selecionado mostra o seletor opcional **Materiais específicos** — escopa a regra a materiais individuais (carve-out). Ver [material-specific-distribution-rules](material-specific-distribution-rules.md).
 - Click em célula abre popover de override (laranja)
 
 ### 6. Preços

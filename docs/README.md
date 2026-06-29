@@ -78,6 +78,7 @@ docs/
 | [connect-backoff-circuit-breaker.md](features/connect-backoff-circuit-breaker.md) | Backoff exponencial no respawn de stream que nunca conecta (IP bloqueado/URL morta) — para a sangria de connects que gerava ban de abuso (incidente jun/2026) |
 | [station-audience-age-ranges.md](features/station-audience-age-ranges.md) | Faixa etária da emissora vira 3 percentuais (18-24/25-49/50+); texto antigo preservado em `ageRangeLegado` |
 | [geocoding-emissoras.md](features/geocoding-emissoras.md) | lat/long de emissoras por cidade+UF (dataset IBGE embutido + backfill); geocode no Create/Update |
+| [material-specific-distribution-rules.md](features/material-specific-distribution-rules.md) | Escopagem de regras de distribuição a materiais específicos (carve-out via `material_ids[]`) — sobrescreve regras gerais do tipo |
 
 ## `operations/` — operar o sistema em prod
 
