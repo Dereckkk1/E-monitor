@@ -76,7 +76,7 @@ A view `daily_play_summary` agrega por (campaign, material, station, data) e cal
 
 Regras podem ser escopadas a materiais específicos dentro de um tipo via `material_ids[]`:
 
-- **Vazio** (`material_ids = NULL` ou `[]`): regra se aplica a **todos** os materiais do tipo (comportamento clássico pré-migration 0043)
+- **Vazio** (`material_ids = []` — a coluna é `NOT NULL DEFAULT '{}'`, nunca NULL): regra se aplica a **todos** os materiais do tipo (comportamento clássico pré-migration 0043)
 - **Preenchido** (`material_ids = [uuid1, uuid2, ...]`): regra só se aplica a esses materiais específicos (carve-out)
 
 Quando um material tem ≥1 regra específica, ele é julgado **só** por essas regras, não pelas regras gerais do tipo. Material sem regra específica continua usando as regras gerais, inalterado.

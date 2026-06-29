@@ -284,6 +284,10 @@ export default function RuleSidePanel({
             )}
           </div>
 
+          {/* Seletor só aparece com 1 tipo que tenha material na campanha. Se um
+              material da regra deixou de estar vinculado, o seletor some mas o
+              `materialIds` pré-preenchido segue indo no submit() — o escopo
+              carve-out é preservado, não silenciosamente descartado. */}
           {typeIds.length === 1 && (materialsByType.get(typeIds[0])?.length ?? 0) > 0 && (
             <div style={{ marginBottom: 20 }}>
               <Label>
