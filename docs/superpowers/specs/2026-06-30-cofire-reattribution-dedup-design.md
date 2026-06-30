@@ -19,6 +19,10 @@ Quando um **sting curto** que é subset de um **spot longo** toca sozinho (ex.: 
 
 Resultado: **2 rows mat-34 no mesmo segundo** (cov 0.2 + 1.0), nenhuma retratada → contam as duas = **duplicidade**. Provado por log (`detection reattributed by coverage` `from_short_id:33 to_short_id:34`) e SQL (2 rows `created_at` 7ms apart). **Sistêmico** — o mesmo log mostra `104→147`, `78→77`, `48→47`, `48→9`.
 
+**Confirmado pelo operador (2026-06-30, escuta dos clipes `db3703dd`/`a60f8ef3`):** tocou **uma única vez**, o material que sobrevive (mat 34) está **correto** — o bug é **contagem dobrada pura**, NÃO má-atribuição. Isso valida a direção do fix (manter o vencedor que já tem a tocada, retratar a row irmã redundante). `coverage` é normalizado pela duração do MASTER (`auditor.go:63`), então a row de 0.2 é o irmão mais longo (mat 33) casando só na região compartilhada — não é "match fraco/errado", é a mesma veiculação vista por um segundo fingerprint do catálogo.
+
+**Fora de escopo (anotado, não bloqueia):** `chooseByCoverage` compara coverage entre masters de durações muito diferentes (viés estrutural ao master curto). Aqui não causou má-atribuição (operador confirmou), mas o storm `104→147` merece auditoria à parte — possível usar `MatchExtent`/duração além de coverage crua. Não é este fix.
+
 ### Causa exata
 
 O `reattributeByCoverage` (pass-path) **reatribui incondicionalmente** quando um irmão vence por cobertura. Ele assume *"exactly one row exists and it is corrected in place"* (comentário em service.go:560) — premissa **violada** quando o irmão vencedor já tem a tocada genuína no mesmo segundo. O **reject-path** (`recoverRejectedByCoverage`) **já trata isso**: consulta `FindSiblingDetectionInWindow` e, se o vencedor já tem row presente, faz `RecoverySkip`. O pass-path é o único sem o guard.
