@@ -31,6 +31,10 @@ const (
 // decideRejectRecovery escolhe o ramo a partir da row existente do irmão vencedor
 // na janela (nil = não existe). Pré-condição do caller: o vencedor != corte
 // atribuído e supera a margem de cobertura. Pura/testável.
+//
+// Exclusiva do reject-path: aqui `self` já é audit_rejected (não conta), então
+// RecoverySkip pode deixar `self` como está sem zerar tocada. O pass-path usa um
+// classificador próprio (decideCofireAction) porque lá `self` está APROVADA.
 func decideRejectRecovery(existing *catalog.SiblingDetectionRow) RejectRecoveryAction {
 	switch {
 	case existing == nil:

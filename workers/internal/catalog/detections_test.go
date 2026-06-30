@@ -334,6 +334,44 @@ func TestDetections_FindCutWithSiblings(t *testing.T) {
 	}
 }
 
+func TestDetections_RetractByID(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "RetractByID")
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt: time.Now(), Confidence: 1.0, HashCount: 100, TemporalCoverage: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+	at := time.Now().UTC()
+	if err := dets.RetractByID(ctx, det.ID, det.DetectedAt, at); err != nil {
+		t.Fatalf("RetractByID: %v", err)
+	}
+	var retracted *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT retracted_at FROM detections WHERE id=$1 AND detected_at=$2`,
+		det.ID, det.DetectedAt).Scan(&retracted); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if retracted == nil {
+		t.Fatal("retracted_at ainda NULL após RetractByID")
+	}
+	first := *retracted
+	// idempotente: 2a chamada não sobrescreve (WHERE retracted_at IS NULL).
+	if err := dets.RetractByID(ctx, det.ID, det.DetectedAt, at.Add(time.Hour)); err != nil {
+		t.Fatalf("RetractByID 2a: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT retracted_at FROM detections WHERE id=$1 AND detected_at=$2`,
+		det.ID, det.DetectedAt).Scan(&retracted); err != nil {
+		t.Fatalf("read 2: %v", err)
+	}
+	if !retracted.Equal(first) {
+		t.Errorf("retracted_at mudou na 2a chamada: %v -> %v (deveria ser no-op)", first, *retracted)
+	}
+}
+
 func TestDetections_ReattributeDetection(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Reattribute")
 	clientID := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
