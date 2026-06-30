@@ -513,9 +513,12 @@ export default function DistributionStep({
       )}
 
       {rules.length > 0 && (
-        <RuleChipList
+        <RuleList
           rules={rules}
           typeById={typeById}
+          stations={allStations}
+          campaignStart={campaignStart}
+          campaignEnd={campaignEnd}
           onEdit={openRuleEditor}
         />
       )}
@@ -692,68 +695,224 @@ function PendingDraftsBar({ count, committing, onDiscard, onCommit }) {
   )
 }
 
-// Clickable chip list of existing distribution rules. Each chip opens the rule
-// editor pre-filled with that rule. Provides the only path to edit existing
-// rules now that the standalone "Regra" column was removed from the grid.
-function RuleChipList({ rules, typeById, onEdit }) {
+// ── Rótulos derivados da regra (assinatura escaneável) ──────────────────
+const WEEKDAY_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+
+function formatDM(iso) {
+  const [, m, d] = String(iso).slice(0, 10).split('-')
+  return `${d}/${m}`
+}
+
+// weekday_mask → texto legível. Atalhos pros casos comuns; senão lista os dias.
+function formatWeekdays(mask) {
+  if (mask === 127) return 'Todos os dias'
+  if (mask === 62) return 'Seg a Sex'      // bits 1..5
+  if (mask === 65) return 'Fim de semana'  // bits 0 e 6
+  const days = []
+  for (let i = 0; i < 7; i++) if (mask & (1 << i)) days.push(WEEKDAY_ABBR[i])
+  return days.length ? days.join(', ') : 'Nenhum dia'
+}
+
+// Período da regra vs. período da campanha. Cobre a campanha inteira → "Todo o período".
+function formatPeriod(startISO, endISO, campStartISO, campEndISO) {
+  const s = String(startISO).slice(0, 10)
+  const e = String(endISO).slice(0, 10)
+  if (s <= String(campStartISO).slice(0, 10) && e >= String(campEndISO).slice(0, 10)) {
+    return 'Todo o período'
+  }
+  return `${formatDM(s)}–${formatDM(e)}`
+}
+
+// Resumo das emissoras: contagem + primeiros nomes. A lista completa vai no title.
+function stationsSummary(stationIds, stationById) {
+  const names = stationIds.map(id => stationById.get(id)?.name).filter(Boolean)
+  const count = stationIds.length
+  const head = names.slice(0, 2).join(', ')
+  const rest = count - Math.min(2, names.length)
+  return {
+    count,
+    short: rest > 0 ? `${head} +${rest}` : (head || `${count}`),
+    full: names.join(', '),
+  }
+}
+
+// Lista escaneável de regras de distribuição. Resolve o "achar entre muitas":
+// cada linha mostra a assinatura distintiva (período · dias · faixa · emissoras ·
+// escopo) e, quando a regra tem nome, ele vira o título do "conjunto". A busca
+// filtra por nome, tipo, emissora, período, faixa e dias. Clicar abre o editor.
+function RuleList({ rules, typeById, stations, campaignStart, campaignEnd, onEdit }) {
+  const [query, setQuery] = useState('')
+  const stationById = useMemo(() => new Map(stations.map(s => [s.id, s])), [stations])
+
+  const enriched = useMemo(() => rules.map(rule => {
+    const type = typeById[rule.type_id]
+    const typeName = type?.name ?? 'Tipo'
+    const color = type?.color ?? '#94a3b8'
+    const matCount = Array.isArray(rule.material_ids) ? rule.material_ids.length : 0
+    const scope = matCount === 0 ? 'todos do tipo' : matCount === 1 ? '1 material' : `${matCount} materiais`
+    const period = formatPeriod(rule.start_date, rule.end_date, campaignStart, campaignEnd)
+    const weekdays = formatWeekdays(rule.weekday_mask)
+    const time = `${String(rule.time_start).slice(0, 5)}–${String(rule.time_end).slice(0, 5)}`
+    const st = stationsSummary(rule.station_ids ?? [], stationById)
+    const named = !!(rule.name && rule.name.trim())
+    return {
+      rule, typeName, color, scope, period, weekdays, time, st, named,
+      title: named ? rule.name.trim() : typeName,
+      plays: `${rule.plays_per_day}×/dia`,
+      hay: {
+        name: rule.name ?? '', type: typeName, stations: st.full,
+        period, weekdays, time, plays: `${rule.plays_per_day}x`,
+      },
+    }
+  }), [rules, typeById, stationById, campaignStart, campaignEnd])
+
+  const tokens = tokenize(query)
+  const fields = ['name', 'type', 'stations', 'period', 'weekdays', 'time', 'plays']
+  const filtered = tokens.length === 0
+    ? enriched
+    : enriched.filter(e => matchesAllTokens(e.hay, fields, tokens))
+
+  const scrolls = rules.length > 7
+
   return (
     <div style={{
-      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
-      padding: '10px 14px', borderRadius: 'var(--radius-md)',
-      background: 'var(--c-bg)', border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius-md)', background: 'var(--c-bg)',
+      border: '1px solid var(--c-border)', overflow: 'hidden',
     }}>
-      <span style={{
-        fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)',
-        textTransform: 'uppercase', letterSpacing: '0.06em',
-        fontFamily: 'var(--font-heading)', marginRight: 4,
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '9px 12px 9px 14px', borderBottom: '1px solid var(--c-border)',
       }}>
-        Regras
-      </span>
-      {rules.map(rule => {
-        const type = typeById[rule.type_id]
-        const color = type?.color ?? '#94a3b8'
-        const name  = type?.name  ?? 'Tipo'
-        const matCount = Array.isArray(rule.material_ids) ? rule.material_ids.length : 0
-        const scopeLabel = matCount === 0 ? 'todos do tipo' : `${matCount} material${matCount !== 1 ? 'is' : ''}`
-        return (
-          <button
-            key={rule.id}
-            type="button"
-            onClick={() => onEdit(rule)}
-            title="Editar regra"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '5px 10px 5px 8px', borderRadius: 999,
-              background: 'var(--c-surface)',
-              border: `1px solid ${color}33`,
-              cursor: 'pointer', fontSize: 11, fontWeight: 600,
-              color: 'var(--c-text)',
-              transition: 'all 120ms',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = `${color}10`
-              e.currentTarget.style.borderColor = `${color}66`
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = 'var(--c-surface)'
-              e.currentTarget.style.borderColor = `${color}33`
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0,
-            }} />
-            <span style={{ color }}>{name}</span>
-            <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>
-              {String(rule.time_start).slice(0, 5)}–{String(rule.time_end).slice(0, 5)} · {rule.plays_per_day}×/dia
-            </span>
-            <span style={{ color: 'var(--c-text-3)', fontWeight: 500 }}>· {scopeLabel}</span>
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden style={{ opacity: 0.55 }}>
-              <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+        <span style={{
+          fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)',
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-heading)',
+        }}>
+          Regras
+        </span>
+        <span style={{
+          fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)',
+          color: 'var(--c-text-2)', background: 'var(--c-surface)',
+          border: '1px solid var(--c-border)', borderRadius: 'var(--radius-full)', padding: '1px 8px',
+        }}>
+          {tokens.length ? `${filtered.length} de ${rules.length}` : rules.length}
+        </span>
+        <div style={{ flex: 1 }} />
+        <div style={{ position: 'relative', width: 240, maxWidth: '48%' }}>
+          <span style={{
+            position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)',
+            color: 'var(--c-text-3)', display: 'flex', pointerEvents: 'none',
+          }}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+              <circle cx="7" cy="7" r="5" /><path d="M11 11l3 3" strokeLinecap="round" />
             </svg>
-          </button>
-        )
-      })}
+          </span>
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Filtrar regras…"
+            aria-label="Filtrar regras"
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '6px 26px 6px 28px',
+              fontSize: 12, color: 'var(--c-text)', background: 'var(--c-surface)',
+              border: '1px solid var(--c-border)', borderRadius: 'var(--radius-full)',
+              fontFamily: 'inherit', outline: 'none', transition: 'box-shadow 120ms, border-color 120ms',
+            }}
+            onFocus={e => {
+              e.currentTarget.style.borderColor = 'var(--c-action-border)'
+              e.currentTarget.style.boxShadow = '0 0 0 3px var(--c-action-light)'
+            }}
+            onBlur={e => {
+              e.currentTarget.style.borderColor = 'var(--c-border)'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          />
+          {query && (
+            <button
+              type="button" onClick={() => setQuery('')} aria-label="Limpar filtro"
+              style={{
+                position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                border: 0, background: 'transparent', cursor: 'pointer',
+                color: 'var(--c-text-3)', display: 'flex', padding: 2,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ padding: '22px 16px', textAlign: 'center', color: 'var(--c-text-2)', fontSize: 13 }}>
+          Nenhuma regra corresponde a <strong style={{ color: 'var(--c-text)' }}>“{query}”</strong>.
+        </div>
+      ) : (
+        <div style={{ maxHeight: scrolls ? 364 : 'none', overflowY: scrolls ? 'auto' : 'visible' }}>
+          {filtered.map((e, i) => (
+            <RuleRow key={e.rule.id} e={e} first={i === 0} onEdit={() => onEdit(e.rule)} />
+          ))}
+        </div>
+      )}
     </div>
+  )
+}
+
+function RuleRow({ e, first, onEdit }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="Editar regra"
+      style={{
+        width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 12,
+        padding: '11px 14px', border: 0, cursor: 'pointer', fontFamily: 'inherit',
+        background: hover ? 'var(--c-surface-2)' : 'var(--c-surface)',
+        borderTop: first ? 0 : '1px solid var(--c-border)', transition: 'background 110ms',
+      }}
+    >
+      <span style={{ width: 9, height: 9, borderRadius: 3, background: e.color, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <span style={{
+            fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 13, color: 'var(--c-text)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {e.title}
+          </span>
+          {e.named && (
+            <span style={{ fontSize: 11, color: e.color, fontWeight: 600, flexShrink: 0 }}>{e.typeName}</span>
+          )}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--c-text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {e.time} · {e.weekdays} · {e.period}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-3)', minWidth: 0 }}>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden style={{ flexShrink: 0 }}>
+            <circle cx="8" cy="8" r="1.7" /><path d="M4.6 4.6a5 5 0 000 6.8M11.4 4.6a5 5 0 010 6.8" strokeLinecap="round" />
+          </svg>
+          <span title={e.st.full} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {e.st.count === 1 ? '1 emissora' : `${e.st.count} emissoras`}: {e.st.short}
+          </span>
+          <span aria-hidden style={{ color: 'var(--c-border)' }}>·</span>
+          <span style={{ flexShrink: 0 }}>{e.scope}</span>
+        </div>
+      </div>
+      <span style={{
+        flexShrink: 0, padding: '3px 9px', borderRadius: 'var(--radius-full)',
+        background: `color-mix(in srgb, ${e.color} 13%, transparent)`, color: e.color,
+        fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-heading)', whiteSpace: 'nowrap',
+      }}>
+        {e.plays}
+      </span>
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden
+        style={{ flexShrink: 0, color: 'var(--c-text-3)', opacity: hover ? 0.9 : 0.4, transition: 'opacity 110ms' }}>
+        <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    </button>
   )
 }
 
