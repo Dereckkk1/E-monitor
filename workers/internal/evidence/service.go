@@ -612,9 +612,13 @@ func (s *Service) reattributeByCoverage(
 			zap.String("detection_id", detectionID.String()), zap.Error(ferr))
 		return false
 	}
-	switch decideRejectRecovery(existing) {
-	case RecoveryRestore:
-		// v1 retraiu a tocada real do vencedor; restaura e retrata a duplicata.
+	switch decideCofireAction(existing) {
+	case cofireRestoreThenRetractSelf:
+		// v1 deslocou (retraiu) a tocada real do vencedor, que ainda tem evidência
+		// available; restaura o vencedor e retrata a duplicata. NB: as duas escritas
+		// NÃO são transacionais (Execs separados) — um crash no meio deixa o vencedor
+		// restaurado + self vivo (duplicata transitória), varrida pelo reparo
+		// keep-max-coverage (spec §6). Consistente com a filosofia in-place do v2.
 		if cerr := s.detections.ClearRetraction(ctx, existing.ID, existing.DetectedAt); cerr != nil {
 			s.log.Warn("evidence: co-fire — restore winner failed",
 				zap.String("detection_id", detectionID.String()), zap.Error(cerr))
@@ -631,8 +635,8 @@ func (s *Service) reattributeByCoverage(
 			zap.String("winner_detection_id", existing.ID.String()),
 			zap.Int32("winner_short_id", best.ShortID))
 		return true
-	case RecoverySkip:
-		// Vencedor já tem tocada presente → esta row é a mesma veiculação. Retrata.
+	case cofireRetractSelf:
+		// Vencedor já conta a veiculação → esta row é a mesma tocada. Retrata.
 		if rerr := s.detections.RetractByID(ctx, detectionID, detectedAt, time.Now().UTC()); rerr != nil {
 			s.log.Warn("evidence: co-fire — retract duplicate failed",
 				zap.String("detection_id", detectionID.String()), zap.Error(rerr))
@@ -644,8 +648,9 @@ func (s *Service) reattributeByCoverage(
 			zap.String("winner_detection_id", existing.ID.String()),
 			zap.Int32("winner_short_id", best.ShortID))
 		return true
-	case RecoveryReattribute:
-		// Vencedor SEM row → reatribuição legítima (15s-contado-como-30s). Cai pro
+	case cofireReattribute:
+		// Vencedor sem row (15s-contado-como-30s legítimo) OU presente mas NÃO
+		// contado (audit_rejected → retratar self zeraria a tocada, M-1). Cai pro
 		// fluxo normal abaixo (resolveAttribution + ReattributeDetection).
 	}
 
