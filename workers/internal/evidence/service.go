@@ -599,6 +599,56 @@ func (s *Service) reattributeByCoverage(
 		return false // attributed cut already wins → leave as-is
 	}
 
+	// §18.2.2-v2 co-fire guard. O irmão vencedor pode JÁ ter a tocada própria na
+	// janela: quando um material curto (subset de um spot longo) toca, o spot casa
+	// fraco na região compartilhada e cairia aqui. Reatribuir criaria contagem
+	// dobrada (incidente PILECCO 2026-06-30 — ver
+	// docs/superpowers/specs/2026-06-30-cofire-reattribution-dedup-design.md).
+	// Reusa o classificador do reject-path; no pass-path `self` está APROVADA, então
+	// Skip/Restore retratam `self`.
+	existing, ferr := s.detections.FindSiblingDetectionInWindow(ctx, best.ShortID, stationID, detectedAt, recoverRejWindowSeconds)
+	if ferr != nil {
+		s.log.Warn("evidence: co-fire — winner row lookup failed",
+			zap.String("detection_id", detectionID.String()), zap.Error(ferr))
+		return false
+	}
+	switch decideRejectRecovery(existing) {
+	case RecoveryRestore:
+		// v1 retraiu a tocada real do vencedor; restaura e retrata a duplicata.
+		if cerr := s.detections.ClearRetraction(ctx, existing.ID, existing.DetectedAt); cerr != nil {
+			s.log.Warn("evidence: co-fire — restore winner failed",
+				zap.String("detection_id", detectionID.String()), zap.Error(cerr))
+			return false
+		}
+		if rerr := s.detections.RetractByID(ctx, detectionID, detectedAt, time.Now().UTC()); rerr != nil {
+			s.log.Warn("evidence: co-fire — retract duplicate failed",
+				zap.String("detection_id", detectionID.String()), zap.Error(rerr))
+			return false
+		}
+		metrics.MatchDisambiguation.WithLabelValues("duplicate_cofire_retracted").Inc()
+		s.log.Info("evidence: co-fire — restored winner, retracted duplicate (§18.2.2 v2)",
+			zap.String("detection_id", detectionID.String()),
+			zap.String("winner_detection_id", existing.ID.String()),
+			zap.Int32("winner_short_id", best.ShortID))
+		return true
+	case RecoverySkip:
+		// Vencedor já tem tocada presente → esta row é a mesma veiculação. Retrata.
+		if rerr := s.detections.RetractByID(ctx, detectionID, detectedAt, time.Now().UTC()); rerr != nil {
+			s.log.Warn("evidence: co-fire — retract duplicate failed",
+				zap.String("detection_id", detectionID.String()), zap.Error(rerr))
+			return false
+		}
+		metrics.MatchDisambiguation.WithLabelValues("duplicate_cofire_retracted").Inc()
+		s.log.Info("evidence: co-fire — winner already counted, retracted duplicate (§18.2.2 v2)",
+			zap.String("detection_id", detectionID.String()),
+			zap.String("winner_detection_id", existing.ID.String()),
+			zap.Int32("winner_short_id", best.ShortID))
+		return true
+	case RecoveryReattribute:
+		// Vencedor SEM row → reatribuição legítima (15s-contado-como-30s). Cai pro
+		// fluxo normal abaixo (resolveAttribution + ReattributeDetection).
+	}
+
 	// A sibling covers materially more. Resolve its campaign/material for this
 	// station+time and re-point the row. If the winner has no live campaign for
 	// this station, leave attribution unchanged (don't invent a detection).
