@@ -378,6 +378,122 @@ func TestDetections_ReattributeDetection(t *testing.T) {
 	}
 }
 
+// TestDetections_ReattributeDetection_SyncsProjection prova o invariante que o
+// incidente 2026-06-30 violou: ao reatribuir a tocada base pra um irmão (ex.:
+// desambiguação por cobertura COPA↔CARVÃO), a projeção canônica em
+// detection_campaigns DEVE acompanhar. Sem isso, a grade/relatórios (que lêem
+// detection_campaigns) mostram tocada-fantasma do material errado com a
+// categoria velha. Mesma campanha, só o material muda.
+func TestDetections_ReattributeDetection_SyncsProjection(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ReattrProjSync")
+	clientID := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
+	matB, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: clientID, Title: "ReattrProjSync-real-cut", DurationSeconds: 15,
+		MasterStoragePath: "/tmp", MasterSHA256: "reattrprojsync-b",
+	})
+	if err != nil {
+		t.Fatalf("seed matB: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", matB.ID) })
+
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt: time.Now(), Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+
+	if err := dets.ReattributeDetection(ctx, det.ID, det.DetectedAt, matB.ID, campID, statID); err != nil {
+		t.Fatalf("ReattributeDetection: %v", err)
+	}
+
+	var baseCategory string
+	if err := pool.QueryRow(ctx,
+		`SELECT category FROM detections WHERE id = $1 AND detected_at = $2`,
+		det.ID, det.DetectedAt).Scan(&baseCategory); err != nil {
+		t.Fatalf("read base: %v", err)
+	}
+
+	// A projeção canônica DEVE ter seguido a base (material + categoria).
+	var projCommercial uuid.UUID
+	var projCategory string
+	if err := pool.QueryRow(ctx,
+		`SELECT commercial_id, category FROM detection_campaigns
+		 WHERE detection_id = $1 AND detected_at = $2 AND campaign_id = $3`,
+		det.ID, det.DetectedAt, campID).Scan(&projCommercial, &projCategory); err != nil {
+		t.Fatalf("read projection: %v", err)
+	}
+	if projCommercial != matB.ID {
+		t.Errorf("projeção commercial_id = %s, want %s (devia seguir a base reatribuída)", projCommercial, matB.ID)
+	}
+	if projCategory != baseCategory {
+		t.Errorf("projeção category = %s, want %s (devia bater com a base)", projCategory, baseCategory)
+	}
+}
+
+// TestDetections_ReattributeRejectedDetection_SyncsProjection cobre o caminho
+// gêmeo (reject-path §18.2.2 v2c): reatribuir uma row audit_rejected pra um irmão
+// também precisa levar a projeção canônica junto, senão regenera o fantasma do
+// incidente 2026-06-30 pelo outro caminho.
+func TestDetections_ReattributeRejectedDetection_SyncsProjection(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ReattrRejProjSync")
+	clientID := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
+	matB, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: clientID, Title: "ReattrRejProjSync-real-cut", DurationSeconds: 15,
+		MasterStoragePath: "/tmp", MasterSHA256: "reattrrejprojsync-b",
+	})
+	if err != nil {
+		t.Fatalf("seed matB: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", matB.ID) })
+
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt: time.Now(), Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatalf("seed detection: %v", err)
+	}
+	// O reject-path só reatribui rows audit_rejected.
+	if _, err := pool.Exec(ctx,
+		`UPDATE detections SET evidence_status = 'audit_rejected' WHERE id = $1 AND detected_at = $2`,
+		det.ID, det.DetectedAt); err != nil {
+		t.Fatalf("mark audit_rejected: %v", err)
+	}
+
+	if err := dets.ReattributeRejectedDetection(ctx, det.ID, det.DetectedAt, matB.ID, campID, statID, 0.79); err != nil {
+		t.Fatalf("ReattributeRejectedDetection: %v", err)
+	}
+
+	var baseCategory, evStatus string
+	if err := pool.QueryRow(ctx,
+		`SELECT category, evidence_status FROM detections WHERE id = $1 AND detected_at = $2`,
+		det.ID, det.DetectedAt).Scan(&baseCategory, &evStatus); err != nil {
+		t.Fatalf("read base: %v", err)
+	}
+	if evStatus != "missing" {
+		t.Errorf("evidence_status = %s, want missing (reatribuído)", evStatus)
+	}
+
+	var projCommercial uuid.UUID
+	var projCategory string
+	if err := pool.QueryRow(ctx,
+		`SELECT commercial_id, category FROM detection_campaigns
+		 WHERE detection_id = $1 AND detected_at = $2 AND campaign_id = $3`,
+		det.ID, det.DetectedAt, campID).Scan(&projCommercial, &projCategory); err != nil {
+		t.Fatalf("read projection: %v", err)
+	}
+	if projCommercial != matB.ID {
+		t.Errorf("projeção commercial_id = %s, want %s (devia seguir a base)", projCommercial, matB.ID)
+	}
+	if projCategory != baseCategory {
+		t.Errorf("projeção category = %s, want %s (devia bater com a base)", projCategory, baseCategory)
+	}
+}
+
 func TestDetections_Insert_CarveOut_OutDate(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
