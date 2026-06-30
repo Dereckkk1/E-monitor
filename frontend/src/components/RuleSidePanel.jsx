@@ -66,6 +66,7 @@ export default function RuleSidePanel({
   const [timeStart, setTimeStart] = useState(toTimeInput(initial?.time_start) || '08:00')
   const [timeEnd, setTimeEnd] = useState(toTimeInput(initial?.time_end) || '10:00')
   const [playsPerDay, setPlaysPerDay] = useState(initial?.plays_per_day ?? 3)
+  const [name, setName] = useState(initial?.name ?? '')
 
   useEffect(() => {
     if (open) {
@@ -79,6 +80,7 @@ export default function RuleSidePanel({
       setTimeStart(toTimeInput(initial?.time_start) || '08:00')
       setTimeEnd(toTimeInput(initial?.time_end) || '10:00')
       setPlaysPerDay(initial?.plays_per_day ?? 3)
+      setName(initial?.name ?? '')
     }
   }, [open, initial, campaignStart, campaignEnd])
 
@@ -128,6 +130,7 @@ export default function RuleSidePanel({
 
   function submit() {
     const common = {
+      name: name.trim(),
       station_ids: stationIds,
       material_ids: (typeIds.length === 1 && scopeMode === 'specific') ? materialIds : [],
       start_date: startDate,
@@ -199,6 +202,37 @@ export default function RuleSidePanel({
         </div>
 
         <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1 }}>
+
+          <div style={{ marginBottom: 20 }}>
+            <Label>
+              Nome do conjunto
+              <span style={{
+                marginLeft: 8, fontSize: 10, fontWeight: 600,
+                color: 'var(--c-text-3)', textTransform: 'none', letterSpacing: 0,
+              }}>
+                (opcional)
+              </span>
+            </Label>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              maxLength={60}
+              placeholder="ex.: Rede Nova Brasil, capitais manhã…"
+              style={inputStyle}
+              onFocus={e => {
+                e.currentTarget.style.borderColor = 'var(--c-action-border)'
+                e.currentTarget.style.boxShadow = '0 0 0 3px var(--c-action-light)'
+              }}
+              onBlur={e => {
+                e.currentTarget.style.borderColor = 'var(--c-border)'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            />
+            <p style={{ ...scopeHint, color: 'var(--c-text-3)' }}>
+              Vira o título da regra na lista — facilita achar quando há muitas.
+            </p>
+          </div>
 
           <div style={{ marginBottom: 20 }}>
             <Label>

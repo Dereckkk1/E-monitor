@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,7 @@ type rulePayload struct {
 	TypeID      uuid.UUID   `json:"type_id"`
 	StationIDs  []uuid.UUID `json:"station_ids"`
 	MaterialIDs []uuid.UUID `json:"material_ids"`
+	Name        string      `json:"name"`       // rótulo opcional do conjunto
 	StartDate   string      `json:"start_date"` // YYYY-MM-DD
 	EndDate     string      `json:"end_date"`
 	WeekdayMask int16       `json:"weekday_mask"`
@@ -48,7 +50,8 @@ func (p *rulePayload) toInput(campaignID uuid.UUID) (catalog.CreateDistributionR
 		CampaignID: campaignID, TypeID: p.TypeID,
 		StationIDs:  p.StationIDs,
 		MaterialIDs: p.MaterialIDs,
-		StartDate:  start, EndDate: end,
+		Name:        strings.TrimSpace(p.Name),
+		StartDate:   start, EndDate: end,
 		WeekdayMask: p.WeekdayMask,
 		TimeStart:   p.TimeStart, TimeEnd: p.TimeEnd,
 		PlaysPerDay: p.PlaysPerDay,
