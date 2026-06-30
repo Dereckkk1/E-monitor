@@ -448,6 +448,12 @@ func (d *Detections) FindCutWithSiblings(ctx context.Context, masterID uuid.UUID
 // re-runs the categorizer for the new (campaign, cut, station, day) so in_slot /
 // out_slot / out_date / orphan stays consistent. detected_at is in the WHERE for
 // partition pruning.
+//
+// F-119: a tocada base e sua projeção canônica em detection_campaigns DEVEM
+// andar juntas. Atualizar só detections deixa a projeção órfã no material/
+// campanha antigos (incidente 2026-06-30: tocada-fantasma do material errado na
+// grade/relatórios, que lêem detection_campaigns). As duas escritas correm na
+// MESMA transação via syncCanonicalProjection.
 func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
 	newCommercialID, newCampaignID, stationID uuid.UUID) error {
 	cat, err := d.categorize(ctx, CreateDetectionInput{
@@ -459,11 +465,53 @@ func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.
 	if err != nil {
 		return err
 	}
-	_, err = d.pool.Exec(ctx, `
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var oldCampaignID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT campaign_id FROM detections WHERE id = $1 AND detected_at = $2`,
+		detectionID, detectedAt).Scan(&oldCampaignID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE detections
 		SET commercial_id = $3, campaign_id = $4, category = $5
 		WHERE id = $1 AND detected_at = $2`,
-		detectionID, detectedAt, newCommercialID, newCampaignID, cat)
+		detectionID, detectedAt, newCommercialID, newCampaignID, cat); err != nil {
+		return err
+	}
+	if err := syncCanonicalProjection(ctx, tx, detectionID, detectedAt,
+		oldCampaignID, newCampaignID, newCommercialID, cat); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// syncCanonicalProjection re-aponta a projeção canônica (detection_campaigns) pra
+// acompanhar uma reatribuição da tocada base, na MESMA tx do UPDATE detections.
+// Remove a projeção da campanha antiga e grava a da campanha nova (idempotente:
+// se a campanha nova já tinha projeção — multi-atribuição — atualiza material +
+// categoria). Só mexe na projeção da campanha-base; projeções de OUTRAS campanhas
+// (fan-out multi-atribuição) ficam intactas. Ver incidente 2026-06-30.
+func syncCanonicalProjection(ctx context.Context, tx pgx.Tx,
+	detectionID uuid.UUID, detectedAt time.Time,
+	oldCampaignID, newCampaignID, newCommercialID uuid.UUID, category string) error {
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM detection_campaigns
+		WHERE detection_id = $1 AND detected_at = $2 AND campaign_id = $3`,
+		detectionID, detectedAt, oldCampaignID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (detection_id, detected_at, campaign_id)
+		DO UPDATE SET commercial_id = EXCLUDED.commercial_id, category = EXCLUDED.category`,
+		detectionID, detectedAt, newCampaignID, newCommercialID, category)
 	return err
 }
 
@@ -1238,17 +1286,37 @@ func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detection
 	if err != nil {
 		return err
 	}
-	tag, err := d.pool.Exec(ctx, `
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lê a campanha antiga sob o guard audit_rejected: se a row não estiver
+	// rejeitada (0 rows), devolve ErrReattributeNoRow sem alterar nada (G3).
+	var oldCampaignID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT campaign_id FROM detections
+		WHERE id = $1 AND detected_at = $2 AND evidence_status = 'audit_rejected'`,
+		detectionID, detectedAt).Scan(&oldCampaignID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrReattributeNoRow
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE detections
 		SET commercial_id = $3, campaign_id = $4, category = $5,
 		    evidence_status = 'missing', audit_coverage = $6
 		WHERE id = $1 AND detected_at = $2 AND evidence_status = 'audit_rejected'`,
-		detectionID, detectedAt, newCommercialID, newCampaignID, cat, coverage)
-	if err != nil {
+		detectionID, detectedAt, newCommercialID, newCampaignID, cat, coverage); err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrReattributeNoRow
+	// F-119: leva a projeção canônica junto (mesmo motivo do ReattributeDetection).
+	if err := syncCanonicalProjection(ctx, tx, detectionID, detectedAt,
+		oldCampaignID, newCampaignID, newCommercialID, cat); err != nil {
+		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
