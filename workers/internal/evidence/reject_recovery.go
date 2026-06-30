@@ -31,6 +31,10 @@ const (
 // decideRejectRecovery escolhe o ramo a partir da row existente do irmão vencedor
 // na janela (nil = não existe). Pré-condição do caller: o vencedor != corte
 // atribuído e supera a margem de cobertura. Pura/testável.
+//
+// COMPARTILHADA: além do reject-path, o co-fire guard do PASS-path
+// (reattributeByCoverage) também a usa. No pass-path `self` está APROVADA, então
+// os ramos Skip/Restore retratam `self` em vez de só pular.
 func decideRejectRecovery(existing *catalog.SiblingDetectionRow) RejectRecoveryAction {
 	switch {
 	case existing == nil:
