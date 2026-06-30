@@ -17,14 +17,17 @@ type DistributionRule struct {
 	TypeID      uuid.UUID   `json:"type_id"`
 	StationIDs  []uuid.UUID `json:"station_ids"`
 	MaterialIDs []uuid.UUID `json:"material_ids"`
-	StartDate   time.Time   `json:"start_date"`
-	EndDate     time.Time   `json:"end_date"`
-	WeekdayMask int16       `json:"weekday_mask"`
-	TimeStart   string      `json:"time_start"` // HH:MM
-	TimeEnd     string      `json:"time_end"`   // HH:MM
-	PlaysPerDay int16       `json:"plays_per_day"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	// Name é o rótulo opcional do "conjunto" (ex.: "Rede Nova Brasil"). Vazio
+	// = sem nome → a UI deriva a assinatura. Migration 0045.
+	Name        string    `json:"name"`
+	StartDate   time.Time `json:"start_date"`
+	EndDate     time.Time `json:"end_date"`
+	WeekdayMask int16     `json:"weekday_mask"`
+	TimeStart   string    `json:"time_start"` // HH:MM
+	TimeEnd     string    `json:"time_end"`   // HH:MM
+	PlaysPerDay int16     `json:"plays_per_day"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type DistributionRules struct {
@@ -40,6 +43,7 @@ type CreateDistributionRuleInput struct {
 	TypeID      uuid.UUID
 	StationIDs  []uuid.UUID
 	MaterialIDs []uuid.UUID
+	Name        string
 	StartDate   time.Time
 	EndDate     time.Time
 	WeekdayMask int16
@@ -49,7 +53,7 @@ type CreateDistributionRuleInput struct {
 }
 
 // ruleColumns uses to_char to normalize TIME to HH:MM string in SELECTs.
-const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids,
+const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids, name,
        start_date, end_date, weekday_mask,
        to_char(time_start, 'HH24:MI') AS time_start,
        to_char(time_end,   'HH24:MI') AS time_end,
@@ -59,14 +63,14 @@ func (dr *DistributionRules) Create(ctx context.Context, in CreateDistributionRu
 	var r DistributionRule
 	err := dr.pool.QueryRow(ctx, `
 		INSERT INTO distribution_rules
-		  (campaign_id, type_id, station_ids, material_ids, start_date, end_date,
+		  (campaign_id, type_id, station_ids, material_ids, name, start_date, end_date,
 		   weekday_mask, time_start, time_end, plays_per_day)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::time, $9::time, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time, $11)
 		RETURNING `+ruleColumns,
-		in.CampaignID, in.TypeID, in.StationIDs, in.MaterialIDs,
+		in.CampaignID, in.TypeID, in.StationIDs, in.MaterialIDs, in.Name,
 		in.StartDate, in.EndDate, in.WeekdayMask,
 		in.TimeStart, in.TimeEnd, in.PlaysPerDay,
-	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
+	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs, &r.Name,
 		&r.StartDate, &r.EndDate, &r.WeekdayMask,
 		&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 		&r.CreatedAt, &r.UpdatedAt)
@@ -77,7 +81,7 @@ func (dr *DistributionRules) Get(ctx context.Context, id uuid.UUID) (*Distributi
 	var r DistributionRule
 	err := dr.pool.QueryRow(ctx,
 		`SELECT `+ruleColumns+` FROM distribution_rules WHERE id = $1`, id,
-	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
+	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs, &r.Name,
 		&r.StartDate, &r.EndDate, &r.WeekdayMask,
 		&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 		&r.CreatedAt, &r.UpdatedAt)
@@ -99,7 +103,7 @@ func (dr *DistributionRules) ListByCampaign(ctx context.Context, campaignID uuid
 	var out []DistributionRule
 	for rows.Next() {
 		var r DistributionRule
-		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
+		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs, &r.Name,
 			&r.StartDate, &r.EndDate, &r.WeekdayMask,
 			&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 			&r.CreatedAt, &r.UpdatedAt); err != nil {
@@ -146,7 +150,7 @@ func (dr *DistributionRules) ListApplicable(ctx context.Context,
 	var out []DistributionRule
 	for rows.Next() {
 		var r DistributionRule
-		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs,
+		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs, &r.Name,
 			&r.StartDate, &r.EndDate, &r.WeekdayMask,
 			&r.TimeStart, &r.TimeEnd, &r.PlaysPerDay,
 			&r.CreatedAt, &r.UpdatedAt); err != nil {
@@ -162,10 +166,10 @@ func (dr *DistributionRules) Update(ctx context.Context, id uuid.UUID, in Create
 		UPDATE distribution_rules
 		SET type_id = $2, station_ids = $3, material_ids = $4, start_date = $5,
 		    end_date = $6, weekday_mask = $7, time_start = $8::time,
-		    time_end = $9::time, plays_per_day = $10, updated_at = now()
+		    time_end = $9::time, plays_per_day = $10, name = $11, updated_at = now()
 		WHERE id = $1`,
 		id, in.TypeID, in.StationIDs, in.MaterialIDs, in.StartDate, in.EndDate,
-		in.WeekdayMask, in.TimeStart, in.TimeEnd, in.PlaysPerDay)
+		in.WeekdayMask, in.TimeStart, in.TimeEnd, in.PlaysPerDay, in.Name)
 	return err
 }
 
