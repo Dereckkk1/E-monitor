@@ -1260,6 +1260,21 @@ func (d *Detections) ClearRetraction(ctx context.Context, id uuid.UUID, detected
 	return err
 }
 
+// RetractByID retrata uma detection (retracted_at = $3) por id+detected_at, só se
+// ainda não estava retraída (idempotente — a 2a chamada é no-op). Simétrico ao
+// ClearRetraction. Usado pelo co-fire guard do §18.2.2-v2 pass-path pra descartar
+// a row irmã que é a MESMA veiculação do cut vencedor. NÃO mexe em
+// detection_campaigns: a projeção é gateada pelo retracted_at da row base (view
+// daily_play_summary CTE `actual`), então a retração in-place basta. detected_at
+// no WHERE pra partition pruning.
+func (d *Detections) RetractByID(ctx context.Context, id uuid.UUID, detectedAt, at time.Time) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections SET retracted_at = $3
+		 WHERE id = $1 AND detected_at = $2 AND retracted_at IS NULL`,
+		id, detectedAt, at)
+	return err
+}
+
 // ErrReattributeNoRow sinaliza que a reatribuição não tocou nenhuma row — a
 // detection alvo não estava (mais) audit_rejected. O caller trata como no-op
 // seguro: a row permanece como estava (guard G3 do incidente 2026-05-17).
