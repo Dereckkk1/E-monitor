@@ -15,7 +15,7 @@ import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
-  monthLabel, rangeLabel, defaultRangeForCampaign, formatCampaignPeriod,
+  monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
 } from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
@@ -278,11 +278,22 @@ export default function MaterialsPage() {
   const rangeStart = userRange.start || defaultRange.start
   const rangeEnd   = userRange.end   || defaultRange.end
 
+  // Bounds dos date pickers = campanha INTEIRA, pra liberar o range além do mês
+  // corrente (o default segue mensal). Ver docs/features/materials-page.md.
+  const pickerBounds = useMemo(
+    () => campaignRangeISO(selectedCampaign),
+    [selectedCampaign])
+
   const monthRangeISO = useMemo(() => {
     if (!selectedMonth) return { from: '', to: '' }
     const { start, end } = monthToRange(selectedMonth)
     return { from: isoFromDate(start), to: isoFromDate(end) }
   }, [selectedMonth])
+
+  // Janela do fetch = união do mês com o range escolhido (idem /detections):
+  // narrow no mês não refaz fetch; estender pra outro mês amplia a busca.
+  const fetchFrom = rangeStart && rangeStart < monthRangeISO.from ? rangeStart : monthRangeISO.from
+  const fetchTo   = rangeEnd   && rangeEnd   > monthRangeISO.to   ? rangeEnd   : monthRangeISO.to
 
   // Campaign-scoped data
   const { data: clientLibrary = [] } = useMaterials(selectedCampaign?.client_id ?? null)
@@ -293,7 +304,7 @@ export default function MaterialsPage() {
   const { data: distributionRules = [] } = useDistributionRules(selectedCampaignId || null)
   const { data: materialTypes = [] } = useMaterialTypes()
   const { data: summary = [], isLoading: loadingSummary, isFetching } =
-    useDailySummary(selectedCampaignId || null, monthRangeISO.from, monthRangeISO.to)
+    useDailySummary(selectedCampaignId || null, fetchFrom, fetchTo)
 
   // All materials the campaign has (programmed or not).
   const linkedMaterials = useMemo(
@@ -594,10 +605,10 @@ export default function MaterialsPage() {
             )}
           </label>
           <div className="flow-range">
-            <input type="date" value={rangeStart} min={rangeBounds.start || undefined} max={rangeBounds.end || undefined}
+            <input type="date" value={rangeStart} min={pickerBounds.start || undefined} max={pickerBounds.end || undefined}
                    onChange={handleRangeStart} disabled={filterStep < 3} aria-label="Data de início" />
             <span className="flow-range-arrow">→</span>
-            <input type="date" value={rangeEnd} min={rangeBounds.start || undefined} max={rangeBounds.end || undefined}
+            <input type="date" value={rangeEnd} min={pickerBounds.start || undefined} max={pickerBounds.end || undefined}
                    onChange={handleRangeEnd} disabled={filterStep < 3} aria-label="Data de fim" />
           </div>
         </div>
@@ -676,6 +687,8 @@ export default function MaterialsPage() {
                 month={monthDate}
                 campaignStart={gridStart}
                 campaignEnd={gridEnd}
+                visibleStart={gridStart}
+                visibleEnd={gridEnd}
                 stations={stationCatalog}
                 rows={pagedRows}
                 cellData={cellData}

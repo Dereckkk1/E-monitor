@@ -76,6 +76,19 @@ export function defaultRangeForCampaign(ymStr, campaign) {
   return { start: isoFromDate(start), end: isoFromDate(end) }
 }
 
+// Full campaign span [start_date, end_date] as ISO YYYY-MM-DD strings. Unlike
+// defaultRangeForCampaign (which intersects with a single month), this returns
+// the WHOLE campaign — used as the min/max bounds of the date pickers so the
+// user can extend the range across months. Empty strings when the campaign has
+// no dates (bounds then fall back to unrestricted).
+export function campaignRangeISO(campaign) {
+  if (!campaign?.start_date || !campaign?.end_date) return { start: '', end: '' }
+  const s = parseLocalDate(campaign.start_date)
+  const e = parseLocalDate(campaign.end_date)
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return { start: '', end: '' }
+  return { start: isoFromDate(s), end: isoFromDate(e) }
+}
+
 // Format a campaign's [start_date, end_date] as pt-BR "dd-mm-aaaa – dd-mm-aaaa".
 export function formatCampaignPeriod(startISO, endISO) {
   if (!startISO || !endISO) return ''

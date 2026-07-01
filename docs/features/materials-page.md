@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-27
+ultima-verificacao: 2026-07-01
 codigo-relacionado:
   - frontend/src/pages/MaterialsPage.jsx
   - frontend/src/components/MaterialPlaybackList.jsx
@@ -31,6 +31,11 @@ Competência (mês) → Campanha → Período (início→fim). A campanha lista 
 que cruzam a competência. O período faz o narrow client-side da grade. Os
 helpers de data desse fluxo vivem em `utils/dates.js` (compartilhados com a
 /detections).
+
+Os bounds dos seletores De/Até são a **campanha inteira** (`campaignRangeISO`),
+não o mês — dá pra estender o range pra outros meses da campanha e a grade
+renderiza o span via o override `visibleStart`/`visibleEnd` do `DistributionGrid`
+(mesma mecânica da [/detections](detections-view.md)). O default segue mensal.
 
 ## Resumo do plano
 

@@ -1,11 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-19
+ultima-verificacao: 2026-07-01
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
   - frontend/src/components/CoverageSummary.jsx
   - frontend/src/components/AirtimePaginator.jsx
+  - frontend/src/utils/dates.js
   - workers/internal/catalog/daily_summary.go
   - migrations/0018_detections_categorization.up.sql
 ---
@@ -38,6 +39,13 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 
 1. Selecione uma campanha no dropdown do topo
 2. Use as pills "Mês atual" / "Mês anterior" ou o input de mês pra navegar
+   - **Período (filtro de data):** o default abre no mês selecionado, mas os
+     seletores De/Até têm bounds = **campanha inteira** (`start_date`→`end_date`),
+     não o mês. Então dá pra arrastar o range pra meses anteriores/posteriores e
+     ver uma campanha que cruza meses num só grid — a grade renderiza o span
+     escolhido (com a abreviação do mês no header quando cruza fronteira de mês)
+     e o fetch do `daily-summary` passa a cobrir a união do mês com o range. Ver
+     `campaignRangeISO` + o override `visibleStart`/`visibleEnd` do `DistributionGrid`.
 3. **CoverageSummary** no topo mostra:
    - Cobertura % (verde ÷ esperado) — verde se ≥95%, amarelo 80-94%, vermelho <80%
    - Totais do mês por categoria
