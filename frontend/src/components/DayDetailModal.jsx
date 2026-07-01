@@ -7,10 +7,127 @@ import AudioPlayer from './AudioPlayer'
 import api from '../api/client'
 
 const CATEGORY_LABEL = {
-  in_slot:  { label: 'Dentro da faixa', variant: 'green' },
-  out_slot: { label: 'Fora da faixa',   variant: 'yellow' },
-  out_date: { label: 'Fora da data',    variant: 'purple' },
-  orphan:   { label: 'Bônus (sem regra)', variant: 'blue' },
+  in_slot:  { label: 'Dentro da faixa programada', variant: 'green' },
+  out_slot: { label: 'Tocou fora das faixas',      variant: 'yellow' },
+  out_date: { label: 'Tocou fora da data',         variant: 'purple' },
+  orphan:   { label: 'Bônus (sem faixa)',          variant: 'blue' },
+}
+
+// ── Plano do dia: helpers ───────────────────────────────────────
+// Reconstroem, no cliente, exatamente o que o backend usa pra montar a célula
+// (categorizer.go + view daily_play_summary): quais faixas valem NAQUELA data,
+// a tolerância de 15 min em cada extremo, e o carve-out por material. Nada aqui
+// recategoriza detecção — a categoria gravada continua a verdade; isto é só a
+// lente "por faixa" sobre o total autoritativo.
+const WD_SHORT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb']
+const WD_LONG  = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira',
+                  'quinta-feira', 'sexta-feira', 'sábado']
+const SLOT_TOLERANCE_SEC = 15 * 60
+
+// weekdayIndexISO: 0=dom..6=sáb, no fuso local do calendário (sem drift de TZ,
+// já que dateISO é o dia-calendário SP que a modal usa pra buscar detecções).
+function weekdayIndexISO(dateISO) {
+  const [y, m, d] = dateISO.slice(0, 10).split('-').map(Number)
+  return new Date(y, m - 1, d).getDay()
+}
+
+function hhmmToSec(s) {
+  const [h, m, sec] = String(s || '').split(':').map(Number)
+  return (h || 0) * 3600 + (m || 0) * 60 + (sec || 0)
+}
+
+// spSecOfDay: segundo-do-dia de um instante ISO no fuso America/Sao_Paulo — o
+// mesmo fuso em que o categorizer avalia a faixa. Independe do fuso do browser.
+const _spTimeFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'America/Sao_Paulo',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})
+function spSecOfDay(iso) {
+  const parts = _spTimeFmt.formatToParts(new Date(iso))
+  const get = t => Number(parts.find(p => p.type === t)?.value ?? 0)
+  return get('hour') * 3600 + get('minute') * 60 + get('second')
+}
+
+// ruleAppliesOn: espelha matchesDateWeekday do categorizer — data dentro de
+// [start,end] E o dia-da-semana no weekday_mask.
+function ruleAppliesOn(rule, dateISO) {
+  const d = dateISO.slice(0, 10)
+  const start = (rule.start_date || '').slice(0, 10)
+  const end = (rule.end_date || '').slice(0, 10)
+  if (start && d < start) return false
+  if (end && d > end) return false
+  const dow = weekdayIndexISO(dateISO)
+  return ((1 << dow) & (rule.weekday_mask ?? 0)) !== 0
+}
+
+// notApplyReason: por que uma faixa existente não vale nesta data.
+function notApplyReason(rule, dateISO) {
+  const d = dateISO.slice(0, 10)
+  const start = (rule.start_date || '').slice(0, 10)
+  const end = (rule.end_date || '').slice(0, 10)
+  if (start && d < start) return `começa ${fmtDateShort(start)}`
+  if (end && d > end) return `encerrou ${fmtDateShort(end)}`
+  return `só ${weekdayMaskLabel(rule.weekday_mask ?? 0)}`
+}
+
+function fmtDateShort(iso) {
+  const [, m, d] = iso.slice(0, 10).split('-')
+  return `${d}/${m}`
+}
+
+// weekdayMaskLabel: rótulo compacto do conjunto de dias do mask.
+function weekdayMaskLabel(mask) {
+  const set = new Set()
+  for (let i = 0; i < 7; i++) if ((mask >> i) & 1) set.add(i)
+  if (set.size === 0) return '—'
+  if (set.size === 7) return 'todos os dias'
+  const isWeekdays = [1, 2, 3, 4, 5].every(x => set.has(x)) && !set.has(0) && !set.has(6)
+  if (isWeekdays) return 'seg a sex'
+  if (set.size === 2 && set.has(0) && set.has(6)) return 'sáb e dom'
+  return [1, 2, 3, 4, 5, 6, 0].filter(x => set.has(x)).map(x => WD_SHORT[x]).join(', ')
+}
+
+// buildDayPlan: monta as faixas do dia + atribuição honesta das tocadas in_slot.
+// Cada in_slot é creditada a UMA faixa (respeitando carve-out por material,
+// janela ±15 min; empate → janela mais curta, depois começo mais cedo) pra a
+// soma nunca estourar o total autoritativo. In_slot que não casa nenhuma janela
+// atual (regra editada desde a categorização) vai pra `changedWindow`.
+function buildDayPlan({ rules, dateISO, detections, expected }) {
+  const applicable = rules.filter(r => ruleAppliesOn(r, dateISO))
+  const notApplicable = rules
+    .filter(r => !ruleAppliesOn(r, dateISO))
+    .map(r => ({ rule: r, reason: notApplyReason(r, dateISO) }))
+
+  const win = r => {
+    const s = hhmmToSec(r.time_start), e = hhmmToSec(r.time_end)
+    return { s, e, dur: e - s }
+  }
+  const played = Object.fromEntries(applicable.map(r => [r.id, 0]))
+  let changedWindow = 0
+
+  for (const det of detections) {
+    if (det.category !== 'in_slot') continue
+    const mid = det.commercial_id
+    const t = spSecOfDay(det.detected_at)
+    // carve-out: material nomeado em ALGUMA regra específica (qualquer data)?
+    const carved = rules.some(r => (r.material_ids?.length > 0) && r.material_ids.includes(mid))
+    const cands = applicable.filter(r => {
+      const specific = (r.material_ids?.length > 0)
+      return carved ? (specific && r.material_ids.includes(mid)) : !specific
+    })
+    const hits = cands.filter(r => {
+      const { s, e } = win(r)
+      return t >= s - SLOT_TOLERANCE_SEC && t <= e + SLOT_TOLERANCE_SEC
+    })
+    if (hits.length === 0) { changedWindow++; continue }
+    hits.sort((a, b) => (win(a).dur - win(b).dur) || (win(a).s - win(b).s))
+    played[hits[0].id]++
+  }
+
+  const sumTargets = applicable.reduce((n, r) => n + (r.plays_per_day || 0), 0)
+  const overrideLikely = expected != null && expected !== sumTargets
+
+  return { applicable, notApplicable, played, changedWindow, sumTargets, overrideLikely }
 }
 
 function fmtTime(iso) {
@@ -164,6 +281,17 @@ export default function DayDetailModal({
     orphan:   filtered.filter(d => d.category === 'orphan'),
   }
 
+  // id→título pra rotular faixas escopadas a material específico. availableMaterials
+  // cobre os materiais do tipo nesta emissora; commercial_name das detecções é o
+  // fallback quando um material referido pela regra não está na lista.
+  const materialTitleById = {}
+  availableMaterials.forEach(m => { if (m?.id) materialTitleById[m.id] = m.title || m.name || '' })
+  filtered.forEach(d => {
+    if (d.commercial_id && !materialTitleById[d.commercial_id]) {
+      materialTitleById[d.commercial_id] = d.commercial_name || ''
+    }
+  })
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
@@ -187,59 +315,26 @@ export default function DayDetailModal({
               )}
               {materialType?.name ?? 'Tipo'} · {station?.name ?? 'Emissora'}
             </h3>
-            <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 13 }}>
-              {fmtDate(dateISO)} — materiais individuais detectados abaixo
+            <p style={{
+              margin: '4px 0 0', color: '#64748b', fontSize: 13,
+              textTransform: 'capitalize',
+            }}>
+              {WD_LONG[weekdayIndexISO(dateISO)]}, {fmtDate(dateISO)}
             </p>
-            {rules.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                {rules.map(r => (
-                  <span key={r.id} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    fontSize: 11, fontWeight: 600,
-                    padding: '3px 8px', borderRadius: 999,
-                    background: '#fdf2f8', color: '#be185d',
-                    border: '1px solid #fbcfe8',
-                  }}>
-                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
-                      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4" />
-                      <path d="M8 4.5V8l2.25 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                    </svg>
-                    {r.time_start.slice(0, 5)}–{r.time_end.slice(0, 5)}
-                    <span style={{ color: '#9d174d', fontWeight: 500, opacity: 0.75 }}>
-                      · {r.plays_per_day}×/dia
-                    </span>
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
           <button className="modal-close" onClick={onClose} type="button">×</button>
         </div>
 
         <div className="modal-body" style={{ padding: 20, flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
-          {/* Cell summary badges */}
-          {cellSummary && (
-            <div style={{
-              display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20,
-              padding: 14, background: '#fafbfc', borderRadius: 8, border: '1px solid #e2e8f0',
-            }}>
-              <SummaryStat label="Esperado" value={cellSummary.expected} variant="gray" />
-              <SummaryStat label="Tocou (faixa)" value={cellSummary.in_slot} variant="green" />
-              {cellSummary.deficit > 0 && (
-                <SummaryStat label="Faltou" value={cellSummary.deficit} variant="red" />
-              )}
-              {cellSummary.bonus > 0 && (
-                <SummaryStat label="Bônus" value={cellSummary.bonus} variant="blue" prefix="+" />
-              )}
-              {cellSummary.out_slot > 0 && (
-                <SummaryStat label="Fora faixa" value={cellSummary.out_slot} variant="yellow" prefix="+" />
-              )}
-              {cellSummary.out_date > 0 && (
-                <SummaryStat label="Fora data" value={cellSummary.out_date} variant="purple" prefix="+" />
-              )}
-            </div>
-          )}
+          {/* Plano do dia: faixas que valem hoje, alvo × tocou, e o saldo. */}
+          <DayPlan
+            rules={rules}
+            dateISO={dateISO}
+            detections={filtered}
+            cellSummary={cellSummary}
+            materialTitleById={materialTitleById}
+          />
 
           {isLoading ? (
             <p style={{ color: '#64748b' }}>Carregando detecções…</p>
@@ -1096,11 +1191,324 @@ function NoMaterialsState({ materialType, station, onCancel }) {
   )
 }
 
-function SummaryStat({ label, value, variant, prefix }) {
+// ── Plano do dia ────────────────────────────────────────────────
+// Substitui a fileira de chips + o box de resumo. Compacto (é modal): uma linha
+// por faixa que vale NAQUELA data (janela · progresso · tocou/alvo), recolhe as
+// que não valem com o motivo, e reconcilia com o "esperado" da célula.
+//
+// deriveSummary: saldo derivado das próprias detecções quando a célula não trouxe
+// summary (ex.: regra editada/removida depois da tocada). Garante que o bloco
+// NUNCA some quando há veiculação — espelha a fórmula da view daily_play_summary.
+function deriveSummary(detections, sumTargets) {
+  let inSlot = 0, outSlot = 0, outDate = 0, orphan = 0
+  for (const d of detections) {
+    if (d.category === 'in_slot') inSlot++
+    else if (d.category === 'out_slot') outSlot++
+    else if (d.category === 'out_date') outDate++
+    else if (d.category === 'orphan') orphan++
+  }
+  const expected = sumTargets
+  return {
+    expected, in_slot: inSlot, out_slot: outSlot, out_date: outDate,
+    deficit: Math.max(0, expected - inSlot - outSlot),
+    bonus: Math.max(0, inSlot - expected) + orphan,
+  }
+}
+
+function DayPlan({ rules, dateISO, detections = [], cellSummary, materialTitleById }) {
+  const [showOff, setShowOff] = useState(false)
+  const plan = buildDayPlan({ rules, dateISO, detections, expected: cellSummary?.expected ?? null })
+  const { applicable, notApplicable, played, changedWindow, sumTargets, overrideLikely } = plan
+
+  const eff = cellSummary ?? deriveSummary(detections, sumTargets)
+  const expected = eff.expected ?? 0
+
+  const hasAnything = applicable.length > 0 || notApplicable.length > 0 ||
+    detections.length > 0 || expected > 0
+  if (!hasAnything) return null
+
+  const wd = WD_SHORT[weekdayIndexISO(dateISO)]
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-      <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>{label}</span>
-      <BadgePill variant={variant} value={value} prefix={prefix ?? ''} />
+    <section
+      aria-label="Plano do dia"
+      style={{
+        // flexShrink:0 é obrigatório: a modal-body é um flex column com altura
+        // limitada (overflowY:auto). Num flex item com overflow:hidden, o
+        // min-height:auto colapsa pra 0, então sem isto o flex COMPRIME e CORTA
+        // o plano quando a lista de detecções é longa (era o "some"/"cortando").
+        flexShrink: 0,
+        marginBottom: 14,
+        background: '#fafbfc',
+        border: '1px solid #e8edf2',
+        borderRadius: 'var(--radius-md)',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header compacto: rótulo · dia · esperado */}
+      <div style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        gap: 10, padding: '8px 12px',
+        borderBottom: applicable.length > 0 ? '1px solid #eef2f6' : 'none',
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.09em',
+          color: '#64748b', textTransform: 'uppercase',
+          fontFamily: 'var(--font-heading)', whiteSpace: 'nowrap',
+        }}>
+          Plano do dia<span style={{ color: '#b8c2ce', letterSpacing: 0 }}> · {wd}</span>
+        </span>
+        {expected > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, flexShrink: 0 }}>
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.09em',
+              color: '#94a3b8', textTransform: 'uppercase', fontFamily: 'var(--font-heading)',
+            }}>
+              esperado
+            </span>
+            <span style={{
+              fontSize: 16, fontWeight: 700, lineHeight: 1, color: '#1e293b',
+              fontFamily: 'var(--font-heading)', fontVariantNumeric: 'tabular-nums',
+            }}>
+              {expected}
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* Faixas do dia */}
+      {applicable.length > 0 ? (
+        applicable.map((r, i) => (
+          <PlanRow
+            key={r.id}
+            rule={r}
+            played={played[r.id] ?? 0}
+            materialTitleById={materialTitleById}
+            first={i === 0}
+          />
+        ))
+      ) : (
+        <p style={{ margin: 0, padding: '8px 12px', fontSize: 12, color: '#64748b', lineHeight: 1.45 }}>
+          {expected > 0
+            ? 'Sem faixa de regra neste dia (ajuste manual define o esperado).'
+            : 'Sem faixa programada; tocadas entram como bônus.'}
+        </p>
+      )}
+
+      {/* Notas curtas: override / faixa editada */}
+      {overrideLikely && applicable.length > 0 && (
+        <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#92400e', lineHeight: 1.45 }}>
+          Esperado ({expected}) ≠ soma das faixas ({sumTargets}): ajuste manual sobrepõe a regra.
+        </p>
+      )}
+      {changedWindow > 0 && applicable.length > 0 && (
+        <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>
+          +{changedWindow} tocou na faixa, mas fora das janelas atuais (regra editada depois).
+        </p>
+      )}
+
+      {/* Faixas que existem mas não valem hoje (recolhidas) */}
+      {notApplicable.length > 0 && (
+        <div style={{ padding: '6px 12px' }}>
+          <button
+            type="button"
+            onClick={() => setShowOff(v => !v)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              border: 0, background: 'transparent', cursor: 'pointer',
+              padding: 0, fontSize: 11, fontWeight: 600, color: '#94a3b8',
+              fontFamily: 'var(--font-heading)',
+            }}
+          >
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden
+              style={{ transform: showOff ? 'rotate(90deg)' : 'none', transition: 'transform 160ms cubic-bezier(0.16,1,0.3,1)' }}>
+              <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {notApplicable.length} {notApplicable.length === 1 ? 'faixa não vale' : 'faixas não valem'} neste {wd}
+          </button>
+          {showOff && (
+            <ul style={{ listStyle: 'none', margin: '6px 0 2px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {notApplicable.map(({ rule, reason }) => (
+                <li key={rule.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 11.5, color: '#94a3b8',
+                }}>
+                  <span style={{
+                    fontFamily: 'var(--font-heading)', fontWeight: 600,
+                    fontVariantNumeric: 'tabular-nums', color: '#64748b',
+                  }}>
+                    {rule.time_start.slice(0, 5)}–{rule.time_end.slice(0, 5)}
+                  </span>
+                  <span>· {rule.plays_per_day}×</span>
+                  <ScopeChip rule={rule} materialTitleById={materialTitleById} muted compact />
+                  <span style={{ marginLeft: 'auto', fontStyle: 'italic' }}>{reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Tira de saldo: só o não-zero */}
+      <SaldoStrip s={eff} />
+    </section>
+  )
+}
+
+// PlanRow: uma faixa que vale hoje, em UMA linha. Janela · escopo (se
+// material-específica) · barra de progresso · tocou/alvo. O alvo é lido no "/N"
+// da contagem, então não repetimos "alvo N×".
+function PlanRow({ rule, played, materialTitleById, first }) {
+  const target = rule.plays_per_day || 0
+  const state = played >= target && target > 0 ? 'done' : played > 0 ? 'partial' : 'zero'
+  // Semáforo na contagem: verde cumpriu, âmbar parcial, vermelho não tocou nada.
+  const countColor = state === 'done' ? '#15803d' : state === 'partial' ? '#b45309' : '#dc2626'
+  const over = Math.max(0, played - target)
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 9,
+      padding: '7px 12px',
+      borderTop: first ? 'none' : '1px solid #eef2f6',
+    }}>
+      <span style={{
+        flexShrink: 0, width: 84,
+        fontSize: 12.5, fontWeight: 700, color: '#1e293b',
+        fontFamily: 'var(--font-heading)', fontVariantNumeric: 'tabular-nums',
+        letterSpacing: '-0.01em',
+      }}>
+        {rule.time_start.slice(0, 5)}<span style={{ color: '#cbd5e1', fontWeight: 500 }}>–</span>{rule.time_end.slice(0, 5)}
+      </span>
+
+      <ScopeChip rule={rule} materialTitleById={materialTitleById} compact />
+
+      <div style={{ flex: 1, minWidth: 28 }}>
+        <SegBar played={played} target={target} state={state} />
+      </div>
+
+      <span style={{
+        flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+        minWidth: 30, justifyContent: 'flex-end',
+      }}>
+        {state === 'done' && (
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden style={{ color: '#15803d' }}>
+            <path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+        <span style={{
+          fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-heading)',
+          fontVariantNumeric: 'tabular-nums', color: countColor,
+        }}>
+          {played}<span style={{ color: '#cbd5e1', fontWeight: 500 }}>/{target}</span>
+        </span>
+        {over > 0 && (
+          <span style={{
+            fontSize: 9.5, fontWeight: 700, color: '#1d4ed8', background: '#dbeafe',
+            borderRadius: 999, padding: '1px 5px', fontFamily: 'var(--font-heading)',
+          }}>
+            +{over}
+          </span>
+        )}
+      </span>
+    </div>
+  )
+}
+
+// SegBar: barra "em blocos" (DESIGN metarregra 2). Um bloco por tocada esperada;
+// verde = tocou, cinza = falta. Acima de 24 alvos vira barra contínua.
+function SegBar({ played, target, state }) {
+  const fillColor = '#16a34a'
+  if (target > 0 && target <= 24) {
+    const filled = Math.min(played, target)
+    return (
+      // Blocos capados em 22px (contáveis no desktop) mas com flex-shrink pra
+      // encolher no mobile sem estourar; alinhados à esquerda.
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center', justifyContent: 'flex-start' }}>
+        {Array.from({ length: target }, (_, i) => (
+          <span key={i} style={{
+            flex: '1 1 0', minWidth: 4, maxWidth: 20, height: 6, borderRadius: 2,
+            background: i < filled ? fillColor : '#e6ebf1',
+            transition: 'background 200ms cubic-bezier(0.16,1,0.3,1)',
+          }} />
+        ))}
+      </div>
+    )
+  }
+  // Alvo grande (raro): barra contínua com fração preenchida.
+  const pct = target > 0 ? Math.min(100, (played / target) * 100) : 0
+  return (
+    <div style={{ height: 6, borderRadius: 3, background: '#e6ebf1', overflow: 'hidden' }}>
+      <div style={{
+        height: '100%', width: `${pct}%`, background: fillColor,
+        transition: 'width 240ms cubic-bezier(0.16,1,0.3,1)',
+      }} />
+    </div>
+  )
+}
+
+// ScopeChip: pílula que sinaliza faixa escopada a material específico
+// (carve-out material_ids). Faixa geral (todos do tipo) não renderiza nada.
+function ScopeChip({ rule, materialTitleById, muted, compact }) {
+  const ids = rule.material_ids ?? []
+  if (ids.length === 0) return null
+  const titles = ids.map(id => materialTitleById?.[id]).filter(Boolean)
+  const label = titles.length === 0
+    ? `${ids.length} mat.`
+    : titles.length === 1
+      ? titles[0]
+      : `${titles[0]} +${titles.length - 1}`
+  const full = titles.length > 0 ? titles.join(', ') : `${ids.length} materiais específicos`
+  return (
+    <span
+      title={`Faixa só para: ${full}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        flexShrink: 1, minWidth: 0, maxWidth: compact ? 240 : 160,
+        fontSize: compact ? 12 : 10.5, fontWeight: 600, fontFamily: 'var(--font-heading)',
+        padding: compact ? '2px 9px' : '2px 7px', borderRadius: 999,
+        background: muted ? 'transparent' : '#fdf2f8',
+        color: muted ? '#94a3b8' : '#be185d',
+        border: `1px solid ${muted ? '#e2e8f0' : '#fbcfe8'}`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <svg width={compact ? 10 : 8} height={compact ? 10 : 8} viewBox="0 0 16 16" fill="none" aria-hidden style={{ flexShrink: 0 }}>
+        <path d="M4 7V5a4 4 0 0 1 8 0v2M3.5 7h9v6h-9z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+    </span>
+  )
+}
+
+// SaldoStrip: linha única com o que faltou/vazou. Só o não-zero (compacto).
+function SaldoStrip({ s }) {
+  if (!s) return null
+  const items = [
+    { key: 'in_slot',  label: 'tocou',         value: s.in_slot,  dot: '#16a34a' },
+    { key: 'deficit',  label: 'faltou',        value: s.deficit,  dot: '#dc2626' },
+    { key: 'out_slot', label: 'fora da faixa', value: s.out_slot, dot: '#d97706' },
+    { key: 'out_date', label: 'fora da data',  value: s.out_date, dot: '#7c3aed' },
+    { key: 'bonus',    label: 'bônus',         value: s.bonus,    dot: '#2563eb' },
+  ].filter(it => (it.value ?? 0) > 0)
+  if (items.length === 0) return null
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 12px',
+      padding: '7px 12px',
+      borderTop: '1px solid #eef2f6', background: '#f6f8fa',
+    }}>
+      {items.map(it => (
+        <span key={it.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5 }}>
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: it.dot, flexShrink: 0 }} />
+          <span style={{ color: '#64748b' }}>{it.label}</span>
+          <span style={{
+            fontWeight: 700, color: '#1e293b', fontFamily: 'var(--font-heading)',
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {it.value}
+          </span>
+        </span>
+      ))}
     </div>
   )
 }
