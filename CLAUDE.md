@@ -171,6 +171,19 @@ Build nativo Windows passar **não** garante que o cross-compile linux passa. Se
 
 ---
 
+### 7. Você (Claude) NÃO tem acesso direto à VM de produção nem ao banco de prod
+
+Não existe `gcloud` no PATH desta máquina dev (Windows), e o SSH pra VM falha (host key rotacionada / acesso restrito por IP). **Não tente `gcloud`/`ssh` pra rodar query em prod** — não funciona e só gasta tempo (lição 2026-06-30).
+
+Como investigar dado de prod, então:
+
+- **Leia as queries do próprio sistema** no código Go pra entender atribuição/categorização — é ali que mora o SQL canônico: `workers/internal/evidence/{attribution,disambig_coverage,service}.go` (atribuição + reatribuição §18.2.2), `workers/internal/catalog/{detections,daily_summary,distribution_rules,detection_campaigns}.go` (projeção canônica + categorizador + grade).
+- **Monte o SQL de diagnóstico read-only (SELECT)** e **entregue pro Dereck rodar** na VM; ele cola o resultado de volta. Escreva o SQL completo e auto-contido (o Dereck roda às cegas) — de preferência via `docker compose ... exec -T postgres psql -At -c "..."`. Qualquer reparo de dado (`UPDATE`) você **escreve com preview+ROLLBACK→COMMIT**, mas QUEM executa em prod é o Dereck.
+- O método canônico de cruzamento com o fornecedor está em [docs/operations/vendor-reconciliation.md](docs/operations/vendor-reconciliation.md) (as 5 bandejas de discrepância). Padrões de má-atribuição já mapeados: memórias `duplicate-material-cross-campaign-misattribution` e `detection-campaigns-projection-sync-reattribution`.
+- Snapshots/backups pontuais às vezes existem em `c:\tmp` (ex.: `backup-prod-*.sql`, `prod-snapshot.json`), mas costumam estar **desatualizados** — confira a data antes de confiar; não valem pra dado recente.
+
+---
+
 ## Índice do Plano (`plano_implementacao.md`)
 
 Use estes links para ir direto à seção relevante em vez de ler o arquivo inteiro.
