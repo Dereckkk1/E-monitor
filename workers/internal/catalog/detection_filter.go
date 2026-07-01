@@ -28,4 +28,12 @@ package catalog
 //   - system_health.go conta detecções CRUAS nos contadores de liveness do
 //     pipeline (o matcher está produzindo saída?), não é tally de veiculação.
 //   - O recategorizador dá UPDATE em todas as linhas do escopo, por design.
-const ApprovedDetectionsFilter = `d.retracted_at IS NULL AND d.ignored_at IS NULL AND d.evidence_status <> 'audit_rejected'`
+//
+// evidence_status = 'ambiguous' (desambiguação de gêmeos acústicos, spec
+// 2026-07-01): tocada de gêmeo que o trecho discriminante não conseguiu atribuir
+// → vai pra revisão manual, NÃO conta. MarkAmbiguous SEMPRE retrata a linha
+// (retracted_at), então a invariante é `ambiguous ⟺ retracted` — a view
+// daily_play_summary e a projeção detection_campaigns já a excluem via
+// retracted_at (JOIN ao vivo na row base). A cláusula abaixo é defesa em
+// profundidade + documentação; nunca deve haver 'ambiguous' sem retracted_at.
+const ApprovedDetectionsFilter = `d.retracted_at IS NULL AND d.ignored_at IS NULL AND d.evidence_status <> 'audit_rejected' AND d.evidence_status <> 'ambiguous'`
