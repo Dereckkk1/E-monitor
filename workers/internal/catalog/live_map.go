@@ -141,6 +141,12 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]Li
 	return out, rows.Err()
 }
 
+// queryRecentDetections alimenta o feed "Últimas Veiculações". Janela = últimas
+// 24h (não o histórico inteiro): o feed é "ao vivo" e a versão sem corte temporal
+// dava a impressão de "só o mês atual" — as 50 mais recentes de uma campanha
+// ativa são todas recentes de qualquer forma. O LIMIT 200 é só um teto de
+// segurança pra campanhas de volume alto dentro dessas 24h. Ver
+// docs/features/live-map.md.
 func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUID) ([]LiveDetection, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id, d.station_id, COALESCE(s.name, ''), s.logo_url,
@@ -154,11 +160,12 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli   ON cli.id = cmp.client_id
 		WHERE d.campaign_id = $1
+		  AND d.detected_at >= now() - interval '24 hours'
 		  AND d.evidence_status <> 'audit_rejected'
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		ORDER BY d.detected_at DESC
-		LIMIT 50`, campaignID)
+		LIMIT 200`, campaignID)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-27
+ultima-verificacao: 2026-07-01
 codigo-relacionado:
   - workers/internal/catalog/live_map.go
   - workers/internal/api/handlers/live_map.go
@@ -38,9 +38,16 @@ obrigatório (400 se ausente/ inválido). Scope-aware via
 
 Retorna as emissoras-alvo da campanha (`campaigns.target_stations`) que tenham
 `latitude`/`longitude` preenchidos — ver
-[geocoding-emissoras.md](geocoding-emissoras.md) — e as últimas 50 veiculações
-da campanha. Emissoras internacionais e distritos (que o geocoding pula) não
-aparecem no mapa.
+[geocoding-emissoras.md](geocoding-emissoras.md) — e as veiculações das **últimas
+24 horas** da campanha (teto de segurança de 200 linhas). Emissoras internacionais
+e distritos (que o geocoding pula) não aparecem no mapa.
+
+> **Janela de 24h (2026-07-01).** Antes o feed trazia as 50 veiculações mais
+> recentes **sem corte temporal** — o que, numa campanha ativa, são todas
+> recentes de qualquer jeito e passava a impressão de "só o mês atual". Agora a
+> query filtra `detected_at >= now() - interval '24 hours'`, coerente com o
+> caráter "ao vivo" do painel (refresh a cada 20s). Contrapartida: campanha de
+> baixo volume que não tocou nas últimas 24h mostra o feed vazio.
 
 ### Payload
 
@@ -60,8 +67,9 @@ aparecem no mapa.
 O repo (`catalog.LiveMap`) resolve o `client_id` da campanha uma vez (existência
 + posse), depois faz duas queries: `stations` (emissoras-alvo com coordenada;
 `last_detection_at` = MAX por emissora **dentro da campanha**) e
-`recent_detections` (veiculações da campanha, ignorando `audit_rejected`,
-`ignored_at` e `retracted_at`).
+`recent_detections` (veiculações da campanha nas últimas 24h, ignorando
+`audit_rejected`, `ignored_at` e `retracted_at`; `ORDER BY detected_at DESC
+LIMIT 200`).
 
 ## Mapa
 
