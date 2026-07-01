@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/google/uuid"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"radiocheck/internal/audit"
+	"radiocheck/internal/sharing"
+	"radiocheck/internal/similarity"
 )
 
 // complementRanges returns [0,total) minus the union of overlap ranges — the
@@ -117,4 +120,73 @@ func (r *TwinDiscriminative) Get(ctx context.Context, materialID, twinID uuid.UU
 		out = nil
 	}
 	return out, frames, nil
+}
+
+// twinDurToleranceSeconds: two cuts count as same-duration twins only if their
+// durations differ by ≤ this. Same-duration is the ONE case coverage/duration
+// can't disambiguate (spec 2026-07-01) — the whole reason discriminative regions
+// exist. A 15s vs 30s pair is handled by the existing coverage/duration path, not here.
+const twinDurToleranceSeconds = 1.0
+
+// twinSimilarityThreshold: the similarity score at/above which two same-client
+// materials are considered acoustic twins worth a discriminative region.
+const twinSimilarityThreshold = 0.50 // == similarity.WarnThreshold
+
+// filterTwinsByDuration keeps only candidates whose duration is within
+// twinDurToleranceSeconds of ownDurationSeconds.
+func filterTwinsByDuration(cands []similarity.SimilarMaterial, ownDurationSeconds float64) []similarity.SimilarMaterial {
+	var out []similarity.SimilarMaterial
+	for _, c := range cands {
+		if math.Abs(c.DurationSeconds-ownDurationSeconds) <= twinDurToleranceSeconds {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// PopulateForMaterial finds the acoustic twins of materialID (similarity ≥
+// twinSimilarityThreshold AND duration within twinDurToleranceSeconds) and stores
+// the discriminative region for BOTH sides of each pair. Best-effort: per-twin
+// failures are collected and returned joined, never aborting the others. Heavy
+// (decode per ComputeTwinOverlap). Caller (ingestion hook, Task 10) logs the error.
+//
+// Known inefficiency: ComputeTwinOverlap(self, twinK) re-decodes self's master
+// once per twin. Fine for the on-upload populator (rare, few twins per material);
+// Plan 3's backfill will decode-once and reuse. Not fixed here on purpose.
+func (r *TwinDiscriminative) PopulateForMaterial(ctx context.Context, materialID uuid.UUID) error {
+	cands, err := similarity.FindSimilarMaterials(ctx, r.pool, materialID, twinSimilarityThreshold)
+	if err != nil {
+		return fmt.Errorf("catalog: find twins for %s: %w", materialID, err)
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	var ownDur float64
+	if err := r.pool.QueryRow(ctx, `SELECT duration_seconds FROM materials WHERE id = $1`, materialID).Scan(&ownDur); err != nil {
+		return fmt.Errorf("catalog: own duration %s: %w", materialID, err)
+	}
+	twins := filterTwinsByDuration(cands, ownDur)
+
+	var errs []error
+	for _, tw := range twins {
+		// disc(self vs twin): frames of self NOT shared with twin.
+		if overlap, totalSelf, e := sharing.ComputeTwinOverlap(ctx, r.pool, materialID, tw.ID); e != nil {
+			errs = append(errs, fmt.Errorf("overlap %s vs %s: %w", materialID, tw.ID, e))
+		} else {
+			disc := complementRanges(overlap, totalSelf)
+			if e := r.Upsert(ctx, materialID, tw.ID, disc, sumFrames(disc)); e != nil {
+				errs = append(errs, fmt.Errorf("upsert %s/%s: %w", materialID, tw.ID, e))
+			}
+		}
+		// disc(twin vs self): frames of twin NOT shared with self (different region).
+		if overlap, totalTwin, e := sharing.ComputeTwinOverlap(ctx, r.pool, tw.ID, materialID); e != nil {
+			errs = append(errs, fmt.Errorf("overlap %s vs %s: %w", tw.ID, materialID, e))
+		} else {
+			disc := complementRanges(overlap, totalTwin)
+			if e := r.Upsert(ctx, tw.ID, materialID, disc, sumFrames(disc)); e != nil {
+				errs = append(errs, fmt.Errorf("upsert %s/%s: %w", tw.ID, materialID, e))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
