@@ -122,6 +122,48 @@ func (r *TwinDiscriminative) Get(ctx context.Context, materialID, twinID uuid.UU
 	return out, frames, nil
 }
 
+// TwinRow é um gêmeo POPULADO de um material: o twin_id, o short_id dele (pra
+// FindSiblingDetectionInWindow/resolveAttribution a jusante) e a região
+// discriminante DO MATERIAL vs este gêmeo (disc_ranges da linha material→twin).
+type TwinRow struct {
+	TwinID      uuid.UUID
+	TwinShortID int32
+	Disc        []audit.FrameRange
+	DiscFrames  int
+}
+
+// ListForMaterial devolve os gêmeos de materialID que têm linha na tabela (só
+// pares já populados; a própria pertinência já garante mesma duração, filtrada em
+// PopulateForMaterial). twin_id referencia materials(id), então o short_id sai de
+// materials direto (sem polimorfismo). Usado pelo disambiguateTwin (§gêmeos) como
+// fonte autoritativa dos gêmeos + suas regiões discriminantes.
+func (r *TwinDiscriminative) ListForMaterial(ctx context.Context, materialID uuid.UUID) ([]TwinRow, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT t.twin_id, m.short_id, t.disc_ranges, t.disc_frames
+		FROM material_twin_discriminative t
+		JOIN materials m ON m.id = t.twin_id
+		WHERE t.material_id = $1
+	`, materialID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list twins for %s: %w", materialID, err)
+	}
+	defer rows.Close()
+
+	var out []TwinRow
+	for rows.Next() {
+		var tw TwinRow
+		var flat []int32
+		if err := rows.Scan(&tw.TwinID, &tw.TwinShortID, &flat, &tw.DiscFrames); err != nil {
+			return nil, fmt.Errorf("catalog: scan twin row: %w", err)
+		}
+		for i := 0; i+1 < len(flat); i += 2 {
+			tw.Disc = append(tw.Disc, audit.FrameRange{Lo: flat[i], Hi: flat[i+1]})
+		}
+		out = append(out, tw)
+	}
+	return out, rows.Err()
+}
+
 // twinDurToleranceSeconds: two cuts count as same-duration twins only if their
 // durations differ by ≤ this. Same-duration is the ONE case coverage/duration
 // can't disambiguate (spec 2026-07-01) — the whole reason discriminative regions
