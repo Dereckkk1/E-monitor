@@ -1275,6 +1275,27 @@ func (d *Detections) RetractByID(ctx context.Context, id uuid.UUID, detectedAt, 
 	return err
 }
 
+// MarkAmbiguous estampa uma detecção como tocada de gêmeo acústico NÃO resolvida:
+// o clipe casou um de dois gêmeos quase idênticos mas o trecho discriminante não
+// disse qual (spec 2026-07-01, desambiguação de gêmeos). Seta
+// evidence_status='ambiguous' E retrata a linha (retracted_at) — a invariante
+// `ambiguous ⟺ retracted` faz a detecção não contar em LUGAR nenhum: o
+// ApprovedDetectionsFilter e todas as views (daily_play_summary, projeção
+// detection_campaigns) gateiam no retracted_at da row base ao vivo, então NÃO é
+// preciso sincronizar detection_campaigns (mesma razão do RetractByID). COALESCE
+// mantém idempotente (re-marcar não move o timestamp). A linha aguarda resolução
+// manual (uma fila de revisão futura reatribui + limpa a retração). detected_at
+// no WHERE pra partition pruning.
+func (d *Detections) MarkAmbiguous(ctx context.Context, id uuid.UUID, detectedAt time.Time) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE detections
+		 SET evidence_status = 'ambiguous',
+		     retracted_at = COALESCE(retracted_at, now())
+		 WHERE id = $1 AND detected_at = $2`,
+		id, detectedAt)
+	return err
+}
+
 // ErrReattributeNoRow sinaliza que a reatribuição não tocou nenhuma row — a
 // detection alvo não estava (mais) audit_rejected. O caller trata como no-op
 // seguro: a row permanece como estava (guard G3 do incidente 2026-05-17).

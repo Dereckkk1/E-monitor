@@ -104,6 +104,71 @@ func seedAirtimeFixture(t *testing.T, materialTitle string) (
 	return ctx, pool, cmp.ID, mat.ID, stat.ID
 }
 
+// TestDetections_MarkAmbiguous_RetractsAndExcludes prova a invariante
+// `ambiguous ⟺ retracted`: MarkAmbiguous seta evidence_status='ambiguous' E
+// retracted_at, tirando a linha do conjunto aprovado (catalog.ApprovedDetectionsFilter),
+// e é idempotente (COALESCE não move o timestamp na 2a chamada).
+func TestDetections_MarkAmbiguous_RetractsAndExcludes(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Ambiguous")
+	dets := NewDetections(pool)
+	det, err := dets.Create(ctx, CreateDetectionInput{
+		StationID: statID, CommercialID: matID, CampaignID: campID,
+		DetectedAt: time.Now(), Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	countApproved := func() int {
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM detections d WHERE d.id=$1 AND d.detected_at=$2 AND `+ApprovedDetectionsFilter,
+			det.ID, det.DetectedAt).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if countApproved() != 1 {
+		t.Fatalf("pré-condição: detecção recém-criada deveria estar aprovada, got %d", countApproved())
+	}
+
+	if err := dets.MarkAmbiguous(ctx, det.ID, det.DetectedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	var ev string
+	var retracted *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT evidence_status, retracted_at FROM detections WHERE id=$1 AND detected_at=$2`,
+		det.ID, det.DetectedAt).Scan(&ev, &retracted); err != nil {
+		t.Fatal(err)
+	}
+	if ev != "ambiguous" {
+		t.Fatalf("evidence_status=%q, want ambiguous", ev)
+	}
+	if retracted == nil {
+		t.Fatalf("retracted_at deve estar setado (ambiguous ⟹ retracted)")
+	}
+	if countApproved() != 0 {
+		t.Fatalf("detecção ambígua deve sair do conjunto aprovado, got %d", countApproved())
+	}
+
+	// Idempotente: 2a chamada não move retracted_at.
+	first := *retracted
+	if err := dets.MarkAmbiguous(ctx, det.ID, det.DetectedAt); err != nil {
+		t.Fatal(err)
+	}
+	var second time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT retracted_at FROM detections WHERE id=$1 AND detected_at=$2`,
+		det.ID, det.DetectedAt).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	if !second.Equal(first) {
+		t.Fatalf("retracted_at moveu na 2a MarkAmbiguous: %v -> %v", first, second)
+	}
+}
+
 func TestDetections_ListPaged_BasicPaging(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "ListPaged-basic")
 	dets := NewDetections(pool)

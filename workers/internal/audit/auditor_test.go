@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"math"
 	"testing"
 
 	"radiocheck/internal/match"
@@ -270,5 +271,42 @@ func TestNewAuditor_CustomThresholds(t *testing.T) {
 	}
 	if a.minCoverage != 0.75 {
 		t.Errorf("minCoverage=%f, want 0.75", a.minCoverage)
+	}
+}
+
+func TestCoverageOnFrames(t *testing.T) {
+	covered := map[int32]bool{10: true, 11: true, 12: true, 40: true, 41: true}
+	// disc range [39,42) => discriminative frames 39,40,41 ; covered ∩ disc = {40,41}
+	got := CoverageOnFrames(covered, []FrameRange{{Lo: 39, Hi: 42}})
+	want := 2.0 / 3.0
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("CoverageOnFrames = %v, want %v", got, want)
+	}
+	if got := CoverageOnFrames(covered, nil); got != 0 {
+		t.Fatalf("CoverageOnFrames(empty) = %v, want 0", got)
+	}
+}
+
+func TestRunMatch_ExposesCoveredFrames(t *testing.T) {
+	// Reuse the PerfectAlignment shape: master frames 0..4, query offset +10.
+	masterByHash := map[uint32][]HashEntry{
+		0x10: {{0, 0, 0}}, 0x20: {{0, 0, 1}}, 0x30: {{0, 0, 2}},
+		0x40: {{0, 0, 3}}, 0x50: {{0, 0, 4}},
+	}
+	totals := map[vrKey]int{{0, 0}: 5}
+	query := []audio.Hash{
+		{Value: 0x10, TimeFrame: 10}, {Value: 0x20, TimeFrame: 11},
+		{Value: 0x30, TimeFrame: 12}, {Value: 0x40, TimeFrame: 13},
+		{Value: 0x50, TimeFrame: 14},
+	}
+	res := runMatch(query, masterByHash, totals, 3, 0.5, false)
+	want := map[int32]bool{0: true, 1: true, 2: true, 3: true, 4: true}
+	if len(res.CoveredFrames) != len(want) {
+		t.Fatalf("CoveredFrames=%v, want %v", res.CoveredFrames, want)
+	}
+	for f := range want {
+		if !res.CoveredFrames[f] {
+			t.Fatalf("CoveredFrames missing frame %d: got %v", f, res.CoveredFrames)
+		}
 	}
 }

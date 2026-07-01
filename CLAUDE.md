@@ -169,6 +169,8 @@ Build nativo Windows passar **não** garante que o cross-compile linux passa. Se
 
 **6.6. Testes flaky ≠ regressão.** Rode `go test ./...` mesmo o deploy não rodando testes — mas saiba distinguir falha sua de flaky pré-existente. Conhecidas: `internal/catalog TestBuildDailySummary_WithDowntime` falha antes de ~13:00 UTC (usa `time.Now().Add(-13h)` que atravessa a meia-noite). Confirme que a falha está num pacote que você **não tocou** antes de descartá-la.
 
+**6.7. CLI novo em `cmd/*` NÃO entra na imagem sozinho — adicione ao `workers.Dockerfile`.** O [`workers.Dockerfile`](infra/docker/Dockerfiles/workers.Dockerfile) **NÃO faz `go build ./...`** — ele builda e copia **cada binário explicitamente** (uma linha `RUN ... go build -o /out/<nome> ./cmd/<nome>` + uma `COPY --from=builder /out/<nome> /usr/local/bin/<nome>`). Se você criar um `cmd/<novo>/` e esquecer as duas linhas, o `go build ./...` local passa, o deploy sobe **sem o binário**, e na VM `docker compose exec api <novo>` falha com "not found" — silenciosamente, só na hora de rodar. **Toda vez que criar um CLI novo, adicione as duas linhas ao Dockerfile no mesmo commit.** (Os CLIs rodam em prod via `docker compose exec api <nome> --dsn "$DATABASE_URL"`, regra 4.2.)
+
 ---
 
 ### 7. Você (Claude) NÃO tem acesso direto à VM de produção nem ao banco de prod
