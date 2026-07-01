@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"radiocheck/internal/audit"
 	"radiocheck/internal/fingerprint"
 	"radiocheck/internal/index"
 	"radiocheck/internal/match"
@@ -309,6 +310,34 @@ func scanForSharedRegions(
 	return report
 }
 
+// overlapRangesForOther merges the X-side ranges that matched otherID in a scan
+// report and returns them as audit.FrameRange. nil if the other wasn't matched.
+func overlapRangesForOther(report scanReport, otherID uuid.UUID) []audit.FrameRange {
+	scan := report.perOther[otherID]
+	if scan == nil {
+		return nil
+	}
+	merged := mergeRanges(scan.ownRanges)
+	out := make([]audit.FrameRange, len(merged))
+	for i, r := range merged {
+		out[i] = audit.FrameRange{Lo: r.from, Hi: r.until}
+	}
+	return out
+}
+
+// overlapRangesXvsY slides X's PCM against a store holding ONLY Y and returns
+// the frame-ranges of X that overlap Y, plus X's total frames. Pure: no DB, no
+// decode — caller supplies pcmX and the Y-only store. Reuses scanForSharedRegions
+// (the same raw-overlap accumulator MarkSharedHashes uses) rather than
+// duplicating the window-scan loop; the subset/sting filter is intentionally NOT
+// applied — Task 5 wants the RAW overlap.
+func overlapRangesXvsY(pcmX []float32, storeY *index.Store, xShortID, yShortID int32, xID, yID uuid.UUID, yTotalFrames, minScore int) ([]audit.FrameRange, int) {
+	report := scanForSharedRegions(pcmX, storeY, xShortID,
+		map[int32]uuid.UUID{yShortID: yID}, xID,
+		map[uuid.UUID]int{yID: yTotalFrames}, minScore)
+	return overlapRangesForOther(report, yID), report.ownTotalFrames
+}
+
 // frameCoverage returns the total number of frames covered by the union of
 // the input ranges (i.e. the merged length).
 func frameCoverage(rs []frameRange) int {
@@ -453,6 +482,96 @@ func loadCatalogIndex(ctx context.Context, pool *pgxpool.Pool) (index.Index, map
 		totalFramesByID[commercialID] = int(durationSec * float64(fingerprint.SampleRate) / 2048.0)
 	}
 	return idx, shortIDToID, totalFramesByID, rows.Err()
+}
+
+// ComputeTwinOverlap returns the frame-ranges of master X (xID) that overlap
+// master Y (yID), plus X's total frame count. The discriminative region of X
+// (what separates it from its twin) is [0,totalFramesX) minus these ranges —
+// computed by the caller (catalog.PopulateForMaterial). Mirrors MarkSharedHashes'
+// DB+decode shell; heavy (decodes X, builds one Y-only index). Best-effort
+// caller: failures are returned wrapped and should not roll back anything.
+func ComputeTwinOverlap(ctx context.Context, pool *pgxpool.Pool, xID, yID uuid.UUID) ([]audit.FrameRange, int, error) {
+	xShort, xMasterPath, _, err := resolveEntity(ctx, pool, xID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sharing: resolve X %s: %w", xID, err)
+	}
+	yShort, _, yDurationSec, err := resolveEntity(ctx, pool, yID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sharing: resolve Y %s: %w", yID, err)
+	}
+	yTotalFrames := int(yDurationSec * float64(fingerprint.SampleRate) / 2048.0)
+
+	yIdx, err := loadHashesForID(ctx, pool, yID, yShort)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sharing: load Y hashes %s: %w", yID, err)
+	}
+	storeY := index.New()
+	storeY.Swap(yIdx)
+
+	pcmX, err := fingerprint.DecodePCM(ctx, xMasterPath, fingerprint.VariantClean)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sharing: decode X master %s: %w", xID, err)
+	}
+
+	overlap, totalX := overlapRangesXvsY(pcmX, storeY, xShort, yShort, xID, yID, yTotalFrames, MinScore())
+	return overlap, totalX, nil
+}
+
+// resolveEntity looks up an entity's short_id, master_storage_path and
+// duration_seconds — trying commercials first, falling back to materials
+// (mirrors MarkSharedHashes' short_id resolution and the subscriber's
+// master_storage_path read).
+func resolveEntity(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (shortID int32, masterPath string, durationSec float64, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT short_id, master_storage_path, duration_seconds FROM commercials WHERE id = $1`, id,
+	).Scan(&shortID, &masterPath, &durationSec)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = pool.QueryRow(ctx,
+			`SELECT short_id, master_storage_path, duration_seconds FROM materials WHERE id = $1`, id,
+		).Scan(&shortID, &masterPath, &durationSec)
+	}
+	if err != nil {
+		return 0, "", 0, err
+	}
+	return shortID, masterPath, durationSec, nil
+}
+
+// loadHashesForID loads all fingerprint_hashes for a single entity into an
+// index.Index keyed by hash_value, tagging every entry with the supplied
+// short_id. Mirrors the uint8 bounds checks in loadCatalogIndex. IsShared is
+// left false — the overlap scan re-derives sharing from the raw match, and a
+// stale flag would bias MatchWindow's scoring vs the runtime matcher.
+func loadHashesForID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, short int32) (index.Index, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT hash_value, time_frame, variant_id, rate_id
+		FROM fingerprint_hashes
+		WHERE commercial_id = $1
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	idx := make(index.Index)
+	for rows.Next() {
+		var hashValue uint32
+		var timeFrame int32
+		var variantID, rateID int16
+		if err := rows.Scan(&hashValue, &timeFrame, &variantID, &rateID); err != nil {
+			return nil, err
+		}
+		if variantID < 0 || variantID > 255 || rateID < 0 || rateID > 255 {
+			return nil, fmt.Errorf("sharing: variant_id=%d or rate_id=%d out of uint8 range",
+				variantID, rateID)
+		}
+		idx[hashValue] = append(idx[hashValue], index.Entry{
+			CommercialShortID: short,
+			VariantID:         uint8(variantID),
+			RateID:            uint8(rateID),
+			TimeFrame:         timeFrame,
+		})
+	}
+	return idx, rows.Err()
 }
 
 // mergeRanges merges overlapping or contiguous frame ranges into a minimal
