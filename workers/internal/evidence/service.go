@@ -60,8 +60,12 @@ type Service struct {
 	// sibling cuts and behaviour is identical to pre-fix. Flipped via the
 	// DISAMBIG_BY_COVERAGE env var in cmd/api/main.go.
 	disambigByCoverage bool
-	log                *zap.Logger
-	mu                 sync.RWMutex
+	// disambigTwin liga a desambiguação por trecho discriminante de gêmeos
+	// acústicos de MESMA duração (spec 2026-07-01). Roda no pass-path DEPOIS do
+	// reattributeByCoverage, só quando ele NÃO agiu. Flag DISAMBIG_TWIN_DISCRIMINATIVE.
+	disambigTwin bool
+	log          *zap.Logger
+	mu           sync.RWMutex
 	// segmentDirs maps station UUIDs to the absolute filesystem directory
 	// where ffmpeg is dropping ADTS-AAC segment files. Populated by the
 	// supervisor via Register / Unregister as workers come up and down.
@@ -80,6 +84,7 @@ func NewService(
 	detectionCampaigns *catalog.DetectionCampaigns,
 	auditor *audit.Auditor,
 	disambigByCoverage bool,
+	disambigTwin bool,
 	multiAttribution bool,
 	log *zap.Logger,
 ) *Service {
@@ -91,6 +96,7 @@ func NewService(
 		detectionCampaigns: detectionCampaigns,
 		auditor:            auditor,
 		disambigByCoverage: disambigByCoverage,
+		disambigTwin:       disambigTwin,
 		multiAttribution:   multiAttribution,
 		log:                log,
 		segmentDirs:        make(map[uuid.UUID]string),
@@ -488,8 +494,17 @@ func (s *Service) runAuditOrReject(
 		// clip against the client's sibling cuts; if one covers materially more,
 		// the live matcher attributed the wrong cut (the 15s/30s confusion) and
 		// we re-point the row. Gated by DISAMBIG_BY_COVERAGE; never blocks upload.
+		reattributed := false
 		if s.disambigByCoverage {
-			s.reattributeByCoverage(auditCtx, detectionID, detectedAt, stationID, commercialID, result.Coverage, pcm)
+			reattributed = s.reattributeByCoverage(auditCtx, detectionID, detectedAt, stationID, commercialID, result.Coverage, pcm)
+		}
+		// Desambiguação de gêmeos acústicos de mesma duração (spec 2026-07-01):
+		// pega o caso que o passo de cobertura-cheia NÃO resolve (empate entre
+		// gêmeos ~idênticos), medindo a cobertura do trecho discriminante. Só roda
+		// se o v2 acima NÃO agiu (não desfaz/duplica a decisão dele). Gated por
+		// DISAMBIG_TWIN_DISCRIMINATIVE; best-effort, nunca bloqueia o upload.
+		if s.disambigTwin && !reattributed {
+			s.disambiguateTwin(auditCtx, detectionID, detectedAt, stationID, commercialID, pcm)
 		}
 		s.log.Info("evidence: audit passed",
 			zap.String("detection_id", detectionID.String()),
