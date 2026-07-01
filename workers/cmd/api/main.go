@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/api"
@@ -127,7 +128,16 @@ func main() {
 	// fingerprint.shared-scan, runs MatchWindow against the catalog, flags
 	// is_shared on overlapping ranges, then republishes index.reload so the
 	// in-memory index picks up the new flags. See docs/shared-hash-detection.md.
-	sharingSubscriber := sharing.NewSubscriber(pool, nc, logger)
+	// Após cada shared-scan de material, popula/atualiza as regiões
+	// discriminantes de gêmeos acústicos (spec 2026-07-01). Injetado como callback
+	// pra evitar ciclo de import (catalog já importa sharing). Best-effort.
+	twinDisc := catalog.NewTwinDiscriminative(pool)
+	sharingSubscriber := sharing.NewSubscriber(pool, nc, logger, func(cbCtx context.Context, materialID uuid.UUID) {
+		if err := twinDisc.PopulateForMaterial(cbCtx, materialID); err != nil {
+			logger.Warn("twin-disc: PopulateForMaterial falhou (best-effort)",
+				zap.String("material_id", materialID.String()), zap.Error(err))
+		}
+	})
 	sharingSub, err := sharingSubscriber.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("sharing subscribe: %v", err)
