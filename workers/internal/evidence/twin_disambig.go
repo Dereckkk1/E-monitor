@@ -2,6 +2,8 @@ package evidence
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,9 +70,21 @@ func chooseTwinByDiscriminative(discSelf, discTwin, floor, margin float64) twinV
 type twinEval struct {
 	twinID      uuid.UUID
 	twinShortID int32
-	discCov     float64 // cobertura do clipe na região discriminante do gêmeo (sinal de decisão)
+	covSelf     float64 // cobertura do clipe na região discriminante do PRÓPRIO material (contexto/preview)
+	discCov     float64 // cobertura do clipe na região discriminante do gêmeo (sinal de decisão = covTwin)
 	fullCov     float64 // cobertura-cheia do clipe vs o master do gêmeo (pra SetAuditCoverage ao reatribuir)
 	verdict     twinVerdict
+}
+
+func (v twinVerdict) String() string {
+	switch v {
+	case verdictReattribute:
+		return "reattribute"
+	case verdictKeep:
+		return "keep"
+	default:
+		return "ambiguous"
+	}
 }
 
 // pickTwinAction agrega os vereditos por-gêmeo numa ÚNICA ação pra a detecção:
@@ -115,29 +129,60 @@ func pickTwinAction(evals []twinEval) (twinVerdict, *twinEval) {
 // quando `reattributeByCoverage` NÃO agiu (gate na Task 9) — então a row ainda
 // está atribuída a attributedID e não-retraída. Fonte dos gêmeos = tabela
 // material_twin_discriminative (só pares populados, já de mesma duração).
+// Devolve a ação tomada ("reattribute->sid=N" | "ambiguous" | "keep" | "skip" |
+// "error") — o pass-path vivo ignora o retorno; o CLI redisambiguate --apply usa.
 func (s *Service) disambiguateTwin(
 	ctx context.Context,
 	detectionID uuid.UUID,
 	detectedAt time.Time,
 	stationID, attributedID uuid.UUID,
 	pcm []float32,
-) {
+) string {
+	action, winner, _, ok := s.evaluateTwins(ctx, attributedID, pcm)
+	if !ok {
+		return "skip"
+	}
+	switch action {
+	case verdictReattribute:
+		s.reattributeTwinWithCofireGuard(ctx, detectionID, detectedAt, stationID, winner.twinShortID, winner.fullCov)
+		return fmt.Sprintf("reattribute->sid=%d", winner.twinShortID)
+	case verdictAmbiguous:
+		if err := s.detections.MarkAmbiguous(ctx, detectionID, detectedAt); err != nil {
+			s.log.Warn("evidence: twin — MarkAmbiguous falhou",
+				zap.String("detection_id", detectionID.String()), zap.Error(err))
+			return "error"
+		}
+		metrics.MatchDisambiguation.WithLabelValues("ambiguous_by_discriminative").Inc()
+		s.log.Info("evidence: detecção marcada ambígua (gêmeos indistinguíveis pelo trecho discriminante)",
+			zap.String("detection_id", detectionID.String()))
+		return "ambiguous"
+	}
+	metrics.MatchDisambiguation.WithLabelValues("kept_by_discriminative").Inc()
+	return "keep"
+}
+
+// evaluateTwins roda a comparação discriminante e devolve a DECISÃO sem aplicar
+// (nenhuma escrita — só lê repo + auditor). ok=false quando não há o que decidir
+// (sem gêmeos populados ou audit do próprio material falhou). O ponteiro `winner`
+// aponta pra dentro de `evals` (usar juntos, não mutar). Usada tanto pelo
+// disambiguateTwin (aplica) quanto pelo PreviewTwinDecision (dry-run do CLI).
+func (s *Service) evaluateTwins(ctx context.Context, attributedID uuid.UUID, pcm []float32) (twinVerdict, *twinEval, []twinEval, bool) {
 	twinRepo := catalog.NewTwinDiscriminative(s.db)
 	twins, err := twinRepo.ListForMaterial(ctx, attributedID)
 	if err != nil {
 		s.log.Warn("evidence: twin — falha ao listar gêmeos",
-			zap.String("detection_id", detectionID.String()), zap.Error(err))
-		return
+			zap.String("material_id", attributedID.String()), zap.Error(err))
+		return verdictKeep, nil, nil, false
 	}
 	if len(twins) == 0 {
-		return // não é caso de gêmeo
+		return verdictKeep, nil, nil, false // não é caso de gêmeo
 	}
 
 	auditSelf, err := s.auditor.AuditEvidence(ctx, attributedID, pcm)
 	if err != nil {
 		s.log.Warn("evidence: twin — audit do próprio material falhou",
-			zap.String("detection_id", detectionID.String()), zap.Error(err))
-		return
+			zap.String("material_id", attributedID.String()), zap.Error(err))
+		return verdictKeep, nil, nil, false
 	}
 
 	var evals []twinEval
@@ -160,31 +205,56 @@ func (s *Service) disambiguateTwin(
 		evals = append(evals, twinEval{
 			twinID:      tw.TwinID,
 			twinShortID: tw.TwinShortID,
+			covSelf:     covSelf,
 			discCov:     covTwin,
 			fullCov:     auditTwin.Coverage,
 			verdict:     chooseTwinByDiscriminative(covSelf, covTwin, twinDiscFloor, twinDiscMargin),
 		})
 	}
 	if len(evals) == 0 {
-		return
+		return verdictKeep, nil, nil, false
 	}
-
 	action, winner := pickTwinAction(evals)
-	switch action {
-	case verdictReattribute:
-		s.reattributeTwinWithCofireGuard(ctx, detectionID, detectedAt, stationID, winner.twinShortID, winner.fullCov)
-	case verdictAmbiguous:
-		if err := s.detections.MarkAmbiguous(ctx, detectionID, detectedAt); err != nil {
-			s.log.Warn("evidence: twin — MarkAmbiguous falhou",
-				zap.String("detection_id", detectionID.String()), zap.Error(err))
-			return
-		}
-		metrics.MatchDisambiguation.WithLabelValues("ambiguous_by_discriminative").Inc()
-		s.log.Info("evidence: detecção marcada ambígua (gêmeos indistinguíveis pelo trecho discriminante)",
-			zap.String("detection_id", detectionID.String()))
-	case verdictKeep:
-		metrics.MatchDisambiguation.WithLabelValues("kept_by_discriminative").Inc()
+	return action, winner, evals, true
+}
+
+// TwinPreview é o resultado read-only da avaliação de gêmeos pra uma detecção
+// (dry-run do CLI redisambiguate-twins). Não aplica nada.
+type TwinPreview struct {
+	Action        string  // "reattribute" | "ambiguous" | "keep" | "skip"
+	WinnerShortID int32   // preenchido quando Action == "reattribute"
+	WinnerCov     float64 // covTwin do vencedor (sinal de decisão)
+	Twins         int     // nº de gêmeos avaliados
+	Detail        string  // resumo por-gêmeo: "sid=N covSelf=.. covTwin=.. -> verdict"
+}
+
+// PreviewTwinDecision computa a decisão de desambiguação de gêmeos pra uma
+// detecção SEM aplicar (o clipe de evidência já decodificado é o `pcm`). Pro
+// dry-run do redisambiguate-twins. Não escreve nada.
+func (s *Service) PreviewTwinDecision(ctx context.Context, attributedID uuid.UUID, pcm []float32) TwinPreview {
+	action, winner, evals, ok := s.evaluateTwins(ctx, attributedID, pcm)
+	if !ok {
+		return TwinPreview{Action: "skip"}
 	}
+	parts := make([]string, 0, len(evals))
+	for _, e := range evals {
+		parts = append(parts, fmt.Sprintf("sid=%d covSelf=%.2f covTwin=%.2f->%s",
+			e.twinShortID, e.covSelf, e.discCov, e.verdict))
+	}
+	p := TwinPreview{Action: action.String(), Twins: len(evals), Detail: strings.Join(parts, " | ")}
+	if winner != nil {
+		p.WinnerShortID = winner.twinShortID
+		p.WinnerCov = winner.discCov
+	}
+	return p
+}
+
+// RedisambiguateDetection re-roda a desambiguação de gêmeos sobre UMA detecção
+// histórica a partir do PCM do clipe já baixado, APLICANDO (mesmos guards do
+// pass-path: co-fire, projeção sync, ambiguous⟺retracted). Devolve a ação tomada.
+// Pro --apply do CLI redisambiguate-twins.
+func (s *Service) RedisambiguateDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time, stationID, attributedID uuid.UUID, pcm []float32) string {
+	return s.disambiguateTwin(ctx, detectionID, detectedAt, stationID, attributedID, pcm)
 }
 
 // reattributeTwinWithCofireGuard re-aponta a detecção pro gêmeo vencedor, com o

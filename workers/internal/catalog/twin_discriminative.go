@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -160,6 +161,61 @@ func (r *TwinDiscriminative) ListForMaterial(ctx context.Context, materialID uui
 			tw.Disc = append(tw.Disc, audit.FrameRange{Lo: flat[i], Hi: flat[i+1]})
 		}
 		out = append(out, tw)
+	}
+	return out, rows.Err()
+}
+
+// EligibleTwinDetection é uma detecção candidata a reprocessamento de gêmeos:
+// aprovada, atribuída a um material que tem gêmeo populado, e com clipe salvo.
+type EligibleTwinDetection struct {
+	ID           uuid.UUID
+	DetectedAt   time.Time
+	StationID    uuid.UUID
+	CommercialID uuid.UUID
+	EvidenceKey  string
+}
+
+// EligibleTwinFilter escopa a listagem (todos os ponteiros nil = sem filtro).
+type EligibleTwinFilter struct {
+	CampaignID *uuid.UUID
+	MaterialID *uuid.UUID
+	StationID  *uuid.UUID
+	Since      *time.Time
+	Until      *time.Time
+	Limit      int
+}
+
+// ListEligibleDetections lista as detecções APROVADAS (ApprovedDetectionsFilter)
+// atribuídas a um material que tem gêmeo na tabela e que têm evidence_key (o CLI
+// redisambiguate-twins precisa do clipe pra re-auditar). Ordena por detected_at
+// desc; Limit=0 → sem limite (evite sem escopo). Read-only.
+func (r *TwinDiscriminative) ListEligibleDetections(ctx context.Context, f EligibleTwinFilter) ([]EligibleTwinDetection, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT d.id, d.detected_at, d.station_id, d.commercial_id, d.evidence_key
+		FROM detections d
+		WHERE d.commercial_id IN (SELECT DISTINCT material_id FROM material_twin_discriminative)
+		  AND d.evidence_key IS NOT NULL AND d.evidence_key <> ''
+		  AND `+ApprovedDetectionsFilter+`
+		  AND ($1::uuid IS NULL OR d.campaign_id = $1)
+		  AND ($2::uuid IS NULL OR d.commercial_id = $2)
+		  AND ($3::uuid IS NULL OR d.station_id = $3)
+		  AND ($4::timestamptz IS NULL OR d.detected_at >= $4)
+		  AND ($5::timestamptz IS NULL OR d.detected_at <= $5)
+		ORDER BY d.detected_at DESC
+		LIMIT CASE WHEN $6::bigint > 0 THEN $6::bigint ELSE NULL END
+	`, f.CampaignID, f.MaterialID, f.StationID, f.Since, f.Until, int64(f.Limit))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list eligible twin detections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EligibleTwinDetection
+	for rows.Next() {
+		var e EligibleTwinDetection
+		if err := rows.Scan(&e.ID, &e.DetectedAt, &e.StationID, &e.CommercialID, &e.EvidenceKey); err != nil {
+			return nil, fmt.Errorf("catalog: scan eligible detection: %w", err)
+		}
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }
