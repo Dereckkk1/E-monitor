@@ -93,7 +93,12 @@ SHADOW_NAME=""
 SHADOW_NET=""
 
 shadow_cleanup() {
-  [ -n "${SHADOW_NAME:-}" ] && docker rm -f "$SHADOW_NAME" >/dev/null 2>&1 || true
+  # -v remove o volume ANÔNIMO que o postgres descartável cria (a imagem tem
+  # VOLUME /var/lib/postgresql/data). Sem o -v, cada deploy deixava ~2.8GB órfãos
+  # (o dump de prod restaurado) acumulando no disco de OS — chegou a encher o root
+  # e abortar o build (no space left, 2026-06-30). O -v só apaga o volume do
+  # próprio container de sombra; nunca toca bind mounts nem volumes nomeados.
+  [ -n "${SHADOW_NAME:-}" ] && docker rm -fv "$SHADOW_NAME" >/dev/null 2>&1 || true
   [ -n "${SHADOW_NET:-}" ]  && docker network rm "$SHADOW_NET" >/dev/null 2>&1 || true
   SHADOW_NAME=""; SHADOW_NET=""
 }
