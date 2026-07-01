@@ -77,6 +77,29 @@ type scanReport struct {
 	perOther       map[uuid.UUID]*pairScan
 }
 
+// pairScore is max(ownCov, otherCov), each coverage clamped to 1.0 (window hits
+// can spill past the nominal frame total when the last window straddles the end).
+func pairScore(s *pairScan, ownTotalFrames int) float64 {
+	if ownTotalFrames == 0 {
+		return 0
+	}
+	ownCov := float64(frameCoverage(s.ownRanges)) / float64(ownTotalFrames)
+	var otherCov float64
+	if s.otherTotalFrames > 0 {
+		otherCov = float64(frameCoverage(s.otherRanges)) / float64(s.otherTotalFrames)
+	}
+	if ownCov > 1.0 {
+		ownCov = 1.0
+	}
+	if otherCov > 1.0 {
+		otherCov = 1.0
+	}
+	if otherCov > ownCov {
+		return otherCov
+	}
+	return ownCov
+}
+
 // pickTopMatch returns the (otherID, score) with the highest
 // score = max(ownCov, otherCov) across all candidates. Returns (uuid.Nil, 0)
 // when the scan is empty or own has zero frames.
@@ -93,23 +116,7 @@ func pickTopMatch(report scanReport) (uuid.UUID, float64) {
 	var topID uuid.UUID
 	var topScore float64
 	for otherID, s := range report.perOther {
-		ownCov := float64(frameCoverage(s.ownRanges)) / float64(report.ownTotalFrames)
-		var otherCov float64
-		if s.otherTotalFrames > 0 {
-			otherCov = float64(frameCoverage(s.otherRanges)) / float64(s.otherTotalFrames)
-		}
-		// Clamp at 1.0: window-based hits can extend past the nominal frame
-		// total when the last window straddles the end of the material.
-		if ownCov > 1.0 {
-			ownCov = 1.0
-		}
-		if otherCov > 1.0 {
-			otherCov = 1.0
-		}
-		score := ownCov
-		if otherCov > score {
-			score = otherCov
-		}
+		score := pairScore(s, report.ownTotalFrames)
 		if score > topScore {
 			topScore = score
 			topID = otherID
@@ -249,6 +256,76 @@ func markFailed(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
 	_, err := pool.Exec(ctx,
 		`UPDATE materials SET similarity_check_status = 'failed' WHERE id = $1`, id)
 	return err
+}
+
+// SimilarMaterial is one candidate returned by FindSimilarMaterials.
+type SimilarMaterial struct {
+	ID              uuid.UUID
+	Score           float64 // max(ownCov, otherCov), clamped to 1.0
+	DurationSeconds float64
+}
+
+// FindSimilarMaterials scans materialID against the same-client 'ready' materials
+// and returns every other material scoring ≥ minScore. Read-only: unlike
+// CheckMaterialSimilarity it persists nothing. Reuses loadClientIndex + runScan.
+// Heavy (decode + match per window). Returns nil (no error) when the material
+// isn't ready or has no same-client peers.
+func FindSimilarMaterials(ctx context.Context, pool *pgxpool.Pool, materialID uuid.UUID, minScore float64) ([]SimilarMaterial, error) {
+	// 1. Resolve client_id + master_storage_path + fingerprint_status.
+	var clientID uuid.UUID
+	var masterPath string
+	var fpStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT client_id, master_storage_path, fingerprint_status
+		FROM materials WHERE id = $1
+	`, materialID).Scan(&clientID, &masterPath, &fpStatus); err != nil {
+		return nil, fmt.Errorf("similarity: lookup material: %w", err)
+	}
+	if fpStatus != "ready" {
+		return nil, nil
+	}
+
+	// 2. Build the per-client index (excludes self, skips non-ready peers).
+	idx, shortToID, totalFramesByID, durationByID, err := loadClientIndex(ctx, pool, clientID, materialID)
+	if err != nil {
+		return nil, fmt.Errorf("similarity: load client index: %w", err)
+	}
+	if len(idx) == 0 {
+		return nil, nil
+	}
+	store := index.New()
+	store.Swap(idx)
+
+	// 3. Decode the material's PCM through the same pipeline as fingerprint gen.
+	pcm, err := fingerprint.DecodePCM(ctx, masterPath, fingerprint.VariantClean)
+	if err != nil {
+		return nil, fmt.Errorf("similarity: decode master: %w", err)
+	}
+
+	// 4. Slide window, run MatchWindow, build report.
+	report := runScan(pcm, store, materialID, shortToID, totalFramesByID)
+
+	// 5. Collect every candidate scoring ≥ minScore.
+	var out []SimilarMaterial
+	for otherID, s := range report.perOther {
+		sc := pairScore(s, report.ownTotalFrames)
+		if sc >= minScore {
+			out = append(out, SimilarMaterial{
+				ID:              otherID,
+				Score:           sc,
+				DurationSeconds: durationByID[otherID],
+			})
+		}
+	}
+
+	// 6. Sort descending by Score (stable), tie-break on ID for determinism.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	return out, nil
 }
 
 // loadClientIndex loads all fingerprint hashes belonging to OTHER materials of

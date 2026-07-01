@@ -20,13 +20,19 @@ type Subscriber struct {
 	pool *pgxpool.Pool
 	nc   *nats.Conn
 	log  *zap.Logger
+	// afterScan roda (best-effort) após um shared-scan bem-sucedido de um
+	// MATERIAL, com o id do material. Injetado por cmd/api pra popular as regiões
+	// discriminantes de gêmeos (catalog.PopulateForMaterial) sem que `sharing`
+	// importe `catalog` (evita ciclo — catalog já importa sharing). nil = no-op.
+	afterScan func(ctx context.Context, materialID uuid.UUID)
 }
 
 // NewSubscriber wires a Subscriber to the given DB pool, NATS connection,
-// and logger. Subscribe() registers the listener; the returned subscription
-// should be drained on shutdown.
-func NewSubscriber(pool *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *Subscriber {
-	return &Subscriber{pool: pool, nc: nc, log: log}
+// and logger. afterScan (pode ser nil) é chamado após cada shared-scan de
+// material bem-sucedido. Subscribe() registers the listener; the returned
+// subscription should be drained on shutdown.
+func NewSubscriber(pool *pgxpool.Pool, nc *nats.Conn, log *zap.Logger, afterScan func(context.Context, uuid.UUID)) *Subscriber {
+	return &Subscriber{pool: pool, nc: nc, log: log, afterScan: afterScan}
 }
 
 // payload accepts both commercial_id and material_id keys. The Python
@@ -138,6 +144,14 @@ func (s *Subscriber) Subscribe(ctx context.Context) (*nats.Subscription, error) 
 			zap.String("entity_id", entityID.String()),
 			zap.String("kind", entityKind),
 		)
+
+		// Popula/atualiza as regiões discriminantes de gêmeos deste material
+		// (best-effort). Só materiais participam (gêmeos são conceito da
+		// biblioteca de materiais); commercials legados não. Roda em re-fingerprint
+		// também (mesmo evento), mantendo as regiões atualizadas bidirecionalmente.
+		if s.afterScan != nil && entityKind == "material" {
+			s.afterScan(bgCtx, entityID)
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sharing: subscribe: %w", err)

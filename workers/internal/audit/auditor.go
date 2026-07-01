@@ -68,6 +68,31 @@ type Result struct {
 	MasterHashes int           // total entries loaded from fingerprint_hashes for this master
 	QueryHashes  int           // hashes generated from evidence PCM
 	Duration     time.Duration // wall time of the audit run
+
+	CoveredFrames map[int32]bool // distinct master frames matched in the winning bin (peak ± coverageBinRadius); nil when no match
+}
+
+// FrameRange is a half-open interval [Lo, Hi) of master frames.
+type FrameRange struct{ Lo, Hi int32 }
+
+// CoverageOnFrames returns the fraction of the discriminative frames (the union
+// of the given half-open ranges) that appear in `covered` (master frames the
+// clip matched in the winning bin). Empty ranges => 0 (twin pair with no
+// separating region).
+func CoverageOnFrames(covered map[int32]bool, disc []FrameRange) float64 {
+	total, hit := 0, 0
+	for _, r := range disc {
+		for f := r.Lo; f < r.Hi; f++ {
+			total++
+			if covered[f] {
+				hit++
+			}
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(hit) / float64(total)
 }
 
 // Auditor verifies post-hoc that a saved evidence clip contains the master
@@ -224,6 +249,7 @@ func runMatch(
 
 	coverage := 0.0
 	matchExtent := 0.0
+	var covered map[int32]bool
 	if bestScore > 0 {
 		totalFrames := totalFramesByVR[vrKey{bestKey.variant, bestKey.rate}]
 		if totalFrames > 0 {
@@ -231,11 +257,11 @@ func runMatch(
 			// immediate neighbours to tolerate playout-speed drift over long
 			// spots (see coverageBinRadius). maxFrame is the furthest matched
 			// master frame — how deep into the master the clip reached.
-			covered := make(map[int32]struct{})
+			covered = make(map[int32]bool)
 			maxFrame := int32(-1)
 			for d := bestKey.deltaBin - coverageBinRadius; d <= bestKey.deltaBin+coverageBinRadius; d++ {
 				for f := range refTimes[binKey{bestKey.variant, bestKey.rate, d}] {
-					covered[f] = struct{}{}
+					covered[f] = true
 					if f > maxFrame {
 						maxFrame = f
 					}
@@ -249,13 +275,14 @@ func runMatch(
 	}
 
 	return &Result{
-		Passed:      bestScore >= minScore && (coverage >= minCoverage || (!materialHasShared && bestScore >= coverageBypassScore)),
-		Score:       bestScore,
-		Coverage:    coverage,
-		MatchExtent: matchExtent,
-		VariantID:   bestKey.variant,
-		RateID:      bestKey.rate,
-		DeltaBin:    bestKey.deltaBin,
+		Passed:        bestScore >= minScore && (coverage >= minCoverage || (!materialHasShared && bestScore >= coverageBypassScore)),
+		Score:         bestScore,
+		Coverage:      coverage,
+		MatchExtent:   matchExtent,
+		VariantID:     bestKey.variant,
+		RateID:        bestKey.rate,
+		DeltaBin:      bestKey.deltaBin,
+		CoveredFrames: covered,
 	}
 }
 

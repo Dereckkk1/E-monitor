@@ -12,6 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-geocoding ./cmd/backfill-
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/selfmatch ./cmd/selfmatch
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/audit-extent ./cmd/audit-extent
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-unretract-displaced ./cmd/backfill-unretract-displaced
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-twin-discriminative ./cmd/backfill-twin-discriminative
 
 FROM alpine:3.19
 # tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
@@ -28,5 +29,6 @@ COPY --from=builder /out/backfill-geocoding  /usr/local/bin/backfill-geocoding
 COPY --from=builder /out/selfmatch  /usr/local/bin/selfmatch
 COPY --from=builder /out/audit-extent  /usr/local/bin/audit-extent
 COPY --from=builder /out/backfill-unretract-displaced  /usr/local/bin/backfill-unretract-displaced
+COPY --from=builder /out/backfill-twin-discriminative  /usr/local/bin/backfill-twin-discriminative
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]

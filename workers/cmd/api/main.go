@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/api"
@@ -127,7 +128,16 @@ func main() {
 	// fingerprint.shared-scan, runs MatchWindow against the catalog, flags
 	// is_shared on overlapping ranges, then republishes index.reload so the
 	// in-memory index picks up the new flags. See docs/shared-hash-detection.md.
-	sharingSubscriber := sharing.NewSubscriber(pool, nc, logger)
+	// Após cada shared-scan de material, popula/atualiza as regiões
+	// discriminantes de gêmeos acústicos (spec 2026-07-01). Injetado como callback
+	// pra evitar ciclo de import (catalog já importa sharing). Best-effort.
+	twinDisc := catalog.NewTwinDiscriminative(pool)
+	sharingSubscriber := sharing.NewSubscriber(pool, nc, logger, func(cbCtx context.Context, materialID uuid.UUID) {
+		if err := twinDisc.PopulateForMaterial(cbCtx, materialID); err != nil {
+			logger.Warn("twin-disc: PopulateForMaterial falhou (best-effort)",
+				zap.String("material_id", materialID.String()), zap.Error(err))
+		}
+	})
 	sharingSub, err := sharingSubscriber.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("sharing subscribe: %v", err)
@@ -162,6 +172,15 @@ func main() {
 		logger.Info("§18.2.2-v2 coverage-based disambiguation ENABLED (DISAMBIG_BY_COVERAGE=true)")
 	}
 
+	// Desambiguação de gêmeos acústicos de mesma duração pelo trecho discriminante
+	// (spec 2026-07-01). Default OFF; set DISAMBIG_TWIN_DISCRIMINATIVE=true. Roda no
+	// pass-path do evidence só quando o passo de cobertura não agiu. Calibrar
+	// floor/margin em sombra antes de ligar em prod.
+	disambigTwin := os.Getenv("DISAMBIG_TWIN_DISCRIMINATIVE") == "true"
+	if disambigTwin {
+		logger.Info("desambiguação de gêmeos por trecho discriminante ENABLED (DISAMBIG_TWIN_DISCRIMINATIVE=true)")
+	}
+
 	// F-119 multi-attribution — default OFF. Quando ON, uma tocada física conta
 	// pra TODAS as campanhas que rodam o mesmo áudio na emissora (fan-out de
 	// projeções em detection_campaigns). OFF = só a projeção canônica (1:1).
@@ -172,7 +191,7 @@ func main() {
 	detectionCampaigns := catalog.NewDetectionCampaigns(pool)
 
 	// Evidence service.
-	evidSvc := evidence.NewService(pool, s3Client, nc, detections, detectionCampaigns, auditor, disambigByCoverage, multiAttribution, logger)
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, detectionCampaigns, auditor, disambigByCoverage, disambigTwin, multiAttribution, logger)
 	evidSub, err := evidSvc.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("evidence subscribe: %v", err)
