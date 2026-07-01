@@ -15,6 +15,11 @@ import { parseLocalDate } from '../utils/dates'
  *  - month: Date (first of month being displayed)
  *  - campaignStart: ISO string
  *  - campaignEnd: ISO string
+ *  - visibleStart / visibleEnd: ISO string (optional). When BOTH are set they
+ *    override the month∩campaign clamp and the grid renders exactly that span —
+ *    even crossing month boundaries. Used by /detections and /materials so the
+ *    date-range filter can reach past/future months of the campaign. Absent in
+ *    the wizard, which keeps the one-month-at-a-time view.
  *  - stations: Array<{id, name, frequency_mhz, city, ...}>
  *  - rows: Array<{
  *      stationId: uuid,
@@ -58,6 +63,7 @@ export default function DistributionGrid({
   //                       StationTotalCell virando "N programados" (Σ expected),
   //                       sem R$/impactos. Usado em /materials.
   summary = 'full',
+  visibleStart, visibleEnd,
 }) {
   const year = month.getFullYear()
   const monthIdx = month.getMonth()
@@ -71,16 +77,24 @@ export default function DistributionGrid({
   const today = new Date()
   today.setHours(0,0,0,0)
 
-  // Visible day range = month ∩ campaign [∩ [-∞, today] se capAtToday]. Antes
-  // começava sempre no dia 1 do mês mesmo quando a campanha começava no meio
-  // dele — a grid ficava com 13 dias hatched antes do primeiro útil. Agora
-  // arrancamos no primeiro dia útil da campanha dentro do mês.
-  const monthFirst = new Date(year, monthIdx, 1, 0, 0, 0, 0)
-  const monthLast  = new Date(year, monthIdx + 1, 0, 0, 0, 0, 0)
-  let firstVisible = monthFirst
-  let lastVisible  = monthLast
-  if (cStart > firstVisible) firstVisible = cStart
-  if (cEnd   < lastVisible)  lastVisible  = cEnd
+  // Visible day range. Dois modos:
+  //  - visibleStart/visibleEnd setados (/detections, /materials): renderiza
+  //    EXATAMENTE esse span, cruzando meses se preciso. É o range que o usuário
+  //    escolheu no filtro de data — já é a interseção com a campanha lá na página.
+  //  - senão (wizard): month ∩ campanha, como antes. Arrancamos no primeiro dia
+  //    útil da campanha dentro do mês (evita dias hatched antes do início).
+  let firstVisible, lastVisible
+  if (visibleStart && visibleEnd) {
+    firstVisible = parseLocalDate(visibleStart)
+    lastVisible  = parseLocalDate(visibleEnd)
+  } else {
+    const monthFirst = new Date(year, monthIdx, 1, 0, 0, 0, 0)
+    const monthLast  = new Date(year, monthIdx + 1, 0, 0, 0, 0, 0)
+    firstVisible = monthFirst
+    lastVisible  = monthLast
+    if (cStart > firstVisible) firstVisible = cStart
+    if (cEnd   < lastVisible)  lastVisible  = cEnd
+  }
   if (capAtToday && today < lastVisible) lastVisible = today
   const days = []
   if (firstVisible <= lastVisible) {
@@ -90,6 +104,14 @@ export default function DistributionGrid({
       cur.setDate(cur.getDate() + 1)
     }
   }
+
+  // Quando o range cruza meses os números de dia reiniciam (…30, 31, 01, 02…) e
+  // o header fica ambíguo sem pista de mês. Só nesse caso mostramos a abreviação
+  // do mês na 1ª coluna e em todo dia 1 — a view de mês único fica byte-a-byte
+  // idêntica (a linha extra nem é renderizada).
+  const multiMonth = days.length > 0 &&
+    (days[0].getFullYear() !== days[days.length - 1].getFullYear() ||
+     days[0].getMonth() !== days[days.length - 1].getMonth())
 
   // Group rows by station for rendering
   const byStation = new Map()
@@ -139,12 +161,20 @@ export default function DistributionGrid({
         {days.map((d, i) => {
           const wkd = d.getDay() === 0 || d.getDay() === 6
           const isToday = d.toDateString() === today.toDateString()
+          const showMonth = multiMonth && (i === 0 || d.getDate() === 1)
           return (
             <div key={`hd-${i}`} style={{
               ...head,
               color: wkd ? '#cbd5e1' : isToday ? '#E81E75' : '#64748b',
               background: isToday ? '#fdf2f8' : wkd ? '#f8fafc' : '#fafbfc',
             }}>
+              {multiMonth && (
+                <span style={{ display: 'block', fontSize: 8, height: 10, lineHeight: '10px',
+                               fontWeight: 800, letterSpacing: 0.3, textTransform: 'uppercase',
+                               color: showMonth ? '#94a3b8' : 'transparent' }}>
+                  {showMonth ? d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '') : '·'}
+                </span>
+              )}
               <span style={{ display: 'block', fontSize: 9 }}>{dayNames[d.getDay()]}</span>
               <span style={{ display: 'block', fontSize: 13, color: '#0f172a', fontWeight: 700, marginTop: 2 }}>
                 {String(d.getDate()).padStart(2, '0')}

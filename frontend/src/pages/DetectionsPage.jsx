@@ -17,7 +17,7 @@ import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
-  monthLabel, rangeLabel, defaultRangeForCampaign, formatCampaignPeriod,
+  monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
 } from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
@@ -500,14 +500,26 @@ export default function DetectionsPage() {
   const rangeStart = userRange.start || defaultRange.start
   const rangeEnd   = userRange.end   || defaultRange.end
 
-  // Date range strings for the daily-summary query: we always fetch the
-  // selected MONTH (not the user range) so tweaking the range doesn't refetch;
-  // the range is applied as a client-side visual narrow on the grid + coverage.
+  // Bounds dos date pickers = campanha INTEIRA (não o mês). É isso que deixa o
+  // usuário arrastar o range pra meses anteriores/posteriores da campanha —
+  // antes o min/max travava no mês corrente. Ver docs/features/detections-view.md.
+  const pickerBounds = useMemo(
+    () => campaignRangeISO(selectedCampaign),
+    [selectedCampaign])
+
+  // Janela do mês selecionado (base do fetch e fallback).
   const monthRangeISO = useMemo(() => {
     if (!selectedMonth) return { from: '', to: '' }
     const { start, end } = monthToRange(selectedMonth)
     return { from: isoFromDate(start), to: isoFromDate(end) }
   }, [selectedMonth])
+
+  // Janela do daily-summary = UNIÃO do mês com o range escolhido. Narrow dentro
+  // do mês mantém a janela = mês (não refaz fetch, como antes); estender o range
+  // pra outro mês amplia a janela pra buscar aquele período também. Strings ISO
+  // comparam lexicograficamente, então </> funcionam direto.
+  const fetchFrom = rangeStart && rangeStart < monthRangeISO.from ? rangeStart : monthRangeISO.from
+  const fetchTo   = rangeEnd   && rangeEnd   > monthRangeISO.to   ? rangeEnd   : monthRangeISO.to
 
   // Hydrate the campaign's material library
   const { data: clientLibrary = [] } = useMaterials(selectedCampaign?.client_id ?? null)
@@ -533,7 +545,7 @@ export default function DetectionsPage() {
     isLoading: loadingSummary,
     isFetching,
     refetch,
-  } = useDailySummary(selectedCampaignId || null, monthRangeISO.from, monthRangeISO.to)
+  } = useDailySummary(selectedCampaignId || null, fetchFrom, fetchTo)
 
   // Client-side range narrow (drives both CoverageSummary and the visible
   // grid days). If range isn't set yet, fall back to the full month.
@@ -921,8 +933,8 @@ export default function DetectionsPage() {
             <input
               type="date"
               value={rangeStart}
-              min={rangeBounds.start || undefined}
-              max={rangeBounds.end || undefined}
+              min={pickerBounds.start || undefined}
+              max={pickerBounds.end || undefined}
               onChange={handleRangeStart}
               disabled={filterStep < 3}
               aria-label="Data de início"
@@ -931,8 +943,8 @@ export default function DetectionsPage() {
             <input
               type="date"
               value={rangeEnd}
-              min={rangeBounds.start || undefined}
-              max={rangeBounds.end || undefined}
+              min={pickerBounds.start || undefined}
+              max={pickerBounds.end || undefined}
               onChange={handleRangeEnd}
               disabled={filterStep < 3}
               aria-label="Data de fim"
@@ -1041,6 +1053,8 @@ export default function DetectionsPage() {
             month={monthDate}
             campaignStart={gridStart}
             campaignEnd={gridEnd}
+            visibleStart={gridStart}
+            visibleEnd={gridEnd}
             stations={stationCatalog}
             rows={pagedRows}
             cellData={cellData}

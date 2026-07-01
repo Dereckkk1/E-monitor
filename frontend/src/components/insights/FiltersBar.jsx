@@ -158,7 +158,12 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
     const starts = selected.map(c => c.start_date).filter(Boolean).sort()
     const ends = selected.map(c => c.end_date).filter(Boolean).sort()
     if (!starts.length || !ends.length) return null
-    return { from: starts[0], to: ends[ends.length - 1] }
+    // start_date/end_date chegam como timestamp ISO ("2026-01-15T00:00:00Z").
+    // O <input type="date"> só aceita "YYYY-MM-DD" — sem o slice ele descarta o
+    // valor e o campo fica VAZIO (o "Período completo só tira as datas"). Como
+    // toda string começa com YYYY-MM-DD, o .sort() lexicográfico acima segue
+    // válido pra achar o menor início e o maior fim.
+    return { from: starts[0].slice(0, 10), to: ends[ends.length - 1].slice(0, 10) }
   }, [allCampaigns, value.campaignIds])
 
   // Para role cliente: trava o clientId no próprio.
