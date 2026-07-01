@@ -14,20 +14,61 @@
 
 ---
 
+## Correções pós-auditoria de regressão (2026-07-01)
+
+Antes de escrever a Task 7 rodou uma **auditoria de regressão** cruzando esta feature contra TODOS os postmortems (`docs/incidents/*`) e a arquitetura de atribuição. Achados e desvios já aplicados durante a execução subagent-driven:
+
+**Status de execução (branch `feat/acoustic-twin-disambiguation`):**
+
+| Task | Estado | Commit |
+|---|---|---|
+| 1+2 migrations (0046 tabela, 0047 `ambiguous` no CHECK) | ✅ feito | `6c1c70c`, `17ff3d5` |
+| 3 `audit.CoverageOnFrames` + `Result.CoveredFrames` | ✅ feito | `a0625e4` |
+| 4 `sharing.ComputeTwinOverlap` (core puro + shell) | ✅ feito | `73b059c` |
+| 5a migration `INT[]` + repo + `complement` puro | ✅ feito | `f460236`, `0f3fe9b` |
+| 5b `similarity.FindSimilarMaterials` + `PopulateForMaterial` | ✅ feito | `44ea7cd` |
+| 6 regra pura `chooseTwinByDiscriminative` | ✅ feito | `90e0771` |
+| 8 `MarkAmbiguous` + filtro | ⏳ em execução | — |
+| 7 orquestração `disambiguateTwin` | ⏳ pendente (revisada abaixo) | — |
+| 9 wire + flag | ⏳ pendente (revisada abaixo) | — |
+| 10 hook na ingestão | ⏳ pendente | — |
+
+**Desvios do plano original (justificados, já aplicados):**
+
+1. **`disc_ranges` é `INT[]` achatado** (`[lo0,hi0,...]`), não `int4range[]` — evita custom pgx codec (Task 1/5a).
+2. **Tipo único de range: `audit.FrameRange`** atravessa todo o pipeline (sharing→catalog→evidence); o `Int4Range` do plano foi descartado.
+3. **CHECK de `evidence_status` (0047) preserva TODOS os valores atuais** (`pending,generating,available,missing,failed,audit_rejected`) + `ambiguous`. O plano original dropava `generating`/`audit_rejected` por engano (teria quebrado linhas existentes — incidente 2026-05-17).
+4. **Estratégia de teste = core puro in-memory + shell de DB/áudio sem teste dedicado** (espelha `similarity`/`sharing`, cujos shells `CheckMaterialSimilarity`/`MarkSharedHashes` não têm teste). Os fixtures `seedTwinMasters`/`newTestDB`-com-áudio do plano original **não existem** no repo; foram substituídos por ruído denso determinístico.
+5. **Task 5 dividida em 5a (repo+complement, testados) e 5b (FindSimilarMaterials+Populate, shells).** `similarity.FindSimilarMaterials` (read-only, todos candidatos ≥0.50) foi adicionado porque `CheckMaterialSimilarity` só persiste o TOP match — insuficiente pro caso Milium (vários gêmeos).
+6. **Ordem reordenada 6 → 8 → 7 → 9 → 10** (a Task 7 consome `MarkAmbiguous` da Task 8).
+
+**Guards de regressão OBRIGATÓRIOS (incorporados nas Tasks 7/8/9 abaixo):**
+
+- **[HIGH] Co-fire guard (2026-06-30 / memória `disambig-v2-reattribution-duplicates-cofiring-sting`):** reatribuir pra um gêmeo co-firing SEM checar se ele já tem row na janela **duplica a tocada**. A Task 7 DEVE reusar `FindSiblingDetectionInWindow` + `decideCofireAction` antes de qualquer `ReattributeDetection`, idêntico ao `reattributeByCoverage` (service.go:609-655). Gêmeos co-programados de mesma duração são o PIOR caso. **O plano original omitiu isto.**
+- **[HIGH] Projeção-fantasma (2026-06-30):** reatribuir **só** via `catalog.ReattributeDetection` (sincroniza `detection_campaigns` in-tx). Nunca `UPDATE detections` bare.
+- **[HIGH] `ambiguous` (2026-05-17 + count-consistency):** `MarkAmbiguous` seta `evidence_status='ambiguous'` **E** `retracted_at` (invariante `ambiguous ⟺ retracted`). Todas as views filtram `retracted_at IS NULL` ao vivo → exclui de tudo sem migration de view. Task 8 também adiciona `<> 'ambiguous'` ao const.
+- **[HIGH] Ordenação (§18.2.2):** Task 9 gateia `disambiguateTwin` em `reattributeByCoverage` ter retornado `false`; `disambiguateTwin` no-op se a row já está retraída (não desfaz decisão do v2).
+- **[MEDIUM] Campanha cancelada:** reusar `resolveAttribution` (filtra `('programada','ativa')`) → sem campanha viva = deixa intacto. Verificado.
+- **[MEDIUM] Supressão silenciosa (2026-06-12):** `ambiguous` é nova classe tipo `audit_rejected`. Métrica `ambiguous_by_discriminative` dá o contador; flag OFF default; `floor`/`margin` conservadores calibrados em sombra antes de ligar.
+
+---
+
 ## File Structure
 
 | Arquivo | Responsabilidade | Ação |
 |---|---|---|
-| `migrations/00NN_material_twin_discriminative.up/.down.sql` | Tabela das regiões discriminantes por par de gêmeos | Criar |
-| `migrations/00NN_evidence_status_ambiguous.up/.down.sql` | Adiciona `'ambiguous'` ao CHECK de `detections.evidence_status` | Criar |
-| `workers/internal/audit/auditor.go` | Nova `CoverageOnFrames` — cobertura restrita a frame-ranges | Modificar |
-| `workers/internal/sharing/sharing.go` | Nova `ComputeTwinOverlap` — frame-ranges de overlap entre dois masters | Modificar |
-| `workers/internal/catalog/twin_discriminative.go` | Repo da tabela `material_twin_discriminative` (upsert/get) | Criar |
-| `workers/internal/evidence/twin_disambig.go` | Regra de decisão pura (`chooseTwinByDiscriminative`) + orquestração | Criar |
-| `workers/internal/evidence/twin_disambig_test.go` | Testes da regra pura | Criar |
-| `workers/internal/evidence/service.go` | Wire do passo discriminante no `reattributeByCoverage` + flag `disambigTwin` | Modificar |
-| `workers/internal/catalog/detections.go` | `MarkAmbiguous` + exclusão de `ambiguous` do conjunto aprovado | Modificar |
-| `workers/internal/metrics/metrics.go` | Labels novos em `MatchDisambiguation` | Modificar (sem código novo — labels são strings) |
+| `migrations/0046_material_twin_discriminative.up/.down.sql` | Tabela das regiões discriminantes (`disc_ranges INT[]` achatado) | ✅ Criado |
+| `migrations/0047_evidence_status_ambiguous.up/.down.sql` | Adiciona `'ambiguous'` ao CHECK (preservando todos os valores) | ✅ Criado |
+| `workers/internal/audit/auditor.go` | `CoverageOnFrames` + `Result.CoveredFrames` | ✅ Modificado |
+| `workers/internal/sharing/sharing.go` | `ComputeTwinOverlap` (core puro + shell) | ✅ Modificado |
+| `workers/internal/similarity/similarity.go` | `FindSimilarMaterials` (read-only, todos ≥0.50) + `pairScore` | ✅ Modificado |
+| `workers/internal/catalog/twin_discriminative.go` | Repo (`Upsert`/`Get`/**`ListForMaterial`**) + `complement`/`PopulateForMaterial` | Modificar (repo ✅; `ListForMaterial` na Task 7) |
+| `workers/internal/evidence/twin_disambig.go` | Regra pura `chooseTwinByDiscriminative` (✅) + `pickTwinAction` + `disambiguateTwin` | Modificar |
+| `workers/internal/evidence/service.go` | Extrair `applyReattributionWithCofireGuard` + wire + flag `disambigTwin` | Modificar (Task 7/9) |
+| `workers/internal/catalog/detections.go` | `MarkAmbiguous` (retrata) | Modificar (Task 8) |
+| `workers/internal/catalog/detection_filter.go` | `<> 'ambiguous'` no `ApprovedDetectionsFilter` | Modificar (Task 8) |
+| `cmd/api/main.go` | Thread flag `DISAMBIG_TWIN_DISCRIMINATIVE` pro `NewService` | Modificar (Task 9) |
+| `workers/internal/metrics/metrics.go` | Labels novos em `MatchDisambiguation` (strings, sem código) | — |
 
 **Ordem de dependência:** migrations → audit.CoverageOnFrames → sharing.ComputeTwinOverlap → catalog.twin_discriminative repo → evidence.twin_disambig (regra pura) → wire no service → ambiguous status. Cada tarefa commita sozinha.
 
@@ -400,35 +441,65 @@ git commit -m "feat(evidence): regra pura de desambiguação por trecho discrimi
 
 ---
 
-## Task 7: Orquestração — `disambiguateTwin` (junta audit + repo + regra)
+## Task 7: Orquestração — `disambiguateTwin` (junta audit + repo + regra) — **REVISADA pós-auditoria**
 
 **Files:**
-- Modify: `workers/internal/evidence/twin_disambig.go`
-- Test: `workers/internal/evidence/twin_disambig_test.go` (parte de integração, DB)
+- Modify: `workers/internal/catalog/twin_discriminative.go` (novo `ListForMaterial`)
+- Modify: `workers/internal/evidence/twin_disambig.go` (agregador puro + `disambiguateTwin`)
+- Test: `workers/internal/evidence/twin_disambig_test.go` (agregador puro)
 
-Objetivo: função `(*Service).disambiguateTwin(ctx, detectionID, detectedAt, stationID, attributedID, attributedCoverage, pcm)` que: acha gêmeos de mesma duração; audita cobertura-cheia de cada; se um vence por `coverageMargin` → deixa o `reattributeByCoverage` existente cuidar (retorna "não é caso de gêmeo"); se empata → carrega `disc_ranges`, audita `CoverageOnFrames` de cada, chama `chooseTwinByDiscriminative`; aplica: `verdictReattribute` → `ReattributeDetection` (já sincroniza projeção); `verdictAmbiguous` → `MarkAmbiguous` (Task 8); `verdictKeep` → nada.
-
-- [ ] **Step 1** Leia `reattributeByCoverage` (service.go:566-631) e `FindCutWithSiblings` (catalog/detections.go:409-443) pra reusar a busca de gêmeos e o `AuditEvidence` por candidato.
-
-- [ ] **Step 2** Teste de integração (DB + áudio sintético): duas seeds — (a) gêmeos onde o clipe contém a assinatura de Y → verifica reatribuição pra Y + projeção sincronizada; (b) clipe sem assinatura de nenhum → verifica `evidence_status='ambiguous'`. Reuse os helpers de seed das Tasks 4/5.
-
-- [ ] **Step 3** Implemente `disambiguateTwin` orquestrando as peças. Best-effort (log, nunca aborta upload). Métrica `MatchDisambiguation` com labels `reattributed_by_discriminative`/`ambiguous_by_discriminative`/`kept_by_discriminative`.
-
-- [ ] **Step 4** PASS + commit.
-```bash
-git add workers/internal/evidence/twin_disambig.go workers/internal/evidence/twin_disambig_test.go
-git commit -m "feat(evidence): orquestra desambiguação de gêmeos (audit+repo+regra)"
+**Fonte dos gêmeos = a própria tabela `material_twin_discriminative`** (não `FindCutWithSiblings`): as linhas já são de mesma duração (filtro aplicado no `PopulateForMaterial`) e já carregam a região discriminante. Novo repo method:
+```go
+type TwinRow struct { TwinID uuid.UUID; TwinShortID int32; Disc []audit.FrameRange; DiscFrames int }
+// ListForMaterial retorna os gêmeos POPULADOS de materialID (só pares com row).
+func (r *TwinDiscriminative) ListForMaterial(ctx, materialID uuid.UUID) ([]TwinRow, error)
+//   SELECT t.twin_id, m.short_id, t.disc_ranges, t.disc_frames
+//   FROM material_twin_discriminative t JOIN materials m ON m.id = t.twin_id
+//   WHERE t.material_id = $1
 ```
+> Só materiais têm row aqui (FK → materials(id)), então `short_id` sai de `materials` direto (sem polimorfismo). `FindSiblingDetectionInWindow`/`resolveAttribution` a jusante já resolvem `commercials ∪ materials`.
+
+**Algoritmo do `(*Service).disambiguateTwin(ctx, detectionID, detectedAt, stationID, attributedID, pcm)`** (shell best-effort, nunca aborta upload):
+1. `twins := ListForMaterial(attributedID)`; se vazio → return (não é caso de gêmeo).
+2. Defensivo: se a row já está retraída/reatribuída (v2 agiu antes), no-op. (Gate primário fica na Task 9, mas revalide barato.)
+3. `auditSelf := s.auditor.AuditEvidence(ctx, attributedID, pcm)` → `auditSelf.CoveredFrames` (Task 3).
+4. Pra cada twin: `discTwin,_ := twinRepo.Get(twin.TwinID, attributedID)`; `auditTwin := AuditEvidence(twin.TwinID, pcm)`; `covSelf := CoverageOnFrames(auditSelf.CoveredFrames, twin.Disc)`; `covTwin := CoverageOnFrames(auditTwin.CoveredFrames, discTwin)`; `verdict := chooseTwinByDiscriminative(covSelf, covTwin, twinDiscFloor, twinDiscMargin)`. Acumula `twinEval{TwinID, TwinShortID, covTwin, verdict}`.
+5. `action, winner := pickTwinAction(evals)` (agregador PURO — Step abaixo).
+6. Aplica:
+   - `verdictReattribute` → **reatribui pro `winner` COM co-fire guard** (Step co-fire); métrica `reattributed_by_discriminative`.
+   - `verdictAmbiguous` → `s.detections.MarkAmbiguous(ctx, detectionID, detectedAt)` (Task 8, retrata); métrica `ambiguous_by_discriminative`.
+   - `verdictKeep` → nada; métrica opcional `kept_by_discriminative`.
+
+- [ ] **Step 1 — agregador PURO (`twin_disambig.go`) + teste.** `pickTwinAction(evals []twinEval) (twinVerdict, *twinEval)`: se ALGUM eval é `verdictReattribute` → retorna `(verdictReattribute, &eval com maior covTwin)`; senão se algum é `verdictAmbiguous` → `(verdictAmbiguous, nil)`; senão `(verdictKeep, nil)`. Teste puro cobrindo: um reattribute vence; dois reattribute → maior covTwin; nenhum reattribute + um ambiguous → ambiguous; todos keep → keep; lista vazia → keep.
+
+- [ ] **Step 2 — CO-FIRE GUARD (obrigatório — regressão 2026-06-30).** Antes de qualquer `ReattributeDetection` pro `winner`, replicar EXATAMENTE o guard do `reattributeByCoverage` (service.go:609-655): `existing := s.detections.FindSiblingDetectionInWindow(ctx, winner.TwinShortID, stationID, detectedAt, recoverRejWindowSeconds)`; `switch decideCofireAction(existing)`:
+  - `cofireRetractSelf` → `RetractByID(self)`, métrica `duplicate_cofire_retracted`, **NÃO reatribui**.
+  - `cofireRestoreThenRetractSelf` → `ClearRetraction(existing)` + `RetractByID(self)`, métrica `duplicate_cofire_retracted`.
+  - `cofireReattribute` → segue pro fluxo de reatribuição normal (Step 3).
+  > **DRY:** extraia a cauda de `reattributeByCoverage` (service.go:609-685 — o guard + `resolveAttribution` + `ReattributeDetection` + `SetAuditCoverage`) num helper compartilhado `(*Service) applyReattributionWithCofireGuard(ctx, detectionID, detectedAt, stationID, winnerShortID, winnerCoverage, reattributeMetricLabel) bool` e chame-o de AMBOS. Mantenha o comportamento do `reattributeByCoverage` **idêntico** — os testes existentes (`cofire_guard_test.go`, `disambig_coverage_test.go`) são a rede de segurança; rode-os e confirme verdes. Se o risco de mexer no caminho provado incomodar, duplique o switch inline, mas então garanta paridade com o original.
+
+- [ ] **Step 3 — reatribuição normal (dentro do helper).** `newCommercialID, newCampaignID, err := resolveAttribution(ctx, s.db, winner.TwinShortID, stationID, detectedAt)`; se `ErrNoRows`/erro → **deixa intacto** (não inventa tocada — campanha cancelada/concluída cai aqui). Senão `s.detections.ReattributeDetection(...)` (sincroniza projeção in-tx — regressão 2026-06-30) + `SetAuditCoverage`.
+
+- [ ] **Step 4 — cross-compile linux** (regra 6.1) + rodar suíte `evidence` (incl. os testes de cofire/disambig existentes verdes). Commit.
+```bash
+git add workers/internal/catalog/twin_discriminative.go workers/internal/evidence/twin_disambig.go workers/internal/evidence/twin_disambig_test.go workers/internal/evidence/service.go
+git commit -m "feat(evidence): orquestra desambiguação de gêmeos com co-fire guard (audit+repo+regra)"
+```
+
+> **Constantes:** `twinDiscFloor = 0.15`, `twinDiscMargin = 1.5` (conservador; calibrar em sombra antes de ligar a flag). `recoverRejWindowSeconds`/`decideCofireAction` já existem no pacote `evidence`.
 
 ---
 
-## Task 8: `catalog.MarkAmbiguous` + excluir do conjunto aprovado
+## Task 8: `catalog.MarkAmbiguous` + excluir do conjunto aprovado — **REVISADA (retração)**
 
 **Files:**
-- Modify: `workers/internal/catalog/detections.go`
+- Modify: `workers/internal/catalog/detections.go` (`MarkAmbiguous`)
+- Modify: `workers/internal/catalog/detection_filter.go` (const + doc)
 - Test: `workers/internal/catalog/detections_test.go`
 
-- [ ] **Step 1** Leia o `ApprovedDetectionsFilter` (procure em `catalog/`) — o predicado que define "aprovado". Vai adicionar `evidence_status <> 'ambiguous'` a ele (ou garantir que 'ambiguous' não é 'available').
+> **Decisão de design (regressão 2026-05-17 + count-consistency):** `MarkAmbiguous` retrata a linha (`retracted_at`) ALÉM de setar `evidence_status='ambiguous'`. Motivo: o filtro aprovado é duplicado em views SQL (`daily_play_summary` 0029, grade 0041) que já filtram `d.retracted_at IS NULL` **ao vivo** (JOIN na detection base) → retratar exclui de TUDO sem migration de view (redefinir a view complexa da 0041 seria arriscado). Invariante: **`ambiguous ⟺ retracted`**. Também adiciona `<> 'ambiguous'` ao const (defesa/documentação; consistente pois ambiguous⟹retracted).
+
+- [ ] **Step 1** `ApprovedDetectionsFilter` está em `catalog/detection_filter.go:31`. Adicione `AND d.evidence_status <> 'ambiguous'` ao const e explique a invariante no doc-comment.
 
 - [ ] **Step 2** Teste que falha: cria detecção, `MarkAmbiguous(id, detectedAt)`, verifica `evidence_status='ambiguous'` E que ela **não** aparece numa contagem que usa `ApprovedDetectionsFilter`.
 
@@ -445,12 +516,12 @@ func TestDetections_MarkAmbiguous_ExcludedFromApproved(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3** Implemente `MarkAmbiguous(ctx, id, detectedAt)` (`UPDATE detections SET evidence_status='ambiguous' WHERE id=$1 AND detected_at=$2`) e ajuste `ApprovedDetectionsFilter` pra excluir `'ambiguous'`.
+- [ ] **Step 3** Implemente `MarkAmbiguous(ctx, id, detectedAt)`: `UPDATE detections SET evidence_status='ambiguous', retracted_at = COALESCE(retracted_at, now()) WHERE id=$1 AND detected_at=$2` (idempotente via COALESCE; `detected_at` no WHERE pra partition pruning). Ajuste o const. O teste (Step 2) deve provar: antes = aprovada; depois = `evidence_status='ambiguous'` E `retracted_at IS NOT NULL` E fora do conjunto aprovado E idempotente.
 
 - [ ] **Step 4** PASS (+ garanta que os testes de consistência de contagem existentes seguem verdes) + commit.
 ```bash
-git add workers/internal/catalog/detections.go workers/internal/catalog/detections_test.go
-git commit -m "feat(catalog): MarkAmbiguous + exclui 'ambiguous' do conjunto aprovado"
+git add workers/internal/catalog/detections.go workers/internal/catalog/detection_filter.go workers/internal/catalog/detections_test.go
+git commit -m "feat(catalog): MarkAmbiguous retrata + exclui 'ambiguous' do conjunto aprovado"
 ```
 
 ---
@@ -460,9 +531,19 @@ git commit -m "feat(catalog): MarkAmbiguous + exclui 'ambiguous' do conjunto apr
 **Files:**
 - Modify: `workers/internal/evidence/service.go`
 
-- [ ] **Step 1** Adicione o campo `disambigTwin bool` na `Service` + no construtor (espelhe `disambigByCoverage`), lido de `DISAMBIG_TWIN_DISCRIMINATIVE` (default OFF) onde as outras flags são montadas (procure onde `disambigByCoverage` é setado no wiring do serviço, provavelmente em `cmd/api` ou no `NewService`).
+- [ ] **Step 1** Adicione o campo `disambigTwin bool` na `Service` + param no `NewService` (espelhe `disambigByCoverage`), thread desde `cmd/api/main.go` lido de `DISAMBIG_TWIN_DISCRIMINATIVE` (default OFF — mesmo padrão de `DISAMBIG_BY_COVERAGE`). Atualize TODOS os callers de `NewService` (incl. testes) pro novo param.
 
-- [ ] **Step 2** No `reattributeByCoverage` (ou logo após ele no pass-path, service.go:491-493): se `s.disambigTwin` E o material tem gêmeos de mesma duração, chame `s.disambiguateTwin(...)`. Ordem: o passo de cobertura-cheia existente roda primeiro (pega subset/loop); o discriminante só entra no empate (a função `disambiguateTwin` já faz esse gate internamente — Task 7).
+- [ ] **Step 2 — ORDERING GATE (regressão §18.2.2).** No pass-path (service.go:491-493), **capture o retorno** do `reattributeByCoverage` e só rode o discriminante se ele NÃO agiu:
+```go
+reattributed := false
+if s.disambigByCoverage {
+    reattributed = s.reattributeByCoverage(auditCtx, detectionID, detectedAt, stationID, commercialID, result.Coverage, pcm)
+}
+if s.disambigTwin && !reattributed {
+    s.disambiguateTwin(auditCtx, detectionID, detectedAt, stationID, commercialID, pcm)
+}
+```
+> Assim o discriminante NUNCA desfaz nem duplica a decisão do v2: se o v2 reatribuiu/retratou a row, o twin-step é pulado. O `disambiguateTwin` (Task 7) ainda revalida barato que a row não está retraída (defesa em profundidade). Nota: hoje `reattributeByCoverage` já é chamado ignorando o retorno; passar a usá-lo é a mudança.
 
 - [ ] **Step 3** Cross-compile linux (regra 6.1) — o gold standard do deploy:
 Run:
