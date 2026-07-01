@@ -7,7 +7,22 @@ import (
 	"github.com/google/uuid"
 
 	"radiocheck/internal/audit"
+	"radiocheck/internal/similarity"
 )
+
+func TestFilterTwinsByDuration(t *testing.T) {
+	own := 30.0
+	cands := []similarity.SimilarMaterial{
+		{ID: uuid.New(), Score: 0.9, DurationSeconds: 30.0},  // keep (exact)
+		{ID: uuid.New(), Score: 0.8, DurationSeconds: 30.7},  // keep (within 1s)
+		{ID: uuid.New(), Score: 0.95, DurationSeconds: 15.0}, // drop (15s vs 30s)
+		{ID: uuid.New(), Score: 0.7, DurationSeconds: 31.2},  // drop (>1s)
+	}
+	got := filterTwinsByDuration(cands, own)
+	if len(got) != 2 {
+		t.Fatalf("kept %d, want 2: %+v", len(got), got)
+	}
+}
 
 func TestComplementRanges(t *testing.T) {
 	fr := func(lo, hi int32) audit.FrameRange { return audit.FrameRange{Lo: lo, Hi: hi} }
