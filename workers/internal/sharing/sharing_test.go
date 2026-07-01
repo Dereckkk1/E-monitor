@@ -1,9 +1,15 @@
 package sharing
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"radiocheck/internal/audit"
+	"radiocheck/internal/fingerprint"
+	"radiocheck/internal/index"
+	"radiocheck/pkg/audio"
 )
 
 // stingRanges helper: simulates the AMB30/JINGLE sting shape — ~4 consecutive
@@ -320,6 +326,159 @@ func TestMinScoreFromEnv(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Task 4: ComputeTwinOverlap pure-core tests -------------------------------
+//
+// The DB+decode shell (ComputeTwinOverlap) is intentionally untested — it is
+// thin glue mirroring MarkSharedHashes' shell (which also has no test). We test
+// the pure cores overlapRangesForOther/overlapRangesXvsY here with synthetic
+// dense noise, mirroring similarity/dense_audio_test.go.
+
+// makeDenseNoise builds deterministic broadband noise. Run through the
+// fingerprint pipeline it yields ~300+ hashes/s — the dense regime that gives
+// the matcher a real signal to align window-by-window (as opposed to a sparse
+// jingle where a single window covers the whole clip).
+func makeDenseNoise(seed int64, seconds int) []float32 {
+	r := rand.New(rand.NewSource(seed))
+	n := seconds * fingerprint.SampleRate
+	out := make([]float32, n)
+	for i := range out {
+		out[i] = float32(r.Float64()*2 - 1)
+	}
+	return out
+}
+
+func denseHashes(pcm []float32) []audio.Hash {
+	filtered := audio.ApplyHighPass(pcm, 100.0, 16000)
+	normalized := audio.NormalizeRMS(filtered, -20.0)
+	spec := audio.STFT(normalized)
+	peaks := audio.PickPeaks(spec)
+	return audio.GenerateHashes(peaks)
+}
+
+func indexFromHashes(hs []audio.Hash, short int32) index.Index {
+	idx := make(index.Index)
+	for _, h := range hs {
+		idx[h.Value] = append(idx[h.Value], index.Entry{
+			CommercialShortID: short,
+			TimeFrame:         int32(h.TimeFrame),
+		})
+	}
+	return idx
+}
+
+// TestOverlapRangesForOther exercises the pure merge+convert helper against a
+// synthetic scanReport (no audio, no DB) — same style as the classifyAndFilter
+// tests. Two overlapping X-side ranges must merge into one audit.FrameRange,
+// and an absent other must yield nil.
+func TestOverlapRangesForOther(t *testing.T) {
+	other := uuid.New()
+	report := scanReport{
+		ownCommercialID: uuid.New(),
+		ownTotalFrames:  frames30s,
+		perOther: map[uuid.UUID]*perOtherScan{
+			other: {
+				otherTotalFrames: frames30s,
+				ownRanges:        []frameRange{{10, 42}, {40, 80}},
+			},
+		},
+	}
+
+	got := overlapRangesForOther(report, other)
+	want := []audit.FrameRange{{Lo: 10, Hi: 80}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("overlapRangesForOther merged wrong: got %v, want %v", got, want)
+	}
+
+	if nilOut := overlapRangesForOther(report, uuid.New()); nilOut != nil {
+		t.Errorf("absent other must yield nil, got %v", nilOut)
+	}
+}
+
+// TestOverlapRangesXvsY_ExcludesDivergentTail is the confidence-builder for the
+// whole feature: it proves the overlap concentrates in the SHARED region of two
+// acoustic twins and essentially none of it lands in the DISCRIMINATIVE tail.
+//
+// X = shared(seed 1, 24s) ++ tailX(seed 2, 6s)
+// Y = shared(seed 1, 24s) ++ tailY(seed 3, 6s)
+// The first 24s of X and Y are byte-identical; the last 6s differ. Sliding X's
+// PCM against a Y-only index must return overlap ranges that cover the shared
+// head and stop at the seam (± a few frames of window straddle).
+func TestOverlapRangesXvsY_ExcludesDivergentTail(t *testing.T) {
+	shared := makeDenseNoise(1, 24)
+	pcmX := append(append([]float32{}, shared...), makeDenseNoise(2, 6)...)
+	pcmY := append(append([]float32{}, shared...), makeDenseNoise(3, 6)...)
+
+	const (
+		xShort int32 = 3
+		yShort int32 = 7
+	)
+	xID := uuid.New()
+	yID := uuid.New()
+
+	storeY := index.New()
+	storeY.Swap(indexFromHashes(denseHashes(pcmY), yShort))
+
+	overlap, totalX := overlapRangesXvsY(pcmX, storeY, xShort, yShort, xID, yID, len(pcmY)/2048, DefaultMinScore)
+
+	// X is 30s → ~234 frames.
+	const wantTotalX = 30 * fingerprint.SampleRate / 2048 // 234
+	if totalX < wantTotalX-2 || totalX > wantTotalX+2 {
+		t.Errorf("totalX = %d, want ≈ %d", totalX, wantTotalX)
+	}
+
+	sharedFrames := 24 * fingerprint.SampleRate / 2048 // ≈187
+
+	// Convert overlap back to frameRange to measure coverage within regions.
+	frs := make([]frameRange, len(overlap))
+	for i, r := range overlap {
+		frs[i] = frameRange{from: r.Lo, until: r.Hi}
+	}
+	headRegion := clampRanges(frs, 0, int32(sharedFrames))
+	tailRegion := clampRanges(frs, int32(sharedFrames), int32(totalX))
+	headCov := frameCoverage(headRegion)
+	tailCov := frameCoverage(tailRegion)
+
+	t.Logf("totalX=%d sharedFrames=%d | overlap merged=%d frames across %d ranges | headCov=%d (%.0f%% of shared) tailCov=%d",
+		totalX, sharedFrames, frameCoverage(frs), len(overlap),
+		headCov, 100*float64(headCov)/float64(sharedFrames), tailCov)
+
+	// The overlap must cover a substantial part of the shared head.
+	if headCov < sharedFrames/2 {
+		t.Errorf("overlap covers only %d/%d frames of the shared region (< 50%%) — the twin overlap is not being detected", headCov, sharedFrames)
+	}
+	// And essentially none of the discriminative tail. The last matching window
+	// starts a few frames before the 24s seam and spans 4s (≈31 frames), so the
+	// merged overlap runs a fraction of one window past the seam (measured: 23
+	// frames ≈ 3s). That straddle is inherent to a 4s@1s window and does NOT
+	// weaken the guard: it is bounded by one window length, and the FAR half of
+	// the tail (the genuinely divergent [~+31, +47) frames) stays clean. A leak
+	// larger than one window would mean the tail is being matched on its own
+	// (a real bug). Slop = one full window (32 frames).
+	const tailSlop = 32
+	if tailCov > tailSlop {
+		t.Errorf("overlap leaks %d frames into the discriminative tail (> %d slop = one 4s window) — the tail must stay discriminative", tailCov, tailSlop)
+	}
+}
+
+// clampRanges intersects each range with [lo, hi), dropping empties. Test-only
+// helper to measure how much of the overlap lands inside a region.
+func clampRanges(rs []frameRange, lo, hi int32) []frameRange {
+	var out []frameRange
+	for _, r := range rs {
+		f, u := r.from, r.until
+		if f < lo {
+			f = lo
+		}
+		if u > hi {
+			u = hi
+		}
+		if f < u {
+			out = append(out, frameRange{f, u})
+		}
+	}
+	return out
 }
 
 // TestFrameCoverage_UnionMath exercises the merged-length calculation.
