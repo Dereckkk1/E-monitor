@@ -245,6 +245,31 @@ classified AS (
                  NOT BETWEEN c.start_date AND c.end_date
                 THEN 'out_date'
             WHEN s.type_id IS NULL THEN 'orphan'
+            -- ── Override pontual (campaign, type, station, dia): supersede rules ──
+            -- Espelha categorizer.Categorize: plays_expected=0 = faixa inerte →
+            -- out_slot; senão faixa±900s → in_slot/out_slot. Precede carve-out e
+            -- regras gerais (audit 2026-07-02 G1 — recat ignorava overrides).
+            WHEN EXISTS (
+                SELECT 1 FROM distribution_overrides o
+                WHERE o.campaign_id = s.campaign_id
+                  AND o.type_id     = s.type_id
+                  AND o.station_id  = s.station_id
+                  AND o.for_date    = date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+            ) THEN (
+                SELECT CASE
+                    WHEN o.plays_expected = 0 THEN 'out_slot'
+                    WHEN EXTRACT(EPOCH FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo')::time)
+                         BETWEEN EXTRACT(EPOCH FROM o.time_start) - 900
+                             AND EXTRACT(EPOCH FROM o.time_end)   + 900
+                        THEN 'in_slot'
+                    ELSE 'out_slot'
+                END
+                FROM distribution_overrides o
+                WHERE o.campaign_id = s.campaign_id
+                  AND o.type_id     = s.type_id
+                  AND o.station_id  = s.station_id
+                  AND o.for_date    = date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+            )
             -- ── Carve-out: material nomeado em alguma regra específica ──
             WHEN EXISTS (
                 SELECT 1 FROM distribution_rules r
