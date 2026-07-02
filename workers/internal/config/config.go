@@ -24,6 +24,15 @@ type Config struct {
 	SegmentsPath string
 	APIPort      string
 
+	// ── Retenção local de evidência (§11.4 variante de prod, incidente
+	// 2026-07-02) ──
+	// EvidenceRetentionDays: idade máxima (dias) de um clipe de evidência no
+	// MinIO antes do prune apagar o objeto e marcar a detecção 'expired'.
+	// Default 30. EvidencePruneDryRun: quando true, o prune só LOGA o que
+	// apagaria, sem tocar no storage (válvula de segurança do 1º rollout).
+	EvidenceRetentionDays int  // EVIDENCE_RETENTION_DAYS
+	EvidencePruneDryRun   bool // EVIDENCE_PRUNE_DRY_RUN ("true" só simula)
+
 	// ── Notificações por email (emails diários de alerta de campanha) ──
 	NotificationsEnabled  bool   // NOTIFICATIONS_ENABLED ("true" liga o job)
 	NotificationsBaseURL  string // NOTIFICATIONS_BASE_URL (base dos links/CTA)
@@ -73,6 +82,14 @@ func Load() (*Config, error) {
 	if cfg.SegmentsPath == "" {
 		cfg.SegmentsPath = "/data/segments"
 	}
+
+	cfg.EvidenceRetentionDays = 30
+	if v := os.Getenv("EVIDENCE_RETENTION_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			cfg.EvidenceRetentionDays = d
+		}
+	}
+	cfg.EvidencePruneDryRun = os.Getenv("EVIDENCE_PRUNE_DRY_RUN") == "true"
 
 	cfg.NotificationsEnabled = os.Getenv("NOTIFICATIONS_ENABLED") == "true"
 	cfg.NotificationsBaseURL = os.Getenv("NOTIFICATIONS_BASE_URL")

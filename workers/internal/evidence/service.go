@@ -400,6 +400,11 @@ func (s *Service) processEvidence(
 		uploadSpan.RecordError(err)
 		uploadSpan.SetStatus(codes.Error, err.Error())
 		uploadSpan.End()
+		// Feed the EvidenceUploadFailures alert. This counter was defined and
+		// registered but never incremented, so the EvidenceUploadFailures alert
+		// stayed dead through the entire 2026-07-02 MinIO-full outage — hundreds
+		// of failures, zero pages. Increment it here at the actual failure site.
+		metrics.EvidenceUploadFailures.Inc()
 		s.log.Error("evidence upload failed", zap.String("detection_id", detectionID.String()), zap.Error(err))
 		s.markFailed(ctx, detectionID, detectedAt, "upload failed")
 		return

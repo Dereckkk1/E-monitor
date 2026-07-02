@@ -374,6 +374,23 @@ func (d *Detections) UpdateEvidence(ctx context.Context, id uuid.UUID, detectedA
 	return err
 }
 
+// MarkEvidenceExpired flags a detection whose audio clip was reclaimed by the
+// local retention prune (§11.4 prod variant, incidente 2026-07-02): the clip is
+// gone from storage but the detection still counts as an airing. Sets
+// evidence_status='expired' and clears the key/size so the UI and the presign
+// endpoint stop pointing at a deleted object. Guarded by evidence_status =
+// 'available' so it is idempotent and never clobbers a row that changed status
+// (retracted/ambiguous) between candidate selection and the update. detected_at
+// is in the WHERE for partition pruning (detections is partitioned by it).
+func (d *Detections) MarkEvidenceExpired(ctx context.Context, id uuid.UUID, detectedAt time.Time) error {
+	_, err := d.pool.Exec(ctx, `
+		UPDATE detections
+		SET evidence_status = 'expired', evidence_key = NULL, evidence_size_bytes = 0
+		WHERE id = $1 AND detected_at = $2 AND evidence_status = 'available'`,
+		id, detectedAt)
+	return err
+}
+
 // SetAuditCoverage records the §9.9 audit coverage (master frames matched in the
 // clip / total) for a detection that passed the audit. The coverage-based version
 // disambiguation (§18.2.2 v2) reads it on a sibling cut to decide which cut

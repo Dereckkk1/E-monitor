@@ -1140,6 +1140,16 @@ r2://evidences/2026/05/04/3f5a-b1c2.../det-9d8e-7c6b.m4a
 
 Cada detecção mantém até 3 cópias em paralelo durante os primeiros 30 dias: SSD local, R2 (replicação automática), e backup em segundo bucket cross-region. A partir de 30 dias, mantém apenas a cópia em R2 com versionamento ativado.
 
+> ⚠️ **Divergência em produção (2026-07-02):** o offload pro R2 (cold/archive)
+> **nunca foi conectado** — hot/cold/archive apontam para o mesmo bucket MinIO,
+> então o tiering é um no-op e a evidência acumulava até o disco encher (507).
+> Enquanto o R2 não é ligado, prod usa **retenção local**: apaga o clipe do MinIO
+> após `EVIDENCE_RETENTION_DAYS` (default 30) e marca a detecção `expired`.
+> Consequência: **cópia única** (sem offsite) e retenção limitada a N dias.
+> Implementação e trade-offs em
+> [docs/features/evidence-local-retention.md](docs/features/evidence-local-retention.md);
+> causa em [docs/incidents/incident-2026-07-02-minio-storage-full.md](docs/incidents/incident-2026-07-02-minio-storage-full.md).
+
 ### 11.5 Tratamento de Falhas
 
 **Falha ao recuperar do buffer:** se o EvidenceBuffer não tiver os bytes necessários (worker reiniciou ou stream caiu durante a janela), a detecção é registrada com `evidence_status: missing`. Operação é alertada para revisão manual.

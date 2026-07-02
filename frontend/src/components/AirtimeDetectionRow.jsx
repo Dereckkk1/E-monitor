@@ -4,6 +4,7 @@ import StationAvatar from './StationAvatar'
 import AudioPlayer from './AudioPlayer'
 import api from '../api/client'
 import { materialColor } from '../utils/materialColor'
+import { EVIDENCE_EXPIRED_SHORT } from '../utils/evidenceRetention'
 
 const CATEGORY_DOT = {
   in_slot:  '#16A34A',
@@ -121,6 +122,8 @@ export default function AirtimeDetectionRow({
   const cost = resolveCost(detection, pricingByStation)
   const pmm = fmtPMM(detection.station_pmm)
   const noEvidence = detection.evidence_status !== 'available'
+  const isExpired = detection.evidence_status === 'expired'
+  const noAudioTitle = isExpired ? EVIDENCE_EXPIRED_SHORT : 'Sem áudio disponível'
   const catDotColor = CATEGORY_DOT[detection.category] ?? '#94a3b8'
 
   // Dial line: "Classic Pan - FM (88.3) FM" style — name plus dial inline.
@@ -144,7 +147,7 @@ export default function AirtimeDetectionRow({
         className="airtime-row-play"
         onClick={handlePlayClick}
         disabled={noEvidence}
-        title={noEvidence ? 'Sem áudio disponível' : (isPlaying ? 'Pausar' : 'Reproduzir')}
+        title={noEvidence ? noAudioTitle : (isPlaying ? 'Pausar' : 'Reproduzir')}
         aria-label={
           isPlaying
             ? 'Pausar'
