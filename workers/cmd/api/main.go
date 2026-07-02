@@ -254,11 +254,18 @@ func main() {
 	}
 	defer evidSub.Unsubscribe() //nolint:errcheck
 
-	// Evidence tiering job (§11.4). For now hot/cold/archive all share the
-	// same R2/MinIO client; in production the operator can override the
-	// archive client to point at a different bucket / storage class. The
-	// schedule fires once a day at 03:00 BR.
+	// Evidence tiering job (§11.4). Hot/cold/archive share the same MinIO
+	// client, so the tier "move" is a no-op flag flip — evidence never leaves
+	// the disk and grows unbounded until MinIO returns 507 (incidente
+	// 2026-07-02). Until real R2 offload is wired, the job enforces a hard
+	// LOCAL retention: RetentionMaxAge deletes evidence objects older than N
+	// days and marks the row 'expired'. The schedule fires once a day at 03:00
+	// BR. First rollout: set EVIDENCE_PRUNE_DRY_RUN=true to preview, confirm the
+	// logged counts, then unset.
 	tieringJob := evidence.NewTieringJob(pool, s3Client, s3Client, s3Client, logger)
+	tieringJob.Detections = detections
+	tieringJob.RetentionMaxAge = time.Duration(cfg.EvidenceRetentionDays) * 24 * time.Hour
+	tieringJob.PruneDryRun = cfg.EvidencePruneDryRun
 	go tieringJob.Schedule(ctx)
 
 	// Supervisor.

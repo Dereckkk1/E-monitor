@@ -90,6 +90,18 @@ var (
 		Help: "Total non-fatal errors hit by the evidence tiering job.",
 	})
 
+	// ── Evidence local retention prune (§11.4 prod variant, incidente
+	// 2026-07-02) ──────────────────────────────────────────────────────
+	EvidencePrunedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "radiocheck_evidence_pruned_total",
+		Help: "Total evidence clips deleted from local storage by the retention prune.",
+	})
+
+	EvidencePrunedBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "radiocheck_evidence_pruned_bytes_total",
+		Help: "Total bytes reclaimed from local storage by the retention prune.",
+	})
+
 	// Webhook delivery (§13.1.4).
 	WebhookDeliveriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_webhook_deliveries_total",
@@ -296,6 +308,7 @@ func init() {
 		PostgresRestoreTestStatus,
 		EvidenceTierMovements, EvidenceStorageBytes,
 		EvidenceTieringLastRun, EvidenceTieringErrors,
+		EvidencePrunedTotal, EvidencePrunedBytes,
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,

@@ -17,13 +17,29 @@ groups:
         annotations:
           summary: "Mais de 10 falhas de upload de evidência na última hora"
 
+      # Cobre TODOS os filesystems reais, não só "/". O incidente 2026-07-02
+      # (MinIO 507 storage-full) passou despercebido porque o disco cheio era
+      # /mnt/data (evidência do MinIO) e este alerta só olhava "/". O regex
+      # exclui pseudo-FS (tmpfs/overlay) pra não gerar ruído. {{ $labels.mountpoint }}
+      # identifica qual disco encheu.
       - alert: DiskSpaceCritical
-        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|devtmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|devtmpfs"} < 0.05
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Disco com menos de 5% livre"
+          summary: "Disco {{ $labels.mountpoint }} com menos de 5% livre"
+
+      # Aviso antecipado: dá folga pra crescer o disco / rodar o prune antes de o
+      # MinIO começar a rejeitar upload de evidência com 507 (o reserve do MinIO
+      # dispara bem antes de 0% livre).
+      - alert: DiskSpaceWarning
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|devtmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|devtmpfs"} < 0.15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disco {{ $labels.mountpoint }} com menos de 15% livre"
 
       - alert: BackupNotRunning
         expr: time() - radiocheck_postgres_backup_last_success_timestamp > 26 * 3600

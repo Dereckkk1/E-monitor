@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import BadgePill from './BadgePill'
 import AudioPlayer from './AudioPlayer'
 import api from '../api/client'
+import { EVIDENCE_EXPIRED_MESSAGE } from '../utils/evidenceRetention'
 
 const CATEGORY_LABEL = {
   in_slot:  { label: 'Dentro da faixa programada', variant: 'green' },
@@ -1546,6 +1547,7 @@ function DetectionsList({ grouped, materialType, activePlayerId, evidenceBlobUrl
                   : d.evidence_status === 'generating' ? 'gerando…'
                   : d.evidence_status === 'missing' ? 'sem áudio'
                   : d.evidence_status === 'failed' ? 'falhou'
+                  : d.evidence_status === 'expired' ? 'áudio expirado'
                   : null
                 return (
                   <li key={d.id} style={{
@@ -1608,7 +1610,10 @@ function DetectionsList({ grouped, materialType, activePlayerId, evidenceBlobUrl
                           </>
                         )}
                         {!hasEvidence && (
-                          <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                          <span
+                            style={{ fontSize: 11, color: '#94a3b8', cursor: d.evidence_status === 'expired' ? 'help' : undefined }}
+                            title={d.evidence_status === 'expired' ? EVIDENCE_EXPIRED_MESSAGE : undefined}
+                          >
                             {evidenceLabel || 'indisponível'}
                           </span>
                         )}

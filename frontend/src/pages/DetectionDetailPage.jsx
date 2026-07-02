@@ -6,6 +6,7 @@ import StationAvatar from '../components/StationAvatar'
 import { useIgnoreDetection, useRestoreDetection, useUploadDetectionEvidence } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { useConfirm } from '../components/ConfirmModal'
+import { EVIDENCE_EXPIRED_TITLE, EVIDENCE_EXPIRED_MESSAGE } from '../utils/evidenceRetention'
 import './DetectionDetailPage.css'
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ function evidenceChip(status) {
     generating: { label: 'Gerando',      tone: 'is-warning' },
     missing:    { label: 'Indisponível', tone: 'is-muted' },
     failed:     { label: 'Falhou',       tone: 'is-danger' },
+    expired:    { label: 'Expirada',     tone: 'is-muted' },
   }
   return map[status] ?? { label: status ?? '—', tone: 'is-muted' }
 }
@@ -264,8 +266,22 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError, awaitin
     )
   }
 
-  if (status === 'failed' || status === 'missing' || urlError) {
-    const awaiting = awaitingCensura && status !== 'failed'
+  if (status === 'failed' || status === 'missing' || status === 'expired' || urlError) {
+    const awaiting = awaitingCensura && status !== 'failed' && status !== 'expired'
+    const title = status === 'expired'
+      ? EVIDENCE_EXPIRED_TITLE
+      : status === 'failed'
+      ? 'Falha ao gerar evidência'
+      : awaiting
+      ? 'Aguardando censura da emissora'
+      : 'Evidência indisponível'
+    const desc = status === 'expired'
+      ? EVIDENCE_EXPIRED_MESSAGE
+      : status === 'failed'
+      ? 'O encoder retornou erro durante a geração do clip. A detecção em si permanece válida — apenas o áudio não pôde ser preservado.'
+      : awaiting
+      ? 'Esta veiculação foi registrada pelo comprovante; o áudio da censura ainda não foi anexado.'
+      : 'Este registro não possui clip de áudio armazenado. Detecções recentes aparecem como “Pendente” por alguns segundos antes de serem encodadas.'
     return (
       <div className="dd-panel">
         <div className="dd-panel-head">
@@ -275,20 +291,8 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError, awaitin
           </span>
         </div>
         <div className="dd-evidence-state">
-          <span className="dd-evidence-state-title">
-            {status === 'failed'
-              ? 'Falha ao gerar evidência'
-              : awaiting
-              ? 'Aguardando censura da emissora'
-              : 'Evidência indisponível'}
-          </span>
-          <span className="dd-evidence-state-desc">
-            {status === 'failed'
-              ? 'O encoder retornou erro durante a geração do clip. A detecção em si permanece válida — apenas o áudio não pôde ser preservado.'
-              : awaiting
-              ? 'Esta veiculação foi registrada pelo comprovante; o áudio da censura ainda não foi anexado.'
-              : 'Este registro não possui clip de áudio armazenado. Detecções recentes aparecem como “Pendente” por alguns segundos antes de serem encodadas.'}
-          </span>
+          <span className="dd-evidence-state-title">{title}</span>
+          <span className="dd-evidence-state-desc">{desc}</span>
         </div>
       </div>
     )

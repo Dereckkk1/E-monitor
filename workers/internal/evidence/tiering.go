@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/catalog"
 	"radiocheck/internal/metrics"
 	"radiocheck/internal/storage"
 )
@@ -39,6 +40,19 @@ type TieringJob struct {
 	// ArchiveStorageClass is forwarded to the archive bucket on PUT (e.g.
 	// "STANDARD_IA"). Empty string lets the bucket default decide.
 	ArchiveStorageClass string
+
+	// ── Local retention prune (§11.4 prod variant, incidente 2026-07-02) ──
+	// When Hot/Cold/Archive all point at the same MinIO bucket the tier "move"
+	// is a no-op flag flip and evidence never leaves the disk — it grows
+	// unbounded until MinIO returns 507 (storage full). RetentionMaxAge > 0
+	// enables a hard local prune: delete evidence objects older than it and
+	// mark the row 'expired'. Zero disables the prune entirely (pre-fix
+	// behaviour). Detections supplies the guarded MarkEvidenceExpired update;
+	// PruneDryRun logs what WOULD be deleted without touching storage (first
+	// rollout safety valve). See docs/features/evidence-local-retention.md.
+	RetentionMaxAge time.Duration
+	PruneDryRun     bool
+	Detections      *catalog.Detections
 }
 
 // NewTieringJob returns a TieringJob with sensible defaults wired in. Hot,
@@ -69,6 +83,10 @@ func (j *TieringJob) Run(ctx context.Context) error {
 	hotMoved, hotErrs := j.moveTier(ctx, "hot", "cold", j.Hot, j.Cold, j.HotMaxAge, "")
 	coldMoved, coldErrs := j.moveTier(ctx, "cold", "archive", j.Cold, j.Archive, j.ColdMaxAge, j.ArchiveStorageClass)
 
+	// Local retention prune (§11.4 prod variant). Bounds MinIO disk growth
+	// while real R2 offload isn't wired — see the RetentionMaxAge field.
+	pruned, reclaimed, pruneErrs := j.pruneExpired(ctx)
+
 	if err := j.refreshStorageGauge(ctx); err != nil {
 		j.Log.Warn("evidence tiering: refresh storage gauge failed", zap.Error(err))
 	}
@@ -77,11 +95,14 @@ func (j *TieringJob) Run(ctx context.Context) error {
 	j.Log.Info("evidence tiering: pass complete",
 		zap.Int("hot_to_cold", hotMoved),
 		zap.Int("cold_to_archive", coldMoved),
-		zap.Int("errors", hotErrs+coldErrs),
+		zap.Int("pruned", pruned),
+		zap.Int64("reclaimed_bytes", reclaimed),
+		zap.Bool("prune_dry_run", j.PruneDryRun),
+		zap.Int("errors", hotErrs+coldErrs+pruneErrs),
 		zap.Duration("duration", time.Since(start)),
 	)
-	if hotErrs+coldErrs > 0 {
-		return fmt.Errorf("tiering: %d errors in pass", hotErrs+coldErrs)
+	if hotErrs+coldErrs+pruneErrs > 0 {
+		return fmt.Errorf("tiering: %d errors in pass", hotErrs+coldErrs+pruneErrs)
 	}
 	return nil
 }
