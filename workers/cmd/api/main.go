@@ -135,6 +135,32 @@ func main() {
 		}
 	}
 	go loader.RunReconcileLoop(ctx, indexReconcileInterval)
+
+	// Partition maintenance (audit E1): keep monthly partitions provisioned so
+	// INSERTs into detections/detection_campaigns/stream_health_events never hit
+	// "no partition of relation found". Migration 0048 extends the horizon on
+	// deploy; this keeps a rolling 6-month buffer, at startup and once a day.
+	// Warns (never fatal) if ensure_month_partitions is somehow absent.
+	go func() {
+		ensure := func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := pool.Exec(bgCtx, `SELECT ensure_month_partitions(6)`); err != nil {
+				logger.Warn("partition maintenance: ensure_month_partitions failed", zap.Error(err))
+			}
+		}
+		ensure()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ensure()
+			}
+		}
+	}()
 	defer indexSub.Unsubscribe() //nolint:errcheck
 
 	// Shared-hash detection (§18.2.2 follow-up). Subscribes to
