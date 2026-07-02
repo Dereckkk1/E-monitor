@@ -217,7 +217,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		      -- daily_play_summary e do resto do sistema. Sem isso o /insights
 		      -- divergia do /detections (impactos/veiculações inflados).
 		      AND `+ApprovedDetectionsFilter+`
-		      AND d.detected_at::date BETWEEN $2 AND $3
+		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		),
 		per_station AS (
@@ -329,7 +329,7 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		      -- os "extras" do gráfico vs o resto do sistema.
 		      AND `+ApprovedDetectionsFilter+`
 		      AND d.category = 'orphan'
-		      AND d.detected_at::date BETWEEN $2 AND $3
+		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		)
@@ -515,7 +515,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — impactos
 		      -- do CPM têm que bater com veiculações_total do aggregateCore.
 		      AND `+ApprovedDetectionsFilter+`
-		      AND d.detected_at::date BETWEEN $2 AND $3
+		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND s.pmm IS NOT NULL
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY d.campaign_id
