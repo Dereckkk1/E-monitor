@@ -71,7 +71,10 @@ type Supervisor struct {
 	commercials  *catalog.Commercials
 	materials    *catalog.Materials
 	healthEvents *catalog.HealthEvents
-	log          *zap.Logger
+	// dedupSuppressions grava (forense, interno) cada supressão do §18.2.2 —
+	// instrumento pra detectar veiculação real morta pelo dedup (audit A3).
+	dedupSuppressions *catalog.DedupSuppressions
+	log               *zap.Logger
 
 	// segmentsRoot is the directory under which each station gets a
 	// per-station subdir for ffmpeg's segment muxer output. See
@@ -133,6 +136,7 @@ func New(
 		commercials:        commercials,
 		materials:          materials,
 		healthEvents:       healthEvents,
+		dedupSuppressions:  catalog.NewDedupSuppressions(db),
 		segmentsRoot:       segmentsRoot,
 		log:                log,
 		workers:            make(map[uuid.UUID]*workerEntry),
