@@ -275,6 +275,17 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
+	// Guard (audit C1): recusa (409) ANTES de pausar workers se apagar esta
+	// campanha destruiria projeções fan-out de OUTRAS campanhas via CASCADE.
+	// Checar antes do Pause evita deixar uma campanha viva pausada num delete
+	// que vai falhar.
+	if n, cerr := h.Repo.CountForeignProjections(r.Context(), id); cerr == nil && n > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":               "campaign_has_foreign_projections",
+			"foreign_projections": n,
+		})
+		return
+	}
 	if h.Supervisor != nil {
 		if perr := h.Supervisor.Pause(id); perr != nil && h.Log != nil {
 			h.Log.Error("campaigns.Delete: supervisor pause failed",
@@ -284,9 +295,15 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
 			http.Error(w, "not found", 404)
-		} else {
+		case errors.Is(err, catalog.ErrCampaignHasForeignProjections):
+			// Defense-in-depth: o pre-check acima normalmente já pegou isto.
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "campaign_has_foreign_projections",
+			})
+		default:
 			http.Error(w, "internal error", 500)
 		}
 		return
