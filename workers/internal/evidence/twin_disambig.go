@@ -147,6 +147,14 @@ func (s *Service) disambiguateTwin(
 		s.reattributeTwinWithCofireGuard(ctx, detectionID, detectedAt, stationID, winner.twinShortID, winner.fullCov)
 		return fmt.Sprintf("reattribute->sid=%d", winner.twinShortID)
 	case verdictAmbiguous:
+		if !s.twinRetractAmbiguous {
+			// Sinal discriminante fraco/confuso e SEM fila de revisão (Plano 2):
+			// retrair aqui sub-contaria a tocada. Preserva a atribuição atual (não
+			// piora, só não corrige). Ligar a retração via
+			// DISAMBIG_TWIN_RETRACT_AMBIGUOUS quando o Plano 2 (fila de revisão) existir.
+			metrics.MatchDisambiguation.WithLabelValues("ambiguous_kept").Inc()
+			return "ambiguous(kept)"
+		}
 		if err := s.detections.MarkAmbiguous(ctx, detectionID, detectedAt); err != nil {
 			s.log.Warn("evidence: twin — MarkAmbiguous falhou",
 				zap.String("detection_id", detectionID.String()), zap.Error(err))

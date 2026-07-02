@@ -122,9 +122,10 @@ func main() {
 	detCampaigns := catalog.NewDetectionCampaigns(pool)
 	twinRepo := catalog.NewTwinDiscriminative(pool)
 	// nc=nil: o CLI não publica eventos; disambiguateTwin/co-fire não usam s.nc.
-	// flags (disambigByCoverage/disambigTwin/multiAttribution) irrelevantes aqui —
+	// twinRetractAmbiguous=false: --apply mantém a atribuição em ambiguous (não
+	// retrai), consistente com o default vivo. As outras flags são irrelevantes —
 	// chamamos RedisambiguateDetection/PreviewTwinDecision direto.
-	svc := evidence.NewService(pool, s3, nil, detections, detCampaigns, auditor, false, false, false, logger)
+	svc := evidence.NewService(pool, s3, nil, detections, detCampaigns, auditor, false, false, false, false, logger)
 
 	dets, err := twinRepo.ListEligibleDetections(ctx, f)
 	if err != nil {
