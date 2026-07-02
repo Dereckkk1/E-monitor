@@ -64,7 +64,15 @@ type Service struct {
 	// acústicos de MESMA duração (spec 2026-07-01). Roda no pass-path DEPOIS do
 	// reattributeByCoverage, só quando ele NÃO agiu. Flag DISAMBIG_TWIN_DISCRIMINATIVE.
 	disambigTwin bool
-	log          *zap.Logger
+	// twinRetractAmbiguous decide o que fazer quando o sinal discriminante é
+	// fraco/confuso (verdictAmbiguous): true → retrata (MarkAmbiguous, vai pra
+	// revisão); false (DEFAULT) → NÃO retrata, preserva a atribuição atual. Sem a
+	// fila de revisão (Plano 2), retrair sub-contaria a tocada — então o default é
+	// não-retrair (preserva contagem; só reatribui em sinal CLARO). Ligar só depois
+	// do Plano 2, via DISAMBIG_TWIN_RETRACT_AMBIGUOUS. Validado no dry-run 2026-07-02
+	// (trio 45/46/48 sai lamacento por window-straddle → não deve sumir da contagem).
+	twinRetractAmbiguous bool
+	log                  *zap.Logger
 	mu           sync.RWMutex
 	// segmentDirs maps station UUIDs to the absolute filesystem directory
 	// where ffmpeg is dropping ADTS-AAC segment files. Populated by the
@@ -85,19 +93,21 @@ func NewService(
 	auditor *audit.Auditor,
 	disambigByCoverage bool,
 	disambigTwin bool,
+	twinRetractAmbiguous bool,
 	multiAttribution bool,
 	log *zap.Logger,
 ) *Service {
 	return &Service{
-		db:                 db,
-		store:              store,
-		nc:                 nc,
-		detections:         detections,
-		detectionCampaigns: detectionCampaigns,
-		auditor:            auditor,
-		disambigByCoverage: disambigByCoverage,
-		disambigTwin:       disambigTwin,
-		multiAttribution:   multiAttribution,
+		db:                   db,
+		store:                store,
+		nc:                   nc,
+		detections:           detections,
+		detectionCampaigns:   detectionCampaigns,
+		auditor:              auditor,
+		disambigByCoverage:   disambigByCoverage,
+		disambigTwin:         disambigTwin,
+		twinRetractAmbiguous: twinRetractAmbiguous,
+		multiAttribution:     multiAttribution,
 		log:                log,
 		segmentDirs:        make(map[uuid.UUID]string),
 	}

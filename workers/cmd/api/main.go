@@ -180,6 +180,13 @@ func main() {
 	if disambigTwin {
 		logger.Info("desambiguação de gêmeos por trecho discriminante ENABLED (DISAMBIG_TWIN_DISCRIMINATIVE=true)")
 	}
+	// Retração de gêmeo ambíguo (sinal fraco/confuso). Default OFF: preserva a
+	// atribuição em vez de retrair (sem fila de revisão, retrair sub-contaria).
+	// Ligar só depois do Plano 2 (fila de revisão). Ver docs/architecture/twin-disambiguation.md.
+	twinRetractAmbiguous := os.Getenv("DISAMBIG_TWIN_RETRACT_AMBIGUOUS") == "true"
+	if twinRetractAmbiguous {
+		logger.Info("retração de gêmeo ambíguo ENABLED (DISAMBIG_TWIN_RETRACT_AMBIGUOUS=true)")
+	}
 
 	// F-119 multi-attribution — default OFF. Quando ON, uma tocada física conta
 	// pra TODAS as campanhas que rodam o mesmo áudio na emissora (fan-out de
@@ -191,7 +198,7 @@ func main() {
 	detectionCampaigns := catalog.NewDetectionCampaigns(pool)
 
 	// Evidence service.
-	evidSvc := evidence.NewService(pool, s3Client, nc, detections, detectionCampaigns, auditor, disambigByCoverage, disambigTwin, multiAttribution, logger)
+	evidSvc := evidence.NewService(pool, s3Client, nc, detections, detectionCampaigns, auditor, disambigByCoverage, disambigTwin, twinRetractAmbiguous, multiAttribution, logger)
 	evidSub, err := evidSvc.Subscribe(ctx)
 	if err != nil {
 		log.Fatalf("evidence subscribe: %v", err)

@@ -88,9 +88,20 @@ Roda **depois** do §9.9 audit passar e **depois** do `reattributeByCoverage`, s
 
 `MarkAmbiguous` retrata a linha. Como `ApprovedDetectionsFilter` e as views (`daily_play_summary` 0029, projeção `detection_campaigns` 0041) filtram `d.retracted_at IS NULL` **ao vivo** (JOIN na row base), a detecção ambígua não conta em lugar nenhum — sem migration de view. O const também tem `<> 'ambiguous'` (defesa/documentação). Ver [detection-count-consistency.md](detection-count-consistency.md).
 
-## Flag
+## Flags
 
-`DISAMBIG_TWIN_DISCRIMINATIVE=true` (default OFF) em `cmd/api/main.go`. Métrica `radiocheck_match_disambiguation_total` com labels `reattributed_by_discriminative` / `ambiguous_by_discriminative` / `kept_by_discriminative` / `duplicate_cofire_retracted`.
+- **`DISAMBIG_TWIN_DISCRIMINATIVE`** (default OFF) — liga a desambiguação no pass-path.
+- **`DISAMBIG_TWIN_RETRACT_AMBIGUOUS`** (default OFF) — o que fazer no sinal fraco/confuso (`verdictAmbiguous`): OFF = **preserva a atribuição** (`ambiguous_kept`), não retrai; ON = retrai (`MarkAmbiguous` → revisão). **Default OFF de propósito:** sem a fila de revisão (Plano 2), retrair sub-contaria a tocada. Ligar só depois do Plano 2.
+
+Métrica `radiocheck_match_disambiguation_total`: labels `reattributed_by_discriminative` / `ambiguous_by_discriminative` / `ambiguous_kept` / `kept_by_discriminative` / `duplicate_cofire_retracted`.
+
+### Validação em prod (dry-run 2026-07-02, campanha Milium ativa)
+
+`redisambiguate-twins --dry-run` sobre 15 detecções: **6 keep, 8 ambiguous, 1 reattribute, 0 erradas.** Padrão:
+- **Par 9↔15** (diferem ~2.7s): separa limpo — `keep` com `covSelf 0.50–0.68` quando certo, `reattribute→sid=9 (covTwin 0.50)` quando errado. A feature funciona.
+- **Trio 45/46/48** (diferem numa tag de marca ~2s): `covSelf`/`covTwin` todos 0.00–0.14 (ruído) → `ambiguous`. É o **window-straddle** do `ComputeTwinOverlap` (janela de 4s atravessa a diferença de ~2s) — a região discriminante sai mal-medida.
+
+Conclusão: calibração (`floor=0.15`/`margin=1.5`) **está boa** — não baixar (a 0.10-0.14 é ruído; reatribuir ali seria chute). Com `RETRACT_AMBIGUOUS=OFF` o trio fica como está (preserva contagem) e só o par limpo é corrigido. Recuperar o trio = melhorar o `ComputeTwinOverlap` (janela menor pro scan discriminante) + re-backfill.
 
 ## Filosofia de teste
 
