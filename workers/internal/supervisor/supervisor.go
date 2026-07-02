@@ -452,36 +452,7 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 	// only recorded after the worker successfully comes up (which clears
 	// lastDownID via onStreamUp) and then drops again.
 	onStreamDown := func() {
-		go func() {
-			s.mu.Lock()
-			alreadyOpen := false
-			if e, ok := s.workers[capturedStationID]; ok && e.lastDownID != nil {
-				alreadyOpen = true
-			}
-			s.mu.Unlock()
-			if alreadyOpen {
-				return
-			}
-
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			id, at, err := s.healthEvents.RecordDown(bgCtx, capturedStationID)
-			if err != nil {
-				s.log.Warn("supervisor: record down failed",
-					zap.String("station_id", capturedStationID.String()),
-					zap.Error(err),
-				)
-				return
-			}
-
-			s.mu.Lock()
-			if e, ok := s.workers[capturedStationID]; ok {
-				e.lastDownID = &id
-				e.lastDownAt = &at
-			}
-			s.mu.Unlock()
-		}()
+		s.recordStreamDown(capturedStationID)
 	}
 
 	// ── Resolve dynamic threshold from station_thresholds (§9.4) ───────────
@@ -638,6 +609,51 @@ func isStalled(last, startedAt, now time.Time) bool {
 	return now.Sub(startedAt) > stallStartupGrace
 }
 
+// recordStreamDownSync opens a 'down' health event for the station, idempotent
+// per open outage via the worker entry's lastDownID (no-op if a down event is
+// already open). Extracted from the onStreamDown callback so the stall watchdog
+// can record the outage on the hang/ban path too (audit 2026-07-02 F1): a hung
+// or IP-banned stream never reaches the worker's OnStreamDown because
+// runPCMReader blocks, so without this the outage showed zero down events
+// (uptime 100%). Idempotency survives respawns because startStationWorker's
+// startup recovery adopts the open down via GetLastOpenDown.
+func (s *Supervisor) recordStreamDownSync(stationID uuid.UUID) {
+	s.mu.Lock()
+	alreadyOpen := false
+	if e, ok := s.workers[stationID]; ok && e.lastDownID != nil {
+		alreadyOpen = true
+	}
+	s.mu.Unlock()
+	if alreadyOpen {
+		return
+	}
+
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	id, at, err := s.healthEvents.RecordDown(bgCtx, stationID)
+	if err != nil {
+		s.log.Warn("supervisor: record down failed",
+			zap.String("station_id", stationID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	s.mu.Lock()
+	if e, ok := s.workers[stationID]; ok {
+		e.lastDownID = &id
+		e.lastDownAt = &at
+	}
+	s.mu.Unlock()
+}
+
+// recordStreamDown runs recordStreamDownSync off-goroutine so callers (worker
+// reconnect loop, stall watchdog) never block on Postgres.
+func (s *Supervisor) recordStreamDown(stationID uuid.UUID) {
+	go s.recordStreamDownSync(stationID)
+}
+
 // runStallWatchdog periodically checks whether the worker has produced PCM
 // recently. See isStalled for the decision rule. A 2-minute cooldown between
 // consecutive restarts prevents restart storms when a stream is genuinely
@@ -693,6 +709,14 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 				zap.String("station_id", stationID.String()),
 				zap.Bool("never_connected", neverConnected),
 				zap.Duration("backoff", delay))
+
+			// F1: record the outage BEFORE killing the worker. A hung or
+			// IP-banned stream never reaches the worker's OnStreamDown
+			// (runPCMReader blocks on PCM that never arrives), so without this
+			// the outage showed zero down events and the station read as 100%
+			// up. Idempotent (lastDownID) and survives the respawn below because
+			// startStationWorker's startup recovery adopts the open down.
+			s.recordStreamDown(stationID)
 
 			// Kill the worker now — ffmpeg dies, so a blocked stream stops
 			// hammering the panel's firewall during the backoff window.
