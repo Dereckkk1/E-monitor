@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrCampaignHasForeignProjections is returned by Delete when the campaign owns
+// physical detections (detections.campaign_id) that ALSO carry fan-out
+// projections belonging to OTHER campaigns (MULTI_ATTRIBUTION). A hard delete
+// would DELETE those detections and CASCADE-wipe the sibling campaigns'
+// detection_campaigns rows — irreversible loss of another campaign's history
+// (audit 2026-07-02 C1). Callers map this to 409 Conflict.
+var ErrCampaignHasForeignProjections = errors.New("campaign owns detections projected to other campaigns")
 
 type Campaign struct {
 	ID             uuid.UUID   `json:"id"`
@@ -568,6 +577,26 @@ func (c *Campaigns) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	defer tx.Rollback(ctx)
 
+	// Guard (audit C1): recusa deletar se as detecções desta campanha carregam
+	// projeções fan-out de OUTRAS campanhas — o DELETE FROM detections abaixo
+	// faria o CASCADE (FK detection_campaigns→detections) varrer o histórico
+	// alheio de forma irreversível. Caller mapeia pra 409.
+	var hasForeignProjections bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+		  SELECT 1
+		  FROM detections d
+		  JOIN detection_campaigns dc
+		    ON dc.detection_id = d.id AND dc.detected_at = d.detected_at
+		  WHERE d.campaign_id = $1
+		    AND dc.campaign_id <> $1
+		)`, id).Scan(&hasForeignProjections); err != nil {
+		return err
+	}
+	if hasForeignProjections {
+		return ErrCampaignHasForeignProjections
+	}
+
 	steps := []string{
 		`DELETE FROM detections WHERE campaign_id = $1`,
 		`DELETE FROM fingerprint_hashes WHERE commercial_id IN (SELECT id FROM commercials WHERE campaign_id = $1)`,
@@ -580,6 +609,23 @@ func (c *Campaigns) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// CountForeignProjections reports how many detection_campaigns rows belonging to
+// OTHER campaigns ride on detections owned by this campaign (detections.campaign_id).
+// A value > 0 means a hard Delete would CASCADE-wipe another campaign's history —
+// the handler uses this to answer 409 before pausing anything (mirrors the
+// Clients.CountDependents pattern). See Delete's guard and audit 2026-07-02 C1.
+func (c *Campaigns) CountForeignProjections(ctx context.Context, id uuid.UUID) (int, error) {
+	var n int
+	err := c.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM detections d
+		JOIN detection_campaigns dc
+		  ON dc.detection_id = d.id AND dc.detected_at = d.detected_at
+		WHERE d.campaign_id = $1
+		  AND dc.campaign_id <> $1`, id).Scan(&n)
+	return n, err
 }
 
 // ActiveCampaignsForStation returns IDs of all currently-active campaigns that include the given station.
