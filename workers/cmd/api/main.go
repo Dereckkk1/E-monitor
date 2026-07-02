@@ -122,6 +122,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("index loader subscribe: %v", err)
 	}
+	// Periodic index reconcile (audit E4): rebuild the whole index from the DB
+	// on a timer so a dropped index.reload (NATS core is fire-and-forget) or a
+	// campaign_materials mutation that missed a publish self-heals within one
+	// interval. Default 30m; override with INDEX_RECONCILE_INTERVAL (Go duration).
+	indexReconcileInterval := 30 * time.Minute
+	if v := os.Getenv("INDEX_RECONCILE_INTERVAL"); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			indexReconcileInterval = d
+		} else {
+			logger.Warn("invalid INDEX_RECONCILE_INTERVAL, using default 30m", zap.String("value", v))
+		}
+	}
+	go loader.RunReconcileLoop(ctx, indexReconcileInterval)
 	defer indexSub.Unsubscribe() //nolint:errcheck
 
 	// Shared-hash detection (§18.2.2 follow-up). Subscribes to

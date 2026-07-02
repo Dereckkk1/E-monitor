@@ -212,20 +212,10 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 		return fmt.Errorf("supervisor: update campaign status: %w", err)
 	}
 
-	// 3. Trigger index reload for all ready commercials in this campaign.
-	// Handles the case where fingerprints were generated before the campaign was activated
-	// (the index.reload handler requires ca.status = 'active', which is now satisfied).
-	if coms, err := s.commercials.ListReadyByCampaigns(ctx, []uuid.UUID{campaignID}); err == nil {
-		for _, c := range coms {
-			payload, _ := json.Marshal(map[string]string{"commercial_id": c.ID.String()})
-			if err := s.nc.Publish(events.SubjectIndexReload, payload); err != nil {
-				s.log.Warn("supervisor: index reload publish failed",
-					zap.String("commercial_id", c.ID.String()),
-					zap.Error(err),
-				)
-			}
-		}
-	}
+	// 3. Trigger index reload for this campaign's ready spots (materials +
+	// legacy commercials) so fingerprints generated before activation enter the
+	// in-memory index now that the campaign is index-eligible.
+	s.publishIndexReloadForCampaign(ctx, campaignID)
 
 	// 4. For each station in campaign.TargetStations, start/replace worker.
 	for _, stationID := range camp.TargetStations {
@@ -936,6 +926,35 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 	return nil
 }
 
+// publishIndexReloadForCampaign publishes an index.reload for every ready spot
+// linked to the campaign — materials (via campaign_materials) and legacy
+// commercials — so their fingerprints are (re)loaded into the in-memory
+// matching index. Fire-and-forget over NATS core; the periodic reconcile
+// (loader.RunReconcileLoop) is the safety net if a publish is dropped.
+func (s *Supervisor) publishIndexReloadForCampaign(ctx context.Context, campaignID uuid.UUID) {
+	if matIDs, err := s.materials.ListReadyIDsByCampaign(ctx, campaignID); err == nil {
+		for _, id := range matIDs {
+			payload, _ := json.Marshal(map[string]string{"material_id": id.String()})
+			if err := s.nc.Publish(events.SubjectIndexReload, payload); err != nil {
+				s.log.Warn("supervisor: index reload publish (material) failed",
+					zap.String("material_id", id.String()), zap.Error(err))
+			}
+		}
+	} else {
+		s.log.Warn("supervisor: list ready materials for index reload failed",
+			zap.String("campaign_id", campaignID.String()), zap.Error(err))
+	}
+	if coms, err := s.commercials.ListReadyByCampaigns(ctx, []uuid.UUID{campaignID}); err == nil {
+		for _, c := range coms {
+			payload, _ := json.Marshal(map[string]string{"commercial_id": c.ID.String()})
+			if err := s.nc.Publish(events.SubjectIndexReload, payload); err != nil {
+				s.log.Warn("supervisor: index reload publish (commercial) failed",
+					zap.String("commercial_id", c.ID.String()), zap.Error(err))
+			}
+		}
+	}
+}
+
 // Reload rebuilds workers for all stations of a campaign without changing its status.
 // It is a no-op if the campaign is not currently active.
 // Used when campaign stations or commercial station assignments change while active.
@@ -951,6 +970,11 @@ func (s *Supervisor) Reload(campaignID uuid.UUID) error {
 	if camp.Status != "ativa" {
 		return nil
 	}
+	// Publish index.reload for the campaign's ready spots so a freshly-linked or
+	// reused/backfilled material's fingerprints enter the in-memory index
+	// immediately — before this Reload only restarted workers, leaving the
+	// hashes absent until a full restart (audit E3, INFINITE PAY case).
+	s.publishIndexReloadForCampaign(ctx, campaignID)
 	for _, stationID := range camp.TargetStations {
 		if err := s.startStationWorker(ctx, stationID); err != nil {
 			s.log.Warn("supervisor.Reload: failed to restart worker",

@@ -48,6 +48,34 @@ func NewMaterials(pool *pgxpool.Pool) *Materials {
 	return &Materials{pool: pool}
 }
 
+// ListReadyIDsByCampaign returns the IDs of 'ready' materials linked to the
+// campaign via campaign_materials. Used by Supervisor.Reload to publish
+// index.reload so a freshly-linked (or reused/backfilled) material's
+// fingerprints enter the in-memory matching index without waiting for a full
+// restart (audit 2026-07-02 E3: INFINITE PAY — a ready material reused in a new
+// campaign never entered the index because no link path published a reload).
+func (m *Materials) ListReadyIDsByCampaign(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := m.pool.Query(ctx, `
+		SELECT DISTINCT mt.id
+		FROM materials mt
+		JOIN campaign_materials cm ON cm.material_id = mt.id
+		WHERE cm.campaign_id = $1
+		  AND mt.fingerprint_status = 'ready'`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // CreateMaterialInput holds the fields required to insert a new material row.
 type CreateMaterialInput struct {
 	ClientID          uuid.UUID

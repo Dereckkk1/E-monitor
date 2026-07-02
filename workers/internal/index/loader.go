@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
@@ -294,4 +295,25 @@ func (l *Loader) Subscribe(ctx context.Context) (*nats.Subscription, error) {
 		return nil, fmt.Errorf("index loader: nats subscribe: %w", err)
 	}
 	return sub, nil
+}
+
+// RunReconcileLoop periodically rebuilds the whole index from Postgres (LoadAll),
+// so an index.reload event dropped by NATS core (fire-and-forget) or any code
+// path that mutated campaign_materials without publishing a reload self-heals
+// within one interval (audit 2026-07-02 E3/E4: 32 materials stayed blind for a
+// month in the 2026-06-12 incident because the reload was lost). Blocks until
+// ctx is cancelled; each tick logs on failure but keeps the last good index.
+func (l *Loader) RunReconcileLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := l.LoadAll(ctx); err != nil {
+				l.log.Warn("index reconcile: LoadAll failed", zap.Error(err))
+			}
+		}
+	}
 }
