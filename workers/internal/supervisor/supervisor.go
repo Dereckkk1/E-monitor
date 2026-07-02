@@ -74,7 +74,11 @@ type Supervisor struct {
 	// dedupSuppressions grava (forense, interno) cada supressão do §18.2.2 —
 	// instrumento pra detectar veiculação real morta pelo dedup (audit A3).
 	dedupSuppressions *catalog.DedupSuppressions
-	log               *zap.Logger
+	// disambigConfidenceAware (env DISAMBIG_CONFIDENCE_AWARE, default OFF) faz o
+	// dedup §18.2.2 escolher o corte de MAIOR cobertura em vez do mais longo
+	// (audit A2). OFF = comportamento inalterado.
+	disambigConfidenceAware bool
+	log                     *zap.Logger
 
 	// segmentsRoot is the directory under which each station gets a
 	// per-station subdir for ffmpeg's segment muxer output. See
@@ -123,27 +127,29 @@ func New(
 	commercials *catalog.Commercials,
 	materials *catalog.Materials,
 	healthEvents *catalog.HealthEvents,
+	disambigConfidenceAware bool,
 	segmentsRoot string,
 	log *zap.Logger,
 ) *Supervisor {
 	return &Supervisor{
-		db:                 db,
-		store:              store,
-		nc:                 nc,
-		evidence:           ev,
-		campaigns:          campaigns,
-		stations:           stations,
-		commercials:        commercials,
-		materials:          materials,
-		healthEvents:       healthEvents,
-		dedupSuppressions:  catalog.NewDedupSuppressions(db),
-		segmentsRoot:       segmentsRoot,
-		log:                log,
-		workers:            make(map[uuid.UUID]*workerEntry),
-		lastStallRestart:   make(map[uuid.UUID]time.Time),
-		stallRestartCounts: make(map[uuid.UUID]uint32),
-		connectFailures:    make(map[uuid.UUID]uint32),
-		dedupBuffer:        NewDedupBuffer(dedupBufferRetention),
+		db:                      db,
+		store:                   store,
+		nc:                      nc,
+		evidence:                ev,
+		campaigns:               campaigns,
+		stations:                stations,
+		commercials:             commercials,
+		materials:               materials,
+		healthEvents:            healthEvents,
+		dedupSuppressions:       catalog.NewDedupSuppressions(db),
+		disambigConfidenceAware: disambigConfidenceAware,
+		segmentsRoot:            segmentsRoot,
+		log:                     log,
+		workers:                 make(map[uuid.UUID]*workerEntry),
+		lastStallRestart:        make(map[uuid.UUID]time.Time),
+		stallRestartCounts:      make(map[uuid.UUID]uint32),
+		connectFailures:         make(map[uuid.UUID]uint32),
+		dedupBuffer:             NewDedupBuffer(dedupBufferRetention),
 	}
 }
 
