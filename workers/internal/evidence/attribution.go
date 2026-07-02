@@ -36,7 +36,7 @@ func resolveAttribution(ctx context.Context, db *pgxpool.Pool, shortID int32,
 		WHERE m.short_id = $1
 		  AND $2 = ANY(cm.target_stations)
 		  AND ca.status IN ('programada','ativa')
-		  AND $3::date BETWEEN ca.start_date AND ca.end_date
+		  AND ($3 AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN ca.start_date AND ca.end_date
 		ORDER BY cm.added_at DESC
 		LIMIT 1
 	`, shortID, stationID, detectedAt).Scan(&commercialID, &campaignID)
@@ -67,7 +67,7 @@ func resolveAllAttributions(ctx context.Context, db *pgxpool.Pool, canonicalComm
 		WHERE m.master_sha256 = (SELECT master_sha256 FROM materials WHERE id = $1)
 		  AND $2 = ANY(cm.target_stations)
 		  AND ca.status IN ('programada','ativa')
-		  AND $3::date BETWEEN ca.start_date AND ca.end_date
+		  AND ($3 AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN ca.start_date AND ca.end_date
 		ORDER BY cm.campaign_id, cm.added_at DESC
 	`, canonicalCommercialID, stationID, detectedAt)
 	if err != nil {

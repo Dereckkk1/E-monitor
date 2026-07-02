@@ -142,7 +142,7 @@ func (m *ManagementOverview) queryKPIs(ctx context.Context, p ManagementParams) 
 		  (SELECT COUNT(*) FROM detections d
 		         WHERE d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL AND d.retracted_at IS NULL
-		           AND d.detected_at::date BETWEEN $4::date AND $5::date
+		           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $4::date AND $5::date
 		           AND EXISTS (SELECT 1 FROM detection_campaigns dc
 		                       WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
 		                         AND dc.campaign_id IN (SELECT id FROM scoped)))     AS airings_total,
