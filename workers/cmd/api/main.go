@@ -234,6 +234,16 @@ func main() {
 	if multiAttribution {
 		logger.Info("F-119 multi-attribution ENABLED (MULTI_ATTRIBUTION=true)")
 	}
+
+	// Dedup confidence-aware (audit A2) — default OFF. Quando ON, o dedup §18.2.2
+	// escolhe o corte de MAIOR cobertura em vez do mais longo, impedindo que um
+	// corte que só false-confirmou a região compartilhada suprima a veiculação
+	// real (classe 90fm/ASAAS). Ligar SÓ após calibrar a margem com os dados de
+	// dedup_suppressions (a cobertura é wall-clock, audit B1).
+	disambigConfidenceAware := os.Getenv("DISAMBIG_CONFIDENCE_AWARE") == "true"
+	if disambigConfidenceAware {
+		logger.Info("dedup confidence-aware ENABLED (DISAMBIG_CONFIDENCE_AWARE=true)")
+	}
 	detectionCampaigns := catalog.NewDetectionCampaigns(pool)
 
 	// Evidence service.
@@ -252,7 +262,7 @@ func main() {
 	go tieringJob.Schedule(ctx)
 
 	// Supervisor.
-	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, matsRepo, healthEvents, cfg.SegmentsPath, logger)
+	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, matsRepo, healthEvents, disambigConfidenceAware, cfg.SegmentsPath, logger)
 
 	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
 	// version disambiguation before re-emitting on detections.confirmed.

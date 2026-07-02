@@ -134,6 +134,40 @@ func evaluateDedup(candidateDuration int, candidateShortID int32, conflict *Dedu
 	}
 }
 
+// confidenceMargin is the coverage gap above which the more-confident cut wins
+// the dedup regardless of duration (audit 2026-07-02 A2). Below it, the decision
+// falls back to the duration rule (behavior unchanged). CONSERVATIVE default —
+// coverage is still wall-clock (audit B1), so this MUST be calibrated against
+// the dedup_suppressions shadow data before DISAMBIG_CONFIDENCE_AWARE is trusted
+// in prod.
+const confidenceMargin = 0.25
+
+// evaluateDedupWithConfidence layers the confidence-aware rule on top of the
+// duration-based evaluateDedup. With confidenceAware=false it is EXACTLY
+// evaluateDedup (flag OFF → behavior unchanged). With it on, a clear coverage
+// gap decides the winner: the cut that actually aired has the higher coverage,
+// so a longer cut that only false-confirmed the shared region (90fm/ASAAS: 30s
+// cov 0.16) no longer suppresses the real shorter cut (15s cov 0.79). Near-ties
+// fall back to duration — never worse than today.
+func evaluateDedupWithConfidence(candidateDuration int, candidateShortID int32, candidateConfidence float64, conflict *DedupEntry, confidenceAware bool) DedupAction {
+	if conflict == nil {
+		return DedupActionPublish
+	}
+	if confidenceAware {
+		gap := candidateConfidence - conflict.Detection.Confidence
+		switch {
+		case gap >= confidenceMargin:
+			// Candidate clearly aired more of itself → it's the real one.
+			return DedupActionRetractAndPublish
+		case gap <= -confidenceMargin:
+			// Kept cut is clearly stronger → candidate is the weak duplicate.
+			return DedupActionSuppress
+		}
+		// Near-tie on confidence → fall through to the duration rule.
+	}
+	return evaluateDedup(candidateDuration, candidateShortID, conflict)
+}
+
 // SubmitDetection applies §18.2.2 disambiguation to a state-machine
 // confirmation. The original ingestor.DetectionEvent is passed alongside the
 // match.ConfirmedDetection so we can republish it verbatim on the confirmed
@@ -196,7 +230,7 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 		InsertedAt:      now,
 	}
 
-	action := evaluateDedup(info.DurationSeconds, det.CommercialShortID, conflict)
+	action := evaluateDedupWithConfidence(info.DurationSeconds, det.CommercialShortID, det.Confidence, conflict, s.disambigConfidenceAware)
 	evalSpan.SetAttributes(attribute.Int("dedup.action", int(action)))
 	evalSpan.End()
 	span.SetAttributes(attribute.Int("dedup.action", int(action)))

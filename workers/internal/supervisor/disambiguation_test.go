@@ -177,3 +177,61 @@ func TestSubmitDetectionFlow_MisalignedCut20sGap(t *testing.T) {
 		t.Fatalf("expected suppress (30s < 60s), got %v", got)
 	}
 }
+
+// ── evaluateDedupWithConfidence (audit A2, flag DISAMBIG_CONFIDENCE_AWARE) ──
+
+// dedupConflict é um helper: conflito de `dur`s com cobertura `conf`.
+func dedupConflict(dur int, shortID int32, conf float64) *DedupEntry {
+	return &DedupEntry{
+		DurationSeconds: dur,
+		Detection:       match.ConfirmedDetection{CommercialShortID: shortID, Confidence: conf},
+	}
+}
+
+// Flag OFF → idêntico ao evaluateDedup: o corte curto perde mesmo com cobertura
+// muito maior (o bug 90fm).
+func TestEvaluateDedupWithConfidence_FlagOff_UnchangedBehavior(t *testing.T) {
+	conflict := dedupConflict(30, 1, 0.16) // 30s, cobertura fraca
+	// candidato 15s cov 0.79, flag OFF → duração manda → suppress (bug atual).
+	if got := evaluateDedupWithConfidence(15, 2, 0.79, conflict, false); got != DedupActionSuppress {
+		t.Fatalf("flag OFF deve preservar o comportamento (suppress), got %v", got)
+	}
+}
+
+// Flag ON + gap claro de cobertura → o corte curto de MAIOR cobertura vence
+// (retract+publish). É o fix do 90fm/ASAAS: 15s cov 0.79 mata o 30s cov 0.16.
+func TestEvaluateDedupWithConfidence_HigherCoverageShorterCutWins(t *testing.T) {
+	conflict := dedupConflict(30, 1, 0.16)
+	if got := evaluateDedupWithConfidence(15, 2, 0.79, conflict, true); got != DedupActionRetractAndPublish {
+		t.Fatalf("candidato de cobertura muito maior deve vencer (retract+publish), got %v", got)
+	}
+}
+
+// Flag ON, mantido claramente mais forte → suprime o candidato (duplicata fraca).
+func TestEvaluateDedupWithConfidence_KeptClearlyStronger_Suppresses(t *testing.T) {
+	conflict := dedupConflict(30, 1, 0.80)
+	if got := evaluateDedupWithConfidence(15, 2, 0.10, conflict, true); got != DedupActionSuppress {
+		t.Fatalf("candidato claramente mais fraco deve ser suprimido, got %v", got)
+	}
+}
+
+// Flag ON, quase-empate de cobertura (gap < margem) → cai na regra de duração,
+// nunca pior que hoje.
+func TestEvaluateDedupWithConfidence_NearTie_FallsBackToDuration(t *testing.T) {
+	conflict := dedupConflict(30, 1, 0.55)
+	// candidato 15s cov 0.50 (gap -0.05, dentro da margem) → duração → suppress.
+	if got := evaluateDedupWithConfidence(15, 2, 0.50, conflict, true); got != DedupActionSuppress {
+		t.Fatalf("quase-empate deve cair na duração (suppress, 15<30), got %v", got)
+	}
+	// candidato 60s cov 0.50 (gap -0.05) → duração → longer wins.
+	if got := evaluateDedupWithConfidence(60, 2, 0.50, conflict, true); got != DedupActionRetractAndPublish {
+		t.Fatalf("quase-empate deve cair na duração (longer wins), got %v", got)
+	}
+}
+
+// Sem conflito → publish (ambas as flags).
+func TestEvaluateDedupWithConfidence_NoConflictPublishes(t *testing.T) {
+	if got := evaluateDedupWithConfidence(30, 2, 0.9, nil, true); got != DedupActionPublish {
+		t.Fatalf("sem conflito deve publicar, got %v", got)
+	}
+}
