@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
 	"radiocheck/internal/ingestor"
 	"radiocheck/internal/match"
@@ -213,6 +214,33 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 		s.publishConfirmed(ctx, original)
 	case DedupActionSuppress:
 		metrics.MatchDisambiguation.WithLabelValues("suppressed").Inc()
+		reason := "shorter_cut"
+		if info.DurationSeconds == conflict.DurationSeconds {
+			reason = "tiebreak_lower_short_id"
+		}
+		// Forense (audit A3): grava a tocada descartada com as DUAS confianças.
+		// O sinal `suppressed_confidence > kept_confidence` denuncia uma provável
+		// veiculação REAL morta por um corte mais fraco (só false-confirmou a
+		// região compartilhada). Best-effort — não bloqueia a decisão.
+		if s.dedupSuppressions != nil {
+			if err := s.dedupSuppressions.Record(ctx, catalog.DedupSuppression{
+				StationID:            stationID,
+				SuppressedShortID:    det.CommercialShortID,
+				KeptShortID:          conflict.Detection.CommercialShortID,
+				SuppressedDuration:   info.DurationSeconds,
+				KeptDuration:         conflict.DurationSeconds,
+				SuppressedConfidence: det.Confidence,
+				KeptConfidence:       conflict.Detection.Confidence,
+				BroadcastStart:       broadcastStart,
+				DetectedAt:           det.DetectedAt,
+				Reason:               reason,
+			}); err != nil {
+				s.log.Warn("supervisor: record dedup suppression failed",
+					zap.String("station_id", det.StationID),
+					zap.Int32("suppressed_short_id", det.CommercialShortID),
+					zap.Error(err))
+			}
+		}
 		s.log.Info("supervisor: detection suppressed by version disambiguation",
 			zap.String("station_id", det.StationID),
 			zap.Int32("suppressed_short_id", det.CommercialShortID),
