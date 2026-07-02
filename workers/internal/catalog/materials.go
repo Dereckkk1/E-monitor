@@ -122,6 +122,26 @@ func (m *Materials) Create(ctx context.Context, in CreateMaterialInput) (*Materi
 	return &mat, nil
 }
 
+// GetByClientAndSHA returns the material a client already has for a given
+// master_sha256, if any (oldest short_id wins for determinism). Used to prevent
+// uploading the SAME audio as a SECOND material — the double-count root the
+// audit surfaced (UNIUBE 130/138: same sha, two materials, each fanning out to
+// both campaigns → each airing counted twice). Returns pgx.ErrNoRows when the
+// client has no material with this sha. Scoped to the client on purpose: the
+// same audio across DIFFERENT clients can be legitimate (shared production).
+func (m *Materials) GetByClientAndSHA(ctx context.Context, clientID uuid.UUID, sha string) (*Material, error) {
+	var mat Material
+	row := m.pool.QueryRow(ctx, `SELECT `+materialColumns+`
+		FROM materials
+		WHERE client_id = $1 AND master_sha256 = $2
+		ORDER BY short_id ASC
+		LIMIT 1`, clientID, sha)
+	if err := scanMaterial(row, &mat); err != nil {
+		return nil, err
+	}
+	return &mat, nil
+}
+
 // Get returns a single material by ID. Returns pgx.ErrNoRows when not found.
 func (m *Materials) Get(ctx context.Context, id uuid.UUID) (*Material, error) {
 	var mat Material

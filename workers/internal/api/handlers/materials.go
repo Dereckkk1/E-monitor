@@ -164,6 +164,21 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dedup por áudio (audit — raiz do double-count UNIUBE 130/138): se o cliente
+	// já tem um material com este master_sha256, REUSA o existente em vez de criar
+	// um segundo. O mesmo áudio como 2 materiais duplicava a contagem (cada row
+	// fazia fan-out F-119 pras 2 campanhas). Reusar = 1 material/áudio, e o link
+	// da nova campanha nele credita ambas via fan-out, sem dobrar. Escopado ao
+	// cliente (mesmo áudio em clientes distintos pode ser produção legítima).
+	// O arquivo já está salvo em <sha>.<ext> (conteúdo idêntico), então nada a limpar.
+	if existing, gerr := h.Repo.GetByClientAndSHA(r.Context(), clientID, sha); gerr == nil {
+		writeJSON(w, http.StatusOK, existing)
+		return
+	} else if !errors.Is(gerr, pgx.ErrNoRows) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	// Probe the real audio duration with ffprobe — same helper commercials.go
 	// uses (both live in package handlers). This was stubbed at 30.0 (F-88),
 	// which made every uploaded material report 30s regardless of the file.
