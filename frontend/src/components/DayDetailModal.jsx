@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useDetections, useCreateManualBatchDetection } from '../api/hooks'
+import { useDetections, useCreateManualBatchDetection, useDistributionOverrides } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import BadgePill from './BadgePill'
 import AudioPlayer from './AudioPlayer'
@@ -93,7 +93,25 @@ function weekdayMaskLabel(mask) {
 // janela ±15 min; empate → janela mais curta, depois começo mais cedo) pra a
 // soma nunca estourar o total autoritativo. In_slot que não casa nenhuma janela
 // atual (regra editada desde a categorização) vai pra `changedWindow`.
-function buildDayPlan({ rules, dateISO, detections, expected }) {
+function buildDayPlan({ rules, override = null, dateISO, detections, expected }) {
+  // Override supersede as regras nesta célula+dia (categorizer.go / recatClassifyTailSQL).
+  // A janela do override é a única que rege; atribuímos in_slot a ela (±15min).
+  if (override) {
+    const s = hhmmToSec(override.time_start), e = hhmmToSec(override.time_end)
+    let played = 0, changedWindow = 0
+    for (const det of detections) {
+      if (det.category !== 'in_slot') continue
+      const t = spSecOfDay(det.detected_at)
+      if (t >= s - SLOT_TOLERANCE_SEC && t <= e + SLOT_TOLERANCE_SEC) played++
+      else changedWindow++
+    }
+    return {
+      override: { ...override, played },
+      applicable: [], notApplicable: [], played: {}, changedWindow,
+      sumTargets: override.plays_expected ?? 0, overrideLikely: true,
+    }
+  }
+
   const applicable = rules.filter(r => ruleAppliesOn(r, dateISO))
   const notApplicable = rules
     .filter(r => !ruleAppliesOn(r, dateISO))
@@ -128,7 +146,7 @@ function buildDayPlan({ rules, dateISO, detections, expected }) {
   const sumTargets = applicable.reduce((n, r) => n + (r.plays_per_day || 0), 0)
   const overrideLikely = expected != null && expected !== sumTargets
 
-  return { applicable, notApplicable, played, changedWindow, sumTargets, overrideLikely }
+  return { override: null, applicable, notApplicable, played, changedWindow, sumTargets, overrideLikely }
 }
 
 function fmtTime(iso) {
@@ -266,6 +284,10 @@ export default function DayDetailModal({
     limit: 200,
   })
 
+  // Override do dia (fonte de verdade da célula quando existe — precede a regra).
+  const { data: dayOverrides = [] } = useDistributionOverrides(campaignId, dateISO, dateISO)
+  const override = dayOverrides.find(o => o.type_id === typeId && o.station_id === stationId) ?? null
+
   // useDetections may return either an array directly or {data: [...]}
   const detections = Array.isArray(detectionsResp)
     ? detectionsResp
@@ -331,6 +353,7 @@ export default function DayDetailModal({
           {/* Plano do dia: faixas que valem hoje, alvo × tocou, e o saldo. */}
           <DayPlan
             rules={rules}
+            override={override}
             dateISO={dateISO}
             detections={filtered}
             cellSummary={cellSummary}
@@ -1216,10 +1239,11 @@ function deriveSummary(detections, sumTargets) {
   }
 }
 
-function DayPlan({ rules, dateISO, detections = [], cellSummary, materialTitleById }) {
+function DayPlan({ rules, override = null, dateISO, detections = [], cellSummary, materialTitleById }) {
   const [showOff, setShowOff] = useState(false)
-  const plan = buildDayPlan({ rules, dateISO, detections, expected: cellSummary?.expected ?? null })
-  const { applicable, notApplicable, played, changedWindow, sumTargets, overrideLikely } = plan
+  const plan = buildDayPlan({ rules, override, dateISO, detections, expected: cellSummary?.expected ?? null })
+  const { applicable, notApplicable, played, changedWindow, sumTargets } = plan
+  const gov = plan.override
 
   const eff = cellSummary ?? deriveSummary(detections, sumTargets)
   const expected = eff.expected ?? 0
@@ -1278,15 +1302,31 @@ function DayPlan({ rules, dateISO, detections = [], cellSummary, materialTitleBy
       </div>
 
       {/* Faixas do dia */}
-      {applicable.length > 0 ? (
-        applicable.map((r, i) => (
+      {gov ? (
+        <>
+          <div style={{ padding: '6px 12px 0', fontSize: 10.5, color: '#92400e', lineHeight: 1.4 }}>
+            <span style={{
+              display: 'inline-block', padding: '1px 6px', borderRadius: 999,
+              background: '#fef3c7', border: '1px solid #fcd34d',
+              fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em',
+              textTransform: 'uppercase', fontFamily: 'var(--font-heading)',
+            }}>ajuste do dia</span>
+            {' '}substitui a regra nesta emissora.
+          </div>
           <PlanRow
-            key={r.id}
-            rule={r}
-            played={played[r.id] ?? 0}
+            rule={{
+              id: 'override', time_start: gov.time_start, time_end: gov.time_end,
+              plays_per_day: gov.plays_expected ?? 0, material_ids: [],
+            }}
+            played={gov.played}
             materialTitleById={materialTitleById}
-            first={i === 0}
+            first
           />
+        </>
+      ) : applicable.length > 0 ? (
+        applicable.map((r, i) => (
+          <PlanRow key={r.id} rule={r} played={played[r.id] ?? 0}
+            materialTitleById={materialTitleById} first={i === 0} />
         ))
       ) : (
         <p style={{ margin: 0, padding: '8px 12px', fontSize: 12, color: '#64748b', lineHeight: 1.45 }}>
@@ -1296,12 +1336,6 @@ function DayPlan({ rules, dateISO, detections = [], cellSummary, materialTitleBy
         </p>
       )}
 
-      {/* Notas curtas: override / faixa editada */}
-      {overrideLikely && applicable.length > 0 && (
-        <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#92400e', lineHeight: 1.45 }}>
-          Esperado ({expected}) ≠ soma das faixas ({sumTargets}): ajuste manual sobrepõe a regra.
-        </p>
-      )}
       {changedWindow > 0 && applicable.length > 0 && (
         <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>
           +{changedWindow} tocou na faixa, mas fora das janelas atuais (regra editada depois).
