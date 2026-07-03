@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -12,8 +13,23 @@ import (
 	"radiocheck/internal/catalog"
 )
 
+// overrideStore é a fatia de catalog.DistributionOverrides que o handler usa —
+// interface p/ permitir mock no teste sem DB.
+type overrideStore interface {
+	Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error
+	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+	ListByCampaignAndDateRange(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]catalog.DistributionOverride, error)
+}
+
+// OverrideRecategorizer redispara a recat de uma célula após mudança de override.
+// Satisfeita por *catalog.DistributionRules.
+type OverrideRecategorizer interface {
+	RecategorizeForOverride(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+}
+
 type DistributionOverridesHandler struct {
-	Repo *catalog.DistributionOverrides
+	Repo  overrideStore
+	Recat OverrideRecategorizer
 }
 
 type overridePayload struct {
@@ -68,6 +84,13 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if h.Recat != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
+		}()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -90,6 +113,13 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 	if err := h.Repo.Delete(r.Context(), campaignID, p.TypeID, p.StationID, date); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if h.Recat != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
+		}()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
