@@ -394,3 +394,13 @@ WITH scope AS (
 		materialID)
 	return err
 }
+
+// RecategorizeForOverride re-classifica as detections de UMA célula (campaign,
+// type, station, dia) após criar/editar/apagar um override. Escopo preciso: só
+// aquele dia/tipo/estação. recategorizeScope lê rules+overrides ao vivo, então
+// serve tanto p/ Upsert (aplica o override) quanto p/ Delete (célula reverte pra
+// regra). O tail atualiza detections.category E detection_campaigns.category.
+func (dr *DistributionRules) RecategorizeForOverride(ctx context.Context,
+	campaignID, typeID, stationID uuid.UUID, forDate time.Time) error {
+	return dr.recategorizeScope(ctx, campaignID, &typeID, []uuid.UUID{stationID}, forDate, forDate)
+}
