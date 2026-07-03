@@ -80,7 +80,7 @@ function evidenceChip(status) {
     generating: { label: 'Gerando',      tone: 'is-warning' },
     missing:    { label: 'Indisponível', tone: 'is-muted' },
     failed:     { label: 'Falhou',       tone: 'is-danger' },
-    expired:    { label: 'Expirada',     tone: 'is-muted' },
+    expired:    { label: 'Expirada',     tone: 'is-warning' },
   }
   return map[status] ?? { label: status ?? '—', tone: 'is-muted' }
 }
@@ -118,6 +118,16 @@ function WarnIcon() {
       <path d="M11 2L2 19h18L11 2z" />
       <path d="M11 9v4" />
       <circle cx="11" cy="16.5" r="0.6" fill="currentColor" />
+    </svg>
+  )
+}
+
+function HourglassIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 2h12M6 22h12" />
+      <path d="M6 2c0 4 3 6 6 8 3-2 6-4 6-8" />
+      <path d="M6 22c0-4 3-6 6-8 3 2 6 4 6 8" />
     </svg>
   )
 }
@@ -290,7 +300,12 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError, awaitin
             {awaiting ? 'Aguardando censura' : chip.label}
           </span>
         </div>
-        <div className="dd-evidence-state">
+        <div className={`dd-evidence-state${status === 'expired' ? ' is-expired' : ''}`}>
+          {status === 'expired' && (
+            <span className="dd-evidence-state-icon" aria-hidden="true">
+              <HourglassIcon />
+            </span>
+          )}
           <span className="dd-evidence-state-title">{title}</span>
           <span className="dd-evidence-state-desc">{desc}</span>
         </div>

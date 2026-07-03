@@ -1609,11 +1609,25 @@ function DetectionsList({ grouped, materialType, activePlayerId, evidenceBlobUrl
                             </button>
                           </>
                         )}
-                        {!hasEvidence && (
-                          <span
-                            style={{ fontSize: 11, color: '#94a3b8', cursor: d.evidence_status === 'expired' ? 'help' : undefined }}
-                            title={d.evidence_status === 'expired' ? EVIDENCE_EXPIRED_MESSAGE : undefined}
-                          >
+                        {!hasEvidence && d.evidence_status === 'expired' && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: 'var(--c-warning)' }}>
+                            áudio expirado
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); window.alert(EVIDENCE_EXPIRED_MESSAGE) }}
+                              aria-label="Por que o áudio não está disponível?"
+                              title="O que significa?"
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                width: 14, height: 14, padding: 0, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                                background: 'color-mix(in srgb, var(--c-warning) 22%, transparent)',
+                                color: 'var(--c-warning)', fontSize: 9, fontWeight: 800, fontStyle: 'italic', lineHeight: 1,
+                              }}
+                            >i</button>
+                          </span>
+                        )}
+                        {!hasEvidence && d.evidence_status !== 'expired' && (
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}>
                             {evidenceLabel || 'indisponível'}
                           </span>
                         )}

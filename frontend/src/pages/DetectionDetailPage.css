@@ -435,6 +435,28 @@
   line-height: 1.5;
 }
 
+/* Expired: informational YELLOW callout (retenção §11.4). Not an error state —
+   the airing is valid, only the audio aged out. Solid tint + border (mirrors
+   .dd-retracted-ribbon), never a side-stripe, never alarmist red. */
+.dd-evidence-state.is-expired {
+  border: 1px solid color-mix(in srgb, var(--c-warning) 40%, transparent);
+  background: color-mix(in srgb, var(--c-warning) 10%, transparent);
+  color: var(--c-text);
+}
+.dd-evidence-state.is-expired .dd-evidence-state-title { color: var(--c-warning); }
+.dd-evidence-state.is-expired .dd-evidence-state-desc { color: var(--c-text-2); }
+.dd-evidence-state-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-warning) 18%, transparent);
+  color: var(--c-warning);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
 .dd-spinner {
   width: 22px;
   height: 22px;
