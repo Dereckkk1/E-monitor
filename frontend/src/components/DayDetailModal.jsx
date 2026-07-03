@@ -1403,8 +1403,9 @@ function DayPlan({ rules, override = null, dateISO, detections = [], cellSummary
       )}
       {eff.out_slot > 0 && govWindow && (
         <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#92400e', lineHeight: 1.45 }}>
-          {eff.out_slot} tocou fora da faixa {govWindow} ({govSource}) — conta como fora do prazo.
-          Tolerância de 15 min já considerada.
+          {gov && gov.plays_expected === 0
+            ? `${eff.out_slot} tocou, mas o ajuste do dia zerou a meta — toda tocada conta como fora do prazo.`
+            : `${eff.out_slot} tocou fora da faixa ${govWindow} (${govSource}) — conta como fora do prazo. Tolerância de 15 min já considerada.`}
         </p>
       )}
 
