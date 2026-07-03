@@ -130,6 +130,17 @@ func (j *TieringJob) moveTier(
 			zap.String("from", fromTier), zap.String("to", toTier))
 		return 0, 0
 	}
+	// Sem bucket cold/archive separado (hot==cold==mesmo MinIO), o "move" é um
+	// no-op: o Get→Put na mesma chave falha com "request stream is not seekable"
+	// (stream não-seekable) e erra em TODA linha >maxAge antes do prune apagá-la
+	// (incidente 2026-07-02). Pula por completo — a retenção local (pruneExpired)
+	// é quem cuida do storage nesse modo. Quando um R2 real for configurado
+	// (buckets distintos), o move volta a rodar normalmente.
+	if src.Bucket() == dst.Bucket() {
+		j.Log.Info("evidence tiering: hot/cold no mesmo bucket — sem tiering físico; retenção via prune local",
+			zap.String("from", fromTier), zap.String("to", toTier), zap.String("bucket", src.Bucket()))
+		return 0, 0
+	}
 	cutoff := j.Now().Add(-maxAge)
 
 	rows, err := j.DB.Query(ctx, `

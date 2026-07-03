@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"radiocheck/internal/storage"
 )
 
 // TestTieringJobDefaults verifies that NewTieringJob populates sensible
@@ -40,6 +42,24 @@ func TestMoveTierSkipsOnNilBuckets(t *testing.T) {
 	}
 	if errs != 0 {
 		t.Errorf("errs = %d, want 0", errs)
+	}
+}
+
+// TestMoveTierSkipsWhenSameBucket verifies that when hot and cold resolve to the
+// SAME bucket (no separate cold tier — the prod reality behind the local-retention
+// prune), moveTier skips entirely instead of attempting a Get→Put copy that fails
+// with "request stream is not seekable" and spams errors on every 30d+ row
+// (incidente 2026-07-02). j.DB is nil, so if the skip guard is missing moveTier
+// proceeds to j.DB.Query and panics — the test would fail loudly.
+func TestMoveTierSkipsWhenSameBucket(t *testing.T) {
+	c, err := storage.New(context.Background(), "http://minio:9000", "", "evidence", "us-east-1", "k", "s")
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	j := NewTieringJob(nil, c, c, c, zap.NewNop())
+	moved, errs := j.moveTier(context.Background(), "hot", "cold", c, c, time.Hour, "")
+	if moved != 0 || errs != 0 {
+		t.Fatalf("moved=%d errs=%d; want 0/0 (skipped same-bucket move)", moved, errs)
 	}
 }
 

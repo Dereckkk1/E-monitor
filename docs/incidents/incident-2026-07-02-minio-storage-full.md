@@ -106,8 +106,9 @@ então apagar objeto = perda permanente — o desbloqueio lossless é crescer o 
 - [ ] **1º deploy com `EVIDENCE_PRUNE_DRY_RUN=true`** — conferir os counts logados
       (`evidence prune: DRY-RUN`), depois remover a env.
 - [ ] Confirmar recuperação: `evidence_status` volta a `available`, `failed` cai.
-- [ ] Decidir se a retenção deve **isentar** áudio de censura enviado manualmente
-      (hoje o prune é uniforme; o PDF de comprovante já é preservado).
+- [x] Isentar áudio de censura enviado manualmente do prune (`manual_at IS NULL
+      AND proof_batch_id IS NULL` no predicado) — prova enviada pela emissora não
+      some por idade. O PDF de comprovante já era preservado.
 - [ ] (Futuro) Ligar o offload real pro R2 (§11.4 original) se quiser retenção
       >30 dias com durabilidade offsite — hoje a evidência é **cópia única**.
 

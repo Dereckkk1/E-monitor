@@ -58,18 +58,18 @@ próximo passo retenta. Testado em [prune_test.go](../../workers/internal/eviden
 
 ## O que NÃO é podado
 
+- **Censura enviada manualmente** (`manual_at IS NOT NULL` OU `proof_batch_id IS
+  NOT NULL`): isenta do prune. É prova enviada pela emissora/operador, cópia
+  única, não some por idade. Só o **áudio capturado automaticamente** expira.
 - **Comprovante PDF** (`manual_proof_batches`, `proof_batch_id`): storage separado,
   intocado — a prova de cobrança sobrevive.
 - Linhas que não são `available` (missing/failed/audit_rejected/ambiguous/manual sem áudio).
 
 > ⚠️ **Cópia única.** Sem R2, o clipe de áudio no MinIO é a única cópia (não entra no
-> `pg_dump`). O prune apaga definitivamente após N dias. Retenção >30d **com**
-> durabilidade offsite exige ligar o offload pro R2 do §11.4.
->
-> **Aberto:** o prune hoje é uniforme (poda áudio de censura enviado manualmente
-> também). Se a censura manual deve ser preservada além dos N dias, adicionar
-> `manual_at IS NULL AND proof_batch_id IS NULL` ao predicado de
-> `listExpiryCandidates`. Ver ação pós-incidente.
+> `pg_dump`). O prune apaga definitivamente após N dias o áudio **automático**.
+> Retenção >30d **com** durabilidade offsite exige ligar o offload pro R2 do §11.4.
+> A censura manual, sendo isenta, acumula no disco — volume desprezível (upload
+> manual é raro).
 
 ## UI
 
