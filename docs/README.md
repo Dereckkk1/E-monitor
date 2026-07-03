@@ -2,7 +2,7 @@
 
 Índice geral. Todo doc tem header YAML no topo com `status`, `ultima-verificacao` e `codigo-relacionado`. Use isso para saber se um doc ainda reflete o código antes de confiar nele.
 
-> **Auditoria mais recente:** [AUDIT-2026-05-15.md](AUDIT-2026-05-15.md) — classificação por status + divergências encontradas.
+> **Auditoria mais recente:** [AUDIT-2026-07-02.md](AUDIT-2026-07-02.md) — audit completo do sistema de detecção (notas 0–10 por área, 73 achados, plano P0/P1/P2). Anterior: [AUDIT-2026-05-15.md](AUDIT-2026-05-15.md).
 
 ---
 
@@ -11,7 +11,8 @@
 ```
 docs/
   README.md                — este índice
-  AUDIT-2026-05-15.md      — última auditoria (histórico, não substituir)
+  AUDIT-2026-07-02.md      — última auditoria (sistema de detecção, cabo a rabo)
+  AUDIT-2026-05-15.md      — auditoria anterior (histórico, não substituir)
   architecture/            — como o sistema funciona (conceitual, estável)
   features/                — feature implementada (uma feature por arquivo)
   operations/              — operar o sistema em prod
@@ -66,6 +67,7 @@ docs/
 | [client-deactivation.md](features/client-deactivation.md) | Desativar cliente (reversível) + delete bloqueado vira 409 com contagem de vínculos; login gating de cliente inativo |
 | [webhooks.md](features/webhooks.md) | Entrega de eventos com HMAC-SHA256 + retry + outbox |
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
+| [evidence-local-retention.md](features/evidence-local-retention.md) | Prune por idade do clipe de evidência no MinIO (§11.4 variante prod): apaga áudio >N dias (`EVIDENCE_RETENTION_DAYS`=30, dry-run pro 1º rollout) e marca a detecção `expired`; PDF de comprovante preservado (incidente 2026-07-02) |
 | [broadcaster-search.md](features/broadcaster-search.md) | Busca multi-token AND/field-OR de emissoras |
 | [material-library.md](features/material-library.md) | Catálogo de materiais por cliente (decuplado de campanha) |
 | [material-fingerprint-pipeline.md](features/material-fingerprint-pipeline.md) | Pipeline polimórfico (material_id OU commercial_id) + hot-reload |
@@ -115,6 +117,7 @@ docs/
 | [incident-2026-06-17-migration-0039-dirty.md](incidents/incident-2026-06-17-migration-0039-dirty.md) | 2026-06-17 | Backfill 0039 colidiu em `materials.short_id UNIQUE` em prod (DB local vazio deu falso verde) → schema dirty → deploy travado. Defesa: teste de migrations em sombra no deploy.sh + 0024 endurecida contra DB vazio |
 | [incident-2026-06-22-s3-checksum-upload-failure.md](incidents/incident-2026-06-22-s3-checksum-upload-failure.md) | 2026-06-22 | AWS SDK v2 (checksum CRC default) quebra todo PutObject contra MinIO sem TLS → upload/tiering de evidência falham → `failed` na modal + audit pulado faz "15 contar como 30". Bug latente no go.mod, ativado pelo 1º rebuild. Fix: `RequestChecksumCalculation=when_required` |
 | [incident-2026-06-25-uniube-cross-campaign-misattribution.md](incidents/incident-2026-06-25-uniube-cross-campaign-misattribution.md) | 2026-06-25 | UNIUBE: mesmo áudio (master_sha256 igual) em 2 campanhas sobrepostas compartilhando emissora → desambiguação §18.2.2 elege o menor short_id, a outra campanha zera. Fix manual (forward+backfill+recat, 2 emissoras/75 veic.) + fix definitivo F-119 multi-atribuição (tabela `detection_campaigns`, flag `MULTI_ATTRIBUTION`) |
+| [incident-2026-07-02-minio-storage-full.md](incidents/incident-2026-07-02-minio-storage-full.md) | 2026-07-02 | MinIO 100% cheio (`/mnt/data`) → PutObject 507 `XMinioStorageFull` → upload de evidência falha intermitente, UI culpa o "encoder". Causa: tiering hot=cold=archive no mesmo bucket nunca deleta → evidência acumula. 2 alertas mortos (métrica de upload nunca incrementada, DiskSpaceCritical só olhava `/`). Fix: retenção local (prune >30d, marca `expired`) + alertas + `expired` na UI (migration 0050) |
 
 ## `roadmap/` — follow-ups e planos de fase
 

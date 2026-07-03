@@ -4,6 +4,9 @@ Sistema de monitoramento de veiculação de comerciais em rádios AM/FM via stre
 
 ---
 
+## IMPORTANTE
+Quando for trabalhar com Sub-agentes, leia o doc em /docs/subagentic-use/`Subagents-usage.md` para extrair o melhor de cada sub-agente.
+
 ## Regras Críticas
 
 ### 1. O plano é lei — mas pode ser alterado com justificativa
