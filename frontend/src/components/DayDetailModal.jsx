@@ -422,6 +422,8 @@ export default function DayDetailModal({
           open={ovAnchor != null}
           anchorRect={ovAnchor}
           onClose={() => setOvAnchor(null)}
+          zIndex={260}
+          allowReplicate={false}
           currentRuleValue={rules.reduce((n, r) =>
             ruleAppliesOn(r, dateISO) ? n + (r.plays_per_day || 0) : n, 0)}
           currentOverrideValue={override ? override.plays_expected : null}
