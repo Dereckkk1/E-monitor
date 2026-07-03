@@ -1244,6 +1244,12 @@ function DayPlan({ rules, override = null, dateISO, detections = [], cellSummary
   const plan = buildDayPlan({ rules, override, dateISO, detections, expected: cellSummary?.expected ?? null })
   const { applicable, notApplicable, played, changedWindow, sumTargets } = plan
   const gov = plan.override
+  const govWindow = gov
+    ? `${gov.time_start}–${gov.time_end}`
+    : (applicable.length
+        ? applicable.map(r => `${r.time_start.slice(0, 5)}–${r.time_end.slice(0, 5)}`).join(', ')
+        : null)
+  const govSource = gov ? 'ajuste do dia' : 'da regra'
 
   const eff = cellSummary ?? deriveSummary(detections, sumTargets)
   const expected = eff.expected ?? 0
@@ -1339,6 +1345,12 @@ function DayPlan({ rules, override = null, dateISO, detections = [], cellSummary
       {changedWindow > 0 && applicable.length > 0 && (
         <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>
           +{changedWindow} tocou na faixa, mas fora das janelas atuais (regra editada depois).
+        </p>
+      )}
+      {eff.out_slot > 0 && govWindow && (
+        <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#92400e', lineHeight: 1.45 }}>
+          {eff.out_slot} tocou fora da faixa {govWindow} ({govSource}) — conta como fora do prazo.
+          Tolerância de 15 min já considerada.
         </p>
       )}
 
