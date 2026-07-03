@@ -26,6 +26,8 @@ export default function OverridePopover({
   currentOverrideWindow = null,
   lastUsedWindow = null,
   materialTitle, stationName, date,
+  zIndex = 60,
+  allowReplicate = true,
 }) {
   // Default window resolution (priority order — first match wins):
   //   1. existing override → use its window
@@ -72,7 +74,14 @@ export default function OverridePopover({
 
   if (!open || !anchorRect) return null
 
-  const top  = anchorRect.top  + window.scrollY - 320
+  // Abre acima da âncora quando há espaço (grid do DistributionStep); senão
+  // abaixo (ex.: botão no header do modal, colado no topo do viewport — sem o
+  // fallback o top ia fortemente negativo e o popover sumia acima da tela).
+  const POPOVER_H = 320
+  const openAbove = anchorRect.top >= POPOVER_H + 12
+  const top = openAbove
+    ? anchorRect.top + window.scrollY - POPOVER_H
+    : anchorRect.bottom + window.scrollY + 8
   const left = Math.max(8, anchorRect.left + window.scrollX + anchorRect.width / 2 - 150)
   const dateStr = date ? date.slice(0, 10).split('-').reverse().join('/') : '—'
   const multiRule = currentRuleWindows.length > 1 && !currentOverrideWindow
@@ -86,7 +95,7 @@ export default function OverridePopover({
 
   return createPortal(
     <div ref={ref} style={{
-      position: 'absolute', top, left, width: 300, zIndex: 60,
+      position: 'absolute', top, left, width: 300, zIndex,
       background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
       padding: '14px 16px',
       boxShadow: '0 10px 25px -5px rgba(15,23,42,0.18), 0 4px 10px -4px rgba(15,23,42,0.08)',
@@ -171,21 +180,25 @@ export default function OverridePopover({
         )}
       </div>
 
-      {/* Replication checkbox */}
-      <label style={{
-        display: 'flex', gap: 6, alignItems: 'flex-start',
-        marginBottom: 12, cursor: 'pointer', fontSize: 11, color: '#475569',
-      }}>
-        <input type="checkbox" checked={applyToOthers}
-               onChange={e => setApplyToOthers(e.target.checked)}
-               style={{ marginTop: 2 }} />
-        <span>
-          Aplicar essa mesma faixa nas demais células deste tipo neste mês
-          <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
-            (afeta apenas células que já têm override)
-          </div>
-        </span>
-      </label>
+      {/* Replication checkbox — oculto quando o chamador edita UMA célula só
+          (ex.: modal do dia). applyToOthers fica no default false, então não
+          renderizar já basta pra não replicar silenciosamente. */}
+      {allowReplicate && (
+        <label style={{
+          display: 'flex', gap: 6, alignItems: 'flex-start',
+          marginBottom: 12, cursor: 'pointer', fontSize: 11, color: '#475569',
+        }}>
+          <input type="checkbox" checked={applyToOthers}
+                 onChange={e => setApplyToOthers(e.target.checked)}
+                 style={{ marginTop: 2 }} />
+          <span>
+            Aplicar essa mesma faixa nas demais células deste tipo neste mês
+            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
+              (afeta apenas células que já têm override)
+            </div>
+          </span>
+        </label>
+      )}
 
       <div style={{ display: 'flex', gap: 6 }}>
         {currentOverrideValue != null && (
