@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useDetections, useCreateManualBatchDetection, useDistributionOverrides } from '../api/hooks'
+import {
+  useDetections, useCreateManualBatchDetection, useDistributionOverrides,
+  useUpsertOverride, useDeleteOverride,
+} from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import BadgePill from './BadgePill'
 import AudioPlayer from './AudioPlayer'
+import OverridePopover from './OverridePopover'
 import api from '../api/client'
 import { EVIDENCE_EXPIRED_MESSAGE } from '../utils/evidenceRetention'
 
@@ -212,6 +216,9 @@ export default function DayDetailModal({
   const [evidenceBlobUrls, setEvidenceBlobUrls] = useState({})
   const blobUrlsRef = useRef({})
   const [loadingId, setLoadingId] = useState(null)
+  const upsertOverride = useUpsertOverride()
+  const deleteOverride = useDeleteOverride()
+  const [ovAnchor, setOvAnchor] = useState(null) // DOMRect | null
 
   // Esc to close
   useEffect(() => {
@@ -345,7 +352,19 @@ export default function DayDetailModal({
               {WD_LONG[weekdayIndexISO(dateISO)]}, {fmtDate(dateISO)}
             </p>
           </div>
-          <button className="modal-close" onClick={onClose} type="button">×</button>
+          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+            {isAdmin && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={e => setOvAnchor(e.currentTarget.getBoundingClientRect())}
+                style={{ marginRight: 8 }}
+              >
+                Ajustar faixa deste dia
+              </button>
+            )}
+            <button className="modal-close" onClick={onClose} type="button">×</button>
+          </div>
         </div>
 
         <div className="modal-body" style={{ padding: 20, flex: 1, overflowY: 'auto', minHeight: 0 }}>
@@ -398,6 +417,39 @@ export default function DayDetailModal({
             </div>
           )}
         </div>
+
+        <OverridePopover
+          open={ovAnchor != null}
+          anchorRect={ovAnchor}
+          onClose={() => setOvAnchor(null)}
+          currentRuleValue={rules.reduce((n, r) =>
+            ruleAppliesOn(r, dateISO) ? n + (r.plays_per_day || 0) : n, 0)}
+          currentOverrideValue={override ? override.plays_expected : null}
+          currentRuleWindows={rules.filter(r => ruleAppliesOn(r, dateISO))
+            .map(r => ({ time_start: r.time_start.slice(0, 5), time_end: r.time_end.slice(0, 5) }))}
+          currentOverrideWindow={override
+            ? { time_start: override.time_start, time_end: override.time_end } : null}
+          materialTitle={materialType?.name ?? ''}
+          stationName={station?.name ?? ''}
+          date={dateISO}
+          onApply={async (value, timeStart, timeEnd) => {
+            // useUpsertOverride.mutationFn é ({ campaignId, ...body }) — o
+            // body vai FLAT junto de campaignId, não aninhado (hooks.js).
+            await upsertOverride.mutateAsync({
+              campaignId,
+              type_id: typeId, station_id: stationId, for_date: dateISO,
+              plays_expected: value, time_start: timeStart, time_end: timeEnd,
+            })
+            setOvAnchor(null)
+          }}
+          onRevert={async () => {
+            await deleteOverride.mutateAsync({
+              campaignId,
+              type_id: typeId, station_id: stationId, for_date: dateISO,
+            })
+            setOvAnchor(null)
+          }}
+        />
       </div>
     </div>
   )
