@@ -1,16 +1,19 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-29
+ultima-verificacao: 2026-07-03
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
   - migrations/0019_rules_by_type.up.sql
   - migrations/0043_rule_material_scope.up.sql
   - workers/internal/api/handlers/distribution_rules.go
+  - workers/internal/api/handlers/distribution_overrides.go
   - workers/internal/api/handlers/materials.go
   - workers/internal/catalog/distribution_rules.go
   - workers/internal/catalog/materials.go
   - workers/internal/categorizer/categorizer.go
+  - frontend/src/components/DayDetailModal.jsx
+  - frontend/src/components/OverridePopover.jsx
 ---
 
 # Distribution Rules — Semantica e Operacao
@@ -99,6 +102,12 @@ Quando uma regra e criada/editada/excluida via API, o handler `DistributionRules
 
 A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_rules.go` — sem N+1 queries. Para uma campanha inteira leva milissegundos mesmo com centenas de milhares de detections.
 
+### Gatilho por override (create/edit/delete)
+
+Criar, editar ou apagar um override (`PUT`/`DELETE /distribution-overrides`) também dispara re-categorizacao — `DistributionOverridesHandler.Upsert`/`Delete` chamam `RecategorizeForOverride(campaignID, typeID, stationID, forDate)` em goroutine best-effort (mesmo padrao do handler de regra: sem bloquear a resposta, sem retry se falhar). O escopo e a **celula exata** (campanha + tipo + emissora + dia), via `recategorizeScope` com `stationIDs=[stationID]` e `from=to=forDate` — nao a campanha inteira.
+
+Isso fecha uma lacuna que existia antes: mudar um override só trocava o `expected` calculado (via `daily_play_summary`), mas as detections já persistidas continuavam com a categoria antiga (`detections.category`, gravada no insert contra a regra vigente na hora). Uma tocada que era `in_slot` pela regra podia silenciosamente virar `out_slot` (ou vice-versa) quando o override definia uma janela diferente, sem que ninguém recategorizasse o passado — o operador via o override novo, mas a lista de detections e a projeção `detection_campaigns` continuavam refletindo a janela antiga. Igual ao fix de regra (2026-06-17, ver acima), o SQL do tail atualiza `detections.category` **e** `detection_campaigns.category` na mesma passada.
+
 ### Gatilho por troca de tipo do material (não só por rule)
 
 A categoria é casada por **tipo** (`r.type_id = material.type_id`), então mudar o `type_id` de um material também invalida a categoria gravada das detections dele — calculada no insert com o tipo antigo. Sem recategorizar, uma detection que passa a casar uma regra do tipo novo continua `orphan` e some pra "bônus (sem regra)" no resumo diário.
@@ -116,6 +125,15 @@ A faixa horária das rules é comparada com folga de **±900 segundos (15 min)**
 A tolerância existe pra absorver jitter de stream (buffer + atraso de programação ao vivo) — o operador entende "tocou às 6h" mesmo quando o trecho real veiculou às 05:45.
 
 Antes deste fix (2026-05-26), o SQL usava `BETWEEN r.time_start AND r.time_end` direto: detections que o Go categorizer tinha marcado `in_slot` viravam `out_slot` na primeira recategorize disparada por criação/edição de rule. Sintoma reportado pelo operador: "a tolerância não está funcionando, contagem some quando edito a regra".
+
+### Leitura no modal — por que ficou fora
+
+O `DayDetailModal` da página `/detections` (bloco "Plano do dia", `DayPlan` em `frontend/src/components/DayDetailModal.jsx`) reconstrói no cliente qual janela **governa** aquela célula naquele dia, pra explicar visualmente o `out_slot` — em vez de deixar o operador adivinhar por que uma tocada não contou como `in_slot`.
+
+- Quando existe override pra (tipo, emissora, dia), ele **precede** a(s) regra(s) — igual à semântica do backend (`daily_play_summary` / `recategorizeScope`). O modal mostra essa janela como uma faixa **"ajuste do dia"** (selo âmbar) em vez das faixas de regra, com o texto "substitui a regra nesta emissora".
+- A frase de rodapé que explica o `out_slot` (`"{N} tocou fora da faixa {janela} ({origem}) — conta como fora do prazo."`) nomeia explicitamente qual janela é a culpada — `ajuste do dia` quando há override, `da regra` caso contrário — em vez de só mostrar o número. Isso é a raiz do incidente que motivou esta branch: uma janela de override mais estreita que a regra fazia veiculações contarem como "fora do prazo" sem nenhuma pista visual de qual janela estava valendo.
+- Botão admin **"Ajustar faixa deste dia"** no header do modal abre o `OverridePopover` inline (`allowReplicate={false}`, escopo travado nessa única célula) pra criar/editar/reverter o override sem sair do modal. Aplicar dispara o mesmo `PUT /distribution-overrides` da grade — logo, o gatilho de re-categorização da célula (seção acima) roda igual.
+- O `OverridePopover` em si mostra um aviso soft (não bloqueante) quando a faixa digitada é mais estreita que a janela da regra (só quando há exatamente 1 regra aplicável — `currentRuleWindows.length === 1`): `"⚠ Faixa mais estreita que a regra ({janela da regra}) — veiculações fora dela contam como fora do prazo."`. É um lembrete no momento de decisão, não uma validação — o "Aplicar" continua habilitado mesmo com o aviso visível.
 
 ## Endpoints relevantes
 
