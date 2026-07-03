@@ -70,14 +70,15 @@ func TestDistributionOverridesHandler_List_BadFromDate(t *testing.T) {
 	}
 }
 
-type mockOverrideStore struct{ upserted, deleted bool }
+var _ OverrideRepo = (*catalog.DistributionOverrides)(nil)
+var _ OverrideRecategorizer = (*catalog.DistributionRules)(nil)
+
+type mockOverrideStore struct{}
 
 func (m *mockOverrideStore) Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error {
-	m.upserted = true
 	return nil
 }
 func (m *mockOverrideStore) Delete(ctx context.Context, c, t, s uuid.UUID, d time.Time) error {
-	m.deleted = true
 	return nil
 }
 func (m *mockOverrideStore) ListByCampaignAndDateRange(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]catalog.DistributionOverride, error) {
