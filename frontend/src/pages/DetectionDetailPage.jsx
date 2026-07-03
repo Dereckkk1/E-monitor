@@ -583,15 +583,27 @@ export default function DetectionDetailPage() {
     staleTime: 60_000,
   })
 
-  // Evidence presigned URL — only fetched when status === 'available'.
-  const evidenceUrlQuery = useQuery({
-    queryKey: ['detection-evidence-url', id],
-    queryFn:  () => api.get(`/detections/${id}/evidence/url`).then(r => r.data),
+  // Evidence audio — fetched through the authenticated API PROXY, not a
+  // presigned MinIO URL. A presigned URL bakes the MinIO host (localhost:9000)
+  // into the src, which the browser cannot follow from the public https origin
+  // (Chrome's Private Network Access blocks the loopback address space). The
+  // proxy endpoint streams the bytes with the JWT the axios client already
+  // sends, so we pull it as a blob and play a blob: object URL. Mirrors the
+  // same move in DayDetailModal. Only fetched when the clip exists.
+  const evidenceBlobQuery = useQuery({
+    queryKey: ['detection-evidence-blob', id],
+    queryFn:  () => api.get(`/detections/${id}/evidence`, { responseType: 'blob' }).then(r => r.data),
     enabled:  detection?.evidence_status === 'available',
-    // Presigned URL TTL is 5 minutes server-side; refresh slightly before
-    staleTime: 4 * 60 * 1000,
+    staleTime: Infinity, // a blob doesn't expire the way the presigned URL did
     retry: 1,
   })
+  // Object URL for the fetched blob, revoked when it changes or on unmount so
+  // we don't leak blob: handles.
+  const evidenceUrl = useMemo(
+    () => (evidenceBlobQuery.data ? URL.createObjectURL(evidenceBlobQuery.data) : null),
+    [evidenceBlobQuery.data],
+  )
+  useEffect(() => () => { if (evidenceUrl) URL.revokeObjectURL(evidenceUrl) }, [evidenceUrl])
 
   // Comprovante PDF do lote (manual_proof_batches). Admin-only — o endpoint
   // /proof/url vive no grupo admin. Habilita só quando há proof_batch_id.
@@ -602,24 +614,6 @@ export default function DetectionDetailPage() {
     staleTime: 4 * 60 * 1000,
     retry: 1,
   })
-
-  // Refresh the URL automatically when it expires while the user is still
-  // on the page. We compute the timeout from `expires_at` and re-trigger.
-  const [, setRefetchTick] = useState(0)
-  useEffect(() => {
-    const expiresAt = evidenceUrlQuery.data?.expires_at
-    if (!expiresAt) return
-    const ms = new Date(expiresAt).getTime() - Date.now() - 10_000 // refresh 10s early
-    if (ms <= 0) {
-      evidenceUrlQuery.refetch()
-      return
-    }
-    const t = setTimeout(() => {
-      evidenceUrlQuery.refetch()
-      setRefetchTick(x => x + 1)
-    }, ms)
-    return () => clearTimeout(t)
-  }, [evidenceUrlQuery.data?.expires_at, evidenceUrlQuery])
 
   const campaign = useMemo(() => {
     if (!campaignId || !campaignsQuery.data) return null
@@ -676,7 +670,6 @@ export default function DetectionDetailPage() {
   // ── Loaded ──────────────────────────────────────────────────
   const station    = stationQuery.data
   const commercial = commercialQuery.data
-  const evidenceUrl = evidenceUrlQuery.data?.url ?? null
   const hasAudio = detection.evidence_status === 'available' || !!detection.evidence_key
   // Manual/lote sem áudio = "aguardando censura": estado neutro, não erro vermelho.
   const awaitingCensura = !hasAudio && (!!detection.manual_at || !!detection.proof_batch_id)
@@ -801,8 +794,8 @@ export default function DetectionDetailPage() {
         <EvidencePanel
           detection={detection}
           evidenceUrl={evidenceUrl}
-          isLoadingUrl={evidenceUrlQuery.isLoading}
-          urlError={!!evidenceUrlQuery.error}
+          isLoadingUrl={evidenceBlobQuery.isLoading}
+          urlError={evidenceBlobQuery.isError}
           awaitingCensura={awaitingCensura}
         />
         <AnalysisPanel detection={detection} />

@@ -1,27 +1,42 @@
 ---
-status: implementado
-ultima-verificacao: 2026-05-15
+status: parcialmente-implementado
+ultima-verificacao: 2026-07-03
 codigo-relacionado:
   - workers/internal/storage/s3.go
   - workers/internal/api/handlers/detections.go
   - workers/internal/config/config.go
   - frontend/src/components/DayDetailModal.jsx
+  - frontend/src/pages/DetectionDetailPage.jsx
   - frontend/src/components/AudioPlayer.jsx
 ---
 
 # Evidence — URLs pré-assinadas
 
-Como o frontend interno entrega áudios de evidência ao navegador sem precisar
-proxiar o arquivo pela API.
+Mecanismo de URL pré-assinada (SigV4) do bucket de evidência.
+
+> **Estado atual (2026-07-03):** o **frontend interno NÃO usa mais** URLs
+> pré-assinadas para o áudio — ele **proxia os bytes pela API** (ver
+> [Fluxo no frontend](#fluxo-no-frontend)). O motivo é que a URL pré-assinada
+> assa o host do MinIO (`localhost:9000` em prod) na própria URL, e o navegador
+> em `https://e-monitor.online` (origem pública) **não consegue seguir um
+> endereço loopback** — o Chrome bloqueia com *"Permission was denied for this
+> request to access the `loopback` address space"* (Private Network Access).
+> Isso quebrou a reprodução na `DetectionDetailPage` em 2026-07-03; a
+> `DayDetailModal` já tinha migrado pro proxy antes. O endpoint `/evidence/url`
+> continua existindo, mas hoje só o **comprovante PDF** (`/proof/url`, admin)
+> ainda depende de presigned no browser — e por isso ainda sofre o mesmo
+> bloqueio (ver [Pendências](#pendências)).
 
 ## Por que existe
 
 `<audio>` e `<a download>` não anexam o header `Authorization` em GETs. Como o
 endpoint `GET /v1/internal/detections/{id}/evidence` exige JWT, o player do
-calendário falhava com 401 mesmo com o usuário logado. Em vez de aceitar token
-em query string (vaza em logs / referer) ou de baixar o arquivo via fetch + Blob
-(rouba memória, quebra seek), o frontend pede uma URL pré-assinada do bucket e
-usa essa URL diretamente no `<audio src>`.
+calendário falhava com 401. As duas saídas para isso são: (a) uma URL
+pré-assinada do bucket (SigV4, sem header) usada direto no `<audio src>`, ou
+(b) buscar os bytes via `fetch` autenticado e tocar um `blob:` object URL. A
+opção (a) foi a original, mas depende de o bucket ter um host público
+alcançável pelo browser — que não é o caso do MinIO atrás do tunnel. O
+frontend interno usa hoje a opção (b).
 
 Aderente ao §11.3 e §13 do `plano_implementacao.md`.
 
@@ -74,28 +89,43 @@ Em produção, defina `S3_PUBLIC_ENDPOINT` para o domínio público do bucket
 
 ## Fluxo no frontend
 
-[DayDetailModal.jsx](../../frontend/src/components/DayDetailModal.jsx) mantém um
-mapa `{detectionId -> {url, expiresAt}}` em estado local.
+Ambos os consumidores de áudio buscam os bytes pelo **proxy autenticado**
+`GET /v1/internal/detections/{id}/evidence` (que anexa o JWT do axios) com
+`responseType: 'blob'` e tocam um `blob:` object URL — **não** uma URL
+pré-assinada.
 
-- **Click em Play:** `ensureEvidenceUrl(id)` → seta no estado → AudioPlayer
-  renderiza com `src=url` → `useEffect` dispara `audio.play()`.
-- **Click em Download:** `ensureEvidenceUrl(id)` → cria âncora temporária com
-  `download` attribute, força click programático, remove. A URL pré-assinada
-  é seguida diretamente pelo navegador.
-- **Cache:** primeira chamada para uma detecção dispara fetch; chamadas
-  subsequentes reaproveitam até 30 s antes do expiry.
-- **Erro:** 4xx/5xx é silenciosamente engolido — próximo click tenta de novo.
+- [DayDetailModal.jsx](../../frontend/src/components/DayDetailModal.jsx) —
+  fetch on-click (`ensureEvidenceUrl`), cacheia o object URL por detecção num
+  ref, revoga todos no unmount.
+- [DetectionDetailPage.jsx](../../frontend/src/pages/DetectionDetailPage.jsx) —
+  o player carrega sozinho, então busca o blob via `useQuery`
+  (`['detection-evidence-blob', id]`, `staleTime: Infinity`) e deriva o object
+  URL com `useMemo`, revogando no cleanup. `isLoading`/`isError` da query
+  alimentam os estados do painel.
+- **Download:** âncora com `download` apontando pro mesmo `blob:` URL.
+- Um `blob:` object URL não expira como a antiga presigned (TTL 5 min), então
+  não há lógica de refresh.
 
-## O endpoint legado continua existindo
+## Pendências
 
-`GET /v1/internal/detections/{id}/evidence` (proxia o arquivo) e
-`GET /v1/detections/{id}/evidence` (API key, externo) seguem funcionando. São
-úteis para:
+- **Comprovante PDF (`GET /v1/internal/detections/{id}/proof/url`, admin)**
+  ainda devolve uma URL pré-assinada aberta direto no browser
+  ([DetectionDetailPage `ProofCard`](../../frontend/src/pages/DetectionDetailPage.jsx)).
+  Em prod isso sofre exatamente o mesmo bloqueio de loopback do áudio. Correção
+  simétrica: criar um proxy `GET /detections/{id}/proof` (espelhando o de
+  evidência) e buscar o PDF como blob. Não feito ainda — a decisão de 2026-07-03
+  foi migrar só o áudio (o que estava reportado quebrado) e deixar o comprovante
+  como follow-up.
 
+## O endpoint de proxy (caminho atual do browser)
+
+`GET /v1/internal/detections/{id}/evidence` (proxia o arquivo com JWT) é o
+caminho que o frontend interno usa hoje. `GET /v1/detections/{id}/evidence`
+(API key, externo) também existe. São úteis para:
+
+- Frontend interno tocar áudio sem depender de host público do bucket.
 - Clientes externos via API key (não passam por SigV4).
 - Testes via `curl` com header `Authorization`.
-- Cenários onde o storage não suporta presigning ou está atrás de um proxy
-  que invalida assinaturas.
 
 ## Por que TTL curto
 
