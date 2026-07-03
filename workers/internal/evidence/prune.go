@@ -155,6 +155,12 @@ func (j *TieringJob) pruneExpired(ctx context.Context) (pruned int, reclaimed in
 // full-backlog preview). Ordered oldest-first so the batched real prune drains
 // the predicate deterministically. detected_at drives the age (it is the
 // partition key, so the range scan prunes partitions).
+//
+// Censura enviada manualmente é ISENTA: `manual_at IS NULL AND proof_batch_id
+// IS NULL` exclui tanto veiculações manuais quanto o áudio anexado a um lote de
+// comprovante — essa é prova enviada pela emissora/operador, a única cópia, e
+// não deve sumir por idade (o PDF do comprovante já vive em storage separado e
+// nunca foi tocado pelo prune). Só o áudio capturado automaticamente expira.
 func (j *TieringJob) listExpiryCandidates(ctx context.Context, cutoff time.Time, limit int) ([]pruneCandidate, error) {
 	q := `
 		SELECT id, detected_at, evidence_key, COALESCE(evidence_size_bytes, 0)
@@ -162,6 +168,8 @@ func (j *TieringJob) listExpiryCandidates(ctx context.Context, cutoff time.Time,
 		WHERE evidence_status = 'available'
 		  AND evidence_key IS NOT NULL
 		  AND detected_at < $1
+		  AND manual_at IS NULL
+		  AND proof_batch_id IS NULL
 		ORDER BY detected_at ASC`
 	args := []any{cutoff}
 	if limit > 0 {
