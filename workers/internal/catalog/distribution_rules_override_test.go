@@ -90,3 +90,102 @@ func TestRecategorizeForCampaign_RespectsOverride(t *testing.T) {
 	require.Equal(t, "out_slot", cat,
 		"recat deve respeitar override plays_expected=0 (out_slot), não a regra (in_slot)")
 }
+
+// TestRecategorizeForOverride: criar override que exclui a tocada reclassifica
+// in_slot→out_slot (detections E projeção detection_campaigns); apagar o override
+// reverte pra regra (out_slot→in_slot). Prova o disparo dos DOIS caminhos com o
+// escopo preciso de célula (campaign, type, station, dia).
+func TestRecategorizeForOverride(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	cli, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "recat-ov1-cli"})
+	require.NoError(t, err)
+	now := time.Now()
+	cmp, err := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "recat-ov1", ClientID: cli.ID,
+		StartDate: now.AddDate(0, 0, -1), EndDate: now.AddDate(0, 0, 1),
+		TargetStations: []uuid.UUID{},
+	})
+	require.NoError(t, err)
+	typeID := seedType(t, ctx, pool, "recat-ov1-spot")
+	mat, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "recat-ov1-M", TypeID: &typeID, DurationSeconds: 30,
+		MasterStoragePath: "/tmp/ro1", MasterSHA256: "recat-ov1-" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	stat, err := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "Recat OV1 FM", Band: "FM", StreamURL: "http://example.com/recatov1",
+	})
+	require.NoError(t, err)
+
+	rules := NewDistributionRules(pool)
+	_, err = rules.Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID,
+		StationIDs:  []uuid.UUID{stat.ID},
+		MaterialIDs: []uuid.UUID{},
+		StartDate:   now.AddDate(0, 0, -1), EndDate: now.AddDate(0, 0, 1),
+		WeekdayMask: 127, TimeStart: "00:00", TimeEnd: "23:59", PlaysPerDay: 10,
+	})
+	require.NoError(t, err)
+
+	detectedAt := now
+	det, err := NewDetections(pool).Create(ctx, CreateDetectionInput{
+		StationID: stat.ID, CommercialID: mat.ID, CampaignID: cmp.ID,
+		DetectedAt: detectedAt, MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+		Confidence: 0.95, HashCount: 100, TemporalCoverage: 0.85,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM distribution_overrides WHERE campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM detections WHERE campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM distribution_rules WHERE campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, mat.ID)
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, cli.ID)
+		pool.Exec(ctx, `DELETE FROM stations WHERE id = $1`, stat.ID)
+	})
+
+	// for_date = dia-calendário SP da tocada (mesma expressão do insert-path).
+	var forDate time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT ($1::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date`, detectedAt).Scan(&forDate))
+
+	catOf := func(t *testing.T) (string, string) {
+		var base, proj string
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT category FROM detections WHERE id=$1 AND detected_at=$2`, det.ID, det.DetectedAt).Scan(&base))
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT category FROM detection_campaigns WHERE detection_id=$1 AND campaign_id=$2`, det.ID, cmp.ID).Scan(&proj))
+		return base, proj
+	}
+
+	// Precondição: regra cobre o dia → in_slot nas duas tabelas.
+	base, proj := catOf(t)
+	require.Equal(t, "in_slot", base)
+	require.Equal(t, "in_slot", proj, "projeção deve nascer in_slot")
+
+	// Override plays_expected=0 (faixa inerte) → out_slot.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO distribution_overrides
+		  (campaign_id, type_id, station_id, for_date, plays_expected, time_start, time_end)
+		VALUES ($1, $2, $3, $4, 0, '00:00', '00:01')`,
+		cmp.ID, typeID, stat.ID, forDate)
+	require.NoError(t, err)
+
+	require.NoError(t, rules.RecategorizeForOverride(ctx, cmp.ID, typeID, stat.ID, forDate))
+	base, proj = catOf(t)
+	require.Equal(t, "out_slot", base, "override deve reclassificar base p/ out_slot")
+	require.Equal(t, "out_slot", proj, "override deve reclassificar a projeção também")
+
+	// Apagar o override → volta pra regra (in_slot).
+	_, err = pool.Exec(ctx,
+		`DELETE FROM distribution_overrides WHERE campaign_id=$1 AND type_id=$2 AND station_id=$3 AND for_date=$4`,
+		cmp.ID, typeID, stat.ID, forDate)
+	require.NoError(t, err)
+
+	require.NoError(t, rules.RecategorizeForOverride(ctx, cmp.ID, typeID, stat.ID, forDate))
+	base, proj = catOf(t)
+	require.Equal(t, "in_slot", base, "após delete, recat deve reverter p/ regra (in_slot)")
+	require.Equal(t, "in_slot", proj, "projeção deve reverter também")
+}
