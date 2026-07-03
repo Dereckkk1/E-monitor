@@ -49,6 +49,10 @@ export default function OverridePopover({
   const [applyToOthers, setApplyToOthers] = useState(false)
   const ref = useRef(null)
 
+  const ruleSpan = currentRuleWindows.length === 1 ? currentRuleWindows[0] : null
+  const isNarrower = ruleSpan && /^[0-2]\d:[0-5]\d$/.test(timeStart) && /^[0-2]\d:[0-5]\d$/.test(timeEnd)
+    && (timeStart > ruleSpan.time_start || timeEnd < ruleSpan.time_end)
+
   // Reset state when popover re-opens or context changes.
   useEffect(() => {
     setValue(currentOverrideValue ?? currentRuleValue ?? 0)
@@ -198,6 +202,16 @@ export default function OverridePopover({
             </div>
           </span>
         </label>
+      )}
+
+      {isNarrower && (
+        <div style={{
+          padding: 8, marginBottom: 10, background: '#fffbeb',
+          border: '1px solid #fde68a', borderRadius: 6, color: '#92400e', fontSize: 11, lineHeight: 1.4,
+        }}>
+          ⚠ Faixa mais estreita que a regra ({ruleSpan.time_start}–{ruleSpan.time_end}) —
+          veiculações fora dela contam como fora do prazo.
+        </div>
       )}
 
       <div style={{ display: 'flex', gap: 6 }}>
