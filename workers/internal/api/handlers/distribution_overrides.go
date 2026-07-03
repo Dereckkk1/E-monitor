@@ -84,13 +84,16 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Recategoriza as detections da célula afetada (async, best-effort — espelha o handler de regra).
+	// Recategoriza as detections da célula afetada.
 	if h.Recat != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
-		}()
+		// Síncrono (NÃO goroutine): o frontend refetcha detections/daily-summary no
+		// onSuccess deste 204, então a recat precisa ter commitado ANTES da resposta
+		// — senão o refetch pinta a categoria velha (race). Escopo de célula = poucas
+		// linhas, latência desprezível. Best-effort: o override já foi gravado, então
+		// erro na recat não falha o request.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -115,13 +118,16 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Recategoriza as detections da célula afetada (async, best-effort — espelha o handler de regra).
+	// Recategoriza as detections da célula afetada.
 	if h.Recat != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
-		}()
+		// Síncrono (NÃO goroutine): o frontend refetcha detections/daily-summary no
+		// onSuccess deste 204, então a recat precisa ter commitado ANTES da resposta
+		// — senão o refetch pinta a categoria velha (race). Escopo de célula = poucas
+		// linhas, latência desprezível. Best-effort: o override já foi gravado, então
+		// erro na recat não falha o request.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
