@@ -16,7 +16,7 @@ export const EVIDENCE_EXPIRED_TITLE = 'Áudio expirado pela retenção'
 export const EVIDENCE_EXPIRED_MESSAGE =
   `Censuras de materiais vinculados com mais de ${EVIDENCE_RETENTION_DAYS} dias ` +
   `são apagadas automaticamente pelo sistema. A veiculação continua registrada e ` +
-  `válida — apenas o áudio não fica disponível após esse período. Agradecemos a compreensão.`
+  `válida; apenas o áudio não fica disponível após esse período. Agradecemos a compreensão.`
 
 // Versão curta pra tooltip de botão de play desabilitado.
 export const EVIDENCE_EXPIRED_SHORT = `Áudio expirado — censuras com mais de ${EVIDENCE_RETENTION_DAYS} dias são apagadas automaticamente`
