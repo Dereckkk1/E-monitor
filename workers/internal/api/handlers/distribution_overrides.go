@@ -13,9 +13,9 @@ import (
 	"radiocheck/internal/catalog"
 )
 
-// overrideStore é a fatia de catalog.DistributionOverrides que o handler usa —
+// OverrideRepo é a fatia de catalog.DistributionOverrides que o handler usa —
 // interface p/ permitir mock no teste sem DB.
-type overrideStore interface {
+type OverrideRepo interface {
 	Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error
 	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
 	ListByCampaignAndDateRange(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]catalog.DistributionOverride, error)
@@ -28,7 +28,7 @@ type OverrideRecategorizer interface {
 }
 
 type DistributionOverridesHandler struct {
-	Repo  overrideStore
+	Repo  OverrideRepo
 	Recat OverrideRecategorizer
 }
 
@@ -84,6 +84,7 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Recategoriza as detections da célula afetada (async, best-effort — espelha o handler de regra).
 	if h.Recat != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -114,6 +115,7 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Recategoriza as detections da célula afetada (async, best-effort — espelha o handler de regra).
 	if h.Recat != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
