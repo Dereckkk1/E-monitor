@@ -885,6 +885,9 @@ export function useUpsertOverride() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['distribution-overrides', vars.campaignId] })
       qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+      // Backend reclassifica as detections afetadas ao mudar o override; sem
+      // isto a grade/modal ficariam mostrando a categoria velha em cache.
+      qc.invalidateQueries({ queryKey: ['detections'] })
     },
   })
 }
@@ -897,6 +900,9 @@ export function useDeleteOverride() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['distribution-overrides', vars.campaignId] })
       qc.invalidateQueries({ queryKey: ['daily-summary', vars.campaignId] })
+      // Mesmo motivo do useUpsertOverride acima: reverter o override também
+      // reclassifica detections no backend.
+      qc.invalidateQueries({ queryKey: ['detections'] })
     },
   })
 }
