@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import api from '../api/client'
+import { buildJourney } from '../utils/userJourney'
 import './AdminMonitoringPage.css'
 
 /*
@@ -91,6 +92,27 @@ const Icon = {
   ChevRight:() => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4l4 4-4 4"/></svg>,
   Unlock:  () => <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="7.5" width="9" height="6" rx="1"/><path d="M5.5 7.5V5.5a2.5 2.5 0 0 1 4.7-1.2"/></svg>,
   Filter:  () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h12l-4.5 6V14L6.5 12.5V9L2 3Z"/></svg>,
+  // ── Jornada — ícone da aba + ícones por categoria de ação ──────────────────
+  Route:   () => <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="4" cy="3.5" r="1.8"/><circle cx="12" cy="12.5" r="1.8"/><path d="M4 5.3v3.2a2.5 2.5 0 0 0 2.5 2.5h3a2.5 2.5 0 0 0 0 0"/><path d="M4 8.5h4.5a2.5 2.5 0 0 1 2.5 2.5v.7"/></svg>,
+  Login:   () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 2.5h3.5v11H9"/><path d="M2.5 8h7M7 5.5 9.5 8 7 10.5"/></svg>,
+  Eye:     () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.8"/></svg>,
+  Plus:    () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v10M3 8h10"/></svg>,
+  Pencil:  () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 2.5 13.5 5 6 12.5l-3 .5.5-3L11 2.5Z"/></svg>,
+  Trash:   () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5 5 13h6l.5-8.5M6.5 7v3.5M9.5 7v3.5"/></svg>,
+  Download:() => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2.5v7M5 7l3 2.5L11 7M3 12.5h10"/></svg>,
+  Wave:    () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 8h1.5M5 5v6M8 3v10M11 5.5v5M14 8h-1.5"/></svg>,
+  Sliders: () => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4.5h6M11.5 4.5h1.5M3 11.5h1.5M7 11.5h6"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="5" cy="11.5" r="1.5"/></svg>,
+  Clock:   () => <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>,
+}
+
+// Categoria de ação → ícone + rótulo curto. Usado na timeline da jornada.
+const CAT_ICON = {
+  session: Icon.Login, navigate: Icon.Eye, create: Icon.Plus, update: Icon.Pencil,
+  destructive: Icon.Trash, export: Icon.Download, evidence: Icon.Wave, admin: Icon.Sliders, other: Icon.Eye,
+}
+const CAT_LABEL = {
+  session: 'Sessão', navigate: 'Navegação', create: 'Criação', update: 'Edição',
+  destructive: 'Sensível', export: 'Exportação', evidence: 'Evidência', admin: 'Admin', other: 'Ação',
 }
 
 // ── Tooltip portal (evita clipping em tabelas com overflow) ────────────────
@@ -250,9 +272,26 @@ function useBlockedIPs() {
   })
 }
 
+// useJourney — busca o histórico de requests de UM usuário (por userId, todos os
+// IPs) e reusa o mesmo endpoint /actor-detail do painel de identidades. A
+// transformação em jornada legível é feita no componente via buildJourney().
+function useJourney(userId, range) {
+  return useQuery({
+    queryKey: ['admin-monitoring-journey', userId, range],
+    queryFn: async () => {
+      const params = new URLSearchParams({ range })
+      params.set('userId', userId)
+      return (await api.get(`/admin/monitoring/actor-detail?${params}`)).data
+    },
+    enabled: !!userId,
+    refetchInterval: 20_000,
+    staleTime: 5_000,
+  })
+}
+
 // ── Actor Detail Panel (slide-in) ──────────────────────────────────────────
 
-function ActorDetailPanel({ actor, range, onClose, onBlockIp, onBlockUser, onUnblockIp }) {
+function ActorDetailPanel({ actor, range, onClose, onBlockIp, onBlockUser, onUnblockIp, onViewJourney }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -328,6 +367,11 @@ function ActorDetailPanel({ actor, range, onClose, onBlockIp, onBlockUser, onUnb
         </div>
 
         <div className="am-panel-actions">
+          {actor.userId && onViewJourney && (
+            <button type="button" className="am-action-btn am-action-btn--journey" onClick={() => onViewJourney(actor)}>
+              <Icon.Route /> Ver jornada
+            </button>
+          )}
           {actor.ip && (actor.isIPBlocked
             ? <button type="button" className="am-action-btn am-action-btn--unblock" onClick={() => onUnblockIp(actor.ip)}><Icon.Unlock /> Desbloquear IP</button>
             : <button type="button" className="am-action-btn am-action-btn--block-ip" onClick={() => onBlockIp(actor.ip)}><Icon.Block /> Bloquear IP</button>
@@ -400,6 +444,385 @@ function ActorDetailPanel({ actor, range, onClose, onBlockIp, onBlockUser, onUnb
   )
 }
 
+// ── Jornada do usuário ──────────────────────────────────────────────────────
+// Traduz o histórico cru de requests de um usuário (endpoint /actor-detail) numa
+// narrativa cronológica legível: sessões, ações em português, horários, com
+// destaque para erros e ações sensíveis. Zero backend novo — ver userJourney.js.
+
+function fmtClock(d) {
+  if (!d) return '—'
+  return new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+function fmtClockMin(d) {
+  if (!d) return '—'
+  return new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} min`
+  const h = Math.floor(m / 60), rm = m % 60
+  return rm ? `${h}h ${rm}min` : `${h}h`
+}
+function fmtGap(ms) {
+  const m = Math.round(ms / 60000)
+  if (m < 60) return `${m} min depois`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} h depois`
+  const d = Math.round(h / 24)
+  return `${d} ${d === 1 ? 'dia' : 'dias'} depois`
+}
+function dayLabel(d) {
+  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+}
+
+function JourneyTab({ users, loadingUsers, selected, onSelect, search, onSearch, range, onBlockUser }) {
+  return (
+    <section className="am-card am-jn">
+      <header className="am-card-head am-card-head--id">
+        <div className="am-id-title">
+          <span className="am-card-head-icon"><Icon.Route /></span>
+          <div>
+            <h2 className="am-card-title">Jornada do usuário</h2>
+            <p className="am-card-sub">O passo a passo de cada pessoa na plataforma — telas abertas, ações e horários, traduzidos das chamadas de API</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="am-jn-body">
+        <JourneyRail
+          users={users}
+          loading={loadingUsers}
+          selected={selected}
+          onSelect={onSelect}
+          search={search}
+          onSearch={onSearch}
+        />
+        <JourneyPane selected={selected} range={range} onBlockUser={onBlockUser} />
+      </div>
+    </section>
+  )
+}
+
+function JourneyRail({ users, loading, selected, onSelect, search, onSearch }) {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return users
+    return users.filter((u) => (u.userEmail || '').toLowerCase().includes(q))
+  }, [users, search])
+
+  return (
+    <aside className="am-jn-rail">
+      <div className="am-jn-rail-head">
+        <span className="am-jn-rail-title">Usuários</span>
+        <span className="am-jn-rail-count">{users.length}</span>
+      </div>
+      <div className="am-search am-jn-search">
+        <span className="am-search-icon"><Icon.Search /></span>
+        <input
+          className="am-search-input"
+          type="text"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Buscar por e-mail…"
+          aria-label="Buscar usuário"
+        />
+        {search && (
+          <button type="button" className="am-search-clear" onClick={() => onSearch('')} aria-label="Limpar busca"><Icon.Close /></button>
+        )}
+      </div>
+
+      <div className="am-jn-user-list" role="listbox" aria-label="Usuários">
+        {loading ? (
+          Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="am-jn-user am-jn-user--skel">
+              <div className="am-skel" style={{ width: 30, height: 30, borderRadius: 9999 }} />
+              <div style={{ flex: 1 }}>
+                <div className="am-skel" style={{ width: '70%', height: 11 }} />
+                <div className="am-skel" style={{ width: '40%', height: 9, marginTop: 6 }} />
+              </div>
+            </div>
+          ))
+        ) : filtered.length === 0 ? (
+          <div className="am-jn-rail-empty">
+            {users.length === 0 ? 'Nenhum usuário autenticado no período.' : 'Nenhum usuário para esta busca.'}
+          </div>
+        ) : (
+          filtered.map((u) => {
+            const isSel = selected?.userId === u.userId
+            return (
+              <button
+                key={u.userId}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                className={`am-jn-user ${isSel ? 'am-jn-user--sel' : ''}`}
+                onClick={() => onSelect({ userId: u.userId, userEmail: u.userEmail || null })}
+              >
+                <span className="am-jn-user-avatar">{(u.userEmail || '?').charAt(0).toUpperCase()}</span>
+                <span className="am-jn-user-meta">
+                  <span className="am-jn-user-email">{u.userEmail || 'Sem e-mail'}</span>
+                  <span className="am-jn-user-sub">
+                    <span className={`am-jn-risk-dot am-jn-risk-dot--${u.riskLevel}`} />
+                    {fmtNum(u.totalRequests)} req · {fmtDate(u.lastSeen)}
+                  </span>
+                </span>
+                <span className="am-jn-user-chev"><Icon.ChevRight /></span>
+              </button>
+            )
+          })
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function JourneyPane({ selected, range, onBlockUser }) {
+  const q = useJourney(selected?.userId, range)
+  const journey = useMemo(
+    () => (q.data ? buildJourney(q.data.requests || [], {}) : null),
+    [q.data],
+  )
+
+  if (!selected) {
+    return (
+      <div className="am-jn-pane am-jn-pane--empty">
+        <JourneyGhost />
+      </div>
+    )
+  }
+
+  return (
+    <div className="am-jn-pane">
+      <header className="am-jn-phead">
+        <div className="am-jn-phead-id">
+          <span className="am-jn-phead-avatar">{(selected.userEmail || '?').charAt(0).toUpperCase()}</span>
+          <div className="am-jn-phead-meta">
+            <span className="am-jn-phead-email">{selected.userEmail || 'Usuário sem e-mail'}</span>
+            {journey && journey.summary.actionCount > 0 && (
+              <span className="am-jn-phead-period">
+                <Icon.Clock /> {fmtDateSec(journey.summary.firstSeen)} → {fmtDateSec(journey.summary.lastSeen)}
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="am-jn-phead-block"
+          onClick={() => onBlockUser(selected.userId, selected.userEmail)}
+          title="Bloquear novos logins deste usuário"
+        >
+          <Icon.Block /> Bloquear
+        </button>
+      </header>
+
+      {q.isError ? (
+        <div className="am-banner"><Icon.Error /><span>Não deu pra carregar a jornada deste usuário.</span><button type="button" onClick={() => q.refetch()}>Tentar de novo</button></div>
+      ) : q.isLoading || !journey ? (
+        <JourneyTimelineSkeleton />
+      ) : journey.summary.actionCount === 0 ? (
+        <EmptyState icon={<Icon.Route />} title="Sem atividade nesse intervalo" hint="Este usuário não fez nenhuma ação no período. Tente ampliar o range no topo (7d / 30d)." />
+      ) : (
+        <>
+          <JourneySummary summary={journey.summary} capped={journey.capped} />
+          <JourneySessions sessions={journey.sessions} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function JourneySummary({ summary, capped }) {
+  const stats = [
+    { value: fmtNum(summary.actionCount), label: 'ações' },
+    { value: fmtNum(summary.sessionCount), label: summary.sessionCount === 1 ? 'sessão' : 'sessões' },
+    { value: fmtNum(summary.warnCount + summary.errorCount), label: 'erros', danger: (summary.warnCount + summary.errorCount) > 0 },
+    { value: fmtNum(summary.destructiveCount), label: 'sensíveis', warn: summary.destructiveCount > 0 },
+  ]
+  const topAreas = summary.areas.slice(0, 5)
+  const maxArea = topAreas.length ? topAreas[0].count : 1
+
+  return (
+    <div className="am-jn-summary">
+      <div className="am-jn-stats">
+        {stats.map((s, i) => (
+          <span key={i} className="am-jn-stat">
+            <span className={`am-jn-stat-value ${s.danger ? 'am-jn-stat-value--danger' : s.warn ? 'am-jn-stat-value--warn' : ''}`}>{s.value}</span>
+            <span className="am-jn-stat-label">{s.label}</span>
+          </span>
+        ))}
+      </div>
+      <div className="am-jn-areas">
+        <span className="am-jn-areas-title">Áreas mais usadas</span>
+        {topAreas.map((a) => (
+          <div key={a.area} className="am-jn-area">
+            <span className="am-jn-area-name">{a.area}</span>
+            <span className="am-jn-area-track">
+              <span className="am-jn-area-fill" style={{ width: `${Math.max(4, (a.count / maxArea) * 100)}%` }} />
+            </span>
+            <span className="am-jn-area-count">{a.count}</span>
+          </div>
+        ))}
+      </div>
+      {capped && (
+        <p className="am-jn-cap"><Icon.Info /> Mostrando as 300 ações mais recentes do período — o começo pode ter sido cortado.</p>
+      )}
+    </div>
+  )
+}
+
+function JourneySessions({ sessions }) {
+  return (
+    <div className="am-jn-sessions">
+      {sessions.map((s, i) => {
+        const prev = i > 0 ? sessions[i - 1] : null
+        const gap = prev ? s.startT - prev.endT : 0
+        return (
+          <div key={s.id}>
+            {prev && (
+              <div className="am-jn-gap"><span className="am-jn-gap-line" /><span className="am-jn-gap-text">{fmtGap(gap)}</span><span className="am-jn-gap-line" /></div>
+            )}
+            <JourneySession session={s} index={i + 1} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function JourneySession({ session, index }) {
+  const [open, setOpen] = useState(true)
+  const sameDay = dayLabel(session.start) === dayLabel(session.end)
+  return (
+    <div className="am-jn-sess">
+      <button type="button" className="am-jn-sess-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className={`am-jn-sess-chev ${open ? 'am-jn-sess-chev--open' : ''}`}><Icon.ChevRight /></span>
+        <span className="am-jn-sess-num">Sessão {index}</span>
+        <span className="am-jn-sess-time">
+          {dayLabel(session.start)} · {fmtClockMin(session.start)}–{fmtClockMin(session.end)}{sameDay ? '' : ` (${dayLabel(session.end)})`}
+        </span>
+        <span className="am-jn-sess-dur">{fmtDur(session.durationMs)}</span>
+        <span className="am-jn-sess-count">{session.eventCount} {session.eventCount === 1 ? 'ação' : 'ações'}</span>
+        {session.errorCount > 0 && <span className="am-jn-sess-err">{session.errorCount} com erro</span>}
+      </button>
+      {open && (
+        <div className="am-jn-events">
+          {session.items.map((it, j) => <JourneyEvent key={j} item={it} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function JourneyEvent({ item }) {
+  const [showSamples, setShowSamples] = useState(false)
+  const isGroup = item.type === 'group'
+  const CatIcon = CAT_ICON[item.category] || Icon.Eye
+  const sev = item.severity
+
+  return (
+    <div className={`am-jn-ev am-jn-ev--${sev}`}>
+      <span className="am-jn-ev-time">{isGroup ? fmtClockMin(item.start) : fmtClock(item.ts)}</span>
+      <span className={`am-jn-ev-icon am-jn-ev-icon--${sev}`} title={CAT_LABEL[item.category]}><CatIcon /></span>
+      <div className="am-jn-ev-body">
+        <span className="am-jn-ev-action">
+          {item.action}
+          {isGroup && <span className="am-jn-ev-times">{item.count}×</span>}
+        </span>
+        <span className="am-jn-ev-tags">
+          <span className="am-jn-ev-area">{item.area}</span>
+          {sev === 'destructive' && <span className="am-jn-ev-tag am-jn-ev-tag--sens">sensível</span>}
+          {item.fallback && <span className="am-jn-ev-tag am-jn-ev-tag--muted" title={`${item.method} ${item.route}`}>rota não mapeada</span>}
+          {isGroup && <span className="am-jn-ev-span">{fmtClockMin(item.start)}–{fmtClockMin(item.end)}</span>}
+        </span>
+      </div>
+      <div className="am-jn-ev-meta">
+        {isGroup ? (
+          <>
+            {item.errorCount > 0 && <span className="am-jn-ev-status am-jn-ev-status--warn">{item.errorCount} erro{item.errorCount > 1 ? 's' : ''}</span>}
+            <button type="button" className="am-jn-ev-expand" onClick={() => setShowSamples((v) => !v)} title="Ver as chamadas">
+              {showSamples ? 'ocultar' : 'detalhar'}
+            </button>
+          </>
+        ) : (
+          <>
+            {item.status >= 400 && (
+              <span className={`am-jn-ev-status ${item.status >= 500 ? 'am-jn-ev-status--err' : 'am-jn-ev-status--warn'}`}>{item.status}</span>
+            )}
+            {item.durationMs != null && item.durationMs > 2000 && (
+              <span className="am-jn-ev-slow" title="Resposta lenta"><Icon.Timer /> {fmtMs(item.durationMs)}</span>
+            )}
+            <code className="am-jn-ev-route" title={`${item.method} ${item.route}`}>{item.method}</code>
+          </>
+        )}
+      </div>
+      {isGroup && showSamples && (
+        <ul className="am-jn-ev-samples">
+          {item.samples.map((s, k) => (
+            <li key={k} className={s.status >= 400 ? 'am-jn-ev-sample--err' : ''}>
+              <span>{fmtClock(s.ts)}</span>
+              <code>{s.method}</code>
+              <span className={s.status >= 500 ? 'am-stat am-stat--err' : s.status >= 400 ? 'am-stat am-stat--warn' : 'am-stat'}>{s.status}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// Empty state "tutorial" (DESIGN.md §4.7): silhueta de uma timeline pra ensinar
+// o que a tela mostra antes de escolher um usuário.
+function JourneyGhost() {
+  return (
+    <div className="am-jn-ghost">
+      <div className="am-jn-ghost-art" aria-hidden="true">
+        {[
+          { w: '58%', sens: false }, { w: '42%', sens: false }, { w: '66%', sens: true },
+          { w: '38%', sens: false }, { w: '52%', sens: false },
+        ].map((r, i) => (
+          <div key={i} className="am-jn-ghost-row">
+            <span className="am-jn-ghost-time" />
+            <span className={`am-jn-ghost-node ${r.sens ? 'am-jn-ghost-node--sens' : ''}`} />
+            <span className="am-jn-ghost-bar" style={{ width: r.w }} />
+          </div>
+        ))}
+      </div>
+      <div className="am-jn-ghost-copy">
+        <div className="am-jn-ghost-icon"><Icon.Route /></div>
+        <p className="am-jn-ghost-title">Escolha um usuário para ver a jornada</p>
+        <p className="am-jn-ghost-hint">Cada ação que a pessoa fez na plataforma — telas abertas, o que criou, editou, exportou ou excluiu — em ordem, com horário. Selecione alguém na lista ao lado.</p>
+      </div>
+    </div>
+  )
+}
+
+function JourneyTimelineSkeleton() {
+  return (
+    <div className="am-jn-summary">
+      <div className="am-jn-stats">
+        {[0, 1, 2, 3].map((i) => (
+          <span key={i} className="am-jn-stat">
+            <div className="am-skel" style={{ width: 34, height: 22 }} />
+            <div className="am-skel" style={{ width: 44, height: 9, marginTop: 6 }} />
+          </span>
+        ))}
+      </div>
+      <div className="am-jn-events" style={{ marginTop: 18 }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <div key={i} className="am-jn-ev">
+            <span className="am-jn-ev-time"><div className="am-skel" style={{ width: 40, height: 10 }} /></span>
+            <span className="am-jn-ev-icon am-jn-ev-icon--normal" style={{ background: 'var(--c-surface-2)' }} />
+            <div className="am-jn-ev-body"><div className="am-skel" style={{ width: `${45 + (i * 7) % 40}%`, height: 12 }} /></div>
+            <div className="am-jn-ev-meta" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Página principal ───────────────────────────────────────────────────────
 
 export default function AdminMonitoringPage() {
@@ -424,6 +847,10 @@ export default function AdminMonitoringPage() {
   const [vitalsPage, setVitalsPage] = useState(1)
   const [selectedActor, setSelectedActor] = useState(null)
   const [expanded, setExpanded] = useState(new Set())
+
+  // Jornada: usuário selecionado ({ userId, userEmail }) + busca no rail.
+  const [journeyUser, setJourneyUser] = useState(null)
+  const [journeySearch, setJourneySearch] = useState('')
 
   const main = useMonitoring(range, hideLocalhost)
   const actorsQ = useActors(range, hideLocalhost)
@@ -484,6 +911,14 @@ export default function AdminMonitoringPage() {
       window.alert('Erro ao bloquear usuário.')
     }
   }, [qc])
+
+  // Deep-link do painel de identidades → aba Jornada, já com o usuário escolhido.
+  const viewJourney = useCallback((actor) => {
+    if (!actor?.userId) return
+    setJourneyUser({ userId: actor.userId, userEmail: actor.userEmail || null })
+    setSelectedActor(null)
+    setTab('jornada')
+  }, [])
 
   // ── Agregação Identidades: agrupa por usuário (múltiplos IPs → 1 linha) ──
   const groupedActors = useMemo(() => {
@@ -550,10 +985,17 @@ export default function AdminMonitoringPage() {
     blocked: actors.filter((a) => a.isIPBlocked).length,
   }), [actors, groupedActors])
 
+  // Usuários autenticados vistos no período — alimenta o rail da Jornada.
+  const journeyUsers = useMemo(
+    () => groupedActors.filter((a) => a.userId),
+    [groupedActors],
+  )
+
   const tabs = [
     { id: 'overview',    label: 'Visão geral',   Icon: Icon.Timeline },
     { id: 'identidades', label: 'Identidades',   Icon: Icon.Shield,
       badge: actorSummary.highRisk > 0 ? actorSummary.highRisk : null, badgeDanger: true },
+    { id: 'jornada',     label: 'Jornada',       Icon: Icon.Route },
     { id: 'performance', label: 'Performance',   Icon: Icon.Speed },
     { id: 'vitals',      label: 'Web Vitals',    Icon: Icon.Web },
     { id: 'erros',       label: 'Erros',         Icon: Icon.Error,
@@ -943,6 +1385,22 @@ export default function AdminMonitoringPage() {
         </div>
       )}
 
+      {/* ── TAB: Jornada ──────────────────────────────────────────────── */}
+      {tab === 'jornada' && (
+        <div className="am-tab-content" key="jornada">
+          <JourneyTab
+            users={journeyUsers}
+            loadingUsers={actorsQ.isLoading}
+            selected={journeyUser}
+            onSelect={setJourneyUser}
+            search={journeySearch}
+            onSearch={setJourneySearch}
+            range={range}
+            onBlockUser={blockUser}
+          />
+        </div>
+      )}
+
       {/* ── TAB: Performance ──────────────────────────────────────────── */}
       {tab === 'performance' && (
         <div className="am-tab-content" key="performance">
@@ -1149,6 +1607,7 @@ export default function AdminMonitoringPage() {
           onBlockIp={blockIP}
           onBlockUser={blockUser}
           onUnblockIp={unblockIP}
+          onViewJourney={viewJourney}
         />
       )}
     </div>
