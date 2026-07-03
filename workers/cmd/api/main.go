@@ -472,7 +472,7 @@ func main() {
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc, DistRules: distRulesRepo},
 		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup, Log: logger},
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo, CampaignRepo: campaigns},
-		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo},
+		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo, Recat: distRulesRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo, CampaignRepo: campaigns},
 		Users:                 handlers.NewUsersHandler(usersRepo),
 		Me:                    handlers.NewMeHandler(usersRepo),
