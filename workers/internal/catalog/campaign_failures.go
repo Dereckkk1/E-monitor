@@ -141,6 +141,23 @@ func makeDial(freq, band string) string {
 // dateOnly trims a time.Time to YYYY-MM-DD.
 func dateOnly(t time.Time) string { return t.Format("2006-01-02") }
 
+// failureHorizonClause restringe qualquer agregação de daily_play_summary a
+// dias JÁ ENCERRADOS (estritamente antes de "hoje" em America/Sao_Paulo).
+//
+// A view daily_play_summary não é materializada: ela emite uma linha de déficit
+// pra CADA dia agendado até o end_date da regra (CROSS JOIN generate_series na
+// migration 0041). Dias >= hoje têm expected>0 e in_slot=0 → deficit=expected,
+// mas um dia que ainda não chegou não pode ser "falha". Sem este corte, o drawer
+// e o histórico de /admin/station-failures contavam amanhã (e o resto da
+// vigência) como dia com falha. Regra do produto: "de ontem pra trás".
+//
+// Fica no frame local do Brasil porque for_date já vive nesse frame (detections
+// convertidas via AT TIME ZONE 'America/Sao_Paulo' na migration 0041; lado
+// "expected" é date puro do generate_series). Consumidores single-day
+// (station_failures.go, ListForDate Q1/Q2) já limitam a data ≤ hoje no handler
+// e não precisam disto.
+const failureHorizonClause = `dps.for_date < (now() AT TIME ZONE 'America/Sao_Paulo')::date`
+
 // ListForDate returns campaigns that had any (station, date) deficit > 0
 // on the given local day. Stations inside each campaign are ONLY the ones
 // that failed on that specific day, but their programmed/identified/deficit
@@ -259,6 +276,7 @@ SELECT dps.campaign_id, dps.station_id,
 FROM daily_play_summary dps
 WHERE dps.campaign_id = ANY($1::uuid[])
   AND dps.station_id  = ANY($2::uuid[])
+  AND ` + failureHorizonClause + `
 GROUP BY dps.campaign_id, dps.station_id`, campIDs, stationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("q3 aggregates: %w", err)
@@ -358,6 +376,7 @@ WITH agg AS (
          SUM(dps.deficit)::int AS total_deficit,
          SUM(dps.out_slot + dps.out_date + dps.bonus)::int AS total_extras
   FROM daily_play_summary dps
+  WHERE ` + failureHorizonClause + `
   GROUP BY dps.campaign_id
   HAVING SUM(dps.deficit) > 0
 )
@@ -411,6 +430,7 @@ LIMIT $1 OFFSET $2`, pageSize, offset)
 WITH agg AS (
   SELECT dps.campaign_id
   FROM daily_play_summary dps
+  WHERE ` + failureHorizonClause + `
   GROUP BY dps.campaign_id
   HAVING SUM(dps.deficit) > 0
 )
@@ -490,6 +510,7 @@ SELECT dps.station_id,
 FROM daily_play_summary dps
 JOIN stations s ON s.id = dps.station_id
 WHERE dps.campaign_id = $1
+  AND ` + failureHorizonClause + `
 GROUP BY dps.station_id, s.name, s.band, s.frequency_mhz, s.city, s.logo_url
 HAVING COUNT(*) FILTER (WHERE dps.deficit > 0) > 0
 ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)

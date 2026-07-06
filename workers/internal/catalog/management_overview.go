@@ -222,7 +222,7 @@ func (m *ManagementOverview) queryRecentDetections(ctx context.Context, p Manage
 		SELECT d.id, d.station_id, COALESCE(s.name, ''), s.logo_url,
 		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
 		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name,
-		       d.evidence_status
+		       cmp.name, d.evidence_status
 		FROM detection_attributions d
 		LEFT JOIN stations s    ON s.id = d.station_id
 		LEFT JOIN commercials c ON c.id = d.commercial_id
@@ -255,7 +255,7 @@ func (m *ManagementOverview) queryRecentDetections(ctx context.Context, p Manage
 		if err := rows.Scan(&d.ID, &d.StationID, &d.StationName, &d.StationLogoURL,
 			&d.Band, &d.FrequencyMHz, &d.City, &d.State,
 			&d.DetectedAt, &d.CommercialID, &d.CommercialName, &d.ClientName,
-			&d.EvidenceStatus); err != nil {
+			&d.CampaignName, &d.EvidenceStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

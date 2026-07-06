@@ -2035,6 +2035,108 @@ textarea.input {
   flex-shrink: 0;
 }
 
+/* Bloco financeiro da row (investimento + CPM). Tratamento de "dado calmo":
+   deliberadamente SEM rosa-action (rosa é reservado pra ações no design
+   system) — o valor destaca por peso + navy, não por cor de fundo. Slot de
+   largura mínima fixa + números tabulares pra o skeleton e os valores
+   ocuparem a mesma caixa (zero layout shift na entrada do dado). */
+.campaign-fin {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  min-width: 100px;
+  margin-left: 4px;
+  padding-left: 16px;
+  border-left: 1px solid var(--c-border);
+  text-align: right;
+  line-height: 1.12;
+}
+
+.campaign-fin-label {
+  font-family: var(--font-body);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--c-text-2);
+}
+
+.campaign-fin-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 18px;
+  /* Rosa Digital no CPM (o número-protagonista): destaque forte e sancionado
+     pelo design system (DESIGN.md libera tertiary pra "Charts de Custo"). Sem
+     fundo → é número, não botão. 18px bold = texto grande, então passa AA
+     mesmo em rosa/branco (o rótulo fica em cinza por ser pequeno demais). */
+  color: var(--c-action);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* CPM indeterminado (emissoras sem PMM / sem inserção): "—" sai em cinza,
+   não em rosa — rosa num traço lê como erro. */
+.campaign-fin-value--empty {
+  color: var(--c-text-2);
+}
+
+/* Investimento total: figura de apoio abaixo do CPM. */
+.campaign-fin-sub {
+  margin-top: 2px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.campaign-fin-sub-label {
+  font-weight: 500;
+  color: var(--c-text-3);
+}
+
+.campaign-fin-tag {
+  font-family: var(--font-body);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-text-2);
+  background: var(--c-surface-2);
+  border-radius: var(--radius-full);
+  padding: 1px 6px;
+  line-height: 1.5;
+}
+
+.campaign-fin--skeleton {
+  gap: 5px;
+}
+
+/* Telas estreitas: o slot financeiro encolhe primeiro o rótulo (o valor e o
+   CPM nunca somem — dado financeiro não pode ser cortado, Princípio 5) e
+   afrouxa o divisor pra não brigar por espaço com o cluster de ações. */
+@media (max-width: 720px) {
+  .campaign-fin {
+    min-width: 0;
+    padding-left: 12px;
+    margin-left: 2px;
+  }
+  .campaign-fin-value {
+    font-size: 16px;
+  }
+  /* Poupa largura na row apertada: some a palavra "Investimento", fica só o
+     valor abaixo do CPM (o rótulo "CPM" permanece pra nomear o número-estrela). */
+  .campaign-fin-sub-label {
+    display: none;
+  }
+}
+
 .campaign-panel {
   border-top: 1px solid var(--c-border);
   padding: 16px;

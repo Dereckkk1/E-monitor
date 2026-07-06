@@ -46,6 +46,9 @@ type LiveDetection struct {
 	CommercialID   uuid.UUID `json:"commercial_id"`
 	CommercialName string    `json:"commercial_name"`
 	ClientName     *string   `json:"client_name,omitempty"`
+	// CampaignName só é populado no feed do /management (visão cross-campanha);
+	// no /live-map fica nil e é omitido do JSON.
+	CampaignName *string `json:"campaign_name,omitempty"`
 	// EvidenceStatus permite o frontend habilitar/desabilitar o play button
 	// sem disparar /evidence pra deteccoes sem clipe salvo.
 	EvidenceStatus string `json:"evidence_status"`

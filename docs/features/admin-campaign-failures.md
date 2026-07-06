@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-25
+ultima-verificacao: 2026-07-06
 codigo-relacionado:
   - workers/internal/catalog/campaign_failures.go
   - workers/internal/catalog/campaign_failures_test.go
@@ -33,7 +33,7 @@ A diretora executiva precisa de uma visão diária de **quais campanhas tiveram 
 | **Falhas de [data]** | Cobrança diária ("o que falhou ontem") | Grid de cards, um por campanha, com emissoras dentro |
 | **Por Campanha (histórico)** | Backlog ("o que ainda precisa cobrança") | Tabela paginada, todas campanhas com qualquer falha |
 
-Click em qualquer card/linha → drawer lateral com **todas** as emissoras da campanha que falharam em **qualquer dia** da vigência, com chips de dias específicos. Dentro do drawer, botão **"Baixar PDF de cobrança"**.
+Click em qualquer card/linha → drawer lateral com **todas** as emissoras da campanha que falharam em **qualquer dia já encerrado** da vigência (ver [Horizonte de falha](#horizonte-de-falha-só-dias-já-encerrados)), com chips de dias específicos. Dentro do drawer, botão **"Baixar PDF de cobrança"**.
 
 ## Quem pode ver
 
@@ -52,6 +52,20 @@ bonified = (extras >= deficit) AND extras > 0 AND deficit > 0
 A view `daily_play_summary` já expõe todas as colunas necessárias — esta feature não toca em `detections` direto.
 
 **Caveat:** em campanha ainda ativa, `bonified` é provisória — amanhã pode aparecer mais déficit. O drawer mostra banner amarelo discreto avisando.
+
+## Horizonte de falha (só dias já encerrados)
+
+`daily_play_summary` **não é materializada**: ela emite uma linha de déficit pra **cada dia agendado até o `end_date` da regra** (`CROSS JOIN generate_series(start_date, end_date)` na migration 0041). Um dia futuro tem `expected>0` e `in_slot=0` → `deficit=expected` — mas **um dia que ainda não chegou não é falha**.
+
+Por isso toda agregação de falha em `campaign_failures.go` corta em `dps.for_date < (now() AT TIME ZONE 'America/Sao_Paulo')::date` (const `failureHorizonClause`). Vale pras 3 superfícies que somam vários dias:
+
+- **drawer** (`Get`) — `failure_days`, déficit e "dias com falha";
+- **histórico** (`ListHistorical` — Q1 e Q2 espelhadas);
+- **agregado do card diário** (`ListForDate` Q3 — programado/déficit/extras/bonificada).
+
+As consultas single-day (`ListForDate` Q1/Q2 e o modo *Por emissora* em `station_failures.go`) não precisam do corte: a data já é limitada a ≤ hoje no handler. Regra do produto: **"de ontem pra trás"** — a mesma que o sininho/digest (`notifications.go`) já aplicava com `< CURRENT_DATE`.
+
+> Bug histórico (2026-07-06): sem esse corte, o drawer contava amanhã e todo o resto da vigência como dia com falha (ex.: campanha "aa" mostrava 90 dias/déficit 271 quando o real encerrado era 11 dias/déficit 34). Regressão travada em `TestCampaignFailures_Get_ExcludesFutureDays`.
 
 ## Endpoints
 
