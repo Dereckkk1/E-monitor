@@ -111,8 +111,17 @@ export function LiveAiringRow({ detection, isPlaying, onPlayRequest, onPlayClose
         <span className="la-row-material-name" style={{ color: matColor }} title={detection.commercial_name}>
           {detection.commercial_name}
         </span>
-        {detection.client_name && (
-          <span className="la-row-material-client">{detection.client_name}</span>
+        {(detection.client_name || detection.campaign_name) && (
+          <span
+            className="la-row-material-client"
+            title={[detection.client_name, detection.campaign_name].filter(Boolean).join(' · ')}
+          >
+            {detection.client_name}
+            {detection.client_name && detection.campaign_name && ' · '}
+            {detection.campaign_name && (
+              <span className="la-row-material-campaign">{detection.campaign_name}</span>
+            )}
+          </span>
         )}
       </div>
 

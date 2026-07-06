@@ -235,7 +235,7 @@ export default function ManagementPage() {
             <div className="mg-kpis">
             <KpiCard icon={ICON_MAP} value={isLoading ? '—' : nf(kpis.stations_monitored)}
               label="Emissoras monitoradas"
-              sub={isLoading ? '' : `no período · ${nf(kpis.states_count)} estado${kpis.states_count === 1 ? '' : 's'}`} />
+              sub={isLoading ? '' : `no período · ${nf(kpis.states_count)}/25 estado${kpis.states_count === 1 ? '' : 's'}`} />
             <KpiCard icon={ICON_LIVE} live value={isLoading ? '—' : nf(kpis.stations_live)}
               label="Monitorando agora"
               sub={isLoading ? '' : `worker saudável · ${livePct}% online`} />

@@ -978,52 +978,70 @@ function CampaignStationsSection({ campaign, allStations }) {
 
 // ─── CampaignRow ───────────────────────────────────────────────────────────────
 
-// Inline badge na meta da row: investimento total + CPM calculado.
-// Só aparece quando a campanha tem pricing cadastrado (total_invested > 0).
-// Tooltip detalha as duas pernas da fórmula. Visual: pílula sutil com tinta
-// rosa-action pra não competir com o badge de status à direita.
+// Bloco financeiro da row: CPM (protagonista, em Rosa Digital — o número que
+// o operador compara entre campanhas) com o investimento total logo abaixo,
+// como apoio, num slot próprio à direita do bloco de info, antes do cluster
+// de ações. O rosa no valor é sancionado pelo DESIGN.md ("Charts de Custo"
+// usam tertiary) e, sem fundo, lê como número e não como botão. Números
+// tabulares + largura mínima fixa fazem o skeleton e os valores carregados
+// ocuparem a mesma caixa: os números surgem no lugar, sem o "pop" que a
+// linha-meta tinha (financials vem de uma query separada da lista, então
+// durante o fetch o slot fica reservado pelo skeleton).
 const _BRL_CAMPAIGN_LIST = new Intl.NumberFormat('pt-BR', {
   style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
-function CPMBadge({ financials }) {
+function CampaignFinancials({ financials, loading }) {
+  // Enquanto a query de financials não resolveu, reserva o espaço com o
+  // esqueleto de mesma forma — evita layout shift quando o valor entra.
+  if (loading) return <CampaignFinancialsSkeleton />
+  // Sem pricing cadastrado: nada a mostrar (o slot colapsa após o load).
+  if (!financials || !(financials.total_invested > 0)) return null
+
   const { total_invested: inv, total_insertions: ins, total_audience: aud, fixed_cpm: fixed } = financials
   // CPM fixo (quando setado na campanha) sobrescreve o cálculo dinâmico, pra
   // refletir o número comercial pré-acordado em vez do derivado de pricing.
   const dynamicCPM = aud > 0 ? (inv / aud) * 1000 : null
   const cpm = fixed != null ? fixed : dynamicCPM
   const isFixed = fixed != null
-  const tooltip = isFixed
+  const cpmTip = isFixed
     ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. Investimento ${_BRL_CAMPAIGN_LIST.format(inv)} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
     : cpm != null
       ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
       : ins > 0
         ? 'Emissoras sem PMM cadastrado — CPM indeterminado.'
         : 'Nenhuma inserção realizada ainda — CPM indeterminado.'
+
   return (
-    <span
-      title={tooltip}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        padding: '2px 8px', borderRadius: 'var(--radius-full)',
-        background: 'var(--c-action-light)', color: 'var(--c-action)',
-        fontSize: 10.5, fontWeight: 700,
-        fontFamily: 'var(--font-heading)', letterSpacing: '0.02em',
-        verticalAlign: 'middle',
-      }}
-    >
-      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden>
-        <path d="M3 13l5-9 5 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      {_BRL_CAMPAIGN_LIST.format(inv)}
-      <span style={{ color: 'var(--c-action)', opacity: 0.7, fontWeight: 500 }}>
-        · CPM {cpm != null ? _BRL_CAMPAIGN_LIST.format(cpm) : '—'}
-        {isFixed && <span style={{ marginLeft: 3, fontSize: 8.5, opacity: 0.85 }}>(fixo)</span>}
+    <div className="campaign-fin">
+      <span className="campaign-fin-label">CPM</span>
+      <span
+        className={`campaign-fin-value${cpm == null ? ' campaign-fin-value--empty' : ''}`}
+        title={cpmTip}
+      >
+        {cpm != null ? _BRL_CAMPAIGN_LIST.format(cpm) : '—'}
+        {isFixed && <span className="campaign-fin-tag">fixo</span>}
       </span>
-    </span>
+      <span className="campaign-fin-sub" title={`Investimento total: ${_BRL_CAMPAIGN_LIST.format(inv)}`}>
+        <span className="campaign-fin-sub-label">Investimento</span> {_BRL_CAMPAIGN_LIST.format(inv)}
+      </span>
+    </div>
   )
 }
 
-function CampaignRow({ campaign, clients, allStations, cancelCampaign, financials }) {
+// Placeholder de mesma pegada visual do bloco financeiro carregado: três
+// barras (rótulo / valor / CPM) alinhadas à direita, ocupando a mesma caixa
+// pra que a transição loading → carregado não empurre nem pisque o layout.
+function CampaignFinancialsSkeleton() {
+  return (
+    <div className="campaign-fin campaign-fin--skeleton" aria-hidden="true">
+      <div className="skeleton" style={{ width: 58, height: 8, borderRadius: 3 }} />
+      <div className="skeleton" style={{ width: 88, height: 15, borderRadius: 4 }} />
+      <div className="skeleton" style={{ width: 60, height: 10, borderRadius: 3 }} />
+    </div>
+  )
+}
+
+function CampaignRow({ campaign, clients, allStations, cancelCampaign, financials, financialsLoading }) {
   const confirm = useConfirm()
   const alertDialog = useAlert()
   const navigate = useNavigate()
@@ -1097,14 +1115,10 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, financial
             <span title={endTip}>{fmtDate(campaign.end_date)}</span>
             {' · '}
             {stationCount} {stationCount === 1 ? 'emissora' : 'emissoras'}
-            {financials && financials.total_invested > 0 && (
-              <>
-                {' · '}
-                <CPMBadge financials={financials} />
-              </>
-            )}
           </div>
         </div>
+
+        <CampaignFinancials financials={financials} loading={financialsLoading} />
 
         <div className="campaign-row-actions">
           {/* Relatórios: CSV consolidado / detalhado / PDF. Sem from/to →
@@ -1218,7 +1232,7 @@ export default function CampaignsPage() {
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
-  const { data: financialsList = [] }       = useCampaignsFinancials()
+  const { data: financialsList = [], isPending: financialsLoading } = useCampaignsFinancials()
   const financialsByCampaign = useMemo(
     () => Object.fromEntries(financialsList.map(f => [f.campaign_id, f])),
     [financialsList]
@@ -1354,6 +1368,7 @@ export default function CampaignsPage() {
                     allStations={allStations}
                     cancelCampaign={cancelCampaign}
                     financials={financialsByCampaign[c.id]}
+                    financialsLoading={financialsLoading}
                   />
                 ))}
               </div>
@@ -1478,6 +1493,7 @@ function CampaignListSkeleton() {
               <div className="skeleton" style={{ width: '35%', height: 14, borderRadius: 4, marginBottom: 6 }} />
               <div className="skeleton" style={{ width: '55%', height: 11, borderRadius: 4 }} />
             </div>
+            <CampaignFinancialsSkeleton />
             <div className="skeleton" style={{ width: 60, height: 22, borderRadius: 999 }} />
           </div>
         </div>

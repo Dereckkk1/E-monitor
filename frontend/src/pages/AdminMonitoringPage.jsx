@@ -115,6 +115,15 @@ const CAT_LABEL = {
   destructive: 'Sensível', export: 'Exportação', evidence: 'Evidência', admin: 'Admin', other: 'Ação',
 }
 
+// Tier de um item da timeline. "Sinal" = mutação, ação sensível, sessão, evidência,
+// export, admin, OU qualquer resposta 4xx/5xx — o que o operador precisa achar num
+// relance. "Silencioso" = navegação/leitura (GET de tela), o substrato de contexto.
+// Dirige o peso visual: sinal ganha nó com cor + texto primário; silencioso recua.
+function isSignalItem(it) {
+  if (it.severity && it.severity !== 'normal') return true
+  return it.category !== 'navigate' && it.category !== 'other'
+}
+
 // ── Tooltip portal (evita clipping em tabelas com overflow) ────────────────
 function TipPortal({ visible, target, content }) {
   const [pos, setPos] = useState({ top: 0, left: 0 })
@@ -560,13 +569,13 @@ function JourneyRail({ users, loading, selected, onSelect, search, onSearch }) {
                 className={`am-jn-user ${isSel ? 'am-jn-user--sel' : ''}`}
                 onClick={() => onSelect({ userId: u.userId, userEmail: u.userEmail || null })}
               >
-                <span className="am-jn-user-avatar">{(u.userEmail || '?').charAt(0).toUpperCase()}</span>
+                <span className="am-jn-user-avatar">
+                  {(u.userEmail || '?').charAt(0).toUpperCase()}
+                  <span className={`am-jn-user-risk am-jn-user-risk--${u.riskLevel}`} title={`Risco ${RISK_LABELS[u.riskLevel] ?? u.riskLevel}`} />
+                </span>
                 <span className="am-jn-user-meta">
                   <span className="am-jn-user-email">{u.userEmail || 'Sem e-mail'}</span>
-                  <span className="am-jn-user-sub">
-                    <span className={`am-jn-risk-dot am-jn-risk-dot--${u.riskLevel}`} />
-                    {fmtNum(u.totalRequests)} req · {fmtDate(u.lastSeen)}
-                  </span>
+                  <span className="am-jn-user-sub">{fmtNum(u.totalRequests)} req · {fmtDate(u.lastSeen)}</span>
                 </span>
                 <span className="am-jn-user-chev"><Icon.ChevRight /></span>
               </button>
@@ -634,36 +643,41 @@ function JourneyPane({ selected, range, onBlockUser }) {
 }
 
 function JourneySummary({ summary, capped }) {
-  const stats = [
-    { value: fmtNum(summary.actionCount), label: 'ações' },
-    { value: fmtNum(summary.sessionCount), label: summary.sessionCount === 1 ? 'sessão' : 'sessões' },
-    { value: fmtNum(summary.warnCount + summary.errorCount), label: 'erros', danger: (summary.warnCount + summary.errorCount) > 0 },
-    { value: fmtNum(summary.destructiveCount), label: 'sensíveis', warn: summary.destructiveCount > 0 },
-  ]
-  const topAreas = summary.areas.slice(0, 5)
-  const maxArea = topAreas.length ? topAreas[0].count : 1
+  const errors = summary.warnCount + summary.errorCount
+  const sensitive = summary.destructiveCount
+  const clean = errors === 0 && sensitive === 0
 
   return (
     <div className="am-jn-summary">
-      <div className="am-jn-stats">
-        {stats.map((s, i) => (
-          <span key={i} className="am-jn-stat">
-            <span className={`am-jn-stat-value ${s.danger ? 'am-jn-stat-value--danger' : s.warn ? 'am-jn-stat-value--warn' : ''}`}>{s.value}</span>
-            <span className="am-jn-stat-label">{s.label}</span>
+      <div className="am-jn-recap">
+        <div className="am-jn-recap-figs">
+          <span className="am-jn-fig">
+            <span className="am-jn-fig-num">{fmtNum(summary.actionCount)}</span>
+            <span className="am-jn-fig-lbl">{summary.actionCount === 1 ? 'ação' : 'ações'}</span>
           </span>
-        ))}
-      </div>
-      <div className="am-jn-areas">
-        <span className="am-jn-areas-title">Áreas mais usadas</span>
-        {topAreas.map((a) => (
-          <div key={a.area} className="am-jn-area">
-            <span className="am-jn-area-name">{a.area}</span>
-            <span className="am-jn-area-track">
-              <span className="am-jn-area-fill" style={{ width: `${Math.max(4, (a.count / maxArea) * 100)}%` }} />
+          <span className="am-jn-fig-sep" aria-hidden="true" />
+          <span className="am-jn-fig">
+            <span className="am-jn-fig-num">{fmtNum(summary.sessionCount)}</span>
+            <span className="am-jn-fig-lbl">{summary.sessionCount === 1 ? 'sessão' : 'sessões'}</span>
+          </span>
+        </div>
+        <div className="am-jn-flags">
+          {errors > 0 && (
+            <span className="am-jn-flag am-jn-flag--err">
+              <Icon.Error /> {fmtNum(errors)} {errors === 1 ? 'erro' : 'erros'}
             </span>
-            <span className="am-jn-area-count">{a.count}</span>
-          </div>
-        ))}
+          )}
+          {sensitive > 0 && (
+            <span className="am-jn-flag am-jn-flag--sens">
+              <Icon.Trash /> {fmtNum(sensitive)} {sensitive === 1 ? 'ação sensível' : 'ações sensíveis'}
+            </span>
+          )}
+          {clean && (
+            <span className="am-jn-flag am-jn-flag--clean">
+              <Icon.Check /> nada crítico no período
+            </span>
+          )}
+        </div>
       </div>
       {capped && (
         <p className="am-jn-cap"><Icon.Info /> Mostrando as 300 ações mais recentes do período — o começo pode ter sido cortado.</p>
@@ -707,28 +721,56 @@ function JourneySession({ session, index }) {
         {session.errorCount > 0 && <span className="am-jn-sess-err">{session.errorCount} com erro</span>}
       </button>
       {open && (
-        <div className="am-jn-events">
-          {session.items.map((it, j) => <JourneyEvent key={j} item={it} />)}
-        </div>
+        <ol className="am-jn-events">
+          {(() => {
+            // Calha de tempo: o horário só é impresso quando o minuto muda. Colapsa
+            // a repetição de rajadas no mesmo minuto (load de tela = 3 GETs juntos)
+            // num só rótulo, criando o ritmo "minuto → ações daquele minuto".
+            let lastLabel = null
+            return session.items.map((it, j) => {
+              const t = it.type === 'group' ? it.start : it.ts
+              const label = fmtClockMin(t)
+              const showTime = label !== lastLabel
+              lastLabel = label
+              return <JourneyEvent key={j} item={it} index={j} showTime={showTime} timeLabel={label} />
+            })
+          })()}
+        </ol>
       )}
     </div>
   )
 }
 
-function JourneyEvent({ item }) {
+function JourneyEvent({ item, index, showTime, timeLabel }) {
   const [showSamples, setShowSamples] = useState(false)
   const isGroup = item.type === 'group'
-  const CatIcon = CAT_ICON[item.category] || Icon.Eye
+  const signal = isSignalItem(item)
   const sev = item.severity
+  const CatIcon = CAT_ICON[item.category] || Icon.Eye
+  const fullTime = fmtClock(isGroup ? item.start : item.ts)
+  // Método só aparece quando carrega informação: mutação (não-GET) ou erro. Em
+  // navegação (GET 2xx) o "GET" era constante em toda linha = puro ruído.
+  const isErr = !isGroup && item.status >= 400
+  const showMethod = isGroup ? false : (item.method !== 'GET' || isErr)
+  const slow = !isGroup && item.durationMs != null && item.durationMs > 2000
 
   return (
-    <div className={`am-jn-ev am-jn-ev--${sev}`}>
-      <span className="am-jn-ev-time">{isGroup ? fmtClockMin(item.start) : fmtClock(item.ts)}</span>
-      <span className={`am-jn-ev-icon am-jn-ev-icon--${sev}`} title={CAT_LABEL[item.category]}><CatIcon /></span>
+    <li
+      className={`am-jn-ev ${signal ? 'am-jn-ev--sig' : 'am-jn-ev--quiet'} am-jn-ev--${sev}`}
+      style={{ animationDelay: `${Math.min(index * 12, 200)}ms` }}
+    >
+      <span className="am-jn-ev-time" title={fullTime}>{showTime ? timeLabel : ''}</span>
+      {signal ? (
+        <span className={`am-jn-ev-node am-jn-ev-node--sig am-jn-ev-node--${sev}`} title={CAT_LABEL[item.category]}>
+          <CatIcon />
+        </span>
+      ) : (
+        <span className="am-jn-ev-node am-jn-ev-node--quiet" aria-hidden="true" />
+      )}
       <div className="am-jn-ev-body">
         <span className="am-jn-ev-action">
           {item.action}
-          {isGroup && <span className="am-jn-ev-times">{item.count}×</span>}
+          {isGroup && <span className={`am-jn-ev-times ${signal ? '' : 'am-jn-ev-times--quiet'}`}>{item.count}×</span>}
         </span>
         <span className="am-jn-ev-tags">
           <span className="am-jn-ev-area">{item.area}</span>
@@ -741,19 +783,21 @@ function JourneyEvent({ item }) {
         {isGroup ? (
           <>
             {item.errorCount > 0 && <span className="am-jn-ev-status am-jn-ev-status--warn">{item.errorCount} erro{item.errorCount > 1 ? 's' : ''}</span>}
-            <button type="button" className="am-jn-ev-expand" onClick={() => setShowSamples((v) => !v)} title="Ver as chamadas">
+            <button type="button" className="am-jn-ev-expand" onClick={() => setShowSamples((v) => !v)} aria-expanded={showSamples} title="Ver as chamadas">
               {showSamples ? 'ocultar' : 'detalhar'}
             </button>
           </>
         ) : (
           <>
-            {item.status >= 400 && (
-              <span className={`am-jn-ev-status ${item.status >= 500 ? 'am-jn-ev-status--err' : 'am-jn-ev-status--warn'}`}>{item.status}</span>
-            )}
-            {item.durationMs != null && item.durationMs > 2000 && (
+            {slow && (
               <span className="am-jn-ev-slow" title="Resposta lenta"><Icon.Timer /> {fmtMs(item.durationMs)}</span>
             )}
-            <code className="am-jn-ev-route" title={`${item.method} ${item.route}`}>{item.method}</code>
+            {isErr && (
+              <span className={`am-jn-ev-status ${item.status >= 500 ? 'am-jn-ev-status--err' : 'am-jn-ev-status--warn'}`}>{item.status}</span>
+            )}
+            {showMethod && (
+              <code className="am-jn-ev-route" title={`${item.method} ${item.route}`}>{item.method}</code>
+            )}
           </>
         )}
       </div>
@@ -768,7 +812,7 @@ function JourneyEvent({ item }) {
           ))}
         </ul>
       )}
-    </div>
+    </li>
   )
 }
 
@@ -801,24 +845,24 @@ function JourneyGhost() {
 function JourneyTimelineSkeleton() {
   return (
     <div className="am-jn-summary">
-      <div className="am-jn-stats">
-        {[0, 1, 2, 3].map((i) => (
-          <span key={i} className="am-jn-stat">
-            <div className="am-skel" style={{ width: 34, height: 22 }} />
-            <div className="am-skel" style={{ width: 44, height: 9, marginTop: 6 }} />
-          </span>
-        ))}
+      <div className="am-jn-recap">
+        <div className="am-jn-recap-figs">
+          <span className="am-jn-fig"><div className="am-skel" style={{ width: 44, height: 24 }} /></span>
+          <span className="am-jn-fig-sep" aria-hidden="true" />
+          <span className="am-jn-fig"><div className="am-skel" style={{ width: 30, height: 24 }} /></span>
+        </div>
+        <div className="am-jn-flags"><div className="am-skel" style={{ width: 120, height: 24, borderRadius: 9999 }} /></div>
       </div>
-      <div className="am-jn-events" style={{ marginTop: 18 }}>
-        {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="am-jn-ev">
-            <span className="am-jn-ev-time"><div className="am-skel" style={{ width: 40, height: 10 }} /></span>
-            <span className="am-jn-ev-icon am-jn-ev-icon--normal" style={{ background: 'var(--c-surface-2)' }} />
-            <div className="am-jn-ev-body"><div className="am-skel" style={{ width: `${45 + (i * 7) % 40}%`, height: 12 }} /></div>
+      <ol className="am-jn-events am-jn-events--skel" style={{ marginTop: 20 }}>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <li key={i} className="am-jn-ev am-jn-ev--quiet">
+            <span className="am-jn-ev-time">{i % 3 === 0 ? <div className="am-skel" style={{ width: 34, height: 10 }} /> : null}</span>
+            <span className="am-jn-ev-node am-jn-ev-node--quiet" aria-hidden="true" />
+            <div className="am-jn-ev-body"><div className="am-skel" style={{ width: `${44 + (i * 9) % 42}%`, height: 12 }} /></div>
             <div className="am-jn-ev-meta" />
-          </div>
+          </li>
         ))}
-      </div>
+      </ol>
     </div>
   )
 }

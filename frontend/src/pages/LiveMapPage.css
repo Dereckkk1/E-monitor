@@ -228,6 +228,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .la-row-material-client { font-size: 11px; color: var(--c-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.la-row-material-campaign { color: var(--c-text-2); font-weight: 600; }
 
 .la-row-stripe {
   position: absolute; right: 0; top: 8px; bottom: 8px; width: 3px;
