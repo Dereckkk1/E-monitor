@@ -170,7 +170,7 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	// cálculo por-veiculação/Modelo B do aggregateInvestment é preservado (útil
 	// se a regra mudar) mas sobrescrito aqui pra consolidado. Campanha 100%
 	// por-inserção segue por veiculação (inv/bon inalterados).
-	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.Today)
+	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.From, p.To, p.Today)
 	if err != nil {
 		return nil, fmt.Errorf("consolidatedSummary: %w", err)
 	}
@@ -219,19 +219,22 @@ func orMaxDate(t time.Time) time.Time {
 	return t
 }
 
-// monthsElapsedSQL conta os MESES DE CALENDÁRIO que a campanha cobre até
-// `todayParam`. O valor consolidado é mensal e incrementa na VIRADA de cada mês
-// (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data
-// de início (0 antes dela) e, ao entrar num novo mês de calendário, soma mais 1;
-// limitado ao mês de fim. Ex.: campanha 09/06–08/07 conta 1 em junho e 2 a
-// partir de 01/07. startCol/endCol = colunas de data da campanha no escopo.
-func monthsElapsedSQL(startCol, endCol, todayParam string) string {
-	return `(CASE WHEN ` + todayParam + `::date < ` + startCol + ` THEN 0 ELSE
-	    (EXTRACT(YEAR  FROM LEAST(date_trunc('month', ` + endCol + `), date_trunc('month', ` + todayParam + `::date)))::int * 12
-	     + EXTRACT(MONTH FROM LEAST(date_trunc('month', ` + endCol + `), date_trunc('month', ` + todayParam + `::date)))::int)
-	    - (EXTRACT(YEAR  FROM date_trunc('month', ` + startCol + `))::int * 12
-	     + EXTRACT(MONTH FROM date_trunc('month', ` + startCol + `))::int) + 1
-	  END)`
+// monthsElapsedSQL conta os MESES DE CALENDÁRIO da campanha que (a) já
+// começaram até `todayParam`, (b) estão dentro da janela [fromExpr, toExpr]
+// selecionada. O valor consolidado é mensal e incrementa na VIRADA de cada mês
+// (todo dia 1º): o 1º mês conta a partir da data de início (0 antes dela), e ao
+// entrar num novo mês de calendário soma mais 1. Filtrar um sub-período escopa
+// a contagem (ex.: filtrar só junho de uma campanha de 3 meses → 1). Para o
+// /campaigns (sem filtro) passe start_date/end_date como from/to → sem escopo.
+//
+// generate_series pelos 1ºs de cada mês; conta os que satisfazem começou-até-
+// hoje E dentro-da-janela. startCol/endCol = colunas de data da campanha.
+func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) string {
+	return `(SELECT count(*)::int
+	  FROM generate_series(date_trunc('month', ` + startCol + `), date_trunc('month', ` + endCol + `), interval '1 month') gm(ms)
+	  WHERE GREATEST(gm.ms::date, ` + startCol + `) <= (` + todayParam + `)::date
+	    AND GREATEST(gm.ms::date, ` + startCol + `) <= (` + toExpr + `)::date
+	    AND LEAST((gm.ms + interval '1 month' - interval '1 day')::date, ` + endCol + `) >= (` + fromExpr + `)::date)`
 }
 
 // consolidatedSummary devolve o valor TOTAL da campanha e se há QUALQUER
@@ -250,18 +253,18 @@ func monthsElapsedSQL(startCol, endCol, todayParam string) string {
 //
 // Não depende de from/to (whole-campaign); depende de `today` só pro acúmulo
 // mensal do consolidado.
-func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, today time.Time) (float64, bool, error) {
+func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, from, to, today time.Time) (float64, bool, error) {
 	var total float64
 	var hasConsolidated bool
 	err := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
 		    SELECT id, start_date, end_date,
-		           `+monthsElapsedSQL("start_date", "end_date", "$3")+` AS months_elapsed
+		           `+monthsElapsedSQL("start_date", "end_date", "$5", "$3", "$4")+` AS months_elapsed
 		    FROM campaigns WHERE id = ANY($1::uuid[])
 		),
 		per_ins_delivered AS (
-		    -- valor ENTREGUE das emissoras por-inserção: unit × (in_slot + bonus),
-		    -- igual ao /campaigns (não o plano cheio unit × expected).
+		    -- valor ENTREGUE das emissoras por-inserção NA JANELA [from,to]:
+		    -- unit × (in_slot + bonus), igual ao /campaigns (não o plano cheio).
 		    SELECT s.campaign_id, s.station_id,
 		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::numeric AS pi_delivered
 		    FROM daily_play_summary s
@@ -270,7 +273,7 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		      ON tp.campaign_id = s.campaign_id
 		     AND tp.station_id  = s.station_id
 		     AND tp.type_id     = s.type_id
-		    WHERE s.for_date BETWEEN cm.start_date AND cm.end_date
+		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $3::date) AND LEAST(cm.end_date, $4::date)
 		      AND ($2::uuid[] = '{}' OR s.station_id = ANY($2::uuid[]))
 		    GROUP BY s.campaign_id, s.station_id
 		)
@@ -287,7 +290,7 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		  ON pd.campaign_id = csp.campaign_id AND pd.station_id = csp.station_id
 		WHERE csp.campaign_id = ANY($1::uuid[])
 		  AND ($2::uuid[] = '{}' OR csp.station_id = ANY($2::uuid[]))
-	`, campaignIDs, stationIDs, orMaxDate(today)).Scan(&total, &hasConsolidated)
+	`, campaignIDs, stationIDs, from, to, orMaxDate(today)).Scan(&total, &hasConsolidated)
 	if err != nil {
 		return 0, false, err
 	}

@@ -73,11 +73,11 @@ Decisão deliberada e documentada nos comentários do `aggregateBuckets` em [wor
 
 Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` entra em **modo fornecedor**:
 
-- **Investido** = calculado **igual ao `/campaigns`** (`Campaigns.FinancialsByCampaign`) pra as duas telas nunca divergirem:
+- **Investido** = mesma fórmula do `/campaigns` (`Campaigns.FinancialsByCampaign`):
   `Σ_estação (consolidated_value × meses_decorridos das consolidadas + unit_value × (in_slot + bonus) das por-inserção)`.
-  - **`meses_decorridos`** = nº de **meses de calendário** que a campanha cobre até **hoje**. O incremento acontece na **virada do mês** (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data de início (0 antes dela) e, ao entrar num novo mês de calendário, soma +1; limitado ao mês de fim. Ex.: campanha **09/06–08/07** conta **1** em junho e **2 a partir de 01/07** (dobra na virada). Campanha dentro de 1 mês de calendário → sempre 1. Função `monthsElapsedSQL`.
-  - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → total cheio.
-  - **Não varia com o filtro de período** do /insights (só com o tempo real / `hoje`).
+  - **`meses_decorridos`** = nº de **meses de calendário** da campanha que **(a)** já começaram até **hoje** e **(b)** estão dentro da **janela de período selecionada** `[from, to]`. Incremento na **virada do mês** (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data de início (0 antes dela); ao entrar num novo mês soma +1; limitado ao mês de fim. Ex.: campanha **09/06–08/07** conta **1** em junho e **2 a partir de 01/07**. Função `monthsElapsedSQL` (via `generate_series`).
+  - **Respeita o filtro de período:** filtrar só junho de uma campanha de 3 meses → 1 mês (não a campanha toda). O per-inserção também é escopado a `[from, to]`. Bate com o `/campaigns` (que não tem filtro) quando o filtro cobre a campanha inteira até hoje.
+  - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → sem cap de hoje (só o filtro escopa).
 - **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
 - **CPM**: usa o `fixed_cpm` da campanha (consolidado sempre tem cadastrado); sem ele, cai no dinâmico `total ÷ impactos × 1000`.
 - **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
