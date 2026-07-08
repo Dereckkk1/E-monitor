@@ -868,6 +868,96 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	}
 }
 
+// Consolidado ACUMULA POR MÊS: consolidated_value é MENSAL. Campanha de 3 meses
+// (01/06–31/08) × R$1000/mês. O Investido cresce conforme os ciclos mensais
+// começam (mês conta inteiro ao iniciar), limitado a 3, e 0 antes de começar.
+func TestInsights_Compute_Consolidated_AccruesByMonth(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-08-31")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000) // R$1000/mês
+
+	cases := []struct {
+		today string
+		want  float64
+	}{
+		{"2026-05-20", 0},    // antes de começar
+		{"2026-06-10", 1000}, // mês 1 iniciado
+		{"2026-07-15", 2000}, // mês 2 iniciado
+		{"2026-08-20", 3000}, // mês 3 iniciado
+		{"2026-09-05", 3000}, // depois do fim → cap em 3
+	}
+	for _, tc := range cases {
+		out, err := repo.Compute(ctx, InsightsParams{
+			ClientID: client, CampaignIDs: []uuid.UUID{camp},
+			From: parseDate("2026-06-01"), To: parseDate("2026-08-31"),
+			Today: parseDate(tc.today), StationIDs: []uuid.UUID{},
+		})
+		if err != nil {
+			t.Fatalf("Compute %s: %v", tc.today, err)
+		}
+		if !approxEq(out.KPIs.Investido.Executado, tc.want, 1) {
+			t.Errorf("hoje %s: investido = %v, want %v", tc.today, out.KPIs.Investido.Executado, tc.want)
+		}
+	}
+}
+
+// Campanha que ATRAVESSA a virada do mês mas dura ~1 mês (como a 5252,
+// 19/06–18/07) conta como 1 ciclo — NÃO 2. Hoje 08/jul → R$1000 × 1 = 1000.
+func TestInsights_Compute_Consolidated_StraddleCountsAsOneMonth(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-19", "2026-07-18")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-19"), To: parseDate("2026-07-18"),
+		Today: parseDate("2026-07-08"), StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
+		t.Errorf("investido = %v, want ~1000 (1 ciclo, NÃO 2 pela virada jun/jul)", out.KPIs.Investido.Executado)
+	}
+}
+
+// /campaigns (FinancialsByCampaign) usa a MESMA regra: consolidado acumula por
+// mês. 3 meses × R$1000, hoje mês 2 → total_invested = 2000.
+func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	campaignsRepo := NewCampaigns(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-08-31")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, &client, parseDate("2026-07-15"))
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign: %v", err)
+	}
+	var found bool
+	for _, f := range fins {
+		if f.CampaignID == camp {
+			found = true
+			if !approxEq(f.TotalInvested, 2000, 1) {
+				t.Errorf("total_invested = %v, want ~2000 (1000/mês × 2 meses)", f.TotalInvested)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("campanha %s não veio no FinancialsByCampaign", camp)
+	}
+}
+
 // Campanha MISTA (consolidada + por-inserção): o Investido bate com o
 // /campaigns — consolidado fixo + por-inserção pelo ENTREGUE (unit×(in_slot+
 // bonus)), NÃO pelo plano cheio (unit×expected). Contrato consolidado 400,

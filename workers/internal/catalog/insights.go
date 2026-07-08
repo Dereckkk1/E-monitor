@@ -34,6 +34,10 @@ type InsightsParams struct {
 	From        time.Time   // inclusive (date-only, UTC)
 	To          time.Time   // inclusive (date-only, UTC end-of-day)
 	StationIDs  []uuid.UUID // vazio = todas as estações das campanhas
+	// Today é "hoje" no fuso America/Sao_Paulo (date-only). Usado para acumular
+	// o valor consolidado por mês (ciclos mensais já iniciados até hoje — ver
+	// consolidatedSummary). Zero value = sem "hoje" → cai no total cheio.
+	Today time.Time
 }
 
 // InsightsPayload é o response completo do endpoint.
@@ -166,7 +170,7 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	// cálculo por-veiculação/Modelo B do aggregateInvestment é preservado (útil
 	// se a regra mudar) mas sobrescrito aqui pra consolidado. Campanha 100%
 	// por-inserção segue por veiculação (inv/bon inalterados).
-	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs)
+	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.Today)
 	if err != nil {
 		return nil, fmt.Errorf("consolidatedSummary: %w", err)
 	}
@@ -205,22 +209,51 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	}, nil
 }
 
-// consolidatedSummary devolve o valor TOTAL da campanha (fixo, independente do
-// período) e se há QUALQUER emissora consolidada na seleção (respeitando o
-// filtro de estações). Quando há consolidada, o /insights entra em modo
-// fornecedor: Investido = esse total (não cresce com o tempo) e Bonificação
-// some.
+// orMaxDate devolve t, ou uma data no futuro distante quando t é zero (o "hoje"
+// não foi injetado — testes/uso legado). Com data distante, o acumulado
+// consolidado cai no total cheio do contrato (todos os ciclos).
+func orMaxDate(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
+	return t
+}
+
+// monthsElapsedSQL conta os CICLOS MENSAIS já iniciados de uma campanha até
+// `todayParam` — aniversário a partir do início (start + i meses). O mês conta
+// inteiro assim que o ciclo começa; limitado ao fim da campanha; 0 antes do
+// início. generate_series torna a contagem exata pra qualquer dia do mês
+// (inclusive fim-de-mês). startCol/endCol = colunas de data da campanha no escopo.
+func monthsElapsedSQL(startCol, endCol, todayParam string) string {
+	return `(SELECT count(*)::int FROM generate_series(0, 120) g(i)
+	          WHERE (` + startCol + ` + (g.i || ' months')::interval)::date
+	                <= LEAST(` + endCol + `, ` + todayParam + `::date))`
+}
+
+// consolidatedSummary devolve o valor TOTAL da campanha e se há QUALQUER
+// emissora consolidada na seleção (respeitando o filtro de estações). Quando há
+// consolidada, o /insights entra em modo fornecedor: Investido = esse total e
+// Bonificação some.
 //
 // A fórmula é IDÊNTICA à do /campaigns (catalog.Campaigns.FinancialsByCampaign)
-// pra as duas telas nunca divergirem: total = Σ_estação (consolidated_value das
-// consolidadas + unit_value × (in_slot + bonus) das por-inserção — o ENTREGUE,
-// não o plano cheio). Não depende de from/to (whole-campaign).
-func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID) (float64, bool, error) {
+// pra as duas telas nunca divergirem:
+//
+//	total = Σ_estação (
+//	    consolidated: consolidated_value × meses_decorridos  (valor é MENSAL;
+//	                  acumula por ciclo mensal iniciado até `today`)
+//	  + per_insertion: unit_value × (in_slot + bonus)        (o ENTREGUE)
+//	)
+//
+// Não depende de from/to (whole-campaign); depende de `today` só pro acúmulo
+// mensal do consolidado.
+func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, today time.Time) (float64, bool, error) {
 	var total float64
 	var hasConsolidated bool
 	err := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
-		    SELECT id, start_date, end_date FROM campaigns WHERE id = ANY($1::uuid[])
+		    SELECT id, start_date, end_date,
+		           `+monthsElapsedSQL("start_date", "end_date", "$3")+` AS months_elapsed
+		    FROM campaigns WHERE id = ANY($1::uuid[])
 		),
 		per_ins_delivered AS (
 		    -- valor ENTREGUE das emissoras por-inserção: unit × (in_slot + bonus),
@@ -239,16 +272,18 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		)
 		SELECT
 		    COALESCE(SUM(
-		        CASE WHEN csp.mode='consolidated' THEN COALESCE(csp.consolidated_value, 0)::numeric
+		        CASE WHEN csp.mode='consolidated'
+		             THEN COALESCE(csp.consolidated_value, 0)::numeric * cm.months_elapsed
 		             ELSE COALESCE(pd.pi_delivered, 0) END
 		    ), 0)::float8 AS total,
 		    COALESCE(BOOL_OR(csp.mode='consolidated'), false) AS has_consolidated
 		FROM campaign_station_pricing csp
+		JOIN camp_meta cm ON cm.id = csp.campaign_id
 		LEFT JOIN per_ins_delivered pd
 		  ON pd.campaign_id = csp.campaign_id AND pd.station_id = csp.station_id
 		WHERE csp.campaign_id = ANY($1::uuid[])
 		  AND ($2::uuid[] = '{}' OR csp.station_id = ANY($2::uuid[]))
-	`, campaignIDs, stationIDs).Scan(&total, &hasConsolidated)
+	`, campaignIDs, stationIDs, orMaxDate(today)).Scan(&total, &hasConsolidated)
 	if err != nil {
 		return 0, false, err
 	}
