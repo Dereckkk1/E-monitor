@@ -905,27 +905,39 @@ func TestInsights_Compute_Consolidated_AccruesByMonth(t *testing.T) {
 	}
 }
 
-// Campanha que ATRAVESSA a virada do mês mas dura ~1 mês (como a 5252,
-// 19/06–18/07) conta como 1 ciclo — NÃO 2. Hoje 08/jul → R$1000 × 1 = 1000.
-func TestInsights_Compute_Consolidated_StraddleCountsAsOneMonth(t *testing.T) {
+// O incremento acontece na VIRADA do mês (1º de cada mês de calendário), não no
+// aniversário de 30 dias. Campanha 09/06–08/07 × R$1000/mês: 1000 em junho, e
+// dobra pra 2000 a partir de 01/07 (entrou em julho), mesmo durando ~1 mês.
+func TestInsights_Compute_Consolidated_IncrementsAtCalendarMonthStart(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
 	client := insSeedClient(t, ctx, pool, "X")
-	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-19", "2026-07-18")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-09", "2026-07-08")
 	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
 	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
 
-	out, err := repo.Compute(ctx, InsightsParams{
-		ClientID: client, CampaignIDs: []uuid.UUID{camp},
-		From: parseDate("2026-06-19"), To: parseDate("2026-07-18"),
-		Today: parseDate("2026-07-08"), StationIDs: []uuid.UUID{},
-	})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
+	cases := []struct {
+		today string
+		want  float64
+	}{
+		{"2026-06-20", 1000}, // junho
+		{"2026-06-30", 1000}, // último dia de junho, ainda 1
+		{"2026-07-01", 2000}, // dobra na virada pra julho
+		{"2026-07-08", 2000}, // fim, ainda 2
 	}
-	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
-		t.Errorf("investido = %v, want ~1000 (1 ciclo, NÃO 2 pela virada jun/jul)", out.KPIs.Investido.Executado)
+	for _, tc := range cases {
+		out, err := repo.Compute(ctx, InsightsParams{
+			ClientID: client, CampaignIDs: []uuid.UUID{camp},
+			From: parseDate("2026-06-09"), To: parseDate("2026-07-08"),
+			Today: parseDate(tc.today), StationIDs: []uuid.UUID{},
+		})
+		if err != nil {
+			t.Fatalf("Compute %s: %v", tc.today, err)
+		}
+		if !approxEq(out.KPIs.Investido.Executado, tc.want, 1) {
+			t.Errorf("hoje %s: investido = %v, want %v (virada de mês)", tc.today, out.KPIs.Investido.Executado, tc.want)
+		}
 	}
 }
 
