@@ -10,7 +10,7 @@ export default function InvestmentToggleCard({ data }) {
   return (
     <div
       className="in-card"
-      title="Valor do contrato efetivamente cumprido. Em pacote consolidado é limitado a 100% (o excedente entra em Bonificação) e não conta dias futuros ainda não veiculados."
+      title="Valor veiculado no período. Em pacote consolidado é proporcional ao que foi entregue (fração do contrato), limitado a 100% — o excedente entra em Bonificação. Campanha em andamento mostra o entregue até agora."
     >
       <div className="in-card-head">
         <span className="in-card-icon"><IconWallet /></span>

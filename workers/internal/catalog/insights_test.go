@@ -561,18 +561,19 @@ func TestInsights_AggregateCore_StationWithoutPMM(t *testing.T) {
 	}
 }
 
-// ─── consolidated: clamp em "hoje" + cap no contrato (fix 2026-07-08) ────────
+// ─── consolidated: proporcional ao período (Modelo B, fix 2026-07-08) ───────
 //
-// Ver docs/superpowers/specs/2026-07-08-insights-consolidated-fill-cap-design.md.
-// Dois defeitos na fórmula consolidada, corrigidos aqui:
-//   A) dias futuros (esperado>0/executado=0) inflavam o denominador →
-//      executado/bonificação/CPM caíam ao alargar a janela.
-//   B) over-delivery (in_slot acima do plano) entrava no executado (razão >1,
-//      executado > contrato) E na bonificação — double-count. Agora o
-//      executado capa em 100% do contrato; o excedente fica só na bonificação.
+// Ver docs/superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md.
+// O Investido/Bonificação consolidado é proporcional ao período selecionado:
 //
-// A injeção de "hoje" é via InsightsParams.Today (date-only). Zero value =
-// sem clamp (comportamento legado dos testes/handlers que não setam).
+//	executado = contrato × min(1, entregue_na_janela ÷ plano_da_campanha_INTEIRA)
+//	bonus     = contrato × (bonus_na_janela ÷ plano_da_campanha_INTEIRA)
+//
+// O denominador é o plano da campanha inteira (fixo), NÃO da janela. Assim o
+// número escala com o período (junho = fração; período todo = contrato) e é
+// monotônico: alargar a janela pra dias ainda-não-veiculados não muda nada
+// (entrega 0), e nunca decresce. Over-delivery capa no contrato e vai só pra
+// bonificação. Não há clamp de "hoje" — dia futuro entrega 0 no numerador.
 
 // approxEq compara floats com tolerância absoluta.
 func approxEq(got, want, tol float64) bool {
@@ -583,13 +584,10 @@ func approxEq(got, want, tol float64) bool {
 	return d <= tol
 }
 
-// A) Dias futuros não derrubam o executado consolidado.
-//
-// Contrato 3000, plano 1/dia em junho (30 esperados). Entregue 1/dia nos dias
-// 01–15 (15 executados). Today=15/06 → dias 16–30 são futuro. Com o fix, a
-// janela de fill vai só até hoje: 15 executados / 15 esperados = 100% → 3000.
-// Sem o fix, 15/30 = 50% → 1500.
-func TestInsights_Investment_Consolidated_FutureDaysDoNotDeflate(t *testing.T) {
+// Proporcional ao período: contrato 3000, plano 1/dia em junho (30 do plano
+// cheio). Entregue 1/dia nos 30 dias. Meia janela (até 15/06) = 15/30 do
+// contrato = 1500; janela cheia = 30/30 = 3000. Escala com o período.
+func TestInsights_Investment_Consolidated_PeriodProportional(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -601,32 +599,82 @@ func TestInsights_Investment_Consolidated_FutureDaysDoNotDeflate(t *testing.T) {
 	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 3000)
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	for d := 1; d <= 30; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
 
-	// 1 in_slot/dia nos dias 01–15 (passado relativo a Today=15/06).
+	half, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment (half): %v", err)
+	}
+	full, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment (full): %v", err)
+	}
+	if !approxEq(half.Executado, 1500, 1) {
+		t.Errorf("meia janela: executado = %v, want ~1500 (15/30 do contrato)", half.Executado)
+	}
+	if !approxEq(full.Executado, 3000, 1) {
+		t.Errorf("janela cheia: executado = %v, want ~3000 (30/30 do contrato)", full.Executado)
+	}
+	if full.Executado <= half.Executado {
+		t.Errorf("deveria crescer com o período: half=%v full=%v", half.Executado, full.Executado)
+	}
+}
+
+// Monotônico: alargar a janela pra incluir dias ainda-não-veiculados não muda
+// o Investido (entrega 0 nesses dias). Contrato 3000, plano 1/dia 30 dias,
+// entregue só nos dias 01–15. Janela até 15/06 e janela até 30/06 dão o MESMO
+// valor (15/30 = 1500) — não infla nem deflaciona.
+func TestInsights_Investment_Consolidated_UndeliveredDaysDoNotDeflate(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 3000)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
 	for d := 1; d <= 15; d++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
 
-	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+	toHalf, _, err := repo.aggregateInvestment(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
-		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-06-15"),
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
 		StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
-		t.Fatalf("aggregateInvestment: %v", err)
+		t.Fatalf("aggregateInvestment (half): %v", err)
 	}
-	if !approxEq(inv.Executado, 3000, 1) {
-		t.Errorf("executado = %v, want ~3000 (fill até hoje = 15/15 = 100%%, não 15/30)", inv.Executado)
+	toFull, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment (full): %v", err)
+	}
+	if !approxEq(toHalf.Executado, 1500, 1) || !approxEq(toFull.Executado, 1500, 1) {
+		t.Errorf("dias não-veiculados deflacionaram: half=%v full=%v, want ambos ~1500", toHalf.Executado, toFull.Executado)
 	}
 }
 
-// B) Over-delivery capa no contrato e vai pra bonificação, não pro investido.
-//
-// Contrato 1000, plano 1/dia dias 01–10 (10 esperados). Entregue 2/dia (20
-// executados, 10 de excedente). Today=01/07 (tudo passado). Com o fix:
-// executado = 1000 × min(1, 20/10) = 1000 (capa). Bonificação = 1000 × 10/10 =
-// 1000 (o excedente). Sem o fix, executado = 1000 × 20/10 = 2000.
+// Over-delivery capa no contrato e vai pra bonificação, não pro investido.
+// Contrato 1000, plano 1/dia dias 01–10 (plano cheio = 10). Entregue 2/dia
+// (20 executados, 10 de excedente). executado = 1000 × min(1, 20/10) = 1000
+// (capa). Bonificação = 1000 × 10/10 = 1000 (o excedente, à taxa do plano cheio).
 func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
@@ -649,7 +697,6 @@ func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *t
 	inv, bon, err := repo.aggregateInvestment(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
 		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-07-01"),
 		StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
@@ -666,12 +713,9 @@ func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *t
 	}
 }
 
-// Déficit passado reduz o executado (o cap não vira piso). Guard: passa antes
-// e depois do fix — garante que min(1, x) não floora quando x<1.
-//
-// Contrato 1000, plano 1/dia dias 01–10 (10 esperados). Entregue só 4.
-// executado = 1000 × min(1, 4/10) = 400.
-func TestInsights_Investment_Consolidated_PastDeficitReduces(t *testing.T) {
+// Déficit reduz o executado (o cap não vira piso): min(1, x) não floora x<1.
+// Contrato 1000, plano cheio 10, entregue só 4 → 1000 × min(1, 4/10) = 400.
+func TestInsights_Investment_Consolidated_DeficitReduces(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -691,7 +735,6 @@ func TestInsights_Investment_Consolidated_PastDeficitReduces(t *testing.T) {
 	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
 		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-07-01"),
 		StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
@@ -702,10 +745,9 @@ func TestInsights_Investment_Consolidated_PastDeficitReduces(t *testing.T) {
 	}
 }
 
-// per_insertion não é afetado pelo clamp de "hoje": o contratado mantém o
-// plano cheio (30 esperados) mesmo com Today no meio do período. Guard contra
-// vazamento do clamp pro modo aditivo.
-func TestInsights_Investment_PerInsertion_UnaffectedByTodayClamp(t *testing.T) {
+// per_insertion (aditivo) não é afetado pela mudança de denominador: contratado
+// = unit × plano da janela, executado = unit × entregue. Guard de regressão.
+func TestInsights_Investment_PerInsertion_Additive(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -726,27 +768,23 @@ func TestInsights_Investment_PerInsertion_UnaffectedByTodayClamp(t *testing.T) {
 	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
 		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-06-15"), // no meio: não deve cortar o per_insertion
 		StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
 		t.Fatalf("aggregateInvestment: %v", err)
 	}
-	// contratado = 50 × 30 esperados = 1500 (plano cheio, sem clamp)
-	if !approxEq(inv.Contratado, 1500, 1) {
-		t.Errorf("contratado = %v, want ~1500 (per_insertion não é clampeado por Today)", inv.Contratado)
+	if !approxEq(inv.Contratado, 1500, 1) { // 50 × 30 esperados
+		t.Errorf("contratado = %v, want ~1500", inv.Contratado)
 	}
-	// executado = 50 × 6 = 300
-	if !approxEq(inv.Executado, 300, 1) {
+	if !approxEq(inv.Executado, 300, 1) { // 50 × 6
 		t.Errorf("executado = %v, want ~300", inv.Executado)
 	}
 }
 
-// Compute end-to-end (fast path do CPM): campanha consolidada com dias futuros
-// não derruba Investido nem CPM. Contrato 2000, pmm 1000, 15 tocadas nos dias
-// 01–15, Today=15/06. Investido = 2000 (100% até hoje). Impactos = 15×1000 =
-// 15000. CPM = 2000/15000×1000 = 133,33. Sem o fix: Investido 1000, CPM 66,67.
-func TestInsights_Compute_Consolidated_FutureDaysDoNotDeflateInvestidoOrCPM(t *testing.T) {
+// Compute end-to-end (fast path do CPM): consolidada, contrato 2000, plano 1/dia
+// 30 dias (plano cheio = 30), entregue 15. executado = 2000 × 15/30 = 1000.
+// Impactos = 15×1000 = 15000. CPM = 1000/15000×1000 = 66,67.
+func TestInsights_Compute_Consolidated_PeriodProportionalInvestidoAndCPM(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -762,28 +800,28 @@ func TestInsights_Compute_Consolidated_FutureDaysDoNotDeflateInvestidoOrCPM(t *t
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
 
+	// Sub-janela até 15/06: entregou 15 no período, plano cheio = 30.
 	out, err := repo.Compute(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
-		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-06-15"),
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
 		StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	if !approxEq(out.KPIs.Investido.Executado, 2000, 1) {
-		t.Errorf("investido = %v, want ~2000", out.KPIs.Investido.Executado)
+	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
+		t.Errorf("investido = %v, want ~1000 (15/30 de 2000, denominador = plano cheio)", out.KPIs.Investido.Executado)
 	}
-	if !approxEq(out.KPIs.CPM, 133.33, 0.5) {
-		t.Errorf("cpm = %v, want ~133.33 (2000/15000×1000)", out.KPIs.CPM)
+	if !approxEq(out.KPIs.CPM, 66.67, 0.5) {
+		t.Errorf("cpm = %v, want ~66.67 (1000/15000×1000)", out.KPIs.CPM)
 	}
 }
 
-// computeCPM slow path (com fixed_cpm em jogo): o executado por-campanha também
-// usa clamp+cap. Campanha A tem fixed_cpm (força o slow path) mas 0 impactos
-// (peso 0). Campanha B (sem fixed_cpm) domina o CPM ponderado; seu executado
-// deve vir clampeado até hoje. CPM esperado = 133,33 (não 66,67).
-func TestInsights_ComputeCPM_Consolidated_SlowPathUsesClampedExecutado(t *testing.T) {
+// computeCPM slow path: o executado por-campanha usa o mesmo denominador de
+// plano cheio. Campanha A tem fixed_cpm (força o slow path) mas 0 impactos
+// (peso 0). Campanha B (sem fixed_cpm) domina; executado_B = 2000×15/30 = 1000,
+// impactos_B = 15000 → CPM = 66,67.
+func TestInsights_ComputeCPM_Consolidated_SlowPathUsesWholePlanDenominator(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -795,7 +833,7 @@ func TestInsights_ComputeCPM_Consolidated_SlowPathUsesClampedExecutado(t *testin
 		t.Fatalf("set fixed_cpm: %v", err)
 	}
 
-	// B: consolidada, sem fixed_cpm, com dias futuros.
+	// B: consolidada, sem fixed_cpm; entregue metade do plano cheio.
 	campB := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
 	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
 	st := insSeedStation(t, ctx, pool, "RXB", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
@@ -806,16 +844,17 @@ func TestInsights_ComputeCPM_Consolidated_SlowPathUsesClampedExecutado(t *testin
 		insSeedDetection(t, ctx, pool, campB, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
 
+	// Sub-janela até 15/06: discrimina denominador da janela (daria 133,67) do
+	// denominador de plano cheio (66,67).
 	cpm, err := repo.computeCPM(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{campA, campB},
-		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
-		Today:      parseDate("2026-06-15"),
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
 		StationIDs: []uuid.UUID{},
 	}, 0, 0)
 	if err != nil {
 		t.Fatalf("computeCPM: %v", err)
 	}
-	if !approxEq(cpm, 133.33, 0.5) {
-		t.Errorf("cpm = %v, want ~133.33 (executado clampeado no slow path)", cpm)
+	if !approxEq(cpm, 66.67, 0.5) {
+		t.Errorf("cpm = %v, want ~66.67 (executado 15/30 no slow path)", cpm)
 	}
 }
