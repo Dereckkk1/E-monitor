@@ -219,15 +219,19 @@ func orMaxDate(t time.Time) time.Time {
 	return t
 }
 
-// monthsElapsedSQL conta os CICLOS MENSAIS já iniciados de uma campanha até
-// `todayParam` — aniversário a partir do início (start + i meses). O mês conta
-// inteiro assim que o ciclo começa; limitado ao fim da campanha; 0 antes do
-// início. generate_series torna a contagem exata pra qualquer dia do mês
-// (inclusive fim-de-mês). startCol/endCol = colunas de data da campanha no escopo.
+// monthsElapsedSQL conta os MESES DE CALENDÁRIO que a campanha cobre até
+// `todayParam`. O valor consolidado é mensal e incrementa na VIRADA de cada mês
+// (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data
+// de início (0 antes dela) e, ao entrar num novo mês de calendário, soma mais 1;
+// limitado ao mês de fim. Ex.: campanha 09/06–08/07 conta 1 em junho e 2 a
+// partir de 01/07. startCol/endCol = colunas de data da campanha no escopo.
 func monthsElapsedSQL(startCol, endCol, todayParam string) string {
-	return `(SELECT count(*)::int FROM generate_series(0, 120) g(i)
-	          WHERE (` + startCol + ` + (g.i || ' months')::interval)::date
-	                <= LEAST(` + endCol + `, ` + todayParam + `::date))`
+	return `(CASE WHEN ` + todayParam + `::date < ` + startCol + ` THEN 0 ELSE
+	    (EXTRACT(YEAR  FROM LEAST(date_trunc('month', ` + endCol + `), date_trunc('month', ` + todayParam + `::date)))::int * 12
+	     + EXTRACT(MONTH FROM LEAST(date_trunc('month', ` + endCol + `), date_trunc('month', ` + todayParam + `::date)))::int)
+	    - (EXTRACT(YEAR  FROM date_trunc('month', ` + startCol + `))::int * 12
+	     + EXTRACT(MONTH FROM date_trunc('month', ` + startCol + `))::int) + 1
+	  END)`
 }
 
 // consolidatedSummary devolve o valor TOTAL da campanha e se há QUALQUER

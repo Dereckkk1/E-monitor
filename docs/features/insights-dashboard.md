@@ -75,7 +75,7 @@ Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` 
 
 - **Investido** = calculado **igual ao `/campaigns`** (`Campaigns.FinancialsByCampaign`) pra as duas telas nunca divergirem:
   `Σ_estação (consolidated_value × meses_decorridos das consolidadas + unit_value × (in_slot + bonus) das por-inserção)`.
-  - **`meses_decorridos`** = nº de **ciclos mensais** já iniciados até **hoje** (aniversário a partir do `start_date`; o mês conta inteiro assim que o ciclo começa; limitado ao fim; 0 antes de começar). Conta a **duração real** — campanha que atravessa a virada do mês mas dura ~1 mês (ex.: 19/06–18/07) conta **1**, não 2. Contagem exata via `generate_series` (função `monthsElapsedSQL`).
+  - **`meses_decorridos`** = nº de **meses de calendário** que a campanha cobre até **hoje**. O incremento acontece na **virada do mês** (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data de início (0 antes dela) e, ao entrar num novo mês de calendário, soma +1; limitado ao mês de fim. Ex.: campanha **09/06–08/07** conta **1** em junho e **2 a partir de 01/07** (dobra na virada). Campanha dentro de 1 mês de calendário → sempre 1. Função `monthsElapsedSQL`.
   - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → total cheio.
   - **Não varia com o filtro de período** do /insights (só com o tempo real / `hoje`).
 - **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
