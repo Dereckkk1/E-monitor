@@ -8,7 +8,10 @@ export default function InvestmentToggleCard({ data }) {
   const inv = data?.kpis?.investido
   if (!inv) return null
   return (
-    <div className="in-card">
+    <div
+      className="in-card"
+      title="Valor do contrato efetivamente cumprido. Em pacote consolidado é limitado a 100% (o excedente entra em Bonificação) e não conta dias futuros ainda não veiculados."
+    >
       <div className="in-card-head">
         <span className="in-card-icon"><IconWallet /></span>
         <span className="in-card-label">Investido</span>

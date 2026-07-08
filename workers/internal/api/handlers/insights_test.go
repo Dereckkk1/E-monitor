@@ -99,6 +99,30 @@ func TestInsights_Get_DefaultPeriodIsCurrentMonth(t *testing.T) {
 	}
 }
 
+// O handler deve injetar Today = "hoje" no fuso America/Sao_Paulo (date-only),
+// pra que aggregateInvestment/computeCPM não contem dias futuros no fill-ratio
+// consolidado. Ver docs/features/insights-dashboard.md.
+func TestInsights_Get_SetsTodayInSaoPaulo(t *testing.T) {
+	repo := &fakeInsightsRepo{out: &catalog.InsightsPayload{}}
+	h := &InsightsHandler{Repo: repo}
+	url := "/insights?client_id=" + uuid.NewString() + "&campaigns=" + uuid.NewString()
+	req := httptest.NewRequest("GET", url, nil)
+	rec := httptest.NewRecorder()
+	h.Get(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	spNow := time.Now().In(loc)
+	wantToday := time.Date(spNow.Year(), spNow.Month(), spNow.Day(), 0, 0, 0, 0, time.UTC)
+	if !repo.got.Today.Equal(wantToday) {
+		t.Fatalf("today = %v, want %v (date-only em America/Sao_Paulo)", repo.got.Today, wantToday)
+	}
+}
+
 func TestInsights_Get_CrossClientErrorReturns403(t *testing.T) {
 	repo := &fakeInsightsRepo{err: errors.New("insights: 2 campaigns requested, 1 found for client (cross-client or invalid id)")}
 	h := &InsightsHandler{Repo: repo}
