@@ -2,7 +2,9 @@
 
 **Data:** 2026-07-08
 **Autor:** Claude + Dereck
-**Status:** aprovado (design), pré-implementação
+**Status:** SUPERSEDED por [2026-07-08-insights-consolidated-period-proportional-design.md](2026-07-08-insights-consolidated-period-proportional-design.md)
+
+> ⚠️ **Superseded no mesmo dia.** A abordagem deste spec (clamp do denominador em "hoje" + cap) resolvia a queda ao alargar a janela, mas mantinha o denominador = plano da *janela*, então junho totalmente entregue mostrava o contrato cheio. O Modelo B (denominador = plano da *campanha inteira*) substituiu isso — torna o Investido proporcional ao período e dispensa o clamp. Mantido aqui como registro histórico do raciocínio.
 
 ## 1. Problema
 

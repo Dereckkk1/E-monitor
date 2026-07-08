@@ -52,10 +52,10 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 |---|---|
 | **Impactos** | `Σ_estação (detections_count × PMM)`. Estação sem PMM → não soma (mas conta em `stations_count`) |
 | **Impactos por gênero** | `Σ (count × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`) |
-| **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o clamp/cap consolidado abaixo |
-| **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; `(consolidated/expected) × bonus` em consolidated. **Em consolidated, `expected` é somado só até hoje (SP)** — dias futuros não deflacionam a bonificação |
-| **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje; per_insertion NÃO sofre o clamp de hoje) |
-| **Investido executado** | `consolidated`: `cv × LEAST(1, executed/expected)`, com `executed`/`expected` somados só até **hoje** (America/Sao_Paulo). `per_insertion`: `Σ_type (unit_value × (in_slot+out_slot))`. **Ver §"Investido consolidado: fill-ratio, não gasto acumulado"** |
+| **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo |
+| **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
+| **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
+| **Investido executado** | `consolidated`: `cv × LEAST(1, entregue_na_janela / plano_da_campanha_INTEIRA)` — **proporcional ao período** (Modelo B). `per_insertion`: `Σ_type (unit_value × (in_slot+out_slot))`. **Ver §"Investido consolidado: proporcional ao período"** |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
 | **Buckets — déficit** | `max(0, expected - in_slot - out_slot)` |
 | **Buckets — extras** | `count(detections WHERE category='orphan')` (NÃO inclui in_slot-acima-de-expected, pra evitar double-count no gráfico) |
@@ -67,17 +67,25 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 
 Decisão deliberada e documentada nos comentários do `aggregateBuckets` em [workers/internal/catalog/insights.go](../../workers/internal/catalog/insights.go).
 
-### Investido consolidado: fill-ratio, não gasto acumulado
+### Investido consolidado: proporcional ao período (Modelo B)
 
-Em campanha com pricing `consolidated`, o **Investido executado** exibido é `valor_do_contrato × taxa-de-cumprimento`, não a soma do que foi gasto na janela. Isso tem duas consequências que já causaram confusão (diagnóstico 2026-07-08):
+Em campanha com pricing `consolidated`, o **Investido executado** é **proporcional ao período selecionado**:
 
-1. **Dias futuros deflacionavam o número.** A view `daily_play_summary` gera `expected` para todos os dias do plano (`generate_series(start_date, end_date)`), inclusive dias que ainda não aconteceram. Como `executado = cv × executed/expected`, alargar a janela pra frente inflava o denominador (`expected>0`/`executed=0`) e **derrubava** Investido, Bonificação e CPM. **Fix:** `executed`/`expected` são somados só até **hoje** (America/Sao_Paulo), injetado via `InsightsParams.Today` (o handler calcula; testes passam data fixa; zero value = sem clamp). Só afeta `consolidated` — `per_insertion` é aditivo e mantém o plano cheio.
+```
+executado = cv × LEAST(1, entregue_na_janela ÷ plano_da_campanha_INTEIRA)
+bonus     = cv ×        (excedente_na_janela ÷ plano_da_campanha_INTEIRA)
+```
 
-2. **Over-delivery era contado duas vezes.** Tocadas acima do planejado entram no `bonus` (Bonificação) **e** faziam `executed/expected > 1` (Investido passava de 100% do contrato). **Fix:** o executado capa no contrato — `cv × LEAST(1, executed/expected)`. O excedente aparece **só** na Bonificação.
+A chave é o **denominador = plano da campanha inteira** (fixo, `SUM(expected)` em `[start_date, end_date]`), **não** o plano da janela. Isso dá:
 
-**Comportamento residual (correto):** se uma emissora entregou **menos** que o planejado em dias que já passaram (déficit real — fora do ar etc.), o Investido reflete isso (`< contrato`). O clamp de "hoje" só remove dias que ainda não puderam tocar, não déficit legítimo.
+- **Proporcional:** "de 19/06 a 30/06" mostra a fração do contrato entregue nesse recorte; ampliar o período **soma**. `cv ÷ plano_total` é a taxa estável por inserção.
+- **Monotônico / sem deflação por dia futuro:** dia ainda-não-veiculado entrega 0 no numerador, então alargar a janela pra frente nunca faz o número cair (nem precisa de clamp de "hoje").
+- **Cap em 100% + bônus:** over-delivery (entregue > plano) capa o Investido no contrato; o excedente aparece **só** na Bonificação, valorizado à mesma taxa por inserção. Fim do double-count.
+- **Déficit reduz (correto):** emissora que entregou menos que o plano mostra `< contrato` — reflete a não-entrega.
 
-Os dois pontos que replicam a fórmula (`aggregateInvestment` e o slow-path de `computeCPM`) recebem o mesmo clamp+cap. Spec: [docs/superpowers/specs/2026-07-08-insights-consolidated-fill-cap-design.md](../superpowers/specs/2026-07-08-insights-consolidated-fill-cap-design.md).
+**Campanha ativa:** enquanto a campanha não termina, "campanha inteira" mostra o **entregue até agora** (não o contrato cheio), completando conforme veicula. É o comportamento por-entrega (não por-tempo) — decisão de negócio registrada na spec.
+
+`per_insertion` é aditivo e não muda (`Σ unit_value × tocadas`). Os dois pontos que replicam a fórmula (`aggregateInvestment` via CTEs `cs_window`/`cs_plan`, e o slow-path de `computeCPM`) usam o mesmo denominador de plano cheio. Spec: [docs/superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md](../superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md).
 
 ## Granularidade automática do gráfico 4
 
