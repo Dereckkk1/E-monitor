@@ -55,7 +55,7 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 | **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo |
 | **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
-| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): valor **total FIXO = o mesmo do `/campaigns`** = `Σ (consolidated_value + unit_value×(in_slot+bonus) das por-inserção)`, não varia com o período; e a Bonificação some. **100% `per_insertion`**: inalterado — `Σ_type (unit_value × (in_slot+out_slot))` por veiculação, com Bonificação. **Ver §"Consolidado: total fixo estilo fornecedor"** |
+| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): **= o mesmo do `/campaigns`** = `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período); Bonificação some. **100% `per_insertion`**: inalterado — `Σ_type (unit_value × (in_slot+out_slot))` por veiculação, com Bonificação. **Ver §"Consolidado: valor MENSAL que acumula por mês"** |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
 | **Buckets — déficit** | `max(0, expected - in_slot - out_slot)` |
 | **Buckets — extras** | `count(detections WHERE category='orphan')` (NÃO inclui in_slot-acima-de-expected, pra evitar double-count no gráfico) |
@@ -67,17 +67,23 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 
 Decisão deliberada e documentada nos comentários do `aggregateBuckets` em [workers/internal/catalog/insights.go](../../workers/internal/catalog/insights.go).
 
-### Consolidado: total fixo estilo fornecedor
+### Consolidado: valor MENSAL que acumula por mês (estilo fornecedor)
 
-**Regra vigente (2026-07-08, tarde):** se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` entra em **modo fornecedor**:
+**Regra vigente (2026-07-08, fim da tarde):** o `consolidated_value` cadastrado é o valor **POR MÊS**, não o total. A equipe cadastra o mensal e o sistema acumula conforme os meses passam (ex.: campanha de 3 meses × R$1000 → total 3000, mostrando 1000 no mês 1, 2000 no mês 2, 3000 no mês 3).
 
-- **Investido** = **valor total da campanha, FIXO**, calculado **igual ao `/campaigns`** (`Campaigns.FinancialsByCampaign`) pra as duas telas nunca divergirem: `Σ_estação (consolidated_value das consolidadas + unit_value × (in_slot + bonus) das por-inserção)` — o **entregue**, não o plano cheio. **Não varia com o período** selecionado (junho, mês todo, 1 dia → sempre o mesmo total). É como o fornecedor mostra e os clientes já estão acostumados.
+Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` entra em **modo fornecedor**:
+
+- **Investido** = calculado **igual ao `/campaigns`** (`Campaigns.FinancialsByCampaign`) pra as duas telas nunca divergirem:
+  `Σ_estação (consolidated_value × meses_decorridos das consolidadas + unit_value × (in_slot + bonus) das por-inserção)`.
+  - **`meses_decorridos`** = nº de **ciclos mensais** já iniciados até **hoje** (aniversário a partir do `start_date`; o mês conta inteiro assim que o ciclo começa; limitado ao fim; 0 antes de começar). Conta a **duração real** — campanha que atravessa a virada do mês mas dura ~1 mês (ex.: 19/06–18/07) conta **1**, não 2. Contagem exata via `generate_series` (função `monthsElapsedSQL`).
+  - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → total cheio.
+  - **Não varia com o filtro de período** do /insights (só com o tempo real / `hoje`).
 - **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
 - **CPM**: usa o `fixed_cpm` da campanha (consolidado sempre tem cadastrado); sem ele, cai no dinâmico `total ÷ impactos × 1000`.
 - **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
 - **Campanha 100% `per_insertion`**: nada muda — segue por veiculação, com Bonificação.
 
-Implementação: `catalog.Insights.consolidatedSummary` calcula o total + a flag (independente de `from/to`); o `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. Frontend: `KpiCards` esconde a Bonificação e `InsightsPage` aplica `in-row--cards--4` quando `data.consolidated`.
+Implementação: `catalog.Insights.consolidatedSummary(…, today)` calcula o total + a flag; `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. O `/campaigns` (`FinancialsByCampaign(…, today)`) usa a MESMA `monthsElapsedSQL`. Frontend: `KpiCards` esconde a Bonificação e `InsightsPage` aplica `in-row--cards--4` quando `data.consolidated`. **Compatível com campanhas de 1 mês** (meses_decorridos = 1 → inalterado).
 
 > **Nota:** o cálculo **Modelo B (proporcional)** abaixo continua existindo no `aggregateInvestment` (e nos testes diretos), mas é **sobrescrito** pelo total fixo para consolidado no `Compute` — preservado caso a regra mude de novo. Vale hoje só como o número por-veiculação de campanhas `per_insertion`.
 

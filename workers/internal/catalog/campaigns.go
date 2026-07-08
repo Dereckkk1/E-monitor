@@ -481,8 +481,8 @@ type CampaignFinancials struct {
 // não é nil, filtra somente as campanhas do cliente — usado por viewers
 // para evitar vazamento cross-client. Admins/operators passam nil e recebem
 // todas as campanhas.
-func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID) ([]CampaignFinancials, error) {
-	const q = `
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
+	q := `
 		WITH per_ins AS (
 			-- Investimento, inserções e audiência no modo per_insertion:
 			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
@@ -532,7 +532,10 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 		)
 		SELECT
 			c.id,
-			COALESCE(per_ins.invested, 0) + COALESCE(consolidated_inv.invested, 0) AS total_invested,
+			-- consolidated_value é MENSAL → acumula por ciclo mensal iniciado até
+			-- hoje ($2). per_insertion segue pelo entregue. Mesma regra do /insights.
+			COALESCE(per_ins.invested, 0)
+			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2") + ` AS total_invested,
 			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
 			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
 			c.fixed_cpm
@@ -542,7 +545,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
 		WHERE ($1::uuid IS NULL OR c.client_id = $1)
 	`
-	rows, err := c.pool.Query(ctx, q, clientID)
+	rows, err := c.pool.Query(ctx, q, clientID, orMaxDate(today))
 	if err != nil {
 		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
 	}
