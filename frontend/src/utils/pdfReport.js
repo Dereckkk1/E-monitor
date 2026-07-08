@@ -382,3 +382,233 @@ export async function buildCampaignReportPDF(summary) {
   const filename = `relatorio-${slugify(summary.campaign?.name)}-${stamp}.pdf`
   doc.save(filename)
 }
+
+// ════════════════════════════════════════════════════════════════
+//  PDF WYSIWYG da grade de /detections (programado × tocado, por dia)
+// ════════════════════════════════════════════════════════════════
+//
+// Entrada: o MODELO de utils/gridReport.js (buildGridReportModel). Espelha a
+// grade — as mesmas emissoras/materiais filtrados, os mesmos números da view
+// daily_play_summary — e detalha DIA A DIA por emissora. Reusa logo/tokens/
+// footer do builder acima.
+
+// Cores de semáforo por categoria (mesma família da grade).
+const GRID_DEF_RED  = [185, 28, 28]
+const GRID_BONUS_BL = [29, 78, 216]
+
+function drawGridHero(doc, model, marginX, y) {
+  const pageW = doc.internal.pageSize.getWidth()
+  const w = pageW - marginX * 2
+  const h = 44
+
+  setColor(doc, 'fill', TOKENS.action)
+  doc.rect(marginX, y, w, 2.5, 'F')
+  drawCard(doc, marginX, y + 2.5, w, h)
+
+  setColor(doc, 'text', TOKENS.text3)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.text('RELATÓRIO DE VEICULAÇÕES · PROGRAMADO × TOCADO', marginX + 8, y + 11)
+
+  setColor(doc, 'text', TOKENS.text)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(18)
+  const name = doc.splitTextToSize(model.header.campaignName || '—', w - 60)
+  doc.text(name[0], marginX + 8, y + 21)
+
+  setColor(doc, 'text', TOKENS.text2)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  const meta = [model.header.clientName, model.header.periodLabel].filter(Boolean).join('  ·  ')
+  doc.text(meta || '—', marginX + 8, y + 30)
+
+  // Nota do recorte aplicado (filtro de busca + período).
+  if (model.header.filterLabel) {
+    setColor(doc, 'text', TOKENS.text3)
+    doc.setFontSize(8.5)
+    doc.text(`Recorte: ${model.header.filterLabel}`, marginX + 8, y + 38)
+  }
+
+  // Status badge.
+  const status = model.header.status || 'concluida'
+  const sLabel = STATUS_LABEL[status] || status
+  const sColor = STATUS_COLORS[status] || STATUS_COLORS.concluida
+  const sW = doc.getTextWidth(sLabel) + 10
+  const sX = marginX + w - sW - 8
+  const sY = y + 9
+  setColor(doc, 'fill', sColor.bg)
+  doc.roundedRect(sX, sY, sW, 7, 3.5, 3.5, 'F')
+  setColor(doc, 'text', sColor.fg)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.text(sLabel, sX + 5, sY + 4.8)
+
+  return y + 2.5 + h
+}
+
+// Uma pílula-KPI compacta (label em cima, número embaixo) — versão estreita do
+// drawKPI pra caber 5 numa linha.
+function drawMiniKPI(doc, x, y, w, h, label, value, valueColor) {
+  drawCard(doc, x, y, w, h)
+  setColor(doc, 'text', TOKENS.text3)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7)
+  doc.text(String(label).toUpperCase(), x + 5, y + 6)
+  setColor(doc, 'text', valueColor || TOKENS.action)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(16)
+  doc.text(String(value), x + 5, y + h - 5)
+}
+
+export async function buildGridReportPDF(model) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+  const marginX = 15
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+
+  // 1) Logo (ou fallback textual).
+  const logoData = await loadLogoDataURL()
+  if (logoData) {
+    try { doc.addImage(logoData, 'PNG', marginX, 12, 28, 11, '', 'FAST') } catch { /* segue sem logo */ }
+  } else {
+    setColor(doc, 'text', TOKENS.action)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(14)
+    doc.text('E-monitor', marginX, 20)
+  }
+
+  // 2) Hero.
+  const heroBottom = drawGridHero(doc, model, marginX, 30)
+
+  // 3) KPIs (Cobertura, Esperado, Tocou, Déficit, Bônus).
+  const k = model.kpis
+  const kpiY = heroBottom + 10
+  const kpiH = 20
+  const kpiGap = 3
+  const kpiW = (pageW - marginX * 2 - kpiGap * 4) / 5
+  const kpis = [
+    ['Cobertura', k.coveragePct != null ? `${k.coveragePct}%` : '—', TOKENS.action],
+    ['Esperado', fmtNumber(k.expected), TOKENS.text],
+    ['Tocou', fmtNumber(k.inSlot), [22, 128, 61]],
+    ['Déficit', fmtNumber(k.deficit), k.deficit > 0 ? GRID_DEF_RED : TOKENS.text3],
+    ['Bônus', fmtNumber(k.bonus), k.bonus > 0 ? GRID_BONUS_BL : TOKENS.text3],
+  ]
+  kpis.forEach(([label, value, color], i) => {
+    drawMiniKPI(doc, marginX + (kpiW + kpiGap) * i, kpiY, kpiW, kpiH, label, value, color)
+  })
+
+  // 4) Seções por emissora (dia a dia).
+  let nextY = kpiY + kpiH + 10
+
+  const anyNonZero = t => !!(t.expected || t.inSlot || t.deficit || t.bonus || t.outSlot || t.outDate)
+  const plus = n => (n > 0 ? `+${fmtNumber(n)}` : '0')
+
+  const stations = model.byStation.filter(s => anyNonZero(s.totals))
+
+  if (stations.length === 0) {
+    setColor(doc, 'text', TOKENS.text3)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(11)
+    doc.text('Nenhuma veiculação ou programação no recorte selecionado.', marginX, nextY + 6)
+  }
+
+  for (const s of stations) {
+    // Espaço mínimo pro cabeçalho da emissora + o header da 1ª tabela.
+    if (nextY > pageH - 45) { doc.addPage(); nextY = 20 }
+
+    // Cabeçalho da emissora.
+    setColor(doc, 'text', TOKENS.text)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(12)
+    doc.text(s.stationName, marginX, nextY)
+    const sub = [s.stationDial, [s.stationCity, s.stationState].filter(Boolean).join('/')]
+      .filter(Boolean).join('  ·  ')
+    if (sub) {
+      setColor(doc, 'text', TOKENS.text3)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.text(sub, marginX, nextY + 4.5)
+    }
+    // Nota de fora-faixa/fora-data quando houver (não some nada da grade).
+    const extras = []
+    if (s.totals.outSlot > 0) extras.push(`${fmtNumber(s.totals.outSlot)} fora da faixa`)
+    if (s.totals.outDate > 0) extras.push(`${fmtNumber(s.totals.outDate)} fora da data`)
+    if (extras.length) {
+      setColor(doc, 'text', TOKENS.text3)
+      doc.setFont('helvetica', 'italic')
+      doc.setFontSize(8.5)
+      doc.text(`+ ${extras.join(' · ')}`, marginX, nextY + 9)
+    }
+
+    // Corpo da tabela: dias por material + linha Total por material.
+    const body = []
+    const boldRows = new Set()
+    for (const m of s.materials) {
+      if (!anyNonZero(m.totals)) continue
+      for (const d of m.days) {
+        body.push([d.dateLabel, m.title, fmtNumber(d.expected), fmtNumber(d.inSlot), fmtNumber(d.deficit), plus(d.bonus)])
+      }
+      boldRows.add(body.length)
+      body.push(['Total', m.title, fmtNumber(m.totals.expected), fmtNumber(m.totals.inSlot), fmtNumber(m.totals.deficit), plus(m.totals.bonus)])
+    }
+
+    autoTable(doc, {
+      startY: nextY + (extras.length ? 12 : 8),
+      head: [['Data', 'Material', 'Prog', 'Tocou', 'Déf', 'Bônus']],
+      body,
+      margin: { left: marginX, right: marginX },
+      styles: {
+        fontSize: 8.5,
+        cellPadding: { top: 2, right: 3, bottom: 2, left: 3 },
+        textColor: TOKENS.text2,
+        lineColor: TOKENS.border,
+        lineWidth: 0.1,
+      },
+      headStyles: {
+        fillColor: TOKENS.surface2,
+        textColor: TOKENS.text,
+        fontStyle: 'bold',
+        fontSize: 8,
+        lineColor: TOKENS.border,
+      },
+      alternateRowStyles: { fillColor: [250, 250, 252] },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        2: { halign: 'right', cellWidth: 22 },
+        3: { halign: 'right', cellWidth: 22 },
+        4: { halign: 'right', cellWidth: 20 },
+        5: { halign: 'right', cellWidth: 20 },
+      },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return
+        if (boldRows.has(data.row.index)) {
+          data.cell.styles.fontStyle = 'bold'
+          data.cell.styles.fillColor = TOKENS.surface2
+          data.cell.styles.textColor = TOKENS.text
+        }
+        // Semáforo nas colunas Déf/Bônus (só quando > 0; zero fica apagado).
+        if (data.column.index === 4 || data.column.index === 5) {
+          const val = Number(String(data.cell.raw).replace(/[^0-9-]/g, '')) || 0
+          if (val > 0) {
+            data.cell.styles.textColor = data.column.index === 4 ? GRID_DEF_RED : GRID_BONUS_BL
+          } else if (!boldRows.has(data.row.index)) {
+            data.cell.styles.textColor = TOKENS.text3
+          }
+        }
+      },
+    })
+
+    nextY = doc.lastAutoTable.finalY + 12
+  }
+
+  // 5) Footer em todas as páginas.
+  const total = doc.getNumberOfPages()
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i)
+    drawFooter(doc, total)
+  }
+
+  // 6) Download.
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  doc.save(`relatorio-veiculacoes-${model.slug}-${stamp}.pdf`)
+}
