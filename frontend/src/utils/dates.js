@@ -89,6 +89,57 @@ export function campaignRangeISO(campaign) {
   return { start: isoFromDate(s), end: isoFromDate(e) }
 }
 
+// Local-midnight "today". Extracted so DistributionGrid and the /detections
+// report compute the exact same "cap at today" cutoff.
+export function startOfLocalToday() {
+  const t = new Date()
+  t.setHours(0, 0, 0, 0)
+  return t
+}
+
+// Enumerate the visible day columns EXACTLY like DistributionGrid does, so the
+// /detections report and the grid can never drift on which days are shown.
+//
+//   - visibleStart/visibleEnd set (/detections, /materials): render EXACTLY
+//     that span (may cross months). It's already the intersection with the
+//     campaign done upstream on the page.
+//   - otherwise (wizard): month ∩ [campaignStart, campaignEnd].
+//   - capAtToday (default true): never past today — future days have no real
+//     data and would show up as phantom déficit.
+//
+// `today` is injectable for testing; defaults to local midnight now. Returns an
+// array of local-midnight Date objects (possibly empty).
+export function enumerateVisibleDays({
+  month, campaignStart, campaignEnd,
+  visibleStart, visibleEnd, capAtToday = true, today,
+}) {
+  const cutoff = today ?? startOfLocalToday()
+  let firstVisible, lastVisible
+  if (visibleStart && visibleEnd) {
+    firstVisible = parseLocalDate(visibleStart)
+    lastVisible  = parseLocalDate(visibleEnd)
+  } else {
+    const y = month.getFullYear()
+    const m = month.getMonth()
+    firstVisible = new Date(y, m, 1, 0, 0, 0, 0)
+    lastVisible  = new Date(y, m + 1, 0, 0, 0, 0, 0)
+    const cStart = parseLocalDate(campaignStart)
+    const cEnd   = parseLocalDate(campaignEnd)
+    if (cStart > firstVisible) firstVisible = cStart
+    if (cEnd   < lastVisible)  lastVisible  = cEnd
+  }
+  if (capAtToday && cutoff < lastVisible) lastVisible = cutoff
+  const days = []
+  if (firstVisible <= lastVisible) {
+    const cur = new Date(firstVisible)
+    while (cur <= lastVisible) {
+      days.push(new Date(cur))
+      cur.setDate(cur.getDate() + 1)
+    }
+  }
+  return days
+}
+
 // Format a campaign's [start_date, end_date] as pt-BR "dd-mm-aaaa – dd-mm-aaaa".
 export function formatCampaignPeriod(startISO, endISO) {
   if (!startISO || !endISO) return ''

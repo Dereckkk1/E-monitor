@@ -1,12 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-01
+ultima-verificacao: 2026-07-08
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
   - frontend/src/components/CoverageSummary.jsx
   - frontend/src/components/AirtimePaginator.jsx
+  - frontend/src/components/CampaignReportsMenu.jsx
   - frontend/src/utils/dates.js
+  - frontend/src/utils/gridReport.js
   - workers/internal/catalog/daily_summary.go
   - migrations/0018_detections_categorization.up.sql
 ---
@@ -49,7 +51,10 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 3. **CoverageSummary** no topo mostra:
    - Cobertura % (verde ÷ esperado) — verde se ≥95%, amarelo 80-94%, vermelho <80%
    - Totais do mês por categoria
-4. **Busca** filtra emissora E material (nome, cidade, dial, banda, título do material)
+4. **Busca** filtra emissora E material (nome, cidade, dial, banda, título do
+   material) — e **o botão Relatórios respeita esse filtro**: exporta só as
+   emissoras/materiais que batem com a busca, com o programado e o detalhamento
+   por dia. Ver [detections-report-wysiwyg.md](detections-report-wysiwyg.md).
 5. **Clique em célula**: abre `DayDetailModal` com breakdown por categoria + lista de detecções
 6. **Clique no bloco da emissora**: abre `HealthDrawer` com saúde do stream
 
@@ -78,4 +83,6 @@ A grid é paginada **por emissora** (a unidade visual do `DistributionGrid` em m
 
 - Pesquisar texto não é fuzzy — só substring case-insensitive em campos pré-definidos
 - `daily_play_summary` é VIEW não-materializada — pode lentificar com volume alto (ver F-84)
-- Não há export CSV/PDF do relatório (futuro F-102)
+- Export CSV/PDF: implementado e espelha a grade (busca + programado + por dia).
+  Ver [detections-report-wysiwyg.md](detections-report-wysiwyg.md). O **CSV
+  Detalhado** (admin, por veiculação) ainda não aplica o filtro de busca.

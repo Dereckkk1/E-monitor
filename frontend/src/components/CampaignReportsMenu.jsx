@@ -31,7 +31,8 @@ import {
   exportDetectionsCsv,
   fetchCampaignReportSummary,
 } from '../api/hooks'
-import { buildCampaignReportPDF, prefetchReportLogo } from '../utils/pdfReport'
+import { buildCampaignReportPDF, buildGridReportPDF, prefetchReportLogo } from '../utils/pdfReport'
+import { exportGridReportCsv } from '../utils/gridReport'
 import { useAuth } from '../contexts/AuthContext'
 
 // Converte from/to (YYYY-MM-DD) pra RFC3339 em America/Sao_Paulo, exatamente
@@ -130,6 +131,15 @@ export default function CampaignReportsMenu({
   showDetailed = true,
   // Texto do botão pode ser sobrescrito pra caber em pílulas estreitas.
   label = 'Relatórios',
+  // gridReport (opcional) liga o modo WYSIWYG de /detections: o Consolidado e o
+  // PDF são gerados LOCALMENTE a partir do model da grade (mesmos números, mesmo
+  // filtro de busca, mesmo cap-at-today), em vez de baterem no backend genérico.
+  // Quando presente, o editor de período do menu some (o relatório segue o
+  // recorte da tela) e aparece a nota do filtro. Shape:
+  //   { model: <buildGridReportModel(...)>, filterNote: string }
+  // Ausente → comportamento atual (backend + editor de período), intacto pras
+  // outras telas (/campaigns, /reports/airtime).
+  gridReport = null,
 }) {
   const { isAdmin } = useAuth()
   const [open, setOpen] = useState(false)
@@ -214,8 +224,13 @@ export default function CampaignReportsMenu({
     if (busy || rangeInvalid) return
     setBusy('consolidated')
     try {
-      const { from: f, to: t } = rangeRFC3339()
-      await exportConsolidatedCsv({ campaignId, from: f, to: t })
+      if (gridReport) {
+        // WYSIWYG: CSV montado no cliente a partir do model da grade filtrada.
+        exportGridReportCsv(gridReport.model)
+      } else {
+        const { from: f, to: t } = rangeRFC3339()
+        await exportConsolidatedCsv({ campaignId, from: f, to: t })
+      }
       setOpen(false)
     } catch (err) {
       console.error('CSV consolidado falhou:', err)
@@ -252,9 +267,14 @@ export default function CampaignReportsMenu({
     if (busy || rangeInvalid) return
     setBusy('pdf')
     try {
-      const { from: f, to: t } = rangeRFC3339()
-      const summary = await fetchCampaignReportSummary({ campaignId, from: f, to: t })
-      await buildCampaignReportPDF(summary)
+      if (gridReport) {
+        // WYSIWYG: PDF programado × tocado, dia a dia, do model da grade.
+        await buildGridReportPDF(gridReport.model)
+      } else {
+        const { from: f, to: t } = rangeRFC3339()
+        const summary = await fetchCampaignReportSummary({ campaignId, from: f, to: t })
+        await buildCampaignReportPDF(summary)
+      }
       setOpen(false)
     } catch (err) {
       console.error('PDF falhou:', err)
@@ -316,6 +336,7 @@ export default function CampaignReportsMenu({
           placement={placement}
           busy={busy}
           showDetailed={showDetailed && isAdmin}
+          gridReport={gridReport}
           range={localRange}
           rangeInvalid={rangeInvalid}
           onRangeChange={setLocalRange}
@@ -336,7 +357,7 @@ export default function CampaignReportsMenu({
 
 const ReportsDropdown = forwardRef(function ReportsDropdown(
   {
-    anchorRect, placement, busy, showDetailed,
+    anchorRect, placement, busy, showDetailed, gridReport,
     range, rangeInvalid,
     onRangeChange, onResetToMonth, onClearRange,
     onConsolidated, onDetailed, onPdf,
@@ -378,21 +399,25 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         animation: 'reportsMenuIn 130ms ease-out',
       }}
     >
-      <RangeSection
-        range={range}
-        rangeInvalid={rangeInvalid}
-        onRangeChange={onRangeChange}
-        onResetToMonth={onResetToMonth}
-        onClearRange={onClearRange}
-        disabled={!!busy}
-      />
+      {gridReport ? (
+        <FilterNoteSection note={gridReport.filterNote} />
+      ) : (
+        <RangeSection
+          range={range}
+          rangeInvalid={rangeInvalid}
+          onRangeChange={onRangeChange}
+          onResetToMonth={onResetToMonth}
+          onClearRange={onClearRange}
+          disabled={!!busy}
+        />
+      )}
 
       <div style={{ height: 1, background: 'var(--c-border)', margin: '6px 6px' }} />
 
       <ReportItem
         icon={<IconCsv />}
         label="CSV Consolidado"
-        hint="Totais por material × emissora"
+        hint={gridReport ? 'Por emissora × material (recorte da tela)' : 'Totais por material × emissora'}
         loading={busy === 'consolidated'}
         disabled={!!busy || rangeInvalid}
         onClick={onConsolidated}
@@ -401,7 +426,7 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         <ReportItem
           icon={<IconCsv />}
           label="CSV Detalhado"
-          hint="Uma linha por veiculação"
+          hint={gridReport ? 'Uma linha por veiculação (sem filtro de busca)' : 'Uma linha por veiculação'}
           loading={busy === 'detailed'}
           disabled={!!busy || rangeInvalid}
           onClick={onDetailed}
@@ -411,7 +436,7 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
       <ReportItem
         icon={<IconPdf />}
         label="PDF"
-        hint="Relatório visual completo"
+        hint={gridReport ? 'Programado × tocado, dia a dia' : 'Relatório visual completo'}
         loading={busy === 'pdf'}
         disabled={!!busy || rangeInvalid}
         onClick={onPdf}
@@ -420,6 +445,36 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
     </div>
   )
 })
+
+// ─── FilterNoteSection ───────────────────────────────────────────
+// Substitui o RangeSection no modo WYSIWYG de /detections: em vez de um editor
+// de período próprio (que conflitaria com "espelhar a tela"), mostra só uma
+// nota read-only do recorte já aplicado na página (busca + emissoras + período).
+function FilterNoteSection({ note }) {
+  return (
+    <div style={{ padding: '6px 8px 2px' }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+        color: 'var(--c-text-3)', textTransform: 'uppercase', marginBottom: 5,
+      }}>Recorte da tela</div>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 7,
+        padding: '7px 10px', borderRadius: 'var(--radius-md)',
+        background: 'var(--c-surface-2)', border: '1px solid var(--c-border)',
+      }}>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ flexShrink: 0, color: 'var(--c-action)' }}>
+          <path d="M2 3h12l-4.5 5.5V13l-3 1.5V8.5L2 3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        </svg>
+        <span style={{ fontSize: 11.5, color: 'var(--c-text-2)', fontWeight: 500, lineHeight: 1.35 }}>
+          {note || 'Recorte atual da grade'}
+        </span>
+      </div>
+      <p style={{ margin: '6px 2px 0', fontSize: 10.5, color: 'var(--c-text-3)', lineHeight: 1.35 }}>
+        O relatório espelha exatamente o que está na tela — mesmas emissoras, mesmo período, mesmos números.
+      </p>
+    </div>
+  )
+}
 
 // ─── RangeSection ────────────────────────────────────────────────
 // Cabeçalho com label "Período" + dois <input type="date"> + dois chips

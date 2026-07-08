@@ -2,7 +2,7 @@ import { Fragment } from 'react'
 import DayCell from './DayCell'
 import TypeIconPill from './TypeIconPill'
 import StationAvatar from './StationAvatar'
-import { parseLocalDate } from '../utils/dates'
+import { parseLocalDate, enumerateVisibleDays } from '../utils/dates'
 
 /**
  * Grid of station × material × day with distribution badges.
@@ -65,8 +65,6 @@ export default function DistributionGrid({
   summary = 'full',
   visibleStart, visibleEnd,
 }) {
-  const year = month.getFullYear()
-  const monthIdx = month.getMonth()
   const dayNames = ['DOM','SEG','TER','QUA','QUI','SEX','SÁB']
 
   // parseLocalDate keeps the calendar day intact across timezones — using
@@ -77,33 +75,17 @@ export default function DistributionGrid({
   const today = new Date()
   today.setHours(0,0,0,0)
 
-  // Visible day range. Dois modos:
+  // Visible day range — enumerado pelo helper compartilhado (dates.js) pra a
+  // grade e o relatório de /detections NUNCA divergirem no conjunto de dias.
+  // Dois modos (embutidos no helper):
   //  - visibleStart/visibleEnd setados (/detections, /materials): renderiza
   //    EXATAMENTE esse span, cruzando meses se preciso. É o range que o usuário
   //    escolheu no filtro de data — já é a interseção com a campanha lá na página.
-  //  - senão (wizard): month ∩ campanha, como antes. Arrancamos no primeiro dia
-  //    útil da campanha dentro do mês (evita dias hatched antes do início).
-  let firstVisible, lastVisible
-  if (visibleStart && visibleEnd) {
-    firstVisible = parseLocalDate(visibleStart)
-    lastVisible  = parseLocalDate(visibleEnd)
-  } else {
-    const monthFirst = new Date(year, monthIdx, 1, 0, 0, 0, 0)
-    const monthLast  = new Date(year, monthIdx + 1, 0, 0, 0, 0, 0)
-    firstVisible = monthFirst
-    lastVisible  = monthLast
-    if (cStart > firstVisible) firstVisible = cStart
-    if (cEnd   < lastVisible)  lastVisible  = cEnd
-  }
-  if (capAtToday && today < lastVisible) lastVisible = today
-  const days = []
-  if (firstVisible <= lastVisible) {
-    const cur = new Date(firstVisible)
-    while (cur <= lastVisible) {
-      days.push(new Date(cur))
-      cur.setDate(cur.getDate() + 1)
-    }
-  }
+  //  - senão (wizard): month ∩ campanha, como antes.
+  // Passamos o `today` já computado acima pra o cutoff ser idêntico ao header.
+  const days = enumerateVisibleDays({
+    month, campaignStart, campaignEnd, visibleStart, visibleEnd, capAtToday, today,
+  })
 
   // Quando o range cruza meses os números de dia reiniciam (…30, 31, 01, 02…) e
   // o header fica ambíguo sem pista de mês. Só nesse caso mostramos a abreviação

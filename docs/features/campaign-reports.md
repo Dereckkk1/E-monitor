@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-19
+ultima-verificacao: 2026-07-08
 codigo-relacionado:
   - workers/internal/catalog/detections.go
   - workers/internal/api/handlers/reports.go
@@ -9,10 +9,15 @@ codigo-relacionado:
   - frontend/src/api/hooks.js
   - frontend/src/components/CampaignReportsMenu.jsx
   - frontend/src/utils/pdfReport.js
+  - frontend/src/utils/gridReport.js
   - frontend/src/pages/CampaignsPage.jsx
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/AirtimeFiltersBar.jsx
 ---
+
+> **Modo WYSIWYG em /detections:** desde 2026-07, `/detections` gera CSV/PDF
+> localmente espelhando a grade filtrada (não o backend desta doc). Ver
+> [detections-report-wysiwyg.md](detections-report-wysiwyg.md).
 
 # Relatórios de Campanha (CSV consolidado, CSV detalhado, PDF)
 
@@ -23,8 +28,15 @@ nas três telas de "veiculação":
 
 - **/campaigns** — botão **Relatórios** em cada card de campanha (sem range
   de datas — usa a campanha inteira).
-- **/detections** — botão **Relatórios** na toolbar secundária (filterStep 3),
-  recortado pelo range de datas atual da página.
+- **/detections** — botão **Relatórios** na toolbar secundária (filterStep 3).
+  > **Atenção:** em `/detections` (para admin, com catálogo de emissoras
+  > carregado) o menu opera em **modo WYSIWYG** — CSV Consolidado e PDF são
+  > gerados **localmente** espelhando a grade filtrada (busca + programado +
+  > por dia), via a prop `gridReport`. NÃO usa os endpoints backend descritos
+  > abaixo nesse caso. Detalhes:
+  > [detections-report-wysiwyg.md](detections-report-wysiwyg.md). O fluxo
+  > backend desta doc continua valendo para `/campaigns`, `/reports/airtime` e
+  > para o fallback de viewer em `/detections`.
 - **/reports/airtime** — botão **Relatórios** substituiu o antigo
   "Exportar CSV" admin-only; agora viewer também consegue baixar
   consolidado/PDF dentro do escopo do próprio cliente.

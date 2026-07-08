@@ -15,9 +15,11 @@ import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import AirtimePaginator from '../components/AirtimePaginator'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
+import { buildGridReportModel } from '../utils/gridReport'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
   monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
+  enumerateVisibleDays,
 } from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
@@ -758,6 +760,38 @@ export default function DetectionsPage() {
     [filteredRows, pagedStationIds]
   )
 
+  // ── Modelo do relatório WYSIWYG (Relatórios da toolbar) ────────
+  // Espelha a grade: MESMOS dias (enumerateVisibleDays, cap-at-today idêntico ao
+  // DistributionGrid), TODAS as linhas que batem com a busca (filteredRows, não
+  // as paginadas) e os MESMOS números do cellData. O CSV/PDF saem daqui — ver
+  // utils/gridReport.js + pdfReport.js.
+  const reportDays = useMemo(() => enumerateVisibleDays({
+    month: monthDate,
+    campaignStart: gridStart, campaignEnd: gridEnd,
+    visibleStart: gridStart, visibleEnd: gridEnd,
+    capAtToday: true,
+  }), [monthDate, gridStart, gridEnd])
+
+  const reportModel = useMemo(() => buildGridReportModel({
+    campaign: selectedCampaign,
+    client: selectedCampaign ? clientMap.get(selectedCampaign.client_id) ?? null : null,
+    filteredRows,
+    stations: stationCatalog,
+    days: reportDays,
+    cellData,
+    filterInfo: {
+      search: search.trim(),
+      periodLabel: rangeLabel(rangeStart, rangeEnd),
+    },
+  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd])
+
+  // Só liga o modo WYSIWYG quando temos o catálogo de emissoras pra resolver
+  // nomes/dial (admin). Sem catálogo (ex.: viewer), cai no relatório backend
+  // atual — sem regressão. Ver docs/features/detections-report-wysiwyg.md.
+  const gridReport = stationCatalog.length > 0
+    ? { model: reportModel, filterNote: reportModel.header.filterLabel }
+    : null
+
   // ── Filter step state ─────────────────────────────────────────
   // Drives both the filter bar UI (which field is disabled vs active vs done)
   // and the empty-state variant. Single source of truth.
@@ -981,6 +1015,7 @@ export default function DetectionsPage() {
               variant="compact"
               placement="bottom-end"
               label="Relatórios"
+              gridReport={gridReport}
             />
           </div>
 
