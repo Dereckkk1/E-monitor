@@ -55,7 +55,7 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 | **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo |
 | **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
-| **Investido executado** | `consolidated`: `cv × LEAST(1, entregue_na_janela / plano_da_campanha_INTEIRA)` — **proporcional ao período** (Modelo B). `per_insertion`: `Σ_type (unit_value × (in_slot+out_slot))`. **Ver §"Investido consolidado: proporcional ao período"** |
+| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): valor **total contratado, FIXO** = `Σ (consolidated_value + valor cheio das por-inserção)`, não varia com o período; e a Bonificação some. **100% `per_insertion`**: `Σ_type (unit_value × (in_slot+out_slot))` (por veiculação). **Ver §"Consolidado: total fixo estilo fornecedor"** |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
 | **Buckets — déficit** | `max(0, expected - in_slot - out_slot)` |
 | **Buckets — extras** | `count(detections WHERE category='orphan')` (NÃO inclui in_slot-acima-de-expected, pra evitar double-count no gráfico) |
@@ -67,9 +67,23 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 
 Decisão deliberada e documentada nos comentários do `aggregateBuckets` em [workers/internal/catalog/insights.go](../../workers/internal/catalog/insights.go).
 
-### Investido consolidado: proporcional ao período (Modelo B)
+### Consolidado: total fixo estilo fornecedor
 
-Em campanha com pricing `consolidated`, o **Investido executado** é **proporcional ao período selecionado**:
+**Regra vigente (2026-07-08, tarde):** se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` entra em **modo fornecedor**:
+
+- **Investido** = **valor total contratado, FIXO** = `Σ_estação (consolidated_value das consolidadas + unit_value × plano_da_campanha_inteira das por-inserção)`. **Não varia com o período** selecionado (junho, mês todo, 1 dia → sempre o mesmo total). É como o fornecedor mostra e os clientes já estão acostumados.
+- **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
+- **CPM**: usa o `fixed_cpm` da campanha (consolidado sempre tem cadastrado); sem ele, cai no dinâmico `total ÷ impactos × 1000`.
+- **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
+- **Campanha 100% `per_insertion`**: nada muda — segue por veiculação, com Bonificação.
+
+Implementação: `catalog.Insights.consolidatedSummary` calcula o total + a flag (independente de `from/to`); o `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. Frontend: `KpiCards` esconde a Bonificação e `InsightsPage` aplica `in-row--cards--4` quando `data.consolidated`.
+
+> **Nota:** o cálculo **Modelo B (proporcional)** abaixo continua existindo no `aggregateInvestment` (e nos testes diretos), mas é **sobrescrito** pelo total fixo para consolidado no `Compute` — preservado caso a regra mude de novo. Vale hoje só como o número por-veiculação de campanhas `per_insertion`.
+
+<details><summary>Modelo B — proporcional ao período (camada de baixo, sobrescrita em consolidado)</summary>
+
+Em campanha com pricing `consolidated`, o **Investido executado** (do `aggregateInvestment`, hoje sobrescrito) é **proporcional ao período selecionado**:
 
 ```
 executado = cv × LEAST(1, entregue_na_janela ÷ plano_da_campanha_INTEIRA)
@@ -86,6 +100,8 @@ A chave é o **denominador = plano da campanha inteira** (fixo, `SUM(expected)` 
 **Campanha ativa:** enquanto a campanha não termina, "campanha inteira" mostra o **entregue até agora** (não o contrato cheio), completando conforme veicula. É o comportamento por-entrega (não por-tempo) — decisão de negócio registrada na spec.
 
 `per_insertion` é aditivo e não muda (`Σ unit_value × tocadas`). Os dois pontos que replicam a fórmula (`aggregateInvestment` via CTEs `cs_window`/`cs_plan`, e o slow-path de `computeCPM`) usam o mesmo denominador de plano cheio. Spec: [docs/superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md](../superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md).
+
+</details>
 
 ## Granularidade automática do gráfico 4
 

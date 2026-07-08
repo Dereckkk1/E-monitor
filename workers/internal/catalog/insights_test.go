@@ -781,10 +781,10 @@ func TestInsights_Investment_PerInsertion_Additive(t *testing.T) {
 	}
 }
 
-// Compute end-to-end (fast path do CPM): consolidada, contrato 2000, plano 1/dia
-// 30 dias (plano cheio = 30), entregue 15. executado = 2000 × 15/30 = 1000.
-// Impactos = 15×1000 = 15000. CPM = 1000/15000×1000 = 66,67.
-func TestInsights_Compute_Consolidated_PeriodProportionalInvestidoAndCPM(t *testing.T) {
+// Regra do fornecedor (Compute): campanha com QUALQUER emissora consolidada
+// mostra no Investido o valor TOTAL contratado (fixo — NÃO cresce com o
+// período), zera a Bonificação e marca Consolidated=true. Contrato 2000.
+func TestInsights_Compute_Consolidated_ShowsFixedTotal(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
 
@@ -800,20 +800,71 @@ func TestInsights_Compute_Consolidated_PeriodProportionalInvestidoAndCPM(t *test
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
 
-	// Sub-janela até 15/06: entregou 15 no período, plano cheio = 30.
+	half, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"), StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute half: %v", err)
+	}
+	full, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"), StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute full: %v", err)
+	}
+
+	if !half.Consolidated || !full.Consolidated {
+		t.Errorf("Consolidated deveria ser true (half=%v full=%v)", half.Consolidated, full.Consolidated)
+	}
+	// Total fixo (2000) independente do período.
+	if !approxEq(half.KPIs.Investido.Executado, 2000, 1) || !approxEq(full.KPIs.Investido.Executado, 2000, 1) {
+		t.Errorf("Investido deveria ser o total fixo ~2000 em qualquer janela: half=%v full=%v",
+			half.KPIs.Investido.Executado, full.KPIs.Investido.Executado)
+	}
+	// Bonificação zerada.
+	if half.KPIs.Bonificacao.Valor != 0 || half.KPIs.Bonificacao.Count != 0 {
+		t.Errorf("Bonificação deveria estar zerada em consolidado: %+v", half.KPIs.Bonificacao)
+	}
+}
+
+// Campanha 100% por-inserção: NÃO é consolidada — segue por veiculação, com
+// Bonificação normal e Consolidated=false.
+func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 2000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 100.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	for i := 0; i < 10; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	}
+
 	out, err := repo.Compute(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
-		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
-		StationIDs: []uuid.UUID{},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"), StationIDs: []uuid.UUID{},
 	})
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
-		t.Errorf("investido = %v, want ~1000 (15/30 de 2000, denominador = plano cheio)", out.KPIs.Investido.Executado)
+	if out.Consolidated {
+		t.Errorf("per_insertion não deveria marcar Consolidated")
 	}
-	if !approxEq(out.KPIs.CPM, 66.67, 0.5) {
-		t.Errorf("cpm = %v, want ~66.67 (1000/15000×1000)", out.KPIs.CPM)
+	// executado por-inserção = 100 × 10 = 1000 (inalterado)
+	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
+		t.Errorf("executado = %v, want ~1000 (per_insertion, inalterado)", out.KPIs.Investido.Executado)
+	}
+	// Bonificação continua computada (10 tocadas no dia, plano 1 → bonus 9 × 100)
+	if out.KPIs.Bonificacao.Valor <= 0 {
+		t.Errorf("Bonificação per_insertion deveria ser > 0, veio %v", out.KPIs.Bonificacao.Valor)
 	}
 }
 

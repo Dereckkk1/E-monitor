@@ -151,6 +151,10 @@
   gap: 16px;
 }
 .in-row--cards { grid-template-columns: repeat(5, 1fr); }
+/* Consolidado esconde a Bonificação → 4 cards. Classe simples (mesma
+   especificidade de .in-row--cards) e depois na ordem, então vence no desktop;
+   as media queries abaixo (mais adiante na ordem) ainda reduzem no mobile. */
+.in-row--cards--4 { grid-template-columns: repeat(4, 1fr); }
 .in-row--charts { grid-template-columns: repeat(3, 1fr); }
 
 @media (max-width: 1280px) { .in-row--cards { grid-template-columns: repeat(3, 1fr); } }

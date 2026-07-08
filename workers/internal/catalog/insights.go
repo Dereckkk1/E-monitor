@@ -45,6 +45,11 @@ type InsightsPayload struct {
 	AgeRanges            AgeRangesData            `json:"age_ranges"`
 	VeiculacoesBreakdown VeiculacoesBreakdownData `json:"veiculacoes_breakdown"`
 	Buckets              []BucketRow              `json:"buckets"`
+	// Consolidated é true quando QUALQUER emissora da seleção tem pricing
+	// consolidado. Nesse caso o Investido mostra o valor total contratado
+	// (fixo, estilo fornecedor) e o frontend esconde o card de Bonificação
+	// (que fica zerada). Ver docs/features/insights-dashboard.md.
+	Consolidated bool `json:"consolidated"`
 }
 
 type PeriodSpec struct {
@@ -155,6 +160,21 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("aggregateBuckets: %w", err)
 	}
 
+	// Regra do fornecedor: se QUALQUER emissora da seleção é consolidada, o
+	// Investido mostra o valor TOTAL contratado (fixo — não cresce com o
+	// período) e a Bonificação some (zerada; o frontend esconde o card). O
+	// cálculo por-veiculação/Modelo B do aggregateInvestment é preservado (útil
+	// se a regra mudar) mas sobrescrito aqui pra consolidado. Campanha 100%
+	// por-inserção segue por veiculação (inv/bon inalterados).
+	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("consolidatedSummary: %w", err)
+	}
+	if hasConsolidated {
+		inv.Executado = total
+		bon = BonificacaoK{}
+	}
+
 	cpm, err := r.computeCPM(ctx, p, inv.Executado, core.Impactos)
 	if err != nil {
 		return nil, fmt.Errorf("computeCPM: %w", err)
@@ -181,7 +201,53 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		AgeRanges:            core.Ages,
 		VeiculacoesBreakdown: core.Breakdown,
 		Buckets:              buckets,
+		Consolidated:         hasConsolidated,
 	}, nil
+}
+
+// consolidatedSummary devolve o valor TOTAL contratado (fixo, independente do
+// período) e se há QUALQUER emissora consolidada na seleção (respeitando o
+// filtro de estações). Quando há consolidada, o /insights entra em modo
+// fornecedor: Investido = esse total (não cresce com o tempo) e Bonificação
+// some. Total = Σ_estação (consolidated_value das consolidadas + unit_value ×
+// plano_da_campanha_inteira das por-inserção). Não depende de from/to.
+func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID) (float64, bool, error) {
+	var total float64
+	var hasConsolidated bool
+	err := r.pool.QueryRow(ctx, `
+		WITH camp_meta AS (
+		    SELECT id, start_date, end_date FROM campaigns WHERE id = ANY($1::uuid[])
+		),
+		per_ins_full AS (
+		    -- valor cheio contratado das emissoras por-inserção (plano inteiro)
+		    SELECT s.campaign_id, s.station_id,
+		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric AS pi_full
+		    FROM daily_play_summary s
+		    JOIN camp_meta cm ON cm.id = s.campaign_id
+		    JOIN campaign_station_type_pricing tp
+		      ON tp.campaign_id = s.campaign_id
+		     AND tp.station_id  = s.station_id
+		     AND tp.type_id     = s.type_id
+		    WHERE s.for_date BETWEEN cm.start_date AND cm.end_date
+		      AND ($2::uuid[] = '{}' OR s.station_id = ANY($2::uuid[]))
+		    GROUP BY s.campaign_id, s.station_id
+		)
+		SELECT
+		    COALESCE(SUM(
+		        CASE WHEN csp.mode='consolidated' THEN COALESCE(csp.consolidated_value, 0)::numeric
+		             ELSE COALESCE(pf.pi_full, 0) END
+		    ), 0)::float8 AS total,
+		    COALESCE(BOOL_OR(csp.mode='consolidated'), false) AS has_consolidated
+		FROM campaign_station_pricing csp
+		LEFT JOIN per_ins_full pf
+		  ON pf.campaign_id = csp.campaign_id AND pf.station_id = csp.station_id
+		WHERE csp.campaign_id = ANY($1::uuid[])
+		  AND ($2::uuid[] = '{}' OR csp.station_id = ANY($2::uuid[]))
+	`, campaignIDs, stationIDs).Scan(&total, &hasConsolidated)
+	if err != nil {
+		return 0, false, err
+	}
+	return total, hasConsolidated, nil
 }
 
 // coreAggregates é o resultado interno usado pelo Compute().
