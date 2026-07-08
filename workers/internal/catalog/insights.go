@@ -205,12 +205,16 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	}, nil
 }
 
-// consolidatedSummary devolve o valor TOTAL contratado (fixo, independente do
+// consolidatedSummary devolve o valor TOTAL da campanha (fixo, independente do
 // período) e se há QUALQUER emissora consolidada na seleção (respeitando o
 // filtro de estações). Quando há consolidada, o /insights entra em modo
 // fornecedor: Investido = esse total (não cresce com o tempo) e Bonificação
-// some. Total = Σ_estação (consolidated_value das consolidadas + unit_value ×
-// plano_da_campanha_inteira das por-inserção). Não depende de from/to.
+// some.
+//
+// A fórmula é IDÊNTICA à do /campaigns (catalog.Campaigns.FinancialsByCampaign)
+// pra as duas telas nunca divergirem: total = Σ_estação (consolidated_value das
+// consolidadas + unit_value × (in_slot + bonus) das por-inserção — o ENTREGUE,
+// não o plano cheio). Não depende de from/to (whole-campaign).
 func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID) (float64, bool, error) {
 	var total float64
 	var hasConsolidated bool
@@ -218,10 +222,11 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		WITH camp_meta AS (
 		    SELECT id, start_date, end_date FROM campaigns WHERE id = ANY($1::uuid[])
 		),
-		per_ins_full AS (
-		    -- valor cheio contratado das emissoras por-inserção (plano inteiro)
+		per_ins_delivered AS (
+		    -- valor ENTREGUE das emissoras por-inserção: unit × (in_slot + bonus),
+		    -- igual ao /campaigns (não o plano cheio unit × expected).
 		    SELECT s.campaign_id, s.station_id,
-		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric AS pi_full
+		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::numeric AS pi_delivered
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
@@ -235,12 +240,12 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		SELECT
 		    COALESCE(SUM(
 		        CASE WHEN csp.mode='consolidated' THEN COALESCE(csp.consolidated_value, 0)::numeric
-		             ELSE COALESCE(pf.pi_full, 0) END
+		             ELSE COALESCE(pd.pi_delivered, 0) END
 		    ), 0)::float8 AS total,
 		    COALESCE(BOOL_OR(csp.mode='consolidated'), false) AS has_consolidated
 		FROM campaign_station_pricing csp
-		LEFT JOIN per_ins_full pf
-		  ON pf.campaign_id = csp.campaign_id AND pf.station_id = csp.station_id
+		LEFT JOIN per_ins_delivered pd
+		  ON pd.campaign_id = csp.campaign_id AND pd.station_id = csp.station_id
 		WHERE csp.campaign_id = ANY($1::uuid[])
 		  AND ($2::uuid[] = '{}' OR csp.station_id = ANY($2::uuid[]))
 	`, campaignIDs, stationIDs).Scan(&total, &hasConsolidated)

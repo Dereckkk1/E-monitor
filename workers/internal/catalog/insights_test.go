@@ -868,6 +868,48 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	}
 }
 
+// Campanha MISTA (consolidada + por-inserção): o Investido bate com o
+// /campaigns — consolidado fixo + por-inserção pelo ENTREGUE (unit×(in_slot+
+// bonus)), NÃO pelo plano cheio (unit×expected). Contrato consolidado 400,
+// por-inserção unit 10, plano 1/dia 30 dias mas só 3 entregues → total = 400 +
+// 10×3 = 430 (não 400 + 10×30 = 700).
+func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	stCons := insSeedStation(t, ctx, pool, "CONS", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	stIns := insSeedStation(t, ctx, pool, "INS", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, stCons, "consolidated", 400)
+	insSeedStationPricing(t, ctx, pool, camp, stIns, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, stIns, typeID, 10.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, stCons,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, stIns,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	// por-inserção entrega só 3 (1/dia, sem bonus)
+	for d := 1; d <= 3; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, stIns, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"), StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if !out.Consolidated {
+		t.Errorf("mista tem consolidada → Consolidated deveria ser true")
+	}
+	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
+		t.Errorf("investido = %v, want ~430 (400 pacote + 30 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	}
+}
+
 // computeCPM slow path: o executado por-campanha usa o mesmo denominador de
 // plano cheio. Campanha A tem fixed_cpm (força o slow path) mas 0 impactos
 // (peso 0). Campanha B (sem fixed_cpm) domina; executado_B = 2000×15/30 = 1000,
