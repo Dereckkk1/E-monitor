@@ -905,6 +905,42 @@ func TestInsights_Compute_Consolidated_AccruesByMonth(t *testing.T) {
 	}
 }
 
+// Filtrar um SUB-PERÍODO escopa o consolidado: campanha 3 meses × R$1000,
+// filtrando só junho → 1000 (não 3000). O filtro define os meses contados.
+// (today após o fim, então o escopo vem só do filtro, não do cap de hoje.)
+func TestInsights_Compute_Consolidated_PeriodFilterScopes(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-08-31")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+
+	cases := []struct {
+		from, to string
+		want     float64
+	}{
+		{"2026-06-01", "2026-06-30", 1000}, // só junho
+		{"2026-06-01", "2026-07-31", 2000}, // jun + jul
+		{"2026-06-01", "2026-08-31", 3000}, // campanha toda
+		{"2026-07-01", "2026-07-31", 1000}, // só julho (mês do meio)
+	}
+	for _, tc := range cases {
+		out, err := repo.Compute(ctx, InsightsParams{
+			ClientID: client, CampaignIDs: []uuid.UUID{camp},
+			From: parseDate(tc.from), To: parseDate(tc.to),
+			Today: parseDate("2026-09-15"), StationIDs: []uuid.UUID{}, // após o fim
+		})
+		if err != nil {
+			t.Fatalf("Compute %s..%s: %v", tc.from, tc.to, err)
+		}
+		if !approxEq(out.KPIs.Investido.Executado, tc.want, 1) {
+			t.Errorf("filtro %s..%s: investido = %v, want %v", tc.from, tc.to, out.KPIs.Investido.Executado, tc.want)
+		}
+	}
+}
+
 // O incremento acontece na VIRADA do mês (1º de cada mês de calendário), não no
 // aniversário de 30 dias. Campanha 09/06–08/07 × R$1000/mês: 1000 em junho, e
 // dobra pra 2000 a partir de 01/07 (entrou em julho), mesmo durando ~1 mês.

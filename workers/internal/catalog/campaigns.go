@@ -535,7 +535,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			-- consolidated_value é MENSAL → acumula por ciclo mensal iniciado até
 			-- hoje ($2). per_insertion segue pelo entregue. Mesma regra do /insights.
 			COALESCE(per_ins.invested, 0)
-			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2") + ` AS total_invested,
+			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2", "c.start_date", "c.end_date") + ` AS total_invested,
 			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
 			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
 			c.fixed_cpm
