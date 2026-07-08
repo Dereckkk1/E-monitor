@@ -215,6 +215,7 @@ func insSeedDistributionRule(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		CampaignID:  campaignID,
 		TypeID:      typeID,
 		StationIDs:  []uuid.UUID{stationID},
+		MaterialIDs: []uuid.UUID{}, // vazio = todos os materiais (material_ids NOT NULL, migration 0043)
 		StartDate:   parseDate(start),
 		EndDate:     parseDate(end),
 		WeekdayMask: int16(weekdayMask),
@@ -489,9 +490,11 @@ func TestInsights_AggregateInvestment_PerInsertion(t *testing.T) {
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
 
-	// 6 executadas dentro do período (todas 'in_slot' pra simplicidade)
-	for i := 0; i < 6; i++ {
-		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
+	// 6 executadas em 6 dias distintos (1/dia). bonus é POR DIA:
+	// max(0, in_slot_dia - expected_dia). Com 1 in_slot/dia e 1 expected/dia,
+	// bonus=0. (Colocar as 6 no mesmo dia daria bonus=5 — a view é per-day.)
+	for d := 1; d <= 6; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
 
 	from := parseDate("2026-06-01")
@@ -512,8 +515,8 @@ func TestInsights_AggregateInvestment_PerInsertion(t *testing.T) {
 	if inv.Executado < 299 || inv.Executado > 301 {
 		t.Errorf("executado = %v, want ~300", inv.Executado)
 	}
-	// Bonificação count = "bonus" da view = max(0, in_slot - expected) + orphan
-	// Como in_slot=6 e expected=30, max(0, 6-30)=0. Orphan=0. bonus=0.
+	// bonus da view = Σ_dia max(0, in_slot_dia - expected_dia) + orphan = 0
+	// (1 in_slot/dia == 1 expected/dia em cada um dos 6 dias).
 	if bon.Count != 0 || bon.Valor != 0 {
 		t.Errorf("bonificacao = %+v, want zero", bon)
 	}
@@ -555,5 +558,264 @@ func TestInsights_AggregateCore_StationWithoutPMM(t *testing.T) {
 	}
 	if core.StationsWithPMM != 1 {
 		t.Errorf("stations_with_pmm = %d, want 1", core.StationsWithPMM)
+	}
+}
+
+// ─── consolidated: clamp em "hoje" + cap no contrato (fix 2026-07-08) ────────
+//
+// Ver docs/superpowers/specs/2026-07-08-insights-consolidated-fill-cap-design.md.
+// Dois defeitos na fórmula consolidada, corrigidos aqui:
+//   A) dias futuros (esperado>0/executado=0) inflavam o denominador →
+//      executado/bonificação/CPM caíam ao alargar a janela.
+//   B) over-delivery (in_slot acima do plano) entrava no executado (razão >1,
+//      executado > contrato) E na bonificação — double-count. Agora o
+//      executado capa em 100% do contrato; o excedente fica só na bonificação.
+//
+// A injeção de "hoje" é via InsightsParams.Today (date-only). Zero value =
+// sem clamp (comportamento legado dos testes/handlers que não setam).
+
+// approxEq compara floats com tolerância absoluta.
+func approxEq(got, want, tol float64) bool {
+	d := got - want
+	if d < 0 {
+		d = -d
+	}
+	return d <= tol
+}
+
+// A) Dias futuros não derrubam o executado consolidado.
+//
+// Contrato 3000, plano 1/dia em junho (30 esperados). Entregue 1/dia nos dias
+// 01–15 (15 executados). Today=15/06 → dias 16–30 são futuro. Com o fix, a
+// janela de fill vai só até hoje: 15 executados / 15 esperados = 100% → 3000.
+// Sem o fix, 15/30 = 50% → 1500.
+func TestInsights_Investment_Consolidated_FutureDaysDoNotDeflate(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 3000)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	// 1 in_slot/dia nos dias 01–15 (passado relativo a Today=15/06).
+	for d := 1; d <= 15; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-06-15"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment: %v", err)
+	}
+	if !approxEq(inv.Executado, 3000, 1) {
+		t.Errorf("executado = %v, want ~3000 (fill até hoje = 15/15 = 100%%, não 15/30)", inv.Executado)
+	}
+}
+
+// B) Over-delivery capa no contrato e vai pra bonificação, não pro investido.
+//
+// Contrato 1000, plano 1/dia dias 01–10 (10 esperados). Entregue 2/dia (20
+// executados, 10 de excedente). Today=01/07 (tudo passado). Com o fix:
+// executado = 1000 × min(1, 20/10) = 1000 (capa). Bonificação = 1000 × 10/10 =
+// 1000 (o excedente). Sem o fix, executado = 1000 × 20/10 = 2000.
+func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-10", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	// 2 in_slot/dia nos dias 01–10 → excedente de 1/dia.
+	for d := 1; d <= 10; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	inv, bon, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-07-01"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment: %v", err)
+	}
+	if !approxEq(inv.Executado, 1000, 1) {
+		t.Errorf("executado = %v, want ~1000 (capado no contrato, não 2000)", inv.Executado)
+	}
+	if !approxEq(bon.Valor, 1000, 1) {
+		t.Errorf("bonificacao.valor = %v, want ~1000 (o excedente)", bon.Valor)
+	}
+	if bon.Count != 10 {
+		t.Errorf("bonificacao.count = %d, want 10", bon.Count)
+	}
+}
+
+// Déficit passado reduz o executado (o cap não vira piso). Guard: passa antes
+// e depois do fix — garante que min(1, x) não floora quando x<1.
+//
+// Contrato 1000, plano 1/dia dias 01–10 (10 esperados). Entregue só 4.
+// executado = 1000 × min(1, 4/10) = 400.
+func TestInsights_Investment_Consolidated_PastDeficitReduces(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-10", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	for d := 1; d <= 4; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-07-01"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment: %v", err)
+	}
+	if !approxEq(inv.Executado, 400, 1) {
+		t.Errorf("executado = %v, want ~400 (4/10 do contrato)", inv.Executado)
+	}
+}
+
+// per_insertion não é afetado pelo clamp de "hoje": o contratado mantém o
+// plano cheio (30 esperados) mesmo com Today no meio do período. Guard contra
+// vazamento do clamp pro modo aditivo.
+func TestInsights_Investment_PerInsertion_UnaffectedByTodayClamp(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 50.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	for d := 1; d <= 6; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	inv, _, err := repo.aggregateInvestment(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-06-15"), // no meio: não deve cortar o per_insertion
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateInvestment: %v", err)
+	}
+	// contratado = 50 × 30 esperados = 1500 (plano cheio, sem clamp)
+	if !approxEq(inv.Contratado, 1500, 1) {
+		t.Errorf("contratado = %v, want ~1500 (per_insertion não é clampeado por Today)", inv.Contratado)
+	}
+	// executado = 50 × 6 = 300
+	if !approxEq(inv.Executado, 300, 1) {
+		t.Errorf("executado = %v, want ~300", inv.Executado)
+	}
+}
+
+// Compute end-to-end (fast path do CPM): campanha consolidada com dias futuros
+// não derruba Investido nem CPM. Contrato 2000, pmm 1000, 15 tocadas nos dias
+// 01–15, Today=15/06. Investido = 2000 (100% até hoje). Impactos = 15×1000 =
+// 15000. CPM = 2000/15000×1000 = 133,33. Sem o fix: Investido 1000, CPM 66,67.
+func TestInsights_Compute_Consolidated_FutureDaysDoNotDeflateInvestidoOrCPM(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 2000)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	for d := 1; d <= 15; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-06-15"),
+		StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if !approxEq(out.KPIs.Investido.Executado, 2000, 1) {
+		t.Errorf("investido = %v, want ~2000", out.KPIs.Investido.Executado)
+	}
+	if !approxEq(out.KPIs.CPM, 133.33, 0.5) {
+		t.Errorf("cpm = %v, want ~133.33 (2000/15000×1000)", out.KPIs.CPM)
+	}
+}
+
+// computeCPM slow path (com fixed_cpm em jogo): o executado por-campanha também
+// usa clamp+cap. Campanha A tem fixed_cpm (força o slow path) mas 0 impactos
+// (peso 0). Campanha B (sem fixed_cpm) domina o CPM ponderado; seu executado
+// deve vir clampeado até hoje. CPM esperado = 133,33 (não 66,67).
+func TestInsights_ComputeCPM_Consolidated_SlowPathUsesClampedExecutado(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+
+	// A: força slow path (fixed_cpm setado), sem detecções → peso 0.
+	campA := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	if _, err := pool.Exec(ctx, `UPDATE campaigns SET fixed_cpm = 50 WHERE id = $1`, campA); err != nil {
+		t.Fatalf("set fixed_cpm: %v", err)
+	}
+
+	// B: consolidada, sem fixed_cpm, com dias futuros.
+	campB := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RXB", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, campB, st, "consolidated", 2000)
+	insSeedDistributionRule(t, ctx, pool, campB, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	for d := 1; d <= 15; d++ {
+		insSeedDetection(t, ctx, pool, campB, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+
+	cpm, err := repo.computeCPM(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{campA, campB},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today:      parseDate("2026-06-15"),
+		StationIDs: []uuid.UUID{},
+	}, 0, 0)
+	if err != nil {
+		t.Fatalf("computeCPM: %v", err)
+	}
+	if !approxEq(cpm, 133.33, 0.5) {
+		t.Errorf("cpm = %v, want ~133.33 (executado clampeado no slow path)", cpm)
 	}
 }

@@ -105,6 +105,9 @@ func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		From:        from,
 		To:          to,
 		StationIDs:  stations,
+		// "Hoje" em America/Sao_Paulo (date-only): o fill-ratio consolidado
+		// (investido/bonificação/CPM) não conta dias futuros ainda-não-tocados.
+		Today: todaySaoPaulo(),
 	})
 	if err != nil {
 		// Erros "cross-client" do repo viram 403 — não vazamos detalhe.
@@ -138,6 +141,24 @@ func parseUUIDList(s string) ([]uuid.UUID, error) {
 		out = append(out, id)
 	}
 	return out, nil
+}
+
+// spLocation é America/Sao_Paulo, resolvido uma vez no init (tzdata está na
+// imagem — ver workers.Dockerfile). Fallback pra UTC-3 fixo caso o ambiente
+// não tenha tzdata (Brasil não observa DST desde 2019).
+var spLocation = func() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		return time.FixedZone("BRT", -3*3600)
+	}
+	return loc
+}()
+
+// todaySaoPaulo devolve o dia corrente em America/Sao_Paulo como date-only
+// (meia-noite UTC daquele dia calendário), no mesmo formato de from/to.
+func todaySaoPaulo() time.Time {
+	n := time.Now().In(spLocation)
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func parseDateOr(s string, def time.Time) time.Time {

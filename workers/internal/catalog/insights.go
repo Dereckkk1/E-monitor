@@ -34,6 +34,10 @@ type InsightsParams struct {
 	From        time.Time   // inclusive (date-only, UTC)
 	To          time.Time   // inclusive (date-only, UTC end-of-day)
 	StationIDs  []uuid.UUID // vazio = todas as estações das campanhas
+	// Today é "hoje" no fuso America/Sao_Paulo (date-only). Usado para não
+	// contar dias futuros (esperado>0/executado=0) no fill-ratio consolidado
+	// — ver aggregateInvestment/computeCPM. Zero value = sem clamp (legado).
+	Today time.Time
 }
 
 // InsightsPayload é o response completo do endpoint.
@@ -362,6 +366,17 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 	return out, gran, rows.Err()
 }
 
+// investmentUpperBound devolve o teto de for_date pro clamp de "hoje" no
+// fill-ratio consolidado. Quando Today não é setado (zero value — testes/uso
+// legado que não injeta), devolve uma data no futuro distante, tornando o
+// LEAST(..., $5) um no-op e preservando o comportamento anterior.
+func investmentUpperBound(today time.Time) time.Time {
+	if today.IsZero() {
+		return time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
+	return today
+}
+
 // aggregateInvestment calcula investido (contratado / executado) e
 // bonificação somando contribuições por (campaign, station) seguindo
 // o modo de pricing definido em campaign_station_pricing:
@@ -390,6 +405,7 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (InvestidoK, BonificacaoK, error) {
 	row := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
+			-- $5 = teto "hoje" pro fill-ratio consolidado (ver investmentUpperBound)
 		    SELECT id, start_date, end_date,
 		           GREATEST(0, (LEAST(end_date, $3::date) - GREATEST(start_date, $2::date) + 1))::int AS overlap_days,
 		           (end_date - start_date + 1)::int AS total_days
@@ -397,13 +413,16 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		    WHERE id = ANY($1::uuid[])
 		),
 		cs_totals AS (
+		    -- Teto em $5 (hoje): dias futuros têm expected>0/executed=0 e
+		    -- inflavam o denominador do fill-ratio consolidado. Só afeta o modo
+		    -- consolidated — cs_per_ins (aditivo) mantém o plano cheio.
 		    SELECT s.campaign_id, s.station_id,
 		           SUM(s.expected)::bigint                   AS expected,
 		           SUM(s.in_slot + s.out_slot)::bigint       AS executed,
 		           SUM(s.bonus)::bigint                      AS bonus
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
-		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
+		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date, $5::date)
 		      AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
 		    GROUP BY s.campaign_id, s.station_id
 		),
@@ -450,7 +469,9 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		    ), 0)::float8 AS contratado,
 		    COALESCE(SUM(
 		        CASE
-		            WHEN mode='consolidated' AND expected > 0 THEN consolidated_value * executed / expected
+		            -- Cap em 100% do contrato: over-delivery (executed>expected) NÃO
+		            -- infla o executado — o excedente aparece só na bonificação.
+		            WHEN mode='consolidated' AND expected > 0 THEN consolidated_value * LEAST(1, executed / expected)
 		            WHEN mode='per_insertion' THEN pi_executado
 		            ELSE 0
 		        END
@@ -464,7 +485,7 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		    ), 0)::float8 AS bonificacao_valor,
 		    COALESCE(SUM(bonus), 0)::bigint AS bonificacao_count
 		FROM final
-	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs, investmentUpperBound(p.Today))
 
 	var inv InvestidoK
 	var bon BonificacaoK
@@ -531,8 +552,9 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    SELECT csp.campaign_id,
 		           COALESCE(SUM(
 		               CASE
+		                   -- Cap em 100% do contrato, igual ao aggregateInvestment.
 		                   WHEN csp.mode='consolidated' AND COALESCE(t.expected, 0) > 0
-		                       THEN csp.consolidated_value * COALESCE(t.executed, 0)::numeric / COALESCE(t.expected, 1)::numeric
+		                       THEN csp.consolidated_value * LEAST(1, COALESCE(t.executed, 0)::numeric / COALESCE(t.expected, 1)::numeric)
 		                   WHEN csp.mode='per_insertion'
 		                       THEN COALESCE(pi.pi_executado, 0)
 		                   ELSE 0
@@ -541,12 +563,13 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM campaign_station_pricing csp
 		    JOIN camp_meta cm ON cm.id = csp.campaign_id
 		    LEFT JOIN (
+		        -- Espelha cs_totals do aggregateInvestment: teto em $5 (hoje).
 		        SELECT s.campaign_id, s.station_id,
 		               SUM(s.expected)::bigint               AS expected,
 		               SUM(s.in_slot + s.out_slot)::bigint   AS executed
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
-		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
+		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date, $5::date)
 		          AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
 		        GROUP BY s.campaign_id, s.station_id
 		    ) t ON t.campaign_id = csp.campaign_id AND t.station_id = csp.station_id
@@ -573,7 +596,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		FROM camp_meta cm
 		LEFT JOIN per_campaign_impactos pi ON pi.campaign_id = cm.id
 		LEFT JOIN per_campaign_exec     pe ON pe.campaign_id = cm.id
-	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs, investmentUpperBound(p.Today))
 	if err != nil {
 		return 0, err
 	}
