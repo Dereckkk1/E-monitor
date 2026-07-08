@@ -98,7 +98,8 @@ export default function InsightsPage() {
           <SkeletonLoader />
         ) : data ? (
           <>
-            <div className="in-row in-row--cards">
+            {/* Consolidado esconde a Bonificação → 4 cards → grid de 4 colunas. */}
+            <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}`}>
               <KpiCards data={data} />
               <InvestmentToggleCard data={data} />
               <GenderCard data={data} />

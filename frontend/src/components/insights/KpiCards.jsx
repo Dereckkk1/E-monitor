@@ -24,13 +24,17 @@ export default function KpiCards({ data }) {
         <div className="in-card-value">{fmtCurrency.format(k.cpm)}</div>
       </div>
 
-      <div className="in-card">
-        <div className="in-card-head">
-          <span className="in-card-icon"><IconGift /></span>
-          <span className="in-card-label">Bonificação</span>
+      {/* Consolidado (estilo fornecedor): a Bonificação some — o card não é
+          renderizado, e o grid de cards vira 4 colunas (ver InsightsPage). */}
+      {!data?.consolidated && (
+        <div className="in-card">
+          <div className="in-card-head">
+            <span className="in-card-icon"><IconGift /></span>
+            <span className="in-card-label">Bonificação</span>
+          </div>
+          <div className="in-card-value">{fmtCurrency.format(k.bonificacao.valor)}</div>
         </div>
-        <div className="in-card-value">{fmtCurrency.format(k.bonificacao.valor)}</div>
-      </div>
+      )}
     </>
   )
 }
