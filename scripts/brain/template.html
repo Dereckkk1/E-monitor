@@ -11,7 +11,7 @@
   :root{
     --bg:#05060A; --panel:rgba(14,18,28,.72); --hair:rgba(120,170,255,.14);
     --hair-strong:rgba(120,170,255,.28);
-    --ink:#EAF2FF; --ink-dim:#8CA0C0; --ink-faint:#5A6B86;
+    --ink:#EAF2FF; --ink-dim:#8CA0C0; --ink-faint:#7080A0;
     --accent:#38E1FF; --accent-2:#FFB84D;
     --radius:14px; --mono:ui-monospace,"JetBrains Mono","Cascadia Code",Consolas,monospace;
     --grot:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -25,14 +25,34 @@
     overflow:hidden;
     -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
   }
-  /* radial vignette — deep space falloff, no colored aurora yet (Layer 2) */
-  body::before{
-    content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  /* ── ambient backdrop (behind the graph): aurora → vignette → particles ──── */
+  /* Aurora / nebula — arc-reactor cyan + amber orbs slowly drifting over deep
+     space. Low opacity so it never washes out the nodes. Drift is pure CSS. */
+  #aurora{
+    position:fixed; inset:-25%; z-index:0; pointer-events:none;
     background:
-      radial-gradient(120% 90% at 50% 8%, rgba(56,225,255,.05), transparent 46%),
-      radial-gradient(140% 120% at 50% 42%, rgba(20,28,44,.55), transparent 60%),
-      radial-gradient(160% 140% at 50% 100%, rgba(0,0,0,.82), transparent 68%);
+      radial-gradient(38% 42% at 26% 32%, rgba(56,225,255,.11), transparent 62%),
+      radial-gradient(34% 38% at 76% 60%, rgba(255,184,77,.075), transparent 62%),
+      radial-gradient(44% 46% at 58% 18%, rgba(56,225,255,.06), transparent 60%),
+      radial-gradient(40% 40% at 82% 26%, rgba(120,170,255,.05), transparent 60%);
+    background-repeat:no-repeat;
+    animation:aurora-drift 46s ease-in-out infinite alternate;
+    will-change:transform;
   }
+  @keyframes aurora-drift{
+    0%{ transform:translate3d(-1.5%,-1%,0) scale(1); }
+    50%{ transform:translate3d(2%,1.5%,0) scale(1.06); }
+    100%{ transform:translate3d(-1%,2%,0) scale(1.02); }
+  }
+  /* static edge vignette — deep-space falloff framing the aurora */
+  #vignette{
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(135% 115% at 50% 42%, transparent 50%, rgba(3,4,7,.55) 78%, rgba(2,3,6,.92) 100%),
+      radial-gradient(120% 90% at 50% 6%, rgba(56,225,255,.04), transparent 44%);
+  }
+  /* thin drifting particle field — its own light canvas behind the graph */
+  #particles{ position:fixed; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; }
   /* fixed film grain — pointer-events none, above graph, below chrome */
   #grain{
     position:fixed; inset:0; z-index:70; pointer-events:none; opacity:.05;
@@ -49,6 +69,20 @@
   #marks .tr{ top:14px; right:14px; transform:scaleX(-1); }
   #marks .bl{ bottom:14px; left:14px; transform:scaleY(-1); }
   #marks .br{ bottom:14px; right:14px; transform:scale(-1,-1); }
+  /* fine crosshair "+" registration marks at a sparse interior grid (cyan, faint) */
+  #marks b{ position:absolute; width:11px; height:11px; opacity:.4; }
+  #marks b::before,#marks b::after{ content:""; position:absolute; background:var(--accent); }
+  #marks b::before{ left:5px; top:0; width:1px; height:11px; }
+  #marks b::after{ top:5px; left:0; height:1px; width:11px; }
+  #marks b.c1{ left:20%; top:23%; } #marks b.c2{ left:80%; top:23%; }
+  #marks b.c3{ left:20%; bottom:23%; } #marks b.c4{ left:80%; bottom:23%; }
+
+  /* honest static build/unit tag (no fake precision numbers) */
+  #unit{
+    position:fixed; z-index:70; right:18px; bottom:15px; pointer-events:none;
+    font-family:var(--mono); font-size:9px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--ink-faint); opacity:.75;
+  }
 
   #app{ position:fixed; inset:0; }
 
@@ -100,6 +134,8 @@
   }
   #telemetry b{ color:var(--accent); font-weight:600; }
   #telemetry .amber{ color:var(--accent-2); }
+  #telemetry::before{ content:"[\00a0"; color:var(--ink-faint); }
+  #telemetry::after{ content:"\00a0]"; color:var(--ink-faint); }
 
   .mono{ font-family:var(--mono); }
 
@@ -116,6 +152,13 @@
   }
   #readout.open{ opacity:1; transform:none; }
   #readout[hidden]{ display:none; }
+  /* corner registration ticks — instrument framing that coheres with glass */
+  #readout::before, #readout::after{
+    content:""; position:absolute; width:13px; height:13px; z-index:3; pointer-events:none;
+    border:1.5px solid var(--accent); opacity:.5;
+  }
+  #readout::before{ top:9px; left:9px; border-right:none; border-bottom:none; }
+  #readout::after{ bottom:9px; right:9px; border-left:none; border-top:none; }
   .rd-core{
     position:relative; height:100%; overflow-y:auto; overflow-x:hidden;
     background:linear-gradient(180deg, rgba(10,14,22,.72), rgba(7,9,15,.66));
@@ -218,17 +261,37 @@
   .lg-item .sw{ width:10px; height:10px; border-radius:50%; flex:none; box-shadow:0 0 8px currentColor; }
   .lg-item .n{ color:var(--ink-faint); font-size:10px; }
 
+  /* keyboard focus — visible accent ring on every interactive control */
+  :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+  #search:focus-visible{ outline-offset:-1px; }
+
   @media (max-width:720px){
     #hud-top{ grid-template-columns:1fr; gap:9px; padding:10px 14px; }
     .brand{ font-size:13px; }
     #telemetry{ text-align:left; justify-self:start; }
     #readout{ top:auto; bottom:12px; left:12px; right:12px; width:auto; height:52vh; }
     #legend{ left:12px; right:12px; bottom:auto; top:auto; display:none; }
+    #unit{ display:none; }
   }
+  /* reduced motion — freeze aurora drift; particles/entry/pulse/dash frozen in JS.
+     Glow and layout stay; nothing moves. */
   @media (prefers-reduced-motion:reduce){
-    *{ transition-duration:.001ms !important; }
+    *{ transition-duration:.001ms !important; animation:none !important; }
+    #aurora{ animation:none !important; }
+  }
+  /* reduced transparency — glass panels become solid fills, no backdrop blur */
+  @media (prefers-reduced-transparency:reduce){
+    #readout{ background:#0B0F18; backdrop-filter:none; -webkit-backdrop-filter:none; }
+    .rd-core{ background:#0B0F18; }
+    #hud-top{ background:#080B12; backdrop-filter:none; -webkit-backdrop-filter:none; }
+    #legend{ background:#0B0F18; backdrop-filter:none; -webkit-backdrop-filter:none; }
+    #grain{ display:none; }
   }
 </style>
+
+<div id="aurora"></div>
+<div id="vignette"></div>
+<canvas id="particles"></canvas>
 
 <div id="app">
   <header id="hud-top">
@@ -242,7 +305,11 @@
 </div>
 
 <div id="grain"></div>
-<div id="marks"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+<div id="marks">
+  <i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>
+  <b class="c1"></b><b class="c2"></b><b class="c3"></b><b class="c4"></b>
+</div>
+<div id="unit"></div>
 
 <script id="brain-data" type="application/json">__BRAIN_DATA__</script>
 
@@ -255,6 +322,11 @@
   var nodes = Array.isArray(DATA.nodes) ? DATA.nodes : [];
   var edges = Array.isArray(DATA.edges) ? DATA.edges : [];
   var counts = DATA.counts || {};
+
+  // Seeded PRNG (mulberry32) with a FIXED seed → the initial layout is identical
+  // and well-centred on every load (deterministic, reproducible).
+  function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; var t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+  var rng = mulberry32(0x9E3779B1);
 
   // ── categorical palettes (calibrated with /dataviz on surface #05060A) ────
   // FOLDER: 8 vivid chromatic identity hues + 2 deliberately-neutral folders
@@ -308,11 +380,12 @@
   // ── force-directed layout (O(n²), fine for ~190; runs once on load/resize) ─
   function simulate(nodes, edges, opt){
     var W = opt.W, H = opt.H, iterations = opt.iterations || 300;
+    var rand = opt.rand || Math.random;   // seeded PRNG on first layout → deterministic
     var K=0.02, REP=1400, SPRING=0.008, DAMP=0.85, CENTER=0.0009;
     var idx = new Map(nodes.map(function(n,i){ return [n.id,i]; }));
     for (var s=0;s<nodes.length;s++){ var n0=nodes[s];
       n0.vx=0; n0.vy=0;
-      if(n0.x==null){ var a=Math.random()*6.283; n0.x=W/2+Math.cos(a)*Math.min(W,H)*0.3; n0.y=H/2+Math.sin(a)*Math.min(W,H)*0.3; }
+      if(n0.x==null){ var a=rand()*6.283; n0.x=W/2+Math.cos(a)*Math.min(W,H)*0.3; n0.y=H/2+Math.sin(a)*Math.min(W,H)*0.3; }
     }
     for (var it=0; it<iterations; it++){
       for (var i=0;i<nodes.length;i++){ var a=nodes[i];
@@ -447,6 +520,30 @@
   var animClock=0, dashOffset=0, rafId=0;
   function setFocusTarget(v){ if(ffTo!==v){ ffFrom=ff; ffTo=v; ffT0=performance.now(); } }
 
+  // entry animation — nodes materialise with a staggered fade+scale (once, on load).
+  // entryFactor(i) is that node's 0..1 progress; entryGlobal() fades the edge web in.
+  var entryT0=0, entryDone=false, ENTRY_DUR=560, ENTRY_STAG=210;
+  function entryFactor(i){
+    if(entryDone || reduceMotion) return 1;
+    var delay = nodes.length>1 ? (i/(nodes.length-1))*ENTRY_STAG : 0;
+    var t = performance.now() - entryT0 - delay;
+    if(t<=0) return 0;
+    return easeFn(clamp(t/ENTRY_DUR,0,1));
+  }
+  function entryGlobal(){
+    if(entryDone || reduceMotion) return 1;
+    return clamp((performance.now()-entryT0)/(ENTRY_DUR+ENTRY_STAG),0,1);
+  }
+  function runEntry(){
+    if(reduceMotion){ entryDone=true; invalidate(); render(); return; }
+    entryDone=false; entryT0=performance.now();
+    (function step(){
+      invalidate(); render();
+      if(performance.now()-entryT0 < ENTRY_DUR+ENTRY_STAG+40){ requestAnimationFrame(step); }
+      else { entryDone=true; invalidate(); render(); }   // final crisp frame, then idle
+    })();
+  }
+
   // per-node effective alpha: search/legend dim × focus/context dim (all tied to ff
   // so the neighbourhood dims IN and back OUT smoothly)
   function nodeAlpha(n){
@@ -459,6 +556,7 @@
   // Structured as discrete passes so Layer 3 can insert particle/aurora passes.
   function drawScene(g, bloom){
     var searching = !!activeQuery || activeCat!=null;
+    var eg = entryGlobal();                     // 0..1 edge-web materialise on load
     // 1. base hairline web — sharp layer only (too faint to be worth blooming)
     if(!bloom){
       g.lineWidth=1; g.strokeStyle='rgba(126,176,255,0.22)';
@@ -468,7 +566,7 @@
         var a=idIndex.get(e.source), b=idIndex.get(e.target);
         var lit = !searching || (isBright(a)&&isBright(b));
         var cdim = (focusSet && !(focusSet.has(e.source)&&focusSet.has(e.target))) ? (1-0.88*ff) : 1;
-        g.globalAlpha = (lit?1:0.05) * cdim;
+        g.globalAlpha = (lit?1:0.05) * cdim * eg;
         g.beginPath(); g.moveTo(sx(a),sy(a)); g.lineTo(sx(b),sy(b)); g.stroke();
       }
       g.globalAlpha=1;
@@ -489,11 +587,12 @@
     g.globalCompositeOperation='lighter';
     for(var k=0;k<nodes.length;k++){
       var n=nodes[k], na=nodeAlpha(n); if(na<0.02) continue;
+      var ek=entryFactor(k); if(ek<=0) continue;                    // staggered materialise
       var isF=(n===focusNodeRef);
       var pulse = isF ? (1 + 0.18*ff*Math.sin(animClock/380)) : 1;   // slow breathing
-      var hr = n.r * (bloom?4.2:3.4) * pulse;                        // hubs glow more (bigger r)
+      var hr = n.r * (bloom?4.2:3.4) * pulse * (0.4+0.6*ek);         // hubs glow more (bigger r)
       var px=sx(n), py=sy(n);
-      g.globalAlpha = na * (bloom?1:0.85) * (isF ? 1+0.35*ff : 1);
+      g.globalAlpha = na * (bloom?1:0.85) * (isF ? 1+0.35*ff : 1) * ek;
       g.drawImage(haloSprite(nodeColor(n)), px-hr, py-hr, hr*2, hr*2);
     }
     g.globalCompositeOperation='source-over'; g.globalAlpha=1;
@@ -501,10 +600,11 @@
     // 4. bright cores — near-white hot centre → folder/status colour
     for(var q=0;q<nodes.length;q++){
       var nc=nodes[q], ca=nodeAlpha(nc); if(ca<0.02) continue;
+      var eq=entryFactor(q); if(eq<=0) continue;                    // staggered materialise
       var isFc=(nc===focusNodeRef);
       var pc = isFc ? (1 + 0.09*ff*Math.sin(animClock/380)) : 1;
-      var cr = nc.r * 1.35 * pc, cx2=sx(nc), cy2=sy(nc);
-      g.globalAlpha=ca;
+      var cr = nc.r * 1.35 * pc * (0.4+0.6*eq), cx2=sx(nc), cy2=sy(nc);
+      g.globalAlpha=ca*eq;
       g.drawImage(coreSprite(nodeColor(nc)), cx2-cr, cy2-cr, cr*2, cr*2);
     }
     g.globalAlpha=1;
@@ -901,7 +1001,7 @@
     legendEl.innerHTML='';
     var head=el('div','lg-head');
     var toggle=el('button','lg-toggle');
-    toggle.innerHTML = 'COLOR // <b>'+(colorMode==='folder'?'FOLDER':'STATUS')+'</b>';
+    toggle.innerHTML = '[ COLOR // <b>'+(colorMode==='folder'?'FOLDER':'STATUS')+'</b> ]';
     toggle.addEventListener('click', function(){
       colorMode = (colorMode==='folder') ? 'status' : 'folder';
       activeCat = null;
@@ -917,16 +1017,17 @@
     orderedCats().forEach(function(cat){
       var color = pal[cat] || fb;
       var item = el('div','lg-item');
+      item.tabIndex=0; item.setAttribute('role','button');
+      item.setAttribute('aria-pressed', activeCat===cat ? 'true' : 'false');
       if(activeCat!=null && activeCat!==cat) item.classList.add('muted');
       if(activeCat===cat) item.classList.add('active');
       var sw=el('span','sw'); sw.style.color=color; sw.style.background=color; item.appendChild(sw);
       var name = colorMode==='status' ? statusLabel(cat==='null'?null:cat) : folderLabel(cat);
       item.appendChild(el('span','lbl',name));
       item.appendChild(el('span','n',String(tally.get(cat)||0)));
-      item.addEventListener('click', function(){
-        activeCat = (activeCat===cat) ? null : cat;
-        buildLegend(); invalidate(); render();
-      });
+      function toggleCat(){ activeCat = (activeCat===cat) ? null : cat; buildLegend(); invalidate(); render(); }
+      item.addEventListener('click', toggleCat);
+      item.addEventListener('keydown', function(ev){ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); toggleCat(); } });
       items.appendChild(item);
     });
     legendEl.appendChild(items);
@@ -940,23 +1041,75 @@
     }
   });
 
+  // ── ambient particle field — its own light canvas behind the graph. A very cheap
+  // continuous rAF (~60 particles, additive) is the ONLY perpetual loop; it pauses
+  // under reduced-motion and when the tab is hidden. The graph's own (expensive)
+  // render loop still idle-freezes — only this featherweight layer keeps drifting.
+  var pcv=document.getElementById('particles'), pctx=pcv.getContext('2d');
+  var particles=[], pW=0, pH=0, pDpr=1, particleRaf=0;
+  function sizeParticles(){
+    var r=pcv.getBoundingClientRect(); pW=r.width; pH=r.height; pDpr=window.devicePixelRatio||1;
+    pcv.width=Math.max(1,Math.round(pW*pDpr)); pcv.height=Math.max(1,Math.round(pH*pDpr));
+    pctx.setTransform(pDpr,0,0,pDpr,0,0);
+  }
+  function initParticles(){
+    sizeParticles();
+    var N=Math.max(46, Math.min(70, Math.round(pW*pH/26000)));
+    particles=[];
+    for(var i=0;i<N;i++){
+      particles.push({ x:Math.random()*pW, y:Math.random()*pH,
+        vx:(Math.random()-0.5)*0.14, vy:(Math.random()-0.5)*0.14,
+        r:0.5+Math.random()*1.3, a:0.03+Math.random()*0.045 });
+    }
+  }
+  function drawParticles(){
+    pctx.clearRect(0,0,pW,pH);
+    pctx.globalCompositeOperation='lighter'; pctx.fillStyle='#38E1FF';
+    for(var i=0;i<particles.length;i++){ var p=particles[i];
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<-3)p.x=pW+3; else if(p.x>pW+3)p.x=-3;
+      if(p.y<-3)p.y=pH+3; else if(p.y>pH+3)p.y=-3;
+      pctx.globalAlpha=p.a;
+      pctx.beginPath(); pctx.arc(p.x,p.y,p.r,0,6.2832); pctx.fill();
+    }
+    pctx.globalAlpha=1; pctx.globalCompositeOperation='source-over';
+  }
+  function particleLoop(){ drawParticles(); particleRaf=requestAnimationFrame(particleLoop); }
+  function startParticles(){
+    if(reduceMotion){ drawParticles(); return; }        // static field, no loop
+    if(!particleRaf && !document.hidden) particleRaf=requestAnimationFrame(particleLoop);
+  }
+  function stopParticles(){ if(particleRaf){ cancelAnimationFrame(particleRaf); particleRaf=0; } }
+  document.addEventListener('visibilitychange', function(){ if(document.hidden) stopParticles(); else startParticles(); });
+
   // ── boot ────────────────────────────────────────────────────────────────────
   function layout(){
     sizeCanvas();
-    // a few extra iterations let the core settle into an organic mass (still ONE
-    // cohesive cluster — the given constants are unchanged, only more relaxation)
-    simulate(nodes, edges, { W:W||1200, H:H||800, iterations:360 });
+    // seeded init → identical, well-centred layout every load; extra iterations let
+    // the core settle into an organic mass (given constants unchanged, more relaxation)
+    simulate(nodes, edges, { W:W||1200, H:H||800, iterations:360, rand:rng });
     if(!didFit){ fitView(); didFit=true; }
-    render();
+    invalidate(); runEntry();          // materialise the graph, then idle-freeze
   }
   var resizeT=0;
   window.addEventListener('resize', function(){
     clearTimeout(resizeT);
-    resizeT=setTimeout(function(){ sizeCanvas(); simulate(nodes, edges, { W:W||1200, H:H||800, iterations:120 }); invalidate(); render(); }, 160);
+    resizeT=setTimeout(function(){
+      sizeCanvas(); sizeParticles();
+      simulate(nodes, edges, { W:W||1200, H:H||800, iterations:120 });
+      invalidate(); render();
+      if(reduceMotion) drawParticles();
+    }, 160);
   });
+
+  // honest static build/unit tag (schemaVersion is real data; L3 + unit id are true)
+  document.getElementById('unit').textContent =
+    '[ REV·L3 · SCHEMA·'+(DATA.schemaVersion!=null?DATA.schemaVersion:1)+' · UNIT·RC-BRAIN ]';
 
   buildLegend();
   updateTelemetry();
+  initParticles();
+  startParticles();
   layout();
 })();
 </script>
