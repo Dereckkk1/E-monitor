@@ -103,26 +103,34 @@ docs/**/*.md ──▶ [Peça 1: Indexador]  scripts/brain-build.mjs (Node stdli
 
 **CLI:** `node scripts/brain-build.mjs` (regenera ambos). Flags: `--check` (só valida links quebrados, exit ≠0 se houver — útil pra CI futura), `--quiet`.
 
-## 5. Peça 2 — Grafo / Central de comando (`docs/brain/index.html`)
+## 5. Peça 2 — Grafo / "Stark HUD" (`docs/brain/index.html`)
 
-**Ambição visual:** uma **central de comando estilo "Jarvis"** — não um grafo genérico. Construída com **`/impeccable` + `/dataviz`** na fase de implementação (a `/taste` pedida não está instalada neste ambiente; `/impeccable` cobre o "technically extraordinary" e `/dataviz` governa a paleta do grafo).
+**Direção visual (DECIDIDA — comprometida com UMA linguagem):** **Holographic Command Deck** — o HUD do Tony Stark. Projeção holográfica de comando, **não** terminal retrô. Fundo espaço-preto, **nós volumétricos que brilham e pulsam**, backdrop de aurora/mesh radial (cyan arc-reactor + acento âmbar/ouro), **painéis de vidro fosco** com hairline e inner-highlight ("instrumento usinado"), **arestas que fluem/cintilam**, motion cinematográfico, campo de partículas sutil, **cromo de precisão** (crosshairs de registro, ticks de canto, leituras em mono).
 
-**Restrição inegociável:** auto-contido, **canvas + CSS puro, zero dependência de runtime**, 100% offline (`file://`). Nada de CDN, lib externa ou fetch. Toda a beleza sai de canvas 2D + CSS + SVG inline.
+**Design read** (`design-taste-frontend` §0.B): *"Lendo isto como: um command deck de conhecimento pra um engenheiro (Dereck/Stark), linguagem holographic-glass + precisão de telemetria, inclinado a canvas 2D vanilla com glow aditivo, vidro CSS e tipografia técnica."*
 
-**Linguagem visual (dirigida por `/impeccable`):**
-- Tema **dark HUD / mission-control**: fundo com grid sutil + vinheta + leve scanline; tipografia técnica; cromo de "instrumento".
-- **Grafo force-directed animado** em canvas: nós = docs (raio ∝ `wordCount` ou grau), arestas = links. Simulação física viva (repulsão/mola/centro), com *settle* suave.
-- **Nós com glow**; nó em foco/selecionado **pulsa** (ecoando as emissoras pulsando do `/live-map` — coerência com o produto).
-- **Cor por pasta** (padrão) com toggle **cor por `status`** (`implementado`/`legado`/`parcialmente-implementado`/`planejado`). Paleta definida via **`/dataviz`** (categórica acessível, funciona no dark; validar contraste).
-- **Hover:** realça o nó + vizinhos de 1º grau, esmaece o resto ("focus+context").
-- **Painel lateral (readout)** ao clicar num nó: título, pasta, `status` + `ultima-verificacao`, `summary`, `codigo-relacionado` (clicável → abre o arquivo), lista de **out-links** e **backlinks** (clicáveis → focam o nó). Estética de "ficha de instrumento".
-- **Busca** no topo: filtra por título/resumo/headings; resultados **destacam/isolam** no grafo (dim dos não-casados), com contadorzinho tipo telemetria.
-- **Barra de status/telemetria**: contadores (docs, arestas, links quebrados), legenda de cores, toggles (pasta↔status, congelar simulação, isolar cluster).
-- **Micro-interações e motion** com bom gosto (entrada dos nós, transições de foco, easing) — sem virar poluição; respeitar `prefers-reduced-motion`.
+**Dials** (`design-taste-frontend` §1): `DESIGN_VARIANCE: 8` · `MOTION_INTENSITY: 9` (cinematográfico — "motion claimed, motion shown") · `VISUAL_DENSITY: 5` (comando, mas Stark respira).
 
-**Performance:** 187 nós / ~340 arestas é leve pra canvas 2D. Simulação com *cap* de iterações + `requestAnimationFrame`; congela ao assentar pra não gastar CPU à toa.
+**Regra de não-mistura (as skills exigem comprometer com UMA estética):** comprometido com **holographic-precision**. Emprestamos da `industrial-brutalist-ui` **só** os motivos de *precisão* que coabitam com vidro (crosshairs de registro, molduras técnicas `[ ... ]`, leituras mono, grid determinístico). **Sem** a degradação analógica gritty — nada de scanlines CRT, fósforo verde, dithering. Scanline sobre vidro glossy = a mistura proibida.
 
-**Acessibilidade:** contraste AA no dark (validado pela `/dataviz`), foco de teclado no painel, `prefers-reduced-motion` desliga o loop de física (layout estático pré-computado).
+**Skills de build-time:** invocar **`/impeccable`** + **`/dataviz`** (invocáveis). Aplicar manualmente (referência em `.agents/skills/`, não-invocáveis): **`high-end-visual-design`** (OLED depth, double-bezel, `cubic-bezier`, perf), **`industrial-brutalist-ui`** (só motivos de precisão), **`full-output-enforcement`** (entregar o HTML **inteiro**, zero placeholder), **`redesign-existing-projects`** (premium em vanilla), e os princípios anti-slop da **`design-taste-frontend`**.
+
+**Restrição inegociável:** auto-contido e **offline** (`file://`), **zero dependência de runtime/rede** — sem CDN, npm, ou fetch. Toda a beleza sai de **canvas 2D + CSS + SVG inline**. **Fontes:** 1 grotesk display + 1 mono (ambas **OFL**) servidas como `woff2` relativos em `docs/brain/assets/` (`@font-face` relativo carrega em `file://` sem inflar o HTML com base64).
+
+**Anatomia do HUD:**
+- **Backdrop:** espaço-preto (`~#05060A`) com aurora/mesh radial animada lenta (cyan + âmbar), vinheta, e campo de partículas à deriva (canvas, `globalCompositeOperation:'lighter'`). Grain sutil em pseudo-elemento `fixed pointer-events-none` (regra de perf da high-end).
+- **Grafo force-directed** (canvas): nós = docs (raio ∝ grau/`wordCount`), arestas = links doc↔doc. Simulação viva (repulsão/mola/centro), settle suave, **congela ao assentar** (perf).
+- **Nós volumétricos:** núcleo + halo em gradiente radial aditivo (`shadowBlur`/`'lighter'`); **bloom** via camada offscreen borrada composta em `screen`. Nó em foco **pulsa** (respiração senoidal) — ecoa as emissoras do `/live-map`.
+- **Arestas:** stroke com gradiente; ao focar um nó, as do 1º grau **fluem** (dash animado) e o resto esmaece (focus+context).
+- **Cor** (via `/dataviz`): categórica **por pasta** (padrão) com toggle **por `status`**, calibrada pra brilhar no espaço-preto com contraste AA; **1 accent primário travado** (cyan arc-reactor) + 1 secundário (âmbar). Sem AI-purple (THE LILA RULE).
+- **Painel de leitura (glass):** ao clicar num nó, painel lateral de **vidro fosco** (`backdrop-filter`) com double-bezel (shell + core, inner-highlight): título, pasta, `status` + `ultima-verificacao`, `summary`, `codigo-relacionado` (clicável → abre o arquivo), **out-links** e **backlinks** (clicáveis → focam o nó). Leituras rotuladas em mono, com crosshair/ticks de instrumento.
+- **Busca:** campo no topo; filtra por título/resumo/headings; casados **isolam** no grafo (resto esmaece) com contador de telemetria (`MATCHES / 07`).
+- **Barra de comando/telemetria:** contadores (docs, arestas, links quebrados), legenda, toggles (pasta↔status, congelar simulação, isolar cluster), molduras `[ ... ]`.
+- **Motion:** entrada dos nós (fade+scale com stagger), transições de foco, hover — tudo `cubic-bezier(0.32,0.72,0,1)`, só `transform`/`opacity` no DOM (GPU-safe). **`prefers-reduced-motion`** desliga a física e os pulsos (layout estático pré-computado).
+
+**Performance:** 187 nós/~340 arestas é leve; simulação com cap de iterações + `requestAnimationFrame`, congela ao assentar; bloom em resolução reduzida; `backdrop-filter` só no painel fixo (nunca em conteúdo rolando).
+
+**Acessibilidade:** contraste AA no espaço-preto (validado pela `/dataviz`), foco de teclado no painel e nos resultados de busca, `prefers-reduced-motion` respeitado, e **fallback sólido** sob `prefers-reduced-transparency` (painel vira fill opaco, sem vidro).
 
 ## 6. Peça 3 — Q&A (skill `.claude/skills/cerebro/`)
 
@@ -161,7 +169,7 @@ docs/**/*.md ──▶ [Peça 1: Indexador]  scripts/brain-build.mjs (Node stdli
 |---------|---------|---------|
 | Motor do Q&A | Claude Code (skill) | Zero infra/serviço externo; melhor qualidade; "não-externo" de verdade |
 | Grafo | HTML estático auto-contido, zero-dep (Abordagem A) | Abre com duplo-clique; dodgeia a regra 5; mais leve de manter |
-| Visual | Jarvis/HUD via `/impeccable` + `/dataviz` | Pedido explícito; ambição alta mantendo zero-dep |
+| Visual | **Holographic Command Deck** (Stark HUD) — comprometido, sem CRT grit | "Surpreenda / o que o Stark ia querer"; holographic-glass + precisão, zero-dep |
 | Linguagem do gerador | Node stdlib em `scripts/` | Padrão `.mjs` já existe ali; isolado do lockfile do frontend |
 | Freshness | git pre-commit hook versionado | Sempre fresco sem depender de memória |
 | Gerados no git | Commitados (hook faz `git add`) | Clona e abre, sem build |
@@ -173,7 +181,7 @@ docs/**/*.md ──▶ [Peça 1: Indexador]  scripts/brain-build.mjs (Node stdli
 - **R2 — Churn de diff nos gerados.** Regeneração determinística (ordenar nós/arestas por `path`; sem timestamps voláteis dentro do payload, ou timestamp estável) pra minimizar ruído de diff.
 - **R3 — Links quebrados/ambíguos.** O gerador reporta (não falha por padrão); `--check` falha pra uso futuro em CI.
 - **R4 — Coerência visual vs. resto do produto.** O HUD é uma superfície própria (standalone), pode ir mais dark/bold que o app, mas deve *rimar* com o design system (`docs/architecture/frontend-design-system.md`) e com o `/live-map`. `/impeccable` cuida disso.
-- **R5 — Escopo do visual inflar o prazo.** A ambição Jarvis pode crescer sem fim. **Mitigação:** MVP visual sólido primeiro (grafo + glow + painel + busca + dark HUD), efeitos avançados (partículas, scanline, motion fino) como camada incremental.
+- **R5 — Escopo do visual inflar o prazo.** A ambição Stark HUD pode crescer sem fim. **Mitigação:** entregar em **camadas**, cada uma já "shippável": (1) grafo force + nós com glow + painel glass + busca; (2) bloom + pulso + arestas fluindo + focus/context; (3) aurora animada + partículas + motion fino + cromo de precisão. Nunca deixar motion meio-feito (regra "motion claimed, motion shown" da high-end).
 
 ## 10. Validação
 
@@ -190,6 +198,7 @@ docs/**/*.md ──▶ [Peça 1: Indexador]  scripts/brain-build.mjs (Node stdli
 | Hook | `scripts/hooks/pre-commit` |
 | Grafo (gerado) | `docs/brain/index.html` |
 | Índice (gerado) | `docs/brain/index.json` |
+| Fontes (OFL, `woff2`) | `docs/brain/assets/*.woff2` (1 grotesk display + 1 mono) |
 | Skill Q&A | `.claude/skills/cerebro/SKILL.md` |
 | Doc oficial | `docs/operations/docs-brain.md` (header YAML obrigatório) |
 | Entrada no índice | `docs/README.md` + mapa de consulta do `CLAUDE.md` |
