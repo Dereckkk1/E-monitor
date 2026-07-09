@@ -35,6 +35,13 @@ type Suggestion struct {
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// Enriquecimento (não-coluna) preenchido por List/Get via JOIN/subquery.
+	// Create/Update retornam via RETURNING sem estes — quem consome recarrega.
+	CreatedByName  *string `json:"created_by_name,omitempty"`
+	CreatedByEmail *string `json:"created_by_email,omitempty"`
+	CommentCount   int     `json:"comment_count"`
+	Unread         bool    `json:"unread"`
 }
 
 // SuggestionComment is a message in a suggestion's thread.
@@ -44,6 +51,7 @@ type SuggestionComment struct {
 	AuthorID     *uuid.UUID `json:"author_id,omitempty"`
 	Body         string     `json:"body"`
 	CreatedAt    time.Time  `json:"created_at"`
+	AuthorName   *string    `json:"author_name,omitempty"` // JOIN users (ListComments)
 }
 
 // SuggestionAttachment is an image attached to a suggestion (root) or a
@@ -69,13 +77,15 @@ type SuggestionEvent struct {
 	FromValue    *string    `json:"from_value,omitempty"`
 	ToValue      *string    `json:"to_value,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
+	ActorName    *string    `json:"actor_name,omitempty"` // JOIN users (ListEvents)
 }
 
 // SuggestionSummary feeds the dev's header KPIs.
 type SuggestionSummary struct {
-	ByStatus   map[string]int `json:"by_status"`
-	Total      int            `json:"total"`
-	OldestOpen *time.Time     `json:"oldest_open,omitempty"`
+	ByStatus          map[string]int `json:"by_status"`
+	Total             int            `json:"total"`
+	OldestOpen        *time.Time     `json:"oldest_open,omitempty"`
+	ResolvedThisMonth int            `json:"resolved_this_month"`
 }
 
 // Suggestions is the repository for the suggestions* tables.
@@ -90,13 +100,27 @@ const suggestionColumns = `id, ref_num, created_by, title, description, type,
        target_screen, requester_priority, status, dev_priority, effort,
        dev_feedback, dev_notes, awaiting_author, resolved_at, created_at, updated_at`
 
-func scanSuggestion(row interface {
-	Scan(...any) error
-}, s *Suggestion) error {
+// Mesmas colunas, qualificadas com o alias `s` — para queries com JOIN em users.
+const suggestionSelectCols = `s.id, s.ref_num, s.created_by, s.title, s.description, s.type,
+       s.target_screen, s.requester_priority, s.status, s.dev_priority, s.effort,
+       s.dev_feedback, s.dev_notes, s.awaiting_author, s.resolved_at, s.created_at, s.updated_at`
+
+type rowScanner interface{ Scan(dest ...any) error }
+
+// scanSuggestion lê as colunas base (Create/Update via RETURNING).
+func scanSuggestion(row rowScanner, s *Suggestion) error {
 	return row.Scan(&s.ID, &s.RefNum, &s.CreatedBy, &s.Title, &s.Description,
 		&s.Type, &s.TargetScreen, &s.RequesterPriority, &s.Status, &s.DevPriority,
 		&s.Effort, &s.DevFeedback, &s.DevNotes, &s.AwaitingAuthor, &s.ResolvedAt,
 		&s.CreatedAt, &s.UpdatedAt)
+}
+
+// scanSuggestionNamed lê as base + nome/email do autor (JOIN users) — Get.
+func scanSuggestionNamed(row rowScanner, s *Suggestion) error {
+	return row.Scan(&s.ID, &s.RefNum, &s.CreatedBy, &s.Title, &s.Description,
+		&s.Type, &s.TargetScreen, &s.RequesterPriority, &s.Status, &s.DevPriority,
+		&s.Effort, &s.DevFeedback, &s.DevNotes, &s.AwaitingAuthor, &s.ResolvedAt,
+		&s.CreatedAt, &s.UpdatedAt, &s.CreatedByName, &s.CreatedByEmail)
 }
 
 // sqlExec is satisfied by both *pgxpool.Pool and pgx.Tx, so addEvent can run
@@ -169,6 +193,11 @@ type ListSuggestionsFilter struct {
 	Query        string // ILIKE on title/description
 	AuthorID     *uuid.UUID
 	Sort         string // "" (updated_at DESC) | "created_at" | "oldest" | "ref_num"
+
+	// Viewer para o cálculo do "unread" por linha. ViewerIsDev muda a semântica:
+	// dev = qualquer atividade nova; autor = atividade de OUTROS (dev) nas suas.
+	ViewerID    uuid.UUID
+	ViewerIsDev bool
 }
 
 // List returns suggestions matching the filter. Order defaults to
@@ -183,39 +212,68 @@ func (s *Suggestions) List(ctx context.Context, f ListSuggestionsFilter) ([]Sugg
 		idx++
 	}
 	if f.OnlyAuthorID != nil {
-		push("created_by = $?", *f.OnlyAuthorID)
+		push("s.created_by = $?", *f.OnlyAuthorID)
 	} else if f.AuthorID != nil {
-		push("created_by = $?", *f.AuthorID)
+		push("s.created_by = $?", *f.AuthorID)
 	}
 	if f.Status != "" {
-		push("status = $?", f.Status)
+		push("s.status = $?", f.Status)
 	}
 	if f.Type != "" {
-		push("type = $?", f.Type)
+		push("s.type = $?", f.Type)
 	}
 	if f.Priority != "" {
-		push("dev_priority = $?", f.Priority)
+		push("s.dev_priority = $?", f.Priority)
 	}
 	if f.Query != "" {
 		like := "%" + strings.ToLower(f.Query) + "%"
-		where = append(where, "(LOWER(title) LIKE $"+strconv.Itoa(idx)+
-			" OR LOWER(description) LIKE $"+strconv.Itoa(idx+1)+")")
+		where = append(where, "(LOWER(s.title) LIKE $"+strconv.Itoa(idx)+
+			" OR LOWER(s.description) LIKE $"+strconv.Itoa(idx+1)+")")
 		args = append(args, like, like)
 		idx += 2
 	}
 
-	order := "updated_at DESC"
+	// Param do viewer (referenciado no SELECT via $V). Appendado por último;
+	// como params são posicionais, a posição casa com o índice.
+	v := "$" + strconv.Itoa(idx)
+	args = append(args, f.ViewerID)
+	idx++
+
+	// Fonte de atividade do "unread": dev vê tudo; autor vê só o que NÃO é dele.
+	var actSrc string
+	if f.ViewerIsDev {
+		actSrc = `SELECT created_at FROM suggestion_comments WHERE suggestion_id = s.id
+		          UNION ALL
+		          SELECT created_at FROM suggestion_events   WHERE suggestion_id = s.id`
+	} else {
+		actSrc = `SELECT created_at FROM suggestion_events
+		            WHERE suggestion_id = s.id AND (actor_id IS NULL OR actor_id <> ` + v + `)
+		          UNION ALL
+		          SELECT created_at FROM suggestion_comments
+		            WHERE suggestion_id = s.id AND (author_id IS NULL OR author_id <> ` + v + `)`
+	}
+	unread := `EXISTS (SELECT 1 FROM (` + actSrc + `) act
+		WHERE act.created_at > COALESCE(
+			(SELECT last_read_at FROM suggestion_reads WHERE user_id = ` + v + ` AND suggestion_id = s.id),
+			'-infinity'::timestamptz))`
+
+	order := "s.updated_at DESC"
 	switch f.Sort {
 	case "created_at":
-		order = "created_at DESC"
+		order = "s.created_at DESC"
 	case "oldest":
-		order = "created_at ASC"
+		order = "s.created_at ASC"
 	case "ref_num":
-		order = "ref_num DESC"
+		order = "s.ref_num DESC"
 	}
 
-	q := `SELECT ` + suggestionColumns + ` FROM suggestions WHERE ` +
-		strings.Join(where, " AND ") + ` ORDER BY ` + order
+	q := `SELECT ` + suggestionSelectCols + `, u.name, u.email,
+		(SELECT COUNT(*) FROM suggestion_comments c WHERE c.suggestion_id = s.id) AS comment_count,
+		` + unread + ` AS unread
+		FROM suggestions s
+		LEFT JOIN users u ON u.id = s.created_by
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY ` + order
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -224,7 +282,11 @@ func (s *Suggestions) List(ctx context.Context, f ListSuggestionsFilter) ([]Sugg
 	var out []Suggestion
 	for rows.Next() {
 		var sug Suggestion
-		if err := scanSuggestion(rows, &sug); err != nil {
+		if err := rows.Scan(&sug.ID, &sug.RefNum, &sug.CreatedBy, &sug.Title, &sug.Description,
+			&sug.Type, &sug.TargetScreen, &sug.RequesterPriority, &sug.Status, &sug.DevPriority,
+			&sug.Effort, &sug.DevFeedback, &sug.DevNotes, &sug.AwaitingAuthor, &sug.ResolvedAt,
+			&sug.CreatedAt, &sug.UpdatedAt, &sug.CreatedByName, &sug.CreatedByEmail,
+			&sug.CommentCount, &sug.Unread); err != nil {
 			return nil, err
 		}
 		out = append(out, sug)
@@ -236,8 +298,10 @@ func (s *Suggestions) List(ctx context.Context, f ListSuggestionsFilter) ([]Sugg
 func (s *Suggestions) Get(ctx context.Context, id uuid.UUID) (*Suggestion, error) {
 	var sug Suggestion
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+suggestionColumns+` FROM suggestions WHERE id = $1`, id)
-	if err := scanSuggestion(row, &sug); err != nil {
+		`SELECT `+suggestionSelectCols+`, u.name, u.email
+		 FROM suggestions s LEFT JOIN users u ON u.id = s.created_by
+		 WHERE s.id = $1`, id)
+	if err := scanSuggestionNamed(row, &sug); err != nil {
 		return nil, err
 	}
 	return &sug, nil
@@ -351,10 +415,11 @@ func (s *Suggestions) Update(ctx context.Context, id uuid.UUID, in UpdateSuggest
 // ListComments returns the thread of a suggestion, oldest first.
 func (s *Suggestions) ListComments(ctx context.Context, sid uuid.UUID) ([]SuggestionComment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, suggestion_id, author_id, body, created_at
-		FROM suggestion_comments
-		WHERE suggestion_id = $1
-		ORDER BY created_at ASC`, sid)
+		SELECT c.id, c.suggestion_id, c.author_id, c.body, c.created_at, u.name
+		FROM suggestion_comments c
+		LEFT JOIN users u ON u.id = c.author_id
+		WHERE c.suggestion_id = $1
+		ORDER BY c.created_at ASC`, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +427,7 @@ func (s *Suggestions) ListComments(ctx context.Context, sid uuid.UUID) ([]Sugges
 	var out []SuggestionComment
 	for rows.Next() {
 		var c SuggestionComment
-		if err := rows.Scan(&c.ID, &c.SuggestionID, &c.AuthorID, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.SuggestionID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.AuthorName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -464,10 +529,11 @@ func (s *Suggestions) GetAttachment(ctx context.Context, id uuid.UUID) (*Suggest
 // ListEvents returns the activity timeline of a suggestion, oldest first.
 func (s *Suggestions) ListEvents(ctx context.Context, sid uuid.UUID) ([]SuggestionEvent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, suggestion_id, actor_id, event_type, from_value, to_value, created_at
-		FROM suggestion_events
-		WHERE suggestion_id = $1
-		ORDER BY created_at ASC`, sid)
+		SELECT e.id, e.suggestion_id, e.actor_id, e.event_type, e.from_value, e.to_value, e.created_at, u.name
+		FROM suggestion_events e
+		LEFT JOIN users u ON u.id = e.actor_id
+		WHERE e.suggestion_id = $1
+		ORDER BY e.created_at ASC`, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +542,7 @@ func (s *Suggestions) ListEvents(ctx context.Context, sid uuid.UUID) ([]Suggesti
 	for rows.Next() {
 		var e SuggestionEvent
 		if err := rows.Scan(&e.ID, &e.SuggestionID, &e.ActorID, &e.EventType,
-			&e.FromValue, &e.ToValue, &e.CreatedAt); err != nil {
+			&e.FromValue, &e.ToValue, &e.CreatedAt, &e.ActorName); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -522,6 +588,14 @@ func (s *Suggestions) Summary(ctx context.Context) (SuggestionSummary, error) {
 		return out, err
 	}
 	out.OldestOpen = oldest
+
+	// Concluídas/recusadas com resolved_at neste mês-calendário.
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM suggestions
+		 WHERE status IN ('concluida','recusada') AND resolved_at >= date_trunc('month', NOW())`).
+		Scan(&out.ResolvedThisMonth); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 

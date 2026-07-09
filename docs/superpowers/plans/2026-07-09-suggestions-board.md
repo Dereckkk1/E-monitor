@@ -49,7 +49,7 @@ BEGIN;
 
 CREATE TABLE suggestions (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    ref_num             BIGINT GENERATED ALWAYS AS IDENTITY,
+    ref_num             SERIAL UNIQUE,   -- número humano (#42), convenção da casa (short_id)
     created_by          UUID REFERENCES users(id) ON DELETE SET NULL,
     title               TEXT NOT NULL,
     description         TEXT NOT NULL,
@@ -67,7 +67,6 @@ CREATE TABLE suggestions (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX suggestions_ref_num_idx ON suggestions (ref_num);
 CREATE INDEX suggestions_created_by_idx ON suggestions (created_by);
 CREATE INDEX suggestions_status_idx ON suggestions (status);
 CREATE INDEX suggestions_updated_at_idx ON suggestions (updated_at DESC);
