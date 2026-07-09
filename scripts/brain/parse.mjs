@@ -62,3 +62,18 @@ export function extractHeadings(body) {
   while ((m = re.exec(body))) out.push(cleanInline(m[1]));
   return out;
 }
+
+export function extractLinks(text) {
+  const out = [];
+  const reMd = /\]\(([^)\s]+?\.md)(?:#[^)]*)?\)/g;
+  let m;
+  while ((m = reMd.exec(text))) out.push({ target: m[1], kind: 'md' });
+  const reWiki = /\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]/g;
+  while ((m = reWiki.exec(text))) out.push({ target: m[1].trim(), kind: 'wiki' });
+  return out;
+}
+
+export function resolveMdLink(target, fromPath) {
+  const dir = path.posix.dirname(fromPath);
+  return path.posix.normalize(path.posix.join(dir, target));
+}
