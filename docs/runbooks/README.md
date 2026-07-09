@@ -33,6 +33,7 @@ Cada runbook segue a estrutura padrão definida no plano (§15.6):
 | [FingerprintStuck](FingerprintStuck.md) | warning | Pipeline de materiais | operational |
 | [WorkerStallLoop](WorkerStallLoop.md) | critical | Ingestão | operational |
 | [AuditRejectedSpike](AuditRejectedSpike.md) | warning | Detecção | operational |
+| [CalibrationStale](CalibrationStale.md) | warning | Calibração | operational |
 
 ### Legenda de status
 

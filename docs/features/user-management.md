@@ -110,3 +110,13 @@ middleware de autorização e no `isAdmin` do frontend.
 - Audit log de ações.
 - Email de convite (sem SMTP no projeto — admin define senha e passa por fora).
 - N:M user↔clientes (agência multi-marca → 1 login por marca).
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Gerenciamento de usuários — design](../superpowers/specs/2026-05-15-user-management-design.md)
+- **Plano:** [Gerenciamento de usuários — plano](../superpowers/plans/2026-05-15-user-management.md)

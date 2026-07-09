@@ -89,3 +89,13 @@ curl -s http://localhost:8080/metrics | grep -E \
 
 # 3. UI — abrir /operations e confirmar que os 4 tiles e a tabela exibem números.
 ```
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Stream Health — Design Spec](../superpowers/specs/2026-05-07-stream-health-design.md)
+- **Plano:** [Stream Health — Implementation Plan](../superpowers/plans/2026-05-07-stream-health.md)

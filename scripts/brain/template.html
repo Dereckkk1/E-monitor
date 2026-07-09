@@ -89,6 +89,10 @@
   /* ── canvas graph ──────────────────────────────────────────────────────── */
   #graph{ position:fixed; inset:0; width:100%; height:100%; z-index:1; display:block; background:transparent; touch-action:none; cursor:grab; }
   #graph.dragging{ cursor:grabbing; }
+  /* J5: 3D galaxy container (three/WebGL via 3d-force-graph). Hidden until toggled. */
+  #graph3d{ position:fixed; inset:0; z-index:1; display:none; cursor:grab; }
+  #graph3d.on{ display:block; }
+  #graph3d canvas{ display:block; outline:none; }
 
   /* ── top HUD bar ───────────────────────────────────────────────────────── */
   #hud-top{
@@ -127,6 +131,8 @@
     box-shadow:0 0 0 1px rgba(56,225,255,.25), 0 0 22px rgba(56,225,255,.14);
     background-color:rgba(11,16,26,.9);
   }
+  /* J4-C: brief cue when the wake word "Jarvis" is heard */
+  #search.wake{ border-color:var(--accent-2); box-shadow:0 0 0 1px rgba(255,184,77,.4), 0 0 26px rgba(255,184,77,.25); }
   #telemetry{
     font-size:11px; letter-spacing:.14em; color:var(--ink-dim);
     text-align:right; white-space:nowrap; justify-self:end;
@@ -138,6 +144,34 @@
   #telemetry::after{ content:"\00a0]"; color:var(--ink-faint); }
 
   .mono{ font-family:var(--mono); }
+
+  /* ── J1: deep-link constellation banner — pill under the top bar ─────────── */
+  #banner{
+    position:fixed; z-index:96; top:70px; left:50%;
+    transform:translateX(-50%) translateY(-6px);
+    max-width:min(680px,calc(100vw - 32px));
+    display:flex; align-items:center; gap:12px;
+    padding:9px 10px 9px 16px;
+    background:var(--panel); border:1px solid var(--hair-strong); border-radius:999px;
+    backdrop-filter:blur(16px) saturate(1.2); -webkit-backdrop-filter:blur(16px) saturate(1.2);
+    box-shadow:0 12px 40px rgba(0,0,0,.5), 0 0 22px rgba(56,225,255,.10);
+    opacity:0; transition:opacity .34s var(--ease), transform .34s var(--ease);
+    pointer-events:none;
+  }
+  #banner.open{ opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto; }
+  #banner[hidden]{ display:none; }
+  #banner .bn-q{
+    font-family:var(--grot); font-size:13px; color:var(--ink); letter-spacing:.01em;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+  }
+  #banner .bn-q::before{ content:"◉ "; color:var(--accent); }
+  #banner .bn-x{
+    flex:none; width:24px; height:24px; display:grid; place-items:center; cursor:pointer;
+    background:rgba(255,255,255,.04); border:1px solid var(--hair); border-radius:7px;
+    color:var(--ink-dim); font-size:12px; line-height:1;
+    transition:color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease);
+  }
+  #banner .bn-x:hover{ color:var(--ink); border-color:var(--hair-strong); background:rgba(255,255,255,.08); }
 
   /* ── readout panel — double-bezel glass ────────────────────────────────── */
   #readout{
@@ -229,37 +263,190 @@
   .rd-stat .k{ font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-faint); display:block; }
   .rd-stat .v{ font-size:17px; color:var(--ink); font-weight:600; }
 
-  /* ── legend / footer ───────────────────────────────────────────────────── */
+  /* ── Control Deck — left sidebar: render · color · layers · audio ────────── */
   #legend{
-    position:fixed; z-index:90; left:16px; bottom:16px; max-width:min(560px,calc(100vw - 32px));
-    background:var(--panel); border:1px solid var(--hair); border-radius:14px;
-    backdrop-filter:blur(16px) saturate(1.2); -webkit-backdrop-filter:blur(16px) saturate(1.2);
-    box-shadow:0 16px 44px rgba(0,0,0,.5);
-    padding:11px 13px;
+    position:fixed; z-index:90; left:14px; top:70px; width:238px; max-height:calc(100vh - 108px);
+    display:flex; flex-direction:column;
+    background:var(--panel); border:1px solid var(--hair); border-radius:16px;
+    backdrop-filter:blur(18px) saturate(1.2); -webkit-backdrop-filter:blur(18px) saturate(1.2);
+    box-shadow:0 22px 60px rgba(0,0,0,.5);
+    padding:4px; overflow:hidden;
   }
-  .lg-head{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+  .dk-scroll{ overflow-y:auto; overflow-x:hidden; padding:13px 13px 14px; scrollbar-width:thin; scrollbar-color:var(--hair-strong) transparent; }
+  .dk-scroll::-webkit-scrollbar{ width:7px; }
+  .dk-scroll::-webkit-scrollbar-thumb{ background:var(--hair-strong); border-radius:8px; }
+  .dk-sec{ margin-bottom:17px; }
+  .dk-sec:last-child{ margin-bottom:0; }
+  .dk-eyebrow{
+    font-family:var(--mono); font-size:9.5px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--ink-faint); margin:0 0 9px; display:flex; align-items:center; gap:9px;
+  }
+  .dk-eyebrow::after{ content:""; flex:1; height:1px; background:var(--hair); }
+  .dk-eyebrow .accent{ color:var(--accent); }
+  /* segmented control (2D|3D, folder|status|age) */
+  .seg{ display:flex; gap:3px; background:rgba(9,12,20,.5); border:1px solid var(--hair); border-radius:10px; padding:3px; }
+  .seg button{
+    flex:1; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+    color:var(--ink-dim); background:transparent; border:1px solid transparent; border-radius:7px; padding:6px 4px;
+    transition:color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+  }
+  .seg button:hover{ color:var(--ink); }
+  .seg button.on{ color:var(--ink); background:rgba(56,225,255,.13); border-color:var(--hair-strong); }
+  /* layers legend — vertical, scannable rows */
+  .lg-items{ display:flex; flex-direction:column; gap:1px; }
+  .lg-item{
+    display:flex; align-items:center; gap:9px; cursor:pointer;
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.02em; color:var(--ink-dim);
+    padding:5px 7px; border-radius:7px; border:1px solid transparent;
+    transition:color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease), opacity .16s var(--ease);
+  }
+  .lg-item:hover{ color:var(--ink); background:rgba(255,255,255,.04); }
+  .lg-item.active{ color:var(--ink); border-color:var(--hair-strong); background:rgba(56,225,255,.09); }
+  .lg-item.muted{ opacity:.36; }
+  .lg-item .sw{ width:10px; height:10px; border-radius:50%; flex:none; box-shadow:0 0 8px currentColor; }
+  .lg-item .lbl{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lg-item .n{ color:var(--ink-faint); font-size:10.5px; font-variant-numeric:tabular-nums; }
+  /* audio toggles + hint */
+  .dk-audio{ display:flex; gap:6px; }
   .lg-toggle{
-    font-family:var(--mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase; cursor:pointer;
+    flex:1; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; cursor:pointer;
     color:var(--ink-dim); background:rgba(255,255,255,.03); border:1px solid var(--hair);
-    border-radius:8px; padding:5px 10px;
-    display:inline-flex; align-items:center; gap:7px;
-    transition:color .25s var(--ease), border-color .25s var(--ease), background .25s var(--ease);
+    border-radius:8px; padding:8px 6px; text-align:center;
+    transition:color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
   }
   .lg-toggle:hover{ color:var(--ink); border-color:var(--hair-strong); }
   .lg-toggle b{ color:var(--accent); font-weight:600; }
-  .lg-hint{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; color:var(--ink-faint); text-transform:uppercase; }
-  .lg-items{ display:flex; flex-wrap:wrap; gap:4px 14px; }
-  .lg-item{
-    display:inline-flex; align-items:center; gap:7px; cursor:pointer;
-    font-family:var(--mono); font-size:11px; letter-spacing:.03em; color:var(--ink-dim);
-    padding:3px 6px; border-radius:6px; border:1px solid transparent;
-    transition:color .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease), opacity .2s var(--ease);
+  .dk-hint{ font-family:var(--mono); font-size:9px; letter-spacing:.1em; color:var(--ink-faint); text-transform:uppercase; margin-top:10px; text-align:center; }
+
+  /* ── J2: time-lapse — full-width holographic command bar (hidden until revealed) ── */
+  #timeline{
+    position:fixed; z-index:92; left:16px; right:16px; bottom:16px;
+    display:flex; align-items:center; gap:20px;
+    background:linear-gradient(180deg, rgba(10,14,22,.8), rgba(6,9,15,.9));
+    border:1px solid var(--hair-strong); border-radius:13px;
+    backdrop-filter:blur(22px) saturate(1.25); -webkit-backdrop-filter:blur(22px) saturate(1.25);
+    box-shadow:0 22px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.05);
+    padding:13px 22px;
+    transform:translateY(150%); opacity:0; pointer-events:none;
+    transition:transform .44s var(--ease), opacity .3s var(--ease), border-color .25s var(--ease), box-shadow .25s var(--ease);
   }
-  .lg-item:hover{ color:var(--ink); background:rgba(255,255,255,.04); }
-  .lg-item.active{ color:var(--ink); border-color:var(--hair-strong); background:rgba(56,225,255,.08); }
-  .lg-item.muted{ opacity:.4; }
-  .lg-item .sw{ width:10px; height:10px; border-radius:50%; flex:none; box-shadow:0 0 8px currentColor; }
-  .lg-item .n{ color:var(--ink-faint); font-size:10px; }
+  #timeline.on{ transform:none; opacity:1; pointer-events:auto; }
+  #timeline.active{ border-color:var(--accent); box-shadow:0 22px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.05), 0 0 30px rgba(56,225,255,.16); }
+  /* corner registration ticks — instrument framing */
+  #timeline::before, #timeline::after{ content:""; position:absolute; width:11px; height:11px; border:1.5px solid var(--accent); opacity:.4; pointer-events:none; }
+  #timeline::before{ top:7px; left:7px; border-right:none; border-bottom:none; }
+  #timeline::after{ bottom:7px; right:7px; border-left:none; border-top:none; }
+  .tl-lead{ display:flex; align-items:center; gap:12px; flex:none; }
+  .tl-ico{ font-size:14px; color:var(--accent); }
+  .tl-label{ font-size:10px; letter-spacing:.24em; color:var(--ink-dim); text-transform:uppercase; }
+  #tl-play{
+    flex:none; width:32px; height:32px; display:grid; place-items:center; cursor:pointer;
+    font-family:var(--mono); font-size:12px; color:var(--accent);
+    background:rgba(56,225,255,.1); border:1px solid var(--hair-strong); border-radius:9px;
+    transition:color .18s var(--ease), background .18s var(--ease), box-shadow .18s var(--ease), transform .15s var(--ease);
+  }
+  #tl-play:hover{ background:rgba(56,225,255,.2); color:#fff; box-shadow:0 0 18px rgba(56,225,255,.3); }
+  #tl-play:active{ transform:scale(.93); }
+  .tl-track-wrap{ flex:1; display:flex; align-items:center; gap:15px; min-width:0; }
+  .tl-edge{ font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; color:var(--ink-faint); text-transform:uppercase; white-space:nowrap; flex:none; }
+  .tl-track{ position:relative; flex:1; height:22px; display:flex; align-items:center; }
+  #tl-range{
+    -webkit-appearance:none; appearance:none; width:100%; height:5px; margin:0;
+    background:linear-gradient(90deg, rgba(56,225,255,.6), rgba(120,170,255,.2));
+    border-radius:999px; outline:none; cursor:pointer; position:relative; z-index:2;
+  }
+  #tl-range::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none; width:16px; height:16px; border-radius:50%;
+    background:#EAF2FF; border:2px solid var(--accent); box-shadow:0 0 12px rgba(56,225,255,.7); cursor:grab;
+  }
+  #tl-range::-moz-range-thumb{
+    width:16px; height:16px; border-radius:50%; border:2px solid var(--accent);
+    background:#EAF2FF; box-shadow:0 0 12px rgba(56,225,255,.7); cursor:grab;
+  }
+  /* incident markers along the temporal axis */
+  .tl-ticks{ position:absolute; left:8px; right:8px; top:0; bottom:0; z-index:1; pointer-events:none; }
+  .tl-tick{ position:absolute; top:50%; width:2px; height:13px; transform:translate(-50%,-50%); background:#FF5468; box-shadow:0 0 7px rgba(255,84,104,.9); border-radius:1px; }
+  .tl-tail{ display:flex; align-items:center; gap:13px; flex:none; }
+  #tl-date{
+    font-family:var(--mono); font-size:13px; letter-spacing:.14em; color:var(--accent);
+    min-width:96px; text-align:right; text-transform:uppercase;
+  }
+  #tl-date:empty::before{ content:"◉ AGORA"; color:var(--ink-faint); }
+  #tl-close{
+    flex:none; width:26px; height:26px; display:grid; place-items:center; cursor:pointer;
+    background:rgba(255,255,255,.04); border:1px solid var(--hair); border-radius:7px;
+    color:var(--ink-dim); font-size:12px; line-height:1;
+    transition:color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
+  }
+  #tl-close:hover{ color:var(--ink); border-color:var(--hair-strong); background:rgba(255,255,255,.08); }
+
+  /* ── J3: arc-reactor health ring — bottom-right, only in AGE mode ──────────── */
+  #health{
+    position:fixed; z-index:80; right:15px; bottom:13px; width:64px; height:64px;
+    filter:drop-shadow(0 4px 14px rgba(0,0,0,.55)); pointer-events:auto; cursor:help;
+    animation:health-in .4s var(--ease) both;
+  }
+  #health[hidden]{ display:none; }
+  #health canvas{ width:64px; height:64px; display:block; }
+  @keyframes health-in{ from{ opacity:0; transform:scale(.82); } to{ opacity:1; transform:none; } }
+  /* when the time-lapse bar is open, lift the ring above it and retire the unit tag */
+  body.tl-open #health{ bottom:92px; transition:bottom .3s var(--ease); }
+  body.tl-open #unit{ opacity:0; }
+  /* and shrink the deck so its lower sections clear the full-width bar */
+  body.tl-open #legend{ max-height:calc(100vh - 170px); transition:max-height .3s var(--ease); }
+
+  /* ── J4-A: Siri-style speech waveform — full-width strip behind the chrome ─── */
+  #wave{
+    position:fixed; left:0; right:0; bottom:0; width:100%; height:110px; z-index:84;
+    pointer-events:none; opacity:0; transition:opacity .32s var(--ease);
+  }
+  #wave.on{ opacity:1; }
+  #wave[hidden]{ display:none; }
+  /* ◉ LER button in the readout (top-right, left of the ✕) */
+  .rd-read{
+    position:absolute; top:12px; right:48px; height:28px; padding:0 11px;
+    display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--accent); background:rgba(56,225,255,.08);
+    border:1px solid var(--hair-strong); border-radius:8px; line-height:1;
+    transition:color .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease);
+  }
+  .rd-read:hover{ color:#fff; background:rgba(56,225,255,.18); }
+  .rd-read:active{ transform:scale(.96); }
+  .rd-read.speaking{ color:#fff; background:rgba(56,225,255,.22); border-color:var(--accent); }
+
+  /* ── J6: boot sequence overlay — one-time cinematic "◉ INITIALIZE" ─────────── */
+  #boot{
+    position:fixed; inset:0; z-index:200; display:grid; place-items:center;
+    background:radial-gradient(60% 60% at 50% 45%, rgba(8,11,20,.86), rgba(3,4,7,.97));
+    backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+    animation:boot-in .5s var(--ease) both;
+  }
+  #boot[hidden]{ display:none; }
+  #boot.out{ opacity:0; visibility:hidden; transition:opacity .6s var(--ease), visibility 0s .6s; pointer-events:none; }
+  @keyframes boot-in{ from{opacity:0} to{opacity:1} }
+  .boot-inner{ display:flex; flex-direction:column; align-items:center; gap:24px; text-align:center; padding:0 20px; }
+  .boot-brand{ font-family:var(--grot); font-weight:600; font-size:20px; letter-spacing:.3em; text-transform:uppercase; color:var(--ink); }
+  .boot-brand span{ color:var(--ink-faint); font-weight:500; }
+  #boot-go{
+    font-family:var(--mono); font-size:14px; letter-spacing:.28em; text-transform:uppercase; cursor:pointer;
+    color:var(--accent); background:rgba(56,225,255,.06);
+    border:1px solid var(--hair-strong); border-radius:999px; padding:14px 34px;
+    transition:color .25s var(--ease), background .25s var(--ease), box-shadow .25s var(--ease), transform .2s var(--ease);
+    animation:boot-pulse 2.4s ease-in-out infinite;
+  }
+  #boot-go:hover{ color:#fff; background:rgba(56,225,255,.16); }
+  #boot-go:active{ transform:scale(.97); }
+  @keyframes boot-pulse{
+    0%,100%{ box-shadow:0 0 0 1px rgba(56,225,255,.15), 0 0 34px rgba(56,225,255,.14); }
+    50%{ box-shadow:0 0 0 1px rgba(56,225,255,.28), 0 0 56px rgba(56,225,255,.30); }
+  }
+  .boot-skip{
+    font-family:var(--mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase; cursor:pointer;
+    color:var(--ink-faint); background:none; border:none; padding:6px;
+    transition:color .25s var(--ease);
+  }
+  .boot-skip:hover{ color:var(--ink-dim); }
 
   /* keyboard focus — visible accent ring on every interactive control */
   :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
@@ -271,6 +458,9 @@
     #telemetry{ text-align:left; justify-self:start; }
     #readout{ top:auto; bottom:12px; left:12px; right:12px; width:auto; height:52vh; }
     #legend{ left:12px; right:12px; bottom:auto; top:auto; display:none; }
+    #banner{ top:118px; max-width:calc(100vw - 24px); }   /* clear the stacked header */
+    #timeline{ display:none; }                            /* bottom is crowded on mobile */
+    #health{ display:none; }
     #unit{ display:none; }
   }
   /* reduced motion — freeze aurora drift; particles/entry/pulse/dash frozen in JS.
@@ -299,18 +489,54 @@
     <input id="search" placeholder="SEARCH / filtrar docs" autocomplete="off" spellcheck="false" aria-label="Buscar docs">
     <div id="telemetry" class="mono"></div>
   </header>
+  <div id="banner" hidden>
+    <span class="bn-q"></span>
+    <button class="bn-x" aria-label="limpar constelação" title="limpar (Esc)">✕</button>
+  </div>
   <canvas id="graph"></canvas>
+  <div id="graph3d"></div>
   <aside id="readout" hidden></aside>
   <footer id="legend" class="mono"></footer>
+  <div id="timeline" class="mono">
+    <div class="tl-lead">
+      <span class="tl-ico" aria-hidden="true">◷</span>
+      <span class="tl-label">Time-lapse</span>
+      <button id="tl-play" aria-label="reproduzir a linha do tempo" title="reproduzir ▶">▶</button>
+    </div>
+    <div class="tl-track-wrap">
+      <span class="tl-edge" id="tl-start" aria-hidden="true"></span>
+      <div class="tl-track">
+        <input id="tl-range" type="range" min="0" max="1000" value="1000" aria-label="linha do tempo — arraste para o passado">
+        <div class="tl-ticks" id="tl-ticks" aria-hidden="true"></div>
+      </div>
+      <span class="tl-edge" id="tl-end" aria-hidden="true"></span>
+    </div>
+    <div class="tl-tail">
+      <span id="tl-date" aria-live="polite"></span>
+      <button id="tl-close" aria-label="fechar o time-lapse" title="fechar">✕</button>
+    </div>
+  </div>
 </div>
 
+<div id="boot" hidden>
+  <div class="boot-inner">
+    <div class="boot-brand">RADIOCHECK <span>// DOCS-BRAIN</span></div>
+    <button id="boot-go" aria-label="inicializar com som">◉ INITIALIZE</button>
+    <button id="boot-skip" class="boot-skip">entrar em silêncio</button>
+  </div>
+</div>
 <div id="grain"></div>
 <div id="marks">
   <i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>
   <b class="c1"></b><b class="c2"></b><b class="c3"></b><b class="c4"></b>
 </div>
 <div id="unit"></div>
+<div id="health" hidden><canvas width="128" height="128"></canvas></div>
+<canvas id="wave" hidden aria-hidden="true"></canvas>
 
+<!-- J5: 3D galaxy vendor (3d-force-graph + three + UnrealBloomPass, single instance).
+     Inlined offline by render.mjs; defines the global BRAINGL. Stable between builds. -->
+<script id="brain-gl">__VENDOR_GL__</script>
 <script id="brain-data" type="application/json">__BRAIN_DATA__</script>
 
 <script>
@@ -359,21 +585,51 @@
   };
   var STATUS_FALLBACK = '#7C8BA3';
 
+  // AGE (J3): decay of `ultima-verificacao` computed at RUNTIME (Date.now, never at build
+  // → payload stays deterministic). Fresh cyan → aging amber → stale red-ember → slate for
+  // undated. Calibrated on #05060A: fresh/aging/stale reuse the accent/coral triad.
+  var AGE_COLORS = {
+    'fresh' : '#38E1FF',  // <30d  — verified recently, arc-reactor cyan
+    'aging' : '#FFB84D',  // 30–90d — amber, going stale
+    'stale' : '#FF5468',  // >90d  — coral ember (flickers)
+    'none'  : '#5B6A82'   // no ultima-verificacao — dim slate
+  };
+  var AGE_FALLBACK = '#5B6A82';
+  var AGE_LABEL = { fresh:'<30d', aging:'30–90d', stale:'>90d', none:'sem data' };
+
   var FOLDER_LABEL = { 'subagentic-use':'subagentic', 'root':'root', 'archive':'archive' };
   function folderLabel(f){ return (FOLDER_LABEL[f] || f || 'root'); }
   function statusKey(s){ return (s === null || s === undefined || s === '') ? 'null' : String(s); }
   function statusLabel(s){ return statusKey(s) === 'null' ? 'sem-status' : statusKey(s); }
+  // age in days from ultima-verificacao (runtime), null when undated; band buckets it.
+  function ageDays(n){
+    if(!n.ultimaVerificacao) return null;
+    var t = Date.parse(n.ultimaVerificacao + 'T00:00:00Z');
+    if(isNaN(t)) return null;
+    return (Date.now() - t) / 86400000;
+  }
+  function ageBand(n){ var d=ageDays(n); return d===null ? 'none' : (d<30 ? 'fresh' : (d<90 ? 'aging' : 'stale')); }
 
   // ── node/edge model (Layer-2/3 ready: x,y,vx,vy,r,deg,match on each node) ──
   var idIndex = new Map();
   nodes.forEach(function(n){ idIndex.set(n.id, n); });
-  nodes.forEach(function(n){
+  nodes.forEach(function(n, i){
     var deg = ((n.outLinks && n.outLinks.length) || 0) + ((n.backLinks && n.backLinks.length) || 0);
     n.deg = deg;
     n.r = 4 + Math.sqrt(deg);        // disc radius (screen px, constant across zoom)
     n.x = null; n.y = null; n.vx = 0; n.vy = 0;
     n.match = true;                  // search state
+    // J2 time-lapse: creation instant (ms). Missing dates sort to the very start so the
+    // node is always present (never hidden by the timeline).
+    n.bornT = n.createdAt ? Date.parse(n.createdAt + 'T00:00:00Z') : 0;
+    n.bt = 0;                        // per-node birth-animation start clock (0 = none)
+    n.flickPhase = i * 2.3999632;    // J3: desynced flicker phase (golden angle, deterministic)
   });
+  // timeline bounds (J2): earliest created doc → latest. Used to map the slider.
+  var timeMin = Infinity, timeMax = -Infinity;
+  for(var ti=0; ti<nodes.length; ti++){ var bt=nodes[ti].bornT; if(bt>0){ if(bt<timeMin)timeMin=bt; if(bt>timeMax)timeMax=bt; } }
+  if(!isFinite(timeMin)){ timeMin=0; timeMax=1; }
+  var DAY_MS = 86400000;
   // keep only edges whose endpoints resolve
   edges = edges.filter(function(e){ return idIndex.has(e.source) && idIndex.has(e.target); });
 
@@ -427,22 +683,27 @@
 
   function clamp(v,lo,hi){ return v<lo?lo:(v>hi?hi:v); }
 
-  function fitView(){
+  // fitView(subset?) — frame ALL nodes (default) or just a given list (J1 constellation).
+  function fitView(subset){
     if(!nodes.length){ view={x:W/2,y:H/2,scale:1}; return; }
+    var pts = (subset && subset.length) ? subset : nodes;
     // ROBUST fit. Raw min/max is dominated by a few far-flung outliers, and even the
     // mean centroid is pulled toward them (asymmetric outliers → core drifts off to a
     // side). So center on the MEDIAN position (outlier-resistant) and size by a
     // PERCENTILE radius: the dense mass fills the frame, the ~12% extreme nodes may
     // clip off at the default zoom (fine — wheel-zoom-out reveals them).
-    var xs = nodes.map(function(n){ return n.x; }).sort(function(a,b){ return a-b; });
-    var ys = nodes.map(function(n){ return n.y; }).sort(function(a,b){ return a-b; });
+    var xs = pts.map(function(n){ return n.x; }).sort(function(a,b){ return a-b; });
+    var ys = pts.map(function(n){ return n.y; }).sort(function(a,b){ return a-b; });
     var cx = xs[Math.floor(xs.length/2)], cy = ys[Math.floor(ys.length/2)];
-    var ds = nodes.map(function(n){ return Math.hypot(n.x-cx, n.y-cy); }).sort(function(a,b){ return a-b; });
-    var R = Math.max(1, ds[Math.floor(ds.length*0.86)] || 1);   // 86th-percentile radius = core edge
+    var ds = pts.map(function(n){ return Math.hypot(n.x-cx, n.y-cy); }).sort(function(a,b){ return a-b; });
+    // subset framing keeps more margin (0.62) so a small constellation isn't zoomed to the max
+    var pctl = pts===nodes ? 0.86 : 0.98;
+    var R = Math.max(1, ds[Math.floor(ds.length*pctl)] || 1);   // percentile radius = core edge
     var insetT=88, insetB=104, insetX=60;
     var availW=Math.max(80, W-insetX*2), availH=Math.max(80, H-insetT-insetB);
-    // map the core DIAMETER (2R) to ~72% of the smaller available dimension, centered
-    var target = Math.min(availW, availH) * 0.72;
+    // map the core DIAMETER (2R) to ~72% of the smaller available dimension (subset: 0.55,
+    // more breathing room so a tight constellation keeps surrounding context visible)
+    var target = Math.min(availW, availH) * (pts===nodes ? 0.72 : 0.55);
     var s = clamp(target / (2*R), 0.08, 3.2);
     view.scale=s;
     view.x=(insetX+availW/2) - cx*s;
@@ -450,19 +711,40 @@
   }
 
   // ── colour + brightness state ────────────────────────────────────────────
-  var colorMode = 'folder';        // 'folder' | 'status'
+  var colorMode = 'folder';        // 'folder' | 'status' | 'age'
   var activeCat = null;            // legend isolation for the current mode
   var activeQuery = '';
   function nodeColor(n){
     if(colorMode==='status') return STATUS_COLORS[statusKey(n.status)] || STATUS_FALLBACK;
+    if(colorMode==='age') return AGE_COLORS[ageBand(n)] || AGE_FALLBACK;
     return FOLDER_COLORS[n.folder] || FOLDER_FALLBACK;
   }
-  function nodeCat(n){ return colorMode==='status' ? statusKey(n.status) : (n.folder||'root'); }
+  function nodeCat(n){
+    if(colorMode==='status') return statusKey(n.status);
+    if(colorMode==='age') return ageBand(n);
+    return (n.folder||'root');
+  }
+
+  // J3 flicker — stale (>90d) or legado docs pulse like a failing circuit, but ONLY in
+  // age mode and never under reduced-motion (so the idle-freeze holds in folder/status).
+  var flickerCount = 0;
+  function isFlicker(n){ return ageBand(n)==='stale' || n.status==='legado'; }
+  function updateFlickerCount(){ var c=0; for(var i=0;i<nodes.length;i++){ if(isFlicker(nodes[i])) c++; } flickerCount=c; }
+  function ageFlickering(){ return colorMode==='age' && !reduceMotion && flickerCount>0; }
+  function flickerFactor(n){
+    if(colorMode!=='age' || reduceMotion || !isFlicker(n)) return 1;
+    return 0.5 + 0.5*Math.sin(animClock*0.0031 + n.flickPhase);   // ~0.5Hz, desynced
+  }
   function isBright(n){
     if(activeQuery && !n.match) return false;
     if(activeCat!=null && nodeCat(n)!==activeCat) return false;
     return true;
   }
+
+  // ── J2 time-lapse — timelineT (null = present, show everything). When set, a node
+  // participates only if it was already born; edges only if both endpoints are.
+  var timelineT = null;
+  function bornBy(n){ return timelineT===null || n.bornT <= timelineT; }
 
   // ── Layer 2 — focus state, glow sprites, and the unified scene ─────────────
   var hovered = null;
@@ -472,17 +754,71 @@
   var flowEdgeSet = null;   // Set(flowEdges) for O(1) skip in the base-edge pass
   var focusNodeRef = null;  // node driving focus/context (persists through fade-out)
 
+  // J1 — constellation: a PERSISTENT multi-node focus (deep-link from /cerebro). It is
+  // the resting focus source: hover/selection take over while active, and focus falls
+  // back to it when they clear. { ids:Set, edges:[edgeRefs], primary:node, q:string }.
+  var constellation = null;
+
   function activeFocus(){ return hovered || selected; }
+  // "is any focus source live" — includes the persistent constellation (keeps the loop
+  // alive and the neighbourhood lit even with no hover/selection).
+  function focusLive(){ return !!(hovered || selected || constellation); }
   function computeFocus(){
     var fn = activeFocus();
-    if(!fn) return;                          // keep the prior set alive during fade-out
-    focusNodeRef = fn;
-    focusSet = new Set([fn.id]); flowEdges = [];
-    for(var i=0;i<edges.length;i++){ var e=edges[i];
-      if(e.source===fn.id){ focusSet.add(e.target); flowEdges.push(e); }
-      else if(e.target===fn.id){ focusSet.add(e.source); flowEdges.push(e); }
+    if(fn){                                  // hover/selection: single node + neighbours
+      focusNodeRef = fn;
+      focusSet = new Set([fn.id]); flowEdges = [];
+      for(var i=0;i<edges.length;i++){ var e=edges[i];
+        if(e.source===fn.id){ focusSet.add(e.target); flowEdges.push(e); }
+        else if(e.target===fn.id){ focusSet.add(e.source); flowEdges.push(e); }
+      }
+      flowEdgeSet = new Set(flowEdges);
+      return;
     }
-    flowEdgeSet = new Set(flowEdges);
+    if(constellation){                       // no hover/selection → the constellation drives focus
+      focusNodeRef = constellation.primary;
+      focusSet = new Set(constellation.ids);
+      flowEdges = constellation.edges.slice();
+      flowEdgeSet = new Set(flowEdges);
+      return;
+    }
+    // nothing live → keep the prior set alive during fade-out
+  }
+
+  // undirected adjacency (lazy) referencing the REAL edge objects, so path edges are
+  // identity-comparable in flowEdgeSet (the base-edge pass skips flowEdgeSet members).
+  var adj = null;
+  function buildAdj(){
+    if(adj) return adj;
+    adj = new Map();
+    var push = function(a,b,e){ var l=adj.get(a); if(!l){ l=[]; adj.set(a,l); } l.push({to:b,edge:e}); };
+    for(var i=0;i<edges.length;i++){ var e=edges[i]; push(e.source,e.target,e); push(e.target,e.source,e); }
+    return adj;
+  }
+  // shortest path (BFS) from → to over the undirected graph; returns the edge refs. [] if none.
+  function pathEdges(from,to){
+    if(from===to || !idIndex.has(from) || !idIndex.has(to)) return [];
+    var g=buildAdj(), prev=new Map(), q=[from], seen=new Set([from]), qi=0;
+    while(qi<q.length){
+      var cur=q[qi++]; if(cur===to) break;
+      var ns=g.get(cur)||[];
+      for(var i=0;i<ns.length;i++){ var nx=ns[i];
+        if(seen.has(nx.to)) continue; seen.add(nx.to); prev.set(nx.to,{from:cur,edge:nx.edge}); q.push(nx.to);
+      }
+    }
+    if(!seen.has(to)) return [];
+    var out=[], step=to;
+    while(step!==from){ var p=prev.get(step); if(!p) return []; out.push(p.edge); step=p.from; }
+    return out;
+  }
+  // union of shortest paths from ids[0] to every other id → the constellation's connective tissue
+  function constellationEdges(ids){
+    var seen=new Set(), out=[];
+    for(var i=1;i<ids.length;i++){
+      var pe=pathEdges(ids[0],ids[i]);
+      for(var j=0;j<pe.length;j++){ if(!seen.has(pe[j])){ seen.add(pe[j]); out.push(pe[j]); } }
+    }
+    return out;
   }
 
   // hex → rgba, used to build the glow gradients once
@@ -534,6 +870,15 @@
     if(entryDone || reduceMotion) return 1;
     return clamp((performance.now()-entryT0)/(ENTRY_DUR+ENTRY_STAG),0,1);
   }
+  // J2: per-node birth animation used during time-lapse play (a node materialises the
+  // instant the timeline crosses its createdAt). n.bt = the clock it was (re)born, 0 = none.
+  var BIRTH_DUR=520;
+  function birthFactor(n){
+    if(reduceMotion || !n.bt) return 1;
+    var t = performance.now() - n.bt;
+    if(t<=0) return 0;
+    return easeFn(clamp(t/BIRTH_DUR,0,1));
+  }
   function runEntry(){
     if(reduceMotion){ entryDone=true; invalidate(); render(); return; }
     entryDone=false; entryT0=performance.now();
@@ -564,6 +909,7 @@
         var e=edges[i];
         if(flowEdgeSet && flowEdgeSet.has(e)) continue;      // drawn as flow below
         var a=idIndex.get(e.source), b=idIndex.get(e.target);
+        if(!bornBy(a)||!bornBy(b)) continue;                 // J2: both endpoints must exist yet
         var lit = !searching || (isBright(a)&&isBright(b));
         var cdim = (focusSet && !(focusSet.has(e.source)&&focusSet.has(e.target))) ? (1-0.88*ff) : 1;
         g.globalAlpha = (lit?1:0.05) * cdim * eg;
@@ -579,6 +925,7 @@
       if(!bloom){ g.setLineDash([7,9]); g.lineDashOffset=dashOffset; }
       for(var j=0;j<flowEdges.length;j++){
         var fe=flowEdges[j], fa=idIndex.get(fe.source), fb=idIndex.get(fe.target);
+        if(!bornBy(fa)||!bornBy(fb)) continue;               // J2
         g.beginPath(); g.moveTo(sx(fa),sy(fa)); g.lineTo(sx(fb),sy(fb)); g.stroke();
       }
       g.restore(); g.globalAlpha=1;
@@ -586,28 +933,37 @@
     // 3. node halos — additive radial glow (light emitting from each doc)
     g.globalCompositeOperation='lighter';
     for(var k=0;k<nodes.length;k++){
-      var n=nodes[k], na=nodeAlpha(n); if(na<0.02) continue;
-      var ek=entryFactor(k); if(ek<=0) continue;                    // staggered materialise
+      var n=nodes[k]; if(!bornBy(n)) continue;                       // J2: not born yet
+      var na=nodeAlpha(n); if(na<0.02) continue;
+      var ek=entryFactor(k), bf=birthFactor(n), grow=ek<bf?ek:bf;    // boot-entry OR time-lapse birth
+      if(grow<=0) continue;
       var isF=(n===focusNodeRef);
       var pulse = isF ? (1 + 0.18*ff*Math.sin(animClock/380)) : 1;   // slow breathing
-      var hr = n.r * (bloom?4.2:3.4) * pulse * (0.4+0.6*ek);         // hubs glow more (bigger r)
+      if(speaking && n===selected) pulse *= 1 + 0.30*Math.abs(Math.sin(animClock/200));  // J4-A: speaks louder
+      var hr = n.r * (bloom?4.2:3.4) * pulse * (0.4+0.6*grow);       // hubs glow more (bigger r)
       var px=sx(n), py=sy(n);
-      g.globalAlpha = na * (bloom?1:0.85) * (isF ? 1+0.35*ff : 1) * ek;
+      // flicker only on the sharp layer → the bloom cache stays valid (no per-frame rebuild)
+      g.globalAlpha = na * (bloom?1:0.85*flickerFactor(n)) * (isF ? 1+0.35*ff : 1) * grow;
       g.drawImage(haloSprite(nodeColor(n)), px-hr, py-hr, hr*2, hr*2);
     }
     g.globalCompositeOperation='source-over'; g.globalAlpha=1;
     if(bloom) return;               // bloom pass = glow only; cores/rings/labels stay sharp
     // 4. bright cores — near-white hot centre → folder/status colour
     for(var q=0;q<nodes.length;q++){
-      var nc=nodes[q], ca=nodeAlpha(nc); if(ca<0.02) continue;
-      var eq=entryFactor(q); if(eq<=0) continue;                    // staggered materialise
+      var nc=nodes[q]; if(!bornBy(nc)) continue;                    // J2: not born yet
+      var ca=nodeAlpha(nc); if(ca<0.02) continue;
+      var eq=entryFactor(q), bfc=birthFactor(nc), growc=eq<bfc?eq:bfc;
+      if(growc<=0) continue;
       var isFc=(nc===focusNodeRef);
       var pc = isFc ? (1 + 0.09*ff*Math.sin(animClock/380)) : 1;
-      var cr = nc.r * 1.35 * pc * (0.4+0.6*eq), cx2=sx(nc), cy2=sy(nc);
-      g.globalAlpha=ca*eq;
+      if(speaking && nc===selected) pc *= 1 + 0.16*Math.abs(Math.sin(animClock/200));   // J4-A
+      var cr = nc.r * 1.35 * pc * (0.4+0.6*growc), cx2=sx(nc), cy2=sy(nc);
+      g.globalAlpha=ca*growc*flickerFactor(nc);
       g.drawImage(coreSprite(nodeColor(nc)), cx2-cr, cy2-cr, cr*2, cr*2);
     }
     g.globalAlpha=1;
+    // 4.5 J2 incident bursts — red radial shockwave when an incident is born during play
+    drawBursts(g);
     // 5. focus ring
     if(focusNodeRef && ff>0.02) ring(focusNodeRef, rgba('#38E1FF', 0.45+0.45*ff), 4);
   }
@@ -624,6 +980,7 @@
     ctx.textBaseline = 'middle';
     for(var i=0;i<nodes.length;i++){
       var n=nodes[i];
+      if(!bornBy(n)) continue;                 // J2: no label for a not-yet-born doc
       var force = (n===hovered) || (n===selected);
       if(!force && !showAll) continue;
       if(!isBright(n) && !force) continue;
@@ -705,7 +1062,7 @@
     }
     dashOffset -= 0.7;                                 // data flows toward the focus node
     render();
-    if(activeFocus() || ff>0.001){
+    if(focusLive() || ff>0.001 || ageFlickering()){    // J3: age-mode flicker keeps it alive
       rafId=requestAnimationFrame(loop);
     } else {                                           // settled, nothing focused → FREEZE
       rafId=0; ff=0;
@@ -713,18 +1070,18 @@
       render();                                        // one clean static frame, then idle
     }
   }
-  function startLoop(){ if(!rafId) rafId=requestAnimationFrame(loop); }
+  function startLoop(){ if(mode==='3d') return; if(!rafId) rafId=requestAnimationFrame(loop); }
 
   // called whenever hover/selection changes — drives the focus+context transition
   function updateFocus(){
     computeFocus();
     invalidate();
     if(reduceMotion){
-      ff = activeFocus() ? 1 : 0;
-      if(!activeFocus()){ focusNodeRef=null; focusSet=null; flowEdges=[]; flowEdgeSet=null; }
+      ff = focusLive() ? 1 : 0;
+      if(!focusLive()){ focusNodeRef=null; focusSet=null; flowEdges=[]; flowEdgeSet=null; }
       render();
     } else {
-      setFocusTarget(activeFocus() ? 1 : 0);
+      setFocusTarget(focusLive() ? 1 : 0);
       startLoop();
     }
   }
@@ -734,6 +1091,7 @@
     var best=null, bestD=Infinity;
     for(var i=0;i<nodes.length;i++){
       var n=nodes[i];
+      if(!bornBy(n)) continue;                 // J2: can't hover/select a not-yet-born doc
       var d=Math.hypot(mx-sx(n), my-sy(n));
       if(d <= n.r+6 && d<bestD){ bestD=d; best=n; }
     }
@@ -750,6 +1108,7 @@
   }
   function deselect(){
     selected=null;
+    stopSpeaking();         // J4-A: closing the readout stops the voice
     closeReadout();
     updateFocus();          // eases the focus back out, then the loop freezes
   }
@@ -768,6 +1127,14 @@
     close.setAttribute('aria-label','fechar');
     close.addEventListener('click', deselect);
     core.appendChild(close);
+
+    if(synth){              // J4-A: read the summary aloud (native TTS, offline)
+      var readBtn = el('button','rd-read','◉ Ler');
+      readBtn.setAttribute('aria-label','ler o resumo em voz alta (tecla L)');
+      readBtn.setAttribute('title','ler o resumo (L)');
+      readBtn.addEventListener('click', function(){ isSpeaking() ? stopSpeaking() : speakNode(n); });
+      core.appendChild(readBtn);
+    }
 
     core.appendChild(el('p','rd-eyebrow','NODE // '+folderLabel(n.folder)));
     core.appendChild(el('h3','rd-title', n.title || n.id));
@@ -886,8 +1253,364 @@
   function focusNode(id){
     var n=idIndex.get(id); if(!n) return;
     selectNode(n);
+    if(mode==='3d'){                                   // J5: warp the camera to the linked node
+      var gn = gnodes && gnodes[nodes.indexOf(n)];
+      if(gn) warpTo(gn);
+      return;
+    }
     animateView(W/2 - n.x*view.scale, H/2 - n.y*view.scale);
   }
+
+  // ── J1: constellation control (deep-link) + banner + location.hash ──────────
+  var bannerEl = document.getElementById('banner');
+  var bannerQ  = bannerEl.querySelector('.bn-q');
+  bannerEl.querySelector('.bn-x').addEventListener('click', clearConstellation);
+  function showBanner(text){
+    bannerQ.textContent = text;
+    bannerEl.hidden = false;
+    if(reduceMotion){ bannerEl.classList.add('open'); return; }
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){ bannerEl.classList.add('open'); }); });
+  }
+  function hideBanner(){
+    bannerEl.classList.remove('open');
+    if(reduceMotion){ bannerEl.hidden = true; return; }
+    setTimeout(function(){ if(!constellation) bannerEl.hidden = true; }, 340);
+  }
+
+  function setConstellation(ids, q){
+    var valid=[]; for(var i=0;i<ids.length;i++){ if(idIndex.has(ids[i]) && valid.indexOf(ids[i])<0) valid.push(ids[i]); }
+    if(!valid.length){ clearConstellation(); return; }
+    constellation = {
+      ids: new Set(valid),
+      edges: constellationEdges(valid),
+      primary: idIndex.get(valid[0]),
+      q: q || ''
+    };
+    showBanner(q || (valid.length + (valid.length===1 ? ' doc em foco' : ' docs em foco')));
+    updateFocus();                                   // lights the set + keeps the loop alive
+    fitView(valid.map(function(id){ return idIndex.get(id); }));   // frame the constellation
+    invalidate(); render();
+    if(mode==='3d'){ refresh3D(); frame3DConstellation(); }        // J5: light + frame in the galaxy
+  }
+  function clearConstellation(){
+    if(!constellation) return;
+    constellation = null;
+    hideBanner();
+    updateFocus();                                   // eases focus back out, then freezes
+    refresh3D();
+  }
+  function frame3DConstellation(){
+    if(!Graph3D || !constellation) return;
+    try{ Graph3D.zoomToFit(1200, 80, function(gn){ return constellation.ids.has(gn.ref.id); }); }catch(e){}
+  }
+
+  function safeDecode(s){ try{ return decodeURIComponent(s); } catch(e){ return s; } }
+  // #docs=<id1>,<id2>,...&q=<pergunta urlencoded>  (ids = node `id` field)
+  function parseHash(){
+    var h = (location.hash || '').replace(/^#/, '');
+    if(!h) return null;
+    var docs=null, q='';
+    h.split('&').forEach(function(kv){
+      var i=kv.indexOf('='); var k=i<0?kv:kv.slice(0,i); var v=i<0?'':kv.slice(i+1);
+      if(k==='docs') docs=v;
+      else if(k==='q') q=safeDecode(v.replace(/\+/g,' '));
+    });
+    if(!docs) return null;
+    var ids = docs.split(',').map(function(s){ return safeDecode(s.trim()); }).filter(Boolean);
+    return { ids:ids, q:q };
+  }
+  function applyHash(){
+    var p = parseHash();
+    if(p && p.ids.length) setConstellation(p.ids, p.q);
+    else clearConstellation();
+  }
+  window.addEventListener('hashchange', applyHash);
+
+  // ── J2: time-lapse — slider + play, per-node birth, incident bursts ─────────
+  var MONTHS=['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ'];
+  var bursts=[];                       // active incident shockwaves {n,t0}
+  var timelinePlaying=false, timelineRaf=0, playT0=0, PLAY_DUR=30000, lastBirthAt=0;
+  var tlWrap=document.getElementById('timeline');
+  var playBtn=document.getElementById('tl-play');
+  var rangeEl=document.getElementById('tl-range');
+  var dateEl=document.getElementById('tl-date');
+
+  function drawBursts(g){
+    if(!bursts.length) return;
+    var now=performance.now(), BDUR=1100, alive=[];
+    g.save(); g.globalCompositeOperation='lighter';
+    for(var i=0;i<bursts.length;i++){
+      var bs=bursts[i], p=(now-bs.t0)/BDUR;
+      if(p>=1 || !bornBy(bs.n)) continue;
+      var eo=1-(1-p)*(1-p);                            // easeOut
+      var rad=bs.n.r*(1+6*eo);                         // 1→7× expanding glow
+      g.globalAlpha=(1-p)*(1-p)*0.9;                   // fade out
+      g.drawImage(haloSprite('#FF5468'), sx(bs.n)-rad, sy(bs.n)-rad, rad*2, rad*2);
+      alive.push(bs);
+    }
+    bursts=alive; g.restore(); g.globalAlpha=1;
+  }
+
+  // mark nodes whose bornT falls in (prevT, newT]; incidents also fire a burst + log line
+  function markBirths(prevT, newT){
+    var now=performance.now();
+    for(var i=0;i<nodes.length;i++){ var n=nodes[i];
+      if(n.bornT>prevT && n.bornT<=newT){
+        n.bt=now; lastBirthAt=now;
+        if(n.folder==='incidents'){ bursts.push({n:n,t0:now}); pushTimelineLog(n); }
+      }
+    }
+  }
+  function clearBirths(){ for(var i=0;i<nodes.length;i++) nodes[i].bt=0; }
+
+  function pushTimelineLog(n){
+    // reuse the telemetry line as the Gource-style event ticker during play
+    telEl.innerHTML = 'DOCS/<b>'+(counts.docs!=null?counts.docs:nodes.length)+'</b> · <span class="amber">+ '+escapeHtml(n.id.replace(/^docs\//,''))+'</span>';
+  }
+
+  function syncTimelineDate(){
+    if(timelineT===null){ dateEl.textContent=''; tlWrap.classList.remove('active'); return; }
+    var d=new Date(timelineT);
+    dateEl.textContent = MONTHS[d.getUTCMonth()]+' '+d.getUTCFullYear();
+    tlWrap.classList.add('active');
+  }
+  function syncTimelineUI(){
+    var frac = (timelineT===null) ? 1 : clamp((timelineT-timeMin)/((timeMax-timeMin)||1),0,1);
+    rangeEl.value = String(Math.round(frac*1000));
+    syncTimelineDate();
+  }
+
+  function timelineTick(now){
+    animClock=now;
+    if(timelinePlaying){
+      var p=clamp((now-playT0)/PLAY_DUR,0,1);
+      var prevT = (timelineT===null) ? -Infinity : timelineT;
+      var newT = timeMin + p*(timeMax-timeMin);
+      markBirths(prevT, newT);
+      timelineT = newT;
+      syncTimelineUI();
+      if(p>=1){ timelinePlaying=false; timelineT=null; playBtn.textContent='▶'; syncTimelineUI(); updateTelemetry(); }
+    }
+    invalidate(); render();
+    if(timelinePlaying || bursts.length || (performance.now()-lastBirthAt < BIRTH_DUR)){
+      timelineRaf=requestAnimationFrame(timelineTick);
+    } else { timelineRaf=0; invalidate(); render(); }
+  }
+
+  function startPlay(){
+    if(reduceMotion) return;
+    var frac = (timelineT===null) ? 0 : clamp((timelineT-timeMin)/((timeMax-timeMin)||1),0,1);
+    if(frac>=1) frac=0;                                 // at the end → replay from zero
+    clearBirths(); bursts=[];
+    timelineT = (frac<=0) ? (timeMin - DAY_MS) : (timeMin + frac*(timeMax-timeMin));
+    playT0 = performance.now() - frac*PLAY_DUR;
+    timelinePlaying=true; playBtn.textContent='⏸';
+    if(!timelineRaf) timelineRaf=requestAnimationFrame(timelineTick);
+  }
+  function pausePlay(){ if(timelinePlaying){ timelinePlaying=false; playBtn.textContent='▶'; } }
+  function resetTimeline(){
+    pausePlay(); timelineT=null; clearBirths(); bursts=[];
+    syncTimelineUI(); updateTelemetry(); invalidate(); render(); refresh3D();
+  }
+
+  if(reduceMotion && playBtn){ playBtn.style.display='none'; }   // no auto-play under reduced motion
+  if(playBtn) playBtn.addEventListener('click', function(){ timelinePlaying ? pausePlay() : startPlay(); });
+  if(rangeEl) rangeEl.addEventListener('input', function(){
+    pausePlay();                                        // manual scrub overrides play
+    var frac = (+rangeEl.value)/1000;
+    if(frac>=1){ timelineT=null; updateTelemetry(); } else { timelineT = timeMin + frac*(timeMax-timeMin); }
+    clearBirths(); bursts=[];                           // manual scrub = static filter, no pop
+    syncTimelineDate(); invalidate(); render(); refresh3D();   // J5: timeline filters the galaxy too
+  });
+
+  // ── reveal/hide the time-lapse bar (hidden by default; toggled from the deck) ──
+  var timelineVisible=false, tlTicksBuilt=false;
+  function buildTimelineTicks(){                         // red incident markers along the axis
+    var ticks=document.getElementById('tl-ticks'); if(!ticks) return;
+    ticks.innerHTML=''; var span=(timeMax-timeMin)||1;
+    for(var i=0;i<nodes.length;i++){ var n=nodes[i];
+      if(n.folder!=='incidents') continue;
+      var m=n.id.match(/incident-(\d{4})-(\d{2})-(\d{2})/);     // exact date from the filename
+      var t = m ? Date.parse(m[1]+'-'+m[2]+'-'+m[3]+'T00:00:00Z') : n.bornT;
+      if(!t) continue;
+      var frac=clamp((t-timeMin)/span,0,1);
+      var tk=document.createElement('div'); tk.className='tl-tick';
+      tk.style.left=(frac*100)+'%'; tk.title=(n.title||n.id);
+      ticks.appendChild(tk);
+    }
+    tlTicksBuilt=true;
+  }
+  function setTimelineEdges(){
+    var s=document.getElementById('tl-start'), e=document.getElementById('tl-end');
+    var d0=new Date(timeMin);
+    if(s) s.textContent = MONTHS[d0.getUTCMonth()]+' '+d0.getUTCFullYear();
+    if(e) e.textContent = 'HOJE';
+  }
+  function showTimeline(){
+    timelineVisible=true;
+    if(!tlTicksBuilt) buildTimelineTicks();
+    setTimelineEdges(); tlWrap.classList.add('on');
+    document.body.classList.add('tl-open');            // lift health ring / hide unit tag
+    updateTimeBtn();
+  }
+  function hideTimeline(){
+    timelineVisible=false; tlWrap.classList.remove('on');
+    document.body.classList.remove('tl-open');
+    resetTimeline(); updateTimeBtn();
+  }
+  function toggleTimeline(){ timelineVisible ? hideTimeline() : showTimeline(); }
+  function updateTimeBtn(){
+    var b=document.getElementById('time-toggle');
+    if(b) b.innerHTML='[ '+(timelineVisible?'◉ <b>TEMPO</b>':'<span style="opacity:.55">TEMPO</span>')+' ]';
+  }
+  var tlClose=document.getElementById('tl-close');
+  if(tlClose) tlClose.addEventListener('click', hideTimeline);
+
+  // ── J4-A: voice — read the selected doc's summary (pt-BR) + Siri-style waveform ──
+  // speechSynthesis is native and runs OFFLINE (the OS voice engine); zero bytes added.
+  var synth = window.speechSynthesis || null;
+  var ttsVoice = null, speaking = false;
+  function pickVoice(){
+    if(!synth) return;
+    var vs = synth.getVoices() || [];
+    ttsVoice = vs.filter(function(v){ return /pt[-_]?BR/i.test(v.lang); })[0]
+            || vs.filter(function(v){ return /^pt/i.test(v.lang); })[0] || null;
+  }
+  if(synth){ pickVoice(); if('onvoiceschanged' in synth) synth.onvoiceschanged = pickVoice; }
+
+  function markRead(on){ var b=readout.querySelector('.rd-read'); if(b) b.classList.toggle('speaking', on); }
+  function speakNode(n){
+    if(!synth || !n) return;
+    synth.cancel();
+    var txt = (n.title || n.id) + '. ' + (n.summary || 'Sem resumo disponível.');
+    var u = new SpeechSynthesisUtterance(txt);
+    u.lang = 'pt-BR'; if(ttsVoice) u.voice = ttsVoice; u.rate = 1.02; u.pitch = 1;
+    u.onstart = function(){ speaking=true; markRead(true); startWave(); startLoop(); };
+    u.onend   = function(){ speaking=false; markRead(false); stopWave(); };
+    u.onerror = function(){ speaking=false; markRead(false); stopWave(); };
+    synth.speak(u);
+  }
+  function stopSpeaking(){ if(synth) synth.cancel(); speaking=false; markRead(false); stopWave(); }
+  // native `synth.speaking` covers the gap between speak() and onstart firing
+  function isSpeaking(){ return speaking || !!(synth && synth.speaking); }
+
+  // Siri waveform — summed attenuated sines; amplitude eases in/out with `speaking`.
+  var waveCanvas=document.getElementById('wave'), wctx=waveCanvas.getContext('2d');
+  var waveRaf=0, waveAmp=0, waveTarget=0, wavePhase=0, wW=0, wH=0;
+  function sizeWave(){
+    var d=window.devicePixelRatio||1;
+    wW=waveCanvas.clientWidth||W; wH=waveCanvas.clientHeight||110;
+    waveCanvas.width=Math.max(1,Math.round(wW*d)); waveCanvas.height=Math.max(1,Math.round(wH*d));
+    wctx.setTransform(d,0,0,d,0,0);
+  }
+  var waveMode='speak';                                        // 'speak' (cyan) | 'listen' (amber)
+  function startWave(m){
+    waveMode = m || 'speak';
+    waveTarget=1; waveCanvas.hidden=false; sizeWave();
+    requestAnimationFrame(function(){ waveCanvas.classList.add('on'); });
+    if(reduceMotion){ waveAmp=0.55; drawWave(); return; }     // static crest, no loop
+    if(!waveRaf) waveRaf=requestAnimationFrame(waveLoop);
+  }
+  function stopWave(){
+    waveTarget=0;
+    if(reduceMotion){ waveAmp=0; drawWave(); waveCanvas.classList.remove('on'); waveCanvas.hidden=true; }
+  }
+  function waveLoop(){
+    waveAmp += (waveTarget-waveAmp)*0.12; wavePhase += 0.19;
+    drawWave();
+    if(waveAmp>0.01 || waveTarget>0){ waveRaf=requestAnimationFrame(waveLoop); }
+    else { waveRaf=0; waveCanvas.classList.remove('on'); setTimeout(function(){ if(!speaking && !listening) waveCanvas.hidden=true; }, 320); }
+  }
+  function drawWave(){
+    if(!wW) sizeWave();
+    wctx.clearRect(0,0,wW,wH);
+    var mid=wH*0.6, cols = waveMode==='listen' ? ['#FFB84D','#FFD08A','#FF9F45'] : ['#38E1FF','#7FD4FF','#59B7FF'];
+    wctx.globalCompositeOperation='lighter';
+    for(var c=0;c<cols.length;c++){
+      var amp=waveAmp*(wH*0.34)*(1-c*0.24), speed=1+c*0.42;
+      wctx.beginPath();
+      for(var x=0;x<=wW;x+=2){
+        var xn=(x/wW)*4-2, att=Math.pow(2/(2+xn*xn),3);        // SiriWave global attenuation
+        var y=mid+amp*att*Math.sin(xn*3*speed - wavePhase*speed);
+        if(x===0) wctx.moveTo(x,y); else wctx.lineTo(x,y);
+      }
+      wctx.strokeStyle=rgba(cols[c], 0.5-c*0.13); wctx.lineWidth=2.2; wctx.stroke();
+    }
+    wctx.globalCompositeOperation='source-over';
+  }
+
+  // ── J4-B: listen (STT) — hold SPACE to talk → search + fly to the doc + read it ──
+  // Chrome's webkitSpeechRecognition uses a REMOTE Google service → needs network. The
+  // rest of the HUD stays offline; this is a documented, opt-in degradation.
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  var recog=null, listening=false;
+  function bestMatch(q){
+    q=norm(q); if(!q) return null;
+    var words=q.split(/\s+/).filter(Boolean), best=null, bestScore=0;
+    for(var i=0;i<nodes.length;i++){ var n=nodes[i];
+      var title=norm(n.title), sum=norm(n.summary), s=0;
+      for(var w=0;w<words.length;w++){ var wd=words[w];
+        if(title.indexOf(wd)>=0) s+=3; else if(sum.indexOf(wd)>=0) s+=1;
+      }
+      if(title===q) s+=6;
+      if(s>bestScore){ bestScore=s; best=n; }
+    }
+    return bestScore>0 ? best : null;
+  }
+  function actOnTranscript(text){
+    if(!text) return;
+    var n=bestMatch(text);
+    if(n){
+      searchEl.value=''; searchEl.dispatchEvent(new Event('input'));    // clear the live filter
+      focusNode(n.id);                                                  // camera flies to the winner
+      setTimeout(function(){ speakNode(n); }, 650);                     // then read it aloud
+    } else {
+      searchEl.value=text; searchEl.dispatchEvent(new Event('input'));  // no strong match → leave it filtering
+    }
+  }
+  function startListen(){
+    if(!SR || listening) return;
+    try{ recog=new SR(); }catch(e){ return; }
+    recog.lang='pt-BR'; recog.interimResults=true; recog.continuous=false; recog.maxAlternatives=1;
+    var finalText='';
+    recog.onstart=function(){ listening=true; startWave('listen'); };
+    recog.onresult=function(ev){
+      var interim='';
+      for(var i=ev.resultIndex;i<ev.results.length;i++){
+        var r=ev.results[i]; if(r.isFinal) finalText+=r[0].transcript; else interim+=r[0].transcript;
+      }
+      searchEl.value=(finalText||interim).trim();                        // live transcript in the search box
+      searchEl.dispatchEvent(new Event('input'));
+    };
+    recog.onerror=function(){ listening=false; stopWave(); };
+    recog.onend=function(){ listening=false; stopWave(); actOnTranscript((finalText||searchEl.value).trim()); };
+    try{ recog.start(); }catch(e){ listening=false; }
+  }
+  function stopListen(){ if(recog && listening){ try{ recog.stop(); }catch(e){} } }
+
+  // ── J4-C: wake word "Jarvis" (opt-in, online, experimental) ──────────────────
+  // Continuous webkitSpeechRecognition listening for "jarvis"/"cérebro" → fires a listen
+  // capture. OFF by default (always-listening + remote service). True offline wake word
+  // (Picovoice/whisper.cpp) is out of scope without an access key.
+  var wakeWordOn=false, wakeRecog=null;
+  function startWakeWord(){
+    if(!SR || wakeRecog) return;
+    try{ wakeRecog=new SR(); }catch(e){ wakeWordOn=false; return; }
+    wakeRecog.lang='pt-BR'; wakeRecog.interimResults=false; wakeRecog.continuous=true;
+    wakeRecog.onresult=function(ev){
+      for(var i=ev.resultIndex;i<ev.results.length;i++){
+        var t=norm(ev.results[i][0].transcript);
+        if(/\bjarvis\b|\bcerebro\b/.test(t)){ flashWake(); if(!listening) startListen(); break; }
+      }
+    };
+    wakeRecog.onerror=function(){};
+    wakeRecog.onend=function(){ if(wakeWordOn){ try{ wakeRecog.start(); }catch(e){} } };   // keep it alive
+    try{ wakeRecog.start(); }catch(e){ wakeWordOn=false; }
+  }
+  function stopWakeWord(){ var r=wakeRecog; wakeRecog=null; if(r){ try{ r.stop(); }catch(e){} } }
+  function toggleWakeWord(){ if(!SR) return; wakeWordOn=!wakeWordOn; wakeWordOn?startWakeWord():stopWakeWord(); updateWakeBtn(); }
+  function flashWake(){ searchEl.classList.add('wake'); setTimeout(function(){ searchEl.classList.remove('wake'); }, 600); }
+  function updateWakeBtn(){ var b=document.getElementById('wake-toggle'); if(b) b.innerHTML='[ '+(wakeWordOn?'◉ <b>JARVIS</b>':'<span style="opacity:.6">JARVIS</span>')+' ]'; }
 
   // ── pointer: pan (drag) / hover / click-select / wheel-zoom ─────────────────
   var isDown=false, moved=0, downX=0, downY=0, downVX=0, downVY=0, pid=null;
@@ -962,7 +1685,7 @@
       n.match = hay.indexOf(q) !== -1;
       if(n.match) matchCount++;
     }
-    updateTelemetry(); invalidate(); render();
+    updateTelemetry(); invalidate(); render(); refresh3D();
   });
   searchEl.addEventListener('keydown', function(ev){
     // M3: stop the Escape from also reaching the document handler (which would
@@ -995,32 +1718,73 @@
     return tally;
   }
   function orderedCats(){
+    var present=categoryTally();
     if(colorMode==='status'){
       var order=['implementado','parcialmente-implementado','legado','resolvido','planejado','proposta-futura','null'];
-      return order.filter(function(k){ return categoryTally().has(k); });
+      return order.filter(function(k){ return present.has(k); });
+    }
+    if(colorMode==='age'){
+      var aorder=['fresh','aging','stale','none'];
+      return aorder.filter(function(k){ return present.has(k); });
     }
     var forder=['architecture','features','operations','incidents','runbooks','superpowers','roadmap','subagentic-use','root','archive'];
-    var present=categoryTally();
     return forder.filter(function(k){ return present.has(k); });
   }
+  var MODE_LABEL={folder:'FOLDER',status:'STATUS',age:'AGE'};
+  // entering/leaving age mode: (re)draw the health ring, toggle its visibility + the unit tag,
+  // and kick the render loop so the flicker animates.
+  function onColorModeChange(){
+    if(colorMode==='age'){
+      updateFlickerCount();
+      if(healthWrap){ healthWrap.hidden=false; drawHealth(); }
+      if(unitEl) unitEl.style.visibility='hidden';
+      startLoop();
+    } else {
+      if(healthWrap) healthWrap.hidden=true;
+      if(unitEl) unitEl.style.visibility='';
+    }
+  }
+  // set the colour mode directly (segmented control, no cycling)
+  function setColorMode(m){
+    if(colorMode===m) return;
+    colorMode=m; activeCat=null; onColorModeChange();
+    buildLegend(); updateTelemetry(); invalidate(); render(); refresh3D();
+  }
+  function section(eyebrowHtml){
+    var s=el('div','dk-sec'), e=el('div','dk-eyebrow'); e.innerHTML=eyebrowHtml; s.appendChild(e); return s;
+  }
+  function segmented(cls, options, isOn, onPick){    // options: [[value,label],...]
+    var seg=el('div','seg '+cls);
+    options.forEach(function(o){
+      var b=el('button',null,o[1]); if(isOn(o[0])) b.classList.add('on');
+      b.addEventListener('click', function(){ onPick(o[0]); });
+      seg.appendChild(b);
+    });
+    return seg;
+  }
+  // Control Deck — left sidebar. One organised surface for render / colour / layers / audio.
   function buildLegend(){
     var tally = categoryTally();
     legendEl.innerHTML='';
-    var head=el('div','lg-head');
-    var toggle=el('button','lg-toggle');
-    toggle.innerHTML = '[ COLOR // <b>'+(colorMode==='folder'?'FOLDER':'STATUS')+'</b> ]';
-    toggle.addEventListener('click', function(){
-      colorMode = (colorMode==='folder') ? 'status' : 'folder';
-      activeCat = null;
-      buildLegend(); updateTelemetry(); invalidate(); render();
-    });
-    head.appendChild(toggle);
-    head.appendChild(el('span','lg-hint', activeCat? 'isolando → clique p/ limpar' : 'clique p/ isolar'));
-    legendEl.appendChild(head);
+    var scroll = el('div','dk-scroll');
 
+    if(canGL){                                        // RENDER (2D | 3D)
+      var sr = section('Render');
+      sr.appendChild(segmented('dk-render-seg', [['2d','2D'],['3d','3D']],
+        function(v){ return mode===v; },
+        function(v){ v==='3d'?enter3D():exit3D(); }));
+      scroll.appendChild(sr);
+    }
+
+    var sc = section('Cor');                          // COLOR (folder | status | age)
+    sc.appendChild(segmented('dk-color-seg', [['folder','Pasta'],['status','Status'],['age','Idade']],
+      function(v){ return colorMode===v; }, setColorMode));
+    scroll.appendChild(sc);
+
+    var sl = section(activeCat ? 'Camadas · <span class="accent">isolando</span>' : 'Camadas');   // LAYERS legend
     var items=el('div','lg-items');
-    var pal = colorMode==='status' ? STATUS_COLORS : FOLDER_COLORS;
-    var fb  = colorMode==='status' ? STATUS_FALLBACK : FOLDER_FALLBACK;
+    var pal = colorMode==='status' ? STATUS_COLORS : (colorMode==='age' ? AGE_COLORS : FOLDER_COLORS);
+    var fb  = colorMode==='status' ? STATUS_FALLBACK : (colorMode==='age' ? AGE_FALLBACK : FOLDER_FALLBACK);
     orderedCats().forEach(function(cat){
       var color = pal[cat] || fb;
       var item = el('div','lg-item');
@@ -1029,23 +1793,95 @@
       if(activeCat!=null && activeCat!==cat) item.classList.add('muted');
       if(activeCat===cat) item.classList.add('active');
       var sw=el('span','sw'); sw.style.color=color; sw.style.background=color; item.appendChild(sw);
-      var name = colorMode==='status' ? statusLabel(cat==='null'?null:cat) : folderLabel(cat);
+      var name = colorMode==='status' ? statusLabel(cat==='null'?null:cat)
+               : (colorMode==='age' ? (AGE_LABEL[cat]||cat) : folderLabel(cat));
       item.appendChild(el('span','lbl',name));
       item.appendChild(el('span','n',String(tally.get(cat)||0)));
-      function toggleCat(){ activeCat = (activeCat===cat) ? null : cat; buildLegend(); invalidate(); render(); }
+      function toggleCat(){ activeCat = (activeCat===cat) ? null : cat; buildLegend(); invalidate(); render(); refresh3D(); }
       item.addEventListener('click', toggleCat);
       item.addEventListener('keydown', function(ev){ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); toggleCat(); } });
       items.appendChild(item);
     });
-    legendEl.appendChild(items);
+    sl.appendChild(items);
+    scroll.appendChild(sl);
+
+    var st = section('Tempo');                        // TIME-LAPSE reveal
+    var tb=el('button','lg-toggle'); tb.id='time-toggle';
+    tb.innerHTML='[ '+(timelineVisible?'◉ <b>TEMPO</b>':'<span style="opacity:.55">TEMPO</span>')+' ]';
+    tb.title='revela o player de time-lapse (crescimento do cérebro no tempo)';
+    tb.addEventListener('click', toggleTimeline);
+    st.appendChild(tb);
+    scroll.appendChild(st);
+
+    var sa = section('Áudio');                        // AUDIO (hum + voice)
+    var au = el('div','dk-audio');
+    var sb=el('button','lg-toggle'); sb.id='sound-toggle';
+    sb.innerHTML='[ '+(soundOn?'◉ <b>SOM</b>':'<span style="opacity:.55">SOM</span>')+' ]';
+    sb.title='som ambiente — hum do arc reactor';
+    sb.addEventListener('click', toggleSound);
+    au.appendChild(sb);
+    if(SR){
+      var wb=el('button','lg-toggle'); wb.id='wake-toggle';
+      wb.innerHTML='[ '+(wakeWordOn?'◉ <b>JARVIS</b>':'<span style="opacity:.55">JARVIS</span>')+' ]';
+      wb.title='wake word: dizer "Jarvis" ativa a escuta (experimental, usa rede)';
+      wb.addEventListener('click', toggleWakeWord);
+      au.appendChild(wb);
+    }
+    sa.appendChild(au);
+    if(SR) sa.appendChild(el('div','dk-hint','segure ESPAÇO p/ falar · L lê'));
+    scroll.appendChild(sa);
+
+    legendEl.appendChild(scroll);
+  }
+
+  // ── J3: arc-reactor health ring — % of docs verified in the last 90 days ─────
+  var healthWrap = document.getElementById('health');
+  var healthCanvas = healthWrap ? healthWrap.querySelector('canvas') : null;
+  var unitEl = document.getElementById('unit');
+  function drawHealth(){
+    if(!healthCanvas) return;
+    var total=nodes.length, bands={fresh:0,aging:0,stale:0,none:0};
+    for(var i=0;i<nodes.length;i++) bands[ageBand(nodes[i])]++;
+    var pct = total ? Math.round(100*(bands.fresh+bands.aging)/total) : 0;
+    healthWrap.title = 'SAÚDE DA DOC · '+pct+'% verificada há <90d\n<30d: '+bands.fresh+
+      '   ·   30–90d: '+bands.aging+'   ·   >90d: '+bands.stale+'   ·   sem data: '+bands.none;
+    var S=128, g=healthCanvas.getContext('2d'), cx=S/2, cy=S/2, R=48, a0=-Math.PI/2;
+    g.clearRect(0,0,S,S);
+    g.lineCap='round';
+    g.lineWidth=6; g.strokeStyle='rgba(120,170,255,0.16)';                 // track
+    g.beginPath(); g.arc(cx,cy,R,0,6.2832); g.stroke();
+    g.save(); g.shadowColor='rgba(56,225,255,0.75)'; g.shadowBlur=10;      // progress + glow
+    g.lineWidth=6; g.strokeStyle='#38E1FF';
+    g.beginPath(); g.arc(cx,cy,R,a0,a0+6.2832*(pct/100)); g.stroke(); g.restore();
+    g.lineWidth=1; g.strokeStyle='rgba(56,225,255,0.32)';                  // inner bezel
+    g.beginPath(); g.arc(cx,cy,R-9,0,6.2832); g.stroke();
+    g.fillStyle='#EAF2FF'; g.textAlign='center'; g.textBaseline='middle';
+    g.font='600 27px ui-monospace,"JetBrains Mono",Consolas,monospace';
+    g.fillText(pct+'%', cx, cy-3);
+    g.fillStyle='#7080A0'; g.font='600 9px ui-monospace,monospace';
+    g.fillText('<90D', cx, cy+16);
   }
 
   // ── global keys ─────────────────────────────────────────────────────────────
   document.addEventListener('keydown', function(ev){
+    if(ev.target && ev.target.id==='search') return;       // don't hijack typing in the search box
     if(ev.key==='Escape'){
+      if(isSpeaking()){ stopSpeaking(); return; }           // J4-A: first Esc silences the voice
       if(selected){ deselect(); return; }
+      if(constellation){ clearConstellation(); return; }   // J1: clear deep-link constellation
+      if(timelinePlaying || timelineT!==null){ resetTimeline(); return; }   // J2: back to present
       if(activeCat!=null){ activeCat=null; buildLegend(); invalidate(); render(); return; }
     }
+    if((ev.key==='l'||ev.key==='L') && selected){           // J4-A: read the selected doc aloud
+      ev.preventDefault(); isSpeaking() ? stopSpeaking() : speakNode(selected);
+    }
+    if(ev.key==='3'){ ev.preventDefault(); toggleMode(); }   // J5: toggle 2D ↔ 3D galaxy
+    if(ev.key===' ' && !ev.repeat && SR && !(bootEl && !bootEl.hidden)){   // J4-B: hold Space to talk
+      ev.preventDefault(); startListen();
+    }
+  });
+  document.addEventListener('keyup', function(ev){
+    if(ev.key===' ' && listening){ ev.preventDefault(); stopListen(); }   // J4-B: release → process
   });
 
   // ── ambient particle field — its own light canvas behind the graph. A very cheap
@@ -1089,6 +1925,229 @@
   function stopParticles(){ if(particleRaf){ cancelAnimationFrame(particleRaf); particleRaf=0; } }
   document.addEventListener('visibilitychange', function(){ if(document.hidden) stopParticles(); else startParticles(); });
 
+  // ── J5: 3D galaxy mode (three + 3d-force-graph + UnrealBloomPass, via BRAINGL) ──
+  var mode = '2d';                      // '2d' | '3d'
+  var g3dEl = document.getElementById('graph3d');
+  var Graph3D = null, gnodes = null, glinks = null, bloomPass = null;
+  var GL = (typeof BRAINGL !== 'undefined') ? BRAINGL : null;
+
+  function webglOK(){
+    try{ var c=document.createElement('canvas');
+      return !!(window.WebGLRenderingContext && (c.getContext('webgl')||c.getContext('experimental-webgl'))); }
+    catch(e){ return false; }
+  }
+  var canGL = !!GL && webglOK();
+
+  // FG3D mutates x/y/z on its node objects — give it COPIES, never our nodes (whose n.x/n.y
+  // hold the 2D layout). Keep a .ref back-pointer for colour/visibility/state lookups.
+  function build3DData(){
+    gnodes = nodes.map(function(n){ return { id:n.id, ref:n }; });
+    var gi = new Map(gnodes.map(function(g){ return [g.id, g]; }));
+    glinks = edges.filter(function(e){ return gi.has(e.source)&&gi.has(e.target); })
+                  .map(function(e){ return { source:e.source, target:e.target }; });
+  }
+  function node3DVisible(gn){
+    var n = gn && gn.ref; if(!n) return false;
+    if(!bornBy(n)) return false;                                     // J2 timeline
+    if(activeQuery && !n.match) return false;                        // search
+    if(activeCat!=null && nodeCat(n)!==activeCat) return false;      // legend isolation
+    if(constellation && !constellation.ids.has(n.id)) return false;  // J1 deep-link → only the constellation
+    return true;
+  }
+  function link3DVisible(l){
+    var a = (l.source && typeof l.source==='object') ? l.source : null;
+    var b = (l.target && typeof l.target==='object') ? l.target : null;
+    if(!a || !b) return true;                                        // pre-layout (ids) → let it show
+    return node3DVisible(a) && node3DVisible(b);
+  }
+  function warpTo(gn){
+    if(gn.x==null) return;
+    var dist=90, h=Math.hypot(gn.x, gn.y, gn.z||0.0001)||1, r=1+dist/h;
+    Graph3D.cameraPosition({ x:gn.x*r, y:gn.y*r, z:(gn.z||0)*r }, { x:gn.x, y:gn.y, z:gn.z||0 }, 1400);
+  }
+
+  function init3D(){
+    if(Graph3D || !canGL) return;
+    build3DData();
+    var THREE = GL.THREE;
+    Graph3D = GL.ForceGraph3D()(g3dEl)
+      .graphData({ nodes:gnodes, links:glinks })
+      .backgroundColor('rgba(5,6,10,0)')                 // transparent → the CSS aurora shows through
+      .showNavInfo(false)
+      .cooldownTime(4000)                                // settle in ~4s (default 15s) → auto-fit sooner
+      .nodeRelSize(4)
+      .nodeVal(function(gn){ return 1 + gn.ref.deg*0.7; })
+      .nodeColor(function(gn){ return nodeColor(gn.ref); })
+      .nodeOpacity(0.9)
+      .nodeResolution(12)
+      .nodeVisibility(node3DVisible)
+      .linkColor(function(){ return 'rgba(126,176,255,0.34)'; })
+      .linkOpacity(0.5)
+      .linkWidth(0.35)
+      .linkVisibility(link3DVisible)
+      .linkDirectionalParticles(2)
+      .linkDirectionalParticleWidth(1.1)
+      .linkDirectionalParticleSpeed(0.006)
+      .linkDirectionalParticleColor(function(){ return '#38E1FF'; })
+      .onNodeClick(function(gn){ warpTo(gn); selectNode(gn.ref); refresh3D(); })
+      .onNodeHover(function(gn){ g3dEl.style.cursor = gn ? 'pointer' : 'grab'; })
+      // frame the whole galaxy once the force layout settles (unless a deep-link is framing it)
+      .onEngineStop(function(){ if(mode==='3d' && !constellation && !didAutoFit3D){ didAutoFit3D=true; try{ Graph3D.zoomToFit(900, 60); }catch(e){} } });
+    // real bloom → bright nodes bloom into energy orbs
+    bloomPass = new GL.UnrealBloomPass(new THREE.Vector2(W||1200, H||800), 1.35, 0.8, 0.0);
+    Graph3D.postProcessingComposer().addPass(bloomPass);
+  }
+  var didAutoFit3D = false;
+
+  function refresh3D(){
+    if(!Graph3D || mode!=='3d') return;
+    Graph3D.nodeColor(Graph3D.nodeColor())            // re-trigger the colour + visibility accessors
+           .nodeVisibility(node3DVisible)
+           .linkVisibility(link3DVisible);
+  }
+
+  function enter3D(){
+    if(mode==='3d' || !canGL) return;
+    mode='3d'; init3D();
+    Graph3D.width(W).height(H);
+    g3dEl.classList.add('on'); canvas.style.display='none';
+    Graph3D.resumeAnimation(); refresh3D();
+    try{ localStorage.setItem('brainMode','3d'); }catch(e){}
+    updateModeChip();
+  }
+  function exit3D(){
+    if(mode!=='3d') return;
+    mode='2d';
+    if(Graph3D) Graph3D.pauseAnimation();
+    g3dEl.classList.remove('on'); canvas.style.display='';
+    invalidate(); render(); startLoop();
+    try{ localStorage.setItem('brainMode','2d'); }catch(e){}
+    updateModeChip();
+  }
+  function toggleMode(){ if(!canGL) return; mode==='3d' ? exit3D() : enter3D(); }
+  function updateModeChip(){                          // reflect mode in the render segmented control
+    var seg=legendEl.querySelector('.dk-render-seg');
+    if(seg){ var bs=seg.querySelectorAll('button');
+      if(bs[0]) bs[0].classList.toggle('on', mode==='2d');
+      if(bs[1]) bs[1].classList.toggle('on', mode==='3d'); }
+  }
+
+  // ── J6: cinema — arc-reactor hum (WebAudio synth, zero asset) + boot + attract ──
+  var actx=null, humGain=null, humNodes=[], soundOn=false;
+  function initAudio(){
+    if(actx) return actx;
+    var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return null;
+    try{ actx=new AC(); }catch(e){ actx=null; }
+    return actx;
+  }
+  function startHum(){
+    if(reduceMotion || humNodes.length) return;
+    if(!initAudio()) return;
+    if(actx.state==='suspended'){ try{ actx.resume(); }catch(e){} }
+    var t=actx.currentTime;
+    humGain=actx.createGain(); humGain.gain.value=0.0001; humGain.connect(actx.destination);
+    var o1=actx.createOscillator(); o1.type='sine'; o1.frequency.value=55;   // fundamental
+    var o2=actx.createOscillator(); o2.type='sine'; o2.frequency.value=110;  // octave
+    var g2=actx.createGain(); g2.gain.value=0.4; o1.connect(humGain); o2.connect(g2); g2.connect(humGain);
+    var buf=actx.createBuffer(1, actx.sampleRate*2, actx.sampleRate), d=buf.getChannelData(0);
+    for(var i=0;i<d.length;i++) d[i]=Math.random()*2-1;                       // noise bed
+    var noise=actx.createBufferSource(); noise.buffer=buf; noise.loop=true;
+    var lp=actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=170;
+    var ng=actx.createGain(); ng.gain.value=0.13; noise.connect(lp); lp.connect(ng); ng.connect(humGain);
+    var lfo=actx.createOscillator(); lfo.type='sine'; lfo.frequency.value=0.11; // slow breathing
+    var lfoG=actx.createGain(); lfoG.gain.value=0.03; lfo.connect(lfoG); lfoG.connect(humGain.gain);
+    o1.start(t); o2.start(t); noise.start(t); lfo.start(t);
+    humNodes=[o1,o2,noise,lfo];
+    try{ humGain.gain.exponentialRampToValueAtTime(0.10, t+2.6); }catch(e){}   // rise to ambient ~-18dB
+    soundOn=true; try{ localStorage.setItem('brainSound','on'); }catch(e){} updateSoundBtn();
+  }
+  function stopHum(){
+    soundOn=false; try{ localStorage.setItem('brainSound','off'); }catch(e){} updateSoundBtn();
+    if(!actx||!humNodes.length) return;
+    var t=actx.currentTime, nodes=humNodes; humNodes=[];
+    try{ humGain.gain.cancelScheduledValues(t); humGain.gain.setValueAtTime(humGain.gain.value,t);
+      humGain.gain.exponentialRampToValueAtTime(0.0001, t+0.6); }catch(e){}
+    setTimeout(function(){ nodes.forEach(function(n){ try{ n.stop(); }catch(e){} }); }, 700);
+  }
+  function toggleSound(){ soundOn ? stopHum() : startHum(); }
+  function tick(){                                          // subtle materialise blip
+    if(!actx||!soundOn||reduceMotion) return;
+    var t=actx.currentTime;
+    var o=actx.createOscillator(); o.type='sine'; o.frequency.value=1180;
+    var g=actx.createGain(); g.gain.value=0.0001; o.connect(g); g.connect(actx.destination);
+    try{ g.gain.exponentialRampToValueAtTime(0.022, t+0.006); g.gain.exponentialRampToValueAtTime(0.0001, t+0.10); }catch(e){}
+    o.start(t); o.stop(t+0.11);
+  }
+  function updateSoundBtn(){
+    var b=document.getElementById('sound-toggle');
+    if(b) b.innerHTML='[ '+(soundOn?'◉ <b>SOM</b>':'<span style="opacity:.6">SOM</span>')+' ]';
+  }
+  function armSoundGesture(){                               // autoplay: resume pref on first gesture
+    var once=function(){ startHum(); window.removeEventListener('pointerdown',once); window.removeEventListener('keydown',once); };
+    window.addEventListener('pointerdown', once); window.addEventListener('keydown', once);
+  }
+
+  // boot overlay — one-time cinematic intro (remembered via localStorage)
+  var bootEl=document.getElementById('boot');
+  function dismissBoot(withSound){
+    bootEl.classList.add('out');
+    setTimeout(function(){ bootEl.hidden=true; }, 640);
+    try{ localStorage.setItem('brainBooted','1'); }catch(e){}
+    if(withSound && !reduceMotion){
+      startHum();
+      if(mode==='2d') runEntry();                          // replay the materialise now that we're on screen
+      for(var i=0;i<14;i++){ (function(k){ setTimeout(tick, 140 + k*52); })(i); }   // ticks over the entry
+    }
+    resetIdle();
+  }
+  function maybeShowBoot(){
+    var booted=false; try{ booted=localStorage.getItem('brainBooted')==='1'; }catch(e){}
+    if(booted || reduceMotion){
+      bootEl.hidden=true;
+      try{ if(localStorage.getItem('brainSound')==='on') armSoundGesture(); }catch(e){}   // restore hum on next gesture
+      return;
+    }
+    bootEl.hidden=false;
+    document.getElementById('boot-go').addEventListener('click', function(){ dismissBoot(true); });
+    document.getElementById('boot-skip').addEventListener('click', function(){ dismissBoot(false); });
+  }
+
+  // attract mode — after 60s idle, tour the hubs + slow orbit; any input cancels
+  var ATTRACT_IDLE=60000, idleTimer=0, attracting=false, attractRaf=0, hubs=null, tourI=0, tourNext=0;
+  function resetIdle(){
+    if(attracting) stopAttract();
+    clearTimeout(idleTimer);
+    if(reduceMotion) return;
+    idleTimer=setTimeout(startAttract, ATTRACT_IDLE);
+  }
+  function startAttract(){
+    if(reduceMotion || attracting || (bootEl && !bootEl.hidden)) return;   // not while the boot overlay is up
+    attracting=true; tourI=0; tourNext=0;
+    hubs=nodes.slice().sort(function(a,b){ return b.deg-a.deg; }).slice(0,12);
+    if(mode==='3d' && Graph3D){ try{ var c=Graph3D.controls(); c.autoRotate=true; c.autoRotateSpeed=0.55; }catch(e){} }
+    attractRaf=requestAnimationFrame(attractStep);
+  }
+  function attractStep(now){
+    if(!attracting) return;
+    if(now>=tourNext){ var h=hubs[tourI%hubs.length]; tourI++; tourNext=now+8000; attractFocus(h); }
+    attractRaf=requestAnimationFrame(attractStep);
+  }
+  function attractFocus(h){
+    if(mode==='3d'){ var gn=gnodes&&gnodes[nodes.indexOf(h)]; if(gn) warpTo(gn); return; }
+    hovered=h; updateFocus(); updateTelemetry();
+    animateView(W/2 - h.x*view.scale, H/2 - h.y*view.scale);
+  }
+  function stopAttract(){
+    if(!attracting) return;
+    attracting=false; if(attractRaf){ cancelAnimationFrame(attractRaf); attractRaf=0; }
+    if(mode==='3d' && Graph3D){ try{ Graph3D.controls().autoRotate=false; }catch(e){} }
+    if(hovered){ hovered=null; updateFocus(); }
+  }
+  ['pointerdown','wheel','keydown','touchstart'].forEach(function(ev){
+    window.addEventListener(ev, resetIdle, { passive:true });
+  });
+  window.addEventListener('pointermove', function(){ if(attracting) resetIdle(); }, { passive:true });
+
   // ── boot ────────────────────────────────────────────────────────────────────
   function layout(){
     sizeCanvas();
@@ -1097,6 +2156,7 @@
     simulate(nodes, edges, { W:W||1200, H:H||800, iterations:360, rand:rng });
     if(!didFit){ fitView(); didFit=true; }
     invalidate(); runEntry();          // materialise the graph, then idle-freeze
+    applyHash();                       // J1: open on a deep-link constellation if the hash has one
   }
   var resizeT=0;
   window.addEventListener('resize', function(){
@@ -1106,7 +2166,10 @@
       // force sim would visibly drift it. Just re-size and re-fit (re-centre) for the
       // new dimensions; positions are preserved.
       sizeCanvas(); sizeParticles();
-      fitView();
+      if(Graph3D){ Graph3D.width(W).height(H); }            // J5: keep the galaxy sized to the window
+      if(!waveCanvas.hidden){ sizeWave(); drawWave(); }    // J4-A: keep the waveform crisp
+      // J1: keep a deep-link constellation framed on resize instead of re-fitting all nodes
+      fitView(constellation ? Array.from(constellation.ids, function(id){ return idIndex.get(id); }) : undefined);
       invalidate(); render();
       if(reduceMotion) drawParticles();
     }, 160);
@@ -1121,5 +2184,10 @@
   initParticles();
   startParticles();
   layout();
+  // J5: restore the last-used renderer (2D default; 3D only if WebGL + the vendor loaded)
+  try{ if(canGL && localStorage.getItem('brainMode')==='3d') enter3D(); }catch(e){}
+  // J6: one-time cinematic boot overlay (else arm sound-restore + start the idle→attract timer)
+  maybeShowBoot();
+  resetIdle();
 })();
 </script>

@@ -140,3 +140,13 @@ contava → 4 vs 2.
   `Detections.List` (modal), `aggregateCore` (/insights) e `daily_play_summary`
   (grid) — retornem **3**. Trava a regressão do "3 vs 5 vs 2".
 - `go build ./...`, `go vet` dos pacotes alterados: limpos.
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [F-124 — Recuperação de corte suprimido no reject-path (§18.2.2 v2c)](../superpowers/specs/2026-06-24-suppress-path-reattribution-design.md)
+- **Plano:** [F-124 — Reatribuição de corte suprimido — Plan](../superpowers/plans/2026-06-24-suppress-path-reattribution.md)

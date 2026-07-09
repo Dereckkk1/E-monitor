@@ -94,3 +94,13 @@ Dry-run contra o banco de dev (5.882 emissoras sem coordenada): **5.167
 geocodariam, 715 puladas, 0 falhas** — as puladas são majoritariamente
 emissoras não-brasileiras e regiões administrativas do DF. Testes unitários do
 pacote `geo` e testes de integração de `Create`/`Update` passando.
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Geocoding de emissoras — Design](../superpowers/specs/2026-05-27-geocoding-emissoras-design.md)
+- **Plano:** [Geocoding de emissoras — Implementation Plan](../superpowers/plans/2026-05-27-geocoding-emissoras.md)

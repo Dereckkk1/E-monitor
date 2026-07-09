@@ -223,3 +223,12 @@ npm run dev
 `docs/superpowers/specs/2026-05-18-not-found-page-design.md` — registra as
 decisões de mapeamento (JSX, rota fora do AppShell, deps a instalar) que
 guiaram a implementação.
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Tela 404 Radiocheck (Three.js) — Spec](../superpowers/specs/2026-05-18-not-found-page-design.md)

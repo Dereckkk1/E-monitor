@@ -140,3 +140,13 @@ isso apareciam mesmo quando os polígonos preenchiam tudo.
 - Sem testes de frontend automatizados (o projeto não tem test runner JS); a
   lógica de scope é coberta pelo teste do handler
   (`workers/internal/api/handlers/live_map_test.go`).
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Mapa ao Vivo — Design](../superpowers/specs/2026-05-27-live-map-design.md)
+- **Plano:** [Mapa ao Vivo — Implementation Plan](../superpowers/plans/2026-05-27-live-map.md)

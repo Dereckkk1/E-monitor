@@ -75,11 +75,16 @@ docs/
 | [material-similarity-warning.md](features/material-similarity-warning.md) | Alerta de duplicata por similaridade ≥50% no upload |
 | [override-time-window.md](features/override-time-window.md) | Faixa horária por célula em distribution_overrides + popover com herança inteligente |
 | [admin-system-overview.md](features/admin-system-overview.md) | Painel admin com health de toda a stack (infra + workers + streams + pipeline + atenção) |
+| [management-overview.md](features/management-overview.md) | Visão Gerencial `/management` — painel admin da operação inteira (KPIs cross-campanha + mapa + feed global ao vivo, filtros opcionais) |
 | [admin-monitoring.md](features/admin-monitoring.md) | Painel `/admin/monitoring` — telemetria HTTP (rotas/p95/erros/slow), identidades (IP × usuário com risco), Web Vitals, bloqueio de IP/usuário |
 | [admin-monitoring-user-journey.md](features/admin-monitoring-user-journey.md) | Aba `/admin/monitoring` → Jornada — fluxo de um usuário (telas/ações/horários por sessão), tradução rota→ação, sem backend novo |
 | [login-page.md](features/login-page.md) | Tela `/login` com hero cinematográfico (globo + pulsos rosa) + form claro |
 | [not-found-page.md](features/not-found-page.md) | Tela 404 fullscreen com cena Three.js (constellation map + torre wireframe + ondas de glitch) |
 | [campaign-reports.md](features/campaign-reports.md) | Menu unificado de relatórios (CSV consolidado/detalhado + PDF com logo E-monitor) em /campaigns, /detections, /reports/airtime |
+| [insights-dashboard.md](features/insights-dashboard.md) | Dashboard de veiculação `/insights` (admin + cliente) — KPIs + 4 charts + export PNG/PDF; investido/bonificação (pricing consolidado Modelo B) |
+| [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard; override em /campaigns + /insights + dashboard) |
+| [suggestions-board.md](features/suggestions-board.md) | Central de demandas interna `/admin/suggestions` (autor cria/acompanha, dev gerencia; thread + imagens S3 + board/lista) |
+| [daily-failures-digest-modal.md](features/daily-failures-digest-modal.md) | Modal de resumo diário de falhas (admin, 1×/dia no 1º load; leva pra /admin/station-failures) |
 | [operations-page.md](features/operations-page.md) | Página `/operations` — supervisor ao vivo (bytes, reconnects, stall restarts, min_hashes) com wire contract de `GET /workers` |
 | [connect-backoff-circuit-breaker.md](features/connect-backoff-circuit-breaker.md) | Backoff exponencial no respawn de stream que nunca conecta (IP bloqueado/URL morta) — para a sangria de connects que gerava ban de abuso (incidente jun/2026) |
 | [station-audience-age-ranges.md](features/station-audience-age-ranges.md) | Faixa etária da emissora vira 3 percentuais (18-24/25-49/50+); texto antigo preservado em `ageRangeLegado` |
@@ -127,6 +132,7 @@ docs/
 | Doc | Sobre |
 |-----|-------|
 | [follow-ups-fase2.md](roadmap/follow-ups-fase2.md) | Dívida técnica F-01 a F-121 (5 security fixes resolvidos, ~40 pendentes) |
+| [2026-07-09-docs-brain-jarvis.md](roadmap/2026-07-09-docs-brain-jarvis.md) | Plano "Jarvis" do docs-brain: 9 melhorias em 4 ondas (deep-link /cerebro→HUD, time-lapse, decay, voz, galáxia 3D, busca semântica offline, gaps estruturais, gestos) |
 | [2026-06-12-plano-remediacao-recall.md](roadmap/2026-06-12-plano-remediacao-recall.md) | Plano-mestre pós-incidente: 3 ondas (falhas silenciosas → recall do algoritmo → infra/processo), 13 tasks ordenadas |
 | [detection-evaluation-report.md](roadmap/detection-evaluation-report.md) | Avaliação E2E do matcher; recomendações 4.1/4.4/4.5/4.7 aplicadas |
 
@@ -149,3 +155,7 @@ Ver [runbooks/README.md](runbooks/README.md) para o índice. Cada alerta em `inf
 ## `superpowers/` — artefatos de planejamento
 
 Pasta gerenciada pelo workflow `superpowers:*`. Não editar manualmente — specs e plans são snapshots imutáveis de sessões de design/implementação.
+
+## `subagentic-use/` — orquestração de subagentes
+
+Guia de como delegar bem para sub-agentes (efeito/verbosidade/escopo explícitos): [Subagents-usage.md](subagentic-use/Subagents-usage.md). Referenciado pelo `CLAUDE.md` como leitura obrigatória antes de trabalhar com subagentes.

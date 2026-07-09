@@ -492,3 +492,14 @@ detecção duplicada por restart. Aceitável.
 - `migrations/0038_detection_audit_coverage.up.sql` — coluna `audit_coverage`.
 - `cmd/api/main.go` — lê `DISAMBIG_BY_COVERAGE`.
 - `frontend/src/pages/DetectionDetailPage.jsx` — "Cobertura do áudio (§9.9)".
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Plano:** [Version Disambiguation by Coverage — Plan](../superpowers/plans/2026-06-17-version-disambiguation-by-coverage.md)
+- **Plano:** [Co-fire Reattribution Dedup — Plan](../superpowers/plans/2026-06-30-cofire-reattribution-dedup.md)
+- **Spec:** [Guard anti-duplicata no §18.2.2-v2 (co-fire sting/spot)](../superpowers/specs/2026-06-30-cofire-reattribution-dedup-design.md)

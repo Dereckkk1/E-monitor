@@ -46,3 +46,13 @@ Faseado e reversível: migração 0041 + backfill 1:1 (flag OFF = idêntico) →
 
 - O recategorizador sincroniza a projeção **canônica** (`detection.campaign_id`). Com fan-out ON, recategorizar projeções cujo `detection.campaign_id` canônico difere da campanha projetada exige escopo sobre `detection_campaigns` (pendente — fazer antes de ligar a flag em larga escala).
 - Audit §9.9 testa contra UM `commercial_id` (o canônico); ver nota em [[evidence-audit]].
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [F-119 — Multi-atribuição (fan-out por tabela de ligação)](../superpowers/specs/2026-06-25-multi-attribution-f119-design.md)
+- **Plano:** [Multi-atribuição (F-119) — Implementation Plan](../superpowers/plans/2026-06-25-multi-attribution-f119.md)

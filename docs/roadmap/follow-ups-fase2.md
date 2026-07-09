@@ -387,3 +387,18 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-101** — Filtros de categoria na toolbar (ex: "Mostrar só células com déficit"). Útil pra investigar problemas rapidamente.
 - **F-102** — Export do relatório (CSV/PDF) com os totais + breakdown por (station, material, day) pra entregar ao cliente.
 - **F-103** — Indicador visual de "última atualização" da view (a `daily_play_summary` é live mas usuário não sabe). Mostrar timestamp do último refetch.
+
+
+---
+
+## Design & origem
+
+Specs e planos das fases que originaram o sistema (histórico de desenvolvimento):
+
+- **Fase 1 (PoC) — Spec:** [Radiocheck — PoC Fase 1 (Design)](../superpowers/specs/2026-05-05-radiocheck-poc-design.md)
+- **Fase 1 (PoC) — Plano:** [Radiocheck Phase 1 — Implementation Plan](../superpowers/plans/2026-05-05-radiocheck-poc-implementation.md)
+- **Fase 2 — Spec:** [Radiocheck Fase 2 — Design Spec](../superpowers/specs/2026-05-05-radiocheck-fase2-design.md)
+- **Fase 2 — Plano:** [Radiocheck Fase 2 — Implementation Plan](../superpowers/plans/2026-05-05-radiocheck-fase2-implementation.md)
+- **Execução:** [Prompt de execução — PoC (Fase 1)](../superpowers/EXECUTAR.md)
+- **Execução:** [Prompt de execução — Fase 2 (Hardening)](../superpowers/EXECUTAR-FASE2.md)
+- **Execução:** [Prompt de execução — Fixes PoC Fase 1](../superpowers/EXECUTAR-FIXES.md)

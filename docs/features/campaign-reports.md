@@ -188,3 +188,13 @@ página — é só o recorte do relatório.
 - Quebra paginada da tabela "Material × Emissora" com cabeçalho
   repetido em cada página (autotable já faz isso por padrão; só
   conferir visual em campanhas com 500+ linhas).
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Relatório Data e Hora — Spec](../superpowers/specs/2026-05-13-airtime-report-design.md)
+- **Plano:** [Relatório Data e Hora — Implementation Plan](../superpowers/plans/2026-05-13-airtime-report.md)

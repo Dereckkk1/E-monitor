@@ -32,3 +32,13 @@ A página `/detections` mostra as detecções de uma campanha em formato de **gr
 - [frontend/src/components/DetectionsCalendar.jsx](../../frontend/src/components/DetectionsCalendar.jsx) — grade emissoras × dias.
 - [frontend/src/components/DayDetailModal.jsx](../../frontend/src/components/DayDetailModal.jsx) — detalhamento diário com player de áudio.
 - [frontend/src/pages/detections/utils.js](../../frontend/src/pages/detections/utils.js) — helpers puros (range de dias, bucketização, formatação em fuso SP).
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Detections Calendar View — Design](../superpowers/specs/2026-05-06-detections-calendar-view-design.md)
+- **Plano:** [Detections Calendar View — Implementation Plan](../superpowers/plans/2026-05-06-detections-calendar-view.md)

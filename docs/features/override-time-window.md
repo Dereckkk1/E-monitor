@@ -124,3 +124,13 @@ de perda de dado: zero.
 ## Spec original
 
 [docs/superpowers/specs/2026-05-19-override-time-window-design.md](../superpowers/specs/2026-05-19-override-time-window-design.md)
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Override: recategorização + visibilidade + auto-conserto — Design](../superpowers/specs/2026-07-03-override-recat-and-visibility-design.md)
+- **Plano:** [Override: recategorização + visibilidade + auto-conserto — Plan](../superpowers/plans/2026-07-03-override-recat-and-visibility.md)

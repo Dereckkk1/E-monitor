@@ -202,3 +202,12 @@ The threshold lives in `sharing.SubsetThreshold` and is unit-tested in
   single SELECT (no JOIN in the hot path); the trade-off is that resetting
   the flag for one commercial requires touching every row of that
   commercial.
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Plano:** [Shared Hash Coverage — Implementation Plan](../superpowers/plans/2026-05-09-shared-hash-coverage.md)

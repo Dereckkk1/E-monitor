@@ -80,3 +80,13 @@ comum. Frontend: `useManagementOverview` (react-query, refetch 20s,
 É a consulta mais pesada do sistema. V1 = queries diretas sobre os índices
 existentes. Medir antes de otimizar; se necessário, cache curto ou tabela de
 agregação (não pré-otimizado).
+
+
+---
+
+## Design & origem
+
+Specs e planos que originaram esta doc (histórico de desenvolvimento):
+
+- **Spec:** [Visão Gerencial — Design](../superpowers/specs/2026-05-29-visao-gerencial-design.md)
+- **Plano:** [Visão Gerencial — Implementation Plan](../superpowers/plans/2026-05-29-visao-gerencial.md)

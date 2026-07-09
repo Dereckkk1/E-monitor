@@ -46,7 +46,7 @@ export function buildGraph(nodes) {
   }
   const outNodes = nodes.map((n) => ({
     id: n.id, title: n.title, folder: n.folder, status: n.status,
-    ultimaVerificacao: n.ultimaVerificacao, summary: n.summary,
+    ultimaVerificacao: n.ultimaVerificacao, createdAt: n.createdAt ?? null, summary: n.summary,
     headings: n.headings, codigoRelacionado: n.codigoRelacionado,
     outLinks: [...(out.get(n.id) || [])].sort(),
     backLinks: [...(back.get(n.id) || [])].sort(),

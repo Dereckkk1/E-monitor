@@ -129,3 +129,8 @@ alterados — só em ambientes de teste.
   - Saída de `pg_locks`.
   - Últimos 100 logs do scheduler.
   - Resultado do `psql` mostrando `updated_at` por emissora.
+
+## Ver também
+- [operations/calibration.md](../operations/calibration.md) — como a calibração por emissora funciona (§9.4) e é operada.
+- [operations/threshold-dynamic.md](../operations/threshold-dynamic.md) — threshold adaptativo derivado da calibração.
+- [runbooks/README.md](README.md) — índice dos runbooks.

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "counts": {
-    "docs": 190,
-    "edges": 299,
+    "docs": 191,
+    "edges": 344,
     "brokenLinks": 79
   },
   "nodes": [
@@ -12,6 +12,7 @@
       "folder": "root",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-15",
       "summary": "docs/ README.md                          — índice (criar) AUDIT-2026-05-15.md                — este relatório architecture/                      — descreve arquitetura conceitual design.md                        — design system compartil…",
       "headings": [
         "Metodologia",
@@ -51,6 +52,7 @@
       "folder": "root",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-03",
       "summary": "O núcleo do algoritmo é sólido — defesa UniqueScore de ponta a ponta, índice hot-swap atômico, threshold dinâmico por emissora, audit §9.9 com fail-open em erro de infra, projeção canônica atômica e o filtro ApprovedDetectionsFilter unif…",
       "headings": [
         "TL;DR — handoff pra implementação (leia isto primeiro)",
@@ -81,6 +83,7 @@
       "folder": "root",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-15",
       "summary": "Índice geral. Todo doc tem header YAML no topo com status, ultima-verificacao e codigo-relacionado. Use isso para saber se um doc ainda reflete o código antes de confiar nele.",
       "headings": [
         "Estrutura",
@@ -92,7 +95,8 @@
         "roadmap/ — follow-ups e planos de fase",
         "archive/ — histórico inativo",
         "runbooks/ — resposta a alertas",
-        "superpowers/ — artefatos de planejamento"
+        "superpowers/ — artefatos de planejamento",
+        "subagentic-use/ — orquestração de subagentes"
       ],
       "codigoRelacionado": [],
       "outLinks": [
@@ -116,12 +120,14 @@
         "docs/features/admin-system-overview.md",
         "docs/features/broadcaster-search.md",
         "docs/features/campaign-connection-step.md",
+        "docs/features/campaign-fixed-cpm.md",
         "docs/features/campaign-notification-emails.md",
         "docs/features/campaign-reports.md",
         "docs/features/campaign-wizard.md",
         "docs/features/cancelled-campaign-handling.md",
         "docs/features/client-deactivation.md",
         "docs/features/connect-backoff-circuit-breaker.md",
+        "docs/features/daily-failures-digest-modal.md",
         "docs/features/detections-calendar.md",
         "docs/features/detections-day-plan.md",
         "docs/features/detections-report-wysiwyg.md",
@@ -129,7 +135,9 @@
         "docs/features/evidence-local-retention.md",
         "docs/features/evidence-presigned-urls.md",
         "docs/features/geocoding-emissoras.md",
+        "docs/features/insights-dashboard.md",
         "docs/features/login-page.md",
+        "docs/features/management-overview.md",
         "docs/features/manual-airings-bulk-and-proof.md",
         "docs/features/material-fingerprint-pipeline.md",
         "docs/features/material-library.md",
@@ -141,6 +149,7 @@
         "docs/features/operations-page.md",
         "docs/features/override-time-window.md",
         "docs/features/station-audience-age-ranges.md",
+        "docs/features/suggestions-board.md",
         "docs/features/user-management.md",
         "docs/features/webhooks.md",
         "docs/incidents/incident-2026-05-09-jingle-falsepos.md",
@@ -170,14 +179,16 @@
         "docs/operations/vendor-reconciliation.md",
         "docs/operations/worker-commercial-reconciler.md",
         "docs/roadmap/2026-06-12-plano-remediacao-recall.md",
+        "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
         "docs/roadmap/detection-evaluation-report.md",
         "docs/roadmap/follow-ups-fase2.md",
-        "docs/runbooks/README.md"
+        "docs/runbooks/README.md",
+        "docs/subagentic-use/Subagents-usage.md"
       ],
       "backLinks": [
         "docs/superpowers/specs/2026-05-27-campaign-connection-step-design.md"
       ],
-      "wordCount": 1747
+      "wordCount": 1905
     },
     {
       "id": "docs/architecture/campaign-lifecycle.md",
@@ -185,6 +196,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-29",
+      "createdAt": "2026-05-07",
       "summary": "estados são equivalentes para o supervisor (worker desligado).",
       "headings": [
         "Estados",
@@ -233,6 +245,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Diretrizes de design, estrutura visual, componentes e micro-interacoes da plataforma Signalads.",
       "headings": [
         "1. O Padrão de Cores Core (Design Tokens - CRÍTICA)",
@@ -265,6 +278,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-19",
+      "createdAt": "2026-06-19",
       "summary": "Define o conjunto único de detecções que pode ser contado ou listado em qualquer número de veiculação visível ao usuário e cataloga toda query do sistema que toca esse número, com seu veredito de conformidade.",
       "headings": [
         "O conjunto \"aprovado\"",
@@ -274,7 +288,8 @@
         "Lê via dailyplaysummary (herda canônico)",
         "Exceções deliberadas",
         "Por que a divergência existia (caso ASAAS)",
-        "Validação"
+        "Validação",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/catalog/detection_filter.go",
@@ -286,7 +301,9 @@
         "migrations/0029_daily_summary_exclude_audit_rejected.up.sql"
       ],
       "outLinks": [
-        "docs/architecture/version-disambiguation.md"
+        "docs/architecture/version-disambiguation.md",
+        "docs/superpowers/plans/2026-06-24-suppress-path-reattribution.md",
+        "docs/superpowers/specs/2026-06-24-suppress-path-reattribution-design.md"
       ],
       "backLinks": [
         "docs/README.md",
@@ -296,7 +313,7 @@
         "docs/incidents/incident-2026-06-30-phantom-projection-reattribution.md",
         "docs/superpowers/specs/2026-06-24-suppress-path-reattribution-design.md"
       ],
-      "wordCount": 1036
+      "wordCount": 1073
     },
     {
       "id": "docs/architecture/distribution-rules.md",
@@ -304,6 +321,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-03",
+      "createdAt": "2026-05-11",
       "summary": "Documenta as regras de distribuicao (programado) e categorizacao de deteccoes introduzidas pelo Plano 1 — Foundations.",
       "headings": [
         "O que e uma \"regra de distribuicao\"",
@@ -353,6 +371,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-16",
+      "createdAt": "2026-05-15",
       "summary": "Camada de verificação determinística que roda sobre o clipe de evidência salvo antes de marcar a veiculação como confirmada. Implementa a invariante:",
       "headings": [
         "Quando o audit roda",
@@ -391,6 +410,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-09",
       "summary": "The previous design held the AAC evidence stream in an in-memory ring buffer (pkg/ringbuffer.ByteRing) keyed on time.Now() at the moment each chunk arrived from ffmpeg. That worked for the PoC but had three failure modes that began surfa…",
       "headings": [
         "Why this exists",
@@ -419,6 +439,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-07",
       "summary": "Documentação operacional do pipeline que gera fingerprints acústicos a partir do master de um comercial e os persiste em fingerprinthashes. Spec arquitetural completa: §7 do planoimplementacao.md.",
       "headings": [
         "Visão geral",
@@ -453,6 +474,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Documenta os padrões de botões, inputs e selects do Radiocheck. Qualquer novo elemento de formulário deve seguir essas convenções.",
       "headings": [
         "Tokens relevantes (index.css :root)",
@@ -485,6 +507,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-09",
       "summary": "Two commercials can share a snippet of audio — typically a sting, vinheta or brand jingle reused at the end of a longer spot. When the longer commercial plays on the air, the matching engine sees the shared snippet and may accumulate eno…",
       "headings": [
         "What it solves",
@@ -495,7 +518,8 @@
         "Re-running after edits",
         "Cost",
         "Subset / version-cut relationships",
-        "Known limits"
+        "Known limits",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/sharing/sharing.go",
@@ -504,7 +528,8 @@
         "migrations/0015_shared_hashes.up.sql"
       ],
       "outLinks": [
-        "docs/architecture/version-disambiguation.md"
+        "docs/architecture/version-disambiguation.md",
+        "docs/superpowers/plans/2026-05-09-shared-hash-coverage.md"
       ],
       "backLinks": [
         "docs/README.md",
@@ -514,7 +539,7 @@
         "docs/incidents/incident-2026-05-22-stale-master-catalog.md",
         "docs/incidents/incident-2026-06-15-shared-hash-density-regression.md"
       ],
-      "wordCount": 1230
+      "wordCount": 1253
     },
     {
       "id": "docs/architecture/system-architecture-overview.md",
@@ -522,6 +547,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-19",
+      "createdAt": "2026-06-19",
       "summary": "Visão visual de toda a arquitetura do Radiocheck/E-monitor. Os diagramas abaixo são Mermaid — renderizam no preview de Markdown do VSCode (extensão Markdown Preview Mermaid Support) e no GitHub.",
       "headings": [
         "1. Visão geral (container view)",
@@ -563,6 +589,7 @@
       "folder": "architecture",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-07-01",
+      "createdAt": "2026-07-01",
       "summary": "Gêmeos acústicos = dois materiais de mesma duração e áudio quase idêntico (mesmo clientid, mastersha256 diferente, ~90%+ compartilhado), tipicamente co-programados (ex.: incidente Milium — \"FESTIVAL DE INVERNO\" 30s com cortes 9/15/48/149…",
       "headings": [
         "Problema",
@@ -608,6 +635,7 @@
       "folder": "architecture",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-24",
+      "createdAt": "2026-05-07",
       "summary": "Documentação operacional do mecanismo que evita publicação duplicada quando duas versões do mesmo comercial (corte 30s e corte 60s) confirmam dentro de uma janela curta na mesma emissora.",
       "headings": [
         "Problema",
@@ -644,7 +672,8 @@
         "R-C. Buffer em memória é volátil",
         "Critério de aceite",
         "Migrations relacionadas",
-        "Arquivos chave"
+        "Arquivos chave",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/supervisor/disambiguation.go",
@@ -660,7 +689,10 @@
         "frontend/src/components/DayDetailModal.jsx"
       ],
       "outLinks": [
-        "docs/architecture/detection-count-consistency.md"
+        "docs/architecture/detection-count-consistency.md",
+        "docs/superpowers/plans/2026-06-17-version-disambiguation-by-coverage.md",
+        "docs/superpowers/plans/2026-06-30-cofire-reattribution-dedup.md",
+        "docs/superpowers/specs/2026-06-30-cofire-reattribution-dedup-design.md"
       ],
       "backLinks": [
         "docs/README.md",
@@ -676,7 +708,7 @@
         "docs/roadmap/follow-ups-fase2.md",
         "docs/superpowers/specs/2026-06-24-suppress-path-reattribution-design.md"
       ],
-      "wordCount": 3049
+      "wordCount": 3087
     },
     {
       "id": "docs/archive/prompt-fix-poc-fase1.md",
@@ -684,6 +716,7 @@
       "folder": "archive",
       "status": "legado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Este arquivo contém o prompt para uma sessão nova do Claude Code corrigir os bugs identificados via code review do PoC da Fase 1.",
       "headings": [
         "Prompt para colar na nova sessão"
@@ -701,6 +734,7 @@
       "folder": "archive",
       "status": "legado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-05",
       "summary": "workers/internal/api/router.go — PUT /start e /pause adicionados.",
       "headings": [
         "Legenda",
@@ -753,6 +787,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-06",
+      "createdAt": "2026-05-25",
       "summary": "Visão complementar de admin-station-failures.md: mesma rota, mesmo gate de admin, mas pivota a leitura por campanha ao invés de por emissora. Internaliza a UX do app externo Relatório Campanha.",
       "headings": [
         "Por que existe",
@@ -799,6 +834,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-03",
+      "createdAt": "2026-07-03",
       "summary": "Aba nova no painel /admin/monitoring que mostra o fluxo de um usuário na plataforma: escolhe-se uma pessoa e lê-se, em ordem cronológica, tudo que ela fez — telas abertas, o que criou/editou/excluiu, exportações, relatórios, evidências o…",
       "headings": [
         "Por que existe",
@@ -831,6 +867,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "Painel admin de telemetria HTTP — espelho funcional do /admin/monitoring do E-radios/Signalads, adaptado para a stack Go + React do Radiocheck. Mostra performance por rota, identidades acessando (IPs × usuários) com risco calculado, Web…",
       "headings": [
         "Arquitetura",
@@ -882,6 +919,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-25",
+      "createdAt": "2026-05-25",
       "summary": "Sininho no header do /dashboard (admin-only) com inbox das campanhas que tiveram déficit nos últimos 7 dias.",
       "headings": [
         "Comportamento",
@@ -911,6 +949,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-25",
+      "createdAt": "2026-05-19",
       "summary": "Lista as emissoras que tiveram falha em um dia (default ontem) e as campanhas cujos slots foram perdidos. Cada campanha é um link direto pra /campaigns?campaign=<id> — abre filtrada na tela de campanhas.",
       "headings": [
         "Por que existe",
@@ -955,6 +994,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-15",
       "summary": "Painel único de health do sistema inteiro: infra, observabilidade, workers, streams, pipeline de detecção e lista priorizada de \"atenção agora\". Foi desenhado pra ser a primeira parada do operador quando algo parece estranho.",
       "headings": [
         "Por que existe",
@@ -997,6 +1037,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-08",
       "summary": "Padrão único de busca de emissoras usado em todas as telas que filtram broadcasters. Importado do /marketplace do E-radios (referência: signalads-frontend/src/pages/Marketplace + productController.ts:668) para garantir que o usuário tenh…",
       "headings": [
         "Comportamento",
@@ -1026,6 +1067,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-27",
+      "createdAt": "2026-05-27",
       "summary": "Step 3 do wizard (Dados → Emissoras → Conexão → Materiais → Distribuição → Preços). Lista as emissoras da campanha e deixa o operador diagnosticar e trocar a streamurl de cada uma — útil porque muitos links vieram da fonte antiga e estão…",
       "headings": [
         "Escada de 3 testes (todos efêmeros, sob demanda)",
@@ -1066,6 +1108,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-28",
+      "createdAt": "2026-05-28",
       "summary": "Campo opcional no Step 6 (Pricing) do wizard de campanha que trava o CPM exibido em /campaigns, /insights e dashboard. Quando vazio, todas essas telas seguem o cálculo dinâmico padrão. Quando preenchido, vira a fonte de verdade nas telas…",
       "headings": [
         "Por que existe",
@@ -1091,6 +1134,7 @@
       ],
       "outLinks": [],
       "backLinks": [
+        "docs/README.md",
         "docs/features/insights-dashboard.md"
       ],
       "wordCount": 639
@@ -1101,6 +1145,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-12",
+      "createdAt": "2026-06-09",
       "summary": "Quatro emails transacionais diários para usuários internos (role admin ou operator, ativos, com \"Receber emails de alerta\" ligado — toggle por usuário em /admin/users, default ligado). Disparo só em dia útil, a partir das 08:00 BRT, uma…",
       "headings": [
         "Os 4 disparos",
@@ -1142,6 +1187,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-08",
+      "createdAt": "2026-05-19",
       "summary": "Componente unificado de exportação de relatórios de uma campanha, disponível nas três telas de \"veiculação\":",
       "headings": [
         "O que é",
@@ -1153,7 +1199,8 @@
         "Frontend (React + jsPDF)",
         "Como tirar do ar / debug",
         "O que NÃO faz",
-        "Próximos passos possíveis (não compromissados)"
+        "Próximos passos possíveis (não compromissados)",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/catalog/detections.go",
@@ -1169,14 +1216,16 @@
         "frontend/src/components/AirtimeFiltersBar.jsx"
       ],
       "outLinks": [
-        "docs/features/detections-report-wysiwyg.md"
+        "docs/features/detections-report-wysiwyg.md",
+        "docs/superpowers/plans/2026-05-13-airtime-report.md",
+        "docs/superpowers/specs/2026-05-13-airtime-report-design.md"
       ],
       "backLinks": [
         "docs/README.md",
         "docs/features/admin-campaign-failures.md",
         "docs/features/detections-report-wysiwyg.md"
       ],
-      "wordCount": 1141
+      "wordCount": 1173
     },
     {
       "id": "docs/features/campaign-wizard.md",
@@ -1184,6 +1233,7 @@
       "folder": "features",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-06-18",
+      "createdAt": "2026-05-11",
       "summary": "Documenta o fluxo de 6 etapas pra criar/editar campanha. Base implementada pelo Plano 2 (4 etapas); Preços e Conexão entraram depois — Conexão é o Step 3 (campaign-connection-step).",
       "headings": [
         "Quando usar",
@@ -1233,6 +1283,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-29",
+      "createdAt": "2026-06-29",
       "summary": "Campanha cancelada é terminal (ver campaign-lifecycle.md): foi encerrada manualmente antes do enddate. Antes desta entrega, o estado cancelada vazava em vários lugares onde deveria ser tratado como morto —",
       "headings": [
         "Política",
@@ -1275,6 +1326,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-27",
+      "createdAt": "2026-05-27",
       "summary": "DELETE /v1/internal/clients/{id} retornava 500 para qualquer cliente que tivesse campanhas, materiais ou usuários vinculados. Causa: o repo fazia DELETE FROM clients direto e o handler mapeava só pgx.ErrNoRows → 404;",
       "headings": [
         "Problema que originou",
@@ -1314,6 +1366,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-25",
+      "createdAt": "2026-06-25",
       "summary": "Quando o IP de saída do worker é bloqueado no firewall de uma emissora/painel (o connect TCP dá timeout silencioso, não 403), o ffmpeg fica retentando internamente via -reconnect para sempre — ele nunca sai. Logo o loop de reconexão do p…",
       "headings": [
         "Problema",
@@ -1346,6 +1399,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-18",
+      "createdAt": "2026-06-18",
       "summary": "Modal admin-only que aparece 1x por dia, por usuário no primeiro load do app, resume as campanhas que tiveram falha ontem (com a contagem de emissoras por campanha) e leva pra /admin/station-failures.",
       "headings": [
         "Comportamento",
@@ -1368,7 +1422,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-06-18-daily-failures-digest-modal-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/README.md"
+      ],
       "wordCount": 378
     },
     {
@@ -1377,11 +1433,13 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-06",
       "summary": "A página /detections mostra as detecções de uma campanha em formato de grade calendário: cada linha é uma emissora-alvo da campanha, cada coluna é um dia do período selecionado, e cada célula traz a quantidade de veiculações daquele dia/…",
       "headings": [
         "Como usar",
         "Notas técnicas",
-        "Componentes"
+        "Componentes",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "frontend/src/pages/DetectionsPage.jsx",
@@ -1389,11 +1447,14 @@
         "workers/internal/api/handlers/detections.go",
         "migrations/0018_detections_categorization.up.sql"
       ],
-      "outLinks": [],
+      "outLinks": [
+        "docs/superpowers/plans/2026-05-06-detections-calendar-view.md",
+        "docs/superpowers/specs/2026-05-06-detections-calendar-view-design.md"
+      ],
       "backLinks": [
         "docs/README.md"
       ],
-      "wordCount": 261
+      "wordCount": 291
     },
     {
       "id": "docs/features/detections-day-plan.md",
@@ -1401,6 +1462,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-01",
+      "createdAt": "2026-07-01",
       "summary": "Substitui, no topo da DayDetailModal (aberta ao clicar numa célula da grade /detections), a antiga fileira achatada de chips de faixa + o box de resumo por um bloco único \"Plano do dia\".",
       "headings": [
         "Problema que resolve",
@@ -1431,6 +1493,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-08",
+      "createdAt": "2026-07-08",
       "summary": "Em /detections, o botão Relatórios (na toolbar secundária) passou a gerar CSV e PDF espelhando exatamente o que está na tela — as mesmas emissoras/ materiais filtrados pela busca, o mesmo período, os mesmos números da grade, com o progra…",
       "headings": [
         "Problema que resolve",
@@ -1467,6 +1530,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-08",
+      "createdAt": "2026-05-11",
       "summary": "Documenta a /detections refatorada pelo Plano 3.",
       "headings": [
         "O que mudou",
@@ -1508,6 +1572,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-30",
+      "createdAt": "2026-06-30",
       "summary": "Melhoria da Step 5 (Distribuição) do wizard de campanha. Quando uma campanha tem muitas regras, a lista antiga (pílulas idênticas mostrando só tipo · horário · plays/dia · escopo) ficava impossível de varrer — as dimensões que distinguem",
       "headings": [
         "O que mudou",
@@ -1536,6 +1601,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-02",
+      "createdAt": "2026-07-02",
       "summary": "Bound no crescimento do disco do MinIO: apaga os clipes de áudio de evidência mais antigos que EVIDENCERETENTIONDAYS e marca a detecção expired.",
       "headings": [
         "Comportamento",
@@ -1569,6 +1635,7 @@
       "folder": "features",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-07-03",
+      "createdAt": "2026-05-08",
       "summary": "Mecanismo de URL pré-assinada (SigV4) do bucket de evidência.",
       "headings": [
         "Por que existe",
@@ -1600,6 +1667,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-27",
+      "createdAt": "2026-05-27",
       "summary": "Preenche stations.latitude/longitude a partir de city + state (UF), usando o centroide do município (única resolução possível com cidade+UF — não temos o endereço da emissora).",
       "headings": [
         "Fonte de dados",
@@ -1607,7 +1675,8 @@
         "Quando dispara",
         "Backfill",
         "Limitações",
-        "Validação (2026-05-27, dev local)"
+        "Validação (2026-05-27, dev local)",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/geo/geo.go",
@@ -1616,12 +1685,15 @@
         "workers/cmd/backfill-geocoding/main.go",
         "infra/docker/Dockerfiles/workers.Dockerfile"
       ],
-      "outLinks": [],
+      "outLinks": [
+        "docs/superpowers/plans/2026-05-27-geocoding-emissoras.md",
+        "docs/superpowers/specs/2026-05-27-geocoding-emissoras-design.md"
+      ],
       "backLinks": [
         "docs/README.md",
         "docs/features/live-map.md"
       ],
-      "wordCount": 509
+      "wordCount": 539
     },
     {
       "id": "docs/features/insights-dashboard.md",
@@ -1629,6 +1701,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-08",
+      "createdAt": "2026-05-26",
       "summary": "Tela única que consolida KPIs e gráficos demográficos por cliente × campanha(s) × período × emissoras. Substitui o PDF manual que o time comercial montava ao fim de cada campanha. Exporta como PNG ou PDF.",
       "headings": [
         "Quem vê o quê",
@@ -1664,7 +1737,9 @@
         "docs/superpowers/specs/2026-05-26-insights-dashboard-design.md",
         "docs/superpowers/specs/2026-07-08-insights-consolidated-period-proportional-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/README.md"
+      ],
       "wordCount": 1715
     },
     {
@@ -1673,6 +1748,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-01",
+      "createdAt": "2026-05-27",
       "summary": "Tela (admin + cliente) com mapa do Brasil mostrando as emissoras de uma campanha monitoradas ao vivo (pulsando) + feed de últimas veiculações da campanha. Acessível pela seção \"Veiculação\" do menu (admin e cliente).",
       "headings": [
         "Fluxo (igual às outras telas de Veiculação)",
@@ -1682,7 +1758,8 @@
         "Estados da tela",
         "Atualização",
         "Mapa — notas de render",
-        "Limitações"
+        "Limitações",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/catalog/live_map.go",
@@ -1695,12 +1772,14 @@
         "frontend/src/assets/br-states.json"
       ],
       "outLinks": [
-        "docs/features/geocoding-emissoras.md"
+        "docs/features/geocoding-emissoras.md",
+        "docs/superpowers/plans/2026-05-27-live-map.md",
+        "docs/superpowers/specs/2026-05-27-live-map-design.md"
       ],
       "backLinks": [
         "docs/superpowers/plans/2026-07-09-docs-brain.md"
       ],
-      "wordCount": 790
+      "wordCount": 820
     },
     {
       "id": "docs/features/login-page.md",
@@ -1708,6 +1787,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-18",
+      "createdAt": "2026-05-15",
       "summary": "A /login é a porta de entrada do app: split 2-colunas em desktop, single-column em mobile. Painel-hero à esquerda com imagem cinematográfica (globo terrestre com pulsos de sinal sobre o Brasil) + formulário claro à direita usando o desig…",
       "headings": [
         "Layout",
@@ -1746,6 +1826,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-08",
+      "createdAt": "2026-05-29",
       "summary": "Painel admin/operator-only com uma visão da operação inteira da plataforma — todas as campanhas, de todos os clientes. Diferente do /live-map (que exige Cliente → Campanha antes de mostrar algo), abre já trazendo tudo e oferece filtros o…",
       "headings": [
         "Acesso",
@@ -1755,7 +1836,8 @@
         "Escopo vs. período",
         "Fonte de dados",
         "Limitações conhecidas",
-        "Performance"
+        "Performance",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/catalog/management_overview.go",
@@ -1766,9 +1848,14 @@
         "frontend/src/components/LiveAiringRow.jsx",
         "frontend/src/api/hooks.js"
       ],
-      "outLinks": [],
-      "backLinks": [],
-      "wordCount": 425
+      "outLinks": [
+        "docs/superpowers/plans/2026-05-29-visao-gerencial.md",
+        "docs/superpowers/specs/2026-05-29-visao-gerencial-design.md"
+      ],
+      "backLinks": [
+        "docs/README.md"
+      ],
+      "wordCount": 453
     },
     {
       "id": "docs/features/manual-airings-bulk-and-proof.md",
@@ -1776,6 +1863,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-09",
+      "createdAt": "2026-06-26",
       "summary": "Extensão da inserção manual de veiculações (a antiga \"Adicionar veiculação manualmente\" single, que continua descrita em version-disambiguation e na grade de /detections). Resolve três dores operacionais:",
       "headings": [
         "Modelo de dados",
@@ -1816,6 +1904,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-03",
+      "createdAt": "2026-05-13",
       "summary": "Quando um material novo é subido via wizard (Step 3), o backend salva a row, publica fingerprint.generate no NATS com {\"materialid\": \"<uuid>\"}, e o daemon Python (fingerprint service) gera os hashes e atualiza materials.fingerprintstatus…",
       "headings": [
         "Fluxo",
@@ -1855,6 +1944,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-17",
+      "createdAt": "2026-05-11",
       "summary": "Documenta a biblioteca de materiais por cliente e o registro global de tipos. Introduzido pelo Plano 1 — Foundations.",
       "headings": [
         "Modelo",
@@ -1893,6 +1983,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-18",
+      "createdAt": "2026-05-14",
       "summary": "When an operator uploads a new material in the campaign wizard, the system scans the new audio against the other materials of the same client (no cross-client comparison) and persists the top match if the similarity score is ≥50%. The fr…",
       "headings": [
         "What it does",
@@ -1933,6 +2024,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-29",
+      "createdAt": "2026-06-29",
       "summary": "Uma distributionrule pode ser escopada a materiais específicos dentro de um tipo via materialids UUID[] (vazio = todos do tipo, como na migration 0019).",
       "headings": [
         "Carve-out (precedência)",
@@ -1967,6 +2059,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-01",
+      "createdAt": "2026-05-27",
       "summary": "Tela da seção Veiculação, acessível a admin e cliente (cliente só com as próprias campanhas/materiais — escopo aplicado pelo backend). Mostra, por campanha: todos os materiais que ela tem (programados ou não, com play + download) e quant…",
       "headings": [
         "Diferença pra /detections",
@@ -2001,6 +2094,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-25",
+      "createdAt": "2026-06-25",
       "summary": "Quando o mesmo áudio roda em duas campanhas que compartilham uma emissora, uma tocada física conta para todas as campanhas que veiculam aquele áudio ali. Resolve o furo da [[duplicate-material-cross-campaign-misattribution]] (incidente U…",
       "headings": [
         "Modelo",
@@ -2008,7 +2102,8 @@
         "Leitura",
         "Intocado (a segurança)",
         "Rollout",
-        "Limitações conhecidas"
+        "Limitações conhecidas",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "migrations/0041_detection_campaigns.up.sql",
@@ -2022,14 +2117,16 @@
       "outLinks": [
         "docs/architecture/detection-count-consistency.md",
         "docs/architecture/evidence-audit.md",
-        "docs/architecture/version-disambiguation.md"
+        "docs/architecture/version-disambiguation.md",
+        "docs/superpowers/plans/2026-06-25-multi-attribution-f119.md",
+        "docs/superpowers/specs/2026-06-25-multi-attribution-f119-design.md"
       ],
       "backLinks": [
         "docs/README.md",
         "docs/incidents/incident-2026-06-25-uniube-cross-campaign-misattribution.md",
         "docs/incidents/incident-2026-06-30-phantom-projection-reattribution.md"
       ],
-      "wordCount": 387
+      "wordCount": 419
     },
     {
       "id": "docs/features/not-found-page.md",
@@ -2037,6 +2134,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-18",
+      "createdAt": "2026-05-18",
       "summary": "Página catch-all do E-monitor com cena 3D temática de fingerprinting acústico (constellation map + peak pairs), torre de transmissão wireframe e anéis de onda com glitch procedural. Substitui o redirect silencioso anterior que mandava UR…",
       "headings": [
         "Rotas e roteamento",
@@ -2051,7 +2149,8 @@
         "Como reproduzir / verificar",
         "Decisões deliberadamente fora",
         "Pontos de manutenção futura",
-        "Spec original"
+        "Spec original",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "frontend/src/pages/NotFoundPage.jsx",
@@ -2065,11 +2164,13 @@
         "frontend/src/App.jsx",
         "frontend/src/index.css"
       ],
-      "outLinks": [],
+      "outLinks": [
+        "docs/superpowers/specs/2026-05-18-not-found-page-design.md"
+      ],
       "backLinks": [
         "docs/README.md"
       ],
-      "wordCount": 1180
+      "wordCount": 1203
     },
     {
       "id": "docs/features/operations-page.md",
@@ -2077,13 +2178,15 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "A tela /operations mostra o estado em tempo real de cada worker de stream: identidade da emissora, último PCM recebido, status (running / stalled / restarting / down), bytes consumidos, reconnects, stall restarts e o threshold (minhashes…",
       "headings": [
         "Wire contract — GET /workers",
         "Semântica dos contadores",
         "Onde os incrementos acontecem",
         "Histórico",
-        "Como verificar"
+        "Como verificar",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "frontend/src/pages/OperationsPage.jsx",
@@ -2092,11 +2195,14 @@
         "workers/internal/ingestor/worker.go",
         "workers/internal/metrics/metrics.go"
       ],
-      "outLinks": [],
+      "outLinks": [
+        "docs/superpowers/plans/2026-05-07-stream-health.md",
+        "docs/superpowers/specs/2026-05-07-stream-health-design.md"
+      ],
       "backLinks": [
         "docs/README.md"
       ],
-      "wordCount": 478
+      "wordCount": 507
     },
     {
       "id": "docs/features/override-time-window.md",
@@ -2104,6 +2210,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "No step \"Distribuição\" do wizard de campanha (/campaigns/:id/edit), o operador pode ajustar manualmente o número de veiculações esperadas em qualquer célula (emissora, tipo, dia) clicando na célula ou usando os botões +/−. A partir desta…",
       "headings": [
         "O que faz",
@@ -2117,7 +2224,8 @@
         "Fora de escopo",
         "Como testar manualmente",
         "Migration",
-        "Spec original"
+        "Spec original",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "migrations/0031_override_time_window.up.sql",
@@ -2131,7 +2239,9 @@
         "frontend/src/components/DistributionGrid.jsx"
       ],
       "outLinks": [
-        "docs/superpowers/specs/2026-05-19-override-time-window-design.md"
+        "docs/superpowers/plans/2026-07-03-override-recat-and-visibility.md",
+        "docs/superpowers/specs/2026-05-19-override-time-window-design.md",
+        "docs/superpowers/specs/2026-07-03-override-recat-and-visibility-design.md"
       ],
       "backLinks": [
         "docs/README.md",
@@ -2139,7 +2249,7 @@
         "docs/features/material-specific-distribution-rules.md",
         "docs/superpowers/specs/2026-06-29-material-specific-distribution-rules-design.md"
       ],
-      "wordCount": 662
+      "wordCount": 697
     },
     {
       "id": "docs/features/station-audience-age-ranges.md",
@@ -2147,6 +2257,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-26",
+      "createdAt": "2026-05-26",
       "summary": "O perfil de audiência da emissora (stations.metadata.audienceprofile) passou a ter o dado de faixa etária armazenado como três percentuais quantitativos, no mesmo formato do bloco de classe social — e não mais como string livre.",
       "headings": [
         "Forma anterior",
@@ -2174,6 +2285,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-09",
+      "createdAt": "2026-07-09",
       "summary": "Quando o Dereck fala de \"sugestões\", é esta tela: /admin/suggestions. Uma central onde os admins mandam demandas detalhadas (o que querem na plataforma) e o dev (tatico3@hubradios.com) gerencia tudo — triage, status, prioridade, feedback…",
       "headings": [
         "Personas (uma rota, duas faces)",
@@ -2200,7 +2312,9 @@
         "docs/superpowers/plans/2026-07-09-suggestions-board.md",
         "docs/superpowers/specs/2026-07-09-suggestions-board-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/README.md"
+      ],
       "wordCount": 813
     },
     {
@@ -2209,6 +2323,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-17",
+      "createdAt": "2026-05-17",
       "summary": "CRUD de usuários no painel admin (/admin/users) e tela \"Minha conta\" (/account) para self-service. Suporta dois tipos de conta:",
       "headings": [
         "Vínculo N:1",
@@ -2220,7 +2335,8 @@
         "Vocabulário API ↔ DB",
         "Fluxo de cadastro",
         "Bloqueios e validações",
-        "Fora de escopo (ver follow-ups)"
+        "Fora de escopo (ver follow-ups)",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "migrations/0027_user_management.up.sql",
@@ -2236,12 +2352,15 @@
         "frontend/src/components/UserFormModal.jsx",
         "frontend/src/components/ResetPasswordModal.jsx"
       ],
-      "outLinks": [],
+      "outLinks": [
+        "docs/superpowers/plans/2026-05-15-user-management.md",
+        "docs/superpowers/specs/2026-05-15-user-management-design.md"
+      ],
       "backLinks": [
         "docs/README.md",
         "docs/operations/auth-bootstrap.md"
       ],
-      "wordCount": 525
+      "wordCount": 554
     },
     {
       "id": "docs/features/webhooks.md",
@@ -2249,6 +2368,7 @@
       "folder": "features",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Documentação operacional do subsistema de webhooks do Radiocheck (§13.1.4 do plano).",
       "headings": [
         "Como funciona",
@@ -2295,6 +2415,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-12",
       "summary": "Três episódios sucessivos da mesma família de causa raiz (compartilhamento de áudio entre comerciais), revelando bugs distintos no algoritmo shared-hash em cada iteração e culminando na versão definitiva (fix/sharing-bidirectional-subset…",
       "headings": [
         "Resumo executivo",
@@ -2340,6 +2461,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-12",
       "summary": "Durante um redeploy de rotina do service api, o comando docker compose up -d --force-recreate api (sem --no-deps, sem override file) levou compose a usar o pgdata named volume vazio do base yml em vez do bind mount /mnt/db/pgdata que pro…",
       "headings": [
         "Resumo executivo",
@@ -2385,6 +2507,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-15",
       "summary": "Operador editou streamurl em algumas emissoras via PUT /v1/internal/stations/{id}. O banco refletiu a mudança, o botão \"play\" em /stations (que lê a URL fresca do banco no browser) tocou normalmente, mas os workers correspondentes ficara…",
       "headings": [
         "Causa raiz",
@@ -2430,6 +2553,7 @@
       "folder": "incidents",
       "status": "resolvido",
       "ultimaVerificacao": "2026-05-17",
+      "createdAt": "2026-05-17",
       "summary": "A PR do audit pré-persist (§9.9, commit 8f8f3ee em 2026-05-15) shipou usando o valor 'auditrejected' em evidencestatus mas não criou a migration que adicionasse esse valor ao CHECK constraint da tabela detections. Toda detecção que o aud…",
       "headings": [
         "TL;DR",
@@ -2466,6 +2590,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-22",
+      "createdAt": "2026-05-25",
       "summary": "Duas campanhas (209 UNIFIQUE e 221 STUDIOZ) pararam de gerar detecções em datas diferentes (15/05 e 21/05). Após 6+ horas investigando 7 hipóteses técnicas no código, a causa real foi operacional: o cliente trocou a versão do material qu…",
       "headings": [
         "TL;DR",
@@ -2511,6 +2636,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-12",
+      "createdAt": "2026-06-12",
       "summary": "eles têm mais detecções que nós — mas ao pegar o air-check (censura) do fornecedor e rodar no nosso detector offline (cmd/diag), o material casa. \"Se detecta offline, por que não detectou ao vivo?\"",
       "headings": [
         "Causas raiz",
@@ -2558,6 +2684,7 @@
       "folder": "incidents",
       "status": "resolvido",
       "ultimaVerificacao": "2026-06-15",
+      "createdAt": "2026-06-15",
       "summary": "densidade do #2. Não havia segundo bug — investigado e descartado (ver \"Investigação do falso-segundo-bug\" abaixo).",
       "headings": [
         "0. Desfecho (RESOLVIDO — 2026-06-15)",
@@ -2604,6 +2731,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-18",
+      "createdAt": "2026-06-18",
       "summary": "up -d / migrate exit 1).",
       "headings": [
         "Impacto",
@@ -2640,6 +2768,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-23",
+      "createdAt": "2026-06-23",
       "summary": "Disco não estava cheio (/mnt/data 65%, /dev/root 49%). A flag DISAMBIGBYCOVERAGE estava true, mas não era a causa.",
       "headings": [
         "Sintoma (reportado pelo operador, 2026-06-23)",
@@ -2670,6 +2799,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-25",
+      "createdAt": "2026-06-26",
       "summary": "Operador reportou que a emissora Jovem Pan News FM (98.9) / Ituiutaba (24757c2a-15c0-4c17-99f3-fcf05ba8bc93, shortid 2911) \"não teve detecção ontem (2026-06-24)\" e perguntou se foi bloqueio ou nenhum match. Investigação mostrou que nenhu…",
       "headings": [
         "Resumo",
@@ -2700,6 +2830,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-30",
+      "createdAt": "2026-06-30",
       "summary": "Operador relatou que o mesmo material aparecia \"dentro\" e \"fora da data\" no mesmo dia na campanha 5e39554f-739e-4418-a96e-bf5ff41e402c (VERISURE), nas emissoras da rede Nova Brasil. A investigação descartou as três suspeitas óbvias (carv…",
       "headings": [
         "Resumo",
@@ -2734,6 +2865,7 @@
       "folder": "incidents",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-02",
+      "createdAt": "2026-07-02",
       "summary": "Em /detections/:id, algumas veiculações mostravam \"Falha ao gerar evidência — O encoder retornou erro durante a geração do clip\", de forma intermitente (\"se repete às vezes\"). O match em si era bom: audit §9.9 alto (ex.: 75.9%), 435 hash…",
       "headings": [
         "Sintoma (reportado pelo operador)",
@@ -2768,6 +2900,7 @@
       "folder": "incidents",
       "status": "legado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-12",
       "summary": "Documento de handoff para agentes futuros e para você mesmo amanhã. Captura o estado em que o sistema ficou após a sequência de incidentes do dia 9-12 e o que precisa acontecer pra finalizar a recuperação.",
       "headings": [
         "TL;DR",
@@ -2802,6 +2935,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Documenta como o primeiro usuário admin é criado, como trocar a senha e o fluxo completo de login (backend cmd/api + frontend SPA).",
       "headings": [
         "Status: implementado em 2026-05-17",
@@ -2838,6 +2972,7 @@
       "folder": "operations",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Este documento operacional cobre os jobs introduzidos para implementar §14.4 (backup do Postgres) e §11.4 (retenção e tiering das evidências) do planoimplementacao.md.",
       "headings": [
         "1. Backup do Postgres",
@@ -2881,6 +3016,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "O sistema ajusta automaticamente o minhashes (mínimo de hashes para confirmar uma detecção) por emissora.",
       "headings": [
         "Fluxo",
@@ -2904,7 +3040,8 @@
       ],
       "backLinks": [
         "docs/README.md",
-        "docs/operations/threshold-dynamic.md"
+        "docs/operations/threshold-dynamic.md",
+        "docs/runbooks/CalibrationStale.md"
       ],
       "wordCount": 744
     },
@@ -2914,6 +3051,7 @@
       "folder": "operations",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Documentação operacional dos painéis Grafana provisionados em infra/grafana/dashboards/. Referência arquitetural: §15.4 do planoimplementacao.md.",
       "headings": [
         "Provisioning",
@@ -2945,6 +3083,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-12",
       "summary": "Como Radiocheck protege os dados de cada classe de falha — qual camada cobre o quê, qual ainda é gap, e procedimentos de recuperação.",
       "headings": [
         "Modelo de ameaças",
@@ -2987,6 +3126,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-08",
       "summary": "Números baseados em stress test real (50 workers ativos medidos em 08/05/2026):",
       "headings": [
         "Índice",
@@ -3060,6 +3200,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-07-09",
+      "createdAt": "2026-07-09",
       "summary": "Um \"segundo cérebro\" sobre os ~189 documentos de /docs, 100% dentro do repositório — sem Obsidian, sem serviço externo, sem LLM hospedado. Duas capacidades sobre um índice compartilhado:",
       "headings": [
         "Como funciona (visão de 30s)",
@@ -3070,25 +3211,31 @@
         "Atualização automática (git hook)",
         "Arquivos",
         "Testes",
-        "Design"
+        "Design",
+        "Próximas evoluções (\"Jarvis\")"
       ],
       "codigoRelacionado": [
         "scripts/brain-build.mjs",
         "scripts/brain/parse.mjs",
         "scripts/brain/graph.mjs",
         "scripts/brain/render.mjs",
+        "scripts/brain/gitdates.mjs",
+        "scripts/brain/render.mjs",
         "scripts/brain/template.html",
+        "scripts/brain/vendor/braingl.min.js",
         "scripts/hooks/pre-commit",
         ".claude/skills/cerebro/SKILL.md"
       ],
       "outLinks": [
+        "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
         "docs/superpowers/plans/2026-07-09-docs-brain.md",
         "docs/superpowers/specs/2026-07-09-docs-brain-design.md"
       ],
       "backLinks": [
-        "docs/README.md"
+        "docs/README.md",
+        "docs/roadmap/2026-07-09-docs-brain-jarvis.md"
       ],
-      "wordCount": 609
+      "wordCount": 1364
     },
     {
       "id": "docs/operations/migrations.md",
@@ -3096,6 +3243,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-18",
+      "createdAt": "2026-05-08",
       "summary": "Toda vez que o docker compose up sobe, um service dedicado (migrate) aplica todas as migrations pendentes em migrations/.up.sql antes do api iniciar. Não há mais necessidade de aplicação manual.",
       "headings": [
         "Como funciona",
@@ -3133,6 +3281,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "A API expõe os endpoints padrão net/http/pprof num listener dedicado em 127.0.0.1:6060 dentro do container. A porta deliberadamente não é publicada no compose, e o bind é em loopback, então o endpoint é inacessível fora do container — se…",
       "headings": [
         "Por que existe",
@@ -3157,6 +3306,7 @@
       "folder": "operations",
       "status": "planejado",
       "ultimaVerificacao": "2026-06-08",
+      "createdAt": "2026-06-08",
       "summary": "frames (peaks.go neighborFrames; generator.py PEAKNEIGHBORHOODT 17→7, PEAKNEIGHBORHOODF 17→13). Resultado: ~4× mais hashes por janela → spots de 5-15s ganham margem de match pra sobreviver à degradação de broadcast.",
       "headings": [
         "Passo a passo",
@@ -3194,6 +3344,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-03",
+      "createdAt": "2026-06-03",
       "summary": "O ffmpeg grava segmentos ADTS-AAC rotativos por emissora em /data/segments/<station>/ (buffer de evidência). O sidecar segments-cleanup apaga .aac com mais de 60min a cada 5min, então o volume é bounded — mas o tamanho em regime é",
       "headings": [
         "Contexto",
@@ -3220,6 +3371,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-05",
       "summary": "Ferramenta para validar o pipeline de detecção ponta-a-ponta sem depender de uma rádio real tocar os comerciais cadastrados.",
       "headings": [
         "Como funciona",
@@ -3253,6 +3405,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Documentação operacional do plumbing que aplica em tempo real o minhashes calculado pelo job de calibração (§9.4 do plano). Complementa calibration.md — aqui descrevemos como o valor que vive em stationthresholds chega no worker e quando…",
       "headings": [
         "Visão geral",
@@ -3274,7 +3427,8 @@
       ],
       "backLinks": [
         "docs/README.md",
-        "docs/operations/calibration.md"
+        "docs/operations/calibration.md",
+        "docs/runbooks/CalibrationStale.md"
       ],
       "wordCount": 651
     },
@@ -3284,6 +3438,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-07",
       "summary": "Este documento descreve a instrumentação de tracing OpenTelemetry implantada nos workers Go do Radiocheck. Cobre o setup local, como ler um trace end-to-end de uma detecção, a lista de spans gerados, e os trade-offs de sampling que produ…",
       "headings": [
         "Objetivos",
@@ -3316,6 +3471,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-06-12",
+      "createdAt": "2026-06-12",
       "summary": "Como comparar nossas detecções com o relatório do fornecedor sem caçar fantasma. Nasceu do incidente 2026-06-12, em que uma comparação crua superestimava os nossos misses por 4 motivos",
       "headings": [
         "Regras de ouro antes de declarar um \"miss\"",
@@ -3344,6 +3500,7 @@
       "folder": "operations",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-08",
       "summary": "Em 2026-05-08, dois jingles veiculados na 89 FM Joinville (06:43 e 07:02 local) não foram detectados pelo Radiocheck. A causa raiz foi que o worker da estação rodava com uma lista de CommercialShortIDs desatualizada — o comercial existia…",
       "headings": [
         "Por que isso existe",
@@ -3391,6 +3548,7 @@
       "folder": "roadmap",
       "status": "proposta-futura",
       "ultimaVerificacao": "2026-05-22",
+      "createdAt": "2026-05-25",
       "summary": "Permitir que, ao cadastrar um material novo, o operador peça pra plataforma escanear o áudio das emissoras dos últimos N dias e gerar detecções retroativas — sem precisar esperar próximas veiculações pra confirmar que o material toca.",
       "headings": [
         "TL;DR",
@@ -3431,6 +3589,7 @@
       "folder": "roadmap",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-06-12",
+      "createdAt": "2026-06-12",
       "summary": "Plano-mestre que sequencia TODO o trabalho aberto derivado do incidente 2026-06-12 mais os itens de recall pendentes de planos anteriores. Ordenado por",
       "headings": [
         "Onda 1 — Parar de sangrar em silêncio (~1 dia, risco zero)",
@@ -3470,11 +3629,52 @@
       "wordCount": 1455
     },
     {
+      "id": "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
+      "title": "Docs-Brain → Jarvis — Plano de melhorias",
+      "folder": "roadmap",
+      "status": "planejado",
+      "ultimaVerificacao": "2026-07-09",
+      "createdAt": "2026-07-09",
+      "summary": "Roadmap das melhorias que transformam o cérebro dos docs de \"grafo bonito\" em \"Jarvis\": presença, voz, tempo, inteligência. Cada item foi selecionado pelo critério \"quem bate o olho fala CARALHO\" — ou é visualmente absurdo, ou é funciona…",
+      "headings": [
+        "Invariantes — o que NENHUM item pode quebrar",
+        "Onda 1 — cola o sistema (esforço baixo, retorno imediato)",
+        "J1. Deep-link /cerebro → HUD — a resposta vira constelação",
+        "J2. Time-lapse — assistir o cérebro nascer (modo Gource)",
+        "J3. Decay visual + arc reactor de saúde — ver a doc apodrecer",
+        "Onda 2 — vira Jarvis (presença e voz)",
+        "J4. Voz — o cérebro fala e escuta",
+        "J5. Modo Galáxia 3D — o grafo vira universo",
+        "J6. Cinema — boot com som + attract mode",
+        "Onda 3 — fica inteligente (análise)",
+        "J8. Comunidades nomeadas + detector de buracos estruturais",
+        "Ordem recomendada e resumo",
+        "Referências"
+      ],
+      "codigoRelacionado": [
+        "scripts/brain-build.mjs",
+        "scripts/brain/parse.mjs",
+        "scripts/brain/graph.mjs",
+        "scripts/brain/render.mjs",
+        "scripts/brain/template.html",
+        ".claude/skills/cerebro/SKILL.md"
+      ],
+      "outLinks": [
+        "docs/operations/docs-brain.md"
+      ],
+      "backLinks": [
+        "docs/README.md",
+        "docs/operations/docs-brain.md"
+      ],
+      "wordCount": 3698
+    },
+    {
       "id": "docs/roadmap/detection-evaluation-report.md",
       "title": "Relatório de Avaliação de Detecção — Baseline e Recomendações",
       "folder": "roadmap",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-05",
       "summary": "Foi criado um harness end-to-end que aplica 15 perfis realistas de degradação broadcast a um master e tenta detectá-lo contra um índice multi-variante (variant 0 = raw + variants 1..3 = broadcastsim).",
       "headings": [
         "1. Resumo Executivo",
@@ -3522,6 +3722,7 @@
       "folder": "roadmap",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Itens identificados durante a Fase 2 (semanas 7–18) que não bloqueiam o critério de saída mas devem ser resolvidos antes da Fase 3 (semanas 19–30, escala para 30→200 emissoras). Cada item lista o que, por quê, onde no código, e dependênc…",
       "headings": [
         "Resolvidos pós-Fase 2",
@@ -3571,7 +3772,8 @@
         "Como tratar este documento",
         "Foundations (Plano 1) — Follow-ups",
         "Wizard Frontend (Plano 2) — Follow-ups",
-        "Detections Refactor (Plano 3) — Follow-ups"
+        "Detections Refactor (Plano 3) — Follow-ups",
+        "Design & origem"
       ],
       "codigoRelacionado": [
         "workers/internal/webhook/safehttp.go",
@@ -3583,6 +3785,13 @@
       ],
       "outLinks": [
         "docs/architecture/version-disambiguation.md",
+        "docs/superpowers/EXECUTAR-FASE2.md",
+        "docs/superpowers/EXECUTAR-FIXES.md",
+        "docs/superpowers/EXECUTAR.md",
+        "docs/superpowers/plans/2026-05-05-radiocheck-fase2-implementation.md",
+        "docs/superpowers/plans/2026-05-05-radiocheck-poc-implementation.md",
+        "docs/superpowers/specs/2026-05-05-radiocheck-fase2-design.md",
+        "docs/superpowers/specs/2026-05-05-radiocheck-poc-design.md",
         "docs/superpowers/specs/2026-06-03-reused-material-dead-zone-design.md"
       ],
       "backLinks": [
@@ -3591,7 +3800,7 @@
         "docs/features/material-fingerprint-pipeline.md",
         "docs/superpowers/specs/2026-06-24-suppress-path-reattribution-design.md"
       ],
-      "wordCount": 4323
+      "wordCount": 4414
     },
     {
       "id": "docs/roadmap/short-audio-baseline-2026-06-03.md",
@@ -3599,6 +3808,7 @@
       "folder": "roadmap",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-08",
       "summary": "Gates: score>=5 (gate efetivo do live para curto) e live = score>=5 & cov>=0.15. Fonte do master: sintético. Índice = v0 cru + 5 variantes broadcastsim. 20 perfis de degradação.",
       "headings": [
         "Misses por duração (perfis com score < 5)",
@@ -3617,6 +3827,7 @@
       "folder": "roadmap",
       "status": "planejado",
       "ultimaVerificacao": "2026-06-02",
+      "createdAt": "2026-06-08",
       "summary": "O sistema hoje é agressivo em recall de curtos por acidente, não por design, e quase todas as suas defesas anti-FP estão inertes ou mortas exatamente na faixa de 5–21s:",
       "headings": [
         "TL;DR — a história real",
@@ -3657,6 +3868,7 @@
       "folder": "roadmap",
       "status": "planejado",
       "ultimaVerificacao": "2026-06-03",
+      "createdAt": "2026-06-08",
       "summary": "Plano executável derivado da auditoria, corrigido após verificação de coerência contra o pipeline real. Objetivo: subir recall de 5/10/15s mantendo FP ~0.",
       "headings": [
         "Correções de coerência (o que a auditoria errou e o que sai do escopo)",
@@ -3704,6 +3916,7 @@
       "folder": "runbooks",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-12",
       "summary": "docker compose -f infra/docker/docker-compose.yml \\",
       "headings": [
         "Sintomas",
@@ -3730,6 +3943,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "A métrica radiocheckcalibrationlastsuccesstimestamp para uma ou mais emissoras está há mais de 14 dias sem ser atualizada (alerta dispara após 1h nesse estado). O esperado pelo §9.4 é uma recalibração a cada 7 dias; 14d é um sinal claro…",
       "headings": [
         "Sintomas",
@@ -3741,16 +3955,23 @@
         "3. Restartar o API",
         "4. Verificar conexão DB",
         "5. Reverter CALIBRATIONINTERVAL / CALIBRATIONMINAGE",
-        "Escalação"
+        "Escalação",
+        "Ver também"
       ],
       "codigoRelacionado": [
         "infra/prometheus/alerts.yml",
         "workers/internal/calibration/scheduler.go",
         "workers/internal/metrics/metrics.go"
       ],
-      "outLinks": [],
-      "backLinks": [],
-      "wordCount": 602
+      "outLinks": [
+        "docs/operations/calibration.md",
+        "docs/operations/threshold-dynamic.md",
+        "docs/runbooks/README.md"
+      ],
+      "backLinks": [
+        "docs/runbooks/README.md"
+      ],
+      "wordCount": 632
     },
     {
       "id": "docs/runbooks/ClockDrift.md",
@@ -3758,6 +3979,7 @@
       "folder": "runbooks",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Drift de relógio (nodetimexoffsetseconds) acima de 2 segundos em algum host por 5 minutos. Compromete diretamente a correlação temporal de detecções entre workers e o cooldown anti-duplicata (§9.5), além de timestamps em evidências e web…",
       "headings": [
         "Sintomas",
@@ -3782,6 +4004,7 @@
       "folder": "runbooks",
       "status": "planejado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Latência p95 de queries Postgres acima de 1s por mais de 10 minutos. Reflete em latência de API (endpoints de detecção, listagem, dashboards) e em atraso na escrita de eventos de detecção.",
       "headings": [
         "Sintomas",
@@ -3806,6 +4029,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Taxa de detecções confirmadas (últimos 10min) caiu para menos de 30% da média móvel de 7 dias, sustentada por 30 minutos. Sintoma agregado — pode mascarar várias causas distintas.",
       "headings": [
         "Sintomas",
@@ -3831,6 +4055,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Menos de 5% de espaço livre no disco raiz do servidor. Alerta dispara no Slack. Risco de falha de escrita nos logs, spool de evidências e banco de dados.",
       "headings": [
         "Sintomas",
@@ -3854,6 +4079,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Spool de upload de evidências (radiocheckevidencequeuesize) acima de 100 itens e crescendo (derivada > 0) por 15 minutos. Diferente de EvidenceUploadFailures — aqui não estamos vendo erros explícitos, apenas que a fila não drena. Pode in…",
       "headings": [
         "Sintomas",
@@ -3880,6 +4106,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Mais de 10 falhas de upload de evidência (clipes de áudio) para o storage S3/R2 na última hora. Alerta dispara no Slack.",
       "headings": [
         "Sintomas",
@@ -3905,6 +4132,7 @@
       "folder": "runbooks",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-12",
       "summary": "docker compose -f infra/docker/docker-compose.yml \\",
       "headings": [
         "Sintomas",
@@ -3929,6 +4157,7 @@
       "folder": "runbooks",
       "status": "parcialmente-implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "O índice de fingerprints não pôde ser carregado na memória durante a inicialização do serviço. Workers iniciam sem comerciais para detectar.",
       "headings": [
         "Sintomas",
@@ -3952,6 +4181,7 @@
       "folder": "runbooks",
       "status": "planejado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Scheduler de transições de campanha (programada → ativa → concluida, §18.2.1) não roda há mais de 5 minutos. Campanhas podem ficar \"presas\" em estado incorreto: anúncios não detectam (campanha ainda programada) ou continuam contando após…",
       "headings": [
         "Sintomas",
@@ -3977,6 +4207,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Três ou mais workers ficaram sem receber bytes simultaneamente nos últimos 5 minutos. Diferente de StreamDownProlongado (que dispara para uma emissora isolada), aqui o padrão sugere causa raiz compartilhada entre múltiplas emissoras: red…",
       "headings": [
         "Sintomas",
@@ -4003,6 +4234,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "O sidecar clap-verifier não está respondendo. Detecções em estado uncertain não são resolvidas. O sistema continua funcionando com matching acústico mas sem verificação neural.",
       "headings": [
         "Sintomas",
@@ -4027,6 +4259,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Procedimentos operacionais associados aos alertas do Prometheus/Alertmanager definidos em infra/prometheus/alerts.yml.",
       "headings": [
         "Índice",
@@ -4041,6 +4274,7 @@
       ],
       "outLinks": [
         "docs/runbooks/AuditRejectedSpike.md",
+        "docs/runbooks/CalibrationStale.md",
         "docs/runbooks/ClockDrift.md",
         "docs/runbooks/DBLatencyHigh.md",
         "docs/runbooks/DetectionRateAnomaly.md",
@@ -4057,9 +4291,10 @@
         "docs/runbooks/WorkerStallLoop.md"
       ],
       "backLinks": [
-        "docs/README.md"
+        "docs/README.md",
+        "docs/runbooks/CalibrationStale.md"
       ],
-      "wordCount": 407
+      "wordCount": 416
     },
     {
       "id": "docs/runbooks/StreamDownProlongado.md",
@@ -4067,6 +4302,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Worker de uma emissora sem bytes recebidos por mais de 10 minutos. Alerta dispara no Slack via #alertas-radiocheck.",
       "headings": [
         "Sintomas",
@@ -4092,6 +4328,7 @@
       "folder": "runbooks",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-07",
       "summary": "Container radiocheck-worker. (ou api) acima de 1.5 GiB de working set por mais de 30 minutos. Forte indicador de memory leak (R28 do plano), comum em ffmpeg de longa duração e em mudanças recentes no path de matching.",
       "headings": [
         "Sintomas",
@@ -4117,6 +4354,7 @@
       "folder": "runbooks",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-12",
       "summary": "STATIONURL=\"<streamurl da emissora>\"   # pegar do cadastro ou do log \"worker started\"",
       "headings": [
         "Sintomas",
@@ -4144,6 +4382,7 @@
       "folder": "subagentic-use",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-03",
       "summary": "You are an orchestrator agent responsible for delegating tasks to specialized sub-agents. You coordinate their work, synthesize results, and ensure the overall goal is achieved efficiently.",
       "headings": [
         "Core behavior",
@@ -4156,7 +4395,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/README.md"
+      ],
       "wordCount": 467
     },
     {
@@ -4165,6 +4406,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-05",
       "summary": "Este arquivo contém o prompt para iniciar uma sessão nova do Claude Code que vai planejar e executar a Fase 2 do Radiocheck via subagentes, com double-review por task (spec + qualidade).",
       "headings": [
         "O que a Fase 2 entrega",
@@ -4174,7 +4416,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 1699
     },
     {
@@ -4183,6 +4427,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-05",
       "summary": "Este arquivo contém o prompt para iniciar uma sessão nova do Claude Code que vai finalizar o PoC aplicando os fixes pendentes e fazendo commit do que já está aplicado.",
       "headings": [
         "Prompt para colar na nova sessão",
@@ -4190,7 +4435,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 1269
     },
     {
@@ -4199,6 +4446,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-05",
       "summary": "Este arquivo contém o prompt para iniciar uma sessão nova do Claude Code que vai executar o plano de implementação completo via subagentes, com double-review por task (spec + qualidade).",
       "headings": [
         "Pré-requisitos antes de iniciar a sessão",
@@ -4207,7 +4455,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 1119
     },
     {
@@ -4216,6 +4466,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-07",
       "summary": "cd workers && go test ./...",
       "headings": [
         "Grupo A — Scale Foundation",
@@ -4255,7 +4506,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 7727
     },
     {
@@ -4264,6 +4517,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-05",
       "summary": "workers/bin/ workers/.exe",
       "headings": [
         "File Map",
@@ -4314,7 +4568,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-05-radiocheck-poc-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 18991
     },
     {
@@ -4323,6 +4579,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-06",
       "summary": "Pure functions são o tijolo do componente. Sem React, sem CSS — só lógica.",
       "headings": [
         "File Structure",
@@ -4343,7 +4600,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-06-detections-calendar-view-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/detections-calendar.md"
+      ],
       "wordCount": 3379
     },
     {
@@ -4352,6 +4611,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-07",
       "summary": "// workers/internal/catalog/healtheventstest.go package catalog",
       "headings": [
         "File Map",
@@ -4367,7 +4627,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/operations-page.md"
+      ],
       "wordCount": 7305
     },
     {
@@ -4376,6 +4638,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-09",
       "summary": "migrations/0015sharedhashes.up.sql:",
       "headings": [
         "File Structure",
@@ -4396,7 +4659,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/shared-hash-detection.md"
+      ],
       "wordCount": 5922
     },
     {
@@ -4405,6 +4670,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-11",
       "summary": "cd \"c:/Users/marke/Desktop/Programas/Radiocheck/infra/docker\" docker compose ps",
       "headings": [
         "Estrutura de arquivos",
@@ -4466,6 +4732,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-11",
       "summary": "Estabelece o canal de comunicação com o backend (Plano 1) e prepara o roteamento. Sem UI nesta phase — só infra.",
       "headings": [
         "Pré-requisitos",
@@ -4523,6 +4790,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-11",
       "summary": "A página atual só carrega campaigns + stations + detections. Precisamos adicionar: useCampaignMaterials, useMaterials (do client da campanha), useDistributionRules, useMaterialTypes, useDailySummary. Tudo só ativa quando uma campanha est…",
       "headings": [
         "Pré-requisitos",
@@ -4568,6 +4836,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-13",
       "summary": "Adicionar logo após o tipo ListFilter existente (linha ~269), preservando o método List antigo para não quebrar o DayDetailModal:",
       "headings": [
         "File Structure",
@@ -4612,7 +4881,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-13-airtime-report-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/campaign-reports.md"
+      ],
       "wordCount": 11189
     },
     {
@@ -4621,6 +4892,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-13",
       "summary": "Migration 0016 introduced materials as a client-scoped, multi-campaign reusable catalog table. Existing commercials were backfilled into materials with the same UUID, but the detection pipeline (fingerprint daemon → index loader → matche…",
       "headings": [
         "Context — Why This Exists",
@@ -4667,6 +4939,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-14",
       "summary": "The current master has migrations through 0023unaccent. The bridge plan claims 0021 but will be renumbered to 0024 on merge (since 0021-0023 are taken). This plan uses 0025. If, when starting this plan, the highest migration is different…",
       "headings": [
         "File Structure",
@@ -4712,6 +4985,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-15",
       "summary": "Run: ls migrations/.up.sql | sort | tail -3 Expected: última versão é 0026materialscript.up.sql. Próxima é 0027.",
       "headings": [
         "File Structure",
@@ -4751,7 +5025,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-15-user-management-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/user-management.md"
+      ],
       "wordCount": 11226
     },
     {
@@ -4760,6 +5036,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-19",
       "summary": "workers/internal/catalog/stationfailurestest.go:",
       "headings": [
         "File Structure",
@@ -4798,6 +5075,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-19",
       "summary": "Create migrations/0031overridetimewindow.up.sql:",
       "headings": [
         "Task 1: Migration 0031overridetimewindow",
@@ -4837,6 +5115,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-25",
       "summary": "Em terminais separados, dev server e API rodando:",
       "headings": [
         "Pré-requisitos",
@@ -4881,6 +5160,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-25",
       "summary": "workers/internal/catalog/campaignfailurestest.go:",
       "headings": [
         "File Structure",
@@ -4925,6 +5205,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-25",
       "summary": "Antes de começar, em um terminal separado rode o dev server e mantenha aberto durante todo o plano:",
       "headings": [
         "Pré-requisitos",
@@ -4964,6 +5245,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-26",
       "summary": "cd frontend && npm install recharts html2canvas",
       "headings": [
         "File Structure",
@@ -5011,6 +5293,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "// workers/internal/probe/probetest.go package probe",
       "headings": [
         "File Structure",
@@ -5046,6 +5329,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "O dataset é o csv/municipios.csv do repositório público kelvins/municipios-brasileiros (colunas: codigoibge,nome,latitude,longitude,capital,codigouf,siafiid,ddd,fusohorario, base IBGE). Requer acesso à rede nesta etapa.",
       "headings": [
         "Estrutura de arquivos",
@@ -5069,7 +5353,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-27-geocoding-emissoras-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/geocoding-emissoras.md"
+      ],
       "wordCount": 4038
     },
     {
@@ -5078,6 +5364,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "Esta task não tem teste unitário próprio (o repo bate no Postgres; o projeto testa repos por integração/manual e a lógica de scope é validada no handler da Task 2). É exercitada na verificação manual da Task 9.",
       "headings": [
         "File Structure",
@@ -5101,7 +5388,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-05-27-live-map-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/live-map.md"
+      ],
       "wordCount": 4041
     },
     {
@@ -5110,6 +5399,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "Move 8 pure helpers out of DetectionsPage.jsx so MaterialsPage can reuse them without duplicating logic. Mechanical relocation — no behavior change.",
       "headings": [
         "File Structure",
@@ -5143,6 +5433,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-29",
       "summary": "Espelha workers/internal/catalog/livemap.go (que não tem teste de catálogo — o teste automatizado fica no handler, Task 2). Verificação desta task é compilar.",
       "headings": [
         "File Structure",
@@ -5166,7 +5457,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/management-overview.md"
+      ],
       "wordCount": 6015
     },
     {
@@ -5175,6 +5468,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-03",
       "summary": "package index",
       "headings": [
         "File Structure",
@@ -5202,6 +5496,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-09",
       "summary": "Cobre exatamente os cenários do usuário + bordas de ponte de fim de semana.",
       "headings": [
         "File Structure",
@@ -5240,6 +5535,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-17",
       "summary": "Isto foi provado numa investigação (2026-06-16/17). Não re-investigar o que já foi descartado:",
       "headings": [
         "⚠️ Contexto — ONDE está o problema (não fuçar em lugar errado)",
@@ -5267,7 +5563,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/version-disambiguation.md"
+      ],
       "wordCount": 3375
     },
     {
@@ -5276,6 +5574,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-18",
       "summary": "Cria workers/internal/api/handlers/admindailyfailuresdigesttest.go:",
       "headings": [
         "File Structure",
@@ -5308,6 +5607,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-18",
       "summary": "// matchedWindow é uma janela que casou com o top match: posição no material // novo (own) + offset de alinhamento (frames). type matchedWindow struct{ ownStart, ownEnd, offset int32 }",
       "headings": [
         "Convenções compartilhadas (referência para todas as tasks)",
@@ -5338,6 +5638,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-24",
       "summary": "Adicionar ao fim de detectionrestoretest.go:",
       "headings": [
         "File Structure",
@@ -5354,7 +5655,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/detection-count-consistency.md"
+      ],
       "wordCount": 4227
     },
     {
@@ -5363,6 +5666,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-25",
       "summary": "BEGIN;",
       "headings": [
         "File Structure",
@@ -5387,7 +5691,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/multi-attribution.md"
+      ],
       "wordCount": 3502
     },
     {
@@ -5396,6 +5702,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-26",
       "summary": "Mudança trivial, frontend-only. Confirmado no backend: monitoringstatus='paused' é setado exclusivamente quando a emissora não tem campanha ativa (supervisor) e emissora nova nasce paused — não existe \"pausada manualmente\".",
       "headings": [
         "File Structure",
@@ -5426,6 +5733,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-29",
       "summary": "migrations/0043rulematerialscope.up.sql:",
       "headings": [
         "Convenções deste plano",
@@ -5457,6 +5765,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-30",
       "summary": "Em detectionstest.go:",
       "headings": [
         "Task 1: RetractByID em catalog.Detections",
@@ -5467,7 +5776,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/version-disambiguation.md"
+      ],
       "wordCount": 1336
     },
     {
@@ -5476,6 +5787,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-01",
       "summary": "Espelha cmd/backfill-shared-hashes/main.go. Itera materiais fingerprintstatus='ready' (gêmeos são materiais) e chama PopulateForMaterial. Só escreve materialtwindiscriminative.",
       "headings": [
         "Pré-requisitos e travas de segurança (LER antes)",
@@ -5501,6 +5813,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-01",
       "summary": "Antes de escrever a Task 7 rodou uma auditoria de regressão cruzando esta feature contra TODOS os postmortems (docs/incidents/) e a arquitetura de atribuição. Achados e desvios já aplicados durante a execução subagent-driven:",
       "headings": [
         "Correções pós-auditoria de regressão (2026-07-01)",
@@ -5533,6 +5846,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-03",
       "summary": "Adicione ao fim de distributionrulesoverridetest.go (dentro do package catalog, imports já presentes):",
       "headings": [
         "File Structure",
@@ -5551,7 +5865,9 @@
       "outLinks": [
         "docs/superpowers/specs/2026-07-03-override-recat-and-visibility-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/override-time-window.md"
+      ],
       "wordCount": 3618
     },
     {
@@ -5560,6 +5876,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-09",
       "summary": "// scripts/brain/parse.test.mjs import { test } from 'node:test'; import assert from 'node:assert/strict'; import { parseFrontmatter, extractTitle, extractSummary, extractHeadings } from './parse.mjs';",
       "headings": [
         "Estrutura de arquivos",
@@ -5594,6 +5911,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-09",
       "summary": "BEGIN;",
       "headings": [
         "File Structure",
@@ -5633,6 +5951,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-07",
       "summary": "30 emissoras, 50 comerciais. Operação paralela em shadow mode com o fornecedor atual (§17.1 Fase A). A comparação de concordância é manual e visual — operador acessa plataforma do fornecedor e Radiocheck lado a lado.",
       "headings": [
         "Escopo",
@@ -5680,7 +5999,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md"
+      ],
       "wordCount": 2133
     },
     {
@@ -5689,6 +6010,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-05",
       "summary": "Construir o núcleo técnico do sistema de monitoramento de veiculação de comerciais em rádio, com 4 funcionalidades operacionais:",
       "headings": [
         "1. Objetivo",
@@ -5720,6 +6042,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/roadmap/follow-ups-fase2.md",
         "docs/superpowers/plans/2026-05-05-radiocheck-poc-implementation.md"
       ],
       "wordCount": 1366
@@ -5730,6 +6053,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-06",
       "summary": "Substituir a tabela plana de detecções por uma grade calendário onde:",
       "headings": [
         "1. Objetivo",
@@ -5750,6 +6074,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/detections-calendar.md",
         "docs/superpowers/plans/2026-05-06-detections-calendar-view.md"
       ],
       "wordCount": 1049
@@ -5760,6 +6085,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-07",
       "summary": "The current /monitoring page shows only lasthealthcheck timestamps and monitoringstatus badges — no historical data, no timeline, no incident tracking. It is operationally useless.",
       "headings": [
         "1. Context",
@@ -5784,7 +6110,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/operations-page.md"
+      ],
       "wordCount": 1260
     },
     {
@@ -5793,6 +6121,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-11",
       "summary": "Substituir o fluxo atual de cadastro de campanha (modal único com nome + cliente + datas + lista de emissoras + materiais soltos) por um wizard de 4 etapas que produz dados de distribuição programada. Esses dados alimentam a /detections…",
       "headings": [
         "1. Objetivo",
@@ -5852,6 +6181,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-13",
       "summary": "A DetectionsPage (/detections) atual mostra veiculações como um calendário de cobertura (grid station × dia, agrupado por tipo). É excelente pra ver padrões de distribuição mensal, mas péssima pra responder perguntas cronológicas tipo:",
       "headings": [
         "1. Problema e objetivo",
@@ -5907,6 +6237,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/campaign-reports.md",
         "docs/superpowers/plans/2026-05-13-airtime-report.md"
       ],
       "wordCount": 3812
@@ -5917,6 +6248,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-14",
       "summary": "docs/superpowers/plans/2026-05-13-material-fingerprint-pipeline.md (plano da ponte materials→fingerprint→detection). Ordem de execução: ponte primeiro, depois esta feature. Após a ponte, materiais novos chegam a",
       "headings": [
         "§1 — Problema & escopo",
@@ -5970,6 +6302,7 @@
       "folder": "superpowers",
       "status": "planejado",
       "ultimaVerificacao": "2026-05-15",
+      "createdAt": "2026-05-15",
       "summary": "A tela /login atual já tem um split 2-colunas funcional (brand panel + form panel) com orbs animadas e signal rings, mas o impacto visual é discreto. O usuário pediu um redesign inspirado em uma referência de SaaS com hero astronômico dr…",
       "headings": [
         "Contexto",
@@ -6022,6 +6355,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-15",
       "summary": "Hoje o sistema tem autenticação por JWT com 3 roles (admin, operator, viewer) mas nenhuma tela de gerenciamento de usuários: o único caminho pra criar conta é o bootstrap por env vars (workers/internal/auth/bootstrap.go), que só cria 1 a…",
       "headings": [
         "1. Contexto e motivação",
@@ -6055,6 +6389,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/user-management.md",
         "docs/superpowers/plans/2026-05-15-user-management.md"
       ],
       "wordCount": 1762
@@ -6065,6 +6400,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-18",
       "summary": "Radiocheck é um sistema de monitoramento de comerciais em rádio AM/FM cujo núcleo técnico é fingerprinting acústico estilo Shazam (constellation map + peak pairs). A tela 404 atual redireciona silenciosamente pra home (App.jsx:126). Quer…",
       "headings": [
         "1. Contexto e motivação",
@@ -6084,7 +6420,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/not-found-page.md"
+      ],
       "wordCount": 1415
     },
     {
@@ -6093,6 +6431,7 @@
       "folder": "superpowers",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "O admin do Radiocheck hoje tem três telas pra investigar problemas operacionais:",
       "headings": [
         "Contexto",
@@ -6158,6 +6497,7 @@
       "folder": "superpowers",
       "status": "planejado",
       "ultimaVerificacao": "2026-05-19",
+      "createdAt": "2026-05-19",
       "summary": "A tela de edição de campanha (/campaigns/:id/edit, step 4 \"Distribuição\") permite ao operador ajustar a distribuição esperada de veiculações por célula (emissora, tipo, dia). Hoje o ajuste manual via grid grava um override na tabela dist…",
       "headings": [
         "Contexto",
@@ -6213,6 +6553,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-25",
       "summary": "Hoje o admin não tem uma forma rápida de saber \"tem campanha com problema?\" sem entrar manualmente em /admin/campaign-failures ou /admin/station-failures. E quando entra em /admin/station-failures, a página inclui emissoras que só tivera…",
       "headings": [
         "1. Problema",
@@ -6259,6 +6600,7 @@
       "folder": "superpowers",
       "status": "implementado",
       "ultimaVerificacao": "2026-05-25",
+      "createdAt": "2026-05-25",
       "summary": "A página /admin/station-failures hoje responde \"que emissoras caíram ontem e que campanhas foram afetadas\" — visão station-first, útil pra ops investigar causa. Falta o complemento: a diretora executiva precisa abrir uma tela e ver \"que…",
       "headings": [
         "Contexto",
@@ -6310,6 +6652,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-25",
       "summary": "Campanhas costumam ser planejadas semanas antes da veiculação, mas o áudio do comercial chega em cima da hora. Hoje o wizard de campanha (/campaigns/new, /campaigns/:id/edit) força o operador a subir/vincular pelo menos um material no St…",
       "headings": [
         "1. Problema",
@@ -6354,6 +6697,7 @@
       "folder": "superpowers",
       "status": "planejado",
       "ultimaVerificacao": "2026-05-26",
+      "createdAt": "2026-05-26",
       "summary": "Hoje, ao final de uma campanha (ou em check-points), o time comercial monta manualmente um PDF para o cliente com impactos demográficos, CPM, bonificação e percentual de execução. O dado existe — está espalhado por /campaigns (financials…",
       "headings": [
         "1. Contexto e Motivação",
@@ -6407,6 +6751,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "Já temos streamurl cadastrada para muitas emissoras, mas parte desses links veio da fonte antiga e está podre: URLs que venceram, ou IPs que eram só um conector interno do fornecedor anterior — inúteis pra nós. Hoje o operador só descobr…",
       "headings": [
         "1. Problema",
@@ -6442,6 +6787,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "As emissoras (stations) têm city e state (UF) preenchidos, mas latitude/longitude ficam quase sempre nulas. Queremos preencher lat/long de todas as emissoras a partir de cidade+UF, manter isso preenchido ao cadastrar/editar emissoras, e…",
       "headings": [
         "Problema",
@@ -6461,6 +6807,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/geocoding-emissoras.md",
         "docs/superpowers/plans/2026-05-27-geocoding-emissoras.md"
       ],
       "wordCount": 1456
@@ -6471,6 +6818,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "Tela nova /live-map, item de menu \"Mapa ao Vivo\" na secao Veiculacao (admin e cliente). Layout split espelhando a referencia fornecida pelo usuario:",
       "headings": [
         "1. Visao geral",
@@ -6497,6 +6845,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/live-map.md",
         "docs/superpowers/plans/2026-05-27-live-map.md"
       ],
       "wordCount": 1192
@@ -6507,6 +6856,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-27",
       "summary": "Tela nova na seção Veiculação, acessível a admin e cliente (cliente só com as próprias campanhas/materiais). Permite, por campanha:",
       "headings": [
         "1. Objetivo",
@@ -6546,6 +6896,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-05-29",
       "summary": "Nova tela Visão Gerencial (/management): uma visão completa da operação da plataforma — todas as campanhas, de todos os clientes, num painel único. Diferente do /live-map (que exige escolher Cliente → Campanha antes de mostrar qualquer c…",
       "headings": [
         "1. Objetivo",
@@ -6564,7 +6915,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/management-overview.md"
+      ],
       "wordCount": 1108
     },
     {
@@ -6573,6 +6926,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-03",
       "summary": "Campanha 193 (MRA) INFINITE PAY | CAPITAIS (047cbacd-8508-402e-8577-1ceaff1c7c54), status ativa, 01/06→31/07, 7 emissoras-alvo, 1 material ligado — zero detecção desde sempre (detections histórico = 0), mesmo com workers ativos, pings OK,",
       "headings": [
         "1. Sintoma (caso real)",
@@ -6604,6 +6958,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-09",
       "summary": "Disparar automaticamente 3 tipos de email diários para todos os usuários internos (admin/operator) sobre o ciclo de vida das campanhas:",
       "headings": [
         "1. Objetivo",
@@ -6638,6 +6993,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-18",
       "summary": "O admin precisa de um \"briefing\" proativo das falhas do dia anterior assim que abre o sistema. Hoje a informação existe, mas é pull-only: ele tem que lembrar de abrir /admin/station-failures ou caçar no sininho. Queremos uma interrupção…",
       "headings": [
         "1. Problema / motivação",
@@ -6673,6 +7029,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-18",
       "summary": "Hoje o scan de similaridade reduz a comparação entre dois materiais a um único número (similarityscore = max(ownCov, otherCov)) e só age quando ≥50% (modal bloqueante de duplicata). O operador não consegue ver quanto dois materiais compa…",
       "headings": [
         "1. Problema",
@@ -6703,6 +7060,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-24",
       "summary": "A desambiguação de versões tem três camadas hoje, e a cobertura do clipe (no audit §9.9) é a autoridade final — menos num caso, que vaza ativamente:",
       "headings": [
         "1. Problema",
@@ -6736,7 +7094,9 @@
         "docs/incidents/incident-2026-06-12-detection-recall-gaps.md",
         "docs/roadmap/follow-ups-fase2.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/detection-count-consistency.md"
+      ],
       "wordCount": 1743
     },
     {
@@ -6745,6 +7105,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-25",
       "summary": "Hoje cada veiculação física gera exatamente uma linha em detections, com um campaignid. Esse invariante é a base de todo o pipeline de detecção: a desambiguação de versão (§18.2.2: v1/v2/v2b/v2c, dedup buffer, retração, reject-recovery),…",
       "headings": [
         "1. Contexto e problema",
@@ -6762,7 +7123,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/features/multi-attribution.md"
+      ],
       "wordCount": 1765
     },
     {
@@ -6771,6 +7134,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-26",
       "summary": "Hoje o operador insere veiculações manuais uma por uma pela DayDetailModal em /detections (POST /detections/manual, admin-only). Quando o stream de uma emissora cai o dia inteiro, todas as veiculações daquele dia são perdidas e precisam…",
       "headings": [
         "Contexto e motivação",
@@ -6806,6 +7170,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-29",
       "summary": "Hoje, toda regra de distribuição é por tipo (distributionrules.typeid, migration 0019): \"Spot 30s = 3×/dia na rádio X\" e qualquer material desse tipo cumpre a meta, fungivelmente. O categorizador casa detecção × regra só por typeid",
       "headings": [
         "1. Contexto e objetivo",
@@ -6846,6 +7211,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-06-30",
       "summary": "Quando um sting curto que é subset de um spot longo toca sozinho (ex.: camp 673c30b7 PILECCO — mat 34 \"PULSO SONORO\" 5.4s ⊂ mat 33 \"Spot 30\" 30s):",
       "headings": [
         "1. Problema (confirmado em prod)",
@@ -6864,7 +7230,9 @@
       ],
       "codigoRelacionado": [],
       "outLinks": [],
-      "backLinks": [],
+      "backLinks": [
+        "docs/architecture/version-disambiguation.md"
+      ],
       "wordCount": 1271
     },
     {
@@ -6873,6 +7241,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-01",
       "summary": "Dois (ou mais) materiais do mesmo anunciante que compartilham a maior parte do áudio (mesma locução-base/jingle) e diferem só num trecho curto — a chamada, a data falada (\"de 1 a 5 de julho\" vs \"festival de inverno junho\"). Chamamos de g…",
       "headings": [
         "1. Problema",
@@ -6908,6 +7277,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-03",
       "summary": "Cadeia de 3 falhas que vai recorrer:",
       "headings": [
         "Problema",
@@ -6926,6 +7296,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/features/override-time-window.md",
         "docs/superpowers/plans/2026-07-03-override-recat-and-visibility.md"
       ],
       "wordCount": 1322
@@ -6936,6 +7307,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-08",
       "summary": "No dashboard /insights, os KPIs Investido, Bonificação e CPM de campanhas com pricing consolidated têm dois defeitos que compartilham a mesma raiz — a fórmula do executado é uma taxa de cumprimento multiplicada pelo valor total do contra…",
       "headings": [
         "1. Problema",
@@ -6967,6 +7339,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-08",
       "summary": "Após o primeiro fix (clamp em \"hoje\" + cap no contrato), o Investido de campanha consolidada ainda não escalava com o período: como o executado era contrato × min(1, entreguenajanela ÷ planejadonajanela), assim que a janela tinha entrega…",
       "headings": [
         "1. Problema",
@@ -6992,6 +7365,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-09",
       "summary": "O projeto tem 187 documentos .md em /docs, organizados em pastas (architecture, features, operations, incidents, runbooks, roadmap, archive, superpowers/{plans,specs}). 104 deles têm frontmatter YAML ligando o doc ao código (codigo-relac…",
       "headings": [
         "1. Contexto e objetivo",
@@ -7021,6 +7395,7 @@
       "folder": "superpowers",
       "status": null,
       "ultimaVerificacao": null,
+      "createdAt": "2026-07-09",
       "summary": "O dev da plataforma (Dereck, email tatico3@hubradios.com) precisa coletar e gerenciar as demandas dos usuários dentro da própria plataforma, sem depender de ferramenta externa (Trello etc.). O incômodo não é o kanban — é ter que abrir ou…",
       "headings": [
         "1. Problema e objetivo",
@@ -7153,6 +7528,11 @@
     },
     {
       "source": "docs/README.md",
+      "target": "docs/features/campaign-fixed-cpm.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
       "target": "docs/features/campaign-notification-emails.md",
       "kind": "md"
     },
@@ -7179,6 +7559,11 @@
     {
       "source": "docs/README.md",
       "target": "docs/features/connect-backoff-circuit-breaker.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
+      "target": "docs/features/daily-failures-digest-modal.md",
       "kind": "md"
     },
     {
@@ -7218,7 +7603,17 @@
     },
     {
       "source": "docs/README.md",
+      "target": "docs/features/insights-dashboard.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
       "target": "docs/features/login-page.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
+      "target": "docs/features/management-overview.md",
       "kind": "md"
     },
     {
@@ -7274,6 +7669,11 @@
     {
       "source": "docs/README.md",
       "target": "docs/features/station-audience-age-ranges.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
+      "target": "docs/features/suggestions-board.md",
       "kind": "md"
     },
     {
@@ -7423,6 +7823,11 @@
     },
     {
       "source": "docs/README.md",
+      "target": "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
       "target": "docs/roadmap/detection-evaluation-report.md",
       "kind": "md"
     },
@@ -7434,6 +7839,11 @@
     {
       "source": "docs/README.md",
       "target": "docs/runbooks/README.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/README.md",
+      "target": "docs/subagentic-use/Subagents-usage.md",
       "kind": "md"
     },
     {
@@ -7449,6 +7859,16 @@
     {
       "source": "docs/architecture/detection-count-consistency.md",
       "target": "docs/architecture/version-disambiguation.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/architecture/detection-count-consistency.md",
+      "target": "docs/superpowers/plans/2026-06-24-suppress-path-reattribution.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/architecture/detection-count-consistency.md",
+      "target": "docs/superpowers/specs/2026-06-24-suppress-path-reattribution-design.md",
       "kind": "md"
     },
     {
@@ -7482,6 +7902,11 @@
       "kind": "md"
     },
     {
+      "source": "docs/architecture/shared-hash-detection.md",
+      "target": "docs/superpowers/plans/2026-05-09-shared-hash-coverage.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/architecture/system-architecture-overview.md",
       "target": "docs/operations/deploy.md",
       "kind": "md"
@@ -7509,6 +7934,21 @@
     {
       "source": "docs/architecture/version-disambiguation.md",
       "target": "docs/architecture/detection-count-consistency.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/architecture/version-disambiguation.md",
+      "target": "docs/superpowers/plans/2026-06-17-version-disambiguation-by-coverage.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/architecture/version-disambiguation.md",
+      "target": "docs/superpowers/plans/2026-06-30-cofire-reattribution-dedup.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/architecture/version-disambiguation.md",
+      "target": "docs/superpowers/specs/2026-06-30-cofire-reattribution-dedup-design.md",
       "kind": "md"
     },
     {
@@ -7592,6 +8032,16 @@
       "kind": "md"
     },
     {
+      "source": "docs/features/campaign-reports.md",
+      "target": "docs/superpowers/plans/2026-05-13-airtime-report.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/campaign-reports.md",
+      "target": "docs/superpowers/specs/2026-05-13-airtime-report-design.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/features/campaign-wizard.md",
       "target": "docs/features/campaign-connection-step.md",
       "kind": "md"
@@ -7639,6 +8089,16 @@
     {
       "source": "docs/features/daily-failures-digest-modal.md",
       "target": "docs/superpowers/specs/2026-06-18-daily-failures-digest-modal-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/detections-calendar.md",
+      "target": "docs/superpowers/plans/2026-05-06-detections-calendar-view.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/detections-calendar.md",
+      "target": "docs/superpowers/specs/2026-05-06-detections-calendar-view-design.md",
       "kind": "md"
     },
     {
@@ -7707,6 +8167,16 @@
       "kind": "md"
     },
     {
+      "source": "docs/features/geocoding-emissoras.md",
+      "target": "docs/superpowers/plans/2026-05-27-geocoding-emissoras.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/geocoding-emissoras.md",
+      "target": "docs/superpowers/specs/2026-05-27-geocoding-emissoras-design.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/features/insights-dashboard.md",
       "target": "docs/features/campaign-fixed-cpm.md",
       "kind": "md"
@@ -7732,6 +8202,16 @@
       "kind": "md"
     },
     {
+      "source": "docs/features/live-map.md",
+      "target": "docs/superpowers/plans/2026-05-27-live-map.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/live-map.md",
+      "target": "docs/superpowers/specs/2026-05-27-live-map-design.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/features/login-page.md",
       "target": "docs/operations/auth-bootstrap.md",
       "kind": "md"
@@ -7739,6 +8219,16 @@
     {
       "source": "docs/features/login-page.md",
       "target": "docs/superpowers/specs/2026-05-15-login-redesign-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/management-overview.md",
+      "target": "docs/superpowers/plans/2026-05-29-visao-gerencial.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/management-overview.md",
+      "target": "docs/superpowers/specs/2026-05-29-visao-gerencial-design.md",
       "kind": "md"
     },
     {
@@ -7837,8 +8327,43 @@
       "kind": "wiki"
     },
     {
+      "source": "docs/features/multi-attribution.md",
+      "target": "docs/superpowers/plans/2026-06-25-multi-attribution-f119.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/multi-attribution.md",
+      "target": "docs/superpowers/specs/2026-06-25-multi-attribution-f119-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/not-found-page.md",
+      "target": "docs/superpowers/specs/2026-05-18-not-found-page-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/operations-page.md",
+      "target": "docs/superpowers/plans/2026-05-07-stream-health.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/operations-page.md",
+      "target": "docs/superpowers/specs/2026-05-07-stream-health-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/override-time-window.md",
+      "target": "docs/superpowers/plans/2026-07-03-override-recat-and-visibility.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/features/override-time-window.md",
       "target": "docs/superpowers/specs/2026-05-19-override-time-window-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/override-time-window.md",
+      "target": "docs/superpowers/specs/2026-07-03-override-recat-and-visibility-design.md",
       "kind": "md"
     },
     {
@@ -7849,6 +8374,16 @@
     {
       "source": "docs/features/suggestions-board.md",
       "target": "docs/superpowers/specs/2026-07-09-suggestions-board-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/user-management.md",
+      "target": "docs/superpowers/plans/2026-05-15-user-management.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/features/user-management.md",
+      "target": "docs/superpowers/specs/2026-05-15-user-management-design.md",
       "kind": "md"
     },
     {
@@ -8038,6 +8573,11 @@
     },
     {
       "source": "docs/operations/docs-brain.md",
+      "target": "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/operations/docs-brain.md",
       "target": "docs/superpowers/plans/2026-07-09-docs-brain.md",
       "kind": "md"
     },
@@ -8112,8 +8652,48 @@
       "kind": "md"
     },
     {
+      "source": "docs/roadmap/2026-07-09-docs-brain-jarvis.md",
+      "target": "docs/operations/docs-brain.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/roadmap/follow-ups-fase2.md",
       "target": "docs/architecture/version-disambiguation.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/EXECUTAR-FASE2.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/EXECUTAR-FIXES.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/EXECUTAR.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/plans/2026-05-05-radiocheck-fase2-implementation.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/plans/2026-05-05-radiocheck-poc-implementation.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/specs/2026-05-05-radiocheck-fase2-design.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/roadmap/follow-ups-fase2.md",
+      "target": "docs/superpowers/specs/2026-05-05-radiocheck-poc-design.md",
       "kind": "md"
     },
     {
@@ -8157,6 +8737,21 @@
       "kind": "md"
     },
     {
+      "source": "docs/runbooks/CalibrationStale.md",
+      "target": "docs/operations/calibration.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/runbooks/CalibrationStale.md",
+      "target": "docs/operations/threshold-dynamic.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/runbooks/CalibrationStale.md",
+      "target": "docs/runbooks/README.md",
+      "kind": "md"
+    },
+    {
       "source": "docs/runbooks/FingerprintStuck.md",
       "target": "docs/incidents/incident-2026-06-12-detection-recall-gaps.md",
       "kind": "md"
@@ -8164,6 +8759,11 @@
     {
       "source": "docs/runbooks/README.md",
       "target": "docs/runbooks/AuditRejectedSpike.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/runbooks/README.md",
+      "target": "docs/runbooks/CalibrationStale.md",
       "kind": "md"
     },
     {
