@@ -557,7 +557,9 @@ export function buildHtml(index, template) {
   }
   // escapa </ para não fechar o <script> prematuramente
   const json = JSON.stringify(index).replace(/<\//g, '<\\/');
-  return template.replace(TOKEN, json);
+  // função (não string) no replace: senão $$, $&, $` , $' no JSON viram
+  // padrões de substituição do String.replace e corrompem/quebram o JSON.parse
+  return template.replace(TOKEN, () => json);
 }
 ```
 
