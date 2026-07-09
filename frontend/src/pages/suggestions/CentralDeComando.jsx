@@ -3,18 +3,21 @@ import { useSuggestions, useSuggestionsSummary, useUpdateSuggestion } from '../.
 import { StatusPill, TypePill, DevPriorityPill } from './SuggestionPills'
 import SuggestionCreateModal from './SuggestionCreateModal'
 import SuggestionDetail from './SuggestionDetail'
+import EmptyState from './EmptyState'
+import { TableSkeleton } from './Skeletons'
+import { IconPlus, IconList, IconBoard, IconSearch, IconInbox } from './icons'
 import {
   STATUS, STATUS_ORDER, BOARD_COLUMNS, TYPE, TYPE_ORDER,
   DEV_PRIORITY, DEV_PRIORITY_ORDER, devPriorityRank,
 } from './constants'
 import { timeAgo, fmtDateTime, authorLabel, initialOf } from './utils'
 
-function KpiCard({ label, value, tone, hint }) {
+// Leitura secundária de status (label:valor), sem virar card.
+function Read({ label, value, tone }) {
   return (
-    <div className={`sug-kpi${tone ? ' sug-kpi--' + tone : ''}`}>
-      <div className="sug-kpi-value">{value}</div>
-      <div className="sug-kpi-label">{label}</div>
-      {hint && <div className="sug-kpi-hint">{hint}</div>}
+    <div className={`sug-read${tone ? ' sug-read--' + tone : ''}`}>
+      <span className="sug-read-value">{value}</span>
+      <span className="sug-read-label">{label}</span>
     </div>
   )
 }
@@ -43,7 +46,7 @@ export default function CentralDeComando() {
 
   const items = q.data?.items || []
   const sm = summaryQ.data || {}
-  const counts = sm.counts || {}
+  const counts = sm.by_status || {}
 
   // Opções de autor derivadas dos resultados.
   const authorOptions = useMemo(() => {
@@ -77,27 +80,32 @@ export default function CentralDeComando() {
           <h1 className="sug-h1">Central de Sugestões</h1>
           <p className="sug-sub">Toda demanda da plataforma num lugar só. Triage, prioriza, responde — sem sair daqui.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Nova demanda</button>
+        <button className="btn btn-primary sug-newbtn" onClick={() => setCreating(true)}><IconPlus /> Nova demanda</button>
       </header>
 
-      {/* KPIs */}
-      <section className="sug-kpis">
-        <KpiCard label="Na caixa (novas)" value={counts.nova ?? 0} tone={counts.nova ? 'alert' : null} hint="Aguardando triage" />
-        <KpiCard label="Em progresso" value={counts.em_progresso ?? 0} tone="progress" />
-        <KpiCard label="Aceitas / backlog" value={counts.aceita ?? 0} />
-        <KpiCard label="Concluídas no mês" value={sm.resolved_this_month ?? 0} tone="done" />
-        <KpiCard label="Mais antiga aberta"
-                 value={sm.oldest_open_at ? timeAgo(sm.oldest_open_at) : '—'}
-                 tone={sm.oldest_open_at ? 'aging' : null}
-                 hint={sm.oldest_open_at ? fmtDateTime(sm.oldest_open_at) : 'nada apodrecendo'} />
+      {/* Command strip — primário (inbox) + leituras secundárias */}
+      <section className="sug-cmdstrip">
+        <button className={`sug-inbox${counts.nova ? ' is-hot' : ''}`}
+                onClick={() => setFStatus(fStatus === 'nova' ? '' : 'nova')}
+                title="Filtrar novas">
+          <span className="sug-inbox-icon"><IconInbox /></span>
+          <span className="sug-inbox-num">{counts.nova ?? 0}</span>
+          <span className="sug-inbox-label">na caixa<br />p/ triar</span>
+        </button>
+        <div className="sug-reads">
+          <Read label="em progresso" value={counts.em_progresso ?? 0} tone="progress" />
+          <Read label="aceitas / backlog" value={counts.aceita ?? 0} />
+          <Read label="concluídas no mês" value={sm.resolved_this_month ?? 0} tone="done" />
+          <Read label={sm.oldest_open ? 'mais antiga aberta' : 'tudo fresco'}
+                value={sm.oldest_open ? timeAgo(sm.oldest_open) : '—'}
+                tone={sm.oldest_open ? 'aging' : null} />
+        </div>
       </section>
 
       {/* Toolbar */}
       <div className="sug-toolbar">
         <div className="sug-search">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.5" /><path d="M11 11l3 3" strokeLinecap="round" />
-          </svg>
+          <IconSearch />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar título, descrição…" />
         </div>
         <select className="input sug-select" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
@@ -122,19 +130,23 @@ export default function CentralDeComando() {
           <option value="oldest">Ordenar: mais antigas</option>
         </select>
         <div className="sug-viewtoggle">
-          <button className={view === 'list' ? 'is-active' : ''} onClick={() => setView('list')} title="Lista">☰</button>
-          <button className={view === 'board' ? 'is-active' : ''} onClick={() => setView('board')} title="Board">▦</button>
+          <button className={view === 'list' ? 'is-active' : ''} onClick={() => setView('list')} title="Lista" aria-label="Ver como lista"><IconList /></button>
+          <button className={view === 'board' ? 'is-active' : ''} onClick={() => setView('board')} title="Board" aria-label="Ver como board"><IconBoard /></button>
         </div>
       </div>
 
-      {q.isLoading && <div className="sug-loading">Carregando…</div>}
+      {q.isLoading && <TableSkeleton rows={7} />}
 
       {!q.isLoading && sorted.length === 0 && (
-        <div className="sug-empty">
-          <div className="sug-empty-emoji" aria-hidden="true">🗂️</div>
-          <h3>{hasFilters ? 'Nada bate com esses filtros' : 'Caixa limpa'}</h3>
-          <p>{hasFilters ? 'Afrouxa um filtro pra ver mais.' : 'Nenhuma demanda em aberto. Aproveita o sossego.'}</p>
-        </div>
+        <EmptyState
+          variant={view === 'board' ? 'board' : 'cards'}
+          title={hasFilters ? 'Nada bate com esses filtros' : 'Caixa limpa — nada apodrecendo'}
+          text={hasFilters
+            ? 'Afrouxa um filtro (ou limpa a busca) pra ver mais demandas.'
+            : 'Nenhuma demanda em aberto. Quando um admin mandar algo, cai aqui na hora. Você também pode lançar as suas.'}
+          ctaLabel={hasFilters ? null : 'Nova demanda'}
+          onCta={() => setCreating(true)}
+        />
       )}
 
       {/* LISTA */}
