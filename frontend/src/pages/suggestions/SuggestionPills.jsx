@@ -2,6 +2,7 @@
 // por lista, board, cards e detalhe. As cores moram no CSS (classes
 // sug-pill--<value>) pra manter o JSX limpo e o tema consistente.
 import { STATUS, TYPE, REQ_PRIORITY, DEV_PRIORITY, EFFORT } from './constants'
+import { TypeIcon } from './icons'
 
 export function StatusPill({ value, size }) {
   const meta = STATUS[value]
@@ -20,7 +21,7 @@ export function TypePill({ value, size }) {
   if (!meta) return null
   return (
     <span className={`sug-pill sug-pill--type sug-type--${value}${size === 'sm' ? ' sug-pill--sm' : ''}`}>
-      <span className="sug-pill-emoji" aria-hidden="true">{meta.icon}</span>
+      <TypeIcon type={value} size={size === 'sm' ? 12 : 13} />
       {meta.label}
     </span>
   )

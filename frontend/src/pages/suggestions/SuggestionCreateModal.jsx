@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import RSelect from '../../components/RSelect'
 import { useCreateSuggestion, useUploadSuggestionAttachment } from '../../api/hooks'
 import ClipboardPasteZone from './ClipboardPasteZone'
+import { TypeIcon } from './icons'
 import { TYPE, TYPE_ORDER, REQ_PRIORITY, REQ_PRIORITY_ORDER, TARGET_SCREENS } from './constants'
 
 // Modal de criação. Serve ao autor (nova sugestão) e ao dev (nova demanda).
@@ -79,7 +80,7 @@ export default function SuggestionCreateModal({ onClose, onCreated, devMode }) {
                 <button key={t} type="button"
                         className={`sug-chip sug-chip--type${type === t ? ' is-active' : ''} sug-type--${t}`}
                         onClick={() => setType(t)} disabled={busy}>
-                  <span aria-hidden="true">{TYPE[t].icon}</span> {TYPE[t].label}
+                  <TypeIcon type={t} size={15} /> {TYPE[t].label}
                 </button>
               ))}
             </div>

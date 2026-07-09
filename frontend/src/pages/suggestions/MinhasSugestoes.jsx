@@ -3,6 +3,9 @@ import { useSuggestions } from '../../api/hooks'
 import { StatusPill, TypePill, ReqPriorityPill } from './SuggestionPills'
 import SuggestionCreateModal from './SuggestionCreateModal'
 import SuggestionDetail from './SuggestionDetail'
+import EmptyState from './EmptyState'
+import { CardsSkeleton } from './Skeletons'
+import { IconPlus } from './icons'
 import { STATUS, STATUS_ORDER } from './constants'
 import { timeAgo } from './utils'
 
@@ -22,7 +25,7 @@ export default function MinhasSugestoes() {
           <h1 className="sug-h1">Sugestões</h1>
           <p className="sug-sub">Mande o que você quer ver na plataforma. Acompanhe cada uma até virar realidade.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Nova sugestão</button>
+        <button className="btn btn-primary sug-newbtn" onClick={() => setCreating(true)}><IconPlus /> Nova sugestão</button>
       </header>
 
       <div className="sug-filterbar">
@@ -33,17 +36,21 @@ export default function MinhasSugestoes() {
         ))}
       </div>
 
-      {q.isLoading && <div className="sug-loading">Carregando…</div>}
+      {q.isLoading && <CardsSkeleton n={6} />}
 
       {!q.isLoading && items.length === 0 && (
-        <div className="sug-empty">
-          <div className="sug-empty-emoji" aria-hidden="true">💡</div>
-          <h3>{statusFilter ? 'Nada por aqui neste filtro' : 'Sua primeira ideia começa aqui'}</h3>
-          <p>Achou algo que dava pra melhorar? Faltou uma tela? Conta pra gente — com print e tudo.</p>
-          {!statusFilter && <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Nova sugestão</button>}
-        </div>
+        <EmptyState
+          variant="cards"
+          title={statusFilter ? 'Nada por aqui neste filtro' : 'Sua primeira ideia começa aqui'}
+          text={statusFilter
+            ? 'Nenhuma sugestão sua caiu neste status. Troca o filtro pra ver as outras.'
+            : 'Achou algo pra melhorar? Faltou uma tela? Conta com detalhe (e cola um print). A gente acompanha até virar realidade.'}
+          ctaLabel={statusFilter ? null : 'Nova sugestão'}
+          onCta={() => setCreating(true)}
+        />
       )}
 
+      {!q.isLoading && items.length > 0 && (
       <ul className="sug-cardlist">
         {items.map((s) => (
           <li key={s.id}>
@@ -66,6 +73,7 @@ export default function MinhasSugestoes() {
           </li>
         ))}
       </ul>
+      )}
 
       {creating && (
         <SuggestionCreateModal onClose={() => setCreating(false)} onCreated={(s) => setOpenId(s.id)} />
