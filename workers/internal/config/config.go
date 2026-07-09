@@ -42,6 +42,13 @@ type Config struct {
 	SMTPUser              string // SMTP_USER
 	SMTPPass              string // SMTP_PASS
 	MailFrom              string // MAIL_FROM (default = SMTPUser)
+
+	// ── Central de Sugestões ──
+	// SuggestionsDevEmail: email do dev que enxerga a "Central de Comando"
+	// (todas as sugestões, triage, notas privadas). Qualquer outro admin/operator
+	// vira "Autor" (só as próprias). Configurável por env pra ser testável sem
+	// recompilar; cai no default seguro quando ausente.
+	SuggestionsDevEmail string // SUGGESTIONS_DEV_EMAIL
 }
 
 func Load() (*Config, error) {
@@ -117,6 +124,11 @@ func Load() (*Config, error) {
 	cfg.MailFrom = os.Getenv("MAIL_FROM")
 	if cfg.MailFrom == "" {
 		cfg.MailFrom = cfg.SMTPUser
+	}
+
+	cfg.SuggestionsDevEmail = os.Getenv("SUGGESTIONS_DEV_EMAIL")
+	if cfg.SuggestionsDevEmail == "" {
+		cfg.SuggestionsDevEmail = "tatico3@hubradios.com"
 	}
 
 	return cfg, nil
