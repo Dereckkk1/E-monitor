@@ -34,12 +34,15 @@
 .sug-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
 .sug-search { display: flex; align-items: center; gap: 7px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-md); padding: 0 10px; flex: 1 1 220px; min-width: 180px; color: var(--c-text-3); }
 .sug-search input { border: 0; outline: 0; background: transparent; padding: 9px 0; font: inherit; color: var(--c-text); width: 100%; }
-/* Native select: sobrescreve o width:100%/appearance:none do .input global e
-   devolve um chevron (senão parece um campo de texto). Sem isso os filtros
-   esticam e empilham — o "empilhado" que a gente não quer. */
-.sug-select {
+/* Native select: PRECISA de `select.sug-select` (especificidade 0,1,1) pra
+   vencer o `.input { width:100%; appearance:none }` global — que, no bundle,
+   carrega depois e ganharia no empate de especificidade. Sem isto os filtros
+   esticam full-width e empilham (o "empilhado" que a gente não quer), e ficam
+   sem seta (parecem campo de texto). */
+select.sug-select {
   width: auto;
   min-width: 128px;
+  max-width: 220px;
   flex: 0 0 auto;
   height: 38px;
   padding: 8px 30px 8px 12px;
@@ -51,7 +54,8 @@
   background-position: right 10px center;
   cursor: pointer;
 }
-.sug-toolbar .sug-search { flex: 1 1 260px; }
+.sug-toolbar { row-gap: 8px; }
+.sug-toolbar .sug-search { flex: 1 1 240px; }
 .sug-viewtoggle { display: inline-flex; border: 1px solid var(--c-border); border-radius: var(--radius-md); overflow: hidden; background: var(--c-surface); }
 .sug-viewtoggle button { border: 0; background: transparent; padding: 8px 12px; cursor: pointer; color: var(--c-text-3); font-size: 15px; }
 .sug-viewtoggle button.is-active { background: var(--c-action-light); color: var(--c-action); }
