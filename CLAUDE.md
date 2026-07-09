@@ -352,6 +352,7 @@ docs/
 | Schema / migrations | [docs/operations/migrations.md](docs/operations/migrations.md) — leitura obrigatória antes de mexer em schema |
 | Auth, JWT, bootstrap admin, role gating | [docs/operations/auth-bootstrap.md](docs/operations/auth-bootstrap.md) |
 | Gerenciamento de usuários (admin/cliente, /admin/users, /account) | [docs/features/user-management.md](docs/features/user-management.md) |
+| **Sugestões** / central de demandas do dev (`/admin/suggestions`, 2 personas: autor cria/acompanha, dev `SUGGESTIONS_DEV_EMAIL`=tatico3@hubradios.com gerencia; thread, imagens S3, board/lista) | [docs/features/suggestions-board.md](docs/features/suggestions-board.md) |
 | Desativar cliente (reversível) + delete→409 com vínculos + login gating de cliente inativo | [docs/features/client-deactivation.md](docs/features/client-deactivation.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |
 | Disco cheio na VM / segmentos de evidência (`segmentsdata`) ocupando o disco de OS | [docs/operations/segments-disk-migration.md](docs/operations/segments-disk-migration.md) |
