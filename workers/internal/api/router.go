@@ -56,6 +56,7 @@ type Deps struct {
 	Insights              *handlers.InsightsHandler
 	LiveMap               *handlers.LiveMapHandler
 	ManagementOverview    *handlers.ManagementOverviewHandler
+	Suggestions           *handlers.SuggestionsHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -482,6 +483,26 @@ func NewRouter(d Deps) http.Handler {
 						r.Get("/admin/daily-failures-digest", d.DailyFailuresDigest.Get)
 						r.Post("/admin/daily-failures-digest/ack", d.DailyFailuresDigest.Ack)
 					})
+				}
+
+				// Central de Sugestões — admin/operator entram; a distinção
+				// dev × autor é imposta DENTRO do handler (isDev via email).
+				// Rotas registradas método-a-método (sem r.Route) pela mesma
+				// razão de /materials acima. As estáticas (/summary,
+				// /unread-count, /attachments/{aid}/url) vêm ANTES de /{id}
+				// pra chi resolver por especificidade sem surpresa. Doc:
+				// docs/features/suggestions-board.md.
+				if d.Suggestions != nil {
+					r.Post("/suggestions", d.Suggestions.Create)
+					r.Get("/suggestions", d.Suggestions.List)
+					r.Get("/suggestions/summary", d.Suggestions.Summary)              // handler barra não-dev
+					r.Get("/suggestions/unread-count", d.Suggestions.UnreadCount)
+					r.Get("/suggestions/attachments/{aid}/url", d.Suggestions.AttachmentURL)
+					r.Get("/suggestions/{id}", d.Suggestions.Get)
+					r.Patch("/suggestions/{id}", d.Suggestions.Patch)                 // handler barra não-dev
+					r.Post("/suggestions/{id}/comments", d.Suggestions.AddComment)
+					r.Post("/suggestions/{id}/attachments", d.Suggestions.UploadAttachment)
+					r.Post("/suggestions/{id}/read", d.Suggestions.MarkRead)
 				}
 			}) // end admin/operator group
 
