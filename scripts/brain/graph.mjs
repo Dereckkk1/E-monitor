@@ -22,7 +22,10 @@ export function buildGraph(nodes) {
   for (const n of nodes) {
     for (const link of n.rawLinks) {
       let tid = null;
-      if (link.kind === 'md') {
+      if (link.kind === 'repopath') {
+        // full repo-relative path (ex.: memória citando `docs/features/x.md`) → resolve por id exato
+        if (byId.has(link.target)) tid = link.target;
+      } else if (link.kind === 'md') {
         const r = resolveMdLink(link.target, n.id);
         if (byId.has(r)) tid = r;
       } else {

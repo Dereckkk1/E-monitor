@@ -568,6 +568,7 @@
     'runbooks'       : '#4C8DFF',  // azure — procedures/reference
     'superpowers'    : '#FF6EC7',  // magenta — skills/specs (largest folder)
     'subagentic-use' : '#FF8A3C',  // orange — subagent guidance
+    'memory'         : '#B48AFF',  // violet — memória nativa do Claude (overlay local)
     'root'           : '#D7E1F2',  // pale steel — top-level / meta (neutral)
     'archive'        : '#7C8BA3'   // dim slate — archived / inactive (neutral)
   };
@@ -597,7 +598,7 @@
   var AGE_FALLBACK = '#5B6A82';
   var AGE_LABEL = { fresh:'<30d', aging:'30–90d', stale:'>90d', none:'sem data' };
 
-  var FOLDER_LABEL = { 'subagentic-use':'subagentic', 'root':'root', 'archive':'archive' };
+  var FOLDER_LABEL = { 'subagentic-use':'subagentic', 'memory':'memória', 'root':'root', 'archive':'archive' };
   function folderLabel(f){ return (FOLDER_LABEL[f] || f || 'root'); }
   function statusKey(s){ return (s === null || s === undefined || s === '') ? 'null' : String(s); }
   function statusLabel(s){ return statusKey(s) === 'null' ? 'sem-status' : statusKey(s); }
@@ -1727,7 +1728,7 @@
       var aorder=['fresh','aging','stale','none'];
       return aorder.filter(function(k){ return present.has(k); });
     }
-    var forder=['architecture','features','operations','incidents','runbooks','superpowers','roadmap','subagentic-use','root','archive'];
+    var forder=['architecture','features','operations','incidents','runbooks','superpowers','roadmap','subagentic-use','memory','root','archive'];
     return forder.filter(function(k){ return present.has(k); });
   }
   var MODE_LABEL={folder:'FOLDER',status:'STATUS',age:'AGE'};

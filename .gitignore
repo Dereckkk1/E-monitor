@@ -64,3 +64,7 @@ docs/*.md.superpowers/
 dash campanha e multi campanha.txt
 # Visual brainstorming companion (superpowers)
 .superpowers/
+
+# docs-brain: overlay local de memória (--with-memory) — não committar
+docs/brain/index.local.html
+docs/brain/index.local.json

@@ -64,6 +64,13 @@ node scripts/brain-build.mjs --check
 ```
 Não escreve nada; imprime as contagens e a **lista de links `.md` quebrados** (aponta pra doc que não existe). Sai com código ≠0 se houver algum — útil pra CI futura. Hoje há alguns quebrados pré-existentes (drift de path relativo em `docs/superpowers/**` e docs que apontam pra fora de `/docs` como `plano_implementacao.md`).
 
+### Overlay de memória (local, não committado)
+
+```bash
+node scripts/brain-build.mjs --with-memory
+```
+Funde as **memórias nativas do Claude** (`~/.claude/projects/<slug>/memory/*.md`) no grafo como nós **`memory`** (cor violeta), cruzando com os docs pelos `[[wiki-links]]` e pelos caminhos `docs/…md` citados. Escreve num arquivo **à parte** — `docs/brain/index.local.html` (+ `.json`) — que é **gitignored**: o cérebro committado (`index.html`) segue **só-docs** (determinístico, portável, sem notas internas no repo). Abra o `index.local.html` no navegador pra ver docs + memória juntos. A pasta de memória é auto-detectada (override via `BRAIN_MEMORY_DIR`); se não existir, cai só-docs com aviso.
+
 ## Atualização automática (git hook)
 
 Um pre-commit hook regenera o índice sempre que você commita mudanças em `docs/**`. **Ativação por clone** (roda uma vez):

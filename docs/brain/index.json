@@ -3,7 +3,7 @@
   "counts": {
     "docs": 191,
     "edges": 344,
-    "brokenLinks": 79
+    "brokenLinks": 80
   },
   "nodes": [
     {
@@ -3208,6 +3208,7 @@
         "Perguntar (/cerebro)",
         "Regenerar o índice",
         "Checar saúde dos docs (links quebrados)",
+        "Overlay de memória (local, não committado)",
         "Atualização automática (git hook)",
         "Arquivos",
         "Testes",
@@ -3235,7 +3236,7 @@
         "docs/README.md",
         "docs/roadmap/2026-07-09-docs-brain-jarvis.md"
       ],
-      "wordCount": 1364
+      "wordCount": 1454
     },
     {
       "id": "docs/operations/migrations.md",
