@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-26
+ultima-verificacao: 2026-07-09
 codigo-relacionado:
   - migrations/0042_manual_proof_batches.up.sql
   - workers/internal/catalog/manual_batches.go
   - workers/internal/catalog/detections.go
+  - workers/internal/api/handlers/detections.go
   - workers/internal/api/handlers/detections_manual_batch.go
   - workers/internal/api/router.go
   - frontend/src/api/hooks.js
@@ -85,8 +86,17 @@ Resposta `201`: `{ batch_id, detections: [...], warnings: [...] }`.
 
 `multipart/form-data`, campo `audio`. Anexa o áudio a uma detecção que **ainda não tem áudio**
 (qualquer detecção: manual, via lote, ou automática sem evidência). Guard: `409` se já tiver áudio.
-Valida MIME (mp3/m4a/wav/aac/ogg) e 25 MB. Em sucesso, `evidence_status` vira `available` e retorna
+Aceita mp3/m4a/wav/aac/mpeg/ogg e 25 MB. Em sucesso, `evidence_status` vira `available` e retorna
 a detecção atualizada.
+
+O formato é resolvido por `resolveManualAudioExt` ([detections.go](../../workers/internal/api/handlers/detections.go)),
+compartilhado pelos 3 pontos de upload de censura (`CreateManual`, batch por-linha, `UploadEvidence`):
+tenta o `Content-Type` do browser e, se ele não bater no `manualAudioMIME`, **cai na extensão do
+filename** — espelhando a validação por extensão do upload de material (`/campaigns` passo 4). Isso
+resolve o `415` em arquivos cujo browser manda um MIME inesperado (ex.: `.mpeg` como `video/mpeg`, ou
+`application/octet-stream`/vazio no drag-drop). Quando resolvido por extensão, grava um Content-Type de
+áudio canônico no S3 (não persiste `video/mpeg`). O front (`DayDetailModal`, `DetectionDetailPage`)
+valida do mesmo jeito: aceita por extensão de áudio ou MIME de áudio explícito.
 
 ### `GET /detections/{id}/proof/url` — presigned do PDF do lote
 

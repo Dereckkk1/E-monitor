@@ -533,7 +533,7 @@ function ManualEntryForm({
   // MaterialsStep.addFiles) — inclui .mpeg. MIME fica só como fallback pra
   // arquivos sem extensão, já que .mpeg costuma vir com MIME video/mpeg.
   const AUDIO_EXT = /\.(wav|mp3|m4a|aac|mpeg|ogg)$/i
-  const isAudioOk = f => AUDIO_EXT.test(f.name) || !f.type || AUDIO_MIME.includes(f.type.toLowerCase())
+  const isAudioOk = f => AUDIO_EXT.test(f.name) || (f.type && AUDIO_MIME.includes(f.type.toLowerCase()))
 
   function patchRow(key, patch) {
     setRows(rs => rs.map(r => (r.key === key ? { ...r, ...patch } : r)))

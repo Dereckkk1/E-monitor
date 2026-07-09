@@ -401,7 +401,7 @@ function CensuraUploader({ detection }) {
   // Aceita por extensão igual ao upload de material (/campaigns passo 4) — inclui
   // .mpeg. MIME fica só como fallback pra arquivos sem extensão.
   const EXT = /\.(wav|mp3|m4a|aac|mpeg|ogg)$/i
-  const isAudioOk = f => EXT.test(f.name) || !f.type || MIME.includes(f.type.toLowerCase())
+  const isAudioOk = f => EXT.test(f.name) || (f.type && MIME.includes(f.type.toLowerCase()))
 
   function pick(f) {
     setErr('')
