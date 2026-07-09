@@ -44,6 +44,22 @@ test('buildGraph não vaza rawLinks no nó de saída', () => {
   assert.equal(g.nodes[0].rawLinks, undefined);
 });
 
+test('buildGraph trata basename ambíguo como link quebrado (não adivinha)', () => {
+  const nodes = [
+    mk('docs/README.md', []),
+    mk('docs/runbooks/README.md', []),
+    mk('docs/x.md', [{ target: 'README', kind: 'wiki' }]),
+  ];
+  const g = buildGraph(nodes);
+  assert.equal(g.counts.edges, 0);
+  assert.equal(g.counts.brokenLinks, 1);
+});
+
+test('buildGraph ordena brokenList (determinístico)', () => {
+  const g = buildGraph([mk('docs/a.md', [{ target: 'zzz.md', kind: 'md' }, { target: 'aaa.md', kind: 'md' }])]);
+  assert.deepEqual(g.brokenList.map((b) => b.target), ['aaa.md', 'zzz.md']);
+});
+
 function mk(id, rawLinks) {
   return {
     id, title: id, folder: 'x', status: null, ultimaVerificacao: null,
