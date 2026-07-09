@@ -356,15 +356,21 @@
 
   function fitView(){
     if(!nodes.length){ view={x:W/2,y:H/2,scale:1}; return; }
-    var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for(var i=0;i<nodes.length;i++){ var n=nodes[i];
-      if(n.x<minX)minX=n.x; if(n.y<minY)minY=n.y; if(n.x>maxX)maxX=n.x; if(n.y>maxY)maxY=n.y;
-    }
-    var gw=Math.max(1,maxX-minX), gh=Math.max(1,maxY-minY);
+    // ROBUST fit. Raw min/max is dominated by a few far-flung outliers, and even the
+    // mean centroid is pulled toward them (asymmetric outliers → core drifts off to a
+    // side). So center on the MEDIAN position (outlier-resistant) and size by a
+    // PERCENTILE radius: the dense mass fills the frame, the ~12% extreme nodes may
+    // clip off at the default zoom (fine — wheel-zoom-out reveals them).
+    var xs = nodes.map(function(n){ return n.x; }).sort(function(a,b){ return a-b; });
+    var ys = nodes.map(function(n){ return n.y; }).sort(function(a,b){ return a-b; });
+    var cx = xs[Math.floor(xs.length/2)], cy = ys[Math.floor(ys.length/2)];
+    var ds = nodes.map(function(n){ return Math.hypot(n.x-cx, n.y-cy); }).sort(function(a,b){ return a-b; });
+    var R = Math.max(1, ds[Math.floor(ds.length*0.86)] || 1);   // 86th-percentile radius = core edge
     var insetT=88, insetB=104, insetX=60;
     var availW=Math.max(80, W-insetX*2), availH=Math.max(80, H-insetT-insetB);
-    var s=clamp(Math.min(availW/gw, availH/gh), 0.08, 3.2);
-    var cx=(minX+maxX)/2, cy=(minY+maxY)/2;
+    // map the core DIAMETER (2R) to ~72% of the smaller available dimension, centered
+    var target = Math.min(availW, availH) * 0.72;
+    var s = clamp(target / (2*R), 0.08, 3.2);
     view.scale=s;
     view.x=(insetX+availW/2) - cx*s;
     view.y=(insetT+availH/2) - cy*s;
@@ -400,15 +406,14 @@
   function drawEdges(){
     var searching = !!activeQuery || activeCat!=null;
     ctx.lineWidth = 1;
-    // base edges
-    ctx.strokeStyle = 'rgba(120,170,255,0.14)';
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
+    // base edges — stroked one-by-one so overlaps accumulate: the dense core reads
+    // as brighter connective tissue while sparse links stay a faint hairline web.
+    ctx.strokeStyle = 'rgba(126,176,255,0.22)';
     for(var i=0;i<edges.length;i++){
       var e=edges[i], a=idIndex.get(e.source), b=idIndex.get(e.target);
       if(selectedEdges.has(e)) continue;
       var lit = !searching || (isBright(a) && isBright(b));
-      ctx.globalAlpha = lit ? 0.5 : 0.06;
+      ctx.globalAlpha = lit ? 1 : 0.05;
       ctx.beginPath();
       ctx.moveTo(sx(a),sy(a)); ctx.lineTo(sx(b),sy(b)); ctx.stroke();
     }
@@ -816,7 +821,9 @@
   // ── boot ────────────────────────────────────────────────────────────────────
   function layout(){
     sizeCanvas();
-    simulate(nodes, edges, { W:W||1200, H:H||800, iterations:300 });
+    // a few extra iterations let the core settle into an organic mass (still ONE
+    // cohesive cluster — the given constants are unchanged, only more relaxation)
+    simulate(nodes, edges, { W:W||1200, H:H||800, iterations:360 });
     if(!didFit){ fitView(); didFit=true; }
     render();
   }
