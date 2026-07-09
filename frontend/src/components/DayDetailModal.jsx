@@ -529,6 +529,11 @@ function ManualEntryForm({
   const MAX_MB = 25
   const AUDIO_MIME = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a',
                       'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg']
+  // Aceita por extensão igual ao upload de material (/campaigns passo 4:
+  // MaterialsStep.addFiles) — inclui .mpeg. MIME fica só como fallback pra
+  // arquivos sem extensão, já que .mpeg costuma vir com MIME video/mpeg.
+  const AUDIO_EXT = /\.(wav|mp3|m4a|aac|mpeg|ogg)$/i
+  const isAudioOk = f => AUDIO_EXT.test(f.name) || !f.type || AUDIO_MIME.includes(f.type.toLowerCase())
 
   function patchRow(key, patch) {
     setRows(rs => rs.map(r => (r.key === key ? { ...r, ...patch } : r)))
@@ -551,7 +556,7 @@ function ManualEntryForm({
     const fresh = []
     for (const f of files) {
       if (f.size > MAX_MB * 1024 * 1024) { skipped++; continue }
-      if (f.type && !AUDIO_MIME.includes(f.type.toLowerCase())) { skipped++; continue }
+      if (!isAudioOk(f)) { skipped++; continue }
       fresh.push({ ...mkRow(parseTimeFromName(f.name) ?? '12:00', bulkMaterial), audio: f })
     }
     if (fresh.length > 0) {
@@ -571,8 +576,8 @@ function ManualEntryForm({
   function pickRowAudio(key, file) {
     if (!file) { patchRow(key, { audio: null, audioError: '' }); return }
     if (file.size > MAX_MB * 1024 * 1024) { patchRow(key, { audio: null, audioError: `Acima de ${MAX_MB}MB.` }); return }
-    if (file.type && !AUDIO_MIME.includes(file.type.toLowerCase())) {
-      patchRow(key, { audio: null, audioError: 'Formato inválido (mp3, m4a, wav, aac, ogg).' }); return
+    if (!isAudioOk(file)) {
+      patchRow(key, { audio: null, audioError: 'Formato inválido (mp3, m4a, wav, aac, mpeg, ogg).' }); return
     }
     patchRow(key, { audio: file, audioError: '' })
   }
@@ -988,7 +993,7 @@ function CensurasDropzone({ onFiles }) {
         ref={inputRef}
         type="file"
         multiple
-        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/wave,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/wave,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.mpeg,.ogg"
         onChange={e => { onFiles(e.target.files); e.target.value = '' }}
         style={{ display: 'none' }}
       />
@@ -1007,7 +1012,7 @@ function CensurasDropzone({ onFiles }) {
           {dragOver ? 'Solta as censuras aqui' : 'Selecionar censuras (vários arquivos)'}
         </div>
         <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
-          Cada áudio vira uma linha. MP3, M4A, WAV, AAC ou OGG · até 25MB cada
+          Cada áudio vira uma linha. MP3, M4A, WAV, AAC, MPEG ou OGG · até 25MB cada
         </div>
       </div>
     </div>
@@ -1089,7 +1094,7 @@ function RowAudio({ audio, error, onFile, onClear }) {
       <input
         ref={inputRef}
         type="file"
-        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+        accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.mpeg,.ogg"
         onChange={e => onFile(e.target.files?.[0] ?? null)}
         style={{ display: 'none' }}
       />

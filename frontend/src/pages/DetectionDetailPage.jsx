@@ -398,12 +398,16 @@ function CensuraUploader({ detection }) {
   const upload = useUploadDetectionEvidence()
   const MAX_MB = 25
   const MIME = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg']
+  // Aceita por extensão igual ao upload de material (/campaigns passo 4) — inclui
+  // .mpeg. MIME fica só como fallback pra arquivos sem extensão.
+  const EXT = /\.(wav|mp3|m4a|aac|mpeg|ogg)$/i
+  const isAudioOk = f => EXT.test(f.name) || !f.type || MIME.includes(f.type.toLowerCase())
 
   function pick(f) {
     setErr('')
     if (!f) { setFile(null); return }
     if (f.size > MAX_MB * 1024 * 1024) { setErr(`Acima de ${MAX_MB}MB.`); setFile(null); return }
-    if (f.type && !MIME.includes(f.type.toLowerCase())) { setErr('Formato inválido (mp3, m4a, wav, aac, ogg).'); setFile(null); return }
+    if (!isAudioOk(f)) { setErr('Formato inválido (mp3, m4a, wav, aac, mpeg, ogg).'); setFile(null); return }
     setFile(f)
   }
 
@@ -436,7 +440,7 @@ function CensuraUploader({ detection }) {
         <input
           ref={inputRef}
           type="file"
-          accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.ogg"
+          accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,.mp3,.m4a,.wav,.aac,.mpeg,.ogg"
           style={{ display: 'none' }}
           onChange={e => pick(e.target.files?.[0] ?? null)}
         />
