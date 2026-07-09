@@ -133,8 +133,10 @@ func (h *SuggestionsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	filter := catalog.ListSuggestionsFilter{
-		Query: q.Get("q"),
-		Sort:  q.Get("sort"),
+		Query:       q.Get("q"),
+		Sort:        q.Get("sort"),
+		ViewerID:    uid,
+		ViewerIsDev: isDev,
 	}
 	if !isDev {
 		filter.OnlyAuthorID = &uid
