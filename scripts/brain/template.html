@@ -296,7 +296,7 @@
 <div id="app">
   <header id="hud-top">
     <div class="brand">RADIOCHECK <span class="dim">// DOCS-BRAIN</span></div>
-    <input id="search" placeholder="SEARCH / filtrar docs" autocomplete="off" spellcheck="false">
+    <input id="search" placeholder="SEARCH / filtrar docs" autocomplete="off" spellcheck="false" aria-label="Buscar docs">
     <div id="telemetry" class="mono"></div>
   </header>
   <canvas id="graph"></canvas>
@@ -929,6 +929,11 @@
   }
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', function(){ isDown=false; canvas.classList.remove('dragging'); });
+  // I2: pointermove only fires over the canvas — leaving it (onto the search box /
+  // legend / out of the window) must clear hover so the focus loop can settle & FREEZE.
+  canvas.addEventListener('pointerleave', function(){
+    if(hovered){ hovered=null; canvas.style.cursor='grab'; updateTelemetry(); updateFocus(); }
+  });
 
   canvas.addEventListener('wheel', function(ev){
     ev.preventDefault();
@@ -960,7 +965,9 @@
     updateTelemetry(); invalidate(); render();
   });
   searchEl.addEventListener('keydown', function(ev){
-    if(ev.key==='Escape'){ searchEl.value=''; searchEl.dispatchEvent(new Event('input')); searchEl.blur(); }
+    // M3: stop the Escape from also reaching the document handler (which would
+    // deselect the node/category) — clearing the search is its own action.
+    if(ev.key==='Escape'){ ev.stopPropagation(); searchEl.value=''; searchEl.dispatchEvent(new Event('input')); searchEl.blur(); }
   });
 
   // ── telemetry ───────────────────────────────────────────────────────────────
@@ -1095,8 +1102,11 @@
   window.addEventListener('resize', function(){
     clearTimeout(resizeT);
     resizeT=setTimeout(function(){
+      // M2: the layout is seeded/deterministic and already settled — re-running the
+      // force sim would visibly drift it. Just re-size and re-fit (re-centre) for the
+      // new dimensions; positions are preserved.
       sizeCanvas(); sizeParticles();
-      simulate(nodes, edges, { W:W||1200, H:H||800, iterations:120 });
+      fitView();
       invalidate(); render();
       if(reduceMotion) drawParticles();
     }, 160);

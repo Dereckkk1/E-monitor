@@ -18,3 +18,11 @@ test('buildHtml escapa </script> pra não quebrar o parser', () => {
   const html = buildHtml({ nodes: [{ t: '</script><b>' }] }, TPL);
   assert.ok(!html.includes('</script><b>'));
 });
+
+test('buildHtml não quebra com $$ / $& no conteúdo (replace pattern hazard)', () => {
+  const idx = { nodes: [{ summary: 'usa $$VAR e sed $& e R$ 5,00 e $` e $\'' }] };
+  const html = buildHtml(idx, TPL);
+  const json = html.match(/type="application\/json">([\s\S]*?)<\/script>/)[1];
+  const back = JSON.parse(json.replace(/<\\\//g, '</'));
+  assert.equal(back.nodes[0].summary, idx.nodes[0].summary);
+});

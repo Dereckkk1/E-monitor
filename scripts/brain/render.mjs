@@ -6,5 +6,7 @@ export function buildHtml(index, template) {
     throw new Error(`template sem token de injeção ${TOKEN}`);
   }
   const json = JSON.stringify(index).replace(/<\//g, '<\\/');
-  return template.replace(TOKEN, json);
+  // Function replacement: never subject to $$, $&, $`, $' substitution patterns,
+  // which would otherwise corrupt JSON containing them (docker $$, sed $&, R$...).
+  return template.replace(TOKEN, () => json);
 }
