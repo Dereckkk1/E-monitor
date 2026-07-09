@@ -1,0 +1,23 @@
+#!/bin/sh
+# docs-brain: regenera o índice+HUD quando docs/**/*.md muda no commit.
+# NUNCA bloqueia o commit — falha graciosa.
+changed=$(git diff --cached --name-only --diff-filter=ACMR \
+  | grep '^docs/' | grep -v '^docs/brain/' | grep '\.md$')
+[ -z "$changed" ] && exit 0
+
+NODE=""
+if command -v node >/dev/null 2>&1; then NODE="node"
+elif [ -x "/c/Program Files/nodejs/node.exe" ]; then NODE="/c/Program Files/nodejs/node.exe"
+elif [ -n "$LOCALAPPDATA" ] && [ -x "$LOCALAPPDATA/Programs/nodejs/node.exe" ]; then NODE="$LOCALAPPDATA/Programs/nodejs/node.exe"
+fi
+if [ -z "$NODE" ]; then
+  echo "[docs-brain] node não encontrado no PATH do hook — pulei a regeneração (commit segue)." >&2
+  exit 0
+fi
+
+"$NODE" scripts/brain-build.mjs --quiet || {
+  echo "[docs-brain] geração falhou — commit segue sem atualizar o índice." >&2
+  exit 0
+}
+git add docs/brain/index.json docs/brain/index.html
+exit 0
