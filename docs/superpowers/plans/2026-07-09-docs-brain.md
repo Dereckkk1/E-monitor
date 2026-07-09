@@ -105,6 +105,21 @@ test('extractSummary pega a 1ª prosa, limpa markdown, ignora heading', () => {
 test('extractHeadings pega ## e ###', () => {
   assert.deepEqual(extractHeadings(DOC), ['Arquitetura', 'Feed']);
 });
+
+test('parseFrontmatter funciona com CRLF (arquivos reais do repo)', () => {
+  const crlf = '---\r\nstatus: legado\r\nultima-verificacao: 2026-01-02\r\ncodigo-relacionado:\r\n  - a/b.go\r\n---\r\n\r\n# Título\r\n\r\nCorpo.\r\n';
+  const { fm, body } = parseFrontmatter(crlf);
+  assert.equal(fm.status, 'legado');
+  assert.equal(fm.ultimaVerificacao, '2026-01-02');
+  assert.deepEqual(fm.codigoRelacionado, ['a/b.go']);
+  assert.ok(!body.includes('\r'));
+  assert.ok(body.includes('# Título'));
+});
+
+test('extractSummary para na lista colada sem linha em branco', () => {
+  const s = extractSummary('Texto de abertura sem linha em branco.\n- item um\n- item dois\n\nresto');
+  assert.equal(s, 'Texto de abertura sem linha em branco.');
+});
 ```
 
 - [ ] **Step 2: Rodar e ver falhar**
@@ -127,6 +142,7 @@ const cleanInline = (s) =>
    .trim();
 
 export function parseFrontmatter(text) {
+  text = text.replace(/\r\n/g, '\n'); // arquivos do repo são CRLF (core.autocrlf)
   const fm = { status: null, ultimaVerificacao: null, codigoRelacionado: [] };
   const m = text.match(FM_RE);
   if (!m) return { fm, body: text };
@@ -161,7 +177,9 @@ export function extractSummary(body) {
     if (!l || SKIP.test(l)) continue;
     let out = l;
     for (let j = i + 1; j < lines.length && lines[j].trim() && out.length <= 240; j++) {
-      out += ' ' + lines[j].trim();
+      const t = lines[j].trim();
+      if (SKIP.test(t)) break; // não funde lista/heading colados sem linha em branco
+      out += ' ' + t;
     }
     out = cleanInline(out);
     return out.length > 240 ? out.slice(0, 237).trimEnd() + '…' : out;
