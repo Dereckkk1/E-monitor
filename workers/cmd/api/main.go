@@ -480,6 +480,12 @@ func main() {
 		Insights:              handlers.NewInsightsHandler(catalog.NewInsights(pool)),
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
 		ManagementOverview:    &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: sup},
+		Suggestions: &handlers.SuggestionsHandler{
+			Repo:     catalog.NewSuggestions(pool),
+			Users:    usersRepo,
+			Storage:  s3Client,
+			DevEmail: cfg.SuggestionsDevEmail,
+		},
 	}
 
 	srv := &http.Server{
