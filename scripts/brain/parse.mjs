@@ -10,6 +10,7 @@ const cleanInline = (s) =>
    .trim();
 
 export function parseFrontmatter(text) {
+  text = text.replace(/\r\n/g, '\n');
   const fm = { status: null, ultimaVerificacao: null, codigoRelacionado: [] };
   const m = text.match(FM_RE);
   if (!m) return { fm, body: text };
@@ -44,7 +45,9 @@ export function extractSummary(body) {
     if (!l || SKIP.test(l)) continue;
     let out = l;
     for (let j = i + 1; j < lines.length && lines[j].trim() && out.length <= 240; j++) {
-      out += ' ' + lines[j].trim();
+      const t = lines[j].trim();
+      if (SKIP.test(t)) break;
+      out += ' ' + t;
     }
     out = cleanInline(out);
     return out.length > 240 ? out.slice(0, 237).trimEnd() + '…' : out;

@@ -51,11 +51,26 @@ test('extractTitle sem H1 humaniza o nome do arquivo', () => {
 test('extractSummary pega a 1ª prosa, limpa markdown, ignora heading', () => {
   const { body } = parseFrontmatter(DOC);
   const s = extractSummary(body);
-  assert.ok(s.startsWith('Emissoras monitoradas pulsando no mapa do Brasil'));
+  assert.equal(s, 'Emissoras monitoradas pulsando no mapa do Brasil em tempo real.');
   assert.ok(!s.includes('**'));
   assert.ok(!s.includes(']('));
 });
 
 test('extractHeadings pega ## e ###', () => {
   assert.deepEqual(extractHeadings(DOC), ['Arquitetura', 'Feed']);
+});
+
+test('parseFrontmatter funciona com CRLF (arquivos reais do repo)', () => {
+  const crlf = '---\r\nstatus: legado\r\nultima-verificacao: 2026-01-02\r\ncodigo-relacionado:\r\n  - a/b.go\r\n---\r\n\r\n# Título\r\n\r\nCorpo.\r\n';
+  const { fm, body } = parseFrontmatter(crlf);
+  assert.equal(fm.status, 'legado');
+  assert.equal(fm.ultimaVerificacao, '2026-01-02');
+  assert.deepEqual(fm.codigoRelacionado, ['a/b.go']);
+  assert.ok(!body.includes('\r'));
+  assert.ok(body.includes('# Título'));
+});
+
+test('extractSummary para na lista colada sem linha em branco', () => {
+  const s = extractSummary('Texto de abertura sem linha em branco.\n- item um\n- item dois\n\nresto');
+  assert.equal(s, 'Texto de abertura sem linha em branco.');
 });
