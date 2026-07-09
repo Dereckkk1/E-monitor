@@ -391,66 +391,125 @@
     return true;
   }
 
+  // ── Layer 2 — focus state, glow sprites, and the unified scene ─────────────
   var hovered = null;
   var selected = null;
-  var selectedEdges = new Set();
+  var focusSet = null;      // ids in the focused neighbourhood (node + its neighbours)
+  var flowEdges = [];       // edges incident to the focus node (animated "data flow")
+  var flowEdgeSet = null;   // Set(flowEdges) for O(1) skip in the base-edge pass
+  var focusNodeRef = null;  // node driving focus/context (persists through fade-out)
 
-  // ── draw pipeline (kept modular so Layer 2 can add glow/bloom passes) ──────
-  function draw(){
-    ctx.clearRect(0,0,W,H);
-    drawEdges();
-    drawNodes();
-    drawLabels();
+  function activeFocus(){ return hovered || selected; }
+  function computeFocus(){
+    var fn = activeFocus();
+    if(!fn) return;                          // keep the prior set alive during fade-out
+    focusNodeRef = fn;
+    focusSet = new Set([fn.id]); flowEdges = [];
+    for(var i=0;i<edges.length;i++){ var e=edges[i];
+      if(e.source===fn.id){ focusSet.add(e.target); flowEdges.push(e); }
+      else if(e.target===fn.id){ focusSet.add(e.source); flowEdges.push(e); }
+    }
+    flowEdgeSet = new Set(flowEdges);
   }
 
-  function drawEdges(){
+  // hex → rgba, used to build the glow gradients once
+  function hexRgb(h){ h=(h||'#8899aa').replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; var n=parseInt(h,16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+  function rgba(h,a){ var c=hexRgb(h); return 'rgba('+c[0]+','+c[1]+','+c[2]+','+a+')'; }
+
+  // Cached sprites: built once per colour, blitted every frame (no per-frame gradient
+  // allocation). Layer 3 can register particle/aurora sprites the same way.
+  var SPRITE=128, haloCache={}, coreCache={};
+  function haloSprite(color){
+    if(haloCache[color]) return haloCache[color];
+    var c=document.createElement('canvas'); c.width=SPRITE; c.height=SPRITE;
+    var g=c.getContext('2d'), m=SPRITE/2, grad=g.createRadialGradient(m,m,0,m,m,m);
+    grad.addColorStop(0.00, rgba(color,0.55));
+    grad.addColorStop(0.22, rgba(color,0.30));
+    grad.addColorStop(0.50, rgba(color,0.09));
+    grad.addColorStop(1.00, rgba(color,0));
+    g.fillStyle=grad; g.fillRect(0,0,SPRITE,SPRITE);
+    return (haloCache[color]=c);
+  }
+  function coreSprite(color){
+    if(coreCache[color]) return coreCache[color];
+    var c=document.createElement('canvas'); c.width=SPRITE; c.height=SPRITE;
+    var g=c.getContext('2d'), m=SPRITE/2, grad=g.createRadialGradient(m,m,0,m,m,m);
+    grad.addColorStop(0.00, 'rgba(234,242,255,1)');    // near-white hot centre (--ink)
+    grad.addColorStop(0.30, rgba(color,1));
+    grad.addColorStop(0.82, rgba(color,1));
+    grad.addColorStop(1.00, rgba(color,0));            // soft anti-aliased edge
+    g.fillStyle=grad; g.fillRect(0,0,SPRITE,SPRITE);
+    return (coreCache[color]=c);
+  }
+
+  // animation state — ff is the eased focus factor (0 = neutral, 1 = focus+context)
+  var ff=0, ffFrom=0, ffTo=0, ffT0=0, FF_DUR=340;
+  var animClock=0, dashOffset=0, rafId=0;
+  function setFocusTarget(v){ if(ffTo!==v){ ffFrom=ff; ffTo=v; ffT0=performance.now(); } }
+
+  // per-node effective alpha: search/legend dim × focus/context dim (all tied to ff
+  // so the neighbourhood dims IN and back OUT smoothly)
+  function nodeAlpha(n){
+    var a = isBright(n) ? 1 : 0.10;
+    if(focusSet && !focusSet.has(n.id)) a *= (1 - 0.88*ff);
+    return a;
+  }
+
+  // The whole scene, drawn into either the main ctx (sharp) or the ½-res bloom ctx.
+  // Structured as discrete passes so Layer 3 can insert particle/aurora passes.
+  function drawScene(g, bloom){
     var searching = !!activeQuery || activeCat!=null;
-    ctx.lineWidth = 1;
-    // base edges — stroked one-by-one so overlaps accumulate: the dense core reads
-    // as brighter connective tissue while sparse links stay a faint hairline web.
-    ctx.strokeStyle = 'rgba(126,176,255,0.22)';
-    for(var i=0;i<edges.length;i++){
-      var e=edges[i], a=idIndex.get(e.source), b=idIndex.get(e.target);
-      if(selectedEdges.has(e)) continue;
-      var lit = !searching || (isBright(a) && isBright(b));
-      ctx.globalAlpha = lit ? 1 : 0.05;
-      ctx.beginPath();
-      ctx.moveTo(sx(a),sy(a)); ctx.lineTo(sx(b),sy(b)); ctx.stroke();
-    }
-    // highlighted edges (touching the selected node) — accent, drawn on top
-    if(selected && selectedEdges.size){
-      ctx.globalAlpha = 0.85; ctx.lineWidth = 1.4;
-      ctx.strokeStyle = 'rgba(56,225,255,0.55)';
-      ctx.beginPath();
-      selectedEdges.forEach(function(e){
+    // 1. base hairline web — sharp layer only (too faint to be worth blooming)
+    if(!bloom){
+      g.lineWidth=1; g.strokeStyle='rgba(126,176,255,0.22)';
+      for(var i=0;i<edges.length;i++){
+        var e=edges[i];
+        if(flowEdgeSet && flowEdgeSet.has(e)) continue;      // drawn as flow below
         var a=idIndex.get(e.source), b=idIndex.get(e.target);
-        ctx.moveTo(sx(a),sy(a)); ctx.lineTo(sx(b),sy(b));
-      });
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  function drawNodes(){
-    for(var i=0;i<nodes.length;i++){
-      var n=nodes[i];
-      var bright = isBright(n);
-      var col = nodeColor(n);
-      var px=sx(n), py=sy(n), r=n.r;
-      ctx.globalAlpha = bright ? 1 : 0.10;
-      // core disc (Layer 2 will add a halo/bloom pass around this)
-      ctx.beginPath(); ctx.arc(px,py,r,0,6.2832);
-      ctx.fillStyle = col; ctx.fill();
-      // subtle inner rim for depth
-      if(bright){
-        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.16)';
-        ctx.beginPath(); ctx.arc(px,py,r,0,6.2832); ctx.stroke();
+        var lit = !searching || (isBright(a)&&isBright(b));
+        var cdim = (focusSet && !(focusSet.has(e.source)&&focusSet.has(e.target))) ? (1-0.88*ff) : 1;
+        g.globalAlpha = (lit?1:0.05) * cdim;
+        g.beginPath(); g.moveTo(sx(a),sy(a)); g.lineTo(sx(b),sy(b)); g.stroke();
       }
+      g.globalAlpha=1;
     }
-    ctx.globalAlpha = 1;
-    // selection & hover rings
-    if(selected){ ring(selected, 'rgba(56,225,255,0.95)', 4); }
-    if(hovered && hovered!==selected){ ring(hovered, 'rgba(255,255,255,0.6)', 3); }
+    // 2. flow edges — accent cyan, fade in with ff; animated dash (sharp) / solid (bloom)
+    if(flowEdges.length && ff>0.001){
+      g.save();
+      g.lineCap='round'; g.strokeStyle=rgba('#38E1FF',0.95);
+      g.lineWidth = bloom?2.4:1.7; g.globalAlpha=ff;
+      if(!bloom){ g.setLineDash([7,9]); g.lineDashOffset=dashOffset; }
+      for(var j=0;j<flowEdges.length;j++){
+        var fe=flowEdges[j], fa=idIndex.get(fe.source), fb=idIndex.get(fe.target);
+        g.beginPath(); g.moveTo(sx(fa),sy(fa)); g.lineTo(sx(fb),sy(fb)); g.stroke();
+      }
+      g.restore(); g.globalAlpha=1;
+    }
+    // 3. node halos — additive radial glow (light emitting from each doc)
+    g.globalCompositeOperation='lighter';
+    for(var k=0;k<nodes.length;k++){
+      var n=nodes[k], na=nodeAlpha(n); if(na<0.02) continue;
+      var isF=(n===focusNodeRef);
+      var pulse = isF ? (1 + 0.18*ff*Math.sin(animClock/380)) : 1;   // slow breathing
+      var hr = n.r * (bloom?4.2:3.4) * pulse;                        // hubs glow more (bigger r)
+      var px=sx(n), py=sy(n);
+      g.globalAlpha = na * (bloom?1:0.85) * (isF ? 1+0.35*ff : 1);
+      g.drawImage(haloSprite(nodeColor(n)), px-hr, py-hr, hr*2, hr*2);
+    }
+    g.globalCompositeOperation='source-over'; g.globalAlpha=1;
+    if(bloom) return;               // bloom pass = glow only; cores/rings/labels stay sharp
+    // 4. bright cores — near-white hot centre → folder/status colour
+    for(var q=0;q<nodes.length;q++){
+      var nc=nodes[q], ca=nodeAlpha(nc); if(ca<0.02) continue;
+      var isFc=(nc===focusNodeRef);
+      var pc = isFc ? (1 + 0.09*ff*Math.sin(animClock/380)) : 1;
+      var cr = nc.r * 1.35 * pc, cx2=sx(nc), cy2=sy(nc);
+      g.globalAlpha=ca;
+      g.drawImage(coreSprite(nodeColor(nc)), cx2-cr, cy2-cr, cr*2, cr*2);
+    }
+    g.globalAlpha=1;
+    // 5. focus ring
+    if(focusNodeRef && ff>0.02) ring(focusNodeRef, rgba('#38E1FF', 0.45+0.45*ff), 4);
   }
 
   function ring(n, color, gap){
@@ -494,9 +553,81 @@
     ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
   }
 
-  // Single-frame render entry point. Layer 2 (pulse/particles) can swap this
-  // for a requestAnimationFrame loop without touching the interaction code.
-  function render(){ draw(); }
+  // ── bloom — a ½-res blurred underlay, screened back over the sharp scene.
+  // Recomputed only when the view/state changes (invalidate()); reused otherwise,
+  // so a steady pulse costs one cheap sharp redraw per frame, not a bloom rebuild.
+  var bloomCanvas=document.createElement('canvas');
+  var bloomCtx=bloomCanvas.getContext('2d');
+  var BLOOM_SCALE=0.5, bloomDirty=true;
+  function invalidate(){ bloomDirty=true; }
+  function buildBloom(){
+    var bw=Math.max(1,Math.round(canvas.width*BLOOM_SCALE));
+    var bh=Math.max(1,Math.round(canvas.height*BLOOM_SCALE));
+    if(bloomCanvas.width!==bw) bloomCanvas.width=bw;
+    if(bloomCanvas.height!==bh) bloomCanvas.height=bh;
+    bloomCtx.setTransform(dpr*BLOOM_SCALE,0,0,dpr*BLOOM_SCALE,0,0);  // CSS px → ½-device
+    bloomCtx.globalCompositeOperation='source-over';
+    bloomCtx.clearRect(0,0,W,H);
+    drawScene(bloomCtx, true);
+    bloomDirty=false;
+  }
+
+  function render(){
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    ctx.clearRect(0,0,W,H);
+    // 1. bloom underlay (blurred, additive) — the holographic wash
+    if(bloomDirty) buildBloom();
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);                    // blit in device px
+    ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=0.6;
+    ctx.filter='blur(7px)';
+    ctx.drawImage(bloomCanvas, 0,0,bloomCanvas.width,bloomCanvas.height, 0,0,canvas.width,canvas.height);
+    ctx.filter='none';
+    ctx.restore();
+    // 2. sharp scene on top
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    drawScene(ctx, false);
+    drawLabels();
+  }
+
+  // ── the loop runs ONLY while a node is focused or focus is transitioning; it
+  // stops (rafId=0) once nothing is focused and ff has eased back to 0 → idle CPU ~0.
+  function loop(now){
+    animClock=now;
+    if(ff!==ffTo){
+      var p = FF_DUR>0 ? clamp((now-ffT0)/FF_DUR,0,1) : 1;
+      ff = ffFrom + (ffTo-ffFrom)*easeFn(p);          // cubic-bezier(.32,.72,0,1) feel
+      if(p>=1) ff=ffTo;
+      invalidate();                                   // context dimming changed → rebuild bloom
+    }
+    dashOffset -= 0.7;                                 // data flows toward the focus node
+    render();
+    if(activeFocus() || ff>0.001){
+      rafId=requestAnimationFrame(loop);
+    } else {                                           // settled, nothing focused → FREEZE
+      rafId=0; ff=0;
+      focusNodeRef=null; focusSet=null; flowEdges=[]; flowEdgeSet=null;
+      render();                                        // one clean static frame, then idle
+    }
+  }
+  function startLoop(){ if(!rafId) rafId=requestAnimationFrame(loop); }
+
+  // called whenever hover/selection changes — drives the focus+context transition
+  function updateFocus(){
+    computeFocus();
+    invalidate();
+    if(reduceMotion){
+      ff = activeFocus() ? 1 : 0;
+      if(!activeFocus()){ focusNodeRef=null; focusSet=null; flowEdges=[]; flowEdgeSet=null; }
+      render();
+    } else {
+      setFocusTarget(activeFocus() ? 1 : 0);
+      startLoop();
+    }
+  }
 
   // ── hit testing (screen space) ────────────────────────────────────────────
   function hitTest(mx,my){
@@ -511,25 +642,16 @@
 
   // ── selection + readout ────────────────────────────────────────────────────
   var readout = document.getElementById('readout');
-  function computeSelectedEdges(){
-    selectedEdges = new Set();
-    if(!selected) return;
-    for(var i=0;i<edges.length;i++){
-      var e=edges[i];
-      if(e.source===selected.id || e.target===selected.id) selectedEdges.add(e);
-    }
-  }
   function selectNode(n){
     selected = n;
-    computeSelectedEdges();
     buildReadout(n);
     openReadout();
-    render();
+    updateFocus();          // lights up the neighbourhood (focus+context) + pulse
   }
   function deselect(){
-    selected=null; selectedEdges=new Set();
+    selected=null;
     closeReadout();
-    render();
+    updateFocus();          // eases the focus back out, then the loop freezes
   }
 
   function el(tag, cls, txt){
@@ -652,12 +774,12 @@
   var animRaf = 0;
   function animateView(tx,ty){
     cancelAnimationFrame(animRaf);
-    if(reduceMotion){ view.x=tx; view.y=ty; render(); return; }
+    if(reduceMotion){ view.x=tx; view.y=ty; invalidate(); render(); return; }
     var sx0=view.x, sy0=view.y, t0=performance.now(), dur=440;
     (function step(now){
       var p=clamp((now-t0)/dur,0,1), k=easeFn(p);
       view.x=sx0+(tx-sx0)*k; view.y=sy0+(ty-sy0)*k;
-      render();
+      invalidate(); render();
       if(p<1) animRaf=requestAnimationFrame(step);
     })(t0);
   }
@@ -685,14 +807,14 @@
       var dx=mx-downX, dy=my-downY;
       moved=Math.max(moved, Math.abs(dx)+Math.abs(dy));
       view.x=downVX+dx; view.y=downVY+dy;
-      render();
+      invalidate(); render();
       return;
     }
     var h=hitTest(mx,my);
     if(h!==hovered){
       hovered=h;
       canvas.style.cursor = h ? 'pointer' : 'grab';
-      updateTelemetry(); render();
+      updateTelemetry(); updateFocus();      // hover lights up the neighbourhood
     }
   });
   function endPointer(ev){
@@ -717,7 +839,7 @@
     view.x = mx - (mx-view.x)*factor;
     view.y = my - (my-view.y)*factor;
     view.scale = ns;
-    render();
+    invalidate(); render();
   }, { passive:false });
 
   // ── search ─────────────────────────────────────────────────────────────────
@@ -735,7 +857,7 @@
       n.match = hay.indexOf(q) !== -1;
       if(n.match) matchCount++;
     }
-    updateTelemetry(); render();
+    updateTelemetry(); invalidate(); render();
   });
   searchEl.addEventListener('keydown', function(ev){
     if(ev.key==='Escape'){ searchEl.value=''; searchEl.dispatchEvent(new Event('input')); searchEl.blur(); }
@@ -783,7 +905,7 @@
     toggle.addEventListener('click', function(){
       colorMode = (colorMode==='folder') ? 'status' : 'folder';
       activeCat = null;
-      buildLegend(); updateTelemetry(); render();
+      buildLegend(); updateTelemetry(); invalidate(); render();
     });
     head.appendChild(toggle);
     head.appendChild(el('span','lg-hint', activeCat? 'isolando → clique p/ limpar' : 'clique p/ isolar'));
@@ -803,7 +925,7 @@
       item.appendChild(el('span','n',String(tally.get(cat)||0)));
       item.addEventListener('click', function(){
         activeCat = (activeCat===cat) ? null : cat;
-        buildLegend(); render();
+        buildLegend(); invalidate(); render();
       });
       items.appendChild(item);
     });
@@ -814,7 +936,7 @@
   document.addEventListener('keydown', function(ev){
     if(ev.key==='Escape'){
       if(selected){ deselect(); return; }
-      if(activeCat!=null){ activeCat=null; buildLegend(); render(); return; }
+      if(activeCat!=null){ activeCat=null; buildLegend(); invalidate(); render(); return; }
     }
   });
 
@@ -830,7 +952,7 @@
   var resizeT=0;
   window.addEventListener('resize', function(){
     clearTimeout(resizeT);
-    resizeT=setTimeout(function(){ sizeCanvas(); simulate(nodes, edges, { W:W||1200, H:H||800, iterations:120 }); render(); }, 160);
+    resizeT=setTimeout(function(){ sizeCanvas(); simulate(nodes, edges, { W:W||1200, H:H||800, iterations:120 }); invalidate(); render(); }, 160);
   });
 
   buildLegend();

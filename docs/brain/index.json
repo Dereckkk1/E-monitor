@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "counts": {
-    "docs": 189,
-    "edges": 296,
-    "brokenLinks": 76
+    "docs": 190,
+    "edges": 298,
+    "brokenLinks": 79
   },
   "nodes": [
     {
@@ -3054,6 +3054,40 @@
       "wordCount": 3211
     },
     {
+      "id": "docs/operations/docs-brain.md",
+      "title": "Cérebro dos Docs (docs-brain)",
+      "folder": "operations",
+      "status": "implementado",
+      "ultimaVerificacao": "2026-07-09",
+      "summary": "Um \"segundo cérebro\" sobre os ~189 documentos de /docs, 100% dentro do repositório — sem Obsidian, sem serviço externo, sem LLM hospedado. Duas capacidades sobre um índice compartilhado:",
+      "headings": [
+        "Como funciona (visão de 30s)",
+        "Abrir o grafo",
+        "Perguntar (/cerebro)",
+        "Regenerar o índice",
+        "Checar saúde dos docs (links quebrados)",
+        "Atualização automática (git hook)",
+        "Arquivos",
+        "Testes",
+        "Design"
+      ],
+      "codigoRelacionado": [
+        "scripts/brain-build.mjs",
+        "scripts/brain/parse.mjs",
+        "scripts/brain/graph.mjs",
+        "scripts/brain/render.mjs",
+        "scripts/brain/template.html",
+        "scripts/hooks/pre-commit",
+        ".claude/skills/cerebro/SKILL.md"
+      ],
+      "outLinks": [
+        "docs/superpowers/plans/2026-07-09-docs-brain.md",
+        "docs/superpowers/specs/2026-07-09-docs-brain-design.md"
+      ],
+      "backLinks": [],
+      "wordCount": 609
+    },
+    {
       "id": "docs/operations/migrations.md",
       "title": "Migrations — runner automático",
       "folder": "operations",
@@ -5546,7 +5580,9 @@
         "docs/features/live-map.md",
         "docs/superpowers/specs/2026-07-09-docs-brain-design.md"
       ],
-      "backLinks": [],
+      "backLinks": [
+        "docs/operations/docs-brain.md"
+      ],
       "wordCount": 5133
     },
     {
@@ -6971,6 +7007,7 @@
       "codigoRelacionado": [],
       "outLinks": [],
       "backLinks": [
+        "docs/operations/docs-brain.md",
         "docs/superpowers/plans/2026-07-09-docs-brain.md"
       ],
       "wordCount": 2372
@@ -7989,6 +8026,16 @@
     {
       "source": "docs/operations/deploy.md",
       "target": "docs/operations/refingerprint-density-migration.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/operations/docs-brain.md",
+      "target": "docs/superpowers/plans/2026-07-09-docs-brain.md",
+      "kind": "md"
+    },
+    {
+      "source": "docs/operations/docs-brain.md",
+      "target": "docs/superpowers/specs/2026-07-09-docs-brain-design.md",
       "kind": "md"
     },
     {
