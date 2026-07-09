@@ -5,7 +5,7 @@
    Prefixo: .sug-*
    ══════════════════════════════════════════════════════════════════ */
 
-.sug-page { max-width: 1240px; margin: 0 auto; padding: 4px 4px 64px; }
+.sug-page {margin: 0 auto; padding: 4px 4px 64px; }
 
 /* ── Header ─────────────────────────────────────────────────── */
 .sug-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
