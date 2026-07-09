@@ -408,6 +408,7 @@ docs/
 | Comparar detecções com o fornecedor externo / investigar "miss" | [docs/operations/vendor-reconciliation.md](docs/operations/vendor-reconciliation.md) |
 | Responder a alerta Prometheus disparado | [docs/runbooks/README.md](docs/runbooks/README.md) (índice por alerta) |
 | Postmortem de incidente passado | [docs/incidents/](docs/incidents/) (incident-AAAA-MM-DD-*.md) |
+| Cérebro dos docs — grafo navegável de toda a doc / Q&A `/cerebro` / regenerar o índice | [docs/operations/docs-brain.md](docs/operations/docs-brain.md) |
 
 Antes de afirmar "vou consultar X", verifique no header YAML do doc se `status` é `implementado`. Se for `legado` ou `parcialmente-implementado`, o doc é ponto de partida, mas confirme no código antes de agir.
 

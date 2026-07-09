@@ -104,6 +104,7 @@ docs/
 | [backup-and-retention.md](operations/backup-and-retention.md) | ⚠️ doc parcialmente desatualizado — descreve pg_basebackup, código usa pg_dump |
 | [data-durability.md](operations/data-durability.md) | Modelo de ameaças + 5 camadas de defesa (bind mount, R2, snapshot GCP, alerta, drill) |
 | [vendor-reconciliation.md](operations/vendor-reconciliation.md) | Método de comparação com o fornecedor externo: regimes do algoritmo, dedup 30/60s, audit_rejected, workflow por discrepância |
+| [docs-brain.md](operations/docs-brain.md) | **Cérebro dos docs** — grafo navegável (`docs/brain/index.html`, estilo Stark HUD) + Q&A `/cerebro` sobre os ~190 docs; indexador Node stdlib + git hook |
 
 ## `incidents/` — postmortems
 
