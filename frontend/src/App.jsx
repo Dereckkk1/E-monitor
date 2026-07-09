@@ -32,6 +32,7 @@ import AccountPage from './pages/AccountPage'
 import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
 import ManagementPage from './pages/ManagementPage'
+import AdminSuggestionsPage from './pages/AdminSuggestionsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -145,6 +146,9 @@ function AppShell() {
             } />
             <Route path="/admin/users" element={
               <RequireRole roles={['admin']}><AdminUsersPage /></RequireRole>
+            } />
+            <Route path="/admin/suggestions" element={
+              <RequireRole roles={['admin']}><AdminSuggestionsPage /></RequireRole>
             } />
             <Route path="/dashboard"   element={<DashboardPage />} />
             <Route path="/account"     element={<AccountPage />} />
