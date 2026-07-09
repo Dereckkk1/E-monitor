@@ -1,5 +1,6 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useSuggestionsUnread } from '../api/hooks'
 
 /* ── SVG icon primitives ──────────────────────────────────────── */
 function IconStations() {
@@ -173,8 +174,17 @@ function IconAccount() {
   )
 }
 
+function IconSuggestions() {
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5A5.5 5.5 0 0 0 4.7 11.4c.3.22.5.55.5.92V13a1 1 0 0 0 1 1h3.6a1 1 0 0 0 1-1v-.68c0-.37.2-.7.5-.92A5.5 5.5 0 0 0 8 1.5z" />
+      <path d="M6.5 14.8h3" strokeOpacity="0.6" />
+    </svg>
+  )
+}
+
 /* ── Nav link helper ─────────────────────────────────────────── */
-function SidebarLink({ to, icon, children, onClose }) {
+function SidebarLink({ to, icon, children, onClose, badge }) {
   return (
     <NavLink
       to={to}
@@ -182,7 +192,12 @@ function SidebarLink({ to, icon, children, onClose }) {
       onClick={onClose}
     >
       {icon}
-      {children}
+      <span className="sidebar-link-label">{children}</span>
+      {badge > 0 && (
+        <span className="sidebar-link-badge" aria-label={`${badge} não lidas`}>
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </NavLink>
   )
 }
@@ -200,6 +215,9 @@ function IconLogout() {
 
 /* ── Admin navigation ────────────────────────────────────────── */
 function AdminNav({ onClose }) {
+  // Badge de não-lidas em "Sugestões". Escopo por persona é imposto no
+  // servidor (dev: novas + respostas; autor: atividade do dev nas próprias).
+  const { data: suggestionsUnread } = useSuggestionsUnread()
   return (
     <>
       <span className="sidebar-section-label">Cadastros</span>
@@ -225,6 +243,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/admin/monitoring"        icon={<IconAdminMonitoring />}   onClose={onClose}>Monitoramento</SidebarLink>
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
+      <SidebarLink to="/admin/suggestions"       icon={<IconSuggestions />}       onClose={onClose} badge={suggestionsUnread}>Sugestões</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>
       <SidebarLink to="/account" icon={<IconAccount />} onClose={onClose}>Minha conta</SidebarLink>

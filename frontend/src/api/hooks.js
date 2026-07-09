@@ -1124,3 +1124,123 @@ export function useInsights({ clientId, campaignIds, from, to, stationIds } = {}
     // queryKey.
   })
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   Sugestões — central de demandas interna (admin-only).
+   Backend: /v1/internal/suggestions (ver docs/features/suggestions-board.md).
+   Duas personas na mesma rota: o servidor decide o escopo (dev vê tudo,
+   autor vê só as próprias). Estes hooks são agnósticos à persona.
+   ══════════════════════════════════════════════════════════════════ */
+
+// Lista. Params: status, type, priority, author_id, q, unread, sort, page.
+// Dev recebe todas; autor recebe só as próprias (imposto no servidor).
+export function useSuggestions(params = {}) {
+  return useQuery({
+    queryKey: ['suggestions', params],
+    queryFn: () => api.get('/suggestions', { params }).then(r => r.data),
+    // resposta: { data: [...], unread?: {...} }
+    select: (d) => ({ items: d.data ?? [], unread: d.unread ?? null }),
+  })
+}
+
+// Detalhe: objeto da sugestão + comments/attachments/events aninhados.
+// attachments já vêm com `url` presigned (expira ~5min → refetch no open).
+export function useSuggestion(id, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['suggestion', id],
+    queryFn: () => api.get(`/suggestions/${id}`).then(r => r.data),
+    enabled: enabled && !!id,
+  })
+}
+
+export function useCreateSuggestion() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data) => api.post('/suggestions', data).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['suggestions'] })
+      qc.invalidateQueries({ queryKey: ['suggestions', 'unread'] })
+    },
+  })
+}
+
+// PATCH de gestão (dev-only no servidor): status, dev_priority, effort,
+// dev_feedback, dev_notes, awaiting_author.
+export function useUpdateSuggestion() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch(`/suggestions/${id}`, body).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['suggestions'] })
+      qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
+      qc.invalidateQueries({ queryKey: ['suggestions', 'summary'] })
+    },
+  })
+}
+
+export function useAddSuggestionComment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }) => api.post(`/suggestions/${id}/comments`, { body }).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
+      qc.invalidateQueries({ queryKey: ['suggestions'] })
+    },
+  })
+}
+
+// Upload multipart de imagem (anexo da sugestão ou de um comentário).
+export function useUploadSuggestionAttachment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, file, commentId }) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      if (commentId) fd.append('comment_id', commentId)
+      return api.post(`/suggestions/${id}/attachments`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data)
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
+    },
+  })
+}
+
+// Marca a sugestão como lida pelo usuário atual (zera a bolinha de não-lido).
+export function useMarkSuggestionRead() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/suggestions/${id}/read`).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['suggestions', 'unread'] })
+      qc.invalidateQueries({ queryKey: ['suggestions'] })
+    },
+  })
+}
+
+// KPIs do header da central (dev-only no servidor).
+export function useSuggestionsSummary({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['suggestions', 'summary'],
+    queryFn: () => api.get('/suggestions/summary').then(r => r.data),
+    enabled,
+  })
+}
+
+// Contador de não-lidas pro badge da sidebar (escopo por persona no servidor).
+export function useSuggestionsUnread({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['suggestions', 'unread'],
+    queryFn: () => api.get('/suggestions/unread-count').then(r => r.data?.count ?? 0),
+    enabled,
+    refetchInterval: 60_000,
+  })
+}
+
+// URL presigned fresca de um anexo (fallback quando a do detalhe expira).
+export function useSuggestionAttachmentURL() {
+  return useMutation({
+    mutationFn: (aid) => api.get(`/suggestions/attachments/${aid}/url`).then(r => r.data),
+  })
+}
