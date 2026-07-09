@@ -153,8 +153,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 		if ferr != nil {
 			continue
 		}
-		ctype := header.Header.Get("Content-Type")
-		ext, okExt := manualAudioMIME[strings.ToLower(ctype)]
+		ext, storeCT, okExt := resolveManualAudioExt(header.Header.Get("Content-Type"), header.Filename)
 		if !okExt {
 			file.Close()
 			warnings = append(warnings, fmt.Sprintf("linha %d: formato de áudio não suportado", i))
@@ -171,7 +170,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 		}
 		key := fmt.Sprintf("evidences/%s/%s/%s.%s",
 			det.DetectedAt.UTC().Format("2006/01/02"), meta.StationID, det.ID, ext)
-		if err := h.Storage.Put(r.Context(), key, file, ctype); err != nil {
+		if err := h.Storage.Put(r.Context(), key, file, storeCT); err != nil {
 			file.Close()
 			warnings = append(warnings, fmt.Sprintf("linha %d: upload do áudio falhou", i))
 			continue
@@ -224,10 +223,9 @@ func (h *DetectionsHandler) UploadEvidence(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer file.Close()
-	ctype := header.Header.Get("Content-Type")
-	ext, okExt := manualAudioMIME[strings.ToLower(ctype)]
+	ext, storeCT, okExt := resolveManualAudioExt(header.Header.Get("Content-Type"), header.Filename)
 	if !okExt {
-		http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac ou ogg)", http.StatusUnsupportedMediaType)
+		http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac, mpeg ou ogg)", http.StatusUnsupportedMediaType)
 		return
 	}
 	if header.Size > manualAudioMaxBytes {
@@ -240,7 +238,7 @@ func (h *DetectionsHandler) UploadEvidence(w http.ResponseWriter, r *http.Reques
 	}
 	key := fmt.Sprintf("evidences/%s/%s/%s.%s",
 		det.DetectedAt.UTC().Format("2006/01/02"), det.StationID, det.ID, ext)
-	if err := h.Storage.Put(r.Context(), key, file, ctype); err != nil {
+	if err := h.Storage.Put(r.Context(), key, file, storeCT); err != nil {
 		http.Error(w, "falha no upload", http.StatusInternalServerError)
 		return
 	}

@@ -313,6 +313,54 @@ var manualAudioMIME = map[string]string{
 	"audio/ogg":   "ogg",
 }
 
+// manualAudioExtFallback mapeia a extensão do filename → extensão canônica na
+// chave S3. Usado quando o Content-Type do browser não bate no manualAudioMIME
+// (ex.: .mpeg costuma vir como video/mpeg; drag-drop às vezes manda
+// application/octet-stream ou vazio). Espelha a validação por extensão do
+// upload de material (/campaigns passo 4), pra que um arquivo aceito lá também
+// suba como censura em /detections.
+var manualAudioExtFallback = map[string]string{
+	"mp3":  "mp3",
+	"mpeg": "mp3",
+	"m4a":  "m4a",
+	"mp4":  "m4a",
+	"wav":  "wav",
+	"aac":  "aac",
+	"ogg":  "ogg",
+}
+
+// manualAudioCanonicalMIME dá um Content-Type de áudio "limpo" pra gravar no S3
+// quando o formato foi resolvido por extensão (o browser pode ter mandado
+// video/mpeg / octet-stream, que não queremos persistir na evidência).
+var manualAudioCanonicalMIME = map[string]string{
+	"mp3": "audio/mpeg",
+	"m4a": "audio/mp4",
+	"wav": "audio/wav",
+	"aac": "audio/aac",
+	"ogg": "audio/ogg",
+}
+
+// resolveManualAudioExt decide a extensão canônica do áudio de censura e o
+// Content-Type a persistir no S3. Tenta primeiro o Content-Type (mantendo o do
+// browser quando reconhecido) e, como fallback, a extensão do filename (com um
+// Content-Type canônico). ok=false quando nenhum dos dois é um áudio conhecido
+// → o handler responde 415.
+func resolveManualAudioExt(contentType, filename string) (ext, storeContentType string, ok bool) {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 { // descarta "; charset=..."
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if e, found := manualAudioMIME[ct]; found {
+		return e, contentType, true
+	}
+	if i := strings.LastIndexByte(filename, '.'); i >= 0 {
+		if e, found := manualAudioExtFallback[strings.ToLower(filename[i+1:])]; found {
+			return e, manualAudioCanonicalMIME[e], true
+		}
+	}
+	return "", "", false
+}
+
 const manualAudioMaxBytes = 25 << 20 // 25 MB
 
 // CreateManual is the admin "Adicionar veiculação manualmente" action. The
@@ -372,12 +420,12 @@ func (h *DetectionsHandler) CreateManual(w http.ResponseWriter, r *http.Request)
 		file, header, ferr := r.FormFile("audio")
 		if ferr == nil {
 			defer file.Close()
-			audioContentType = header.Header.Get("Content-Type")
-			ext, accepted := manualAudioMIME[strings.ToLower(audioContentType)]
+			ext, storeCT, accepted := resolveManualAudioExt(header.Header.Get("Content-Type"), header.Filename)
 			if !accepted {
-				http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac ou ogg)", http.StatusUnsupportedMediaType)
+				http.Error(w, "formato de áudio não suportado (use mp3, m4a, wav, aac, mpeg ou ogg)", http.StatusUnsupportedMediaType)
 				return
 			}
+			audioContentType = storeCT
 			audioExt = ext
 			audioSize = header.Size
 			audioReader = file
