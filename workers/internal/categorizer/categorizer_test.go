@@ -378,3 +378,61 @@ func TestCategorize_NonCarvedMaterial_UsesGeneralRule(t *testing.T) {
 		t.Errorf("got %q, want in_slot (material comum usa regra geral)", got)
 	}
 }
+
+// Caso novo (spec 2026-07-13): material carved toca DENTRO do range da regra
+// dele, mas num dia-da-semana sem meta (sábado, regra seg-sex). Está dentro do
+// período contratado → dia extra → orphan (credita bônus), NÃO out_date.
+func TestCategorize_CarveOut_InPeriodWrongWeekday_Orphan(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, saoPaulo),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
+	}
+	m := uuid.New()
+	// Regra específica de m: mês todo (1-30), seg-sex (mask 62), 08-22h.
+	rules := []Rule{mkMatRule(1, 30, 62, "08:00", "22:00", 1, m)}
+	// 06/06/2026 é SÁBADO (DOW=6). Dentro do range 1-30, mas fora do mask 62.
+	det := time.Date(2026, 6, 6, 12, 0, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, m, rules, nil); got != "orphan" {
+		t.Errorf("got %q, want orphan (sábado dentro do período do material)", got)
+	}
+}
+
+// Guarda-corpo: fora do range da regra do material continua out_date (não vira
+// orphan). Distingue "dia extra dentro do período" de "fora do período".
+func TestCategorize_CarveOut_OutsidePeriod_StaysOutDate(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, saoPaulo),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
+	}
+	m := uuid.New()
+	// Regra só na 1ª semana (1-7). Detecção no sábado 20/06 (semana 3) → fora
+	// do range da regra → out_date.
+	rules := []Rule{mkMatRule(1, 7, 62, "08:00", "22:00", 1, m)}
+	det := time.Date(2026, 6, 20, 12, 0, 0, 0, saoPaulo) // sáb, fora do range 1-7
+	if got := Categorize(det, cmp, m, rules, nil); got != "out_date" {
+		t.Errorf("got %q, want out_date (fora do período do material)", got)
+	}
+}
+
+// Limite do range (start_date/end_date são inclusivos): sábado (fora do mask
+// seg-sex) caindo EXATAMENTE no start_date e no end_date do range da regra
+// continua dentro do período → orphan, não out_date.
+func TestCategorize_CarveOut_InPeriodBoundary_Orphan(t *testing.T) {
+	cmp := Campaign{
+		StartDate: time.Date(2026, 6, 1, 0, 0, 0, 0, saoPaulo),
+		EndDate:   time.Date(2026, 6, 30, 0, 0, 0, 0, saoPaulo),
+	}
+	m := uuid.New()
+	// 06/06/2026 é SÁBADO (fora do mask 62 seg-sex).
+	// Caso A: sábado == end_date do range da regra ([1,6]) → dentro (inclusivo) → orphan.
+	rulesEnd := []Rule{mkMatRule(1, 6, 62, "08:00", "22:00", 1, m)}
+	det := time.Date(2026, 6, 6, 12, 0, 0, 0, saoPaulo)
+	if got := Categorize(det, cmp, m, rulesEnd, nil); got != "orphan" {
+		t.Errorf("end_date boundary: got %q, want orphan", got)
+	}
+	// Caso B: sábado == start_date do range da regra ([6,20]) → dentro (inclusivo) → orphan.
+	rulesStart := []Rule{mkMatRule(6, 20, 62, "08:00", "22:00", 1, m)}
+	if got := Categorize(det, cmp, m, rulesStart, nil); got != "orphan" {
+		t.Errorf("start_date boundary: got %q, want orphan", got)
+	}
+}
