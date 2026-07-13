@@ -1143,8 +1143,10 @@ export function useSuggestions(params = {}) {
   })
 }
 
-// Detalhe: objeto da sugestão + comments/attachments/events aninhados.
-// attachments já vêm com `url` presigned (expira ~5min → refetch no open).
+// Detalhe: objeto da sugestão + comments/attachments/events aninhados. As
+// imagens são exibidas pelo componente AttachmentImage, que busca os bytes pelo
+// proxy GET /suggestions/attachments/{aid} (não pela URL presigned — o browser
+// não alcança localhost:9000 em prod). Ver docs/features/suggestions-board.md.
 export function useSuggestion(id, { enabled = true } = {}) {
   return useQuery({
     queryKey: ['suggestion', id],
@@ -1235,12 +1237,5 @@ export function useSuggestionsUnread({ enabled = true } = {}) {
     queryFn: () => api.get('/suggestions/unread-count').then(r => r.data?.count ?? 0),
     enabled,
     refetchInterval: 60_000,
-  })
-}
-
-// URL presigned fresca de um anexo (fallback quando a do detalhe expira).
-export function useSuggestionAttachmentURL() {
-  return useMutation({
-    mutationFn: (aid) => api.get(`/suggestions/attachments/${aid}/url`).then(r => r.data),
   })
 }
