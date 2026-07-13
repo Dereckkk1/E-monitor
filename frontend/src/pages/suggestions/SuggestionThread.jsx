@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAddSuggestionComment, useUploadSuggestionAttachment } from '../../api/hooks'
+import AttachmentImage from './AttachmentImage'
 import ClipboardPasteZone from './ClipboardPasteZone'
 import { timeAgo, initialOf } from './utils'
 
@@ -57,7 +58,7 @@ export default function SuggestionThread({ suggestionId, requesterId, comments =
                     {atts.map((a, i) => (
                       <button key={a.id} type="button" className="sug-att-thumb"
                               onClick={() => onOpenImage?.(a)}>
-                        <img src={a.url} alt={a.filename || 'anexo'} loading="lazy" />
+                        <AttachmentImage att={a} />
                       </button>
                     ))}
                   </div>

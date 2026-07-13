@@ -1,8 +1,10 @@
 import { useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import AttachmentImage from './AttachmentImage'
 
-// Lightbox de imagem: recebe a lista de anexos (com .url presigned) e o índice
-// aberto. Setas navegam, Esc/clique-no-fundo fecha. Portaliza pro body.
+// Lightbox de imagem: recebe a lista de anexos e o índice aberto. Cada imagem é
+// buscada pela API (blob autenticado) via AttachmentImage — não usa presigned
+// direto. Setas navegam, Esc/clique-no-fundo fecha. Portaliza pro body.
 export default function AttachmentLightbox({ attachments = [], index, onClose, onIndex }) {
   const open = index != null && index >= 0 && index < attachments.length
 
@@ -34,7 +36,7 @@ export default function AttachmentLightbox({ attachments = [], index, onClose, o
                 onClick={(e) => { e.stopPropagation(); go(-1) }} aria-label="Anterior">‹</button>
       )}
       <figure className="sug-lightbox-figure" onClick={(e) => e.stopPropagation()}>
-        <img src={att.url} alt={att.filename || 'anexo'} />
+        <AttachmentImage att={att} />
         <figcaption>{index + 1} / {attachments.length}</figcaption>
       </figure>
       {attachments.length > 1 && (

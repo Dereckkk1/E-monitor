@@ -384,7 +384,8 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/detections/manual", d.Detections.CreateManual)
 					r.Post("/detections/manual/batch", d.Detections.CreateManualBatch)
 					r.Post("/detections/{id}/evidence", d.Detections.UploadEvidence)
-					r.Get("/detections/{id}/proof/url", d.Detections.ProofURL)
+					r.Get("/detections/{id}/proof/url", d.Detections.ProofURL) // legado (presigned) — browser não alcança localhost:9000
+					r.Get("/detections/{id}/proof", d.Detections.Proof)        // proxy dos bytes (JWT) — usado pelo front
 					r.Post("/detections/{id}/ignore", d.Detections.Ignore)
 					r.Post("/detections/{id}/restore", d.Detections.Restore)
 					// CSV export do relatório data/hora — streaming. Prefixo
@@ -498,6 +499,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/suggestions/summary", d.Suggestions.Summary)              // handler barra não-dev
 					r.Get("/suggestions/unread-count", d.Suggestions.UnreadCount)
 					r.Get("/suggestions/attachments/{aid}/url", d.Suggestions.AttachmentURL)
+					r.Get("/suggestions/attachments/{aid}", d.Suggestions.ProxyAttachment) // proxy dos bytes (JWT) — browser não alcança presigned localhost:9000
 					r.Get("/suggestions/{id}", d.Suggestions.Get)
 					r.Patch("/suggestions/{id}", d.Suggestions.Patch)                 // handler barra não-dev
 					r.Post("/suggestions/{id}/comments", d.Suggestions.AddComment)

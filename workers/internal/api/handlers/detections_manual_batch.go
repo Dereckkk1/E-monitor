@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -285,4 +287,50 @@ func (h *DetectionsHandler) ProofURL(w http.ResponseWriter, r *http.Request) {
 		"url":        url,
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// Proof — proxia os BYTES do PDF comprovante pela API (com JWT) em vez de
+// entregar uma URL pré-assinada. Necessário porque em prod o host do MinIO
+// assado na presigned é `localhost:9000`, que o navegador do usuário não
+// alcança (mesmo bloqueio de loopback do áudio de evidência e dos anexos de
+// sugestão). Espelha ProofURL no lookup da chave e Evidence no streaming.
+// Admin-only (rota no grupo RequireRole("admin")). Ver
+// docs/features/evidence-presigned-urls.md.
+func (h *DetectionsHandler) Proof(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	key, err := h.Repo.ProofKeyForDetection(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "sem comprovante", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	if h.Storage == nil {
+		http.Error(w, "storage indisponível", http.StatusInternalServerError)
+		return
+	}
+	body, ct, _, err := h.Storage.Get(r.Context(), key)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if ct == "" {
+		ct = "application/pdf"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".pdf\"")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, id.String()+".pdf", time.Time{}, bytes.NewReader(data))
 }

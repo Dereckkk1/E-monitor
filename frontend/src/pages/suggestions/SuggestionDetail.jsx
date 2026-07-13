@@ -4,6 +4,7 @@ import { useSuggestion, useUpdateSuggestion, useMarkSuggestionRead } from '../..
 import { StatusPill, TypePill, ReqPriorityPill, DevPriorityPill, EffortPill } from './SuggestionPills'
 import SuggestionThread from './SuggestionThread'
 import AttachmentLightbox from './AttachmentLightbox'
+import AttachmentImage from './AttachmentImage'
 import { STATUS, STATUS_ORDER, DEV_PRIORITY, DEV_PRIORITY_ORDER, EFFORT, EFFORT_ORDER } from './constants'
 import { timeAgo, fmtDateTime, authorLabel, initialOf } from './utils'
 
@@ -141,7 +142,7 @@ export default function SuggestionDetail({ id, isDev, onClose }) {
                   {rootAtts.map((a) => (
                     <button key={a.id} type="button" className="sug-att-thumb sug-att-thumb--lg"
                             onClick={() => openLightbox(a, rootAtts)}>
-                      <img src={a.url} alt={a.filename || 'anexo'} loading="lazy" />
+                      <AttachmentImage att={a} />
                     </button>
                   ))}
                 </div>

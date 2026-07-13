@@ -263,6 +263,17 @@ select.sug-select {
 .sug-att-thumb img { display: block; width: 84px; height: 64px; object-fit: cover; }
 .sug-att-thumb--lg img { width: 104px; height: 78px; }
 
+/* Placeholders do <AttachmentImage> (blob carregando / erro). Espelham as
+   dimensões do <img> de cada contexto pra não colapsar o layout do thumb. */
+.sug-att-loading, .sug-att-broken { display: block; width: 84px; height: 64px; }
+.sug-att-thumb--lg .sug-att-loading, .sug-att-thumb--lg .sug-att-broken { width: 104px; height: 78px; }
+.sug-msg-atts .sug-att-loading, .sug-msg-atts .sug-att-broken { width: 72px; height: 56px; }
+.sug-att-broken { display: grid; place-items: center; padding: 4px; font-size: 10px; line-height: 1.25;
+  text-align: center; color: var(--c-text-2); background: var(--c-surface-2); }
+.sug-lightbox-figure .sug-att-loading { width: min(60vw, 420px); height: min(45vh, 320px); border-radius: var(--radius-md); }
+.sug-lightbox-figure .sug-att-broken { width: auto; height: auto; padding: 40px 56px; font-size: 13px;
+  color: rgba(255,255,255,.85); background: rgba(255,255,255,.08); border-radius: var(--radius-md); }
+
 /* timeline */
 .sug-timeline { margin-bottom: 18px; }
 .sug-timeline-list { list-style: none; margin: 0; padding: 0; position: relative; }
