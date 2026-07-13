@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -439,6 +441,71 @@ func (h *SuggestionsHandler) UploadAttachment(w http.ResponseWriter, r *http.Req
 		att.URL = url
 	}
 	writeJSON(w, http.StatusCreated, att)
+}
+
+// ProxyAttachment — GET /suggestions/attachments/{aid}. Owner or dev. Streams
+// the image bytes through the API (with JWT) instead of handing the browser a
+// presigned bucket URL. Necessary because in prod the MinIO host baked into a
+// presigned URL is `localhost:9000`, which the user's browser cannot reach
+// (loopback / connection refused) — the same reason evidence audio moved to a
+// proxy in 2026-07-03. See docs/features/evidence-presigned-urls.md and
+// docs/features/suggestions-board.md.
+func (h *SuggestionsHandler) ProxyAttachment(w http.ResponseWriter, r *http.Request) {
+	aid, err := uuid.Parse(chi.URLParam(r, "aid"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	isDev, uid, err := h.isDev(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	att, err := h.Repo.GetAttachment(r.Context(), aid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	if !isDev {
+		sug, gerr := h.Repo.Get(r.Context(), att.SuggestionID)
+		if gerr != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if sug.CreatedBy == nil || *sug.CreatedBy != uid {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+	if h.Storage == nil {
+		http.Error(w, "storage indisponível", http.StatusInternalServerError)
+		return
+	}
+	body, ct, _, err := h.Storage.Get(r.Context(), att.StorageKey)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if ct == "" {
+		ct = att.ContentType
+	}
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+aid.String()+"\"")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, aid.String(), time.Time{}, bytes.NewReader(data))
 }
 
 // AttachmentURL — GET /suggestions/attachments/{aid}/url. Owner or dev.

@@ -1,12 +1,15 @@
 ---
-status: parcialmente-implementado
-ultima-verificacao: 2026-07-03
+status: implementado
+ultima-verificacao: 2026-07-13
 codigo-relacionado:
   - workers/internal/storage/s3.go
   - workers/internal/api/handlers/detections.go
+  - workers/internal/api/handlers/detections_manual_batch.go
+  - workers/internal/api/handlers/suggestions.go
   - workers/internal/config/config.go
   - frontend/src/components/DayDetailModal.jsx
   - frontend/src/pages/DetectionDetailPage.jsx
+  - frontend/src/pages/suggestions/AttachmentImage.jsx
   - frontend/src/components/AudioPlayer.jsx
 ---
 
@@ -14,18 +17,20 @@ codigo-relacionado:
 
 Mecanismo de URL pré-assinada (SigV4) do bucket de evidência.
 
-> **Estado atual (2026-07-03):** o **frontend interno NÃO usa mais** URLs
-> pré-assinadas para o áudio — ele **proxia os bytes pela API** (ver
-> [Fluxo no frontend](#fluxo-no-frontend)). O motivo é que a URL pré-assinada
-> assa o host do MinIO (`localhost:9000` em prod) na própria URL, e o navegador
-> em `https://e-monitor.online` (origem pública) **não consegue seguir um
-> endereço loopback** — o Chrome bloqueia com *"Permission was denied for this
-> request to access the `loopback` address space"* (Private Network Access).
-> Isso quebrou a reprodução na `DetectionDetailPage` em 2026-07-03; a
-> `DayDetailModal` já tinha migrado pro proxy antes. O endpoint `/evidence/url`
-> continua existindo, mas hoje só o **comprovante PDF** (`/proof/url`, admin)
-> ainda depende de presigned no browser — e por isso ainda sofre o mesmo
-> bloqueio (ver [Pendências](#pendências)).
+> **Estado atual (2026-07-13):** o **frontend interno NÃO usa mais** URLs
+> pré-assinadas para NENHUMA mídia do bucket — áudio de evidência, comprovante
+> PDF e anexos de sugestão **proxiam os bytes pela API** (ver
+> [Fluxo no frontend](#fluxo-no-frontend) e a tabela em
+> [Todos os consumidores](#todos-os-consumidores-de-mídia-do-bucket-usam-o-proxy-mesmo-motivo)).
+> O motivo é que a URL pré-assinada assa o host do MinIO (`localhost:9000` em
+> prod) na própria URL, e o navegador em `https://e-monitor.online` (origem
+> pública) **não consegue seguir um endereço loopback** — o Chrome bloqueia com
+> *"Permission was denied for this request to access the `loopback` address
+> space"* (Private Network Access), ou simplesmente `ERR_CONNECTION_REFUSED`.
+> Isso quebrou o áudio da `DetectionDetailPage` em 2026-07-03 (a `DayDetailModal`
+> já tinha migrado antes), o comprovante PDF e os prints das sugestões (audit de
+> 2026-07-13). Os endpoints `*/url` presigned continuam existindo mas ninguém no
+> front os chama (ver [Pendências](#pendências)).
 
 ## Por que existe
 
@@ -106,16 +111,35 @@ pré-assinada.
 - Um `blob:` object URL não expira como a antiga presigned (TTL 5 min), então
   não há lógica de refresh.
 
+## Todos os consumidores de mídia do bucket usam o proxy (mesmo motivo)
+
+Audit de 2026-07-13: varremos **todo** produtor de presigned (`Storage.PresignGet`)
+e todo consumidor no browser. Só existem 3 superfícies que entregavam bytes do
+bucket ao navegador, e as 3 agora proxiam:
+
+| Superfície | Proxy (bytes + JWT) | Endpoint `/url` presigned legado |
+|---|---|---|
+| Áudio de evidência | `GET /detections/{id}/evidence` (`Evidence`) | `/evidence/url` (`EvidenceURL`) — não usado pelo front |
+| Comprovante PDF (lote) | `GET /detections/{id}/proof` (`Proof`) | `/proof/url` (`ProofURL`) — não usado pelo front |
+| Anexos de Sugestões (prints) | `GET /suggestions/attachments/{aid}` (`ProxyAttachment`) | `/attachments/{aid}/url` (`AttachmentURL`) — não usado pelo front |
+
+- **Anexos de Sugestões** (`/admin/suggestions`) — corrigido em 2026-07-13 com o
+  componente `AttachmentImage`. Ver [suggestions-board.md](suggestions-board.md).
+- **Comprovante PDF** (`ProofCard` em [DetectionDetailPage](../../frontend/src/pages/DetectionDetailPage.jsx))
+  — corrigido em 2026-07-13: buscava `/proof/url` (presigned) e abria em nova aba
+  → em prod caía no `localhost:9000`. Agora busca `/detections/{id}/proof` como
+  blob e abre um `blob:` URL. Handler `DetectionsHandler.Proof` espelha o
+  `Evidence`.
+
+Reprodutores de material/áudio (MaterialPlaybackList, LiveAiringRow,
+AirtimeDetectionRow, SimilarityWarningModal) e os exports CSV/PDF já usavam o
+proxy autenticado (`responseType: 'blob'`), nunca presigned — sem ação.
+
 ## Pendências
 
-- **Comprovante PDF (`GET /v1/internal/detections/{id}/proof/url`, admin)**
-  ainda devolve uma URL pré-assinada aberta direto no browser
-  ([DetectionDetailPage `ProofCard`](../../frontend/src/pages/DetectionDetailPage.jsx)).
-  Em prod isso sofre exatamente o mesmo bloqueio de loopback do áudio. Correção
-  simétrica: criar um proxy `GET /detections/{id}/proof` (espelhando o de
-  evidência) e buscar o PDF como blob. Não feito ainda — a decisão de 2026-07-03
-  foi migrar só o áudio (o que estava reportado quebrado) e deixar o comprovante
-  como follow-up.
+- Os endpoints `*/url` presigned (`EvidenceURL`, `ProofURL`, `AttachmentURL`)
+  continuam existindo mas **nenhum é usado pelo frontend interno**. São inócuos
+  (nada os chama) e ficam como legado; podem ser removidos numa limpeza futura.
 
 ## O endpoint de proxy (caminho atual do browser)
 
