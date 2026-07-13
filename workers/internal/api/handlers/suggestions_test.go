@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -129,6 +130,63 @@ func TestSuggestionsHandler_Patch_NonDevForbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Patch(w, req)
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+}
+
+// reqWithAIDParam builds a request carrying an {aid} chi URL param (the
+// attachment id), mirroring reqWithIDParam but for the attachment routes.
+func reqWithAIDParam(method, path, aid string) *http.Request {
+	req := httptest.NewRequest(method, path, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("aid", aid)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+// The blob proxy (GET /suggestions/attachments/{aid}) enforces the same
+// owner-or-dev gating as the presigned-URL endpoint: an autor who does not own
+// the parent suggestion must get 403 — never the bytes.
+func TestSuggestionsHandler_ProxyAttachment_AuthorCannotReadOthers(t *testing.T) {
+	ctx, pool := newSuggestionsTestPool(t)
+	h := newSuggestionsHandler(pool)
+	authorA := mkUser(t, ctx, pool, "a@test.local")
+	authorB := mkUser(t, ctx, pool, "b@test.local")
+	sug, err := h.Repo.Create(ctx, catalog.CreateSuggestionInput{
+		CreatedBy: authorA, Title: "x", Description: "y", Type: "bug", RequesterPriority: "alta",
+	})
+	require.NoError(t, err)
+	att, err := h.Repo.AddAttachment(ctx, catalog.AddAttachmentInput{
+		SuggestionID: sug.ID, StorageKey: "suggestions/" + sug.ID.String() + "/x.png",
+		ContentType: "image/png", SizeBytes: 3, UploadedBy: authorA,
+	})
+	require.NoError(t, err)
+
+	req := reqWithAIDParam("GET", "/suggestions/attachments/x", att.ID.String())
+	req = asCaller(req, authorB)
+	w := httptest.NewRecorder()
+	h.ProxyAttachment(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+}
+
+// With no storage backend wired, the proxy fails closed (500) rather than
+// panicking on a nil client — same contract as UploadAttachment/AttachmentURL.
+func TestSuggestionsHandler_ProxyAttachment_NoStorage(t *testing.T) {
+	ctx, pool := newSuggestionsTestPool(t)
+	h := newSuggestionsHandler(pool) // Storage: nil
+	author := mkUser(t, ctx, pool, "a@test.local")
+	sug, err := h.Repo.Create(ctx, catalog.CreateSuggestionInput{
+		CreatedBy: author, Title: "x", Description: "y", Type: "bug", RequesterPriority: "alta",
+	})
+	require.NoError(t, err)
+	att, err := h.Repo.AddAttachment(ctx, catalog.AddAttachmentInput{
+		SuggestionID: sug.ID, StorageKey: "suggestions/" + sug.ID.String() + "/x.png",
+		ContentType: "image/png", SizeBytes: 3, UploadedBy: author,
+	})
+	require.NoError(t, err)
+
+	req := reqWithAIDParam("GET", "/suggestions/attachments/x", att.ID.String())
+	req = asCaller(req, author) // owner → passes gating, then hits nil storage
+	w := httptest.NewRecorder()
+	h.ProxyAttachment(w, req)
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
 }
 
 // An autor's List is hard-scoped to their own suggestions server-side.

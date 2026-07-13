@@ -353,17 +353,17 @@ function EvidencePanel({ detection, evidenceUrl, isLoadingUrl, urlError, awaitin
   )
 }
 
-// ProofCard: comprovante PDF do lote (manual_proof_batches). Admin-only. Abre o
-// presigned em nova aba. Renderizado só quando a detecção tem proof_batch_id.
-function ProofCard({ query }) {
-  const url = query.data?.url
-  const ready = !!url && !query.isLoading && !query.error
+// ProofCard: comprovante PDF do lote (manual_proof_batches). Admin-only. Abre um
+// blob: URL (bytes buscados pelo proxy, não presigned) em nova aba. Renderizado
+// só quando a detecção tem proof_batch_id.
+function ProofCard({ url, isLoading, error }) {
+  const ready = !!url && !isLoading && !error
   return (
     <div className="dd-panel">
       <div className="dd-panel-head">
         <span className="dd-panel-title">Comprovante</span>
-        <span className={`dd-chip ${query.error ? 'is-danger' : ready ? 'is-success' : ''}`.trim()}>
-          {query.error ? 'erro' : query.isLoading ? '…' : 'PDF'}
+        <span className={`dd-chip ${error ? 'is-danger' : ready ? 'is-success' : ''}`.trim()}>
+          {error ? 'erro' : isLoading ? '…' : 'PDF'}
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -381,7 +381,7 @@ function ProofCard({ query }) {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
           </svg>
-          {query.isLoading ? 'Carregando…' : query.error ? 'Indisponível' : 'Ver comprovante (PDF)'}
+          {isLoading ? 'Carregando…' : error ? 'Indisponível' : 'Ver comprovante (PDF)'}
         </a>
       </div>
     </div>
@@ -609,15 +609,22 @@ export default function DetectionDetailPage() {
   )
   useEffect(() => () => { if (evidenceUrl) URL.revokeObjectURL(evidenceUrl) }, [evidenceUrl])
 
-  // Comprovante PDF do lote (manual_proof_batches). Admin-only — o endpoint
-  // /proof/url vive no grupo admin. Habilita só quando há proof_batch_id.
-  const proofUrlQuery = useQuery({
-    queryKey: ['detection-proof-url', id],
-    queryFn:  () => api.get(`/detections/${id}/proof/url`).then(r => r.data),
+  // Comprovante PDF do lote (manual_proof_batches). Admin-only. Buscado pelo
+  // PROXY autenticado (bytes), não pela URL pré-assinada — a presigned assa o
+  // host do MinIO (localhost:9000), que o browser não alcança no origin público
+  // (mesmo motivo do áudio acima). Pegamos como blob e abrimos um blob: URL.
+  const proofBlobQuery = useQuery({
+    queryKey: ['detection-proof-blob', id],
+    queryFn:  () => api.get(`/detections/${id}/proof`, { responseType: 'blob' }).then(r => r.data),
     enabled:  isAdmin && !!detection?.proof_batch_id,
-    staleTime: 4 * 60 * 1000,
+    staleTime: Infinity,
     retry: 1,
   })
+  const proofUrl = useMemo(
+    () => (proofBlobQuery.data ? URL.createObjectURL(proofBlobQuery.data) : null),
+    [proofBlobQuery.data],
+  )
+  useEffect(() => () => { if (proofUrl) URL.revokeObjectURL(proofUrl) }, [proofUrl])
 
   const campaign = useMemo(() => {
     if (!campaignId || !campaignsQuery.data) return null
@@ -812,7 +819,7 @@ export default function DetectionDetailPage() {
           gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: 16, marginTop: 16,
         }}>
-          {detection.proof_batch_id && <ProofCard query={proofUrlQuery} />}
+          {detection.proof_batch_id && <ProofCard url={proofUrl} isLoading={proofBlobQuery.isLoading} error={proofBlobQuery.error} />}
           {canUploadCensura && <CensuraUploader detection={detection} />}
         </div>
       )}
