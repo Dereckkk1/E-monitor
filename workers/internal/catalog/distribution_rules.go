@@ -225,8 +225,10 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 //   - Carve-out (migration 0043): se o material é nomeado em ALGUMA regra
 //     específica (cardinality(material_ids) > 0 contendo material_id), ele é
 //     julgado SÓ por essas regras — in_slot se casa data+dia+faixa(±15min),
-//     out_slot se casa data+dia mas não a faixa, senão out_date (fora do
-//     período/dia programado dele). Regras gerais NÃO valem pra ele.
+//     out_slot se casa data+dia mas não a faixa, orphan se dentro do range de
+//     datas de alguma regra dele (ignorando dia/faixa) — dia extra dentro do
+//     período, credita bônus (spec 2026-07-13) — senão out_date (fora do período
+//     das regras dele). Regras gerais NÃO valem pra ele.
 //   - Material comum (só regras gerais, material_ids vazio): in_slot / out_slot
 //     / orphan, exatamente como antes.
 //
@@ -303,6 +305,18 @@ classified AS (
                               BETWEEN r.start_date AND r.end_date
                           AND ((1 << EXTRACT(DOW FROM (s.detected_at AT TIME ZONE 'America/Sao_Paulo'))::int) & r.weekday_mask) != 0
                     ) THEN 'out_slot'
+                    -- [NOVO] Dentro do range de alguma regra específica do material
+                    -- (ignorando dia/faixa) → dia extra dentro do período → orphan
+                    -- (credita bônus). Espelha categorizer.Categorize inRulePeriod.
+                    WHEN EXISTS (
+                        SELECT 1 FROM distribution_rules r
+                        WHERE r.campaign_id = s.campaign_id
+                          AND r.type_id = s.type_id
+                          AND s.station_id = ANY(r.station_ids)
+                          AND s.material_id = ANY(r.material_ids)
+                          AND date_trunc('day', s.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+                              BETWEEN r.start_date AND r.end_date
+                    ) THEN 'orphan'
                     ELSE 'out_date'
                 END
             )
