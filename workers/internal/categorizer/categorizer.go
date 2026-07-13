@@ -127,9 +127,14 @@ func Categorize(detectedAt time.Time, cmp Campaign, materialID uuid.UUID, rules 
 
 	if carved {
 		hasDateWeekday := false
+		inRulePeriod := false
 		for _, r := range rules {
 			if len(r.MaterialIDs) == 0 || !containsUUID(r.MaterialIDs, materialID) {
 				continue
+			}
+			// Dentro do range de datas da regra dele (ignorando dia/faixa)?
+			if !date.Before(dateOnlySP(r.StartDate)) && !date.After(dateOnlySP(r.EndDate)) {
+				inRulePeriod = true
 			}
 			if !matchesDateWeekday(r) {
 				continue
@@ -141,6 +146,12 @@ func Categorize(detectedAt time.Time, cmp Campaign, materialID uuid.UUID, rules 
 		}
 		if hasDateWeekday {
 			return CatOutSlot
+		}
+		// Dentro do período do material mas em dia/faixa sem meta → dia extra
+		// dentro do período contratado → orphan (a view credita bônus). out_date
+		// fica reservado a tocadas FORA do período das regras do material.
+		if inRulePeriod {
+			return CatOrphan
 		}
 		return CatOutDate
 	}
