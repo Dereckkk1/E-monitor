@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-19
+ultima-verificacao: 2026-07-14
 codigo-relacionado:
   - workers/internal/catalog/detection_filter.go
   - workers/internal/catalog/detections.go
@@ -131,6 +131,17 @@ contava → 4 vs 2.
 > [version-disambiguation.md](version-disambiguation.md). São dois problemas
 > distintos: *consistência de exibição* (este doc) e *correção/recuperação de
 > atribuição* (v2b).
+
+## Sincronização de categoria
+
+Este doc padroniza **quais linhas contam** (o conjunto aprovado). Um problema
+distinto — e complementar — é garantir que, para uma linha que conta, a
+**categoria** gravada (`detection_campaigns.category`, o que a view
+`daily_play_summary` e a grade exibem como in_slot/out_slot/out_date/orphan)
+está sempre certa em relação às regras/overrides vivos da campanha. Ver
+[projection-category-invariant.md](projection-category-invariant.md) — inclui
+o caso COPA 10/07, onde a categoria de uma projeção fan-out (F-119) ficou
+`orphan` presa porque o recat só escopava a campanha-base da tocada.
 
 ## Validação
 
