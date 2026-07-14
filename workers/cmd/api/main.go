@@ -52,6 +52,7 @@ func main() {
 		log.Fatalf("logger: %v", err)
 	}
 	defer logger.Sync() //nolint:errcheck
+	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
 	// OTLP endpoint is configured so dev / CI keep working without a

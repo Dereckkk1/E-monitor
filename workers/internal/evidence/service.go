@@ -262,6 +262,10 @@ func (s *Service) handle(msg *nats.Msg) {
 					cat, cerr := s.detections.CategorizeFor(ctx, p.CampaignID, p.CommercialID, stationID, detectedAt)
 					if cerr != nil {
 						cat = "orphan"
+						s.log.Warn("evidence: fan-out CategorizeFor falhou; projeção nasce orphan (projrecon cura)",
+							zap.String("detection_id", det.ID.String()),
+							zap.String("campaign_id", p.CampaignID.String()),
+							zap.Error(cerr))
 					}
 					projs = append(projs, catalog.Projection{CampaignID: p.CampaignID, CommercialID: p.CommercialID, Category: cat})
 				}
