@@ -28,6 +28,7 @@ import (
 	"radiocheck/internal/index"
 	"radiocheck/internal/mailer"
 	"radiocheck/internal/observability"
+	"radiocheck/internal/projrecon"
 	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
 	"radiocheck/internal/similarity"
@@ -51,6 +52,7 @@ func main() {
 		log.Fatalf("logger: %v", err)
 	}
 	defer logger.Sync() //nolint:errcheck
+	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
 	// OTLP endpoint is configured so dev / CI keep working without a
@@ -343,6 +345,27 @@ func main() {
 			logger.Error("calibration scheduler exited with error", zap.Error(err))
 		}
 	}()
+
+	// Reconciler do invariante de categoria por projeção (spec 2026-07-14).
+	// PROJECTION_RECONCILE=off desliga; intervalo/janela via env.
+	if os.Getenv("PROJECTION_RECONCILE") != "off" {
+		projScheduler := projrecon.New(distRulesRepo, logger)
+		if v := os.Getenv("PROJECTION_RECONCILE_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				projScheduler.Interval = d
+			}
+		}
+		if v := os.Getenv("PROJECTION_RECONCILE_LOOKBACK"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				projScheduler.Lookback = d
+			}
+		}
+		go func() {
+			if err := projScheduler.Run(ctx); err != nil {
+				logger.Error("projection reconciler saiu com erro", zap.Error(err))
+			}
+		}()
+	}
 
 	// Webhook subsystem (§13.1.4):
 	//   1. Deliverer: subscribes to detections.confirmed NATS events and

@@ -243,7 +243,7 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			_ = h.DistRules.RecategorizeForMaterial(ctx, id)
+			recordRecatFailure("material_type_change", h.DistRules.RecategorizeForMaterial(ctx, id))
 		}()
 	}
 	w.WriteHeader(http.StatusNoContent)
