@@ -15,6 +15,9 @@
 //                   enumerateVisibleDays de dates.js).
 //   - cellData:     Map key `${stationId}|${materialId}|${dateISO}` →
 //                   { expected, in_slot, deficit, bonus, out_slot, out_date }.
+//   - materialLookup: (opcional) Map/objeto key `${stationId}|${typeId}` →
+//                   [{ shortId, title, durationSec }] com os materiais REAIS
+//                   daquele tipo naquela emissora (a grade só conhece o tipo).
 //
 // dateISO segue a mesma construção da grade (`d.toISOString().slice(0,10)`), que
 // em America/Sao_Paulo (UTC-3) coincide com o for_date da view.
@@ -68,6 +71,28 @@ function coveragePct(expected, inSlot) {
   return expected > 0 ? Math.round((inSlot / expected) * 100) : null
 }
 
+// Resolve os materiais REAIS de uma célula (emissora × tipo). A grade é
+// organizada por tipo (`daily_play_summary` agrega por type_id), então o nome
+// do material não vem na linha — resolvemos aqui a partir do lookup montado na
+// página (materiais da campanha por estação × tipo). Aceita Map OU objeto puro.
+// Ausente → [] (sem regressão: o relatório segue mostrando só o tipo).
+function resolveMaterials(lookup, stationId, typeId) {
+  if (!lookup) return []
+  const key = `${stationId}|${typeId}`
+  const arr = typeof lookup.get === 'function' ? lookup.get(key) : lookup[key]
+  return Array.isArray(arr) ? arr : []
+}
+
+// Rótulo textual dos materiais reais de um bloco — usado no CSV (uma célula) e
+// como fallback de subtítulo. `#<short> <título>` por material, unidos por ' / '.
+export function materialsLabel(materials) {
+  if (!Array.isArray(materials) || materials.length === 0) return ''
+  return materials
+    .map(m => (m.shortId != null ? `#${m.shortId} ${m.title ?? ''}`.trim() : (m.title ?? '')))
+    .filter(Boolean)
+    .join(' / ')
+}
+
 /**
  * Constrói o modelo estruturado do relatório. Puro e determinístico.
  *
@@ -78,6 +103,7 @@ function coveragePct(expected, inSlot) {
  *   byStation: Array<{
  *     stationId, stationName, stationCity, stationState, stationDial,
  *     materials: Array<{ typeId, title,
+ *       materials: Array<{ shortId, title, durationSec }>,  // materiais REAIS do tipo
  *       days: Array<{ dateISO, dateLabel, ...cell }>,   // só dias não-vazios
  *       totals }>,
  *     totals }>,
@@ -87,6 +113,7 @@ function coveragePct(expected, inSlot) {
  */
 export function buildGridReportModel({
   campaign, client, filteredRows, stations, days, cellData, filterInfo = {},
+  materialLookup = null,
 }) {
   const stationById = new Map((stations ?? []).map(s => [s.id, s]))
 
@@ -128,6 +155,7 @@ export function buildGridReportModel({
       materials.push({
         typeId: row.materialId,
         title:  row.materialTitle ?? '—',
+        materials: resolveMaterials(materialLookup, stationId, row.materialId),
         days:   dayRows,
         totals: matTotals,
       })
@@ -192,7 +220,7 @@ function slugify(s) {
 // abrir limpo no Excel pt-BR, igual ao reports.go.
 
 const CSV_HEADER = [
-  'Emissora', 'Dial', 'Cidade', 'UF', 'Material',
+  'Emissora', 'Dial', 'Cidade', 'UF', 'Tipo', 'Materiais',
   'Programado', 'Tocou (faixa)', 'Déficit', 'Bônus',
   'Fora da faixa', 'Fora da data',
 ]
@@ -207,7 +235,8 @@ export function buildGridReportCSV(model) {
   for (const s of model.byStation) {
     for (const m of s.materials) {
       lines.push([
-        s.stationName, s.stationDial, s.stationCity, s.stationState, m.title,
+        s.stationName, s.stationDial, s.stationCity, s.stationState,
+        m.title, materialsLabel(m.materials),
         m.totals.expected, m.totals.inSlot, m.totals.deficit,
         m.totals.bonus, m.totals.outSlot, m.totals.outDate,
       ].map(csvEscape).join(';'))
