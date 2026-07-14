@@ -39,6 +39,15 @@ ainda não foi recategorizada por nenhum caminho. O reconciler cura isso no tick
 seguinte e o gauge volta a 0. **Isso não deve disparar o alerta** (o threshold
 de 3+ ciclos sustentados existe justamente para absorver esse ruído normal).
 
+Um **pico no primeiro ciclo pós-deploy** também é esperado: `CountProjectionDrift`
+conta **toda** projeção divergente, inclusive linhas retratadas/ignoradas/
+`audit_rejected` — que **não** aparecem em nenhuma grade/relatório/cobrança (essas
+telas usam o gate "aprovado", `ApprovedDetectionsFilter`). O reconciler cura essas
+linhas benignas de uma vez no primeiro tick e o gauge assenta. Antes de tratar um
+pico como problema real, cheque se o drift está confinado a linhas **não-aprovadas**
+(retracted/ignored/audit_rejected) — se estiver, é inócuo para as telas, e o que
+importa é só que ele **não reapareça** ciclo após ciclo (§Causas Comuns).
+
 ## Causas Comuns (drift que REAPARECE a cada ciclo)
 
 Drift sustentado — a mesma divergência sendo curada e reaparecendo no ciclo

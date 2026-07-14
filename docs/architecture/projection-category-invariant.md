@@ -224,6 +224,16 @@ backfill-recategorize --dsn "$DATABASE_URL"
 backfill-recategorize --dsn "$DATABASE_URL" --all
 ```
 
+**Cobertura por modo (importante):** o default varre cada campanha com
+`RecategorizeForCampaign`, que é **escopado ao período da campanha**
+(`[start_date, end_date]`) — suficiente para a classe carve-out (dia extra
+*dentro* do período). O `--all` usa `HealProjectionDriftForCampaign`, que é
+**sem date-bound** (`WHERE dc.campaign_id = $1`, qualquer data): assim uma
+projeção com `detected_at` **fora** do período — cujo veredito correto é
+`out_date` — também converge, coisa que o caminho date-bounded nunca faria. Isso
+alinha a cobertura do `--all` à do reconciler (que também não é date-bounded) e
+fecha a lacuna I1 do review 2026-07-14.
+
 Dry-run é o default em ambos os modos (só imprime `ANTES`/`DEPOIS`/`DELTA` de
 `out_date`/`orphan`); `--apply` muta. Procedimento canônico para rodar em prod
 (regra 4.8 do `CLAUDE.md` — migração/backfill que depende de volume de dados
