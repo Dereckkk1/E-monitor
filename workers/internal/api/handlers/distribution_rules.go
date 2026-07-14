@@ -83,7 +83,7 @@ func (h *DistributionRulesHandler) Create(w http.ResponseWriter, r *http.Request
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = h.Repo.RecategorizeForRule(ctx, rule.ID)
+		recordRecatFailure("rule_create", h.Repo.RecategorizeForRule(ctx, rule.ID))
 	}()
 	writeJSON(w, http.StatusCreated, rule)
 }
@@ -149,7 +149,7 @@ func (h *DistributionRulesHandler) Update(w http.ResponseWriter, r *http.Request
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = h.Repo.RecategorizeForRule(ctx, ruleID)
+		recordRecatFailure("rule_update", h.Repo.RecategorizeForRule(ctx, ruleID))
 	}()
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -173,7 +173,7 @@ func (h *DistributionRulesHandler) Delete(w http.ResponseWriter, r *http.Request
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = h.Repo.RecategorizeForCampaign(ctx, campaignID)
+		recordRecatFailure("rule_delete", h.Repo.RecategorizeForCampaign(ctx, campaignID))
 	}()
 	w.WriteHeader(http.StatusNoContent)
 }

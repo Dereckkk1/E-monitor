@@ -93,7 +93,7 @@ func (h *DistributionOverridesHandler) Upsert(w http.ResponseWriter, r *http.Req
 		// erro na recat não falha o request.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
+		recordRecatFailure("override_upsert", h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -127,7 +127,7 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 		// erro na recat não falha o request.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date)
+		recordRecatFailure("override_delete", h.Recat.RecategorizeForOverride(ctx, campaignID, p.TypeID, p.StationID, date))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
