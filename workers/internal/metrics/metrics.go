@@ -297,6 +297,28 @@ var (
 		Name: "radiocheck_notifications_recipients",
 		Help: "Número de destinatários do último disparo, por tipo.",
 	}, []string{"type"})
+
+	// ── Invariante de categoria por projeção (spec 2026-07-14) ──
+	// RecategorizeFailures conta falhas dos disparos best-effort de
+	// recategorização (handlers de rule/override/material). Antes eram
+	// engolidas (`_ =`) — categoria ficava velha em silêncio.
+	RecategorizeFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_recategorize_failures_total",
+		Help: "Falhas de recategorização best-effort, por origem.",
+	}, []string{"origin"}) // rule_create | rule_update | rule_delete | override_upsert | override_delete | material_type_change
+
+	// ProjectionDriftHealed conta projeções cuja categoria o reconciler
+	// corrigiu. Cura sem métrica esconderia bug upstream — drift sustentado
+	// > 0 = produtor novo furando o invariante (runbook ProjectionDriftPersistent).
+	ProjectionDriftHealed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_projection_drift_healed_total",
+		Help: "Projeções com categoria corrigida pelo reconciler, por transição.",
+	}, []string{"from", "to"})
+
+	ProjectionDriftLastRun = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "radiocheck_projection_drift_last_run",
+		Help: "Divergências de categoria encontradas no último ciclo do reconciler.",
+	})
 )
 
 func init() {
@@ -319,5 +341,6 @@ func init() {
 		NotificationsSentTotal, NotificationsFailedTotal, NotificationsRecipients,
 		FingerprintStuck, FingerprintRetriesTotal,
 		CooldownPossibleReairTotal,
+		RecategorizeFailures, ProjectionDriftHealed, ProjectionDriftLastRun,
 	)
 }
