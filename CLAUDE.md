@@ -371,6 +371,7 @@ docs/
 | Regras de distribuição + categorização de detection | [docs/architecture/distribution-rules.md](docs/architecture/distribution-rules.md) |
 | Regra de distribuição escopada a materiais específicos (carve-out, `material_ids[]`) | [docs/features/material-specific-distribution-rules.md](docs/features/material-specific-distribution-rules.md) |
 | Contagem de veiculações divergindo entre telas (modal × grid × /insights × /management × /live-map) — filtro canônico "aprovado" (`catalog.ApprovedDetectionsFilter`) | [docs/architecture/detection-count-consistency.md](docs/architecture/detection-count-consistency.md) |
+| Categoria de projeção divergente da grade (bônus/órfã fantasma), reconciler de projeções, drift | [docs/architecture/projection-category-invariant.md](docs/architecture/projection-category-invariant.md) |
 | Audit de evidência pré-persist (§9.9) | [docs/architecture/evidence-audit.md](docs/architecture/evidence-audit.md) |
 | Segmentos ADTS-AAC e extração de evidência | [docs/architecture/evidence-segments.md](docs/architecture/evidence-segments.md) |
 | Design tokens, CSS, .btn, RSelect, .field | [docs/architecture/frontend-design-system.md](docs/architecture/frontend-design-system.md) |
