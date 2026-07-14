@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-25
+ultima-verificacao: 2026-07-14
 codigo-relacionado:
   - migrations/0041_detection_campaigns.up.sql
   - workers/internal/catalog/detection_campaigns.go
@@ -42,7 +42,10 @@ Desambiguação §18.2.2, audit §9.9, evidência, webhooks operam na tocada bas
 
 Faseado e reversível: migração 0041 + backfill 1:1 (flag OFF = idêntico) → validar → ligar `MULTI_ATTRIBUTION=true` (recreate `--no-deps api`). Backfill passa pelo shadow migration test (regra 4.8). Spec: `docs/superpowers/specs/2026-06-25-multi-attribution-f119-design.md`.
 
+## Sincronização de categoria
+
+O recategorizador escopa por **projeção** (`detection_campaigns.campaign_id`), não só pela campanha-base da tocada — resolvido pelo invariante de categoria por projeção (caso motivador: fan-out F-119 que ficava `orphan` para sempre porque o recat só alcançava a projeção canônica). Ver [projection-category-invariant.md](../architecture/projection-category-invariant.md) para o invariante, a guarda que impede uma projeção secundária de sobrescrever a categoria da base, e o reconciler contínuo que cura qualquer drift futuro.
+
 ## Limitações conhecidas
 
-- O recategorizador sincroniza a projeção **canônica** (`detection.campaign_id`). Com fan-out ON, recategorizar projeções cujo `detection.campaign_id` canônico difere da campanha projetada exige escopo sobre `detection_campaigns` (pendente — fazer antes de ligar a flag em larga escala).
 - Audit §9.9 testa contra UM `commercial_id` (o canônico); ver nota em [[evidence-audit]].

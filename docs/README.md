@@ -45,6 +45,7 @@ docs/
 | [distribution-rules.md](architecture/distribution-rules.md) | Regras de distribuição + categorização in_slot/out_slot/out_date/orphan + view daily_play_summary |
 | [version-disambiguation.md](architecture/version-disambiguation.md) | Dedup pós-confirmação entre cortes 30s/60s do mesmo cliente |
 | [detection-count-consistency.md](architecture/detection-count-consistency.md) | Conjunto "aprovado" único (`catalog.ApprovedDetectionsFilter`) + matriz de toda query de contagem de veiculação + exceções deliberadas |
+| [projection-category-invariant.md](architecture/projection-category-invariant.md) | Invariante `detection_campaigns.category` sempre igual ao veredito do categorizador: recat escopado por projeção + guarda da base + reconciler contínuo `projrecon` (caso motivador COPA 10/07) |
 | [evidence-audit.md](architecture/evidence-audit.md) | Re-fingerprint do clipe salvo × master antes de confirmar veiculação (§9.9) |
 | [evidence-segments.md](architecture/evidence-segments.md) | ffmpeg escreve segmentos ADTS-AAC 30s; evidence extrai por timestamp |
 | [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect) |

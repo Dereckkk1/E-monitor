@@ -33,12 +33,14 @@ Cada runbook segue a estrutura padrão definida no plano (§15.6):
 | [FingerprintStuck](FingerprintStuck.md) | warning | Pipeline de materiais | operational |
 | [WorkerStallLoop](WorkerStallLoop.md) | critical | Ingestão | operational |
 | [AuditRejectedSpike](AuditRejectedSpike.md) | warning | Detecção | operational |
+| [ProjectionDriftPersistent](ProjectionDriftPersistent.md) | warning | Detecção | aguardando wiring do alerta |
 
 ### Legenda de status
 
 - **operational**: alerta ativo no `alerts.yml` e métrica disponível.
 - **aguardando métrica**: alerta presente como TODO (comentado no `alerts.yml`); depende de instrumentação ainda não implementada — runbook já documentado para uso futuro.
 - **depende de node_exporter**: alerta ativo, mas requer `node_exporter` rodando no host com a coleção `time` habilitada para a métrica `node_timex_offset_seconds`.
+- **aguardando wiring do alerta**: métrica já exposta e o produtor (scheduler/reconciler) já roda em prod; falta só declarar a regra em `infra/prometheus/alerts.yml` — runbook documentado para uso imediato assim que a regra for adicionada (rollout operacional, fora deste commit de docs).
 
 ## Como usar
 
