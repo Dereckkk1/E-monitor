@@ -12,6 +12,12 @@
 //	backfill-recategorize --dsn "$DATABASE_URL" --apply
 //
 // Escopa a uma campanha com --campaign <uuid>.
+//
+// --all amplia o alvo para TODA campanha com ao menos uma projeção em
+// detection_campaigns (não só as com carve-out) — necessário uma vez, após o
+// motor de recat passar a escopar por projeção em vez da tocada-base (spec
+// 2026-07-14), para convergir o histórico de projeções fan-out (F-119) que os
+// recats antigos nunca alcançavam.
 package main
 
 import (
@@ -31,6 +37,7 @@ func main() {
 	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "postgres connection string")
 	campaign := flag.String("campaign", "", "recategorizar só esta campanha (uuid); vazio = todas com carve-out")
 	apply := flag.Bool("apply", false, "aplicar a recategorização (default: dry-run, só reporta)")
+	all := flag.Bool("all", false, "todas as campanhas com projeções (default: só campanhas com regra carve-out)")
 	flag.Parse()
 	if *dsn == "" {
 		log.Fatal("--dsn (ou DATABASE_URL) é obrigatório")
@@ -45,13 +52,25 @@ func main() {
 
 	// Campanhas-alvo: as que têm ao menos uma regra carve-out (material_ids não-vazio).
 	// São as únicas cuja categoria pode mudar com o spec 2026-07-13.
-	const targetQuery = `
+	//
+	// --all: toda campanha com ao menos uma projeção — necessário 1× após o motor
+	// de recat passar a escopar por projeção (spec 2026-07-14), pra convergir o
+	// histórico de projeções fan-out que os recats antigos nunca alcançaram.
+	targetQuery := `
 		SELECT DISTINCT c.id, c.name
 		FROM campaigns c
 		JOIN distribution_rules r ON r.campaign_id = c.id
 		WHERE cardinality(r.material_ids) > 0
 		  AND ($1::uuid IS NULL OR c.id = $1)
 		ORDER BY c.name`
+	if *all {
+		targetQuery = `
+		SELECT c.id, c.name
+		FROM campaigns c
+		WHERE EXISTS (SELECT 1 FROM detection_campaigns dc WHERE dc.campaign_id = c.id)
+		  AND ($1::uuid IS NULL OR c.id = $1)
+		ORDER BY c.name`
+	}
 	var campaignFilter *uuid.UUID
 	if *campaign != "" {
 		id, err := uuid.Parse(*campaign)
