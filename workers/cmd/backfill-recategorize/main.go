@@ -35,7 +35,7 @@ import (
 
 func main() {
 	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "postgres connection string")
-	campaign := flag.String("campaign", "", "recategorizar só esta campanha (uuid); vazio = todas com carve-out")
+	campaign := flag.String("campaign", "", "recategorizar só esta campanha (uuid); vazio = todo o conjunto-alvo (ver --all)")
 	apply := flag.Bool("apply", false, "aplicar a recategorização (default: dry-run, só reporta)")
 	all := flag.Bool("all", false, "todas as campanhas com projeções (default: só campanhas com regra carve-out)")
 	flag.Parse()
@@ -125,7 +125,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("count (antes): %v", err)
 	}
-	fmt.Printf("\n=== backfill-recategorize (%d campanhas com carve-out) ===\n", len(camps))
+	alvo := "campanhas com carve-out"
+	if *all {
+		alvo = "todas as campanhas com projeções"
+	}
+	fmt.Printf("\n=== backfill-recategorize (%d %s) ===\n", len(camps), alvo)
 	fmt.Printf("ANTES:  out_date=%d  orphan=%d\n", beforeOut, beforeOrphan)
 
 	if !*apply {
