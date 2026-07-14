@@ -67,3 +67,24 @@ func (dr *DistributionRules) HealProjectionDrift(ctx context.Context, since time
 	}
 	return tag.RowsAffected(), nil
 }
+
+// HealProjectionDriftForCampaign resincroniza TODAS as projeções de UMA campanha
+// (qualquer data, sem o date-bound de RecategorizeForCampaign) à categoria correta
+// pelo categorizador — projeções fora do período da campanha convergem pra out_date.
+// Usado pelo backfill --all pra convergência completa do histórico (I1 do review
+// 2026-07-14). Reusa recatClassifyTailSQL (fonte única). Devolve linhas curadas.
+func (dr *DistributionRules) HealProjectionDriftForCampaign(ctx context.Context, campaignID uuid.UUID) (int64, error) {
+	tag, err := dr.pool.Exec(ctx, `
+WITH scope AS (
+    SELECT dc.detection_id AS id, dc.detected_at, dc.campaign_id,
+           dc.commercial_id AS material_id, m.type_id, d.station_id
+    FROM detection_campaigns dc
+    JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+    JOIN materials m ON m.id = dc.commercial_id
+    WHERE dc.campaign_id = $1
+)`+recatClassifyTailSQL, campaignID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

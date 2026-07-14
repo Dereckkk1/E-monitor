@@ -140,7 +140,16 @@ func main() {
 	dr := catalog.NewDistributionRules(pool)
 	var ok, failed int
 	for _, c := range camps {
-		if err := dr.RecategorizeForCampaign(ctx, c.id); err != nil {
+		var err error
+		if *all {
+			// --all: heal date-UNBOUNDED (I1 review 2026-07-14) — converge TODAS as
+			// projeções da campanha, inclusive as fora do período (→ out_date), que
+			// o RecategorizeForCampaign date-bounded nunca alcança.
+			_, err = dr.HealProjectionDriftForCampaign(ctx, c.id)
+		} else {
+			err = dr.RecategorizeForCampaign(ctx, c.id)
+		}
+		if err != nil {
 			log.Printf("FALHOU %s (%s): %v", c.name, c.id, err)
 			failed++
 			continue
