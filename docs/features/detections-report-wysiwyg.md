@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-08
+ultima-verificacao: 2026-07-14
 codigo-relacionado:
   - frontend/src/utils/gridReport.js
   - frontend/src/utils/pdfReport.js
@@ -57,12 +57,27 @@ total por emissora = KPIs).
 
 | Item | Conteúdo |
 |------|----------|
-| **CSV Consolidado** | 1 linha por **emissora × material**, colunas: Emissora, Dial, Cidade, UF, Material, **Programado**, Tocou (faixa), Déficit, Bônus, Fora da faixa, Fora da data. BOM UTF-8 + separador `;` (Excel pt-BR). |
-| **PDF** | Capa (campanha + cliente + período + **nota do recorte**) → KPIs filtrados (Cobertura %, Esperado, Tocou, Déficit, Bônus) → **uma seção por emissora** com tabela **dia a dia** (`Data · Material · Prog · Tocou · Déf · Bônus`) e total por material. Fora-faixa/fora-data aparecem como nota por emissora. |
+| **CSV Consolidado** | 1 linha por **emissora × tipo**, colunas: Emissora, Dial, Cidade, UF, **Tipo**, **Materiais**, **Programado**, Tocou (faixa), Déficit, Bônus, Fora da faixa, Fora da data. BOM UTF-8 + separador `;` (Excel pt-BR). |
+| **PDF** | Capa (campanha + cliente + período + **nota do recorte**) → KPIs filtrados (Cobertura %, Esperado, Tocou, Déficit, Bônus) → **legenda de cores** → **uma seção por emissora** com tabela **dia a dia** (`Data · Prog · Tocou · Fora faixa · Fora data · Déf · Bônus`) e total por tipo. Cada bloco de tipo tem uma **linha-título com o material REAL** (`Spot 30" · #241 VERISURE Alarme 30s`; `N materiais: A, B` quando o tipo tem vários). |
 | **CSV Detalhado** (admin) | **Inalterado** — segue o backend `/detections/export` (1 linha por veiculação, escopo campanha + data). É o dump cru do timeline e **não aplica o filtro de busca** (o hint no menu avisa). |
 
 "Tocou" = `in_slot` (dentro da faixa, verde) — o mesmo vocabulário das cores da
-grade. Déficit em vermelho, Bônus em azul, espelhando o semáforo da tela.
+grade. Déficit em vermelho, Bônus em azul, **Fora da faixa em âmbar, Fora da
+data em roxo**, espelhando o semáforo da tela (cores de
+[`DayDetailModal.jsx`](../../frontend/src/components/DayDetailModal.jsx)).
+
+### Material real × tipo (por que existe a linha-título)
+
+A grade de `/detections` é organizada por **tipo** (`daily_play_summary` agrega
+por `type_id`), então o nome do material não vem na linha — só o tipo (`Spot
+30"`). Para o relatório mostrar **qual comercial** tocou, a
+[`DetectionsPage`](../../frontend/src/pages/DetectionsPage.jsx) monta um
+`materialsByStationType` (Map `estação|tipo` → materiais reais da campanha) e
+passa como `materialLookup` ao `buildGridReportModel`. Quando um tipo tem **1
+material** naquela emissora, o subtítulo mostra `#short · nome · dur`; quando
+tem **N** (ex.: dois cortes de 15s), lista todos — as contagens diárias seguem
+por tipo (não dá pra fatiar sem outra query). No CSV, isso vira a coluna
+**Materiais**.
 
 ## Arquitetura (frontend-only, sem backend)
 

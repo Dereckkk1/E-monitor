@@ -671,6 +671,28 @@ export default function DetectionsPage() {
     return m
   }, [campaignMaterials, materialsById])
 
+  // Lookup dos materiais REAIS por (emissora × tipo) — a grade só conhece o
+  // tipo (daily_play_summary agrega por type_id), então resolvemos o nome do
+  // material aqui pra o relatório mostrar "Spot 30\" · #241 VERISURE Alarme 30s".
+  // Um tipo pode ter N materiais na mesma emissora → guardamos todos.
+  const materialsByStationType = useMemo(() => {
+    const m = new Map()
+    for (const cm of campaignMaterials) {
+      const mat = materialsById[cm.material_id]
+      if (!mat?.type_id) continue
+      for (const sid of cm.target_stations) {
+        const key = `${sid}|${mat.type_id}`
+        if (!m.has(key)) m.set(key, [])
+        m.get(key).push({
+          shortId: mat.short_id ?? null,
+          title: mat.title ?? '—',
+          durationSec: mat.duration_seconds ?? null,
+        })
+      }
+    }
+    return m
+  }, [campaignMaterials, materialsById])
+
   const rows = useMemo(() => {
     const r = []
     for (const [sid, typeSet] of typesInScopeByStation.entries()) {
@@ -783,7 +805,8 @@ export default function DetectionsPage() {
       search: search.trim(),
       periodLabel: rangeLabel(rangeStart, rangeEnd),
     },
-  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd])
+    materialLookup: materialsByStationType,
+  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType])
 
   // Só liga o modo WYSIWYG quando temos o catálogo de emissoras pra resolver
   // nomes/dial (admin). Sem catálogo (ex.: viewer), cai no relatório backend

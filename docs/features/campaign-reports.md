@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-08
+ultima-verificacao: 2026-07-14
 codigo-relacionado:
   - workers/internal/catalog/detections.go
   - workers/internal/api/handlers/reports.go
@@ -47,7 +47,7 @@ O menu oferece três opções:
 |------|-------|---------------|--------|
 | CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total + breakdown por status (Dentro/Fora faixa/Fora data/Bônus) no período | viewer (próprio cliente) + operator + admin |
 | CSV Detalhado | mesmo formato | 1 linha por **veiculação**, coluna **Status** em PT-BR | **admin-only** (reusa `/detections/export`) |
-| PDF | A4, gerado no browser via jsPDF | capa + KPIs + tabela por material + tabela por emissora + tabela material × emissora | viewer (próprio cliente) + operator + admin |
+| PDF | A4, gerado no browser via jsPDF | capa + KPIs + **legenda de cores** + tabela por material + tabela por emissora + tabela material × emissora — as três com **breakdown por status** (Dentro · Fora faixa · Fora data · Bônus, coloridos como o semáforo da grade) | viewer (próprio cliente) + operator + admin |
 
 > O CSV detalhado continua admin-only por decisão histórica (o endpoint
 > `/detections/export` já era restrito; mantemos pra evitar mudança de
@@ -140,9 +140,18 @@ página — é só o recorte do relatório.
      Helvetica bold 20pt navy (#06055B), meta `cliente · período`,
      badge de status à direita.
   3. **KPIs**: 3 cards (Veiculações, Materiais, Emissoras) — número
-     grande rosa, label cinza.
+     grande rosa, label cinza. Abaixo, uma **legenda de cores**
+     (Tocou · Fora da faixa · Fora da data · Déficit · Bônus) espelhando
+     o semáforo de [`DayDetailModal.jsx`](../../frontend/src/components/DayDetailModal.jsx).
   4. **Tabelas** via `jspdf-autotable` (linha zebra clara,
-     cabeçalho cinza, colunas de total em bold rosa).
+     cabeçalho cinza, colunas de total em bold rosa). As três tabelas
+     (por material, por emissora, material × emissora) trazem colunas
+     **Dentro · Fora faixa · Fora data · Bônus** com números coloridos.
+     O breakdown vem do `by_material_station` (que já carrega
+     `in_slot_count`/`out_slot_count`/`out_date_count`/`orphan_count`),
+     somado no cliente por material e por emissora — **sem mudança de
+     backend**. A tabela de detalhe trocou `Primeira/Última` por esse
+     status (as datas seguem no CSV consolidado).
   5. **Footer**: `Gerado por E-monitor · DD/MM/YYYY` à esquerda,
      paginação à direita.
 

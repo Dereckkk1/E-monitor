@@ -199,6 +199,69 @@ function drawFooter(doc, totalPages) {
   doc.text(pg, pageW - 15 - pgW, pageH - 6)
 }
 
+// ── Cores de categoria + legenda (compartilhadas pelos dois PDFs) ─
+// Espelham as pílulas de status da grade (DayDetailModal.jsx:1594-1598) pra o
+// relatório usar o mesmo semáforo que a tela. Tons levemente escurecidos pra
+// legibilidade em impressão.
+const CAT = {
+  prog:    [100, 116, 139],  // #64748b  Programado (neutro)
+  tocou:   [22, 128, 61],    // #15803d  Dentro da faixa (verde)
+  outSlot: [180, 83, 9],     // #b45309  Fora da faixa (âmbar)
+  outDate: [124, 58, 237],   // #7c3aed  Fora da data (roxo)
+  deficit: [185, 28, 28],    // #b91c1c  Déficit (vermelho)
+  bonus:   [29, 78, 216],    // #1d4ed8  Bônus (azul)
+}
+
+const LEGEND_ITEMS = [
+  ['Tocou', CAT.tocou],
+  ['Fora da faixa', CAT.outSlot],
+  ['Fora da data', CAT.outDate],
+  ['Déficit', CAT.deficit],
+  ['Bônus', CAT.bonus],
+]
+
+// Desenha a legenda de cores numa linha (bolinha + rótulo). Devolve o y após.
+function drawLegend(doc, x, y, items = LEGEND_ITEMS) {
+  const r = 1.3
+  let cx = x
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  for (const [label, color] of items) {
+    setColor(doc, 'fill', color)
+    doc.circle(cx + r, y - 1, r, 'F')
+    setColor(doc, 'text', TOKENS.text2)
+    doc.text(label, cx + r * 2 + 1.6, y)
+    cx += r * 2 + 1.6 + doc.getTextWidth(label) + 7
+  }
+  return y + 4.5
+}
+
+// Cor do número numa coluna de status: colorida quando > 0, apagada quando 0
+// (a não ser em linha de total, que fica navy). Reduz ruído visual.
+function statusTextColor(val, color, isTotal) {
+  if (val > 0) return color
+  return isTotal ? TOKENS.text : TOKENS.text3
+}
+
+// Subtítulo do bloco de material no PDF WYSIWYG: tipo + material(is) REAIS
+// resolvidos (a grade só conhece o tipo). 1 material → "Spot 30\" · #241
+// VERISURE Alarme 30s"; N materiais → "Spot 30\" · 2 materiais: A, B".
+function materialSubtitle(m) {
+  const mats = Array.isArray(m.materials) ? m.materials : []
+  const type = m.title || '—'
+  if (mats.length === 0) return type
+  if (mats.length === 1) {
+    const x = mats[0]
+    const bits = []
+    if (x.shortId != null) bits.push(`#${x.shortId}`)
+    if (x.title) bits.push(x.title)
+    if (x.durationSec != null) bits.push(`${Math.round(x.durationSec)}s`)
+    return `${type}  ·  ${bits.join(' ')}`
+  }
+  const names = mats.map(x => x.title).filter(Boolean).join(', ')
+  return `${type}  ·  ${mats.length} materiais: ${names}`
+}
+
 // ── Builder principal ───────────────────────────────────────────
 
 export async function buildCampaignReportPDF(summary) {
@@ -236,8 +299,38 @@ export async function buildCampaignReportPDF(summary) {
   drawKPI(doc, marginX + (kpiW + kpiGap) * 2, kpiY, kpiW, kpiH,
     'Emissoras', fmtNumber(summary.totals?.distinct_stations))
 
+  // Breakdown por status (Dentro/Fora faixa/Fora data/Bônus) — derivado do
+  // by_material_station (que já traz a contagem por categoria), somado por
+  // material e por emissora. Zero mudança de backend/SQL.
+  const byMatSta = Array.isArray(summary.by_material_station) ? summary.by_material_station : []
+  const bmByMaterial = new Map()
+  const bmByStation = new Map()
+  for (const r of byMatSta) {
+    for (const [map, key] of [[bmByMaterial, r.material_id], [bmByStation, r.station_id]]) {
+      const a = map.get(key) ?? { inSlot: 0, outSlot: 0, outDate: 0, orphan: 0 }
+      a.inSlot  += r.in_slot_count  ?? 0
+      a.outSlot += r.out_slot_count ?? 0
+      a.outDate += r.out_date_count ?? 0
+      a.orphan  += r.orphan_count   ?? 0
+      map.set(key, a)
+    }
+  }
+  const ZERO_BD = { inSlot: 0, outSlot: 0, outDate: 0, orphan: 0 }
+
+  // didParseCell reusável: pinta as colunas de status (índices → cor) quando > 0.
+  const statusColorizer = (colorByCol) => (data) => {
+    if (data.section !== 'body') return
+    const color = colorByCol[data.column.index]
+    if (!color) return
+    const val = Number(String(data.cell.raw).replace(/[^0-9-]/g, '')) || 0
+    data.cell.styles.textColor = statusTextColor(val, color, false)
+  }
+
+  // Legenda de cores (mesma da grade) abaixo dos KPIs.
+  const legendY = drawLegend(doc, marginX, kpiY + kpiH + 9)
+
   // 4) Seção "Por material" — tabela.
-  const sectionY = kpiY + kpiH + 12
+  const sectionY = legendY + 6
   setColor(doc, 'text', TOKENS.text)
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(12)
@@ -246,18 +339,25 @@ export async function buildCampaignReportPDF(summary) {
   const byMaterial = Array.isArray(summary.by_material) ? summary.by_material : []
   autoTable(doc, {
     startY: sectionY + 3,
-    head: [['ID', 'Material', 'Tipo', 'Duração', 'Total']],
-    body: byMaterial.map(m => [
-      m.material_short_id ?? '—',
-      m.material_title || '—',
-      m.material_type_name || '—',
-      m.material_duration_sec != null ? `${Math.round(m.material_duration_sec)}s` : '—',
-      fmtNumber(m.count),
-    ]),
+    head: [['ID', 'Material', 'Tipo', 'Dur', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total']],
+    body: byMaterial.map(m => {
+      const bd = bmByMaterial.get(m.material_id) ?? ZERO_BD
+      return [
+        m.material_short_id ?? '—',
+        m.material_title || '—',
+        m.material_type_name || '—',
+        m.material_duration_sec != null ? `${Math.round(m.material_duration_sec)}s` : '—',
+        fmtNumber(bd.inSlot),
+        fmtNumber(bd.outSlot),
+        fmtNumber(bd.outDate),
+        fmtNumber(bd.orphan),
+        fmtNumber(m.count),
+      ]
+    }),
     margin: { left: marginX, right: marginX },
     styles: {
-      fontSize: 9,
-      cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
+      fontSize: 8.5,
+      cellPadding: { top: 2.5, right: 2.5, bottom: 2.5, left: 2.5 },
       textColor: TOKENS.text2,
       lineColor: TOKENS.border,
       lineWidth: 0.1,
@@ -266,15 +366,21 @@ export async function buildCampaignReportPDF(summary) {
       fillColor: TOKENS.surface2,
       textColor: TOKENS.text,
       fontStyle: 'bold',
-      fontSize: 8.5,
+      fontSize: 8,
       lineColor: TOKENS.border,
     },
     alternateRowStyles: { fillColor: [250, 250, 252] },
     columnStyles: {
-      0: { cellWidth: 14, halign: 'center' },
-      3: { halign: 'right', cellWidth: 20 },
-      4: { halign: 'right', cellWidth: 20, fontStyle: 'bold', textColor: TOKENS.action },
+      0: { cellWidth: 12, halign: 'center' },
+      2: { cellWidth: 24 },
+      3: { halign: 'right', cellWidth: 12 },
+      4: { halign: 'right', cellWidth: 16 },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', cellWidth: 20 },
+      7: { halign: 'right', cellWidth: 14 },
+      8: { halign: 'right', cellWidth: 16, fontStyle: 'bold', textColor: TOKENS.action },
     },
+    didParseCell: statusColorizer({ 4: CAT.tocou, 5: CAT.outSlot, 6: CAT.outDate, 7: CAT.bonus }),
   })
 
   // 5) Seção "Por emissora" — tabela.
@@ -293,19 +399,26 @@ export async function buildCampaignReportPDF(summary) {
   const byStation = Array.isArray(summary.by_station) ? summary.by_station : []
   autoTable(doc, {
     startY: nextY + 3,
-    head: [['Emissora', 'Dial', 'Cidade', 'UF', 'Total']],
-    body: byStation.map(s => [
-      s.station_name || '—',
-      [s.station_band, s.station_frequency_mhz != null ? `${s.station_frequency_mhz.toFixed(1).replace('.', ',')}` : null]
-        .filter(Boolean).join(' ') || '—',
-      s.station_city || '—',
-      s.station_state || '—',
-      fmtNumber(s.count),
-    ]),
+    head: [['Emissora', 'Dial', 'Cidade', 'UF', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total']],
+    body: byStation.map(s => {
+      const bd = bmByStation.get(s.station_id) ?? ZERO_BD
+      return [
+        s.station_name || '—',
+        [s.station_band, s.station_frequency_mhz != null ? `${s.station_frequency_mhz.toFixed(1).replace('.', ',')}` : null]
+          .filter(Boolean).join(' ') || '—',
+        s.station_city || '—',
+        s.station_state || '—',
+        fmtNumber(bd.inSlot),
+        fmtNumber(bd.outSlot),
+        fmtNumber(bd.outDate),
+        fmtNumber(bd.orphan),
+        fmtNumber(s.count),
+      ]
+    }),
     margin: { left: marginX, right: marginX },
     styles: {
-      fontSize: 9,
-      cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
+      fontSize: 8.5,
+      cellPadding: { top: 2.5, right: 2.5, bottom: 2.5, left: 2.5 },
       textColor: TOKENS.text2,
       lineColor: TOKENS.border,
       lineWidth: 0.1,
@@ -314,42 +427,52 @@ export async function buildCampaignReportPDF(summary) {
       fillColor: TOKENS.surface2,
       textColor: TOKENS.text,
       fontStyle: 'bold',
-      fontSize: 8.5,
+      fontSize: 8,
       lineColor: TOKENS.border,
     },
     alternateRowStyles: { fillColor: [250, 250, 252] },
     columnStyles: {
-      1: { cellWidth: 24 },
-      3: { halign: 'center', cellWidth: 12 },
-      4: { halign: 'right', cellWidth: 20, fontStyle: 'bold', textColor: TOKENS.action },
+      1: { cellWidth: 20 },
+      2: { cellWidth: 26 },
+      3: { halign: 'center', cellWidth: 10 },
+      4: { halign: 'right', cellWidth: 16 },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', cellWidth: 20 },
+      7: { halign: 'right', cellWidth: 14 },
+      8: { halign: 'right', cellWidth: 16, fontStyle: 'bold', textColor: TOKENS.action },
     },
+    didParseCell: statusColorizer({ 4: CAT.tocou, 5: CAT.outSlot, 6: CAT.outDate, 7: CAT.bonus }),
   })
 
   // 6) Seção "Material × Emissora" (detalhe). Sempre em nova página, pra
-  //    legibilidade da tabela quando a campanha é grande.
-  const byMatSta = Array.isArray(summary.by_material_station) ? summary.by_material_station : []
+  //    legibilidade da tabela quando a campanha é grande. Troca Primeira/Última
+  //    pelas colunas de status (mais úteis pro fechamento comercial); as datas
+  //    de primeira/última seguem no CSV consolidado.
   if (byMatSta.length > 0) {
     doc.addPage()
     setColor(doc, 'text', TOKENS.text)
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(12)
     doc.text('Detalhe — Material × Emissora', marginX, 20)
+    drawLegend(doc, marginX, 26)
 
     autoTable(doc, {
-      startY: 24,
-      head: [['Material', 'Emissora', 'Cidade/UF', 'Primeira', 'Última', 'Total']],
+      startY: 30,
+      head: [['Material', 'Emissora', 'Cidade/UF', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total']],
       body: byMatSta.map(r => [
         r.material_title || '—',
         r.station_name || '—',
         [r.station_city, r.station_state].filter(Boolean).join('/') || '—',
-        r.first_detected_at ? fmtDate(r.first_detected_at) : '—',
-        r.last_detected_at  ? fmtDate(r.last_detected_at)  : '—',
+        fmtNumber(r.in_slot_count),
+        fmtNumber(r.out_slot_count),
+        fmtNumber(r.out_date_count),
+        fmtNumber(r.orphan_count),
         fmtNumber(r.count),
       ]),
       margin: { left: marginX, right: marginX },
       styles: {
         fontSize: 8.5,
-        cellPadding: { top: 2.2, right: 3, bottom: 2.2, left: 3 },
+        cellPadding: { top: 2.2, right: 2.5, bottom: 2.2, left: 2.5 },
         textColor: TOKENS.text2,
         lineColor: TOKENS.border,
         lineWidth: 0.1,
@@ -358,15 +481,20 @@ export async function buildCampaignReportPDF(summary) {
         fillColor: TOKENS.surface2,
         textColor: TOKENS.text,
         fontStyle: 'bold',
-        fontSize: 8.5,
+        fontSize: 8,
         lineColor: TOKENS.border,
       },
       alternateRowStyles: { fillColor: [250, 250, 252] },
       columnStyles: {
-        3: { halign: 'right', cellWidth: 22 },
-        4: { halign: 'right', cellWidth: 22 },
-        5: { halign: 'right', cellWidth: 16, fontStyle: 'bold', textColor: TOKENS.action },
+        1: { cellWidth: 30 },
+        2: { cellWidth: 22 },
+        3: { halign: 'right', cellWidth: 16 },
+        4: { halign: 'right', cellWidth: 20 },
+        5: { halign: 'right', cellWidth: 20 },
+        6: { halign: 'right', cellWidth: 14 },
+        7: { halign: 'right', cellWidth: 16, fontStyle: 'bold', textColor: TOKENS.action },
       },
+      didParseCell: statusColorizer({ 3: CAT.tocou, 4: CAT.outSlot, 5: CAT.outDate, 6: CAT.bonus }),
     })
   }
 
@@ -391,10 +519,6 @@ export async function buildCampaignReportPDF(summary) {
 // grade — as mesmas emissoras/materiais filtrados, os mesmos números da view
 // daily_play_summary — e detalha DIA A DIA por emissora. Reusa logo/tokens/
 // footer do builder acima.
-
-// Cores de semáforo por categoria (mesma família da grade).
-const GRID_DEF_RED  = [185, 28, 28]
-const GRID_BONUS_BL = [29, 78, 216]
 
 function drawGridHero(doc, model, marginX, y) {
   const pageW = doc.internal.pageSize.getWidth()
@@ -489,16 +613,19 @@ export async function buildGridReportPDF(model) {
   const kpis = [
     ['Cobertura', k.coveragePct != null ? `${k.coveragePct}%` : '—', TOKENS.action],
     ['Esperado', fmtNumber(k.expected), TOKENS.text],
-    ['Tocou', fmtNumber(k.inSlot), [22, 128, 61]],
-    ['Déficit', fmtNumber(k.deficit), k.deficit > 0 ? GRID_DEF_RED : TOKENS.text3],
-    ['Bônus', fmtNumber(k.bonus), k.bonus > 0 ? GRID_BONUS_BL : TOKENS.text3],
+    ['Tocou', fmtNumber(k.inSlot), CAT.tocou],
+    ['Déficit', fmtNumber(k.deficit), k.deficit > 0 ? CAT.deficit : TOKENS.text3],
+    ['Bônus', fmtNumber(k.bonus), k.bonus > 0 ? CAT.bonus : TOKENS.text3],
   ]
   kpis.forEach(([label, value, color], i) => {
     drawMiniKPI(doc, marginX + (kpiW + kpiGap) * i, kpiY, kpiW, kpiH, label, value, color)
   })
 
+  // 3b) Legenda de cores (mesma da grade) logo abaixo dos KPIs.
+  const legendY = drawLegend(doc, marginX, kpiY + kpiH + 7)
+
   // 4) Seções por emissora (dia a dia).
-  let nextY = kpiY + kpiH + 10
+  let nextY = legendY + 6
 
   const anyNonZero = t => !!(t.expected || t.inSlot || t.deficit || t.bonus || t.outSlot || t.outDate)
   const plus = n => (n > 0 ? `+${fmtNumber(n)}` : '0')
@@ -540,21 +667,30 @@ export async function buildGridReportPDF(model) {
       doc.text(`+ ${extras.join(' · ')}`, marginX, nextY + 9)
     }
 
-    // Corpo da tabela: dias por material + linha Total por material.
+    // Corpo da tabela: por material → linha-título (subtítulo com o material
+    // REAL) + dias + linha Total. O nome do material vira subtítulo porque a
+    // grade é por tipo; as contagens diárias seguem por tipo.
     const body = []
-    const boldRows = new Set()
+    const headerRows = new Set()  // linhas-título (material) — colSpan
+    const totalRows = new Set()   // linhas de total por material — bold
+    // Cor por índice de coluna de status na tabela por-dia.
+    const colColor = { 2: CAT.tocou, 3: CAT.outSlot, 4: CAT.outDate, 5: CAT.deficit, 6: CAT.bonus }
     for (const m of s.materials) {
       if (!anyNonZero(m.totals)) continue
+      headerRows.add(body.length)
+      body.push([{ content: materialSubtitle(m), colSpan: 7 }])
       for (const d of m.days) {
-        body.push([d.dateLabel, m.title, fmtNumber(d.expected), fmtNumber(d.inSlot), fmtNumber(d.deficit), plus(d.bonus)])
+        body.push([d.dateLabel, fmtNumber(d.expected), fmtNumber(d.inSlot),
+          fmtNumber(d.outSlot), fmtNumber(d.outDate), fmtNumber(d.deficit), plus(d.bonus)])
       }
-      boldRows.add(body.length)
-      body.push(['Total', m.title, fmtNumber(m.totals.expected), fmtNumber(m.totals.inSlot), fmtNumber(m.totals.deficit), plus(m.totals.bonus)])
+      totalRows.add(body.length)
+      body.push(['Total', fmtNumber(m.totals.expected), fmtNumber(m.totals.inSlot),
+        fmtNumber(m.totals.outSlot), fmtNumber(m.totals.outDate), fmtNumber(m.totals.deficit), plus(m.totals.bonus)])
     }
 
     autoTable(doc, {
       startY: nextY + (extras.length ? 12 : 8),
-      head: [['Data', 'Material', 'Prog', 'Tocou', 'Déf', 'Bônus']],
+      head: [['Data', 'Prog', 'Tocou', 'Fora faixa', 'Fora data', 'Déf', 'Bônus']],
       body,
       margin: { left: marginX, right: marginX },
       styles: {
@@ -572,28 +708,40 @@ export async function buildGridReportPDF(model) {
         lineColor: TOKENS.border,
       },
       alternateRowStyles: { fillColor: [250, 250, 252] },
+      // Larguras somam exatamente a área útil (A4 210 − 2×15 = 180mm). Fixar as
+      // 7 sem folga evita o aviso "units could not fit" do autotable (que ocorre
+      // quando todas são fixas e NÃO preenchem a página).
       columnStyles: {
-        0: { cellWidth: 20 },
-        2: { halign: 'right', cellWidth: 22 },
-        3: { halign: 'right', cellWidth: 22 },
-        4: { halign: 'right', cellWidth: 20 },
-        5: { halign: 'right', cellWidth: 20 },
+        0: { cellWidth: 22 },
+        1: { halign: 'right', cellWidth: 24 },
+        2: { halign: 'right', cellWidth: 26 },
+        3: { halign: 'right', cellWidth: 30 },
+        4: { halign: 'right', cellWidth: 30 },
+        5: { halign: 'right', cellWidth: 22 },
+        6: { halign: 'right', cellWidth: 26 },
       },
       didParseCell: (data) => {
         if (data.section !== 'body') return
-        if (boldRows.has(data.row.index)) {
+        const ri = data.row.index
+        // Linha-título do material (colSpan) — destaque, sem semáforo.
+        if (headerRows.has(ri)) {
+          data.cell.styles.fontStyle = 'bold'
+          data.cell.styles.fillColor = TOKENS.actionLight
+          data.cell.styles.textColor = TOKENS.text
+          data.cell.styles.halign = 'left'
+          return
+        }
+        const isTotal = totalRows.has(ri)
+        if (isTotal) {
           data.cell.styles.fontStyle = 'bold'
           data.cell.styles.fillColor = TOKENS.surface2
           data.cell.styles.textColor = TOKENS.text
         }
-        // Semáforo nas colunas Déf/Bônus (só quando > 0; zero fica apagado).
-        if (data.column.index === 4 || data.column.index === 5) {
+        // Semáforo por coluna de status (só quando > 0; zero fica apagado).
+        const color = colColor[data.column.index]
+        if (color) {
           const val = Number(String(data.cell.raw).replace(/[^0-9-]/g, '')) || 0
-          if (val > 0) {
-            data.cell.styles.textColor = data.column.index === 4 ? GRID_DEF_RED : GRID_BONUS_BL
-          } else if (!boldRows.has(data.row.index)) {
-            data.cell.styles.textColor = TOKENS.text3
-          }
+          data.cell.styles.textColor = statusTextColor(val, color, isTotal)
         }
       },
     })
