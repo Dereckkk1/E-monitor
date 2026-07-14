@@ -402,21 +402,27 @@ WITH scope AS (
 	return err
 }
 
-// RecategorizeForMaterial re-classifica TODAS as detections de um material,
-// em todas as campanhas onde ele aparece. Usado quando o type_id do material
-// muda: a categoria gravada (detections.category) foi computada no insert com
-// o tipo antigo e fica obsoleta — uma detection que casava uma regra do tipo
-// novo continua marcada 'orphan' (some pra "bônus" no resumo diário). Como o
-// scope resolve m.type_id ao vivo (JOIN materials), rodar isto APÓS o UPDATE
-// do type_id reclassifica corretamente contra as regras do tipo atual.
+// RecategorizeForMaterial re-classifica TODAS as projeções que carregam um
+// material, em todas as campanhas onde ele aparece. Usado quando o type_id do
+// material muda: a categoria gravada foi computada no insert com o tipo antigo
+// e fica obsoleta — uma projeção que casava uma regra do tipo novo continua
+// marcada 'orphan' (some pra "bônus" no resumo diário). O escopo vem de
+// detection_campaigns (dc.commercial_id = $1), não da tocada-base: uma projeção
+// fan-out F-119 carrega o material numa campanha SECUNDÁRIA mesmo quando a base
+// (d.commercial_id) é outro material — reclassificá-la exige escopar pela
+// projeção. A tocada-base (detections.category) é espelhada só quando a projeção
+// é a canônica, via guarda do recatApplySQL (d.campaign_id = cl.campaign_id).
+// Como o scope resolve m.type_id ao vivo (JOIN materials), rodar isto APÓS o
+// UPDATE do type_id reclassifica corretamente contra as regras do tipo atual.
 func (dr *DistributionRules) RecategorizeForMaterial(ctx context.Context, materialID uuid.UUID) error {
 	_, err := dr.pool.Exec(ctx, `
 WITH scope AS (
-    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id,
-           m.type_id, d.station_id
-    FROM detections d
-    JOIN materials m ON m.id = d.commercial_id
-    WHERE d.commercial_id = $1
+    SELECT dc.detection_id AS id, dc.detected_at, dc.campaign_id,
+           dc.commercial_id AS material_id, m.type_id, d.station_id
+    FROM detection_campaigns dc
+    JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+    JOIN materials m ON m.id = dc.commercial_id
+    WHERE dc.commercial_id = $1
 )`+recatClassifyTailSQL,
 		materialID)
 	return err
