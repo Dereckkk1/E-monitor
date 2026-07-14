@@ -214,10 +214,11 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 	return dr.recategorizeScope(ctx, campaignID, nil, nil, start, end)
 }
 
-// recatClassifyTailSQL é o trecho compartilhado que replica
-// categorizer.Categorize em SQL. Espera uma CTE `scope(id, detected_at,
-// campaign_id, material_id, type_id, station_id)` definida antes dele e
-// é parameter-free (toda variação de escopo mora na CTE scope que o precede).
+// recatClassifiedCTE é a CTE `classified` — replica categorizer.Categorize em
+// SQL para cada linha da CTE `scope` (ver recategorizeScope). Separada de
+// recatApplySQL para o reconciler (projection_reconcile.go) poder CONTAR
+// divergências (SELECT) sem aplicá-las. Espera uma CTE `scope(id, detected_at,
+// campaign_id, material_id, type_id, station_id)` definida antes dela.
 //
 // Lógica, pra cada detection do scope (espelha o carve-out de categorizer.Categorize):
 //   - Se a data local (SP timezone) está fora do range da campanha → out_date
@@ -238,7 +239,7 @@ func (dr *DistributionRules) RecategorizeForCampaign(ctx context.Context, campai
 // categorizer Go (no insert) tinha marcado in_slot — divergência silenciosa.
 // Fonte única: tanto recategorizeScope (rule/campaign) quanto
 // RecategorizeForMaterial (mudança de tipo do material) usam este trecho.
-const recatClassifyTailSQL = `,
+const recatClassifiedCTE = `,
 classified AS (
     SELECT
         s.id, s.detected_at, s.campaign_id,
@@ -350,12 +351,20 @@ classified AS (
         END AS new_category
     FROM scope s
     JOIN campaigns c ON c.id = s.campaign_id
-)
+)`
+
+// recatApplySQL aplica o veredito: atualiza a projeção (detection_campaigns) e,
+// SÓ quando a projeção é a canônica (d.campaign_id = cl.campaign_id), espelha na
+// tocada-base (detections.category). Sem essa guarda, o recat de uma campanha
+// SECUNDÁRIA (fan-out F-119) sobrescreveria a categoria da base com o veredito
+// de outra campanha — bug. Ver spec 2026-07-14 §3-T1.
+const recatApplySQL = `
 , upd_det AS (
     UPDATE detections d
     SET category = cl.new_category
     FROM classified cl
     WHERE d.id = cl.id AND d.detected_at = cl.detected_at
+      AND d.campaign_id = cl.campaign_id
       AND d.category IS DISTINCT FROM cl.new_category
     RETURNING 1
 )
@@ -366,23 +375,27 @@ WHERE dc.detection_id = cl.id AND dc.detected_at = cl.detected_at
   AND dc.campaign_id = cl.campaign_id
   AND dc.category IS DISTINCT FROM cl.new_category`
 
-// recategorizeScope é o motor SQL pra escopos rule/campaign. Pra cada detection
-// no escopo (campaign + opcional type via JOIN materials + opcional stations +
-// date range), computa a nova categoria via recatClassifyTailSQL e UPDATE em batch.
+const recatClassifyTailSQL = recatClassifiedCTE + recatApplySQL
+
+// recategorizeScope é o motor SQL pra escopos rule/campaign. Escopa por
+// PROJEÇÃO (detection_campaigns), não pela tocada-base: uma projeção fan-out
+// F-119 pertence à campanha $1 mesmo quando a base (d.campaign_id) é outra —
+// era o ponto cego do caso COPA 10/07 (spec 2026-07-14 §1.1).
 func (dr *DistributionRules) recategorizeScope(ctx context.Context,
 	campaignID uuid.UUID, typeID *uuid.UUID, stationIDs []uuid.UUID,
 	from, to time.Time) error {
 
 	_, err := dr.pool.Exec(ctx, `
 WITH scope AS (
-    SELECT d.id, d.detected_at, d.campaign_id, d.commercial_id AS material_id,
-           m.type_id, d.station_id
-    FROM detections d
-    JOIN materials m ON m.id = d.commercial_id
-    WHERE d.campaign_id = $1
+    SELECT dc.detection_id AS id, dc.detected_at, dc.campaign_id,
+           dc.commercial_id AS material_id, m.type_id, d.station_id
+    FROM detection_campaigns dc
+    JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+    JOIN materials m ON m.id = dc.commercial_id
+    WHERE dc.campaign_id = $1
       AND ($2::uuid IS NULL OR m.type_id = $2)
       AND ($3::uuid[] IS NULL OR d.station_id = ANY($3))
-      AND (date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+      AND (date_trunc('day', dc.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
            BETWEEN $4::date AND $5::date)
 )`+recatClassifyTailSQL,
 		campaignID, typeID, stationIDs, from, to)
