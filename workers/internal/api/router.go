@@ -75,6 +75,10 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
+	// gzip nas respostas compressíveis. Lista explícita de content-types: os
+	// proxies de evidência (audio/*, application/pdf) passam intocados —
+	// gzipar binário já comprimido só queima CPU.
+	r.Use(middleware.Compress(5, "application/json", "text/csv", "text/plain", "image/svg+xml"))
 	r.Use(corsMiddleware)
 	r.Use(otelRoutePatternMiddleware)
 

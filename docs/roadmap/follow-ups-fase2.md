@@ -387,3 +387,58 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 - **F-101** — Filtros de categoria na toolbar (ex: "Mostrar só células com déficit"). Útil pra investigar problemas rapidamente.
 - **F-102** — Export do relatório (CSV/PDF) com os totais + breakdown por (station, material, day) pra entregar ao cliente.
 - **F-103** — Indicador visual de "última atualização" da view (a `daily_play_summary` é live mas usuário não sabe). Mostrar timestamp do último refetch.
+
+## Follow-ups da otimização de performance (auditoria 2026-07-17)
+
+Itens deixados de fora do escopo da branch `perf/fase1-config` de propósito. Contexto
+completo em [docs/superpowers/plans/2026-07-17-otimizacoes-performance.md](../superpowers/plans/2026-07-17-otimizacoes-performance.md).
+
+- **F-PERF-01 — Cache RAM/Redis dos endpoints quentes.** `/campaigns/financials`,
+  `/management-overview`, `/admin/notifications` são polled e caros. Cachear com TTL 30-60s
+  (padrão `reqmetrics.BlockList`, ou usar o Redis que hoje está ocioso no stack). **É o
+  fix decidido para `/campaigns/financials`** (não migrar a query — ver decisão na Task 13
+  do plano). Se não for usar o Redis pra isso, removê-lo do compose (RAM + healthcheck à toa).
+- **F-PERF-02 — Métricas de saturação de pool + latência HTTP por rota no Prometheus.**
+  Hoje `pgxpool.Stat()` não é exposto — saturação do pool (agora configurável via
+  `DB_MAX_CONNS`) é invisível no Grafana. Pré-requisito pra dimensionar o pool medindo em
+  vez de chutar. Adicionar também histograma HTTP `{route,method,status}` (a telemetria
+  existe mas vai pro Postgres via reqmetrics, não pro Prometheus).
+- **F-PERF-03 — Denominador Modelo B na função (`insights.go` `cs_plan`/`pl`).** Migrar
+  `aggregateInvestment`/`computeCPM` inteiros pra `daily_play_summary_for()` com bound
+  `MIN(start)..MAX(end)` das campanhas (NÃO a janela — encolher o denominador infla o CPM,
+  ver memória `insights-consolidated-investido-shrinks-future-days`). Gate: diff byte-a-byte
+  do JSON de `/insights` nos 2 modos. Ficou de fora por ser superfície de faturamento —
+  merece rodada dedicada.
+- **F-PERF-04 — `campaign_failures.go` Q3/Get/ListHistorical na função.** Ficaram na view
+  porque agregam `out_date` sem lower bound e a função corta out_date de fora da janela
+  (ver memória `daily-play-summary-for-out-date-lower-bound-trap`). Fix seguro: `p_from =
+  LEAST(MIN(campaigns.start_date), MIN(detection_campaigns.detected_at)::date)` + re-rodar
+  paridade EXCEPT. Painel admin (não faturamento), ganho modesto.
+- **F-PERF-05 — Frontend evidência via presigned URL direta.** Depois do runbook
+  [evidence-presign-public.md](../operations/evidence-presign-public.md), trocar os
+  componentes que usam o proxy blob pela presigned URL — tira o download 100% do processo Go.
+- **F-PERF-06 — Particionar `system_metrics`/`web_vitals` (reqmetrics).** Não-particionadas,
+  5 índices, prune por DELETE = fábrica de bloat a 2-10M linhas/mês. Particionar por `ts` +
+  DROP de partição (reaproveitar `ensure_month_partitions`/`drop_old_health_partitions`).
+- **F-PERF-07 — Jobs pesados ancorados no relógio, não no boot.** Calibração e partition
+  maintenance rodam "24h após o deploy" — se deployou 14h, roda 14h todo dia (pico).
+  Ancorar em 02:00-04:00 BR como o tiering já faz. Webhook worker: LISTEN/NOTIFY ou backoff
+  em vez de SELECT a cada 5s.
+- **F-PERF-08 — Paralelizar `insights.Compute` com errgroup + cache de resposta 60s.** As
+  5-6 queries hoje são sequenciais e independentes.
+- **F-PERF-09 — Keyset pagination + índice trigram em `/detections`** quando o volume/uso de
+  busca livre (`q`) justificar (hoje `ILIKE '%x%'` não-sargável + OFFSET profundo).
+- **F-PERF-10 — Code-splitting por rota no frontend** (`React.lazy` — recharts/d3-geo/
+  html2canvas fora do bundle do `/login`). Afeta first-load (Cloudflare), não a VM.
+- **F-PERF-11 — Endpoint agregado `/admin/monitoring/overview`** (1 request em vez dos 4
+  polls independentes; hoje já alongados pra 30s).
+- **F-PERF-12 — Task 21 (memoizar `categorize` + `ValidateBatchLinks` em 1 query no
+  batch manual).** Adiada de propósito: ~1% do wall-clock daquela rota (o gargalo é o
+  upload de dezenas de MB, não as queries). Higiene de pool, não de latência.
+- **F-PERF-13 — Testes de regressão para `management_overview.queryKPIs` e
+  `station_failures` deficit_aggr/query-3.** Hoje sem teste dedicado; a paridade das
+  migrações foi provada ad-hoc contra `rc-test-pg`. Um fixture-based test pega divergência
+  futura.
+- **F-PERF-14 — Limpar `refetchOnWindowFocus: false` redundante** em `hooks.js:166,188,202,
+  1079` (agora que o default global já desliga). Cosmético; os `staleTime` de 60s/5min
+  dessas mesmas queries ficam.
