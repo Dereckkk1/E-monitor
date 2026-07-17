@@ -16,8 +16,9 @@ const (
 	// defaultMaxConns é o teto histórico do pool, usado quando DB_MAX_CONNS
 	// está ausente ou inválido.
 	defaultMaxConns = int32(20)
-	// minAllowedMaxConns não pode ser menor que MinConns (2) abaixo — caso
-	// contrário a config fica inconsistente (MinConns > MaxConns).
+	// minAllowedMaxConns é TAMBÉM o MinConns do pool (ver New) — daí o piso do
+	// range aceito: um MaxConns abaixo dele deixaria MinConns > MaxConns.
+	// Os dois saem desta constante justamente pra não poderem divergir.
 	minAllowedMaxConns = int32(2)
 	// maxAllowedMaxConns: teto contra max_connections=100 do Postgres,
 	// deixando folga p/ psql manual do operador, backup e migrate.
@@ -56,7 +57,7 @@ func New(ctx context.Context, url string, logger *zap.Logger) (*pgxpool.Pool, er
 		logger.Warn("invalid DB_MAX_CONNS, using default", zap.Error(err))
 	}
 	cfg.MaxConns = maxConns
-	cfg.MinConns = 2
+	cfg.MinConns = minAllowedMaxConns
 
 	// OpenTelemetry instrumentation (§15.3). Each query becomes a span named
 	// "pgx.query.<sql>" with attributes db.system=postgresql, db.statement,
