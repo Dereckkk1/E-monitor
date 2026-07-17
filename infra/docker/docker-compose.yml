@@ -118,6 +118,9 @@ services:
       # deixar o kernel OOM-killar o container (que inclui os ffmpeg de captura).
       # "off" (default do runtime) = sem limite; prod seta API_GOMEMLIMIT=6GiB.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-off}
+      # Teto do pool de conexoes pgx (API + jobs + reqmetrics compartilham).
+      # Default 20; prod usa 40 (max_connections do PG e 100).
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-20}
       # Shared-hash: score mínimo que qualifica uma janela como compartilhada
       # (internal/sharing). Vazio = default do binário (20). Subido de 5 após o
       # #2 (densidade ~4×) ter elevado o piso de ruído material-vs-material e
