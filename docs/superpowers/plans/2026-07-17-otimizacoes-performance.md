@@ -132,17 +132,34 @@ por:
 	srv := &http.Server{
 		Addr:    ":" + cfg.APIPort,
 		Handler: api.NewRouter(deps),
-		// Read/WriteTimeout ficam zerados de propósito: uploads de material
-		// (multipart) e downloads de evidência são legitimamente longos, e o
-		// middleware.Timeout(60s) do router já limita os handlers JSON. Estes
-		// dois cortam goroutines penduradas em conexões mortas/lentas:
+		// ReadHeaderTimeout corta o cliente que abre conexão e não manda header
+		// (Slowloris); IdleTimeout recicla keep-alive ocioso. Ambos são seguros
+		// pros uploads/downloads grandes daqui — ReadHeaderTimeout não cobre o
+		// body, só o header.
+		//
+		// Read/WriteTimeout ficam ZERADOS de propósito: são deadlines de conexão
+		// inteira e matariam upload de material (até 600MB no batch manual) e
+		// download de evidência. O custo consciente: um cliente lento segurando
+		// um CSV export ou um download de evidência prende a goroutine — o
+		// middleware.Timeout(60s) do chi NÃO cobre isso (ele só cancela o
+		// context; nossos handlers de CSV/evidência não fazem select em
+		// ctx.Done()). Endpoints autenticados, superfície limitada; se virar
+		// problema, a saída é deadline por-handler via http.ResponseController.
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
 	}
 ```
 
 O import `time` já existe em main.go.
+
+> **Correção pós-review (2026-07-17):** a versão original desta task mandava setar
+> `MaxHeaderBytes: 1 << 20` — **erro do plano**. `net/http` já usa exatamente
+> `1 << 20` como `DefaultMaxHeaderBytes` quando o campo fica zerado, então a linha
+> era no-op disfarçada de tightening. Removida. O comentário original também
+> afirmava que o `middleware.Timeout(60s)` do chi cobria os handlers JSON; o chi
+> só cancela o context (não aborta write lento) e nossos handlers de CSV/evidência
+> não fazem select em `ctx.Done()` — comentário reescrito pra ser honesto sobre
+> o gap residual.
 
 - [ ] **Step 2: GOMEMLIMIT no compose**
 
@@ -151,16 +168,17 @@ Em `infra/docker/docker-compose.yml`, no service `api`, adicionar ao bloco `envi
 ```yaml
       # Teto soft do heap Go — o GC fica agressivo perto do limite em vez de
       # deixar o kernel OOM-killar o container (que inclui os ffmpeg de captura).
-      GOMEMLIMIT: ${API_GOMEMLIMIT:-0}
-```
-
-`GOMEMLIMIT=0` não é aceito pelo runtime — o Go trata string vazia como "sem limite", então o default correto é **omitir**. Use este formato condicional em vez do acima:
-
-```yaml
+      # "off" (default do runtime) = sem limite; prod seta API_GOMEMLIMIT=6GiB.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-off}
 ```
 
-`off` é o valor explícito do runtime Go para "sem limite" (default). Em prod, o Dereck seta `API_GOMEMLIMIT=6GiB` no `.env` da VM.
+`GOMEMLIMIT=0` **não** serve como "sem limite" (significaria teto zero). O valor
+correto é a string literal `off` — confirmado em `runtime/mgcpacer.go`, onde
+`readGOMEMLIMIT()` mapeia `""` e `"off"` para `math.MaxInt64`. Em prod, o Dereck
+seta `API_GOMEMLIMIT=6GiB` no `.env` da VM.
+
+Documentar a var em `infra/docker/.env.example` no mesmo commit (senão o knob
+fica indescobrível).
 
 - [ ] **Step 3: Build linux**
 
