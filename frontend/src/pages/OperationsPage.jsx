@@ -49,6 +49,13 @@ const STATUS_META = {
   unknown:    { label: 'Desconhecido', cls: 'op-chip--neutral' },
 }
 
+// Fronteira real de stall, espelhando o backend: supervisor.go:1039 marca
+// StallRisk quando time.Since(last_pcm_at) > 30s. Este número pertence ao
+// backend, NÃO à cadência do nosso poll — derivá-lo de WORKERS_POLL_MS só
+// bate por coincidência aritmética no valor atual e desalinha silenciosamente
+// na próxima mudança de cadência.
+const STALL_RISK_MS = 30_000
+
 // Resolve worker status defensively. The prompt advertised a `status`
 // string field but the live `WorkerStatus` Go struct only exposes
 // `active` + `stall_risk`. Map both shapes onto the same vocabulary.
@@ -66,7 +73,7 @@ function resolveStatus(w) {
   const last = w?.last_pcm_at ?? w?.lastPCMAt
   if (last) {
     const ageMs = Date.now() - new Date(last).getTime()
-    if (ageMs > 30_000) return 'stalled'
+    if (ageMs > STALL_RISK_MS) return 'stalled'
   }
   return 'running'
 }
@@ -481,13 +488,12 @@ export default function OperationsPage() {
 // ── Row ───────────────────────────────────────────────────────────────────────
 function WorkerRow({ row, onClick }) {
   const meta = STATUS_META[row.status] ?? STATUS_META.unknown
-  // Um worker sadio emite PCM continuamente, então lastPcmAge no momento do
-  // render não deveria passar de ~1 intervalo de poll + jitter. 1.5x dá
-  // folga pra um refetch atrasado sem esconder um stall real — e coincide
-  // com o próprio threshold de StallRisk do backend (supervisor.go:
-  // `time.Since(last) > 30*time.Second`), então em regime estável os dois
-  // critérios (badge de status via stall_risk e esta célula) concordam.
-  const lastPcmStale = row.lastPcmAge != null && row.lastPcmAge > WORKERS_POLL_MS * 1.5
+  // Invariante real é STALL_RISK_MS (30s, espelha supervisor.go:1039) — não
+  // a cadência do poll. O Math.max com WORKERS_POLL_MS*1.5 é só uma rede de
+  // segurança: se algum dia o poll subir acima de 20s, evita que a célula
+  // pisque vermelho num worker saudável entre um refetch e outro. Com o
+  // poll atual (20s) o max não muda nada — fica em 30s, o invariante real.
+  const lastPcmStale = row.lastPcmAge != null && row.lastPcmAge > Math.max(STALL_RISK_MS, WORKERS_POLL_MS * 1.5)
 
   // Uptime fill rules: ok ≥ 99%, warn ≥ 95%, bad below.
   const uptime = row.uptimePct
