@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/exaring/otelpgx"
@@ -14,7 +16,16 @@ func New(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	cfg.MaxConns = 20
+	// DB_MAX_CONNS: teto do pool compartilhado (API + reqmetrics + webhook +
+	// jobs). Default 20 (comportamento histórico); prod usa 40 — dimensionado
+	// contra max_connections=100 do Postgres, deixando folga p/ psql/backup.
+	maxConns := int32(20)
+	if v := os.Getenv("DB_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 90 {
+			maxConns = int32(n)
+		}
+	}
+	cfg.MaxConns = maxConns
 	cfg.MinConns = 2
 
 	// OpenTelemetry instrumentation (§15.3). Each query becomes a span named
