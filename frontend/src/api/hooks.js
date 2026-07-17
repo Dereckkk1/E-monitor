@@ -564,6 +564,12 @@ export function useRestoreDetection() {
   })
 }
 
+// Cadência do poll de /workers. Exportado porque os thresholds de staleness
+// do /operations são derivados dele — quando o intervalo muda, eles precisam
+// acompanhar, senão a tela pinta worker sadio de vermelho (foi o que
+// aconteceu quando este poll passou de 10s pra 20s).
+export const WORKERS_POLL_MS = 20_000
+
 // Snapshot do supervisor (/workers). Compartilhado por Dashboard admin e
 // /operations — MESMA queryKey de propósito: com as duas telas abertas, uma
 // única chamada alimenta ambas. 20s é suficiente; o "ao vivo" percebido vem
@@ -572,7 +578,7 @@ export function useWorkersStatus() {
   return useQuery({
     queryKey: ['workers'],
     queryFn: () => api.get('/workers').then(r => r.data),
-    refetchInterval: 20_000,
+    refetchInterval: WORKERS_POLL_MS,
     retry: 1,
   })
 }
