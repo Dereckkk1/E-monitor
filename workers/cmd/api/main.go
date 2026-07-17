@@ -514,6 +514,13 @@ func main() {
 	srv := &http.Server{
 		Addr:    ":" + cfg.APIPort,
 		Handler: api.NewRouter(deps),
+		// Read/WriteTimeout ficam zerados de propósito: uploads de material
+		// (multipart) e downloads de evidência são legitimamente longos, e o
+		// middleware.Timeout(60s) do router já limita os handlers JSON. Estes
+		// dois cortam goroutines penduradas em conexões mortas/lentas:
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {
