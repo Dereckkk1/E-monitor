@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -283,18 +282,17 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer body.Close()
-	data, err := io.ReadAll(body)
-	if err != nil {
-		http.Error(w, "internal error", 500)
-		return
-	}
 	if ct == "" {
 		ct = "audio/mp4"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
-	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, id.String()+".m4a", time.Time{}, bytes.NewReader(data))
+	// Streaming direto S3→cliente: sem io.ReadAll (bufferizava o objeto inteiro no
+	// heap do processo que também roda os ffmpeg). Trade-off consciente: sem
+	// Accept-Ranges — os arquivos têm poucos MB, o player faz seek client-side.
+	if _, err := io.Copy(w, body); err != nil {
+		return // cliente desconectou no meio; nada útil a fazer (header já foi)
+	}
 }
 
 // manualAudioMIME mapeia content-types aceitos no upload da "censura" → extensão

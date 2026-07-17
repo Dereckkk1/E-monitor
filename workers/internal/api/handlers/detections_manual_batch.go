@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -345,16 +344,16 @@ func (h *DetectionsHandler) Proof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer body.Close()
-	data, err := io.ReadAll(body)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
 	if ct == "" {
 		ct = "application/pdf"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".pdf\"")
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	http.ServeContent(w, r, id.String()+".pdf", time.Time{}, bytes.NewReader(data))
+	// Streaming direto S3→cliente: sem io.ReadAll (bufferizava o objeto inteiro no
+	// heap do processo que também roda os ffmpeg). Trade-off consciente: sem
+	// Accept-Ranges — os arquivos têm poucos MB, o player faz seek client-side.
+	if _, err := io.Copy(w, body); err != nil {
+		return // cliente desconectou no meio; nada útil a fazer (header já foi)
+	}
 }
