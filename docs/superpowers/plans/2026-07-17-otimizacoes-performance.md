@@ -1451,8 +1451,31 @@ conexões simultâneas**. Com `MaxConns=20` (40 após a Task 3), N batches conco
 N conexões de tx e todos bloqueiam esperando a segunda → **deadlock até o ctx estourar**.
 A Task 3 (40 conns) **não corrige** — só dobra quantos batches são precisos pra travar.
 
-Bônus correto de brinde: rodar o categorize DENTRO da tx torna a leitura de rules/overrides
-consistente com o snapshot da transação (hoje pode ler rules alteradas no meio do lote).
+> **ERRATA (code review, 2026-07-17):** a versão original desta task afirmava um "bônus
+> de brinde" — que rodar o `categorize` dentro da tx tornaria a leitura de rules/overrides
+> consistente com o snapshot da transação. **Isso é FALSO.** O pool nunca sobrescreve
+> `default_transaction_isolation` (verificado por grep em `internal/db`), então tudo roda
+> em **READ COMMITTED**, onde *cada statement* pega um snapshot MVCC novo no seu próprio
+> início — dentro de tx ou fora, tanto faz. Congelamento por-transação só existe em
+> REPEATABLE READ/SERIALIZABLE. Uma regra alterada por outra sessão no meio do lote
+> continua visível na iteração seguinte, exatamente como antes. **A correção vale pelo
+> deadlock e só por ele** — não invente garantia de isolamento que não existe, ainda mais
+> num pacote com histórico de invariantes sutis quebrados (multi-atribuição/reatribuição).
+> A afirmação errada também está na mensagem do commit `ce0cc14`; esta errata é o registro.
+
+**Prova empírica do deadlock (obtida no review, não é teoria):** com um Postgres
+descartável + as 100 migrations aplicadas, um pool dedicado de `MaxConns=2` e 3
+`CreateManualBatch` concorrentes:
+- **antes do fix:** deadlock, timeout em 12s (`context deadline exceeded`)
+- **depois do fix:** os 3 completam em **179ms**
+
+**Armadilha de verificação descoberta aqui — vale pra QUALQUER task deste pacote:**
+`go test ./internal/catalog/...` sem `TEST_DATABASE_URL` **pula 99 testes** e passa verde
+com 22 testes de lógica pura. **Todos os testes que tocam `categorize` estão entre os que
+pulam.** Ou seja: o "Step 4: rode os testes" desta task era quase um no-op — verde não
+provava nada. Pra mudança P0 neste pacote, rodar contra um Postgres real
+(`TEST_DATABASE_URL`, PG descartável em 15432 — ver memória
+`test-db-native-pg-shadows-docker`) é **obrigatório, não opcional**.
 
 **Files:**
 - Modify: `workers/internal/catalog/detections.go` (assinatura de `categorize`)
