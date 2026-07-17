@@ -41,9 +41,12 @@ func NewDailySummary(pool *pgxpool.Pool) *DailySummaryRepo {
 // ListByCampaign returns the daily summary rows for the given campaign
 // where for_date is between `from` and `to` inclusive.
 //
-// The view is defined in migration 0018. It's not materialized — every call
-// reads from live distribution_rules + distribution_overrides + detections.
-// See follow-up F-84 for plans to materialize.
+// The underlying view is defined in migration 0018. As of migration 0052,
+// reads go through daily_play_summary_for(from, to, campaigns) — a
+// parametrized function semantically byte-identical to the view but with
+// filter pushdown (partition pruning) instead of scanning the full live
+// distribution_rules + distribution_overrides + detections history on every
+// call. See follow-up F-84.
 func (ds *DailySummaryRepo) ListByCampaign(ctx context.Context,
 	campaignID uuid.UUID, from, to time.Time) ([]DailySummaryRow, error) {
 
@@ -54,11 +57,9 @@ func (ds *DailySummaryRepo) ListByCampaign(ctx context.Context,
 	rows, err := ds.pool.Query(ctx, `
 		SELECT dps.campaign_id, dps.type_id, dps.station_id, dps.for_date,
 		       dps.expected, dps.in_slot, dps.deficit, dps.bonus, dps.out_slot, dps.out_date
-		FROM daily_play_summary dps
+		FROM daily_play_summary_for($2::date, $3::date, ARRAY[$1]::uuid[]) dps
 		JOIN campaigns c ON c.id = dps.campaign_id
-		WHERE dps.campaign_id = $1
-		  AND dps.for_date BETWEEN $2 AND $3
-		  AND (c.status <> 'cancelada' OR c.cancelled_at IS NULL
+		WHERE (c.status <> 'cancelada' OR c.cancelled_at IS NULL
 		       OR dps.for_date <= (c.cancelled_at AT TIME ZONE 'America/Sao_Paulo')::date)
 		ORDER BY dps.station_id, dps.type_id, dps.for_date`,
 		campaignID, from, to)
