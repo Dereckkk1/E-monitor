@@ -689,8 +689,19 @@ git commit -m "perf(frontend): poll de material em analise 3s -> 5s"
 -- O bound em dc.detected_at/d.detected_at usa [meia-noite local de p_from,
 -- meia-noite local de p_to+1) — exatamente as linhas cujo dia local cai em
 -- [p_from, p_to], igual ao date_trunc da view, mas sargável (poda partições).
+--
+-- CONTRATO (revisado pós-review):
+--   p_from / p_to  → OBRIGATÓRIOS, NOT NULL. Se qualquer um for NULL a função
+--     devolve VAZIO (o WHERE da CTE expected barra). Isso é de propósito:
+--     GREATEST/LEAST ignoram NULL, então sem o guard a CTE expected produziria
+--     dados mas a CTE actual (p_from::timestamp AT TIME ZONE = NULL) zeraria →
+--     100% de déficit com cara de verdade, na superfície de pricing do Modelo B.
+--     Vazio é obviamente quebrado; número errado plausível não é.
+--   p_campaigns NULL  → todas as campanhas (NÃO use STRICT: mataria este caso).
+--   p_campaigns '{}'  → zero linhas (semântica de = ANY('{}')). Callers que
+--     querem "todas" passam NULL, NUNCA array vazio.
 
-CREATE FUNCTION daily_play_summary_for(p_from date, p_to date, p_campaigns uuid[] DEFAULT NULL)
+CREATE OR REPLACE FUNCTION daily_play_summary_for(p_from date, p_to date, p_campaigns uuid[] DEFAULT NULL)
 RETURNS TABLE (
     campaign_id uuid, type_id uuid, station_id uuid, for_date date,
     expected int, in_slot int, deficit int, bonus int, out_slot int, out_date int)
@@ -708,7 +719,10 @@ WITH expected AS (
         GREATEST(r.start_date, p_from),
         LEAST(r.end_date, p_to),
         INTERVAL '1 day') AS d(for_date)
-    WHERE (p_campaigns IS NULL OR r.campaign_id = ANY(p_campaigns))
+    -- guard de NULL: sem isto, p_from/p_to NULL dariam "expected" cheio mas
+    -- "actual" zerado (100% déficit fantasma). Ver CONTRATO no topo.
+    WHERE p_from IS NOT NULL AND p_to IS NOT NULL
+      AND (p_campaigns IS NULL OR r.campaign_id = ANY(p_campaigns))
       AND (1 << EXTRACT(DOW FROM d.for_date)::INT) & r.weekday_mask != 0
     GROUP BY r.campaign_id, r.type_id, s.station_id, d.for_date
 ),
