@@ -114,6 +114,10 @@ services:
       MASTERS_PATH: /data/masters
       SEGMENTS_PATH: /data/segments
       API_PORT: "8080"
+      # Teto soft do heap Go — o GC fica agressivo perto do limite em vez de
+      # deixar o kernel OOM-killar o container (que inclui os ffmpeg de captura).
+      # "off" (default do runtime) = sem limite; prod seta API_GOMEMLIMIT=6GiB.
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-off}
       # Shared-hash: score mínimo que qualifica uma janela como compartilhada
       # (internal/sharing). Vazio = default do binário (20). Subido de 5 após o
       # #2 (densidade ~4×) ter elevado o piso de ruído material-vs-material e
