@@ -138,10 +138,15 @@ deficit_aggr AS (
   -- reported as "lost slots" (it would bill inserções for a campaign the
   -- client cancelled). Mirrors campaign_failures.go's c.status <> 'cancelada'
   -- filter so the two failure surfaces agree for the same day.
+  --
+  -- As of migration 0052 reads go through daily_play_summary_for(from, to,
+  -- campaigns) instead of the view: single-day filter is done via
+  -- p_from=p_to=$1, so the for_date predicate below is now the FUNCTION's
+  -- own filter, not a WHERE on top of it (pushdown). See Task 13.
   SELECT dps.station_id, COUNT(DISTINCT dps.campaign_id) AS aff_camp
-  FROM daily_play_summary dps
+  FROM daily_play_summary_for($1::date, $1::date, NULL) dps
   JOIN campaigns c ON c.id = dps.campaign_id
-  WHERE dps.for_date = $1::date AND dps.deficit > 0
+  WHERE dps.deficit > 0
     AND c.status <> 'cancelada'
   GROUP BY dps.station_id
 )
@@ -246,11 +251,10 @@ SELECT dps.station_id, dps.campaign_id,
            AND dr.start_date <= $1::date AND dr.end_date >= $1::date
            AND (1 << EXTRACT(DOW FROM $1::date)::int) & dr.weekday_mask <> 0
        ), ARRAY[]::text[]) AS rule_windows
-FROM daily_play_summary dps
+FROM daily_play_summary_for($1::date, $1::date, NULL) dps
 JOIN campaigns c ON c.id = dps.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
-WHERE dps.for_date = $1::date
-  AND dps.deficit > 0
+WHERE dps.deficit > 0
   AND dps.station_id = ANY($2::uuid[])
   AND c.status <> 'cancelada'
 GROUP BY dps.station_id, dps.campaign_id, c.name, cl.name
