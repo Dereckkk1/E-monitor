@@ -1019,17 +1019,24 @@ Rodar contra `rc-test-pg` com dados semeados, OU `EXCEPT` SQL das CTEs isoladas.
      todas as campanhas, ganho pequeno (p_campaigns NULL), e têm que espelhar-se. Painel
      admin, não faturamento. Ficam na view.
 
-**→ O QUE MIGRA NESTA RODADA (8 call-sites, ganho limpo, um commit por arquivo):**
-- `campaign_failures.go`: `:182` (Q1 `_for($1,$1,NULL)`), `:224` (Q2 `_for($1,$1,$2)`),
-  `:276` (Q3 — fabricar `p_from=MIN(start) de $1`, `p_to=hoje_local-1`), `:510` (Get —
-  `start/end` já em Go, `ARRAY[$1]`).
-- `station_failures.go`: `:142` (`_for($1,$1,NULL)`), `:249` (`_for($1,$1,NULL)`).
-- `insights.go`: `:270` (consolidatedSummary — statement próprio, `_for($3,$4,$1)` + clamp),
-  `:429` (aggregateBuckets — `_for($2,$3,$1)`). **NÃO tocar `aggregateInvestment`/`computeCPM`.**
+**→ MIGRADOS NESTA RODADA (6 call-sites — paridade EXCEPT=0 provada com dados semeados):**
+- `station_failures.go`: `:142`, `:249` (`_for($1,$1,NULL)`) — commit `2d2c52a`.
+- `insights.go`: `:270` (consolidatedSummary, `_for($3,$4,$1)`+clamp), `:429`
+  (aggregateBuckets, `_for($2,$3,$1)`) — commit `8b4a24f`. aggregateInvestment/computeCPM
+  intactos na view (contêm o denominador Modelo B pulado).
+- `campaign_failures.go`: `:182` (Q1 `_for($1,$1,NULL)`), `:224` (Q2 `_for($1,$1,$2)`) —
+  commit `acf29e8`.
 
-**Gate:** paridade EXCEPT contra `rc-test-pg` com dados semeados para cada arquivo; para
-o `insights.go` migrado, diff do bloco correspondente do JSON de `/insights`. Nenhum toque
-nos statements de denominador.
+**🔴 Q3 (`:276`) e Get (`:510`) NÃO foram migrados — bug real achado na execução, ficam na
+view.** A CTE `actual` da view não tem lower bound de data; `out_date` = tocada
+`detected_at NOT BETWEEN campaign.start_date AND end_date` (`distribution_rules.go:246-249`)
+— existe pra contar tocada FORA do período (material tocando antes/depois do contrato).
+Q3/Get agregam `out_date`→`extras`/`IsBonified` (crédito de faturamento) **sem lower bound**
+(só `for_date < hoje`). Como a função EXIGE `p_from`, qualquer `p_from` fabricado de
+`campaign.start_date` **corta** os out_date de fora → provado `extras: 1 → 0`. Fix seguro
+(não implementado, follow-up): `p_from = LEAST(MIN(campaigns.start_date),
+MIN(detection_campaigns.detected_at)::date)` das campanhas + re-rodar paridade. Ver memória
+`daily-play-summary-for-out-date-lower-bound-trap`. Mesma razão do ListHistorical pulado.
 
 ---
 
