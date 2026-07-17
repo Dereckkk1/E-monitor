@@ -519,9 +519,10 @@ func main() {
 		// pros uploads/downloads grandes daqui — ReadHeaderTimeout não cobre o
 		// body, só o header.
 		//
-		// Read/WriteTimeout ficam ZERADOS de propósito: são deadlines de conexão
-		// inteira e matariam upload de material (até 600MB no batch manual) e
-		// download de evidência. O custo consciente: um cliente lento segurando
+		// Read/WriteTimeout ficam ZERADOS de propósito: são deadlines por-request
+		// (medidos do início da requisição, body incluído) e matariam upload de
+		// material (até 600MB no batch manual) e download de evidência, que são
+		// legitimamente longos. O custo consciente: um cliente lento segurando
 		// um CSV export ou um download de evidência prende a goroutine — o
 		// middleware.Timeout(60s) do chi NÃO cobre isso (ele só cancela o
 		// context; nossos handlers de CSV/evidência não fazem select em
