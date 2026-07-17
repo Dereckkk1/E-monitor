@@ -111,7 +111,7 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 	created := make([]uuid.UUID, 0, len(in.Entries))
 
 	for _, e := range in.Entries {
-		cat, err := d.categorize(ctx, CreateDetectionInput{
+		cat, err := d.categorize(ctx, tx, CreateDetectionInput{
 			StationID:    in.StationID,
 			CommercialID: e.CommercialID,
 			CampaignID:   in.CampaignID,

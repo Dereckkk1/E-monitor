@@ -11,7 +11,16 @@ import { initWebVitals } from './utils/webVitals'
 initWebVitals()
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      // Sem refetch em foco: cada volta de aba disparava TODAS as queries
+      // montadas >10s — rajada sincronizada contra a VM. As telas "ao vivo"
+      // já têm refetchInterval próprio; o resto aguenta 30s de stale.
+      refetchOnWindowFocus: false,
+    },
+  },
 })
 
 ReactDOM.createRoot(document.getElementById('root')).render(

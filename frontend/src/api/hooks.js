@@ -564,6 +564,25 @@ export function useRestoreDetection() {
   })
 }
 
+// Cadência do poll de /workers. Exportado porque os thresholds de staleness
+// do /operations são derivados dele — quando o intervalo muda, eles precisam
+// acompanhar, senão a tela pinta worker sadio de vermelho (foi o que
+// aconteceu quando este poll passou de 10s pra 20s).
+export const WORKERS_POLL_MS = 20_000
+
+// Snapshot do supervisor (/workers). Compartilhado por Dashboard admin e
+// /operations — MESMA queryKey de propósito: com as duas telas abertas, uma
+// única chamada alimenta ambas. 20s é suficiente; o "ao vivo" percebido vem
+// do ticker de relógio local, não do poll.
+export function useWorkersStatus() {
+  return useQuery({
+    queryKey: ['workers'],
+    queryFn: () => api.get('/workers').then(r => r.data),
+    refetchInterval: WORKERS_POLL_MS,
+    retry: 1,
+  })
+}
+
 // Stream Health
 export function useStreamHealth(params = {}) {
   return useQuery({
@@ -698,14 +717,14 @@ export function useMaterials(clientId, q = '') {
     }),
     enabled: !!clientId,
     refetchInterval: (query) => {
-      // Poll every 3s while ANY material is still being analyzed for
+      // Poll every 5s while ANY material is still being analyzed for
       // similarity OR fingerprint. Stops polling once everything is settled.
       const list = query.state.data ?? []
       const pending = list.some(m =>
         m.fingerprint_status === 'pending' ||
         m.fingerprint_status === 'generating' ||
         m.similarity_check_status === 'pending')
-      return pending ? 3000 : false
+      return pending ? 5000 : false
     },
   })
 }

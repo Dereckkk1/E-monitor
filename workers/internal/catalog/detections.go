@@ -101,7 +101,7 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 	// Categoriza inline antes de inserir. Acessa campaigns + distribution_rules
 	// pra alimentar o categorizador puro. Mantém categorização consistente
 	// com o que a view daily_play_summary espera.
-	category, err := d.categorize(ctx, in)
+	category, err := d.categorize(ctx, d.pool, in)
 	if err != nil {
 		return nil, err
 	}
@@ -158,12 +158,21 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 // evidence.Service calcula a categoria de cada projeção fan-out com as regras da
 // campanha respectiva. Mesma lógica do categorize() usado no Create.
 func (d *Detections) CategorizeFor(ctx context.Context, campaignID, commercialID, stationID uuid.UUID, detectedAt time.Time) (string, error) {
-	return d.categorize(ctx, CreateDetectionInput{
+	return d.categorize(ctx, d.pool, CreateDetectionInput{
 		CampaignID:   campaignID,
 		CommercialID: commercialID,
 		StationID:    stationID,
 		DetectedAt:   detectedAt,
 	})
+}
+
+// pgxQuerier é o subconjunto de pgxpool.Pool / pgx.Tx que categorize usa.
+// Existe pra categorize poder rodar DENTRO de uma transação: quando o caller
+// já segura uma conexão via tx, usar d.pool aqui exigiria uma SEGUNDA conexão
+// simultânea — com o pool no teto, N batches concorrentes deadlockam.
+type pgxQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // categorize resolves the detection's category by loading the campaign,
@@ -174,16 +183,20 @@ func (d *Detections) CategorizeFor(ctx context.Context, campaignID, commercialID
 // up the type of the detected material via JOIN materials.
 // Migration 0031: overrides now carry their own time_start/time_end and
 // supersede rules for the cell+day when present.
-func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (string, error) {
+//
+// q é o querier a usar (d.pool fora de transação, ou a tx do caller quando já
+// segurando uma — ver pgxQuerier acima). Callers dentro de uma tx DEVEM passar
+// essa tx: usar d.pool ali exigiria uma segunda conexão simultânea do pool.
+func (d *Detections) categorize(ctx context.Context, q pgxQuerier, in CreateDetectionInput) (string, error) {
 	var cmpStart, cmpEnd time.Time
-	err := d.pool.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, in.CampaignID,
 	).Scan(&cmpStart, &cmpEnd)
 	if err != nil {
 		return categorizer.CatOrphan, err
 	}
 
-	rows, err := d.pool.Query(ctx, `
+	rows, err := q.Query(ctx, `
 		SELECT r.start_date, r.end_date, r.weekday_mask,
 		       r.time_start::text, r.time_end::text, r.plays_per_day, r.material_ids
 		FROM distribution_rules r
@@ -224,7 +237,7 @@ func (d *Detections) categorize(ctx context.Context, in CreateDetectionInput) (s
 		ovTsStr string
 		ovTeStr string
 	)
-	err = d.pool.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT plays_expected, time_start::text, time_end::text
 		FROM distribution_overrides
 		WHERE campaign_id = $1
@@ -300,7 +313,7 @@ func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*D
 	}
 
 	// Reutiliza o categorizer existente passando os mesmos inputs.
-	cat, err := d.categorize(ctx, CreateDetectionInput{
+	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
 		StationID:    in.StationID,
 		CommercialID: in.CommercialID,
 		CampaignID:   in.CampaignID,
@@ -473,7 +486,7 @@ func (d *Detections) FindCutWithSiblings(ctx context.Context, masterID uuid.UUID
 // MESMA transação via syncCanonicalProjection.
 func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
 	newCommercialID, newCampaignID, stationID uuid.UUID) error {
-	cat, err := d.categorize(ctx, CreateDetectionInput{
+	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
 		StationID:    stationID,
 		CommercialID: newCommercialID,
 		CampaignID:   newCampaignID,
@@ -1330,7 +1343,7 @@ var ErrReattributeNoRow = errors.New("reattribute: no audit_rejected row matched
 //     NÃO altera nada (G3 — falha mantém o estado, nunca orfana).
 func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
 	newCommercialID, newCampaignID, stationID uuid.UUID, coverage float64) error {
-	cat, err := d.categorize(ctx, CreateDetectionInput{
+	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
 		StationID:    stationID,
 		CommercialID: newCommercialID,
 		CampaignID:   newCampaignID,

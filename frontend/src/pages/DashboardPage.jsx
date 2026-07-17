@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
-import { useCampaigns, useStreamHealth, useClients, useCampaignsFinancials } from '../api/hooks'
+import { useCampaigns, useStreamHealth, useClients, useCampaignsFinancials, useWorkersStatus } from '../api/hooks'
 import api from '../api/client'
 import StationAvatar from '../components/StationAvatar'
 import NotificationBell from '../components/NotificationBell'
@@ -678,22 +678,14 @@ function ClientDashboard() {
 //  ADMIN DASHBOARD — System Health
 // ═══════════════════════════════════════════════════════════════════
 
-// Inline hooks for /health and /workers — kept here (not in api/hooks.js)
-// because that file is off-limits for this change.
+// Inline hook for /health — kept here (not in api/hooks.js) because only
+// this dashboard uses /health. /workers now lives in api/hooks.js as
+// useWorkersStatus(), shared with /operations under the same queryKey.
 function useSystemHealth() {
   return useQuery({
     queryKey: ['system-health'],
     queryFn: () => api.get('/health').then(r => r.data),
-    refetchInterval: 15_000,
-    retry: 1,
-  })
-}
-
-function useWorkers() {
-  return useQuery({
-    queryKey: ['workers-overview'],
-    queryFn: () => api.get('/workers').then(r => r.data),
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
     retry: 1,
   })
 }
@@ -1193,7 +1185,7 @@ function WorkersAlertPanel({ workers, isLoading, isFetching }) {
 
 function AdminDashboard() {
   const health        = useSystemHealth()
-  const workers       = useWorkers()
+  const workers       = useWorkersStatus()
   const streamHealth  = useStreamHealth({ days: 1 })
   const campaignsQ    = useCampaigns()
 
