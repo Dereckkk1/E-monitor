@@ -2,9 +2,18 @@ services:
   postgres:
     image: postgres:16-alpine
     # Tuning parametrizado por env — defaults = valores de fábrica do PG 16
-    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md):
-    #   PG_SHARED_BUFFERS=3GB  PG_EFFECTIVE_CACHE_SIZE=8GB  PG_WORK_MEM=32MB
-    #   PG_MAINTENANCE_WORK_MEM=512MB  PG_MAX_WAL_SIZE=4GB
+    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md,
+    # secao "Tuning de Postgres e limites de memoria" p/ tabela + conta completa):
+    #   PG_SHARED_BUFFERS=2GB  PG_EFFECTIVE_CACHE_SIZE=5GB  PG_WORK_MEM=16MB
+    #   PG_MAINTENANCE_WORK_MEM=512MB  PG_AUTOVACUUM_WORK_MEM=128MB
+    #   PG_MAX_WAL_SIZE=4GB
+    # (revisão 2026-07-17: os valores originais desta task — shared_buffers=3GB,
+    # work_mem=32MB, effective_cache_size=8GB, sem autovacuum_work_mem explícito —
+    # estouravam o PG_MEM_LIMIT=6g: os 3 workers de autovacuum herdam
+    # maintenance_work_mem=512MB cada [default -1] = 1.5GB, que somado a
+    # shared_buffers=3GB + work_mem por-nó da daily_play_summary sob concorrência
+    # batia ou passava do limite — o cgroup mataria o próprio postgres, o oposto
+    # do que a reserva/limite de memória abaixo existe pra evitar.)
     # random_page_cost=1.1 é default aqui MESMO em dev: todo ambiente roda SSD,
     # e 4.0 (default do PG) faz o planner fugir de index scan.
     command:
@@ -17,12 +26,22 @@ services:
       - work_mem=${PG_WORK_MEM:-4MB}
       - -c
       - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      # autovacuum_work_mem default do PG é -1 = herda maintenance_work_mem.
+      # Setar explícito impede que os 3 workers de autovacuum (default
+      # autovacuum_max_workers=3) multipliquem um maintenance_work_mem alto —
+      # ver nota acima. -1 aqui é literalmente no-op (mesmo comportamento
+      # do PG sem essa flag).
+      - -c
+      - autovacuum_work_mem=${PG_AUTOVACUUM_WORK_MEM:--1}
       - -c
       - random_page_cost=1.1
       - -c
-      - effective_io_concurrency=200
+      - effective_io_concurrency=${PG_EFFECTIVE_IO_CONCURRENCY:-200}
       - -c
       - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      # checkpoint_completion_target já é 0.9 por default desde o PG14 (era 0.5
+      # antes) — esta linha é declaração explícita de intenção num bloco de
+      # tuning, não uma mudança de comportamento.
       - -c
       - checkpoint_completion_target=0.9
     # Sem hard limit em dev (0 = ilimitado). Prod (VM c3-highcpu-8, 16GB RAM):
@@ -145,8 +164,15 @@ services:
       MASTERS_PATH: /data/masters
       SEGMENTS_PATH: /data/segments
       API_PORT: "8080"
-      # Teto soft do heap Go — o GC fica agressivo perto do limite em vez de
-      # deixar o kernel OOM-killar o container (que inclui os ffmpeg de captura).
+      # Teto soft do HEAP GO — o GC fica agressivo perto do limite em vez de
+      # deixar o heap crescer sem controle. IMPORTANTE (correção 2026-07-17):
+      # isso NÃO protege o container do OOM killer do kernel. O RSS deste
+      # container é dominado pelos ~200 processos ffmpeg de captura (medido:
+      # ~88MB base + 14.8MB/emissora ≈ 3GB a 200 emissoras — ver
+      # docs/operations/deploy.md), que ficam FORA do heap Go e portanto FORA
+      # do alcance do GOMEMLIMIT. Por isso o service `api` não tem `mem_limit`
+      # no compose — um hard limit ali arriscaria matar a captura (core do
+      # produto) em vez de só conter o heap Go.
       # "off" (default do runtime) = sem limite; prod seta API_GOMEMLIMIT=6GiB.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-off}
       # Teto do pool de conexoes pgx (API + jobs + reqmetrics compartilham).

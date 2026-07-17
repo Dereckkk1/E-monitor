@@ -1,10 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-07-17
 codigo-relacionado:
   - scripts/deploy.sh
   - infra/docker/docker-compose.yml
   - infra/docker/docker-compose.override.yml
+  - infra/docker/.env.example
 ---
 
 # Deploy em Produção — Radiocheck
@@ -29,6 +30,17 @@ codigo-relacionado:
 ## 1. Análise do sistema
 
 ### Serviços e consumo de recursos
+
+> ⚠️ **Medição PRÉ-tuning (08/05/2026).** Esta tabela foi capturada antes da
+> Fase 1 de otimização de performance (2026-07-17), que subiu
+> `shared_buffers`/`work_mem`/`effective_cache_size` do Postgres e adicionou
+> `mem_limit`/`mem_reservation` no compose — ver seção "Tuning de Postgres e
+> limites de memória" logo abaixo. Depois de aplicar os valores de prod, o
+> `postgres` tende a encostar bem mais perto do teto de `shared_buffers`
+> (2GB) conforme o cache aquece, então a linha do `postgres` nesta tabela e o
+> "Total" da projeção ficam desatualizados. **Re-medir e atualizar aqui**
+> após rodar em prod com os novos valores — não confie nestes números pra
+> validar a Fase 1.
 
 | Serviço | Container | RAM (medida) | Escala com emissoras? |
 |---|---|---|---|
@@ -56,6 +68,48 @@ Números baseados em stress test real (50 workers ativos medidos em 08/05/2026):
 | Stack fixo (todos os outros containers) | ~400 MB |
 | Fingerprint index em memória (100 comerciais) | ~500 MB–1 GB |
 | **Total** | **~4–5 GB** |
+
+### Tuning de Postgres e limites de memória (Fase 1 — performance, 2026-07-17)
+
+Desde a Fase 1 de otimização de performance, o `command:` do service
+`postgres` e os `mem_limit`/`mem_reservation` de `postgres`/`minio` em
+`infra/docker/docker-compose.yml` são parametrizados por env var. Defaults =
+valores de fábrica do PG16 / sem limite (no-op em dev). Setar no `.env` da VM
+(Bloco I abaixo):
+
+| Var | Dev (default) | Prod (VM c3-highcpu-8, 16GB RAM) | Motivo |
+|---|---|---|---|
+| `PG_SHARED_BUFFERS` | `128MB` | `2GB` | Cache dedicado do PG — cabe no SSD `/mnt/db` (300GB) e na RAM da VM. |
+| `PG_EFFECTIVE_CACHE_SIZE` | `4GB` | `5GB` | `shared_buffers` (2GB) + page cache realista (~3GB). NÃO 8GB: o box de 16GB é compartilhado com `api` (~3GB medido com os ffmpeg a 200 emissoras — ver tabela acima), `minio` (1GB) e stack fixa (~0.5GB) + OS (~1GB); um valor inflado engana o planner a superestimar cache hits. |
+| `PG_WORK_MEM` | `4MB` | `16MB` | Alocado por-nó de sort/hash, não por conexão. A view `daily_play_summary` (`migrations/0041_detection_campaigns.up.sql`) tem 4-8 nós por execução (2 FULL OUTER JOIN + 2 GROUP BY + generate_series); alimenta `/insights`, `/management`, o digest diário e `/admin/station-failures` sob concorrência real. |
+| `PG_MAINTENANCE_WORK_MEM` | `64MB` | `512MB` | Usado por `VACUUM`/`CREATE INDEX` manual. **Não** é herdado pelo autovacuum se a var abaixo estiver setada. |
+| `PG_AUTOVACUUM_WORK_MEM` | `-1` (default do PG = herda `maintenance_work_mem`) | `128MB` | **Crítico.** Sem essa var explícita, os 3 workers de autovacuum (`autovacuum_max_workers` default 3) herdam `maintenance_work_mem` inteiro — 3×512MB=1.5GB — que somado a `shared_buffers` + `work_mem` sob concorrência estoura o `PG_MEM_LIMIT` (ver conta abaixo). |
+| `PG_EFFECTIVE_IO_CONCURRENCY` | `200` | `200` | Todo ambiente aqui roda em container Linux/SSD — sem motivo pra diferenciar dev/prod. |
+| `PG_MAX_WAL_SIZE` | `1GB` | `4GB` | Menos checkpoints sob carga de escrita. |
+| `PG_MEM_RESERVATION` | `256m` | `3g` | Soft — reserva de memória do `postgres` pro scheduler do Docker. |
+| `PG_MEM_LIMIT` | `0` (sem limite) | `6g` | Hard cap — protege os outros services (`api`, `minio`) do OOM killer do kernel sob pressão de RAM na VM; ver conta abaixo. |
+| `MINIO_MEM_LIMIT` | `0` (sem limite) | `1g` | Hard cap do MinIO. |
+
+**Conta de memória do Postgres sob `PG_MEM_LIMIT=6g`** (revisão 2026-07-17 —
+os valores originalmente planejados para esta task, `shared_buffers=3GB` +
+`work_mem=32MB` + `effective_cache_size=8GB` **sem** `autovacuum_work_mem`
+explícito, chegavam a ~5.8GB só com 10 conexões concorrentes e passariam de
+9GB no pior caso de 40 conexões — estourando o próprio `PG_MEM_LIMIT` que
+esta task existe pra impor):
+
+- `shared_buffers=2GB` — fixo, sempre alocado.
+- autovacuum: 3 workers × `autovacuum_work_mem=128MB` = 384MB.
+- `work_mem` pior caso: `DB_MAX_CONNS=40` × 4 nós (query como `daily_play_summary`) × 16MB ≈ 2.56GB.
+- overhead do processo ≈ 0.3GB.
+- **Total pior caso ≈ 5.2GB** < `PG_MEM_LIMIT=6g`. Caso típico (10 conexões concorrentes): ≈ 3GB — folga confortável.
+
+`GOMEMLIMIT`/`API_GOMEMLIMIT` (service `api`) limita **só o heap Go** — não
+tem efeito sobre o RSS dos ~200 processos ffmpeg de captura, que são o termo
+dominante e variável desse container (~88MB base + 14.8MB/emissora ≈ 3GB a
+200 emissoras, ver tabela acima). Por isso `api` **não** tem `mem_limit` no
+compose: um hard limit ali arriscaria matar a captura — o core do produto —
+em vez de só conter o heap Go. A proteção do `api` é inteiramente soft
+(`GOMEMLIMIT`, que deixa o GC mais agressivo perto do teto do heap).
 
 ---
 
