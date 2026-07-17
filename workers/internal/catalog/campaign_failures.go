@@ -158,6 +158,29 @@ func dateOnly(t time.Time) string { return t.Format("2006-01-02") }
 // e não precisam disto.
 const failureHorizonClause = `dps.for_date < (now() AT TIME ZONE 'America/Sao_Paulo')::date`
 
+// NOTE (Task 13, safe subset): ListForDate's Q3 and Get() still read the
+// daily_play_summary VIEW, not daily_play_summary_for(). Both queries have
+// NO lower bound on for_date (only failureHorizonClause caps the upper end),
+// which the view supports because its `actual` CTE is unbounded history. The
+// function requires p_from/p_to NOT NULL, so migrating these two forces
+// fabricating a p_from. Two candidates were tried and both PROVEN (against
+// synthetic fixtures on rc-test-pg) to silently drop legitimate 'out_date'
+// rows — detections attributed to the campaign but outside [start_date,
+// end_date] (see distribution_rules.go recatClassifiedCTE) — which feed
+// `extras` and therefore IsBonified:
+//   - Q3: p_from = MIN(start_date) across the selected campaigns clips
+//     out_date detections that occurred BEFORE that minimum start_date.
+//   - Get: p_from/p_to = campaign.start_date/LEAST(end_date, hoje-1) clips
+//     out_date detections outside the campaign's own [start_date, end_date]
+//     — which is exactly the set out_date exists to capture (e.g. material
+//     still airing after the contract ended).
+// Both are pricing-adjacent (IsBonified feeds "extras >= deficit" credit
+// decisions), so per CLAUDE.md byte-identical-output gate they were left on
+// the view rather than shipped with a proven divergence. Follow-up: either
+// accept staying on the view permanently for these two, or widen p_from to a
+// provably-safe bound (e.g. LEAST(campaign MIN(start_date), MIN(detected_at)
+// from detection_campaigns for those campaigns)) and re-prove parity.
+
 // ListForDate returns campaigns that had any (station, date) deficit > 0
 // on the given local day. Stations inside each campaign are ONLY the ones
 // that failed on that specific day, but their programmed/identified/deficit
@@ -175,15 +198,16 @@ func (r *CampaignFailures) ListForDate(ctx context.Context, day time.Time) (*Dai
 	}
 
 	// Q1: campaigns with at least one (station, day) deficit > 0
+	// As of migration 0052 (Task 13) reads go through daily_play_summary_for
+	// with p_from=p_to=$1 (single-day pushdown) instead of the view.
 	rows1, err := r.pool.Query(ctx, `
 SELECT DISTINCT c.id, c.name, c.start_date, c.end_date, c.status,
                 cl.id, COALESCE(cl.name, '—') AS client_name,
                 COALESCE(cl.logo_url, '') AS client_logo_url
-FROM daily_play_summary dps
+FROM daily_play_summary_for($1::date, $1::date, NULL) dps
 JOIN campaigns c ON c.id = dps.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
-WHERE dps.for_date = $1::date
-  AND dps.deficit > 0
+WHERE dps.deficit > 0
   AND c.status != 'cancelada'
 ORDER BY c.id`, dayStr)
 	if err != nil {
@@ -216,16 +240,16 @@ ORDER BY c.id`, dayStr)
 	}
 
 	// Q2: stations that failed ON THE DAY, grouped by campaign
+	// As of migration 0052 (Task 13): campaign_id filter moves into the
+	// function's p_campaigns arg (pushdown) instead of a WHERE on the view.
 	rows2, err := r.pool.Query(ctx, `
 SELECT dps.campaign_id, dps.station_id,
        s.name, COALESCE(s.band, '') AS band,
        COALESCE(to_char(s.frequency_mhz, 'FM999990.0'), '') AS freq,
        COALESCE(s.city, '') AS city, COALESCE(s.logo_url, '') AS logo_url
-FROM daily_play_summary dps
+FROM daily_play_summary_for($1::date, $1::date, $2::uuid[]) dps
 JOIN stations s ON s.id = dps.station_id
-WHERE dps.for_date = $1::date
-  AND dps.deficit > 0
-  AND dps.campaign_id = ANY($2::uuid[])
+WHERE dps.deficit > 0
 GROUP BY dps.campaign_id, dps.station_id, s.name, s.band, s.frequency_mhz, s.city, s.logo_url
 ORDER BY dps.campaign_id`, dayStr, campIDs)
 	if err != nil {
