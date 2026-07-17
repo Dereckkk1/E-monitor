@@ -150,6 +150,12 @@ func main() {
 			if _, err := pool.Exec(bgCtx, `SELECT ensure_month_partitions(6)`); err != nil {
 				logger.Warn("partition maintenance: ensure_month_partitions failed", zap.Error(err))
 			}
+			var dropped int
+			if err := pool.QueryRow(bgCtx, `SELECT drop_old_health_partitions(6)`).Scan(&dropped); err != nil {
+				logger.Warn("partition maintenance: drop_old_health_partitions failed", zap.Error(err))
+			} else if dropped > 0 {
+				logger.Info("partition maintenance: dropped old stream_health partitions", zap.Int("count", dropped))
+			}
 		}
 		ensure()
 		ticker := time.NewTicker(24 * time.Hour)
