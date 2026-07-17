@@ -959,38 +959,53 @@ git commit -m "perf(catalog): sininho le daily_play_summary_for() (janela 7d, er
 
 ### Task 13: Migrar os demais consumidores da view (insights, financials, failures)
 
-**Files (um commit por arquivo, nesta ordem):**
-- Modify: `workers/internal/catalog/campaigns.go` (`FinancialsByCampaign`, ~linha 484)
-- Modify: `workers/internal/catalog/insights.go` (call-sites ~linhas 270, 429, 521-544, 682-701)
-- Modify: `workers/internal/catalog/campaign_failures.go` (~linhas 182, 224, 276, 378, 432, 510)
-- Modify: `workers/internal/catalog/station_failures.go` (~linha 142)
-- Modify: `workers/internal/catalog/distribution_overrides.go` (se referenciar a view)
+> **Inventário preciso (levantado 2026-07-17 — substitui a "regra de transformação"
+> genérica original).** São **18 leituras da view** em 4 arquivos, com riscos MUITO
+> diferentes. A regra genérica "use os mesmos bounds do WHERE" **não basta** — vários
+> call-sites não têm lower bound, e dois são o denominador do Modelo B (range =
+> campanha-inteira, ≠ janela do request). Só `campaign_failures.go`, `campaigns.go`,
+> `insights.go`, `station_failures.go` têm leituras REAIS; todo resto (`detections.go`,
+> `distribution_overrides.go`, `router.go`, `*_test.go`) é só comentário.
 
-**Regra de transformação (aplicar em cada call-site):**
+| call-site | bound data | bound campanha | risco | tratamento |
+|---|---|---|---|---|
+| campaign_failures.go:182 (ListForDate Q1) | `= $1` (dia) | nenhum | **trivial** | `_for($1,$1,NULL)` |
+| campaign_failures.go:224 (Q2) | `= $1` (dia) | `= ANY($2)` | **trivial** | `_for($1,$1,$2)` |
+| station_failures.go:142 (deficit_aggr) | `= $1` (dia) | nenhum | **trivial** | `_for($1,$1,NULL)` |
+| station_failures.go:249 (query 3) | `= $1` (dia) | nenhum | **baixo** | `_for($1,$1,NULL)`; subquery correlacionada é contra `distribution_rules`, não a view — chaves preservadas |
+| insights.go:429 (aggregateBuckets) | `BETWEEN $2 AND $3` | `= ANY($1)` | **trivial** | `_for($2,$3,$1)` |
+| insights.go:270 (consolidatedSummary) | janela clampada `[$3,$4]` | `camp_meta`=$1 | **baixo** | `_for($3,$4,$1)` + mantém clamp no WHERE |
+| insights.go:521 / :544 (aggInvestment window) | janela `[$2,$3]` | `camp_meta`=$1 | **baixo** | `_for($2,$3,$1)` |
+| insights.go:682 / :701 (computeCPM window, slow-path fixed_cpm) | janela `[$2,$3]` | `camp_meta`=$1 | **baixo** | `_for($2,$3,$1)` |
+| campaign_failures.go:276 (Q3) | só `< hoje`; **SEM lower** | `= ANY($1)` | **médio** | fabricar `p_from=MIN(start_date de $1)`, `p_to=hoje_local-1` |
+| campaign_failures.go:510 (Get drill-in) | só `< hoje`; **SEM lower** | `= $1` (escalar!) | **médio** | `start/end` já lidos em Go (l.471-480); `ARRAY[$1]`, `p_to=hoje_local-1` |
+| **insights.go:533 (cs_plan)** | **campanha INTEIRA** `cm.start..cm.end` | `camp_meta`=$1 | **🔴 ALTO** | **denominador Modelo B.** NÃO passar `$2/$3` — encolheria o denominador e inflaria CPM. Bound = superset `MIN(start)..MAX(end)` de $1, mantendo `BETWEEN cm.start AND cm.end` no WHERE |
+| **insights.go:692 (computeCPM pl)** | **campanha INTEIRA** | `camp_meta`=$1 | **🔴 ALTO** | espelha :533; mesmo cuidado |
+| campaign_failures.go:378 (ListHistorical Q1) | só `< hoje`; **SEM lower** | **NENHUM (todas)** | **🔴 ALTO** | full-scan global. `p_campaigns=NULL`, `p_from=MIN(start_date do banco)`, `p_to=hoje_local-1` |
+| campaign_failures.go:432 (ListHistorical Q2 count) | só `< hoje`; **SEM lower** | **NENHUM** | **🔴 ALTO** | espelha Q1 (comentário exige mirror). Migrar JUNTO ou divergem |
+| **campaigns.go:498 / :525 (FinancialsByCampaign)** | **NENHUM** (vida inteira) | **NENHUM** | **🔴🔴 estrutural** | `LEFT JOIN view ON keys` correlacionado, sem data nem campanha → exige `LEFT JOIN LATERAL`. Pushdown quase nulo (range global). **VER DECISÃO abaixo.** |
 
-1. Localize `FROM daily_play_summary` (grep no arquivo).
-2. Identifique no SQL circundante os filtros de data e campanha já aplicados (`for_date BETWEEN/=/>= …`, `campaign_id = / IN / = ANY …`).
-3. Substitua por `FROM daily_play_summary_for(<from>, <to>, <campanhas|NULL>) dps`, onde:
-   - `<from>/<to>` = os MESMOS bounds de data que o WHERE externo aplica (se o WHERE usa `for_date = $X`, passe `$X, $X`); **não invente bounds novos** — se um call-site não tem bound de data (ex.: um total "desde o início"), use o range da campanha (`c.start_date`/`c.end_date`) se disponível no escopo da query, senão NÃO migre esse call-site e anote no commit.
-   - `<campanhas>` = o array de campanhas do escopo quando a query já o tem (ex.: `(SELECT array_agg(id) FROM scoped)`), senão `NULL`.
-4. O WHERE externo original PODE permanecer (filtros redundantes são inofensivos e protegem a semântica).
-5. NÃO altere nenhuma expressão de agregação, COALESCE, ou junção fora do FROM.
+**Ordem de execução recomendada (do seguro pro arriscado, um commit por grupo):**
+1. **Triviais/baixos primeiro** (failures de data-única + insights de janela): `campaign_failures.go:182,224` · `station_failures.go:142,249` · `insights.go:429,270,521,544,682,701`. Swaps diretos, bounds já presentes.
+2. **Denominador Modelo B** (`insights.go:533,692`) — SEPARADO, com o gate de diff JSON abaixo. Bound = `MIN(start)..MAX(end)` das campanhas, NÃO a janela.
+3. **Failures sem lower bound** (`campaign_failures.go:276,378,432,510`) — fabricar `p_from`.
+4. **campaigns.go** — só se a decisão for migrar (ver abaixo).
 
-- [ ] **Step 1: Migrar `campaigns.go` FinancialsByCampaign** — commit `perf(catalog): financials le daily_play_summary_for()`
-- [ ] **Step 2: Migrar `insights.go`** (todos os call-sites; o range `from/to` do request já existe como parâmetro em cada query) — commit `perf(catalog): insights le daily_play_summary_for()`
+**🔴 GATE do Modelo B — obrigatório antes de commitar insights.go:** comparar o JSON de
+`/insights` byte a byte, mesma campanha/período, nos DOIS modos (consolidated E
+per_insertion), entre master e a branch. A memória `insights-consolidated-investido-shrinks-future-days`
+documenta exatamente o tipo de erro (denominador encolhido → investido/CPM errados) que
+migrar `cs_plan`/`pl` errado reintroduz. Diff vazio = passa; qualquer diferença = bloqueia.
+Rodar contra `rc-test-pg` com dados semeados, OU `EXCEPT` SQL das CTEs isoladas.
 
-  **Gate específico do Modelo B:** antes do commit, rodar em dev com dados de simulação e comparar o JSON de `/insights` byte a byte (mesma campanha, mesmo período, modo consolidated E per_insertion) entre master e a branch:
-  ```bash
-  curl -s "http://localhost:8080/v1/internal/insights?campaigns=<id>&from=<f>&to=<t>" -H "Authorization: Bearer $TOK" > depois.json
-  git stash && (rebuild api) && curl -s ... > antes.json && git stash pop
-  diff antes.json depois.json   # esperado: vazio
-  ```
-- [ ] **Step 3: Migrar `campaign_failures.go` e `station_failures.go`** (os call-sites de data única passam `(dia, dia)`) — commit `perf(catalog): failures leem daily_play_summary_for()`
-- [ ] **Step 4: `go test ./internal/catalog/...` completo + build linux**
-
-```bash
-cd workers && go test ./internal/catalog/... && CGO_ENABLED=0 GOOS=linux go build ./...
-```
+**DECISÃO PENDENTE — `campaigns.go` FinancialsByCampaign:** é a única com correlação
+estrutural (`LEFT JOIN view ON campaign+station+type`, sem bound de data nem campanha).
+Migrar exige reescrever pra `LEFT JOIN LATERAL daily_play_summary_for(...)`, risco alto,
+numa rota de faturamento — e como não há bound de data nem campanha, o ganho de pushdown
+é o MENOR de todos (a função varreria `MIN(start)..MAX(end)` global, quase igual à view;
+só poda partições futuras vazias 2027-2028). É /campaigns/financials, uma das 3 rotas
+CRÍTICAS — mas o custo/benefício aqui é o pior da fase. **Aguarda decisão do dono antes
+de tocar.**
 
 ---
 
