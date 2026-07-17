@@ -395,8 +395,10 @@ WITH scope AS (
     WHERE dc.campaign_id = $1
       AND ($2::uuid IS NULL OR m.type_id = $2)
       AND ($3::uuid[] IS NULL OR d.station_id = ANY($3))
-      AND (date_trunc('day', dc.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
-           BETWEEN $4::date AND $5::date)
+      -- range sargável na partition key: [meia-noite local de $4, meia-noite
+      -- local de $5+1) ≡ dia-local BETWEEN $4 AND $5, mas com partition pruning
+      AND dc.detected_at >= ($4::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND dc.detected_at <  (($5::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
 )`+recatClassifyTailSQL,
 		campaignID, typeID, stationIDs, from, to)
 	return err
