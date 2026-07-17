@@ -564,6 +564,19 @@ export function useRestoreDetection() {
   })
 }
 
+// Snapshot do supervisor (/workers). Compartilhado por Dashboard admin e
+// /operations — MESMA queryKey de propósito: com as duas telas abertas, uma
+// única chamada alimenta ambas. 20s é suficiente; o "ao vivo" percebido vem
+// do ticker de relógio local, não do poll.
+export function useWorkersStatus() {
+  return useQuery({
+    queryKey: ['workers'],
+    queryFn: () => api.get('/workers').then(r => r.data),
+    refetchInterval: 20_000,
+    retry: 1,
+  })
+}
+
 // Stream Health
 export function useStreamHealth(params = {}) {
   return useQuery({

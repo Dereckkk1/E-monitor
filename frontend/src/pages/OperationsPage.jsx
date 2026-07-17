@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
+import { useWorkersStatus } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import './OperationsPage.css'
 
@@ -153,13 +154,9 @@ export default function OperationsPage() {
   const navigate = useNavigate()
   useNowTicker(1000)
 
-  // /workers — the live supervisor snapshot.
-  const workersQuery = useQuery({
-    queryKey: ['workers-status'],
-    queryFn: () => api.get('/workers').then(r => r.data),
-    refetchInterval: 10_000,
-    refetchIntervalInBackground: false,
-  })
+  // /workers — the live supervisor snapshot. Shared with the admin
+  // Dashboard under queryKey ['workers'] (see useWorkersStatus in api/hooks).
+  const workersQuery = useWorkersStatus()
 
   // /stream-health — used to enrich each worker row with station identity
   // and uptime. 30s is fine because that data changes slowly.
