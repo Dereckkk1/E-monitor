@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
-import { useWorkersStatus } from '../api/hooks'
+import { useWorkersStatus, WORKERS_POLL_MS } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import './OperationsPage.css'
 
@@ -10,7 +10,7 @@ import './OperationsPage.css'
  * OperationsPage — live worker console (`/operations`).
  *
  * Two queries drive this screen:
- *   1. GET /workers       (refetch every 10s) — supervisor snapshot.
+ *   1. GET /workers       (refetch every WORKERS_POLL_MS, see api/hooks.js) — supervisor snapshot.
  *   2. GET /stream-health (refetch every 30s) — used to enrich worker rows
  *      with name/band/freq/city/state/logo + uptime_pct/is_currently_down.
  *
@@ -123,7 +123,7 @@ function pickStr(...vals) {
 
 // ── "Live now" ticker ─────────────────────────────────────────────────────────
 // Forces a re-render every 1s so the relative timestamps ("há 1.2s") tick
-// even between the 10s /workers refetches.
+// even between the WORKERS_POLL_MS /workers refetches.
 function useNowTicker(intervalMs = 1000) {
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -276,10 +276,12 @@ export default function OperationsPage() {
 
   const totalReconnects = rows.reduce((acc, r) => acc + (r.reconnects ?? 0), 0)
 
-  // "Atualizado há Xs" pill.
+  // "Atualizado há Xs" pill. Margem de 3x o poll: absorve um refetch
+  // atrasado (retry backoff, soluço de rede) sem virar "falha ao atualizar"
+  // por si só.
   const lastUpdate = workersQuery.dataUpdatedAt
   const lastUpdateLabel = lastUpdate ? relativeShort(new Date(lastUpdate).toISOString()) : null
-  const isFreshHealthy = !workersQuery.isError && lastUpdate && (Date.now() - lastUpdate) < 30_000
+  const isFreshHealthy = !workersQuery.isError && lastUpdate && (Date.now() - lastUpdate) < WORKERS_POLL_MS * 3
 
   // ── Render ────────────────────────────────────────────────────────────────
   const isInitialLoading = workersQuery.isLoading
@@ -294,7 +296,7 @@ export default function OperationsPage() {
           <h2>Operações</h2>
           <div className="op-header-sub">Estado ao vivo dos workers de ingestão</div>
         </div>
-        <span className="op-pulse" title="Atualizado automaticamente a cada 10s">
+        <span className="op-pulse" title={`Atualizado automaticamente a cada ${WORKERS_POLL_MS / 1000}s`}>
           <span
             className={`op-pulse-dot ${isFreshHealthy ? 'op-pulse-dot--ok op-pulse-dot--live' : 'op-pulse-dot--bad'}`}
           />
@@ -479,7 +481,13 @@ export default function OperationsPage() {
 // ── Row ───────────────────────────────────────────────────────────────────────
 function WorkerRow({ row, onClick }) {
   const meta = STATUS_META[row.status] ?? STATUS_META.unknown
-  const lastPcmStale = row.lastPcmAge != null && row.lastPcmAge > 5_000
+  // Um worker sadio emite PCM continuamente, então lastPcmAge no momento do
+  // render não deveria passar de ~1 intervalo de poll + jitter. 1.5x dá
+  // folga pra um refetch atrasado sem esconder um stall real — e coincide
+  // com o próprio threshold de StallRisk do backend (supervisor.go:
+  // `time.Since(last) > 30*time.Second`), então em regime estável os dois
+  // critérios (badge de status via stall_risk e esta célula) concordam.
+  const lastPcmStale = row.lastPcmAge != null && row.lastPcmAge > WORKERS_POLL_MS * 1.5
 
   // Uptime fill rules: ok ≥ 99%, warn ≥ 95%, bad below.
   const uptime = row.uptimePct
