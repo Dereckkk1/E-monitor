@@ -277,9 +277,7 @@ Logo após `image: postgres:16-alpine`, adicionar:
 
 ```yaml
     # Tuning parametrizado por env — defaults = valores de fábrica do PG 16
-    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md):
-    #   PG_SHARED_BUFFERS=3GB  PG_EFFECTIVE_CACHE_SIZE=8GB  PG_WORK_MEM=32MB
-    #   PG_MAINTENANCE_WORK_MEM=512MB  PG_MAX_WAL_SIZE=4GB
+    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md).
     # random_page_cost=1.1 é default aqui MESMO em dev: todo ambiente roda SSD,
     # e 4.0 (default do PG) faz o planner fugir de index scan.
     command:
@@ -293,14 +291,24 @@ Logo após `image: postgres:16-alpine`, adicionar:
       - -c
       - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
       - -c
+      # autovacuum_work_mem: default -1 = HERDA maintenance_work_mem. Sem este
+      # knob, subir maintenance_work_mem pra 512MB dá 3×512MB aos workers de
+      # autovacuum (1.5GB) — foi o que quase estourou o cgroup. Ver §Task 4 Step 4.
+      - autovacuum_work_mem=${PG_AUTOVACUUM_WORK_MEM:--1}
+      - -c
       - random_page_cost=1.1
       - -c
-      - effective_io_concurrency=200
+      - effective_io_concurrency=${PG_EFFECTIVE_IO_CONCURRENCY:-200}
       - -c
       - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
       - -c
+      # já é o default do PG16 (mudou de 0.5 em PG14) — explícito por documentação
       - checkpoint_completion_target=0.9
 ```
+
+**Valores de prod:** ver o runbook do Step 4 — foram **revisados pós-review** (a primeira
+versão estourava o `PG_MEM_LIMIT`). Não copie valores de memória de nenhum outro lugar
+deste doc que não seja o Step 4.
 
 - [ ] **Step 2: Validar em dev**
 
@@ -327,11 +335,15 @@ Escrever no PR/mensagem pro Dereck (não executar):
 docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env exec backup sh /backup.sh
 
 # 2. Adicionar ao infra/docker/.env da VM:
-#    PG_SHARED_BUFFERS=3GB
-#    PG_EFFECTIVE_CACHE_SIZE=8GB
-#    PG_WORK_MEM=32MB
+#    PG_SHARED_BUFFERS=2GB
+#    PG_EFFECTIVE_CACHE_SIZE=5GB
+#    PG_WORK_MEM=16MB
 #    PG_MAINTENANCE_WORK_MEM=512MB
+#    PG_AUTOVACUUM_WORK_MEM=128MB
 #    PG_MAX_WAL_SIZE=4GB
+#    PG_MEM_RESERVATION=3g
+#    PG_MEM_LIMIT=6g
+#    MINIO_MEM_LIMIT=1g
 #    DB_MAX_CONNS=40
 #    API_GOMEMLIMIT=6GiB
 
@@ -340,9 +352,33 @@ docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose
 docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env up -d --force-recreate --no-deps postgres
 
 # 4. Conferir:
-docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SHOW shared_buffers; SHOW effective_cache_size; SHOW work_mem; SHOW random_page_cost;"
-# esperado: 3GB / 8GB / 32MB / 1.1
+docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SHOW shared_buffers; SHOW effective_cache_size; SHOW work_mem; SHOW autovacuum_work_mem; SHOW random_page_cost;"
+# esperado: 2GB / 5GB / 16MB / 128MB / 1.1
+
+# 5. VIGIAR A MEMÓRIA por algumas horas (a conta abaixo é teórica; o box tem
+#    ~200 ffmpeg cujo RSS ninguém limita):
+docker stats --no-stream
+free -m
+# Se o postgres encostar em 6g, o cgroup MATA ele. Sinal de alerta: RSS do
+# container postgres > ~5g sustentado.
 ```
+
+> **Correção pós-review (2026-07-17) — os valores originais deste runbook eram perigosos.**
+> A primeira versão mandava `PG_SHARED_BUFFERS=3GB` + `PG_WORK_MEM=32MB` +
+> `PG_MAINTENANCE_WORK_MEM=512MB` com `PG_MEM_LIMIT=6g`. Erro: `autovacuum_work_mem`
+> tem default `-1` = **herda `maintenance_work_mem`**, então os 3 workers de autovacuum
+> passariam a poder usar 512MB cada = **1.5GB**. Somando `shared_buffers` (3GB) +
+> autovacuum (1.5GB) + `work_mem` por-nó (a `daily_play_summary` tem 4-8 nós de
+> sort/hash por execução, e `work_mem` é por NÓ, não por conexão — 10 conns × 4 nós ×
+> 32MB = 1.28GB) ≈ **5.8GB contra o teto de 6g** → o cgroup OOM-killaria o Postgres,
+> exatamente o que a Task 5 existe pra evitar. Config auto-destrutiva.
+>
+> Valores revisados cabem: `2GB + 0.384GB (3×128MB) + 2.56GB (pior caso patológico:
+> 40 conns × 4 nós × 16MB) + ~0.3GB overhead ≈ 5.2GB < 6g`. Caso típico ≈ 3GB.
+> `effective_cache_size` caiu de 8GB pra 5GB porque 8GB **mentia pro planner**: num box
+> de 16GB dividido com api (~3GB medidos, ffmpeg incluso), minio (1GB), stack fixa
+> (~0.5GB) e OS (~1GB), não existe 8GB de page cache — planner superestimando cache
+> hit escolhe plano ruim.
 
 ---
 
