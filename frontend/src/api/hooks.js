@@ -711,14 +711,14 @@ export function useMaterials(clientId, q = '') {
     }),
     enabled: !!clientId,
     refetchInterval: (query) => {
-      // Poll every 3s while ANY material is still being analyzed for
+      // Poll every 5s while ANY material is still being analyzed for
       // similarity OR fingerprint. Stops polling once everything is settled.
       const list = query.state.data ?? []
       const pending = list.some(m =>
         m.fingerprint_status === 'pending' ||
         m.fingerprint_status === 'generating' ||
         m.similarity_check_status === 'pending')
-      return pending ? 3000 : false
+      return pending ? 5000 : false
     },
   })
 }
