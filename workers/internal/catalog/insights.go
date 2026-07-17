@@ -242,6 +242,9 @@ func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) str
 // consolidada, o /insights entra em modo fornecedor: Investido = esse total e
 // Bonificação some.
 //
+// per_ins_delivered lê daily_play_summary_for(from, to, campaigns) (migration
+// 0052, Task 13) em vez da view — pushdown, byte-idêntico ao original.
+//
 // A fórmula é IDÊNTICA à do /campaigns (catalog.Campaigns.FinancialsByCampaign)
 // pra as duas telas nunca divergirem:
 //
@@ -267,7 +270,7 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		    -- unit × (in_slot + bonus), igual ao /campaigns (não o plano cheio).
 		    SELECT s.campaign_id, s.station_id,
 		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::numeric AS pi_delivered
-		    FROM daily_play_summary s
+		    FROM daily_play_summary_for($3::date, $4::date, $1::uuid[]) s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
 		      ON tp.campaign_id = s.campaign_id
@@ -405,6 +408,12 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 // `in_slot` no mesmo gráfico — bonus inclui in_slot-acima-de-expected
 // que já é mostrado em in_slot. Bonificação KPI (no aggregateInvestment)
 // usa bonus separadamente.
+//
+// A CTE `agg` lê daily_play_summary_for(from, to, campaigns) (migration 0052,
+// Task 13) em vez da view — pushdown, byte-idêntico ao original. As leituras
+// de daily_play_summary em aggregateInvestment/computeCPM (denominador do
+// Modelo B) e em campaign_failures.ListHistorical FICARAM na view de
+// propósito — decisão do dono (tudo-ou-nada nesses statements; ver Task 13).
 func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]BucketRow, string, error) {
 	days := int(p.To.Sub(p.From).Hours()/24) + 1
 	gran := "day"
@@ -426,10 +435,8 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		           SUM(out_slot)::int  AS out_slot,
 		           SUM(out_date)::int  AS out_date,
 		           GREATEST(0, SUM(expected) - SUM(in_slot) - SUM(out_slot))::int AS deficit
-		    FROM daily_play_summary
-		    WHERE campaign_id = ANY($1::uuid[])
-		      AND for_date BETWEEN $2 AND $3
-		      AND ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+		    FROM daily_play_summary_for($2::date, $3::date, $1::uuid[])
+		    WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		),
 		orphan AS (
