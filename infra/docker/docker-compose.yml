@@ -1,6 +1,30 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Tuning parametrizado por env — defaults = valores de fábrica do PG 16
+    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md):
+    #   PG_SHARED_BUFFERS=3GB  PG_EFFECTIVE_CACHE_SIZE=8GB  PG_WORK_MEM=32MB
+    #   PG_MAINTENANCE_WORK_MEM=512MB  PG_MAX_WAL_SIZE=4GB
+    # random_page_cost=1.1 é default aqui MESMO em dev: todo ambiente roda SSD,
+    # e 4.0 (default do PG) faz o planner fugir de index scan.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - checkpoint_completion_target=0.9
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
