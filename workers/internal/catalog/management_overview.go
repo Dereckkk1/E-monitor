@@ -139,18 +139,27 @@ func (m *ManagementOverview) queryKPIs(ctx context.Context, p ManagementParams) 
 		  -- se QUALQUER projeção dela cai numa campanha do escopo. Fan-out OFF (1:1) é
 		  -- equivalente ao "campaign_id IN scoped"; com ON uma tocada compartilhada
 		  -- conta +1 (não +N) e entra mesmo se só uma campanha projetada está no escopo.
+		  -- range sargável na partition key: [meia-noite local de $4, meia-noite
+		  -- local de $5+1) ≡ dia-local BETWEEN $4 AND $5, mas com partition pruning
 		  (SELECT COUNT(*) FROM detections d
 		         WHERE d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL AND d.retracted_at IS NULL
-		           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $4::date AND $5::date
+		           AND d.detected_at >= ($4::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+		           AND d.detected_at <  (($5::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
 		           AND EXISTS (SELECT 1 FROM detection_campaigns dc
 		                       WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
 		                         AND dc.campaign_id IN (SELECT id FROM scoped)))     AS airings_total,
+		  -- "hoje": bound inferior = meia-noite local de hoje. Bound superior
+		  -- explícito (meia-noite local de amanhã) mesmo detected_at "não devendo"
+		  -- ser futuro — CreateManualBatch aceita DetectedAt até 5min no futuro
+		  -- (detections_manual_batch.go), então sem o teto o range ficaria aberto.
 		  (SELECT COUNT(*) FROM detections d
 		         WHERE d.evidence_status <> 'audit_rejected'
 		           AND d.ignored_at IS NULL AND d.retracted_at IS NULL
-		           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
-		               = (now() AT TIME ZONE 'America/Sao_Paulo')::date
+		           AND d.detected_at >= (((now() AT TIME ZONE 'America/Sao_Paulo')::date)::timestamp
+		                                  AT TIME ZONE 'America/Sao_Paulo')
+		           AND d.detected_at <  (((now() AT TIME ZONE 'America/Sao_Paulo')::date + 1)::timestamp
+		                                  AT TIME ZONE 'America/Sao_Paulo')
 		           AND EXISTS (SELECT 1 FROM detection_campaigns dc
 		                       WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
 		                         AND dc.campaign_id IN (SELECT id FROM scoped)))     AS airings_today
