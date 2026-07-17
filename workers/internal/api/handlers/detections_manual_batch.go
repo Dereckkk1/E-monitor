@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,25 @@ import (
 )
 
 const manualProofMaxBytes = 25 << 20 // 25 MB
+
+// uploadTimeout: teto de parede pra rotas multipart grandes. O MaxBytesReader
+// aceita 600MB; a 10 Mbps isso levaria ~8min, então 15min dá folga real em vez
+// de matar o request no meio e fazer o operador perder o trabalho digitado.
+const uploadTimeout = 15 * time.Minute
+
+// uploadContext desacopla o request do middleware.Timeout(60s) global
+// (router.go:77), que é dimensionado pras rotas JSON e mata upload grande:
+// ParseMultipartForm não observa ctx e completa, mas aí o Put no S3 e o
+// Begin da tx recebem um ctx já expirado → 500 e trabalho perdido.
+// WithoutCancel preserva os VALORES (auth claims) e descarta só o
+// cancelamento/deadline herdado; o deadline próprio evita request imortal.
+//
+// Efeito colateral consciente: desconexão do cliente não cancela mais o
+// handler. É o comportamento desejado aqui — os bytes já subiram; queremos
+// que os inserts terminem em vez de abortar no meio do lote.
+func uploadContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), uploadTimeout)
+}
 
 // manualBatchMeta é o JSON no campo `meta` do multipart de CreateManualBatch.
 type manualBatchMeta struct {
@@ -46,6 +66,10 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	// Upload grande não cabe no deadline de 60s das rotas JSON — ver uploadContext.
+	ctx, cancel := uploadContext(r)
+	defer cancel()
 
 	// Teto generoso de corpo: PDF (25MB) + N áudios (25MB cada). 600MB cobre ~23 áudios.
 	r.Body = http.MaxBytesReader(w, r.Body, 600<<20)
@@ -90,7 +114,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 	}
 
 	// Vínculo: tudo-ou-nada. Nada é criado se qualquer linha falhar.
-	if linkErrs := h.Repo.ValidateBatchLinks(r.Context(), meta.CampaignID, meta.StationID, entries); len(linkErrs) > 0 {
+	if linkErrs := h.Repo.ValidateBatchLinks(ctx, meta.CampaignID, meta.StationID, entries); len(linkErrs) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"errors": linkErrs})
 		return
 	}
@@ -121,7 +145,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 			bid := uuid.New()
 			key := fmt.Sprintf("proofs/%s/%s/%s.pdf",
 				entries[0].DetectedAt.UTC().Format("2006/01/02"), meta.StationID, bid)
-			if err := h.Storage.Put(r.Context(), key, file, "application/pdf"); err != nil {
+			if err := h.Storage.Put(ctx, key, file, "application/pdf"); err != nil {
 				warnings = append(warnings, "upload do PDF comprovante falhou — veiculações criadas sem comprovante")
 			} else {
 				proofBatchID = &bid
@@ -132,7 +156,7 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 		file.Close()
 	}
 
-	out, err := h.Repo.CreateManualBatch(r.Context(), catalog.CreateManualBatchInput{
+	out, err := h.Repo.CreateManualBatch(ctx, catalog.CreateManualBatchInput{
 		CampaignID:   meta.CampaignID,
 		StationID:    meta.StationID,
 		ManualBy:     claims.UserID,
@@ -172,13 +196,13 @@ func (h *DetectionsHandler) CreateManualBatch(w http.ResponseWriter, r *http.Req
 		}
 		key := fmt.Sprintf("evidences/%s/%s/%s.%s",
 			det.DetectedAt.UTC().Format("2006/01/02"), meta.StationID, det.ID, ext)
-		if err := h.Storage.Put(r.Context(), key, file, storeCT); err != nil {
+		if err := h.Storage.Put(ctx, key, file, storeCT); err != nil {
 			file.Close()
 			warnings = append(warnings, fmt.Sprintf("linha %d: upload do áudio falhou", i))
 			continue
 		}
 		file.Close()
-		if err := h.Repo.UpdateEvidence(r.Context(), det.ID, det.DetectedAt, "available", key, header.Size); err != nil {
+		if err := h.Repo.UpdateEvidence(ctx, det.ID, det.DetectedAt, "available", key, header.Size); err != nil {
 			warnings = append(warnings, fmt.Sprintf("linha %d: erro ao gravar evidência", i))
 		}
 	}
