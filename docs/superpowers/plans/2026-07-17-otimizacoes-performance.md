@@ -27,7 +27,7 @@
 | 2 | Tasks 7–9 (polls frontend) | `npm run build` OK + telas Dashboard/Operations/Monitoring funcionais em dev |
 | 3 | Tasks 10–15 (função SQL + consumidores + sargable) | Script de paridade retorna 0 linhas contra cópia de prod |
 | 4 | Tasks 16–18 (streaming evidência, retenção, presign público) | Independentes entre si |
-| **5** | **Tasks 19–21 (`/detections/manual/batch`: 2 bugs P0 + higiene)** | **Testes novos passando; Task 20 antes da 21** |
+| **5** | **Tasks 19–21 (`/detections/manual/batch`: 2 bugs P0 + higiene)** | **Testes novos passando. 🚨 Task 19 e 20 vão pra prod JUNTAS — ver gate abaixo** |
 
 Cada fase pode ser uma branch própria (`perf/fase1-config`, `perf/fase2-polls`,
 `perf/fase3-dps-function`, `perf/fase4-arch`, `perf/fase5-manual-batch`).
@@ -37,6 +37,29 @@ Cada fase pode ser uma branch própria (`perf/fase1-config`, `perf/fase2-polls`,
 deadlock armado. Elas competem com a Fase 3 pela primeira posição. Se for pra escolher,
 Fase 1 (config, já quase pronta) → **Tasks 19/20** (bugs, escopo pequeno) → Fase 3
 (causa-raiz, escopo grande) → resto.
+
+> ## 🚨 GATE DE DEPLOY: a Task 19 NÃO pode ir pra prod sem a Task 20
+>
+> Descoberto no code review da Task 19 (2026-07-17). **Deployar a 19 sozinha piora um
+> incidente em vez de melhorar:**
+>
+> A Task 20 corrige um deadlock latente — `CreateManualBatch` segura a conexão da tx e
+> chama `categorize`, que pega uma **segunda** conexão do mesmo pool compartilhado
+> (`manual_batches.go:94` + `:114` → `detections.go:179,186,227`). Com o pool no teto,
+> N batches concorrentes travam esperando a segunda conexão.
+>
+> **Hoje esse deadlock se auto-resolve em ~60s** — o `middleware.Timeout(60s)` estoura,
+> o handler morre com 500, as conexões voltam pro pool. Feio, mas limitado.
+>
+> **A Task 19 troca esse deadline por 15 minutos.** Sozinha, ela transforma um travamento
+> de 1 minuto num travamento de **até 15 minutos que starva o pool inteiro** — ou seja,
+> derruba *toda* rota que precise de banco (login, health, dashboards), não só o batch.
+> Trocaríamos "o operador perde as linhas digitadas" por "a aplicação inteira para por
+> 15 minutos".
+>
+> **Regra:** as duas no mesmo release, 20 antes da 19 na ordem de merge. Se por qualquer
+> motivo só uma puder ir, vá com a **20 sozinha** (ela é segura e útil isolada — corrige
+> o deadlock sem mexer em deadline nenhum). **Nunca a 19 sozinha.**
 
 ---
 
