@@ -27,8 +27,16 @@
 | 2 | Tasks 7–9 (polls frontend) | `npm run build` OK + telas Dashboard/Operations/Monitoring funcionais em dev |
 | 3 | Tasks 10–15 (função SQL + consumidores + sargable) | Script de paridade retorna 0 linhas contra cópia de prod |
 | 4 | Tasks 16–18 (streaming evidência, retenção, presign público) | Independentes entre si |
+| **5** | **Tasks 19–21 (`/detections/manual/batch`: 2 bugs P0 + higiene)** | **Testes novos passando; Task 20 antes da 21** |
 
-Cada fase pode ser uma branch própria (`perf/fase1-config`, `perf/fase2-polls`, `perf/fase3-dps-function`, `perf/fase4-arch`).
+Cada fase pode ser uma branch própria (`perf/fase1-config`, `perf/fase2-polls`,
+`perf/fase3-dps-function`, `perf/fase4-arch`, `perf/fase5-manual-batch`).
+
+**Prioridade real (revisada 2026-07-17 com telemetria de prod):** as Tasks 19 e 20 são
+**bugs**, não otimizações — a 19 faz o operador perder trabalho digitado; a 20 é um
+deadlock armado. Elas competem com a Fase 3 pela primeira posição. Se for pra escolher,
+Fase 1 (config, já quase pronta) → **Tasks 19/20** (bugs, escopo pequeno) → Fase 3
+(causa-raiz, escopo grande) → resto.
 
 ---
 
@@ -1162,6 +1170,360 @@ git commit -m "perf(db): retencao de 6 meses p/ stream_health_events (drop de pa
 - [ ] **Step 2:** No `.env` da VM: `S3_PUBLIC_ENDPOINT=https://evidence.<dominio>`.
 - [ ] **Step 3:** Recreate do api (`up -d --force-recreate --no-deps api` — regra 4.1) e testar: abrir uma detecção no frontend, endpoint `/detections/{id}/evidence-url` (presigned) deve devolver URL `https://evidence.<dominio>/...` que toca no browser.
 - [ ] **Step 4:** Depois de validado, abrir follow-up para o frontend trocar os componentes que usam o proxy (`/detections/{id}/evidence`) pela presigned URL — aí sim o download some do processo Go. (Fora deste plano; criar em `docs/roadmap/follow-ups-fase2.md`.)
+
+---
+
+# FASE 5 — `/detections/manual/batch` (telemetria de prod, 2026-07-17)
+
+**Origem:** o Dereck reportou as 4 rotas em status CRÍTICO no Web Vitals de prod:
+`/campaigns/financials`, `/management-overview`, `/insights` e `/detections/manual/batch`.
+As três primeiras **confirmam a Fase 3** (são os consumidores da `daily_play_summary`).
+A quarta não estava priorizada — investigada em 2026-07-17, com dois achados verificados
+no código que são **bug, não lentidão de query**.
+
+**Veredito honesto sobre a latência:** o gargalo dessa rota é **inerente** — ela empurra
+dezenas de MB (PDF 25MB + N áudios de até 25MB) por HTTP, e o handler só começa a
+trabalhar depois que `ParseMultipartForm` drena o corpo inteiro. 50MB num uplink de
+escritório de 10Mbps = ~40s. As 403 queries de um lote de 50 (contagem medida abaixo)
+somam ~200-400ms — **~1% do wall-clock**. Otimizar as queries é higiene e proteção de
+pool; **não** move o ponteiro que o operador sente. O que move é a Task 19.
+
+**Contagem medida (lote de 50 + 1 PDF + 50 áudios): 8N+3 = 403 queries.**
+`ValidateBatchLinks` N (`manual_batches.go:46-64`) · `categorize` 3N (`detections.go:177-254`) ·
+inserts 2N (`manual_batches.go:125,146`) · `Get` pós-commit N (`:161-168`) ·
+`UpdateEvidence` N (`detections_manual_batch.go:153-184`) · tx begin/proof/commit 3.
+Mais 51 `PutObject` sequenciais.
+
+**Crédito ao design existente (não "consertar"):** o `Put` do PDF acontece **antes** do
+`Begin` (`:124` vs `manual_batches.go:94`) e os `Put` dos áudios **depois** do `Commit`
+(`:153`). A transação **não** segura conexão durante I/O de S3. A hipótese "tx longa
+esperando S3" é FALSA — não mexa nessa ordem.
+
+**Descartado por verificação:** o batch **não** dispara `recategorizeScope`/
+`RecategorizeForMaterial` (grep confirmou: só rules/campaign/override/backfill chamam).
+Sem varredura de partição aqui.
+
+---
+
+### Task 19: [P0 — BUG] Reconciliar `MaxBytesReader` 600MB × `middleware.Timeout` 60s
+
+**O bug:** `detections_manual_batch.go:51` faz `http.MaxBytesReader(w, r.Body, 600<<20)`
+— teto deliberado ("600MB cobre ~23 áudios"). Mas a rota (`router.go:389`) está sob o
+`r.Use(middleware.Timeout(60 * time.Second))` global (`router.go:77`). 600MB em 60s exige
+≥80Mbps sustentados. `ParseMultipartForm` não observa ctx e completa; então
+`Storage.Put(r.Context(), …)` (`:124`) e `d.pool.Begin(ctx)` (`manual_batches.go:94`)
+recebem um **context já expirado** → 500 "internal error" (`:146`) — e o operador **perde
+as N linhas digitadas** depois de esperar minutos. Provável causa do CRÍTICO na telemetria.
+
+**Decisão de design (justificada):** NÃO baixar o `MaxBytesReader` pra caber em 60s. Isso
+quebraria um caso de uso documentado ([manual-airings-bulk-and-proof.md](../../features/manual-airings-bulk-and-proof.md)
+— "1 PDF → N veiculações, materiais mistos"). O limite de 600MB é intencional; o que está
+errado é o deadline de 60s aplicado a uma rota de upload. **Corrigir o deadline.**
+
+**Files:**
+- Modify: `workers/internal/api/handlers/detections_manual_batch.go` (início de `CreateManualBatch`, ~linha 43-55)
+- Test: `workers/internal/api/handlers/` (teste novo)
+
+- [ ] **Step 1: Escrever o teste que falha**
+
+O teste precisa provar que o handler NÃO usa o deadline curto herdado. Crie
+`workers/internal/api/handlers/detections_manual_batch_timeout_test.go`:
+
+```go
+package handlers
+
+import (
+	"context"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+// O handler de upload roda sob middleware.Timeout(60s) global (router.go:77),
+// mas aceita corpo de até 600MB (600MB@60s = 80Mbps — impossível). uploadContext
+// desacopla o deadline do upload do deadline das rotas JSON.
+func TestUploadContext_DetachesFromShortDeadline(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("POST", "/x", nil).WithContext(parent)
+
+	ctx, cancelUp := uploadContext(req)
+	defer cancelUp()
+
+	time.Sleep(100 * time.Millisecond) // parent já expirou
+
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("upload ctx morreu junto com o parent de 50ms: %v", err)
+	}
+	dl, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("upload ctx deve ter deadline próprio (não pode ser infinito)")
+	}
+	if remaining := time.Until(dl); remaining < 5*time.Minute {
+		t.Fatalf("deadline do upload muito curto: %v restante", remaining)
+	}
+}
+
+// Valores do context (auth claims!) TÊM que sobreviver ao detach — senão o
+// handler perde o usuário autenticado.
+func TestUploadContext_PreservesValues(t *testing.T) {
+	type ctxKey string
+	const k ctxKey = "claims"
+	parent := context.WithValue(context.Background(), k, "user-42")
+	req := httptest.NewRequest("POST", "/x", nil).WithContext(parent)
+
+	ctx, cancel := uploadContext(req)
+	defer cancel()
+
+	if got := ctx.Value(k); got != "user-42" {
+		t.Fatalf("valor do context perdido no detach: got %v", got)
+	}
+}
+```
+
+- [ ] **Step 2: Rodar e ver falhar**
+
+```bash
+cd workers && go test ./internal/api/handlers/ -run TestUploadContext -v
+```
+Expected: FAIL — `undefined: uploadContext`.
+
+- [ ] **Step 3: Implementar**
+
+Em `workers/internal/api/handlers/detections_manual_batch.go`, adicionar o helper (antes de `CreateManualBatch`):
+
+```go
+// uploadTimeout: teto de parede pra rotas multipart grandes. O MaxBytesReader
+// aceita 600MB; a 10 Mbps isso levaria ~8min, então 15min dá folga real em vez
+// de matar o request no meio e fazer o operador perder o trabalho digitado.
+const uploadTimeout = 15 * time.Minute
+
+// uploadContext desacopla o request do middleware.Timeout(60s) global
+// (router.go:77), que é dimensionado pras rotas JSON e mata upload grande:
+// ParseMultipartForm não observa ctx e completa, mas aí o Put no S3 e o
+// Begin da tx recebem um ctx já expirado → 500 e trabalho perdido.
+// WithoutCancel preserva os VALORES (auth claims) e descarta só o
+// cancelamento/deadline herdado; o deadline próprio evita request imortal.
+//
+// Efeito colateral consciente: desconexão do cliente não cancela mais o
+// handler. É o comportamento desejado aqui — os bytes já subiram; queremos
+// que os inserts terminem em vez de abortar no meio do lote.
+func uploadContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), uploadTimeout)
+}
+```
+
+E no início de `CreateManualBatch`, LOGO APÓS a extração dos claims (que precisa do
+`r.Context()` original) e ANTES do `MaxBytesReader`:
+
+```go
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Upload grande não cabe no deadline de 60s das rotas JSON — ver uploadContext.
+	ctx, cancel := uploadContext(r)
+	defer cancel()
+
+	// Teto generoso de corpo: PDF (25MB) + N áudios (25MB cada). 600MB cobre ~23 áudios.
+	r.Body = http.MaxBytesReader(w, r.Body, 600<<20)
+```
+
+Depois, **substituir TODOS os `r.Context()` restantes do corpo deste handler por `ctx`**.
+Localize-os com grep no arquivo — sabidamente incluem `ValidateBatchLinks` (`:93`),
+o `Storage.Put` do PDF (`~:124`), o `Repo.CreateManualBatch` (`~:135-146`) e os
+`Put`/`UpdateEvidence` dos áudios (`~:153-184`). **Não mude a extração dos claims** —
+essa lê do context original de propósito. Adicione os imports `context` e `time` se faltarem.
+
+- [ ] **Step 4: Rodar e ver passar**
+
+```bash
+cd workers && go test ./internal/api/handlers/ -run TestUploadContext -v && go test ./internal/api/...
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+Expected: PASS nos dois testes novos, sem regressão no pacote, build linux exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add workers/internal/api/handlers/detections_manual_batch.go workers/internal/api/handlers/detections_manual_batch_timeout_test.go
+git commit -m "fix(manual-batch): upload de 600MB nao cabia no middleware.Timeout de 60s
+
+MaxBytesReader aceita 600MB mas a rota herdava o deadline de 60s das rotas JSON
+(600MB@60s = 80Mbps). ParseMultipartForm completa, mas Put/Begin recebiam ctx
+expirado -> 500 e o operador perdia as linhas digitadas. uploadContext desacopla
+o deadline (WithoutCancel preserva os claims) com teto proprio de 15min."
+```
+
+---
+
+### Task 20: [P0 — hazard] `categorize` usa o pool dentro da transação (2 conexões por request)
+
+**O bug:** `manual_batches.go:94` abre `tx` (segura 1 conexão do pool) e o loop chama
+`d.categorize(ctx, …)` em `manual_batches.go:114` — mas `categorize` usa `d.pool.QueryRow`/
+`d.pool.Query` (`detections.go:179,186,227`), **não a tx**. Cada request precisa de **2
+conexões simultâneas**. Com `MaxConns=20` (40 após a Task 3), N batches concorrentes seguram
+N conexões de tx e todos bloqueiam esperando a segunda → **deadlock até o ctx estourar**.
+A Task 3 (40 conns) **não corrige** — só dobra quantos batches são precisos pra travar.
+
+Bônus correto de brinde: rodar o categorize DENTRO da tx torna a leitura de rules/overrides
+consistente com o snapshot da transação (hoje pode ler rules alteradas no meio do lote).
+
+**Files:**
+- Modify: `workers/internal/catalog/detections.go` (assinatura de `categorize`)
+- Modify: `workers/internal/catalog/manual_batches.go:114` (passar `tx`)
+- Test: `workers/internal/catalog/`
+
+- [ ] **Step 1: Introduzir a interface de querier**
+
+Em `workers/internal/catalog/detections.go`, acima de `categorize`:
+
+```go
+// pgxQuerier é o subconjunto de pgxpool.Pool / pgx.Tx que categorize usa.
+// Existe pra categorize poder rodar DENTRO de uma transação: quando o caller
+// já segura uma conexão via tx, usar d.pool aqui exigiria uma SEGUNDA conexão
+// simultânea — com o pool no teto, N batches concorrentes deadlockam.
+type pgxQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+```
+
+Trocar a assinatura de `categorize` para receber o querier:
+
+```go
+func (d *Detections) categorize(ctx context.Context, q pgxQuerier, in CreateDetectionInput) (string, error) {
+```
+
+e dentro do corpo, trocar as 3 ocorrências de `d.pool.QueryRow(` / `d.pool.Query(`
+(linhas ~179, ~186, ~227) por `q.QueryRow(` / `q.Query(`. **Não mude mais nada da lógica.**
+
+- [ ] **Step 2: Atualizar os call-sites**
+
+Encontre TODOS com grep:
+```bash
+cd workers && grep -rn "\.categorize(" internal/
+```
+- Em `manual_batches.go:114` (dentro da tx): passar **`tx`**.
+- Nos demais call-sites (`Create`/`CreateManual` em `detections.go`, fora de tx): passar **`d.pool`**.
+
+- [ ] **Step 3: Build + testes**
+
+```bash
+cd workers && go build ./... && go test ./internal/catalog/...
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+Expected: compila e passa. Falhas de harness pré-existentes do pacote catalog (material_ids
+NOT NULL, partição, FK user, isolamento stations — ver memória `test-db-native-pg-shadows-docker`)
+NÃO são regressão sua; confirme que a falha existe também no master antes de descartar.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/catalog/detections.go workers/internal/catalog/manual_batches.go
+git commit -m "fix(manual-batch): categorize roda na tx, nao no pool (2 conns/request = deadlock)
+
+CreateManualBatch segurava a conexao da tx e chamava categorize, que usava
+d.pool -> cada request exigia 2 conexoes simultaneas. Com o pool no teto, N
+batches concorrentes deadlockavam ate o ctx estourar. Subir MaxConns nao
+corrige, so adia. Bonus: rules/overrides agora sao lidos no snapshot da tx."
+```
+
+---
+
+### Task 21: [P1] Memoizar `categorize` + `ValidateBatchLinks` em uma query
+
+Higiene e proteção do pool — **não** prometa ganho de latência percebida (ver "veredito"
+acima: ~1% do wall-clock). Faça DEPOIS da Task 20 (depende da assinatura nova).
+
+**Por que é redundante:** `campaign_id` e `station_id` são **fixos pro lote inteiro**
+(vêm de `meta`, `detections_manual_batch.go:135-137`), e as rules são chaveadas por
+`(campaign, type_id, station)` (`detections.go:186-193`). O caso típico documentado
+("o stream caiu o dia inteiro, reinsere as tocadas" — mesmo material, mesmo dia) faz
+**3 queries repetidas N vezes**.
+
+**Files:**
+- Modify: `workers/internal/catalog/manual_batches.go` (loop de `CreateManualBatch` + `ValidateBatchLinks`)
+
+- [ ] **Step 1: Memoizar categorize por (material, dia-local)**
+
+No `CreateManualBatch`, antes do loop:
+
+```go
+	// categorize depende de (campaign, station, material-type, dia-local) — e
+	// campaign/station são fixos no lote. Memoiza por (material, dia): o caso
+	// típico (mesmo material, mesmo dia) colapsa 3N queries em 3.
+	type catKey struct {
+		material uuid.UUID
+		day      string
+	}
+	catCache := make(map[catKey]string, len(in.Entries))
+```
+
+No loop, envolver a chamada:
+
+```go
+		key := catKey{
+			material: e.CommercialID,
+			day:      e.DetectedAt.In(saoPaulo).Format("2006-01-02"),
+		}
+		cat, hit := catCache[key]
+		if !hit {
+			var err error
+			cat, err = d.categorize(ctx, tx, CreateDetectionInput{
+				StationID:    in.StationID,
+				CommercialID: e.CommercialID,
+				CampaignID:   in.CampaignID,
+				DetectedAt:   e.DetectedAt,
+			})
+			if err != nil {
+				return nil, err
+			}
+			catCache[key] = cat
+		}
+```
+
+**ATENÇÃO — correção obrigatória de semântica:** o categorizador considera a **faixa
+horária** (`time_start`/`time_end` das rules e overrides — ver `override-time-window.md`),
+então duas tocadas do mesmo material no mesmo DIA mas em horários diferentes podem
+categorizar diferente (`in_slot` vs `out_slot`). **Memoizar só por (material, dia) está
+ERRADO.** Antes de implementar, leia `categorizer.Categorize` e decida uma destas:
+  - (a) memoizar as **entradas** (a lista de rules + o override do dia), que são o que
+    custa query, e continuar chamando `categorizer.Categorize` (função **pura**, in-memory)
+    por entry — **esta é a correta**;
+  - (b) incluir o horário na chave (mata o ganho — cada tocada tem horário distinto).
+Implemente a **(a)**: refatore `categorize` pra separar "buscar rules/override" (cacheável
+por material+dia) de "classificar" (puro, por entry). Se isso exigir mudança maior que o
+previsto aqui, PARE e reporte — não force.
+
+- [ ] **Step 2: `ValidateBatchLinks` em uma query**
+
+Em `manual_batches.go:46-64`, trocar o loop de N queries por uma só sobre os materiais
+distintos do lote:
+
+```sql
+SELECT material_id FROM campaign_materials
+WHERE campaign_id = $1 AND material_id = ANY($2::uuid[])
+```
+e comparar o set retornado com o set pedido pra montar os erros por índice, preservando
+**exatamente** a mesma mensagem/formato de erro por índice que o handler já devolve (o
+frontend depende do shape `{errors: [{index, message}]}`).
+
+- [ ] **Step 3: Testes + commit**
+
+```bash
+cd workers && go test ./internal/catalog/... && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+```bash
+git add workers/internal/catalog/manual_batches.go
+git commit -m "perf(manual-batch): memoiza rules/override por (material,dia) + valida vinculos em 1 query
+
+Lote de 50: 8N+3 = 403 queries -> ~250. Higiene de pool, nao de latencia (o
+wall-clock e dominado pelo upload de dezenas de MB, nao pelas queries)."
+```
 
 ---
 
