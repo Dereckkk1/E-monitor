@@ -18,8 +18,20 @@
 -- O bound em detected_at usa [meia-noite local de p_from, meia-noite local de
 -- p_to+1) — exatamente as linhas cujo dia local cai em [p_from, p_to], igual ao
 -- date_trunc da view, mas SARGÁVEL (poda partições de detections/detection_campaigns).
+--
+-- Contrato de NULL: p_from/p_to são OBRIGATÓRIOS (NOT NULL) — GREATEST/LEAST
+-- ignoram NULL silenciosamente (a CTE expected continuaria produzindo linhas
+-- reais), mas `p_from::timestamp AT TIME ZONE ...` vira NULL e zera a CTE
+-- actual, o que produziria "100% de déficit" plausível e ERRADO em vez de um
+-- erro visível. Por isso a CTE expected também é blindada com
+-- `p_from IS NOT NULL AND p_to IS NOT NULL`: com qualquer um dos dois NULL a
+-- função devolve VAZIO (obviamente quebrado), nunca um número fabricado.
+-- Não usar STRICT/RETURNS NULL ON NULL INPUT: mataria o `p_campaigns IS NULL`
+-- legítimo (= "todas as campanhas"). p_campaigns = '{}' (array vazio, não
+-- NULL) é "zero campanhas" via semântica de `= ANY('{}')` — não é bug, mas
+-- callers devem passar NULL, nunca array vazio, para "todas".
 
-CREATE FUNCTION daily_play_summary_for(p_from date, p_to date, p_campaigns uuid[] DEFAULT NULL)
+CREATE OR REPLACE FUNCTION daily_play_summary_for(p_from date, p_to date, p_campaigns uuid[] DEFAULT NULL)
 RETURNS TABLE (
     campaign_id uuid, type_id uuid, station_id uuid, for_date date,
     expected int, in_slot int, deficit int, bonus int, out_slot int, out_date int)
@@ -37,7 +49,8 @@ WITH expected AS (
         GREATEST(r.start_date, p_from),
         LEAST(r.end_date, p_to),
         INTERVAL '1 day') AS d(for_date)
-    WHERE (p_campaigns IS NULL OR r.campaign_id = ANY(p_campaigns))
+    WHERE p_from IS NOT NULL AND p_to IS NOT NULL
+      AND (p_campaigns IS NULL OR r.campaign_id = ANY(p_campaigns))
       AND (1 << EXTRACT(DOW FROM d.for_date)::INT) & r.weekday_mask != 0
     GROUP BY r.campaign_id, r.type_id, s.station_id, d.for_date
 ),
