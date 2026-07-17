@@ -55,7 +55,7 @@ func newTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	pool, err := db.New(ctx, url)
+	pool, err := db.New(ctx, url, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM station_thresholds`)
