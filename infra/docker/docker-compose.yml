@@ -51,17 +51,23 @@ services:
       - -c
       - checkpoint_completion_target=0.9
     # Sem hard limit em dev (0 = ilimitado). Prod (VM c3-highcpu-8, 16GB RAM):
-    # PG_MEM_RESERVATION=3g PG_MEM_LIMIT=6g. Papel de cada knob (não é óbvio):
-    #   mem_reservation = piso GARANTIDO — isso é o que de fato protege o
-    #     postgres do OOM killer do kernel quando um vizinho barulhento (api
-    #     com N ffmpeg) pressiona a RAM da VM.
-    #   mem_limit NÃO protege o postgres — ele cria uma forma NOVA do postgres
-    #     morrer (morte pelo próprio cgroup, se o consumo real passar do teto).
-    #     Só é seguro como backstop porque a conta de memória em deploy.md
-    #     fecha com folga na ponta ADVERSA do pior caso (ver PG_WORK_MEM).
-    #     Quem protege de verdade os vizinhos (minio) é o limite NELES + o
-    #     postgres ter consumo bounded por config (shared_buffers fixo +
-    #     work_mem × pool cap), não por sorte.
+    # PG_MEM_RESERVATION=3g PG_MEM_LIMIT=6g. Papel de cada knob (não é óbvio,
+    # e nenhum dos dois é "seguro contra OOM" — ver a redação exata abaixo):
+    #   mem_reservation → memory.low no cgroup v2. É prioridade de RECLAIM,
+    #     NÃO garantia: o kernel prefere reclamar páginas de quem está acima
+    #     da própria reserva antes de mexer no postgres. Isso REDUZ FORTEMENTE
+    #     a chance do postgres ser a vítima sob pressão moderada, mas sob
+    #     exaustão global severa o OOM killer age por oom_score por-processo,
+    #     ignorando memory.low. A própria doc do Docker: "Docker attempts to
+    #     keep the container's memory within the soft limit; however, this
+    #     isn't guaranteed."
+    #   mem_limit → memory.max, teto DURO. NÃO protege o postgres: cria uma
+    #     forma NOVA dele morrer (OOM-kill escopado ao próprio cgroup se o
+    #     consumo passar do teto). Só é aceitável como backstop de blast radius
+    #     porque a conta em deploy.md fecha na ponta ADVERSA do pior caso.
+    # O que realmente segura o postgres é o consumo ser BOUNDED POR CONFIG
+    # (shared_buffers fixo + work_mem × cap do pool + autovacuum_work_mem), não
+    # os knobs de cgroup. Estes são rede de segurança, não o plano.
     mem_reservation: ${PG_MEM_RESERVATION:-256m}
     mem_limit: ${PG_MEM_LIMIT:-0}
     environment:
