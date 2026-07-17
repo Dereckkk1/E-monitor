@@ -21,7 +21,7 @@ func newTestDB(t *testing.T) (context.Context, *pgxpool.Pool) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	pool, err := db.New(ctx, url)
+	pool, err := db.New(ctx, url, zap.NewNop())
 	if err != nil {
 		t.Fatalf("db.New: %v", err)
 	}

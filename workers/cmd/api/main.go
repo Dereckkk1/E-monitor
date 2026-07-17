@@ -69,7 +69,7 @@ func main() {
 		}
 	}()
 
-	pool, err := db.New(ctx, cfg.DatabaseURL)
+	pool, err := db.New(ctx, cfg.DatabaseURL, logger)
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"radiocheck/internal/db"
 )
 
@@ -16,7 +17,7 @@ func TestInsertProjections_Idempotent(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	pool, err := db.New(ctx, url)
+	pool, err := db.New(ctx, url, zap.NewNop())
 	if err != nil {
 		t.Fatalf("db.New: %v", err)
 	}

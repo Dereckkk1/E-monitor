@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"radiocheck/internal/db"
 )
 
@@ -20,7 +21,7 @@ func newTestDB(t *testing.T) (context.Context, *pgxpool.Pool) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	pool, err := db.New(ctx, url)
+	pool, err := db.New(ctx, url, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Close() })
 	return ctx, pool

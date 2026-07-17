@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
 	"radiocheck/internal/auth"
@@ -29,7 +30,7 @@ func newUsersTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	pool, err := db.New(ctx, url)
+	pool, err := db.New(ctx, url, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Close() })
 	// Guard: recusa TRUNCATE se DB tem dado real (ver dbtest/guard.go).
