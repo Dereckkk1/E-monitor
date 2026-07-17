@@ -25,6 +25,11 @@ services:
       - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
       - -c
       - checkpoint_completion_target=0.9
+    # Sem hard limit em dev (0 = ilimitado). Prod (VM c3-highcpu-8, 16GB RAM):
+    # PG_MEM_RESERVATION=3g PG_MEM_LIMIT=6g — protege o postgres do OOM killer
+    # quando outro service (ex: api com N ffmpeg) pressiona a RAM da VM.
+    mem_reservation: ${PG_MEM_RESERVATION:-256m}
+    mem_limit: ${PG_MEM_LIMIT:-0}
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -93,6 +98,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
+    # Sem hard limit em dev (0 = ilimitado). Prod: MINIO_MEM_LIMIT=1g.
+    mem_limit: ${MINIO_MEM_LIMIT:-0}
     ports:
       - "${MINIO_PORT}:9000"
       - "${MINIO_CONSOLE_PORT}:9001"
