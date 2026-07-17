@@ -259,7 +259,7 @@ function useMonitoring(range, hideLocalhost) {
         vitals:   vit.data.vitals ?? [],
       }
     },
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
     staleTime: 5_000,
   })
 }
@@ -269,7 +269,7 @@ function useActors(range, hideLocalhost) {
   return useQuery({
     queryKey: ['admin-monitoring-actors', range, hideLocalhost],
     queryFn: async () => (await api.get(`/admin/monitoring/top-actors?${qs}`)).data.actors ?? [],
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
   })
 }
 
