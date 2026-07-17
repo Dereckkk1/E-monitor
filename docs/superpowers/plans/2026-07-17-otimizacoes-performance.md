@@ -998,14 +998,38 @@ documenta exatamente o tipo de erro (denominador encolhido → investido/CPM err
 migrar `cs_plan`/`pl` errado reintroduz. Diff vazio = passa; qualquer diferença = bloqueia.
 Rodar contra `rc-test-pg` com dados semeados, OU `EXCEPT` SQL das CTEs isoladas.
 
-**DECISÃO PENDENTE — `campaigns.go` FinancialsByCampaign:** é a única com correlação
-estrutural (`LEFT JOIN view ON campaign+station+type`, sem bound de data nem campanha).
-Migrar exige reescrever pra `LEFT JOIN LATERAL daily_play_summary_for(...)`, risco alto,
-numa rota de faturamento — e como não há bound de data nem campanha, o ganho de pushdown
-é o MENOR de todos (a função varreria `MIN(start)..MAX(end)` global, quase igual à view;
-só poda partições futuras vazias 2027-2028). É /campaigns/financials, uma das 3 rotas
-CRÍTICAS — mas o custo/benefício aqui é o pior da fase. **Aguarda decisão do dono antes
-de tocar.**
+**DECISÕES DO DONO (2026-07-17):**
+
+1. **`campaigns.go` FinancialsByCampaign → NÃO migrar; resolver por CACHE.** A query
+   fica na view. A lentidão de `/campaigns/financials` (rota polled) será atacada por
+   cache RAM (padrão `BlockList`, TTL 30-60s) — já no backlog (item 2). Tese: correlação
+   estrutural (`LEFT JOIN view ON keys`, sem bound), reescrita LATERAL de risco alto numa
+   rota de faturamento, e ganho de pushdown mínimo (sem bound, varre quase igual). Atacar
+   o sintoma (poll caro) por cache é melhor custo/benefício que reescrever pricing.
+
+2. **Os 4 call-sites de risco alto → PULADOS nesta rodada** (viram follow-up dedicado):
+   - `insights.go:533` (`cs_plan`) e `:692` (`pl`) — denominador do Modelo B. Risco de
+     faturamento errado silencioso se o bound for a janela em vez de `MIN(start)..MAX(end)`.
+     **Consequência:** como essas CTEs compartilham statement com as CTEs de janela
+     (`cs_window`/`cs_per_ins` em `aggregateInvestment`; `w`/`pi` em `computeCPM`), e
+     migrar só as janelas deixaria o denominador ainda varrendo 51 partições (ganho ~0)
+     num statement view+função frágil, **os statements `aggregateInvestment` (506) e
+     `computeCPM` (641) ficam INTEIROS na view** por ora. São tudo-ou-nada.
+   - `campaign_failures.go:378` (`ListHistorical` Q1) e `:432` (Q2 count) — full-scan de
+     todas as campanhas, ganho pequeno (p_campaigns NULL), e têm que espelhar-se. Painel
+     admin, não faturamento. Ficam na view.
+
+**→ O QUE MIGRA NESTA RODADA (8 call-sites, ganho limpo, um commit por arquivo):**
+- `campaign_failures.go`: `:182` (Q1 `_for($1,$1,NULL)`), `:224` (Q2 `_for($1,$1,$2)`),
+  `:276` (Q3 — fabricar `p_from=MIN(start) de $1`, `p_to=hoje_local-1`), `:510` (Get —
+  `start/end` já em Go, `ARRAY[$1]`).
+- `station_failures.go`: `:142` (`_for($1,$1,NULL)`), `:249` (`_for($1,$1,NULL)`).
+- `insights.go`: `:270` (consolidatedSummary — statement próprio, `_for($3,$4,$1)` + clamp),
+  `:429` (aggregateBuckets — `_for($2,$3,$1)`). **NÃO tocar `aggregateInvestment`/`computeCPM`.**
+
+**Gate:** paridade EXCEPT contra `rc-test-pg` com dados semeados para cada arquivo; para
+o `insights.go` migrado, diff do bloco correspondente do JSON de `/insights`. Nenhum toque
+nos statements de denominador.
 
 ---
 
