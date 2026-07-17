@@ -54,16 +54,15 @@ SELECT
     cl.id, COALESCE(cl.name, '—'), COALESCE(cl.logo_url, ''),
     dps.for_date,
     nr.read_at
-FROM daily_play_summary dps
+FROM daily_play_summary_for((CURRENT_DATE - INTERVAL '7 days')::date,
+                            (CURRENT_DATE - INTERVAL '1 day')::date, NULL) dps
 JOIN campaigns c ON c.id = dps.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
 LEFT JOIN notification_reads nr
     ON nr.user_id = $1
    AND nr.notification_key =
        'campaign_failure:' || c.id::text || ':' || dps.for_date::text
-WHERE dps.for_date >= (CURRENT_DATE - INTERVAL '7 days')
-  AND dps.for_date <  CURRENT_DATE
-  AND dps.deficit > 0
+WHERE dps.deficit > 0
   AND c.status != 'cancelada'
 GROUP BY c.id, c.name, cl.id, cl.name, cl.logo_url, dps.for_date, nr.read_at
 ORDER BY dps.for_date DESC, c.name ASC
@@ -125,11 +124,10 @@ func (n *Notifications) MarkAllReadInWindow(ctx context.Context, userID uuid.UUI
 	tag, err := n.pool.Exec(ctx, `
 INSERT INTO notification_reads (user_id, notification_key)
 SELECT $1, 'campaign_failure:' || c.id::text || ':' || dps.for_date::text
-FROM daily_play_summary dps
+FROM daily_play_summary_for((CURRENT_DATE - INTERVAL '7 days')::date,
+                            (CURRENT_DATE - INTERVAL '1 day')::date, NULL) dps
 JOIN campaigns c ON c.id = dps.campaign_id
-WHERE dps.for_date >= (CURRENT_DATE - INTERVAL '7 days')
-  AND dps.for_date <  CURRENT_DATE
-  AND dps.deficit > 0
+WHERE dps.deficit > 0
   AND c.status != 'cancelada'
 GROUP BY c.id, dps.for_date
 ON CONFLICT (user_id, notification_key) DO NOTHING`, userID)
