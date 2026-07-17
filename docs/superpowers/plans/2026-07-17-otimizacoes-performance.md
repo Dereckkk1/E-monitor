@@ -1,0 +1,1170 @@
+# Plano de Otimização de Performance — E-monitor
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Reduzir a carga do servidor (VM única GCP c3-highcpu-8, 16GB) sob usuários simultâneos, atacando as causas-raiz identificadas na auditoria 2026-07-17: view `daily_play_summary` não-otimizável, Postgres em defaults de fábrica, ausência de gzip/timeouts, pool de 20 conexões, `refetchOnWindowFocus` global no frontend e polls admin redundantes.
+
+**Architecture:** Quatro fases independentes e incrementais. Fase 1 = mudanças de configuração sem tocar lógica (compose, http.Server, queryClient). Fase 2 = enxugar polling do frontend. Fase 3 = otimização de plano de query no Postgres (função parametrizada substituindo a view nas leituras + predicados sargáveis para partition pruning) **mantendo semântica idêntica** — é otimização de plano, não de resultado. Fase 4 = mudanças arquiteturais (streaming de evidência, retenção, âncora de jobs).
+
+**Tech Stack:** Go 1.26 (chi, pgx/v5), PostgreSQL 16 (particionado por RANGE), React 18 + Vite + @tanstack/react-query v5, docker compose, Cloudflare Tunnel/Pages.
+
+---
+
+## Restrições invioláveis (ler antes de qualquer task)
+
+1. **NÃO tocar no pipeline de fingerprint/matching/captura**: `workers/internal/{fingerprint,match,index,ingestor,segments,supervisor}` (lógica), stream workers, ffmpeg. Nenhuma task deste plano mexe neles; se uma task parecer exigir isso, PARE e avise o Dereck.
+2. **Regra 6 do CLAUDE.md antes de todo push**: `cd workers && CGO_ENABLED=0 GOOS=linux go build ./...` tem que passar; migrations caem na regra 4.8 (testar contra cópia de prod — o `shadow_migration_test` do deploy pega, mas teste antes localmente).
+3. **Regra 5**: nenhuma task deste plano roda `npm install`. Se alguma mudança futura precisar, siga o procedimento 5.3 do CLAUDE.md.
+4. **Quem executa em prod é o Dereck** (regra 7). Tasks marcadas **[PROD/Dereck]** são runbooks para ele; escreva/valide os comandos, não os execute.
+5. **Paridade numérica é gate da Fase 3**: a view `daily_play_summary` sustenta o Modelo B de pricing (`/insights` "Investido"). Qualquer divergência de resultado entre view e função = bug bloqueante, não "aproximação aceitável".
+6. Dev local Windows: o PG nativo sombreia a porta 5432 (memória `test-db-native-pg-shadows-docker`). Para testes de integração use o PG descartável `rc-test-pg` na porta **15432** na rede `docker_default`. **Nunca** use `rc-prodcopy` (5544).
+
+## Ordem e gates
+
+| Fase | Conteúdo | Gate para avançar |
+|---|---|---|
+| 1 | Tasks 1–6 (config: gzip, timeouts, pool, PG tuning, mem limits, queryClient) | Build linux OK + deploy validado pelo Dereck + `SHOW shared_buffers` confere |
+| 2 | Tasks 7–9 (polls frontend) | `npm run build` OK + telas Dashboard/Operations/Monitoring funcionais em dev |
+| 3 | Tasks 10–15 (função SQL + consumidores + sargable) | Script de paridade retorna 0 linhas contra cópia de prod |
+| 4 | Tasks 16–18 (streaming evidência, retenção, presign público) | Independentes entre si |
+
+Cada fase pode ser uma branch própria (`perf/fase1-config`, `perf/fase2-polls`, `perf/fase3-dps-function`, `perf/fase4-arch`).
+
+---
+
+# FASE 1 — Quick wins de configuração
+
+### Task 1: gzip nas respostas JSON da API
+
+**Files:**
+- Modify: `workers/internal/api/router.go:73-79`
+
+- [ ] **Step 1: Adicionar `middleware.Compress` na cadeia**
+
+Em `workers/internal/api/router.go`, o bloco atual é:
+
+```go
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(corsMiddleware)
+	r.Use(otelRoutePatternMiddleware)
+```
+
+Adicionar UMA linha após `middleware.Timeout`:
+
+```go
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(60 * time.Second))
+	// gzip nas respostas compressíveis (application/json, text/csv etc). O set
+	// default do chi NÃO inclui audio/* — os proxies de evidência (áudio/PDF)
+	// passam intocados. Nível 5 = bom trade-off CPU × ratio.
+	r.Use(middleware.Compress(5))
+	r.Use(corsMiddleware)
+	r.Use(otelRoutePatternMiddleware)
+```
+
+Nota: `middleware.Compress` já vem do import existente `github.com/go-chi/chi/v5/middleware` — nenhum import novo.
+
+- [ ] **Step 2: Verificar que o CSV export também comprime**
+
+O chi comprime por content-type. O export CSV usa `text/csv` — adicionar o tipo explicitamente se o default não cobrir:
+
+```go
+	r.Use(middleware.Compress(5, "application/json", "text/csv", "text/plain", "image/svg+xml"))
+```
+
+Use esta forma (com a lista explícita) — é determinística e documenta a intenção.
+
+- [ ] **Step 3: Build + teste**
+
+```bash
+cd workers && go build ./... && go test ./internal/api/...
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+Expected: PASS (falhas conhecidas flaky: `internal/catalog TestBuildDailySummary_WithDowntime` antes de ~13:00 UTC — ignorar se for só ela).
+
+- [ ] **Step 4: Smoke test manual**
+
+Com a API dev rodando:
+
+```bash
+curl -s -H "Accept-Encoding: gzip" -D - -o /dev/null http://localhost:8080/v1/internal/health
+```
+
+Expected: header `Content-Encoding: gzip` presente.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add workers/internal/api/router.go
+git commit -m "perf(api): gzip (Compress nivel 5) nas respostas JSON/CSV"
+```
+
+---
+
+### Task 2: Timeouts no http.Server + GOMEMLIMIT
+
+**Files:**
+- Modify: `workers/cmd/api/main.go:514-517`
+- Modify: `infra/docker/docker-compose.yml` (env do service `api`)
+
+- [ ] **Step 1: Timeouts de servidor**
+
+Em `workers/cmd/api/main.go`, trocar:
+
+```go
+	srv := &http.Server{
+		Addr:    ":" + cfg.APIPort,
+		Handler: api.NewRouter(deps),
+	}
+```
+
+por:
+
+```go
+	srv := &http.Server{
+		Addr:    ":" + cfg.APIPort,
+		Handler: api.NewRouter(deps),
+		// Read/WriteTimeout ficam zerados de propósito: uploads de material
+		// (multipart) e downloads de evidência são legitimamente longos, e o
+		// middleware.Timeout(60s) do router já limita os handlers JSON. Estes
+		// dois cortam goroutines penduradas em conexões mortas/lentas:
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+```
+
+O import `time` já existe em main.go.
+
+- [ ] **Step 2: GOMEMLIMIT no compose**
+
+Em `infra/docker/docker-compose.yml`, no service `api`, adicionar ao bloco `environment`:
+
+```yaml
+      # Teto soft do heap Go — o GC fica agressivo perto do limite em vez de
+      # deixar o kernel OOM-killar o container (que inclui os ffmpeg de captura).
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-0}
+```
+
+`GOMEMLIMIT=0` não é aceito pelo runtime — o Go trata string vazia como "sem limite", então o default correto é **omitir**. Use este formato condicional em vez do acima:
+
+```yaml
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-off}
+```
+
+`off` é o valor explícito do runtime Go para "sem limite" (default). Em prod, o Dereck seta `API_GOMEMLIMIT=6GiB` no `.env` da VM.
+
+- [ ] **Step 3: Build linux**
+
+```bash
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+Expected: sucesso.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/cmd/api/main.go infra/docker/docker-compose.yml
+git commit -m "perf(api): ReadHeaderTimeout/IdleTimeout no http.Server + GOMEMLIMIT via env"
+```
+
+---
+
+### Task 3: Pool de conexões configurável por env (20 → 40 em prod)
+
+**Files:**
+- Modify: `workers/internal/db/postgres.go:17-18`
+- Modify: `infra/docker/docker-compose.yml` (env do `api`)
+
+- [ ] **Step 1: Ler `DB_MAX_CONNS` no db.New**
+
+Em `workers/internal/db/postgres.go`, trocar:
+
+```go
+	cfg.MaxConns = 20
+	cfg.MinConns = 2
+```
+
+por:
+
+```go
+	// DB_MAX_CONNS: teto do pool compartilhado (API + reqmetrics + webhook +
+	// jobs). Default 20 (comportamento histórico); prod usa 40 — dimensionado
+	// contra max_connections=100 do Postgres, deixando folga p/ psql/backup.
+	maxConns := int32(20)
+	if v := os.Getenv("DB_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 90 {
+			maxConns = int32(n)
+		}
+	}
+	cfg.MaxConns = maxConns
+	cfg.MinConns = 2
+```
+
+Adicionar `"os"` e `"strconv"` aos imports do arquivo.
+
+- [ ] **Step 2: Env no compose**
+
+No service `api` do `infra/docker/docker-compose.yml`:
+
+```yaml
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-20}
+```
+
+Prod `.env` (Dereck): `DB_MAX_CONNS=40`.
+
+- [ ] **Step 3: Build + testes**
+
+```bash
+cd workers && go build ./... && go test ./internal/db/...
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/db/postgres.go infra/docker/docker-compose.yml
+git commit -m "perf(db): pool MaxConns configuravel via DB_MAX_CONNS (prod: 40)"
+```
+
+---
+
+### Task 4: Tuning do Postgres via compose (parametrizado por env)
+
+**Files:**
+- Modify: `infra/docker/docker-compose.yml:2-27` (service `postgres`)
+
+Contexto: o container `postgres:16-alpine` roda 100% nos defaults (`shared_buffers=128MB`, `work_mem=4MB`, `random_page_cost=4.0`) numa VM de 16GB com SSD dedicado. O snippet `infra/postgres/postgresql.conf.snippet` só cobre WAL e aponta para um path que não existe no container.
+
+- [ ] **Step 1: Adicionar `command` parametrizado ao service postgres**
+
+Logo após `image: postgres:16-alpine`, adicionar:
+
+```yaml
+    # Tuning parametrizado por env — defaults = valores de fábrica do PG 16
+    # (no-op em dev). Prod seta no .env da VM (ver docs/operations/deploy.md):
+    #   PG_SHARED_BUFFERS=3GB  PG_EFFECTIVE_CACHE_SIZE=8GB  PG_WORK_MEM=32MB
+    #   PG_MAINTENANCE_WORK_MEM=512MB  PG_MAX_WAL_SIZE=4GB
+    # random_page_cost=1.1 é default aqui MESMO em dev: todo ambiente roda SSD,
+    # e 4.0 (default do PG) faz o planner fugir de index scan.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - checkpoint_completion_target=0.9
+```
+
+- [ ] **Step 2: Validar em dev**
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d --force-recreate --no-deps postgres
+docker compose -f infra/docker/docker-compose.yml exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB -At -c "SHOW random_page_cost; SHOW shared_buffers;"
+```
+
+Expected: `1.1` e `128MB` (defaults dev). **Atenção**: `--no-deps` obrigatório (regra 4.1).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add infra/docker/docker-compose.yml
+git commit -m "perf(postgres): tuning parametrizado por env no compose (shared_buffers, work_mem, random_page_cost=1.1)"
+```
+
+- [ ] **Step 4: [PROD/Dereck] Runbook de aplicação**
+
+Escrever no PR/mensagem pro Dereck (não executar):
+
+```bash
+# 1. Backup manual antes (regra 4.5):
+docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env exec backup sh /backup.sh
+
+# 2. Adicionar ao infra/docker/.env da VM:
+#    PG_SHARED_BUFFERS=3GB
+#    PG_EFFECTIVE_CACHE_SIZE=8GB
+#    PG_WORK_MEM=32MB
+#    PG_MAINTENANCE_WORK_MEM=512MB
+#    PG_MAX_WAL_SIZE=4GB
+#    DB_MAX_CONNS=40
+#    API_GOMEMLIMIT=6GiB
+
+# 3. Recreate SÓ do postgres (janela de ~10s de indisponibilidade do banco;
+#    fazer em horário de baixa — os workers reconectam sozinhos):
+docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env up -d --force-recreate --no-deps postgres
+
+# 4. Conferir:
+docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SHOW shared_buffers; SHOW effective_cache_size; SHOW work_mem; SHOW random_page_cost;"
+# esperado: 3GB / 8GB / 32MB / 1.1
+```
+
+---
+
+### Task 5: Reservas de memória no compose (proteger o Postgres do OOM killer)
+
+**Files:**
+- Modify: `infra/docker/docker-compose.yml` (services `postgres` e `minio`)
+
+**Decisão consciente:** NÃO colocar `mem_limit` no service `api` — ele contém os ffmpeg de captura (core intocável); um hard limit poderia OOM-killar a captura. A proteção do lado do api é o `GOMEMLIMIT` (Task 2), soft.
+
+- [ ] **Step 1: Adicionar limites**
+
+No service `postgres`:
+
+```yaml
+    mem_reservation: ${PG_MEM_RESERVATION:-256m}
+    mem_limit: ${PG_MEM_LIMIT:-0}
+```
+
+`mem_limit: 0` = sem limite (default compose). Prod `.env`: `PG_MEM_RESERVATION=3g`, `PG_MEM_LIMIT=6g`.
+
+No service `minio`:
+
+```yaml
+    mem_limit: ${MINIO_MEM_LIMIT:-0}
+```
+
+Prod: `MINIO_MEM_LIMIT=1g`.
+
+- [ ] **Step 2: Validar que dev sobe normal**
+
+```bash
+docker compose -f infra/docker/docker-compose.yml config --quiet && echo OK
+```
+
+Expected: `OK` (sem erro de sintaxe).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add infra/docker/docker-compose.yml
+git commit -m "perf(infra): mem_reservation/limit parametrizados p/ postgres e minio (api fica sem hard limit de proposito)"
+```
+
+---
+
+### Task 6: Frontend — desligar refetchOnWindowFocus global + staleTime 30s
+
+**Files:**
+- Modify: `frontend/src/main.jsx:13-15`
+
+- [ ] **Step 1: Novo default do QueryClient**
+
+Trocar:
+
+```js
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
+})
+```
+
+por:
+
+```js
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      // Sem refetch em foco: cada volta de aba disparava TODAS as queries
+      // montadas >10s — rajada sincronizada contra a VM. As telas "ao vivo"
+      // já têm refetchInterval próprio; o resto aguenta 30s de stale.
+      refetchOnWindowFocus: false,
+    },
+  },
+})
+```
+
+- [ ] **Step 2: Build**
+
+```bash
+cd frontend && npm run build
+```
+
+Expected: build OK. (NÃO rodar `npm install` — regra 5.)
+
+- [ ] **Step 3: Smoke manual em dev**
+
+Abrir o app, navegar Dashboard → Campaigns → voltar, trocar de aba e voltar. Na aba Network: nenhuma rajada de refetch ao focar. Polls (`/workers` a cada 10s no dashboard admin) continuam rodando.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add frontend/src/main.jsx
+git commit -m "perf(frontend): refetchOnWindowFocus off + staleTime 30s no default global"
+```
+
+---
+
+# FASE 2 — Enxugar polling do frontend
+
+### Task 7: Unificar hook `/workers` (Dashboard × Operations) e alongar intervalos
+
+Hoje: `DashboardPage.jsx:692-699` (queryKey `['workers-overview']`, 10s) e `OperationsPage.jsx:157-162` (queryKey `['workers-status']`, 10s) batem o MESMO endpoint sem compartilhar cache.
+
+**Files:**
+- Modify: `frontend/src/api/hooks.js` (adicionar hook)
+- Modify: `frontend/src/pages/DashboardPage.jsx:680-699`
+- Modify: `frontend/src/pages/OperationsPage.jsx:156-162`
+
+- [ ] **Step 1: Hook compartilhado em hooks.js**
+
+Adicionar em `frontend/src/api/hooks.js` (junto dos hooks de stream health, ~linha 567):
+
+```js
+// Snapshot do supervisor (/workers). Compartilhado por Dashboard admin e
+// /operations — MESMA queryKey de propósito: com as duas telas abertas, uma
+// única chamada alimenta ambas. 20s é suficiente; o "ao vivo" percebido vem
+// do ticker de relógio local, não do poll.
+export function useWorkersStatus() {
+  return useQuery({
+    queryKey: ['workers'],
+    queryFn: () => api.get('/workers').then(r => r.data),
+    refetchInterval: 20_000,
+    retry: 1,
+  })
+}
+```
+
+- [ ] **Step 2: DashboardPage usa o hook compartilhado**
+
+Em `frontend/src/pages/DashboardPage.jsx`, remover a função inline `useWorkers()` (linhas 692-699) e ajustar `useSystemHealth` de 15s→30s:
+
+```js
+// Inline hook for /health — kept here (not in api/hooks.js) because only the
+// admin dashboard reads it.
+function useSystemHealth() {
+  return useQuery({
+    queryKey: ['system-health'],
+    queryFn: () => api.get('/health').then(r => r.data),
+    refetchInterval: 30_000,
+    retry: 1,
+  })
+}
+```
+
+No corpo do componente, trocar a chamada `useWorkers()` por `useWorkersStatus()` e adicionar o import:
+
+```js
+import { useWorkersStatus } from '../api/hooks'
+```
+
+(Verificar o import existente de hooks no topo do arquivo e mesclar.)
+
+- [ ] **Step 3: OperationsPage usa o hook compartilhado**
+
+Em `frontend/src/pages/OperationsPage.jsx:156-162`, trocar:
+
+```js
+  const workersQuery = useQuery({
+    queryKey: ['workers-status'],
+    queryFn: () => api.get('/workers').then(r => r.data),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
+  })
+```
+
+por:
+
+```js
+  const workersQuery = useWorkersStatus()
+```
+
+com o import ajustado no topo (o arquivo já importa de `../api/hooks` ou de `../api/client` — mesclar no import existente de hooks; se só importa `api`, adicionar `import { useWorkersStatus } from '../api/hooks'`).
+
+- [ ] **Step 4: Build + smoke**
+
+```bash
+cd frontend && npm run build
+```
+
+Smoke em dev: abrir /operations e o dashboard admin em duas abas; na aba Network confirmar que `/workers` é chamado 1× por ciclo de 20s (não 2×), e que ambas as telas renderizam workers.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/api/hooks.js frontend/src/pages/DashboardPage.jsx frontend/src/pages/OperationsPage.jsx
+git commit -m "perf(frontend): unifica poll /workers (queryKey unica, 20s) e /health 30s"
+```
+
+---
+
+### Task 8: Admin/Monitoring — alongar polls de 15s para 30s
+
+A tela mais cara em regime estável (~14 req/min).
+
+**Files:**
+- Modify: `frontend/src/pages/AdminMonitoringPage.jsx:262,272`
+
+- [ ] **Step 1: Ajustar os dois `refetchInterval: 15_000`**
+
+Na query principal (linha 262) e em `useActors` (linha 272), trocar `refetchInterval: 15_000` por `refetchInterval: 30_000`. As demais (30s blocked-ips, 20s journey) ficam como estão.
+
+- [ ] **Step 2: Build + commit**
+
+```bash
+cd frontend && npm run build
+git add frontend/src/pages/AdminMonitoringPage.jsx
+git commit -m "perf(frontend): admin/monitoring polls 15s -> 30s"
+```
+
+---
+
+### Task 9: Poll de materiais em análise — 3s → 5s
+
+**Files:**
+- Modify: `frontend/src/api/hooks.js:700-709` (função `useMaterials`)
+
+- [ ] **Step 1: Ajustar o intervalo condicional**
+
+Trocar `return pending ? 3000 : false` por `return pending ? 5000 : false` e atualizar o comentário de "every 3s" para "every 5s".
+
+- [ ] **Step 2: Build + commit**
+
+```bash
+cd frontend && npm run build
+git add frontend/src/api/hooks.js
+git commit -m "perf(frontend): poll de material em analise 3s -> 5s"
+```
+
+---
+
+# FASE 3 — `daily_play_summary` parametrizada + partition pruning
+
+**Leia antes:** `docs/architecture/detection-count-consistency.md`, `docs/operations/migrations.md` (§Testar migration contra dados de prod) e a memória `insights-consolidated-investido-shrinks-future-days` (Modelo B depende desta view). O objetivo é **plano de execução melhor com resultado byte-idêntico**.
+
+### Task 10: Migration 0052 — função `daily_play_summary_for(from, to, campaigns[])`
+
+**Files:**
+- Create: `migrations/0052_daily_play_summary_fn.up.sql`
+- Create: `migrations/0052_daily_play_summary_fn.down.sql`
+- Create: `scripts/sql/paridade-dps-function.sql`
+
+**Por que função e não a view:** o `FULL OUTER JOIN` final com `COALESCE` nas colunas de junção impede o planner de empurrar `WHERE campaign_id=… AND for_date=…` para dentro das CTEs — a view sempre materializa o histórico INTEIRO. A função injeta os filtros dentro das CTEs: `generate_series` fica limitado ao período, e o agregado de `detection_campaigns` ganha range sargável em `detected_at` (= partition pruning). A view original **continua existindo** (rollback trivial, consumidores migram um a um).
+
+- [ ] **Step 1: Escrever a migration up**
+
+`migrations/0052_daily_play_summary_fn.up.sql`:
+
+```sql
+-- daily_play_summary_for: versão parametrizada da view daily_play_summary
+-- (0041) com pushdown manual dos filtros. Semântica IDÊNTICA à view para o
+-- recorte (p_from..p_to, p_campaigns); p_campaigns NULL = todas as campanhas.
+-- A view segue existindo — os consumidores migram gradualmente.
+--
+-- Equivalência (validada por scripts/sql/paridade-dps-function.sql):
+--   SELECT * FROM daily_play_summary WHERE for_date BETWEEN f AND t
+--     [AND campaign_id = ANY(c)]
+-- ≡ SELECT * FROM daily_play_summary_for(f, t, c)
+--
+-- O bound em dc.detected_at/d.detected_at usa [meia-noite local de p_from,
+-- meia-noite local de p_to+1) — exatamente as linhas cujo dia local cai em
+-- [p_from, p_to], igual ao date_trunc da view, mas sargável (poda partições).
+
+CREATE FUNCTION daily_play_summary_for(p_from date, p_to date, p_campaigns uuid[] DEFAULT NULL)
+RETURNS TABLE (
+    campaign_id uuid, type_id uuid, station_id uuid, for_date date,
+    expected int, in_slot int, deficit int, bonus int, out_slot int, out_date int)
+LANGUAGE sql STABLE AS $$
+WITH expected AS (
+    SELECT
+        r.campaign_id,
+        r.type_id,
+        s.station_id,
+        d.for_date::date AS for_date,
+        SUM(r.plays_per_day)::int AS rule_expected
+    FROM distribution_rules r
+    CROSS JOIN LATERAL unnest(r.station_ids) AS s(station_id)
+    CROSS JOIN LATERAL generate_series(
+        GREATEST(r.start_date, p_from),
+        LEAST(r.end_date, p_to),
+        INTERVAL '1 day') AS d(for_date)
+    WHERE (p_campaigns IS NULL OR r.campaign_id = ANY(p_campaigns))
+      AND (1 << EXTRACT(DOW FROM d.for_date)::INT) & r.weekday_mask != 0
+    GROUP BY r.campaign_id, r.type_id, s.station_id, d.for_date
+),
+expected_with_override AS (
+    SELECT
+        COALESCE(o.campaign_id, e.campaign_id) AS campaign_id,
+        COALESCE(o.type_id,     e.type_id)     AS type_id,
+        COALESCE(o.station_id,  e.station_id)  AS station_id,
+        COALESCE(o.for_date,    e.for_date)    AS for_date,
+        COALESCE(o.plays_expected, e.rule_expected)::int AS expected
+    FROM expected e
+    FULL OUTER JOIN (
+        SELECT * FROM distribution_overrides ov
+        WHERE ov.for_date BETWEEN p_from AND p_to
+          AND (p_campaigns IS NULL OR ov.campaign_id = ANY(p_campaigns))
+    ) o
+        ON e.campaign_id = o.campaign_id
+       AND e.type_id     = o.type_id
+       AND e.station_id  = o.station_id
+       AND e.for_date    = o.for_date
+),
+actual AS (
+    SELECT
+        dc.campaign_id,
+        m.type_id,
+        d.station_id,
+        date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date AS for_date,
+        COUNT(*) FILTER (WHERE dc.category = 'in_slot')::int  AS in_slot,
+        COUNT(*) FILTER (WHERE dc.category = 'out_slot')::int AS out_slot,
+        COUNT(*) FILTER (WHERE dc.category = 'out_date')::int AS out_date,
+        COUNT(*) FILTER (WHERE dc.category = 'orphan')::int   AS orphan
+    FROM detection_campaigns dc
+    JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+    JOIN materials   m ON m.id = dc.commercial_id
+    WHERE (p_campaigns IS NULL OR dc.campaign_id = ANY(p_campaigns))
+      AND dc.detected_at >= (p_from::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND dc.detected_at <  ((p_to + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND d.detected_at  >= (p_from::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND d.detected_at  <  ((p_to + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND d.retracted_at IS NULL
+      AND d.ignored_at IS NULL
+      AND d.evidence_status <> 'audit_rejected'
+      AND m.type_id IS NOT NULL
+    GROUP BY dc.campaign_id, m.type_id, d.station_id,
+             date_trunc('day', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+)
+SELECT
+    COALESCE(e.campaign_id, a.campaign_id) AS campaign_id,
+    COALESCE(e.type_id,     a.type_id)     AS type_id,
+    COALESCE(e.station_id,  a.station_id)  AS station_id,
+    COALESCE(e.for_date,    a.for_date)    AS for_date,
+    COALESCE(e.expected, 0)::int AS expected,
+    COALESCE(a.in_slot,  0)::int AS in_slot,
+    GREATEST(0, COALESCE(e.expected,0) - COALESCE(a.in_slot,0) - COALESCE(a.out_slot,0))::int AS deficit,
+    (GREATEST(0, COALESCE(a.in_slot,0) - COALESCE(e.expected,0)) + COALESCE(a.orphan,0))::int AS bonus,
+    COALESCE(a.out_slot, 0)::int AS out_slot,
+    COALESCE(a.out_date, 0)::int AS out_date
+FROM expected_with_override e
+FULL OUTER JOIN actual a
+    ON e.campaign_id = a.campaign_id
+   AND e.type_id     = a.type_id
+   AND e.station_id  = a.station_id
+   AND e.for_date    = a.for_date
+$$;
+```
+
+- [ ] **Step 2: Migration down**
+
+`migrations/0052_daily_play_summary_fn.down.sql`:
+
+```sql
+DROP FUNCTION IF EXISTS daily_play_summary_for(date, date, uuid[]);
+```
+
+- [ ] **Step 3: Script de paridade**
+
+`scripts/sql/paridade-dps-function.sql`:
+
+```sql
+-- Paridade view × função. Rodar contra CLONE de dados de prod (regra 4.8;
+-- procedimento: docs/operations/migrations.md). Esperado: as duas queries
+-- retornam 0. Qualquer linha = divergência = NÃO MERGEAR.
+--
+-- Janela 1: últimos 60 dias, todas as campanhas (exercita p_campaigns NULL).
+WITH v AS (
+    SELECT campaign_id, type_id, station_id, for_date,
+           expected, in_slot, deficit, bonus, out_slot, out_date
+    FROM daily_play_summary
+    WHERE for_date BETWEEN CURRENT_DATE - 60 AND CURRENT_DATE
+), f AS (
+    SELECT * FROM daily_play_summary_for(CURRENT_DATE - 60, CURRENT_DATE, NULL)
+)
+SELECT 'view_minus_fn' AS lado, COUNT(*) FROM (SELECT * FROM v EXCEPT SELECT * FROM f) x
+UNION ALL
+SELECT 'fn_minus_view', COUNT(*) FROM (SELECT * FROM f EXCEPT SELECT * FROM v) y;
+
+-- Janela 2: 1 ano inteiro, por campanha (exercita GREATEST/LEAST nas bordas).
+WITH alvo AS (SELECT id FROM campaigns ORDER BY created_at DESC LIMIT 10),
+v AS (
+    SELECT campaign_id, type_id, station_id, for_date,
+           expected, in_slot, deficit, bonus, out_slot, out_date
+    FROM daily_play_summary
+    WHERE for_date BETWEEN CURRENT_DATE - 365 AND CURRENT_DATE + 90
+      AND campaign_id IN (SELECT id FROM alvo)
+), f AS (
+    SELECT * FROM daily_play_summary_for(CURRENT_DATE - 365, CURRENT_DATE + 90,
+                                         (SELECT array_agg(id) FROM alvo))
+)
+SELECT 'view_minus_fn' AS lado, COUNT(*) FROM (SELECT * FROM v EXCEPT SELECT * FROM f) x
+UNION ALL
+SELECT 'fn_minus_view', COUNT(*) FROM (SELECT * FROM f EXCEPT SELECT * FROM v) y;
+```
+
+- [ ] **Step 4: Testar a migration contra clone de prod (regra 4.8 — OBRIGATÓRIO)**
+
+Seguir `docs/operations/migrations.md` §Testar migration contra dados de prod: restaurar o dump num PG descartável, rodar `migrate up`, depois:
+
+```bash
+docker exec -i <pg-descartavel> psql -U postgres -d radiocheck -f - < scripts/sql/paridade-dps-function.sql
+```
+
+Expected: as 4 linhas de resultado com COUNT = **0**. Também comparar tempo: `EXPLAIN ANALYZE SELECT * FROM daily_play_summary_for(CURRENT_DATE-30, CURRENT_DATE, ARRAY['<uuid de campanha ativa>']::uuid[]);` deve mostrar partition pruning (partições fora do range ausentes do plano) e tempo ≪ que a view equivalente.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add migrations/0052_daily_play_summary_fn.up.sql migrations/0052_daily_play_summary_fn.down.sql scripts/sql/paridade-dps-function.sql
+git commit -m "perf(db): daily_play_summary_for() parametrizada (pushdown + partition pruning), paridade validada"
+```
+
+---
+
+### Task 11: Migrar `daily_summary.go` (grade /detections) para a função
+
+**Files:**
+- Modify: `workers/internal/catalog/daily_summary.go:54-64`
+- Test: `workers/internal/catalog/` (testes existentes do pacote)
+
+- [ ] **Step 1: Trocar o FROM**
+
+Em `ListByCampaign`, trocar a query por:
+
+```go
+	rows, err := ds.pool.Query(ctx, `
+		SELECT dps.campaign_id, dps.type_id, dps.station_id, dps.for_date,
+		       dps.expected, dps.in_slot, dps.deficit, dps.bonus, dps.out_slot, dps.out_date
+		FROM daily_play_summary_for($2::date, $3::date, ARRAY[$1]::uuid[]) dps
+		JOIN campaigns c ON c.id = dps.campaign_id
+		WHERE (c.status <> 'cancelada' OR c.cancelled_at IS NULL
+		       OR dps.for_date <= (c.cancelled_at AT TIME ZONE 'America/Sao_Paulo')::date)
+		ORDER BY dps.station_id, dps.type_id, dps.for_date`,
+		campaignID, from, to)
+```
+
+(O `WHERE dps.campaign_id = $1 AND dps.for_date BETWEEN $2 AND $3` da versão antiga vira parâmetro da função; o filtro de cancelamento permanece.) Atualizar o comentário do método: a função substitui a leitura da view (F-84 parcialmente endereçado).
+
+- [ ] **Step 2: Testes do pacote**
+
+```bash
+cd workers && go test ./internal/catalog/ -run DailySummary -v
+```
+
+Expected: PASS nos testes que rodam (flaky conhecido `TestBuildDailySummary_WithDowntime` antes de 13:00 UTC — checar se a falha é só ela). Testes de integração que precisam de DB: usar `rc-test-pg` (15432).
+
+- [ ] **Step 3: Smoke dev**
+
+Com stack dev + dados de simulação: abrir `/detections` (grade) e confirmar células idênticas a antes da mudança.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/catalog/daily_summary.go
+git commit -m "perf(catalog): grade /detections le daily_play_summary_for() (pushdown por campanha)"
+```
+
+---
+
+### Task 12: Migrar o sininho (`notifications.go`) para a função
+
+O sininho é polled a cada 60s **por cada admin logado** — hoje cada poll varre o histórico inteiro.
+
+**Files:**
+- Modify: `workers/internal/catalog/notifications.go:50-70` (List) e `:124` (MarkAllReadInWindow)
+
+- [ ] **Step 1: List**
+
+Trocar o `FROM daily_play_summary dps ... WHERE dps.for_date >= ... AND dps.for_date < CURRENT_DATE AND dps.deficit > 0` por:
+
+```go
+	rows, err := n.pool.Query(ctx, `
+SELECT
+    'campaign_failure:' || c.id::text || ':' || dps.for_date::text AS key,
+    c.id, c.name,
+    cl.id, COALESCE(cl.name, '—'), COALESCE(cl.logo_url, ''),
+    dps.for_date,
+    nr.read_at
+FROM daily_play_summary_for((CURRENT_DATE - INTERVAL '7 days')::date,
+                            (CURRENT_DATE - INTERVAL '1 day')::date, NULL) dps
+JOIN campaigns c ON c.id = dps.campaign_id
+LEFT JOIN clients cl ON cl.id = c.client_id
+LEFT JOIN notification_reads nr
+    ON nr.user_id = $1
+   AND nr.notification_key =
+       'campaign_failure:' || c.id::text || ':' || dps.for_date::text
+WHERE dps.deficit > 0
+  AND c.status != 'cancelada'
+GROUP BY c.id, c.name, cl.id, cl.name, cl.logo_url, dps.for_date, nr.read_at
+ORDER BY dps.for_date DESC, c.name ASC
+LIMIT 50`, userID)
+```
+
+(A janela `[hoje-7d, ontem]` sai do WHERE e vira parâmetro da função — semanticamente idêntico: `for_date >= CURRENT_DATE-7 AND for_date < CURRENT_DATE` ≡ `BETWEEN CURRENT_DATE-7 AND CURRENT_DATE-1` para datas.)
+
+- [ ] **Step 2: MarkAllReadInWindow**
+
+Ler `notifications.go:100-160` e aplicar a MESMA substituição de `FROM daily_play_summary` pela função com a MESMA janela `[CURRENT_DATE-7, CURRENT_DATE-1]`, preservando o resto da query intacto.
+
+- [ ] **Step 3: Testes + smoke**
+
+```bash
+cd workers && go test ./internal/catalog/ -run Notification -v
+```
+
+Smoke dev: sininho abre, itens idênticos, marcar-todas-lidas funciona.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/catalog/notifications.go
+git commit -m "perf(catalog): sininho le daily_play_summary_for() (janela 7d, era full-scan por poll)"
+```
+
+---
+
+### Task 13: Migrar os demais consumidores da view (insights, financials, failures)
+
+**Files (um commit por arquivo, nesta ordem):**
+- Modify: `workers/internal/catalog/campaigns.go` (`FinancialsByCampaign`, ~linha 484)
+- Modify: `workers/internal/catalog/insights.go` (call-sites ~linhas 270, 429, 521-544, 682-701)
+- Modify: `workers/internal/catalog/campaign_failures.go` (~linhas 182, 224, 276, 378, 432, 510)
+- Modify: `workers/internal/catalog/station_failures.go` (~linha 142)
+- Modify: `workers/internal/catalog/distribution_overrides.go` (se referenciar a view)
+
+**Regra de transformação (aplicar em cada call-site):**
+
+1. Localize `FROM daily_play_summary` (grep no arquivo).
+2. Identifique no SQL circundante os filtros de data e campanha já aplicados (`for_date BETWEEN/=/>= …`, `campaign_id = / IN / = ANY …`).
+3. Substitua por `FROM daily_play_summary_for(<from>, <to>, <campanhas|NULL>) dps`, onde:
+   - `<from>/<to>` = os MESMOS bounds de data que o WHERE externo aplica (se o WHERE usa `for_date = $X`, passe `$X, $X`); **não invente bounds novos** — se um call-site não tem bound de data (ex.: um total "desde o início"), use o range da campanha (`c.start_date`/`c.end_date`) se disponível no escopo da query, senão NÃO migre esse call-site e anote no commit.
+   - `<campanhas>` = o array de campanhas do escopo quando a query já o tem (ex.: `(SELECT array_agg(id) FROM scoped)`), senão `NULL`.
+4. O WHERE externo original PODE permanecer (filtros redundantes são inofensivos e protegem a semântica).
+5. NÃO altere nenhuma expressão de agregação, COALESCE, ou junção fora do FROM.
+
+- [ ] **Step 1: Migrar `campaigns.go` FinancialsByCampaign** — commit `perf(catalog): financials le daily_play_summary_for()`
+- [ ] **Step 2: Migrar `insights.go`** (todos os call-sites; o range `from/to` do request já existe como parâmetro em cada query) — commit `perf(catalog): insights le daily_play_summary_for()`
+
+  **Gate específico do Modelo B:** antes do commit, rodar em dev com dados de simulação e comparar o JSON de `/insights` byte a byte (mesma campanha, mesmo período, modo consolidated E per_insertion) entre master e a branch:
+  ```bash
+  curl -s "http://localhost:8080/v1/internal/insights?campaigns=<id>&from=<f>&to=<t>" -H "Authorization: Bearer $TOK" > depois.json
+  git stash && (rebuild api) && curl -s ... > antes.json && git stash pop
+  diff antes.json depois.json   # esperado: vazio
+  ```
+- [ ] **Step 3: Migrar `campaign_failures.go` e `station_failures.go`** (os call-sites de data única passam `(dia, dia)`) — commit `perf(catalog): failures leem daily_play_summary_for()`
+- [ ] **Step 4: `go test ./internal/catalog/...` completo + build linux**
+
+```bash
+cd workers && go test ./internal/catalog/... && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+---
+
+### Task 14: Predicados sargáveis no recategorizador (partition pruning)
+
+`recategorizeScope` roda a cada create/edit/delete de regra e override — hoje varre TODAS as partições por causa do `date_trunc(... AT TIME ZONE ...)` sobre a partition key.
+
+**Files:**
+- Modify: `workers/internal/catalog/distribution_rules.go:388-401`
+
+- [ ] **Step 1: Trocar o filtro de data do scope**
+
+Em `recategorizeScope`, trocar:
+
+```sql
+      AND (date_trunc('day', dc.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+           BETWEEN $4::date AND $5::date)
+```
+
+por:
+
+```sql
+      -- range sargável na partition key: [meia-noite local de $4, meia-noite
+      -- local de $5+1) ≡ dia-local BETWEEN $4 AND $5, mas com partition pruning
+      AND dc.detected_at >= ($4::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND dc.detected_at <  (($5::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+```
+
+- [ ] **Step 2: Teste de paridade Go**
+
+O pacote tem testes de recategorização (o branch carveout adicionou teste de paridade Go×SQL). Rodar:
+
+```bash
+cd workers && go test ./internal/catalog/ -run 'Recat|Categoriz' -v
+```
+
+Expected: PASS (mesmos resultados — o conjunto de linhas selecionado é matematicamente idêntico).
+
+- [ ] **Step 3: Validar pruning num EXPLAIN (dev ou clone)**
+
+```sql
+EXPLAIN SELECT count(*) FROM detection_campaigns dc
+WHERE dc.campaign_id = '<uuid>'
+  AND dc.detected_at >= ('2026-07-01'::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+  AND dc.detected_at <  ('2026-07-08'::date::timestamp AT TIME ZONE 'America/Sao_Paulo');
+```
+
+Expected: só as partições `detection_campaigns_2026_07` (e vizinha, se o range cruzar) aparecem no plano.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/catalog/distribution_rules.go
+git commit -m "perf(recat): filtro de data sargavel em recategorizeScope (partition pruning)"
+```
+
+---
+
+### Task 15: Predicados sargáveis nos KPIs do /management
+
+**Files:**
+- Modify: `workers/internal/catalog/management_overview.go:142-156`
+
+- [ ] **Step 1: airings_total**
+
+Trocar:
+
+```sql
+           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $4::date AND $5::date
+```
+
+por:
+
+```sql
+           AND d.detected_at >= ($4::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+           AND d.detected_at <  (($5::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+```
+
+- [ ] **Step 2: airings_today**
+
+Trocar:
+
+```sql
+           AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date
+               = (now() AT TIME ZONE 'America/Sao_Paulo')::date
+```
+
+por:
+
+```sql
+           AND d.detected_at >= (((now() AT TIME ZONE 'America/Sao_Paulo')::date)::timestamp
+                                  AT TIME ZONE 'America/Sao_Paulo')
+```
+
+(Sem bound superior: não existem detecções futuras; o EXISTS e o resto ficam intactos — reescrever o EXISTS como JOIN mudaria a contagem sob fan-out F-119.)
+
+- [ ] **Step 3: Testes + smoke + commit**
+
+```bash
+cd workers && go test ./internal/catalog/ -run Management -v
+```
+
+Smoke dev: `/management` mostra os mesmos KPIs de antes.
+
+```bash
+git add workers/internal/catalog/management_overview.go
+git commit -m "perf(management): KPIs com range sargavel em detected_at (partition pruning)"
+```
+
+---
+
+# FASE 4 — Arquitetural
+
+### Task 16: Streaming da evidência (tirar `io.ReadAll` do caminho de download)
+
+**Files:**
+- Modify: `workers/internal/api/handlers/detections.go:280-298` (Evidence)
+- Modify: `workers/internal/api/handlers/detections_manual_batch.go:299-336` (Proof — mesmo padrão)
+- Modify: `workers/internal/api/handlers/suggestions.go:453-507` (ProxyAttachment — mesmo padrão)
+
+**Trade-off documentado:** perde-se `Accept-Ranges` (seek nativo do player). Clips têm poucos MB — o browser baixa inteiro e faz seek client-side. Em troca, zero buffering de heap por request e TTFB imediato.
+
+- [ ] **Step 1: Evidence handler**
+
+Em `detections.go`, trocar o trecho:
+
+```go
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	if ct == "" {
+		ct = "audio/mp4"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, id.String()+".m4a", time.Time{}, bytes.NewReader(data))
+```
+
+por:
+
+```go
+	defer body.Close()
+	if ct == "" {
+		ct = "audio/mp4"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+id.String()+".m4a\"")
+	// Streaming direto S3→cliente: sem io.ReadAll (cada download bufferizava o
+	// clip inteiro no heap do processo que também roda os ffmpeg). Trade-off:
+	// sem Accept-Ranges — clips têm poucos MB, o player faz seek client-side.
+	if _, err := io.Copy(w, body); err != nil {
+		return // cliente desconectou no meio; nada útil a fazer
+	}
+```
+
+Remover os imports que ficarem órfãos (`bytes`; `time` só se não usado em mais nada no arquivo — verificar com `go build`).
+
+- [ ] **Step 2: Repetir o padrão em Proof e ProxyAttachment**
+
+Ler os dois handlers e aplicar a mesma substituição `ReadAll+ServeContent → header+io.Copy`, preservando Content-Type/Disposition de cada um.
+
+- [ ] **Step 3: Build + smoke**
+
+```bash
+cd workers && go build ./... && CGO_ENABLED=0 GOOS=linux go build ./...
+```
+
+Smoke dev: abrir uma detecção com evidência e tocar o áudio no player do modal; baixar um comprovante PDF; abrir um anexo de sugestão.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add workers/internal/api/handlers/detections.go workers/internal/api/handlers/detections_manual_batch.go workers/internal/api/handlers/suggestions.go
+git commit -m "perf(api): evidencia/proof/anexos em streaming (io.Copy) em vez de ReadAll no heap"
+```
+
+---
+
+### Task 17: Retenção de `stream_health_events` (drop de partições antigas)
+
+**Files:**
+- Create: `migrations/0053_partition_retention.up.sql`
+- Create: `migrations/0053_partition_retention.down.sql`
+- Modify: `workers/cmd/api/main.go` (job diário que já chama `ensure_month_partitions`)
+
+- [ ] **Step 1: Migration com a função de drop**
+
+`migrations/0053_partition_retention.up.sql`:
+
+```sql
+-- Retenção de partições de stream_health_events (auditoria 2026-07-17):
+-- as partições são criadas pela ensure_month_partitions (0048) mas nunca
+-- dropadas — telemetria de health cresce para sempre. drop_old_health_partitions
+-- remove partições cujo mês terminou há mais de retention_months.
+-- SÓ stream_health_events: detections/detection_campaigns são dado de negócio
+-- (veiculações) e NUNCA entram aqui.
+
+CREATE OR REPLACE FUNCTION drop_old_health_partitions(retention_months int DEFAULT 6)
+RETURNS int
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    cutoff  date := date_trunc('month', CURRENT_DATE)::date
+                    - (retention_months || ' months')::interval;
+    part    record;
+    dropped int := 0;
+BEGIN
+    FOR part IN
+        SELECT c.relname
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_class p ON p.oid = i.inhparent
+        WHERE p.relname = 'stream_health_events'
+          -- nome no formato stream_health_YYYY_MM (ver 0048)
+          AND c.relname ~ '^stream_health_[0-9]{4}_[0-9]{2}$'
+          AND to_date(right(c.relname, 7), 'YYYY_MM') < cutoff
+    LOOP
+        EXECUTE format('DROP TABLE %I', part.relname);
+        dropped := dropped + 1;
+    END LOOP;
+    RETURN dropped;
+END;
+$$;
+```
+
+`migrations/0053_partition_retention.down.sql`:
+
+```sql
+DROP FUNCTION IF EXISTS drop_old_health_partitions(int);
+```
+
+- [ ] **Step 2: Chamar no job diário existente**
+
+Em `workers/cmd/api/main.go`, localizar o job de partition maintenance (grep por `ensure_month_partitions`, ~linha 146-165). No mesmo ponto onde executa `SELECT ensure_month_partitions(...)`, adicionar logo após:
+
+```go
+	var dropped int
+	if err := pool.QueryRow(ctx, `SELECT drop_old_health_partitions(6)`).Scan(&dropped); err != nil {
+		logger.Warn("drop_old_health_partitions failed", zap.Error(err))
+	} else if dropped > 0 {
+		logger.Info("dropped old stream_health partitions", zap.Int("count", dropped))
+	}
+```
+
+(Adaptar `pool`/`logger`/`ctx` aos identificadores reais do escopo do job — ler o bloco antes de editar.)
+
+- [ ] **Step 3: Testar contra clone de prod (regra 4.8)**
+
+DROP TABLE é destrutivo: no clone, rodar a migration, executar `SELECT drop_old_health_partitions(6);` e conferir que SÓ partições `stream_health_*` mais velhas que 6 meses sumiram:
+
+```sql
+SELECT relname FROM pg_class WHERE relname LIKE 'stream_health_%' ORDER BY 1;
+```
+
+- [ ] **Step 4: Build + commit**
+
+```bash
+cd workers && CGO_ENABLED=0 GOOS=linux go build ./...
+git add migrations/0053_partition_retention.up.sql migrations/0053_partition_retention.down.sql workers/cmd/api/main.go
+git commit -m "perf(db): retencao de 6 meses p/ stream_health_events (drop de particao no job diario)"
+```
+
+---
+
+### Task 18: [PROD/Dereck] Presign público — evidência sai do processo Go
+
+**Sem código neste repo além de config.** A infra já suporta: `storage/s3.go` presigna com `S3_PUBLIC_ENDPOINT`; o valor em prod é `http://localhost:9000` (inalcançável do browser), por isso o frontend usa os proxies. Runbook para o Dereck:
+
+- [ ] **Step 1:** Criar rota no Cloudflare Tunnel da VM: `evidence.<dominio> → http://minio:9000` (mesmo tunnel da API, hostname adicional no config do cloudflared).
+- [ ] **Step 2:** No `.env` da VM: `S3_PUBLIC_ENDPOINT=https://evidence.<dominio>`.
+- [ ] **Step 3:** Recreate do api (`up -d --force-recreate --no-deps api` — regra 4.1) e testar: abrir uma detecção no frontend, endpoint `/detections/{id}/evidence-url` (presigned) deve devolver URL `https://evidence.<dominio>/...` que toca no browser.
+- [ ] **Step 4:** Depois de validado, abrir follow-up para o frontend trocar os componentes que usam o proxy (`/detections/{id}/evidence`) pela presigned URL — aí sim o download some do processo Go. (Fora deste plano; criar em `docs/roadmap/follow-ups-fase2.md`.)
+
+---
+
+## Backlog explícito (fora deste plano — não fazer agora)
+
+Anotar em `docs/roadmap/follow-ups-fase2.md` ao concluir as fases:
+
+1. **Métricas de saturação**: expor `pgxpool.Stat()` e histograma HTTP por rota no Prometheus (hoje a saturação do pool é invisível). Pré-requisito para tunar `DB_MAX_CONNS` além de 40.
+2. **Cache RAM (padrão BlockList)** para `/material-types`, `/campaigns/financials` e `/admin/notifications` (TTL 30-60s) — ou decidir usar o Redis ocioso; se não, remover o Redis do compose.
+3. **Particionar `system_metrics`/`web_vitals`** por `ts` + retenção por DROP (hoje: DELETE + 5 índices = bloat).
+4. **Jobs ancorados no relógio** (calibração/partition maintenance rodam "N horas após o deploy" — podem cair no pico; ancorar em 02:00-04:00 BR como o tiering já faz).
+5. **Paralelizar `insights.Compute` com errgroup** (5-6 queries hoje sequenciais) + cache de resposta 60s.
+6. **Keyset pagination + índice trigram** em `/detections` quando o volume justificar.
+7. **Code-splitting por rota no frontend** (`React.lazy` — recharts/d3-geo/html2canvas fora do bundle do /login). Afeta UX, não a VM.
+8. **Endpoint agregado `/admin/monitoring/overview`** (1 request em vez de 4 polls).
+
+## Checklist final antes de cada push pra master (regra 6)
+
+- [ ] `cd workers && CGO_ENABLED=0 GOOS=linux go build ./...` — TODOS os cmd/*
+- [ ] `cd workers && go test ./...` — distinguir flaky conhecido (catalog before 13:00 UTC) de regressão
+- [ ] Se tocou migration: testada contra clone de prod (o shadow test do deploy é a última linha de defesa, não a primeira)
+- [ ] Se tocou `frontend/package*.json`: NÃO tocou (nenhuma task deste plano mexe em deps)
+- [ ] `git show master:frontend/package-lock.json | grep -c emnapi` vs local — só se o lockfile aparecer no diff (não deve)
+- [ ] API sobe local: `go run ./cmd/api` sem panic de métrica duplicada/nil map
