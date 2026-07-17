@@ -476,6 +476,30 @@ git add frontend/src/main.jsx
 git commit -m "perf(frontend): refetchOnWindowFocus off + staleTime 30s no default global"
 ```
 
+> **Trade-off aceito conscientemente (decidido no review, 2026-07-17):** o cache do
+> react-query é **por aba** (não há BroadcastChannel/SSE/WebSocket sincronizando abas —
+> verificado). Com `refetchOnWindowFocus: false`, o cenário "operador sobe um material
+> na aba A → volta pra aba B com o wizard aberto → o material novo não aparece" deixa
+> de se auto-corrigir no foco. **Decisão: aceitar, não adicionar botão de refresh.**
+> Razões: (a) o caminho primário é subir material *dentro* do wizard, via
+> `useUploadMaterial`, que invalida o cache na mesma aba e segue funcionando idêntico;
+> (b) cross-tab é caso de borda e se cura no remount do componente; (c) o ganho
+> (−20 a −40% do tráfego real) é desproporcional ao custo. Se aparecer reclamação real
+> de operador, a saída é um refresh manual no `MaterialsStep` — não religar o global.
+>
+> **Verificado no source do react-query v5** (`queryObserver.js`, `updateRefetchInterval_fn`):
+> `refetchInterval` dispara **independente** de `staleTime` — o timer do interval chama
+> `executeFetch` incondicionalmente, e `staleTime` só governa `refetchOnMount`/
+> `refetchOnWindowFocus`/`refetchOnReconnect`. Ou seja: subir `staleTime` pra 30s **não**
+> desacelera nenhum poll de tela ao vivo (`/workers` 10s segue 10s). A premissa do plano
+> se sustenta — isso foi conferido no código, não assumido.
+
+**Débito menor registrado:** `frontend/src/api/hooks.js:166,188,202,1079` ainda setam
+`refetchOnWindowFocus: false` por-query — agora redundante com o default global. Inofensivo,
+mas lê como se essas 4 queries fossem especiais quando não são. Limpar num commit separado
+(fora do escopo desta task). Os `staleTime` de 60s/5min dessas mesmas queries **continuam
+válidos** e devem ficar.
+
 ---
 
 # FASE 2 — Enxugar polling do frontend
