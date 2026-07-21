@@ -110,6 +110,16 @@ function ApiKeyIcon() {
   )
 }
 
+function TargetPmmIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="7" cy="7" r="5.4" />
+      <circle cx="7" cy="7" r="2.9" />
+      <circle cx="7" cy="7" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 function DeliveriesIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -667,6 +677,14 @@ export default function ClientsPage() {
                     to={`/clients/${c.id}/api-keys`}
                   >
                     <ApiKeyIcon />
+                  </Link>
+                  <Link
+                    className="btn-icon btn-secondary"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                    title="PMM no target"
+                    to={`/clients/${c.id}/target-pmm`}
+                  >
+                    <TargetPmmIcon />
                   </Link>
                   <button
                     className="btn-icon btn-secondary"
