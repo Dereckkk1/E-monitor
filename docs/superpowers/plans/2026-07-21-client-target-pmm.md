@@ -1037,7 +1037,11 @@ Em `detections.go:670`, logo abaixo de `StationPMM`:
 	StationPMM          *float64   `json:"station_pmm,omitempty"`
 	// StationPMMTarget é o PMM no target do CLIENTE DONO da campanha desta
 	// atribuição, resolvido por (cmp.client_id × station_id). nil = sem cadastro.
-	StationPMMTarget    *int       `json:"station_pmm_target,omitempty"`
+	//
+	// SEM `omitempty`, de propósito: o frontend precisa receber `null` explícito
+	// para distinguir "não cadastrado" de "target zero". Mesma convenção do
+	// TargetPMMRow.PMMTarget em catalog/client_station_pmm.go.
+	StationPMMTarget    *int       `json:"station_pmm_target"`
 ```
 
 - [ ] **Step 2: Alterar o `ListPaged`**
