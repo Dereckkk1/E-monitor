@@ -997,12 +997,20 @@ function CampaignFinancials({ financials, loading }) {
   // Sem pricing cadastrado: nada a mostrar (o slot colapsa após o load).
   if (!financials || !(financials.total_invested > 0)) return null
 
-  const { total_invested: inv, total_insertions: ins, total_audience: aud, fixed_cpm: fixed } = financials
+  const {
+    total_invested: inv, total_insertions: ins, total_audience: aud,
+    total_audience_target: audTarget, stations_with_target: withTarget,
+    fixed_cpm: fixed,
+  } = financials
   // CPM fixo (quando setado na campanha) sobrescreve o cálculo dinâmico, pra
   // refletir o número comercial pré-acordado em vez do derivado de pricing.
   const dynamicCPM = aud > 0 ? (inv / aud) * 1000 : null
   const cpm = fixed != null ? fixed : dynamicCPM
   const isFixed = fixed != null
+  // CPM no target é SEMPRE dinâmico — o CPM fixo é contratado sobre a audiência
+  // total, não sobre o recorte de público-alvo.
+  const hasTarget = (withTarget ?? 0) > 0 && audTarget > 0
+  const cpmTarget = hasTarget ? (inv / audTarget) * 1000 : null
   const cpmTip = isFixed
     ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. Investimento ${_BRL_CAMPAIGN_LIST.format(inv)} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
     : cpm != null
@@ -1021,6 +1029,21 @@ function CampaignFinancials({ financials, loading }) {
         {cpm != null ? _BRL_CAMPAIGN_LIST.format(cpm) : '—'}
         {isFixed && <span className="campaign-fin-tag">fixo</span>}
       </span>
+      {hasTarget && (
+        <span className="campaign-fin-sub"
+              title={`CPM no target: ${_BRL_CAMPAIGN_LIST.format(cpmTarget)} — sempre dinâmico (investimento ÷ impactos no target × 1000).`}>
+          <span className="campaign-fin-sub-label">CPM no target</span> {_BRL_CAMPAIGN_LIST.format(cpmTarget)}
+        </span>
+      )}
+      <span className="campaign-fin-sub" title={`${Math.round(aud).toLocaleString('pt-BR')} impressões`}>
+        <span className="campaign-fin-sub-label">Impactos</span> {Math.round(aud).toLocaleString('pt-BR')}
+      </span>
+      {hasTarget && (
+        <span className="campaign-fin-sub"
+              title={`${Math.round(audTarget).toLocaleString('pt-BR')} impactos no target · ${withTarget} emissoras com target cadastrado`}>
+          <span className="campaign-fin-sub-label">Impactos no target</span> {Math.round(audTarget).toLocaleString('pt-BR')}
+        </span>
+      )}
       <span className="campaign-fin-sub" title={`Investimento total: ${_BRL_CAMPAIGN_LIST.format(inv)}`}>
         <span className="campaign-fin-sub-label">Investimento</span> {_BRL_CAMPAIGN_LIST.format(inv)}
       </span>
@@ -1028,14 +1051,20 @@ function CampaignFinancials({ financials, loading }) {
   )
 }
 
-// Placeholder de mesma pegada visual do bloco financeiro carregado: três
-// barras (rótulo / valor / CPM) alinhadas à direita, ocupando a mesma caixa
-// pra que a transição loading → carregado não empurre nem pisque o layout.
+// Placeholder de mesma pegada visual do bloco financeiro carregado. Cobre o
+// caso comum (sem target cadastrado: rótulo / valor / Impactos / Investimento
+// — 4 barras) em vez do teto de 6 linhas que o bloco pode chegar a ter com
+// target cadastrado; a maioria das campanhas ainda não tem target, então
+// dimensionar pro teto reservaria espaço demais no caso comum e o "shift pra
+// baixo" apareceria de qualquer forma quando o dado real (mais compacto)
+// chegasse. Evita o pop pra quem não usa a feature; quem usa ainda vê um
+// pequeno crescimento da caixa ao carregar — aceitável, não é o caso comum.
 function CampaignFinancialsSkeleton() {
   return (
     <div className="campaign-fin campaign-fin--skeleton" aria-hidden="true">
       <div className="skeleton" style={{ width: 58, height: 8, borderRadius: 3 }} />
       <div className="skeleton" style={{ width: 88, height: 15, borderRadius: 4 }} />
+      <div className="skeleton" style={{ width: 70, height: 10, borderRadius: 3 }} />
       <div className="skeleton" style={{ width: 60, height: 10, borderRadius: 3 }} />
     </div>
   )
