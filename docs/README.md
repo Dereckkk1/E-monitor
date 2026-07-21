@@ -86,6 +86,7 @@ docs/
 | [station-audience-age-ranges.md](features/station-audience-age-ranges.md) | Faixa etária da emissora vira 3 percentuais (18-24/25-49/50+); texto antigo preservado em `ageRangeLegado` |
 | [geocoding-emissoras.md](features/geocoding-emissoras.md) | lat/long de emissoras por cidade+UF (dataset IBGE embutido + backfill); geocode no Create/Update |
 | [material-specific-distribution-rules.md](features/material-specific-distribution-rules.md) | Escopagem de regras de distribuição a materiais específicos (carve-out via `material_ids[]`) — sobrescreve regras gerais do tipo |
+| [client-target-pmm.md](features/client-target-pmm.md) | PMM no target por (cliente, emissora) (migration 0054) — impactos e CPM no target em /insights, /detections, /campaigns e relatórios; ausência de linha ≠ `0`; cadastro em `/clients/:id/target-pmm` com colagem de planilha |
 
 ## `operations/` — operar o sistema em prod
 

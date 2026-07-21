@@ -404,6 +404,7 @@ docs/
 | Tela de login (`/login`) — hero cinematográfico, layout split, fluxo de auth | [docs/features/login-page.md](docs/features/login-page.md) |
 | Relatórios de campanha (CSV consolidado/detalhado, PDF com logo E-monitor) | [docs/features/campaign-reports.md](docs/features/campaign-reports.md) |
 | Dashboard de veiculação (`/insights`, admin + cliente, KPIs + 4 charts + export PNG/PDF) | [docs/features/insights-dashboard.md](docs/features/insights-dashboard.md) |
+| **Impactos / PMM em qualquer tela ou relatório** (`/insights`, `/detections`, `/campaigns`, `/reports/airtime`, CSV/PDF) — PMM no target por (cliente, emissora) | [docs/features/client-target-pmm.md](docs/features/client-target-pmm.md) — resolução canônica `client_station_pmm[campanha.client_id, station_id]`; **ausência de linha ≠ `pmm_target = 0`** (sem linha fica fora do total e do contador; zero conta e soma nada); CPM no target é SEMPRE dinâmico, mesmo com `fixed_cpm`; cada tela espelha a própria base de contagem — não tente reconciliar entre telas |
 | Mapa ao Vivo (`/live-map`, admin + cliente — emissoras monitoradas pulsando no mapa do Brasil + feed de veiculações em tempo real) | [docs/features/live-map.md](docs/features/live-map.md) |
 | Dívida técnica Fase 2 (F-01..F-121) | [docs/roadmap/follow-ups-fase2.md](docs/roadmap/follow-ups-fase2.md) |
 | Avaliação E2E do matcher (recomendações 4.x) | [docs/roadmap/detection-evaluation-report.md](docs/roadmap/detection-evaluation-report.md) |
