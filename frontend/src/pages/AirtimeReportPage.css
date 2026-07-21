@@ -331,6 +331,30 @@
   color: #94a3b8;
 }
 
+/* Wrapper around the PMM pill (+ optional PMM-no-target pill stacked below
+   it). Occupies the SAME grid column the PMM pill always used — no new
+   track is added to .airtime-row's grid-template-columns. That matters:
+   each row is its own independent grid instance (auto column widths are
+   computed per-card, not shared across the list), so adding a whole new
+   column would make rows with/without a cadastro report different child
+   counts and drift out of alignment with each other. Stacking inside the
+   existing cell keeps every row structurally identical; only this cell's
+   own height/width grows when a target pill is present. Rows without a
+   target render a single-child wrapper, which is visually identical to
+   the bare pill that existed before this feature (no padding/margin added
+   by the wrapper itself). */
+.airtime-row-pmm-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* PMM no target: mesma pill do PMM, tom mais fraco pra ler como derivado. */
+.airtime-row-pill-target {
+  opacity: 0.75;
+}
+
 /* ── Right-aligned material info ──────────────────────────────────── */
 .airtime-row-material {
   display: flex;

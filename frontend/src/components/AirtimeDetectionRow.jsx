@@ -121,6 +121,7 @@ export default function AirtimeDetectionRow({
   const matColor = materialColor(detection.commercial_id)
   const cost = resolveCost(detection, pricingByStation)
   const pmm = fmtPMM(detection.station_pmm)
+  const pmmTarget = detection.station_pmm_target != null ? fmtPMM(detection.station_pmm_target) : null
   const noEvidence = detection.evidence_status !== 'available'
   const isExpired = detection.evidence_status === 'expired'
   const noAudioTitle = isExpired ? EVIDENCE_EXPIRED_SHORT : 'Sem áudio disponível'
@@ -187,9 +188,18 @@ export default function AirtimeDetectionRow({
         </div>
       </div>
 
-      <div className="airtime-row-pill airtime-row-pill-pmm" title={detection.station_pmm != null ? `PMM: ${Math.round(detection.station_pmm)}` : 'PMM não cadastrado'}>
-        <IconHeadset />
-        <span>{pmm ?? '—'}</span>
+      <div className="airtime-row-pmm-stack">
+        <div className="airtime-row-pill airtime-row-pill-pmm" title={detection.station_pmm != null ? `PMM: ${Math.round(detection.station_pmm)}` : 'PMM não cadastrado'}>
+          <IconHeadset />
+          <span>{pmm ?? '—'}</span>
+        </div>
+        {pmmTarget != null && (
+          <div className="airtime-row-pill airtime-row-pill-pmm airtime-row-pill-target"
+               title={`PMM no target: ${detection.station_pmm_target}`}>
+            <IconHeadset />
+            <span>{pmmTarget}</span>
+          </div>
+        )}
       </div>
 
       <div className={'airtime-row-pill airtime-row-pill-cost' + (cost.value == null && cost.mode !== 'consolidated' ? ' is-empty' : '')}
