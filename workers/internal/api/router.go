@@ -57,6 +57,7 @@ type Deps struct {
 	LiveMap               *handlers.LiveMapHandler
 	ManagementOverview    *handlers.ManagementOverviewHandler
 	Suggestions           *handlers.SuggestionsHandler
+	ClientTargetPmm       *handlers.ClientTargetPmmHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -171,6 +172,14 @@ func NewRouter(d Deps) http.Handler {
 				// no subgrupo B abaixo.
 				r.Get("/clients", d.Clients.List)
 
+				// PMM no target por cliente — leitura viewer-friendly (scope-check
+				// no handler): a grid de /detections e o /insights do cliente
+				// precisam do mapa para exibir "Impactos no target". A escrita
+				// fica admin-only no subgrupo B.
+				if d.ClientTargetPmm != nil {
+					r.Get("/clients/{clientID}/target-pmm", d.ClientTargetPmm.List)
+				}
+
 				// Relatórios consolidados de campanha — CSV resumo + JSON pra PDF.
 				// Viewer scope checado dentro do handler (mesmo padrão do
 				// /detections/aggregate-by-material). O CSV detalhado continua
@@ -256,6 +265,12 @@ func NewRouter(d Deps) http.Handler {
 				// quando o cliente tem vínculos (campanhas/materiais/usuários).
 				r.Post("/clients/{id}/deactivate", d.Clients.Deactivate)
 				r.Post("/clients/{id}/activate", d.Clients.Activate)
+				// Cadastro do PMM no target (bulk upsert). Admin/operator-only —
+				// NÃO usar r.Route() aqui pelo mesmo motivo dos writes de /clients:
+				// mascararia o GET registrado no subgrupo A.
+				if d.ClientTargetPmm != nil {
+					r.Put("/clients/{clientID}/target-pmm", d.ClientTargetPmm.Bulk)
+				}
 				if d.APIKeys != nil {
 					r.Get("/clients/{clientID}/api-keys", d.APIKeys.List)
 					r.Post("/clients/{clientID}/api-keys", d.APIKeys.Create)

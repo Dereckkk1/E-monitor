@@ -1,0 +1,3 @@
+BEGIN;
+ALTER TABLE clients DROP COLUMN IF EXISTS target_label;
+COMMIT;

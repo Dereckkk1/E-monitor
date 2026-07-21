@@ -135,6 +135,21 @@ export default function AirtimeReportPage() {
     return m
   }, [pricingList])
 
+  // Rótulo do público-alvo (clients.target_label) pro title da pill teal das
+  // rows. A lista aqui NÃO é obrigatoriamente de um cliente só (o filtro de
+  // campanha é opcional), e rotular linhas de vários clientes com o target de
+  // um deles seria mentira — mesma regra que o backend aplica no /insights.
+  // Então só resolve quando o recorte é comprovadamente de um cliente:
+  // campanha selecionada (→ cliente dela) ou lista de clientes com 1 item
+  // (viewer, que só enxerga o próprio). Fora disso fica null.
+  const targetLabel = useMemo(() => {
+    const camp = campaignId ? campaigns.find(c => c.id === campaignId) : null
+    const clientId = camp?.client_id ?? (clients.length === 1 ? clients[0].id : null)
+    if (!clientId) return null
+    const raw = clients.find(cl => cl.id === clientId)?.target_label
+    return (raw ?? '').trim() || null
+  }, [campaignId, campaigns, clients])
+
   const detections = detResp?.data ?? []
   const total = detResp?.total ?? 0
   const totalPages = detResp?.total_pages ?? 1
@@ -300,6 +315,7 @@ export default function AirtimeReportPage() {
                     onPlayRequest={setActivePlayerId}
                     onPlayClose={() => setActivePlayerId(null)}
                     highlighted={highlightedMaterialId === d.commercial_id}
+                    targetLabel={targetLabel}
                   />
                 ))}
                 <AirtimePaginator

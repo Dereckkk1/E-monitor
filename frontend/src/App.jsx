@@ -18,6 +18,7 @@ import DetectionDetailPage from './pages/DetectionDetailPage'
 import OperationsPage from './pages/OperationsPage'
 import WebhookDeliveriesPage from './pages/WebhookDeliveriesPage'
 import ApiKeysPage    from './pages/ApiKeysPage'
+import ClientTargetPmmPage from './pages/ClientTargetPmmPage'
 import DashboardPage  from './pages/DashboardPage'
 import LoginPage      from './pages/LoginPage'
 import CampaignWizardPage from './pages/CampaignWizardPage'
@@ -109,6 +110,9 @@ function AppShell() {
             } />
             <Route path="/clients/:id/api-keys" element={
               <RequireRole roles={['admin']}><ApiKeysPage /></RequireRole>
+            } />
+            <Route path="/clients/:id/target-pmm" element={
+              <RequireRole roles={['admin']}><ClientTargetPmmPage /></RequireRole>
             } />
             <Route path="/campaigns"   element={<CampaignsPage />} />
             <Route path="/campaigns/new" element={

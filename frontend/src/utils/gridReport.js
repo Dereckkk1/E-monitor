@@ -10,7 +10,7 @@
 //                   (todas as páginas, não só a visível). Cada linha tem
 //                   { stationId, materialId (=type_id), materialTitle, ... }.
 //   - stations:     catálogo de emissoras ({ id, name, city, state, band,
-//                   frequency_mhz }).
+//                   frequency_mhz, pmm }).
 //   - days:         array de Date (o MESMO que a grade renderiza — use
 //                   enumerateVisibleDays de dates.js).
 //   - cellData:     Map key `${stationId}|${materialId}|${dateISO}` →
@@ -18,6 +18,12 @@
 //   - materialLookup: (opcional) Map/objeto key `${stationId}|${typeId}` →
 //                   [{ shortId, title, durationSec }] com os materiais REAIS
 //                   daquele tipo naquela emissora (a grade só conhece o tipo).
+//   - pmmTargetByStation: (opcional) objeto/Map station_id → PMM no target do
+//                   cliente dono da campanha (mesmo mapa que alimenta a pill
+//                   de impactos-no-target de DistributionGrid.jsx, construído
+//                   em DetectionsPage.jsx a partir de useClientTargetPmm).
+//                   Ausente/vazio = feature não cadastrada; impactosTarget
+//                   fica null em todas as emissoras e a coluna some.
 //
 // dateISO segue a mesma construção da grade (`d.toISOString().slice(0,10)`), que
 // em America/Sao_Paulo (UTC-3) coincide com o for_date da view.
@@ -102,18 +108,22 @@ export function materialsLabel(materials) {
  *   kpis:   { ...totals, coveragePct },
  *   byStation: Array<{
  *     stationId, stationName, stationCity, stationState, stationDial,
+ *     pmm, impactos,             // nível emissora: pmm × Σ in_slot; null sem pmm (nota do PDF)
+ *     pmmTarget, impactosTarget, // null quando o cliente não tem PMM no target cadastrado
  *     materials: Array<{ typeId, title,
  *       materials: Array<{ shortId, title, durationSec }>,  // materiais REAIS do tipo
  *       days: Array<{ dateISO, dateLabel, ...cell }>,   // só dias não-vazios
+ *       impactos, impactosTarget,  // nível material: pmm × in_slot DESTE material (linha do CSV)
  *       totals }>,
  *     totals }>,
  *   grandTotals,
+ *   hasTarget,  // true se QUALQUER emissora do recorte tem PMM no target
  *   slug,
  * }}
  */
 export function buildGridReportModel({
   campaign, client, filteredRows, stations, days, cellData, filterInfo = {},
-  materialLookup = null,
+  materialLookup = null, pmmTargetByStation = {},
 }) {
   const stationById = new Map((stations ?? []).map(s => [s.id, s]))
 
@@ -139,6 +149,12 @@ export function buildGridReportModel({
     const stationTotals = zeroTotals()
     const materials = []
 
+    // PMM resolvido ANTES do loop de materiais porque impactos é calculado nos
+    // dois níveis: por material (linha do CSV, somável) e por emissora (nota do
+    // PDF da grade / pílula da grid). Ver comentário no push do byStation.
+    const pmm = Number(st.pmm) || 0
+    const pmmTarget = pmmTargetByStation?.[stationId] ?? null
+
     for (const row of rowsByStation.get(stationId)) {
       const matTotals = zeroTotals()
       const dayRows = []
@@ -158,21 +174,51 @@ export function buildGridReportModel({
         materials: resolveMaterials(materialLookup, stationId, row.materialId),
         days:   dayRows,
         totals: matTotals,
+        // Impactos rateados POR MATERIAL (pmm × in_slot só deste material) —
+        // é o que vai pra linha do CSV. Tem que ser por linha, e não o número
+        // da emissora repetido: a coluna do CSV precisa ser somável no Excel
+        // (arrastar e somar é a primeira coisa que se faz), e o CSV
+        // consolidado do backend já usa essa mesma semântica por
+        // material × emissora — os dois batem.
+        impactos:       pmm > 0 ? Math.round(pmm * matTotals.inSlot) : null,
+        impactosTarget: pmmTarget != null ? Math.round(pmmTarget * matTotals.inSlot) : null,
       })
       addInto(stationTotals, matTotals)
     }
 
     addInto(grandTotals, stationTotals)
+    // Nível EMISSORA: pmm × Σ in_slot de todos os materiais — mesma conta do
+    // StationTotalCell da grade (DistributionGrid.jsx), e é esse número que
+    // vai pra nota da emissora no PDF da grade. NÃO vai pro CSV: lá cada linha
+    // é (emissora × material) e repetir o total da emissora em N linhas faria
+    // a coluna somar N× no Excel — por isso o CSV usa o rateio por material
+    // (materials[].impactos, acima). Impactos no target só existe quando o
+    // cliente tem PMM no target cadastrado pra essa emissora
+    // (pmmTargetByStation vem do useClientTargetPmm em DetectionsPage.jsx);
+    // ausente = null, e a coluna/nota correspondente vira "—", sem regressão
+    // pra quem não cadastrou.
+    const impactos = pmm > 0 ? Math.round(pmm * stationTotals.inSlot) : null
+    const impactosTarget = pmmTarget != null ? Math.round(pmmTarget * stationTotals.inSlot) : null
     byStation.push({
       stationId,
       stationName:  st.name ?? '—',
       stationCity:  st.city ?? '',
       stationState: st.state ?? '',
       stationDial:  stationDial(st),
+      pmm: pmm > 0 ? pmm : null,
+      impactos,
+      pmmTarget,
+      impactosTarget,
       materials,
       totals: stationTotals,
     })
   }
+
+  // Gate de exibição da coluna "Impactos no target": só entra quando pelo
+  // menos uma emissora do recorte tem PMM no target cadastrado (mesmo
+  // critério do `stations_with_target` que o backend expõe pro PDF de
+  // campanha em pdfReport.js).
+  const hasTarget = byStation.some(s => s.impactosTarget != null)
 
   const periodLabel = filterInfo.periodLabel ?? ''
   const filterLabel = buildFilterLabel(filterInfo, byStation.length)
@@ -190,6 +236,7 @@ export function buildGridReportModel({
     kpis: { ...grandTotals, coveragePct: coveragePct(grandTotals.expected, grandTotals.inSlot) },
     byStation,
     grandTotals,
+    hasTarget,
     slug: slugify(campaign?.name),
   }
 }
@@ -218,11 +265,22 @@ function slugify(s) {
 // 1 linha por (emissora × material), com os mesmos totais das pílulas do
 // RowSummaryCell da grade. Separador ';' e (BOM adicionado no download) pra
 // abrir limpo no Excel pt-BR, igual ao reports.go.
+//
+// As colunas de impactos são POR LINHA (pmm × in_slot daquele material naquela
+// emissora), não o total da emissora repetido — o CSV existe pra ser somado no
+// Excel, e repetir o número de nível-emissora em cada material multiplicaria o
+// total pelo nº de materiais. Rateado assim a coluna soma certo e casa com a
+// semântica do CSV consolidado do backend (que também é material × emissora).
 
+// Base sempre presente. "Impactos" é coluna nova pra todo mundo (pedido
+// explícito do dono, mesmo sem PMM no target cadastrado); "Impactos no
+// target" só entra quando `model.hasTarget` — apendada dinamicamente em
+// buildGridReportCSV, não fixa aqui, senão o CSV de quem não tem cadastro
+// ganharia uma coluna sempre "—" à toa.
 const CSV_HEADER = [
   'Emissora', 'Dial', 'Cidade', 'UF', 'Tipo', 'Materiais',
   'Programado', 'Tocou (faixa)', 'Déficit', 'Bônus',
-  'Fora da faixa', 'Fora da data',
+  'Fora da faixa', 'Fora da data', 'Impactos',
 ]
 
 function csvEscape(v) {
@@ -231,15 +289,19 @@ function csvEscape(v) {
 }
 
 export function buildGridReportCSV(model) {
-  const lines = [CSV_HEADER.map(csvEscape).join(';')]
+  const header = model.hasTarget ? [...CSV_HEADER, 'Impactos no target'] : CSV_HEADER
+  const lines = [header.map(csvEscape).join(';')]
   for (const s of model.byStation) {
     for (const m of s.materials) {
-      lines.push([
+      const row = [
         s.stationName, s.stationDial, s.stationCity, s.stationState,
         m.title, materialsLabel(m.materials),
         m.totals.expected, m.totals.inSlot, m.totals.deficit,
         m.totals.bonus, m.totals.outSlot, m.totals.outDate,
-      ].map(csvEscape).join(';'))
+        m.impactos ?? '—',
+      ]
+      if (model.hasTarget) row.push(m.impactosTarget ?? '—')
+      lines.push(row.map(csvEscape).join(';'))
     }
   }
   return lines.join('\r\n')

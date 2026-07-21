@@ -1,0 +1,739 @@
+/* ── ClientTargetPmmPage ────────────────────────────────────────
+   Class prefix: ctp-
+   Usa os tokens do design system (src/index.css). Sem token novo.
+   ──────────────────────────────────────────────────────────────── */
+
+.ctp-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+/* Espaço pra barra sticky não cobrir a última linha da tabela. */
+.ctp-page--pending { padding-bottom: 76px; }
+
+/* Back link */
+.ctp-back { margin-bottom: -4px; }
+.ctp-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  padding: 4px 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-md);
+  transition: background 150ms ease-out, color 150ms ease-out, transform 150ms ease-out;
+}
+.ctp-back-link:hover {
+  background: var(--c-surface-2);
+  color: var(--c-action);
+  transform: translateX(-1px);
+}
+
+/* ── Cabeçalho ───────────────────────────────────────────────── */
+.ctp-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 780px;
+}
+.ctp-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.15;
+}
+.ctp-title-sep    { color: var(--c-text-3); margin: 0 2px; font-weight: 400; }
+.ctp-title-client { color: var(--c-action); font-weight: 700; }
+.ctp-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+  line-height: 1.55;
+}
+
+/* Rótulo de público-alvo (chip editável) */
+.ctp-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.ctp-label-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 12px;
+  border: 1px solid var(--c-action-border);
+  border-radius: var(--radius-full);
+  background: var(--c-action-light);
+  /* --c-action puro sobre --c-action-light fica em ~3.6:1, abaixo do AA pra
+     texto pequeno. O tom de hover é o mesmo rosa, só que legível. */
+  color: var(--c-action-hover);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.ctp-label-chip:hover:not(:disabled) {
+  background: var(--c-surface);
+  border-color: var(--c-action);
+  box-shadow: var(--shadow-sm);
+}
+.ctp-label-chip:disabled { opacity: 0.5; cursor: default; }
+.ctp-label-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctp-label-chip svg:last-child { color: var(--c-action); opacity: 0.65; flex-shrink: 0; }
+
+.ctp-label-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--c-text-2);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, color 150ms ease-out, background 150ms ease-out;
+}
+.ctp-label-add:hover:not(:disabled) {
+  border-color: var(--c-action);
+  color: var(--c-action-hover);
+  background: var(--c-action-light);
+}
+.ctp-label-add:disabled { opacity: 0.5; cursor: default; }
+
+.ctp-label--editing { width: 100%; }
+.ctp-label-input {
+  flex: 1 1 260px;
+  min-width: 180px;
+  max-width: 360px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 13px;
+}
+.ctp-label-count {
+  font-size: 11px;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ctp-label-count--max { color: var(--c-warning); font-weight: 600; }
+.ctp-label-error {
+  font-size: 12px;
+  color: var(--c-danger);
+  line-height: 1.4;
+}
+
+/* Inline code */
+.ctp-code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--c-text);
+}
+
+/* ── Barra de cobertura ──────────────────────────────────────── */
+.ctp-coverage {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ctp-coverage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.ctp-coverage-line {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.ctp-coverage-num {
+  font-family: var(--font-heading);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1;
+}
+.ctp-coverage-of { font-size: 13px; color: var(--c-text-2); }
+
+.ctp-coverage-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--c-text-3);
+}
+.ctp-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.ctp-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-text-3) 45%, var(--c-border));
+}
+.ctp-legend-dot--on { background: var(--c-action); }
+
+/* A barra SEMPRE ocupa a largura inteira: com 4 emissoras são 4 segmentos
+   largos, com 160 são 160 finos, mas em nenhum caso ela flutua num vão. */
+.ctp-cov-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 10px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ctp-cov-bar--single { height: 14px; }
+/* Muitos segmentos: gap zero. Com 160 emissoras, 2px de vão entre segmentos
+   ocupam mais pixels que o dado e o vão vira sósia do segmento vazio. */
+.ctp-cov-bar--dense { gap: 0; }
+.ctp-seg {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 2px;
+  /* O vazio precisa ter corpo: em --c-border os buracos somem contra o card
+     branco e a barra vira um tracejado rosa sem leitura. Este cinza é o
+     --c-border puxado pro --c-text-3 até dar pra apontar o buraco de longe. */
+  background: color-mix(in srgb, var(--c-text-3) 45%, var(--c-border));
+  transition: background 150ms ease-out;
+}
+.ctp-cov-bar--dense .ctp-seg { border-radius: 0; }
+.ctp-seg--on { background: var(--c-action); }
+
+/* Grade de células iguais em vez de flex proporcional: com flex, um grupo
+   sozinho na última linha esticava até a largura toda e passava a impressão
+   de ter mais emissoras que os outros. Célula uniforme mantém a leitura. */
+.ctp-cov-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px 16px;
+}
+.ctp-cov-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.ctp-cov-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────── */
+.ctp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ctp-search { max-width: 340px; flex: 1 1 220px; }
+
+.ctp-dirty {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-action-hover); /* contraste AA sobre --c-action-light */
+  background: var(--c-action-light);
+  border: 1px solid var(--c-action-border);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Barra sticky de ações ───────────────────────────────────── */
+.ctp-sticky {
+  position: sticky;
+  bottom: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-action-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.ctp-sticky-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+/* ── Tabela ──────────────────────────────────────────────────── */
+.ctp-table-wrap {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.ctp-table { display: flex; flex-direction: column; }
+
+.ctp-thead,
+.ctp-row {
+  display: grid;
+  grid-template-columns:
+    minmax(200px, 2.2fr) /* emissora */
+    minmax(104px, 0.7fr) /* pmm */
+    minmax(170px, 0.9fr) /* pmm target: input + limpar */
+    minmax(96px, 0.6fr); /* % do pmm */
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+}
+/* O header do input alinha pela direita do INPUT, não pela da célula (que
+   ainda carrega o botão limpar) — senão rótulo e valores saem de eixo. */
+.ctp-th-input { padding-right: 36px; }
+.ctp-thead {
+  background: var(--c-surface-2);
+  /* A borda lateral transparente espelha a das linhas (que existe pro hover
+     acender em rosa): sem ela o cabeçalho fica 1px fora do eixo dos valores. */
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--c-border);
+  font-family: var(--font-heading);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-2);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.ctp-th-num { text-align: right; }
+
+.ctp-row {
+  font-size: 13px;
+  color: var(--c-text);
+  border: 1px solid transparent;
+  border-bottom-color: var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  transition:
+    transform 180ms ease-out,
+    box-shadow 180ms ease-out,
+    border-color 180ms ease-out,
+    background 180ms ease-out;
+}
+.ctp-row:last-child { border-bottom-color: transparent; }
+.ctp-row:hover {
+  position: relative;
+  z-index: 1;
+  transform: translateY(-1px);
+  border-color: var(--c-action-border);
+  box-shadow: var(--shadow-md);
+}
+/* Linha alterada: SEM tint de fundo. Numa sessão de digitação a maioria das
+   linhas fica alterada, então o tint deixa de destacar; pior, rosa claro numa
+   linha que também tem aviso âmbar lê como erro. O ponto no nome + a borda do
+   input bastam pra dizer "modificado" sem brigar com o aviso. */
+.ctp-row--dirty .ctp-input {
+  border-color: var(--c-action-border);
+  background: var(--c-surface);
+}
+.ctp-dirty-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.ctp-row--empty {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding: 24px;
+}
+.ctp-row--empty:hover { transform: none; box-shadow: none; border-color: transparent; }
+
+.ctp-station { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ctp-station-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctp-station-sub {
+  font-size: 11px;
+  color: var(--c-text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctp-dot { color: var(--c-border); }
+
+.ctp-num { text-align: right; font-variant-numeric: tabular-nums; }
+.ctp-pmm { color: var(--c-text-2); font-size: 12.5px; }
+.ctp-dash { color: var(--c-text-3); font-size: 11.5px; }
+
+/* Rótulo de coluna repetido dentro da célula: só aparece no layout empilhado
+   de mobile, onde o cabeçalho da tabela some. */
+.ctp-celllabel { display: none; }
+
+.ctp-inputcell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ctp-input {
+  width: 100%;
+  max-width: 132px;
+  text-align: right;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.ctp-input:focus,
+.ctp-input:focus-visible {
+  outline: none;
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.1);
+}
+
+/* % do PMM — o typo se denuncia sozinho */
+.ctp-pctcell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+}
+.ctp-pct {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+/* --c-warning (#ca8a04) sobre branco fica em ~3.8:1: escurece só o
+   suficiente pra passar em AA sem sair do amarelo do design system. */
+.ctp-pct--over { color: color-mix(in srgb, var(--c-warning) 82%, #000); }
+.ctp-pct-warn {
+  font-size: 11px;
+  line-height: 1.25;
+  color: color-mix(in srgb, var(--c-warning) 82%, #000);
+  text-align: right;
+}
+
+.ctp-clear {
+  flex-shrink: 0;
+  color: var(--c-text-3);
+  transition: color 150ms ease-out, border-color 150ms ease-out;
+}
+.ctp-clear:hover:not(:disabled) { color: var(--c-danger); border-color: var(--c-danger); }
+.ctp-clear:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.ctp-muted { color: var(--c-text-2); font-size: 13px; line-height: 1.55; margin: 0; }
+
+/* ── Estado vazio (tutorial estilizado) ──────────────────────── */
+.ctp-empty {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 36px 32px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 1.05fr);
+  align-items: center;
+  gap: 36px;
+}
+.ctp-empty-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ctp-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--c-action-light);
+  color: var(--c-action);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+.ctp-empty h3 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+}
+.ctp-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+  line-height: 1.6;
+}
+.ctp-empty-hint { color: var(--c-text-3); font-size: 12.5px; }
+.ctp-empty .btn { margin-top: 6px; }
+
+.ctp-empty-preview { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ctp-ghost {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  opacity: 0.4;
+  user-select: none;
+}
+.ctp-ghost-head,
+.ctp-ghost-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.9fr) 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+.ctp-ghost-head {
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
+  font-family: var(--font-heading);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-2);
+}
+.ctp-ghost-row { border-bottom: 1px solid var(--c-border); font-size: 12px; }
+.ctp-ghost-row:last-child { border-bottom: none; }
+.ctp-ghost-station { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ctp-ghost-name {
+  font-weight: 600;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctp-ghost-sub {
+  font-size: 10px;
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctp-ghost-pmm { color: var(--c-text-2); font-size: 11.5px; }
+.ctp-ghost-input {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  padding: 3px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+.ctp-ghost-pct { color: var(--c-action); font-weight: 600; font-size: 11.5px; }
+.ctp-ghost-caption {
+  font-size: 11px;
+  color: var(--c-text-3);
+  text-align: center;
+}
+
+/* ── Callout de aviso ────────────────────────────────────────── */
+.ctp-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--c-warning) 12%, var(--c-surface));
+  border: 1px solid color-mix(in srgb, var(--c-warning) 35%, var(--c-border));
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  color: var(--c-text);
+  line-height: 1.5;
+}
+.ctp-warn-icon { color: var(--c-warning); display: inline-flex; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Modal de colagem ────────────────────────────────────────── */
+.ctp-overlay {
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: ctp-overlay-in 200ms ease-out;
+}
+.ctp-modal { animation: ctp-modal-in 240ms ease-out; }
+@keyframes ctp-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ctp-modal-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ctp-textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.ctp-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ctp-preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ctp-stat {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.ctp-stat strong { color: var(--c-text); font-weight: 700; }
+.ctp-stat--ok {
+  background: color-mix(in srgb, var(--c-success) 12%, var(--c-surface));
+  border-color: color-mix(in srgb, var(--c-success) 35%, var(--c-border));
+}
+.ctp-stat--warn {
+  background: color-mix(in srgb, var(--c-warning) 14%, var(--c-surface));
+  border-color: color-mix(in srgb, var(--c-warning) 35%, var(--c-border));
+}
+.ctp-stat-total { font-size: 11.5px; color: var(--c-text-3); }
+
+.ctp-outlist {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ctp-outlist-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--c-text-3);
+  margin-bottom: 6px;
+}
+.ctp-outlist ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.ctp-outlist li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--c-text-2);
+  line-height: 1.45;
+}
+.ctp-line {
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--c-text-3);
+  min-width: 30px;
+}
+.ctp-out-raw { font-weight: 600; color: var(--c-text); }
+.ctp-out-why { color: var(--c-text-3); }
+
+/* ── Responsivo ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .ctp-empty {
+    grid-template-columns: 1fr;
+    gap: 26px;
+  }
+}
+
+@media (max-width: 860px) {
+  .ctp-thead,
+  .ctp-row {
+    grid-template-columns: minmax(150px, 1.7fr) minmax(84px, 0.7fr) minmax(150px, 0.9fr) minmax(74px, 0.6fr);
+    gap: 10px;
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ctp-title { font-size: 21px; }
+
+  /* A grade de 5 colunas não cabe: cada linha vira um bloco empilhado. */
+  .ctp-thead { display: none; }
+  .ctp-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "station station"
+      "pmm     target"
+      "pct     pct";
+    row-gap: 6px;
+    padding: 12px;
+  }
+  .ctp-row:hover { transform: none; box-shadow: none; }
+  .ctp-station    { grid-area: station; }
+  .ctp-pmm        { grid-area: pmm; text-align: left; display: flex; flex-direction: column; gap: 1px; }
+  .ctp-inputcell  { grid-area: target; }
+  .ctp-pctcell    { grid-area: pct; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 8px; }
+  .ctp-celllabel {
+    display: block;
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--c-text-3);
+  }
+  .ctp-row--empty { grid-template-columns: 1fr; grid-template-areas: none; }
+  .ctp-input { max-width: 132px; }
+
+  .ctp-coverage { padding: 12px 14px 14px; }
+  .ctp-coverage-legend { display: none; }
+  .ctp-search { max-width: none; }
+  .ctp-toolbar > .btn { flex: 1 1 auto; justify-content: center; }
+  .ctp-sticky { bottom: 8px; }
+  .ctp-sticky-hint { display: none; }
+  .ctp-empty { padding: 26px 18px; }
+  .ctp-empty-preview { display: none; }
+  .ctp-label-input { max-width: none; }
+}

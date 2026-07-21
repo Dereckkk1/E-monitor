@@ -2,7 +2,8 @@
  *
  * Prefix `.in-`. Reusa tokens globais (--c-text, --c-surface, etc.)
  * definidos em styles/variables.css. Layout em 3 rows:
- *   Row 1 (cards): grid 5fr (cai pra 3 / 2 / 1 conforme breakpoint)
+ *   Row 1 (cards): grid 5fr (cai pra 3 / 2 / 1 conforme breakpoint) — com
+ *     target no cliente, ver .in-row--cards--target logo abaixo das rows
  *   Row 2 (gráficos demográficos + pizza): grid 1fr 1fr 1fr
  *   Row 3 (gráfico daily/monthly full-width)
  */
@@ -161,6 +162,28 @@
 @media (max-width: 1024px) { .in-row--charts { grid-template-columns: 1fr; } }
 @media (max-width: 720px)  { .in-row--cards  { grid-template-columns: 1fr 1fr; } }
 
+/* Com target no cliente, o KpiCards ganha até 2 cards extras (Impactos no
+   target / CPM no target) — o total da linha pode ir de 5 a 7 (ou de 4 a 6
+   quando consolidado). O grid fixo acima (5/4/3/2 colunas) fica desbalanceado
+   nesses totais maiores, então essa modificadora troca pra auto-fit — mas
+   SÓ quando aplicada (InsightsPage.jsx só adiciona a classe quando
+   stations_with_target > 0), preservando o layout antigo bit-a-bit pra quem
+   não tem target cadastrado.
+   auto-fit calcula quantas colunas de largura ≥180px cabem no container e
+   usa esse número fixo em toda a grade; não é "sempre estica pra preencher
+   a linha" — se a contagem de cards não for múltipla desse número de
+   colunas, a última linha fica com menos itens do MESMO tamanho das linhas
+   cheias, deixando espaço em branco ao lado (não esticado). É um resultado
+   aceitável (linha final mais curta), mas não confundir com o comportamento
+   de "colapsar trilhas vazias", que só vale pra colunas vazias em TODAS as
+   linhas — o que não é o caso aqui, já que a primeira linha sempre preenche
+   todas as trilhas.
+   Precedência: mesma especificidade (0,1,0) de todas as regras acima,
+   inclusive as media queries — como esta regra vem por último na ordem do
+   arquivo e não está dentro de nenhuma @media, ela vence em qualquer
+   breakpoint sempre que a classe estiver presente no elemento. */
+.in-row--cards--target { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+
 /* ── Cards ──────────────────────────────────────────────────────── */
 .in-card {
   background: var(--c-surface);
@@ -179,9 +202,13 @@
   box-shadow: var(--shadow-md);
 }
 
-.in-card-head { display: flex; align-items: center; gap: 8px; }
+/* min-width:0 libera o encolhimento do rótulo dentro do flex (sem ele, o
+   text-overflow do .in-card-label-target nunca dispara: o item flex assume
+   min-width:auto = largura do conteúdo e transborda o card). */
+.in-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 .in-card-icon {
+  flex: none;
   width: 32px;
   height: 32px;
   display: flex;
@@ -199,6 +226,33 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--c-text-2);
+}
+
+/* Variante do rótulo quando o cliente tem público-alvo cadastrado
+   (clients.target_label): 1ª linha = rótulo canônico, 2ª = o público-alvo.
+   Só aplicada nos cards "no target" e só quando existe rótulo — sem rótulo o
+   markup volta ao <span> simples e o card fica idêntico ao de antes.
+   Ver o comentário em KpiCards.jsx pra o porquê de 2 linhas em vez de sufixo
+   na mesma linha. */
+.in-card-label--stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+/* Truncar em 1 linha é intencional: até 60 chars cabem no cadastro, mas a
+   trilha do grid tem 180px. O texto completo fica no title (deste span e do
+   card). white-space:nowrap + overflow:hidden mantêm a altura do card
+   constante, então cards da mesma linha do grid não desalinham. */
+.in-card-label-target {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .in-card-value {

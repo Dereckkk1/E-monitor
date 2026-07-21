@@ -627,9 +627,15 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 
 	cw := csv.NewWriter(w)
 	cw.Comma = ';'
+	// "PMM no target" fica SEM o rótulo de público-alvo do cliente aqui, ao
+	// contrário do CSV consolidado: campaign_id é opcional neste export, então
+	// as linhas podem cobrir várias campanhas de CLIENTES DIFERENTES — cada uma
+	// com o seu target. Um rótulo único no cabeçalho estaria errado para parte
+	// das linhas, e rótulo errado é pior que rótulo nenhum. Se um dia o export
+	// virar por-cliente, o sufixo pode entrar (ver Consolidated em reports.go).
 	_ = cw.Write([]string{
 		"Data", "Hora", "Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "Status",
+		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "PMM no target", "Status",
 	})
 
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
@@ -643,6 +649,10 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 		pmm := ""
 		if d.StationPMM != nil {
 			pmm = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.StationPMM), ".", ",")
+		}
+		pmmTarget := ""
+		if d.StationPMMTarget != nil {
+			pmmTarget = fmt.Sprintf("%d", *d.StationPMMTarget)
 		}
 		dur := ""
 		if d.MaterialDurationSec != nil {
@@ -661,6 +671,7 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 			strOrEmpty(d.MaterialTypeName),
 			strOrEmpty(d.ClientName),
 			pmm,
+			pmmTarget,
 			categoryLabelPT(d.Category),
 		})
 	})

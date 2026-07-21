@@ -175,3 +175,83 @@ func TestClients_ListPaged_HidesInactive(t *testing.T) {
 		t.Fatalf("include total=%d len=%d, want 2/2", total, len(rows))
 	}
 }
+
+// TestClients_TargetLabel_RoundTrip guards the clientColumns × scanClient
+// alignment for the target_label column (migration 0055): a misordered Scan
+// wouldn't break the build, it would silently put the CNPJ in Name and the
+// label somewhere else. Round-trips Create → Get → Update → SetActive and
+// asserts every neighbouring field keeps its own value.
+func TestClients_TargetLabel_RoundTrip(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClients(pool)
+
+	label := "Homens 25-49, classe AB"
+	cnpj := "12345678000199"
+	state := "MG"
+	cli, err := repo.Create(ctx, CreateClientInput{
+		Name: "Target Label Co", CNPJ: &cnpj, State: &state, TargetLabel: &label,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, cli.ID) //nolint:errcheck
+	})
+
+	assertFields := func(where string, c *Client) {
+		t.Helper()
+		if c.Name != "Target Label Co" {
+			t.Errorf("%s: Name = %q, want %q (scan order drift?)", where, c.Name, "Target Label Co")
+		}
+		if c.CNPJ == nil || *c.CNPJ != cnpj {
+			t.Errorf("%s: CNPJ = %v, want %q", where, c.CNPJ, cnpj)
+		}
+		if c.State == nil || *c.State != state {
+			t.Errorf("%s: State = %v, want %q", where, c.State, state)
+		}
+		if !c.IsActive {
+			t.Errorf("%s: IsActive = false, want true", where)
+		}
+		if c.CreatedAt.IsZero() || c.UpdatedAt.IsZero() {
+			t.Errorf("%s: timestamps zero (created=%v updated=%v)", where, c.CreatedAt, c.UpdatedAt)
+		}
+	}
+
+	assertFields("Create", cli)
+	if cli.TargetLabel == nil || *cli.TargetLabel != label {
+		t.Fatalf("Create: TargetLabel = %v, want %q", cli.TargetLabel, label)
+	}
+
+	got, err := repo.Get(ctx, cli.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertFields("Get", got)
+	if got.TargetLabel == nil || *got.TargetLabel != label {
+		t.Errorf("Get: TargetLabel = %v, want %q", got.TargetLabel, label)
+	}
+
+	// Update writes a new label…
+	newLabel := "Mulheres 18-34"
+	upd, err := repo.Update(ctx, cli.ID, UpdateClientInput{
+		Name: "Target Label Co", CNPJ: &cnpj, State: &state, TargetLabel: &newLabel,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	assertFields("Update", upd)
+	if upd.TargetLabel == nil || *upd.TargetLabel != newLabel {
+		t.Errorf("Update: TargetLabel = %v, want %q", upd.TargetLabel, newLabel)
+	}
+
+	// …and nil clears it (cliente sem rótulo → telas dizem só "no target").
+	cleared, err := repo.Update(ctx, cli.ID, UpdateClientInput{
+		Name: "Target Label Co", CNPJ: &cnpj, State: &state, TargetLabel: nil,
+	})
+	if err != nil {
+		t.Fatalf("Update(clear): %v", err)
+	}
+	if cleared.TargetLabel != nil {
+		t.Errorf("Update(nil): TargetLabel = %v, want nil", *cleared.TargetLabel)
+	}
+}

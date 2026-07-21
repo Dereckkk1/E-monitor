@@ -4,6 +4,7 @@ import {
   useCampaigns, useStations, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary, useCampaignPricing,
+  useClientTargetPmm,
 } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import RSelect from '../components/RSelect'
@@ -542,6 +543,26 @@ export default function DetectionsPage() {
     return m
   }, [pricingList])
 
+  // PMM no target do cliente dono da campanha selecionada. Sem campanha (ou
+  // sem cadastro) o mapa fica vazio e a grid não muda em nada.
+  const { data: targetPmmRows = [] } = useClientTargetPmm(selectedCampaign?.client_id, {
+    enabled: !!selectedCampaign?.client_id,
+  })
+  const pmmTargetByStation = useMemo(() => {
+    const m = {}
+    for (const r of targetPmmRows) if (r.pmm_target != null) m[r.station_id] = r.pmm_target
+    return m
+  }, [targetPmmRows])
+
+  // Rótulo do público-alvo do MESMO cliente (clients.target_label). Só entra no
+  // tooltip da pill teal — o label visível fica curto por causa da coluna de
+  // 180px. null quando o cliente não cadastrou rótulo.
+  const targetLabel = useMemo(() => {
+    if (!selectedCampaign?.client_id) return null
+    const raw = clientMap.get(selectedCampaign.client_id)?.target_label
+    return (raw ?? '').trim() || null
+  }, [selectedCampaign, clientMap])
+
   const {
     data: summary = [],
     isLoading: loadingSummary,
@@ -806,7 +827,8 @@ export default function DetectionsPage() {
       periodLabel: rangeLabel(rangeStart, rangeEnd),
     },
     materialLookup: materialsByStationType,
-  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType])
+    pmmTargetByStation,
+  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType, pmmTargetByStation])
 
   // Só liga o modo WYSIWYG quando temos o catálogo de emissoras pra resolver
   // nomes/dial (admin). Sem catálogo (ex.: viewer), cai no relatório backend
@@ -1117,6 +1139,8 @@ export default function DetectionsPage() {
             rows={pagedRows}
             cellData={cellData}
             pricingByStation={pricingByStation}
+            pmmTargetByStation={pmmTargetByStation}
+            targetLabel={targetLabel}
             inlineStationInfo
             onCellClick={(stationId, typeId, dateISO) =>
               setModalCell({ stationId, typeId, dateISO })}
