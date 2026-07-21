@@ -108,11 +108,12 @@ export function materialsLabel(materials) {
  *   kpis:   { ...totals, coveragePct },
  *   byStation: Array<{
  *     stationId, stationName, stationCity, stationState, stationDial,
- *     pmm, impactos,             // impactos = pmm × Σ in_slot da emissora; null sem pmm
+ *     pmm, impactos,             // nível emissora: pmm × Σ in_slot; null sem pmm (nota do PDF)
  *     pmmTarget, impactosTarget, // null quando o cliente não tem PMM no target cadastrado
  *     materials: Array<{ typeId, title,
  *       materials: Array<{ shortId, title, durationSec }>,  // materiais REAIS do tipo
  *       days: Array<{ dateISO, dateLabel, ...cell }>,   // só dias não-vazios
+ *       impactos, impactosTarget,  // nível material: pmm × in_slot DESTE material (linha do CSV)
  *       totals }>,
  *     totals }>,
  *   grandTotals,
@@ -148,6 +149,12 @@ export function buildGridReportModel({
     const stationTotals = zeroTotals()
     const materials = []
 
+    // PMM resolvido ANTES do loop de materiais porque impactos é calculado nos
+    // dois níveis: por material (linha do CSV, somável) e por emissora (nota do
+    // PDF da grade / pílula da grid). Ver comentário no push do byStation.
+    const pmm = Number(st.pmm) || 0
+    const pmmTarget = pmmTargetByStation?.[stationId] ?? null
+
     for (const row of rowsByStation.get(stationId)) {
       const matTotals = zeroTotals()
       const dayRows = []
@@ -167,20 +174,30 @@ export function buildGridReportModel({
         materials: resolveMaterials(materialLookup, stationId, row.materialId),
         days:   dayRows,
         totals: matTotals,
+        // Impactos rateados POR MATERIAL (pmm × in_slot só deste material) —
+        // é o que vai pra linha do CSV. Tem que ser por linha, e não o número
+        // da emissora repetido: a coluna do CSV precisa ser somável no Excel
+        // (arrastar e somar é a primeira coisa que se faz), e o CSV
+        // consolidado do backend já usa essa mesma semântica por
+        // material × emissora — os dois batem.
+        impactos:       pmm > 0 ? Math.round(pmm * matTotals.inSlot) : null,
+        impactosTarget: pmmTarget != null ? Math.round(pmmTarget * matTotals.inSlot) : null,
       })
       addInto(stationTotals, matTotals)
     }
 
     addInto(grandTotals, stationTotals)
-    // Impactos = pmm × Σ in_slot da emissora (todos os materiais somados) —
-    // mesma conta do StationTotalCell da grade (DistributionGrid.jsx). Impactos
-    // no target só existe quando o cliente tem PMM no target cadastrado pra
-    // essa emissora (pmmTargetByStation vem do useClientTargetPmm em
-    // DetectionsPage.jsx); ausente = null, e a coluna/linha correspondente vira
-    // "—" no CSV/PDF, sem regressão pra quem não cadastrou.
-    const pmm = Number(st.pmm) || 0
+    // Nível EMISSORA: pmm × Σ in_slot de todos os materiais — mesma conta do
+    // StationTotalCell da grade (DistributionGrid.jsx), e é esse número que
+    // vai pra nota da emissora no PDF da grade. NÃO vai pro CSV: lá cada linha
+    // é (emissora × material) e repetir o total da emissora em N linhas faria
+    // a coluna somar N× no Excel — por isso o CSV usa o rateio por material
+    // (materials[].impactos, acima). Impactos no target só existe quando o
+    // cliente tem PMM no target cadastrado pra essa emissora
+    // (pmmTargetByStation vem do useClientTargetPmm em DetectionsPage.jsx);
+    // ausente = null, e a coluna/nota correspondente vira "—", sem regressão
+    // pra quem não cadastrou.
     const impactos = pmm > 0 ? Math.round(pmm * stationTotals.inSlot) : null
-    const pmmTarget = pmmTargetByStation?.[stationId] ?? null
     const impactosTarget = pmmTarget != null ? Math.round(pmmTarget * stationTotals.inSlot) : null
     byStation.push({
       stationId,
@@ -248,6 +265,12 @@ function slugify(s) {
 // 1 linha por (emissora × material), com os mesmos totais das pílulas do
 // RowSummaryCell da grade. Separador ';' e (BOM adicionado no download) pra
 // abrir limpo no Excel pt-BR, igual ao reports.go.
+//
+// As colunas de impactos são POR LINHA (pmm × in_slot daquele material naquela
+// emissora), não o total da emissora repetido — o CSV existe pra ser somado no
+// Excel, e repetir o número de nível-emissora em cada material multiplicaria o
+// total pelo nº de materiais. Rateado assim a coluna soma certo e casa com a
+// semântica do CSV consolidado do backend (que também é material × emissora).
 
 // Base sempre presente. "Impactos" é coluna nova pra todo mundo (pedido
 // explícito do dono, mesmo sem PMM no target cadastrado); "Impactos no
@@ -275,9 +298,9 @@ export function buildGridReportCSV(model) {
         m.title, materialsLabel(m.materials),
         m.totals.expected, m.totals.inSlot, m.totals.deficit,
         m.totals.bonus, m.totals.outSlot, m.totals.outDate,
-        s.impactos ?? '—',
+        m.impactos ?? '—',
       ]
-      if (model.hasTarget) row.push(s.impactosTarget ?? '—')
+      if (model.hasTarget) row.push(m.impactosTarget ?? '—')
       lines.push(row.map(csvEscape).join(';'))
     }
   }

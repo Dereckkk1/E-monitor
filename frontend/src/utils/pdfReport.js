@@ -431,17 +431,29 @@ export async function buildCampaignReportPDF(summary) {
   // A4 210mm − 2×15mm de margem); "Emissora" (coluna 0, sem largura fixa)
   // absorve a sobra. Texto que não couber quebra linha (autoTable overflow
   // default = 'linebreak') em vez de ser cortado.
+  //
+  // "Impactos" precisa de 20mm (15mm úteis descontando 2×2,5mm de padding):
+  // com 8,5pt, um valor de 8 dígitos ("12.345.678" = 14,87mm) é o caso comum
+  // (PMM de milhares × dezenas de veiculações) e a 16mm quebrava em 2 linhas
+  // em quase toda linha da tabela. Os 4mm saem de "Fora faixa" e "Fora data"
+  // (16→14 cada), e não de "Cidade": o header dessas duas já quebra em 2
+  // linhas a 16mm ("Fora"/"faixa") e continua quebrando igual a 14mm, e o
+  // corpo são contagens que sempre cabem — "Dentro" e "Total", que carregam
+  // números MAIORES (superconjuntos), já vivem bem com 14mm. Custo vertical
+  // zero. Tirar de "Cidade" (22→18) custaria +10mm de altura de tabela a cada
+  // 8 emissoras, porque nomes como "Uberlândia"/"Florianópolis" passariam a
+  // quebrar linha a cada linha.
   const stationHead = ['Emissora', 'Dial', 'Cidade', 'UF', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total', 'Impactos']
   const stationColumnStyles = {
     1: { cellWidth: 16 },
     2: { cellWidth: 22 },
     3: { halign: 'center', cellWidth: 9 },
     4: { halign: 'right', cellWidth: 14 },
-    5: { halign: 'right', cellWidth: 16 },
-    6: { halign: 'right', cellWidth: 16 },
+    5: { halign: 'right', cellWidth: 14 },
+    6: { halign: 'right', cellWidth: 14 },
     7: { halign: 'right', cellWidth: 12 },
     8: { halign: 'right', cellWidth: 14, fontStyle: 'bold', textColor: TOKENS.action },
-    9: { halign: 'right', cellWidth: 16 },
+    9: { halign: 'right', cellWidth: 20 },
   }
   if (hasTarget) {
     stationHead.push('Impactos no target')
