@@ -442,3 +442,34 @@ completo em [docs/superpowers/plans/2026-07-17-otimizacoes-performance.md](../su
 - **F-PERF-14 — Limpar `refetchOnWindowFocus: false` redundante** em `hooks.js:166,188,202,
   1079` (agora que o default global já desliga). Cosmético; os `staleTime` de 60s/5min
   dessas mesmas queries ficam.
+
+## Capacidade e custo (F-CAP-01..04) — auditoria 2026-07-21
+
+Abertos ao medir custo por emissora em prod (173 emissoras, `c3-highcpu-8`).
+Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../operations/capacity-and-unit-cost.md).
+
+- **F-CAP-01 — `radiocheck_detections_total` não retorna nenhuma série em 7 dias.**
+  `sum by (station_id,status) (increase(radiocheck_detections_total[7d]))` → `result: []`.
+  A métrica está declarada em `workers/internal/metrics/metrics.go` com labels
+  `{station_id,status}`. Investigar se falta o `MustRegister` ou se o counter nunca é
+  incrementado no caminho de confirmação. **Impacto:** cega a taxa de detecção no
+  Prometheus e impede calcular o termo "custo por detecção" do modelo de unit cost.
+
+- **F-CAP-02 — Tiering de evidência não move nada.**
+  `radiocheck_evidence_storage_bytes{tier="cold"}` e `{tier="archive"}` estão em **0**,
+  com 44,8 GB inteiros em `hot`. Ou o job de tiering não roda, ou nunca encontra
+  candidato. **Impacto:** evidência acumula indefinidamente no tier caro; hoje é pouco
+  (44,8 GB) mas cresce monotonicamente.
+
+- **F-CAP-03 — ~US$88/mês (20%) da fatura GCP sem explicação.**
+  `deploy.md §6` projeta US$429/mês; o real medido em 2026-07-21 é ~R$97/dia ≈ US$517.
+  Nunca foi feita quebra por SKU. **Ação:** GCP Console → Billing → Reports → agrupar por
+  SKU; conferir ocupação real dos discos (`df -h /mnt/db /mnt/data` — 300 GB SSD PD são
+  US$76,50/mês e não escalam com emissora). Maior alavanca de custo identificada.
+
+- **F-CAP-04 — RAM líquida por emissora não fechada (falta PSS).**
+  Σ RSS dos 173 ffmpeg = 7,59 GB (44,9 MB/proc), mas RSS double-conta páginas
+  compartilhadas entre processos idênticos; `used`−`shared` situa em ~30 MB. Medir com
+  `smaps_rollup` (PSS) para travar o número. **Impacto:** dimensionar acima de 200
+  emissoras carrega incerteza de ~50% na RAM. (O valor antigo de 14,8 MB/emissora já foi
+  corrigido no `deploy.md` e no `docker-compose.yml`.)

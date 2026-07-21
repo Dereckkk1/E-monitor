@@ -355,6 +355,7 @@ docs/
 | **Sugestões** / central de demandas do dev (`/admin/suggestions`, 2 personas: autor cria/acompanha, dev `SUGGESTIONS_DEV_EMAIL`=tatico3@hubradios.com gerencia; thread, imagens S3, board/lista) | [docs/features/suggestions-board.md](docs/features/suggestions-board.md) |
 | Desativar cliente (reversível) + delete→409 com vínculos + login gating de cliente inativo | [docs/features/client-deactivation.md](docs/features/client-deactivation.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |
+| Custo por emissora, teto de capacidade da VM, dimensionar RAM/CPU pra N emissoras | [docs/operations/capacity-and-unit-cost.md](docs/operations/capacity-and-unit-cost.md) — medições de prod 2026-07-21; **não dimensione por `load average`** (a carga é em rajada, lê 6.9/8 com CPU em 53%) |
 | Disco cheio na VM / segmentos de evidência (`segmentsdata`) ocupando o disco de OS | [docs/operations/segments-disk-migration.md](docs/operations/segments-disk-migration.md) |
 | Backup, restore, retenção de evidência | [docs/operations/data-durability.md](docs/operations/data-durability.md) (canônico) + [docs/operations/backup-and-retention.md](docs/operations/backup-and-retention.md) (parcialmente desatualizado) |
 | OpenTelemetry, Jaeger, spans, sampling | [docs/operations/tracing.md](docs/operations/tracing.md) |

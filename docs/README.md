@@ -92,6 +92,7 @@ docs/
 | Doc | Sobre |
 |-----|-------|
 | [deploy.md](operations/deploy.md) | Guia completo de deploy da VM GCP + Docker Compose + Cloudflare Tunnel |
+| [capacity-and-unit-cost.md](operations/capacity-and-unit-cost.md) | Custo por emissora (médio × marginal × no teto), teto de capacidade da VM e como medir |
 | [segments-disk-migration.md](operations/segments-disk-migration.md) | Mover segmentos de evidência (`segmentsdata`) do disco de OS pro `/mnt/data` via `SEGMENTSDATA_HOST_PATH` |
 | [migrations.md](operations/migrations.md) | Runner automático golang-migrate + bootstrap idempotente |
 | [auth-bootstrap.md](operations/auth-bootstrap.md) | Bootstrap admin via env vars + JWT HS256 + role gating |

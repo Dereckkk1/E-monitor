@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-17
+ultima-verificacao: 2026-07-21
 codigo-relacionado:
   - scripts/deploy.sh
   - infra/docker/docker-compose.yml
@@ -41,10 +41,16 @@ codigo-relacionado:
 > "Total" da projeção ficam desatualizados. **Re-medir e atualizar aqui**
 > após rodar em prod com os novos valores — não confie nestes números pra
 > validar a Fase 1.
+>
+> **Parcialmente re-medido em 2026-07-21** (173 emissoras em prod): a linha do
+> `api` e a projeção de 200 emissoras foram corrigidas — ver
+> [capacity-and-unit-cost.md](capacity-and-unit-cost.md). **A linha do
+> `postgres` continua sendo a medição pré-tuning de 08/05** e segue pendente
+> de re-medição.
 
 | Serviço | Container | RAM (medida) | Escala com emissoras? |
 |---|---|---|---|
-| API Go (supervisor + workers) | `api` | ~88 MB base + **14.8 MB/emissora** | Sim |
+| API Go (supervisor + workers) | `api` | ~88 MB base + **~45 MB/emissora** (RSS bruto; ~30 MB líquido) | Sim |
 | PostgreSQL 16 | `postgres` | ~72–200 MB | Cresce com dados |
 | Redis 7 | `redis` | ~7 MB | Não |
 | NATS 2.10 (JetStream) | `nats` | ~5 MB | Não |
@@ -60,14 +66,31 @@ codigo-relacionado:
 
 ### Projeção para 200 emissoras
 
-Números baseados em stress test real (50 workers ativos medidos em 08/05/2026):
+> ⚠️ **Corrigido em 2026-07-21 com medição de prod.** A projeção anterior
+> (~3.0 GB para o `api`) vinha de um stress test de 50 workers em 08/05/2026 e
+> **subestimava em ~2-3×**. Medição real com 173 emissoras em produção: Σ RSS
+> dos 173 ffmpeg = **7.59 GB** (44.9 MB/processo). Método e ressalvas em
+> [capacity-and-unit-cost.md](capacity-and-unit-cost.md).
 
 | Componente | RAM estimada |
 |---|---|
-| API (88 MB base + 200 × 14.8 MB) | ~3.0 GB |
+| API (88 MB base + 200 × ~30 MB líquido) | **~6.1 GB** (até ~9 GB por RSS bruto) |
 | Stack fixo (todos os outros containers) | ~400 MB |
-| Fingerprint index em memória (100 comerciais) | ~500 MB–1 GB |
-| **Total** | **~4–5 GB** |
+| PostgreSQL (`shared_buffers` 2 GB + work_mem sob concorrência) | ~2.5–5 GB |
+| Fingerprint index em memória (~300 comerciais) | ~40 MB |
+| **Total** | **~9–12 GB de 16 GB** |
+
+**Consequência prática:** a folga de RAM a 200 emissoras é bem menor do que a
+tabela antiga sugeria. Ainda cabe nos 16 GB, mas sem o conforto de "4–5 GB de
+14". Se for passar de ~200 emissoras, dimensione RAM junto com CPU — não
+assuma que só a CPU é o gargalo.
+
+> **Ressalva de método:** os 44.9 MB são RSS por processo, que **double-conta**
+> páginas compartilhadas entre os 173 ffmpeg (mesmo binário e mesmas libs). O
+> líquido real é menor — a subtração `used` − `shared` do `free -m` situa em
+> ~30 MB/emissora. Fechar o número exige PSS (`smaps_rollup`), não medido.
+> Para planejamento, use **30 MB** como estimativa central e **45 MB** como
+> pior caso.
 
 ### Tuning de Postgres e limites de memória (Fase 1 — performance, 2026-07-17)
 
@@ -80,7 +103,7 @@ valores de fábrica do PG16 / sem limite (no-op em dev). Setar no `.env` da VM
 | Var | Dev (default) | Prod (VM c3-highcpu-8, 16GB RAM) | Motivo |
 |---|---|---|---|
 | `PG_SHARED_BUFFERS` | `128MB` | `2GB` | Cache dedicado do PG — cabe no SSD `/mnt/db` (300GB) e na RAM da VM. |
-| `PG_EFFECTIVE_CACHE_SIZE` | `4GB` | `5GB` | `shared_buffers` (2GB) + page cache realista (~3GB). NÃO 8GB: o box de 16GB é compartilhado com `api` (~3GB medido com os ffmpeg a 200 emissoras — ver tabela acima), `minio` (1GB) e stack fixa (~0.5GB) + OS (~1GB); um valor inflado engana o planner a superestimar cache hits. |
+| `PG_EFFECTIVE_CACHE_SIZE` | `4GB` | `5GB` | `shared_buffers` (2GB) + page cache realista (~3GB). NÃO 8GB: o box de 16GB é compartilhado com `api` (**~6GB** projetado com os ffmpeg a 200 emissoras — número corrigido em 2026-07-21, era ~3GB; ver tabela acima), `minio` (1GB) e stack fixa (~0.5GB) + OS (~1GB); um valor inflado engana o planner a superestimar cache hits. **Revisitar:** com o `api` no dobro do previsto, o page cache realista encolhe — `5GB` pode estar otimista. |
 | `PG_WORK_MEM` | `4MB` | `8MB` | Alocado por-nó de sort/hash, não por conexão. **Não é 16MB** — ver conta abaixo; 16MB estoura o `PG_MEM_LIMIT` na ponta adversa do intervalo de nós da `daily_play_summary`. |
 | `PG_MAINTENANCE_WORK_MEM` | `64MB` | `512MB` | Usado por `VACUUM`/`CREATE INDEX` manual. **Não** é herdado pelo autovacuum se a var abaixo estiver setada. |
 | `PG_AUTOVACUUM_WORK_MEM` | `-1` (default do PG = herda `maintenance_work_mem`) | `128MB` | **Crítico.** Sem essa var explícita, os 3 workers de autovacuum (`autovacuum_max_workers` default 3) herdam `maintenance_work_mem` inteiro — 3×512MB=1.5GB — que somado a `shared_buffers` + `work_mem` sob concorrência estoura o `PG_MEM_LIMIT` (ver conta abaixo). |
@@ -136,8 +159,8 @@ revisitar com medição real depois da Fase 3.
 
 `GOMEMLIMIT`/`API_GOMEMLIMIT` (service `api`) limita **só o heap Go** — não
 tem efeito sobre o RSS dos ~200 processos ffmpeg de captura, que são o termo
-dominante e variável desse container (~88MB base + 14.8MB/emissora ≈ 3GB a
-200 emissoras, ver tabela acima). Por isso `api` **não** tem `mem_limit` no
+dominante e variável desse container (~88MB base + ~30MB/emissora líquido ≈
+6GB a 200 emissoras, ver tabela acima). Por isso `api` **não** tem `mem_limit` no
 compose: um hard limit ali arriscaria matar a captura — o core do produto —
 em vez de só conter o heap Go. A proteção do `api` é inteiramente soft
 (`GOMEMLIMIT`, que deixa o GC mais agressivo perto do teto do heap).
@@ -258,9 +281,16 @@ Todo `git push origin master` dispara rebuild automático.
 
 > Máquina em produção desde 2026-06-08 (era `c3-standard-4` / 4 vCPU / 16 GB).
 
-**Por que 8 vCPU e não 4?** Stress test com 50 workers mostrou ~140% CPU no ambiente de dev. Em produção com 200 FFmpeg simultâneos + matching em Go, 4 cores aperiam. Além disso, o fix de densidade **#2** (peak-picking ~4× mais denso — ver [migração de re-fingerprint](refingerprint-density-migration.md)) **dobrou o custo do matcher por janela**, então 8 vCPU passou a ser necessário tanto pela escala quanto pelo algoritmo. Uso atual ~40%.
+**Por que 8 vCPU e não 4?** Stress test com 50 workers mostrou ~140% CPU no ambiente de dev. Em produção com 200 FFmpeg simultâneos + matching em Go, 4 cores aperiam. Além disso, o fix de densidade **#2** (peak-picking ~4× mais denso — ver [migração de re-fingerprint](refingerprint-density-migration.md)) **dobrou o custo do matcher por janela**, então 8 vCPU passou a ser necessário tanto pela escala quanto pelo algoritmo. **Uso medido em 2026-07-21 com 173 emissoras: ~53% de CPU** (`us` 42-46% + `sy` 8-9%, `wa`=0) — ver [capacity-and-unit-cost.md](capacity-and-unit-cost.md).
 
-**Por que `highcpu` (16 GB) e não `standard` (32 GB)?** A carga é **CPU-bound** (matching + 200 FFmpeg); o índice de fingerprint é **leve** — ~10 MB para ~300 comerciais, ~40 MB mesmo com a densidade #2. Os 16 GB cobrem PostgreSQL (shared_buffers) + MinIO + os FFmpeg + OS com folga na carga atual. **Ao escalar para 200 emissoras:** os ~200 FFmpeg + PostgreSQL podem pressionar os 16 GB — se a RAM apertar (não o índice), migrar para `c3-standard-8` (32 GB).
+> ⚠️ **Não dimensione por `load average` nesta máquina.** O load fica em ~6.9
+> de 8 com a CPU em 53%, e o `r` do `vmstat` oscila entre 1 e 23. A carga é
+> **em rajada** (os workers fecham janela de matching em ondas sincronizadas):
+> satura os 8 cores por instantes e fica ociosa entre elas. O load lê como
+> "máquina cheia" quando há 47% de idle. Use `vmstat 1 5` (linhas 2+, a
+> primeira é média desde o boot), não `uptime`.
+
+**Por que `highcpu` (16 GB) e não `standard` (32 GB)?** A carga é **CPU-bound** (matching + 200 FFmpeg); o índice de fingerprint é **leve** — ~10 MB para ~300 comerciais, ~40 MB mesmo com a densidade #2. **Ao escalar para 200 emissoras:** com a correção de RAM de 2026-07-21 (~30 MB/emissora, não 14.8), os ~200 FFmpeg + PostgreSQL projetam **~9–12 GB dos 16 GB** — folga real, mas bem menor que o previsto antes. Se passar de ~200 emissoras, migrar para `c3-standard-8` (32 GB).
 
 ### Discos
 
@@ -788,9 +818,23 @@ ssh -L 3001:localhost:3001 radiocheck@IP_DA_VM
 
 ### Base de cálculo
 
-Sizing baseado em medição real: stress test com 50 workers ativos em 08/05/2026 mostrou **14.8 MB de RAM por emissora adicional** no container `api`. O chute inicial de 80 MB/emissora era ~5× exagerado.
+Sizing baseado em medição de produção (2026-07-21, 173 emissoras ativas):
+**~30 MB de RAM líquida** e **~0,022 vCPU por emissora** no container `api`.
+
+> A base anterior (14.8 MB/emissora, stress test de 50 workers em 08/05/2026)
+> **subestimava a RAM em ~2×**. Corrigida em 2026-07-21.
+
+**Custo por emissora e teto de capacidade:** ver
+[capacity-and-unit-cost.md](capacity-and-unit-cost.md) — a conta de unit
+economics (custo médio × marginal × no teto) vive lá, não aqui.
 
 ### Composição do custo mensal (southamerica-east1)
+
+> ⚠️ **A tabela abaixo é a estimativa de projeto (2026-05), não o gasto real.**
+> Faturamento observado em 2026-07-21: **~R$97/dia ≈ R$2.949/mês ≈ US$517**,
+> contra os **US$429** projetados — **~US$88/mês (20%) acima**, não explicado.
+> Nenhuma quebra por SKU foi feita até hoje. **Ação pendente:** GCP Console →
+> Billing → Reports → agrupar por SKU, e reconciliar contra esta tabela.
 
 | Componente | Tipo | Custo (on-demand) |
 |---|---|---|
