@@ -40,16 +40,18 @@ type clientHeader struct {
 	ID   uuid.UUID
 	Name string
 	CNPJ *string
+	// TargetLabel é o rótulo do público-alvo do cliente; nil = sem rótulo.
+	TargetLabel *string
 }
 
 func (h *ReportsHandler) fetchClientByCampaign(r *http.Request, campaignID uuid.UUID) (*clientHeader, error) {
 	var c clientHeader
 	err := h.Pool.QueryRow(r.Context(), `
-		SELECT cl.id, cl.name, cl.cnpj
+		SELECT cl.id, cl.name, cl.cnpj, cl.target_label
 		FROM campaigns cmp
 		JOIN clients   cl ON cl.id = cmp.client_id
 		WHERE cmp.id = $1`, campaignID,
-	).Scan(&c.ID, &c.Name, &c.CNPJ)
+	).Scan(&c.ID, &c.Name, &c.CNPJ, &c.TargetLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +144,19 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// O rótulo do público-alvo entra no CABEÇALHO das colunas "no target".
+	// Aqui é seguro: o CSV consolidado é sempre de UMA campanha, logo de um
+	// único cliente (diferente do /detections/export, que é multi-campanha).
+	client, err := h.fetchClientByCampaign(r, camp.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	targetSuffix := ""
+	if client.TargetLabel != nil && strings.TrimSpace(*client.TargetLabel) != "" {
+		targetSuffix = " (" + strings.TrimSpace(*client.TargetLabel) + ")"
+	}
+
 	stamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("relatorio-consolidado-%s-%s.csv", slugify(camp.Name), stamp)
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
@@ -160,8 +175,10 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
 		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
 		// usa o PMM no target do cliente dono da campanha; vazia quando não há
-		// cadastro (não confundir com zero).
-		"PMM", "Impactos", "PMM no target", "Impactos no target",
+		// cadastro (não confundir com zero). Quando o cliente tem rótulo de
+		// público-alvo, ele vira sufixo do cabeçalho: "PMM no target (Homens
+		// 25-49)".
+		"PMM", "Impactos", "PMM no target" + targetSuffix, "Impactos no target" + targetSuffix,
 		"Primeira", "Última",
 	})
 
@@ -228,6 +245,9 @@ type SummaryResponse struct {
 		ID   uuid.UUID `json:"id"`
 		Name string    `json:"name"`
 		CNPJ *string   `json:"cnpj,omitempty"`
+		// TargetLabel: rótulo do público-alvo, usado pelo PDF como sufixo
+		// dos números "no target". Sem omitempty — `null` é significativo.
+		TargetLabel *string `json:"target_label"`
 	} `json:"client"`
 	Period struct {
 		From *time.Time `json:"from,omitempty"`
@@ -291,6 +311,7 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	resp.Client.ID = client.ID
 	resp.Client.Name = client.Name
 	resp.Client.CNPJ = client.CNPJ
+	resp.Client.TargetLabel = client.TargetLabel
 	resp.Period.From = f.StartDate
 	resp.Period.To = f.EndDate
 	resp.Totals.Detections = byMaterial.TotalDetections
