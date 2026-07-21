@@ -255,23 +255,28 @@ func TestClientStationPMM_ZeroIsNotAbsent(t *testing.T) {
 }
 ```
 
-Este teste usa três helpers. `insSeedStationNoProfile` já existe em [`insights_test.go:99`](../../../workers/internal/catalog/insights_test.go#L99). `testPool` já existe no pacote. `insSeedClient` pode não existir — confira com `grep -rn "func insSeedClient" workers/internal/catalog/`. Se não existir, adicione-o em `client_station_pmm_test.go`:
+> **Correção aplicada durante a execução (2026-07-21):** o `testPool(t)` que aparece
+> nos blocos de teste deste plano **não existe** no pacote. O helper real é
+> `newTestDB(t)` (em `testhelpers_test.go`), que devolve `(ctx, pool)` juntos.
+> Nos dois testes acima, troque:
+>
+> ```go
+> pool := testPool(t)
+> ctx := context.Background()
+> ```
+>
+> por:
+>
+> ```go
+> ctx, pool := newTestDB(t)
+> ```
+>
+> **Vale para todos os testes deste plano** (Tasks 2 e 4).
 
-```go
-// insSeedClient cria um cliente descartável e o remove no fim do teste.
-func insSeedClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
-	t.Helper()
-	var id uuid.UUID
-	if err := pool.QueryRow(ctx,
-		`INSERT INTO clients (name) VALUES ($1) RETURNING id`, name).Scan(&id); err != nil {
-		t.Fatalf("seed client: %v", err)
-	}
-	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", id) })
-	return id
-}
-```
-
-(Se adicionar, inclua `"github.com/jackc/pgx/v5/pgxpool"` nos imports do arquivo de teste.)
+Os outros helpers já existem e devem ser reusados, não duplicados:
+`insSeedStationNoProfile` em [`insights_test.go:99`](../../../workers/internal/catalog/insights_test.go#L99)
+e `insSeedClient` em [`insights_test.go:32`](../../../workers/internal/catalog/insights_test.go#L32),
+com a assinatura `(t, ctx, pool, name) uuid.UUID`.
 
 - [ ] **Step 2: Rodar o teste e ver falhar**
 
@@ -616,8 +621,9 @@ Adicione em `workers/internal/catalog/insights_test.go`:
 // emissora só com PMM global, só com target, e com os dois. Também trava a
 // regressão de contagem: stations_count não pode contar em dobro.
 func TestInsights_AggregateCore_TargetPMM(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
+	// newTestDB é o helper real do pacote (testhelpers_test.go) — devolve
+	// ctx e pool juntos. Não existe `testPool`.
+	ctx, pool := newTestDB(t)
 
 	clientID := insSeedClient(t, ctx, pool, "Cliente Target Insights")
 	camp := insSeedCampaignForClient(t, ctx, pool, clientID, "Campanha Target")
