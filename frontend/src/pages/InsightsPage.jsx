@@ -98,8 +98,10 @@ export default function InsightsPage() {
           <SkeletonLoader />
         ) : data ? (
           <>
-            {/* Consolidado esconde a Bonificação → 4 cards → grid de 4 colunas. */}
-            <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}`}>
+            {/* .in-row--cards usa auto-fit: o grid se ajusta sozinho ao número
+                de cards (4 a 7, variando por consolidado/target — ver
+                KpiCards.jsx e InsightsPage.css), sem precisar de classe extra. */}
+            <div className="in-row in-row--cards">
               <KpiCards data={data} />
               <InvestmentToggleCard data={data} />
               <GenderCard data={data} />
