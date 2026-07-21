@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useClients, useClientTargetPmm, useSaveClientTargetPmm } from '../api/hooks'
+import { useConfirm } from '../components/ConfirmModal'
 import { parsePastedTargets } from '../utils/targetPmmPaste'
 import './ClientTargetPmmPage.css'
 
@@ -78,6 +79,79 @@ function dial(row) {
 
 function place(row) {
   return [row.city, row.state].filter(Boolean).join('/')
+}
+
+/**
+ * useUnsavedGuard avisa antes de perder o rascunho (colar 200 linhas e sair
+ * sem salvar é a perda de trabalho mais plausível desta tela).
+ *
+ * Por que NÃO usa `useBlocker` do react-router: o projeto está em
+ * react-router-dom 6.30.3 e a app monta `<BrowserRouter>` em src/main.jsx.
+ * O `useBlocker` só existe dentro de um *data router* (`createBrowserRouter`
+ * + `RouterProvider`) — em `BrowserRouter` ele lança invariant no
+ * `useDataRouterContext`. Migrar o router inteiro por causa de uma tela é
+ * risco desproporcional, então a navegação interna é interceptada no clique.
+ *
+ * Cobre: clique em qualquer `<a href>` interno (sidebar, back-link, breadcrumb)
+ * e fechar/recarregar a aba. NÃO cobre o botão Voltar do browser (popstate não
+ * é cancelável e brigar com o history da SPA quebra mais do que resolve).
+ *
+ * @param {boolean} when arma a guarda (só quando há alteração pendente)
+ * @param {string}  message texto do modal de confirmação
+ */
+function useUnsavedGuard(when, message) {
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  // Ref pro texto: o efeito só remonta quando `when` vira/desvira, então a
+  // mensagem tem que ser lida na hora do clique, não capturada no closure.
+  // (`useConfirm()` também devolve função nova a cada render; a ref evita
+  // re-assinar o listener de clique a cada render.)
+  const latest = useRef({ message, confirm })
+  useEffect(() => { latest.current = { message, confirm } }, [message, confirm])
+
+  // Fechar / recarregar a aba. O browser ignora texto customizado desde 2017 —
+  // preventDefault + returnValue é tudo que dá pra fazer.
+  useEffect(() => {
+    if (!when) return undefined
+    function onBeforeUnload(e) {
+      e.preventDefault()
+      e.returnValue = ''
+      return ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [when])
+
+  // Navegação interna: captura o clique antes do <Link>. `preventDefault` na
+  // fase de captura basta — o handler do Link checa `event.defaultPrevented`.
+  useEffect(() => {
+    if (!when) return undefined
+    let asking = false
+
+    async function onClick(e) {
+      if (e.defaultPrevented || e.button !== 0) return
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return // abrir em nova aba: nada se perde
+      const anchor = e.target?.closest?.('a[href]')
+      if (!anchor || anchor.hasAttribute('download')) return
+      if (anchor.target && anchor.target !== '_self') return
+
+      let url
+      try { url = new URL(anchor.href, window.location.href) } catch { return }
+      if (url.origin !== window.location.origin) return // externo → beforeunload cobre
+      const here = window.location.pathname + window.location.search
+      if (url.pathname + url.search === here) return     // âncora/mesma rota
+
+      e.preventDefault()
+      if (asking) return
+      asking = true
+      const ok = await latest.current.confirm(latest.current.message)
+      asking = false
+      if (ok) navigate(url.pathname + url.search + url.hash)
+    }
+
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [when, navigate])
 }
 
 /* ── Modal de colagem ─────────────────────────────────────────── */
@@ -249,6 +323,13 @@ export default function ClientTargetPmmPage() {
     () => rows.filter(r => toValue(valueOf(r)) != null).length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, draft],
+  )
+
+  // Guarda de saída: arma só com alteração pendente e desarma sozinha depois
+  // do save (que zera o `draft`, logo `dirtyEntries` volta a 0).
+  useUnsavedGuard(
+    dirtyEntries.length > 0,
+    `Você tem ${dirtyEntries.length} ${dirtyEntries.length === 1 ? 'alteração não salva' : 'alterações não salvas'} de PMM no target. Sair agora descarta tudo. Deseja sair mesmo assim?`,
   )
 
   const visible = useMemo(() => {
