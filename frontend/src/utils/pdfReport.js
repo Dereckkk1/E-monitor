@@ -149,16 +149,30 @@ function drawKPI(doc, x, y, w, h, label, value) {
 }
 
 // Hero da capa: barra rosa fininha no topo + título + meta da campanha.
+//
+// O rótulo do público-alvo do cliente (`summary.client.target_label`) mora AQUI
+// e não no KPI "Impactos no target": aquele KPI já usa auto-fit de fonte e o
+// rótulo "IMPACTOS NO TARGET" sozinho já encosta no piso de 5,5pt na largura
+// que sobra com 5 boxes — anexar o público-alvo estouraria a caixa. No hero
+// sobra a largura inteira da página, então vira uma linha própria e o card
+// cresce o suficiente pra ela.
+//
+// Devolve o Y da base do card, pra quem chama posicionar o que vem abaixo em
+// relação ao hero em vez de num literal (o hero passou a ter 2 alturas).
 function drawHero(doc, summary, marginX, y) {
   const pageW = doc.internal.pageSize.getWidth()
   const w = pageW - marginX * 2
+  const targetLabel = (summary.client?.target_label ?? '').trim()
+  // 36mm é a altura histórica (título + 1 linha de meta). Com público-alvo,
+  // +8mm abrem a linha extra sem apertar as existentes.
+  const cardH = targetLabel ? 44 : 36
 
   // Faixa de identidade no topo do hero (acento rosa de 2pt).
   setColor(doc, 'fill', TOKENS.action)
   doc.rect(marginX, y, w, 2.5, 'F')
 
   // Card branco em baixo.
-  drawCard(doc, marginX, y + 2.5, w, 36)
+  drawCard(doc, marginX, y + 2.5, w, cardH)
 
   // Título "Relatório de Veiculações" em cinza menor.
   setColor(doc, 'text', TOKENS.text3)
@@ -184,6 +198,19 @@ function drawHero(doc, summary, marginX, y) {
   const clientName = summary.client?.name || '—'
   doc.text(`${clientName}  ·  ${period}`, marginX + 8, y + 31)
 
+  // Linha do público-alvo, logo abaixo da meta (cliente · período) — é uma
+  // qualificação do cliente, então fica junto dele. Corpo menor e cinza claro
+  // pra não competir com a meta. splitTextToSize + [0] garante 1 linha só: a
+  // largura útil (w − 16mm ≈ 164mm) comporta com folga os 60 caracteres que a
+  // UI permite, mas o backend aceita até 200 e um rótulo assim não pode
+  // vazar pra fora do card.
+  if (targetLabel) {
+    setColor(doc, 'text', TOKENS.text3)
+    doc.setFontSize(9)
+    const line = doc.splitTextToSize(`Público-alvo: ${targetLabel}`, w - 16)
+    doc.text(line[0], marginX + 8, y + 39)
+  }
+
   // Status badge no canto direito do hero.
   const status = summary.campaign?.status || 'concluida'
   const sLabel = STATUS_LABEL[status] || status
@@ -197,6 +224,8 @@ function drawHero(doc, summary, marginX, y) {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(8)
   doc.text(sLabel, sX + 5, sY + 4.8)
+
+  return y + 2.5 + cardH
 }
 
 // Linha rodapé padrão em cada página.
@@ -304,12 +333,17 @@ export async function buildCampaignReportPDF(summary) {
   }
 
   // 2) Hero (campanha + cliente + período + status badge).
-  drawHero(doc, summary, marginX, 30)
+  const heroBottom = drawHero(doc, summary, marginX, 30)
 
   // 3) KPIs. Sem cadastro de PMM no target: 4 boxes (Impactos entra pra todos).
   //    Com cadastro: 5 boxes (Impactos no target entra). `hasTarget` também é
   //    reusado mais abaixo, na tabela "Por emissora" (§5).
-  const kpiY = 76
+  //    kpiY acompanha a base do hero (que cresce quando o cliente tem rótulo de
+  //    público-alvo) mantendo os mesmos 7,5mm de respiro. Sem rótulo o hero
+  //    termina em 68,5 e isto dá exatamente os 76 do layout original. Tudo o
+  //    que vem depois já se posiciona em relação a kpiY (legenda, seções,
+  //    tabelas), então o deslocamento propaga sozinho.
+  const kpiY = heroBottom + 7.5
   const kpiH = 22
   const kpiGap = 4
   const pageW = doc.internal.pageSize.getWidth()

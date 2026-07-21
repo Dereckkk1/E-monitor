@@ -554,6 +554,15 @@ export default function DetectionsPage() {
     return m
   }, [targetPmmRows])
 
+  // Rótulo do público-alvo do MESMO cliente (clients.target_label). Só entra no
+  // tooltip da pill teal — o label visível fica curto por causa da coluna de
+  // 180px. null quando o cliente não cadastrou rótulo.
+  const targetLabel = useMemo(() => {
+    if (!selectedCampaign?.client_id) return null
+    const raw = clientMap.get(selectedCampaign.client_id)?.target_label
+    return (raw ?? '').trim() || null
+  }, [selectedCampaign, clientMap])
+
   const {
     data: summary = [],
     isLoading: loadingSummary,
@@ -1131,6 +1140,7 @@ export default function DetectionsPage() {
             cellData={cellData}
             pricingByStation={pricingByStation}
             pmmTargetByStation={pmmTargetByStation}
+            targetLabel={targetLabel}
             inlineStationInfo
             onCellClick={(stationId, typeId, dateISO) =>
               setModalCell({ stationId, typeId, dateISO })}

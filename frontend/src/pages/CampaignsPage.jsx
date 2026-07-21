@@ -990,7 +990,11 @@ function CampaignStationsSection({ campaign, allStations }) {
 const _BRL_CAMPAIGN_LIST = new Intl.NumberFormat('pt-BR', {
   style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
-function CampaignFinancials({ financials, loading }) {
+// targetLabel: rótulo do público-alvo do cliente (clients.target_label). Entra
+// SÓ nos tooltips de "CPM no target"/"Impactos no target" — os rótulos visíveis
+// são curtos por restrição de espaço na row. null = sem rótulo → tooltips
+// idênticos aos de antes.
+function CampaignFinancials({ financials, loading, targetLabel = null }) {
   // Enquanto a query de financials não resolveu, reserva o espaço com o
   // esqueleto de mesma forma — evita layout shift quando o valor entra.
   if (loading) return <CampaignFinancialsSkeleton />
@@ -1011,6 +1015,7 @@ function CampaignFinancials({ financials, loading }) {
   // total, não sobre o recorte de público-alvo.
   const hasTarget = (withTarget ?? 0) > 0 && audTarget > 0
   const cpmTarget = hasTarget ? (inv / audTarget) * 1000 : null
+  const targetSuffix = targetLabel ? ` (${targetLabel})` : ''
   const cpmTip = isFixed
     ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. Investimento ${_BRL_CAMPAIGN_LIST.format(inv)} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
     : cpm != null
@@ -1031,7 +1036,7 @@ function CampaignFinancials({ financials, loading }) {
       </span>
       {hasTarget && (
         <span className="campaign-fin-sub"
-              title={`CPM no target: ${_BRL_CAMPAIGN_LIST.format(cpmTarget)} — sempre dinâmico (investimento ÷ impactos no target × 1000).`}>
+              title={`CPM no target${targetSuffix}: ${_BRL_CAMPAIGN_LIST.format(cpmTarget)}, sempre dinâmico (investimento ÷ impactos no target × 1000).`}>
           <span className="campaign-fin-sub-label">CPM no target</span> {_BRL_CAMPAIGN_LIST.format(cpmTarget)}
         </span>
       )}
@@ -1047,7 +1052,7 @@ function CampaignFinancials({ financials, loading }) {
       </span>
       {hasTarget && (
         <span className="campaign-fin-sub"
-              title={`${Math.round(audTarget).toLocaleString('pt-BR')} impactos no target · ${withTarget} emissoras com target cadastrado`}>
+              title={`${Math.round(audTarget).toLocaleString('pt-BR')} impactos no target${targetSuffix} · ${withTarget} emissoras com target cadastrado`}>
           <span className="campaign-fin-sub-label">Impactos no target</span> {Math.round(audTarget).toLocaleString('pt-BR')}
         </span>
       )}
@@ -1154,7 +1159,13 @@ function CampaignRow({ campaign, clients, allStations, cancelCampaign, financial
           </div>
         </div>
 
-        <CampaignFinancials financials={financials} loading={financialsLoading} />
+        {/* targetLabel sai do cliente da campanha (já resolvido acima em
+            `client`). Vazio/ausente → null e os tooltips ficam como antes. */}
+        <CampaignFinancials
+          financials={financials}
+          loading={financialsLoading}
+          targetLabel={(client?.target_label ?? '').trim() || null}
+        />
 
         <div className="campaign-row-actions">
           {/* Relatórios: CSV consolidado / detalhado / PDF. Sem from/to →
