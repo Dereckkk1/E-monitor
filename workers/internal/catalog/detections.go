@@ -1114,7 +1114,12 @@ type MaterialStationRow struct {
 	StationFrequencyMHz *float64  `json:"station_frequency_mhz,omitempty"`
 	StationCity         *string   `json:"station_city,omitempty"`
 	StationState        *string   `json:"station_state,omitempty"`
-	Count               int       `json:"count"`
+	// PMM total da emissora e PMM no target do cliente dono da campanha.
+	// StationPMMTarget nil = par (cliente, emissora) não cadastrado — a
+	// célula do relatório fica vazia, que é diferente de zero.
+	StationPMM       *float64 `json:"station_pmm,omitempty"`
+	StationPMMTarget *int     `json:"station_pmm_target"`
+	Count            int      `json:"count"`
 	// Breakdown por status — soma sempre == Count.
 	InSlotCount     int       `json:"in_slot_count"`
 	OutSlotCount    int       `json:"out_slot_count"`
@@ -1134,6 +1139,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		       m.duration_seconds, mt.name,
 		       d.station_id, COALESCE(s.name, ''),
 		       s.band, s.frequency_mhz, s.city, s.state,
+		       s.pmm, cst.pmm_target,
 		       COUNT(*) AS cnt,
 		       COUNT(*) FILTER (WHERE d.category = 'in_slot')  AS in_slot_count,
 		       COUNT(*) FILTER (WHERE d.category = 'out_slot') AS out_slot_count,
@@ -1145,6 +1151,9 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		LEFT JOIN materials m       ON m.id = d.commercial_id
 		LEFT JOIN material_types mt ON mt.id = m.type_id
 		LEFT JOIN stations s        ON s.id = d.station_id
+		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
+		LEFT JOIN client_station_pmm cst
+		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
 		WHERE d.campaign_id = $1
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
@@ -1152,7 +1161,8 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
 		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, mt.name,
-		         d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state
+		         d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
+		         s.pmm, cst.pmm_target
 		ORDER BY COALESCE(m.title, c.title, '') ASC, s.name ASC`,
 		f.CampaignID, f.StartDate, f.EndDate)
 	if err != nil {
@@ -1168,6 +1178,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 			&r.MaterialDurationSec, &r.MaterialTypeName,
 			&r.StationID, &r.StationName,
 			&r.StationBand, &r.StationFrequencyMHz, &r.StationCity, &r.StationState,
+			&r.StationPMM, &r.StationPMMTarget,
 			&r.Count,
 			&r.InSlotCount, &r.OutSlotCount, &r.OutDateCount, &r.OrphanCount,
 			&r.FirstDetectedAt, &r.LastDetectedAt,
@@ -1187,7 +1198,10 @@ type StationAggregateRow struct {
 	StationFrequencyMHz *float64  `json:"station_frequency_mhz,omitempty"`
 	StationCity         *string   `json:"station_city,omitempty"`
 	StationState        *string   `json:"station_state,omitempty"`
-	Count               int       `json:"count"`
+	// StationPMMTarget nil = par (cliente, emissora) não cadastrado.
+	StationPMM       *float64 `json:"station_pmm,omitempty"`
+	StationPMMTarget *int     `json:"station_pmm_target"`
+	Count            int      `json:"count"`
 }
 
 // AggregateByStation devolve total de veiculações por emissora — usado tanto
@@ -1195,16 +1209,21 @@ type StationAggregateRow struct {
 func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) ([]StationAggregateRow, error) {
 	rows, err := d.pool.Query(ctx, `
 		SELECT d.station_id, COALESCE(s.name, ''), s.band, s.frequency_mhz, s.city, s.state,
+		       s.pmm, cst.pmm_target,
 		       COUNT(*) AS cnt
 		FROM detection_attributions d
 		LEFT JOIN stations s ON s.id = d.station_id
+		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
+		LEFT JOIN client_station_pmm cst
+		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
 		WHERE d.campaign_id = $1
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
-		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state
+		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
+		         s.pmm, cst.pmm_target
 		ORDER BY cnt DESC, s.name ASC`,
 		f.CampaignID, f.StartDate, f.EndDate)
 	if err != nil {
@@ -1217,7 +1236,9 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		var r StationAggregateRow
 		if err := rows.Scan(
 			&r.StationID, &r.StationName, &r.StationBand, &r.StationFrequencyMHz,
-			&r.StationCity, &r.StationState, &r.Count,
+			&r.StationCity, &r.StationState,
+			&r.StationPMM, &r.StationPMMTarget,
+			&r.Count,
 		); err != nil {
 			return nil, err
 		}

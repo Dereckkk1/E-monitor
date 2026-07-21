@@ -157,6 +157,10 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		// Breakdown por status — útil pra fechamento (saber quanto foi
 		// bônus, quanto foi fora-faixa, etc. dentro de cada combinação).
 		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
+		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
+		// usa o PMM no target do cliente dono da campanha; vazia quando não há
+		// cadastro (não confundir com zero).
+		"PMM", "Impactos", "PMM no target", "Impactos no target",
 		"Primeira", "Última",
 	})
 
@@ -174,6 +178,16 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		if row.StationFrequencyMHz != nil {
 			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *row.StationFrequencyMHz), ".", ",")
 		}
+		pmmStr, impactosStr := "", ""
+		if row.StationPMM != nil {
+			pmmStr = strings.ReplaceAll(fmt.Sprintf("%.0f", *row.StationPMM), ".", ",")
+			impactosStr = fmt.Sprintf("%.0f", *row.StationPMM*float64(row.Count))
+		}
+		pmmTargetStr, impactosTargetStr := "", ""
+		if row.StationPMMTarget != nil {
+			pmmTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget)
+			impactosTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget*row.Count)
+		}
 		_ = cw.Write([]string{
 			idLabel,
 			row.MaterialTitle,
@@ -189,6 +203,10 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%d", row.OutSlotCount),
 			fmt.Sprintf("%d", row.OutDateCount),
 			fmt.Sprintf("%d", row.OrphanCount),
+			pmmStr,
+			impactosStr,
+			pmmTargetStr,
+			impactosTargetStr,
 			row.FirstDetectedAt.In(loc).Format("02/01/2006 15:04"),
 			row.LastDetectedAt.In(loc).Format("02/01/2006 15:04"),
 		})
@@ -218,6 +236,11 @@ type SummaryResponse struct {
 		Detections        int `json:"detections"`
 		DistinctMaterials int `json:"distinct_materials"`
 		DistinctStations  int `json:"distinct_stations"`
+		// Impactos = Σ (veiculações da emissora × PMM). ImpactosTarget usa o
+		// PMM no target; StationsWithTarget > 0 é o gate de exibição no PDF.
+		Impactos           int64 `json:"impactos"`
+		ImpactosTarget     int64 `json:"impactos_target"`
+		StationsWithTarget int   `json:"stations_with_target"`
 	} `json:"totals"`
 	ByMaterial        []catalog.MaterialAggregateRow `json:"by_material"`
 	ByStation         []catalog.StationAggregateRow  `json:"by_station"`
@@ -272,6 +295,17 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	resp.Totals.Detections = byMaterial.TotalDetections
 	resp.Totals.DistinctMaterials = byMaterial.DistinctMaterials
 	resp.Totals.DistinctStations = len(byStation)
+	// Impactos derivados de byStation (uma linha por emissora), não de
+	// byMaterialStation — senão a mesma emissora entraria uma vez por material.
+	for _, s := range byStation {
+		if s.StationPMM != nil {
+			resp.Totals.Impactos += int64(*s.StationPMM * float64(s.Count))
+		}
+		if s.StationPMMTarget != nil {
+			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.Count)
+			resp.Totals.StationsWithTarget++
+		}
+	}
 	resp.ByMaterial = byMaterial.Data
 	resp.ByStation = byStation
 	resp.ByMaterialStation = byMatSta
