@@ -205,10 +205,15 @@ function drawHero(doc, summary, marginX, y) {
   // UI permite, mas o backend aceita até 200 e um rótulo assim não pode
   // vazar pra fora do card.
   if (targetLabel) {
+    // Restaura o tamanho de fonte no fim: o badge de status logo abaixo mede
+    // a própria largura com getTextWidth() usando o tamanho corrente. Sem
+    // restaurar, a pílula sairia ~10% mais estreita só quando há rótulo.
+    const prevSize = doc.getFontSize()
     setColor(doc, 'text', TOKENS.text3)
     doc.setFontSize(9)
     const line = doc.splitTextToSize(`Público-alvo: ${targetLabel}`, w - 16)
     doc.text(line[0], marginX + 8, y + 39)
+    doc.setFontSize(prevSize)
   }
 
   // Status badge no canto direito do hero.
