@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,6 +47,33 @@ const clientIDKey ctxClientKey = "client_id"
 func ClientIDFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(clientIDKey).(string)
 	return id, ok
+}
+
+// APIKeyViewerScope turns the API key's client_id (recorded by Middleware
+// under clientIDKey) into synthetic viewer Claims, so handlers that resolve the
+// tenant via ClientScopeFromContext enforce isolation on the external /v1/*
+// surface identically to a JWT viewer.
+//
+// Fail-closed: a request without a valid client_id in context is rejected 401
+// rather than passed through. Without this, ClientScopeFromContext would return
+// nil, which the system treats as "no scope = see everything" — the BOLA that
+// let one client's key read every client's data (audit 2026-07-21, C-01). Mount
+// this immediately after Middleware on any API-key-protected route group.
+func APIKeyViewerScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idStr, ok := ClientIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		cid, err := uuid.Parse(idStr)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := ContextWithClaims(r.Context(), &Claims{Role: "viewer", ClientID: &cid})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (m *APIKeyMiddleware) Middleware(next http.Handler) http.Handler {
