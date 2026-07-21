@@ -1035,8 +1035,15 @@ function CampaignFinancials({ financials, loading }) {
           <span className="campaign-fin-sub-label">CPM no target</span> {_BRL_CAMPAIGN_LIST.format(cpmTarget)}
         </span>
       )}
-      <span className="campaign-fin-sub" title={`${Math.round(aud).toLocaleString('pt-BR')} impressões`}>
-        <span className="campaign-fin-sub-label">Impactos</span> {Math.round(aud).toLocaleString('pt-BR')}
+      {/* aud === 0 não é "zero impactos" — é indeterminado (mesma causa que
+          deixa o CPM em "—" ao lado: sem PMM cadastrado ou sem inserção
+          ainda). Mostrar "0" seria factualmente errado. */}
+      <span className="campaign-fin-sub" title={aud > 0
+        ? `${Math.round(aud).toLocaleString('pt-BR')} impressões`
+        : ins > 0
+          ? 'Emissoras sem PMM cadastrado — impactos indeterminados.'
+          : 'Nenhuma inserção realizada ainda — impactos indeterminados.'}>
+        <span className="campaign-fin-sub-label">Impactos</span> {aud > 0 ? Math.round(aud).toLocaleString('pt-BR') : '—'}
       </span>
       {hasTarget && (
         <span className="campaign-fin-sub"

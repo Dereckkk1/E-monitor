@@ -194,10 +194,14 @@ export default function AirtimeDetectionRow({
           <span>{pmm ?? '—'}</span>
         </div>
         {pmmTarget != null && (
-          <div className="airtime-row-pill airtime-row-pill-pmm airtime-row-pill-target"
+          <div className="airtime-row-pill airtime-row-pill-target"
                title={`PMM no target: ${detection.station_pmm_target}`}>
             <IconHeadset />
-            <span>{pmmTarget}</span>
+            <span>
+              {pmmTarget}
+              <span className="airtime-row-pill-suffix-full"> target</span>
+              <span className="airtime-row-pill-suffix-short"> tgt</span>
+            </span>
           </div>
         )}
       </div>
