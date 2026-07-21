@@ -155,18 +155,27 @@ O CSV consolidado é **por linha (material × emissora)**, então somar a coluna
 **2. `stations_with_target` em `/campaigns` pode contar emissoras que contribuem 0.**
 A CTE `target_cov` conta `DISTINCT station_id` de `campaign_station_pricing ⋈ client_station_pmm` — mas uma emissora em modo `per_insertion` **sem preço por tipo cadastrado** é eliminada pela CTE `per_ins` (`JOIN campaign_station_type_pricing`) e não soma audiência. O badge pode dizer "2 de N com target" com o valor vindo de **uma só**. É o mesmo comportamento que `total_audience` já tinha — não é regressão, mas confunde. (A CTE é separada de propósito: somar as contagens de `per_ins` + `consolidated_ins` contaria em dobro emissoras presentes nos dois modos.)
 
-**3. Assimetria de arredondamento entre CSV e PDF.**
-`stations.pmm` é `numeric(10,2)`, então `pmm × count` quase nunca é inteiro:
-- CSV consolidado (`reports.go`) **arredonda**: `fmt.Sprintf("%.0f", pmm*count)`.
-- Total do PDF (`Summary.Totals.Impactos`, Go) **trunca**: `int64(pmm * count)`.
-- Coluna "Impactos" da tabela do PDF (`pdfReport.js`, JS) **arredonda**: `Math.round(pmm*count)`.
+**3. Arredondamento: tudo arredonda, e tem que continuar assim.**
+`stations.pmm` é `numeric(10,2)`, então `pmm × count` quase nunca é inteiro. Os três pontos de cálculo **arredondam**, de propósito:
+- CSV consolidado (`reports.go`): `fmt.Sprintf("%.0f", pmm*count)`.
+- Total do PDF (`Summary.Totals.Impactos`, Go): `int64(math.Round(pmm * count))`.
+- Coluna "Impactos" da tabela do PDF (`pdfReport.js`, JS): `Math.round(pmm*count)`.
 
-Podem divergir em até **1 por emissora** — e o KPI "Impactos" do PDF pode ficar até 1×N abaixo da soma da sua própria coluna. Impactos **no target** não sofre disso: `pmm_target` é `INTEGER`, o produto é exato.
+O total do PDF **truncava** originalmente, o que fazia o KPI do topo ficar até 1×N **abaixo da soma da sua própria coluna, no mesmo documento**. Corrigido em `0c22def`. Se mexer em qualquer um dos três, mantenha o arredondamento nos outros dois. Impactos **no target** não sofre disso: `pmm_target` é `INTEGER`, o produto é exato.
 
-**4. O PDF de campanha tem menos detalhe que o CSV consolidado.**
-O CSV traz as 4 colunas por **material × emissora**; no PDF só a tabela **"Por emissora"** ganhou as colunas. Decisão de escopo — a área útil da página A4 (180mm) não comporta mais duas colunas na tabela por material.
+**4. "Impactos" tem DUAS definições nos exportáveis — decisão consciente do dono (2026-07-21).**
+- PDF de campanha e CSV consolidado: `pmm × count`, onde `count` são **todas** as categorias aprovadas (in_slot + out_slot + out_date + bônus).
+- CSV e PDF de **grade**: `pmm × Σ in_slot`.
 
-**5. `stations_count` de `/insights` precisou de `DISTINCT`.**
+O mesmo cliente, na mesma campanha, vê números diferentes conforme o relatório que baixar. **Isso não é bug.** É a mesma regra de "cada superfície espelha a base da sua tela de origem" descrita acima: o relatório de grade espelha a grade de `/detections` (que mostra `in_slot` na pill), e o PDF espelha o conjunto aprovado. Alternativa avaliada e **recusada**: unificar numa base só — quebraria a coerência entre cada relatório e a tela que o gerou.
+
+**4b. A coluna "Impactos" do CSV de grade É somável.**
+Ela é rateada **por material** (`pmm × in_slot daquele material naquela emissora`), não repetida por linha. Arrastar a coluna no Excel dá o total certo. Isso foi corrigido em `ddfff07` — a primeira versão emitia o valor de nível-emissora em cada linha de material, o que **triplicava** a soma numa emissora com 3 materiais. Se mexer no `buildGridReportModel`, o modelo mantém os dois níveis de propósito: `byStation[].impactos` (nível emissora, alimenta a nota do PDF e a pill do `StationTotalCell`) e o valor por linha do CSV. Não colapse os dois.
+
+**5. O PDF de campanha tem menos detalhe que o CSV consolidado — decisão consciente do dono (2026-07-21).**
+O CSV traz as 4 colunas por **material × emissora**; no PDF só a tabela **"Por emissora"** ganhou as colunas. Motivo técnico: na tabela de detalhe do PDF sobram 42mm para a coluna "Material", e as duas colunas novas a deixariam com ~8mm (ou ~26mm mesmo encolhendo o resto) — títulos como "VERISURE CARVÃO 30S" não caberiam. Alternativas avaliadas e **adiadas**: virar aquela seção para paisagem (267mm úteis) ou trocar as 4 colunas de status por 1 de Impactos. Se a paridade PDF↔CSV virar demanda, a paisagem é o caminho.
+
+**6. `stations_count` de `/insights` precisou de `DISTINCT`.**
 A CTE `per_station` passou a particionar por `client_id` (para resolver o target), então uma emissora usada por 2 clientes vira 2 linhas. Os contadores viraram `COUNT(DISTINCT station_id)`; as **somas** não foram afetadas. Se você mexer nessa query, mantenha o `DISTINCT`.
 
 ## Testes
