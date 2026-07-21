@@ -188,9 +188,13 @@ services:
       # Teto soft do HEAP GO — o GC fica agressivo perto do limite em vez de
       # deixar o heap crescer sem controle. IMPORTANTE (correção 2026-07-17):
       # isso NÃO protege o container do OOM killer do kernel. O RSS deste
-      # container é dominado pelos ~200 processos ffmpeg de captura (medido:
-      # ~88MB base + 14.8MB/emissora ≈ 3GB a 200 emissoras — ver
-      # docs/operations/deploy.md), que ficam FORA do heap Go e portanto FORA
+      # container é dominado pelos ~200 processos ffmpeg de captura (medido em
+      # prod 2026-07-21 com 173 emissoras: ~45MB RSS bruto/emissora, ~30MB
+      # líquido descontando páginas compartilhadas ≈ 6-9GB a 200 emissoras.
+      # O número anterior aqui — 14.8MB/emissora ≈ 3GB a 200 — vinha de um
+      # stress test de 50 workers em 08/05/2026 e subestimava em ~2-3×.
+      # Ver docs/operations/capacity-and-unit-cost.md), que ficam FORA do heap
+      # Go e portanto FORA
       # do alcance do GOMEMLIMIT. Por isso o service `api` não tem `mem_limit`
       # no compose — um hard limit ali arriscaria matar a captura (core do
       # produto) em vez de só conter o heap Go.
