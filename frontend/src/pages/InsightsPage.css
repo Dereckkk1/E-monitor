@@ -2,7 +2,8 @@
  *
  * Prefix `.in-`. Reusa tokens globais (--c-text, --c-surface, etc.)
  * definidos em styles/variables.css. Layout em 3 rows:
- *   Row 1 (cards): grid 5fr (cai pra 3 / 2 / 1 conforme breakpoint)
+ *   Row 1 (cards): grid auto-fit (o número de cards varia — 4 a 7 — conforme
+ *     consolidado/target; a coluna se ajusta sozinha, ver .in-row--cards)
  *   Row 2 (gráficos demográficos + pizza): grid 1fr 1fr 1fr
  *   Row 3 (gráfico daily/monthly full-width)
  */
@@ -150,16 +151,16 @@
   display: grid;
   gap: 16px;
 }
-.in-row--cards { grid-template-columns: repeat(5, 1fr); }
-/* Consolidado esconde a Bonificação → 4 cards. Classe simples (mesma
-   especificidade de .in-row--cards) e depois na ordem, então vence no desktop;
-   as media queries abaixo (mais adiante na ordem) ainda reduzem no mobile. */
-.in-row--cards--4 { grid-template-columns: repeat(4, 1fr); }
+/* auto-fit em vez de repeat(N, 1fr): o total de cards varia de 4 (consolidado,
+   sem target) a 7 (não-consolidado, com target no cliente) — ver KpiCards.jsx.
+   Tracks vazios colapsam a 0 (auto-fit), então os cards existentes sempre
+   esticam pra preencher a linha inteira, qualquer que seja a contagem —
+   sem precisar enumerar "4 cols" / "5 cols" / "7 cols" por caso. */
+.in-row--cards { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .in-row--charts { grid-template-columns: repeat(3, 1fr); }
 
-@media (max-width: 1280px) { .in-row--cards { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1024px) { .in-row--charts { grid-template-columns: 1fr; } }
-@media (max-width: 720px)  { .in-row--cards  { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 480px)  { .in-row--cards  { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .in-card {
