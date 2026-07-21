@@ -29,13 +29,19 @@ type Client struct {
 	City         *string   `json:"city,omitempty"`
 	State        *string   `json:"state,omitempty"`
 	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// TargetLabel é o rótulo do público-alvo do cliente ("Homens 25-49"),
+	// usado como sufixo dos números "no target" nas telas/relatórios. Sem
+	// omitempty de propósito: o frontend precisa receber `null` explícito
+	// para distinguir "sem rótulo" de string vazia (mesma convenção de
+	// TargetPMMRow.PMMTarget).
+	TargetLabel *string   `json:"target_label"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // clientColumns is the canonical SELECT/RETURNING projection, kept in one place
 // so the column order never drifts from scanClient's Scan order.
-const clientColumns = `id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, is_active, created_at, updated_at`
+const clientColumns = `id, name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, is_active, created_at, updated_at, target_label`
 
 // scanClient reads one row in clientColumns order. Works with both QueryRow
 // (single) and Rows (loop) since both satisfy pgx.Row.
@@ -43,7 +49,7 @@ func scanClient(row pgx.Row) (*Client, error) {
 	var c Client
 	err := row.Scan(&c.ID, &c.Name, &c.LogoURL, &c.ContactEmail, &c.ContactName,
 		&c.Phone, &c.CNPJ, &c.CEP, &c.City, &c.State, &c.IsActive,
-		&c.CreatedAt, &c.UpdatedAt)
+		&c.CreatedAt, &c.UpdatedAt, &c.TargetLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +86,9 @@ type CreateClientInput struct {
 	CEP          *string `json:"cep,omitempty"`
 	City         *string `json:"city,omitempty"`
 	State        *string `json:"state,omitempty"`
+	// TargetLabel: rótulo do público-alvo (texto livre). Sem omitempty —
+	// `null` explícito significa "sem rótulo".
+	TargetLabel *string `json:"target_label"`
 }
 
 type UpdateClientInput struct {
@@ -92,6 +101,7 @@ type UpdateClientInput struct {
 	CEP          *string `json:"cep"`
 	City         *string `json:"city"`
 	State        *string `json:"state"`
+	TargetLabel  *string `json:"target_label"`
 }
 
 // WebhookConfig represents a client's webhook delivery configuration (§13.1.4).
@@ -116,20 +126,20 @@ type UpdateWebhookInput struct {
 
 func (c *Clients) Create(ctx context.Context, in CreateClientInput) (*Client, error) {
 	return scanClient(c.pool.QueryRow(ctx, `
-		INSERT INTO clients (name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO clients (name, logo_url, contact_email, contact_name, phone, cnpj, cep, city, state, target_label)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING `+clientColumns,
-		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State,
+		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State, in.TargetLabel,
 	))
 }
 
 func (c *Clients) Update(ctx context.Context, id uuid.UUID, in UpdateClientInput) (*Client, error) {
 	return scanClient(c.pool.QueryRow(ctx, `
 		UPDATE clients
-		SET name=$1, logo_url=$2, contact_email=$3, contact_name=$4, phone=$5, cnpj=$6, cep=$7, city=$8, state=$9, updated_at=NOW()
-		WHERE id=$10
+		SET name=$1, logo_url=$2, contact_email=$3, contact_name=$4, phone=$5, cnpj=$6, cep=$7, city=$8, state=$9, target_label=$10, updated_at=NOW()
+		WHERE id=$11
 		RETURNING `+clientColumns,
-		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State, id,
+		in.Name, in.LogoURL, in.ContactEmail, in.ContactName, in.Phone, in.CNPJ, in.CEP, in.City, in.State, in.TargetLabel, id,
 	))
 }
 

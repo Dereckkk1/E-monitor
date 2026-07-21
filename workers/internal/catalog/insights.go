@@ -54,6 +54,13 @@ type InsightsPayload struct {
 	// (fixo, estilo fornecedor) e o frontend esconde o card de Bonificação
 	// (que fica zerada). Ver docs/features/insights-dashboard.md.
 	Consolidated bool `json:"consolidated"`
+	// TargetLabel é o rótulo do público-alvo do cliente ("Homens 25-49"),
+	// usado pela UI como sufixo dos cards "no target". Só vem preenchido
+	// quando TODAS as campanhas filtradas são de um único cliente E esse
+	// cliente tem rótulo: se o filtro mistura clientes, os impactos no target
+	// somam públicos-alvo diferentes e rotular seria mentira. Sem omitempty —
+	// `null` é o valor significativo ("mostre só 'no target'").
+	TargetLabel *string `json:"target_label"`
 }
 
 type PeriodSpec struct {
@@ -189,6 +196,11 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
 
+	targetLabel, err := r.targetLabel(ctx, p.CampaignIDs)
+	if err != nil {
+		return nil, fmt.Errorf("targetLabel: %w", err)
+	}
+
 	// CPM no target é SEMPRE dinâmico (executado ÷ impactos_target × 1000),
 	// mesmo em campanha com fixed_cpm: o CPM fixo é contratado sobre a base
 	// total de audiência, não sobre o recorte de público-alvo.
@@ -223,7 +235,33 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		VeiculacoesBreakdown: core.Breakdown,
 		Buckets:              buckets,
 		Consolidated:         hasConsolidated,
+		TargetLabel:          targetLabel,
 	}, nil
+}
+
+// targetLabel devolve o rótulo do público-alvo a exibir junto dos números
+// "no target" — mas só quando as campanhas filtradas pertencem todas a UM
+// cliente. Com mais de um cliente na seleção o CASE não casa e o resultado é
+// NULL: os impactos no target somam públicos-alvo distintos, então a UI
+// mostra "Impactos no target" sem sufixo em vez de rotular errado.
+//
+// max() sobre um único cliente devolve o rótulo dele (ou NULL se ele não tem
+// rótulo). Seleção vazia → nenhuma linha → nil.
+func (r *Insights) targetLabel(ctx context.Context, campaignIDs []uuid.UUID) (*string, error) {
+	if len(campaignIDs) == 0 {
+		return nil, nil
+	}
+	var label *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT CASE WHEN count(DISTINCT c.client_id) = 1
+		            THEN max(cl.target_label) END
+		FROM campaigns c
+		JOIN clients cl ON cl.id = c.client_id
+		WHERE c.id = ANY($1::uuid[])`, campaignIDs).Scan(&label)
+	if err != nil {
+		return nil, err
+	}
+	return label, nil
 }
 
 // orMaxDate devolve t, ou uma data no futuro distante quando t é zero (o "hoje"

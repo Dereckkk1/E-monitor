@@ -3,7 +3,10 @@ status: implementado
 ultima-verificacao: 2026-07-21
 codigo-relacionado:
   - migrations/0054_client_station_pmm.up.sql
+  - migrations/0055_client_target_label.up.sql
   - workers/internal/catalog/client_station_pmm.go
+  - workers/internal/catalog/clients.go
+  - workers/internal/api/handlers/clients.go
   - workers/internal/api/handlers/client_target_pmm.go
   - workers/internal/catalog/insights.go
   - workers/internal/catalog/campaigns.go
@@ -64,6 +67,29 @@ Consequência prática: um cliente com 40 emissoras-alvo e 3 cadastradas mostra 
 ### Sem versionamento histórico
 
 Não há `valid_from`/`valid_to`. Corrigir um valor **muda relatórios de meses anteriores** — exatamente como `stations.pmm` faz hoje. Decisão explícita: versionar exigiria carregar a data de cada tocada em todo join de leitura (5 consumidores) e resolveria um problema que o PMM global já tem sem causar dor. Se um dia versionarmos, os dois têm que ser versionados juntos.
+
+## Rótulo do público-alvo — `clients.target_label`
+
+Os números acima respondem "quantos do meu público", mas não dizem **qual** público. `clients.target_label` (migration **0055**) é um texto livre por cliente — ex.: `"Homens 25-49, classe AB"` — que as telas usam como **sufixo descritivo** dos rótulos existentes: "Impactos no target" vira "Impactos no target (Homens 25-49, classe AB)".
+
+- Coluna `TEXT` **nullable, sem default**: `NULL` = cliente sem rótulo → as telas continuam dizendo apenas "no target". Nenhum cliente existente ganha rótulo com a migration.
+- Sem versionamento temporal, igual ao `pmm_target`: corrigir o rótulo muda a legenda de relatórios passados.
+- Gravado pelos endpoints de cliente já existentes (`POST`/`PUT /v1/internal/clients`), campo `target_label` no corpo. O handler apara espaços, colapsa `""` em `NULL` e recusa acima de **200 caracteres** (a UI sugere 60). O DDL não tem `CHECK` — o limite mora onde a mensagem de erro é acionável.
+- A tag JSON é `target_label` **sem `omitempty`** em toda a superfície (`Client`, `SummaryResponse.Client`, `InsightsPayload`): o frontend precisa do `null` explícito para distinguir "sem rótulo" de string vazia — mesma convenção do `pmm_target`.
+
+### Onde o rótulo entra — e onde NÃO entra
+
+| Superfície | Comportamento |
+|---|---|
+| `GET/POST/PUT /v1/internal/clients` | `target_label` no payload do cliente |
+| `GET /reports/campaigns/{id}/summary` (JSON do PDF) | `client.target_label` |
+| CSV **consolidado** de campanha | cabeçalhos viram `PMM no target (rótulo)` / `Impactos no target (rótulo)` |
+| `GET /v1/internal/insights` | `target_label` no topo do payload — **só** quando todas as campanhas filtradas são de **um único** cliente **e** ele tem rótulo; filtro multi-cliente devolve `null` |
+| CSV **detalhado** (`/detections/export`) | **fica sem rótulo, de propósito** |
+
+A regra do `/insights` existe porque `impactos_target` ali é uma **soma sobre campanhas de clientes potencialmente diferentes**: rotular esse número com o target de um dos clientes seria mentira. O SQL é um `CASE WHEN count(DISTINCT client_id) = 1 THEN max(target_label) END`.
+
+Pelo mesmo motivo o CSV detalhado não recebe sufixo: `campaign_id` é **opcional** naquele export, então as linhas podem cobrir campanhas de vários clientes, cada um com o seu target — um rótulo único no cabeçalho estaria errado para parte das linhas. O CSV consolidado é sempre de **uma** campanha, logo de um cliente só, e aí o sufixo é seguro.
 
 ## API
 
