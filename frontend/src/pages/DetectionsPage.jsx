@@ -4,6 +4,7 @@ import {
   useCampaigns, useStations, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary, useCampaignPricing,
+  useClientTargetPmm,
 } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import RSelect from '../components/RSelect'
@@ -541,6 +542,17 @@ export default function DetectionsPage() {
     for (const p of pricingList) m[p.station_id] = p
     return m
   }, [pricingList])
+
+  // PMM no target do cliente dono da campanha selecionada. Sem campanha (ou
+  // sem cadastro) o mapa fica vazio e a grid não muda em nada.
+  const { data: targetPmmRows = [] } = useClientTargetPmm(selectedCampaign?.client_id, {
+    enabled: !!selectedCampaign?.client_id,
+  })
+  const pmmTargetByStation = useMemo(() => {
+    const m = {}
+    for (const r of targetPmmRows) if (r.pmm_target != null) m[r.station_id] = r.pmm_target
+    return m
+  }, [targetPmmRows])
 
   const {
     data: summary = [],
@@ -1117,6 +1129,7 @@ export default function DetectionsPage() {
             rows={pagedRows}
             cellData={cellData}
             pricingByStation={pricingByStation}
+            pmmTargetByStation={pmmTargetByStation}
             inlineStationInfo
             onCellClick={(stationId, typeId, dateISO) =>
               setModalCell({ stationId, typeId, dateISO })}

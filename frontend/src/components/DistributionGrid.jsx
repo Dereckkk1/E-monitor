@@ -43,6 +43,10 @@ export default function DistributionGrid({
   //     per_type?: [{type_id, unit_value}] }
   // Quando vazio/null, o resumo da direita mostra "R$ —" igual antes.
   pricingByStation = {},
+  // pmmTargetByStation: station_id → PMM no target do cliente dono da campanha.
+  // Ausente/vazio = feature não cadastrada; a pill de target não é renderizada
+  // e a grid fica idêntica à de antes.
+  pmmTargetByStation = {},
   // capAtToday: true (default) corta a grid em "hoje" — esperado em telas de
   // monitoramento (/detections) onde dias futuros ainda não têm dado real.
   // false mostra a campanha inteira até o end_date — esperado em telas de
@@ -299,6 +303,7 @@ export default function DistributionGrid({
                       cellData={cellData}
                       pricing={pricingByStation[row.stationId] ?? null}
                       pmm={Number(station.pmm) || 0}
+                      pmmTarget={pmmTargetByStation[row.stationId] ?? null}
                       summary={summary}
                     />
                   )}
@@ -409,11 +414,12 @@ function RowSummaryCell({ row, days, cellData, stationTotalWidth, summary = 'ful
 //
 // Cálculo:
 //   • Impactos    = pmm × Σ in_slot (somando todos os materiais da emissora)
+//   • Impactos no target = pmm_target × Σ in_slot (só quando cadastrado)
 //   • Valor:
 //       - consolidated  → consolidated_value (não depende das plays)
 //       - per_insertion → Σ (unit_value_tipo × in_slot_tipo) por tipo
 //   • Bônus em R$ (só per_insertion) → Σ (unit_value × bonus_tipo)
-function StationTotalCell({ rows, days, cellData, pricing, pmm, summary = 'full' }) {
+function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null, summary = 'full' }) {
   // Plan-only (/materials): a célula por emissora mostra QUANTO está programado
   // pra rodar nela no período visível — sem R$, sem impactos. Atende ao foco
   // "quanto está programado pra rodar em cada emissora".
@@ -477,6 +483,9 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, summary = 'full'
   }
 
   const impactos = pmm > 0 ? pmm * inSlotStation : null
+  // Espelha a base da própria tela (Σ in_slot), trocando pmm por pmm_target.
+  // null = sem cadastro pra essa emissora → pill não renderizada.
+  const impactosTarget = pmmTarget != null ? pmmTarget * inSlotStation : null
 
   return (
     <div style={{
@@ -503,6 +512,14 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, summary = 'full'
           ? `${fmtInt(impactos)} impactos = PMM ${fmtInt(pmm)} × ${inSlotStation} veiculações na estação`
           : 'PMM não cadastrado pra essa emissora'}
       />
+      {impactosTarget != null && (
+        <ValuePill
+          tone="violet"
+          icon={<IconHeadset />}
+          label={`${fmtImpactos(impactosTarget)} target`}
+          hint={`${fmtInt(impactosTarget)} impactos no target = PMM no target ${fmtInt(pmmTarget)} × ${inSlotStation} veiculações na estação`}
+        />
+      )}
       <ValuePill
         tone="green"
         icon={<IconCash />}
@@ -577,9 +594,13 @@ function SumPill({ variant, value, prefix = '', dim }) {
 }
 
 const VALUE_PILL_PALETTE = {
-  pink:  { bg: '#fce7f3', color: '#9d174d' },
-  green: { bg: '#dcfce7', color: '#166534' },
-  blue:  { bg: '#dbeafe', color: '#1d4ed8' },
+  pink:   { bg: '#fce7f3', color: '#9d174d' },
+  green:  { bg: '#dcfce7', color: '#166534' },
+  blue:   { bg: '#dbeafe', color: '#1d4ed8' },
+  // violet: pill de impactos-no-target, empilhada logo abaixo da de impactos
+  // (pink). Mesma família "headset/impactos" mas tom diferente pra não
+  // confundir as duas — ambas rosa/magenta ficariam parecidas demais lado a lado.
+  violet: { bg: '#ede9fe', color: '#6d28d9' },
 }
 
 function ValuePill({ tone, icon, label, hint }) {
