@@ -27,7 +27,7 @@ export default function KpiCards({ data }) {
             <span className="in-card-icon"><IconChartBars /></span>
             <span className="in-card-label">Impactos no target</span>
           </div>
-          <div className="in-card-value in-card-value--num">{fmtBR.format(k.impactos_target)}</div>
+          <div className="in-card-value in-card-value--num">{fmtBR.format(k.impactos_target ?? 0)}</div>
           <div className="in-card-sub">{k.stations_with_target} de {k.stations_count} emissoras</div>
         </div>
       )}
