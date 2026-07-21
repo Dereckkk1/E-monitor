@@ -818,7 +818,8 @@ export default function DetectionsPage() {
       periodLabel: rangeLabel(rangeStart, rangeEnd),
     },
     materialLookup: materialsByStationType,
-  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType])
+    pmmTargetByStation,
+  }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType, pmmTargetByStation])
 
   // Só liga o modo WYSIWYG quando temos o catálogo de emissoras pra resolver
   // nomes/dial (admin). Sem catálogo (ex.: viewer), cai no relatório backend
