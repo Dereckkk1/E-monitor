@@ -668,6 +668,9 @@ type DetectionEnriched struct {
 	StationState        *string    `json:"station_state,omitempty"`
 	StationLogoURL      *string    `json:"station_logo_url,omitempty"`
 	StationPMM          *float64   `json:"station_pmm,omitempty"`
+	// StationPMMTarget é o PMM no target do CLIENTE DONO da campanha desta
+	// atribuição, resolvido por (cmp.client_id × station_id). nil = sem cadastro.
+	StationPMMTarget    *int       `json:"station_pmm_target"`
 	MaterialDurationSec *float64   `json:"material_duration_sec,omitempty"`
 	MaterialTypeName    *string    `json:"material_type_name,omitempty"`
 	MaterialTypeColor   *string    `json:"material_type_color,omitempty"`
@@ -708,7 +711,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
 		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
-		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm,
+		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm, cst.pmm_target,
 		       m.duration_seconds, mt.name, mt.color,
 		       cmp.client_id, cli.name,
 		       COUNT(*) OVER () AS total
@@ -719,6 +722,8 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		LEFT JOIN material_types mt ON mt.id = m.type_id
 		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli       ON cli.id = cmp.client_id
+		LEFT JOIN client_station_pmm cst
+		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
@@ -763,7 +768,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 			&det.IgnoredAt, &det.IgnoredBy,
 			&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt,
 			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
-			&det.StationLogoURL, &det.StationPMM,
+			&det.StationLogoURL, &det.StationPMM, &det.StationPMMTarget,
 			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
 			&det.ClientID, &det.ClientName,
 			&total); err != nil {
@@ -864,7 +869,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		       d.evidence_status, d.evidence_key, d.evidence_size_bytes, d.category,
 		       m.type_id, d.retracted_at, d.ignored_at, d.ignored_by,
 		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
-		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm,
+		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm, cst.pmm_target,
 		       m.duration_seconds, mt.name, mt.color,
 		       cmp.client_id, cli.name
 		FROM detection_attributions d
@@ -874,6 +879,8 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		LEFT JOIN material_types mt ON mt.id = m.type_id
 		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli       ON cli.id = cmp.client_id
+		LEFT JOIN client_station_pmm cst
+		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
@@ -909,7 +916,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 			&det.IgnoredAt, &det.IgnoredBy,
 			&det.ManualAt, &det.ManualBy, &det.ManualNote, &det.CreatedAt,
 			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
-			&det.StationLogoURL, &det.StationPMM,
+			&det.StationLogoURL, &det.StationPMM, &det.StationPMMTarget,
 			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
 			&det.ClientID, &det.ClientName); err != nil {
 			return err
