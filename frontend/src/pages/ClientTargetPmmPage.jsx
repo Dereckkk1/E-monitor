@@ -1,11 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useClients, useClientTargetPmm, useSaveClientTargetPmm } from '../api/hooks'
+import {
+  useClients,
+  useClientTargetPmm,
+  useSaveClientTargetPmm,
+  useUpdateClient,
+} from '../api/hooks'
 import { useConfirm } from '../components/ConfirmModal'
 import { parsePastedTargets } from '../utils/targetPmmPaste'
 import './ClientTargetPmmPage.css'
 
 const fmtInt = new Intl.NumberFormat('pt-BR')
+
+// Acima deste número de emissoras, a barra de cobertura vira segmentos por
+// praça: 200 tracinhos numa fileira só viram ruído e o operador perde a
+// noção de "onde estão os buracos", que é justamente o valor da barra.
+const GROUP_BAR_THRESHOLD = 120
+
+// Teto visual do rótulo de público-alvo. O backend aceita mais (200), mas um
+// rótulo maior que isso não cabe no chip do cabeçalho sem quebrar a linha.
+const LABEL_MAX = 60
+const LABEL_COUNTER_FROM = 45
 
 /* ── Icons ────────────────────────────────────────────────────── */
 function ChevronLeft() {
@@ -49,6 +64,20 @@ function AlertIcon() {
     </svg>
   )
 }
+function PencilIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.4 2.4l2.2 2.2M10.3 1.5a1.25 1.25 0 0 1 1.8 1.8L4.6 10.8l-2.6.8.8-2.6z" />
+    </svg>
+  )
+}
+function PlusIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+      <path d="M7 2.5v9M2.5 7h9" />
+    </svg>
+  )
+}
 
 /* ── Helpers ──────────────────────────────────────────────────── */
 
@@ -79,6 +108,21 @@ function dial(row) {
 
 function place(row) {
   return [row.city, row.state].filter(Boolean).join('/')
+}
+
+// share devolve a fatia que o PMM no target representa do PMM total da
+// emissora. Sem PMM cadastrado (ou zerado) não há denominador: devolve null e
+// a UI simplesmente não mostra percentual em vez de inventar um.
+function share(target, pmm) {
+  if (target == null || pmm == null) return null
+  const total = Number(pmm)
+  if (!Number.isFinite(total) || total <= 0) return null
+  return (target / total) * 100
+}
+
+function fmtShare(pct) {
+  if (pct > 0 && pct < 1) return '<1%'
+  return `${Math.round(pct)}%`
 }
 
 /**
@@ -154,6 +198,171 @@ function useUnsavedGuard(when, message) {
   }, [when, navigate])
 }
 
+/* ── Rótulo de público-alvo (chip editável inline) ────────────── */
+/**
+ * TargetLabelControl edita `clients.target_label` sem sair da tela. O campo é
+ * texto livre ("Homens 25-49, classe AB") e serve pra dar sentido à coluna:
+ * sem ele, "PMM no target" não diz de qual target se trata.
+ *
+ * Defensivo por construção: `value` pode vir `undefined` (API sem o campo
+ * ainda) e o erro do PUT vira mensagem inline, nunca quebra a tela.
+ */
+function TargetLabelControl({ value, disabled, onSave, saving, error }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const inputRef = useRef(null)
+
+  const label = typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  function start() {
+    setText(label ?? '')
+    setEditing(true)
+  }
+
+  async function commit() {
+    const next = text.trim()
+    if (next === (label ?? '')) { setEditing(false); return }
+    const ok = await onSave(next === '' ? null : next)
+    if (ok) setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <div className="ctp-label ctp-label--editing">
+        <input
+          ref={inputRef}
+          className="input ctp-label-input"
+          type="text"
+          value={text}
+          maxLength={LABEL_MAX}
+          placeholder="Ex.: Homens 25-49, classe AB"
+          aria-label="Público-alvo do cliente"
+          onChange={e => setText(e.target.value.slice(0, LABEL_MAX))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            if (e.key === 'Escape') { e.preventDefault(); setEditing(false) }
+          }}
+        />
+        {text.length > LABEL_COUNTER_FROM && (
+          <span className={`ctp-label-count${text.length >= LABEL_MAX ? ' ctp-label-count--max' : ''}`}>
+            {text.length}/{LABEL_MAX}
+          </span>
+        )}
+        <button className="btn btn-primary btn-sm" onClick={commit} disabled={saving}>
+          {saving ? 'Salvando…' : 'Salvar'}
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setEditing(false)} disabled={saving}>
+          Cancelar
+        </button>
+        {error && <span className="ctp-label-error">{error}</span>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="ctp-label">
+      {label ? (
+        <button
+          type="button"
+          className="ctp-label-chip"
+          onClick={start}
+          disabled={disabled}
+          title="Editar o público-alvo deste cliente"
+        >
+          <TargetIcon size={12} />
+          <span className="ctp-label-chip-text">{label}</span>
+          <PencilIcon />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ctp-label-add"
+          onClick={start}
+          disabled={disabled}
+          title="Descreva o público que este cliente compra (ex.: Homens 25-49, classe AB)"
+        >
+          <PlusIcon /> definir público-alvo
+        </button>
+      )}
+      {error && <span className="ctp-label-error">{error}</span>}
+    </div>
+  )
+}
+
+/* ── Barra de cobertura ───────────────────────────────────────── */
+/**
+ * CoverageBar troca o contador "N de M" por distribuição: um segmento fino por
+ * emissora, na ordem da lista. O operador enxerga ONDE estão os buracos, não
+ * só quantos são. Acima de GROUP_BAR_THRESHOLD emissoras os segmentos são
+ * agrupados por praça, senão a fileira única vira ruído.
+ */
+function CoverageBar({ rows, isFilled }) {
+  const total = rows.length
+  const filled = rows.reduce((n, r) => n + (isFilled(r) ? 1 : 0), 0)
+  const pct = total > 0 ? Math.round((filled / total) * 100) : 0
+  const aria = `Cobertura de PMM no target: ${filled} de ${total} emissoras preenchidas (${pct}%).`
+
+  const groups = useMemo(() => {
+    if (total <= GROUP_BAR_THRESHOLD) return null
+    const map = new Map()
+    for (const r of rows) {
+      const key = place(r) || 'Sem praça'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(r)
+    }
+    return Array.from(map, ([name, items]) => ({ name, items }))
+  }, [rows, total])
+
+  function seg(r) {
+    const on = isFilled(r)
+    return (
+      <span
+        key={r.station_id}
+        className={`ctp-seg${on ? ' ctp-seg--on' : ''}`}
+        title={`${r.name}${on ? '' : ': sem PMM no target'}`}
+      />
+    )
+  }
+
+  return (
+    <section className="ctp-coverage" aria-labelledby="ctp-cov-title">
+      <div className="ctp-coverage-head">
+        <p className="ctp-coverage-line" id="ctp-cov-title">
+          <span className="ctp-coverage-num">{fmtInt.format(filled)}</span>
+          <span className="ctp-coverage-of">de {fmtInt.format(total)} emissoras com PMM no target</span>
+        </p>
+        <div className="ctp-coverage-legend" aria-hidden="true">
+          <span className="ctp-legend-item"><i className="ctp-legend-dot ctp-legend-dot--on" />preenchida</span>
+          <span className="ctp-legend-item"><i className="ctp-legend-dot" />em branco</span>
+        </div>
+      </div>
+
+      {groups ? (
+        <div className="ctp-cov-groups" role="img" aria-label={aria}>
+          {groups.map(g => (
+            <div
+              className="ctp-cov-group"
+              key={g.name}
+              style={{ flexGrow: g.items.length, flexBasis: g.items.length * 6 }}
+            >
+              <div className="ctp-cov-bar">{g.items.map(seg)}</div>
+              <span className="ctp-cov-group-label">{g.name}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="ctp-cov-bar ctp-cov-bar--single" role="img" aria-label={aria}>
+          {rows.map(seg)}
+        </div>
+      )}
+    </section>
+  )
+}
+
 /* ── Modal de colagem ─────────────────────────────────────────── */
 function PasteModal({ rows, onClose, onApply }) {
   const [text, setText] = useState('')
@@ -176,7 +385,7 @@ function PasteModal({ rows, onClose, onApply }) {
         </div>
         <div className="modal-body">
           <p className="ctp-muted">
-            Cole duas colunas — <strong>emissora</strong> (nome, nome + dial, ou código) e{' '}
+            Cole duas colunas: <strong>emissora</strong> (nome, nome + dial, ou código) e{' '}
             <strong>PMM no target</strong>. Aceita colagem direta do Excel (TAB), ponto-e-vírgula
             ou vírgula. Nada é aplicado antes de você conferir o resumo.
           </p>
@@ -229,7 +438,7 @@ function PasteModal({ rows, onClose, onApply }) {
                         <span className="ctp-line">L{a.line}</span>
                         <span className="ctp-out-raw">{a.raw}</span>
                         <span className="ctp-out-why">
-                          ambígua — bate com {a.candidates.length}: {a.candidates.join(', ')}. Inclua o dial.
+                          ambígua: bate com {a.candidates.length} ({a.candidates.join(', ')}). Inclua o dial.
                         </span>
                       </li>
                     ))}
@@ -279,26 +488,126 @@ function PasteModal({ rows, onClose, onApply }) {
   )
 }
 
+/* ── Estado vazio (tutorial estilizado, DESIGN.md 4.7) ────────── */
+const GHOST_ROWS = [
+  { name: 'Jovem Pan Uberaba', sub: '100,9 FM · Uberaba/MG', pmm: 22543, target: 9000, pct: '40%' },
+  { name: 'Band FM Uberlândia', sub: '95,3 FM · Uberlândia/MG', pmm: 18120, target: 6100, pct: '34%' },
+  { name: 'Rádio Clube', sub: '1080 AM · Araguari/MG', pmm: 7460, target: 1980, pct: '27%' },
+]
+
+function TargetPmmEmptyState() {
+  return (
+    <div className="ctp-empty">
+      <div className="ctp-empty-action">
+        <div className="ctp-empty-icon" aria-hidden="true"><TargetIcon size={30} /></div>
+        <h3>Nenhuma emissora-alvo para este cliente</h3>
+        <p>
+          A lista sai das emissoras-alvo (<code className="ctp-code">target_stations</code>) das
+          campanhas do cliente. Sem campanha com emissoras selecionadas, não há onde cadastrar o
+          PMM no target.
+        </p>
+        <p className="ctp-empty-hint">
+          Crie uma campanha e escolha as emissoras: elas aparecem aqui automaticamente. Valores já
+          cadastrados nunca são apagados quando uma emissora sai do target, ela só some desta tela.
+        </p>
+        <Link className="btn btn-primary btn-sm" to="/campaigns">Ir para Campanhas</Link>
+      </div>
+
+      <div className="ctp-empty-preview" aria-hidden="true">
+        <div className="ctp-ghost">
+          <div className="ctp-ghost-head">
+            <span>Emissora</span>
+            <span className="ctp-th-num">PMM</span>
+            <span className="ctp-th-num">No target</span>
+            <span className="ctp-th-num">%</span>
+          </div>
+          {GHOST_ROWS.map(g => (
+            <div className="ctp-ghost-row" key={g.name}>
+              <span className="ctp-ghost-station">
+                <span className="ctp-ghost-name">{g.name}</span>
+                <span className="ctp-ghost-sub">{g.sub}</span>
+              </span>
+              <span className="ctp-num ctp-ghost-pmm">{fmtInt.format(g.pmm)}</span>
+              <span className="ctp-ghost-input">{fmtInt.format(g.target)}</span>
+              <span className="ctp-num ctp-ghost-pct">{g.pct}</span>
+            </div>
+          ))}
+        </div>
+        <span className="ctp-ghost-caption">Assim a tela fica depois de preenchida.</span>
+      </div>
+    </div>
+  )
+}
+
+/* ── Skeleton ─────────────────────────────────────────────────── */
+function TargetPmmSkeleton() {
+  return (
+    <>
+      <div className="ctp-coverage">
+        <div className="ctp-coverage-head">
+          <div className="skeleton" style={{ height: 20, width: 260, borderRadius: 6 }} />
+          <div className="skeleton" style={{ height: 12, width: 150, borderRadius: 6 }} />
+        </div>
+        <div className="skeleton" style={{ height: 10, width: '100%', borderRadius: 999 }} />
+      </div>
+
+      <div className="ctp-table-wrap">
+        <div className="ctp-table">
+          <div className="ctp-thead">
+            <div>Emissora</div>
+            <div className="ctp-th-num">PMM da emissora</div>
+            <div className="ctp-th-num">PMM no target</div>
+            <div className="ctp-th-num">% do PMM</div>
+            <div />
+          </div>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="ctp-row">
+              <div>
+                <div className="skeleton" style={{ height: 14, width: 200, borderRadius: 6 }} />
+                <div className="skeleton" style={{ height: 10, width: 130, borderRadius: 6, marginTop: 5 }} />
+              </div>
+              <div className="ctp-num"><div className="skeleton" style={{ height: 13, width: 62, borderRadius: 6, marginLeft: 'auto' }} /></div>
+              <div className="ctp-num"><div className="skeleton" style={{ height: 32, width: 130, borderRadius: 8, marginLeft: 'auto' }} /></div>
+              <div className="ctp-num"><div className="skeleton" style={{ height: 13, width: 38, borderRadius: 6, marginLeft: 'auto' }} /></div>
+              <div />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
 /* ── Página ───────────────────────────────────────────────────── */
 export default function ClientTargetPmmPage() {
   const { id } = useParams()
   const { data: clients = [], isLoading: clientsLoading } = useClients()
   const { data: rows = [], isLoading } = useClientTargetPmm(id)
   const save = useSaveClientTargetPmm()
+  const updateClient = useUpdateClient()
 
   // draft: station_id → string do input. Só as chaves tocadas entram aqui.
   const [draft, setDraft] = useState({})
   const [pasteOpen, setPasteOpen] = useState(false)
   const [q, setQ] = useState('')
+  const [labelError, setLabelError] = useState('')
+
+  // inputs: station_id → elemento, pra o Enter saltar pro próximo vazio.
+  const inputs = useRef(new Map())
 
   const client = clients.find(c => c.id === id)
   const clientName = client?.name ?? (clientsLoading ? '…' : 'Cliente')
+  // O campo pode ainda não existir na API: `?? null` mantém a tela de pé.
+  const targetLabel = client?.target_label ?? null
 
-  function valueOf(row) {
-    return row.station_id in draft
-      ? draft[row.station_id]
-      : (row.pmm_target != null ? String(row.pmm_target) : '')
-  }
+  const valueOf = useCallback(
+    row => (
+      row.station_id in draft
+        ? draft[row.station_id]
+        : (row.pmm_target != null ? String(row.pmm_target) : '')
+    ),
+    [draft],
+  )
 
   function setValue(stationId, v) {
     setDraft(d => ({ ...d, [stationId]: onlyDigits(v) }))
@@ -318,12 +627,8 @@ export default function ClientTargetPmmPage() {
     return out
   }, [rows, draft])
 
-  // Contador reflete o estado ATUAL (servidor + rascunho não salvo).
-  const filled = useMemo(
-    () => rows.filter(r => toValue(valueOf(r)) != null).length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, draft],
-  )
+  // Cobertura reflete o estado ATUAL (servidor + rascunho não salvo).
+  const isFilled = useCallback(row => toValue(valueOf(row)) != null, [valueOf])
 
   // Guarda de saída: arma só com alteração pendente e desarma sozinha depois
   // do save (que zera o `draft`, logo `dirtyEntries` volta a 0).
@@ -357,66 +662,87 @@ export default function ClientTargetPmmPage() {
     setPasteOpen(false)
   }
 
+  // O PUT /clients/:id sobrescreve o registro inteiro, então o rótulo viaja
+  // junto com os outros campos do cliente — mandar só ele apagaria o resto.
+  async function saveTargetLabel(next) {
+    if (!client) return false
+    setLabelError('')
+    try {
+      await updateClient.mutateAsync({
+        id: client.id,
+        name: client.name,
+        logo_url: client.logo_url ?? null,
+        contact_email: client.contact_email ?? null,
+        contact_name: client.contact_name ?? null,
+        phone: client.phone ?? null,
+        cnpj: client.cnpj ?? null,
+        cep: client.cep ?? null,
+        city: client.city ?? null,
+        state: client.state ?? null,
+        target_label: next,
+      })
+      return true
+    } catch {
+      setLabelError('Não foi possível salvar o público-alvo. Tente de novo.')
+      return false
+    }
+  }
+
+  // Enter salta pro próximo input VAZIO da lista visível (respeita o filtro).
+  // É o que transforma 200 linhas em fluxo: o operador só para onde falta dado.
+  function handleInputKeyDown(e, index) {
+    if (e.key !== 'Enter') return
+    e.preventDefault() // nunca submeter formulário
+    for (let i = index + 1; i < visible.length; i++) {
+      const el = inputs.current.get(visible[i].station_id)
+      if (el && el.value === '') {
+        el.focus()
+        el.select?.()
+        return
+      }
+    }
+    e.currentTarget.blur()
+  }
+
+  const pending = dirtyEntries.length > 0
+
   return (
-    <div className="ctp-page">
+    <div className={`ctp-page${pending ? ' ctp-page--pending' : ''}`}>
       <div className="ctp-back">
         <Link to="/clients" className="ctp-back-link">
           <ChevronLeft /> Voltar para Clientes
         </Link>
       </div>
 
-      <div className="page-header ctp-header">
-        <div className="ctp-titleblock">
-          <h2 className="ctp-title">
-            PMM no target <span className="ctp-title-sep">·</span>{' '}
-            <span className="ctp-title-client">{clientName}</span>
-          </h2>
-          <p className="ctp-subtitle">
-            Audiência média minuto <strong>dentro do público-alvo deste cliente</strong> em cada
-            emissora. O PMM da emissora é a audiência total; aqui você cadastra a fatia que
-            interessa ao cliente. Deixe em branco para “não cadastrado”.
-          </p>
-        </div>
-        {!isLoading && rows.length > 0 && (
-          <div className="ctp-counter" title="Emissoras-alvo com PMM no target preenchido (incluindo alterações não salvas)">
-            <span className="ctp-counter-icon" aria-hidden="true"><TargetIcon size={16} /></span>
-            <span className="ctp-counter-num">{fmtInt.format(filled)}</span>
-            <span className="ctp-counter-of">de {fmtInt.format(rows.length)}</span>
-            <span className="ctp-counter-label">emissoras com PMM no target</span>
-          </div>
-        )}
-      </div>
+      <header className="ctp-header">
+        <h2 className="ctp-title">
+          PMM no target <span className="ctp-title-sep">·</span>{' '}
+          <span className="ctp-title-client">{clientName}</span>
+        </h2>
+
+        <TargetLabelControl
+          value={targetLabel}
+          disabled={!client}
+          saving={updateClient.isPending}
+          error={labelError}
+          onSave={saveTargetLabel}
+        />
+
+        <p className="ctp-subtitle">
+          Audiência média minuto <strong>dentro do público-alvo deste cliente</strong> em cada
+          emissora. O PMM da emissora é a audiência total; aqui você cadastra a fatia que
+          interessa ao cliente. Deixe em branco para “não cadastrado”.
+        </p>
+      </header>
 
       {isLoading ? (
-        <div className="ctp-table-wrap">
-          <div className="ctp-table">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="ctp-row">
-                <div><div className="skeleton" style={{ height: 16, width: 220, borderRadius: 6 }} /></div>
-                <div><div className="skeleton" style={{ height: 14, width: 70, borderRadius: 6 }} /></div>
-                <div><div className="skeleton" style={{ height: 30, width: 120, borderRadius: 8 }} /></div>
-                <div />
-              </div>
-            ))}
-          </div>
-        </div>
+        <TargetPmmSkeleton />
       ) : rows.length === 0 ? (
-        <div className="ctp-empty">
-          <div className="ctp-empty-icon" aria-hidden="true"><TargetIcon size={34} /></div>
-          <h3>Nenhuma emissora-alvo para este cliente</h3>
-          <p>
-            A lista é montada a partir das emissoras-alvo (<code className="ctp-code">target_stations</code>)
-            das campanhas do cliente. Como este cliente ainda não tem campanha com emissoras
-            selecionadas, não há onde cadastrar o PMM no target.
-          </p>
-          <p className="ctp-empty-hint">
-            Crie uma campanha e escolha as emissoras — elas aparecem aqui automaticamente. Valores
-            já cadastrados nunca são apagados quando uma emissora sai do target: ela só some desta tela.
-          </p>
-          <Link className="btn btn-primary btn-sm" to="/campaigns">Ir para Campanhas</Link>
-        </div>
+        <TargetPmmEmptyState />
       ) : (
         <>
+          <CoverageBar rows={rows} isFilled={isFilled} />
+
           <div className="ctp-toolbar">
             <input
               className="input ctp-search"
@@ -425,29 +751,15 @@ export default function ClientTargetPmmPage() {
               value={q}
               onChange={e => setQ(e.target.value)}
             />
-            <div className="ctp-toolbar-right">
-              {dirtyEntries.length > 0 && (
-                <span className="ctp-dirty">
-                  {dirtyEntries.length} {dirtyEntries.length === 1 ? 'alteração pendente' : 'alterações pendentes'}
-                </span>
-              )}
-              <button className="btn btn-secondary" onClick={() => setPasteOpen(true)}>
-                <PasteIcon /> Colar planilha
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSave}
-                disabled={dirtyEntries.length === 0 || save.isPending}
-              >
-                {save.isPending ? 'Salvando…' : 'Salvar'}
-              </button>
-            </div>
+            <button className="btn btn-secondary" onClick={() => setPasteOpen(true)}>
+              <PasteIcon /> Colar planilha
+            </button>
           </div>
 
           {save.isError && (
             <div className="ctp-warn">
               <span className="ctp-warn-icon" aria-hidden="true"><AlertIcon /></span>
-              <span>Falha ao salvar. As alterações continuam aqui — tente novamente.</span>
+              <span>Falha ao salvar. As alterações continuam aqui, tente novamente.</span>
             </div>
           )}
 
@@ -457,17 +769,23 @@ export default function ClientTargetPmmPage() {
                 <div>Emissora</div>
                 <div className="ctp-th-num">PMM da emissora</div>
                 <div className="ctp-th-num">PMM no target</div>
+                <div className="ctp-th-num">% do PMM</div>
                 <div />
               </div>
 
-              {visible.map(row => {
+              {visible.map((row, index) => {
                 const v = valueOf(row)
-                const touched = row.station_id in draft &&
-                  toValue(v) !== (row.pmm_target ?? null)
+                const parsed = toValue(v)
+                const touched = row.station_id in draft && parsed !== (row.pmm_target ?? null)
+                const pct = share(parsed, row.pmm)
+                const over = pct != null && pct > 100
                 return (
                   <div key={row.station_id} className={`ctp-row${touched ? ' ctp-row--dirty' : ''}`}>
                     <div className="ctp-station">
-                      <span className="ctp-station-name">{row.name}</span>
+                      <span className="ctp-station-name">
+                        {touched && <i className="ctp-dirty-dot" title="Alteração não salva" />}
+                        {row.name}
+                      </span>
                       <span className="ctp-station-sub">
                         {dial(row)}
                         {dial(row) && place(row) && <span className="ctp-dot">·</span>}
@@ -476,20 +794,34 @@ export default function ClientTargetPmmPage() {
                     </div>
 
                     <div className="ctp-num ctp-pmm">
-                      {row.pmm != null ? fmtInt.format(row.pmm) : <span className="ctp-dash">—</span>}
+                      <span className="ctp-celllabel">PMM da emissora</span>
+                      {row.pmm != null
+                        ? fmtInt.format(row.pmm)
+                        : <span className="ctp-dash">sem PMM</span>}
                     </div>
 
-                    <div className="ctp-num">
+                    <div className="ctp-num ctp-inputcell">
                       <input
                         className="input ctp-input"
                         type="text"
                         inputMode="numeric"
                         autoComplete="off"
                         value={v}
-                        placeholder="—"
                         aria-label={`PMM no target de ${row.name}`}
+                        ref={el => {
+                          if (el) inputs.current.set(row.station_id, el)
+                          else inputs.current.delete(row.station_id)
+                        }}
                         onChange={e => setValue(row.station_id, e.target.value)}
+                        onKeyDown={e => handleInputKeyDown(e, index)}
                       />
+                    </div>
+
+                    <div className="ctp-num ctp-pctcell">
+                      {pct != null && (
+                        <span className={`ctp-pct${over ? ' ctp-pct--over' : ''}`}>{fmtShare(pct)}</span>
+                      )}
+                      {over && <span className="ctp-pct-warn">acima do PMM da emissora</span>}
                     </div>
 
                     <div className="ctp-rowactions">
@@ -514,6 +846,22 @@ export default function ClientTargetPmmPage() {
               )}
             </div>
           </div>
+
+          {pending && (
+            <div className="ctp-sticky">
+              <span className="ctp-sticky-hint">Nada é enviado até você salvar.</span>
+              <span className="ctp-dirty">
+                {dirtyEntries.length} {dirtyEntries.length === 1 ? 'alteração pendente' : 'alterações pendentes'}
+              </span>
+              <button
+                className="btn btn-primary"
+                onClick={handleSave}
+                disabled={save.isPending}
+              >
+                {save.isPending ? 'Salvando…' : 'Salvar alterações'}
+              </button>
+            </div>
+          )}
         </>
       )}
 
