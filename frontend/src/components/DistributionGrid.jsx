@@ -514,7 +514,7 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null
       />
       {impactosTarget != null && (
         <ValuePill
-          tone="violet"
+          tone="teal"
           icon={<IconHeadset />}
           label={`${fmtImpactos(impactosTarget)} target`}
           hint={`${fmtInt(impactosTarget)} impactos no target = PMM no target ${fmtInt(pmmTarget)} × ${inSlotStation} veiculações na estação`}
@@ -594,13 +594,16 @@ function SumPill({ variant, value, prefix = '', dim }) {
 }
 
 const VALUE_PILL_PALETTE = {
-  pink:   { bg: '#fce7f3', color: '#9d174d' },
-  green:  { bg: '#dcfce7', color: '#166534' },
-  blue:   { bg: '#dbeafe', color: '#1d4ed8' },
-  // violet: pill de impactos-no-target, empilhada logo abaixo da de impactos
-  // (pink). Mesma família "headset/impactos" mas tom diferente pra não
-  // confundir as duas — ambas rosa/magenta ficariam parecidas demais lado a lado.
-  violet: { bg: '#ede9fe', color: '#6d28d9' },
+  pink:  { bg: '#fce7f3', color: '#9d174d' },
+  green: { bg: '#dcfce7', color: '#166534' },
+  blue:  { bg: '#dbeafe', color: '#1d4ed8' },
+  // teal: pill de impactos-no-target, empilhada logo abaixo da de impactos
+  // (pink). Precisa de um tom sem carga semântica prévia nesta grid — pink/
+  // green/blue já significam impactos/valor/bônus aqui, e roxo/âmbar (que
+  // pareceriam candidatos óbvios) já significam out_date/out_slot no
+  // SUM_VARIANT logo abaixo, no DayDetailModal e nos charts de /insights.
+  // Teal está livre em todos esses três lugares.
+  teal:  { bg: '#ccfbf1', color: '#0f766e' },
 }
 
 function ValuePill({ tone, icon, label, hint }) {
