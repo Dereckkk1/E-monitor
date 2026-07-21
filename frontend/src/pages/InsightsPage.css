@@ -2,8 +2,8 @@
  *
  * Prefix `.in-`. Reusa tokens globais (--c-text, --c-surface, etc.)
  * definidos em styles/variables.css. Layout em 3 rows:
- *   Row 1 (cards): grid auto-fit (o número de cards varia — 4 a 7 — conforme
- *     consolidado/target; a coluna se ajusta sozinha, ver .in-row--cards)
+ *   Row 1 (cards): grid 5fr (cai pra 3 / 2 / 1 conforme breakpoint) — com
+ *     target no cliente, ver .in-row--cards--target logo abaixo das rows
  *   Row 2 (gráficos demográficos + pizza): grid 1fr 1fr 1fr
  *   Row 3 (gráfico daily/monthly full-width)
  */
@@ -151,16 +151,38 @@
   display: grid;
   gap: 16px;
 }
-/* auto-fit em vez de repeat(N, 1fr): o total de cards varia de 4 (consolidado,
-   sem target) a 7 (não-consolidado, com target no cliente) — ver KpiCards.jsx.
-   Tracks vazios colapsam a 0 (auto-fit), então os cards existentes sempre
-   esticam pra preencher a linha inteira, qualquer que seja a contagem —
-   sem precisar enumerar "4 cols" / "5 cols" / "7 cols" por caso. */
-.in-row--cards { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.in-row--cards { grid-template-columns: repeat(5, 1fr); }
+/* Consolidado esconde a Bonificação → 4 cards. Classe simples (mesma
+   especificidade de .in-row--cards) e depois na ordem, então vence no desktop;
+   as media queries abaixo (mais adiante na ordem) ainda reduzem no mobile. */
+.in-row--cards--4 { grid-template-columns: repeat(4, 1fr); }
 .in-row--charts { grid-template-columns: repeat(3, 1fr); }
 
+@media (max-width: 1280px) { .in-row--cards { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1024px) { .in-row--charts { grid-template-columns: 1fr; } }
-@media (max-width: 480px)  { .in-row--cards  { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
+@media (max-width: 720px)  { .in-row--cards  { grid-template-columns: 1fr 1fr; } }
+
+/* Com target no cliente, o KpiCards ganha até 2 cards extras (Impactos no
+   target / CPM no target) — o total da linha pode ir de 5 a 7 (ou de 4 a 6
+   quando consolidado). O grid fixo acima (5/4/3/2 colunas) fica desbalanceado
+   nesses totais maiores, então essa modificadora troca pra auto-fit — mas
+   SÓ quando aplicada (InsightsPage.jsx só adiciona a classe quando
+   stations_with_target > 0), preservando o layout antigo bit-a-bit pra quem
+   não tem target cadastrado.
+   auto-fit calcula quantas colunas de largura ≥180px cabem no container e
+   usa esse número fixo em toda a grade; não é "sempre estica pra preencher
+   a linha" — se a contagem de cards não for múltipla desse número de
+   colunas, a última linha fica com menos itens do MESMO tamanho das linhas
+   cheias, deixando espaço em branco ao lado (não esticado). É um resultado
+   aceitável (linha final mais curta), mas não confundir com o comportamento
+   de "colapsar trilhas vazias", que só vale pra colunas vazias em TODAS as
+   linhas — o que não é o caso aqui, já que a primeira linha sempre preenche
+   todas as trilhas.
+   Precedência: mesma especificidade (0,1,0) de todas as regras acima,
+   inclusive as media queries — como esta regra vem por último na ordem do
+   arquivo e não está dentro de nenhuma @media, ela vence em qualquer
+   breakpoint sempre que a classe estiver presente no elemento. */
+.in-row--cards--target { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .in-card {
