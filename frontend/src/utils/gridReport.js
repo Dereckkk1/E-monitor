@@ -10,7 +10,7 @@
 //                   (todas as páginas, não só a visível). Cada linha tem
 //                   { stationId, materialId (=type_id), materialTitle, ... }.
 //   - stations:     catálogo de emissoras ({ id, name, city, state, band,
-//                   frequency_mhz }).
+//                   frequency_mhz, pmm }).
 //   - days:         array de Date (o MESMO que a grade renderiza — use
 //                   enumerateVisibleDays de dates.js).
 //   - cellData:     Map key `${stationId}|${materialId}|${dateISO}` →
@@ -18,6 +18,12 @@
 //   - materialLookup: (opcional) Map/objeto key `${stationId}|${typeId}` →
 //                   [{ shortId, title, durationSec }] com os materiais REAIS
 //                   daquele tipo naquela emissora (a grade só conhece o tipo).
+//   - pmmTargetByStation: (opcional) objeto/Map station_id → PMM no target do
+//                   cliente dono da campanha (mesmo mapa que alimenta a pill
+//                   de impactos-no-target de DistributionGrid.jsx, construído
+//                   em DetectionsPage.jsx a partir de useClientTargetPmm).
+//                   Ausente/vazio = feature não cadastrada; impactosTarget
+//                   fica null em todas as emissoras e a coluna some.
 //
 // dateISO segue a mesma construção da grade (`d.toISOString().slice(0,10)`), que
 // em America/Sao_Paulo (UTC-3) coincide com o for_date da view.
@@ -102,18 +108,21 @@ export function materialsLabel(materials) {
  *   kpis:   { ...totals, coveragePct },
  *   byStation: Array<{
  *     stationId, stationName, stationCity, stationState, stationDial,
+ *     pmm, impactos,             // impactos = pmm × Σ in_slot da emissora; null sem pmm
+ *     pmmTarget, impactosTarget, // null quando o cliente não tem PMM no target cadastrado
  *     materials: Array<{ typeId, title,
  *       materials: Array<{ shortId, title, durationSec }>,  // materiais REAIS do tipo
  *       days: Array<{ dateISO, dateLabel, ...cell }>,   // só dias não-vazios
  *       totals }>,
  *     totals }>,
  *   grandTotals,
+ *   hasTarget,  // true se QUALQUER emissora do recorte tem PMM no target
  *   slug,
  * }}
  */
 export function buildGridReportModel({
   campaign, client, filteredRows, stations, days, cellData, filterInfo = {},
-  materialLookup = null,
+  materialLookup = null, pmmTargetByStation = {},
 }) {
   const stationById = new Map((stations ?? []).map(s => [s.id, s]))
 
@@ -163,16 +172,36 @@ export function buildGridReportModel({
     }
 
     addInto(grandTotals, stationTotals)
+    // Impactos = pmm × Σ in_slot da emissora (todos os materiais somados) —
+    // mesma conta do StationTotalCell da grade (DistributionGrid.jsx). Impactos
+    // no target só existe quando o cliente tem PMM no target cadastrado pra
+    // essa emissora (pmmTargetByStation vem do useClientTargetPmm em
+    // DetectionsPage.jsx); ausente = null, e a coluna/linha correspondente vira
+    // "—" no CSV/PDF, sem regressão pra quem não cadastrou.
+    const pmm = Number(st.pmm) || 0
+    const impactos = pmm > 0 ? Math.round(pmm * stationTotals.inSlot) : null
+    const pmmTarget = pmmTargetByStation?.[stationId] ?? null
+    const impactosTarget = pmmTarget != null ? Math.round(pmmTarget * stationTotals.inSlot) : null
     byStation.push({
       stationId,
       stationName:  st.name ?? '—',
       stationCity:  st.city ?? '',
       stationState: st.state ?? '',
       stationDial:  stationDial(st),
+      pmm: pmm > 0 ? pmm : null,
+      impactos,
+      pmmTarget,
+      impactosTarget,
       materials,
       totals: stationTotals,
     })
   }
+
+  // Gate de exibição da coluna "Impactos no target": só entra quando pelo
+  // menos uma emissora do recorte tem PMM no target cadastrado (mesmo
+  // critério do `stations_with_target` que o backend expõe pro PDF de
+  // campanha em pdfReport.js).
+  const hasTarget = byStation.some(s => s.impactosTarget != null)
 
   const periodLabel = filterInfo.periodLabel ?? ''
   const filterLabel = buildFilterLabel(filterInfo, byStation.length)
@@ -190,6 +219,7 @@ export function buildGridReportModel({
     kpis: { ...grandTotals, coveragePct: coveragePct(grandTotals.expected, grandTotals.inSlot) },
     byStation,
     grandTotals,
+    hasTarget,
     slug: slugify(campaign?.name),
   }
 }
@@ -219,10 +249,15 @@ function slugify(s) {
 // RowSummaryCell da grade. Separador ';' e (BOM adicionado no download) pra
 // abrir limpo no Excel pt-BR, igual ao reports.go.
 
+// Base sempre presente. "Impactos" é coluna nova pra todo mundo (pedido
+// explícito do dono, mesmo sem PMM no target cadastrado); "Impactos no
+// target" só entra quando `model.hasTarget` — apendada dinamicamente em
+// buildGridReportCSV, não fixa aqui, senão o CSV de quem não tem cadastro
+// ganharia uma coluna sempre "—" à toa.
 const CSV_HEADER = [
   'Emissora', 'Dial', 'Cidade', 'UF', 'Tipo', 'Materiais',
   'Programado', 'Tocou (faixa)', 'Déficit', 'Bônus',
-  'Fora da faixa', 'Fora da data',
+  'Fora da faixa', 'Fora da data', 'Impactos',
 ]
 
 function csvEscape(v) {
@@ -231,15 +266,19 @@ function csvEscape(v) {
 }
 
 export function buildGridReportCSV(model) {
-  const lines = [CSV_HEADER.map(csvEscape).join(';')]
+  const header = model.hasTarget ? [...CSV_HEADER, 'Impactos no target'] : CSV_HEADER
+  const lines = [header.map(csvEscape).join(';')]
   for (const s of model.byStation) {
     for (const m of s.materials) {
-      lines.push([
+      const row = [
         s.stationName, s.stationDial, s.stationCity, s.stationState,
         m.title, materialsLabel(m.materials),
         m.totals.expected, m.totals.inSlot, m.totals.deficit,
         m.totals.bonus, m.totals.outSlot, m.totals.outDate,
-      ].map(csvEscape).join(';'))
+        s.impactos ?? '—',
+      ]
+      if (model.hasTarget) row.push(s.impactosTarget ?? '—')
+      lines.push(row.map(csvEscape).join(';'))
     }
   }
   return lines.join('\r\n')
