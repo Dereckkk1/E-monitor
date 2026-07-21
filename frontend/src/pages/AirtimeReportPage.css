@@ -350,9 +350,21 @@
   gap: 4px;
 }
 
-/* PMM no target: mesma pill do PMM, tom mais fraco pra ler como derivado. */
+/* PMM no target: paleta teal própria (não deriva de .airtime-row-pill-pmm,
+   nem diferencia por opacity) — alinhada com a convenção adotada em
+   /detections (DistributionGrid.jsx, commit d8daded): mesma dupla
+   teal-100/teal-700 (#ccfbf1/#0f766e) e sufixo textual " target" no valor,
+   em vez de depender só do title/hover pra dizer qual número é qual.
+   Contraste do texto sobre o fundo: ~4.86:1 (passa AA pra texto normal). */
 .airtime-row-pill-target {
-  opacity: 0.75;
+  background: #ccfbf1;
+  color: #0f766e;
+}
+/* Sufixo do valor: palavra cheia no desktop, abreviado ("tgt") no mobile —
+   ver @media (max-width: 767px) abaixo — pra não arriscar colidir com a
+   pill de Custo (que fica lado a lado na mesma linha em telas estreitas). */
+.airtime-row-pill-suffix-short {
+  display: none;
 }
 
 /* ── Right-aligned material info ──────────────────────────────────── */
@@ -752,11 +764,20 @@
   .airtime-row-play   { grid-column: 1; grid-row: 1 / span 2; width: 44px; height: 44px; }
   .airtime-row-time-block { grid-column: 2; grid-row: 1; }
   .airtime-row-station    { grid-column: 2; grid-row: 2; }
-  .airtime-row-pill {
+  /* The PMM pill (+ optional target pill) is no longer a direct grid child
+     of .airtime-row at any breakpoint — it lives inside .airtime-row-pmm-stack
+     (see the desktop rule above). grid-column/grid-row/justify-self on
+     .airtime-row-pill-pmm here would be dead no-ops, so the wrapper gets the
+     placement instead. .airtime-row-pill-cost stays a direct grid child and
+     keeps its own grid-row (previously shared via the generic .airtime-row-pill
+     selector — folded in here since cost is the only pill still placed
+     directly). */
+  .airtime-row-pmm-stack {
+    grid-column: 1 / span 2;
     grid-row: 3;
+    justify-self: start;
   }
-  .airtime-row-pill-pmm  { grid-column: 1 / span 2; justify-self: start; }
-  .airtime-row-pill-cost { grid-column: 2 / span 2; justify-self: end; padding-right: 18px; }
+  .airtime-row-pill-cost { grid-column: 2 / span 2; grid-row: 3; justify-self: end; padding-right: 18px; }
   .airtime-row-material {
     grid-column: 1 / -1;
     grid-row: 4;
@@ -770,4 +791,18 @@
     grid-column: 3;
     grid-row: 1 / -1;
   }
+
+  /* Target pill's suffix: "target" is the /detections wording, but on this
+     breakpoint the PMM pill and Custo pill share row 3 side by side
+     (pmm-stack justify-self:start, cost justify-self:end — see above), so
+     shrink to "tgt" for a safety margin against collision. Width check:
+     station_pmm_target goes through fmtPMM's compact Intl notation (max
+     ~4 chars, e.g. "1,2 mi"), so "1,2 mi tgt" + icon is ~90-100px even at
+     13px bold — well under the ~140px of slack this row has at a 320px
+     viewport (44px play + 1fr column − cost pill's own ~70-90px). No
+     ellipsis/truncation added on top of this — the content is already
+     short enough that it isn't warranted, and clipping the icon+text pill
+     awkwardly would be worse than the (already small) residual risk. */
+  .airtime-row-pill-suffix-full { display: none; }
+  .airtime-row-pill-suffix-short { display: inline; }
 }
