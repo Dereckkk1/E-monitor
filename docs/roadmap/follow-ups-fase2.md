@@ -461,11 +461,39 @@ Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../op
   candidato. **Impacto:** evidência acumula indefinidamente no tier caro; hoje é pouco
   (44,8 GB) mas cresce monotonicamente.
 
-- **F-CAP-03 — ~US$88/mês (20%) da fatura GCP sem explicação.**
-  `deploy.md §6` projeta US$429/mês; o real medido em 2026-07-21 é ~R$97/dia ≈ US$517.
-  Nunca foi feita quebra por SKU. **Ação:** GCP Console → Billing → Reports → agrupar por
-  SKU; conferir ocupação real dos discos (`df -h /mnt/db /mnt/data` — 300 GB SSD PD são
-  US$76,50/mês e não escalam com emissora). Maior alavanca de custo identificada.
+- **~~F-CAP-03~~ — ✅ RESOLVIDO 2026-07-21. Quebra por SKU feita.**
+  Real: **R$95,90/dia = R$2.918/mês**. Composição: compute **79,6%**, discos 10,6%,
+  egress 6,9%, snapshots 2,8%, IP 0,2%. A hipótese de gordura nos discos foi
+  **descartada** (10,6%, não os 24% estimados — e o provisionado é *menor* que o
+  documentado). Tabela completa em [deploy.md §6](../operations/deploy.md#6-análise-de-custos).
+  Desdobrou-se em F-CAP-05, F-CAP-06 e F-CAP-07.
+
+- **F-CAP-05 — 🔴 CUD nunca assinado; compute 100% on-demand. ~R$860/mês na mesa.**
+  O billing de 2026-07-21 mostra **zero** em "Programas de economia" em todas as linhas,
+  e compute é 79,6% da conta (R$2.322/mês). O `deploy.md` recomendava assinar CUD de 1 ano
+  após 30 dias on-demand — a VM está em prod desde **2026-06-08**, prazo vencido.
+  **Ação:** GCP Console → Compute Engine → Committed use discounts → CUD de 1 ano para
+  `c3-highcpu-8` em `southamerica-east1`. ~37% sobre compute = **~R$860/mês ≈ R$10,3k/ano**;
+  derruba o custo/emissora no teto de R$12,42 para ~R$8,76. **Maior alavanca de custo do
+  sistema — e é uma assinatura no console, não desenvolvimento.** Confirmar o % real de
+  desconto antes de assinar. Cuidado: o CUD trava o tipo de máquina, e passar de ~200
+  emissoras exige migrar pra `c3-standard-8` (32 GB).
+
+- **F-CAP-06 — Snapshots nos EUA (~R$81/mês) + egress 4× o previsto (~R$200/mês).**
+  Três SKUs revelam que snapshots/imagem de máquina de uma VM de **São Paulo** estão
+  armazenados na **América do Norte**, pagando `PD snapshot Data Transfer between North
+  America and Latin America` diariamente — provável default multi-region nunca revisado.
+  Separadamente, o egress real é ~209 GB/mês (R$200) contra ~50 GB/mês estimados; não é o
+  ingest dos streams (ingress no GCP é grátis), é saída de evidência + presigned URLs +
+  upload de backup pro R2. **Ação:** mover a política de snapshot para região SP; auditar
+  a origem do egress.
+
+- **F-CAP-07 — Discos provisionados não batem com o documentado.**
+  `deploy.md §4` documenta 50 GB Balanced + 300 GB SSD PD + 300 GB Standard HDD. O billing
+  implica **~192 GB Balanced + ~94 GB SSD** e **nenhum SKU de Standard HDD**. Os ↑122% e
+  ↑88% de variação indicam crescimento recente. **Ação:** `df -h /mnt/db /mnt/data` na VM +
+  lista de discos no console; corrigir a tabela da §4. Não é alavanca de custo (discos são
+  10,6%), mas é premissa falsa pra qualquer dimensionamento de disco.
 
 - **F-CAP-04 — RAM líquida por emissora não fechada (falta PSS).**
   Σ RSS dos 173 ffmpeg = 7,59 GB (44,9 MB/proc), mas RSS double-conta páginas

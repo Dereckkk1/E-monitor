@@ -19,13 +19,16 @@ com **173 emissoras** ativas numa `c3-highcpu-8` (8 vCPU / 16 GB).
 
 | Número | Valor | Quando usar |
 |---|---|---|
-| **Custo médio** (total ÷ emissoras) | **R$16,85**/emissora/mês | comparar com o fornecedor externo |
+| **Custo médio** (total ÷ emissoras) | **R$16,87**/emissora/mês | comparar com o fornecedor externo |
 | **Custo marginal** (a próxima emissora) | **~R$0** até o teto | decidir se aceita mais emissora/cliente |
-| **Custo no teto de capacidade** | **~R$12,50**/emissora/mês | **precificar o serviço** |
+| **Custo no teto de capacidade** | **~R$12,42**/emissora/mês | **precificar o serviço** |
+| ↳ mesmo teto, **com CUD de 1 ano** | **~R$8,76**/emissora/mês | meta — ver §6 |
 
-Base: R$97/dia = **R$2.949/mês** com 173 emissoras.
+Base: quebra por SKU do billing GCP em 2026-07-21 — **R$95,90/dia =
+R$2.918/mês** com 173 emissoras ativas.
 
-**Use os R$12,50 para precificar.** Os R$16,85 embutem a ociosidade atual da
+**Use os R$12,42 para precificar** (ou R$8,76, se o CUD da F-CAP-05 for
+assinado). Os R$16,87 embutem a ociosidade atual da
 máquina (47% de CPU livre) — repassá-la ao cliente é cobrar por capacidade
 parada, e ela desaparece sozinha conforme a operação cresce.
 
@@ -92,10 +95,10 @@ fica ociosa entre as ondas.
 `r=35+`, e as janelas de matching passariam a esperar na fila — degradando
 latência de detecção **antes** de qualquer alarme de CPU disparar.
 
-| Alvo de CPU média | Emissoras | R$/emissora/mês |
-|---|---|---|
-| 70% (recomendado, preserva headroom de rajada) | **~235** | **R$12,55** |
-| 80% (agressivo, só com p99 de matching validado) | ~273 | R$10,80 |
+| Alvo de CPU média | Emissoras | R$/emissora/mês | com CUD 1 ano |
+|---|---|---|---|
+| 70% (recomendado, preserva headroom de rajada) | **~235** | **R$12,42** | **~R$8,76** |
+| 80% (agressivo, só com p99 de matching validado) | ~273 | R$10,69 | ~R$7,54 |
 
 Conta: 53% − ~5% de baseline fixo = 48% variável ÷ 173 = 0,022 vCPU/emissora.
 
@@ -173,18 +176,54 @@ inclinação é o `v_e` medido, sem rateio e sem premissa.
 
 ## 6. A maior alavanca de custo não é por emissora
 
-Otimizar custo por emissora rende, no melhor caso, a diferença entre R$16,85 e
-R$12,55 — e rende **sozinho**, só enchendo a máquina até ~235.
+Quebra por SKU do billing feita em **2026-07-21** (detalhe completo em
+[deploy.md §6](deploy.md#6-análise-de-custos)):
 
-Já a conta tem **~US$88/mês (20%) acima do projetado** e sem explicação: o
-[deploy.md §6](deploy.md#6-análise-de-custos) estimava US$429/mês, o real é
-~US$517. E ~29% do custo total são discos (300 GB SSD PD = US$76,50 + 300 GB
-HDD = US$18 + boot 50 GB) que **não escalam com emissora nenhuma** e nunca
-foram auditados quanto a uso real.
+| Grupo | R$/mês | % |
+|---|---|---|
+| **Compute** (C3 core + RAM) | 2.321,90 | **79,6%** |
+| Discos (Balanced + SSD PD) | 310,60 | 10,6% |
+| Egress (~209 GB/mês) | 200,10 | 6,9% |
+| Snapshots/imagem **nos EUA** | 81,10 | 2,8% |
+| IP estático | 4,70 | 0,2% |
+| **TOTAL** | **~2.918** | |
 
-**Ação pendente:** GCP Console → Billing → Reports → agrupar por SKU.
-Reconciliar contra a tabela do `deploy.md` e conferir a ocupação real dos
-discos (`df -h /mnt/db /mnt/data`) antes de qualquer otimização por emissora.
+> **Hipótese descartada.** A suspeita inicial era de gordura nos discos
+> (a estimativa de projeto dizia 24% do custo). O real é **10,6%**, e o
+> provisionado é *menor* que o documentado — não maior. Disco não é alavanca.
+
+### As alavancas reais, em ordem
+
+**1. CUD de 1 ano — ~R$860/mês (~R$10,3k/ano). Vencido.**
+Compute é 79,6% da conta e está **100% on-demand** — o billing mostra zero em
+"Programas de economia" em todas as linhas. O [deploy.md](deploy.md) mandava
+assinar o CUD após 30 dias on-demand; a VM está em prod desde 2026-06-08.
+
+Impacto direto no unit cost:
+
+| | Sem CUD | Com CUD 1 ano |
+|---|---|---|
+| Custo total/mês | R$2.918 | ~R$2.058 |
+| **Custo/emissora no teto (235)** | **R$12,42** | **~R$8,76** |
+
+**2. Snapshots armazenados nos EUA — ~R$81/mês.**
+Três SKUs (`PD snapshot Data Transfer between North America and Latin America`,
+`Storage PD Snapshot in US`, `Storage Machine Image in US`) revelam que os
+snapshots de uma VM de São Paulo vivem na América do Norte, pagando
+transferência intercontinental diária. Provável default multi-region nunca
+revisado.
+
+**3. Egress 4× o previsto — ~R$200/mês.**
+Estimado ~50 GB/mês; real ~209 GB/mês. Não é o ingest dos streams (ingress no
+GCP é grátis — 960 GB/dia entram a custo zero). É saída: evidência servida ao
+frontend, presigned URLs e upload de backup pro R2. **Escala com uso de cliente
+e detecções, não com nº de emissoras.**
+
+### Ordem de ataque
+
+Encher a máquina até ~235 emissoras rende a diferença entre R$16,87 e R$12,42
+por emissora — e rende sozinho, conforme a operação cresce. **O CUD rende mais,
+rende já, e é uma assinatura no console.** Faça o CUD primeiro.
 
 ---
 
@@ -205,7 +244,10 @@ discos (`df -h /mnt/db /mnt/data`) antes de qualquer otimização por emissora.
 
 | # | Achado | Impacto |
 |---|---|---|
-| 1 | `radiocheck_detections_total` sem nenhuma série em 7d | Cega o custo por detecção e a taxa de detecção no Prometheus |
-| 2 | `radiocheck_evidence_storage_bytes{tier="cold"}` e `{tier="archive"}` zerados — tiering não move nada | Evidência acumula no tier caro indefinidamente |
-| 3 | Gap de ~US$88/mês entre custo projetado e real, sem quebra por SKU | ~20% da fatura não explicada |
-| 4 | RAM líquida por emissora não fechada (falta PSS) | Dimensionamento acima de 200 emissoras fica com incerteza de ~50% |
+| F-CAP-01 | `radiocheck_detections_total` sem nenhuma série em 7d | Cega o custo por detecção e a taxa de detecção no Prometheus |
+| F-CAP-02 | `radiocheck_evidence_storage_bytes{tier="cold"}` e `{tier="archive"}` zerados — tiering não move nada | Evidência acumula no tier caro indefinidamente |
+| ~~F-CAP-03~~ | ~~Gap de ~US$88/mês sem quebra por SKU~~ | ✅ **Resolvido 2026-07-21** — quebra feita, ver §6 |
+| F-CAP-04 | RAM líquida por emissora não fechada (falta PSS) | Dimensionamento acima de 200 emissoras fica com incerteza de ~50% |
+| **F-CAP-05** | **CUD nunca assinado — compute 100% on-demand** | **~R$860/mês (~R$10,3k/ano) deixados na mesa** |
+| **F-CAP-06** | Snapshots/imagem de máquina armazenados nos **EUA**, pagando transferência intercontinental | ~R$81/mês; e egress 4× o previsto (~R$200/mês) sem investigação |
+| **F-CAP-07** | Discos provisionados (~192 GB Balanced + ~94 GB SSD, sem HDD) **não batem** com o documentado (50 + 300 SSD + 300 HDD) | Dimensionamento de disco parte de premissa falsa |

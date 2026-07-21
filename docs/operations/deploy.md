@@ -300,6 +300,13 @@ Todo `git push origin master` dispara rebuild automático.
 | **PostgreSQL** | SSD Persistent Disk | 300 GB | `/mnt/db` | IOPS alto para queries de fingerprint |
 | **Áudio / Logs** | Standard HDD | 300 GB | `/mnt/data` | Clips de evidência + logs |
 
+> ⚠️ **Esta tabela NÃO bate com o billing real (verificado 2026-07-21).** Os
+> SKUs faturados implicam **~192 GB de Balanced PD** e **~94 GB de SSD PD**, e
+> **nenhum SKU de Standard HDD** — ver [§6](#6-análise-de-custos). Ou seja: o
+> layout acima é o *planejado*, não o *provisionado*. Antes de dimensionar
+> disco, confirme o real com `df -h /mnt/db /mnt/data` na VM e a lista de
+> discos no console GCP. Follow-up: **F-CAP-07**.
+
 Não use disco único — contenção de I/O entre PostgreSQL e OS degrada latência de detecção.
 
 ### Sistema operacional
@@ -828,28 +835,91 @@ Sizing baseado em medição de produção (2026-07-21, 173 emissoras ativas):
 [capacity-and-unit-cost.md](capacity-and-unit-cost.md) — a conta de unit
 economics (custo médio × marginal × no teto) vive lá, não aqui.
 
-### Composição do custo mensal (southamerica-east1)
+### Composição do custo mensal — REAL, por SKU (2026-07-21)
 
-> ⚠️ **A tabela abaixo é a estimativa de projeto (2026-05), não o gasto real.**
-> Faturamento observado em 2026-07-21: **~R$97/dia ≈ R$2.949/mês ≈ US$517**,
-> contra os **US$429** projetados — **~US$88/mês (20%) acima**, não explicado.
-> Nenhuma quebra por SKU foi feita até hoje. **Ação pendente:** GCP Console →
-> Billing → Reports → agrupar por SKU, e reconciliar contra esta tabela.
+Quebra por SKU do billing GCP, período de **19,84 dias** (MTD julho/2026).
 
-| Componente | Tipo | Custo (on-demand) |
+> **Como o período foi determinado** (o relatório do console é parcial, não um
+> mês cheio — normalizar antes de comparar): `External IP Charge` = 476,18 h;
+> `C3 Instance Core` 3.809,43 ÷ 8 vCPU = 476,18 h; `C3 Instance RAM` 7.602,87 ÷
+> 476,18 = 15,97 GiB ≈ 16 GB. As três baterem confirma o período **e** o tipo
+> de máquina. 476,18 h = 19,84 dias → fator de normalização mensal **×1,534**.
+
+| SKU | Uso (19,84d) | R$ período | **R$/mês** | % |
+|---|---|---|---|---|
+| C3 Instance Core in Sao Paulo | 3.809,43 core-h | 1.233,78 | **1.892,60** | 64,9% |
+| C3 Instance RAM in Sao Paulo | 7.602,87 GiB-h | 279,85 | **429,30** | 14,7% |
+| **→ Compute** | | **1.513,63** | **2.321,90** | **79,6%** |
+| Balanced PD Capacity | 125,25 GiB-mês (~192 GB) | 110,59 | 169,60 | 5,8% |
+| SSD backed PD Capacity | 61,25 GiB-mês (~94 GB) | 91,93 | 141,00 | 4,8% |
+| **→ Discos** | | **202,52** | **310,60** | **10,6%** |
+| Egress SP → South America | 67,72 GiB | 75,74 | 116,20 | 4,0% |
+| Egress SP → Americas | 34,69 GiB | 38,79 | 59,50 | 2,0% |
+| Egress via Carrier Peering | 33,86 GiB | 15,94 | 24,40 | 0,8% |
+| **→ Egress (~209 GB/mês)** | | **130,47** | **200,10** | **6,9%** |
+| PD snapshot transfer NA ↔ LatAm | 48,34 GiB | 39,84 | 61,10 | 2,1% |
+| Storage PD Snapshot **in US** | 30,33 GiB-mês | 11,60 | 17,80 | 0,6% |
+| Storage Machine Image **in US** | 4,84 GiB-mês | 1,42 | 2,20 | 0,1% |
+| **→ Snapshots/imagens (cross-continente)** | | **52,86** | **81,10** | **2,8%** |
+| External IP | 476,18 h | 3,07 | 4,70 | 0,2% |
+| **TOTAL** | | **1.902,55** | **~2.918** | |
+
+**R$95,90/dia.** Nenhuma linha tem "Programas de economia" — **tudo on-demand**.
+
+#### O que a quebra real desmentiu
+
+A estimativa de projeto (2026-05) dizia VM ~71% / discos 24% / resto 3%. O real
+é **compute 79,6% / discos 10,6% / egress 6,9% / snapshots 2,8%**. Três erros:
+
+1. **Compute custa mais que o previsto** — R$2.322/mês ≈ US$407, contra os
+   ~US$305 estimados (+33%).
+2. **Discos custam menos e são outros** — o previsto era 50 GB Balanced + 300 GB
+   SSD + 300 GB HDD; o faturado implica **~192 GB Balanced + ~94 GB SSD** e
+   **nenhum SKU de Standard HDD**. A tabela de discos da §4 está errada — ver
+   aviso lá. (Os ↑122%/↑88% no billing indicam crescimento recente.)
+3. **Egress é 4× o previsto** — estimado ~50 GB/mês (US$9,50); real ~209 GB/mês
+   (R$200 ≈ US$35).
+
+#### Alavancas, em ordem de tamanho
+
+| # | Ação | Economia | Status |
+|---|---|---|---|
+| 1 | **Assinar CUD de 1 ano** no compute (~37%) | **~R$860/mês (~R$10,3k/ano)** | ⚠️ **vencido** — VM em prod desde 2026-06-08, doc mandava assinar após 30d |
+| 2 | Mover snapshots/imagem de máquina dos **EUA** para SP | ~R$81/mês | Config provavelmente acidental (default multi-region) |
+| 3 | Investigar egress 4× acima do previsto | até ~R$150/mês | Ver F-CAP-06 |
+
+Com o CUD assinado, o custo por emissora no teto de capacidade cai de
+**R$12,42 para ~R$8,76** — ver [capacity-and-unit-cost.md](capacity-and-unit-cost.md).
+
+#### Estimativa original de projeto (2026-05) — mantida para histórico
+
+> Superada pela quebra real acima. Preservada só para rastrear o quanto a
+> estimativa errou.
+
+| Componente | Tipo | Custo estimado |
 |---|---|---|
-| VM c3-highcpu-8 (8 vCPU, 16 GB) | Compute | ~$305 (verificar no billing) |
+| VM c3-highcpu-8 (8 vCPU, 16 GB) | Compute | ~$305 |
 | Boot disk: 50 GB Balanced PD | Storage | $7,50 |
 | PostgreSQL: 300 GB SSD PD | Storage | $76,50 |
 | Dados/áudio: 300 GB Standard HDD | Storage | $18,00 |
 | GCS Nearline (backups ~50 GB) | Storage | $1,00 |
 | IP estático externo | Networking | $3,65 |
 | Egress estimado (~50 GB/mês) | Networking | $9,50 |
-| **TOTAL** | | **~$429/mês (~R$ 2.445)** |
+| **TOTAL estimado** | | **~$429/mês (~R$ 2.445)** |
 
 ### Cenários
 
-> **Máquina em produção (desde 2026-06-08): `c3-highcpu-8` (8 vCPU, 16 GB), ~$305/mês on-demand** — mesmo patamar do `n2d-standard-8` abaixo (o C3 tem vCPU mais caro, compensado pela RAM menor). Os cenários `n2d` abaixo ficam como referência; o C3 também tem CUD de 1/3 anos com desconto análogo.
+> **Máquina em produção (desde 2026-06-08): `c3-highcpu-8` (8 vCPU, 16 GB).**
+> Custo real medido em 2026-07-21: **R$2.322/mês ≈ US$407** de compute
+> (core + RAM), **não os ~$305 estimados**. Os cenários `n2d` abaixo ficam como
+> referência histórica — não use pra decidir nada; use a quebra por SKU da §6.
+
+> 🔴 **CUD pendente e vencido.** A recomendação original ("on-demand por 30 dias,
+> depois assine CUD de 1 ano") venceu — a VM está em prod desde 2026-06-08 e o
+> billing de 2026-07-21 mostra **zero** em "Programas de economia" em todas as
+> linhas. O CUD de 1 ano do C3 (~37% sobre compute) economiza **~R$860/mês
+> (~R$10,3k/ano)** e é, com folga, a maior alavanca de custo do sistema.
+> Follow-up: **F-CAP-05**.
 
 | Cenário | Configuração | $/mês | R$/mês |
 |---|---|---|---|
@@ -860,20 +930,58 @@ economics (custo médio × marginal × no teto) vive lá, não aqui.
 
 *Câmbio de referência: R$ 5,70/USD*
 
-### Por que custa isso
+### Por que custa isso (percentuais REAIS, 2026-07-21)
 
-**A VM (~$305/mês = ~71% do custo total)**  
-São Paulo paga ~37% de premium sobre regiões dos EUA. Motivo: infraestrutura mais cara no Brasil, mercado menor, conectividade internacional. A Virginia custaria ~$247/mês pela mesma máquina — mas a latência de 120–180 ms para streams brasileiras é pior do que os 15–40 ms de São Paulo.
+**Compute — R$2.322/mês = 79,6%**  
+São Paulo paga ~37% de premium sobre regiões dos EUA. A Virginia sairia mais
+barato, mas a latência de 120–180 ms para streams brasileiras é pior que os
+15–40 ms de SP. **Este é o custo do sistema** — quase 80% da conta. Toda
+otimização relevante passa por aqui: CUD (−37%) ou encher a máquina até o teto
+de ~235 emissoras. O split core/RAM (64,9% / 14,7%) confirma que a carga é
+CPU-bound, coerente com o `highcpu` escolhido.
 
-**Os discos ($102/mês = 24% do custo)**  
-SSD para PostgreSQL é inegociável — o matching faz leituras aleatórias no índice de fingerprints em tempo real. HDD para áudio é suficiente (leitura sequencial de clips, baixa frequência).
+**Discos — R$311/mês = 10,6%**  
+SSD para o PostgreSQL é inegociável (o matching faz leitura aleatória no índice
+em tempo real). Bem abaixo dos 24% estimados no projeto — **não é alavanca de
+custo**. Mas o provisionado não bate com o documentado: ver aviso na §4.
 
-**Tudo mais ($15/mês = 3%)**  
-GCS, egress e IP estático são ruído nessa escala.
+**Egress — R$200/mês = 6,9% (~209 GB/mês)**  
+4× a estimativa original. O *ingest* dos streams não aparece aqui porque
+ingress no GCP é tarifado a zero (960 GB/dia entrando, R$0). Este egress é
+saída: evidência servida ao frontend, presigned URLs e upload de backup pro R2.
+Escala com uso de cliente e detecções, não com nº de emissoras.
+
+**Snapshots e imagem de máquina nos EUA — R$81/mês = 2,8%**  
+Anomalia: snapshots de uma VM de São Paulo estão armazenados na **América do
+Norte**, pagando transferência intercontinental (`PD snapshot Data Transfer
+between North America and Latin America`) todo dia. Quase certamente default
+multi-region não revisado. Ver F-CAP-06.
 
 ### Estratégia de compromisso
 
-Recomendação: suba **on-demand por 30 dias**. Monitore RAM e CPU pelo Grafana. Com dados reais de produção, assine **CUD 1 ano** — economiza ~$86/mês. Só considere 3 anos se o projeto for estratégico de longo prazo.
+> **Status em 2026-07-21: a recomendação abaixo foi cumprida pela metade.** A VM
+> rodou on-demand muito além dos 30 dias (prod desde 2026-06-08) e o CUD **nunca
+> foi assinado** — billing mostra zero em "Programas de economia".
+
+Recomendação original: subir **on-demand por 30 dias**, monitorar RAM e CPU, e
+então assinar **CUD de 1 ano**. Com os dados reais de produção agora em mãos
+(CPU 53% com 173 emissoras, RAM projetada 9–12 GB de 16 a 200 emissoras), a
+máquina está validada e **não há mais motivo para adiar o CUD**.
+
+Economia recalculada sobre o compute real (R$2.322/mês), não sobre a estimativa
+antiga de US$86:
+
+| Compromisso | Desconto | Economia/mês | Economia/ano |
+|---|---|---|---|
+| **CUD 1 ano** (recomendado) | ~37% | **~R$860** | **~R$10,3k** |
+| CUD 3 anos | ~55% | ~R$1.277 | ~R$15,3k |
+
+Só considere 3 anos se o projeto for estratégico de longo prazo — o CUD trava
+o *tipo* de máquina, e passar de ~200 emissoras exige migrar para
+`c3-standard-8` (32 GB de RAM).
+
+> **Confirmar os percentuais de desconto no console** antes de assinar — variam
+> por família e região, e os valores acima são a faixa típica do C3.
 
 ---
 
