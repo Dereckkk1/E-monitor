@@ -124,6 +124,34 @@ export function useActivateClient() {
   })
 }
 
+// PMM no target por cliente — cadastro em /clients/:id/target-pmm e leitura
+// pelas telas de veiculação (grid de /detections). A lista traz as emissoras-
+// alvo das campanhas do cliente com pmm (global) e pmm_target (null = não
+// cadastrado, que é DIFERENTE de zero).
+export function useClientTargetPmm(clientId, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['client-target-pmm', clientId],
+    queryFn: () => api.get(`/clients/${clientId}/target-pmm`).then(r => r.data.data ?? []),
+    enabled: enabled && !!clientId,
+  })
+}
+
+// Bulk upsert: entries com pmm_target null APAGAM a linha (voltam pra "não
+// cadastrado"). Manda só as linhas alteradas.
+export function useSaveClientTargetPmm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ clientId, entries }) =>
+      api.put(`/clients/${clientId}/target-pmm`, { entries }).then(r => r.data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['client-target-pmm', vars.clientId] })
+      // Impactos no target mudaram → as telas que os exibem precisam refazer.
+      qc.invalidateQueries({ queryKey: ['insights'] })
+      qc.invalidateQueries({ queryKey: ['campaigns-financials'] })
+    },
+  })
+}
+
 // Campaigns
 export function useCampaigns() {
   return useQuery({ queryKey: ['campaigns'], queryFn: () => api.get('/campaigns').then(r => r.data.data ?? []) })
