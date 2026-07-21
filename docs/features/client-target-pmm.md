@@ -13,6 +13,9 @@ codigo-relacionado:
   - workers/internal/catalog/detections.go
   - workers/internal/api/handlers/reports.go
   - frontend/src/pages/ClientTargetPmmPage.jsx
+  - frontend/src/pages/ClientsPage.jsx
+  - frontend/src/components/insights/KpiCards.jsx
+  - frontend/src/utils/pdfReport.js
   - frontend/src/utils/targetPmmPaste.js
 ---
 
@@ -86,8 +89,20 @@ Os números acima respondem "quantos do meu público", mas não dizem **qual** p
 | CSV **consolidado** de campanha | cabeçalhos viram `PMM no target (rótulo)` / `Impactos no target (rótulo)` |
 | `GET /v1/internal/insights` | `target_label` no topo do payload — **só** quando todas as campanhas filtradas são de **um único** cliente **e** ele tem rótulo; filtro multi-cliente devolve `null` |
 | CSV **detalhado** (`/detections/export`) | **fica sem rótulo, de propósito** |
+| `/clients` (modal de cliente) | campo "Público-alvo (target)", texto livre, `maxLength=60` (o backend aceita 200); vazio grava `NULL` |
+| `/insights` (cards) | 2ª linha sob "Impactos no target" / "CPM no target" com o rótulo, truncada com reticências (`title` traz o texto inteiro) |
+| `/detections` (grid) | **só no tooltip** da pill teal; o label visível fica curto (coluna de 180px) |
+| `/reports/airtime` | **só no `title`** da pill teal |
+| `/campaigns` (bloco financeiro) | **só nos tooltips** de "CPM no target" e "Impactos no target" |
+| PDF de campanha | linha "Público-alvo: …" no **cabeçalho**, sob "cliente · período" (**não** no KPI, ver abaixo) |
 
 A regra do `/insights` existe porque `impactos_target` ali é uma **soma sobre campanhas de clientes potencialmente diferentes**: rotular esse número com o target de um dos clientes seria mentira. O SQL é um `CASE WHEN count(DISTINCT client_id) = 1 THEN max(target_label) END`.
+
+Nas telas o rótulo é **sempre sufixo, nunca gatilho**: o que decide se o bloco "no target" aparece continua sendo `stations_with_target > 0`. Cliente com rótulo e sem PMM cadastrado não ganha nada; cliente com PMM e sem rótulo vê exatamente a tela de antes.
+
+Onde o espaço é apertado (pills de `/detections` e `/reports/airtime`, rótulos do bloco financeiro de `/campaigns`) o rótulo entra **só no tooltip** — texto visível ali é medido em poucos caracteres e um rótulo de 60 quebraria o layout. Nos cards de `/insights` ele ganha uma **segunda linha** em corpo menor em vez de virar sufixo na mesma linha: as trilhas do grid têm 180px, e um sufixo inline quebraria em 2-3 linhas empurrando o valor e desalinhando as alturas dos cards da mesma linha. Truncado com reticências, o texto completo fica no `title`.
+
+No **PDF de campanha** o rótulo NÃO entra no KPI "Impactos no target": aquele box usa auto-fit de fonte (`fitFontSize`) e o rótulo sozinho já encosta no piso de 5,5pt com 5 boxes na página. Ele vai para o **hero/cabeçalho**, numa linha "Público-alvo: …" sob "cliente · período"; o card do hero cresce de 36mm para 44mm nesse caso e `drawHero` passou a **devolver a base do card**, com o `kpiY` derivado dela (`heroBottom + 7,5`) em vez do literal `76`. Sem rótulo a conta dá exatamente 76 e o PDF sai idêntico ao de antes.
 
 Pelo mesmo motivo o CSV detalhado não recebe sufixo: `campaign_id` é **opcional** naquele export, então as linhas podem cobrir campanhas de vários clientes, cada um com o seu target — um rótulo único no cabeçalho estaria errado para parte das linhas. O CSV consolidado é sempre de **uma** campanha, logo de um cliente só, e aí o sufixo é seguro.
 

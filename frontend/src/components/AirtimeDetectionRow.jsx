@@ -77,6 +77,10 @@ export default function AirtimeDetectionRow({
   onPlayRequest,
   onPlayClose,
   highlighted = false,
+  // targetLabel: rótulo do público-alvo do cliente (clients.target_label).
+  // Entra só no title da pill teal — o texto visível da pill é curto demais.
+  // null = sem rótulo (ou recorte que cruza clientes) → title como antes.
+  targetLabel = null,
 }) {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
@@ -195,7 +199,7 @@ export default function AirtimeDetectionRow({
         </div>
         {pmmTarget != null && (
           <div className="airtime-row-pill airtime-row-pill-target"
-               title={`PMM no target: ${detection.station_pmm_target}`}>
+               title={`PMM no target${targetLabel ? ` (${targetLabel})` : ''}: ${detection.station_pmm_target}`}>
             <IconHeadset />
             <span>
               {pmmTarget}

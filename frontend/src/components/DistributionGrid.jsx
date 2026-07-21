@@ -47,6 +47,11 @@ export default function DistributionGrid({
   // Ausente/vazio = feature não cadastrada; a pill de target não é renderizada
   // e a grid fica idêntica à de antes.
   pmmTargetByStation = {},
+  // targetLabel: rótulo do público-alvo do cliente (clients.target_label), ex.
+  // "Homens 25-49, classe AB". Entra SÓ no tooltip da pill teal — o label
+  // visível é curto por causa da largura da coluna de total (180px). null =
+  // cliente sem rótulo → tooltip idêntico ao de antes.
+  targetLabel = null,
   // capAtToday: true (default) corta a grid em "hoje" — esperado em telas de
   // monitoramento (/detections) onde dias futuros ainda não têm dado real.
   // false mostra a campanha inteira até o end_date — esperado em telas de
@@ -304,6 +309,7 @@ export default function DistributionGrid({
                       pricing={pricingByStation[row.stationId] ?? null}
                       pmm={Number(station.pmm) || 0}
                       pmmTarget={pmmTargetByStation[row.stationId] ?? null}
+                      targetLabel={targetLabel}
                       summary={summary}
                     />
                   )}
@@ -419,7 +425,7 @@ function RowSummaryCell({ row, days, cellData, stationTotalWidth, summary = 'ful
 //       - consolidated  → consolidated_value (não depende das plays)
 //       - per_insertion → Σ (unit_value_tipo × in_slot_tipo) por tipo
 //   • Bônus em R$ (só per_insertion) → Σ (unit_value × bonus_tipo)
-function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null, summary = 'full' }) {
+function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null, targetLabel = null, summary = 'full' }) {
   // Plan-only (/materials): a célula por emissora mostra QUANTO está programado
   // pra rodar nela no período visível — sem R$, sem impactos. Atende ao foco
   // "quanto está programado pra rodar em cada emissora".
@@ -517,7 +523,7 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null
           tone="teal"
           icon={<IconHeadset />}
           label={`${fmtImpactos(impactosTarget)} target`}
-          hint={`${fmtInt(impactosTarget)} impactos no target = PMM no target ${fmtInt(pmmTarget)} × ${inSlotStation} veiculações na estação`}
+          hint={`${fmtInt(impactosTarget)} impactos no target${targetLabel ? ` (${targetLabel})` : ''} = PMM no target ${fmtInt(pmmTarget)} × ${inSlotStation} veiculações na estação`}
         />
       )}
       <ValuePill

@@ -20,6 +20,7 @@ const EMPTY_FORM = {
   cep: '',
   city: '',
   state: '',
+  target_label: '',
 }
 
 function nullify(form) {
@@ -153,6 +154,7 @@ function ClientFormModal({ initial, onClose, onSave, isSaving, isError }) {
           cep:           initial.cep           ?? '',
           city:          initial.city          ?? '',
           state:         initial.state         ?? '',
+          target_label:  initial.target_label  ?? '',
         }
       : EMPTY_FORM
   )
@@ -271,6 +273,25 @@ function ClientFormModal({ initial, onClose, onSave, isSaving, isError }) {
               onChange={e => setF('contact_name', e.target.value)}
               placeholder="Nome do contato principal"
             />
+          </div>
+
+          {/* Público-alvo (clients.target_label): texto livre, opcional. Vira
+              sufixo descritivo dos rótulos "no target" nas telas e relatórios.
+              Vazio → null (nullify), que é como o backend representa "sem
+              rótulo". O backend aceita até 200 chars; aqui limitamos a 60 pra
+              o sufixo não estourar os cards/pills que o exibem. */}
+          <div className="field">
+            <label>Público-alvo (target)</label>
+            <input
+              className="input"
+              maxLength={60}
+              value={form.target_label}
+              onChange={e => setF('target_label', e.target.value)}
+              placeholder="Homens 25-49, classe AB"
+            />
+            <span className="field-hint">
+              Aparece junto dos números de impactos no target. Ex.: Homens 25-49, classe AB
+            </span>
           </div>
 
           {isError && (
