@@ -102,6 +102,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Route("/v1", func(r chi.Router) {
 			r.Group(func(r chi.Router) {
 				r.Use(d.APIKey.Middleware)
+				// Scope every API-key request to its own client before any
+				// handler runs. Without this the shared internal handlers see
+				// no JWT claims → ClientScopeFromContext returns nil → "see
+				// everything" (cross-tenant BOLA, audit 2026-07-21 C-01).
+				r.Use(auth.APIKeyViewerScope)
 				r.Route("/detections", func(r chi.Router) {
 					r.Get("/", d.Detections.List)
 					r.Get("/{id}", d.Detections.Get)
@@ -114,11 +119,16 @@ func NewRouter(d Deps) http.Handler {
 	// Prometheus metrics — public, no auth required (§15.1).
 	r.Handle("/metrics", promhttp.Handler())
 
+	// Per-IP throttle for the public login endpoint — brute force /
+	// credential stuffing defence (audit 2026-07-21 H-04). 10 attempts per
+	// minute per IP is generous for a human, ruinous for a stuffing run.
+	loginLimiter := auth.NewLoginRateLimiter(10, time.Minute)
+
 	r.Route("/v1/internal", func(r chi.Router) {
 		// Public: health check and login do not require JWT.
 		r.Get("/health", d.Health.Check)
 		if d.Auth != nil {
-			r.Post("/auth/login", d.Auth.Login)
+			r.With(loginLimiter.Middleware).Post("/auth/login", d.Auth.Login)
 		}
 
 		// Protected: all other internal routes require a valid JWT.

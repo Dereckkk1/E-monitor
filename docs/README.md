@@ -2,7 +2,8 @@
 
 Índice geral. Todo doc tem header YAML no topo com `status`, `ultima-verificacao` e `codigo-relacionado`. Use isso para saber se um doc ainda reflete o código antes de confiar nele.
 
-> **Auditoria mais recente:** [AUDIT-2026-07-02.md](AUDIT-2026-07-02.md) — audit completo do sistema de detecção (notas 0–10 por área, 73 achados, plano P0/P1/P2). Anterior: [AUDIT-2026-05-15.md](AUDIT-2026-05-15.md).
+> **Auditoria de segurança (AppSec):** [AUDIT-2026-07-21.md](AUDIT-2026-07-21.md) — audit de segurança multi-agente (Anthropic-Cybersecurity-Skills): 2 críticos (BOLA na API externa `/v1/detections`, segredos em cleartext), 8 altos, 16 médios, 8 baixos. **Confidencial.**
+> **Auditoria de detecção mais recente:** [AUDIT-2026-07-02.md](AUDIT-2026-07-02.md) — audit completo do sistema de detecção (notas 0–10 por área, 73 achados, plano P0/P1/P2). Anterior: [AUDIT-2026-05-15.md](AUDIT-2026-05-15.md).
 
 ---
 
@@ -11,7 +12,8 @@
 ```
 docs/
   README.md                — este índice
-  AUDIT-2026-07-02.md      — última auditoria (sistema de detecção, cabo a rabo)
+  AUDIT-2026-07-21.md      — auditoria de segurança AppSec (multi-agente, confidencial)
+  AUDIT-2026-07-02.md      — auditoria do sistema de detecção (cabo a rabo)
   AUDIT-2026-05-15.md      — auditoria anterior (histórico, não substituir)
   architecture/            — como o sistema funciona (conceitual, estável)
   features/                — feature implementada (uma feature por arquivo)
