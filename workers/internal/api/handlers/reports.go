@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -297,9 +298,15 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	resp.Totals.DistinctStations = len(byStation)
 	// Impactos derivados de byStation (uma linha por emissora), não de
 	// byMaterialStation — senão a mesma emissora entraria uma vez por material.
+	//
+	// math.Round, não truncamento: a coluna "Impactos" da tabela do PDF é
+	// calculada no frontend com Math.round(pmm × count) (utils/pdfReport.js).
+	// Truncar aqui faria o KPI do topo ficar ABAIXO da soma da própria coluna
+	// no mesmo documento — stations.pmm é numeric(10,2), então o produto é
+	// fracionário e a diferença chega a 1 por emissora.
 	for _, s := range byStation {
 		if s.StationPMM != nil {
-			resp.Totals.Impactos += int64(*s.StationPMM * float64(s.Count))
+			resp.Totals.Impactos += int64(math.Round(*s.StationPMM * float64(s.Count)))
 		}
 		if s.StationPMMTarget != nil {
 			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.Count)
