@@ -17,6 +17,12 @@ const fmtInt = new Intl.NumberFormat('pt-BR')
 // noção de "onde estão os buracos", que é justamente o valor da barra.
 const GROUP_BAR_THRESHOLD = 120
 
+// A partir daqui os segmentos encostam um no outro (gap zero). Com muitos
+// segmentos, 2px de respiro entre eles ocupam mais pixels que o próprio dado
+// e o vão vira indistinguível de um segmento vazio: quem carrega a
+// informação passa a ser a cor, em corridas contínuas de rosa e cinza.
+const DENSE_BAR_THRESHOLD = 60
+
 // Teto visual do rótulo de público-alvo. O backend aceita mais (200), mas um
 // rótulo maior que isso não cabe no chip do cabeçalho sem quebrar a linha.
 const LABEL_MAX = 60
@@ -328,6 +334,9 @@ function CoverageBar({ rows, isFilled }) {
     )
   }
 
+  const dense = total > DENSE_BAR_THRESHOLD
+  const barClass = `ctp-cov-bar${dense ? ' ctp-cov-bar--dense' : ''}`
+
   return (
     <section className="ctp-coverage" aria-labelledby="ctp-cov-title">
       <div className="ctp-coverage-head">
@@ -344,18 +353,14 @@ function CoverageBar({ rows, isFilled }) {
       {groups ? (
         <div className="ctp-cov-groups" role="img" aria-label={aria}>
           {groups.map(g => (
-            <div
-              className="ctp-cov-group"
-              key={g.name}
-              style={{ flexGrow: g.items.length, flexBasis: g.items.length * 6 }}
-            >
-              <div className="ctp-cov-bar">{g.items.map(seg)}</div>
+            <div className="ctp-cov-group" key={g.name}>
+              <div className={barClass}>{g.items.map(seg)}</div>
               <span className="ctp-cov-group-label">{g.name}</span>
             </div>
           ))}
         </div>
       ) : (
-        <div className="ctp-cov-bar ctp-cov-bar--single" role="img" aria-label={aria}>
+        <div className={`${barClass} ctp-cov-bar--single`} role="img" aria-label={aria}>
           {rows.map(seg)}
         </div>
       )}
@@ -556,9 +561,8 @@ function TargetPmmSkeleton() {
           <div className="ctp-thead">
             <div>Emissora</div>
             <div className="ctp-th-num">PMM da emissora</div>
-            <div className="ctp-th-num">PMM no target</div>
+            <div className="ctp-th-num ctp-th-input">PMM no target</div>
             <div className="ctp-th-num">% do PMM</div>
-            <div />
           </div>
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="ctp-row">
@@ -567,9 +571,11 @@ function TargetPmmSkeleton() {
                 <div className="skeleton" style={{ height: 10, width: 130, borderRadius: 6, marginTop: 5 }} />
               </div>
               <div className="ctp-num"><div className="skeleton" style={{ height: 13, width: 62, borderRadius: 6, marginLeft: 'auto' }} /></div>
-              <div className="ctp-num"><div className="skeleton" style={{ height: 32, width: 130, borderRadius: 8, marginLeft: 'auto' }} /></div>
+              <div className="ctp-inputcell">
+                <div className="skeleton" style={{ height: 32, width: 130, borderRadius: 8 }} />
+                <div className="skeleton" style={{ height: 30, width: 30, borderRadius: 8 }} />
+              </div>
               <div className="ctp-num"><div className="skeleton" style={{ height: 13, width: 38, borderRadius: 6, marginLeft: 'auto' }} /></div>
-              <div />
             </div>
           ))}
         </div>
@@ -768,9 +774,8 @@ export default function ClientTargetPmmPage() {
               <div className="ctp-thead">
                 <div>Emissora</div>
                 <div className="ctp-th-num">PMM da emissora</div>
-                <div className="ctp-th-num">PMM no target</div>
+                <div className="ctp-th-num ctp-th-input">PMM no target</div>
                 <div className="ctp-th-num">% do PMM</div>
-                <div />
               </div>
 
               {visible.map((row, index) => {
@@ -815,16 +820,8 @@ export default function ClientTargetPmmPage() {
                         onChange={e => setValue(row.station_id, e.target.value)}
                         onKeyDown={e => handleInputKeyDown(e, index)}
                       />
-                    </div>
-
-                    <div className="ctp-num ctp-pctcell">
-                      {pct != null && (
-                        <span className={`ctp-pct${over ? ' ctp-pct--over' : ''}`}>{fmtShare(pct)}</span>
-                      )}
-                      {over && <span className="ctp-pct-warn">acima do PMM da emissora</span>}
-                    </div>
-
-                    <div className="ctp-rowactions">
+                      {/* O limpar mora colado no input que ele limpa: solto na
+                          ponta da linha, a relação entre os dois se perde. */}
                       <button
                         className="btn-icon ctp-clear"
                         title="Limpar (volta para não cadastrado)"
@@ -834,6 +831,13 @@ export default function ClientTargetPmmPage() {
                       >
                         <ClearIcon />
                       </button>
+                    </div>
+
+                    <div className="ctp-num ctp-pctcell">
+                      {pct != null && (
+                        <span className={`ctp-pct${over ? ' ctp-pct--over' : ''}`}>{fmtShare(pct)}</span>
+                      )}
+                      {over && <span className="ctp-pct-warn">acima do PMM da emissora</span>}
                     </div>
                   </div>
                 )

@@ -200,41 +200,50 @@
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
-  background: var(--c-border);
+  background: color-mix(in srgb, var(--c-text-3) 45%, var(--c-border));
 }
 .ctp-legend-dot--on { background: var(--c-action); }
 
+/* A barra SEMPRE ocupa a largura inteira: com 4 emissoras são 4 segmentos
+   largos, com 160 são 160 finos, mas em nenhum caso ela flutua num vão. */
 .ctp-cov-bar {
   display: flex;
   align-items: stretch;
   gap: 2px;
   height: 10px;
+  border-radius: 3px;
+  overflow: hidden;
 }
-.ctp-cov-bar--single { height: 12px; }
+.ctp-cov-bar--single { height: 14px; }
+/* Muitos segmentos: gap zero. Com 160 emissoras, 2px de vão entre segmentos
+   ocupam mais pixels que o dado e o vão vira sósia do segmento vazio. */
+.ctp-cov-bar--dense { gap: 0; }
 .ctp-seg {
   flex: 1 1 0;
   min-width: 2px;
-  /* Teto por segmento: com 4 emissoras, blocos de 300px pareceriam uma barra
-     de progresso quebrada em vez de uma emissora por segmento. */
-  max-width: 56px;
   border-radius: 2px;
-  /* O vazio precisa ter corpo: em --c-surface-2 puro os buracos somem contra
-     o card branco e a barra vira um tracejado rosa sem leitura. */
-  background: var(--c-border);
+  /* O vazio precisa ter corpo: em --c-border os buracos somem contra o card
+     branco e a barra vira um tracejado rosa sem leitura. Este cinza é o
+     --c-border puxado pro --c-text-3 até dar pra apontar o buraco de longe. */
+  background: color-mix(in srgb, var(--c-text-3) 45%, var(--c-border));
   transition: background 150ms ease-out;
 }
+.ctp-cov-bar--dense .ctp-seg { border-radius: 0; }
 .ctp-seg--on { background: var(--c-action); }
 
+/* Grade de células iguais em vez de flex proporcional: com flex, um grupo
+   sozinho na última linha esticava até a largura toda e passava a impressão
+   de ter mais emissoras que os outros. Célula uniforme mantém a leitura. */
 .ctp-cov-groups {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px 16px;
 }
 .ctp-cov-group {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  min-width: 44px;
+  min-width: 0;
 }
 .ctp-cov-group-label {
   font-size: 10px;
@@ -304,15 +313,20 @@
   grid-template-columns:
     minmax(200px, 2.2fr) /* emissora */
     minmax(104px, 0.7fr) /* pmm */
-    minmax(128px, 0.8fr) /* pmm target */
-    minmax(96px, 0.7fr)  /* % do pmm */
-    40px;                /* limpar */
+    minmax(170px, 0.9fr) /* pmm target: input + limpar */
+    minmax(96px, 0.6fr); /* % do pmm */
   align-items: center;
   gap: 14px;
   padding: 8px 16px;
 }
+/* O header do input alinha pela direita do INPUT, não pela da célula (que
+   ainda carrega o botão limpar) — senão rótulo e valores saem de eixo. */
+.ctp-th-input { padding-right: 36px; }
 .ctp-thead {
   background: var(--c-surface-2);
+  /* A borda lateral transparente espelha a das linhas (que existe pro hover
+     acender em rosa): sem ela o cabeçalho fica 1px fora do eixo dos valores. */
+  border: 1px solid transparent;
   border-bottom: 1px solid var(--c-border);
   font-family: var(--font-heading);
   font-size: 10.5px;
@@ -347,10 +361,10 @@
   border-color: var(--c-action-border);
   box-shadow: var(--shadow-md);
 }
-/* Linha alterada: tint discreto + ponto rosa no nome. O hover continua
-   legível porque só a borda e a sombra mudam por cima do tint. */
-.ctp-row--dirty { background: color-mix(in srgb, var(--c-action) 4%, var(--c-surface)); }
-.ctp-row--dirty:hover { background: color-mix(in srgb, var(--c-action) 6%, var(--c-surface)); }
+/* Linha alterada: SEM tint de fundo. Numa sessão de digitação a maioria das
+   linhas fica alterada, então o tint deixa de destacar; pior, rosa claro numa
+   linha que também tem aviso âmbar lê como erro. O ponto no nome + a borda do
+   input bastam pra dizer "modificado" sem brigar com o aviso. */
 .ctp-row--dirty .ctp-input {
   border-color: var(--c-action-border);
   background: var(--c-surface);
@@ -401,7 +415,12 @@
    de mobile, onde o cabeçalho da tabela some. */
 .ctp-celllabel { display: none; }
 
-.ctp-inputcell { display: flex; justify-content: flex-end; }
+.ctp-inputcell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .ctp-input {
   width: 100%;
   max-width: 132px;
@@ -442,8 +461,8 @@
   text-align: right;
 }
 
-.ctp-rowactions { display: flex; justify-content: flex-end; }
 .ctp-clear {
+  flex-shrink: 0;
   color: var(--c-text-3);
   transition: color 150ms ease-out, border-color 150ms ease-out;
 }
@@ -672,7 +691,7 @@
 @media (max-width: 860px) {
   .ctp-thead,
   .ctp-row {
-    grid-template-columns: minmax(150px, 1.7fr) minmax(90px, 0.7fr) minmax(112px, 0.8fr) minmax(74px, 0.6fr) 36px;
+    grid-template-columns: minmax(150px, 1.7fr) minmax(84px, 0.7fr) minmax(150px, 0.9fr) minmax(74px, 0.6fr);
     gap: 10px;
     padding: 8px 12px;
   }
@@ -684,11 +703,11 @@
   /* A grade de 5 colunas não cabe: cada linha vira um bloco empilhado. */
   .ctp-thead { display: none; }
   .ctp-row {
-    grid-template-columns: 1fr 118px 34px;
+    grid-template-columns: 1fr auto;
     grid-template-areas:
-      "station station clear"
-      "pmm     target  target"
-      "pct     pct     pct";
+      "station station"
+      "pmm     target"
+      "pct     pct";
     row-gap: 6px;
     padding: 12px;
   }
@@ -697,7 +716,6 @@
   .ctp-pmm        { grid-area: pmm; text-align: left; display: flex; flex-direction: column; gap: 1px; }
   .ctp-inputcell  { grid-area: target; }
   .ctp-pctcell    { grid-area: pct; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 8px; }
-  .ctp-rowactions { grid-area: clear; }
   .ctp-celllabel {
     display: block;
     font-size: 9.5px;
@@ -707,7 +725,7 @@
     color: var(--c-text-3);
   }
   .ctp-row--empty { grid-template-columns: 1fr; grid-template-areas: none; }
-  .ctp-input { max-width: none; }
+  .ctp-input { max-width: 132px; }
 
   .ctp-coverage { padding: 12px 14px 14px; }
   .ctp-coverage-legend { display: none; }
