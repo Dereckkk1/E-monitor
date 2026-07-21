@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -87,6 +89,31 @@ func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxTargetLabelLen é o teto defensivo do rótulo de público-alvo gravado em
+// clients.target_label. A UI sugere 60 chars; aqui só barramos o absurdo (o
+// campo é TEXT no banco, sem CHECK).
+const maxTargetLabelLen = 200
+
+// normalizeTargetLabel apara espaços e colapsa "" em nil (NULL no banco =
+// cliente sem rótulo, que é o mesmo significado de string vazia). Devolve
+// false quando o rótulo excede maxTargetLabelLen — contado em runes, pra um
+// rótulo acentuado não ser rejeitado por causa de bytes UTF-8.
+func normalizeTargetLabel(p **string) bool {
+	if *p == nil {
+		return true
+	}
+	s := strings.TrimSpace(**p)
+	if s == "" {
+		*p = nil
+		return true
+	}
+	if utf8.RuneCountInString(s) > maxTargetLabelLen {
+		return false
+	}
+	*p = &s
+	return true
+}
+
 func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in catalog.CreateClientInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -95,6 +122,10 @@ func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Name == "" {
 		http.Error(w, "name is required", 400)
+		return
+	}
+	if !normalizeTargetLabel(&in.TargetLabel) {
+		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
 	out, err := h.Repo.Create(r.Context(), in)
@@ -181,6 +212,10 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Name == "" {
 		http.Error(w, "name is required", 400)
+		return
+	}
+	if !normalizeTargetLabel(&in.TargetLabel) {
+		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
 	out, err := h.Repo.Update(r.Context(), id, in)

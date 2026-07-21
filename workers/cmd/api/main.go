@@ -515,6 +515,7 @@ func main() {
 			Storage:  s3Client,
 			DevEmail: cfg.SuggestionsDevEmail,
 		},
+		ClientTargetPmm: &handlers.ClientTargetPmmHandler{Repo: catalog.NewClientStationPMM(pool)},
 	}
 
 	srv := &http.Server{

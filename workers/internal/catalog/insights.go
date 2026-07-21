@@ -54,6 +54,13 @@ type InsightsPayload struct {
 	// (fixo, estilo fornecedor) e o frontend esconde o card de Bonificação
 	// (que fica zerada). Ver docs/features/insights-dashboard.md.
 	Consolidated bool `json:"consolidated"`
+	// TargetLabel é o rótulo do público-alvo do cliente ("Homens 25-49"),
+	// usado pela UI como sufixo dos cards "no target". Só vem preenchido
+	// quando TODAS as campanhas filtradas são de um único cliente E esse
+	// cliente tem rótulo: se o filtro mistura clientes, os impactos no target
+	// somam públicos-alvo diferentes e rotular seria mentira. Sem omitempty —
+	// `null` é o valor significativo ("mostre só 'no target'").
+	TargetLabel *string `json:"target_label"`
 }
 
 type PeriodSpec struct {
@@ -82,6 +89,11 @@ type InsightsKPIs struct {
 	Bonificacao      BonificacaoK `json:"bonificacao"`
 	Investido        InvestidoK   `json:"investido"`
 	Gender           GenderK      `json:"gender"`
+	// Bloco "no target": só faz sentido quando o cliente tem cadastro de
+	// PMM no target. StationsWithTarget == 0 → o frontend esconde os cards.
+	ImpactosTarget     int64   `json:"impactos_target"`
+	StationsWithTarget int     `json:"stations_with_target"`
+	CPMTarget          float64 `json:"cpm_target"`
 }
 
 type BonificacaoK struct {
@@ -184,6 +196,19 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
 
+	targetLabel, err := r.targetLabel(ctx, p.CampaignIDs)
+	if err != nil {
+		return nil, fmt.Errorf("targetLabel: %w", err)
+	}
+
+	// CPM no target é SEMPRE dinâmico (executado ÷ impactos_target × 1000),
+	// mesmo em campanha com fixed_cpm: o CPM fixo é contratado sobre a base
+	// total de audiência, não sobre o recorte de público-alvo.
+	var cpmTarget float64
+	if core.ImpactosTarget > 0 {
+		cpmTarget = (inv.Executado / float64(core.ImpactosTarget)) * 1000.0
+	}
+
 	return &InsightsPayload{
 		Period: PeriodSpec{
 			From:        p.From.Format("2006-01-02"),
@@ -200,13 +225,43 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 			Bonificacao:      bon,
 			Investido:        inv,
 			Gender:           core.Gender,
+
+			ImpactosTarget:     core.ImpactosTarget,
+			StationsWithTarget: core.StationsWithTarget,
+			CPMTarget:          cpmTarget,
 		},
 		ClassPyramid:         core.Class,
 		AgeRanges:            core.Ages,
 		VeiculacoesBreakdown: core.Breakdown,
 		Buckets:              buckets,
 		Consolidated:         hasConsolidated,
+		TargetLabel:          targetLabel,
 	}, nil
+}
+
+// targetLabel devolve o rótulo do público-alvo a exibir junto dos números
+// "no target" — mas só quando as campanhas filtradas pertencem todas a UM
+// cliente. Com mais de um cliente na seleção o CASE não casa e o resultado é
+// NULL: os impactos no target somam públicos-alvo distintos, então a UI
+// mostra "Impactos no target" sem sufixo em vez de rotular errado.
+//
+// max() sobre um único cliente devolve o rótulo dele (ou NULL se ele não tem
+// rótulo). Seleção vazia → nenhuma linha → nil.
+func (r *Insights) targetLabel(ctx context.Context, campaignIDs []uuid.UUID) (*string, error) {
+	if len(campaignIDs) == 0 {
+		return nil, nil
+	}
+	var label *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT CASE WHEN count(DISTINCT c.client_id) = 1
+		            THEN max(cl.target_label) END
+		FROM campaigns c
+		JOIN clients cl ON cl.id = c.client_id
+		WHERE c.id = ANY($1::uuid[])`, campaignIDs).Scan(&label)
+	if err != nil {
+		return nil, err
+	}
+	return label, nil
 }
 
 // orMaxDate devolve t, ou uma data no futuro distante quando t é zero (o "hoje"
@@ -302,14 +357,16 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 
 // coreAggregates é o resultado interno usado pelo Compute().
 type coreAggregates struct {
-	Impactos         int64
-	VeiculacoesTotal int64
-	StationsCount    int
-	StationsWithPMM  int
-	Gender           GenderK
-	Class            ClassPyramidData
-	Ages             AgeRangesData
-	Breakdown        VeiculacoesBreakdownData
+	Impactos           int64
+	ImpactosTarget     int64
+	VeiculacoesTotal   int64
+	StationsCount      int
+	StationsWithPMM    int
+	StationsWithTarget int
+	Gender             GenderK
+	Class              ClassPyramidData
+	Ages               AgeRangesData
+	Breakdown          VeiculacoesBreakdownData
 }
 
 // aggregateCore lê a tabela detections direta + perfil demográfico em
@@ -324,8 +381,11 @@ type coreAggregates struct {
 func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAggregates, error) {
 	row := r.pool.QueryRow(ctx, `
 		WITH filt AS (
-		    SELECT d.id, d.station_id, d.category
+		    -- client_id vem da campanha: o PMM no target é resolvido por
+		    -- (cliente da campanha, emissora) — ver client_station_pmm.
+		    SELECT d.id, d.station_id, d.category, c.client_id
 		    FROM detection_attributions d
+		    JOIN campaigns c ON c.id = d.campaign_id
 		    WHERE d.campaign_id = ANY($1::uuid[])
 		      -- Conjunto "aprovado" (catalog.ApprovedDetectionsFilter): exclui
 		      -- retratadas (§18.2.2), ignoradas (admin "Desconsiderar") e
@@ -337,18 +397,19 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		),
 		per_station AS (
-		    SELECT f.station_id,
+		    SELECT f.station_id, f.client_id,
 		           COUNT(*)::bigint AS det_count,
 		           COUNT(*) FILTER (WHERE f.category='in_slot')::bigint  AS in_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_slot')::bigint AS out_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_date')::bigint AS out_date_n,
 		           COUNT(*) FILTER (WHERE f.category='orphan')::bigint   AS orphan_n
 		    FROM filt f
-		    GROUP BY f.station_id
+		    GROUP BY f.station_id, f.client_id
 		),
 		joined AS (
 		    SELECT ps.*,
 		           s.pmm,
+		           cst.pmm_target,
 		           (s.metadata->'audience_profile'->'gender'      ->>'male')::float    AS male_p,
 		           (s.metadata->'audience_profile'->'gender'      ->>'female')::float  AS female_p,
 		           (s.metadata->'audience_profile'->'socialClass' ->>'classeAB')::float AS ab_p,
@@ -359,14 +420,21 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		           (s.metadata->'audience_profile'->'ageRanges'   ->>'range50plus')::float AS r50_p
 		    FROM per_station ps
 		    JOIN stations s ON s.id = ps.station_id
+		    LEFT JOIN client_station_pmm cst
+		           ON cst.client_id = ps.client_id AND cst.station_id = ps.station_id
 		)
 		-- Atenção: percentuais em metadata.audience_profile estão em escala
 		-- 0-100 (não 0-1). Por isso multiplicamos por (pct / 100.0).
 		SELECT
 		    COALESCE(SUM(det_count), 0)::bigint                                  AS veic_total,
-		    COUNT(*)::int                                                        AS stations_count,
-		    COUNT(*) FILTER (WHERE pmm IS NOT NULL)::int                         AS stations_with_pmm,
+		    -- DISTINCT obrigatório: per_station agora particiona por cliente, então
+		    -- uma emissora usada por 2 clientes vira 2 linhas. Sem DISTINCT os
+		    -- contadores dobrariam (as SOMAS não são afetadas).
+		    COUNT(DISTINCT station_id)::int                                      AS stations_count,
+		    COUNT(DISTINCT station_id) FILTER (WHERE pmm IS NOT NULL)::int       AS stations_with_pmm,
+		    COUNT(DISTINCT station_id) FILTER (WHERE pmm_target IS NOT NULL)::int AS stations_with_target,
 		    COALESCE(SUM(det_count * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
+		    COALESCE(SUM(det_count * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
 		    COALESCE(SUM(det_count * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
 		    COALESCE(SUM(det_count * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
 		    COALESCE(SUM(det_count * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
@@ -384,8 +452,8 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 
 	out := &coreAggregates{}
 	if err := row.Scan(
-		&out.VeiculacoesTotal, &out.StationsCount, &out.StationsWithPMM,
-		&out.Impactos,
+		&out.VeiculacoesTotal, &out.StationsCount, &out.StationsWithPMM, &out.StationsWithTarget,
+		&out.Impactos, &out.ImpactosTarget,
 		&out.Gender.M, &out.Gender.F,
 		&out.Class.AB, &out.Class.C, &out.Class.DE,
 		&out.Ages.R18_24, &out.Ages.R25_49, &out.Ages.R50Plus,

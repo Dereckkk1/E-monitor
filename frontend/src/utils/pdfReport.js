@@ -114,31 +114,65 @@ function drawCard(doc, x, y, w, h, { fill = TOKENS.white } = {}) {
   doc.roundedRect(x, y, w, h, 3, 3, 'FD')
 }
 
-// KPI box: número grande em rosa, label cinza em cima.
+// Acha o maior fontSize (dentro de [min, max]) em que `text` cabe em `maxWidth`
+// com a fonte já setada. Usado pelo drawKPI pra não estourar a caixa quando o
+// número de KPIs sobe (5 boxes ficam bem mais estreitos que 3/4) ou quando o
+// valor/label é mais longo que o desenho original previa (ex.: "Impactos no
+// target" e totais de impactos na casa dos milhões). Sem isso, texto largo
+// simplesmente transborda pra fora da caixa (jsPDF não clipa por padrão).
+function fitFontSize(doc, text, maxWidth, { max, min, font }) {
+  doc.setFont(font[0], font[1])
+  let size = max
+  doc.setFontSize(size)
+  while (size > min && doc.getTextWidth(String(text)) > maxWidth) {
+    size -= 0.5
+    doc.setFontSize(size)
+  }
+  return size
+}
+
+// KPI box: número grande em rosa, label cinza em cima. Label e valor encolhem
+// automaticamente se não couberem na largura da caixa (ver fitFontSize).
 function drawKPI(doc, x, y, w, h, label, value) {
   drawCard(doc, x, y, w, h)
+  const maxW = w - 10 // 6mm de início + ~4mm de folga à direita
+
   setColor(doc, 'text', TOKENS.text3)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  doc.text(String(label).toUpperCase(), x + 6, y + 7)
+  const labelText = String(label).toUpperCase()
+  fitFontSize(doc, labelText, maxW, { max: 8, min: 5.5, font: ['helvetica', 'normal'] })
+  doc.text(labelText, x + 6, y + 7)
 
   setColor(doc, 'text', TOKENS.action)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(20)
-  doc.text(String(value), x + 6, y + h - 6)
+  const valueText = String(value)
+  fitFontSize(doc, valueText, maxW, { max: 20, min: 11, font: ['helvetica', 'bold'] })
+  doc.text(valueText, x + 6, y + h - 6)
 }
 
 // Hero da capa: barra rosa fininha no topo + título + meta da campanha.
+//
+// O rótulo do público-alvo do cliente (`summary.client.target_label`) mora AQUI
+// e não no KPI "Impactos no target": aquele KPI já usa auto-fit de fonte e o
+// rótulo "IMPACTOS NO TARGET" sozinho já encosta no piso de 5,5pt na largura
+// que sobra com 5 boxes — anexar o público-alvo estouraria a caixa. No hero
+// sobra a largura inteira da página, então vira uma linha própria e o card
+// cresce o suficiente pra ela.
+//
+// Devolve o Y da base do card, pra quem chama posicionar o que vem abaixo em
+// relação ao hero em vez de num literal (o hero passou a ter 2 alturas).
 function drawHero(doc, summary, marginX, y) {
   const pageW = doc.internal.pageSize.getWidth()
   const w = pageW - marginX * 2
+  const targetLabel = (summary.client?.target_label ?? '').trim()
+  // 36mm é a altura histórica (título + 1 linha de meta). Com público-alvo,
+  // +8mm abrem a linha extra sem apertar as existentes.
+  const cardH = targetLabel ? 44 : 36
 
   // Faixa de identidade no topo do hero (acento rosa de 2pt).
   setColor(doc, 'fill', TOKENS.action)
   doc.rect(marginX, y, w, 2.5, 'F')
 
   // Card branco em baixo.
-  drawCard(doc, marginX, y + 2.5, w, 36)
+  drawCard(doc, marginX, y + 2.5, w, cardH)
 
   // Título "Relatório de Veiculações" em cinza menor.
   setColor(doc, 'text', TOKENS.text3)
@@ -164,6 +198,24 @@ function drawHero(doc, summary, marginX, y) {
   const clientName = summary.client?.name || '—'
   doc.text(`${clientName}  ·  ${period}`, marginX + 8, y + 31)
 
+  // Linha do público-alvo, logo abaixo da meta (cliente · período) — é uma
+  // qualificação do cliente, então fica junto dele. Corpo menor e cinza claro
+  // pra não competir com a meta. splitTextToSize + [0] garante 1 linha só: a
+  // largura útil (w − 16mm ≈ 164mm) comporta com folga os 60 caracteres que a
+  // UI permite, mas o backend aceita até 200 e um rótulo assim não pode
+  // vazar pra fora do card.
+  if (targetLabel) {
+    // Restaura o tamanho de fonte no fim: o badge de status logo abaixo mede
+    // a própria largura com getTextWidth() usando o tamanho corrente. Sem
+    // restaurar, a pílula sairia ~10% mais estreita só quando há rótulo.
+    const prevSize = doc.getFontSize()
+    setColor(doc, 'text', TOKENS.text3)
+    doc.setFontSize(9)
+    const line = doc.splitTextToSize(`Público-alvo: ${targetLabel}`, w - 16)
+    doc.text(line[0], marginX + 8, y + 39)
+    doc.setFontSize(prevSize)
+  }
+
   // Status badge no canto direito do hero.
   const status = summary.campaign?.status || 'concluida'
   const sLabel = STATUS_LABEL[status] || status
@@ -177,6 +229,8 @@ function drawHero(doc, summary, marginX, y) {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(8)
   doc.text(sLabel, sX + 5, sY + 4.8)
+
+  return y + 2.5 + cardH
 }
 
 // Linha rodapé padrão em cada página.
@@ -284,20 +338,32 @@ export async function buildCampaignReportPDF(summary) {
   }
 
   // 2) Hero (campanha + cliente + período + status badge).
-  drawHero(doc, summary, marginX, 30)
+  const heroBottom = drawHero(doc, summary, marginX, 30)
 
-  // 3) KPIs (3 boxes lado a lado).
-  const kpiY = 76
+  // 3) KPIs. Sem cadastro de PMM no target: 4 boxes (Impactos entra pra todos).
+  //    Com cadastro: 5 boxes (Impactos no target entra). `hasTarget` também é
+  //    reusado mais abaixo, na tabela "Por emissora" (§5).
+  //    kpiY acompanha a base do hero (que cresce quando o cliente tem rótulo de
+  //    público-alvo) mantendo os mesmos 7,5mm de respiro. Sem rótulo o hero
+  //    termina em 68,5 e isto dá exatamente os 76 do layout original. Tudo o
+  //    que vem depois já se posiciona em relação a kpiY (legenda, seções,
+  //    tabelas), então o deslocamento propaga sozinho.
+  const kpiY = heroBottom + 7.5
   const kpiH = 22
   const kpiGap = 4
   const pageW = doc.internal.pageSize.getWidth()
-  const kpiW = (pageW - marginX * 2 - kpiGap * 2) / 3
-  drawKPI(doc, marginX, kpiY, kpiW, kpiH,
-    'Veiculações', fmtNumber(summary.totals?.detections))
-  drawKPI(doc, marginX + kpiW + kpiGap, kpiY, kpiW, kpiH,
-    'Materiais', fmtNumber(summary.totals?.distinct_materials))
-  drawKPI(doc, marginX + (kpiW + kpiGap) * 2, kpiY, kpiW, kpiH,
-    'Emissoras', fmtNumber(summary.totals?.distinct_stations))
+  const hasTarget = (summary.totals?.stations_with_target ?? 0) > 0
+  const kpis = [
+    ['Veiculações', fmtNumber(summary.totals?.detections)],
+    ['Materiais', fmtNumber(summary.totals?.distinct_materials)],
+    ['Emissoras', fmtNumber(summary.totals?.distinct_stations)],
+    ['Impactos', fmtNumber(summary.totals?.impactos)],
+  ]
+  if (hasTarget) kpis.push(['Impactos no target', fmtNumber(summary.totals?.impactos_target)])
+  const kpiW = (pageW - marginX * 2 - kpiGap * (kpis.length - 1)) / kpis.length
+  kpis.forEach(([label, value], i) => {
+    drawKPI(doc, marginX + (kpiW + kpiGap) * i, kpiY, kpiW, kpiH, label, value)
+  })
 
   // Breakdown por status (Dentro/Fora faixa/Fora data/Bônus) — derivado do
   // by_material_station (que já traz a contagem por categoria), somado por
@@ -397,12 +463,47 @@ export async function buildCampaignReportPDF(summary) {
   doc.text('Por emissora', marginX, nextY)
 
   const byStation = Array.isArray(summary.by_station) ? summary.by_station : []
+  // Cabeçalho + larguras de coluna: "Impactos" entra sempre; "Impactos no
+  // target" só quando `hasTarget` (declarado no bloco de KPIs acima). As
+  // larguras das colunas existentes foram reduzidas o suficiente pra abrir
+  // espaço pras 1-2 colunas novas sem estourar a área útil da página (180mm =
+  // A4 210mm − 2×15mm de margem); "Emissora" (coluna 0, sem largura fixa)
+  // absorve a sobra. Texto que não couber quebra linha (autoTable overflow
+  // default = 'linebreak') em vez de ser cortado.
+  //
+  // "Impactos" precisa de 20mm (15mm úteis descontando 2×2,5mm de padding):
+  // com 8,5pt, um valor de 8 dígitos ("12.345.678" = 14,87mm) é o caso comum
+  // (PMM de milhares × dezenas de veiculações) e a 16mm quebrava em 2 linhas
+  // em quase toda linha da tabela. Os 4mm saem de "Fora faixa" e "Fora data"
+  // (16→14 cada), e não de "Cidade": o header dessas duas já quebra em 2
+  // linhas a 16mm ("Fora"/"faixa") e continua quebrando igual a 14mm, e o
+  // corpo são contagens que sempre cabem — "Dentro" e "Total", que carregam
+  // números MAIORES (superconjuntos), já vivem bem com 14mm. Custo vertical
+  // zero. Tirar de "Cidade" (22→18) custaria +10mm de altura de tabela a cada
+  // 8 emissoras, porque nomes como "Uberlândia"/"Florianópolis" passariam a
+  // quebrar linha a cada linha.
+  const stationHead = ['Emissora', 'Dial', 'Cidade', 'UF', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total', 'Impactos']
+  const stationColumnStyles = {
+    1: { cellWidth: 16 },
+    2: { cellWidth: 22 },
+    3: { halign: 'center', cellWidth: 9 },
+    4: { halign: 'right', cellWidth: 14 },
+    5: { halign: 'right', cellWidth: 14 },
+    6: { halign: 'right', cellWidth: 14 },
+    7: { halign: 'right', cellWidth: 12 },
+    8: { halign: 'right', cellWidth: 14, fontStyle: 'bold', textColor: TOKENS.action },
+    9: { halign: 'right', cellWidth: 20 },
+  }
+  if (hasTarget) {
+    stationHead.push('Impactos no target')
+    stationColumnStyles[10] = { halign: 'right', cellWidth: 18 }
+  }
   autoTable(doc, {
     startY: nextY + 3,
-    head: [['Emissora', 'Dial', 'Cidade', 'UF', 'Dentro', 'Fora faixa', 'Fora data', 'Bônus', 'Total']],
+    head: [stationHead],
     body: byStation.map(s => {
       const bd = bmByStation.get(s.station_id) ?? ZERO_BD
-      return [
+      const row = [
         s.station_name || '—',
         [s.station_band, s.station_frequency_mhz != null ? `${s.station_frequency_mhz.toFixed(1).replace('.', ',')}` : null]
           .filter(Boolean).join(' ') || '—',
@@ -413,7 +514,12 @@ export async function buildCampaignReportPDF(summary) {
         fmtNumber(bd.outDate),
         fmtNumber(bd.orphan),
         fmtNumber(s.count),
+        s.station_pmm != null ? fmtNumber(Math.round(s.station_pmm * s.count)) : '—',
       ]
+      if (hasTarget) {
+        row.push(s.station_pmm_target != null ? fmtNumber(s.station_pmm_target * s.count) : '—')
+      }
+      return row
     }),
     margin: { left: marginX, right: marginX },
     styles: {
@@ -431,16 +537,7 @@ export async function buildCampaignReportPDF(summary) {
       lineColor: TOKENS.border,
     },
     alternateRowStyles: { fillColor: [250, 250, 252] },
-    columnStyles: {
-      1: { cellWidth: 20 },
-      2: { cellWidth: 26 },
-      3: { halign: 'center', cellWidth: 10 },
-      4: { halign: 'right', cellWidth: 16 },
-      5: { halign: 'right', cellWidth: 20 },
-      6: { halign: 'right', cellWidth: 20 },
-      7: { halign: 'right', cellWidth: 14 },
-      8: { halign: 'right', cellWidth: 16, fontStyle: 'bold', textColor: TOKENS.action },
-    },
+    columnStyles: stationColumnStyles,
     didParseCell: statusColorizer({ 4: CAT.tocou, 5: CAT.outSlot, 6: CAT.outDate, 7: CAT.bonus }),
   })
 
@@ -656,10 +753,15 @@ export async function buildGridReportPDF(model) {
       doc.setFontSize(9)
       doc.text(sub, marginX, nextY + 4.5)
     }
-    // Nota de fora-faixa/fora-data quando houver (não some nada da grade).
+    // Nota de fora-faixa/fora-data/impactos quando houver (não some nada da
+    // grade). Impactos = pmm × Σ in_slot da emissora (calculado em
+    // buildGridReportModel, gridReport.js); "no target" só quando o cliente
+    // tem PMM no target cadastrado pra essa emissora especificamente.
     const extras = []
     if (s.totals.outSlot > 0) extras.push(`${fmtNumber(s.totals.outSlot)} fora da faixa`)
     if (s.totals.outDate > 0) extras.push(`${fmtNumber(s.totals.outDate)} fora da data`)
+    if (s.impactos != null) extras.push(`${fmtNumber(s.impactos)} impactos`)
+    if (s.impactosTarget != null) extras.push(`${fmtNumber(s.impactosTarget)} no target`)
     if (extras.length) {
       setColor(doc, 'text', TOKENS.text3)
       doc.setFont('helvetica', 'italic')

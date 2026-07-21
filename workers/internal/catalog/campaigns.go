@@ -467,11 +467,20 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 //   - CPM = invested / audience × 1000, calculado no caller (frontend)
 //     pra ter precisão decimal. audience = soma de impressões reais
 //     (cada inserção em uma emissora vale stations.pmm impressões).
+//   - audience_target: linha espelho da audience trocando stations.pmm pelo
+//     client_station_pmm.pmm_target do cliente dono da campanha (PMM no
+//     target). Ausência de linha em client_station_pmm = emissora não
+//     cadastrada (soma zero e não conta em stations_with_target).
 type CampaignFinancials struct {
 	CampaignID      uuid.UUID `json:"campaign_id"`
 	TotalInvested   float64   `json:"total_invested"`
 	TotalInsertions int       `json:"total_insertions"`
 	TotalAudience   float64   `json:"total_audience"`
+	// TotalAudienceTarget espelha TotalAudience trocando stations.pmm pelo
+	// client_station_pmm.pmm_target do cliente DONO da campanha.
+	// StationsWithTarget > 0 é o gate de exibição no frontend.
+	TotalAudienceTarget float64 `json:"total_audience_target"`
+	StationsWithTarget  int     `json:"stations_with_target"`
 	// FixedCPM, quando setado, sobrescreve o CPM derivado (invested/audience).
 	// O frontend usa esse valor diretamente em vez de calcular.
 	FixedCPM *float64 `json:"fixed_cpm"`
@@ -486,12 +495,15 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 		WITH per_ins AS (
 			-- Investimento, inserções e audiência no modo per_insertion:
 			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
+			-- audience_target = mesma soma trocando pmm por pmm_target.
 			SELECT
 				p.campaign_id,
 				COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::float8 AS invested,
 				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
 			FROM campaign_station_pricing p
+			JOIN campaigns cc ON cc.id = p.campaign_id
 			JOIN campaign_station_type_pricing tp
 				ON tp.campaign_id = p.campaign_id
 			   AND tp.station_id  = p.station_id
@@ -501,6 +513,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			   AND s.type_id     = tp.type_id
 			LEFT JOIN stations st
 				ON st.id = p.station_id
+			LEFT JOIN client_station_pmm cst
+				ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
 			WHERE p.mode = 'per_insertion'
 			GROUP BY p.campaign_id
 		),
@@ -520,14 +534,30 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			SELECT
 				p.campaign_id,
 				COALESCE(SUM(s.in_slot + s.bonus), 0)::int AS insertions,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
+				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
 			FROM campaign_station_pricing p
+			JOIN campaigns cc ON cc.id = p.campaign_id
 			LEFT JOIN daily_play_summary s
 				ON s.campaign_id = p.campaign_id
 			   AND s.station_id  = p.station_id
 			LEFT JOIN stations st
 				ON st.id = p.station_id
+			LEFT JOIN client_station_pmm cst
+				ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
 			WHERE p.mode = 'consolidated'
+			GROUP BY p.campaign_id
+		),
+		target_cov AS (
+			-- Cobertura do cadastro: quantas emissoras COM PRICING da campanha
+			-- têm target. CTE separada porque somar as contagens das duas CTEs
+			-- acima contaria em dobro emissoras presentes nos dois modos.
+			SELECT p.campaign_id,
+			       COUNT(DISTINCT p.station_id)::int AS stations_with_target
+			FROM campaign_station_pricing p
+			JOIN campaigns cc ON cc.id = p.campaign_id
+			JOIN client_station_pmm cst
+			  ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
 			GROUP BY p.campaign_id
 		)
 		SELECT
@@ -538,11 +568,14 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2", "c.start_date", "c.end_date") + ` AS total_invested,
 			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
 			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
+			COALESCE(per_ins.audience_target, 0) + COALESCE(consolidated_ins.audience_target, 0) AS total_audience_target,
+			COALESCE(target_cov.stations_with_target, 0) AS stations_with_target,
 			c.fixed_cpm
 		FROM campaigns c
 		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
 		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
+		LEFT JOIN target_cov       ON target_cov.campaign_id       = c.id
 		WHERE ($1::uuid IS NULL OR c.client_id = $1)
 	`
 	rows, err := c.pool.Query(ctx, q, clientID, orMaxDate(today))
@@ -553,7 +586,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 	out := make([]CampaignFinancials, 0)
 	for rows.Next() {
 		var f CampaignFinancials
-		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience, &f.FixedCPM); err != nil {
+		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience,
+			&f.TotalAudienceTarget, &f.StationsWithTarget, &f.FixedCPM); err != nil {
 			return nil, fmt.Errorf("campaigns.FinancialsByCampaign: scan: %w", err)
 		}
 		out = append(out, f)

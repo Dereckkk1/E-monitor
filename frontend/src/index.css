@@ -2152,10 +2152,16 @@ textarea.input {
   .campaign-fin-value {
     font-size: 16px;
   }
-  /* Poupa largura na row apertada: some a palavra "Investimento", fica só o
-     valor abaixo do CPM (o rótulo "CPM" permanece pra nomear o número-estrela). */
+  /* Esta regra escondia o rótulo quando só existia UM .campaign-fin-sub
+     (Investimento) — inofensivo, já que só havia um número e o contexto
+     bastava. Agora o bloco pode ter até 4 subs (CPM no target, Impactos,
+     Impactos no target, Investimento): dois valores em R$ e dois inteiros,
+     indistinguíveis entre si sem o rótulo. Manter os rótulos visíveis é o
+     que garante o operador saber qual número é qual sem precisar de hover
+     — só encolhe a fonte pra recuperar parte da largura que o "display:none"
+     poupava antes. */
   .campaign-fin-sub-label {
-    display: none;
+    font-size: 9.5px;
   }
 }
 

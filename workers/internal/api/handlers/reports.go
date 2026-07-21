@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -39,16 +40,18 @@ type clientHeader struct {
 	ID   uuid.UUID
 	Name string
 	CNPJ *string
+	// TargetLabel é o rótulo do público-alvo do cliente; nil = sem rótulo.
+	TargetLabel *string
 }
 
 func (h *ReportsHandler) fetchClientByCampaign(r *http.Request, campaignID uuid.UUID) (*clientHeader, error) {
 	var c clientHeader
 	err := h.Pool.QueryRow(r.Context(), `
-		SELECT cl.id, cl.name, cl.cnpj
+		SELECT cl.id, cl.name, cl.cnpj, cl.target_label
 		FROM campaigns cmp
 		JOIN clients   cl ON cl.id = cmp.client_id
 		WHERE cmp.id = $1`, campaignID,
-	).Scan(&c.ID, &c.Name, &c.CNPJ)
+	).Scan(&c.ID, &c.Name, &c.CNPJ, &c.TargetLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +144,19 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// O rótulo do público-alvo entra no CABEÇALHO das colunas "no target".
+	// Aqui é seguro: o CSV consolidado é sempre de UMA campanha, logo de um
+	// único cliente (diferente do /detections/export, que é multi-campanha).
+	client, err := h.fetchClientByCampaign(r, camp.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	targetSuffix := ""
+	if client.TargetLabel != nil && strings.TrimSpace(*client.TargetLabel) != "" {
+		targetSuffix = " (" + strings.TrimSpace(*client.TargetLabel) + ")"
+	}
+
 	stamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("relatorio-consolidado-%s-%s.csv", slugify(camp.Name), stamp)
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
@@ -157,6 +173,12 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		// Breakdown por status — útil pra fechamento (saber quanto foi
 		// bônus, quanto foi fora-faixa, etc. dentro de cada combinação).
 		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
+		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
+		// usa o PMM no target do cliente dono da campanha; vazia quando não há
+		// cadastro (não confundir com zero). Quando o cliente tem rótulo de
+		// público-alvo, ele vira sufixo do cabeçalho: "PMM no target (Homens
+		// 25-49)".
+		"PMM", "Impactos", "PMM no target" + targetSuffix, "Impactos no target" + targetSuffix,
 		"Primeira", "Última",
 	})
 
@@ -174,6 +196,16 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 		if row.StationFrequencyMHz != nil {
 			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *row.StationFrequencyMHz), ".", ",")
 		}
+		pmmStr, impactosStr := "", ""
+		if row.StationPMM != nil {
+			pmmStr = strings.ReplaceAll(fmt.Sprintf("%.0f", *row.StationPMM), ".", ",")
+			impactosStr = fmt.Sprintf("%.0f", *row.StationPMM*float64(row.Count))
+		}
+		pmmTargetStr, impactosTargetStr := "", ""
+		if row.StationPMMTarget != nil {
+			pmmTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget)
+			impactosTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget*row.Count)
+		}
 		_ = cw.Write([]string{
 			idLabel,
 			row.MaterialTitle,
@@ -189,6 +221,10 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%d", row.OutSlotCount),
 			fmt.Sprintf("%d", row.OutDateCount),
 			fmt.Sprintf("%d", row.OrphanCount),
+			pmmStr,
+			impactosStr,
+			pmmTargetStr,
+			impactosTargetStr,
 			row.FirstDetectedAt.In(loc).Format("02/01/2006 15:04"),
 			row.LastDetectedAt.In(loc).Format("02/01/2006 15:04"),
 		})
@@ -209,6 +245,9 @@ type SummaryResponse struct {
 		ID   uuid.UUID `json:"id"`
 		Name string    `json:"name"`
 		CNPJ *string   `json:"cnpj,omitempty"`
+		// TargetLabel: rótulo do público-alvo, usado pelo PDF como sufixo
+		// dos números "no target". Sem omitempty — `null` é significativo.
+		TargetLabel *string `json:"target_label"`
 	} `json:"client"`
 	Period struct {
 		From *time.Time `json:"from,omitempty"`
@@ -218,6 +257,11 @@ type SummaryResponse struct {
 		Detections        int `json:"detections"`
 		DistinctMaterials int `json:"distinct_materials"`
 		DistinctStations  int `json:"distinct_stations"`
+		// Impactos = Σ (veiculações da emissora × PMM). ImpactosTarget usa o
+		// PMM no target; StationsWithTarget > 0 é o gate de exibição no PDF.
+		Impactos           int64 `json:"impactos"`
+		ImpactosTarget     int64 `json:"impactos_target"`
+		StationsWithTarget int   `json:"stations_with_target"`
 	} `json:"totals"`
 	ByMaterial        []catalog.MaterialAggregateRow `json:"by_material"`
 	ByStation         []catalog.StationAggregateRow  `json:"by_station"`
@@ -267,11 +311,29 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	resp.Client.ID = client.ID
 	resp.Client.Name = client.Name
 	resp.Client.CNPJ = client.CNPJ
+	resp.Client.TargetLabel = client.TargetLabel
 	resp.Period.From = f.StartDate
 	resp.Period.To = f.EndDate
 	resp.Totals.Detections = byMaterial.TotalDetections
 	resp.Totals.DistinctMaterials = byMaterial.DistinctMaterials
 	resp.Totals.DistinctStations = len(byStation)
+	// Impactos derivados de byStation (uma linha por emissora), não de
+	// byMaterialStation — senão a mesma emissora entraria uma vez por material.
+	//
+	// math.Round, não truncamento: a coluna "Impactos" da tabela do PDF é
+	// calculada no frontend com Math.round(pmm × count) (utils/pdfReport.js).
+	// Truncar aqui faria o KPI do topo ficar ABAIXO da soma da própria coluna
+	// no mesmo documento — stations.pmm é numeric(10,2), então o produto é
+	// fracionário e a diferença chega a 1 por emissora.
+	for _, s := range byStation {
+		if s.StationPMM != nil {
+			resp.Totals.Impactos += int64(math.Round(*s.StationPMM * float64(s.Count)))
+		}
+		if s.StationPMMTarget != nil {
+			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.Count)
+			resp.Totals.StationsWithTarget++
+		}
+	}
 	resp.ByMaterial = byMaterial.Data
 	resp.ByStation = byStation
 	resp.ByMaterialStation = byMatSta
