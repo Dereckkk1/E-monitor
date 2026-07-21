@@ -82,17 +82,20 @@ Funciona em toda superfície porque toda tela de veiculação parte de uma campa
 Em multi-atribuição (F-119), uma tocada atribuída a duas campanhas de clientes
 diferentes resolve targets diferentes por atribuição — comportamento correto.
 
-Para os consumidores não divergirem, o join vira um fragmento SQL exportado em
-`catalog`, no mesmo espírito do `ApprovedDetectionsFilter`:
+O join é escrito à mão em cada consumidor, sempre nesta forma:
 
-```go
-const TargetPMMJoin = `LEFT JOIN client_station_pmm cst
-    ON cst.client_id = c.client_id AND cst.station_id = s.id`
+```sql
+LEFT JOIN client_station_pmm cst
+       ON cst.client_id = <alias da campanha>.client_id
+      AND cst.station_id = <alias da emissora>.id
 ```
 
-O fragmento assume os aliases `c` (campanha) e `s` (emissora). Onde a query não
-tiver a campanha no escopo, o plano de implementação define a adaptação —
-mantendo a mesma semântica de resolução.
+Não há um fragmento SQL exportado (ao contrário do `ApprovedDetectionsFilter`):
+cada consumidor chega na campanha por um alias diferente — `cmp` em
+`detections.go`, `cc` em `campaigns.go`, a CTE `per_station` em `insights.go` —
+então um literal comum não encaixaria em nenhum deles sem renomear queries
+estáveis. A regra fica documentada em bloco no topo de
+`catalog/client_station_pmm.go`, com a lista dos consumidores.
 
 Cada agregação ganha a linha espelho da que já existe:
 
@@ -203,8 +206,12 @@ Structs afetadas: `InsightsKPIs` ganha `impactos_target`, `stations_with_target`
   uma com ambos — validando `impactos`, `impactos_target`, `stations_with_pmm` e
   `stations_with_target`. Espelha o `TestInsights_AggregateCore_StationWithoutPMM`
   já existente.
-- Upsert em lote: insert + update + delete numa chamada só.
-- Financials de campanha com target.
+- Upsert em lote: insert + update + delete numa chamada só, mais a distinção
+  entre target zero (linha existe) e não cadastrado (sem linha).
+- Financials de campanha com target: **verificação por query no banco, não teste
+  Go** — a agregação depende da view `daily_play_summary`, derivada de detecções
+  + regras + pricing; montar o fixture custaria mais que o valor da asserção. O
+  critério que importa é `total_audience` continuar idêntico ao da `master`.
 - Parser da colagem (casamento de emissora e número BR) — teste puro no frontend.
 
 Rodar contra o PG descartável `rc-test-pg` na porta 15432 — o PostgreSQL nativo
