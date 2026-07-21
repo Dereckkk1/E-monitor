@@ -1089,3 +1089,180 @@ func TestInsights_ComputeCPM_Consolidated_SlowPathUsesWholePlanDenominator(t *te
 		t.Errorf("cpm = %v, want ~66.67 (executado 15/30 no slow path)", cpm)
 	}
 }
+
+// ─── PMM no target por cliente ──────────────────────────────────────────────
+
+// TestInsights_AggregateCore_TargetPMM cobre as três combinações possíveis:
+// emissora só com PMM global, só com target, e com os dois.
+func TestInsights_AggregateCore_TargetPMM(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	clientID := insSeedClient(t, ctx, pool, "Cliente Target Insights")
+	camp := insSeedCampaign(t, ctx, pool, clientID, "2026-06-01", "2026-06-30")
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Target")
+
+	// stAmbos: PMM 1000 e target 400. stSoPMM: PMM 1000, sem target.
+	// stSoTarget: sem PMM, target 700.
+	stAmbos := insSeedStation(t, ctx, pool, "Ambos", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+	stSoPMM := insSeedStation(t, ctx, pool, "SoPMM", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+	stSoTarget := insSeedStationNoProfile(t, ctx, pool, "SoTarget")
+
+	repo := NewClientStationPMM(pool)
+	v400, v700 := 400, 700
+	if _, _, err := repo.BulkUpsert(ctx, clientID, []TargetPMMEntry{
+		{StationID: stAmbos, PMMTarget: &v400},
+		{StationID: stSoTarget, PMMTarget: &v700},
+	}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM client_station_pmm WHERE client_id = $1", clientID)
+	})
+
+	// 2 detecções em stAmbos, 1 em stSoPMM, 1 em stSoTarget.
+	insSeedDetection(t, ctx, pool, camp, mat, stAmbos, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, stAmbos, "in_slot", "2026-06-11")
+	insSeedDetection(t, ctx, pool, camp, mat, stSoPMM, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, stSoTarget, "in_slot", "2026-06-10")
+
+	core, err := NewInsights(pool).aggregateCore(ctx, InsightsParams{
+		CampaignIDs: []uuid.UUID{camp},
+		From:        parseDate("2026-06-01"),
+		To:          parseDate("2026-06-30"),
+		StationIDs:  []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateCore: %v", err)
+	}
+
+	// impactos = 2×1000 (ambos) + 1×1000 (soPMM) + 0 (soTarget, sem pmm) = 3000
+	if core.Impactos != 3000 {
+		t.Errorf("impactos = %d, want 3000", core.Impactos)
+	}
+	// impactos_target = 2×400 (ambos) + 0 (soPMM, sem target) + 1×700 = 1500
+	if core.ImpactosTarget != 1500 {
+		t.Errorf("impactos_target = %d, want 1500", core.ImpactosTarget)
+	}
+	if core.StationsCount != 3 {
+		t.Errorf("stations_count = %d, want 3", core.StationsCount)
+	}
+	if core.StationsWithPMM != 2 {
+		t.Errorf("stations_with_pmm = %d, want 2", core.StationsWithPMM)
+	}
+	if core.StationsWithTarget != 2 {
+		t.Errorf("stations_with_target = %d, want 2", core.StationsWithTarget)
+	}
+}
+
+// TestInsights_AggregateCore_TargetPMM_ZeroIsNotAbsent trava a distinção entre
+// "não cadastrado" (sem linha → fora do contador e da soma) e pmm_target = 0
+// (linha existe → conta no contador, soma zero).
+func TestInsights_AggregateCore_TargetPMM_ZeroIsNotAbsent(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	clientID := insSeedClient(t, ctx, pool, "Cliente Target Zero")
+	camp := insSeedCampaign(t, ctx, pool, clientID, "2026-06-01", "2026-06-30")
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Zero")
+
+	stZero := insSeedStation(t, ctx, pool, "TargetZero", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+	stAusente := insSeedStation(t, ctx, pool, "TargetAusente", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	zero := 0
+	if _, _, err := NewClientStationPMM(pool).BulkUpsert(ctx, clientID, []TargetPMMEntry{
+		{StationID: stZero, PMMTarget: &zero},
+	}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM client_station_pmm WHERE client_id = $1", clientID)
+	})
+
+	insSeedDetection(t, ctx, pool, camp, mat, stZero, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, camp, mat, stAusente, "in_slot", "2026-06-10")
+
+	core, err := NewInsights(pool).aggregateCore(ctx, InsightsParams{
+		CampaignIDs: []uuid.UUID{camp},
+		From:        parseDate("2026-06-01"),
+		To:          parseDate("2026-06-30"),
+		StationIDs:  []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateCore: %v", err)
+	}
+	if core.ImpactosTarget != 0 {
+		t.Errorf("impactos_target = %d, want 0", core.ImpactosTarget)
+	}
+	// só stZero tem cadastro; stAusente (sem linha) fica de fora.
+	if core.StationsWithTarget != 1 {
+		t.Errorf("stations_with_target = %d, want 1", core.StationsWithTarget)
+	}
+	if core.StationsCount != 2 {
+		t.Errorf("stations_count = %d, want 2", core.StationsCount)
+	}
+}
+
+// TestInsights_AggregateCore_TargetPMM_MultiClientNoDoubleCount é a rede de
+// segurança da mudança COUNT(*) → COUNT(DISTINCT station_id): per_station passou
+// a particionar por cliente, então a MESMA emissora usada por campanhas de dois
+// clientes rende duas linhas. Os contadores não podem contá-la duas vezes; as
+// SOMAS (impactos) continuam somando tudo.
+func TestInsights_AggregateCore_TargetPMM_MultiClientNoDoubleCount(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	cliA := insSeedClient(t, ctx, pool, "Cliente A Multi")
+	cliB := insSeedClient(t, ctx, pool, "Cliente B Multi")
+	campA := insSeedCampaign(t, ctx, pool, cliA, "2026-06-01", "2026-06-30")
+	campB := insSeedCampaign(t, ctx, pool, cliB, "2026-06-01", "2026-06-30")
+	_, matA := insSeedTypeAndMaterial(t, ctx, pool, cliA, "Spot A Multi")
+	_, matB := insSeedTypeAndMaterial(t, ctx, pool, cliB, "Spot B Multi")
+
+	// UMA emissora, compartilhada pelas duas campanhas/clientes.
+	st := insSeedStation(t, ctx, pool, "Compartilhada", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	vA, vB := 400, 100
+	repo := NewClientStationPMM(pool)
+	if _, _, err := repo.BulkUpsert(ctx, cliA, []TargetPMMEntry{{StationID: st, PMMTarget: &vA}}); err != nil {
+		t.Fatalf("seed target A: %v", err)
+	}
+	if _, _, err := repo.BulkUpsert(ctx, cliB, []TargetPMMEntry{{StationID: st, PMMTarget: &vB}}); err != nil {
+		t.Fatalf("seed target B: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM client_station_pmm WHERE client_id = ANY($1)", []uuid.UUID{cliA, cliB})
+	})
+
+	insSeedDetection(t, ctx, pool, campA, matA, st, "in_slot", "2026-06-10")
+	insSeedDetection(t, ctx, pool, campB, matB, st, "in_slot", "2026-06-10")
+
+	core, err := NewInsights(pool).aggregateCore(ctx, InsightsParams{
+		CampaignIDs: []uuid.UUID{campA, campB},
+		From:        parseDate("2026-06-01"),
+		To:          parseDate("2026-06-30"),
+		StationIDs:  []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("aggregateCore: %v", err)
+	}
+
+	if core.VeiculacoesTotal != 2 {
+		t.Errorf("veiculacoes_total = %d, want 2", core.VeiculacoesTotal)
+	}
+	// somas não são afetadas pelo particionamento: 1×1000 + 1×1000
+	if core.Impactos != 2000 {
+		t.Errorf("impactos = %d, want 2000", core.Impactos)
+	}
+	// cada tocada resolve o target do SEU cliente: 1×400 + 1×100
+	if core.ImpactosTarget != 500 {
+		t.Errorf("impactos_target = %d, want 500", core.ImpactosTarget)
+	}
+	// UMA emissora — sem DISTINCT, estes três leriam 2.
+	if core.StationsCount != 1 {
+		t.Errorf("stations_count = %d, want 1 (emissora contada em dobro)", core.StationsCount)
+	}
+	if core.StationsWithPMM != 1 {
+		t.Errorf("stations_with_pmm = %d, want 1 (emissora contada em dobro)", core.StationsWithPMM)
+	}
+	if core.StationsWithTarget != 1 {
+		t.Errorf("stations_with_target = %d, want 1 (emissora contada em dobro)", core.StationsWithTarget)
+	}
+}
