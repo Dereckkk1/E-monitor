@@ -37,6 +37,12 @@ func TestFinancialParity_CampaignsVsInsights(t *testing.T) {
 	insSeedDetection(t, ctx, pool, camp, mat, stPI, "in_slot", "2026-06-10")
 	insSeedDetection(t, ctx, pool, camp, mat, stPI, "in_slot", "2026-06-11")
 	insSeedDetection(t, ctx, pool, camp, mat, stCons, "in_slot", "2026-06-10")
+	// out_slot + out_date na stPI: base A (in_slot+bonus) EXCLUI ambas, então
+	// os valores esperados NÃO mudam. Se algum lado passar a contá-las, os dois
+	// deixam de bater E divergem do absoluto — o teste pega (regressão do header:
+	// "reintroduzir out_slot no investido de um lado só").
+	insSeedDetection(t, ctx, pool, camp, mat, stPI, "out_slot", "2026-06-12")
+	insSeedDetection(t, ctx, pool, camp, mat, stPI, "out_date", "2026-06-13")
 
 	from, to, today := parseDate("2026-06-01"), parseDate("2026-06-30"), parseDate("2026-06-30")
 
@@ -46,10 +52,15 @@ func TestFinancialParity_CampaignsVsInsights(t *testing.T) {
 		t.Fatalf("campaigns: %v", err)
 	}
 	var camF CampaignFinancials
+	found := false
 	for _, f := range fins {
 		if f.CampaignID == camp {
 			camF = f
+			found = true
 		}
+	}
+	if !found {
+		t.Fatalf("campanha %s não veio em FinancialsByCampaign — teste seria vacuoso (camF zero-value)", camp)
 	}
 
 	// /insights (mesma campanha, mesma janela)
@@ -60,6 +71,23 @@ func TestFinancialParity_CampaignsVsInsights(t *testing.T) {
 		t.Fatalf("insights: %v", err)
 	}
 
+	// Magnitudes absolutas: garante que o teste não é vacuoso se AMBOS os
+	// caminhos quebrarem juntos (ex.: os dois passarem a contar out_slot). Com
+	// out_slot+out_date semeados, base A ainda deve dar exatamente estes valores.
+	if int64(camF.TotalAudience) != 4000 {
+		t.Errorf("impactos absoluto = %v, want 4000", camF.TotalAudience)
+	}
+	if int64(camF.TotalAudienceTarget) != 1500 {
+		t.Errorf("impactos_target absoluto = %v, want 1500", camF.TotalAudienceTarget)
+	}
+	if !approxEq(camF.TotalInvested, 5006, 0.01) {
+		t.Errorf("investido absoluto = %v, want 5006", camF.TotalInvested)
+	}
+	if camF.StationsWithTarget != 2 {
+		t.Errorf("stations_with_target absoluto = %d, want 2", camF.StationsWithTarget)
+	}
+
+	// Igualdade campaigns == insights: as duas telas partem do MESMO fin_base.
 	if int64(camF.TotalAudience) != core.Impactos {
 		t.Errorf("impactos divergem: campaigns=%v insights=%v", camF.TotalAudience, core.Impactos)
 	}
