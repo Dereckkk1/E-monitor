@@ -17,6 +17,7 @@ type CatalogFinancials struct {
 	pool *pgxpool.Pool
 }
 
+// NewCatalogFinancials constrói o repositório da base financeira compartilhada.
 func NewCatalogFinancials(pool *pgxpool.Pool) *CatalogFinancials {
 	return &CatalogFinancials{pool: pool}
 }
@@ -39,14 +40,22 @@ type FinancialBaseRow struct {
 // Base é PRICING-DRIVEN (parte de campaign_station_pricing): emissora sem
 // pricing não entra — igual ao /campaigns histórico. Consolidada com zero plays
 // na janela ainda soma invested (value×meses).
+//
+// ATENÇÃO: o consumidor DEVE ligar `todayP` via orMaxDate(today) — um today zero
+// zera o consolidado (monthsElapsedSQL não conta nenhum mês antes de `today`).
 func financialBaseCTE(campaignsP, clientP, stationsP, fromP, toP, todayP string) string {
 	return `
 	fb_dps AS (
+	    -- Sem clamp de for_date em [GREATEST(start,from), LEAST(end,to)] (a versão
+	    -- do /insights fazia): o categorizador já marca toda tocada fora de
+	    -- [start_date,end_date] como out_date, então in_slot+bonus já é 0 fora do range.
 	    SELECT campaign_id, station_id, type_id, in_slot, bonus
 	    FROM daily_play_summary_for(` + fromP + `::date, ` + toP + `::date, ` + campaignsP + `::uuid[])
 	    WHERE (` + stationsP + `::uuid[] = '{}' OR station_id = ANY(` + stationsP + `::uuid[]))
 	),
 	fb_plays AS (
+	    -- plays soma in_slot+bonus de TODOS os tipos (entrega crua); fb_perins.invested
+	    -- só soma tipos COM pricing (INNER JOIN). Assimetria intencional, não "consertar".
 	    SELECT campaign_id, station_id, SUM(in_slot + bonus)::bigint AS plays
 	    FROM fb_dps
 	    GROUP BY campaign_id, station_id
@@ -89,6 +98,14 @@ func financialBaseCTE(campaignsP, clientP, stationsP, fromP, toP, todayP string)
 // diretos). Os consumidores de produção EMBUTEM financialBaseCTE nas próprias
 // queries. Ordem dos params: $1 campaigns, $2 client, $3 stations, $4 from,
 // $5 to, $6 today.
+//
+// Semântica nil-vs-vazio dos filtros:
+//   - campaignIDs: nil = todas as campanhas; slice vazio = nenhuma (contrato do
+//     daily_play_summary_for, `= ANY('{}')` casa zero linhas).
+//   - stationIDs: nil/vazio = todas as emissoras.
+//
+// `today` passa por orMaxDate: um today zero vira 9999-12-31 (campanha inteira),
+// nunca colapsa o consolidado pra 0.
 func (r *CatalogFinancials) FinancialBase(ctx context.Context, campaignIDs []uuid.UUID, clientID *uuid.UUID, stationIDs []uuid.UUID, from, to, today time.Time) ([]FinancialBaseRow, error) {
 	if stationIDs == nil {
 		stationIDs = []uuid.UUID{}
@@ -99,7 +116,7 @@ func (r *CatalogFinancials) FinancialBase(ctx context.Context, campaignIDs []uui
 	}
 	q := `WITH ` + financialBaseCTE("$1", "$2", "$3", "$4", "$5", "$6") + `
 		SELECT campaign_id, station_id, client_id, plays, invested FROM fin_base`
-	rows, err := r.pool.Query(ctx, q, camps, clientID, stationIDs, from, to, today)
+	rows, err := r.pool.Query(ctx, q, camps, clientID, stationIDs, from, to, orMaxDate(today))
 	if err != nil {
 		return nil, err
 	}
