@@ -903,6 +903,46 @@ textarea.input {
   box-shadow: 0 0 0 3px var(--c-action-light);
 }
 
+/* Rótulo de período (componente PeriodLabel) — legenda discreta ao lado dos
+   seletores de janela em /campaigns e dos KPIs em /insights. Deliberadamente
+   apagado pra não competir com o dado. */
+.period-label {
+  font-size: 0.8em;
+  opacity: 0.7;
+  font-weight: 600;
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+/* Seletor de janela financeira de /campaigns (impactos/CPM no período).
+   Reaproveita os chips .in-chip / inputs .in-date da InsightsPage.css, que
+   já estão no bundle global (rotas não são lazy). */
+.campaigns-fin-period {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.campaigns-fin-period-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-text-3);
+}
+
+/* Estado ativo do chip de período (não existia na InsightsPage.css). */
+.in-chip.is-active {
+  background: var(--c-action);
+  border-color: var(--c-action);
+  color: #fff;
+}
+.in-chip.is-active:hover:not(:disabled) {
+  color: #fff;
+}
+
 .flow-range {
   display: flex;
   align-items: center;
