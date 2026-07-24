@@ -231,14 +231,16 @@ export function useCampaignFailureDetail(id) {
   })
 }
 
-// Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
-// Retorna [{campaign_id, total_invested, total_insertions, total_audience}];
-// audience = Σ(inserções × stations.pmm). CPM = (invested / audience) × 1000,
-// calculado no frontend pra preservar precisão.
-export function useCampaignsFinancials() {
+// Agregado financeiro por campanha — base A (in_slot+bonus), escopado por
+// [from, to]. Sem janela, o backend usa o mês corrente como default.
+// audience = Σ(plays × stations.pmm). CPM = (invested / audience) × 1000 no
+// frontend. /campaigns passa a janela do seletor; dashboard fixa no acumulado.
+export function useCampaignsFinancials({ from, to } = {}) {
   return useQuery({
-    queryKey: ['campaigns-financials'],
-    queryFn: () => api.get('/campaigns/financials').then(r => r.data ?? []),
+    queryKey: ['campaigns-financials', from, to],
+    queryFn: () => api.get('/campaigns/financials', {
+      params: { from: from || undefined, to: to || undefined },
+    }).then(r => r.data ?? []),
   })
 }
 export function useCreateCampaign() {

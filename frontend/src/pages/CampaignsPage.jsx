@@ -13,11 +13,17 @@ import StationAvatar from '../components/StationAvatar'
 import AirtimePaginator from '../components/AirtimePaginator'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
 import CampaignReportsMenu from '../components/CampaignReportsMenu'
+import PeriodLabel from '../components/PeriodLabel.jsx'
 import { useAuth } from '../contexts/AuthContext'
 
 const CAMPAIGNS_PAGE_SIZE = 12
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
+
+// Janela default do seletor financeiro = mês corrente (mesma lógica UTC que a
+// InsightsPage usa, pra que as duas telas concordem no "mês atual").
+function firstOfMonthISO() { const d = new Date(); return new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1)).toISOString().slice(0, 10) }
+function lastOfMonthISO() { const d = new Date(); return new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 0)).toISOString().slice(0, 10) }
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -1279,7 +1285,16 @@ export default function CampaignsPage() {
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
-  const { data: financialsList = [], isPending: financialsLoading } = useCampaignsFinancials()
+  // Janela financeira (impactos/CPM). Default = mês corrente, espelhando o
+  // /insights. "Acumulado" abre o from na âncora ACUMULADO_FROM; o backend
+  // trata from<=start como "desde sempre". A janela NÃO afeta o filtro da
+  // listagem (competência) — só os badges financeiros de cada linha.
+  const ACUMULADO_FROM = '2000-01-01'
+  const [finPeriod, setFinPeriod] = useState({ from: firstOfMonthISO(), to: lastOfMonthISO() })
+  const finIsMes = finPeriod.from === firstOfMonthISO() && finPeriod.to === lastOfMonthISO()
+  const finIsAcum = finPeriod.from === ACUMULADO_FROM
+  const { data: financialsList = [], isPending: financialsLoading } =
+    useCampaignsFinancials({ from: finPeriod.from, to: finPeriod.to })
   const financialsByCampaign = useMemo(
     () => Object.fromEntries(financialsList.map(f => [f.campaign_id, f])),
     [financialsList]
@@ -1399,6 +1414,19 @@ export default function CampaignsPage() {
             total={totalFiltered}
             shown={totalFiltered}
           />
+
+          <div className="campaigns-fin-period">
+            <span className="campaigns-fin-period-label">Impactos/CPM no período:</span>
+            <button type="button" className={`in-chip${finIsMes ? ' is-active' : ''}`}
+                    onClick={() => setFinPeriod({ from: firstOfMonthISO(), to: lastOfMonthISO() })}>Mês atual</button>
+            <button type="button" className={`in-chip${finIsAcum ? ' is-active' : ''}`}
+                    onClick={() => setFinPeriod({ from: ACUMULADO_FROM, to: lastOfMonthISO() })}>Acumulado</button>
+            <input type="date" className="in-date" value={finPeriod.from === ACUMULADO_FROM ? '' : finPeriod.from}
+                   onChange={e => setFinPeriod(p => ({ ...p, from: e.target.value || firstOfMonthISO() }))} />
+            <input type="date" className="in-date" value={finPeriod.to}
+                   onChange={e => setFinPeriod(p => ({ ...p, to: e.target.value }))} />
+            <PeriodLabel from={finPeriod.from} to={finPeriod.to} acumuladoFrom={ACUMULADO_FROM} />
+          </div>
 
           {isLoading ? (
             <CampaignListSkeleton />

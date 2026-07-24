@@ -10,6 +10,11 @@ import './DashboardPage.css'
 
 // ── Shared helpers ────────────────────────────────────────────────
 
+// Fim do mês corrente (UTC). O dashboard fixa a janela financeira em
+// [2000-01-01, fim do mês] = acumulado, pra que os números não caiam quando
+// o /campaigns/financials passou a escopar por mês (default do backend).
+function lastOfMonthISO() { const d = new Date(); return new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 0)).toISOString().slice(0, 10) }
+
 function formatDate(isoString) {
   if (!isoString) return '—'
   return new Date(isoString).toLocaleDateString('pt-BR', {
@@ -334,7 +339,7 @@ function ClientDashboard() {
   // Financials por campanha — alimenta os KPIs (impactos, CPM, investimento)
   // de cada card ativo. A query é cacheada por react-query, então não há
   // custo extra se outras telas (CampaignsPage) também a chamarem.
-  const financialsQ = useCampaignsFinancials()
+  const financialsQ = useCampaignsFinancials({ from: '2000-01-01', to: lastOfMonthISO() })
   const financialsByCampaign = useMemo(() => {
     const m = new Map()
     ;(financialsQ.data ?? []).forEach(f => m.set(f.campaign_id, f))

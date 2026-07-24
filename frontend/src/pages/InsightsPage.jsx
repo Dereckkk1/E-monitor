@@ -9,6 +9,7 @@ import BroadcastShareChart from '../components/insights/BroadcastShareChart'
 import DailySummaryChart from '../components/insights/DailySummaryChart'
 import EmptyTutorial from '../components/insights/EmptyTutorial'
 import SkeletonLoader from '../components/insights/SkeletonLoader'
+import PeriodLabel from '../components/PeriodLabel.jsx'
 import { useInsights } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { exportInsightsPNG, exportInsightsPDF } from '../utils/exportInsights'
@@ -103,6 +104,9 @@ export default function InsightsPage() {
                 (5→7 ou 4→6) → in-row--cards--target troca pra auto-fit (só
                 quando a classe é aplicada — sem target, layout idêntico ao
                 de antes da feature; ver InsightsPage.css). */}
+            <div style={{ margin: '0 0 4px 2px' }}>
+              <PeriodLabel from={filters.from} to={filters.to} />
+            </div>
             <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}${(data?.kpis?.stations_with_target ?? 0) > 0 ? ' in-row--cards--target' : ''}`}>
               <KpiCards data={data} />
               <InvestmentToggleCard data={data} />
