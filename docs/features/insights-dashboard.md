@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-08
+ultima-verificacao: 2026-07-24
 codigo-relacionado:
   - workers/internal/catalog/insights.go
   - workers/internal/catalog/insights_test.go
@@ -78,12 +78,12 @@ Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` 
   - **`meses_decorridos`** = nº de **meses de calendário** da campanha que **(a)** já começaram até **hoje** e **(b)** estão dentro da **janela de período selecionada** `[from, to]`. Incremento na **virada do mês** (todo dia 1º), não no aniversário de 30 dias: o 1º mês conta a partir da data de início (0 antes dela); ao entrar num novo mês soma +1; limitado ao mês de fim. Ex.: campanha **09/06–08/07** conta **1** em junho e **2 a partir de 01/07**. Função `monthsElapsedSQL` (via `generate_series`).
   - **Respeita o filtro de período:** filtrar só junho de uma campanha de 3 meses → 1 mês (não a campanha toda). O per-inserção também é escopado a `[from, to]`. Bate com o `/campaigns` (que não tem filtro) quando o filtro cobre a campanha inteira até hoje.
   - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → sem cap de hoje (só o filtro escopa).
-- **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
+- **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (a grade fluida de cards se reajusta ao número de cards; ver [§Responsividade](#responsividade-cards-fluidos--donut)). No fornecedor fica zerado.
 - **CPM**: usa o `fixed_cpm` da campanha (consolidado sempre tem cadastrado); sem ele, cai no dinâmico `total ÷ impactos × 1000`.
 - **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
 - **Campanha 100% `per_insertion`**: nada muda — segue por veiculação, com Bonificação.
 
-Implementação: `catalog.Insights.consolidatedSummary(…, today)` calcula o total + a flag; `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. O `/campaigns` (`FinancialsByCampaign(…, today)`) usa a MESMA `monthsElapsedSQL`. Frontend: `KpiCards` esconde a Bonificação e `InsightsPage` aplica `in-row--cards--4` quando `data.consolidated`. **Compatível com campanhas de 1 mês** (meses_decorridos = 1 → inalterado).
+Implementação: `catalog.Insights.consolidatedSummary(…, today)` calcula o total + a flag; `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. O `/campaigns` (`FinancialsByCampaign(…, today)`) usa a MESMA `monthsElapsedSQL`. Frontend: `KpiCards` esconde a Bonificação; `InsightsPage` ainda adiciona `in-row--cards--4`/`in-row--cards--target`, mas essas classes viraram **no-op** — a grade de cards agora é `auto-fit` e absorve sozinha o nº de cards (ver [§Responsividade](#responsividade-cards-fluidos--donut)). **Compatível com campanhas de 1 mês** (meses_decorridos = 1 → inalterado).
 
 > **Nota:** o cálculo **Modelo B (proporcional)** abaixo continua existindo no `aggregateInvestment` (e nos testes diretos), mas é **sobrescrito** pelo total fixo para consolidado no `Compute` — preservado caso a regra mude de novo. Vale hoje só como o número por-veiculação de campanhas `per_insertion`.
 
@@ -115,6 +115,17 @@ A chave é o **denominador = plano da campanha inteira** (fixo, `SUM(expected)` 
 - > 31 dias → buckets mensais (`YYYY-MM`)
 
 Decidido no backend (`aggregateBuckets`). Frontend formata o label localmente.
+
+## Responsividade (cards fluidos + donut)
+
+Toda a tela é responsiva **sem media query** — o layout deriva da largura real do container, não de breakpoints fixos. Isso resolveu o transbordo que aparecia em larguras intermediárias e no tablet/mobile (números financeiros vazando do card, grade estourando o container, scroll lateral abaixo de ~820px).
+
+- **Grade de cards** (`.in-row--cards`): `repeat(auto-fit, minmax(176px, 1fr))`. O nº de colunas cai de 5→4→3→2→1 continuamente conforme a tela encolhe; `auto-fit` colapsa trilhas vazias, então 4/5/7 cards continuam ocupando a linha inteira no desktop (ex.: 5 cards a 1440 = 5 colunas). As antigas modificadoras `--4`/`--target` viraram no-op.
+- **Valor do card** (`.in-card-value`): a fonte escala pela **largura do card**, não da viewport — cada `.in-card` é `container-type: inline-size` e o valor usa `clamp(15px, 11cqi, 24px)` (variante `--num` p/ impactos). Um R$ de até 7 dígitos cabe numa linha nos cards de ~200px; só um valor de 8+ dígitos (raro) quebra pra 2ª linha via `overflow-wrap`, nunca vazando pra fora.
+- **Grade de gráficos** (`.in-row--charts`): `repeat(auto-fit, minmax(280px, 1fr))` → 3→2→1 colunas.
+- **Donut `% Veiculações`** ([BroadcastShareChart.jsx](../../frontend/src/components/insights/BroadcastShareChart.jsx)): o pie é centrado (`cx/cy = 50%`) e a **legenda é HTML próprio** (`.in-donut-legend`), não a `<Legend>` do recharts — que dividia a largura com o donut e cortava os rótulos em card estreito. O flex `.in-donut-layout` põe donut e legenda lado a lado quando cabe e desce a legenda pra baixo do donut quando o card aperta.
+
+Verificado em 1536 / 1440 / 1280 / 1024 / 900 / 768 / 390 px: zero overflow de card, valor, grade ou página em qualquer largura.
 
 ## Exportação PNG / PDF
 

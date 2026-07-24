@@ -151,38 +151,23 @@
   display: grid;
   gap: 16px;
 }
-.in-row--cards { grid-template-columns: repeat(5, 1fr); }
-/* Consolidado esconde a Bonificação → 4 cards. Classe simples (mesma
-   especificidade de .in-row--cards) e depois na ordem, então vence no desktop;
-   as media queries abaixo (mais adiante na ordem) ainda reduzem no mobile. */
-.in-row--cards--4 { grid-template-columns: repeat(4, 1fr); }
-.in-row--charts { grid-template-columns: repeat(3, 1fr); }
 
-@media (max-width: 1280px) { .in-row--cards { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1024px) { .in-row--charts { grid-template-columns: 1fr; } }
-@media (max-width: 720px)  { .in-row--cards  { grid-template-columns: 1fr 1fr; } }
-
-/* Com target no cliente, o KpiCards ganha até 2 cards extras (Impactos no
-   target / CPM no target) — o total da linha pode ir de 5 a 7 (ou de 4 a 6
-   quando consolidado). O grid fixo acima (5/4/3/2 colunas) fica desbalanceado
-   nesses totais maiores, então essa modificadora troca pra auto-fit — mas
-   SÓ quando aplicada (InsightsPage.jsx só adiciona a classe quando
-   stations_with_target > 0), preservando o layout antigo bit-a-bit pra quem
-   não tem target cadastrado.
-   auto-fit calcula quantas colunas de largura ≥180px cabem no container e
-   usa esse número fixo em toda a grade; não é "sempre estica pra preencher
-   a linha" — se a contagem de cards não for múltipla desse número de
-   colunas, a última linha fica com menos itens do MESMO tamanho das linhas
-   cheias, deixando espaço em branco ao lado (não esticado). É um resultado
-   aceitável (linha final mais curta), mas não confundir com o comportamento
-   de "colapsar trilhas vazias", que só vale pra colunas vazias em TODAS as
-   linhas — o que não é o caso aqui, já que a primeira linha sempre preenche
-   todas as trilhas.
-   Precedência: mesma especificidade (0,1,0) de todas as regras acima,
-   inclusive as media queries — como esta regra vem por último na ordem do
-   arquivo e não está dentro de nenhuma @media, ela vence em qualquer
-   breakpoint sempre que a classe estiver presente no elemento. */
-.in-row--cards--target { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+/* Grade fluida (auto-fit) em vez de contagem fixa de colunas. O número de
+   trilhas é derivado da largura REAL do container, então a linha nunca é
+   forçada além dele — era isso que estourava horizontalmente nas larguras
+   intermediárias (5 cards a 1280) e no tablet (grade de 3 fixas a 900px), e
+   fazia a página ganhar scroll lateral abaixo de ~820px. Também some com os
+   "saltos" entre breakpoints: as colunas caem de 5→4→3→2→1 continuamente
+   conforme a tela encolhe, sem media query.
+   auto-fit colapsa as trilhas vazias, então 4/5/7 cards continuam ocupando a
+   linha inteira no desktop (ex.: 5 cards a 1440 = 5 colunas cheias). As
+   modificadoras --4 e --target viraram no-ops (o JSX ainda as adiciona, mas a
+   contagem variável de cards é absorvida naturalmente pelo auto-fit). O piso
+   de 176px casa com o corpo dos cards depois do ajuste tipográfico abaixo
+   (container queries no .in-card-value), garantindo que o número financeiro
+   caiba na trilha em qualquer largura. */
+.in-row--cards  { grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); }
+.in-row--charts { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .in-card {
@@ -195,6 +180,12 @@
   flex-direction: column;
   gap: 6px;
   transition: transform 200ms, border-color 200ms, box-shadow 200ms;
+  /* min-width:0 libera o card a encolher abaixo do min-content na trilha do
+     grid; container-type transforma o card num container de query, pra o
+     valor financeiro (.in-card-value) escalar a fonte pela largura do card
+     e nunca transbordar quando a linha fica densa (5-7 cards) ou estreita. */
+  min-width: 0;
+  container-type: inline-size;
 }
 .in-card:hover {
   transform: translateY(-2px);
@@ -255,19 +246,32 @@
   text-overflow: ellipsis;
 }
 
+/* O tamanho do valor escala pela LARGURA DO CARD (cqi = 1% do inline-size do
+   container .in-card), não pela viewport: cards densos (5-7 numa linha) ou
+   telas estreitas encolhem o número o suficiente pra ele caber, enquanto no
+   desktop com poucos cards o valor chega ao teto (28px). overflow-wrap:anywhere
+   é a rede de segurança final — se ainda assim um valor gigante (R$ de 8
+   dígitos num card mínimo) não couber, ele quebra pra 2ª linha (R$ em cima,
+   número embaixo) em vez de vazar pra fora do card. tabular-nums mantém os
+   dígitos alinhados nas duas linhas. */
 .in-card-value {
   font-family: var(--font-heading);
-  font-size: 30px;
+  /* ~11cqi mantém um R$ de até 7 dígitos ("R$ 1.234.567,89") numa única linha
+     nos cards de ~200px do desktop, subindo até 24px quando o card é largo
+     (mobile 1-coluna) e caindo até 15px nos cards mais apertados. Só um
+     valor de 8+ dígitos (raro) quebra pra 2ª linha — via overflow-wrap. */
+  font-size: clamp(15px, 11cqi, 24px);
   font-weight: 700;
   color: var(--c-text);
-  line-height: 1.1;
+  line-height: 1.15;
   letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 /* Variante pra números longos (impactos sem abreviação) — tabular pra
-   alinhar os dígitos e font menor pra caber em cards estreitos. */
+   alinhar os dígitos; escala junto pela largura do card. */
 .in-card-value--num {
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
+  font-size: clamp(14px, 11cqi, 22px);
   letter-spacing: -0.01em;
 }
 
@@ -378,9 +382,57 @@
 .in-tooltip-name { color: var(--c-text-2); }
 .in-tooltip-value { font-weight: 600; color: var(--c-text); }
 
-/* ── Donut ──────────────────────────────────────────────────────── */
-.in-donut-wrap {
-  height: 260px;
+/* ── Donut (% Veiculações) ──────────────────────────────────────── */
+/* Layout robusto: área do donut + legenda em HTML próprio, num flex com wrap.
+   A <Legend> nativa do recharts (layout vertical, à direita) dividia a
+   largura com o donut e, quando o card ficava estreito (grade de gráficos a
+   2/3 colunas), estourava/cortava os rótulos. Aqui donut e legenda ficam lado
+   a lado quando cabe e a legenda desce pra baixo do donut quando o card
+   aperta — sem nunca vazar. */
+.in-donut-layout {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.in-donut-chart {
+  flex: 1 1 180px;
+  min-width: 160px;
+  height: 220px;
+}
+.in-donut-legend {
+  flex: 1 1 180px;
+  min-width: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.in-donut-legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+.in-donut-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.in-donut-legend-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.in-donut-legend-value {
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ── Class pyramid (SVG manual) ─────────────────────────────────── */
