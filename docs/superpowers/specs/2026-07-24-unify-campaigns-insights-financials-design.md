@@ -61,6 +61,11 @@ com janela e núcleo de cálculo unificados:
 - **Material sem `type_id` sai do `/insights`.** A view `daily_play_summary` é
   chaveada por `type_id`; material sem tipo não entra. Hoje o `/insights` conta
   essas detecções (contagem crua). No `/campaigns` já é assim.
+- **Base pricing-driven: emissora com tocada mas SEM pricing sai do `/insights`.**
+  A base A parte de `campaign_station_pricing` (é o que o `/campaigns` já faz).
+  Emissora que teve detecção mas não tem linha de pricing na campanha deixa de
+  contar no `/insights` (hoje conta, via contagem crua de detecções). Consequência
+  de adotar a base do `/campaigns` — descoberta na coleta de código do plano.
 - **Números de cliente mudam retroativamente** (cobrança). Ver §6 (segurança).
 
 ## 3. Arquitetura da solução
