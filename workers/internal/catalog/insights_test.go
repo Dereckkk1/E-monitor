@@ -302,10 +302,17 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 
 	client := insSeedClient(t, ctx, pool, "X")
 	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
-	_, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
 
 	// PMM=1000, gender M=60% F=40%, AB=20% C=50% DE=30%, age 30/50/20%
 	st := insSeedStation(t, ctx, pool, "RadioX", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	// Base A é pricing-driven: sem pricing a emissora não entra em fin_base.
+	// expected=5/dia ≥ 5 in_slot no dia 10 → esse in_slot NÃO vira bonus.
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 1.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 5)
 
 	for i := 0; i < 5; i++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
@@ -325,25 +332,29 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 		t.Fatalf("aggregateCore: %v", err)
 	}
 
-	// 8 detecções × 1000 = 8000 impactos
-	if core.Impactos != 8000 {
-		t.Errorf("impactos = %d, want 8000", core.Impactos)
+	// Base A: veiculações = plays = in_slot + bonus. Os 2 out_slot NÃO são
+	// entrega (ficam fora de plays); o 1 orphan vira bonus (conta). Assim:
+	// 5 in_slot (dia 10, bonus 0 pois expected=5) + 0 (out_slot) + 1 (orphan→bonus)
+	// = 6 plays. impactos = 6 × 1000 = 6000.
+	if core.Impactos != 6000 {
+		t.Errorf("impactos = %d, want 6000", core.Impactos)
 	}
-	if core.VeiculacoesTotal != 8 {
-		t.Errorf("veic = %d, want 8", core.VeiculacoesTotal)
+	if core.VeiculacoesTotal != 6 {
+		t.Errorf("veic = %d, want 6", core.VeiculacoesTotal)
 	}
-	// Gender M = 8000 × 60% = 4800
-	if core.Gender.M != 4800 {
-		t.Errorf("gender_m = %d, want 4800", core.Gender.M)
+	// Gender M = 6000 × 60% = 3600
+	if core.Gender.M != 3600 {
+		t.Errorf("gender_m = %d, want 3600", core.Gender.M)
 	}
-	if core.Gender.F != 3200 {
-		t.Errorf("gender_f = %d, want 3200", core.Gender.F)
+	if core.Gender.F != 2400 {
+		t.Errorf("gender_f = %d, want 2400", core.Gender.F)
 	}
-	// AB = 8000 × 20% = 1600
-	if core.Class.AB != 1600 {
-		t.Errorf("class_ab = %d, want 1600", core.Class.AB)
+	// AB = 6000 × 20% = 1200
+	if core.Class.AB != 1200 {
+		t.Errorf("class_ab = %d, want 1200", core.Class.AB)
 	}
-	// Breakdown
+	// Breakdown (informativo, direto da view): in_slot=5, out_slot=2, extras
+	// (=bonus)=1 (o orphan; o in_slot não excede expected=5, então não infla).
 	if core.Breakdown.InSlot != 5 || core.Breakdown.OutSlot != 2 || core.Breakdown.ExtrasOrphan != 1 {
 		t.Errorf("breakdown = %+v", core.Breakdown)
 	}
@@ -408,8 +419,11 @@ func TestInsights_Compute_EndToEnd(t *testing.T) {
 
 	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
 	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 100.0)
+	// expected=10/dia ≥ 10 in_slot no dia 15 → bonus=0 → plays=10 (base A). Sem
+	// isso os 10 do mesmo dia excederiam expected e virariam bonus, inflando
+	// plays/impactos/executado.
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
-		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 10)
 
 	for i := 0; i < 10; i++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
@@ -528,10 +542,18 @@ func TestInsights_AggregateCore_StationWithoutPMM(t *testing.T) {
 
 	client := insSeedClient(t, ctx, pool, "X")
 	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
-	_, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
 
 	stOK := insSeedStation(t, ctx, pool, "OK", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
 	stNoPMM := insSeedStationNoProfile(t, ctx, pool, "SemPerfil")
+
+	// Base A é pricing-driven: pricing + regra por emissora (expected 1/dia ≥
+	// in_slot/dia → bonus=0 → plays = in_slot). Expectativas idênticas às antigas.
+	for _, st := range []uuid.UUID{stOK, stNoPMM} {
+		insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+		insSeedTypePricing(t, ctx, pool, camp, st, typeID, 1.0)
+		insSeedDistributionRule(t, ctx, pool, camp, typeID, st, "2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	}
 
 	insSeedDetection(t, ctx, pool, camp, mat, stOK, "in_slot", "2026-06-10")
 	insSeedDetection(t, ctx, pool, camp, mat, stNoPMM, "in_slot", "2026-06-10")
@@ -858,9 +880,12 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	if out.Consolidated {
 		t.Errorf("per_insertion não deveria marcar Consolidated")
 	}
-	// executado por-inserção = 100 × 10 = 1000 (inalterado)
-	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
-		t.Errorf("executado = %v, want ~1000 (per_insertion, inalterado)", out.KPIs.Investido.Executado)
+	// Base A: executado = unit × (in_slot + bonus) = 100 × (10 + 9) = 1900.
+	// 10 tocadas no dia com plano 1 → bonus 9; base A conta o excedente como
+	// entrega (igual ao /campaigns). A Bonificação (aggregateInvestment, à parte)
+	// segue = unit × bonus = 900 > 0.
+	if !approxEq(out.KPIs.Investido.Executado, 1900, 1) {
+		t.Errorf("executado = %v, want ~1900 (base A: in_slot+bonus)", out.KPIs.Investido.Executado)
 	}
 	// Bonificação continua computada (10 tocadas no dia, plano 1 → bonus 9 × 100)
 	if out.KPIs.Bonificacao.Valor <= 0 {
@@ -1130,13 +1155,23 @@ func TestInsights_AggregateCore_TargetPMM(t *testing.T) {
 
 	clientID := insSeedClient(t, ctx, pool, "Cliente Target Insights")
 	camp := insSeedCampaign(t, ctx, pool, clientID, "2026-06-01", "2026-06-30")
-	_, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Target")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Target")
 
 	// stAmbos: PMM 1000 e target 400. stSoPMM: PMM 1000, sem target.
 	// stSoTarget: sem PMM, target 700.
 	stAmbos := insSeedStation(t, ctx, pool, "Ambos", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
 	stSoPMM := insSeedStation(t, ctx, pool, "SoPMM", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
 	stSoTarget := insSeedStationNoProfile(t, ctx, pool, "SoTarget")
+
+	// Base A é pricing-driven: cada emissora precisa de pricing + regra para
+	// aparecer em fin_base com plays. expected=1/dia ≥ 1 in_slot/dia → bonus=0 →
+	// plays = nº de in_slot. Mantém os valores esperados idênticos aos da base
+	// antiga (det_count), agora via base compartilhada.
+	for _, st := range []uuid.UUID{stAmbos, stSoPMM, stSoTarget} {
+		insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+		insSeedTypePricing(t, ctx, pool, camp, st, typeID, 1.0)
+		insSeedDistributionRule(t, ctx, pool, camp, typeID, st, "2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	}
 
 	repo := NewClientStationPMM(pool)
 	v400, v700 := 400, 700
@@ -1193,10 +1228,18 @@ func TestInsights_AggregateCore_TargetPMM_ZeroIsNotAbsent(t *testing.T) {
 
 	clientID := insSeedClient(t, ctx, pool, "Cliente Target Zero")
 	camp := insSeedCampaign(t, ctx, pool, clientID, "2026-06-01", "2026-06-30")
-	_, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Zero")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, clientID, "Spot Zero")
 
 	stZero := insSeedStation(t, ctx, pool, "TargetZero", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
 	stAusente := insSeedStation(t, ctx, pool, "TargetAusente", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	// Base A é pricing-driven: pricing + regra por emissora (expected 1/dia ≥
+	// in_slot/dia → bonus=0 → plays = in_slot). Expectativas idênticas às antigas.
+	for _, st := range []uuid.UUID{stZero, stAusente} {
+		insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+		insSeedTypePricing(t, ctx, pool, camp, st, typeID, 1.0)
+		insSeedDistributionRule(t, ctx, pool, camp, typeID, st, "2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	}
 
 	zero := 0
 	if _, _, err := NewClientStationPMM(pool).BulkUpsert(ctx, clientID, []TargetPMMEntry{
@@ -1244,11 +1287,22 @@ func TestInsights_AggregateCore_TargetPMM_MultiClientNoDoubleCount(t *testing.T)
 	cliB := insSeedClient(t, ctx, pool, "Cliente B Multi")
 	campA := insSeedCampaign(t, ctx, pool, cliA, "2026-06-01", "2026-06-30")
 	campB := insSeedCampaign(t, ctx, pool, cliB, "2026-06-01", "2026-06-30")
-	_, matA := insSeedTypeAndMaterial(t, ctx, pool, cliA, "Spot A Multi")
-	_, matB := insSeedTypeAndMaterial(t, ctx, pool, cliB, "Spot B Multi")
+	typeA, matA := insSeedTypeAndMaterial(t, ctx, pool, cliA, "Spot A Multi")
+	typeB, matB := insSeedTypeAndMaterial(t, ctx, pool, cliB, "Spot B Multi")
 
 	// UMA emissora, compartilhada pelas duas campanhas/clientes.
 	st := insSeedStation(t, ctx, pool, "Compartilhada", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
+
+	// Base A é pricing-driven: cada campanha precisa de pricing + regra na
+	// emissora compartilhada (expected 1/dia ≥ in_slot/dia → bonus=0 → plays=1).
+	// fin_base rende 1 linha por (campanha, emissora); o DISTINCT nos contadores
+	// evita contar a emissora em dobro. Expectativas idênticas às antigas.
+	insSeedStationPricing(t, ctx, pool, campA, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, campA, st, typeA, 1.0)
+	insSeedDistributionRule(t, ctx, pool, campA, typeA, st, "2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	insSeedStationPricing(t, ctx, pool, campB, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, campB, st, typeB, 1.0)
+	insSeedDistributionRule(t, ctx, pool, campB, typeB, st, "2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
 
 	vA, vB := 400, 100
 	repo := NewClientStationPMM(pool)

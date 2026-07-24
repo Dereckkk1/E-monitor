@@ -11,14 +11,13 @@ import (
 
 // Insights agrupa as queries de agregação do dashboard /insights.
 //
-// O design é "one-shot": Compute() roda 4 SELECTs em sequência e devolve um
-// payload já formatado para serialização JSON, sem paginação. A query de
-// buckets temporais reaproveita a view daily_play_summary (criada na
-// migration 0019) ao invés de reimplementar a expansão de regras +
-// weekday_mask + overrides. Detecções de materiais sem type_id não
-// aparecem nessa view (limitação conhecida do projeto), porém continuam
-// contribuindo para impactos/breakdown porque essas métricas são lidas
-// direto da tabela detections.
+// O design é "one-shot": Compute() roda alguns SELECTs em sequência e devolve
+// um payload já formatado para serialização JSON, sem paginação. Impactos,
+// veiculações, executado e demografia vêm da base financeira COMPARTILHADA
+// (financialBaseCTE → fin_base, a mesma do /campaigns), que lê a view
+// daily_play_summary_for. Como essa view exige type_id, detecções de materiais
+// sem type_id NÃO entram nessas métricas (limitação conhecida do projeto) — o
+// preço da paridade com o /campaigns.
 type Insights struct {
 	pool *pgxpool.Pool
 }
@@ -182,12 +181,12 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	// cálculo por-veiculação/Modelo B do aggregateInvestment é preservado (útil
 	// se a regra mudar) mas sobrescrito aqui pra consolidado. Campanha 100%
 	// por-inserção segue por veiculação (inv/bon inalterados).
-	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.From, p.To, p.Today)
+	_, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.From, p.To, p.Today)
 	if err != nil {
 		return nil, fmt.Errorf("consolidatedSummary: %w", err)
 	}
+	inv.Executado = core.Executado // base A (fin_base) — igual ao /campaigns
 	if hasConsolidated {
-		inv.Executado = total
 		bon = BonificacaoK{}
 	}
 
@@ -363,51 +362,33 @@ type coreAggregates struct {
 	StationsCount      int
 	StationsWithPMM    int
 	StationsWithTarget int
+	Executado          float64
 	Gender             GenderK
 	Class              ClassPyramidData
 	Ages               AgeRangesData
 	Breakdown          VeiculacoesBreakdownData
 }
 
-// aggregateCore lê a tabela detections direta + perfil demográfico em
-// stations.meta. Calcula impactos totais, gender split, class pyramid e
-// age ranges. Estações sem PMM são contadas em veiculações totais (e em
-// stations_count) mas NÃO somam impactos demográficos — o numerador
-// requer PMM, e a UI mostra "X de Y emissoras com perfil" como contexto.
+// aggregateCore lê a base financeira COMPARTILHADA (financialBaseCTE → fin_base,
+// mesma base do /campaigns) e cruza com o perfil demográfico em stations.metadata.
+// `plays` (= Σ in_slot+bonus por emissora, base A) substitui a antiga contagem
+// bruta de detections: veiculações, impactos e demografia agora escalam pela
+// mesma métrica de entrega do /campaigns — as duas telas não podem mais divergir.
+// Como a base é PRICING-DRIVEN, emissora sem pricing não aparece (plays 0).
 //
-// O breakdown de veiculações (in_slot/out_slot/out_date/extras_orphan)
-// é calculado direto da coluna category — não usa a view daily_play_summary
-// porque queremos contar detecções mesmo para materiais sem type_id.
+// Estações sem PMM entram em veiculações/stations_count mas NÃO somam impactos
+// demográficos — o numerador requer PMM; a UI mostra "X de Y emissoras com
+// perfil" como contexto. `executado` (base A) é devolvido para o Compute usar
+// como Investido.Executado (idêntico ao /campaigns).
+//
+// O breakdown (in_slot/out_slot/out_date/extras_orphan) vem numa query separada
+// da mesma view (daily_play_summary_for): informativo, out_slot/out_date NÃO
+// somam impactos (base A), mas seguem exibidos como categorias.
 func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAggregates, error) {
 	row := r.pool.QueryRow(ctx, `
-		WITH filt AS (
-		    -- client_id vem da campanha: o PMM no target é resolvido por
-		    -- (cliente da campanha, emissora) — ver client_station_pmm.
-		    SELECT d.id, d.station_id, d.category, c.client_id
-		    FROM detection_attributions d
-		    JOIN campaigns c ON c.id = d.campaign_id
-		    WHERE d.campaign_id = ANY($1::uuid[])
-		      -- Conjunto "aprovado" (catalog.ApprovedDetectionsFilter): exclui
-		      -- retratadas (§18.2.2), ignoradas (admin "Desconsiderar") e
-		      -- rejeitadas pelo audit §9.9 — mesma régua da view
-		      -- daily_play_summary e do resto do sistema. Sem isso o /insights
-		      -- divergia do /detections (impactos/veiculações inflados).
-		      AND `+ApprovedDetectionsFilter+`
-		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
-		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
-		),
-		per_station AS (
-		    SELECT f.station_id, f.client_id,
-		           COUNT(*)::bigint AS det_count,
-		           COUNT(*) FILTER (WHERE f.category='in_slot')::bigint  AS in_slot_n,
-		           COUNT(*) FILTER (WHERE f.category='out_slot')::bigint AS out_slot_n,
-		           COUNT(*) FILTER (WHERE f.category='out_date')::bigint AS out_date_n,
-		           COUNT(*) FILTER (WHERE f.category='orphan')::bigint   AS orphan_n
-		    FROM filt f
-		    GROUP BY f.station_id, f.client_id
-		),
+		WITH `+financialBaseCTE("$1", "$2", "$3", "$4", "$5", "$6")+`,
 		joined AS (
-		    SELECT ps.*,
+		    SELECT fb.station_id, fb.plays, fb.invested,
 		           s.pmm,
 		           cst.pmm_target,
 		           (s.metadata->'audience_profile'->'gender'      ->>'male')::float    AS male_p,
@@ -418,47 +399,57 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		           (s.metadata->'audience_profile'->'ageRanges'   ->>'range18to24')::float AS r18_p,
 		           (s.metadata->'audience_profile'->'ageRanges'   ->>'range25to49')::float AS r25_p,
 		           (s.metadata->'audience_profile'->'ageRanges'   ->>'range50plus')::float AS r50_p
-		    FROM per_station ps
-		    JOIN stations s ON s.id = ps.station_id
+		    FROM fin_base fb
+		    JOIN stations s ON s.id = fb.station_id
 		    LEFT JOIN client_station_pmm cst
-		           ON cst.client_id = ps.client_id AND cst.station_id = ps.station_id
+		           ON cst.client_id = fb.client_id AND cst.station_id = fb.station_id
 		)
 		-- Atenção: percentuais em metadata.audience_profile estão em escala
 		-- 0-100 (não 0-1). Por isso multiplicamos por (pct / 100.0).
 		SELECT
-		    COALESCE(SUM(det_count), 0)::bigint                                  AS veic_total,
-		    -- DISTINCT obrigatório: per_station agora particiona por cliente, então
-		    -- uma emissora usada por 2 clientes vira 2 linhas. Sem DISTINCT os
-		    -- contadores dobrariam (as SOMAS não são afetadas).
-		    COUNT(DISTINCT station_id)::int                                      AS stations_count,
-		    COUNT(DISTINCT station_id) FILTER (WHERE pmm IS NOT NULL)::int       AS stations_with_pmm,
-		    COUNT(DISTINCT station_id) FILTER (WHERE pmm_target IS NOT NULL)::int AS stations_with_target,
-		    COALESCE(SUM(det_count * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
-		    COALESCE(SUM(det_count * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
-		    COALESCE(SUM(det_count * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
-		    COALESCE(SUM(det_count * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
-		    COALESCE(SUM(det_count * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
-		    COALESCE(SUM(det_count * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
-		    COALESCE(SUM(det_count * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
-		    COALESCE(SUM(det_count * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
-		    COALESCE(SUM(det_count * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
-		    COALESCE(SUM(det_count * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50,
-		    COALESCE(SUM(in_slot_n),  0)::bigint AS sum_in,
-		    COALESCE(SUM(out_slot_n), 0)::bigint AS sum_out,
-		    COALESCE(SUM(out_date_n), 0)::bigint AS sum_outdate,
-		    COALESCE(SUM(orphan_n),   0)::bigint AS sum_orphan
+		    COALESCE(SUM(plays), 0)::bigint                                        AS veic_total,
+		    -- DISTINCT: fin_base tem uma linha por (campanha, emissora), então uma
+		    -- emissora usada por 2 campanhas/clientes vira 2 linhas. Sem DISTINCT os
+		    -- contadores dobrariam (as SOMAS não são afetadas). FILTER plays>0 mantém
+		    -- fora do contador as emissoras com pricing mas sem entrega na janela.
+		    COUNT(DISTINCT station_id) FILTER (WHERE plays > 0)::int               AS stations_count,
+		    COUNT(DISTINCT station_id) FILTER (WHERE plays > 0 AND pmm IS NOT NULL)::int        AS stations_with_pmm,
+		    COUNT(DISTINCT station_id) FILTER (WHERE plays > 0 AND pmm_target IS NOT NULL)::int AS stations_with_target,
+		    COALESCE(SUM(invested), 0)::float8                                     AS executado,
+		    COALESCE(SUM(plays * pmm)        FILTER (WHERE pmm IS NOT NULL), 0)::bigint        AS impactos,
+		    COALESCE(SUM(plays * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint AS impactos_target,
+		    COALESCE(SUM(plays * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
+		    COALESCE(SUM(plays * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
+		    COALESCE(SUM(plays * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
+		    COALESCE(SUM(plays * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
+		    COALESCE(SUM(plays * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
+		    COALESCE(SUM(plays * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
+		    COALESCE(SUM(plays * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
+		    COALESCE(SUM(plays * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50
 		FROM joined
-	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	`, p.CampaignIDs, nil, p.StationIDs, p.From, p.To, orMaxDate(p.Today))
 
 	out := &coreAggregates{}
 	if err := row.Scan(
 		&out.VeiculacoesTotal, &out.StationsCount, &out.StationsWithPMM, &out.StationsWithTarget,
+		&out.Executado,
 		&out.Impactos, &out.ImpactosTarget,
 		&out.Gender.M, &out.Gender.F,
 		&out.Class.AB, &out.Class.C, &out.Class.DE,
 		&out.Ages.R18_24, &out.Ages.R25_49, &out.Ages.R50Plus,
-		&out.Breakdown.InSlot, &out.Breakdown.OutSlot, &out.Breakdown.OutDate, &out.Breakdown.ExtrasOrphan,
 	); err != nil {
+		return nil, err
+	}
+
+	// breakdown informativo — vem da mesma view; out_slot/out_date NÃO entram
+	// em impactos (base A), mas seguem exibidos como categorias.
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(in_slot),0)::bigint, COALESCE(SUM(out_slot),0)::bigint,
+		       COALESCE(SUM(out_date),0)::bigint, COALESCE(SUM(bonus),0)::bigint
+		FROM daily_play_summary_for($1::date, $2::date, $3::uuid[])
+		WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+	`, p.From, p.To, p.CampaignIDs, p.StationIDs).Scan(
+		&out.Breakdown.InSlot, &out.Breakdown.OutSlot, &out.Breakdown.OutDate, &out.Breakdown.ExtrasOrphan); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -694,6 +685,12 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 // Campanhas sem impactos não contribuem (peso zero); se a soma total de
 // impactos for zero, devolve 0.
 func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecutado float64, totalImpactos int64) (float64, error) {
+	// TODO(base-A): o slow path (fixed_cpm) ainda calcula impactos/executado
+	// POR CAMPANHA com as fórmulas pré-base-A (det_count + aggregateInvestment),
+	// então a ponderação do `cpm` regular pode divergir da base A quando alguma
+	// campanha tem fixed_cpm. Fora do escopo desta task: o fast path (sem
+	// fixed_cpm) já usa base A via totalExecutado/totalImpactos, e cpm_target é
+	// sempre dinâmico em cima da base A no Compute.
 	// Fast path: nenhum CPM fixo nas campanhas selecionadas → cálculo clássico.
 	var anyFixed bool
 	if err := r.pool.QueryRow(ctx, `
