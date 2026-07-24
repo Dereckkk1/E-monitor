@@ -142,9 +142,10 @@ type BucketRow struct {
 	Extras     int    `json:"extras"`
 }
 
-// Compute é o entry-point do repo. Roda os 4 helpers em sequência
-// (validate-campaigns → core → investment → buckets) e devolve o
-// payload completo formatado para serialização JSON.
+// Compute é o entry-point do repo. Roda os helpers em sequência
+// (fetchCampaigns → aggregateCore [2 queries: base A + breakdown] →
+// aggregateInvestment → aggregateBuckets → consolidatedSummary → computeCPM →
+// targetLabel) e devolve o payload completo formatado para serialização JSON.
 //
 // CPM padrão = (investido_executado / impactos) × 1000. Quando impactos = 0
 // (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
@@ -427,7 +428,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    COALESCE(SUM(plays * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
 		    COALESCE(SUM(plays * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50
 		FROM joined
-	`, p.CampaignIDs, nil, p.StationIDs, p.From, p.To, orMaxDate(p.Today))
+	`, p.CampaignIDs, (*uuid.UUID)(nil), p.StationIDs, p.From, p.To, orMaxDate(p.Today))
 
 	out := &coreAggregates{}
 	if err := row.Scan(
@@ -442,12 +443,18 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 	}
 
 	// breakdown informativo — vem da mesma view; out_slot/out_date NÃO entram
-	// em impactos (base A), mas seguem exibidos como categorias.
+	// em impactos (base A), mas seguem exibidos como categorias. O JOIN com
+	// campaign_station_pricing escopa o breakdown ao MESMO universo pricing-driven
+	// do fin_base (PK (campaign_id,station_id) → 1:1, não duplica); sem ele uma
+	// emissora com regra+detecção mas sem pricing entraria aqui e divergiria dos
+	// impactos.
 	if err := r.pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(in_slot),0)::bigint, COALESCE(SUM(out_slot),0)::bigint,
-		       COALESCE(SUM(out_date),0)::bigint, COALESCE(SUM(bonus),0)::bigint
-		FROM daily_play_summary_for($1::date, $2::date, $3::uuid[])
-		WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
+		SELECT COALESCE(SUM(s.in_slot),0)::bigint, COALESCE(SUM(s.out_slot),0)::bigint,
+		       COALESCE(SUM(s.out_date),0)::bigint, COALESCE(SUM(s.bonus),0)::bigint
+		FROM daily_play_summary_for($1::date, $2::date, $3::uuid[]) s
+		JOIN campaign_station_pricing p
+		  ON p.campaign_id = s.campaign_id AND p.station_id = s.station_id
+		WHERE ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
 	`, p.From, p.To, p.CampaignIDs, p.StationIDs).Scan(
 		&out.Breakdown.InSlot, &out.Breakdown.OutSlot, &out.Breakdown.OutDate, &out.Breakdown.ExtrasOrphan); err != nil {
 		return nil, err
