@@ -490,95 +490,25 @@ type CampaignFinancials struct {
 // não é nil, filtra somente as campanhas do cliente — usado por viewers
 // para evitar vazamento cross-client. Admins/operators passam nil e recebem
 // todas as campanhas.
-func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID, from, to, today time.Time) ([]CampaignFinancials, error) {
 	q := `
-		WITH per_ins AS (
-			-- Investimento, inserções e audiência no modo per_insertion:
-			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
-			-- audience_target = mesma soma trocando pmm por pmm_target.
-			SELECT
-				p.campaign_id,
-				COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::float8 AS invested,
-				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
-			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
-			JOIN campaign_station_type_pricing tp
-				ON tp.campaign_id = p.campaign_id
-			   AND tp.station_id  = p.station_id
-			LEFT JOIN daily_play_summary s
-				ON s.campaign_id = p.campaign_id
-			   AND s.station_id  = p.station_id
-			   AND s.type_id     = tp.type_id
-			LEFT JOIN stations st
-				ON st.id = p.station_id
-			LEFT JOIN client_station_pmm cst
-				ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
-			WHERE p.mode = 'per_insertion'
-			GROUP BY p.campaign_id
-		),
-		consolidated_inv AS (
-			-- Investimento consolidado: independente das plays, só somar o
-			-- consolidated_value por campanha.
-			SELECT
-				p.campaign_id,
-				COALESCE(SUM(p.consolidated_value), 0)::float8 AS invested
-			FROM campaign_station_pricing p
-			WHERE p.mode = 'consolidated'
-			GROUP BY p.campaign_id
-		),
-		consolidated_ins AS (
-			-- Inserções e audiência de emissoras em modo consolidado entram no
-			-- denominador do CPM (mesma definição pra ambos os modos).
-			SELECT
-				p.campaign_id,
-				COALESCE(SUM(s.in_slot + s.bonus), 0)::int AS insertions,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
-				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
-			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
-			LEFT JOIN daily_play_summary s
-				ON s.campaign_id = p.campaign_id
-			   AND s.station_id  = p.station_id
-			LEFT JOIN stations st
-				ON st.id = p.station_id
-			LEFT JOIN client_station_pmm cst
-				ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
-			WHERE p.mode = 'consolidated'
-			GROUP BY p.campaign_id
-		),
-		target_cov AS (
-			-- Cobertura do cadastro: quantas emissoras COM PRICING da campanha
-			-- têm target. CTE separada porque somar as contagens das duas CTEs
-			-- acima contaria em dobro emissoras presentes nos dois modos.
-			SELECT p.campaign_id,
-			       COUNT(DISTINCT p.station_id)::int AS stations_with_target
-			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
-			JOIN client_station_pmm cst
-			  ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
-			GROUP BY p.campaign_id
-		)
+		WITH ` + financialBaseCTE("$1", "$2", "$3", "$4", "$5", "$6") + `
 		SELECT
-			c.id,
-			-- consolidated_value é MENSAL → acumula por ciclo mensal iniciado até
-			-- hoje ($2). per_insertion segue pelo entregue. Mesma regra do /insights.
-			COALESCE(per_ins.invested, 0)
-			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2", "c.start_date", "c.end_date") + ` AS total_invested,
-			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
-			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
-			COALESCE(per_ins.audience_target, 0) + COALESCE(consolidated_ins.audience_target, 0) AS total_audience_target,
-			COALESCE(target_cov.stations_with_target, 0) AS stations_with_target,
+			fb.campaign_id,
+			COALESCE(SUM(fb.invested), 0)::float8                                              AS total_invested,
+			COALESCE(SUM(fb.plays), 0)::int                                                    AS total_insertions,
+			COALESCE(SUM(fb.plays * COALESCE(st.pmm, 0)), 0)::float8                            AS total_audience,
+			COALESCE(SUM(fb.plays * COALESCE(cst.pmm_target, 0)), 0)::float8                    AS total_audience_target,
+			COUNT(DISTINCT fb.station_id) FILTER (WHERE cst.pmm_target IS NOT NULL AND fb.plays > 0)::int AS stations_with_target,
 			c.fixed_cpm
-		FROM campaigns c
-		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
-		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
-		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
-		LEFT JOIN target_cov       ON target_cov.campaign_id       = c.id
-		WHERE ($1::uuid IS NULL OR c.client_id = $1)
+		FROM fin_base fb
+		JOIN campaigns c   ON c.id = fb.campaign_id
+		LEFT JOIN stations st ON st.id = fb.station_id
+		LEFT JOIN client_station_pmm cst
+		       ON cst.client_id = fb.client_id AND cst.station_id = fb.station_id
+		GROUP BY fb.campaign_id, c.fixed_cpm
 	`
-	rows, err := c.pool.Query(ctx, q, clientID, orMaxDate(today))
+	rows, err := c.pool.Query(ctx, q, nil, clientID, []uuid.UUID{}, from, to, orMaxDate(today))
 	if err != nil {
 		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
 	}

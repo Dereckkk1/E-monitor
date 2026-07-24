@@ -988,7 +988,7 @@ func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
 	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
 	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
 
-	fins, err := campaignsRepo.FinancialsByCampaign(ctx, &client, parseDate("2026-07-15"))
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, &client, parseDate("2026-06-01"), parseDate("2026-08-31"), parseDate("2026-07-15"))
 	if err != nil {
 		t.Fatalf("FinancialsByCampaign: %v", err)
 	}
@@ -1003,6 +1003,37 @@ func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("campanha %s não veio no FinancialsByCampaign", camp)
+	}
+}
+
+// FinancialsByCampaign com janela: consolidado 3 meses × R$1000, hoje mês 2.
+// Janela mês inteiro da campanha → 2000. Janela só junho → 1000.
+func TestCampaigns_Financials_WindowScopesConsolidated(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewCampaigns(pool)
+	client := insSeedClient(t, ctx, pool, "Win")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-08-31")
+	st := insSeedStation(t, ctx, pool, "Win St", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
+
+	get := func(from, to string) float64 {
+		fins, err := repo.FinancialsByCampaign(ctx, &client, parseDate(from), parseDate(to), parseDate("2026-07-15"))
+		if err != nil {
+			t.Fatalf("FinancialsByCampaign: %v", err)
+		}
+		for _, f := range fins {
+			if f.CampaignID == camp {
+				return f.TotalInvested
+			}
+		}
+		t.Fatalf("campanha não veio")
+		return 0
+	}
+	if v := get("2026-06-01", "2026-08-31"); !approxEq(v, 2000, 1) {
+		t.Errorf("full = %v, want ~2000", v)
+	}
+	if v := get("2026-06-01", "2026-06-30"); !approxEq(v, 1000, 1) {
+		t.Errorf("junho = %v, want ~1000", v)
 	}
 }
 

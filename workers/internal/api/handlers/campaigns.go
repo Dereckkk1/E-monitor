@@ -160,7 +160,17 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Viewer scope: filtra pelo client_id do JWT para evitar vazamento cross-client.
 func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
 	scope := auth.ClientScopeFromContext(r.Context())
-	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope, todaySaoPaulo())
+	q := r.URL.Query()
+	now := time.Now().UTC()
+	defaultFrom := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	defaultTo := defaultFrom.AddDate(0, 1, 0).Add(-time.Second)
+	from := parseDateOr(q.Get("from"), defaultFrom)
+	to := parseDateOr(q.Get("to"), defaultTo)
+	if to.Before(from) {
+		http.Error(w, "to must be on or after from", http.StatusBadRequest)
+		return
+	}
+	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope, from, to, todaySaoPaulo())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
