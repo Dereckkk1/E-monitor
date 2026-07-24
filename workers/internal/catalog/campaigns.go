@@ -471,6 +471,11 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 //     client_station_pmm.pmm_target do cliente dono da campanha (PMM no
 //     target). Ausência de linha em client_station_pmm = emissora não
 //     cadastrada (soma zero e não conta em stations_with_target).
+//
+// stations_with_target é PERIOD-DEPENDENT (filtro `AND fb.plays > 0`): uma
+// emissora com target cadastrado mas ZERO plays na janela [from,to] sai da
+// contagem — decisão consciente da spec §2.1 (o contador reflete o target
+// EFETIVO no período consultado, não o cadastro estático).
 type CampaignFinancials struct {
 	CampaignID      uuid.UUID `json:"campaign_id"`
 	TotalInvested   float64   `json:"total_invested"`
@@ -480,7 +485,10 @@ type CampaignFinancials struct {
 	// client_station_pmm.pmm_target do cliente DONO da campanha.
 	// StationsWithTarget > 0 é o gate de exibição no frontend.
 	TotalAudienceTarget float64 `json:"total_audience_target"`
-	StationsWithTarget  int     `json:"stations_with_target"`
+	// StationsWithTarget conta emissoras com pmm_target cadastrado E com
+	// plays > 0 na janela [from,to] — period-dependent (spec §2.1): target
+	// cadastrado sem tocada no período NÃO conta.
+	StationsWithTarget int `json:"stations_with_target"`
 	// FixedCPM, quando setado, sobrescreve o CPM derivado (invested/audience).
 	// O frontend usa esse valor diretamente em vez de calcular.
 	FixedCPM *float64 `json:"fixed_cpm"`
