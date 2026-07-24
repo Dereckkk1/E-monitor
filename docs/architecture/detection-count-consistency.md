@@ -13,6 +13,13 @@ codigo-relacionado:
 
 # Consistência de contagem de veiculações (conjunto "aprovado")
 
+> **Atualização 2026-07-24:** `/campaigns` e `/insights` deixaram de divergir na base de
+> contagem financeira — os dois passaram a usar a base única `in_slot + bonus` via o helper
+> compartilhado, ver [shared-financial-base.md](shared-financial-base.md). A divergência
+> histórica descrita neste doc entre essas duas telas não vale mais para impactos/investido/CPM
+> (para o mesmo período). A **grade de `/detections`** (Σ `in_slot`) e os **exportáveis** seguem
+> com base própria.
+
 Define o **conjunto único de detecções que pode ser contado ou listado em
 qualquer número de veiculação visível ao usuário** e cataloga toda query do
 sistema que toca esse número, com seu veredito de conformidade.

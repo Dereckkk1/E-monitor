@@ -354,9 +354,10 @@ Novo corpo da query (substitui as CTEs `per_ins`/`consolidated_inv`/`consolidate
 		       ON cst.client_id = fb.client_id AND cst.station_id = fb.station_id
 		GROUP BY fb.campaign_id, c.fixed_cpm
 	`
-	rows, err := c.pool.Query(ctx, q, nil, clientID, []uuid.UUID{}, from, to, today)
+	rows, err := c.pool.Query(ctx, q, nil, clientID, []uuid.UUID{}, from, to, orMaxDate(today))
 ```
 
+> **`$6` = `orMaxDate(today)`** (não `today` cru): é o que `FinancialsByCampaign`/`consolidatedSummary` já fazem — um `today` zero colapsaria o investido consolidado pra 0. Mesma regra no /insights (Task 4).
 > `stations_with_target` agora é **period-dependent** (`fb.plays > 0`), conforme decisão da spec §2.1. `total_audience` usa `plays × pmm` (base A) — idêntico ao que o /insights vai usar.
 
 - [ ] **Step 4: Ajustar o handler pra parsear `from/to` (default mês atual)**
@@ -412,6 +413,7 @@ git commit -m "feat(campaigns): FinancialsByCampaign na base compartilhada + jan
 **Files:**
 - Modify: `frontend/src/api/hooks.js:234-243` (`useCampaignsFinancials`)
 - Modify: `frontend/src/pages/CampaignsPage.jsx` (estado do período + render do seletor + passar pro hook)
+- Modify: `frontend/src/pages/DashboardPage.jsx` (outro consumidor de `useCampaignsFinancials` — **fixar em "Acumulado"** pra preservar o comportamento atual, ver Step 7)
 
 - [ ] **Step 1: `useCampaignsFinancials` aceita `{ from, to }`**
 
@@ -493,11 +495,30 @@ Adicionar perto do cabeçalho da lista (onde ficam os outros filtros). Presets:
 
 Run: `cd frontend && npm run dev` e abrir `/campaigns`. Trocar entre "Mês atual" e "Acumulado" e confirmar que os números do bloco financeiro (Impactos, Impactos no target, CPM no target, Investimento) recalculam. Comparar com `/insights` da mesma campanha no MESMO período → devem bater.
 
-- [ ] **Step 6: Commit** (sem `npm install` — regra 5 do CLAUDE.md; só editamos `.jsx`/`.js`)
+- [ ] **Step 6: Preservar os OUTROS consumidores de `useCampaignsFinancials` (não silenciar o dashboard)**
+
+Como o hook agora escopa por `from/to` e o backend passou a ter default = mês atual, **qualquer chamada `useCampaignsFinancials()` sem args cai no mês corrente** — mudando números que hoje são acumulados. Grep todos os callers:
+
+Run: `cd frontend && grep -rn "useCampaignsFinancials" src/`
+
+Para **cada** caller que **não** é o `/campaigns` (hoje: `frontend/src/pages/DashboardPage.jsx`), fixar explicitamente na janela **acumulada** pra preservar o comportamento atual (campanha-até-hoje), já que a decisão do dono foi mudar só `/campaigns` e `/insights`:
+
+```jsx
+// DashboardPage: preserva o acumulado (não segue o default mês-atual do hook).
+useCampaignsFinancials({ from: '2000-01-01', to: lastOfMonthISO() })
+```
+
+(declarar `lastOfMonthISO()` no topo do arquivo se não existir — mesmo helper do padrão do InsightsPage.)
+
+- [ ] **Step 7: Verificar no browser**
+
+Run: `cd frontend && npm run dev`. Abrir `/campaigns`: trocar entre "Mês atual" e "Acumulado" e confirmar que os números do bloco financeiro recalculam; comparar com `/insights` da mesma campanha no MESMO período → devem bater. Abrir `/dashboard` e confirmar que os números de investido/CPM das campanhas **não mudaram** vs. antes (seguem acumulados).
+
+- [ ] **Step 8: Commit** (sem `npm install` — regra 5 do CLAUDE.md; só editamos `.jsx`/`.js`)
 
 ```bash
-git add frontend/src/api/hooks.js frontend/src/pages/CampaignsPage.jsx
-git commit -m "feat(campaigns-ui): seletor de periodo (default mes atual) no bloco financeiro"
+git add frontend/src/api/hooks.js frontend/src/pages/CampaignsPage.jsx frontend/src/pages/DashboardPage.jsx
+git commit -m "feat(campaigns-ui): seletor de periodo (default mes atual) + dashboard fixo no acumulado"
 ```
 
 ---
@@ -550,8 +571,10 @@ Trocar a CTE `filt`/`per_station`/`joined` por consumo de `fin_base`. `plays` su
 		    COALESCE(SUM(plays * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
 		    COALESCE(SUM(plays * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50
 		FROM joined
-	`, p.CampaignIDs, nil, p.StationIDs, p.From, p.To, p.Today)
+	`, p.CampaignIDs, nil, p.StationIDs, p.From, p.To, orMaxDate(p.Today))
 ```
+
+> **`$6` = `orMaxDate(p.Today)`** (não `p.Today` cru) — mesma regra do /campaigns (Task 2), pra o consolidado não colapsar com `today` zero.
 
 Ajustar o `coreAggregates` struct (adicionar `Executado float64`) e o `row.Scan` (adicionar `&out.Executado` na posição correta; **remover** os 4 campos de breakdown `sum_in/out/outdate/orphan` que saíam da CTE antiga — ver Step 2).
 

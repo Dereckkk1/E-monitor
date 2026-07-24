@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-21
+ultima-verificacao: 2026-07-24
 codigo-relacionado:
   - migrations/0054_client_station_pmm.up.sql
   - migrations/0055_client_target_label.up.sql
@@ -176,9 +176,23 @@ Todas as superfícies **escondem o bloco "no target"** quando não há cadastro 
 
 A coluna/linha **"Impactos"** (sem target) é **nova para todos os clientes** em `/campaigns`, no CSV consolidado, no PDF de campanha e no CSV/PDF da grade — pedido explícito do dono. Só o bloco **"no target"** é condicional.
 
-### Base de contagem: cada tela espelha a própria base
+### Base de contagem — `/campaigns` e `/insights` CONVERGEM (desde 2026-07-24)
 
-`/insights` conta **todas as detecções aprovadas**; `/campaigns` conta **`in_slot + bonus`** (via `daily_play_summary`); a grade conta **Σ `in_slot`**. Essa divergência é **anterior a esta feature** — ver [detection-count-consistency.md](../architecture/detection-count-consistency.md). A regra adotada foi **espelhar a base de cada tela**: impactos e impactos-no-target da MESMA tela usam sempre o mesmo denominador de veiculações, então os dois números são comparáveis entre si. Não tente reconciliar o "Impactos no target" de `/insights` com o de `/campaigns` — eles nunca vão bater, pelo mesmo motivo que os totais de veiculação já não batem.
+> **Atualização 2026-07-24:** `/campaigns` e `/insights` passaram a usar a **base única
+> `in_slot + bonus`** via o helper compartilhado `financialBaseCTE` — ver
+> [shared-financial-base.md](../architecture/shared-financial-base.md). Para o **mesmo
+> período/filtro** os dois **batem** (impactos, impactos no target, investido, CPM no
+> target), garantido por construção e travado pelo teste `TestFinancialParity_CampaignsVsInsights`.
+> O `/insights` abre no mês corrente por default e o `/campaigns` ganhou um seletor de
+> período (default mês atual, com preset "Acumulado"); para comparar, use a **mesma janela**
+> nas duas telas.
+
+Ainda **não** convergem com estas superfícies (base própria, por design):
+- **a grade de `/detections`** conta **Σ `in_slot`**;
+- **exportáveis** (CSV/PDF de campanha e de grade) mantêm as bases documentadas nas
+  armadilhas #4/#5 abaixo.
+
+Histórico da divergência (anterior à unificação): [detection-count-consistency.md](../architecture/detection-count-consistency.md).
 
 ### CPM no target é sempre dinâmico
 
