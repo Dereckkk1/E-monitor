@@ -788,6 +788,24 @@ export function useUpdateMaterialTypeId() {
   })
 }
 
+// useUpdateMaterialTitle — renomeia um material (corrigir nome errado no
+// upload). Só o rótulo muda: nada de fingerprint/categorização/atribuição lê
+// o title, e as telas resolvem o nome por JOIN — então basta invalidar as
+// queries que EXIBEM o nome pro texto novo aparecer sem reload.
+export function useUpdateMaterialTitle() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, title }) =>
+      api.patch(`/materials/${id}/title`, { title }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['materials'] })
+      qc.invalidateQueries({ queryKey: ['detections'] })
+      qc.invalidateQueries({ queryKey: ['detection'] })
+      qc.invalidateQueries({ queryKey: ['material-aggregate'] })
+    },
+  })
+}
+
 // useUpdateMaterialScript — sets (or clears) the free-text script of a
 // material. Pass `script: ""` (or null) to clear; the server normalizes
 // empty-after-trim to NULL. Invalidates both materials cache and any open

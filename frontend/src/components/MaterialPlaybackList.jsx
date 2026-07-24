@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import api from '../api/client'
+import { useUpdateMaterialTitle } from '../api/hooks'
 import TypeIconPill from './TypeIconPill'
 
 // Duration in seconds → "12.3s" | "—"
@@ -25,9 +26,15 @@ const FP_BADGE = {
  *               duration_seconds, fingerprint_status, master_storage_path)
  *  - typeById: Record<typeId, {id, name, color}>
  *  - programmedTypeIds: Set<typeId>  (types present in any distribution rule)
+ *  - canEdit: boolean — libera o rename inline do título. Deve espelhar o
+ *               RequireRole admin/operator de PATCH /materials/{id}/title;
+ *               cliente (viewer) levaria 403, então nem mostra o lápis.
  */
-export default function MaterialPlaybackList({ materials, typeById, programmedTypeIds }) {
+export default function MaterialPlaybackList({ materials, typeById, programmedTypeIds, canEdit = false }) {
   const [playingId, setPlayingId] = useState(null)
+  // Só uma linha em edição por vez — mesma ideia do editingScriptFor do wizard.
+  const [renamingId, setRenamingId] = useState(null)
+  const rename = useUpdateMaterialTitle()
 
   // Group by type, sort groups by type name; untyped last.
   const groups = (() => {
@@ -122,6 +129,18 @@ export default function MaterialPlaybackList({ materials, typeById, programmedTy
                 isPlaying={playingId === mat.id}
                 onPlay={() => setPlayingId(mat.id)}
                 onPause={() => setPlayingId(null)}
+                canEdit={canEdit}
+                isRenaming={renamingId === mat.id}
+                renameSaving={rename.isPending && renamingId === mat.id}
+                onStartRename={() => setRenamingId(mat.id)}
+                onCancelRename={() => setRenamingId(null)}
+                onSubmitRename={(title) => rename.mutate(
+                  { id: mat.id, title },
+                  {
+                    onSuccess: () => setRenamingId(null),
+                    onError: () => window.alert('Não foi possível renomear o material.'),
+                  },
+                )}
               />
             ))}
           </div>
@@ -132,7 +151,10 @@ export default function MaterialPlaybackList({ materials, typeById, programmedTy
   )
 }
 
-function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
+function MaterialRow({
+  material, programmed, isPlaying, onPlay, onPause,
+  canEdit, isRenaming, renameSaving, onStartRename, onCancelRename, onSubmitRename,
+}) {
   const [audioBlobUrl, setAudioBlobUrl] = useState(null)
   const [audioLoading, setAudioLoading] = useState(false)
   const [downloadLoading, setDownloadLoading] = useState(false)
@@ -211,13 +233,22 @@ function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
     >
       <div style={{ padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 14 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 13.5, fontWeight: 600, color: 'var(--c-text)',
-          fontFamily: 'var(--font-heading)',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>
-          {material.title}
-        </div>
+        {isRenaming ? (
+          <TitleInlineEditor
+            initial={material.title}
+            saving={renameSaving}
+            onSave={onSubmitRename}
+            onCancel={onCancelRename}
+          />
+        ) : (
+          <div style={{
+            fontSize: 13.5, fontWeight: 600, color: 'var(--c-text)',
+            fontFamily: 'var(--font-heading)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }} title={material.title}>
+            {material.title}
+          </div>
+        )}
         <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--c-text-2)', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600, color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>{fmtDuration(material.duration_seconds)}</span>
           <span style={{ color: 'var(--c-text-3)' }}>·</span>
@@ -247,6 +278,17 @@ function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
         }} />
         {programmed ? 'programado' : 'sem programação'}
       </span>
+
+      {/* Renomear — só o nome. Existe pra corrigir material subido com título
+          errado sem re-upload; áudio, tipo e programação não mudam. */}
+      {canEdit && !isRenaming && (
+        <IconBtn onClick={onStartRename} title="Renomear material">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11.5 2.5l2 2L6 12l-2.7.7.7-2.7 7.5-7.5z" />
+            <path d="M2.5 14.5h11" />
+          </svg>
+        </IconBtn>
+      )}
 
       {/* Play */}
       <IconBtn onClick={togglePlay} disabled={audioLoading} isActive={isPlaying}
@@ -312,6 +354,85 @@ function MaterialRow({ material, programmed, isPlaying, onPlay, onPause }) {
 
       <audio ref={audioRef} src={audioBlobUrl ?? undefined} onEnded={onPause} style={{ display: 'none' }} />
     </div>
+  )
+}
+
+/**
+ * Edição inline SÓ do nome do material. Enter salva, Esc cancela.
+ * Vazio-após-trim não salva (title é NOT NULL no banco e a UI identifica o
+ * material por ele); nome inalterado apenas fecha, sem chamada à API.
+ */
+function TitleInlineEditor({ initial, saving, onSave, onCancel }) {
+  const [value, setValue] = useState(initial)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    el.select()
+  }, [])
+
+  const trimmed = value.trim()
+  const dirty = trimmed !== '' && trimmed !== initial
+
+  function submit(e) {
+    e.preventDefault()
+    if (saving) return
+    if (!dirty) { onCancel(); return }
+    onSave(trimmed)
+  }
+
+  return (
+    <form onSubmit={submit} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input
+        ref={inputRef}
+        className="input"
+        type="text"
+        value={value}
+        disabled={saving}
+        aria-label="Nome do material"
+        onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); onCancel() } }}
+        style={{
+          flex: 1, minWidth: 0, height: 30, padding: '0 9px',
+          fontSize: 13.5, fontWeight: 600, fontFamily: 'var(--font-heading)',
+        }}
+      />
+      {/* Mesma família visual dos botões do ScriptInlineEditor do wizard,
+          em escala reduzida — o editor vive dentro da linha, não num painel. */}
+      <button
+        type="submit"
+        disabled={saving || !dirty}
+        style={{
+          flexShrink: 0, minWidth: 66, height: 30, padding: '0 12px',
+          borderRadius: 'var(--radius-md)',
+          background: dirty && !saving ? 'var(--c-action)' : 'var(--c-surface-2)',
+          border: `1px solid ${dirty && !saving ? 'var(--c-action)' : 'var(--c-border)'}`,
+          color: dirty && !saving ? '#fff' : 'var(--c-text-3)',
+          fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-body)',
+          cursor: saving || !dirty ? 'not-allowed' : 'pointer',
+          transition: 'all 120ms',
+        }}
+      >
+        {saving ? 'Salvando…' : 'Salvar'}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={saving}
+        style={{
+          flexShrink: 0, height: 30, padding: '0 12px',
+          borderRadius: 'var(--radius-md)',
+          background: 'transparent', border: '1px solid var(--c-border)',
+          color: 'var(--c-text-2)', fontSize: 11.5, fontWeight: 600,
+          fontFamily: 'var(--font-body)',
+          cursor: saving ? 'not-allowed' : 'pointer',
+        }}
+      >
+        Cancelar
+      </button>
+    </form>
   )
 }
 

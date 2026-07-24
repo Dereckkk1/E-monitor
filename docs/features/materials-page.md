@@ -1,11 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-01
+ultima-verificacao: 2026-07-24
 codigo-relacionado:
   - frontend/src/pages/MaterialsPage.jsx
   - frontend/src/components/MaterialPlaybackList.jsx
   - frontend/src/components/DistributionGrid.jsx
   - frontend/src/utils/dates.js
+  - frontend/src/api/hooks.js
+  - workers/internal/api/handlers/materials.go
+  - workers/internal/catalog/materials.go
 ---
 
 # Tela "Materiais" (`/materials`)
@@ -50,7 +53,33 @@ campanha, agrupados por tipo. Cada item: duração, status de fingerprint,
 **selo "programado" / "sem programação"** (programado = o tipo do material
 aparece em alguma regra de distribuição), play/pause e download. O áudio é
 buscado via `GET /materials/{id}/audio` (blob autenticado → object URL). Só um
-material toca por vez. Read-only (edição é só no wizard de campanha).
+material toca por vez.
+
+### Renomear material (inline)
+
+Único campo editável nesta tela: o **nome** do material. Botão de lápis na
+linha (só pra **admin/operator** — `canEdit={isAdmin}`) troca o título por um
+input: **Enter** salva, **Esc** cancela, nome vazio-após-trim não salva, nome
+inalterado só fecha (sem chamada à API). Existe pra corrigir material subido
+com título errado sem ter que re-uploadar o áudio.
+
+Todo o resto (tipo, texto do comercial, emissoras-alvo, vínculo com campanha)
+continua editável **só no wizard de campanha** — esta tela não virou um CRUD.
+
+**Por que renomear é seguro:** `materials.title` é rótulo puro. Nada em
+matching, fingerprint, categorização ou atribuição lê esse campo, e todas as
+telas que mostram o nome do material resolvem por `JOIN` em `materials`
+(nenhuma cópia denormalizada). Logo: **não** dispara recategorização (ao
+contrário de trocar o tipo, que chama `RecategorizeForMaterial`) e **não**
+exige regerar fingerprint. Renomear muda só o que o usuário lê.
+
+| | |
+|---|---|
+| Endpoint | `PATCH /v1/internal/materials/{id}/title` |
+| Body | `{"title": "<novo nome>"}` |
+| Respostas | `204` ok · `400` id inválido / JSON inválido / título vazio-após-trim · `404` id inexistente |
+| Role | admin/operator (grupo do router; viewer/cliente leva 403 — por isso o lápis nem aparece pra ele) |
+| Hook | `useUpdateMaterialTitle` — invalida `materials`, `detections`, `detection`, `material-aggregate` (as queries que **exibem** o nome) |
 
 ## Grade de plano
 
@@ -73,7 +102,8 @@ idêntico nos dois modos — só o conteúdo das células de resumo muda.
 
 Rota sem `RequireRole` (igual /detections). Backend escopa: cliente recebe só
 as próprias campanhas (`useCampaigns`) e materiais (`useMaterials`). O CTA
-"Editar campanha" (empty state sem materiais/regras) só aparece pra admin.
+"Editar campanha" (empty state sem materiais/regras) e o lápis de renomear só
+aparecem pra admin/operator.
 Diferente da /detections, as emissoras (`useStations`) são buscadas pra todos
 os papéis — a grade precisa dos objetos de emissora pra renderizar linhas
 também pro cliente.

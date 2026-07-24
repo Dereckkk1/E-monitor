@@ -186,6 +186,24 @@ func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.U
 	return err
 }
 
+// UpdateTitle renames a material. Title is a pure label — nada no matching,
+// na categorização ou na atribuição lê esse campo (as telas que mostram o
+// nome do material sempre resolvem por JOIN em materials.title), então
+// renomear é seguro e não exige recategorizar nem regerar fingerprint.
+// O handler é responsável por normalizar/validar (não-vazio após trim).
+// Retorna pgx.ErrNoRows quando o id não existe.
+func (m *Materials) UpdateTitle(ctx context.Context, id uuid.UUID, title string) error {
+	tag, err := m.pool.Exec(ctx,
+		`UPDATE materials SET title = $2, updated_at = now() WHERE id = $1`, id, title)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 // UpdateScript sets (or clears) the script for a material. Pass nil — or a
 // pointer to "" — to clear; the handler is responsible for normalizing empty
 // input. Returns pgx.ErrNoRows when the id does not exist.
