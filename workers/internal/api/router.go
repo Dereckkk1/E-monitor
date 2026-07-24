@@ -350,6 +350,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/{id}", d.Materials.Get)
 					r.Get("/{id}/audio", d.Materials.Audio)
 					r.Post("/{id}/similarity/acknowledge", d.Materials.Acknowledge)
+					r.Patch("/{id}/title", d.Materials.UpdateTitle)
 					r.Patch("/{id}/type", d.Materials.UpdateType)
 					r.Patch("/{id}/script", d.Materials.UpdateScript)
 					r.Delete("/{id}", d.Materials.Delete)

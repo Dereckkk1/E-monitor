@@ -662,6 +662,7 @@ export default function MaterialsPage() {
               materials={linkedMaterials}
               typeById={typeById}
               programmedTypeIds={programmedTypeIds}
+              canEdit={isAdmin}
             />
           )}
 

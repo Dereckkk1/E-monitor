@@ -249,6 +249,43 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// UpdateTitle renames a material.
+// Body: {"title": "<novo nome>"} → 204. Vazio-após-trim é 400 (title é NOT NULL
+// e a UI depende dele pra identificar o material); id inexistente é 404.
+//
+// Só o rótulo muda: nada de fingerprint, categorização ou atribuição depende
+// de materials.title, então não há recategorização a disparar aqui (ao
+// contrário de UpdateType). Existe pra corrigir material subido com nome
+// errado sem ter que re-uploadar o áudio.
+func (h *MaterialsHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Repo.UpdateTitle(r.Context(), id, title); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // UpdateScript sets (or clears) the spoken-copy of a material.
 // Body: {"script": "<text>" | null}. Empty string after trim is normalized
 // to NULL so the field reads as "no script" both server- and client-side.
