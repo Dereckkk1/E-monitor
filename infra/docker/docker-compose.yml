@@ -234,6 +234,17 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       MAIL_FROM: ${MAIL_FROM:-}
+      # Boas-vindas ao novo usuário (docs/features/welcome-onboarding.md).
+      # WELCOME_ENC_KEY: 32 bytes em hex/base64 que cifram a senha inicial no
+      # convite. SEM ela a feature sobe desabilitada — o checkbox responde
+      # 'unavailable' em vez de gravar senha em texto claro. Gere com:
+      #   openssl rand -hex 32
+      # Trocar a chave invalida TODOS os convites já emitidos (o blob antigo
+      # não decifra e o link passa a responder 404).
+      WELCOME_ENC_KEY: ${WELCOME_ENC_KEY:-}
+      # Base pública do frontend usada no link do email. Default = a mesma dos
+      # alertas diários.
+      WELCOME_FRONTEND_URL: ${WELCOME_FRONTEND_URL:-}
       CLAP_VERIFIER_URL: http://clap-verifier:8080
       # Endpoints probados pelo painel /admin/overview (handler
       # system_health.go). Mantém URLs internas — o probe roda dentro
