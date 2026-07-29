@@ -59,15 +59,15 @@ frente do cliente.
 
 **Rótulos exibidos** (todos vêm de `InsightsPayload`, por campanha, no período):
 
-| Rótulo na tela | Origem |
+| Rótulo na tela | Origem em `InsightsPayload` |
 |---|---|
-| **Valor entregue** | `investido.executado` |
+| **Valor entregue** | `kpis.investido.executado` |
 | **Impactos** | `kpis.impactos` |
-| **Impactos no target** | `kpis.impactos_target` + `target_label` (só quando há cadastro) |
+| **Impactos no target** | `kpis.impactos_target` + `target_label` (só quando `kpis.stations_with_target > 0`) |
 | **CPM** | `kpis.cpm` (respeita `campaigns.fixed_cpm`) |
 | **CPM no target** | `kpis.cpm_target` (sempre dinâmico) |
-| **Bonificação** | `bonificacao` |
-| **Emissoras** | `kpis.stations_count` (+ `stations_with_target` no tooltip) |
+| **Bonificação** | `kpis.bonificacao.valor` — **escondida quando `payload.consolidated == true`**, mesma regra do `/insights` (em pricing consolidado a bonificação fica zerada) |
+| **Emissoras** | `kpis.stations_count` (+ `kpis.stations_with_target` no tooltip) |
 
 Semântica de ausência de PMM no target ([client-target-pmm.md](../../features/client-target-pmm.md)):
 emissora **sem linha** em `client_station_pmm` fica fora do total e do contador;
