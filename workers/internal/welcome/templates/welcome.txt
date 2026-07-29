@@ -1,0 +1,16 @@
+{{.Greeting}}.
+
+Sua conta no E-monitor está criada{{if .ClientName}} e vinculada a {{.ClientName}}{{end}}.
+
+{{if .IsClient}}A partir de agora, cada comercial que for ao ar nas rádios monitoradas fica registrado aqui - com data, hora, emissora e o áudio da veiculação.{{else}}Você tem acesso completo à plataforma: emissoras, campanhas, veiculações e a operação em tempo real.{{end}}
+
+Preparamos um guia rápido com seus dados de acesso e um vídeo curto mostrando como usar a plataforma.
+
+Concluir meu cadastro:
+{{.Link}}
+
+Esse link é pessoal e leva aos seus dados de acesso. Não encaminhe para outras pessoas.
+
+--
+E-monitor | E-Mídias - Tecnologia em publicidade
+Você recebeu este email porque uma conta foi criada para {{.Email}} no E-monitor.
