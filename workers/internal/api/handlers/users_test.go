@@ -72,7 +72,7 @@ func TestUsers_List_FiltersAndPaginate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 
 	// status=active sem filtro
 	req := httptest.NewRequest("GET", "/admin/users", nil)
@@ -110,7 +110,7 @@ func TestUsers_List_FiltersAndPaginate(t *testing.T) {
 
 func TestUsers_List_InvalidRole(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	req := httptest.NewRequest("GET", "/admin/users?role=hacker", nil)
 	w := httptest.NewRecorder()
 	h.List(w, req)
@@ -122,7 +122,7 @@ func TestUsers_List_InvalidRole(t *testing.T) {
 
 func TestUsers_Get_NotFound(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	req := reqWithIDParam("GET", "/admin/users/x", "", uuid.NewString())
 	w := httptest.NewRecorder()
 	h.Get(w, req)
@@ -133,7 +133,7 @@ func TestUsers_Get_NotFound(t *testing.T) {
 
 func TestUsers_Create_Admin_NoClientID_OK(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"new@x.test","password":"super-secret-pw-12345","name":"N","role":"admin"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -149,7 +149,7 @@ func TestUsers_Create_Client_RoleConvertsToViewer(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	clients := catalog.NewClients(pool)
 	c, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Acme"})
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 
 	body := `{"email":"c@acme.com","password":"super-secret-pw-12345","name":"C","role":"client","client_id":"` + c.ID.String() + `"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
@@ -164,7 +164,7 @@ func TestUsers_Create_Client_RoleConvertsToViewer(t *testing.T) {
 
 func TestUsers_Create_Client_RequiresClientID(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"c@acme.com","password":"super-secret-pw-12345","name":"C","role":"client"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func TestUsers_Create_Admin_RejectsClientID(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	clients := catalog.NewClients(pool)
 	c, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Acme"})
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"a@x.test","password":"super-secret-pw-12345","name":"A","role":"admin","client_id":"` + c.ID.String() + `"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -188,7 +188,7 @@ func TestUsers_Create_Admin_RejectsClientID(t *testing.T) {
 
 func TestUsers_Create_DuplicateEmail_409(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"dup@x.test","password":"super-secret-pw-12345","name":"D","role":"admin"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -205,7 +205,7 @@ func TestUsers_Create_DuplicateEmail_409(t *testing.T) {
 
 func TestUsers_Create_PasswordTooShort_400(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"a@x.test","password":"shorty","name":"A","role":"admin"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -216,7 +216,7 @@ func TestUsers_Create_PasswordTooShort_400(t *testing.T) {
 
 func TestUsers_Create_InvalidRole_400(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	body := `{"email":"a@x.test","password":"super-secret-pw-12345","name":"A","role":"operator"}`
 	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -231,7 +231,7 @@ func TestUsers_Patch_RejectsEmail(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	repo := users.NewRepo(pool)
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 	req := reqWithIDParam("PATCH", "/admin/users/x", `{"email":"new@x.test"}`, u.ID.String())
 	w := httptest.NewRecorder()
 	h.Patch(w, req)
@@ -244,7 +244,7 @@ func TestUsers_Patch_CannotReactivateDeleted(t *testing.T) {
 	repo := users.NewRepo(pool)
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
 	require.NoError(t, repo.SoftDelete(ctx, u.ID))
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 	req := reqWithIDParam("PATCH", "/admin/users/x", `{"is_active":true}`, u.ID.String())
 	w := httptest.NewRecorder()
 	h.Patch(w, req)
@@ -259,7 +259,7 @@ func TestUsers_Patch_PromoteViewerToAdmin_ClearsClient(t *testing.T) {
 	c, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Acme"})
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "p@x.test", PasswordHash: "h", Role: "viewer", ClientID: &c.ID, Name: "P"})
 
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 	req := reqWithIDParam("PATCH", "/admin/users/x", `{"role":"admin"}`, u.ID.String())
 	w := httptest.NewRecorder()
 	h.Patch(w, req)
@@ -279,7 +279,7 @@ func TestUsers_ResetPassword_OK(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("super-secret-pw-12345"), 10)
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: string(hash), Role: "admin", Name: "A"})
 
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 	req := reqWithIDParam("POST", "/admin/users/x/password",
 		`{"password":"another-super-strong-pw"}`, u.ID.String())
 	w := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestUsers_ResetPassword_OK(t *testing.T) {
 
 func TestUsers_ResetPassword_TooShort(t *testing.T) {
 	_, pool := newUsersTestPool(t)
-	h := NewUsersHandler(users.NewRepo(pool))
+	h := NewUsersHandler(users.NewRepo(pool), nil)
 	req := reqWithIDParam("POST", "/admin/users/x/password",
 		`{"password":"short"}`, uuid.NewString())
 	w := httptest.NewRecorder()
@@ -308,7 +308,7 @@ func TestUsers_Delete_BlocksSelf(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	repo := users.NewRepo(pool)
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 
 	req := reqWithIDParam("DELETE", "/admin/users/x", "", u.ID.String())
 	req = req.WithContext(auth.ContextWithClaims(req.Context(), &auth.Claims{UserID: u.ID, Role: "admin"}))
@@ -327,7 +327,7 @@ func TestUsers_Delete_OK_AndIdempotent(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	repo := users.NewRepo(pool)
 	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
-	h := NewUsersHandler(repo)
+	h := NewUsersHandler(repo, nil)
 
 	other := &auth.Claims{UserID: uuid.New(), Role: "admin"}
 
