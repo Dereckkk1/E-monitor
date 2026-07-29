@@ -107,6 +107,11 @@ func (s *Service) Link(token string) string {
 	return s.baseURL + "/pos-venda/" + url.PathEscape(token)
 }
 
+// SetAssetsBytes é o que o handler HTTP chama (uploadedAssets é interno).
+func (s *Service) SetAssetsBytes(ctx context.Context, reportID, campaignID uuid.UUID, mapPNG, insightsPNG []byte) error {
+	return s.SetAssets(ctx, reportID, campaignID, uploadedAssets{MapPNG: mapPNG, InsightsPNG: insightsPNG})
+}
+
 // SetAssets guarda a captura do browser até o publish montar o zip.
 func (s *Service) SetAssets(_ context.Context, reportID, campaignID uuid.UUID, up uploadedAssets) error {
 	if len(up.MapPNG) == 0 || len(up.InsightsPNG) == 0 {
