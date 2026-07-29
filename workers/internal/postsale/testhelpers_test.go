@@ -166,6 +166,22 @@ func seedScenario(t *testing.T, ctx context.Context, pool *pgxpool.Pool) scenari
 	return s
 }
 
+// seedClientUser cria um usuário vinculado ao cliente (role viewer, que é o
+// "Cliente" da UI). `active=false` cobre o caso do desativado, que NÃO recebe
+// pós-venda.
+func seedClientUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
+	clientID uuid.UUID, email string, active bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, role, client_id, name, is_active)
+		 VALUES ($1, 'h', 'viewer', $2, $3, $4) RETURNING id`,
+		email, clientID, "Pessoa "+email[:4], active).Scan(&id)
+	require.NoError(t, err, "seed client user")
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id) })
+	return id
+}
+
 func seedStation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
 	t.Helper()
 	st, err := catalog.NewStations(pool).Create(ctx, catalog.CreateStationInput{
