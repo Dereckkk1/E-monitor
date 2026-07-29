@@ -183,6 +183,17 @@ function IconSuggestions() {
   )
 }
 
+function IconPostSale() {
+  // Envelope com um check: o pós-venda é o email de fechamento.
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 4.5h12v7H2z" />
+      <path d="M2.4 5 8 9l5.6-4" />
+      <path d="M10.2 11.8l1.4 1.4 2.7-2.9" strokeOpacity="0.85" />
+    </svg>
+  )
+}
+
 /* ── Nav link helper ─────────────────────────────────────────── */
 function SidebarLink({ to, icon, children, onClose, badge }) {
   return (
@@ -244,6 +255,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
       <SidebarLink to="/admin/suggestions"       icon={<IconSuggestions />}       onClose={onClose} badge={suggestionsUnread}>Sugestões</SidebarLink>
+      <SidebarLink to="/admin/pos-venda"         icon={<IconPostSale />}          onClose={onClose}>Pós-venda</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>
       <SidebarLink to="/account" icon={<IconAccount />} onClose={onClose}>Minha conta</SidebarLink>
