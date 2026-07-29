@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import RSelect from '../components/RSelect'
 import { useConfirm } from '../components/ConfirmModal'
 import UserFormModal from '../components/UserFormModal'
 import ResetPasswordModal from '../components/ResetPasswordModal'
 import { useAuth } from '../contexts/AuthContext'
 import {
-  useUsersPaged, useCreateUser, useUpdateUser,
+  useUsersPaged, useCreateUser, useUpdateUser, useRevokeWelcomeInvite,
   useResetUserPassword, useDeleteUser, useClients,
 } from '../api/hooks'
 import './AdminUsersPage.css'
@@ -123,6 +124,72 @@ function TrashIcon() {
     </svg>
   )
 }
+/* Envelope aberto: o convite de boas-vindas que já saiu. */
+function WelcomeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 10.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8.5" />
+      <path d="m3 10.5 9-6.5 9 6.5" />
+      <path d="m3 10.5 9 6 9-6" />
+    </svg>
+  )
+}
+
+function BadgeCheckIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m20 6-11 11-5-5" />
+    </svg>
+  )
+}
+
+function BadgeAlertIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 8v5" />
+      <path d="M12 17h.01" />
+    </svg>
+  )
+}
+
+function RevokeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="m5.6 5.6 12.8 12.8" />
+    </svg>
+  )
+}
+
+/* Descreve o estado do convite em uma frase pro tooltip — é o "controle" que
+   o admin quer: saber se saiu, se o cliente abriu e quantas vezes. */
+function describeInvite(inv) {
+  if (!inv) return null
+  const d = iso => {
+    if (!iso) return ''
+    const dt = new Date(iso)
+    return dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  }
+  if (inv.revoked_at) return `Convite revogado em ${d(inv.revoked_at)}`
+
+  const envio = {
+    sent: `Email enviado em ${d(inv.created_at)}`,
+    failed: `Falha no envio do email (${d(inv.created_at)})`,
+    disabled: `Convite criado em ${d(inv.created_at)} — email desligado, link entregue por fora`,
+    pending: `Convite criado em ${d(inv.created_at)}`,
+  }[inv.email_status] ?? `Convite criado em ${d(inv.created_at)}`
+
+  const leitura = inv.open_count > 0
+    ? `aberto ${inv.open_count}× (1ª vez em ${d(inv.opened_at)})`
+    : 'ainda não aberto'
+
+  return `${envio} · ${leitura}`
+}
+
 function ClearIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
@@ -157,6 +224,7 @@ export default function AdminUsersPage() {
   const [editing, setEditing] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [formError, setFormError] = useState(null)
+  const [welcomeResult, setWelcomeResult] = useState(null)
 
   const params = {
     status: filters.status,
@@ -171,13 +239,22 @@ export default function AdminUsersPage() {
   const updateM = useUpdateUser()
   const resetM = useResetUserPassword()
   const deleteM = useDeleteUser()
+  const revokeM = useRevokeWelcomeInvite()
 
   const clientById = Object.fromEntries((clientsQ.data ?? []).map(c => [c.id, c]))
 
   function handleCreate(payload) {
     setFormError(null)
     createM.mutate(payload, {
-      onSuccess: () => setCreateOpen(false),
+      onSuccess: (created) => {
+        setCreateOpen(false)
+        // O link aparece SEMPRE que o convite foi emitido — inclusive quando o
+        // email falhou ou o SMTP está desligado. É o que permite ao admin
+        // copiar e mandar por WhatsApp, que é o fluxo que a equipe já usa.
+        if (created?.welcome) {
+          setWelcomeResult({ email: created.email, ...created.welcome })
+        }
+      },
       onError: (err) => setFormError(err.response?.data || err.message),
     })
   }
@@ -206,6 +283,19 @@ export default function AdminUsersPage() {
     const msg = `Excluir ${u.email} definitivamente? Esta ação não pode ser desfeita.`
     if (!await confirm(msg)) return
     deleteM.mutate(u.id)
+  }
+
+  // Convite de boas-vindas mais recente por usuário, indexado por user_id.
+  // Vem no mesmo GET da listagem (sem N+1) — ver handlers/users.go List.
+  const invites = list.data?.welcome_invites ?? {}
+
+  async function handleRevokeInvite(u, inv) {
+    const ok = await confirm(
+      `Revogar o convite de boas-vindas de ${u.email}? O link para de funcionar ` +
+      `imediatamente e a senha inicial guardada nele é apagada. A conta continua ativa.`
+    )
+    if (!ok) return
+    revokeM.mutate(inv.invite_id)
   }
 
   const data = list.data?.data ?? []
@@ -335,6 +425,8 @@ export default function AdminUsersPage() {
                 const isSelf = u.id === me?.id
                 const isDeleted = !!u.deleted_at
                 const t = formatRelativeTime(u.last_login_at)
+                const invite = invites[u.id]
+                const inviteLive = invite && !invite.revoked_at
                 return (
                   <tr key={u.id} className={`au-row ${isDeleted ? 'is-deleted' : ''} ${isSelf ? 'is-self' : ''}`}>
                     <td className="au-cell-name">
@@ -359,6 +451,42 @@ export default function AdminUsersPage() {
                     <td><StatusBadge user={u} /></td>
                     <td className="au-cell-actions">
                       <div className="au-actions">
+                        {/* Convite de boas-vindas: abre a MESMA página que o
+                            cliente recebeu, pra o admin conferir o que foi
+                            enviado. Só aparece pra quem teve convite. */}
+                        {inviteLive && (
+                          <a
+                            className="au-icon-btn au-icon-btn-welcome"
+                            href={invite.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={describeInvite(invite)}
+                            aria-label={`Abrir a página de boas-vindas de ${u.email}`}
+                          >
+                            <WelcomeIcon />
+                          </a>
+                        )}
+                        {invite && invite.revoked_at && (
+                          <span
+                            className="au-icon-btn au-icon-btn-off"
+                            title={describeInvite(invite)}
+                            aria-label={`Convite de boas-vindas de ${u.email} revogado`}
+                          >
+                            <WelcomeIcon />
+                          </span>
+                        )}
+                        {inviteLive && (
+                          <button
+                            type="button"
+                            className="au-icon-btn"
+                            title="Revogar convite de boas-vindas"
+                            aria-label={`Revogar convite de boas-vindas de ${u.email}`}
+                            onClick={() => handleRevokeInvite(u, invite)}
+                            disabled={revokeM.isPending}
+                          >
+                            <RevokeIcon />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="au-icon-btn"
@@ -506,6 +634,107 @@ export default function AdminUsersPage() {
           busy={resetM.isPending}
         />
       )}
+      {welcomeResult && (
+        <WelcomeSentModal
+          result={welcomeResult}
+          onClose={() => setWelcomeResult(null)}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * WelcomeSentModal confirma o convite recém-emitido e entrega o link.
+ *
+ * Aparece mesmo quando o email FALHOU ou o SMTP está desligado — é justamente
+ * aí que ele importa: o convite existe e é válido, e o admin precisa do link
+ * pra mandar por fora. Esconder o link no erro deixaria o usuário criado sem
+ * nenhum caminho de entrega.
+ */
+function WelcomeSentModal({ result, onClose }) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 2200)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  const tone = {
+    sent: {
+      cls: 'is-ok',
+      title: 'Boas-vindas enviadas',
+      text: <>Enviamos o email para <strong>{result.email}</strong>. O link abaixo é o mesmo que ele recebeu.</>,
+    },
+    failed: {
+      cls: 'is-warn',
+      title: 'Convite criado, mas o email não saiu',
+      text: <>O usuário foi criado e o link é válido — só o envio falhou{result.email_error ? ` (${result.email_error})` : ''}. Copie e mande por fora.</>,
+    },
+    disabled: {
+      cls: 'is-warn',
+      title: 'Convite criado — envio de email desligado',
+      text: <>Não há SMTP configurado neste ambiente. Copie o link e entregue para <strong>{result.email}</strong>.</>,
+    },
+    unavailable: {
+      cls: 'is-warn',
+      title: 'Usuário criado sem boas-vindas',
+      text: <>A funcionalidade está desabilitada no servidor (falta <code>WELCOME_ENC_KEY</code>). O usuário foi criado normalmente.</>,
+    },
+  }[result.email_status] ?? {
+    cls: 'is-warn',
+    title: 'Convite criado',
+    text: <>Copie o link e entregue para <strong>{result.email}</strong>.</>,
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(result.link)
+      setCopied(true)
+    } catch { /* navegador sem permissão: o link está visível pra seleção manual */ }
+  }
+
+  return createPortal(
+    <div className="confirm-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="aw-title">
+      <div className={`au-welcome-card ${tone.cls}`} onClick={e => e.stopPropagation()}>
+        <div className="au-welcome-badge" aria-hidden="true">
+          {tone.cls === 'is-ok' ? <BadgeCheckIcon /> : <BadgeAlertIcon />}
+        </div>
+        <h2 className="au-welcome-title" id="aw-title">{tone.title}</h2>
+        <p className="au-welcome-text">{tone.text}</p>
+
+        {result.link && (
+          <div className="au-welcome-link">
+            <code className="au-welcome-url">{result.link}</code>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>
+              {copied ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+        )}
+
+        {result.link && (
+          <p className="au-welcome-note">
+            O link não expira. Se vazar, use o botão de revogar na lista de usuários.
+          </p>
+        )}
+
+        <div className="au-welcome-actions">
+          {result.link && (
+            <a className="btn btn-secondary" href={result.link} target="_blank" rel="noopener noreferrer">
+              Ver a página
+            </a>
+          )}
+          <button type="button" className="btn btn-primary" onClick={onClose}>Entendi</button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
