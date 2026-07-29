@@ -1,0 +1,498 @@
+/* AdminPostSalePage.css — listagem, wizard e detalhe do Pós-venda (admin). */
+
+.psa-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.psa-title {
+  font-family: var(--font-heading);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.psa-sub {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--c-text-2);
+  max-width: 62ch;
+}
+
+.psa-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.psa-toolbar .input { max-width: 280px; }
+.psa-toolbar-select { min-width: 220px; }
+
+/* ─── Lista ────────────────────────────────────────────────────────────── */
+
+.psa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.psa-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.psa-row:hover {
+  border-color: var(--c-action-border);
+  box-shadow: 0 8px 24px -16px rgba(15, 23, 42, 0.3);
+  transform: translateY(-2px);
+}
+
+.psa-row-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.psa-row-meta {
+  font-size: 13px;
+  color: var(--c-text-3);
+  margin-top: 2px;
+}
+
+.psa-row-opens {
+  font-size: 13px;
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+.psa-row-opens strong {
+  font-family: var(--font-heading);
+  color: var(--c-text);
+}
+
+.psa-status {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+
+.psa-status--draft { background: var(--c-surface-2); color: var(--c-text-2); }
+.psa-status--sent  { background: #dcfce7; color: #15803d; }
+
+/* ─── Empty state (tutorial estilizado, DESIGN.md §4.7) ────────────────── */
+
+.psa-empty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  align-items: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  padding: 40px;
+}
+
+.psa-empty-icon { color: var(--c-action); }
+
+.psa-empty h2 {
+  font-family: var(--font-heading);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin: 16px 0 0;
+}
+
+.psa-empty p {
+  margin: 8px 0 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--c-text-2);
+  max-width: 46ch;
+}
+
+/* Mockup silhuetado do documento: mostra o que vai existir depois da ação. */
+.psa-empty-mock {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  background: var(--c-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.psa-mock-bar {
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+}
+
+.psa-mock-bar--wide  { width: 70%; height: 20px; background: var(--c-action-light); }
+.psa-mock-bar--pill  { width: 45%; height: 14px; background: var(--c-action); opacity: 0.35; }
+.psa-mock-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.psa-mock-tile {
+  height: 44px;
+  border-radius: 10px;
+  background: var(--c-surface-2);
+}
+
+/* ─── Wizard ───────────────────────────────────────────────────────────── */
+
+.psa-steps {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.psa-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.psa-step--active { background: var(--c-action-light); color: #9d174d; }
+.psa-step--done   { background: #dcfce7; color: #15803d; }
+
+.psa-step-num {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.psa-panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  padding: 26px 28px;
+}
+
+.psa-panel + .psa-panel { margin-top: 14px; }
+
+.psa-panel-title {
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  margin: 0 0 4px;
+}
+
+.psa-panel-hint {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--c-text-3);
+}
+
+.psa-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.psa-hint {
+  font-size: 13px;
+  color: var(--c-text-2);
+  margin: 12px 0 0;
+}
+
+.psa-hint--warn { color: #b45309; }
+
+/* ─── Passo 2: campanhas ───────────────────────────────────────────────── */
+
+.psa-campaigns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.psa-campaign {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  transition: border-color 0.15s ease;
+}
+
+.psa-campaign--on { border-color: var(--c-action-border); background: #fffafc; }
+
+.psa-campaign-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.psa-campaign-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--c-text);
+  flex: 1;
+  min-width: 0;
+}
+
+.psa-campaign-dates {
+  font-size: 12px;
+  color: var(--c-text-3);
+  white-space: nowrap;
+}
+
+.psa-period {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--c-border);
+}
+
+.psa-field { display: flex; flex-direction: column; gap: 4px; }
+
+.psa-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+.psa-field .input { max-width: 170px; }
+
+.psa-period-error {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.psa-order {
+  display: flex;
+  gap: 4px;
+}
+
+/* ─── Passo 3: checking editável ───────────────────────────────────────── */
+
+.psa-rows {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.psa-row-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  flex-wrap: wrap;
+}
+
+.psa-row-editor-name {
+  flex: 1 1 180px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--c-text);
+}
+
+.psa-row-editor-dial {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.psa-field--tiny .input { max-width: 92px; }
+.psa-field--grow { flex: 1 1 220px; }
+.psa-field--grow .input { max-width: none; width: 100%; }
+
+.psa-group-label {
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-action);
+  margin: 20px 0 0;
+}
+
+.psa-group-label--amber { color: #b45309; }
+
+/* ─── Passo 4: preview ─────────────────────────────────────────────────── */
+
+.psa-preview-frame {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: var(--c-bg);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.psa-recipients {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--c-text-2);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.psa-progress {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--c-action-light);
+  color: #9d174d;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.psa-error {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 14px;
+}
+
+/* Container offscreen das capturas: precisa estar RENDERIZADO (não display:none
+   nem visibility:hidden) para o html2canvas enxergar layout e o Recharts medir
+   os gráficos. Por isso sai da tela por posição. */
+.psa-offscreen {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 1280px;
+  pointer-events: none;
+  opacity: 1;
+  z-index: -1;
+}
+
+/* Molduras do que vira PNG. Largura fixa: a foto precisa sair igual
+   independentemente do tamanho da janela do admin no momento do envio. */
+.psc-map-frame,
+.psc-insights-frame {
+  width: 1280px;
+  background: var(--c-bg);
+  padding: 28px 32px;
+  font-family: var(--font-body);
+}
+
+.psc-frame-title {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin-bottom: 16px;
+}
+
+.psc-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+/* ─── Detalhe ──────────────────────────────────────────────────────────── */
+
+.psa-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.psa-table th {
+  text-align: left;
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.psa-table td {
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--c-surface-2);
+  color: var(--c-text-2);
+}
+
+.psa-table td:first-child { color: var(--c-text); font-weight: 600; }
+
+.psa-email {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.psa-email--sent     { background: #dcfce7; color: #15803d; }
+.psa-email--failed   { background: #fee2e2; color: #b91c1c; }
+.psa-email--disabled { background: var(--c-surface-2); color: var(--c-text-2); }
+.psa-email--pending  { background: #fef9c3; color: #a16207; }
+
+.psa-revoked { color: var(--c-text-3); font-style: italic; }
+
+@media (max-width: 760px) {
+  .psa-row { grid-template-columns: 36px 1fr; row-gap: 8px; }
+  .psa-row-opens, .psa-row-status { grid-column: 2; }
+  .psa-empty { grid-template-columns: 1fr; padding: 26px; }
+  .psa-preview-frame { max-height: none; }
+}
