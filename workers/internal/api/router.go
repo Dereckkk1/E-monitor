@@ -49,6 +49,8 @@ type Deps struct {
 	DistributionOverrides *handlers.DistributionOverridesHandler
 	Pricing               *handlers.PricingHandler
 	Users                 *handlers.UsersHandler
+	PostSale              *handlers.PostSaleHandler
+	PostSalePublic        *handlers.PostSalePublicHandler
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
@@ -129,6 +131,13 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/health", d.Health.Check)
 		if d.Auth != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/login", d.Auth.Login)
+		}
+		// Pós-venda: o cliente abre pelo link do email, SEM sessão — o token de
+		// 32 bytes é a credencial. Throttle no mesmo limiter do login porque a
+		// rota é enumerável em tese. Ver docs/features/post-sale.md.
+		if d.PostSalePublic != nil {
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}", d.PostSalePublic.Resolve)
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/bundle.zip", d.PostSalePublic.Bundle)
 		}
 
 		// Protected: all other internal routes require a valid JWT.
@@ -552,6 +561,26 @@ func NewRouter(d Deps) http.Handler {
 						r.Delete("/{id}", d.Users.Delete)
 						r.Post("/{id}/password", d.Users.ResetPassword)
 					})
+				})
+			}
+
+			// ── Pós-venda — admin-only ──────────────────────────────────────
+			// Tela exclusiva de admin: monta o fechamento, revisa o preview e
+			// dispara o email com o link pessoal de cada usuário do cliente.
+			// Ver docs/features/post-sale.md.
+			if d.PostSale != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Get("/post-sale/reports", d.PostSale.List)
+					r.Post("/post-sale/reports", d.PostSale.Create)
+					r.Get("/post-sale/reports/{id}", d.PostSale.Get)
+					r.Patch("/post-sale/reports/{id}", d.PostSale.Update)
+					r.Get("/post-sale/reports/{id}/preview", d.PostSale.Preview)
+					r.Get("/post-sale/reports/{id}/recipients", d.PostSale.Recipients)
+					r.Post("/post-sale/reports/{id}/assets", d.PostSale.UploadAssets)
+					r.Post("/post-sale/reports/{id}/publish", d.PostSale.Publish)
+					r.Post("/post-sale/reports/{id}/resend", d.PostSale.Resend)
+					r.Post("/post-sale/recipients/{rid}/revoke", d.PostSale.RevokeRecipient)
 				})
 			}
 		}) // end RequireJWT group

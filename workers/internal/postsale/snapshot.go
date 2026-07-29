@@ -2,6 +2,7 @@ package postsale
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -200,6 +201,45 @@ func (s *Service) buildBlock(ctx context.Context, clientID uuid.UUID, b BlockInp
 	}, nil
 }
 
+// Preview monta o documento de um relatório salvo.
+//
+// Já enviado devolve o CONGELADO, não recalcula: o admin abrindo um pós-venda
+// antigo precisa ver o que o cliente vê, não um recálculo de hoje.
+func (s *Service) Preview(ctx context.Context, reportID uuid.UUID) (*Payload, error) {
+	rep, err := s.repo.Get(ctx, reportID)
+	if err != nil {
+		return nil, err
+	}
+	if rep.Status == "sent" {
+		raw, err := s.repo.Payload(ctx, reportID)
+		if err != nil {
+			return nil, err
+		}
+		var p Payload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("postsale: payload congelado ilegível: %w", err)
+		}
+		return &p, nil
+	}
+
+	in := SnapshotInput{
+		ClientID:     rep.ClientID,
+		Title:        rep.Title,
+		IntroMessage: rep.IntroMessage,
+	}
+	for _, b := range rep.Blocks {
+		in.Blocks = append(in.Blocks, BlockInput{
+			CampaignID:   b.CampaignID,
+			From:         b.From,
+			To:           b.To,
+			CheckingText: b.CheckingText,
+			CheckingRows: b.CheckingRows,
+			HasBundle:    b.Assets.BundleZIP != "",
+		})
+	}
+	return s.Build(ctx, in)
+}
+
 // DefaultCheckingText é o texto que o passo 3 sugere. O admin edita à vontade.
 func DefaultCheckingText(deliveryPct int) string {
 	return fmt.Sprintf("Mídia entregue com excelência! Toda a veiculação foi realizada "+
@@ -213,4 +253,3 @@ func DefaultIntroMessage(clientName string) string {
 			"veiculação no rádio — cada inserção monitorada, conferida e comprovada. "+
 			"Qualquer dúvida, é só chamar: estamos por perto.", clientName))
 }
-
