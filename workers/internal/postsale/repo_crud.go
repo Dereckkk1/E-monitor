@@ -332,6 +332,22 @@ func (r *Repo) RevokeRecipient(ctx context.Context, recipientID, by uuid.UUID) e
 	return nil
 }
 
+// Payload devolve o JSON congelado de um relatório já enviado. Usado pelo
+// reenvio, que precisa do conteúdo sem passar pelo caminho público do token.
+func (r *Repo) Payload(ctx context.Context, reportID uuid.UUID) ([]byte, error) {
+	var raw []byte
+	err := r.pool.QueryRow(ctx,
+		`SELECT payload_json FROM post_sale_reports
+		  WHERE id = $1 AND status = 'sent' AND payload_json IS NOT NULL`, reportID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("postsale: payload: %w", err)
+	}
+	return raw, nil
+}
+
 // BundleKey devolve a chave S3 do .zip de uma campanha do relatório.
 func (r *Repo) BundleKey(ctx context.Context, reportID, campaignID uuid.UUID) (string, error) {
 	var raw []byte
