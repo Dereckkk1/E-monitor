@@ -6,7 +6,11 @@
 // combinado (e por isso não vira card, vira contagem).
 package postsale
 
-import "math"
+import (
+	"math"
+
+	"github.com/google/uuid"
+)
 
 // RowKind é o balde de uma emissora no Checking.
 type RowKind string
@@ -51,4 +55,32 @@ func DeliveryPct(programmed, identified int) *int {
 	}
 	v := int(math.Round(float64(identified) / float64(programmed) * 100))
 	return &v
+}
+
+// StationRow é uma emissora do Checking: agregada no período, classificada, e
+// com o metadado que o card mostra (logo, cidade, dial).
+//
+// Os campos numéricos são congelados no payload junto com o resto — depois do
+// envio, recategorização não muda o que o cliente já leu.
+type StationRow struct {
+	StationID    uuid.UUID `json:"station_id"`
+	Name         string    `json:"name"`
+	City         *string   `json:"city"`
+	State        *string   `json:"state"`
+	Band         *string   `json:"band"`
+	FrequencyMHz *float64  `json:"frequency_mhz"`
+	LogoURL      *string   `json:"logo_url"`
+
+	Programmed  int  `json:"programmed"`
+	Identified  int  `json:"identified"`
+	Deficit     int  `json:"deficit"`
+	Extras      int  `json:"extras"`
+	BonusCount  int  `json:"bonus_count"`
+	DeliveryPct *int `json:"delivery_pct"`
+	// Compensated espelha catalog.IsBonified: tinha déficit e os extras cobrem.
+	// Vira o selo "compensado" no card, não muda a lista.
+	Compensated bool    `json:"compensated"`
+	Kind        RowKind `json:"kind"`
+	// Note é escrita pelo admin no passo 3 do wizard (só em KindCompensation).
+	Note string `json:"note"`
 }
