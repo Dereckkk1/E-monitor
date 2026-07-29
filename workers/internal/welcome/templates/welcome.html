@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>Boas-vindas ao E-monitor</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Fira+Sans+Condensed:wght@400;500;600&display=swap');
+body{margin:0;padding:0;background:#f8fafc;}
+.h{font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+.b{font-family:'Fira Sans Condensed',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;}
+a{text-decoration:none;}
+@media only screen and (max-width:620px){
+  .wrap{width:100%!important;}
+  .pad{padding-left:24px!important;padding-right:24px!important;}
+  .hero{padding:34px 24px!important;}
+  .h1{font-size:30px!important;}
+  .cta a{display:block!important;text-align:center!important;}
+}
+</style>
+</head>
+<body class="b" style="margin:0;padding:0;background:#f8fafc;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Sua conta está criada. Abra o guia rápido e comece a acompanhar suas veiculações.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;">
+<tr><td align="center" style="padding:32px 16px;">
+  <table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+
+    <tr><td style="height:4px;line-height:4px;font-size:0;background:#E81E75;">&nbsp;</td></tr>
+
+    <tr><td class="pad" style="padding:26px 36px 22px 36px;">
+      <img src="{{.BaseURL}}/E-monitor%20logo.png" alt="E-monitor" height="26" style="display:block;border:0;height:26px;">
+    </td></tr>
+
+    <!-- Faixa navy full-bleed: o momento de boas-vindas, visualmente separado
+         do tom operacional dos alertas diários. -->
+    <tr><td class="hero" bgcolor="#06055B" style="background-color:#06055B;padding:38px 36px;">
+      <h1 class="h h1" style="margin:0;font-size:34px;line-height:1.1;font-weight:700;letter-spacing:-0.025em;color:#ffffff;">{{.Greeting}}.</h1>
+      <p class="b" style="margin:14px 0 0 0;font-size:16px;line-height:1.6;color:#c7c6e8;max-width:420px;">
+        Sua conta no E-monitor está criada{{if .ClientName}} e vinculada a {{.ClientName}}{{end}}.
+      </p>
+    </td></tr>
+
+    <tr><td class="pad" style="padding:30px 36px 0 36px;">
+      <p class="b" style="margin:0;font-size:16px;line-height:1.65;color:#334155;">
+        {{if .IsClient}}A partir de agora, cada comercial que for ao ar nas rádios monitoradas fica registrado aqui — com data, hora, emissora e o áudio da veiculação.{{else}}Você tem acesso completo à plataforma: emissoras, campanhas, veiculações e a operação em tempo real.{{end}}
+      </p>
+      <p class="b" style="margin:14px 0 0 0;font-size:16px;line-height:1.65;color:#334155;">
+        Preparamos um guia rápido com seus dados de acesso e um vídeo curto mostrando como usar a plataforma.
+      </p>
+    </td></tr>
+
+    <tr><td class="pad cta" style="padding:28px 36px 0 36px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>
+        <td style="border-radius:12px;background:#E81E75;">
+          <a class="b" href="{{.Link}}" style="display:inline-block;padding:16px 32px;font-size:16px;font-weight:600;color:#ffffff;border-radius:12px;">Concluir meu cadastro →</a>
+        </td>
+      </tr></table>
+      <p class="b" style="margin:14px 0 0 0;font-size:13px;line-height:1.5;color:#94a3b8;">
+        Esse link é pessoal e leva aos seus dados de acesso. Não encaminhe para outras pessoas.
+      </p>
+    </td></tr>
+
+    <tr><td class="pad" style="padding:28px 36px 32px 36px;">
+      <div style="border-top:1px solid #f1f5f9;padding-top:18px;">
+        <p class="b" style="margin:0;font-size:13px;line-height:1.6;color:#64748b;">
+          Se o botão não funcionar, copie e cole este endereço no navegador:<br>
+          <span style="color:#94a3b8;word-break:break-all;">{{.Link}}</span>
+        </p>
+      </div>
+    </td></tr>
+
+    <tr><td bgcolor="#06055B" style="background-color:#06055B;padding:26px 36px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td valign="middle" style="vertical-align:middle;">
+          <img src="{{.BaseURL}}/emidias-logo.png" alt="E-Mídias" height="30" style="display:block;border:0;height:30px;">
+        </td>
+        <td valign="middle" align="right" style="vertical-align:middle;text-align:right;">
+          <div class="b" style="font-size:13px;line-height:1.5;color:#a5a4d4;">Tecnologia em publicidade</div>
+        </td>
+      </tr></table>
+    </td></tr>
+
+  </table>
+
+  <table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;">
+    <tr><td class="pad" style="padding:18px 36px 0 36px;text-align:center;">
+      <p class="b" style="margin:0;font-size:12px;line-height:1.5;color:#94a3b8;">
+        Você recebeu este email porque uma conta foi criada para {{.Email}} no E-monitor.
+      </p>
+    </td></tr>
+  </table>
+
+</td></tr></table>
+</body></html>
