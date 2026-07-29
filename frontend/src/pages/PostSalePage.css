@@ -1,0 +1,647 @@
+/* PostSalePage.css — o documento de pós-venda (hero, blocos, checking, footer).
+ *
+ * Usado pela página pública /pos-venda/:token E pelo preview do passo 4 do
+ * wizard: os dois renderizam o mesmo PostSaleDocument, então o estilo mora
+ * num arquivo só.
+ *
+ * Identidade: DESIGN.md — Rosa Digital (--c-action) como cor de ação, azul
+ * marinho (--c-text) nos títulos, Space Grotesk nos títulos + Fira Sans
+ * Condensed no corpo, Soft UI arejado. A intenção aqui é acolhimento, não
+ * ostentação: espaço em branco generoso, cantos macios, uma cor de destaque só.
+ */
+
+.ps-doc {
+  background: var(--c-bg, #f8fafc);
+  color: var(--c-text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+}
+
+.ps-container {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ─── Hero ─────────────────────────────────────────────────────────────── */
+
+.ps-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: min(72vh, 640px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 72px 24px 56px;
+  isolation: isolate;
+}
+
+.ps-hero-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 900px;
+}
+
+/* Orbs: o único elemento decorativo da página. Blur alto + opacidade baixa
+   pra sugerir profundidade sem competir com o texto. */
+.ps-hero-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.34;
+  pointer-events: none;
+  will-change: transform;
+  z-index: 0;
+}
+
+.ps-hero-orb--pink {
+  width: 460px;
+  height: 460px;
+  background: var(--c-action);
+  top: -140px;
+  left: -110px;
+  animation: ps-float-a 18s ease-in-out infinite;
+}
+
+.ps-hero-orb--blue {
+  width: 380px;
+  height: 380px;
+  background: var(--c-text);
+  bottom: -150px;
+  right: -90px;
+  opacity: 0.22;
+  animation: ps-float-b 24s ease-in-out infinite;
+}
+
+@keyframes ps-float-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(40px, 30px, 0) scale(1.06); }
+}
+
+@keyframes ps-float-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(-34px, -26px, 0) scale(1.08); }
+}
+
+.ps-hero-logo {
+  height: 30px;
+  width: auto;
+  margin-bottom: 40px;
+}
+
+.ps-hero-word {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(56px, 12vw, 132px);
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.ps-hero-word-accent { color: var(--c-action); }
+
+.ps-hero-band {
+  display: inline-block;
+  margin: 26px 0 0;
+  padding: 12px 30px;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: clamp(15px, 2.4vw, 21px);
+  letter-spacing: -0.01em;
+  transform-origin: center;
+  box-shadow: 0 10px 30px -12px rgba(232, 30, 117, 0.55);
+}
+
+.ps-hero-meta {
+  margin: 28px 0 0;
+  font-size: 14px;
+  color: var(--c-text-3);
+  letter-spacing: 0.02em;
+}
+
+/* ─── Saudação ─────────────────────────────────────────────────────────── */
+
+.ps-greeting {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl, 20px);
+  padding: 32px 36px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.ps-greeting-logo {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 14px;
+  flex-shrink: 0;
+}
+
+.ps-greeting-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(26px, 4vw, 38px);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.ps-greeting-sub {
+  margin: 6px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--c-action);
+}
+
+.ps-greeting-text {
+  margin: 14px 0 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--c-text-2);
+  max-width: 68ch;
+  white-space: pre-line;
+}
+
+/* ─── Blocos de campanha ───────────────────────────────────────────────── */
+
+.ps-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 28px 0 56px;
+}
+
+.ps-block {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl, 20px);
+  padding: 30px 34px 34px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.ps-block:hover {
+  border-color: var(--c-action-border);
+  box-shadow: 0 12px 32px -18px rgba(15, 23, 42, 0.28);
+  transform: translateY(-2px);
+}
+
+.ps-block-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ps-block-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.ps-block-period {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--c-text-3);
+}
+
+.ps-badge {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+}
+
+.ps-badge--ativa      { background: #dcfce7; color: #15803d; }
+.ps-badge--concluida  { background: #e0e7ff; color: #4338ca; }
+.ps-badge--programada { background: #fef9c3; color: #a16207; }
+/* Cancelada aparece MARCADA em histórico/relatório — nunca some do documento
+   (docs/features/cancelled-campaign-handling.md). */
+.ps-badge--cancelada  { background: #fee2e2; color: #b91c1c; }
+
+.ps-block-body {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 30px;
+  align-items: center;
+  margin-top: 26px;
+}
+
+.ps-block-map {
+  margin: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+}
+
+.ps-block-map img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.ps-block-map-empty {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, var(--c-surface-2), var(--c-surface));
+}
+
+.ps-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ps-kpi {
+  background: var(--c-surface-2);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+/* O valor entregue é o número que o cliente procura primeiro: ocupa a linha
+   inteira e é o único em rosa. */
+.ps-kpi--hero {
+  grid-column: 1 / -1;
+  background: var(--c-action-light);
+}
+
+.ps-kpi--hero .ps-kpi-value {
+  color: var(--c-action);
+  font-size: clamp(28px, 4vw, 38px);
+}
+
+.ps-kpi-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+.ps-kpi-value {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-block-cta {
+  margin-top: 26px;
+}
+
+/* ─── Checking ─────────────────────────────────────────────────────────── */
+
+.ps-checking {
+  margin-top: 34px;
+  padding-top: 28px;
+  border-top: 1px solid var(--c-border);
+}
+
+.ps-checking-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(24px, 3.4vw, 32px);
+  letter-spacing: -0.025em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.ps-checking-text {
+  margin: 10px 0 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--c-text-2);
+  max-width: 68ch;
+  white-space: pre-line;
+}
+
+.ps-checking-sub {
+  margin: 26px 0 12px;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-action);
+}
+
+.ps-checking-sub--amber { color: #b45309; }
+
+.ps-station-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ps-station {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  background: var(--c-surface);
+}
+
+.ps-station-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ps-station-name {
+  display: block;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ps-station-dial {
+  display: block;
+  font-size: 13px;
+  color: var(--c-text-3);
+  margin-top: 1px;
+}
+
+.ps-station-bar {
+  margin-top: 8px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+  max-width: 320px;
+}
+
+.ps-station-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+}
+
+.ps-station--compensation .ps-station-bar-fill { background: #d97706; }
+
+.ps-station-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ps-station-pct {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 19px;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-station-pct-unit {
+  font-size: 13px;
+  color: var(--c-text-3);
+  margin-left: 1px;
+}
+
+.ps-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 11px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.ps-pill--bonus { background: var(--c-action-light); color: #9d174d; }
+/* Âmbar escuro no TEXTO (não no fundo) pra passar em contraste AA. */
+.ps-pill--compensated { background: #fef3c7; color: #92400e; }
+
+.ps-station-note {
+  font-size: 13px;
+  color: var(--c-text-2);
+  font-style: italic;
+}
+
+.ps-checking-rest {
+  margin: 20px 0 0;
+  font-size: 14px;
+  color: var(--c-text-3);
+}
+
+/* ─── Footer ───────────────────────────────────────────────────────────── */
+
+.ps-footer {
+  background: var(--c-text);
+  color: #e2e8f0;
+  padding: 48px 24px 0;
+}
+
+.ps-footer-main {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 40px;
+  padding-bottom: 36px;
+}
+
+.ps-footer-logo {
+  height: 28px;
+  width: auto;
+  /* A logo é colorida sobre fundo claro; aqui o fundo é escuro. */
+  filter: brightness(0) invert(1);
+  opacity: 0.92;
+}
+
+.ps-footer-desc {
+  margin: 16px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #94a3b8;
+  max-width: 46ch;
+}
+
+.ps-footer-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.ps-footer-label {
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.ps-footer-city { color: #94a3b8; }
+
+.ps-footer-link {
+  color: #e2e8f0;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.ps-footer-link:hover { color: var(--c-action); }
+
+.ps-footer-social {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.ps-footer-bottom {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 18px 0 28px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* ─── Estados da página pública ────────────────────────────────────────── */
+
+.ps-loading,
+.ps-gone {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 40px 24px;
+  background: var(--c-bg, #f8fafc);
+  font-family: var(--font-body);
+  color: var(--c-text-2);
+}
+
+.ps-gone-logo { height: 30px; margin-bottom: 18px; }
+
+.ps-gone h1 {
+  font-family: var(--font-heading);
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin: 0;
+}
+
+.ps-gone p { margin: 0; max-width: 46ch; }
+
+/* ─── Reveal ───────────────────────────────────────────────────────────── */
+
+.ps-greeting,
+.ps-block,
+.ps-checking {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ps-greeting.is-shown,
+.ps-block.is-shown,
+.ps-checking.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
+/* ─── Responsivo ───────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  /* Mapa acima dos KPIs: numa coluna só, o número precisa vir depois da
+     imagem que ele descreve. */
+  .ps-block-body { grid-template-columns: 1fr; }
+  .ps-footer-main { grid-template-columns: 1fr; gap: 28px; }
+}
+
+@media (max-width: 640px) {
+  .ps-container { padding: 0 16px; }
+
+  .ps-hero {
+    min-height: 88vh;
+    padding: 56px 18px 44px;
+  }
+
+  .ps-hero-word { line-height: 0.95; }
+  .ps-hero-band { padding: 10px 22px; }
+
+  .ps-greeting {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 24px 20px;
+  }
+
+  .ps-block { padding: 22px 18px 26px; }
+
+  .ps-kpis { gap: 10px; }
+  .ps-kpi { padding: 13px 14px; }
+
+  /* Card de emissora vira linha única: avatar + nome à esquerda, número e
+     pill embaixo, sem quebrar em 320px. */
+  .ps-station {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .ps-station-info { flex: 1 1 60%; }
+  .ps-station-tags {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+  .ps-station-bar { max-width: none; }
+
+  .ps-block-cta { width: 100%; }
+}
+
+/* ─── Movimento reduzido ───────────────────────────────────────────────────
+ * Nenhum movimento e nada invisível: o conteúdo aparece no estado final.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .ps-hero-orb { animation: none; }
+
+  .ps-greeting,
+  .ps-block,
+  .ps-checking {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .ps-block:hover { transform: none; }
+}

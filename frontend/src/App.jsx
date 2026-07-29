@@ -34,6 +34,7 @@ import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
 import ManagementPage from './pages/ManagementPage'
 import AdminSuggestionsPage from './pages/AdminSuggestionsPage'
+import PostSalePage  from './pages/PostSalePage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -173,6 +174,9 @@ export default function App() {
           <Routes>
             {/* Public */}
             <Route path="/login" element={<LoginPage />} />
+            {/* Pós-venda: aberta por definição — o cliente chega pelo link
+                do email, sem sessão. O token da URL é a credencial. */}
+            <Route path="/pos-venda/:token" element={<PostSalePage />} />
             <Route path="/404"   element={<NotFoundPage />} />
             {/* Everything else is gated by RequireAuth */}
             <Route
