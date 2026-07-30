@@ -35,6 +35,10 @@ import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
 import ManagementPage from './pages/ManagementPage'
 import AdminSuggestionsPage from './pages/AdminSuggestionsPage'
+import PostSalePage  from './pages/PostSalePage'
+import AdminPostSalePage       from './pages/AdminPostSalePage'
+import AdminPostSaleWizardPage from './pages/AdminPostSaleWizardPage'
+import AdminPostSaleDetailPage from './pages/AdminPostSaleDetailPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -155,6 +159,15 @@ function AppShell() {
             <Route path="/admin/suggestions" element={
               <RequireRole roles={['admin']}><AdminSuggestionsPage /></RequireRole>
             } />
+            <Route path="/admin/pos-venda" element={
+              <RequireRole roles={['admin']}><AdminPostSalePage /></RequireRole>
+            } />
+            <Route path="/admin/pos-venda/novo" element={
+              <RequireRole roles={['admin']}><AdminPostSaleWizardPage /></RequireRole>
+            } />
+            <Route path="/admin/pos-venda/:id" element={
+              <RequireRole roles={['admin']}><AdminPostSaleDetailPage /></RequireRole>
+            } />
             <Route path="/dashboard"   element={<DashboardPage />} />
             <Route path="/account"     element={<AccountPage />} />
             {/* Catch-all dentro do AppShell: redireciona pra 404 fullscreen */}
@@ -177,6 +190,9 @@ export default function App() {
             {/* Boas-vindas: aberta por definição — o destinatário ainda não tem
                 conta ativa quando chega aqui. O token da URL é a credencial. */}
             <Route path="/boasvindas/:token" element={<WelcomePage />} />
+            {/* Pós-venda: aberta por definição — o cliente chega pelo link
+                do email, sem sessão. O token da URL é a credencial. */}
+            <Route path="/pos-venda/:token" element={<PostSalePage />} />
             <Route path="/404"   element={<NotFoundPage />} />
             {/* Everything else is gated by RequireAuth */}
             <Route

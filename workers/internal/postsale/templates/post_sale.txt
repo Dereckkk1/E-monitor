@@ -1,0 +1,12 @@
+{{ .Greeting }}!
+
+Seu pós-venda da {{ .ClientName }} está pronto.
+{{ range .Campaigns }}
+- {{ .Name }} ({{ .Period }}){{ end }}
+
+Veja os resultados completos em:
+{{ .Link }}
+
+Este link é pessoal — não repasse.
+
+E-monitor · monitoramento de veiculação em rádio

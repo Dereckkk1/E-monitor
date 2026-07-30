@@ -1316,3 +1316,102 @@ export function useSuggestionsUnread({ enabled = true } = {}) {
     refetchInterval: 60_000,
   })
 }
+
+// ─── Pós-venda ──────────────────────────────────────────────────────────────
+// Documento de fechamento congelado. Admin monta e dispara; o cliente abre por
+// link pessoal. Ver docs/features/post-sale.md.
+
+// Público: o token da URL é a credencial (sem JWT). Não faz retry — token
+// inválido é 404 definitivo, e insistir só atrasa a mensagem de erro.
+export function usePublicPostSale(token) {
+  return useQuery({
+    queryKey: ['public-post-sale', token],
+    enabled: !!token,
+    retry: false,
+    queryFn: () => api.get(`/public/post-sale/${encodeURIComponent(token)}`).then(r => r.data),
+  })
+}
+
+export function usePostSaleReports() {
+  return useQuery({
+    queryKey: ['post-sale-reports'],
+    queryFn: () => api.get('/post-sale/reports').then(r => r.data ?? []),
+  })
+}
+
+export function usePostSaleReport(id) {
+  return useQuery({
+    queryKey: ['post-sale-report', id],
+    enabled: !!id,
+    queryFn: () => api.get(`/post-sale/reports/${id}`).then(r => r.data),
+  })
+}
+
+// Quem vai receber o disparo (usuários ativos do cliente). O wizard mostra
+// isso já no passo 1 — o admin precisa saber o tamanho do envio antes.
+export function usePostSaleRecipients(id) {
+  return useQuery({
+    queryKey: ['post-sale-recipients', id],
+    enabled: !!id,
+    queryFn: () => api.get(`/post-sale/reports/${id}/recipients`).then(r => r.data ?? []),
+  })
+}
+
+export function useCreatePostSaleReport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => api.post('/post-sale/reports', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['post-sale-reports'] }),
+  })
+}
+
+export function useUpdatePostSaleReport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch(`/post-sale/reports/${id}`, body).then(r => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] })
+      qc.invalidateQueries({ queryKey: ['post-sale-preview', vars.id] })
+      qc.invalidateQueries({ queryKey: ['post-sale-reports'] })
+    },
+  })
+}
+
+// Preview: mesma função que o publish congela. staleTime 0 porque o admin
+// edita o passo 3 e espera ver o efeito na hora.
+export function usePostSalePreview(id, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['post-sale-preview', id],
+    enabled: !!id && enabled,
+    staleTime: 0,
+    queryFn: () => api.get(`/post-sale/reports/${id}/preview`).then(r => r.data),
+  })
+}
+
+export function usePublishPostSale() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/post-sale/reports/${id}/publish`).then(r => r.data),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['post-sale-reports'] })
+      qc.invalidateQueries({ queryKey: ['post-sale-report', id] })
+    },
+  })
+}
+
+export function useResendPostSale() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, recipientId }) =>
+      api.post(`/post-sale/reports/${id}/resend`, { recipient_id: recipientId }),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] }),
+  })
+}
+
+export function useRevokePostSaleRecipient() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recipientId }) => api.post(`/post-sale/recipients/${recipientId}/revoke`),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] }),
+  })
+}

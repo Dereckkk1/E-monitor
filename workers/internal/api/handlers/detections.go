@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/reportcsv"
 	"radiocheck/internal/storage"
 )
 
@@ -623,80 +623,17 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	// BOM so Excel pt-BR detects UTF-8.
-	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
-
-	cw := csv.NewWriter(w)
-	cw.Comma = ';'
-	// "PMM no target" fica SEM o rótulo de público-alvo do cliente aqui, ao
-	// contrário do CSV consolidado: campaign_id é opcional neste export, então
-	// as linhas podem cobrir várias campanhas de CLIENTES DIFERENTES — cada uma
-	// com o seu target. Um rótulo único no cabeçalho estaria errado para parte
-	// das linhas, e rótulo errado é pior que rótulo nenhum. Se um dia o export
-	// virar por-cliente, o sufixo pode entrar (ver Consolidated em reports.go).
-	_ = cw.Write([]string{
-		"Data", "Hora", "Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "PMM no target", "Status",
+	// A formatação mora em internal/reportcsv porque o bundle .zip do pós-venda
+	// escreve o MESMO arquivo em memória. Erro aqui não vira 500: o header já
+	// foi escrito, então só cortamos o stream.
+	_ = reportcsv.WriteDetailed(w, func(cb func(catalog.DetectionEnriched) error) error {
+		return h.Repo.IterateForExport(r.Context(), f, cb)
 	})
-
-	loc, _ := time.LoadLocation("America/Sao_Paulo")
-
-	_ = h.Repo.IterateForExport(r.Context(), f, func(d catalog.DetectionEnriched) error {
-		t := d.DetectedAt.In(loc)
-		freq := ""
-		if d.StationFrequencyMHz != nil {
-			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *d.StationFrequencyMHz), ".", ",")
-		}
-		pmm := ""
-		if d.StationPMM != nil {
-			pmm = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.StationPMM), ".", ",")
-		}
-		pmmTarget := ""
-		if d.StationPMMTarget != nil {
-			pmmTarget = fmt.Sprintf("%d", *d.StationPMMTarget)
-		}
-		dur := ""
-		if d.MaterialDurationSec != nil {
-			dur = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.MaterialDurationSec), ".", ",")
-		}
-		return cw.Write([]string{
-			t.Format("02/01/2006"),
-			t.Format("15:04:05"),
-			d.StationName,
-			freq,
-			strOrEmpty(d.StationBand),
-			strOrEmpty(d.StationCity),
-			strOrEmpty(d.StationState),
-			d.CommercialName,
-			dur,
-			strOrEmpty(d.MaterialTypeName),
-			strOrEmpty(d.ClientName),
-			pmm,
-			pmmTarget,
-			categoryLabelPT(d.Category),
-		})
-	})
-
-	cw.Flush()
 }
 
-// categoryLabelPT mapeia o enum da coluna `category` (in_slot|out_slot|
-// out_date|orphan) pra rótulo PT-BR usado nos relatórios exportados. Mesmo
-// vocabulário do DayDetailModal.jsx — "Bônus" pra orphan (veiculação sem
-// regra correspondente, conta como bônus comercial pro cliente).
-func categoryLabelPT(c string) string {
-	switch c {
-	case "in_slot":
-		return "Dentro da faixa"
-	case "out_slot":
-		return "Fora da faixa"
-	case "out_date":
-		return "Fora da data"
-	case "orphan":
-		return "Bônus"
-	default:
-		return c // fallback defensivo se aparecer um valor novo
-	}
-}
+// categoryLabelPT delega pro vocabulário canônico em reportcsv. Continua aqui
+// porque outros handlers deste arquivo o usam.
+func categoryLabelPT(c string) string { return reportcsv.CategoryLabelPT(c) }
 
 func strOrEmpty(s *string) string {
 	if s == nil {

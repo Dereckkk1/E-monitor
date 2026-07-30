@@ -28,6 +28,7 @@ import (
 	"radiocheck/internal/index"
 	"radiocheck/internal/mailer"
 	"radiocheck/internal/observability"
+	"radiocheck/internal/postsale"
 	"radiocheck/internal/projrecon"
 	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
@@ -428,6 +429,36 @@ func main() {
 		zap.Bool("smtp", welcomeMailEnabled),
 		zap.String("base_url", cfg.WelcomeFrontendURL))
 
+	// Pós-venda (docs/features/post-sale.md). Mailer PRÓPRIO: é transacional
+	// (dispara na ação do admin), então não pode depender de
+	// NOTIFICATIONS_ENABLED, que liga/desliga o job de alertas das 8h.
+	postSaleMailEnabled := cfg.SMTPUser != "" && cfg.SMTPPass != ""
+	postSaleSvc := postsale.New(postsale.Config{
+		Repo:       postsale.NewRepo(pool),
+		Insights:   catalog.NewInsights(pool),
+		Detections: detections,
+		Storage:    s3Client,
+		Mailer: mailer.New(mailer.Config{
+			Enabled: postSaleMailEnabled,
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.MailFrom,
+		}, logger),
+		MailEnabled: postSaleMailEnabled,
+		// Base pública do frontend. NOTIFICATIONS_BASE_URL já é a base dos CTAs
+		// dos emails de alerta — o link do pós-venda mora no mesmo domínio.
+		BaseURL: cfg.NotificationsBaseURL,
+		Footer: postsale.Footer{
+			Email:     "spot@hubradios.com.br",
+			City:      "São Paulo, Brasil",
+			Instagram: "https://www.instagram.com/emidiastec/",
+			LinkedIn:  "https://www.linkedin.com/in/e-r%C3%A1dios/",
+		},
+		Log: logger,
+	})
+
 	// Emails diários de alerta de campanha (docs/features/campaign-notification-emails.md).
 	// Opt-in via NOTIFICATIONS_ENABLED; sem credenciais SMTP, mailer.New retorna noop.
 	if cfg.NotificationsEnabled {
@@ -541,6 +572,8 @@ func main() {
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo, CampaignRepo: campaigns},
 		Users:                 handlers.NewUsersHandler(usersRepo, welcomeSvc),
 		Welcome:               handlers.NewWelcomeHandler(welcomeSvc),
+		PostSale:              handlers.NewPostSaleHandler(postSaleSvc, logger),
+		PostSalePublic:        handlers.NewPostSalePublicHandler(postSaleSvc, logger),
 		Me:                    handlers.NewMeHandler(usersRepo),
 		Reports:               &handlers.ReportsHandler{Detections: detections, CampaignRepo: campaigns, Pool: pool},
 		Insights:              handlers.NewInsightsHandler(catalog.NewInsights(pool)),
