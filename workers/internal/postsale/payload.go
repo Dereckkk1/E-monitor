@@ -82,6 +82,11 @@ type BlockKPIs struct {
 	// Consolidated vem do InsightsPayload: em pricing consolidado a bonificação
 	// fica zerada e o card some, mesma regra do /insights.
 	Consolidated bool `json:"consolidated"`
+
+	// Overridden marca que algum número deste bloco foi ajustado à mão pelo
+	// admin. Serve ao painel admin (que mostra o valor do sistema ao lado);
+	// a página do cliente NÃO exibe isso — pra ele o número é o número.
+	Overridden bool `json:"overridden"`
 }
 
 // Footer é o rodapé institucional, injetado por configuração para não ficar

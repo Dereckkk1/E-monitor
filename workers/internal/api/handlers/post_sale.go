@@ -123,13 +123,21 @@ func (h *PostSaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 type updatePostSaleRequest struct {
 	Title        *string `json:"title"`
 	IntroMessage *string `json:"intro_message"`
-	Blocks       []struct {
+	// ClientID permite trocar o cliente do rascunho. Sem isso, voltar ao passo 1
+	// e escolher outro cliente mantinha o rascunho no cliente antigo em silêncio,
+	// e o preview quebrava depois (campanha de um cliente, relatório de outro).
+	ClientID *uuid.UUID `json:"client_id"`
+	Blocks   []struct {
 		CampaignID   uuid.UUID             `json:"campaign_id"`
 		PeriodFrom   string                `json:"period_from"` // YYYY-MM-DD
 		PeriodTo     string                `json:"period_to"`
 		Position     int                   `json:"position"`
 		CheckingText string                `json:"checking_text"`
 		CheckingRows []postsale.StationRow `json:"checking_rows"`
+		// CheckingEdited: o front manda true a partir do momento em que o admin
+		// mexe nas linhas. false = "derive do banco" (ver migration 0059).
+		CheckingEdited bool                  `json:"checking_edited"`
+		KPIOverrides   postsale.KPIOverrides `json:"kpi_overrides"`
 	} `json:"blocks"`
 }
 
@@ -151,6 +159,19 @@ func (h *PostSaleHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, err, "update: get")
 		return
+	}
+
+	// Trocar de cliente descarta os blocos: campanha de outro cliente no mesmo
+	// relatório é justamente o que o buildBlock recusa.
+	if in.ClientID != nil && *in.ClientID != current.ClientID {
+		if err := repo.UpdateClient(r.Context(), id, *in.ClientID); err != nil {
+			h.fail(w, err, "update: client")
+			return
+		}
+		if err := repo.ReplaceBlocks(r.Context(), id, nil); err != nil {
+			h.fail(w, err, "update: reset blocks")
+			return
+		}
 	}
 
 	if in.Title != nil || in.IntroMessage != nil {
@@ -186,12 +207,14 @@ func (h *PostSaleHandler) Update(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			blocks = append(blocks, postsale.BlockRow{
-				CampaignID:   b.CampaignID,
-				From:         from,
-				To:           to,
-				Position:     b.Position,
-				CheckingText: b.CheckingText,
-				CheckingRows: b.CheckingRows,
+				CampaignID:     b.CampaignID,
+				From:           from,
+				To:             to,
+				Position:       b.Position,
+				CheckingText:   b.CheckingText,
+				CheckingRows:   b.CheckingRows,
+				CheckingEdited: b.CheckingEdited,
+				KPIOverrides:   b.KPIOverrides,
 			})
 		}
 		if err := repo.ReplaceBlocks(r.Context(), id, blocks); err != nil {

@@ -1,526 +1,991 @@
-/* AdminPostSalePage.css — listagem, wizard e detalhe do Pós-venda (admin). */
+/* ══════════════════════════════════════════════════════════════════════
+   Pós-venda — superfície ADMIN (listagem, wizard, detalhe)
+   docs/features/post-sale.md
 
-.psa-head {
+   Registro: product. Tudo aqui serve a uma tarefa — montar e conferir um
+   fechamento antes de mandar pro cliente. Então: escala tipográfica fixa em
+   rem (nada de clamp em UI), rosa só em ação/seleção/estado, densidade onde
+   ajuda, skeleton em vez de spinner, e transições de 150-200ms que comunicam
+   mudança de estado. O documento do cliente (PostSalePage.css) é a superfície
+   com atmosfera; esta é ferramenta.
+
+   ESTRUTURA: superfície de duas colunas — decisões à esquerda, trilho de
+   resumo à direita respondendo "o que vai no email". É o split layout que o
+   design.md §3 nomeia, e é o que resolve o passo de escopo, que antes gastava
+   uma tela inteira num dropdown solto.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.pv {
+  --pv-rail: 336px;
+  --pv-gap: 22px;
+  --pv-rule: #e6eaf2;
+  --pv-ink: var(--c-text);
+  --pv-ink-2: #475069;
+  --pv-ink-3: #7c8698;
+
+  /* Escala de elevação nomeada, nunca número solto. */
+  --pv-z-bar: 20;
+
+  padding-bottom: 96px; /* espaço da barra de ação fixa */
+}
+
+/* ── Cabeçalho de página ─────────────────────────────────────────────── */
+
+.pv-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
   flex-wrap: wrap;
-  margin-bottom: 20px;
+  padding: 4px 0 20px;
 }
 
-.psa-title {
+.pv-title {
   font-family: var(--font-heading);
-  font-size: 26px;
+  font-size: 1.6rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--c-text);
+  line-height: 1.15;
+  color: var(--pv-ink);
   margin: 0;
 }
 
-.psa-sub {
+.pv-sub {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--pv-ink-2);
+  max-width: 68ch;
+}
+
+.pv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--pv-ink-3);
+  text-decoration: none;
+  margin-bottom: 10px;
+  transition: color 150ms ease;
+}
+.pv-back:hover { color: var(--c-action); }
+
+/* ── Passos ──────────────────────────────────────────────────────────────
+ * Numerado porque É uma sequência real de 3 etapas, e a ordem carrega
+ * informação (não dá pra escolher campanha antes do cliente).
+ */
+.pv-steps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+  margin: 0 0 var(--pv-gap);
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.pv-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--pv-ink-3);
+}
+
+.pv-step-num {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--pv-rule);
+  background: var(--c-surface);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--pv-ink-3);
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.pv-step--done { color: var(--pv-ink-2); }
+.pv-step--done .pv-step-num {
+  background: #e8f6ee;
+  border-color: #bfe3cf;
+  color: #15803d;
+}
+
+.pv-step--now { color: var(--pv-ink); }
+.pv-step--now .pv-step-num {
+  background: var(--c-action);
+  border-color: var(--c-action);
+  color: #fff;
+}
+
+.pv-step-sep {
+  width: 26px;
+  height: 1px;
+  background: var(--pv-rule);
+  flex: 0 0 auto;
+}
+
+.pv-step-item { display: inline-flex; align-items: center; gap: 10px; }
+
+.pv-rail-client {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* ── Superfície de trabalho ──────────────────────────────────────────── */
+
+.pv-work {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--pv-rail);
+  gap: var(--pv-gap);
+  align-items: start;
+}
+
+.pv-main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+
+/* Painel: a unidade de conteúdo. Sem sombra em repouso — a régua e o fundo
+   branco já separam do cinza da página; sombra aqui viraria ruído. */
+.pv-panel {
+  background: var(--c-surface);
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-xl);
+  padding: 22px 24px;
+  /* Item de flex-column tem min-width:auto e se recusa a encolher abaixo do
+     conteúdo: sem isto, a tabela larga do detalhe vazava a página inteira pro
+     lado em vez de rolar dentro do próprio container. */
+  min-width: 0;
+}
+
+.pv-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.pv-panel-title {
+  font-family: var(--font-heading);
+  font-size: 1.06rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--pv-ink);
+  margin: 0;
+}
+
+.pv-panel-hint {
   margin: 4px 0 0;
-  font-size: 14px;
-  color: var(--c-text-2);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--pv-ink-3);
   max-width: 62ch;
 }
 
-.psa-toolbar {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
-
-.psa-toolbar .input { max-width: 280px; }
-.psa-toolbar-select { min-width: 220px; }
-
-/* ─── Lista ────────────────────────────────────────────────────────────── */
-
-.psa-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.psa-row {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 2fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 18px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .psa-row:hover {
-    border-color: var(--c-action-border);
-    box-shadow: 0 8px 24px -16px rgba(15, 23, 42, 0.3);
-    transform: translateY(-2px);
-  }
-}
-
-.psa-row:focus-visible {
-  outline: 2px solid var(--c-action);
-  outline-offset: 2px;
-}
-
-.psa-row-name {
+.pv-label {
+  display: block;
+  font-size: 0.72rem;
   font-weight: 600;
-  font-size: 15px;
-  color: var(--c-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.psa-row-meta {
-  font-size: 13px;
-  color: var(--c-text-3);
-  margin-top: 2px;
-}
-
-.psa-row-opens {
-  font-size: 13px;
-  color: var(--c-text-2);
-  white-space: nowrap;
-}
-
-.psa-row-opens strong {
-  font-family: var(--font-heading);
-  color: var(--c-text);
-}
-
-.psa-status {
-  font-family: var(--font-heading);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
+  color: var(--pv-ink-3);
+  margin-bottom: 6px;
 }
 
-.psa-status--draft { background: var(--c-surface-2); color: var(--c-text-2); }
-.psa-status--sent  { background: #dcfce7; color: #15803d; }
+.pv-field + .pv-field { margin-top: 16px; }
 
-/* ─── Empty state (tutorial estilizado, DESIGN.md §4.7) ────────────────── */
+/* ── Trilho de resumo ────────────────────────────────────────────────── */
 
-.psa-empty {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 32px;
-  align-items: center;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
-  padding: 40px;
-}
-
-.psa-empty-icon { color: var(--c-action); }
-
-.psa-empty h2 {
-  font-family: var(--font-heading);
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--c-text);
-  margin: 16px 0 0;
-}
-
-.psa-empty p {
-  margin: 8px 0 20px;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--c-text-2);
-  max-width: 46ch;
-}
-
-/* Mockup silhuetado do documento: mostra o que vai existir depois da ação. */
-.psa-empty-mock {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: 18px;
-  background: var(--c-bg);
+.pv-rail {
+  position: sticky;
+  top: 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.psa-mock-bar {
-  height: 10px;
-  border-radius: var(--radius-full);
-  background: var(--c-surface-2);
-}
-
-.psa-mock-bar--wide  { width: 70%; height: 20px; background: var(--c-action-light); }
-.psa-mock-bar--pill  { width: 45%; height: 14px; background: var(--c-action); opacity: 0.35; }
-.psa-mock-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 6px;
-}
-.psa-mock-tile {
-  height: 44px;
-  border-radius: 10px;
-  background: var(--c-surface-2);
-}
-
-/* ─── Wizard ───────────────────────────────────────────────────────────── */
-
-.psa-steps {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 22px;
-}
-
-.psa-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: var(--radius-full);
-  background: var(--c-surface-2);
-  color: var(--c-text-2);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.psa-step--active { background: var(--c-action-light); color: #9d174d; }
-.psa-step--done   { background: #dcfce7; color: #15803d; }
-
-.psa-step-num {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.7);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-heading);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.psa-panel {
+.pv-rail-card {
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
-  padding: 26px 28px;
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
 }
 
-.psa-panel + .psa-panel { margin-top: 14px; }
+.pv-rail-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pv-ink-3);
+  margin: 0 0 12px;
+}
 
-.psa-panel-title {
+.pv-rail-empty {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--pv-ink-3);
+  margin: 0;
+}
+
+/* Lista de fatos, não cards aninhados. */
+.pv-facts { display: flex; flex-direction: column; gap: 10px; margin: 0; }
+
+.pv-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.88rem;
+}
+.pv-fact dt { color: var(--pv-ink-3); }
+.pv-fact dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--pv-ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pv-person {
+  padding: 9px 0;
+  border-top: 1px solid var(--c-surface-2);
+  font-size: 0.86rem;
+  color: var(--pv-ink-2);
+}
+.pv-person:first-child { border-top: 0; padding-top: 0; }
+.pv-person strong {
+  display: block;
+  font-weight: 600;
+  color: var(--pv-ink);
+}
+.pv-person span { color: var(--pv-ink-3); word-break: break-all; }
+
+/* Bloqueio acionável: o que falta + o caminho pra resolver. */
+.pv-block {
+  border: 1px solid #f5d9a7;
+  background: #fffaf0;
+  border-radius: var(--radius-lg);
+  padding: 15px 17px;
+}
+.pv-block-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #92400e;
+  margin: 0 0 6px;
+}
+.pv-block-text {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: #7c4a10;
+}
+
+/* ── Barra de ação fixa ──────────────────────────────────────────────── */
+
+.pv-bar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: var(--pv-z-bar);
+  background: #fff;
+  border-top: 1px solid var(--pv-rule);
+  padding: 12px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+/* Translucidez é reforço, não a base: sem suporte, fundo chapado. */
+@supports (backdrop-filter: blur(8px)) {
+  .pv-bar { background: rgba(255, 255, 255, 0.86); backdrop-filter: blur(8px); }
+}
+
+.pv-bar-inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pv-bar-note {
+  font-size: 0.86rem;
+  color: var(--pv-ink-2);
+  min-width: 0;
+}
+.pv-bar-note strong { color: var(--pv-ink); font-weight: 600; }
+
+.pv-bar-actions { display: flex; gap: 10px; align-items: center; }
+
+/* ── Escopo: cliente + campanhas ─────────────────────────────────────── */
+
+.pv-picked {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-lg);
+  background: var(--c-bg);
+}
+.pv-picked-name {
+  font-weight: 600;
+  font-size: 0.98rem;
+  color: var(--pv-ink);
+}
+.pv-picked-meta { font-size: 0.82rem; color: var(--pv-ink-3); }
+
+.pv-camps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pv-camp {
+  border-top: 1px solid var(--c-surface-2);
+  padding: 14px 0;
+}
+.pv-camp:first-child { border-top: 0; padding-top: 4px; }
+
+.pv-camp-line {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.pv-camp-name {
+  font-weight: 600;
+  font-size: 0.96rem;
+  color: var(--pv-ink);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pv-camp-dates {
+  font-size: 0.82rem;
+  color: var(--pv-ink-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-period {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin: 12px 0 0 32px;
+  padding: 12px 14px;
+  background: var(--c-bg);
+  border-radius: var(--radius-lg);
+}
+.pv-period .input { max-width: 156px; }
+
+.pv-period-err {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  color: #b91c1c;
+}
+
+.pv-order { display: flex; gap: 4px; margin-left: auto; }
+
+/* ── Conteúdo: valores + checking ────────────────────────────────────── */
+
+.pv-camp-block {
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-xl);
+  background: var(--c-surface);
+  overflow: hidden;
+  min-width: 0; /* mesmo motivo do .pv-panel */
+}
+.pv-camp-block + .pv-camp-block { margin-top: 12px; }
+
+.pv-camp-block-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 20px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.pv-camp-block-head:hover { background: var(--c-bg); }
+.pv-camp-block-head[aria-expanded='true'] { border-bottom-color: var(--pv-rule); }
+
+.pv-camp-block-title {
   font-family: var(--font-heading);
-  font-size: 17px;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--c-text);
-  margin: 0 0 4px;
+  color: var(--pv-ink);
+  margin: 0;
 }
-
-.psa-panel-hint {
-  margin: 0 0 18px;
-  font-size: 13px;
-  color: var(--c-text-3);
-}
-
-.psa-actions {
+.pv-camp-block-meta {
+  margin: 3px 0 0;
+  font-size: 0.82rem;
+  color: var(--pv-ink-3);
   display: flex;
-  gap: 10px;
-  justify-content: space-between;
   align-items: center;
-  margin-top: 20px;
+  gap: 9px;
   flex-wrap: wrap;
 }
 
-.psa-hint {
-  font-size: 13px;
-  color: var(--c-text-2);
-  margin: 12px 0 0;
+.pv-chev {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--pv-ink-3);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+.pv-camp-block-head[aria-expanded='true'] .pv-chev { transform: rotate(90deg); }
 
-.psa-hint--warn { color: #b45309; }
+.pv-camp-body { padding: 20px; display: flex; flex-direction: column; gap: 22px; }
 
-/* ─── Passo 2: campanhas ───────────────────────────────────────────────── */
-
-.psa-campaigns {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.psa-campaign {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: 14px 16px;
-  transition: border-color 0.15s ease;
-}
-
-.psa-campaign--on { border-color: var(--c-action-border); background: #fffafc; }
-
-.psa-campaign-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.psa-campaign-name {
-  font-weight: 600;
-  font-size: 15px;
-  color: var(--c-text);
-  flex: 1;
-  min-width: 0;
-}
-
-.psa-campaign-dates {
-  font-size: 12px;
-  color: var(--c-text-3);
-  white-space: nowrap;
-}
-
-.psa-period {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--c-border);
-}
-
-.psa-field { display: flex; flex-direction: column; gap: 4px; }
-
-.psa-field-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--c-text-3);
-}
-
-.psa-field .input { max-width: 170px; }
-
-.psa-period-error {
-  flex-basis: 100%;
-  font-size: 12px;
-  color: #b91c1c;
-}
-
-.psa-order {
-  display: flex;
-  gap: 4px;
-}
-
-/* ─── Passo 3: checking editável ───────────────────────────────────────── */
-
-.psa-rows {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.psa-row-editor {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  background: var(--c-surface);
-  flex-wrap: wrap;
-}
-
-.psa-row-editor-name {
-  flex: 1 1 180px;
-  min-width: 0;
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--c-text);
-}
-
-.psa-row-editor-dial {
-  display: block;
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--c-text-3);
-}
-
-.psa-field--tiny .input { max-width: 92px; }
-.psa-field--grow { flex: 1 1 220px; }
-.psa-field--grow .input { max-width: none; width: 100%; }
-
-.psa-group-label {
-  font-family: var(--font-heading);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--c-action);
-  margin: 20px 0 0;
-}
-
-.psa-group-label--amber { color: #b45309; }
-
-/* ─── Passo 4: preview ─────────────────────────────────────────────────── */
-
-.psa-preview-frame {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
-  overflow: hidden;
-  background: var(--c-bg);
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-.psa-recipients {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  font-size: 13px;
-  color: var(--c-text-2);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.psa-progress {
-  margin-top: 14px;
-  padding: 12px 16px;
-  border-radius: var(--radius-lg);
-  background: var(--c-action-light);
-  color: #9d174d;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.psa-error {
-  margin-top: 14px;
-  padding: 12px 16px;
-  border-radius: var(--radius-lg);
-  background: #fee2e2;
-  color: #b91c1c;
-  font-size: 14px;
-}
-
-/* Container offscreen das capturas: precisa estar RENDERIZADO (não display:none
-   nem visibility:hidden) para o html2canvas enxergar layout e o Recharts medir
-   os gráficos. Por isso sai da tela por posição. */
-.psa-offscreen {
-  position: fixed;
-  left: -10000px;
-  top: 0;
-  width: 1280px;
-  pointer-events: none;
-  opacity: 1;
-  z-index: -1;
-}
-
-/* Molduras do que vira PNG. Largura fixa: a foto precisa sair igual
-   independentemente do tamanho da janela do admin no momento do envio. */
-.psc-map-frame,
-.psc-insights-frame {
-  width: 1280px;
-  background: var(--c-bg);
-  padding: 28px 32px;
-  font-family: var(--font-body);
-}
-
-.psc-frame-title {
-  font-family: var(--font-heading);
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--c-text);
-  margin-bottom: 16px;
-}
-
-.psc-charts {
+/* Grade dos valores: 3 campos + o CPM derivado. */
+.pv-values {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  margin-top: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 14px;
 }
 
-/* ─── Detalhe ──────────────────────────────────────────────────────────── */
+.pv-money { position: relative; }
+.pv-money .input { padding-left: 34px; font-variant-numeric: tabular-nums; }
+.pv-money-prefix {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.86rem;
+  color: var(--pv-ink-3);
+  pointer-events: none;
+}
+.pv-count .input { font-variant-numeric: tabular-nums; }
 
-/* A tabela de destinatários tem 4 colunas com email e data — em telas
-   estreitas ela precisa rolar dentro do próprio container, nunca empurrar a
-   página inteira pro lado. */
-.psa-table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+.pv-value-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  min-height: 20px;
+  font-size: 0.76rem;
+  color: var(--pv-ink-3);
 }
 
-.psa-table {
-  width: 100%;
-  min-width: 560px;
-  border-collapse: collapse;
-  font-size: 14px;
+.pv-reset {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--c-action);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
+.pv-reset:hover { color: var(--c-action-hover); }
 
-.psa-table th {
-  text-align: left;
+/* CPM derivado: mesma altura dos campos, mas claramente não editável. */
+.pv-derived {
+  border: 1px dashed var(--pv-rule);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  background: var(--c-bg);
+}
+.pv-derived-value {
+  display: block;
   font-family: var(--font-heading);
-  font-size: 11px;
+  font-size: 1.06rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--c-text-3);
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--c-border);
+  color: var(--pv-ink);
+  font-variant-numeric: tabular-nums;
+}
+.pv-derived-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--pv-ink-3);
 }
 
-.psa-table td {
-  padding: 11px 10px;
-  border-bottom: 1px solid var(--c-surface-2);
-  color: var(--c-text-2);
-}
-
-.psa-table td:first-child { color: var(--c-text); font-weight: 600; }
-
-.psa-email {
-  font-size: 11px;
+.pv-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
   font-weight: 700;
+  letter-spacing: 0.03em;
   padding: 3px 9px;
   border-radius: var(--radius-full);
   white-space: nowrap;
 }
+.pv-tag--manual { background: #fef3c7; color: #92400e; }
+.pv-tag--zero   { background: #fee2e2; color: #b91c1c; }
+.pv-tag--soft   { background: var(--c-surface-2); color: var(--pv-ink-2); }
+/* Cancelada aparece MARCADA, nunca escondida — pós-venda é histórico. */
+.pv-tag--cancelada { background: #fee2e2; color: #b91c1c; }
 
-.psa-email--sent     { background: #dcfce7; color: #15803d; }
-.psa-email--failed   { background: #fee2e2; color: #b91c1c; }
-.psa-email--disabled { background: var(--c-surface-2); color: var(--c-text-2); }
-.psa-email--pending  { background: #fef9c3; color: #a16207; }
+/* Linhas de emissora do Checking */
+.pv-rows { list-style: none; margin: 8px 0 0; padding: 0; }
 
-.psa-revoked { color: var(--c-text-3); font-style: italic; }
+.pv-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 96px 136px 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid var(--c-surface-2);
+}
+.pv-row:first-child { border-top: 0; }
 
-@media (max-width: 760px) {
-  .psa-row { grid-template-columns: 36px 1fr; row-gap: 8px; }
-  .psa-row-opens, .psa-row-status { grid-column: 2; }
-  .psa-empty { grid-template-columns: 1fr; padding: 26px; }
-  /* Scroll aninhado é ruim no toque: no celular o preview cresce à vontade. */
-  .psa-preview-frame { max-height: none; }
-  .psa-actions { flex-direction: column-reverse; align-items: stretch; }
-  .psa-actions .btn { width: 100%; }
+.pv-row-name {
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--pv-ink);
+}
+.pv-row-dial {
+  display: block;
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--pv-ink-3);
+}
+.pv-row .input { padding: 6px 9px; font-size: 0.86rem; }
+
+.pv-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-action);
+}
+.pv-group--amber { color: #b45309; }
+.pv-group-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--pv-ink-3);
 }
 
-/* Em telas de toque os botões-ícone do editor de linhas (remover) precisam
-   dos 44px — 30px é alvo de mouse. */
+.pv-rest {
+  margin: 14px 0 0;
+  font-size: 0.84rem;
+  color: var(--pv-ink-3);
+}
+
+/* ── Revisar ─────────────────────────────────────────────────────────── */
+
+.pv-doc-frame {
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: var(--c-bg);
+}
+
+.pv-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--c-action);
+}
+
+/* Spinner só dentro de ação durável, nunca no meio do conteúdo. */
+.pv-spin {
+  width: 15px; height: 15px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(232, 30, 117, 0.28);
+  border-top-color: var(--c-action);
+  border-radius: 50%;
+  animation: pv-spin 700ms linear infinite;
+}
+@keyframes pv-spin { to { transform: rotate(360deg); } }
+
+.pv-error {
+  margin: 0;
+  padding: 12px 15px;
+  border-radius: var(--radius-lg);
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* Container offscreen das capturas: precisa estar RENDERIZADO (não
+   display:none, não visibility:hidden) pro html2canvas medir layout e o
+   Recharts dimensionar os gráficos. Sai da tela por posição. */
+.pv-offscreen {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 1280px;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* ── Listagem ────────────────────────────────────────────────────────── */
+
+.pv-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.pv-filters .input { max-width: 260px; }
+
+.pv-chips { display: flex; gap: 6px; }
+
+.pv-chip {
+  padding: 6px 13px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--pv-rule);
+  background: var(--c-surface);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--pv-ink-2);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+.pv-chip:hover { border-color: #cbd5e1; }
+.pv-chip[aria-pressed='true'] {
+  background: var(--c-action-light);
+  border-color: var(--c-action-border);
+  color: #9d174d;
+}
+
+.pv-list { display: flex; flex-direction: column; }
+
+.pv-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 150px 128px 96px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  border-bottom-color: var(--pv-rule);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.pv-item:hover {
+  background: var(--c-surface);
+  border-color: var(--c-action-border);
+}
+.pv-item:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
+}
+
+.pv-item-id { min-width: 0; }
+
+.pv-list-none {
+  padding: 18px 16px;
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--pv-ink-3);
+}
+
+.pv-item-title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--pv-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-item-meta {
+  margin-top: 2px;
+  font-size: 0.82rem;
+  color: var(--pv-ink-3);
+}
+
+.pv-item-when {
+  font-size: 0.84rem;
+  color: var(--pv-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Abertura como medidor: "5 de 7" com uma barra fina embaixo. */
+.pv-opens { font-size: 0.82rem; color: var(--pv-ink-2); }
+.pv-opens-num { font-weight: 600; color: var(--pv-ink); }
+.pv-opens-bar {
+  margin-top: 5px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+.pv-opens-fill { height: 100%; background: var(--c-action); border-radius: var(--radius-full); }
+
+.pv-status {
+  justify-self: end;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+.pv-status--draft { background: var(--c-surface-2); color: var(--pv-ink-2); }
+.pv-status--sent  { background: #e8f6ee; color: #15803d; }
+
+/* Empty state que ensina: o que a feature faz + silhueta do resultado. */
+.pv-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 34px;
+  align-items: center;
+  background: var(--c-surface);
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-xl);
+  padding: 34px 36px;
+}
+.pv-empty h2 {
+  font-family: var(--font-heading);
+  font-size: 1.24rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--pv-ink);
+  margin: 14px 0 0;
+}
+.pv-empty p {
+  margin: 8px 0 20px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--pv-ink-2);
+  max-width: 46ch;
+}
+.pv-empty-icon { color: var(--c-action); }
+
+.pv-ghost {
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-lg);
+  background: var(--c-bg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.pv-ghost-bar { height: 9px; border-radius: var(--radius-full); background: var(--c-surface-2); }
+.pv-ghost-bar--lead { width: 62%; height: 17px; background: var(--c-action-light); }
+.pv-ghost-bar--pill { width: 38%; height: 12px; background: var(--c-action); opacity: 0.3; }
+.pv-ghost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.pv-ghost-tile { height: 40px; border-radius: 9px; background: var(--c-surface-2); }
+
+/* ── Detalhe ─────────────────────────────────────────────────────────── */
+
+.pv-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.pv-stat {
+  padding: 13px 16px;
+  border: 1px solid var(--pv-rule);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+}
+.pv-stat-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pv-ink-3);
+}
+.pv-stat-value {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-heading);
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--pv-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.pv-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.pv-table th {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pv-ink-3);
+  padding: 0 10px 9px;
+  border-bottom: 1px solid var(--pv-rule);
+}
+.pv-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--c-surface-2);
+  color: var(--pv-ink-2);
+  vertical-align: top;
+}
+.pv-table tr:last-child td { border-bottom: 0; }
+.pv-table td:first-child { color: var(--pv-ink); font-weight: 600; }
+
+.pv-mail {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.pv-mail--sent     { background: #e8f6ee; color: #15803d; }
+.pv-mail--failed   { background: #fee2e2; color: #b91c1c; }
+.pv-mail--disabled { background: var(--c-surface-2); color: var(--pv-ink-2); }
+.pv-mail--pending  { background: #fef9c3; color: #a16207; }
+
+.pv-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.pv-revoked { color: var(--pv-ink-3); font-style: italic; font-size: 0.82rem; }
+
+/* Números congelados do que foi enviado. */
+.pv-frozen { display: flex; flex-direction: column; }
+.pv-frozen-camp {
+  padding: 14px 0;
+  border-top: 1px solid var(--c-surface-2);
+}
+.pv-frozen-camp:first-child { border-top: 0; padding-top: 0; }
+.pv-frozen-name { font-weight: 600; font-size: 0.94rem; color: var(--pv-ink); }
+.pv-frozen-period { font-size: 0.8rem; color: var(--pv-ink-3); margin-top: 2px; }
+.pv-frozen-nums {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 0.86rem;
+}
+.pv-frozen-num span { color: var(--pv-ink-3); }
+.pv-frozen-num strong {
+  display: block;
+  font-weight: 600;
+  color: var(--pv-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Skeleton ────────────────────────────────────────────────────────── */
+
+.pv-sk {
+  display: block;
+  border-radius: 7px;
+  background: linear-gradient(90deg,
+    var(--c-surface-2) 25%, #e9eef5 37%, var(--c-surface-2) 63%);
+  background-size: 400% 100%;
+  animation: pv-shimmer 1.4s ease-in-out infinite;
+}
+.pv-sk-line { height: 13px; margin-bottom: 9px; }
+.pv-sk-line:last-child { margin-bottom: 0; width: 62%; }
+.pv-sk-block { height: 84px; }
+
+@keyframes pv-shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ── Transição de passo ──────────────────────────────────────────────── */
+
+.pv-fade { animation: pv-in 200ms cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes pv-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Responsivo ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1080px) {
+  /* O trilho passa pra baixo do conteúdo: em uma coluna, resumo antes das
+     decisões inverteria a leitura. */
+  .pv-work { grid-template-columns: 1fr; }
+  .pv-rail { position: static; }
+}
+
+@media (max-width: 860px) {
+  .pv-item { grid-template-columns: 34px minmax(0, 1fr) auto; row-gap: 10px; }
+  .pv-item-when { grid-column: 2; }
+  .pv-opens { grid-column: 2 / -1; }
+  .pv-status { grid-column: 3; grid-row: 1; }
+  .pv-empty { grid-template-columns: 1fr; padding: 24px; }
+  .pv-row { grid-template-columns: 32px minmax(0, 1fr) auto; row-gap: 10px; }
+  .pv-row > :nth-child(3), .pv-row > :nth-child(4) { grid-column: 2 / -1; }
+}
+
+@media (max-width: 640px) {
+  .pv { padding-bottom: 124px; }
+  .pv-title { font-size: 1.36rem; }
+  .pv-panel { padding: 18px 16px; }
+  .pv-camp-body { padding: 16px; }
+  .pv-period { margin-left: 0; }
+  .pv-period .input { max-width: none; }
+  .pv-bar-inner { flex-direction: column; align-items: stretch; }
+  /* Mesma ordem do desktop (secundária à esquerda, primária à direita): trocar
+     a posição da ação principal entre tamanhos de tela é pedir clique errado. */
+  .pv-bar-actions .btn { flex: 1; justify-content: center; }
+}
+
+/* Alvo de toque: em ponteiro grosso os ícones de linha e os chips crescem. */
 @media (pointer: coarse) {
-  .psa-row-editor .btn-icon {
-    width: 44px;
-    height: 44px;
-  }
+  .pv-row .btn-icon, .pv-order .btn-icon { width: 44px; height: 44px; }
+  .pv-chip { padding: 9px 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-fade { animation: none; }
+  .pv-sk { animation: none; }
+  .pv-spin { animation-duration: 1.6s; }
+  .pv-chev { transition: none; }
+}
+
+/* Rótulo só para leitor de tela (cabeçalho da coluna de ações).
+ *
+ * O `position: relative` no <th> NÃO é decoração: sem um ancestral posicionado,
+ * o bloco de contenção do span absoluto vira o <html>, ele escapa do clip do
+ * .pv-table-wrap (que rola) e vai parar em x≈600 — inflando o scrollWidth da
+ * PÁGINA e criando rolagem horizontal no mobile. Levei um tempo achando isso
+ * medindo elemento por elemento; fica documentado. */
+.pv-table th { position: relative; }
+
+.pv-sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

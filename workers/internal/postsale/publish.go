@@ -91,12 +91,14 @@ func (s *Service) Publish(ctx context.Context, reportID uuid.UUID) (*PublishResu
 	}
 	for _, b := range rep.Blocks {
 		in.Blocks = append(in.Blocks, BlockInput{
-			CampaignID:   b.CampaignID,
-			From:         b.From,
-			To:           b.To,
-			CheckingText: b.CheckingText,
-			CheckingRows: b.CheckingRows,
-			HasBundle:    b.Assets.BundleZIP != "",
+			CampaignID:     b.CampaignID,
+			From:           b.From,
+			To:             b.To,
+			CheckingText:   b.CheckingText,
+			CheckingRows:   b.CheckingRows,
+			CheckingEdited: b.CheckingEdited,
+			KPIOverrides:   b.KPIOverrides,
+			HasBundle:      b.Assets.BundleZIP != "",
 		})
 	}
 	payload, err := s.Build(ctx, in)
