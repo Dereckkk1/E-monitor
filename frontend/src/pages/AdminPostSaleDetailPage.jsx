@@ -109,6 +109,7 @@ export default function AdminPostSaleDetailPage() {
           link — para trocar o endereço, revogue e publique de novo.
         </p>
 
+        <div className="psa-table-wrap">
         <table className="psa-table">
           <thead>
             <tr>
@@ -169,6 +170,7 @@ export default function AdminPostSaleDetailPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       <div className="psa-actions">

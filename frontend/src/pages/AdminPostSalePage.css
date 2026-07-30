@@ -58,10 +58,17 @@
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.psa-row:hover {
-  border-color: var(--c-action-border);
-  box-shadow: 0 8px 24px -16px rgba(15, 23, 42, 0.3);
-  transform: translateY(-2px);
+@media (hover: hover) and (pointer: fine) {
+  .psa-row:hover {
+    border-color: var(--c-action-border);
+    box-shadow: 0 8px 24px -16px rgba(15, 23, 42, 0.3);
+    transform: translateY(-2px);
+  }
+}
+
+.psa-row:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
 }
 
 .psa-row-name {
@@ -449,8 +456,17 @@
 
 /* ─── Detalhe ──────────────────────────────────────────────────────────── */
 
+/* A tabela de destinatários tem 4 colunas com email e data — em telas
+   estreitas ela precisa rolar dentro do próprio container, nunca empurrar a
+   página inteira pro lado. */
+.psa-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .psa-table {
   width: 100%;
+  min-width: 560px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -494,5 +510,17 @@
   .psa-row { grid-template-columns: 36px 1fr; row-gap: 8px; }
   .psa-row-opens, .psa-row-status { grid-column: 2; }
   .psa-empty { grid-template-columns: 1fr; padding: 26px; }
+  /* Scroll aninhado é ruim no toque: no celular o preview cresce à vontade. */
   .psa-preview-frame { max-height: none; }
+  .psa-actions { flex-direction: column-reverse; align-items: stretch; }
+  .psa-actions .btn { width: 100%; }
+}
+
+/* Em telas de toque os botões-ícone do editor de linhas (remover) precisam
+   dos 44px — 30px é alvo de mouse. */
+@media (pointer: coarse) {
+  .psa-row-editor .btn-icon {
+    width: 44px;
+    height: 44px;
+  }
 }

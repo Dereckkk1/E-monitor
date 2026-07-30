@@ -171,6 +171,24 @@ func (s *Service) BundleURL(ctx context.Context, token string, campaignID uuid.U
 	return u, nil
 }
 
+// ImageURL revalida o token e presigna uma das imagens do bloco (o mapa que o
+// documento mostra na tela). Mesma regra do BundleURL: a chave nunca sai daqui.
+func (s *Service) ImageURL(ctx context.Context, token string, campaignID uuid.UUID, kind AssetKind, ttl time.Duration) (string, error) {
+	res, err := s.repo.ResolveToken(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	key, err := s.repo.ImageKey(ctx, res.ReportID, campaignID, kind)
+	if err != nil {
+		return "", err
+	}
+	u, _, err := s.storage.PresignGet(ctx, key, ttl)
+	if err != nil {
+		return "", fmt.Errorf("postsale: presign imagem: %w", err)
+	}
+	return u, nil
+}
+
 // NewToken gera o token opaco da URL: 32 bytes de aleatoriedade cripto-segura
 // em base64url sem padding (43 chars, seguro em path de URL).
 func NewToken() (string, error) {

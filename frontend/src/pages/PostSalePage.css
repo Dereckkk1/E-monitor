@@ -95,11 +95,15 @@
 .ps-hero-word {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: clamp(56px, 12vw, 132px);
+  /* Mínimo 40px e não 56px: em 320px de viewport, "pós-venda" a 56px passa de
+     300px de largura e encosta nas bordas. O viewport faz parte do design. */
+  font-size: clamp(40px, 12vw, 132px);
   line-height: 0.92;
   letter-spacing: -0.04em;
   color: var(--c-text);
   margin: 0;
+  hyphens: none;
+  text-wrap: balance;
 }
 
 .ps-hero-word-accent { color: var(--c-action); }
@@ -191,10 +195,14 @@
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.ps-block:hover {
-  border-color: var(--c-action-border);
-  box-shadow: 0 12px 32px -18px rgba(15, 23, 42, 0.28);
-  transform: translateY(-2px);
+/* O lift só existe onde há ponteiro que passa por cima. Em touch, :hover
+   "gruda" depois do toque e o card fica levantado sem motivo. */
+@media (hover: hover) and (pointer: fine) {
+  .ps-block:hover {
+    border-color: var(--c-action-border);
+    box-shadow: 0 12px 32px -18px rgba(15, 23, 42, 0.28);
+    transform: translateY(-2px);
+  }
 }
 
 .ps-block-title {
@@ -589,6 +597,16 @@
   .ps-footer-main { grid-template-columns: 1fr; gap: 28px; }
 }
 
+/* Celular deitado: 88vh de hero engoliria a tela inteira e o cliente rolaria
+   sem ver nada além da capa. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .ps-hero {
+    min-height: 0;
+    padding: 40px 24px 32px;
+  }
+  .ps-hero-logo { margin-bottom: 22px; }
+}
+
 @media (max-width: 640px) {
   .ps-container { padding: 0 16px; }
 
@@ -629,6 +647,34 @@
   .ps-block-cta { width: 100%; }
 }
 
+/* Abaixo de ~420px dois KPIs lado a lado cortam "R$ 2.712,50". Uma coluna. */
+@media (max-width: 420px) {
+  .ps-kpis { grid-template-columns: 1fr; }
+}
+
+/* Alvo de toque: o CTA é a única ação do documento e precisa dos 44px. */
+@media (pointer: coarse) {
+  .ps-block-cta { min-height: 46px; }
+  .ps-footer-link { padding: 6px 0; display: inline-block; }
+}
+
+/* Notch e barra de gestos: o rodapé é a última coisa da página. */
+.ps-footer {
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+
+.ps-footer-bottom { padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+
+/* Foco visível: a página é navegável só por teclado, e o azul-marinho do
+   fundo escuro do rodapé engoliria o outline padrão. */
+.ps-footer-link:focus-visible,
+.ps-block-cta:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 /* ─── Movimento reduzido ───────────────────────────────────────────────────
  * Nenhum movimento e nada invisível: o conteúdo aparece no estado final.
  */
@@ -644,4 +690,28 @@
   }
 
   .ps-block:hover { transform: none; }
+}
+
+/* Impressão: nada de reveal, nada de orb, nada de fundo escuro no rodapé.
+   O cliente pode muito bem imprimir este documento pra levar numa reunião. */
+@media print {
+  .ps-hero { min-height: 0; padding: 24px 0; }
+  .ps-hero-orb { display: none; }
+
+  .ps-greeting,
+  .ps-block,
+  .ps-checking {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .ps-block-cta { display: none; }
+
+  .ps-footer { background: none; color: var(--c-text-2); padding-top: 24px; }
+  .ps-footer-logo { filter: none; }
+  .ps-footer-desc, .ps-footer-city, .ps-footer-bottom { color: var(--c-text-2); }
+  .ps-footer-link { color: var(--c-text); }
 }

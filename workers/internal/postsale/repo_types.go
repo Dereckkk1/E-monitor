@@ -43,11 +43,24 @@ type BlockRow struct {
 }
 
 // Assets são as chaves S3 dos artefatos gerados no publish. Ficam fora do JSON
-// (tag "-") de propósito: o cliente recebe só a rota /bundle.zip, que revalida
-// o token e presigna na hora.
+// (tag "-") de propósito: o cliente recebe só as ROTAS, que revalidam o token e
+// presignam na hora — chave de bucket nunca sai daqui.
+//
+// O mapa é gravado como objeto próprio além de entrar no zip: o documento
+// mostra a imagem na tela, e ninguém vai abrir um zip pra ver o mapa.
 type Assets struct {
-	BundleZIP string `json:"bundle_zip,omitempty"`
+	BundleZIP   string `json:"bundle_zip,omitempty"`
+	MapPNG      string `json:"map_png,omitempty"`
+	InsightsPNG string `json:"insights_png,omitempty"`
 }
+
+// AssetKind é o que o endpoint público aceita servir por imagem.
+type AssetKind string
+
+const (
+	AssetMap      AssetKind = "map"
+	AssetInsights AssetKind = "insights"
+)
 
 // Recipient é um destinatário e o estado do link dele.
 type Recipient struct {

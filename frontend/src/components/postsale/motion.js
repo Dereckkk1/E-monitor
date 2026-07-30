@@ -24,6 +24,19 @@ export function prefersReducedMotion() {
  * sensação de página instável. Com reduced-motion, nasce true — o conteúdo
  * nunca fica invisível esperando animação que não vai rodar.
  */
+// FAILSAFE_MS é a rede de segurança do reveal.
+//
+// Sem ela, conteúdo abaixo da dobra fica em opacity 0 PARA SEMPRE em qualquer
+// renderer que não rola a página: screenshot de página inteira, html2canvas,
+// impressão, aba em background (onde o observer não roda). O documento de
+// pós-venda é longo e sai por email — não pode existir cenário em que o cliente
+// abre e vê um bloco vazio. A animação é enfeite; a legibilidade não é.
+//
+// O reveal continua valendo onde importa (as duas primeiras telas, que o leitor
+// alcança em bem menos de 2,5s). Mais pra baixo, o conteúdo já está lá quando
+// ele chega — sem movimento, mas nunca em branco.
+const FAILSAFE_MS = 2500
+
 export function useReveal({ threshold = 0.15, rootMargin = '0px 0px -10% 0px' } = {}) {
   const ref = useRef(null)
   const [inView, setInView] = useState(false)
@@ -33,11 +46,15 @@ export function useReveal({ threshold = 0.15, rootMargin = '0px 0px -10% 0px' } 
     if (prefersReducedMotion() || typeof IntersectionObserver === 'undefined') return
     const el = ref.current
     if (!el) return
+
     const io = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) { setInView(true); io.unobserve(el) }
     }, { threshold, rootMargin })
     io.observe(el)
-    return () => io.disconnect()
+
+    const failsafe = setTimeout(() => setInView(true), FAILSAFE_MS)
+
+    return () => { io.disconnect(); clearTimeout(failsafe) }
   }, [threshold, rootMargin])
 
   // Derivado no render (e não via setState no effect): com reduced-motion ou

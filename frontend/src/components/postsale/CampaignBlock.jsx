@@ -23,9 +23,13 @@ function Kpi({ label, value, format, hint, shown, protagonist }) {
   )
 }
 
-export default function CampaignBlock({ block, interactive = true, onDownload }) {
+export default function CampaignBlock({ block, interactive = true, onDownload, mapUrlFor }) {
   const [ref, shown] = useReveal()
   const k = block.kpis ?? {}
+  // A URL do mapa é montada com o token de quem está lendo (o payload congelado
+  // não carrega chave de bucket nem URL presignada, que expiraria). No preview
+  // do admin não existe mapUrlFor: o PNG só passa a existir no publish.
+  const mapUrl = mapUrlFor?.(block) ?? null
   // Bloco "no target" só aparece com cadastro: ausência de PMM no target NÃO é
   // zero (docs/features/client-target-pmm.md).
   const hasTarget = (k.stations_with_target ?? 0) > 0
@@ -47,8 +51,12 @@ export default function CampaignBlock({ block, interactive = true, onDownload })
 
       <div className="ps-block-body">
         <figure className="ps-block-map">
-          {block.map_url ? (
-            <img src={block.map_url} alt={`Emissoras monitoradas — ${block.name}`} />
+          {mapUrl ? (
+            <img
+              src={mapUrl}
+              alt={`Mapa das emissoras monitoradas na campanha ${block.name}`}
+              loading="lazy"
+            />
           ) : (
             <div className="ps-block-map-empty" aria-hidden="true" />
           )}

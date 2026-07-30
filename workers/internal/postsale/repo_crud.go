@@ -348,28 +348,56 @@ func (r *Repo) Payload(ctx context.Context, reportID uuid.UUID) ([]byte, error) 
 	return raw, nil
 }
 
-// BundleKey devolve a chave S3 do .zip de uma campanha do relatório.
-func (r *Repo) BundleKey(ctx context.Context, reportID, campaignID uuid.UUID) (string, error) {
+// assetsOf carrega as chaves S3 de um bloco.
+func (r *Repo) assetsOf(ctx context.Context, reportID, campaignID uuid.UUID) (Assets, error) {
 	var raw []byte
 	err := r.pool.QueryRow(ctx,
 		`SELECT assets FROM post_sale_report_campaigns
 		  WHERE report_id = $1 AND campaign_id = $2`, reportID, campaignID).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", ErrNotFound
+			return Assets{}, ErrNotFound
 		}
-		return "", fmt.Errorf("postsale: bundle key: %w", err)
+		return Assets{}, fmt.Errorf("postsale: assets: %w", err)
 	}
 	var a Assets
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
-			return "", err
+			return Assets{}, err
 		}
+	}
+	return a, nil
+}
+
+// BundleKey devolve a chave S3 do .zip de uma campanha do relatório.
+func (r *Repo) BundleKey(ctx context.Context, reportID, campaignID uuid.UUID) (string, error) {
+	a, err := r.assetsOf(ctx, reportID, campaignID)
+	if err != nil {
+		return "", err
 	}
 	if a.BundleZIP == "" {
 		return "", ErrNotFound
 	}
 	return a.BundleZIP, nil
+}
+
+// ImageKey devolve a chave S3 de uma das imagens do bloco.
+func (r *Repo) ImageKey(ctx context.Context, reportID, campaignID uuid.UUID, kind AssetKind) (string, error) {
+	a, err := r.assetsOf(ctx, reportID, campaignID)
+	if err != nil {
+		return "", err
+	}
+	key := ""
+	switch kind {
+	case AssetMap:
+		key = a.MapPNG
+	case AssetInsights:
+		key = a.InsightsPNG
+	}
+	if key == "" {
+		return "", ErrNotFound
+	}
+	return key, nil
 }
 
 // ClientBrief carrega o cabeçalho do cliente pro documento.

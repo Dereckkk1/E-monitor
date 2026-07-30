@@ -138,6 +138,7 @@ func NewRouter(d Deps) http.Handler {
 		if d.PostSalePublic != nil {
 			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}", d.PostSalePublic.Resolve)
 			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/bundle.zip", d.PostSalePublic.Bundle)
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/image/{kind}.png", d.PostSalePublic.Image)
 		}
 
 		// Protected: all other internal routes require a valid JWT.

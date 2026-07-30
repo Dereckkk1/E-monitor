@@ -12,7 +12,7 @@ import CampaignBlock from './CampaignBlock'
 import PostSaleFooter from './PostSaleFooter'
 import { useReveal } from './motion'
 
-export default function PostSaleDocument({ payload, interactive = true, onDownload }) {
+export default function PostSaleDocument({ payload, interactive = true, onDownload, mapUrlFor }) {
   const [greetRef, greetShown] = useReveal()
   if (!payload) return null
 
@@ -47,6 +47,7 @@ export default function PostSaleDocument({ payload, interactive = true, onDownlo
               block={c}
               interactive={interactive}
               onDownload={onDownload}
+              mapUrlFor={mapUrlFor}
             />
           ))}
         </div>
