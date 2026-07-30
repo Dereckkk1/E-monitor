@@ -97,7 +97,10 @@ function RowEditor({ row, onChange, onRemove }) {
 
       {row.kind === 'above' ? (
         <label>
-          <span className="pv-label">Bonificações</span>
+          {/* Quantidade, não dinheiro — o campo em R$ da campanha se chama
+              "Valor bonificado". Dois campos com o nome "Bonificação" na mesma
+              tela mandaram o admin procurar quantidade onde só tinha valor. */}
+          <span className="pv-label">Inserções bônus</span>
           <input
             className="input"
             type="number"
@@ -226,7 +229,7 @@ function CampaignPanel({ block, preview, open, onToggle, onChange }) {
                       editável aqui seria controle morto. */}
                   {!k?.consolidated && (
                     <ValueField
-                      label="Bonificação"
+                      label="Valor bonificado"
                       money
                       step="0.01"
                       value={bonificacao}
