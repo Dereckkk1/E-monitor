@@ -217,6 +217,16 @@ services:
       # sem rebuild — muda no .env, recria o api (--no-deps). Kill switch
       # instantâneo. docs/architecture/version-disambiguation.md §18.2.2-v2
       DISAMBIG_BY_COVERAGE: ${DISAMBIG_BY_COVERAGE:-false}
+      # §18.2.2 dedup confidence-aware (audit A2): gap de cobertura >= 0.25 decide
+      # o dedup (o corte que realmente tocou tem cobertura maior); empate cai pra
+      # regra de duração (comportamento antigo). Sem esta linha a env NUNCA chega
+      # no container (mesma armadilha do SHARING_MIN_SCORE, incidente 2026-06-15).
+      # Caso pulso 5.7s ⊂ spot 30s: incident-2026-07-24-pulso-milium-nao-detectado.md
+      # ⚠️ NÃO LIGAR EM PROD — REPROVADA no E2E (incident §4d): conserta o pulso
+      # standalone mas ROUBA as tocadas reais do spot (4 de 6). O fix correto é
+      # DISAMBIG_BY_COVERAGE=true (§4e). O passthrough existe só pra que a env
+      # não seja silenciosamente ignorada em testes futuros.
+      DISAMBIG_CONFIDENCE_AWARE: ${DISAMBIG_CONFIDENCE_AWARE:-false}
       # F-119 multi-atribuição: uma tocada conta p/ todas as campanhas que rodam o
       # mesmo áudio na emissora. OFF = 1:1 (idêntico ao pré-F-119). Liga via .env +
       # recreate --no-deps api. docs/features/multi-attribution.md
