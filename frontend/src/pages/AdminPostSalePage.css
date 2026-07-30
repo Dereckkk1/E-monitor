@@ -482,6 +482,26 @@
 }
 .pv-count .input { font-variant-numeric: tabular-nums; }
 
+/* Aviso de campo — âmbar, não vermelho: nada está quebrado, só não vai
+ * produzir o efeito que o admin espera. */
+.pv-warn {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #92400e;
+}
+
+/* Marca campo opcional sem gastar uma linha de texto de apoio pra isso. */
+.pv-optional {
+  margin-left: 6px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--pv-ink-3);
+  text-transform: none;
+}
+
 .pv-value-foot {
   display: flex;
   align-items: center;

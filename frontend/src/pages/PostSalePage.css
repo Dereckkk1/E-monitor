@@ -489,6 +489,28 @@
   .ps-cta:hover svg { transform: translateX(4px); }
 }
 
+/* ── Anexos ─────────────────────────────────────────────────────────────
+ * Faixa curta entre a última campanha e o rodapé: título, uma linha de texto e
+ * o botão que abre a pasta externa. Sem card e sem moldura — é uma ação só, e
+ * embrulhar uma ação em caixa a faz parecer mais um bloco de conteúdo.
+ */
+.ps-attach {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ps-attach-text {
+  margin: 0;
+  font-size: clamp(1rem, 1.3vw, 1.1rem);
+  line-height: 1.6;
+  color: var(--ps-ink-soft);
+  max-width: 62ch;
+}
+
+.is-dark .ps-attach-text { color: rgba(255, 255, 255, 0.72); }
+
 /* ── Checking ───────────────────────────────────────────────────────── */
 
 .ps-checking { padding-top: clamp(6px, 1vw, 10px); }
