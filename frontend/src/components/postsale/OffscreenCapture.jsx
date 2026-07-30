@@ -29,7 +29,10 @@ export default function OffscreenCapture({ job, onReady, onError }) {
   const firedFor = useRef(null)
 
   const campaignId = job?.campaignId ?? null
-  const map = useLiveMap(campaignId)
+  // includeTerminal: o pós-venda fecha campanha que já acabou, inclusive
+  // cancelada — e pra /live-map campanha cancelada é 404 por definição. Sem
+  // isto, fechar uma campanha cancelada aborta o envio inteiro.
+  const map = useLiveMap(campaignId, { includeTerminal: true })
   const insights = useInsights({
     clientId: job?.clientId,
     campaignIds: campaignId ? [campaignId] : [],
@@ -39,15 +42,26 @@ export default function OffscreenCapture({ job, onReady, onError }) {
 
   const mapReady = map.isSuccess
   const insReady = insights.isSuccess
-  const failed = map.isError || insights.isError
+  // Qual das duas falhou e com que status: sem isso o admin vê só "não foi
+  // possível" e o diagnóstico vira caça ao console.
+  const failure = map.isError
+    ? { which: 'o mapa', status: map.error?.response?.status }
+    : insights.isError
+      ? { which: 'os indicadores', status: insights.error?.response?.status }
+      : null
+  const failedWhich = failure?.which ?? null
+  const failedStatus = failure?.status ?? null
 
   useEffect(() => {
     if (!job) return
     if (firedFor.current === campaignId) return
 
-    if (failed) {
+    if (failedWhich) {
       firedFor.current = campaignId
-      onError?.(new Error(`Não foi possível carregar os dados de "${job.campaignName}".`))
+      onError?.(new Error(
+        `Não foi possível carregar ${failedWhich} de "${job.campaignName}"` +
+        `${failedStatus ? ` (erro ${failedStatus})` : ''}. Nada foi enviado.`,
+      ))
       return
     }
     if (!mapReady || !insReady) return
@@ -57,7 +71,7 @@ export default function OffscreenCapture({ job, onReady, onError }) {
       onReady?.({ mapNode: mapRef.current, insightsNode: insightsRef.current })
     }, LAYOUT_SETTLE_MS)
     return () => clearTimeout(t)
-  }, [job, campaignId, mapReady, insReady, failed, onReady, onError])
+  }, [job, campaignId, mapReady, insReady, failedWhich, failedStatus, onReady, onError])
 
   if (!job) return null
 
