@@ -45,6 +45,21 @@ func (r *Repo) UpdateContent(ctx context.Context, id uuid.UUID, title, intro str
 	return nil
 }
 
+// UpdateClient troca o cliente do rascunho. Só em draft — depois de enviado o
+// documento é do cliente que o recebeu.
+func (r *Repo) UpdateClient(ctx context.Context, id, clientID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE post_sale_reports SET client_id = $2
+		  WHERE id = $1 AND status = 'draft'`, id, clientID)
+	if err != nil {
+		return fmt.Errorf("postsale: trocar cliente: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ReplaceBlocks troca o conjunto inteiro de campanhas do relatório. Substitui
 // em vez de fazer merge porque o passo 2 do wizard é uma seleção completa —
 // desmarcar uma campanha tem que removê-la.
@@ -64,15 +79,21 @@ func (r *Repo) ReplaceBlocks(ctx context.Context, reportID uuid.UUID, blocks []B
 		if err != nil {
 			return err
 		}
+		ovJSON, err := json.Marshal(b.KPIOverrides)
+		if err != nil {
+			return err
+		}
 		pos := b.Position
 		if pos == 0 {
 			pos = i
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO post_sale_report_campaigns
-			   (report_id, campaign_id, period_from, period_to, position, checking_text, checking_rows)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			reportID, b.CampaignID, b.From, b.To, pos, b.CheckingText, rowsJSON); err != nil {
+			   (report_id, campaign_id, period_from, period_to, position,
+			    checking_text, checking_rows, checking_edited, kpi_overrides)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			reportID, b.CampaignID, b.From, b.To, pos,
+			b.CheckingText, rowsJSON, b.CheckingEdited, ovJSON); err != nil {
 			return fmt.Errorf("postsale: gravar bloco: %w", err)
 		}
 	}
@@ -121,7 +142,8 @@ func (r *Repo) Get(ctx context.Context, id uuid.UUID) (*Report, error) {
 func (r *Repo) blocks(ctx context.Context, reportID uuid.UUID) ([]BlockRow, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT b.id, b.campaign_id, cmp.name, b.period_from, b.period_to,
-		        b.position, b.checking_text, b.checking_rows, b.assets
+		        b.position, b.checking_text, b.checking_rows, b.assets,
+		        b.checking_edited, b.kpi_overrides
 		   FROM post_sale_report_campaigns b
 		   JOIN campaigns cmp ON cmp.id = b.campaign_id
 		  WHERE b.report_id = $1
@@ -134,9 +156,10 @@ func (r *Repo) blocks(ctx context.Context, reportID uuid.UUID) ([]BlockRow, erro
 	var out []BlockRow
 	for rows.Next() {
 		var b BlockRow
-		var rawRows, rawAssets []byte
+		var rawRows, rawAssets, rawOv []byte
 		if err := rows.Scan(&b.ID, &b.CampaignID, &b.CampaignName, &b.From, &b.To,
-			&b.Position, &b.CheckingText, &rawRows, &rawAssets); err != nil {
+			&b.Position, &b.CheckingText, &rawRows, &rawAssets,
+			&b.CheckingEdited, &rawOv); err != nil {
 			return nil, err
 		}
 		if len(rawRows) > 0 {
@@ -147,6 +170,11 @@ func (r *Repo) blocks(ctx context.Context, reportID uuid.UUID) ([]BlockRow, erro
 		if len(rawAssets) > 0 {
 			if err := json.Unmarshal(rawAssets, &b.Assets); err != nil {
 				return nil, fmt.Errorf("postsale: assets inválido no bloco %s: %w", b.ID, err)
+			}
+		}
+		if len(rawOv) > 0 {
+			if err := json.Unmarshal(rawOv, &b.KPIOverrides); err != nil {
+				return nil, fmt.Errorf("postsale: kpi_overrides inválido no bloco %s: %w", b.ID, err)
 			}
 		}
 		out = append(out, b)

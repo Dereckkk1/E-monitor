@@ -1371,19 +1371,29 @@ export function useUpdatePostSaleReport() {
     mutationFn: ({ id, ...body }) => api.patch(`/post-sale/reports/${id}`, body).then(r => r.data),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] })
-      qc.invalidateQueries({ queryKey: ['post-sale-preview', vars.id] })
       qc.invalidateQueries({ queryKey: ['post-sale-reports'] })
+      // O preview roda o cálculo do /insights por campanha e leva DEZENAS DE
+      // SEGUNDOS numa campanha real (medido: 20s). Invalidar a cada PATCH fazia
+      // toda edição de texto pagar esse preço. Só o que muda os NÚMEROS —
+      // campanha ou período — precisa recalcular.
+      if (vars.blocks || vars.client_id) {
+        qc.invalidateQueries({ queryKey: ['post-sale-preview', vars.id] })
+      }
     },
   })
 }
 
-// Preview: mesma função que o publish congela. staleTime 0 porque o admin
-// edita o passo 3 e espera ver o efeito na hora.
+// Preview: mesma função que o publish congela.
+//
+// staleTime alto de propósito: o cálculo é caro (20s medidos) e o número não
+// muda sozinho enquanto o admin escreve. placeholderData mantém o resultado
+// anterior visível durante um refetch, em vez de voltar pro skeleton.
 export function usePostSalePreview(id, { enabled = true } = {}) {
   return useQuery({
     queryKey: ['post-sale-preview', id],
     enabled: !!id && enabled,
-    staleTime: 0,
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
     queryFn: () => api.get(`/post-sale/reports/${id}/preview`).then(r => r.data),
   })
 }
