@@ -139,14 +139,17 @@ func TestRepo_UpdateContent_SoEmDraft(t *testing.T) {
 
 	rep, err := repo.CreateDraft(ctx, CreateDraftInput{ClientID: seed.ClientID, Title: "Antes"})
 	require.NoError(t, err)
-	require.NoError(t, repo.UpdateContent(ctx, rep.ID, "Depois", "oi"))
+	require.NoError(t, repo.UpdateContent(ctx, rep.ID, "Depois", "oi",
+		"  https://drive.google.com/drive/folders/abc  "))
 
 	loaded, err := repo.Get(ctx, rep.ID)
 	require.NoError(t, err)
 	require.Equal(t, "Depois", loaded.Title)
+	require.Equal(t, "https://drive.google.com/drive/folders/abc", loaded.AttachmentsURL,
+		"link dos anexos grava sem espaço nas pontas")
 
 	require.NoError(t, repo.MarkSent(ctx, rep.ID, []byte(`{}`)))
-	require.ErrorIs(t, repo.UpdateContent(ctx, rep.ID, "Tarde demais", "x"), ErrNotFound)
+	require.ErrorIs(t, repo.UpdateContent(ctx, rep.ID, "Tarde demais", "x", ""), ErrNotFound)
 }
 
 func TestRepo_ActiveClientUsers_SoAtivos(t *testing.T) {

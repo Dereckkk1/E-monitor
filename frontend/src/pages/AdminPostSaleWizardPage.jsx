@@ -48,6 +48,9 @@ export default function AdminPostSaleWizardPage() {
   const [reportId, setReportId] = useState(null)
   const [title, setTitle] = useState('')
   const [intro, setIntro] = useState('')
+  // Link externo dos anexos (Drive e afins). Opcional: vazio, o documento do
+  // cliente nem mostra o bloco.
+  const [attachments, setAttachments] = useState('')
   const [blocks, setBlocks] = useState([])
   const [saving, setSaving] = useState(false)
   const [progress, setProgress] = useState(null)
@@ -128,7 +131,11 @@ export default function AdminPostSaleWizardPage() {
         }
       } else if (step === 1) {
         await updateReport.mutateAsync({
-          id: reportId, title, intro_message: intro, blocks: payloadBlocks(),
+          id: reportId,
+          title,
+          intro_message: intro,
+          attachments_url: attachments,
+          blocks: payloadBlocks(),
         })
       }
       setStep(s => Math.min(STEPS.length - 1, s + 1))
@@ -199,11 +206,13 @@ export default function AdminPostSaleWizardPage() {
             <ContentStep
               title={title}
               introMessage={intro}
+              attachmentsUrl={attachments}
               blocks={blocks}
               preview={preview}
               onMeta={(patch) => {
                 if ('title' in patch) setTitle(patch.title)
                 if ('intro_message' in patch) setIntro(patch.intro_message)
+                if ('attachments_url' in patch) setAttachments(patch.attachments_url)
               }}
               onBlockChange={updateBlock}
             />

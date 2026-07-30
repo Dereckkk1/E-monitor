@@ -161,6 +161,9 @@ func (h *PostSaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 type updatePostSaleRequest struct {
 	Title        *string `json:"title"`
 	IntroMessage *string `json:"intro_message"`
+	// AttachmentsURL é o link externo dos anexos. Ponteiro pra distinguir "não
+	// mandei o campo" de "mandei vazio" — o segundo é como o admin REMOVE o link.
+	AttachmentsURL *string `json:"attachments_url"`
 	// ClientID permite trocar o cliente do rascunho. Sem isso, voltar ao passo 1
 	// e escolher outro cliente mantinha o rascunho no cliente antigo em silêncio,
 	// e o preview quebrava depois (campanha de um cliente, relatório de outro).
@@ -212,7 +215,7 @@ func (h *PostSaleHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if in.Title != nil || in.IntroMessage != nil {
+	if in.Title != nil || in.IntroMessage != nil || in.AttachmentsURL != nil {
 		title := current.Title
 		if in.Title != nil {
 			title = *in.Title
@@ -221,7 +224,11 @@ func (h *PostSaleHandler) Update(w http.ResponseWriter, r *http.Request) {
 		if in.IntroMessage != nil {
 			intro = *in.IntroMessage
 		}
-		if err := repo.UpdateContent(r.Context(), id, title, intro); err != nil {
+		attachments := current.AttachmentsURL
+		if in.AttachmentsURL != nil {
+			attachments = *in.AttachmentsURL
+		}
+		if err := repo.UpdateContent(r.Context(), id, title, intro, attachments); err != nil {
 			h.fail(w, err, "update: content")
 			return
 		}

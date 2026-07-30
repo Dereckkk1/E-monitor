@@ -24,6 +24,14 @@ type Payload struct {
 	PeriodLabel  string          `json:"period_label"`
 	Campaigns    []CampaignBlock `json:"campaigns"`
 	Footer       Footer          `json:"footer"`
+
+	// AttachmentsURL é o link externo dos anexos (Drive e afins), já filtrado
+	// para http(s) por safeExternalURL. Vazio — e portanto ausente do JSON —
+	// quando o admin não preencheu: o documento do cliente não mostra o bloco.
+	//
+	// Congela junto com o resto no publish: o botão que o cliente clicar daqui a
+	// um ano aponta para onde apontava no dia do envio.
+	AttachmentsURL string `json:"attachments_url,omitempty"`
 }
 
 type ClientBrief struct {
