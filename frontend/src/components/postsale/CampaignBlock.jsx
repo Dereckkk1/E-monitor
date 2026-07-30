@@ -24,6 +24,29 @@ function ArrowIcon() {
   )
 }
 
+/** Seta que sai da caixa — diz "isto abre fora daqui", diferente da seta do
+ *  download, que age na própria página. */
+function ExternalIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 4h6v6" />
+      <path d="M20 4 10.5 13.5" />
+      <path d="M19 14.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4.5" />
+    </svg>
+  )
+}
+
+/** Clipe grande — é o que faz o bloco se anunciar antes de ser lido. */
+function ClipIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.5 11.5 12 20a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" />
+    </svg>
+  )
+}
+
 function Kpi({ label, value, format, hint, protagonist }) {
   // O ref é do próprio tile: cada número decide sozinho se anima, e o display
   // é o valor real enquanto não estiver animando (ver motion.js).
@@ -61,6 +84,7 @@ function Shot({ src, alt, caption, urlLabel }) {
 
 export default function CampaignBlock({
   block, index = 0, dark = false, interactive = true, onDownload, mapUrlFor,
+  attachmentsUrl = null,
 }) {
   const headRef = useRevealOnce()
   const bodyRef = useRevealOnce({ delay: 90 })
@@ -152,6 +176,31 @@ export default function CampaignBlock({
               Baixar relatórios completos
               <ArrowIcon />
             </button>
+          )}
+
+          {/* Anexos entram entre o download e o checking. O link é do pós-venda
+              inteiro, então quem decide renderizar é o documento: só o primeiro
+              bloco recebe a prop, senão o mesmo link se repetiria em cada
+              campanha. */}
+          {attachmentsUrl && (
+            <div className="ps-attach">
+              <span className="ps-attach-clip" aria-hidden="true"><ClipIcon /></span>
+              <div className="ps-attach-body">
+                <p className="ps-attach-title">Anexos</p>
+                <p className="ps-attach-text">
+                  Os arquivos deste fechamento estão numa pasta compartilhada.
+                </p>
+                <a
+                  className="ps-cta ps-cta--ghost"
+                  href={attachmentsUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  Abrir anexos
+                  <ExternalIcon />
+                </a>
+              </div>
+            </div>
           )}
 
           <CheckingList
