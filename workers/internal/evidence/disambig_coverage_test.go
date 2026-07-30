@@ -85,3 +85,21 @@ func TestChooseByCoverage_RealASAASAuditMeasurements(t *testing.T) {
 		t.Fatalf("15s airing: winner=%d want 77 (covers 0.664 vs 0.132)", got)
 	}
 }
+
+// Números MEDIDOS no E2E do incidente 2026-07-24 (§4d/§4e): pulso 5.7s ⊂ spot 30.8s.
+func TestChooseByCoverage_SubsetPairPulsoMilium(t *testing.T) {
+	pulso := CutCoverage{ShortID: 211, DurationSeconds: 6, Coverage: 0.90}
+	spotFalse := CutCoverage{ShortID: 213, DurationSeconds: 31, Coverage: 0.183}
+	// Pulso tocou sozinho: clipe cobre 0.90 do pulso e 0.183 do spot → pulso vence
+	// (0.90 >= 0.183*1.5).
+	if got := chooseByCoverage(spotFalse, pulso); got != 211 {
+		t.Errorf("pulso standalone: chooseByCoverage = %d, want 211 (pulso)", got)
+	}
+	// Spot tocou: clipe cobre 0.90 do spot e ~1.0 do pulso (a cauda ESTÁ no clipe).
+	// 1.0 < 0.90*1.5 → quase-empate → duração → spot vence (fail-safe correto).
+	pulsoTail := CutCoverage{ShortID: 211, DurationSeconds: 6, Coverage: 1.0}
+	spotReal := CutCoverage{ShortID: 213, DurationSeconds: 31, Coverage: 0.90}
+	if got := chooseByCoverage(spotReal, pulsoTail); got != 213 {
+		t.Errorf("spot tocando: chooseByCoverage = %d, want 213 (spot)", got)
+	}
+}
