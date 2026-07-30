@@ -67,11 +67,21 @@ func NewLiveMap(pool *pgxpool.Pool) *LiveMap {
 	return &LiveMap{pool: pool}
 }
 
+// LiveMapOpts são os ajustes de quem chama. O default (zero value) é o
+// comportamento da tela /live-map.
+type LiveMapOpts struct {
+	// IncludeTerminal serve a quem monta documento HISTÓRICO — o pós-venda —
+	// e por isso precisa do mapa de campanha cancelada. A tela ao vivo NÃO
+	// liga isto: lá campanha cancelada segue 404. A checagem de posse
+	// (anti-oracle) continua valendo nos dois casos.
+	IncludeTerminal bool
+}
+
 // Get retorna o mapa ao vivo de UMA campanha: as emissoras-alvo dela (com
 // coordenada) + as últimas veiculações dela. scope == nil = admin/operator;
 // scope != nil = client_id do viewer — a campanha precisa pertencer a ele,
 // senão ErrCampaignNotFound (anti-oracle).
-func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID) (LiveMapResult, error) {
+func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts LiveMapOpts) (LiveMapResult, error) {
 	var res LiveMapResult
 
 	// Existência + posse: resolve o client_id e o status da campanha uma vez.
@@ -94,8 +104,9 @@ func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUI
 	// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
 	// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
 	// campanha que rodou normalmente até o fim. Ver docs/architecture/
-	// campaign-lifecycle.md.
-	if status == "cancelada" {
+	// campaign-lifecycle.md. IncludeTerminal abre exceção pra documento
+	// histórico (pós-venda), que precisa fotografar o mapa do que já rodou.
+	if status == "cancelada" && !opts.IncludeTerminal {
 		return res, ErrCampaignNotFound
 	}
 

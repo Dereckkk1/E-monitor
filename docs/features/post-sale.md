@@ -182,7 +182,16 @@ conforme o planejado" — o Checking nunca listava ninguém. Travado em
 
 **A ordem é a garantia.** Artefato faltando ou S3 fora do ar aborta com o
 relatório ainda em `draft` e **zero email enviado** — link quebrado é pior que
-atraso. Depois do congelamento, falha de SMTP é por destinatário e nunca desfaz
+atraso.
+
+> **Campanha cancelada (incidente 2026-07-30).** O passo 2 chama `/live-map`,
+> que responde **404 para campanha cancelada** por definição ("ao vivo" implica
+> campanha rodando) — e como qualquer falha de carga aborta o envio, fechar uma
+> campanha cancelada travava o pós-venda inteiro. O `OffscreenCapture` manda
+> `include_terminal=1`: pós-venda é documento **histórico**, e o passo 1 sempre
+> aceitou cancelada (marcada). Ver [live-map.md](live-map.md). Quando a captura
+> falha de verdade, a mensagem agora diz **qual** das duas (mapa/indicadores) e
+> com que status HTTP. Depois do congelamento, falha de SMTP é por destinatário e nunca desfaz
 o publish (o link já vale; o admin reenvia pela tela de detalhe).
 
 Sem credencial SMTP o status é `disabled`, **nunca** `sent`: marcar como

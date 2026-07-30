@@ -100,7 +100,7 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 	}
 
 	// Leitura swapada roda sobre a view (smoke runtime).
-	if _, err := NewLiveMap(pool).Get(ctx, campA, nil); err != nil {
+	if _, err := NewLiveMap(pool).Get(ctx, campA, nil, LiveMapOpts{}); err != nil {
 		t.Fatalf("LiveMap.Get: %v", err)
 	}
 

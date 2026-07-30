@@ -15,15 +15,17 @@ import (
 type fakeLiveMapRepo struct {
 	gotCampaign uuid.UUID
 	gotScope    *uuid.UUID
+	gotOpts     catalog.LiveMapOpts
 	called      bool
 	result      catalog.LiveMapResult
 	err         error
 }
 
-func (f *fakeLiveMapRepo) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID) (catalog.LiveMapResult, error) {
+func (f *fakeLiveMapRepo) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error) {
 	f.called = true
 	f.gotCampaign = campaignID
 	f.gotScope = scope
+	f.gotOpts = opts
 	return f.result, f.err
 }
 
@@ -83,6 +85,28 @@ func TestLiveMapHandler_Viewer_ScopeIsClientID(t *testing.T) {
 		&auth.Claims{Role: "viewer", ClientID: &cid}))
 	if fake.gotScope == nil || *fake.gotScope != cid {
 		t.Errorf("scope = %v, want %v", fake.gotScope, cid)
+	}
+}
+
+// O pós-venda é documento histórico: precisa do mapa da campanha mesmo quando
+// ela já terminou em "cancelada" (a tela /live-map continua devolvendo 404).
+func TestLiveMapHandler_IncludeTerminal_ChegaNoRepo(t *testing.T) {
+	camp := uuid.New()
+
+	fake := &fakeLiveMapRepo{}
+	h := &LiveMapHandler{Repo: fake}
+	h.Get(httptest.NewRecorder(),
+		newLiveMapReq("?campaign_id="+camp.String(), &auth.Claims{Role: "admin"}))
+	if fake.gotOpts.IncludeTerminal {
+		t.Error("sem o parâmetro, IncludeTerminal tem que ser false")
+	}
+
+	fake = &fakeLiveMapRepo{}
+	h = &LiveMapHandler{Repo: fake}
+	h.Get(httptest.NewRecorder(),
+		newLiveMapReq("?campaign_id="+camp.String()+"&include_terminal=1", &auth.Claims{Role: "admin"}))
+	if !fake.gotOpts.IncludeTerminal {
+		t.Error("include_terminal=1 não chegou no repo")
 	}
 }
 

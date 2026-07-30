@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-01
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - workers/internal/catalog/live_map.go
   - workers/internal/api/handlers/live_map.go
@@ -35,6 +35,26 @@ obrigatório (400 se ausente/ inválido). Scope-aware via
 - **Admin/operator** (scope nil): qualquer campanha.
 - **Cliente** (viewer): só campanhas do próprio `client_id`. Campanha de outro
   cliente (ou inexistente) → **404** (`catalog.ErrCampaignNotFound`, anti-oracle).
+
+Campanha **cancelada** também é **404**: "ao vivo" pressupõe campanha rodando
+(concluída segue acessível — rodou até o fim). Ver
+[campaign-lifecycle.md](../architecture/campaign-lifecycle.md).
+
+### `include_terminal=1` — exceção para documento histórico
+
+`GET /v1/internal/live-map?campaign_id=UUID&include_terminal=1` devolve o mapa
+**mesmo de campanha cancelada** (`catalog.LiveMapOpts{IncludeTerminal: true}`).
+Só o **pós-venda** manda esse parâmetro, na captura do PNG do mapa
+([post-sale.md](post-sale.md)): ele fecha o que já aconteceu, e cancelada entra
+no documento marcada em vez de sumir. A tela `/live-map` **não** manda o
+parâmetro e segue vendo 404.
+
+O recorte por cliente (anti-oracle) vale igual nos dois casos — `include_terminal`
+afrouxa só a regra de status, nunca a de posse.
+
+> **Incidente 2026-07-30.** O envio de pós-venda de uma campanha cancelada
+> abortava inteiro: a captura do mapa tomava 404 e, no `OffscreenCapture`,
+> qualquer erro de carga cancela o publish antes de qualquer email sair.
 
 Retorna as emissoras-alvo da campanha (`campaigns.target_stations`) que tenham
 `latitude`/`longitude` preenchidos — ver
@@ -105,8 +125,9 @@ filtros `.lm-filters` espelhando `.in-filters`) e implementa:
 
 ## Atualização
 
-react-query (`useLiveMap(campaignId)` em `frontend/src/api/hooks.js`) com
-`enabled: !!campaignId`, `refetchInterval` de 20s e `placeholderData` (mantém o
+react-query (`useLiveMap(campaignId, { includeTerminal })` em
+`frontend/src/api/hooks.js` — a flag entra na `queryKey`, então o cache do
+pós-venda não se mistura com o da tela) com `enabled: !!campaignId`, `refetchInterval` de 20s e `placeholderData` (mantém o
 último payload bom durante o refetch — o mapa não "pisca"). O pulso é animação
 CSS contínua, independente do refresh. `prefers-reduced-motion` desliga as
 animações.
