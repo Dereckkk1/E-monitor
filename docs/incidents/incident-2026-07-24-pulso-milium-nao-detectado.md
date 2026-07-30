@@ -1,7 +1,7 @@
 ---
 status: em-investigacao
 severidade: ALTA
-ultima-verificacao: 2026-07-29
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - workers/internal/match/statemachine.go
   - workers/internal/match/engine.go
@@ -437,6 +437,65 @@ monitorar na sombra do rollout.
 **Conclusão:** o fix é **rollout de `DISAMBIG_BY_COVERAGE=true`** (com sombra e critérios de
 aceite) + instrumentação. Spec e plano: ver o quadro no topo da §6.
 
+## 4f. VALIDAÇÃO EM ÁUDIO DE AR REAL (censuras) — 2026-07-30
+
+Todas as validações anteriores (§4a–§4e) usaram o **simulador**. Este teste usa as **censuras
+gravadas do ar**, onde o pulso realmente tocou, e mede a cobertura do clipe de evidência contra
+os DOIS masters — exatamente o insumo do `chooseByCoverage`. Harness:
+`fingerprint/scripts/verify_censura_coverage.py` (índice multi-variante idêntico ao de prod:
+master direto + 5 variantes broadcast_sim).
+
+| censura (áudio de ar) | clipe | cov **PULSO** | cov **SPOT** | razão | v1 (duração) | **v2 (cobertura)** |
+|---|---|---|---|---|---|---|
+| 24/07 15h45 (aircheck 22kHz mono 40kbps) | 74-86s | **0,372** (score 39) | 0,021 (score 7) | **17,8×** | SPOT ❌ | **PULSO ✅** |
+| WhatsApp 29/07 (44kHz 320kbps) | 2-14s | **0,326** (score 42) | 0,029 (score 13) | **11,1×** | SPOT ❌ | **PULSO ✅** |
+
+Dois resultados importantes:
+
+1. **Reprodução independente**: os scores do audit (39 e 42) batem **exatamente** com os medidos
+   na §1.2, por caminho de código diferente. A medição da §1.2 está confirmada.
+2. **A margem real é MUITO maior que a do E2E.** No simulador o spot cobria 0,183 do clipe
+   (razão 4,9×); em ar real cobre **0,02** (razão 11–18×). A diferença é o artefato de loop
+   já anotado na §4e: com ~7 tocadas do pulso na mesma janela de 126s a cobertura agregada do
+   spot inflava. **Em rádio real o discriminador é uma ordem de grandeza mais folgado** do que
+   o gate de 1,5× exige — o fix tem muito mais margem do que o E2E sugeriu.
+
+Corolário operacional: com cobertura de 0,02 e score 7-13, a row falsa do spot **não passaria
+no audit §9.9** em ar real (cov < 0,15 e score < 30, então nem o `coverageBypassScore` salva).
+Ou seja, no caso real a recuperação tende a vir pelo **reject-path** (v2b/v2c:
+`RestoreDisplacedShorterCut` / `recoverRejectedByCoverage`), não pelo pass-path do
+`reattributeByCoverage`. Os dois caminhos estão cobertos pela flag, mas é o reject-path que
+precisa aparecer nos logs da sombra — ajustar a expectativa do rollout.
+
+## 4g. O PULSO JÁ DETECTAVA EM PROD ANTES (23/06–01/07) — teste natural antes/depois
+
+Revisando a sessão de 30/06 (investigação dos gêmeos acústicos Milium), a tabela de detecções
+de prod por dia/emissora mostra o **PULSO (`short_id` 51 em prod, 5,736s, 10.925 hashes,
+`ready`) detectando normalmente** ao longo de 23/06–01/07:
+
+```
+51 | PULSO SONORO MILIUM - [Ao | 105 FM      | 23,24,25,26,29,30/06 e 01/07 | 1-2 por dia
+51 | PULSO SONORO MILIUM - [Ao | 96 FM       | 23,24,25,26,29/06 e 01/07    | 2 por dia
+51 | PULSO SONORO MILIUM - [Ao | Clube       | 23,24,25,26,29,30/06         | 1-2 por dia
+51 | PULSO SONORO MILIUM - [Ao | Menina      | 23,24,25,26,29,30/06 e 01/07 | 1-2 por dia
+51 | PULSO SONORO MILIUM - [Ao | Verde Vale  | 24 e 28/06                   | 1-5 por dia
+```
+
+Isso **enterra de vez** qualquer hipótese de "5,7s não detecta em prod" ou "essas emissoras não
+conseguem detectar material curto": o pulso rodou semanas em produção sem problema. O que muda
+entre junho e a semana de 20-26/07 é **qual spot do mesmo cliente está no ar junto**: em junho
+o material irmão era `MILIUM - FESTIVAL DE INVERNO` (short_ids 9/15/48); na semana do incidente
+é `MILIUM - DEMAIS RADIOS DO PLANO -20 a 26.07`, que o Dereck confirmou **conter o pulso**
+(§4c). Isto é o mecanismo da causa 1 expresso como experimento natural: o pulso zera exatamente
+quando entra no ar um spot que o contém.
+
+⚠️ **Ressalva:** o nome de emissora na tabela de junho vem truncado (`Menina`) e a rede Menina
+tem ao menos duas afiliadas monitoradas (`meninablu`, que falha, e `meninacam`, que detecta).
+**Não é possível cravar pelo histórico da conversa qual das duas aparece ali** — a query **B12**
+abaixo resolve, e é o teste mais forte do runbook: se a `meninablu` (ou a `303`) detectava o
+pulso em junho e parou em 20/07, a causa 1 está confirmada por antes/depois, sem depender do
+argumento de "borderline por emissora".
+
 ## 5. Runbook de diagnóstico em prod (Dereck cola na VM; tudo read-only)
 
 Preparação (uma vez por sessão SSH):
@@ -648,6 +707,56 @@ ffmpeg -y -user_agent "VLC/3.0.20 LibVLC/3.0.20" -i "<stream_url>" -t 900 -ac 1 
 Se o pulso NÃO estiver no áudio do stream enquanto a antena o toca → stream≠antena (inserção
 local da afiliada não vai pro stream) — nenhum fix de matcher resolve; é caso de trocar a
 fonte de captura dessa emissora.
+
+### B12 — ⭐ O TESTE ANTES/DEPOIS (rodar PRIMEIRO — é o mais discriminante)
+
+Contexto §4g: o pulso **detectava em prod em junho**, inclusive numa emissora cujo nome truncado
+é `Menina`. Esta query mostra o histórico completo por emissora e o momento exato em que cada
+material irmão entrou no ar. Se a `meninablu` / `303` tinham detecção do pulso ANTES de 20/07 e
+zeraram DEPOIS, a causa 1 está confirmada por experimento natural.
+
+```bash
+PSQL <<'SQL'
+-- 1) histórico de detecções do PULSO por emissora e semana (últimos 60 dias)
+SELECT s.name AS emissora,
+       date_trunc('week', d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date AS semana,
+       count(*) FILTER (WHERE d.retracted_at IS NULL) AS contando,
+       count(*) FILTER (WHERE d.retracted_at IS NOT NULL) AS retratadas
+FROM detections d
+JOIN stations s  ON s.id = d.station_id
+JOIN materials m ON m.id = d.commercial_id
+JOIN clients c   ON c.id = m.client_id
+WHERE c.name ILIKE '%MILIUM%' AND m.duration_seconds < 12
+  AND d.detected_at > now() - interval '60 days'
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- 2) quando cada material irmão >=10s entrou no ar, e em quais emissoras
+--    (o spot que CONTÉM o pulso deve aparecer começando em ~20/07)
+SELECT m.short_id, left(m.title,45) AS material, m.duration_seconds AS dur,
+       ca.name AS campanha, ca.status, ca.start_date, ca.end_date,
+       cardinality(cm.target_stations) AS n_emissoras,
+       (SELECT string_agg(s.name, ' | ' ORDER BY s.name) FROM stations s
+        WHERE s.id = ANY(cm.target_stations)) AS emissoras
+FROM campaign_materials cm
+JOIN campaigns ca ON ca.id = cm.campaign_id
+JOIN materials  m ON m.id  = cm.material_id
+JOIN clients    c ON c.id  = m.client_id
+WHERE c.name ILIKE '%MILIUM%' AND m.duration_seconds >= 10
+  AND ca.end_date > now() - interval '60 days'
+ORDER BY ca.start_date DESC, m.short_id;
+SQL
+```
+
+**Interpretação:**
+
+| resultado da query 1 | leitura |
+|---|---|
+| pulso detectava em `meninablu`/`303` até ~19/07 e **zera a partir de 20/07** | **causa 1 CONFIRMADA** por antes/depois. O divisor é a entrada do spot que contém o pulso, não a emissora. Ligar `DISAMBIG_BY_COVERAGE` resolve. |
+| pulso **nunca** detectou nessas 2 emissoras (o `Menina` de junho era a `meninacam`) | volta a valer o argumento de borderline-por-emissora (§4c). Ainda é causa 1, mas sem o antes/depois — confirmar por B5/B6. |
+| pulso zera em TODAS as emissoras a partir de 20/07 | causa 3 (vínculo/datas da campanha nova) — checar B2 antes de qualquer coisa. |
+
+A query 2 dá a data em que o spot `DEMAIS RADIOS DO PLANO` passou a rodar em cada emissora —
+é o "depois" do teste. Cruzar as duas.
 
 ## 6. O que precisa pra resolver DE VEZ
 
