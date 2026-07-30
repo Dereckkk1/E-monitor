@@ -210,16 +210,100 @@ func (r *Repo) Recipients(ctx context.Context, reportID uuid.UUID) ([]Recipient,
 
 // List alimenta /admin/pos-venda. Traz as contagens agregadas para a linha
 // "5 de 7 abriram" sem N+1.
-func (r *Repo) List(ctx context.Context) ([]ListItem, error) {
+// listWhere monta o recorte compartilhado entre a contagem e a página. Os dois
+// TÊM que usar o mesmo predicado — se divergirem, o total da paginação deixa de
+// bater com o que a lista mostra e a última página vem vazia.
+//
+// Placeholders: $1 = busca, $2 = client_id, $3 = primeiro dia da competência.
+func listWhere() string {
+	return `
+ WHERE ($1 = '' OR r.title ILIKE '%' || $1 || '%' OR c.name ILIKE '%' || $1 || '%')
+   AND ($2::uuid IS NULL OR r.client_id = $2::uuid)
+   AND ($3::date IS NULL OR EXISTS (
+         SELECT 1 FROM post_sale_report_campaigns b
+          WHERE b.report_id = r.id
+            AND b.period_from <= ($3::date + INTERVAL '1 month' - INTERVAL '1 day')
+            AND b.period_to   >= $3::date))`
+}
+
+// List devolve uma página do recorte, mais as contagens por estado.
+func (r *Repo) List(ctx context.Context, f ListFilter) (*ListPage, error) {
+	if f.PerPage <= 0 {
+		f.PerPage = 10
+	}
+	if f.Page <= 0 {
+		f.Page = 1
+	}
+
+	// Competência chega como YYYY-MM; o SQL compara com DATE, então vira o dia 1.
+	var month any
+	if f.Month != "" {
+		month = f.Month + "-01"
+	}
+	var client any
+	if f.ClientID != nil {
+		client = *f.ClientID
+	}
+
+	var counts ListCounts
+	err := r.pool.QueryRow(ctx, `
+SELECT COUNT(*)::int,
+       COUNT(*) FILTER (WHERE r.status = 'sent')::int,
+       COUNT(*) FILTER (WHERE r.status = 'draft')::int
+  FROM post_sale_reports r
+  JOIN clients c ON c.id = r.client_id`+listWhere(),
+		f.Q, client, month).Scan(&counts.All, &counts.Sent, &counts.Draft)
+	if err != nil {
+		return nil, fmt.Errorf("postsale: contar: %w", err)
+	}
+
+	total := counts.All
+	switch f.Status {
+	case "sent":
+		total = counts.Sent
+	case "draft":
+		total = counts.Draft
+	}
+
+	out := &ListPage{
+		Items:   []ListItem{},
+		Total:   total,
+		Page:    f.Page,
+		PerPage: f.PerPage,
+		Counts:  counts,
+	}
+	// Página além do fim (filtro apertou enquanto o admin estava na página 3)
+	// devolve lista vazia em vez de erro — a UI corrige a página sozinha.
+	offset := (f.Page - 1) * f.PerPage
+	if offset >= total {
+		return out, nil
+	}
+
+	items, err := r.listItems(ctx, f, client, month, offset)
+	if err != nil {
+		return nil, err
+	}
+	out.Items = items
+	return out, nil
+}
+
+func (r *Repo) listItems(ctx context.Context, f ListFilter, client, month any, offset int) ([]ListItem, error) {
 	rows, err := r.pool.Query(ctx, `
 SELECT r.id, r.client_id, c.name, c.logo_url, r.title, r.status, r.sent_at, r.created_at,
        (SELECT COUNT(*) FROM post_sale_report_campaigns b WHERE b.report_id = r.id)::int,
        (SELECT COUNT(*) FROM post_sale_report_recipients p WHERE p.report_id = r.id)::int,
        (SELECT COUNT(*) FROM post_sale_report_recipients p
-         WHERE p.report_id = r.id AND p.opened_at IS NOT NULL)::int
+         WHERE p.report_id = r.id AND p.opened_at IS NOT NULL)::int,
+       (SELECT MIN(b.period_from) FROM post_sale_report_campaigns b WHERE b.report_id = r.id),
+       (SELECT MAX(b.period_to)   FROM post_sale_report_campaigns b WHERE b.report_id = r.id)
   FROM post_sale_reports r
-  JOIN clients c ON c.id = r.client_id
- ORDER BY COALESCE(r.sent_at, r.created_at) DESC`)
+  JOIN clients c ON c.id = r.client_id`+listWhere()+`
+   AND ($4 = '' OR r.status = $4)
+ -- r.id no desempate: sem ele, dois relatórios criados no mesmo segundo podem
+ -- trocar de lugar entre páginas e sumir da listagem.
+ ORDER BY COALESCE(r.sent_at, r.created_at) DESC, r.id DESC
+ LIMIT $5 OFFSET $6`,
+		f.Q, client, month, f.Status, f.PerPage, offset)
 	if err != nil {
 		return nil, fmt.Errorf("postsale: listar: %w", err)
 	}
@@ -230,7 +314,8 @@ SELECT r.id, r.client_id, c.name, c.logo_url, r.title, r.status, r.sent_at, r.cr
 		var it ListItem
 		if err := rows.Scan(&it.ID, &it.ClientID, &it.ClientName, &it.ClientLogo,
 			&it.Title, &it.Status, &it.SentAt, &it.CreatedAt,
-			&it.Campaigns, &it.Recipients, &it.Opened); err != nil {
+			&it.Campaigns, &it.Recipients, &it.Opened,
+			&it.PeriodFrom, &it.PeriodTo); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

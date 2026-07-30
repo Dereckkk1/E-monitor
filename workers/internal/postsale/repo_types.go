@@ -149,4 +149,43 @@ type ListItem struct {
 	Campaigns  int        `json:"campaigns_count"`
 	Recipients int        `json:"recipients_count"`
 	Opened     int        `json:"opened_count"`
+
+	// Período coberto = da primeira à última data entre os blocos. É o que a
+	// listagem usa como competência do fechamento — filtrar por data de envio
+	// acharia o relatório de junho despachado em julho no balde errado.
+	// Nulos enquanto o rascunho não tem bloco nenhum.
+	PeriodFrom *time.Time `json:"period_from"`
+	PeriodTo   *time.Time `json:"period_to"`
+}
+
+// ListFilter é o recorte da listagem. Tudo opcional: a tela abre sem filtro
+// nenhum e vai apertando.
+type ListFilter struct {
+	Q        string     // casa em título OU nome do cliente
+	ClientID *uuid.UUID // nil = todos
+	// Month é a competência no formato YYYY-MM. Um relatório entra quando o mês
+	// INTERSECTA o período coberto: um fechamento de 15/06 a 15/07 responde por
+	// junho e por julho, que é o que quem procura "os de julho" espera.
+	Month  string
+	Status string // "sent" | "draft" | "" (todos)
+	Page   int    // 1-based
+	PerPage int
+}
+
+// ListPage é uma página da listagem mais o que a UI precisa pra se orientar.
+type ListPage struct {
+	Items   []ListItem `json:"items"`
+	Total   int        `json:"total"`    // total DO RECORTE (com status), não do banco
+	Page    int        `json:"page"`
+	PerPage int        `json:"per_page"`
+	// Counts ignora o filtro de estado de propósito: é o que faz o chip
+	// "Enviados · 3" significar 3 dentro do recorte atual mesmo quando o
+	// estado seleiconado é outro.
+	Counts ListCounts `json:"counts"`
+}
+
+type ListCounts struct {
+	All   int `json:"all"`
+	Sent  int `json:"sent"`
+	Draft int `json:"draft"`
 }

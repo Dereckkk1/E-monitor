@@ -651,14 +651,62 @@
 
 /* ── Listagem ────────────────────────────────────────────────────────── */
 
-.pv-filters {
+/* Herda .flow-filters das telas de Veiculação; aqui são quatro campos de peso
+ * parecido em vez dos três encadeados de lá. Dupla classe no seletor porque a
+ * regra base mora no index.css e a ordem de bundle não é garantida. */
+.flow-filters.pv-flow {
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .flow-filters.pv-flow { grid-template-columns: 1fr 1fr; }
+  .flow-filters.pv-flow > .flow-filter:nth-child(3) { grid-column: auto; }
+}
+
+@media (max-width: 720px) {
+  .flow-filters.pv-flow { grid-template-columns: 1fr; }
+}
+
+/* Mora dentro do .flow-filter-label do Estado. Padding e tamanho copiam o
+ * rótulo: qualquer folga a mais empurra só aquele campo pra baixo e desalinha
+ * a fileira inteira de controles. */
+.pv-clear {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: inherit;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pv-ink-3);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 150ms ease;
+}
+.pv-clear:hover { color: var(--c-action); }
+
+/* Paginação — informação à esquerda, navegação à direita. */
+.pv-pager {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-top: 14px;
 }
-.pv-filters .input { max-width: 260px; }
+
+.pv-pager-info { font-size: 0.84rem; color: var(--pv-ink-3); font-variant-numeric: tabular-nums; }
+.pv-pager-nav { display: flex; align-items: center; gap: 10px; }
+.pv-pager-pos {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--pv-ink-2);
+  font-variant-numeric: tabular-nums;
+}
 
 .pv-chips { display: flex; gap: 6px; }
 
@@ -708,11 +756,15 @@
 .pv-item-id { min-width: 0; }
 
 .pv-list-none {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
   padding: 18px 16px;
-  margin: 0;
   font-size: 0.88rem;
   color: var(--pv-ink-3);
 }
+.pv-list-none p { margin: 0; }
 
 .pv-item-title {
   font-size: 0.98rem;
@@ -1091,6 +1143,10 @@
   /* Título quebra em três linhas aqui; centralizado, o chip flutuava na altura
      do selo de status em vez da primeira linha do nome. */
   .pv-title-row { align-items: flex-start; }
+  /* Em coluna única os campos ocupam a linha inteira: select de 190px ao lado
+     de uma busca de 300px lê como desalinhamento, não como hierarquia. */
+  .pv-filter, .pv-filter--search { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .pv-filter-tail { margin-left: 0; }
   .pv-panel { padding: 18px 16px; }
   .pv-camp-body { padding: 16px; }
   .pv-period { margin-left: 0; }
