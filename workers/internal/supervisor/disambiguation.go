@@ -144,9 +144,11 @@ const confidenceMargin = 0.25
 
 // isSuspectSuppression marca uma supressão §18.2.2 que provavelmente matou uma
 // veiculação REAL: o corte suprimido estava materialmente mais confiante que o
-// mantido (o mantido só false-confirmou a região compartilhada). Espelha o
-// predicado do índice parcial idx_dedup_suppressions_suspect (migration 0049)
-// e usa a mesma margem do confidence-aware.
+// mantido (o mantido só false-confirmou a região compartilhada). É a versão
+// ESTRITA do predicado do índice parcial idx_dedup_suppressions_suspect
+// (migration 0049, que usa só `suppressed > kept`): aqui exigimos a margem do
+// confidence-aware pra métrica não disparar em quase-empate. Ou seja, o índice
+// cobre um superconjunto do que esta função marca.
 func isSuspectSuppression(suppressedConf, keptConf float64) bool {
 	return suppressedConf >= keptConf+confidenceMargin
 }
