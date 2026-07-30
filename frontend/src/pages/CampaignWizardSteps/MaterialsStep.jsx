@@ -1225,6 +1225,16 @@ function AddMaterialPanel({
           continue
         }
 
+        // Material curto (<10s): fica fora da defesa shared-hash e, se existir
+        // spot do MESMO cliente contendo este áudio, as tocadas são disputadas
+        // entre os dois (incident-2026-07-24-pulso-milium). Aviso não-bloqueante.
+        const durS = Number(fp.duration_seconds)
+        if (Number.isFinite(durS) && durS > 0 && durS < 10) {
+          setEntryStage(entry.key, 'verifying', {
+            shortWarning: `Material curto (${durS.toFixed(1)}s): detecção menos robusta e, se houver um spot deste cliente que contenha este áudio, as veiculações podem ser atribuídas ao spot. Confirme com o suporte antes de faturar por este material.`,
+          })
+        }
+
         // 3. Wait for similarity check (ready / skipped / failed)
         setEntryStage(entry.key, 'verifying')
         let verified
@@ -2037,6 +2047,16 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
           fontSize: 12, color: 'var(--c-danger)', fontWeight: 600,
         }}>
           {entry.errorMsg ?? 'Falha durante o processamento'}
+        </div>
+      )}
+      {/* Aviso de material <10s (incident-2026-07-24-pulso-milium): informativo,
+          persiste até o fim do fluxo — não bloqueia o vínculo. */}
+      {entry.shortWarning && (
+        <div role="status" style={{
+          marginTop: 4, fontSize: 11.5, lineHeight: 1.5,
+          color: 'var(--c-warning)', fontWeight: 500,
+        }}>
+          ⚠ {entry.shortWarning}
         </div>
       )}
     </div>
