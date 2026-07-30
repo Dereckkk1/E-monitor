@@ -20,8 +20,19 @@ export default function PostSalePage() {
   const { token } = useParams()
   const { data, isLoading, isError } = usePublicPostSale(token)
 
+  // Skeleton no mesmo desenho do hero (faixa escura + shimmer), pra que a
+  // página não pisque de branco pra navy quando o dado chega.
   if (isLoading) {
-    return <div className="ps-loading" role="status">Carregando seu pós-venda…</div>
+    return (
+      <div className="ps-loading" role="status" aria-label="Carregando seu pós-venda">
+        <div className="ps-shell">
+          <span className="ps-sk ps-sk-logo" />
+          <span className="ps-sk ps-sk-title" />
+          <span className="ps-sk ps-sk-lead" />
+          <span className="ps-sk ps-sk-lead ps-sk-short" />
+        </div>
+      </div>
+    )
   }
 
   // Token inválido, revogado e rascunho respondem igual, de propósito: a
@@ -29,9 +40,13 @@ export default function PostSalePage() {
   if (isError || !data) {
     return (
       <div className="ps-gone">
-        <img src="/E-monitor%20logo.png" alt="E-monitor" className="ps-gone-logo" />
-        <h1>Este link não está mais disponível</h1>
-        <p>Fale com quem enviou o pós-venda para receber um novo acesso.</p>
+        <div className="ps-gone-card">
+          <img src="/E-monitor%20logo.png" alt="E-monitor" className="ps-gone-logo" />
+          <h1 className="ps-gone-title">Este link não está mais disponível</h1>
+          <p className="ps-gone-text">
+            Fale com quem enviou o pós-venda para receber um novo acesso.
+          </p>
+        </div>
       </div>
     )
   }

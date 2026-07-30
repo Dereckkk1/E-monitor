@@ -1,103 +1,105 @@
 // motion.js — animação do pós-venda sem dependência nova.
 //
-// Uma skill de landing page pediria GSAP; a regra 5 do CLAUDE.md veta instalar
-// dep nova no Windows (o npm poda as opcionais linux do lockfile e o build do
-// Cloudflare Pages quebra com "Missing: @emnapi/core from lock file").
-// IntersectionObserver + Web Animations API + rAF cobrem tudo que esta página
-// precisa: reveal em cascata, entrada do hero e contadores.
+// A tela de boas-vindas usa GSAP (a branch dela adicionou a dep). Aqui a regra 5
+// do CLAUDE.md veta instalar dep nova no Windows — o npm poda as opcionais linux
+// do lockfile e o build do Cloudflare Pages quebra. IntersectionObserver + Web
+// Animations API + rAF cobrem o que esta página precisa.
+//
+// A REGRA DE MOVIMENTO É A MESMA DA /boasvindas: tudo nasce VISÍVEL e o JS só
+// esconde no instante em que vai animar (o equivalente de `gsap.from`). Nenhum
+// `opacity: 0` mora no CSS — se o JS falhar, ou se o renderer não rolar a página
+// (screenshot de página inteira, html2canvas, impressão, aba em background), o
+// documento aparece inteiro em vez de sair em branco.
 import { useEffect, useRef, useState } from 'react'
 
-/**
- * prefersReducedMotion — checado em RUNTIME, não no import: o usuário pode
- * mudar a preferência do sistema com a aba aberta.
- */
+const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)' // mesma curva da /boasvindas
+
+/** Respeita a preferência do SO. Checado em runtime, não no import. */
 export function prefersReducedMotion() {
   return typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
 }
 
 /**
- * useReveal — devolve [ref, shown]; `shown` vira true quando o elemento entra
- * na viewport.
+ * useRevealOnce — devolve um ref. Quando o elemento entra na viewport, roda um
+ * fade+slide DE opacity 0 PARA o estado natural dele, uma vez só.
  *
- * Dispara uma vez só (unobserve): reveal que re-anima ao rolar pra cima dá
- * sensação de página instável. Com reduced-motion, nasce true — o conteúdo
- * nunca fica invisível esperando animação que não vai rodar.
+ * Como o keyframe inicial vive no JS (e não no CSS), não existe cenário em que o
+ * conteúdo fique invisível esperando uma animação que não vai rodar.
  */
-// FAILSAFE_MS é a rede de segurança do reveal.
-//
-// Sem ela, conteúdo abaixo da dobra fica em opacity 0 PARA SEMPRE em qualquer
-// renderer que não rola a página: screenshot de página inteira, html2canvas,
-// impressão, aba em background (onde o observer não roda). O documento de
-// pós-venda é longo e sai por email — não pode existir cenário em que o cliente
-// abre e vê um bloco vazio. A animação é enfeite; a legibilidade não é.
-//
-// O reveal continua valendo onde importa (as duas primeiras telas, que o leitor
-// alcança em bem menos de 2,5s). Mais pra baixo, o conteúdo já está lá quando
-// ele chega — sem movimento, mas nunca em branco.
-const FAILSAFE_MS = 2500
-
-export function useReveal({ threshold = 0.15, rootMargin = '0px 0px -10% 0px' } = {}) {
+export function useRevealOnce({ y = 18, duration = 620, delay = 0 } = {}) {
   const ref = useRef(null)
-  const [inView, setInView] = useState(false)
 
   useEffect(() => {
-    // Nada a observar quando não vai haver animação.
     if (prefersReducedMotion() || typeof IntersectionObserver === 'undefined') return
     const el = ref.current
     if (!el) return
 
+    let anim = null
     const io = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) { setInView(true); io.unobserve(el) }
-    }, { threshold, rootMargin })
+      if (!entry.isIntersecting) return
+      io.unobserve(el)
+      anim = el.animate(
+        [
+          { opacity: 0, transform: `translateY(${y}px)` },
+          { opacity: 1, transform: 'none' },
+        ],
+        { duration, delay, easing: EASE, fill: 'backwards' },
+      )
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' })
+
     io.observe(el)
+    return () => { io.disconnect(); anim?.cancel() }
+  }, [y, duration, delay])
 
-    const failsafe = setTimeout(() => setInView(true), FAILSAFE_MS)
-
-    return () => { io.disconnect(); clearTimeout(failsafe) }
-  }, [threshold, rootMargin])
-
-  // Derivado no render (e não via setState no effect): com reduced-motion ou
-  // sem IntersectionObserver o conteúdo nasce visível, em vez de ficar preso
-  // em opacity 0 esperando uma animação que nunca vai rodar.
-  const shown = inView ||
-    prefersReducedMotion() ||
-    typeof IntersectionObserver === 'undefined'
-
-  return [ref, shown]
+  return ref
 }
 
 /**
- * useCountUp — anima de 0 até `value` quando `start` vira true.
+ * useCountUp — devolve [ref, display] para animar um número de 0 até `value`.
  *
- * Ease-out cúbico: rápido no início e assentando no fim, então o número final
- * fica legível antes da animação terminar. Com reduced-motion, entrega o valor
- * direto.
+ * O DEFAULT é o valor real: `progress === null` significa "não estou animando",
+ * e aí o display é `value`. Isso é deliberado e não é detalhe de animação — a
+ * versão anterior gateava o VALOR na interseção e o documento exibia
+ * "R$ 0,00" para tudo que estava abaixo da dobra em qualquer renderer que não
+ * rola a página (screenshot de página inteira, impressão, aba em background).
+ * Num relatório financeiro isso não é enfeite quebrado, é número errado.
+ *
+ * Elemento já visível no load não anima: contar de 0 no que o leitor já está
+ * lendo daria um flash de zero. Quem está abaixo da dobra anima ao ser
+ * alcançado, que é onde a contagem tem graça.
  */
-export function useCountUp(value, start, duration = 900) {
-  // Guardamos o PROGRESSO (0..1), não o valor: assim o setState acontece só
-  // dentro do callback do rAF, e trocar `value` (payload recarregado) não
-  // reinicia a contagem do zero.
-  const [progress, setProgress] = useState(0)
+export function useCountUp(value, duration = 900) {
+  const ref = useRef(null)
+  const [progress, setProgress] = useState(null)
 
   useEffect(() => {
-    if (!start || prefersReducedMotion()) return
-    let raf = 0
-    let t0 = null
-    const tick = (t) => {
-      if (t0 === null) t0 = t
-      const p = Math.min(1, (t - t0) / duration)
-      setProgress(1 - Math.pow(1 - p, 3))
-      if (p < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [start, duration])
+    if (prefersReducedMotion() || typeof IntersectionObserver === 'undefined') return
+    const el = ref.current
+    if (!el) return
 
-  if (prefersReducedMotion()) return value
-  // Antes de entrar na viewport mostra 0; no fim, progress chega exatamente a
-  // 1, então o número final é o valor exato (sem resíduo de arredondamento).
-  return start ? value * progress : 0
+    const box = el.getBoundingClientRect()
+    if (box.top < window.innerHeight && box.bottom > 0) return // já à vista
+
+    let raf = 0
+    const io = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return
+      io.unobserve(el)
+      let t0 = null
+      const tick = (t) => {
+        if (t0 === null) t0 = t
+        const p = Math.min(1, (t - t0) / duration)
+        setProgress(p < 1 ? 1 - Math.pow(1 - p, 3) : null) // null no fim: volta ao valor exato
+        if (p < 1) raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
+    }, { threshold: 0.2 })
+
+    io.observe(el)
+    return () => { io.disconnect(); cancelAnimationFrame(raf) }
+  }, [duration])
+
+  return [ref, progress === null ? value : value * progress]
 }
 
 /** Formatadores compartilhados entre o preview do admin e a página pública. */
