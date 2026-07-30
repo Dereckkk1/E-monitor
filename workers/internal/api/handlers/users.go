@@ -14,6 +14,7 @@ import (
 
 	"radiocheck/internal/auth"
 	"radiocheck/internal/users"
+	"radiocheck/internal/welcome"
 )
 
 // UsersHandler implements admin CRUD for /v1/internal/admin/users/*.
@@ -27,10 +28,14 @@ import (
 // criação (cai em invalid_role).
 type UsersHandler struct {
 	repo *users.Repo
+	// welcomeSvc emite o convite de boas-vindas quando send_welcome vem true.
+	// Pode ser nil/desabilitado (sem WELCOME_ENC_KEY): nesse caso a criação do
+	// usuário segue normal e a resposta traz welcome.email_status='unavailable'.
+	welcomeSvc *welcome.Service
 }
 
-func NewUsersHandler(repo *users.Repo) *UsersHandler {
-	return &UsersHandler{repo: repo}
+func NewUsersHandler(repo *users.Repo, welcomeSvc *welcome.Service) *UsersHandler {
+	return &UsersHandler{repo: repo, welcomeSvc: welcomeSvc}
 }
 
 // roleAlias converte vocabulário API → DB. operator não é exposto.
@@ -108,13 +113,37 @@ func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	if in.PageSize > 0 {
 		totalPages = (total + in.PageSize - 1) / in.PageSize
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"data":        list,
 		"total":       total,
 		"total_pages": totalPages,
 		"page":        in.Page,
 		"page_size":   in.PageSize,
-	})
+	}
+	// Convite mais recente por usuário, num único SELECT (sem N+1). Alimenta o
+	// selo "boas-vindas enviado" e a ação de revogar na lista do /admin/users.
+	if h.welcomeSvc != nil && h.welcomeSvc.Enabled() && len(list) > 0 {
+		ids := make([]uuid.UUID, 0, len(list))
+		for i := range list {
+			ids = append(ids, list[i].ID)
+		}
+		if invites, err := h.welcomeSvc.Repo().Latest(r.Context(), ids); err == nil {
+			byUser := make(map[string]any, len(invites))
+			for uid, inv := range invites {
+				byUser[uid.String()] = map[string]any{
+					"invite_id":    inv.ID,
+					"link":         h.welcomeSvc.Link(inv.Token),
+					"email_status": inv.EmailStatus,
+					"opened_at":    inv.OpenedAt,
+					"open_count":   inv.OpenCount,
+					"revoked_at":   inv.RevokedAt,
+					"created_at":   inv.CreatedAt,
+				}
+			}
+			body["welcome_invites"] = byUser
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // ── Get ──────────────────────────────────────────────────────────────────
@@ -146,6 +175,24 @@ type createUserPayload struct {
 	Phone    *string    `json:"phone,omitempty"`
 	Role     string     `json:"role"` // "admin" | "client"
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
+	// SendWelcome emite o convite e dispara o email de boas-vindas.
+	SendWelcome bool `json:"send_welcome,omitempty"`
+}
+
+// createUserResponse é o usuário criado mais, quando pedido, o resultado do
+// convite. O link vem SEMPRE que o convite foi emitido — inclusive quando o
+// email falhou ou o SMTP está desligado — pra que o admin consiga copiá-lo e
+// mandar por fora, que é o fluxo que a equipe já usa hoje.
+type createUserResponse struct {
+	*users.User
+	Welcome *welcomeInfo `json:"welcome,omitempty"`
+}
+
+type welcomeInfo struct {
+	InviteID    *uuid.UUID `json:"invite_id,omitempty"`
+	Link        string     `json:"link,omitempty"`
+	EmailStatus string     `json:"email_status"` // sent | failed | disabled | unavailable
+	EmailError  string     `json:"email_error,omitempty"`
 }
 
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +253,48 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, u)
+
+	resp := createUserResponse{User: u}
+	if p.SendWelcome {
+		resp.Welcome = h.issueWelcome(r, u, p.Password)
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// issueWelcome emite o convite pro usuário recém-criado.
+//
+// Nunca devolve erro: o usuário JÁ está gravado, e falhar a resposta inteira
+// porque o SMTP recusou a conexão faria o admin achar que a criação não
+// funcionou (e tentar de novo, colidindo em email_taken). O desfecho vai no
+// campo email_status pra UI mostrar honestamente o que aconteceu.
+func (h *UsersHandler) issueWelcome(r *http.Request, u *users.User, plainPassword string) *welcomeInfo {
+	if h.welcomeSvc == nil || !h.welcomeSvc.Enabled() {
+		return &welcomeInfo{EmailStatus: "unavailable"}
+	}
+	in := welcome.SendInput{
+		UserID:   u.ID,
+		Name:     u.Name,
+		Email:    u.Email,
+		Password: plainPassword,
+		Role:     u.Role,
+	}
+	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
+		by := claims.UserID
+		in.CreatedBy = &by
+	}
+	if u.ClientID != nil {
+		in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+	}
+	res, err := h.welcomeSvc.Issue(r.Context(), in)
+	if err != nil {
+		return &welcomeInfo{EmailStatus: "unavailable", EmailError: err.Error()}
+	}
+	return &welcomeInfo{
+		InviteID:    &res.InviteID,
+		Link:        res.Link,
+		EmailStatus: res.EmailStatus,
+		EmailError:  res.EmailError,
+	}
 }
 
 // ── Patch ────────────────────────────────────────────────────────────────

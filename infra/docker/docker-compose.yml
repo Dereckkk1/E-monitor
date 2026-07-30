@@ -217,6 +217,12 @@ services:
       # sem rebuild — muda no .env, recria o api (--no-deps). Kill switch
       # instantâneo. docs/architecture/version-disambiguation.md §18.2.2-v2
       DISAMBIG_BY_COVERAGE: ${DISAMBIG_BY_COVERAGE:-false}
+      # §18.2.2 dedup confidence-aware (audit A2): gap de cobertura >= 0.25 decide
+      # o dedup (o corte que realmente tocou tem cobertura maior); empate cai pra
+      # regra de duração (comportamento antigo). Sem esta linha a env NUNCA chega
+      # no container (mesma armadilha do SHARING_MIN_SCORE, incidente 2026-06-15).
+      # Caso pulso 5.7s ⊂ spot 30s: incident-2026-07-24-pulso-milium-nao-detectado.md
+      DISAMBIG_CONFIDENCE_AWARE: ${DISAMBIG_CONFIDENCE_AWARE:-false}
       # F-119 multi-atribuição: uma tocada conta p/ todas as campanhas que rodam o
       # mesmo áudio na emissora. OFF = 1:1 (idêntico ao pré-F-119). Liga via .env +
       # recreate --no-deps api. docs/features/multi-attribution.md
@@ -234,6 +240,17 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       MAIL_FROM: ${MAIL_FROM:-}
+      # Boas-vindas ao novo usuário (docs/features/welcome-onboarding.md).
+      # WELCOME_ENC_KEY: 32 bytes em hex/base64 que cifram a senha inicial no
+      # convite. SEM ela a feature sobe desabilitada — o checkbox responde
+      # 'unavailable' em vez de gravar senha em texto claro. Gere com:
+      #   openssl rand -hex 32
+      # Trocar a chave invalida TODOS os convites já emitidos (o blob antigo
+      # não decifra e o link passa a responder 404).
+      WELCOME_ENC_KEY: ${WELCOME_ENC_KEY:-}
+      # Base pública do frontend usada no link do email. Default = a mesma dos
+      # alertas diários.
+      WELCOME_FRONTEND_URL: ${WELCOME_FRONTEND_URL:-}
       CLAP_VERIFIER_URL: http://clap-verifier:8080
       # Endpoints probados pelo painel /admin/overview (handler
       # system_health.go). Mantém URLs internas — o probe roda dentro

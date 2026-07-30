@@ -61,6 +61,8 @@ impeccable/
 !.env.example
 
 docs/*.md.superpowers/
+docs/RFC
+
 dash campanha e multi campanha.txt
 # Visual brainstorming companion (superpowers)
 .superpowers/

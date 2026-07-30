@@ -49,6 +49,7 @@ type Deps struct {
 	DistributionOverrides *handlers.DistributionOverridesHandler
 	Pricing               *handlers.PricingHandler
 	Users                 *handlers.UsersHandler
+	Welcome               *handlers.WelcomeHandler
 	PostSale              *handlers.PostSaleHandler
 	PostSalePublic        *handlers.PostSalePublicHandler
 	Me                    *handlers.MeHandler
@@ -132,9 +133,16 @@ func NewRouter(d Deps) http.Handler {
 		if d.Auth != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/login", d.Auth.Login)
 		}
-		// Pós-venda: o cliente abre pelo link do email, SEM sessão — o token de
-		// 32 bytes é a credencial. Throttle no mesmo limiter do login porque a
-		// rota é enumerável em tese. Ver docs/features/post-sale.md.
+		// Convite de boas-vindas: público por definição — o destinatário ainda
+		// não tem sessão, é justamente onde ele descobre a senha. O token de 32
+		// bytes é a credencial. Throttle no mesmo limiter do login porque o
+		// endpoint é enumerável em tese (na prática, 2^256 de espaço de busca).
+		if d.Welcome != nil {
+			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
+		}
+		// Pós-venda: mesma lógica do welcome — o cliente abre pelo link do
+		// email, sem sessão, e o token de 32 bytes é a credencial. Throttle no
+		// mesmo limiter. Ver docs/features/post-sale.md.
 		if d.PostSalePublic != nil {
 			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}", d.PostSalePublic.Resolve)
 			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/bundle.zip", d.PostSalePublic.Bundle)
@@ -565,7 +573,17 @@ func NewRouter(d Deps) http.Handler {
 				})
 			}
 
-			// ── Pós-venda — admin-only ──────────────────────────────────────
+			// ── Subgrupo D — admin-only: revogar convite de boas-vindas ──────
+			// O convite não expira por tempo (decisão do dono), então revogar é
+			// o único jeito de cortar um link vazado.
+			if d.Welcome != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/admin/welcome-invites/{id}/revoke", d.Welcome.Revoke)
+				})
+			}
+
+			// ── Subgrupo E — admin-only: Pós-venda ──────────────────────────
 			// Tela exclusiva de admin: monta o fechamento, revisa o preview e
 			// dispara o email com o link pessoal de cada usuário do cliente.
 			// Ver docs/features/post-sale.md.

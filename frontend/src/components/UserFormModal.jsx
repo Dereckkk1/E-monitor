@@ -13,6 +13,9 @@ const EMPTY = {
   phone: '',
   password: '',
   is_active: true,
+  // Default LIGADO: mandar as boas-vindas é o caminho desejado; desmarcar é a
+  // exceção (conta de serviço, usuário que já foi avisado por fora).
+  send_welcome: true,
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -130,6 +133,7 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
     if (!isEdit) {
       payload.email = v.email.trim().toLowerCase()
       payload.password = v.password
+      payload.send_welcome = v.send_welcome
     } else {
       payload.is_active = v.is_active
       if (v.role === 'admin') payload.receive_alert_emails = v.receive_alert_emails
@@ -175,7 +179,8 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
             )}
             {!isEdit && (
               <p className="ufm-subtitle">
-                Defina o acesso. Você comunica a senha por fora.
+                Defina o acesso. Com as boas-vindas ligadas, o sistema entrega
+                as credenciais por email.
               </p>
             )}
           </div>
@@ -324,6 +329,24 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
                 12+ caracteres. O botão Gerar cria uma senha forte de 16 caracteres.
               </p>
             </div>
+          )}
+
+          {!isEdit && (
+            <label className="ufm-toggle">
+              <input
+                type="checkbox"
+                checked={v.send_welcome}
+                onChange={e => set('send_welcome', e.target.checked)}
+                disabled={busy}
+              />
+              <span className="ufm-toggle-text">
+                <strong>Enviar boas-vindas</strong>
+                <small>
+                  Manda um email com um link para a página de boas-vindas, onde
+                  o novo usuário vê estas credenciais e um tutorial da plataforma.
+                </small>
+              </span>
+            </label>
           )}
 
           {isEdit && (

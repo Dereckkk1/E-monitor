@@ -37,6 +37,7 @@ import (
 	"radiocheck/internal/supervisor"
 	"radiocheck/internal/users"
 	"radiocheck/internal/webhook"
+	"radiocheck/internal/welcome"
 )
 
 func main() {
@@ -52,7 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("logger: %v", err)
 	}
-	defer logger.Sync() //nolint:errcheck
+	defer logger.Sync()        //nolint:errcheck
 	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
@@ -393,9 +394,44 @@ func main() {
 	// Users repo — shared across auth, me, and users handlers (Tasks 5–8).
 	usersRepo := users.NewRepo(pool)
 
-	// Pós-venda (docs/features/post-sale.md). Mailer PRÓPRIO: é transacional
-	// (dispara na ação do admin), então não pode depender de
-	// NOTIFICATIONS_ENABLED, que liga/desliga o job de alertas das 8h.
+	// Convite de boas-vindas (docs/features/welcome-onboarding.md).
+	//
+	// Mailer PRÓPRIO, de propósito: boas-vindas é email transacional (dispara
+	// na ação do admin), então não pode depender de NOTIFICATIONS_ENABLED — a
+	// flag que liga o scheduler das 8h. Aqui o critério é só "tem credencial
+	// SMTP?". Sem WELCOME_ENC_KEY a feature sobe desabilitada: a API funciona
+	// normal e o checkbox de boas-vindas responde 'unavailable' em vez de
+	// gravar senha em texto claro em algum fallback.
+	welcomeMailEnabled := cfg.SMTPUser != "" && cfg.SMTPPass != ""
+	welcomeCipher, err := welcome.NewCipher(cfg.WelcomeEncKey)
+	if err != nil {
+		logger.Warn("boas-vindas desabilitado: WELCOME_ENC_KEY ausente ou inválida",
+			zap.Error(err))
+		welcomeCipher = nil
+	}
+	welcomeSvc := welcome.New(welcome.Config{
+		Repo:   welcome.NewRepo(pool),
+		Cipher: welcomeCipher,
+		Mailer: mailer.New(mailer.Config{
+			Enabled: welcomeMailEnabled,
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.MailFrom,
+		}, logger),
+		MailEnabled: welcomeMailEnabled,
+		BaseURL:     cfg.WelcomeFrontendURL,
+		Log:         logger,
+	})
+	logger.Info("boas-vindas",
+		zap.Bool("enabled", welcomeSvc.Enabled()),
+		zap.Bool("smtp", welcomeMailEnabled),
+		zap.String("base_url", cfg.WelcomeFrontendURL))
+
+	// Pós-venda (docs/features/post-sale.md). Mailer PRÓPRIO pelo mesmo motivo
+	// do welcome: é transacional (dispara na ação do admin), então não pode
+	// depender de NOTIFICATIONS_ENABLED, que liga/desliga o job das 8h.
 	postSaleMailEnabled := cfg.SMTPUser != "" && cfg.SMTPPass != ""
 	postSaleSvc := postsale.New(postsale.Config{
 		Repo:       postsale.NewRepo(pool),
@@ -534,7 +570,8 @@ func main() {
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo, CampaignRepo: campaigns},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo, Recat: distRulesRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo, CampaignRepo: campaigns},
-		Users:                 handlers.NewUsersHandler(usersRepo),
+		Users:                 handlers.NewUsersHandler(usersRepo, welcomeSvc),
+		Welcome:               handlers.NewWelcomeHandler(welcomeSvc),
 		PostSale:              handlers.NewPostSaleHandler(postSaleSvc, logger),
 		PostSalePublic:        handlers.NewPostSalePublicHandler(postSaleSvc, logger),
 		Me:                    handlers.NewMeHandler(usersRepo),
