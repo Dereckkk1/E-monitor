@@ -87,7 +87,6 @@ export default function PostSaleHero({ clientName, clientLogo, periodLabel }) {
         )}
       </div>
 
-      <div className="ps-hero-fade" aria-hidden="true" />
     </header>
   )
 }
