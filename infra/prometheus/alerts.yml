@@ -286,6 +286,27 @@ groups:
             audit descalibrado pra emissoras ruidosas.
           runbook_url: "docs/runbooks/AuditRejectedSpike.md"
 
+      # ── DedupSuppressedSuspect ───────────────────────────────────────
+      # Supressão §18.2.2 em que o corte SUPRIMIDO estava mais confiante que o
+      # mantido = assinatura de veiculação real morta por um false-confirm de
+      # trecho compartilhado (caso PULSO MILIUM, material <10s contido em spot
+      # do mesmo cliente). Antes deste alerta a perda era 100% silenciosa: o
+      # suppress não deixa row, só linha em dedup_suppressions.
+      - alert: DedupSuppressedSuspect
+        expr: |
+          increase(radiocheck_match_disambiguation_total{action="suppressed_suspect"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dedup §18.2.2 suprimiu tocada provavelmente REAL"
+          description: |
+            {{ $value }} supressões na última hora com confiança do suprimido
+            >= mantido+0.25 (false-confirm vencendo tocada real — caso PULSO
+            MILIUM). Rodar a query B5 do incident-2026-07-24 e conferir se
+            DISAMBIG_BY_COVERAGE está ligado (a v2 resgata no pós-audit).
+          runbook_url: "docs/runbooks/DedupSuppressedSuspect.md"
+
       # ── LifecycleSchedulerStuck ──────────────────────────────────────
       # TODO(metrics): expor radiocheck_lifecycle_scheduler_last_run_timestamp
       # no scheduler de campanhas (§18.2.1). Item ficou de fora da

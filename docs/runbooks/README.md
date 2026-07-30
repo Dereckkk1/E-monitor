@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - infra/prometheus/alerts.yml
   - workers/internal/metrics/metrics.go
@@ -33,6 +33,7 @@ Cada runbook segue a estrutura padrão definida no plano (§15.6):
 | [FingerprintStuck](FingerprintStuck.md) | warning | Pipeline de materiais | operational |
 | [WorkerStallLoop](WorkerStallLoop.md) | critical | Ingestão | operational |
 | [AuditRejectedSpike](AuditRejectedSpike.md) | warning | Detecção | operational |
+| [DedupSuppressedSuspect](DedupSuppressedSuspect.md) | warning | Detecção | operational |
 | [ProjectionDriftPersistent](ProjectionDriftPersistent.md) | warning | Detecção | aguardando wiring do alerta |
 
 ### Legenda de status
