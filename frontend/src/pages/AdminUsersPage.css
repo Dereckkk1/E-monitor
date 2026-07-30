@@ -516,6 +516,114 @@
   color: var(--c-danger);
 }
 
+/* Convite de boas-vindas ativo: é um <a> pra abrir em aba nova, então precisa
+   herdar o alinhamento e perder o sublinhado que o reset dá a links. */
+.au-icon-btn-welcome {
+  text-decoration: none;
+  color: var(--c-action);
+}
+.au-icon-btn-welcome:hover {
+  background: var(--c-action-light);
+  border-color: var(--c-action-border);
+}
+
+/* Convite revogado: continua visível como registro histórico (o admin quer
+   saber que existiu), mas apagado e sem ação — o link não abre mais. */
+.au-icon-btn-off {
+  color: var(--c-text-3);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Modal de confirmação do convite de boas-vindas ─────────────────── */
+
+.au-welcome-card {
+  width: min(100%, 520px);
+  background: var(--c-surface);
+  border-radius: var(--radius-xl);
+  padding: 28px;
+  box-shadow: var(--shadow-lg);
+}
+
+/* O estado vem de um selo, não de uma faixa colorida no topo: borda grossa
+   sobre canto de 16px briga com o arredondamento. */
+.au-welcome-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--c-success) 14%, transparent);
+  color: var(--c-success);
+}
+.au-welcome-card.is-warn .au-welcome-badge {
+  background: color-mix(in srgb, var(--c-warning) 16%, transparent);
+  color: var(--c-warning);
+}
+
+.au-welcome-title {
+  margin: 0 0 8px;
+  font-family: var(--font-heading);
+  font-size: 1.22rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+}
+.au-welcome-text {
+  margin: 0 0 18px;
+  font-size: 0.94rem;
+  line-height: 1.6;
+  color: var(--c-text-2);
+}
+.au-welcome-text code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  background: var(--c-surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.au-welcome-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+.au-welcome-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.79rem;
+  color: var(--c-text);
+  /* O token tem 43 chars: precisa poder quebrar em vez de estourar o modal. */
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+.au-welcome-note {
+  margin: 12px 0 0;
+  font-size: 0.81rem;
+  line-height: 1.5;
+  color: var(--c-text-3);
+}
+
+.au-welcome-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 520px) {
+  .au-welcome-link { flex-direction: column; align-items: stretch; }
+  .au-welcome-actions .btn { flex: 1 1 auto; justify-content: center; }
+}
+
 /* ─── Skeleton loading ───────────────────────────────────── */
 
 .au-row-skeleton td {

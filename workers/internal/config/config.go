@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -42,6 +43,15 @@ type Config struct {
 	SMTPUser              string // SMTP_USER
 	SMTPPass              string // SMTP_PASS
 	MailFrom              string // MAIL_FROM (default = SMTPUser)
+
+	// ── Boas-vindas ao novo usuário (docs/features/welcome-onboarding.md) ──
+	// WelcomeEncKey: chave de 32 bytes (hex ou base64) que cifra a senha
+	// inicial guardada no convite. Sem ela o envio de boas-vindas é recusado
+	// na criação do usuário — nunca cai num fallback que grave texto claro.
+	// WelcomeFrontendURL: base pública do frontend usada pra montar o link
+	// /boasvindas/:token. Default = NotificationsBaseURL.
+	WelcomeEncKey      string // WELCOME_ENC_KEY
+	WelcomeFrontendURL string // WELCOME_FRONTEND_URL
 
 	// ── Central de Sugestões ──
 	// SuggestionsDevEmail: email do dev que enxerga a "Central de Comando"
@@ -125,6 +135,13 @@ func Load() (*Config, error) {
 	if cfg.MailFrom == "" {
 		cfg.MailFrom = cfg.SMTPUser
 	}
+
+	cfg.WelcomeEncKey = os.Getenv("WELCOME_ENC_KEY")
+	cfg.WelcomeFrontendURL = os.Getenv("WELCOME_FRONTEND_URL")
+	if cfg.WelcomeFrontendURL == "" {
+		cfg.WelcomeFrontendURL = cfg.NotificationsBaseURL
+	}
+	cfg.WelcomeFrontendURL = strings.TrimRight(cfg.WelcomeFrontendURL, "/")
 
 	cfg.SuggestionsDevEmail = os.Getenv("SUGGESTIONS_DEV_EMAIL")
 	if cfg.SuggestionsDevEmail == "" {

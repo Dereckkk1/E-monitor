@@ -21,6 +21,7 @@ import ApiKeysPage    from './pages/ApiKeysPage'
 import ClientTargetPmmPage from './pages/ClientTargetPmmPage'
 import DashboardPage  from './pages/DashboardPage'
 import LoginPage      from './pages/LoginPage'
+import WelcomePage    from './pages/WelcomePage'
 import CampaignWizardPage from './pages/CampaignWizardPage'
 import MaterialTypesPage from './pages/MaterialTypesPage'
 import MaterialsPage from './pages/MaterialsPage'
@@ -173,6 +174,9 @@ export default function App() {
           <Routes>
             {/* Public */}
             <Route path="/login" element={<LoginPage />} />
+            {/* Boas-vindas: aberta por definição — o destinatário ainda não tem
+                conta ativa quando chega aqui. O token da URL é a credencial. */}
+            <Route path="/boasvindas/:token" element={<WelcomePage />} />
             <Route path="/404"   element={<NotFoundPage />} />
             {/* Everything else is gated by RequireAuth */}
             <Route
