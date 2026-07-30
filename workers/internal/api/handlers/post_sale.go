@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,14 +59,50 @@ func pathUUID(w http.ResponseWriter, r *http.Request, key string) (uuid.UUID, bo
 }
 
 // List devolve a listagem de /admin/pos-venda.
+// List GET /post-sale/reports
+//
+// Query params (todos opcionais): q, client_id, month (YYYY-MM), status
+// (sent|draft), page (1-based), per_page. Filtro e paginação são do servidor:
+// filtrar só a página aberta esconderia resultado das outras.
 func (h *PostSaleHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, err := h.svc.Repo().List(r.Context())
+	q := r.URL.Query()
+
+	f := postsale.ListFilter{
+		Q:       strings.TrimSpace(q.Get("q")),
+		Page:    atoiOr(q.Get("page"), 1),
+		PerPage: atoiOr(q.Get("per_page"), 10),
+	}
+	if s := q.Get("status"); s == "sent" || s == "draft" {
+		f.Status = s
+	}
+	if m := q.Get("month"); monthRe.MatchString(m) {
+		f.Month = m
+	}
+	if cid := q.Get("client_id"); cid != "" {
+		parsed, err := uuid.Parse(cid)
+		if err != nil {
+			http.Error(w, "invalid client_id", http.StatusBadRequest)
+			return
+		}
+		f.ClientID = &parsed
+	}
+	// Teto de página: sem ele, per_page=100000 vira um SELECT do banco inteiro
+	// servido por uma rota autenticada de leitura.
+	if f.PerPage > 100 {
+		f.PerPage = 100
+	}
+
+	page, err := h.svc.Repo().List(r.Context(), f)
 	if err != nil {
 		h.fail(w, err, "list")
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, page)
 }
+
+// monthRe valida a competência antes de ela chegar no SQL como data.
+// `atoiOr` vem de users.go (mesmo pacote); valor <= 0 é normalizado no repo.
+var monthRe = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
 
 // Get devolve um relatório com blocos e destinatários.
 func (h *PostSaleHandler) Get(w http.ResponseWriter, r *http.Request) {

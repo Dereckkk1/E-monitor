@@ -287,7 +287,7 @@ Admin (`RequireRole("admin")`):
 
 | Método | Rota |
 |---|---|
-| `GET` | `/post-sale/reports` |
+| `GET` | `/post-sale/reports` — filtrado e **paginado no servidor** (ver abaixo) |
 | `POST` | `/post-sale/reports` |
 | `GET` | `/post-sale/reports/{id}` |
 | `PATCH` | `/post-sale/reports/{id}` |
@@ -297,6 +297,34 @@ Admin (`RequireRole("admin")`):
 | `POST` | `/post-sale/reports/{id}/publish` |
 | `POST` | `/post-sale/reports/{id}/resend` |
 | `POST` | `/post-sale/recipients/{rid}/revoke` |
+
+### Listagem: filtro e paginação são do servidor
+
+`GET /post-sale/reports` aceita `q`, `client_id`, `month` (`YYYY-MM`), `status`
+(`sent`/`draft`), `page` (1-based) e `per_page` (default 10, teto 100). Todos
+opcionais — a tela abre sem recorte nenhum.
+
+A resposta é um objeto, **não um array**:
+
+```json
+{ "items": [...], "total": 22, "page": 1, "per_page": 10,
+  "counts": { "all": 22, "sent": 1, "draft": 21 } }
+```
+
+Duas decisões que valem a leitura antes de mexer:
+
+- **`counts` ignora o filtro de estado de propósito.** É o que faz o seletor
+  dizer "Enviados · 3" enquanto "Rascunhos" está selecionado. `total` é o do
+  recorte completo (com estado) e é ele que dimensiona a paginação.
+- **`month` casa por interseção com o período de CADA bloco**, não com o
+  intervalo agregado do relatório: um fechamento com uma campanha em maio e
+  outra em julho **não** aparece em junho, porque nenhuma campanha dele cobre
+  junho. A competência sai do período coberto (`period_from`/`period_to`, que a
+  listagem agora devolve por item), nunca da data de envio — o fechamento de
+  junho despachado em julho é competência de junho.
+
+Filtrar no cliente esconderia resultado das páginas não carregadas, então os
+dois andam juntos: quem mexer em um tem que mexer no outro.
 
 Público (sem JWT):
 

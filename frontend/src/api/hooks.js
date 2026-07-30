@@ -1332,10 +1332,23 @@ export function usePublicPostSale(token) {
   })
 }
 
-export function usePostSaleReports() {
+/**
+ * Listagem paginada do pós-venda. Filtro e página são do SERVIDOR — filtrar só
+ * a página aberta esconderia resultado das outras.
+ *
+ * `params`: { q, client_id, month (YYYY-MM), status, page, per_page }.
+ * Resposta: { items, total, page, per_page, counts: {all, sent, draft} }.
+ */
+export function usePostSaleReports(params = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== '' && v != null),
+  )
   return useQuery({
-    queryKey: ['post-sale-reports'],
-    queryFn: () => api.get('/post-sale/reports').then(r => r.data ?? []),
+    queryKey: ['post-sale-reports', clean],
+    queryFn: () => api.get('/post-sale/reports', { params: clean }).then(r => r.data),
+    // Trocar de página não pisca a lista inteira: mantém a anterior enquanto a
+    // nova chega.
+    placeholderData: prev => prev,
   })
 }
 

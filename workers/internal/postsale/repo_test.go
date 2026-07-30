@@ -44,19 +44,44 @@ func TestRepo_DraftLifecycle(t *testing.T) {
 	require.Len(t, loaded.Blocks, 1)
 	require.Equal(t, "2026-06-05", loaded.Blocks[0].From.Format("2006-01-02"))
 
-	// A listagem enxerga o draft com as contagens zeradas de envio.
-	items, err := repo.List(ctx)
+	// A listagem enxerga o draft com as contagens zeradas de envio. Recorte por
+	// cliente pra não depender do que outros testes deixaram no banco.
+	page, err := repo.List(ctx, ListFilter{ClientID: &seed.ClientID, PerPage: 100})
 	require.NoError(t, err)
 	var found bool
-	for _, it := range items {
+	for _, it := range page.Items {
 		if it.ID == rep.ID {
 			found = true
 			require.Equal(t, 1, it.Campaigns)
 			require.Equal(t, 0, it.Recipients)
 			require.Equal(t, 0, it.Opened)
+			require.NotNil(t, it.PeriodFrom, "período coberto vem dos blocos")
+			require.Equal(t, "2026-06-05", it.PeriodFrom.Format("2006-01-02"))
+			require.Equal(t, "2026-06-20", it.PeriodTo.Format("2006-01-02"))
 		}
 	}
 	require.True(t, found, "draft não apareceu na listagem")
+	require.Equal(t, page.Counts.All, page.Total, "sem filtro de estado, total = todos")
+	require.GreaterOrEqual(t, page.Counts.Draft, 1)
+
+	// Competência: o mês do período acha; um mês fora dele, não.
+	hit, err := repo.List(ctx, ListFilter{ClientID: &seed.ClientID, Month: "2026-06"})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, hit.Total, 1, "junho intersecta 05/06–20/06")
+
+	miss, err := repo.List(ctx, ListFilter{ClientID: &seed.ClientID, Month: "2026-09"})
+	require.NoError(t, err)
+	require.Zero(t, miss.Total, "setembro não intersecta o período do bloco")
+
+	// Paginação: página 1 respeita o teto, página além do fim vem vazia.
+	first, err := repo.List(ctx, ListFilter{ClientID: &seed.ClientID, PerPage: 1, Page: 1})
+	require.NoError(t, err)
+	require.Len(t, first.Items, 1)
+
+	beyond, err := repo.List(ctx, ListFilter{ClientID: &seed.ClientID, PerPage: 1, Page: 999})
+	require.NoError(t, err)
+	require.Empty(t, beyond.Items)
+	require.Equal(t, first.Total, beyond.Total, "total não muda com a página")
 }
 
 func TestRepo_ResolveToken(t *testing.T) {
