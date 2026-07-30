@@ -1080,6 +1080,18 @@ export function useDeleteUser() {
   })
 }
 
+// Revoga o convite de boas-vindas: o link passa a responder 404 e a senha
+// cifrada é apagada. Como o convite não expira por tempo, esta é a única
+// forma de cortar um link que vazou. docs/features/welcome-onboarding.md
+export function useRevokeWelcomeInvite() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (inviteId) =>
+      api.post(`/admin/welcome-invites/${inviteId}/revoke`).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
 // ─── Me (any authenticated) ────────────────────────────────────────────────
 
 export function useMe() {

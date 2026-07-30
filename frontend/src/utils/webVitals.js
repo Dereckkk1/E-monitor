@@ -14,6 +14,7 @@
 // faixas do Google.
 
 import api from '../api/client'
+import { getStoredToken } from '../contexts/AuthContext'
 
 function rate(name, value) {
   // Thresholds oficiais Google (boa | precisa melhorar | ruim).
@@ -32,6 +33,12 @@ function rate(name, value) {
 }
 
 function send(name, value) {
+  // Sem sessão não há o que reportar: o endpoint exige JWT, então a chamada
+  // seria um 401 garantido. Pior, o `.catch` abaixo não segura o estrago — o
+  // interceptor do axios roda ANTES dele e chutava o visitante de páginas
+  // públicas (/boasvindas) pro /login. Telemetria nunca pode custar a página.
+  if (!getStoredToken()) return
+
   // Não esperamos resposta — fire and forget. O backend devolve 204/202;
   // erros são silenciosos (não queremos quebrar a UX por telemetria).
   const page = window.location.pathname

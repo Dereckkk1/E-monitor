@@ -352,6 +352,7 @@ docs/
 | Schema / migrations | [docs/operations/migrations.md](docs/operations/migrations.md) — leitura obrigatória antes de mexer em schema |
 | Auth, JWT, bootstrap admin, role gating | [docs/operations/auth-bootstrap.md](docs/operations/auth-bootstrap.md) |
 | Gerenciamento de usuários (admin/cliente, /admin/users, /account) | [docs/features/user-management.md](docs/features/user-management.md) |
+| **Boas-vindas ao novo usuário** (checkbox em /admin/users → email + página pública `/boasvindas/:token` com credenciais, vídeo e tutorial; senha cifrada AES-GCM, link sem expiração, revogação) | [docs/features/welcome-onboarding.md](docs/features/welcome-onboarding.md) — **ao criar qualquer página pública nova, acrescente a rota em `PUBLIC_ROUTES` no `frontend/src/api/client.js`**: sem isso, qualquer chamada paralela que tome 401 (telemetria, por exemplo) expulsa o visitante pro /login |
 | **Sugestões** / central de demandas do dev (`/admin/suggestions`, 2 personas: autor cria/acompanha, dev `SUGGESTIONS_DEV_EMAIL`=tatico3@hubradios.com gerencia; thread, imagens S3, board/lista) | [docs/features/suggestions-board.md](docs/features/suggestions-board.md) |
 | Desativar cliente (reversível) + delete→409 com vínculos + login gating de cliente inativo | [docs/features/client-deactivation.md](docs/features/client-deactivation.md) |
 | Deploy, docker-compose, override file, Cloudflare Tunnel | [docs/operations/deploy.md](docs/operations/deploy.md) |

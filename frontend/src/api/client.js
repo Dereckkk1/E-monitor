@@ -27,13 +27,26 @@ api.interceptors.request.use((config) => {
 // We avoid redirecting when the failing call IS the login endpoint —
 // otherwise a wrong password would clobber the page state before the
 // LoginPage can render its own error.
+//
+// Também não redirecionamos quando o visitante está numa ROTA PÚBLICA. Nessas
+// telas a ausência de sessão é o estado normal, então qualquer 401 de chamada
+// paralela (telemetria, por exemplo) sequestraria o visitante pro /login.
+// Foi exatamente o que aconteceu com /boasvindas: o POST /web-vitals disparava
+// sem token, tomava 401, e o interceptor engolia a página antes dela renderizar.
+const PUBLIC_ROUTES = [/^\/login$/, /^\/boasvindas(\/|$)/, /^\/404$/]
+
+function onPublicRoute() {
+  const path = window.location.pathname
+  return PUBLIC_ROUTES.some(re => re.test(path))
+}
+
 api.interceptors.response.use(
   (resp) => resp,
   (error) => {
     const status = error?.response?.status
     const url = error?.config?.url || ''
     const isLoginCall = url.endsWith('/auth/login')
-    if (status === 401 && !isLoginCall) {
+    if (status === 401 && !isLoginCall && !onPublicRoute()) {
       clearStoredAuth()
       const here = window.location.pathname + window.location.search
       // Avoid redirect loop if we're already on /login.

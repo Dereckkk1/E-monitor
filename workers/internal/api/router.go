@@ -49,6 +49,7 @@ type Deps struct {
 	DistributionOverrides *handlers.DistributionOverridesHandler
 	Pricing               *handlers.PricingHandler
 	Users                 *handlers.UsersHandler
+	Welcome               *handlers.WelcomeHandler
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
@@ -129,6 +130,13 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/health", d.Health.Check)
 		if d.Auth != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/login", d.Auth.Login)
+		}
+		// Convite de boas-vindas: público por definição — o destinatário ainda
+		// não tem sessão, é justamente onde ele descobre a senha. O token de 32
+		// bytes é a credencial. Throttle no mesmo limiter do login porque o
+		// endpoint é enumerável em tese (na prática, 2^256 de espaço de busca).
+		if d.Welcome != nil {
+			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
 		}
 
 		// Protected: all other internal routes require a valid JWT.
@@ -552,6 +560,16 @@ func NewRouter(d Deps) http.Handler {
 						r.Delete("/{id}", d.Users.Delete)
 						r.Post("/{id}/password", d.Users.ResetPassword)
 					})
+				})
+			}
+
+			// ── Subgrupo D — admin-only: revogar convite de boas-vindas ──────
+			// O convite não expira por tempo (decisão do dono), então revogar é
+			// o único jeito de cortar um link vazado.
+			if d.Welcome != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Post("/admin/welcome-invites/{id}/revoke", d.Welcome.Revoke)
 				})
 			}
 		}) // end RequireJWT group
