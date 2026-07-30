@@ -235,3 +235,26 @@ func TestEvaluateDedupWithConfidence_NoConflictPublishes(t *testing.T) {
 		t.Fatalf("sem conflito deve publicar, got %v", got)
 	}
 }
+
+// isSuspectSuppression — sinal de "provável tocada REAL morta pelo dedup".
+// Números do E2E do incidente 2026-07-24 (§4d): pulso real conf 1.0 vs
+// false-confirm do spot conf 0.167.
+func TestIsSuspectSuppression(t *testing.T) {
+	cases := []struct {
+		name      string
+		sup, kept float64
+		want      bool
+	}{
+		{"pulso real suprimido por false-confirm do spot", 1.0, 0.167, true},
+		{"30s⊂60s legitimo (quase-empate de confianca)", 0.95, 0.90, false},
+		{"exatamente na margem conta como suspeito", 0.45, 0.20, true},
+		{"logo abaixo da margem nao conta", 0.44, 0.20, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isSuspectSuppression(c.sup, c.kept); got != c.want {
+				t.Errorf("isSuspectSuppression(%v, %v) = %v, want %v", c.sup, c.kept, got, c.want)
+			}
+		})
+	}
+}
