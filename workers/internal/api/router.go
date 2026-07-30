@@ -583,7 +583,7 @@ func NewRouter(d Deps) http.Handler {
 				})
 			}
 
-			// ── Pós-venda — admin-only ──────────────────────────────────────
+			// ── Subgrupo E — admin-only: Pós-venda ──────────────────────────
 			// Tela exclusiva de admin: monta o fechamento, revisa o preview e
 			// dispara o email com o link pessoal de cada usuário do cliente.
 			// Ver docs/features/post-sale.md.
