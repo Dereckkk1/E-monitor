@@ -1,0 +1,5 @@
+# Shell scripts rodam DENTRO de containers Linux (bind mount) — CRLF quebra o
+# shebang com "not found"/"^M". Este repo é clonado em Windows com
+# core.autocrlf=true, que converteria os .sh no checkout. Force LF.
+# Ver scripts/radio-sim/simulate-icecast.sh (docs/operations/simulacao-radio.md).
+*.sh text eol=lf
