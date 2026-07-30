@@ -74,7 +74,7 @@ export default function PostSaleHero({ clientName, clientLogo, periodLabel }) {
 
         <h1 className="ps-hero-title">
           <span className="ps-line">
-            <span ref={lineRef} className="ps-line-in">pós-venda</span>
+            <span ref={lineRef} className="ps-line-in">Pós-venda</span>
           </span>
         </h1>
 
