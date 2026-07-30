@@ -367,6 +367,24 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
   + `evidence/reject_recovery.go` no reject-path + testes DB-gated); aguarda merge.
   Doc: [version-disambiguation.md §18.2.2-v2c](../architecture/version-disambiguation.md).
   Webhook corretivo e recuperação das 165 históricas ficam fora deste fix.
+- **F-125** — Dedup v1 não pode suprimir par-**containment** sem registro recuperável.
+  **Extensão do F-124 para o par <10s** (não implementar separado: o "retratar-e-publicar"
+  proposto no F-124 é a mesma peça). Origem:
+  [incident-2026-07-24-pulso-milium](../incidents/incident-2026-07-24-pulso-milium-nao-detectado.md).
+  O que este caso acrescenta ao F-124: para material **<10s**, `sharing.go` pula o
+  shared-hash flagging dos DOIS lados (`MinShareableDurationSeconds=10`) e **não registra
+  nem a relação de containment** — então nem o supervisor nem o audit sabem que o par existe.
+  A v2 (`DISAMBIG_BY_COVERAGE`) resgata a tocada do curto ATRAVÉS da row do longo; se o longo
+  não deixar row (não confirmou, ou NATS caiu), a supressão v1 é perda seca e nem o backfill
+  alcança.
+  **Fix definitivo:** (a) shared-scan registra a relação de containment mesmo pra <10s (hoje
+  pula sem registrar nada), (b) supervisor publica-provisório quando o conflito é com
+  containment conhecido, em vez de suprimir — reusando o mecanismo do F-124.
+  **Prioridade:** baixa enquanto a sombra do rollout
+  ([disambig-by-coverage-rollout.md](../operations/disambig-by-coverage-rollout.md)) não
+  mostrar caso real. O alerta `DedupSuppressedSuspect`
+  ([runbook](../runbooks/DedupSuppressedSuspect.md)) é o detector: supressão suspeita com a v2
+  ligada e SEM resgate nos logs = ocorrência deste follow-up.
 
 ---
 

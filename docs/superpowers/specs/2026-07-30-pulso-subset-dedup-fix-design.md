@@ -64,7 +64,7 @@ incident report §4e. Gate de aceite: pulso standalone → N tocadas = N rows co
 
 | decisão | default escolhido | alternativa |
 |---|---|---|
-| Mexer no supervisor v1 (suppress sem row)? | **NÃO nesta fase** — a v2 recupera via a row do spot; mexer no v1 é cirurgia em caminho quente com risco de duplicata. Fica follow-up F-122 (registrar containment no shared-scan e publicar-provisório) para o caso raro "spot false-confirma mas a row dele nem nasce" (não observado no E2E) | publicar-provisório já agora |
+| Mexer no supervisor v1 (suppress sem row)? | **NÃO nesta fase** — a v2 recupera via a row do spot; mexer no v1 é cirurgia em caminho quente com risco de duplicata. Fica follow-up F-125 (registrar containment no shared-scan e publicar-provisório) para o caso raro "spot false-confirma mas a row dele nem nasce" (não observado no E2E) | publicar-provisório já agora |
 | `DISAMBIG_CONFIDENCE_AWARE` | **permanece OFF** (reprovada §4d); passthrough fica no compose documentado | remover passthrough |
 | Threshold do reject-path | manter os existentes (floor 0.15, margem 1.5) — validados no E2E | recalibrar |
 | Histórico | backfill só Milium/período do incidente (escopo fechado, auditável) | backfill global |

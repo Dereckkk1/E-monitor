@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-24
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - workers/internal/supervisor/disambiguation.go
   - workers/internal/supervisor/dedup_buffer.go
@@ -492,3 +492,21 @@ detecção duplicada por restart. Aceitável.
 - `migrations/0038_detection_audit_coverage.up.sql` — coluna `audit_coverage`.
 - `cmd/api/main.go` — lê `DISAMBIG_BY_COVERAGE`.
 - `frontend/src/pages/DetectionDetailPage.jsx` — "Cobertura do áudio (§9.9)".
+
+## Caso subset <10s (pulso ⊂ spot) — 2026-07-30
+
+Material <10s é PULADO pelo shared-hash (dos dois lados, `MinShareableDurationSeconds`), então
+quando ele é subset de um spot do mesmo cliente os dois confirmam juntos (co-fire) e a regra
+v1 por duração mata o curto — inclusive quando o curto é a tocada REAL (false-confirm do
+longo a conf ~0.2). Demonstrado e validado no
+[incident-2026-07-24-pulso-milium-nao-detectado.md](../incidents/incident-2026-07-24-pulso-milium-nao-detectado.md):
+
+- `DISAMBIG_CONFIDENCE_AWARE` NÃO resolve (conf da state machine é estruturalmente enviesada
+  — curto ~1.0 pelo piso de 32 frames, longo ~0.2 por confirmar na 2ª janela; §4d).
+- A resolução é a v2 (`DISAMBIG_BY_COVERAGE`): arbitragem pós-audit por cobertura do clipe +
+  co-fire guard. Rollout: [disambig-by-coverage-rollout.md](../operations/disambig-by-coverage-rollout.md).
+- Instrumentação: métrica `radiocheck_match_disambiguation_total{action="suppressed_suspect"}`
+  + alerta `DedupSuppressedSuspect` ([runbook](../runbooks/DedupSuppressedSuspect.md)) — supressão
+  de tocada mais confiante que a mantida não é mais silenciosa.
+- Limite residual: se o false-confirm do longo nem gerar row (não observado no E2E), a
+  supressão v1 fica sem resgate → F-125.

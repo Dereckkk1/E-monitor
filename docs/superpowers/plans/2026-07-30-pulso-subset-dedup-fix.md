@@ -208,7 +208,7 @@ SQL
    a v2 resgata a tocada via a row do corte mantido (reatribui/retrata); confira nos logs
    `reattributed by coverage` / `co-fire` pro mesmo horário.
 2. Se a v2 NÃO resgatou (sem row do mantido, ou audit em erro), registrar veiculação manual
-   e abrir follow-up — é o caso F-122 (publicar-provisório no supervisor).
+   e abrir follow-up — é o caso F-125 (publicar-provisório no supervisor).
 ```
 
 - [ ] **Step 3: Adicionar linha no índice `docs/runbooks/README.md`** (mesmo formato das existentes): `DedupSuppressedSuspect → dedup-suppressed-suspect.md`.
@@ -604,7 +604,7 @@ git commit -m "chore(sql): diagnóstico read-only do histórico pulso-contado-co
 
 ---
 
-### Task 9: Atualizar docs de arquitetura + follow-up F-122
+### Task 9: Atualizar docs de arquitetura + follow-up F-125
 
 **Files:**
 - Modify: `docs/architecture/version-disambiguation.md`
@@ -625,13 +625,13 @@ longo a conf ~0.2). Demonstrado e validado no
 - A resolução é a v2 (`DISAMBIG_BY_COVERAGE`): arbitragem pós-audit por cobertura do clipe +
   co-fire guard. Rollout: [disambig-by-coverage-rollout.md](../operations/disambig-by-coverage-rollout.md).
 - Limite residual: se o false-confirm do longo nem gerar row (não observado no E2E), a
-  supressão v1 fica sem resgate → F-122.
+  supressão v1 fica sem resgate → F-125.
 ```
 
 - [ ] **Step 2:** Em `follow-ups-fase2.md`, adicionar (seguindo o formato/numeração do arquivo):
 
 ```markdown
-### F-122 — Dedup v1 não pode suprimir par-containment sem registro recuperável
+### F-125 — Dedup v1 não pode suprimir par-containment sem registro recuperável
 Origem: incident-2026-07-24-pulso-milium. A v2 resgata a tocada do curto ATRAVÉS da row do
 longo; se o longo não deixar row (não confirmou ou NATS caiu), a supressão v1 é perda seca.
 Fix definitivo: (a) shared-scan registra a relação de containment mesmo pra <10s (hoje pula
@@ -643,7 +643,7 @@ vez de suprimir. Prioridade: baixa enquanto a sombra do rollout não mostrar cas
 
 ```bash
 git add docs/architecture/version-disambiguation.md docs/roadmap/follow-ups-fase2.md
-git commit -m "docs: caso subset<10s na arquitetura de desambiguação + follow-up F-122"
+git commit -m "docs: caso subset<10s na arquitetura de desambiguação + follow-up F-125"
 git push -u origin fix/subset-dedup-pulso
 ```
 

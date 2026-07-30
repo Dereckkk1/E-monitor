@@ -71,11 +71,11 @@ docker logs docker-api-1 2>&1 | grep -E 'reattributed by coverage|co-fire' | tai
    viva do material curto no horário.
 3. **Flag ON e a v2 NÃO resgatou** (sem row do corte mantido, ou audit em erro): a tocada é
    perda seca. Registrar **veiculação manual** para o material curto e anotar no follow-up
-   **F-122** ([follow-ups-fase2.md](../roadmap/follow-ups-fase2.md)) — é exatamente o caso
-   residual que o F-122 endereça (publicar-provisório no supervisor).
+   **F-125** ([follow-ups-fase2.md](../roadmap/follow-ups-fase2.md)) — é exatamente o caso
+   residual que o F-125 endereça (publicar-provisório no supervisor).
 4. **Volume alto e recorrente no mesmo par**: avaliar com o dono desvincular o material curto
    das emissoras onde o spot que o contém também roda, ou faturá-lo por contagem manual até
-   o F-122. Diagnóstico do histórico: `scripts/sql/diagnose-pulso-subset-rows.sql`.
+   o F-125. Diagnóstico do histórico: `scripts/sql/diagnose-pulso-subset-rows.sql`.
 
 ## Escalação
 
@@ -88,4 +88,4 @@ para o cliente. Não espere a janela de sombra do rollout terminar.
 - Não cadastrar pulso/vinheta <10s do mesmo cliente de um spot que o contenha sem antes ler
   o aviso do wizard (Task 5 deste fix) — a limitação é estrutural com a flag OFF.
 - Manter `DISAMBIG_BY_COVERAGE=true` após o aceite da sombra.
-- F-122 fecha o caso residual (supressão v1 sem row do vencedor para resgatar).
+- F-125 fecha o caso residual (supressão v1 sem row do vencedor para resgatar).

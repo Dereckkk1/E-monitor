@@ -92,4 +92,4 @@ reverter dado, use o diagnóstico do histórico (abaixo) e decida caso a caso.
 
 - Mover este doc pra `status: implementado` com a data.
 - Avaliar o backfill histórico (`scripts/sql/diagnose-pulso-subset-rows.sql`) com o dono.
-- Reavaliar o F-122 (supressão v1 sem row do vencedor pra resgatar) com o que a sombra mostrou.
+- Reavaliar o F-125 (supressão v1 sem row do vencedor pra resgatar) com o que a sombra mostrou.
