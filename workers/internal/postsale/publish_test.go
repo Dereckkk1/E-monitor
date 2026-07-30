@@ -2,6 +2,7 @@ package postsale
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -146,6 +147,10 @@ func TestPublish_PayloadCongela(t *testing.T) {
 	svc := newTestService(t, pool, &recordingMailer{}, &fakeStore{})
 
 	rep := createDraftWithBlock(t, ctx, svc, seed)
+	// O link dos anexos congela junto com o resto: o botão que o cliente clicar
+	// daqui a um ano aponta pra onde apontava no dia do envio.
+	require.NoError(t, svc.Repo().UpdateContent(ctx, rep.ID, "T", "oi",
+		"https://drive.google.com/drive/folders/xyz"))
 	require.NoError(t, svc.SetAssets(ctx, rep.ID, seed.CampaignID, capture()))
 	_, err := svc.Publish(ctx, rep.ID)
 	require.NoError(t, err)
@@ -154,6 +159,12 @@ func TestPublish_PayloadCongela(t *testing.T) {
 	before, err := svc.Repo().ResolveToken(ctx, tok)
 	require.NoError(t, err)
 	require.Contains(t, string(before.Payload), `"checking_rows"`)
+	// Compara pelo VALOR e não por substring: o jsonb do Postgres reescreve o
+	// JSON (`": "` com espaço), então casar texto cru quebra sem o dado estar
+	// errado.
+	var congelado Payload
+	require.NoError(t, json.Unmarshal(before.Payload, &congelado))
+	require.Equal(t, "https://drive.google.com/drive/folders/xyz", congelado.AttachmentsURL)
 
 	// Apaga TODAS as veiculações da campanha: se o payload recalculasse, os
 	// números mudariam.

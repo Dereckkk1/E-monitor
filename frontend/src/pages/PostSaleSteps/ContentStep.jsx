@@ -22,6 +22,22 @@ function differs(a, b) {
   return Math.abs(Number(a) - Number(b)) > 0.005
 }
 
+/**
+ * Espelha o safeExternalURL do backend: só http(s) com host vira botão no
+ * documento. Aqui é só aviso — quem descarta de verdade é o servidor, na hora
+ * de congelar o payload.
+ */
+function isBrowsableURL(raw) {
+  const s = (raw ?? '').trim()
+  if (!s) return false
+  try {
+    const u = new URL(s)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && !!u.host
+  } catch {
+    return false
+  }
+}
+
 function cpmOf(valor, impactos) {
   const v = Number(valor) || 0
   const i = Number(impactos) || 0
@@ -312,7 +328,7 @@ function CampaignPanel({ block, preview, open, onToggle, onChange }) {
 }
 
 export default function ContentStep({
-  title, introMessage, blocks, preview, onMeta, onBlockChange,
+  title, introMessage, attachmentsUrl, blocks, preview, onMeta, onBlockChange,
 }) {
   // Primeira campanha aberta; as outras dobradas. Com 3+ campanhas a página
   // inteira aberta viraria um rolo sem hierarquia.
@@ -349,6 +365,32 @@ export default function ContentStep({
             value={introMessage}
             onChange={e => onMeta({ intro_message: e.target.value })}
           />
+        </label>
+
+        <label className="pv-field">
+          <span className="pv-label">Link dos anexos <span className="pv-optional">opcional</span></span>
+          <input
+            className="input"
+            type="url"
+            inputMode="url"
+            placeholder="https://drive.google.com/drive/folders/…"
+            value={attachmentsUrl ?? ''}
+            onChange={e => onMeta({ attachments_url: e.target.value })}
+          />
+          <span className="pv-value-foot">
+            {isBrowsableURL(attachmentsUrl)
+              ? 'Vira um botão no documento do cliente, abrindo em aba nova. Confira se a pasta está compartilhada — quem recebe não tem acesso ao seu Drive.'
+              : 'Vira um botão no documento do cliente, abrindo em aba nova. Em branco, o bloco não aparece.'}
+          </span>
+          {/* O backend descarta o que não for http(s) ao congelar o payload. Sem
+              este aviso o admin cola algo torto, salva sem erro, e o botão
+              simplesmente não nasce no documento — falha silenciosa. */}
+          {attachmentsUrl?.trim() && !isBrowsableURL(attachmentsUrl) && (
+            <span className="pv-warn">
+              Isso não é um endereço navegável. Cole a URL inteira, começando com
+              https:// — do jeito que está, o botão não vai aparecer pro cliente.
+            </span>
+          )}
         </label>
       </section>
 
