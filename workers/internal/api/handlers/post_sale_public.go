@@ -67,6 +67,42 @@ func (h *PostSalePublicHandler) Resolve(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write(payload)
 }
 
+// Image serve as imagens que o DOCUMENTO mostra (hoje, o mapa das emissoras).
+// Vive fora do zip porque a página precisa exibir, não fazer o cliente baixar.
+//
+// GET /v1/internal/public/post-sale/{token}/campaigns/{cid}/image/{kind}.png
+func (h *PostSalePublicHandler) Image(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	cid, err := uuid.Parse(chi.URLParam(r, "cid"))
+	if err != nil || token == "" {
+		http.Error(w, "not_found", http.StatusNotFound)
+		return
+	}
+	// Whitelist explícita: o path NUNCA vira nome de arquivo no bucket.
+	var kind postsale.AssetKind
+	switch chi.URLParam(r, "kind") {
+	case "map":
+		kind = postsale.AssetMap
+	case "insights":
+		kind = postsale.AssetInsights
+	default:
+		http.Error(w, "not_found", http.StatusNotFound)
+		return
+	}
+
+	url, err := h.svc.ImageURL(r.Context(), token, cid, kind, bundleTTL)
+	if err != nil {
+		if errors.Is(err, postsale.ErrNotFound) {
+			http.Error(w, "not_found", http.StatusNotFound)
+			return
+		}
+		h.log.Error("postsale: imagem", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
 // Bundle redireciona pro .zip no S3 com URL presignada de vida curta.
 //
 // GET /v1/internal/public/post-sale/{token}/campaigns/{cid}/bundle.zip

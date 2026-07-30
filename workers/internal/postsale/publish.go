@@ -56,12 +56,29 @@ func (s *Service) Publish(ctx context.Context, reportID uuid.UUID) (*PublishResu
 		if err != nil {
 			return nil, err
 		}
-		key := assetKey(reportID, b.CampaignID, "relatorios.zip")
-		if err := s.storage.Put(ctx, key, bytes.NewReader(blob), "application/zip"); err != nil {
-			return nil, fmt.Errorf("postsale: subir bundle: %w", err)
+		// O mapa e os indicadores também vão como objetos próprios, e não só
+		// dentro do zip: o documento mostra o mapa na tela, e ninguém abre um
+		// zip pra ver a imagem que devia estar na página.
+		assets := Assets{
+			BundleZIP:   assetKey(reportID, b.CampaignID, "relatorios.zip"),
+			MapPNG:      assetKey(reportID, b.CampaignID, "mapa.png"),
+			InsightsPNG: assetKey(reportID, b.CampaignID, "indicadores.png"),
 		}
-		rep.Blocks[i].Assets.BundleZIP = key
-		if err := s.repo.SetAssets(ctx, b.ID, rep.Blocks[i].Assets); err != nil {
+		uploads := []struct {
+			key, contentType string
+			body             []byte
+		}{
+			{assets.MapPNG, "image/png", up.MapPNG},
+			{assets.InsightsPNG, "image/png", up.InsightsPNG},
+			{assets.BundleZIP, "application/zip", blob},
+		}
+		for _, u := range uploads {
+			if err := s.storage.Put(ctx, u.key, bytes.NewReader(u.body), u.contentType); err != nil {
+				return nil, fmt.Errorf("postsale: subir %s: %w", u.key, err)
+			}
+		}
+		rep.Blocks[i].Assets = assets
+		if err := s.repo.SetAssets(ctx, b.ID, assets); err != nil {
 			return nil, err
 		}
 	}

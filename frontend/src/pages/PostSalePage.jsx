@@ -36,13 +36,27 @@ export default function PostSalePage() {
     )
   }
 
+  const base = `${API_BASE}/public/post-sale/${encodeURIComponent(token)}`
+
   function handleDownload(block) {
     // O endpoint redireciona (302) pra uma URL presignada de 15 minutos.
     // window.location em vez de fetch: download atravessa o redirect sem CORS.
-    window.location.href =
-      `${API_BASE}/public/post-sale/${encodeURIComponent(token)}` +
-      `/campaigns/${block.campaign_id}/bundle.zip`
+    window.location.href = `${base}/campaigns/${block.campaign_id}/bundle.zip`
   }
 
-  return <PostSaleDocument payload={data} onDownload={handleDownload} />
+  // O mapa é servido pela mesma rota pública, que revalida o token antes de
+  // presignar. A URL é montada aqui (e não gravada no payload) porque cada
+  // destinatário tem seu próprio token e a assinatura do S3 expira.
+  function mapUrlFor(block) {
+    if (!block.has_bundle) return null
+    return `${base}/campaigns/${block.campaign_id}/image/map.png`
+  }
+
+  return (
+    <PostSaleDocument
+      payload={data}
+      onDownload={handleDownload}
+      mapUrlFor={mapUrlFor}
+    />
+  )
 }

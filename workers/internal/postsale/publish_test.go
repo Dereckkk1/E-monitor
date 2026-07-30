@@ -247,4 +247,21 @@ func TestBundleURL_ExigeTokenValido(t *testing.T) {
 
 	_, err = svc.BundleURL(ctx, "token-invalido", seed.CampaignID, time.Minute)
 	require.ErrorIs(t, err, ErrNotFound)
+
+	// O mapa vive como objeto PRÓPRIO, não só dentro do zip: o documento mostra
+	// a imagem na tela, e ninguém abre um zip pra ver o mapa.
+	mapURL, err := svc.ImageURL(ctx, tok, seed.CampaignID, AssetMap, time.Minute)
+	require.NoError(t, err)
+	require.Contains(t, mapURL, "mapa.png")
+
+	insURL, err := svc.ImageURL(ctx, tok, seed.CampaignID, AssetInsights, time.Minute)
+	require.NoError(t, err)
+	require.Contains(t, insURL, "indicadores.png")
+
+	// Token inválido não presigna imagem nenhuma.
+	_, err = svc.ImageURL(ctx, "token-invalido", seed.CampaignID, AssetMap, time.Minute)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	// Os três objetos subiram (mapa, indicadores, zip).
+	require.Len(t, store.objects, 3)
 }
