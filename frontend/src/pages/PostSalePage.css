@@ -490,26 +490,83 @@
 }
 
 /* ── Anexos ─────────────────────────────────────────────────────────────
- * Faixa curta entre a última campanha e o rodapé: título, uma linha de texto e
- * o botão que abre a pasta externa. Sem card e sem moldura — é uma ação só, e
- * embrulhar uma ação em caixa a faz parecer mais um bloco de conteúdo.
+ * Fica DENTRO do bloco de campanha, entre o download dos relatórios e o
+ * checking. Clipe grande à esquerda, conteúdo à direita, separado por réguas em
+ * cima e embaixo: sem elas, mais um botão logo abaixo do "Baixar relatórios"
+ * lê como um par de botões da mesma ação.
  */
 .ps-attach {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(18px, 2.4vw, 28px);
+  padding: clamp(20px, 2.6vw, 28px) 0;
+  border-top: 1px solid var(--ps-rule);
+  border-bottom: 1px solid var(--ps-rule);
+}
+
+.is-dark .ps-attach {
+  border-top-color: rgba(255, 255, 255, 0.14);
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+
+.ps-attach-clip {
+  display: flex;
+  width: clamp(44px, 5vw, 62px);
+  color: var(--c-action);
+  flex-shrink: 0;
+}
+.ps-attach-clip svg { width: 100%; height: auto; }
+
+.ps-attach-body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 14px;
+  gap: 10px;
+  min-width: 0;
 }
+
+.ps-attach-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: clamp(1.15rem, 1.7vw, 1.4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ps-ink);
+}
+.is-dark .ps-attach-title { color: #fff; }
 
 .ps-attach-text {
   margin: 0;
-  font-size: clamp(1rem, 1.3vw, 1.1rem);
-  line-height: 1.6;
+  font-size: clamp(0.95rem, 1.2vw, 1.04rem);
+  line-height: 1.55;
   color: var(--ps-ink-soft);
   max-width: 62ch;
 }
 
 .is-dark .ps-attach-text { color: rgba(255, 255, 255, 0.72); }
+
+/* Variante secundária do CTA: o download dos relatórios é a ação principal do
+ * bloco, e dois botões rosa sólidos empatariam a hierarquia. */
+.ps-cta--ghost {
+  margin-top: 2px;
+  padding: 12px 22px;
+  background: transparent;
+  color: var(--c-action);
+  border: 1.5px solid var(--c-action);
+  box-shadow: none;
+  font-size: 0.96rem;
+}
+.is-dark .ps-cta--ghost { color: #fff; border-color: rgba(255, 255, 255, 0.4); }
+
+@media (hover: hover) and (pointer: fine) {
+  .ps-cta--ghost:hover {
+    background: var(--c-action);
+    color: #fff;
+    box-shadow: 0 10px 24px rgba(232, 30, 117, 0.24);
+  }
+  .is-dark .ps-cta--ghost:hover { border-color: var(--c-action); }
+}
 
 /* ── Checking ───────────────────────────────────────────────────────── */
 
@@ -802,6 +859,10 @@
   .ps-footer-inner { flex-direction: column; }
   .ps-footer-contact { align-items: flex-start; }
   .ps-cta { width: 100%; justify-content: center; }
+  /* Clipe e texto lado a lado deixariam ~180px pro título. Empilha, com o
+     clipe menor: ele anuncia a faixa, não é a faixa. */
+  .ps-attach { grid-template-columns: 1fr; gap: 16px; }
+  .ps-attach-clip { width: 48px; }
 }
 
 /* Abaixo de ~420px dois KPIs lado a lado cortam "R$ 2.712,50". */
