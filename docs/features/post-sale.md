@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-29
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
+  - migrations/0059_post_sale_overrides.up.sql
   - workers/internal/postsale/
   - workers/internal/reportcsv/reportcsv.go
   - workers/internal/api/handlers/post_sale.go
@@ -40,7 +41,7 @@ Plano de implementação: [docs/superpowers/plans/2026-07-29-pos-venda.md](../su
 | Superfície | Quem | Auth |
 |---|---|---|
 | `/admin/pos-venda` (listagem) | **admin apenas** | JWT + `RequireRole("admin")` |
-| `/admin/pos-venda/novo` (wizard 4 passos) | admin | idem |
+| `/admin/pos-venda/novo` (wizard 3 passos) | admin | idem |
 | `/admin/pos-venda/:id` (detalhe, aberturas, reenvio, revogação) | admin | idem |
 | `/pos-venda/:token` (o documento) | qualquer pessoa com o link | **nenhuma** — o token é a credencial |
 
@@ -115,19 +116,55 @@ UI mostra "—", nunca "0%".
 
 ## O que o admin edita
 
-Os KPIs **não** são editáveis — são o número do sistema. O admin ajusta a
-narrativa:
-
 - título e mensagem de abertura;
-- texto do Checking por campanha;
+- texto do Checking por campanha (em branco → sai a sugestão calculada com a
+  entrega real do período, via `DefaultCheckingText`);
 - por linha de emissora: **% de entrega**, **nº de bonificações** e a
   **observação** da compensação;
-- remover linhas (que viram contagem, como acima).
+- remover linhas (que viram contagem, como acima);
+- **os valores** — ver abaixo.
+
+### Valores editáveis (`kpi_overrides`, migration 0059)
+
+Três campos por campanha: **valor entregue**, **impactos** e **bonificação**.
+Existem porque o número fechado com o cliente às vezes não é o que o sistema
+calcula (acordo feito fora da plataforma).
+
+Como funciona:
+
+- Os campos vêm **pré-preenchidos com o valor do sistema** e são editáveis.
+- Só viram override quando o valor **difere** do calculado (tolerância de um
+  centavo). Isso é o que preserva o rastro: pré-preencher e gravar tudo
+  transformaria todo pós-venda num congelamento manual, e ninguém saberia mais
+  qual número é do sistema e qual é da mão.
+- Cada campo mostra `sistema: <valor>` e um **"usar do sistema"** que apaga o
+  override.
+- **O CPM não é editável**: é derivado de `valor ÷ impactos × 1000` e recalcula
+  enquanto se digita. Um CPM digitado contradiria os dois números exibidos ao
+  lado dele. `cpm_target` segue a mesma regra, sobre os impactos no target (que
+  continuam vindo do sistema — o admin ajusta o total, não o recorte de
+  público-alvo).
+- Impactos zero não gera CPM infinito: cai para 0 (indeterminado).
+- O bloco ganha `overridden: true` no payload. O **painel admin** mostra o selo
+  "ajustado à mão"; a **página do cliente não** — pra ele, o número é o número.
+- Em pricing **consolidado** o campo de bonificação nem aparece: ela é zerada por
+  definição e o documento não mostra o card, então seria controle morto.
+
+### Checking intocado × Checking esvaziado (`checking_edited`)
+
+`checking_rows = []` é ambíguo: pode ser "ainda não editei" ou "apaguei todas as
+linhas de propósito". A coluna `checking_edited` (0059) desfaz o empate.
+
+Isso existe porque foi um **bug real**: o wizard salvava os blocos no passo de
+escopo antes de qualquer edição, o backend lia a lista vazia como remoção
+deliberada, e o documento saía com **todas** as emissoras em "entregaram
+conforme o planejado" — o Checking nunca listava ninguém. Travado em
+`TestPreview_BlocoSalvoSemEdicaoAindaDerivaOChecking`.
 
 ## Fluxo do publish
 
 ```
-1. Admin clica "Enviar pós-venda" (passo 4)
+1. Admin clica "Enviar pós-venda" (passo 3, Revisar)
 2. Frontend, offscreen, POR CAMPANHA:
      renderiza BrazilMap (dados de /live-map) e os gráficos de /insights
      espera o SUCESSO do React Query (nunca setTimeout solto)
@@ -151,6 +188,43 @@ Sem credencial SMTP o status é `disabled`, **nunca** `sent`: marcar como
 enviado um email que não saiu é a falha silenciosa que a regra 4.5 do
 [CLAUDE.md](../../CLAUDE.md) manda evitar.
 
+## O wizard (3 passos)
+
+Superfície de duas colunas: decisões à esquerda, **trilho de resumo** à direita
+respondendo "o que vai no email" (cliente, campanhas, período coberto,
+destinatários). Barra de ação fixa no rodapé. É o split layout do
+[design.md §3](../architecture/design.md).
+
+1. **Escopo** — cliente e campanhas na mesma tela (são uma decisão só), com o
+   período inline por campanha, limitado ao range dela.
+2. **Conteúdo** — abertura + um painel dobrável por campanha: valores editáveis,
+   CPM derivado, texto do Checking e as linhas de emissora.
+3. **Revisar** — o documento inteiro, no mesmo componente que o cliente abre.
+
+**Cliente sem usuário ativo bloqueia o avanço** — o documento é lido por link
+pessoal, então precisa de pelo menos um acesso. O trilho explica e leva pro
+`/admin/users`. Na base de dev isso acontece na maioria dos clientes: só 1 de 25
+amostrados tinha usuário ativo.
+
+Trocar o cliente de um rascunho já criado manda `client_id` no PATCH e **descarta
+os blocos** — campanha de outro cliente no mesmo relatório é o que o
+`buildBlock` recusa. Antes disso, trocar de cliente mantinha o rascunho no
+cliente antigo em silêncio.
+
+### O preview é CARO — não invalide por qualquer edição
+
+`GET /preview` roda o cálculo do `/insights` por campanha. Medido numa campanha
+real do dev: **20 segundos**. Consequências que estão no código:
+
+- `useUpdatePostSaleReport` só invalida `post-sale-preview` quando muda
+  **campanha ou período** (`vars.blocks` / `vars.client_id`). Editar texto ou
+  valor não paga esse preço.
+- `usePostSalePreview` usa `staleTime` de 5 min e `placeholderData` (mantém o
+  resultado anterior visível durante um refetch, em vez de voltar pro skeleton).
+- O passo de conteúdo mostra skeleton + a frase de que o cálculo pode demorar.
+- O selo "sem veiculação no período" só aparece **depois** de o cálculo voltar:
+  antes disso o zero é ausência de resposta, não ausência de tocada.
+
 ### Os PNGs ficam em memória entre o upload e o publish
 
 `Service.pending` (mapa em memória, protegido por mutex). São bytes efêmeros de
@@ -158,12 +232,12 @@ um wizard aberto; persistir PNG intermediário no S3 deixaria lixo toda vez que 
 admin desistisse. **Custo:** reiniciar a API no meio do wizard obriga a refazer
 o passo 4 — aceitável, o publish inteiro leva segundos.
 
-## Modelo de dados (migration 0057)
+## Modelo de dados (migrations 0057 e 0059)
 
 | Tabela | Guarda |
 |---|---|
 | `post_sale_reports` | cliente, título, mensagem, `status` (draft/sent), **`payload_json` congelado**, `sent_at` |
-| `post_sale_report_campaigns` | campanha, `period_from/to`, `position`, texto e linhas do Checking, chaves S3 |
+| `post_sale_report_campaigns` | campanha, `period_from/to`, `position`, texto e linhas do Checking, `checking_edited`, `kpi_overrides`, chaves S3 |
 | `post_sale_report_recipients` | usuário, email/nome (snapshot), **token único**, status do email, `opened_at`/`open_count`, `revoked_at` |
 
 `campaign_id` é `ON DELETE RESTRICT`: um pós-venda enviado é documento, e apagar

@@ -39,7 +39,33 @@ type BlockRow struct {
 	Position     int          `json:"position"`
 	CheckingText string       `json:"checking_text"`
 	CheckingRows []StationRow `json:"checking_rows"`
-	Assets       Assets       `json:"-"` // chaves S3 nunca vão pro frontend
+	// CheckingEdited distingue "ainda não mexi no Checking" de "apaguei todas as
+	// linhas de propósito". Sem esse bit, `[]` é ambíguo entre os dois — e o
+	// wizard, que salva o bloco no passo 2 antes de qualquer edição, fazia o
+	// documento sair com o Checking vazio (migration 0059).
+	CheckingEdited bool         `json:"checking_edited"`
+	KPIOverrides   KPIOverrides `json:"kpi_overrides"`
+	Assets         Assets       `json:"-"` // chaves S3 nunca vão pro frontend
+}
+
+// KPIOverrides são os números que o admin digitou à mão, quando o valor do
+// sistema não é o que vai ser cobrado (acordo fechado fora da plataforma).
+//
+// Ponteiro nil = "não sobrescrevi, use o do sistema". Zero é um override
+// legítimo (bonificação zerada, por exemplo), então não dá pra usar o valor
+// zero como sentinela.
+//
+// CPM NÃO entra aqui de propósito: é derivado de valor ÷ impactos × 1000. Um CPM
+// digitado à mão contradiria os dois números exibidos ao lado dele.
+type KPIOverrides struct {
+	ValorEntregue *float64 `json:"valor_entregue,omitempty"`
+	Impactos      *int64   `json:"impactos,omitempty"`
+	Bonificacao   *float64 `json:"bonificacao,omitempty"`
+}
+
+// Any diz se há algum override — o payload marca o bloco como ajustado à mão.
+func (o KPIOverrides) Any() bool {
+	return o.ValorEntregue != nil || o.Impactos != nil || o.Bonificacao != nil
 }
 
 // Assets são as chaves S3 dos artefatos gerados no publish. Ficam fora do JSON

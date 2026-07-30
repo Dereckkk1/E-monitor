@@ -4,9 +4,9 @@ import "testing"
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name                                   string
+		name                                    string
 		programmed, identified, deficit, extras int
-		want                                   RowKind
+		want                                    RowKind
 	}{
 		{"entregou exatamente o contratado", 10, 10, 0, 0, KindConforming},
 		{"entregou a mais", 10, 10, 0, 3, KindAbove},
