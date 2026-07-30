@@ -1,10 +1,20 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-07-30
 codigo-relacionado:
+  - scripts/radio-sim/simulate-icecast.sh
   - scripts/radio-sim/simulate.sh
   - infra/docker/docker-compose.yml
+  - workers/internal/ingestor/ffmpeg.go
 ---
+
+> **2026-07-30 — variante Icecast é a oficial.** O worker atual faz um ffprobe de
+> pré-flight ANTES do ffmpeg principal (2 conexões em sequência); o servidor
+> `ffmpeg -listen 1` original atende 1 conexão por vez e entra em loop de falha.
+> O compose agora usa `simulate-icecast.sh` (Icecast local multi-cliente — o
+> mesmo protocolo das rádios reais). Use `SIM_MASTERS_DIR` pra tocar só uma
+> subpasta de `/masters` (controle de playlist). Procedimento E2E completo do
+> caso subset curto⊂longo: [incident-2026-07-24-pulso-milium](../incidents/incident-2026-07-24-pulso-milium-nao-detectado.md) §4/§4d/§4e.
 
 # Simulação de Stream de Rádio
 

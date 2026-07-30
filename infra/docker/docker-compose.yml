@@ -304,12 +304,17 @@ services:
     image: alpine:3.19
     profiles: ["sim"]
     entrypoint: ["/bin/sh", "-c"]
-    command: ["apk add --no-cache ffmpeg >/dev/null && exec /sim/simulate.sh"]
+    # Variante Icecast: o worker faz um ffprobe de pré-flight ANTES do ffmpeg
+    # principal (2 conexões em sequência) e o `ffmpeg -listen 1` do simulate.sh
+    # original atende 1 cliente por vez → loop de falha. Icecast é multi-cliente
+    # (mesmo protocolo das rádios reais). docs/operations/simulacao-radio.md
+    command: ["apk add --no-cache ffmpeg icecast >/dev/null && exec /sim/simulate-icecast.sh"]
     environment:
       QUALITY: ${SIM_QUALITY:-fm-standard}
       PORT: "8000"
       GAP_SECONDS: ${SIM_GAP_SECONDS:-15}
-      MASTERS_DIR: /masters
+      # Aponte pra uma subpasta de /masters pra controlar a playlist do teste.
+      MASTERS_DIR: ${SIM_MASTERS_DIR:-/masters}
     ports:
       - "${SIM_PORT:-18000}:8000"
     volumes:
