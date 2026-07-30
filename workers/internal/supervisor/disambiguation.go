@@ -142,6 +142,15 @@ func evaluateDedup(candidateDuration int, candidateShortID int32, conflict *Dedu
 // in prod.
 const confidenceMargin = 0.25
 
+// isSuspectSuppression marca uma supressão §18.2.2 que provavelmente matou uma
+// veiculação REAL: o corte suprimido estava materialmente mais confiante que o
+// mantido (o mantido só false-confirmou a região compartilhada). Espelha o
+// predicado do índice parcial idx_dedup_suppressions_suspect (migration 0049)
+// e usa a mesma margem do confidence-aware.
+func isSuspectSuppression(suppressedConf, keptConf float64) bool {
+	return suppressedConf >= keptConf+confidenceMargin
+}
+
 // evaluateDedupWithConfidence layers the confidence-aware rule on top of the
 // duration-based evaluateDedup. With confidenceAware=false it is EXACTLY
 // evaluateDedup (flag OFF → behavior unchanged). With it on, a clear coverage
@@ -248,6 +257,9 @@ func (s *Supervisor) SubmitDetection(ctx context.Context, det match.ConfirmedDet
 		s.publishConfirmed(ctx, original)
 	case DedupActionSuppress:
 		metrics.MatchDisambiguation.WithLabelValues("suppressed").Inc()
+		if isSuspectSuppression(det.Confidence, conflict.Detection.Confidence) {
+			metrics.MatchDisambiguation.WithLabelValues("suppressed_suspect").Inc()
+		}
 		reason := "shorter_cut"
 		if info.DurationSeconds == conflict.DurationSeconds {
 			reason = "tiebreak_lower_short_id"
