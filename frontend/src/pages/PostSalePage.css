@@ -1,244 +1,321 @@
-/* PostSalePage.css — o documento de pós-venda (hero, blocos, checking, footer).
- *
- * Usado pela página pública /pos-venda/:token E pelo preview do passo 4 do
- * wizard: os dois renderizam o mesmo PostSaleDocument, então o estilo mora
- * num arquivo só.
- *
- * Identidade: DESIGN.md — Rosa Digital (--c-action) como cor de ação, azul
- * marinho (--c-text) nos títulos, Space Grotesk nos títulos + Fira Sans
- * Condensed no corpo, Soft UI arejado. A intenção aqui é acolhimento, não
- * ostentação: espaço em branco generoso, cantos macios, uma cor de destaque só.
- */
+/* ══════════════════════════════════════════════════════════════════════
+   Documento de pós-venda — /pos-venda/:token
+   docs/features/post-sale.md
+
+   Mesma linguagem da página de boas-vindas (WelcomePage.css): escala e cores
+   herdadas do design system (index.css), faixas full-bleed alternando navy e
+   claro, container interno limitando a medida, grão sobre os fundos chapados.
+
+   RITMO DA PÁGINA: navy (hero) → claro (saudação) → navy → claro → navy
+   (rodapé). Sem a alternância, o miolo vira uma laje única de quase-branco
+   entre o hero e o rodapé e o conteúdo parece solto no vazio.
+
+   REGRA DE MOVIMENTO: tudo nasce VISÍVEL. Nenhum `opacity: 0` mora aqui — o JS
+   anima DE 0 (Web Animations API, o equivalente do gsap.from). Se o JS falhar,
+   ou se o renderer não rolar a página (screenshot de página inteira,
+   html2canvas, impressão), o documento aparece inteiro.
+   ══════════════════════════════════════════════════════════════════════ */
 
 .ps-doc {
-  background: var(--c-bg, #f8fafc);
-  color: var(--c-text);
+  --ps-ink: #06055B;
+  --ps-ink-soft: #4b5563;
+  --ps-hero-bg: #02001a;
+  --ps-rule: #e8ecf3;
+  --ps-band: clamp(56px, 8vw, 96px);   /* respiro vertical de cada faixa */
+  --ps-shell: 1120px;                  /* medida máxima do conteúdo */
+  --ps-pad: clamp(20px, 5vw, 64px);
+
+  min-height: 100svh;
+  background: var(--c-bg);
+  color: var(--ps-ink);
   font-family: var(--font-body);
-  min-height: 100vh;
+  overflow-x: clip;
 }
 
-.ps-container {
-  width: 100%;
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 24px;
+/* Container comum a todas as faixas — hero, campanhas e rodapé compartilham a
+   mesma coluna, então nada desalinha ao trocar de fundo. */
+.ps-shell {
+  width: min(100% - 2 * var(--ps-pad), var(--ps-shell));
+  margin-inline: auto;
 }
 
-/* ─── Hero ─────────────────────────────────────────────────────────────── */
+/* Textura: grão finíssimo sobre os fundos chapados. Em #f8fafc puro a área
+   clara lê como vazio; 2.5% de ruído dá superfície sem virar decoração. */
+.ps-doc::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 220px;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
 
 .ps-hero {
   position: relative;
+  isolation: isolate;
   overflow: hidden;
-  min-height: min(72vh, 640px);
+  background: var(--ps-hero-bg);
+  padding: clamp(56px, 10vh, 116px) 0 clamp(64px, 11vh, 124px);
   display: flex;
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 72px 24px 56px;
-  isolation: isolate;
+  min-height: min(58svh, 640px);
 }
 
-.ps-hero-inner {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  max-width: 900px;
-}
-
-/* Orbs: o único elemento decorativo da página. Blur alto + opacidade baixa
-   pra sugerir profundidade sem competir com o texto. */
-.ps-hero-orb {
+/* Camada da imagem separada do container pra que o parallax mova só ela. A
+   folga vertical evita revelar a borda durante o movimento. */
+.ps-hero-media {
   position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.34;
-  pointer-events: none;
+  inset: -12% 0 -12% 0;
+  background-image: url('/login-hero.jpg');
+  background-size: cover;
+  background-position: 50% 42%;
   will-change: transform;
+  z-index: -2;
+}
+
+/* Um gradiente só, na diagonal: duas camadas somariam com o fade claro do fim
+   do hero e produziriam uma faixa acinzentada atravessando a foto. */
+.ps-hero-veil {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(105deg,
+    rgba(2, 0, 26, 0.94) 0%,
+    rgba(2, 0, 26, 0.8) 44%,
+    rgba(2, 0, 26, 0.4) 100%);
+}
+
+.ps-hero-fade {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 64px;
+  background: linear-gradient(to bottom,
+    rgba(248, 250, 252, 0) 0%,
+    rgba(248, 250, 252, 0.28) 58%,
+    var(--c-bg) 100%);
   z-index: 0;
+  pointer-events: none;
 }
 
-.ps-hero-orb--pink {
-  width: 460px;
-  height: 460px;
-  background: var(--c-action);
-  top: -140px;
-  left: -110px;
-  animation: ps-float-a 18s ease-in-out infinite;
-}
+.ps-hero-inner { position: relative; z-index: 1; }
 
-.ps-hero-orb--blue {
-  width: 380px;
-  height: 380px;
-  background: var(--c-text);
-  bottom: -150px;
-  right: -90px;
-  opacity: 0.22;
-  animation: ps-float-b 24s ease-in-out infinite;
-}
+/* ── Lockup de marca (E-monitor × cliente) ──────────────────────────── */
 
-@keyframes ps-float-a {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50%      { transform: translate3d(40px, 30px, 0) scale(1.06); }
-}
-
-@keyframes ps-float-b {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50%      { transform: translate3d(-34px, -26px, 0) scale(1.08); }
+.ps-lockup {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 2vw, 22px);
+  margin-bottom: clamp(26px, 5vh, 46px);
+  flex-wrap: wrap;
 }
 
 .ps-hero-logo {
-  height: 30px;
+  height: clamp(30px, 4vw, 40px);
   width: auto;
-  margin-bottom: 40px;
+  display: block;
+  /* A logo oficial é navy; sobre o hero escuro ela some. */
+  filter: brightness(0) invert(1);
 }
 
-.ps-hero-word {
+/* Divisor do lockup: um traço, não um "×" literal — o × sugere colaboração
+   entre marcas, e aqui a relação é de hospedagem. */
+.ps-lockup-x {
+  width: 1px;
+  height: clamp(24px, 3.4vw, 34px);
+  background: rgba(255, 255, 255, 0.28);
+  flex: 0 0 auto;
+}
+
+/* Placa branca: a maioria dos logos de cliente é escura e sumiria no navy. */
+.ps-lockup-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: clamp(38px, 4.8vw, 50px);
+  min-width: clamp(56px, 7vw, 74px);
+  max-width: 190px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+.ps-lockup-logo {
+  max-height: 100%;
+  max-width: 100%;
+  width: auto; height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Sem logo cadastrado: o nome vira a marca. */
+.ps-lockup-name {
+  font-family: var(--font-heading);
+  font-size: clamp(1rem, 1.7vw, 1.22rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #fff;
+  line-height: 1.1;
+  max-width: 22ch;
+}
+
+.ps-hero-title {
   font-family: var(--font-heading);
   font-weight: 700;
-  /* Mínimo 40px e não 56px: em 320px de viewport, "pós-venda" a 56px passa de
-     300px de largura e encosta nas bordas. O viewport faz parte do design. */
-  font-size: clamp(40px, 12vw, 132px);
-  line-height: 0.92;
-  letter-spacing: -0.04em;
-  color: var(--c-text);
+  /* Teto de 5rem, igual ao hero de boas-vindas: acima disso a página grita em
+     vez de acolher. */
+  font-size: clamp(2.35rem, 6.2vw, 5rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  color: #fff;
   margin: 0;
-  hyphens: none;
   text-wrap: balance;
 }
 
-.ps-hero-word-accent { color: var(--c-action); }
+/* Máscara da linha: o overflow escondido é o que permite o deslize de baixo
+   pra cima sem vazar. */
+.ps-line { display: block; overflow: hidden; padding-bottom: 0.08em; }
+.ps-line-in { display: block; }
 
-.ps-hero-band {
-  display: inline-block;
-  margin: 26px 0 0;
-  padding: 12px 30px;
-  border-radius: var(--radius-full);
-  background: var(--c-action);
+.ps-hero-lead {
+  margin: clamp(20px, 3vh, 30px) 0 0;
+  font-size: clamp(1.04rem, 1.5vw, 1.26rem);
+  line-height: 1.62;
+  color: rgba(255, 255, 255, 0.9);
+  max-width: 58ch;
+}
+
+.ps-hero-hint {
+  margin: 18px 0 0;
+  font-size: 0.94rem;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── Faixas ─────────────────────────────────────────────────────────── */
+
+.ps-band {
+  position: relative;
+  padding: var(--ps-band) 0;
+  background: var(--c-bg);
+}
+
+/* Faixa navy: reencontro com a cor do hero e do rodapé. */
+.ps-band.is-dark {
+  background: var(--ps-ink);
   color: #fff;
-  font-family: var(--font-heading);
-  font-weight: 500;
-  font-size: clamp(15px, 2.4vw, 21px);
-  letter-spacing: -0.01em;
-  transform-origin: center;
-  box-shadow: 0 10px 30px -12px rgba(232, 30, 117, 0.55);
 }
 
-.ps-hero-meta {
-  margin: 28px 0 0;
-  font-size: 14px;
-  color: var(--c-text-3);
-  letter-spacing: 0.02em;
-}
+.ps-band-inner { display: grid; gap: clamp(22px, 3vw, 30px); }
 
-/* ─── Saudação ─────────────────────────────────────────────────────────── */
+/* ── Saudação ───────────────────────────────────────────────────────── */
 
-.ps-greeting {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl, 20px);
-  padding: 32px 36px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}
-
-.ps-greeting-logo {
-  width: 72px;
-  height: 72px;
-  object-fit: contain;
-  border-radius: 14px;
-  flex-shrink: 0;
-}
-
-.ps-greeting-title {
+.ps-greet-title {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: clamp(26px, 4vw, 38px);
-  line-height: 1.1;
-  letter-spacing: -0.025em;
-  color: var(--c-text);
+  font-size: clamp(1.7rem, 3.6vw, 2.5rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: var(--ps-ink);
   margin: 0;
+  text-wrap: balance;
 }
 
-.ps-greeting-sub {
-  margin: 6px 0 0;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--c-action);
-}
-
-.ps-greeting-text {
-  margin: 14px 0 0;
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--c-text-2);
-  max-width: 68ch;
+.ps-greet-text {
+  margin: clamp(14px, 2vh, 20px) 0 0;
+  font-size: clamp(1rem, 1.25vw, 1.09rem);
+  line-height: 1.65;
+  color: var(--ps-ink-soft);
+  max-width: 62ch;
+  text-wrap: pretty;
   white-space: pre-line;
 }
 
-/* ─── Blocos de campanha ───────────────────────────────────────────────── */
+/* ── Cabeçalho da campanha ──────────────────────────────────────────── */
 
-.ps-blocks {
+.ps-band-head {
   display: flex;
-  flex-direction: column;
-  gap: 28px;
-  padding: 28px 0 56px;
+  align-items: center;
+  gap: 16px;
 }
 
-.ps-block {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl, 20px);
-  padding: 30px 34px 34px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+/* Marcador com o motivo de onda de rádio: dois anéis que pulsam pra fora. É a
+   metáfora da casa — sinal indo ao ar — e não um enfeite genérico. */
+.ps-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+}
+.ps-mark-num {
+  position: relative;
+  z-index: 2;
+  width: 46px; height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.18rem;
+  line-height: 1;
+  box-shadow: 0 6px 18px rgba(232, 30, 117, 0.28);
+}
+.ps-mark-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--c-action);
+  opacity: 0;
+  animation: ps-pulse 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+.ps-mark-ring-2 { animation-delay: 1.7s; }
+
+@keyframes ps-pulse {
+  0%   { transform: scale(1);    opacity: 0.55; }
+  70%  { transform: scale(1.85); opacity: 0; }
+  100% { transform: scale(1.85); opacity: 0; }
 }
 
-/* O lift só existe onde há ponteiro que passa por cima. Em touch, :hover
-   "gruda" depois do toque e o card fica levantado sem motivo. */
-@media (hover: hover) and (pointer: fine) {
-  .ps-block:hover {
-    border-color: var(--c-action-border);
-    box-shadow: 0 12px 32px -18px rgba(15, 23, 42, 0.28);
-    transform: translateY(-2px);
-  }
+.ps-band-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(1.4rem, 2.9vw, 2.05rem);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--ps-ink);
+  text-wrap: balance;
 }
+.is-dark .ps-band-name { color: #fff; }
 
-.ps-block-title {
+.ps-band-period {
+  margin: 5px 0 0;
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.ps-block-name {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: -0.02em;
-  color: var(--c-text);
-  margin: 0;
-}
-
-.ps-block-period {
-  margin: 6px 0 0;
-  font-size: 14px;
+  font-size: 0.92rem;
   color: var(--c-text-3);
 }
+.is-dark .ps-band-period { color: rgba(255, 255, 255, 0.6); }
 
 .ps-badge {
   font-family: var(--font-heading);
-  font-size: 11px;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   padding: 3px 10px;
   border-radius: var(--radius-full);
   background: var(--c-surface-2);
-  color: var(--c-text-2);
+  color: var(--ps-ink-soft);
 }
-
 .ps-badge--ativa      { background: #dcfce7; color: #15803d; }
 .ps-badge--concluida  { background: #e0e7ff; color: #4338ca; }
 .ps-badge--programada { background: #fef9c3; color: #a16207; }
@@ -246,44 +323,94 @@
    (docs/features/cancelled-campaign-handling.md). */
 .ps-badge--cancelada  { background: #fee2e2; color: #b91c1c; }
 
-.ps-block-body {
+/* Alinha o corpo com o título, não com o marcador — o texto forma uma coluna
+   contínua e a numeração fica como índice na margem. */
+.ps-band-body {
+  padding-left: 62px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(26px, 4vw, 38px);
+}
+
+/* ── Mapa + KPIs ────────────────────────────────────────────────────── */
+
+.ps-block-grid {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
-  gap: 30px;
-  align-items: center;
-  margin-top: 26px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 44px);
+  align-items: start;
 }
 
-.ps-block-map {
-  margin: 0;
-  border-radius: 16px;
+/* Moldura de navegador em CSS puro (a imagem É um print do sistema, então a
+   moldura é honesta) — sem imagem de mockup, sem peso extra. */
+.ps-shot { margin: 0; }
+.ps-shot-frame {
+  border-radius: 14px;
   overflow: hidden;
-  background: var(--c-surface-2);
-  border: 1px solid var(--c-border);
+  border: 1px solid #dde3ec;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(6, 5, 91, 0.04),
+    0 24px 56px -14px rgba(6, 5, 91, 0.26);
 }
-
-.ps-block-map img {
-  display: block;
-  width: 100%;
-  height: auto;
+.is-dark .ps-shot-frame {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 26px 60px -18px rgba(0, 0, 0, 0.6);
 }
-
-.ps-block-map-empty {
+.ps-shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #f4f6fa;
+  border-bottom: 1px solid #e6eaf2;
+}
+.ps-shot-bar span {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: #d7dce6;
+  flex: 0 0 auto;
+}
+.ps-shot-bar em {
+  margin-left: 10px;
+  padding: 3px 12px;
+  border-radius: var(--radius-full);
+  background: #fff;
+  border: 1px solid #e6eaf2;
+  font-style: normal;
+  font-size: 0.71rem;
+  color: #9aa3b2;
+  letter-spacing: 0.01em;
+}
+.ps-shot-img { display: block; width: 100%; height: auto; }
+.ps-shot-empty {
   width: 100%;
   aspect-ratio: 4 / 3;
-  background: linear-gradient(135deg, var(--c-surface-2), var(--c-surface));
+  background: linear-gradient(135deg, #f4f6fa, #fff);
 }
+.ps-shot-cap {
+  margin-top: 12px;
+  font-size: 0.84rem;
+  color: var(--c-text-3);
+}
+.is-dark .ps-shot-cap { color: rgba(255, 255, 255, 0.5); }
 
 .ps-kpis {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
+/* Sem card: régua fina e fundo levíssimo. O número carrega a hierarquia. */
 .ps-kpi {
-  background: var(--c-surface-2);
-  border-radius: 14px;
-  padding: 16px 18px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--ps-rule);
+}
+.is-dark .ps-kpi {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 /* O valor entregue é o número que o cliente procura primeiro: ocupa a linha
@@ -291,427 +418,446 @@
 .ps-kpi--hero {
   grid-column: 1 / -1;
   background: var(--c-action-light);
+  border-color: transparent;
 }
-
+.is-dark .ps-kpi--hero {
+  background: rgba(232, 30, 117, 0.16);
+  border-color: rgba(232, 30, 117, 0.35);
+}
 .ps-kpi--hero .ps-kpi-value {
   color: var(--c-action);
-  font-size: clamp(28px, 4vw, 38px);
+  font-size: clamp(1.9rem, 3.6vw, 2.5rem);
 }
+.is-dark .ps-kpi--hero .ps-kpi-value { color: #ff7ab3; }
 
 .ps-kpi-label {
   display: block;
-  font-size: 12px;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--c-text-3);
 }
+.is-dark .ps-kpi-label { color: rgba(255, 255, 255, 0.56); }
 
 .ps-kpi-value {
   display: block;
-  margin-top: 4px;
+  margin-top: 5px;
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 22px;
+  font-size: clamp(1.15rem, 1.9vw, 1.42rem);
   letter-spacing: -0.02em;
-  color: var(--c-text);
+  color: var(--ps-ink);
   font-variant-numeric: tabular-nums;
 }
+.is-dark .ps-kpi-value { color: #fff; }
 
-.ps-block-cta {
-  margin-top: 26px;
+/* ── CTA ────────────────────────────────────────────────────────────── */
+
+.ps-cta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 28px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 1.02rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(232, 30, 117, 0.26);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              background-color 180ms ease;
+}
+.ps-cta svg { transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+.ps-cta:active { transform: translateY(0); }
+.ps-cta:focus-visible {
+  outline: 3px solid rgba(232, 30, 117, 0.4);
+  outline-offset: 3px;
 }
 
-/* ─── Checking ─────────────────────────────────────────────────────────── */
-
-.ps-checking {
-  margin-top: 34px;
-  padding-top: 28px;
-  border-top: 1px solid var(--c-border);
+@media (hover: hover) and (pointer: fine) {
+  .ps-cta:hover {
+    background: var(--c-action-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 28px rgba(232, 30, 117, 0.32);
+  }
+  .ps-cta:hover svg { transform: translateX(4px); }
 }
+
+/* ── Checking ───────────────────────────────────────────────────────── */
+
+.ps-checking { padding-top: clamp(6px, 1vw, 10px); }
 
 .ps-checking-title {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: clamp(24px, 3.4vw, 32px);
+  font-size: clamp(1.3rem, 2.4vw, 1.75rem);
   letter-spacing: -0.025em;
-  color: var(--c-text);
+  color: var(--ps-ink);
   margin: 0;
 }
+.is-dark .ps-checking-title { color: #fff; }
 
 .ps-checking-text {
   margin: 10px 0 0;
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--c-text-2);
-  max-width: 68ch;
+  font-size: 1.02rem;
+  line-height: 1.62;
+  color: var(--ps-ink-soft);
+  max-width: 62ch;
+  text-wrap: pretty;
   white-space: pre-line;
 }
+.is-dark .ps-checking-text { color: rgba(255, 255, 255, 0.76); }
 
 .ps-checking-sub {
-  margin: 26px 0 12px;
+  margin: clamp(22px, 3vw, 30px) 0 4px;
   font-family: var(--font-heading);
-  font-size: 13px;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--c-action);
 }
-
 .ps-checking-sub--amber { color: #b45309; }
+.is-dark .ps-checking-sub--amber { color: #fbbf24; }
 
+/* Linhas separadas por RÉGUA, não cards: com 20+ emissoras uma grade de cards
+   idênticos vira ruído, e a régua deixa a tipografia carregar a hierarquia. */
 .ps-station-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .ps-station {
-  display: flex;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) minmax(0, 0.9fr) auto;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--c-border);
-  border-radius: 14px;
-  background: var(--c-surface);
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--ps-rule);
 }
+.ps-station:first-child { border-top: 0; }
+.is-dark .ps-station { border-color: rgba(255, 255, 255, 0.12); }
 
-.ps-station-info {
-  flex: 1;
-  min-width: 0;
-}
+.ps-station-id { min-width: 0; }
 
 .ps-station-name {
   display: block;
   font-weight: 600;
-  font-size: 15px;
-  color: var(--c-text);
+  font-size: 1rem;
+  color: var(--ps-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.is-dark .ps-station-name { color: #fff; }
 
 .ps-station-dial {
   display: block;
-  font-size: 13px;
+  font-size: 0.82rem;
   color: var(--c-text-3);
-  margin-top: 1px;
+  margin-top: 2px;
 }
+.is-dark .ps-station-dial { color: rgba(255, 255, 255, 0.52); }
+
+.ps-station-meter { min-width: 0; }
 
 .ps-station-bar {
-  margin-top: 8px;
   height: 5px;
   border-radius: var(--radius-full);
   background: var(--c-surface-2);
   overflow: hidden;
-  max-width: 320px;
 }
+.is-dark .ps-station-bar { background: rgba(255, 255, 255, 0.12); }
 
 .ps-station-bar-fill {
   height: 100%;
   border-radius: var(--radius-full);
   background: var(--c-action);
 }
-
 .ps-station--compensation .ps-station-bar-fill { background: #d97706; }
+
+.ps-station-note {
+  display: block;
+  margin-top: 7px;
+  font-size: 0.82rem;
+  color: var(--ps-ink-soft);
+}
+.is-dark .ps-station-note { color: rgba(255, 255, 255, 0.66); }
 
 .ps-station-tags {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .ps-station-pct {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 19px;
-  color: var(--c-text);
+  font-size: 1.18rem;
+  color: var(--ps-ink);
   font-variant-numeric: tabular-nums;
 }
+.is-dark .ps-station-pct { color: #fff; }
 
 .ps-station-pct-unit {
-  font-size: 13px;
+  font-size: 0.8rem;
   color: var(--c-text-3);
   margin-left: 1px;
 }
+.is-dark .ps-station-pct-unit { color: rgba(255, 255, 255, 0.5); }
 
 .ps-pill {
-  font-size: 11px;
+  font-size: 0.69rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   padding: 4px 11px;
   border-radius: var(--radius-full);
   white-space: nowrap;
 }
-
 .ps-pill--bonus { background: var(--c-action-light); color: #9d174d; }
 /* Âmbar escuro no TEXTO (não no fundo) pra passar em contraste AA. */
 .ps-pill--compensated { background: #fef3c7; color: #92400e; }
 
-.ps-station-note {
-  font-size: 13px;
-  color: var(--c-text-2);
-  font-style: italic;
-}
-
 .ps-checking-rest {
-  margin: 20px 0 0;
-  font-size: 14px;
+  margin: 22px 0 0;
+  font-size: 0.9rem;
   color: var(--c-text-3);
 }
+.is-dark .ps-checking-rest { color: rgba(255, 255, 255, 0.5); }
 
-/* ─── Footer ───────────────────────────────────────────────────────────── */
+/* ── Rodapé ─────────────────────────────────────────────────────────── */
 
 .ps-footer {
-  background: var(--c-text);
-  color: #e2e8f0;
-  padding: 48px 24px 0;
+  background: var(--ps-ink);
+  color: #fff;
+  padding: clamp(38px, 6vw, 58px) 0 clamp(26px, 4vw, 36px);
 }
-
-.ps-footer-main {
-  max-width: 1120px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 40px;
-  padding-bottom: 36px;
+.ps-footer-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
 }
-
 .ps-footer-logo {
-  height: 28px;
+  height: 30px;
   width: auto;
-  /* A logo é colorida sobre fundo claro; aqui o fundo é escuro. */
+  display: block;
   filter: brightness(0) invert(1);
-  opacity: 0.92;
 }
-
-.ps-footer-desc {
-  margin: 16px 0 0;
-  font-size: 14px;
+.ps-footer-tagline {
+  margin: 12px 0 0;
+  font-size: 0.92rem;
   line-height: 1.6;
-  color: #94a3b8;
-  max-width: 46ch;
+  color: rgba(255, 255, 255, 0.66);
+  max-width: 44ch;
 }
-
 .ps-footer-contact {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 6px;
-  font-size: 14px;
+  font-size: 0.92rem;
 }
-
-.ps-footer-label {
-  font-family: var(--font-heading);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #64748b;
-  margin-bottom: 4px;
-}
-
-.ps-footer-city { color: #94a3b8; }
-
+.ps-footer-city { color: rgba(255, 255, 255, 0.62); }
 .ps-footer-link {
-  color: #e2e8f0;
+  color: #fff;
   text-decoration: none;
-  transition: color 0.15s ease;
+  transition: color 150ms ease;
 }
-
 .ps-footer-link:hover { color: var(--c-action); }
+.ps-footer-link:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.ps-footer-social { display: flex; gap: 16px; margin-top: 8px; }
 
-.ps-footer-social {
-  display: flex;
-  gap: 16px;
-  margin-top: 10px;
+.ps-footer-legal {
+  margin-top: clamp(26px, 4vw, 38px);
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.81rem;
+  color: rgba(255, 255, 255, 0.5);
 }
 
-.ps-footer-bottom {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 18px 0 28px;
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
-  font-size: 13px;
-  color: #64748b;
-}
+/* ── Carregando e link indisponível ─────────────────────────────────── */
 
-/* ─── Estados da página pública ────────────────────────────────────────── */
-
-.ps-loading,
-.ps-gone {
-  min-height: 100vh;
+.ps-loading {
+  min-height: 100svh;
+  background: var(--ps-hero-bg);
+  padding: clamp(56px, 10vh, 116px) 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 12px;
-  padding: 40px 24px;
-  background: var(--c-bg, #f8fafc);
   font-family: var(--font-body);
-  color: var(--c-text-2);
+}
+.ps-sk {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0.07) 25%,
+    rgba(255, 255, 255, 0.14) 37%,
+    rgba(255, 255, 255, 0.07) 63%);
+  background-size: 400% 100%;
+  animation: ps-shimmer 1.5s ease-in-out infinite;
+}
+.ps-sk-logo  { width: 168px; height: 34px; margin-bottom: 40px; }
+.ps-sk-title { width: min(78%, 620px); height: clamp(46px, 7vw, 78px); margin-bottom: 26px; }
+.ps-sk-lead  { width: min(62%, 520px); height: 17px; margin-bottom: 11px; }
+.ps-sk-short { width: min(40%, 340px); }
+
+@keyframes ps-shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
 }
 
-.ps-gone-logo { height: 30px; margin-bottom: 18px; }
-
-.ps-gone h1 {
+.ps-gone {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background: var(--ps-hero-bg);
+  font-family: var(--font-body);
+}
+.ps-gone-card {
+  width: min(100%, 460px);
+  background: var(--c-surface);
+  border-radius: var(--radius-xl);
+  padding: clamp(30px, 5vw, 44px);
+  text-align: center;
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.55);
+}
+.ps-gone-logo { height: 30px; width: auto; margin: 0 auto 26px; display: block; }
+.ps-gone-title {
   font-family: var(--font-heading);
-  font-size: clamp(24px, 4vw, 34px);
+  font-size: clamp(1.3rem, 3.4vw, 1.6rem);
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--c-text);
+  line-height: 1.25;
+  margin: 0 0 12px;
+  color: var(--ps-ink);
+  text-wrap: balance;
+}
+.ps-gone-text {
   margin: 0;
+  font-size: 0.97rem;
+  line-height: 1.6;
+  color: var(--ps-ink-soft);
 }
 
-.ps-gone p { margin: 0; max-width: 46ch; }
-
-/* ─── Reveal ───────────────────────────────────────────────────────────── */
-
-.ps-greeting,
-.ps-block,
-.ps-checking {
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.ps-greeting.is-shown,
-.ps-block.is-shown,
-.ps-checking.is-shown {
-  opacity: 1;
-  transform: none;
-}
-
-/* ─── Responsivo ───────────────────────────────────────────────────────── */
+/* ── Responsivo ─────────────────────────────────────────────────────── */
 
 @media (max-width: 900px) {
-  /* Mapa acima dos KPIs: numa coluna só, o número precisa vir depois da
-     imagem que ele descreve. */
-  .ps-block-body { grid-template-columns: 1fr; }
-  .ps-footer-main { grid-template-columns: 1fr; gap: 28px; }
+  /* Mapa acima dos KPIs: numa coluna só, o número vem depois da imagem que ele
+     descreve. */
+  .ps-block-grid { grid-template-columns: 1fr; }
 }
 
-/* Celular deitado: 88vh de hero engoliria a tela inteira e o cliente rolaria
-   sem ver nada além da capa. */
-@media (orientation: landscape) and (max-height: 560px) {
-  .ps-hero {
-    min-height: 0;
-    padding: 40px 24px 32px;
+@media (max-width: 720px) {
+  /* A numeração sai da margem e o corpo encosta na coluna do texto. */
+  .ps-band-body { padding-left: 0; }
+
+  .ps-station {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    row-gap: 10px;
   }
-  .ps-hero-logo { margin-bottom: 22px; }
+  /* A barra e a nota passam pra linha de baixo, alinhadas com o nome. */
+  .ps-station-meter { grid-column: 2 / -1; }
+  .ps-station-tags { grid-column: 2 / -1; justify-content: flex-start; }
 }
 
 @media (max-width: 640px) {
-  .ps-container { padding: 0 16px; }
-
-  .ps-hero {
-    min-height: 88vh;
-    padding: 56px 18px 44px;
-  }
-
-  .ps-hero-word { line-height: 0.95; }
-  .ps-hero-band { padding: 10px 22px; }
-
-  .ps-greeting {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 24px 20px;
-  }
-
-  .ps-block { padding: 22px 18px 26px; }
-
-  .ps-kpis { gap: 10px; }
-  .ps-kpi { padding: 13px 14px; }
-
-  /* Card de emissora vira linha única: avatar + nome à esquerda, número e
-     pill embaixo, sem quebrar em 320px. */
-  .ps-station {
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 12px 14px;
-  }
-  .ps-station-info { flex: 1 1 60%; }
-  .ps-station-tags {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-  }
-  .ps-station-bar { max-width: none; }
-
-  .ps-block-cta { width: 100%; }
+  .ps-hero { min-height: min(76svh, 620px); }
+  .ps-footer-inner { flex-direction: column; }
+  .ps-footer-contact { align-items: flex-start; }
+  .ps-cta { width: 100%; justify-content: center; }
 }
 
-/* Abaixo de ~420px dois KPIs lado a lado cortam "R$ 2.712,50". Uma coluna. */
+/* Abaixo de ~420px dois KPIs lado a lado cortam "R$ 2.712,50". */
 @media (max-width: 420px) {
   .ps-kpis { grid-template-columns: 1fr; }
 }
 
-/* Alvo de toque: o CTA é a única ação do documento e precisa dos 44px. */
+/* Celular deitado: hero cheio engoliria a tela inteira. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .ps-hero {
+    min-height: 0;
+    padding: 40px 0 32px;
+  }
+  .ps-lockup { margin-bottom: 20px; }
+}
+
+/* Alvo de toque nos únicos elementos acionáveis do documento. */
 @media (pointer: coarse) {
-  .ps-block-cta { min-height: 46px; }
+  .ps-cta { min-height: 48px; }
   .ps-footer-link { padding: 6px 0; display: inline-block; }
 }
 
-/* Notch e barra de gestos: o rodapé é a última coisa da página. */
+/* Notch e barra de gestos. */
 .ps-footer {
-  padding-left: max(24px, env(safe-area-inset-left));
-  padding-right: max(24px, env(safe-area-inset-right));
+  padding-left: max(0px, env(safe-area-inset-left));
+  padding-right: max(0px, env(safe-area-inset-right));
 }
+.ps-footer-legal { padding-bottom: max(0px, env(safe-area-inset-bottom)); }
 
-.ps-footer-bottom { padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+/* ── Movimento reduzido ─────────────────────────────────────────────── */
 
-/* Foco visível: a página é navegável só por teclado, e o azul-marinho do
-   fundo escuro do rodapé engoliria o outline padrão. */
-.ps-footer-link:focus-visible,
-.ps-block-cta:focus-visible {
-  outline: 2px solid var(--c-action);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
-/* ─── Movimento reduzido ───────────────────────────────────────────────────
- * Nenhum movimento e nada invisível: o conteúdo aparece no estado final.
- */
 @media (prefers-reduced-motion: reduce) {
-  .ps-hero-orb { animation: none; }
-
-  .ps-greeting,
-  .ps-block,
-  .ps-checking {
-    opacity: 1;
-    transform: none;
-    transition: none;
-  }
-
-  .ps-block:hover { transform: none; }
+  .ps-mark-ring { animation: none; }
+  .ps-hero-media { transform: none !important; }
+  .ps-cta, .ps-cta svg { transition: none; }
 }
 
-/* Impressão: nada de reveal, nada de orb, nada de fundo escuro no rodapé.
-   O cliente pode muito bem imprimir este documento pra levar numa reunião. */
+/* ── Impressão ──────────────────────────────────────────────────────────
+ * O cliente pode imprimir o documento pra levar numa reunião: nada de foto
+ * escura, nada de anel pulsando, nada de faixa navy comendo tinta.
+ */
 @media print {
-  .ps-hero { min-height: 0; padding: 24px 0; }
-  .ps-hero-orb { display: none; }
+  .ps-doc::after { display: none; }
 
-  .ps-greeting,
-  .ps-block,
-  .ps-checking {
-    opacity: 1 !important;
-    transform: none !important;
-    transition: none !important;
-    box-shadow: none;
-    break-inside: avoid;
+  .ps-hero {
+    min-height: 0;
+    padding: 24px 0;
+    background: none;
+    color: var(--ps-ink);
   }
+  .ps-hero-media, .ps-hero-veil, .ps-hero-fade { display: none; }
+  .ps-hero-logo { filter: none; }
+  .ps-hero-title { color: var(--ps-ink); }
+  .ps-hero-lead { color: var(--ps-ink); }
+  .ps-hero-hint { color: var(--ps-ink-soft); }
+  .ps-lockup-x { background: var(--ps-rule); }
+  .ps-lockup-name { color: var(--ps-ink); }
 
-  .ps-block-cta { display: none; }
+  .ps-band, .ps-band.is-dark { background: none; color: var(--ps-ink); break-inside: avoid; }
+  .is-dark .ps-band-name,
+  .is-dark .ps-checking-title,
+  .is-dark .ps-kpi-value,
+  .is-dark .ps-station-name,
+  .is-dark .ps-station-pct { color: var(--ps-ink); }
+  .is-dark .ps-band-period,
+  .is-dark .ps-checking-text,
+  .is-dark .ps-station-dial,
+  .is-dark .ps-checking-rest { color: var(--ps-ink-soft); }
+  .is-dark .ps-kpi { background: none; border-color: var(--ps-rule); }
+  .is-dark .ps-station { border-color: var(--ps-rule); }
+  .ps-mark-ring { display: none; }
+  .ps-shot-frame { box-shadow: none; }
 
-  .ps-footer { background: none; color: var(--c-text-2); padding-top: 24px; }
+  .ps-cta { display: none; }
+
+  .ps-footer { background: none; color: var(--ps-ink-soft); }
   .ps-footer-logo { filter: none; }
-  .ps-footer-desc, .ps-footer-city, .ps-footer-bottom { color: var(--c-text-2); }
-  .ps-footer-link { color: var(--c-text); }
+  .ps-footer-tagline, .ps-footer-city, .ps-footer-legal { color: var(--ps-ink-soft); }
+  .ps-footer-link { color: var(--ps-ink); }
+  .ps-footer-legal { border-color: var(--ps-rule); }
 }
