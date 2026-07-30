@@ -33,7 +33,9 @@ api.interceptors.request.use((config) => {
 // paralela (telemetria, por exemplo) sequestraria o visitante pro /login.
 // Foi exatamente o que aconteceu com /boasvindas: o POST /web-vitals disparava
 // sem token, tomava 401, e o interceptor engolia a página antes dela renderizar.
-const PUBLIC_ROUTES = [/^\/login$/, /^\/boasvindas(\/|$)/, /^\/404$/]
+//
+// TODA rota pública nova precisa entrar nesta lista.
+const PUBLIC_ROUTES = [/^\/login$/, /^\/boasvindas(\/|$)/, /^\/pos-venda(\/|$)/, /^\/404$/]
 
 function onPublicRoute() {
   const path = window.location.pathname

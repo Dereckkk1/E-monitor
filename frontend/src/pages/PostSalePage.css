@@ -1,0 +1,863 @@
+/* ══════════════════════════════════════════════════════════════════════
+   Documento de pós-venda — /pos-venda/:token
+   docs/features/post-sale.md
+
+   Mesma linguagem da página de boas-vindas (WelcomePage.css): escala e cores
+   herdadas do design system (index.css), faixas full-bleed alternando navy e
+   claro, container interno limitando a medida, grão sobre os fundos chapados.
+
+   RITMO DA PÁGINA: navy (hero) → claro (saudação) → navy → claro → navy
+   (rodapé). Sem a alternância, o miolo vira uma laje única de quase-branco
+   entre o hero e o rodapé e o conteúdo parece solto no vazio.
+
+   REGRA DE MOVIMENTO: tudo nasce VISÍVEL. Nenhum `opacity: 0` mora aqui — o JS
+   anima DE 0 (Web Animations API, o equivalente do gsap.from). Se o JS falhar,
+   ou se o renderer não rolar a página (screenshot de página inteira,
+   html2canvas, impressão), o documento aparece inteiro.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.ps-doc {
+  --ps-ink: #06055B;
+  --ps-ink-soft: #4b5563;
+  --ps-hero-bg: #02001a;
+  --ps-rule: #e8ecf3;
+  --ps-band: clamp(56px, 8vw, 96px);   /* respiro vertical de cada faixa */
+  --ps-shell: 1120px;                  /* medida máxima do conteúdo */
+  --ps-pad: clamp(20px, 5vw, 64px);
+
+  min-height: 100svh;
+  background: var(--c-bg);
+  color: var(--ps-ink);
+  font-family: var(--font-body);
+  overflow-x: clip;
+}
+
+/* Container comum a todas as faixas — hero, campanhas e rodapé compartilham a
+   mesma coluna, então nada desalinha ao trocar de fundo. */
+.ps-shell {
+  width: min(100% - 2 * var(--ps-pad), var(--ps-shell));
+  margin-inline: auto;
+}
+
+/* Textura: grão finíssimo sobre os fundos chapados. Em #f8fafc puro a área
+   clara lê como vazio; 2.5% de ruído dá superfície sem virar decoração. */
+.ps-doc::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 220px;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+
+.ps-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--ps-hero-bg);
+  padding: clamp(56px, 10vh, 116px) 0 clamp(64px, 11vh, 124px);
+  display: flex;
+  align-items: center;
+  min-height: min(58svh, 640px);
+}
+
+/* Camada da imagem separada do container pra que o parallax mova só ela. A
+   folga vertical evita revelar a borda durante o movimento. */
+.ps-hero-media {
+  position: absolute;
+  inset: -12% 0 -12% 0;
+  background-image: url('/login-hero.jpg');
+  background-size: cover;
+  background-position: 50% 42%;
+  will-change: transform;
+  z-index: -2;
+}
+
+/* Um gradiente só, na diagonal: duas camadas somariam com o fade claro do fim
+   do hero e produziriam uma faixa acinzentada atravessando a foto. */
+.ps-hero-veil {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(105deg,
+    rgba(2, 0, 26, 0.94) 0%,
+    rgba(2, 0, 26, 0.8) 44%,
+    rgba(2, 0, 26, 0.4) 100%);
+}
+
+.ps-hero-fade {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 64px;
+  background: linear-gradient(to bottom,
+    rgba(248, 250, 252, 0) 0%,
+    rgba(248, 250, 252, 0.28) 58%,
+    var(--c-bg) 100%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.ps-hero-inner { position: relative; z-index: 1; }
+
+/* ── Lockup de marca (E-monitor × cliente) ──────────────────────────── */
+
+.ps-lockup {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 2vw, 22px);
+  margin-bottom: clamp(26px, 5vh, 46px);
+  flex-wrap: wrap;
+}
+
+.ps-hero-logo {
+  height: clamp(30px, 4vw, 40px);
+  width: auto;
+  display: block;
+  /* A logo oficial é navy; sobre o hero escuro ela some. */
+  filter: brightness(0) invert(1);
+}
+
+/* Divisor do lockup: um traço, não um "×" literal — o × sugere colaboração
+   entre marcas, e aqui a relação é de hospedagem. */
+.ps-lockup-x {
+  width: 1px;
+  height: clamp(24px, 3.4vw, 34px);
+  background: rgba(255, 255, 255, 0.28);
+  flex: 0 0 auto;
+}
+
+/* Placa branca: a maioria dos logos de cliente é escura e sumiria no navy. */
+.ps-lockup-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: clamp(38px, 4.8vw, 50px);
+  min-width: clamp(56px, 7vw, 74px);
+  max-width: 190px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+.ps-lockup-logo {
+  max-height: 100%;
+  max-width: 100%;
+  width: auto; height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Sem logo cadastrado: o nome vira a marca. */
+.ps-lockup-name {
+  font-family: var(--font-heading);
+  font-size: clamp(1rem, 1.7vw, 1.22rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #fff;
+  line-height: 1.1;
+  max-width: 22ch;
+}
+
+.ps-hero-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  /* Teto de 5rem, igual ao hero de boas-vindas: acima disso a página grita em
+     vez de acolher. */
+  font-size: clamp(2.35rem, 6.2vw, 5rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  color: #fff;
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* Máscara da linha: o overflow escondido é o que permite o deslize de baixo
+   pra cima sem vazar. */
+.ps-line { display: block; overflow: hidden; padding-bottom: 0.08em; }
+.ps-line-in { display: block; }
+
+.ps-hero-lead {
+  margin: clamp(20px, 3vh, 30px) 0 0;
+  font-size: clamp(1.04rem, 1.5vw, 1.26rem);
+  line-height: 1.62;
+  color: rgba(255, 255, 255, 0.9);
+  max-width: 58ch;
+}
+
+.ps-hero-hint {
+  margin: 18px 0 0;
+  font-size: 0.94rem;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── Faixas ─────────────────────────────────────────────────────────── */
+
+.ps-band {
+  position: relative;
+  padding: var(--ps-band) 0;
+  background: var(--c-bg);
+}
+
+/* Faixa navy: reencontro com a cor do hero e do rodapé. */
+.ps-band.is-dark {
+  background: var(--ps-ink);
+  color: #fff;
+}
+
+.ps-band-inner { display: grid; gap: clamp(22px, 3vw, 30px); }
+
+/* ── Saudação ───────────────────────────────────────────────────────── */
+
+.ps-greet-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(1.7rem, 3.6vw, 2.5rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: var(--ps-ink);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.ps-greet-text {
+  margin: clamp(14px, 2vh, 20px) 0 0;
+  font-size: clamp(1rem, 1.25vw, 1.09rem);
+  line-height: 1.65;
+  color: var(--ps-ink-soft);
+  max-width: 62ch;
+  text-wrap: pretty;
+  white-space: pre-line;
+}
+
+/* ── Cabeçalho da campanha ──────────────────────────────────────────── */
+
+.ps-band-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Marcador com o motivo de onda de rádio: dois anéis que pulsam pra fora. É a
+   metáfora da casa — sinal indo ao ar — e não um enfeite genérico. */
+.ps-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+}
+.ps-mark-num {
+  position: relative;
+  z-index: 2;
+  width: 46px; height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.18rem;
+  line-height: 1;
+  box-shadow: 0 6px 18px rgba(232, 30, 117, 0.28);
+}
+.ps-mark-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--c-action);
+  opacity: 0;
+  animation: ps-pulse 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+.ps-mark-ring-2 { animation-delay: 1.7s; }
+
+@keyframes ps-pulse {
+  0%   { transform: scale(1);    opacity: 0.55; }
+  70%  { transform: scale(1.85); opacity: 0; }
+  100% { transform: scale(1.85); opacity: 0; }
+}
+
+.ps-band-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(1.4rem, 2.9vw, 2.05rem);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--ps-ink);
+  text-wrap: balance;
+}
+.is-dark .ps-band-name { color: #fff; }
+
+.ps-band-period {
+  margin: 5px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.92rem;
+  color: var(--c-text-3);
+}
+.is-dark .ps-band-period { color: rgba(255, 255, 255, 0.6); }
+
+.ps-badge {
+  font-family: var(--font-heading);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  color: var(--ps-ink-soft);
+}
+.ps-badge--ativa      { background: #dcfce7; color: #15803d; }
+.ps-badge--concluida  { background: #e0e7ff; color: #4338ca; }
+.ps-badge--programada { background: #fef9c3; color: #a16207; }
+/* Cancelada aparece MARCADA em histórico/relatório — nunca some do documento
+   (docs/features/cancelled-campaign-handling.md). */
+.ps-badge--cancelada  { background: #fee2e2; color: #b91c1c; }
+
+/* Alinha o corpo com o título, não com o marcador — o texto forma uma coluna
+   contínua e a numeração fica como índice na margem. */
+.ps-band-body {
+  padding-left: 62px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(26px, 4vw, 38px);
+}
+
+/* ── Mapa + KPIs ────────────────────────────────────────────────────── */
+
+.ps-block-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 44px);
+  align-items: start;
+}
+
+/* Moldura de navegador em CSS puro (a imagem É um print do sistema, então a
+   moldura é honesta) — sem imagem de mockup, sem peso extra. */
+.ps-shot { margin: 0; }
+.ps-shot-frame {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #dde3ec;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(6, 5, 91, 0.04),
+    0 24px 56px -14px rgba(6, 5, 91, 0.26);
+}
+.is-dark .ps-shot-frame {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 26px 60px -18px rgba(0, 0, 0, 0.6);
+}
+.ps-shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #f4f6fa;
+  border-bottom: 1px solid #e6eaf2;
+}
+.ps-shot-bar span {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: #d7dce6;
+  flex: 0 0 auto;
+}
+.ps-shot-bar em {
+  margin-left: 10px;
+  padding: 3px 12px;
+  border-radius: var(--radius-full);
+  background: #fff;
+  border: 1px solid #e6eaf2;
+  font-style: normal;
+  font-size: 0.71rem;
+  color: #9aa3b2;
+  letter-spacing: 0.01em;
+}
+.ps-shot-img { display: block; width: 100%; height: auto; }
+.ps-shot-empty {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, #f4f6fa, #fff);
+}
+.ps-shot-cap {
+  margin-top: 12px;
+  font-size: 0.84rem;
+  color: var(--c-text-3);
+}
+.is-dark .ps-shot-cap { color: rgba(255, 255, 255, 0.5); }
+
+.ps-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Sem card: régua fina e fundo levíssimo. O número carrega a hierarquia. */
+.ps-kpi {
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--ps-rule);
+}
+.is-dark .ps-kpi {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* O valor entregue é o número que o cliente procura primeiro: ocupa a linha
+   inteira e é o único em rosa. */
+.ps-kpi--hero {
+  grid-column: 1 / -1;
+  background: var(--c-action-light);
+  border-color: transparent;
+}
+.is-dark .ps-kpi--hero {
+  background: rgba(232, 30, 117, 0.16);
+  border-color: rgba(232, 30, 117, 0.35);
+}
+.ps-kpi--hero .ps-kpi-value {
+  color: var(--c-action);
+  font-size: clamp(1.9rem, 3.6vw, 2.5rem);
+}
+.is-dark .ps-kpi--hero .ps-kpi-value { color: #ff7ab3; }
+
+.ps-kpi-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+.is-dark .ps-kpi-label { color: rgba(255, 255, 255, 0.56); }
+
+.ps-kpi-value {
+  display: block;
+  margin-top: 5px;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(1.15rem, 1.9vw, 1.42rem);
+  letter-spacing: -0.02em;
+  color: var(--ps-ink);
+  font-variant-numeric: tabular-nums;
+}
+.is-dark .ps-kpi-value { color: #fff; }
+
+/* ── CTA ────────────────────────────────────────────────────────────── */
+
+.ps-cta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 28px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 1.02rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(232, 30, 117, 0.26);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              background-color 180ms ease;
+}
+.ps-cta svg { transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+.ps-cta:active { transform: translateY(0); }
+.ps-cta:focus-visible {
+  outline: 3px solid rgba(232, 30, 117, 0.4);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ps-cta:hover {
+    background: var(--c-action-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 28px rgba(232, 30, 117, 0.32);
+  }
+  .ps-cta:hover svg { transform: translateX(4px); }
+}
+
+/* ── Checking ───────────────────────────────────────────────────────── */
+
+.ps-checking { padding-top: clamp(6px, 1vw, 10px); }
+
+.ps-checking-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(1.3rem, 2.4vw, 1.75rem);
+  letter-spacing: -0.025em;
+  color: var(--ps-ink);
+  margin: 0;
+}
+.is-dark .ps-checking-title { color: #fff; }
+
+.ps-checking-text {
+  margin: 10px 0 0;
+  font-size: 1.02rem;
+  line-height: 1.62;
+  color: var(--ps-ink-soft);
+  max-width: 62ch;
+  text-wrap: pretty;
+  white-space: pre-line;
+}
+.is-dark .ps-checking-text { color: rgba(255, 255, 255, 0.76); }
+
+.ps-checking-sub {
+  margin: clamp(22px, 3vw, 30px) 0 4px;
+  font-family: var(--font-heading);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--c-action);
+}
+.ps-checking-sub--amber { color: #b45309; }
+.is-dark .ps-checking-sub--amber { color: #fbbf24; }
+
+/* Linhas separadas por RÉGUA, não cards: com 20+ emissoras uma grade de cards
+   idênticos vira ruído, e a régua deixa a tipografia carregar a hierarquia. */
+.ps-station-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ps-station {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) minmax(0, 0.9fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--ps-rule);
+}
+.ps-station:first-child { border-top: 0; }
+.is-dark .ps-station { border-color: rgba(255, 255, 255, 0.12); }
+
+.ps-station-id { min-width: 0; }
+
+.ps-station-name {
+  display: block;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--ps-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.is-dark .ps-station-name { color: #fff; }
+
+.ps-station-dial {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--c-text-3);
+  margin-top: 2px;
+}
+.is-dark .ps-station-dial { color: rgba(255, 255, 255, 0.52); }
+
+.ps-station-meter { min-width: 0; }
+
+.ps-station-bar {
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+.is-dark .ps-station-bar { background: rgba(255, 255, 255, 0.12); }
+
+.ps-station-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+}
+.ps-station--compensation .ps-station-bar-fill { background: #d97706; }
+
+.ps-station-note {
+  display: block;
+  margin-top: 7px;
+  font-size: 0.82rem;
+  color: var(--ps-ink-soft);
+}
+.is-dark .ps-station-note { color: rgba(255, 255, 255, 0.66); }
+
+.ps-station-tags {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.ps-station-pct {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.18rem;
+  color: var(--ps-ink);
+  font-variant-numeric: tabular-nums;
+}
+.is-dark .ps-station-pct { color: #fff; }
+
+.ps-station-pct-unit {
+  font-size: 0.8rem;
+  color: var(--c-text-3);
+  margin-left: 1px;
+}
+.is-dark .ps-station-pct-unit { color: rgba(255, 255, 255, 0.5); }
+
+.ps-pill {
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 11px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.ps-pill--bonus { background: var(--c-action-light); color: #9d174d; }
+/* Âmbar escuro no TEXTO (não no fundo) pra passar em contraste AA. */
+.ps-pill--compensated { background: #fef3c7; color: #92400e; }
+
+.ps-checking-rest {
+  margin: 22px 0 0;
+  font-size: 0.9rem;
+  color: var(--c-text-3);
+}
+.is-dark .ps-checking-rest { color: rgba(255, 255, 255, 0.5); }
+
+/* ── Rodapé ─────────────────────────────────────────────────────────── */
+
+.ps-footer {
+  background: var(--ps-ink);
+  color: #fff;
+  padding: clamp(38px, 6vw, 58px) 0 clamp(26px, 4vw, 36px);
+}
+.ps-footer-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+.ps-footer-logo {
+  height: 30px;
+  width: auto;
+  display: block;
+  filter: brightness(0) invert(1);
+}
+.ps-footer-tagline {
+  margin: 12px 0 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.66);
+  max-width: 44ch;
+}
+.ps-footer-contact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 0.92rem;
+}
+.ps-footer-city { color: rgba(255, 255, 255, 0.62); }
+.ps-footer-link {
+  color: #fff;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+.ps-footer-link:hover { color: var(--c-action); }
+.ps-footer-link:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.ps-footer-social { display: flex; gap: 16px; margin-top: 8px; }
+
+.ps-footer-legal {
+  margin-top: clamp(26px, 4vw, 38px);
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.81rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ── Carregando e link indisponível ─────────────────────────────────── */
+
+.ps-loading {
+  min-height: 100svh;
+  background: var(--ps-hero-bg);
+  padding: clamp(56px, 10vh, 116px) 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-body);
+}
+.ps-sk {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0.07) 25%,
+    rgba(255, 255, 255, 0.14) 37%,
+    rgba(255, 255, 255, 0.07) 63%);
+  background-size: 400% 100%;
+  animation: ps-shimmer 1.5s ease-in-out infinite;
+}
+.ps-sk-logo  { width: 168px; height: 34px; margin-bottom: 40px; }
+.ps-sk-title { width: min(78%, 620px); height: clamp(46px, 7vw, 78px); margin-bottom: 26px; }
+.ps-sk-lead  { width: min(62%, 520px); height: 17px; margin-bottom: 11px; }
+.ps-sk-short { width: min(40%, 340px); }
+
+@keyframes ps-shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.ps-gone {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background: var(--ps-hero-bg);
+  font-family: var(--font-body);
+}
+.ps-gone-card {
+  width: min(100%, 460px);
+  background: var(--c-surface);
+  border-radius: var(--radius-xl);
+  padding: clamp(30px, 5vw, 44px);
+  text-align: center;
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.55);
+}
+.ps-gone-logo { height: 30px; width: auto; margin: 0 auto 26px; display: block; }
+.ps-gone-title {
+  font-family: var(--font-heading);
+  font-size: clamp(1.3rem, 3.4vw, 1.6rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin: 0 0 12px;
+  color: var(--ps-ink);
+  text-wrap: balance;
+}
+.ps-gone-text {
+  margin: 0;
+  font-size: 0.97rem;
+  line-height: 1.6;
+  color: var(--ps-ink-soft);
+}
+
+/* ── Responsivo ─────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  /* Mapa acima dos KPIs: numa coluna só, o número vem depois da imagem que ele
+     descreve. */
+  .ps-block-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  /* A numeração sai da margem e o corpo encosta na coluna do texto. */
+  .ps-band-body { padding-left: 0; }
+
+  .ps-station {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    row-gap: 10px;
+  }
+  /* A barra e a nota passam pra linha de baixo, alinhadas com o nome. */
+  .ps-station-meter { grid-column: 2 / -1; }
+  .ps-station-tags { grid-column: 2 / -1; justify-content: flex-start; }
+}
+
+@media (max-width: 640px) {
+  .ps-hero { min-height: min(76svh, 620px); }
+  .ps-footer-inner { flex-direction: column; }
+  .ps-footer-contact { align-items: flex-start; }
+  .ps-cta { width: 100%; justify-content: center; }
+}
+
+/* Abaixo de ~420px dois KPIs lado a lado cortam "R$ 2.712,50". */
+@media (max-width: 420px) {
+  .ps-kpis { grid-template-columns: 1fr; }
+}
+
+/* Celular deitado: hero cheio engoliria a tela inteira. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .ps-hero {
+    min-height: 0;
+    padding: 40px 0 32px;
+  }
+  .ps-lockup { margin-bottom: 20px; }
+}
+
+/* Alvo de toque nos únicos elementos acionáveis do documento. */
+@media (pointer: coarse) {
+  .ps-cta { min-height: 48px; }
+  .ps-footer-link { padding: 6px 0; display: inline-block; }
+}
+
+/* Notch e barra de gestos. */
+.ps-footer {
+  padding-left: max(0px, env(safe-area-inset-left));
+  padding-right: max(0px, env(safe-area-inset-right));
+}
+.ps-footer-legal { padding-bottom: max(0px, env(safe-area-inset-bottom)); }
+
+/* ── Movimento reduzido ─────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-mark-ring { animation: none; }
+  .ps-hero-media { transform: none !important; }
+  .ps-cta, .ps-cta svg { transition: none; }
+}
+
+/* ── Impressão ──────────────────────────────────────────────────────────
+ * O cliente pode imprimir o documento pra levar numa reunião: nada de foto
+ * escura, nada de anel pulsando, nada de faixa navy comendo tinta.
+ */
+@media print {
+  .ps-doc::after { display: none; }
+
+  .ps-hero {
+    min-height: 0;
+    padding: 24px 0;
+    background: none;
+    color: var(--ps-ink);
+  }
+  .ps-hero-media, .ps-hero-veil, .ps-hero-fade { display: none; }
+  .ps-hero-logo { filter: none; }
+  .ps-hero-title { color: var(--ps-ink); }
+  .ps-hero-lead { color: var(--ps-ink); }
+  .ps-hero-hint { color: var(--ps-ink-soft); }
+  .ps-lockup-x { background: var(--ps-rule); }
+  .ps-lockup-name { color: var(--ps-ink); }
+
+  .ps-band, .ps-band.is-dark { background: none; color: var(--ps-ink); break-inside: avoid; }
+  .is-dark .ps-band-name,
+  .is-dark .ps-checking-title,
+  .is-dark .ps-kpi-value,
+  .is-dark .ps-station-name,
+  .is-dark .ps-station-pct { color: var(--ps-ink); }
+  .is-dark .ps-band-period,
+  .is-dark .ps-checking-text,
+  .is-dark .ps-station-dial,
+  .is-dark .ps-checking-rest { color: var(--ps-ink-soft); }
+  .is-dark .ps-kpi { background: none; border-color: var(--ps-rule); }
+  .is-dark .ps-station { border-color: var(--ps-rule); }
+  .ps-mark-ring { display: none; }
+  .ps-shot-frame { box-shadow: none; }
+
+  .ps-cta { display: none; }
+
+  .ps-footer { background: none; color: var(--ps-ink-soft); }
+  .ps-footer-logo { filter: none; }
+  .ps-footer-tagline, .ps-footer-city, .ps-footer-legal { color: var(--ps-ink-soft); }
+  .ps-footer-link { color: var(--ps-ink); }
+  .ps-footer-legal { border-color: var(--ps-rule); }
+}

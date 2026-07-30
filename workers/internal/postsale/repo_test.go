@@ -1,0 +1,139 @@
+package postsale
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestRepo_DraftLifecycle(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+	repo := NewRepo(pool)
+
+	rep, err := repo.CreateDraft(ctx, CreateDraftInput{
+		ClientID: seed.ClientID,
+		Title:    "Pós-venda · Teste",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "draft", rep.Status)
+	require.Nil(t, rep.SentAt)
+
+	require.NoError(t, repo.ReplaceBlocks(ctx, rep.ID, []BlockRow{{
+		CampaignID: seed.CampaignID,
+		From:       date(2026, 6, 1),
+		To:         date(2026, 6, 30),
+	}}))
+
+	loaded, err := repo.Get(ctx, rep.ID)
+	require.NoError(t, err)
+	require.Len(t, loaded.Blocks, 1)
+	require.Equal(t, seed.CampaignID, loaded.Blocks[0].CampaignID)
+	require.Equal(t, seed.ClientID, loaded.ClientID)
+	require.NotEmpty(t, loaded.ClientName)
+
+	// Trocar os blocos substitui, não acumula: o passo 2 do wizard é uma
+	// seleção completa, então desmarcar uma campanha precisa removê-la.
+	require.NoError(t, repo.ReplaceBlocks(ctx, rep.ID, []BlockRow{{
+		CampaignID: seed.CampaignID,
+		From:       date(2026, 6, 5),
+		To:         date(2026, 6, 20),
+	}}))
+	loaded, err = repo.Get(ctx, rep.ID)
+	require.NoError(t, err)
+	require.Len(t, loaded.Blocks, 1)
+	require.Equal(t, "2026-06-05", loaded.Blocks[0].From.Format("2006-01-02"))
+
+	// A listagem enxerga o draft com as contagens zeradas de envio.
+	items, err := repo.List(ctx)
+	require.NoError(t, err)
+	var found bool
+	for _, it := range items {
+		if it.ID == rep.ID {
+			found = true
+			require.Equal(t, 1, it.Campaigns)
+			require.Equal(t, 0, it.Recipients)
+			require.Equal(t, 0, it.Opened)
+		}
+	}
+	require.True(t, found, "draft não apareceu na listagem")
+}
+
+func TestRepo_ResolveToken(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+	repo := NewRepo(pool)
+
+	rep, err := repo.CreateDraft(ctx, CreateDraftInput{ClientID: seed.ClientID, Title: "T"})
+	require.NoError(t, err)
+
+	recs, err := repo.CreateRecipients(ctx, rep.ID, []RecipientInput{
+		{Email: "cliente@empresa.com", Name: "Cliente", Token: "tok-" + rep.ID.String()},
+	})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	tok := recs[0].Token
+
+	// Draft não resolve: o link só vale depois do publish.
+	_, err = repo.ResolveToken(ctx, tok)
+	require.ErrorIs(t, err, ErrNotFound, "draft não pode resolver")
+
+	require.NoError(t, repo.MarkSent(ctx, rep.ID, []byte(`{"version":1}`)))
+
+	res, err := repo.ResolveToken(ctx, tok)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"version":1}`, string(res.Payload))
+	require.Equal(t, 0, res.OpenCount)
+
+	// Publicar de novo é 409, não um segundo envio silencioso.
+	require.ErrorIs(t, repo.MarkSent(ctx, rep.ID, []byte(`{"version":1}`)), ErrAlreadySent)
+
+	// Abertura é contabilizada.
+	require.NoError(t, repo.TouchOpen(ctx, res.RecipientID))
+	again, err := repo.ResolveToken(ctx, tok)
+	require.NoError(t, err)
+	require.Equal(t, 1, again.OpenCount)
+
+	// Revogado some pra sempre — e é indistinguível de token inexistente.
+	require.NoError(t, repo.RevokeRecipient(ctx, res.RecipientID, seed.AdminID))
+	_, err = repo.ResolveToken(ctx, tok)
+	require.ErrorIs(t, err, ErrNotFound)
+	_, err = repo.ResolveToken(ctx, "nao-existe")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	// Revogar duas vezes não é erro.
+	require.NoError(t, repo.RevokeRecipient(ctx, res.RecipientID, seed.AdminID))
+}
+
+// Depois de enviado, o conteúdo não muda mais: o texto que o cliente leu é o
+// texto que fica.
+func TestRepo_UpdateContent_SoEmDraft(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+	repo := NewRepo(pool)
+
+	rep, err := repo.CreateDraft(ctx, CreateDraftInput{ClientID: seed.ClientID, Title: "Antes"})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateContent(ctx, rep.ID, "Depois", "oi"))
+
+	loaded, err := repo.Get(ctx, rep.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Depois", loaded.Title)
+
+	require.NoError(t, repo.MarkSent(ctx, rep.ID, []byte(`{}`)))
+	require.ErrorIs(t, repo.UpdateContent(ctx, rep.ID, "Tarde demais", "x"), ErrNotFound)
+}
+
+func TestRepo_ActiveClientUsers_SoAtivos(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+
+	seedClientUser(t, ctx, pool, seed.ClientID, "ativo@empresa.com", true)
+	seedClientUser(t, ctx, pool, seed.ClientID, "inativo@empresa.com", false)
+
+	people, err := NewRepo(pool).ActiveClientUsers(ctx, seed.ClientID)
+	require.NoError(t, err)
+	require.Len(t, people, 1)
+	require.Equal(t, "ativo@empresa.com", people[0].Email)
+	require.NotNil(t, people[0].UserID)
+}

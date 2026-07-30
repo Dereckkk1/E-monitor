@@ -50,6 +50,8 @@ type Deps struct {
 	Pricing               *handlers.PricingHandler
 	Users                 *handlers.UsersHandler
 	Welcome               *handlers.WelcomeHandler
+	PostSale              *handlers.PostSaleHandler
+	PostSalePublic        *handlers.PostSalePublicHandler
 	Me                    *handlers.MeHandler
 	Reports               *handlers.ReportsHandler
 	Notifications         *handlers.NotificationsHandler
@@ -137,6 +139,14 @@ func NewRouter(d Deps) http.Handler {
 		// endpoint é enumerável em tese (na prática, 2^256 de espaço de busca).
 		if d.Welcome != nil {
 			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
+		}
+		// Pós-venda: o cliente abre pelo link do email, SEM sessão — o token de
+		// 32 bytes é a credencial. Throttle no mesmo limiter do login porque a
+		// rota é enumerável em tese. Ver docs/features/post-sale.md.
+		if d.PostSalePublic != nil {
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}", d.PostSalePublic.Resolve)
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/bundle.zip", d.PostSalePublic.Bundle)
+			r.With(loginLimiter.Middleware).Get("/public/post-sale/{token}/campaigns/{cid}/image/{kind}.png", d.PostSalePublic.Image)
 		}
 
 		// Protected: all other internal routes require a valid JWT.
@@ -570,6 +580,26 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/admin/welcome-invites/{id}/revoke", d.Welcome.Revoke)
+				})
+			}
+
+			// ── Pós-venda — admin-only ──────────────────────────────────────
+			// Tela exclusiva de admin: monta o fechamento, revisa o preview e
+			// dispara o email com o link pessoal de cada usuário do cliente.
+			// Ver docs/features/post-sale.md.
+			if d.PostSale != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					r.Get("/post-sale/reports", d.PostSale.List)
+					r.Post("/post-sale/reports", d.PostSale.Create)
+					r.Get("/post-sale/reports/{id}", d.PostSale.Get)
+					r.Patch("/post-sale/reports/{id}", d.PostSale.Update)
+					r.Get("/post-sale/reports/{id}/preview", d.PostSale.Preview)
+					r.Get("/post-sale/reports/{id}/recipients", d.PostSale.Recipients)
+					r.Post("/post-sale/reports/{id}/assets", d.PostSale.UploadAssets)
+					r.Post("/post-sale/reports/{id}/publish", d.PostSale.Publish)
+					r.Post("/post-sale/reports/{id}/resend", d.PostSale.Resend)
+					r.Post("/post-sale/recipients/{rid}/revoke", d.PostSale.RevokeRecipient)
 				})
 			}
 		}) // end RequireJWT group

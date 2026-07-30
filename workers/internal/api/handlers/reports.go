@@ -11,7 +11,6 @@
 package handlers
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/reportcsv"
 )
 
 type ReportsHandler struct {
@@ -162,74 +162,11 @@ func (h *ReportsHandler) Consolidated(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
 
-	cw := csv.NewWriter(w)
-	cw.Comma = ';'
-	_ = cw.Write([]string{
-		"ID Material", "Material", "Tipo", "Duração (s)",
-		"Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Total Veiculações",
-		// Breakdown por status — útil pra fechamento (saber quanto foi
-		// bônus, quanto foi fora-faixa, etc. dentro de cada combinação).
-		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
-		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
-		// usa o PMM no target do cliente dono da campanha; vazia quando não há
-		// cadastro (não confundir com zero). Quando o cliente tem rótulo de
-		// público-alvo, ele vira sufixo do cabeçalho: "PMM no target (Homens
-		// 25-49)".
-		"PMM", "Impactos", "PMM no target" + targetSuffix, "Impactos no target" + targetSuffix,
-		"Primeira", "Última",
-	})
-
-	loc, _ := time.LoadLocation("America/Sao_Paulo")
-	for _, row := range rows {
-		idLabel := ""
-		if row.MaterialShortID != nil {
-			idLabel = fmt.Sprintf("%d", *row.MaterialShortID)
-		}
-		dur := ""
-		if row.MaterialDurationSec != nil {
-			dur = strings.ReplaceAll(fmt.Sprintf("%.0f", *row.MaterialDurationSec), ".", ",")
-		}
-		freq := ""
-		if row.StationFrequencyMHz != nil {
-			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *row.StationFrequencyMHz), ".", ",")
-		}
-		pmmStr, impactosStr := "", ""
-		if row.StationPMM != nil {
-			pmmStr = strings.ReplaceAll(fmt.Sprintf("%.0f", *row.StationPMM), ".", ",")
-			impactosStr = fmt.Sprintf("%.0f", *row.StationPMM*float64(row.Count))
-		}
-		pmmTargetStr, impactosTargetStr := "", ""
-		if row.StationPMMTarget != nil {
-			pmmTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget)
-			impactosTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget*row.Count)
-		}
-		_ = cw.Write([]string{
-			idLabel,
-			row.MaterialTitle,
-			strOrEmpty(row.MaterialTypeName),
-			dur,
-			row.StationName,
-			freq,
-			strOrEmpty(row.StationBand),
-			strOrEmpty(row.StationCity),
-			strOrEmpty(row.StationState),
-			fmt.Sprintf("%d", row.Count),
-			fmt.Sprintf("%d", row.InSlotCount),
-			fmt.Sprintf("%d", row.OutSlotCount),
-			fmt.Sprintf("%d", row.OutDateCount),
-			fmt.Sprintf("%d", row.OrphanCount),
-			pmmStr,
-			impactosStr,
-			pmmTargetStr,
-			impactosTargetStr,
-			row.FirstDetectedAt.In(loc).Format("02/01/2006 15:04"),
-			row.LastDetectedAt.In(loc).Format("02/01/2006 15:04"),
-		})
-	}
-	cw.Flush()
+	// A formatação mora em internal/reportcsv porque o bundle .zip do pós-venda
+	// escreve o MESMO arquivo em memória. Erro aqui não vira 500: o header já
+	// foi escrito, então só cortamos o stream.
+	_ = reportcsv.WriteConsolidated(w, rows, targetSuffix)
 }
 
 // SummaryResponse é a payload do JSON usada pelo PDF builder no front.
