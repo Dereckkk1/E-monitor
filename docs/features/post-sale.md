@@ -4,6 +4,7 @@ ultima-verificacao: 2026-07-30
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
+  - migrations/0060_post_sale_attachments_url.up.sql
   - workers/internal/postsale/
   - workers/internal/reportcsv/reportcsv.go
   - workers/internal/api/handlers/post_sale.go
@@ -297,6 +298,33 @@ Admin (`RequireRole("admin")`):
 | `POST` | `/post-sale/reports/{id}/publish` |
 | `POST` | `/post-sale/reports/{id}/resend` |
 | `POST` | `/post-sale/recipients/{rid}/revoke` |
+
+### Anexos: link externo, não upload
+
+O passo 2 do wizard tem um campo opcional **"Link dos anexos"**. O admin cola a
+URL de uma pasta compartilhada (Drive, OneDrive, o que o time usar) e o
+documento do cliente ganha uma faixa "Anexos" com um botão que abre em aba nova.
+Em branco, a faixa não existe.
+
+Deliberadamente **não é upload**. O arquivo mora onde o time já trabalha; o
+E-monitor não vira storage de documento de terceiro, não processa MP3 de 50MB e
+não paga banda por download. O custo é uma coluna de texto (`attachments_url`,
+migration 0060) contra um bucket, um limite de tamanho, uma allow-list de MIME e
+um zip montado em memória.
+
+Duas coisas que não são óbvias:
+
+- **Só `http`/`https` chega ao payload.** `safeExternalURL` filtra na hora de
+  montar o snapshot, não no componente que renderiza: um `javascript:` colado no
+  campo viraria código rodando no navegador do cliente ao clicar no botão, e a
+  barreira no backend protege qualquer consumidor futuro do payload (email, PDF)
+  de graça. O wizard avisa na tela quando o valor não é navegável — sem isso o
+  admin salva sem erro e o botão simplesmente não nasce.
+- **O link congela no envio**, como o resto do documento. Trocar a pasta depois
+  exige um pós-venda novo. Coberto por `TestPublish_PayloadCongela`.
+
+Fora de escopo: o sistema não valida se a pasta está pública nem se o link abre.
+Drive restrito mostra "pedir acesso" pro cliente — comportamento do Drive.
 
 ### Listagem: filtro e paginação são do servidor
 

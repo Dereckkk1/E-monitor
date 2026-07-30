@@ -85,9 +85,10 @@ func (s *Service) Publish(ctx context.Context, reportID uuid.UUID) (*PublishResu
 
 	// 2. Congela o payload — com o MESMO builder que o preview usa.
 	in := SnapshotInput{
-		ClientID:     rep.ClientID,
-		Title:        rep.Title,
-		IntroMessage: rep.IntroMessage,
+		ClientID:       rep.ClientID,
+		Title:          rep.Title,
+		IntroMessage:   rep.IntroMessage,
+		AttachmentsURL: rep.AttachmentsURL,
 	}
 	for _, b := range rep.Blocks {
 		in.Blocks = append(in.Blocks, BlockInput{

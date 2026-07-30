@@ -30,12 +30,12 @@ func (r *Repo) CreateDraft(ctx context.Context, in CreateDraftInput) (*Report, e
 
 // UpdateContent grava o que o admin escreveu (passo 3). Só em draft: depois de
 // enviado, o texto que o cliente leu não muda.
-func (r *Repo) UpdateContent(ctx context.Context, id uuid.UUID, title, intro string) error {
+func (r *Repo) UpdateContent(ctx context.Context, id uuid.UUID, title, intro, attachmentsURL string) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE post_sale_reports
-		    SET title = $2, intro_message = $3
+		    SET title = $2, intro_message = $3, attachments_url = $4
 		  WHERE id = $1 AND status = 'draft'`,
-		id, strings.TrimSpace(title), intro)
+		id, strings.TrimSpace(title), intro, strings.TrimSpace(attachmentsURL))
 	if err != nil {
 		return fmt.Errorf("postsale: atualizar conteúdo: %w", err)
 	}
@@ -112,12 +112,12 @@ func (r *Repo) Get(ctx context.Context, id uuid.UUID) (*Report, error) {
 	var rep Report
 	err := r.pool.QueryRow(ctx,
 		`SELECT r.id, r.client_id, c.name, r.title, r.intro_message,
-		        r.status, r.sent_at, r.created_at
+		        r.attachments_url, r.status, r.sent_at, r.created_at
 		   FROM post_sale_reports r
 		   JOIN clients c ON c.id = r.client_id
 		  WHERE r.id = $1`, id,
 	).Scan(&rep.ID, &rep.ClientID, &rep.ClientName, &rep.Title, &rep.IntroMessage,
-		&rep.Status, &rep.SentAt, &rep.CreatedAt)
+		&rep.AttachmentsURL, &rep.Status, &rep.SentAt, &rep.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound

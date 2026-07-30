@@ -17,16 +17,19 @@ var ErrAlreadySent = errors.New("postsale: relatório já enviado")
 
 // Report é o pós-venda como o admin o enxerga (draft ou enviado).
 type Report struct {
-	ID           uuid.UUID   `json:"id"`
-	ClientID     uuid.UUID   `json:"client_id"`
-	ClientName   string      `json:"client_name"`
-	Title        string      `json:"title"`
-	IntroMessage string      `json:"intro_message"`
-	Status       string      `json:"status"`
-	SentAt       *time.Time  `json:"sent_at"`
-	CreatedAt    time.Time   `json:"created_at"`
-	Blocks       []BlockRow  `json:"blocks"`
-	Recipients   []Recipient `json:"recipients"`
+	ID           uuid.UUID `json:"id"`
+	ClientID     uuid.UUID `json:"client_id"`
+	ClientName   string    `json:"client_name"`
+	Title        string    `json:"title"`
+	IntroMessage string    `json:"intro_message"`
+	// AttachmentsURL é o link externo dos anexos (Drive e afins). Vazio = o
+	// documento do cliente não mostra o bloco.
+	AttachmentsURL string      `json:"attachments_url"`
+	Status         string      `json:"status"`
+	SentAt         *time.Time  `json:"sent_at"`
+	CreatedAt      time.Time   `json:"created_at"`
+	Blocks         []BlockRow  `json:"blocks"`
+	Recipients     []Recipient `json:"recipients"`
 }
 
 // BlockRow é uma campanha do relatório, com o período e o que o admin editou.
@@ -166,16 +169,16 @@ type ListFilter struct {
 	// Month é a competência no formato YYYY-MM. Um relatório entra quando o mês
 	// INTERSECTA o período coberto: um fechamento de 15/06 a 15/07 responde por
 	// junho e por julho, que é o que quem procura "os de julho" espera.
-	Month  string
-	Status string // "sent" | "draft" | "" (todos)
-	Page   int    // 1-based
+	Month   string
+	Status  string // "sent" | "draft" | "" (todos)
+	Page    int    // 1-based
 	PerPage int
 }
 
 // ListPage é uma página da listagem mais o que a UI precisa pra se orientar.
 type ListPage struct {
 	Items   []ListItem `json:"items"`
-	Total   int        `json:"total"`    // total DO RECORTE (com status), não do banco
+	Total   int        `json:"total"` // total DO RECORTE (com status), não do banco
 	Page    int        `json:"page"`
 	PerPage int        `json:"per_page"`
 	// Counts ignora o filtro de estado de propósito: é o que faz o chip

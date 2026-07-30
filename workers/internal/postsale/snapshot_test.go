@@ -39,3 +39,29 @@ func TestConformingCount_ContaAsRemovidas(t *testing.T) {
 	// Nunca negativo, mesmo se a lista editada trouxer linha a mais.
 	require.Equal(t, 0, conformingCount(1, all))
 }
+
+// O link dos anexos só sobrevive quando é http(s) navegável. O campo é texto
+// livre preenchido por gente, e um `javascript:` que chegasse ao payload viraria
+// código rodando no navegador do cliente ao clicar no botão.
+func TestSafeExternalURL(t *testing.T) {
+	casos := []struct {
+		nome, in, want string
+	}{
+		{"drive normal", "https://drive.google.com/drive/folders/abc", "https://drive.google.com/drive/folders/abc"},
+		{"http também vale", "http://exemplo.com/pasta", "http://exemplo.com/pasta"},
+		{"espaço nas pontas", "  https://exemplo.com/x  ", "https://exemplo.com/x"},
+		{"vazio", "", ""},
+		{"só espaço", "   ", ""},
+		{"javascript", "javascript:alert(document.cookie)", ""},
+		{"javascript com caixa alta", "JavaScript:alert(1)", ""},
+		{"data uri", "data:text/html;base64,PHNjcmlwdD4=", ""},
+		{"file local", "file:///c:/segredos.txt", ""},
+		{"sem scheme", "drive.google.com/pasta", ""},
+		{"scheme sem host", "https://", ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			require.Equal(t, c.want, safeExternalURL(c.in))
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -93,10 +94,33 @@ type BlockInput struct {
 
 // SnapshotInput agrupa o pós-venda inteiro.
 type SnapshotInput struct {
-	ClientID     uuid.UUID
-	Title        string
-	IntroMessage string
-	Blocks       []BlockInput
+	ClientID       uuid.UUID
+	Title          string
+	IntroMessage   string
+	AttachmentsURL string
+	Blocks         []BlockInput
+}
+
+// safeExternalURL devolve a URL só quando ela é http(s) absoluta.
+//
+// O campo é texto livre preenchido por gente. Um `javascript:alert(1)` colado
+// ali viraria código rodando no navegador do CLIENTE quando ele clicasse no
+// botão — a barreira mora aqui, no que entra no payload congelado, e não só no
+// componente que renderiza: assim um segundo consumidor do payload (email, PDF)
+// herda a proteção de graça.
+func safeExternalURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return s
 }
 
 // Build monta o Payload completo.
@@ -110,13 +134,14 @@ func (s *Service) Build(ctx context.Context, in SnapshotInput) (*Payload, error)
 		return nil, err
 	}
 	p := &Payload{
-		Version:      PayloadVersion,
-		GeneratedAt:  s.now(),
-		Client:       *client,
-		Title:        in.Title,
-		IntroMessage: in.IntroMessage,
-		Footer:       s.footer,
-		Campaigns:    []CampaignBlock{},
+		Version:        PayloadVersion,
+		GeneratedAt:    s.now(),
+		Client:         *client,
+		Title:          in.Title,
+		IntroMessage:   in.IntroMessage,
+		AttachmentsURL: safeExternalURL(in.AttachmentsURL),
+		Footer:         s.footer,
+		Campaigns:      []CampaignBlock{},
 	}
 	var minFrom, maxTo time.Time
 	for _, b := range in.Blocks {
@@ -297,9 +322,10 @@ func (s *Service) Preview(ctx context.Context, reportID uuid.UUID) (*Payload, er
 	}
 
 	in := SnapshotInput{
-		ClientID:     rep.ClientID,
-		Title:        rep.Title,
-		IntroMessage: rep.IntroMessage,
+		ClientID:       rep.ClientID,
+		Title:          rep.Title,
+		IntroMessage:   rep.IntroMessage,
+		AttachmentsURL: rep.AttachmentsURL,
 	}
 	for _, b := range rep.Blocks {
 		in.Blocks = append(in.Blocks, BlockInput{
