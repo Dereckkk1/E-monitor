@@ -13,7 +13,7 @@ import (
 // LiveMapRepo é a dependência mínima do handler. Mockável nos testes sem pool
 // real (mesmo padrão de InsightsHandler).
 type LiveMapRepo interface {
-	Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID) (catalog.LiveMapResult, error)
+	Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error)
 }
 
 type LiveMapHandler struct {
@@ -28,6 +28,10 @@ func NewLiveMapHandler(repo LiveMapRepo) *LiveMapHandler {
 // coordenada) + as veiculações dela. Viewer fica restrito às campanhas do
 // próprio client_id via auth.ClientScopeFromContext (404 anti-oracle quando a
 // campanha é de outro cliente).
+//
+// include_terminal=1 pede o mapa mesmo de campanha cancelada. Quem usa é o
+// pós-venda, que é documento histórico — a tela ao vivo não manda o parâmetro
+// e continua vendo 404. O recorte por cliente vale igual nos dois casos.
 func (h *LiveMapHandler) Get(w http.ResponseWriter, r *http.Request) {
 	cid := r.URL.Query().Get("campaign_id")
 	if cid == "" {
@@ -41,7 +45,10 @@ func (h *LiveMapHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := auth.ClientScopeFromContext(r.Context())
-	out, err := h.Repo.Get(r.Context(), campaignID, scope)
+	opts := catalog.LiveMapOpts{
+		IncludeTerminal: r.URL.Query().Get("include_terminal") == "1",
+	}
+	out, err := h.Repo.Get(r.Context(), campaignID, scope, opts)
 	if err != nil {
 		if errors.Is(err, catalog.ErrCampaignNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
