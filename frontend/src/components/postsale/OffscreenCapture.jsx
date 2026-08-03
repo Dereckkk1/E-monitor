@@ -16,9 +16,17 @@ import { useEffect, useRef } from 'react'
 import { useInsights, useLiveMap } from '../../api/hooks'
 import BrazilMap from '../BrazilMap'
 import KpiCards from '../insights/KpiCards'
+import InvestmentToggleCard from '../insights/InvestmentToggleCard'
+import GenderCard from '../insights/GenderCard'
 import ClassPyramidChart from '../insights/ClassPyramidChart'
 import AgeRangeChart from '../insights/AgeRangeChart'
+import BroadcastShareChart from '../insights/BroadcastShareChart'
 import DailySummaryChart from '../insights/DailySummaryChart'
+// A foto usa a grade e os cards do /insights, então o CSS de lá é dependência
+// REAL deste componente — não algo que "por sorte" já está no bundle porque
+// alguma outra página importou. Todo seletor do arquivo é prefixado .in-*, não
+// vaza no wizard. Import idempotente: o Vite dedupa o módulo.
+import '../../pages/InsightsPage.css'
 
 // Tempo pro Recharts assentar depois que o dado chegou.
 const LAYOUT_SETTLE_MS = 400
@@ -89,11 +97,22 @@ export default function OffscreenCapture({ job, onReady, onError }) {
         <div className="psc-frame-title">{job.campaignName}</div>
         {data && (
           <>
-            <KpiCards data={data} />
-            <div className="psc-charts">
-              <DailySummaryChart data={data} />
+            {/* Mesmas faixas, mesma ordem e MESMAS classes do InsightsPage —
+                inclusive as modificadoras de consolidado e de target. A foto é
+                o /insights, então a grade tem que ser a de lá: qualquer grade
+                própria aqui diverge da tela na primeira mudança do dashboard. */}
+            <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}${(data?.kpis?.stations_with_target ?? 0) > 0 ? ' in-row--cards--target' : ''}`}>
+              <KpiCards data={data} />
+              <InvestmentToggleCard data={data} />
+              <GenderCard data={data} />
+            </div>
+            <div className="in-row in-row--charts">
               <ClassPyramidChart data={data} />
               <AgeRangeChart data={data} />
+              <BroadcastShareChart data={data} />
+            </div>
+            <div className="in-row">
+              <DailySummaryChart data={data} />
             </div>
           </>
         )}
