@@ -180,10 +180,10 @@ que uma mudança de layout não quebre pós-vendas antigos.
 
 Duas coisas que ele **não** carrega:
 
-- **chave de S3** — o cliente recebe só as rotas, que revalidam o token e
-  presignam na hora;
-- **URL do mapa** — cada destinatário tem token próprio e assinatura de S3
-  expira, então o frontend monta a URL a partir do token da própria rota.
+- **chave de S3** — o cliente recebe só as rotas, que revalidam o token e só
+  então abrem o objeto no bucket;
+- **URL do mapa** — cada destinatário tem token próprio, então o frontend monta
+  a URL a partir do token da própria rota.
 
 `checking_rows` nunca serializa como `null` (há `MarshalJSON` para isso): o
 frontend filtra a lista, e um `null` viraria TypeError justamente na página que o
@@ -229,8 +229,22 @@ Público (sem JWT):
 | Método | Rota | O quê |
 |---|---|---|
 | `GET` | `/public/post-sale/{token}` | payload congelado + registra abertura |
-| `GET` | `/public/post-sale/{token}/campaigns/{cid}/bundle.zip` | 302 presignado (TTL 15min) |
-| `GET` | `/public/post-sale/{token}/campaigns/{cid}/image/{kind}.png` | 302 presignado; `kind` ∈ `map`\|`insights` (whitelist — o path nunca vira nome de arquivo no bucket) |
+| `GET` | `/public/post-sale/{token}/campaigns/{cid}/bundle.zip` | bytes do zip (`attachment`) |
+| `GET` | `/public/post-sale/{token}/campaigns/{cid}/image/{kind}.png` | bytes do PNG (`inline`, `max-age=300`); `kind` ∈ `map`\|`insights` (whitelist — o path nunca vira nome de arquivo no bucket) |
+
+### Os artefatos saem por PROXY, não por redirect presignado
+
+As duas rotas de artefato **repassam os bytes** (`storage.Get` → `io.Copy`), e
+não redirecionam pra URL presignada. Motivo: o host assado na presigned é o
+`S3_PUBLIC_ENDPOINT`, que em produção vale `http://localhost:9000` — o navegador
+do cliente, em `https://e-monitor.online`, não alcança. Com o 302 o mapa ficava
+quebrado na página e o zip não baixava (prod, ago/2026).
+
+É a mesma decisão do áudio de evidência (2026-07-03) e dos anexos de sugestão;
+ver [evidence-presigned-urls.md](evidence-presigned-urls.md). Se um dia o
+`S3_PUBLIC_ENDPOINT` virar um domínio público de verdade
+([evidence-presign-public.md](../operations/evidence-presign-public.md)), o proxy
+continua correto — só deixa de ser obrigatório.
 
 ## O documento (frontend)
 

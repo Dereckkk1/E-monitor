@@ -21,9 +21,16 @@ import (
 // ObjectStore é o subconjunto do storage.Client que o pós-venda usa. Interface
 // (e não o tipo concreto) pra que o teste consiga exercitar o publish inteiro
 // sem subir MinIO.
+//
+// Get (e não PresignGet): os artefatos saem pelo PROXY da API, não por URL
+// presignada. Em produção o host assado na presigned é o `S3_PUBLIC_ENDPOINT`,
+// que hoje vale `http://localhost:9000` — inalcançável pelo navegador do
+// cliente, que está em https://e-monitor.online. Redirecionar pra lá deixava o
+// mapa quebrado na página e o zip sem baixar. Mesma decisão do áudio de
+// evidência (2026-07-03) e dos anexos de sugestão.
 type ObjectStore interface {
 	Put(ctx context.Context, key string, body io.Reader, contentType string) error
-	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, time.Time, error)
+	Get(ctx context.Context, key string) (io.ReadCloser, string, int64, error)
 }
 
 // Service costura repo, insights, storage e mailer.
@@ -153,40 +160,51 @@ func (s *Service) Resolve(ctx context.Context, token string) ([]byte, error) {
 	return res.Payload, nil
 }
 
-// BundleURL revalida o token ANTES de presignar. A chave S3 nunca sai daqui —
-// o payload público não a carrega.
-func (s *Service) BundleURL(ctx context.Context, token string, campaignID uuid.UUID, ttl time.Duration) (string, error) {
+// Asset é um objeto do relatório aberto pra API repassar ao cliente. Quem
+// consome fecha o Body.
+type Asset struct {
+	Body        io.ReadCloser
+	ContentType string
+	Size        int64 // 0 quando o storage não informa
+}
+
+// OpenBundle revalida o token ANTES de abrir o objeto. A chave S3 nunca sai
+// daqui — o payload público não a carrega.
+func (s *Service) OpenBundle(ctx context.Context, token string, campaignID uuid.UUID) (*Asset, error) {
 	res, err := s.repo.ResolveToken(ctx, token)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	key, err := s.repo.BundleKey(ctx, res.ReportID, campaignID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	u, _, err := s.storage.PresignGet(ctx, key, ttl)
-	if err != nil {
-		return "", fmt.Errorf("postsale: presign bundle: %w", err)
-	}
-	return u, nil
+	return s.open(ctx, key, "application/zip")
 }
 
-// ImageURL revalida o token e presigna uma das imagens do bloco (o mapa que o
-// documento mostra na tela). Mesma regra do BundleURL: a chave nunca sai daqui.
-func (s *Service) ImageURL(ctx context.Context, token string, campaignID uuid.UUID, kind AssetKind, ttl time.Duration) (string, error) {
+// OpenImage revalida o token e abre uma das imagens do bloco (o mapa que o
+// documento mostra na tela). Mesma regra do OpenBundle: a chave nunca sai daqui.
+func (s *Service) OpenImage(ctx context.Context, token string, campaignID uuid.UUID, kind AssetKind) (*Asset, error) {
 	res, err := s.repo.ResolveToken(ctx, token)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	key, err := s.repo.ImageKey(ctx, res.ReportID, campaignID, kind)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	u, _, err := s.storage.PresignGet(ctx, key, ttl)
+	return s.open(ctx, key, "image/png")
+}
+
+func (s *Service) open(ctx context.Context, key, fallbackCT string) (*Asset, error) {
+	body, ct, size, err := s.storage.Get(ctx, key)
 	if err != nil {
-		return "", fmt.Errorf("postsale: presign imagem: %w", err)
+		return nil, fmt.Errorf("postsale: abrir %s: %w", key, err)
 	}
-	return u, nil
+	if ct == "" {
+		ct = fallbackCT
+	}
+	return &Asset{Body: body, ContentType: ct, Size: size}, nil
 }
 
 // NewToken gera o token opaco da URL: 32 bytes de aleatoriedade cripto-segura

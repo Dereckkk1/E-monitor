@@ -10,13 +10,17 @@
 //   - Os três casos respondem IGUAL: a rota é enumerável em tese, e não pode
 //     virar oráculo de "este pós-venda existiu".
 //   - A resposta nunca inclui chave de S3. O download passa pelo Bundle, que
-//     revalida o token e só então presigna.
+//     revalida o token e só então abre o objeto.
+//   - Os BYTES passam pela API (proxy), nunca por redirect pra URL presignada:
+//     em prod o host da presigned é o `S3_PUBLIC_ENDPOINT` = localhost:9000,
+//     que o navegador do cliente não alcança. Ver a nota em postsale.ObjectStore.
 package handlers
 
 import (
 	"errors"
+	"io"
 	"net/http"
-	"time"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -36,10 +40,6 @@ func NewPostSalePublicHandler(svc *postsale.Service, log *zap.Logger) *PostSaleP
 	}
 	return &PostSalePublicHandler{svc: svc, log: log}
 }
-
-// bundleTTL é curto de propósito: a URL presignada não carrega autenticação
-// nenhuma depois de emitida, então vale só o tempo do download começar.
-const bundleTTL = 15 * time.Minute
 
 // Resolve devolve o payload congelado e registra a abertura.
 //
@@ -90,20 +90,17 @@ func (h *PostSalePublicHandler) Image(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.svc.ImageURL(r.Context(), token, cid, kind, bundleTTL)
+	asset, err := h.svc.OpenImage(r.Context(), token, cid, kind)
 	if err != nil {
-		if errors.Is(err, postsale.ErrNotFound) {
-			http.Error(w, "not_found", http.StatusNotFound)
-			return
-		}
-		h.log.Error("postsale: imagem", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		h.failAsset(w, err, "imagem")
 		return
 	}
-	http.Redirect(w, r, url, http.StatusFound)
+	defer asset.Body.Close()
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	h.stream(w, asset, "inline", "")
 }
 
-// Bundle redireciona pro .zip no S3 com URL presignada de vida curta.
+// Bundle serve o .zip dos relatórios da campanha.
 //
 // GET /v1/internal/public/post-sale/{token}/campaigns/{cid}/bundle.zip
 func (h *PostSalePublicHandler) Bundle(w http.ResponseWriter, r *http.Request) {
@@ -115,15 +112,41 @@ func (h *PostSalePublicHandler) Bundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not_found", http.StatusNotFound)
 		return
 	}
-	url, err := h.svc.BundleURL(r.Context(), token, cid, bundleTTL)
+	asset, err := h.svc.OpenBundle(r.Context(), token, cid)
 	if err != nil {
-		if errors.Is(err, postsale.ErrNotFound) {
-			http.Error(w, "not_found", http.StatusNotFound)
-			return
-		}
-		h.log.Error("postsale: bundle", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		h.failAsset(w, err, "bundle")
 		return
 	}
-	http.Redirect(w, r, url, http.StatusFound)
+	defer asset.Body.Close()
+	h.stream(w, asset, "attachment", "relatorios.zip")
+}
+
+// failAsset mantém a regra da rota pública: token inválido, revogado, rascunho
+// e artefato ausente respondem o MESMO 404.
+func (h *PostSalePublicHandler) failAsset(w http.ResponseWriter, err error, op string) {
+	if errors.Is(err, postsale.ErrNotFound) {
+		http.Error(w, "not_found", http.StatusNotFound)
+		return
+	}
+	h.log.Error("postsale: "+op, zap.Error(err))
+	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
+// stream repassa os bytes do storage direto pro cliente, sem io.ReadAll: o
+// mesmo processo roda os ffmpeg, e bufferizar o objeto inteiro no heap por
+// download é custo que não precisa existir.
+func (h *PostSalePublicHandler) stream(w http.ResponseWriter, a *postsale.Asset, disposition, filename string) {
+	w.Header().Set("Content-Type", a.ContentType)
+	cd := disposition
+	if filename != "" {
+		cd += `; filename="` + filename + `"`
+	}
+	w.Header().Set("Content-Disposition", cd)
+	if a.Size > 0 {
+		// Content-Length explícito pro navegador mostrar progresso do download.
+		w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
+	}
+	if _, err := io.Copy(w, a.Body); err != nil {
+		return // cliente desconectou no meio; o header já foi
+	}
 }
