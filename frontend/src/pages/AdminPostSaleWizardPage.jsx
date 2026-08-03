@@ -14,8 +14,8 @@ import {
   useClients,
   useCreatePostSaleReport,
   usePostSalePreview,
+  usePostSaleRecipients,
   useUpdatePostSaleReport,
-  useUsersPaged,
 } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import ScopeStep from './PostSaleSteps/ScopeStep'
@@ -61,14 +61,16 @@ export default function AdminPostSaleWizardPage() {
 
   const client = clients.find(c => c.id === clientId) ?? null
 
-  // Destinatários pela MESMA regra do backend (usuários do cliente, ativos).
-  const usersQ = useUsersPaged({
-    client_id: clientId ?? undefined,
-    status: 'active',
-    page_size: 100,
-  })
-  const recipients = clientId ? (usersQ.data?.data ?? []) : []
-  const recipientsLoading = !!clientId && usersQ.isLoading
+  // Destinatários vindos do BACKEND, pelos mesmos métodos que o publish usa.
+  // `recipients` são as pessoas do cliente; `internal` são os admins que optaram
+  // por receber cópia de todo pós-venda. Só o primeiro grupo destrava o passo 1:
+  // o documento é lido por link pessoal do cliente, e um fechamento que só o
+  // admin recebe não é um fechamento.
+  const recipientsQ = usePostSaleRecipients(clientId)
+  const recipients = recipientsQ.data?.client ?? []
+  const internalRecipients = recipientsQ.data?.internal ?? []
+  const recipientsLoading = !!clientId && recipientsQ.isLoading
+  const totalRecipients = recipients.length + internalRecipients.length
 
   const campaigns = useMemo(
     () => allCampaigns.filter(c => c.client_id === clientId),
@@ -224,6 +226,7 @@ export default function AdminPostSaleWizardPage() {
               reportId={reportId}
               clientId={clientId}
               recipients={recipients}
+              internalRecipients={internalRecipients}
               onProgress={setProgress}
               onDone={() => navigate(`/admin/pos-venda/${reportId}`)}
             />
@@ -256,7 +259,16 @@ export default function AdminPostSaleWizardPage() {
                   </div>
                   <div className="pv-fact">
                     <dt>Destinatários</dt>
-                    <dd>{recipientsLoading ? '…' : recipients.length}</dd>
+                    <dd>
+                      {recipientsLoading ? '…' : totalRecipients}
+                      {!recipientsLoading && internalRecipients.length > 0 && (
+                        <span className="pv-fact-note">
+                          {' '}({recipients.length} do cliente
+                          {' '}+ {internalRecipients.length} interno
+                          {internalRecipients.length === 1 ? '' : 's'})
+                        </span>
+                      )}
+                    </dd>
                   </div>
                 </dl>
               </>
@@ -281,6 +293,24 @@ export default function AdminPostSaleWizardPage() {
               <p className="pv-rail-title">Vão receber</p>
               <ul className="pv-people">
                 {recipients.map(r => (
+                  <li key={r.email} className="pv-person">
+                    <strong>{r.name || 'Sem nome'}</strong>
+                    <span>{r.email}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {client && internalRecipients.length > 0 && (
+            <div className="pv-rail-card">
+              <p className="pv-rail-title">Cópia interna</p>
+              <p className="pv-rail-note">
+                Admins que acompanham todo pós-venda. Recebem o mesmo documento,
+                cada um com link próprio.
+              </p>
+              <ul className="pv-people">
+                {internalRecipients.map(r => (
                   <li key={r.email} className="pv-person">
                     <strong>{r.name || 'Sem nome'}</strong>
                     <span>{r.email}</span>
@@ -317,7 +347,11 @@ export default function AdminPostSaleWizardPage() {
             ) : step === 2 ? (
               recipients.length > 0
                 ? <>Vai para <strong>{recipients.length}</strong>{' '}
-                   {recipients.length === 1 ? 'pessoa' : 'pessoas'} da <strong>{client?.name}</strong></>
+                   {recipients.length === 1 ? 'pessoa' : 'pessoas'} da <strong>{client?.name}</strong>
+                   {internalRecipients.length > 0 && <>
+                     {' '}+ <strong>{internalRecipients.length}</strong>{' '}
+                     {internalRecipients.length === 1 ? 'cópia interna' : 'cópias internas'}
+                   </>}</>
                 : 'Sem destinatários'
             ) : (
               `Passo ${step + 1} de ${STEPS.length} · ${STEPS[step]}`

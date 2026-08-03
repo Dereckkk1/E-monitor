@@ -16,6 +16,10 @@ const EMPTY = {
   // Default LIGADO: mandar as boas-vindas é o caminho desejado; desmarcar é a
   // exceção (conta de serviço, usuário que já foi avisado por fora).
   send_welcome: true,
+  // Espelham os DEFAULT das colunas (migrations 0037 e 0061). Só valem pra
+  // admin — o formulário nem mostra as opções pra Cliente.
+  receive_alert_emails: true,
+  receive_post_sale_emails: false,
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -105,6 +109,7 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
         password: '',
         is_active: initial.is_active,
         receive_alert_emails: initial.receive_alert_emails ?? true,
+        receive_post_sale_emails: initial.receive_post_sale_emails ?? false,
       })
     } else {
       setV(EMPTY)
@@ -136,7 +141,12 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
       payload.send_welcome = v.send_welcome
     } else {
       payload.is_active = v.is_active
-      if (v.role === 'admin') payload.receive_alert_emails = v.receive_alert_emails
+    }
+    // Preferências de email só existem pra admin: as queries de destinatário
+    // filtram por role, então mandá-las pra um Cliente seria gravar campo morto.
+    if (v.role === 'admin') {
+      payload.receive_alert_emails = v.receive_alert_emails
+      payload.receive_post_sale_emails = v.receive_post_sale_emails
     }
     onSubmit(payload)
   }
@@ -364,19 +374,39 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
             </label>
           )}
 
-          {isEdit && v.role === 'admin' && (
-            <label className="ufm-toggle">
-              <input
-                type="checkbox"
-                checked={v.receive_alert_emails}
-                onChange={e => set('receive_alert_emails', e.target.checked)}
-                disabled={busy}
-              />
-              <span className="ufm-toggle-text">
-                <strong>Receber emails de alerta</strong>
-                <small>Disparos diários das 8h: campanhas iniciando/terminando, sem material e emissoras fora do ar.</small>
-              </span>
-            </label>
+          {v.role === 'admin' && (
+            <div className="ufm-group">
+              <p className="ufm-legend">Emails que este admin recebe</p>
+
+              <label className="ufm-toggle">
+                <input
+                  type="checkbox"
+                  checked={v.receive_alert_emails}
+                  onChange={e => set('receive_alert_emails', e.target.checked)}
+                  disabled={busy}
+                />
+                <span className="ufm-toggle-text">
+                  <strong>Alertas diários</strong>
+                  <small>Disparos das 8h: campanhas iniciando/terminando, sem material e emissoras fora do ar.</small>
+                </span>
+              </label>
+
+              <label className="ufm-toggle">
+                <input
+                  type="checkbox"
+                  checked={v.receive_post_sale_emails}
+                  onChange={e => set('receive_post_sale_emails', e.target.checked)}
+                  disabled={busy}
+                />
+                <span className="ufm-toggle-text">
+                  <strong>Pós-venda dos clientes</strong>
+                  <small>
+                    Uma cópia de todo pós-venda enviado, de qualquer cliente, com
+                    o mesmo link pessoal que o cliente recebe.
+                  </small>
+                </span>
+              </label>
+            </div>
           )}
 
           {errorMsg && (

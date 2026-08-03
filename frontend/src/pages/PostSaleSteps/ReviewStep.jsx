@@ -33,7 +33,7 @@ async function toBlob(node) {
 // O envio é acionado pela barra fixa do wizard, que vive fora deste componente
 // — daí o handle imperativo em vez de duplicar payload e capturas lá.
 const ReviewStep = forwardRef(function ReviewStep(
-  { reportId, clientId, recipients = [], onDone, onProgress }, ref,
+  { reportId, clientId, recipients = [], internalRecipients = [], onDone, onProgress }, ref,
 ) {
   const { data: payload, isLoading } = usePostSalePreview(reportId)
   const publish = usePublishPostSale()
@@ -72,9 +72,16 @@ const ReviewStep = forwardRef(function ReviewStep(
     const blocks = payload?.campaigns ?? []
     if (!blocks.length) return
 
+    // A confirmação conta os DOIS grupos: sair daqui com "2 pessoas" enquanto
+    // saem 6 emails é o tipo de surpresa que não se desfaz depois do disparo.
+    const internal = internalRecipients.length
     const ok = await window.confirm(
       `Isto envia um email para ${recipients.length} ` +
-      `${recipients.length === 1 ? 'pessoa' : 'pessoas'} da ${payload.client?.name}. Confirmar?`,
+      `${recipients.length === 1 ? 'pessoa' : 'pessoas'} da ${payload.client?.name}` +
+      (internal > 0
+        ? `, mais ${internal} ${internal === 1 ? 'cópia interna' : 'cópias internas'} (admin).`
+        : '.') +
+      ' Confirmar?',
     )
     if (!ok) return
 
@@ -110,7 +117,7 @@ const ReviewStep = forwardRef(function ReviewStep(
       pending.current = null
       onProgress?.(null)
     }
-  }, [payload, recipients, reportId, publish, onDone, onProgress, captureCampaign])
+  }, [payload, recipients, internalRecipients, reportId, publish, onDone, onProgress, captureCampaign])
 
   useImperativeHandle(ref, () => ({ send, ready: !!payload }), [payload, send])
 

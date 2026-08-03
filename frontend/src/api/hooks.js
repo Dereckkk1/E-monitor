@@ -1367,13 +1367,23 @@ export function usePostSaleReport(id) {
   })
 }
 
-// Quem vai receber o disparo (usuários ativos do cliente). O wizard mostra
-// isso já no passo 1 — o admin precisa saber o tamanho do envio antes.
-export function usePostSaleRecipients(id) {
+// Quem vai receber o disparo, em dois grupos: `client` (usuários ativos do
+// cliente) e `internal` (admins que optaram por receber cópia de todo
+// pós-venda). O wizard mostra isso já no passo 1 — o admin precisa saber o
+// tamanho do envio antes de disparar.
+//
+// A conta vem do BACKEND, pelos mesmos métodos que o publish usa. Antes o
+// wizard refazia a regra com useUsersPaged; com o admin entrando na lista, a
+// segunda fonte passaria a mentir sobre quantos emails saem.
+const EMPTY_RECIPIENTS = { client: [], internal: [] }
+
+export function usePostSaleRecipients(clientId) {
   return useQuery({
-    queryKey: ['post-sale-recipients', id],
-    enabled: !!id,
-    queryFn: () => api.get(`/post-sale/reports/${id}/recipients`).then(r => r.data ?? []),
+    queryKey: ['post-sale-recipients', clientId],
+    enabled: !!clientId,
+    queryFn: () => api
+      .get('/post-sale/recipients', { params: { client_id: clientId } })
+      .then(r => r.data ?? EMPTY_RECIPIENTS),
   })
 }
 
