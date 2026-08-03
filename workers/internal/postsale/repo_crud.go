@@ -571,6 +571,45 @@ func (r *Repo) ActiveClientUsers(ctx context.Context, clientID uuid.UUID) ([]Rec
 	return out, rows.Err()
 }
 
+// InternalRecipients lista os admins que optaram por receber cópia de TODO
+// pós-venda enviado, independente do cliente (users.receive_post_sale_emails,
+// migration 0061). Opt-in: o default da coluna é FALSE.
+//
+// role IN ('admin','operator') espelha users.ActiveInternal — 'operator' é
+// sinônimo de admin no middleware de autorização.
+//
+// Não há dedup contra ActiveClientUsers e isso é proposital: o CHECK
+// users_client_role_consistency (migration 0027) garante que admin/operator tem
+// client_id NULL, então os dois conjuntos são disjuntos por construção. Um
+// guard aqui seria código morto defendendo estado impossível — quem trava o
+// invariante é TestPublish_AdminNaoDuplicaDestinatario.
+func (r *Repo) InternalRecipients(ctx context.Context) ([]RecipientInput, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, email, COALESCE(name, '')
+		   FROM users
+		  WHERE role IN ('admin','operator')
+		    AND is_active = TRUE AND deleted_at IS NULL
+		    AND receive_post_sale_emails = TRUE
+		  ORDER BY email`)
+	if err != nil {
+		return nil, fmt.Errorf("postsale: destinatários internos: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RecipientInput
+	for rows.Next() {
+		var in RecipientInput
+		var uid uuid.UUID
+		if err := rows.Scan(&uid, &in.Email, &in.Name); err != nil {
+			return nil, err
+		}
+		id := uid
+		in.UserID = &id
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
 // TargetSuffix é o rótulo de público-alvo do cliente dono da campanha, no
 // formato que entra no cabeçalho das colunas "no target" do CSV.
 func (r *Repo) TargetSuffix(ctx context.Context, campaignID uuid.UUID) (string, error) {

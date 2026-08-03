@@ -114,11 +114,20 @@ func (s *Service) Publish(ctx context.Context, reportID uuid.UUID) (*PublishResu
 		return nil, err
 	}
 
-	// 3. Destinatários: só usuários ativos do cliente.
+	// 3. Destinatários: usuários ativos do cliente + os admins que optaram por
+	// receber cópia de todo pós-venda. Os dois grupos são destinatários iguais,
+	// cada um com token próprio — é o que permite revogar um link sem derrubar
+	// os outros. Consequência aceita: o admin que abrir o documento entra na
+	// contagem de aberturas do relatório.
 	people, err := s.repo.ActiveClientUsers(ctx, rep.ClientID)
 	if err != nil {
 		return nil, err
 	}
+	internal, err := s.repo.InternalRecipients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	people = append(people, internal...)
 	for i := range people {
 		tok, err := NewToken()
 		if err != nil {

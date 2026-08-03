@@ -31,8 +31,13 @@ type User struct {
 	// ReceiveAlertEmails controla se o usuário recebe os disparos diários de
 	// email (campanhas + emissoras offline). Default TRUE; só admins/operators
 	// são destinatários de qualquer forma (ver ActiveInternal).
-	ReceiveAlertEmails bool       `json:"receive_alert_emails"`
-	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
+	ReceiveAlertEmails bool `json:"receive_alert_emails"`
+	// ReceivePostSaleEmails é o opt-in pra receber cópia de TODO pós-venda
+	// enviado, de qualquer cliente. Default FALSE (ao contrário do de alerta:
+	// aquele preservou comportamento existente, este cria um novo). Quem
+	// consome é postsale.Repo.InternalRecipients, que também filtra por role.
+	ReceivePostSaleEmails bool       `json:"receive_post_sale_emails"`
+	DeletedAt             *time.Time `json:"deleted_at,omitempty"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
@@ -47,12 +52,14 @@ type Repo struct {
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
 const userColumns = `id, email, password_hash, role, client_id, name, phone,
-                     is_active, receive_alert_emails, deleted_at, last_login_at, created_at, updated_at`
+                     is_active, receive_alert_emails, receive_post_sale_emails,
+                     deleted_at, last_login_at, created_at, updated_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.ClientID,
-		&u.Name, &u.Phone, &u.IsActive, &u.ReceiveAlertEmails, &u.DeletedAt, &u.LastLoginAt,
+		&u.Name, &u.Phone, &u.IsActive, &u.ReceiveAlertEmails, &u.ReceivePostSaleEmails,
+		&u.DeletedAt, &u.LastLoginAt,
 		&u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -69,15 +76,26 @@ type CreateInput struct {
 	ClientID     *uuid.UUID
 	Name         string
 	Phone        *string
+	// Preferências de email. nil = deixa o default da coluna decidir (TRUE pro
+	// de alerta, FALSE pro de pós-venda) — é o caso do usuário Cliente, que nem
+	// vê essas opções no formulário.
+	ReceiveAlertEmails    *bool
+	ReceivePostSaleEmails *bool
 }
 
 // Create insere um novo usuário.
+//
+// Os COALESCE espelham os DEFAULT das migrations 0037 e 0061 — mexeu num, mexa
+// no outro.
 func (r *Repo) Create(ctx context.Context, in CreateInput) (*User, error) {
 	row := r.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, role, client_id, name, phone)
-		 VALUES (LOWER($1), $2, $3, $4, $5, $6)
+		`INSERT INTO users (email, password_hash, role, client_id, name, phone,
+		                    receive_alert_emails, receive_post_sale_emails)
+		 VALUES (LOWER($1), $2, $3, $4, $5, $6,
+		         COALESCE($7, TRUE), COALESCE($8, FALSE))
 		 RETURNING `+userColumns,
 		in.Email, in.PasswordHash, in.Role, in.ClientID, in.Name, in.Phone,
+		in.ReceiveAlertEmails, in.ReceivePostSaleEmails,
 	)
 	return scanUser(row)
 }
@@ -112,6 +130,8 @@ type UpdateInput struct {
 	IsActive    *bool
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta.
 	ReceiveAlertEmails *bool
+	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda.
+	ReceivePostSaleEmails *bool
 }
 
 // Update aplica as alterações de UpdateInput e retorna o usuário atualizado.
@@ -143,6 +163,9 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	}
 	if in.ReceiveAlertEmails != nil {
 		push("receive_alert_emails", *in.ReceiveAlertEmails)
+	}
+	if in.ReceivePostSaleEmails != nil {
+		push("receive_post_sale_emails", *in.ReceivePostSaleEmails)
 	}
 
 	args = append(args, id)

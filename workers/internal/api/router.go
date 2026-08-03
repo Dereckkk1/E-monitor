@@ -599,6 +599,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/post-sale/reports/{id}/assets", d.PostSale.UploadAssets)
 					r.Post("/post-sale/reports/{id}/publish", d.PostSale.Publish)
 					r.Post("/post-sale/reports/{id}/resend", d.PostSale.Resend)
+					// Antes do rascunho existir: o passo 1 do wizard pergunta
+					// quem receberia pelo cliente escolhido.
+					r.Get("/post-sale/recipients", d.PostSale.RecipientsPreview)
 					r.Post("/post-sale/recipients/{rid}/revoke", d.PostSale.RevokeRecipient)
 				})
 			}

@@ -182,6 +182,22 @@ func seedClientUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	return id
 }
 
+// seedInternalAdmin cria um admin (client_id NULL, como o CHECK
+// users_client_role_consistency exige) com o opt-in de cópia do pós-venda
+// ligado ou desligado.
+func seedInternalAdmin(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
+	email string, active, wantsPostSale bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, role, name, is_active, receive_post_sale_emails)
+		 VALUES ($1, 'h', 'admin', $2, $3, $4) RETURNING id`,
+		email, "Admin "+email[:4], active, wantsPostSale).Scan(&id)
+	require.NoError(t, err, "seed internal admin")
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id) })
+	return id
+}
+
 func seedStation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
 	t.Helper()
 	st, err := catalog.NewStations(pool).Create(ctx, catalog.CreateStationInput{
