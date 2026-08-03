@@ -44,6 +44,7 @@ func minimalPostSaleRouter() http.Handler {
 				r.Post("/post-sale/reports/{id}/assets", stub)
 				r.Post("/post-sale/reports/{id}/publish", stub)
 				r.Post("/post-sale/reports/{id}/resend", stub)
+				r.Get("/post-sale/recipients", stub)
 				r.Post("/post-sale/recipients/{rid}/revoke", stub)
 			})
 		})
@@ -69,6 +70,7 @@ func TestPostSale_AdminOnly(t *testing.T) {
 		{"POST", "/v1/internal/post-sale/reports/" + id + "/assets"},
 		{"POST", "/v1/internal/post-sale/reports/" + id + "/publish"},
 		{"POST", "/v1/internal/post-sale/reports/" + id + "/resend"},
+		{"GET", "/v1/internal/post-sale/recipients?client_id=" + id},
 		{"POST", "/v1/internal/post-sale/recipients/" + id + "/revoke"},
 	}
 	for _, c := range cases {

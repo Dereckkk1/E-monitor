@@ -291,8 +291,52 @@ func (h *PostSaleHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-// Recipients lista quem receberá o pós-venda (usuários ativos do cliente).
-// O wizard mostra isso já no passo 1 pra transparência do disparo.
+// recipientBrief é o mínimo que o wizard precisa mostrar de cada destinatário.
+type recipientBrief struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+// recipientGroups separa quem recebe por qual motivo. `client` são os usuários
+// ativos do cliente; `internal` são os admins que optaram por receber cópia de
+// todo pós-venda (migration 0061).
+//
+// Os dois grupos vêm dos MESMOS métodos que o Publish usa. É de propósito: com
+// a lista calculada em outro lugar, o trilho do wizard diria "vai para 2
+// pessoas" enquanto saem 6 emails — e o passo 1 existe justamente pra dar a
+// dimensão do disparo antes dele acontecer.
+type recipientGroups struct {
+	Client   []recipientBrief `json:"client"`
+	Internal []recipientBrief `json:"internal"`
+}
+
+func briefs(in []postsale.RecipientInput) []recipientBrief {
+	out := make([]recipientBrief, 0, len(in))
+	for _, p := range in {
+		out = append(out, recipientBrief{Email: p.Email, Name: p.Name})
+	}
+	return out
+}
+
+// recipientsFor monta os dois grupos de um cliente.
+func (h *PostSaleHandler) recipientsFor(w http.ResponseWriter, r *http.Request, clientID uuid.UUID) {
+	people, err := h.svc.Repo().ActiveClientUsers(r.Context(), clientID)
+	if err != nil {
+		h.fail(w, err, "recipients")
+		return
+	}
+	internal, err := h.svc.Repo().InternalRecipients(r.Context())
+	if err != nil {
+		h.fail(w, err, "recipients: internos")
+		return
+	}
+	writeJSON(w, http.StatusOK, recipientGroups{
+		Client:   briefs(people),
+		Internal: briefs(internal),
+	})
+}
+
+// Recipients lista quem receberá o pós-venda de um relatório já criado.
 func (h *PostSaleHandler) Recipients(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id")
 	if !ok {
@@ -303,16 +347,19 @@ func (h *PostSaleHandler) Recipients(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "recipients: get")
 		return
 	}
-	people, err := h.svc.Repo().ActiveClientUsers(r.Context(), rep.ClientID)
+	h.recipientsFor(w, r, rep.ClientID)
+}
+
+// RecipientsPreview responde a mesma coisa a partir do cliente, sem exigir
+// relatório. O passo 1 do wizard precisa disso: o rascunho só nasce quando o
+// admin avança, e a decisão de avançar depende de haver alguém pra receber.
+func (h *PostSaleHandler) RecipientsPreview(w http.ResponseWriter, r *http.Request) {
+	clientID, err := uuid.Parse(r.URL.Query().Get("client_id"))
 	if err != nil {
-		h.fail(w, err, "recipients")
+		http.Error(w, "invalid client_id", http.StatusBadRequest)
 		return
 	}
-	out := make([]map[string]string, 0, len(people))
-	for _, p := range people {
-		out = append(out, map[string]string{"email": p.Email, "name": p.Name})
-	}
-	writeJSON(w, http.StatusOK, out)
+	h.recipientsFor(w, r, clientID)
 }
 
 // maxCaptureBytes limita o upload das capturas. Dois PNGs de página inteira em

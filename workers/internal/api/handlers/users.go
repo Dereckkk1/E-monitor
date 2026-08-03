@@ -177,6 +177,10 @@ type createUserPayload struct {
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
 	// SendWelcome emite o convite e dispara o email de boas-vindas.
 	SendWelcome bool `json:"send_welcome,omitempty"`
+	// Preferências de email (só fazem sentido pra admin — as queries de
+	// destinatário filtram por role). Ausentes = default da coluna.
+	ReceiveAlertEmails    *bool `json:"receive_alert_emails,omitempty"`
+	ReceivePostSaleEmails *bool `json:"receive_post_sale_emails,omitempty"`
 }
 
 // createUserResponse é o usuário criado mais, quando pedido, o resultado do
@@ -228,12 +232,14 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := h.repo.Create(r.Context(), users.CreateInput{
-		Email:        p.Email,
-		PasswordHash: string(hash),
-		Role:         dbRole,
-		ClientID:     p.ClientID,
-		Name:         p.Name,
-		Phone:        p.Phone,
+		Email:                 p.Email,
+		PasswordHash:          string(hash),
+		Role:                  dbRole,
+		ClientID:              p.ClientID,
+		Name:                  p.Name,
+		Phone:                 p.Phone,
+		ReceiveAlertEmails:    p.ReceiveAlertEmails,
+		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -306,8 +312,10 @@ type updateUserPayload struct {
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
 	IsActive *bool      `json:"is_active,omitempty"`
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
-	ReceiveAlertEmails *bool   `json:"receive_alert_emails,omitempty"`
-	Email              *string `json:"email,omitempty"` // só pra detectar e rejeitar
+	ReceiveAlertEmails *bool `json:"receive_alert_emails,omitempty"`
+	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda (admins).
+	ReceivePostSaleEmails *bool   `json:"receive_post_sale_emails,omitempty"`
+	Email                 *string `json:"email,omitempty"` // só pra detectar e rejeitar
 }
 
 func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
@@ -343,10 +351,11 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := users.UpdateInput{
-		Name:               p.Name,
-		Phone:              p.Phone,
-		IsActive:           p.IsActive,
-		ReceiveAlertEmails: p.ReceiveAlertEmails,
+		Name:                  p.Name,
+		Phone:                 p.Phone,
+		IsActive:              p.IsActive,
+		ReceiveAlertEmails:    p.ReceiveAlertEmails,
+		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
 	}
 	if p.Role != nil {
 		dbRole, ok := roleAlias(*p.Role)

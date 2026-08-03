@@ -165,3 +165,45 @@ func TestRepo_ActiveClientUsers_SoAtivos(t *testing.T) {
 	require.Equal(t, "ativo@empresa.com", people[0].Email)
 	require.NotNil(t, people[0].UserID)
 }
+
+// A cópia interna é do TIME: só admin/operator ativo, não excluído e com o
+// opt-in ligado. As asserções são por pertinência (e não por tamanho da lista)
+// porque a query é global — qualquer admin do banco de teste entraria na conta.
+func TestRepo_InternalRecipients_SoAtivosComFlag(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+
+	quer := seedInternalAdmin(t, ctx, pool, "pv-quer@hubradios.com", true, true)
+	seedInternalAdmin(t, ctx, pool, "pv-naoquer@hubradios.com", true, false)
+	seedInternalAdmin(t, ctx, pool, "pv-inativo@hubradios.com", false, true)
+	excluido := seedInternalAdmin(t, ctx, pool, "pv-excluido@hubradios.com", true, true)
+	_, err := pool.Exec(ctx, `UPDATE users SET deleted_at = NOW() WHERE id = $1`, excluido)
+	require.NoError(t, err)
+
+	// Usuário do cliente com a flag ligada NÃO vira destinatário interno: ele já
+	// recebe pelo próprio cliente, e a flag é um controle do time.
+	viewer := seedClientUser(t, ctx, pool, seed.ClientID, "pv-viewer@empresa.com", true)
+	_, err = pool.Exec(ctx,
+		`UPDATE users SET receive_post_sale_emails = TRUE WHERE id = $1`, viewer)
+	require.NoError(t, err)
+
+	people, err := NewRepo(pool).InternalRecipients(ctx)
+	require.NoError(t, err)
+
+	byEmail := map[string]RecipientInput{}
+	for _, p := range people {
+		byEmail[p.Email] = p
+	}
+	require.Contains(t, byEmail, "pv-quer@hubradios.com")
+	require.NotNil(t, byEmail["pv-quer@hubradios.com"].UserID)
+	require.Equal(t, quer, *byEmail["pv-quer@hubradios.com"].UserID)
+
+	for _, fora := range []string{
+		"pv-naoquer@hubradios.com",  // opt-in desligado
+		"pv-inativo@hubradios.com",  // conta desativada
+		"pv-excluido@hubradios.com", // excluído
+		"pv-viewer@empresa.com",     // não é do time
+	} {
+		require.NotContains(t, byEmail, fora)
+	}
+}

@@ -1,8 +1,10 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-17
+ultima-verificacao: 2026-08-03
 codigo-relacionado:
   - migrations/0027_user_management.up.sql
+  - migrations/0037_stations_offline_email.up.sql
+  - migrations/0061_user_post_sale_emails.up.sql
   - workers/internal/users/users.go
   - workers/internal/auth/scope.go
   - workers/internal/auth/jwt.go
@@ -38,6 +40,26 @@ uma empresa cliente que tenha usuários vinculados.
   por padrão (filtro "Excluídos" mostra). Não pode reativar.
 - **Desativar** (`is_active = false`): reversível. Login bloqueado, mas
   admin pode reativar.
+
+## Preferências de email (só Administrador)
+
+Duas colunas em `users`, ambas editáveis no formulário de criar/editar. As
+checkboxes **só aparecem quando o tipo de acesso é Administrador** — as queries
+que resolvem destinatário filtram por `role`, então marcar num Cliente gravaria
+campo morto.
+
+| Coluna | Default | O que liga |
+|---|---|---|
+| `receive_alert_emails` (0037) | **TRUE** | Os 4 disparos diários das 8h: campanhas iniciando/terminando, iniciando sem material, emissoras >2h fora ([campaign-notification-emails.md](campaign-notification-emails.md)) |
+| `receive_post_sale_emails` (0061) | **FALSE** | Cópia de **todo** pós-venda enviado, de **qualquer** cliente ([post-sale.md](post-sale.md)) |
+
+Os defaults divergem de propósito: a de alerta nasceu preservando um
+comportamento que já existia (todos os admins recebiam), a de pós-venda cria
+comportamento novo e é opt-in explícito.
+
+Quem consome: `users.ActiveInternal` (alertas) e `postsale.InternalRecipients`
+(pós-venda). Ambas exigem, além da flag, `role IN ('admin','operator')`,
+`is_active` e `deleted_at IS NULL`.
 
 ## Filtragem por client_id (server-side)
 
@@ -86,7 +108,8 @@ middleware de autorização e no `isAdmin` do frontend.
 
 1. Admin abre `/admin/users`, clica "+ Novo usuário".
 2. Preenche: tipo (Admin / Cliente), [se Cliente] dropdown de cliente,
-   nome, email, telefone, senha (ou "Gerar" → 16 chars cripto-seguros).
+   nome, email, telefone, senha (ou "Gerar" → 16 chars cripto-seguros),
+   [se Admin] as preferências de email acima.
 3. Submit → POST cria. Admin comunica a senha por fora (WhatsApp, etc.).
 4. Cliente faz login → atualiza `last_login_at`. Em `/account`, troca a
    senha (exige senha atual).

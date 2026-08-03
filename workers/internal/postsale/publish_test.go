@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -144,6 +145,65 @@ func TestPublish_FalhaDeEmailNaoDerrubaOsOutros(t *testing.T) {
 	// Publicar de novo é 409, não um segundo disparo silencioso.
 	_, err = svc.Publish(ctx, rep.ID)
 	require.ErrorIs(t, err, ErrAlreadySent)
+}
+
+// Admin com o opt-in ligado recebe o pós-venda de QUALQUER cliente, com token
+// próprio — não é encaminhamento do link do cliente.
+func TestPublish_IncluiAdminsQueOptaram(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+	seedClientUser(t, ctx, pool, seed.ClientID, "pv-cliente@empresa.com", true)
+	seedInternalAdmin(t, ctx, pool, "pv-acompanha@hubradios.com", true, true)
+	seedInternalAdmin(t, ctx, pool, "pv-ignora@hubradios.com", true, false)
+	seedInternalAdmin(t, ctx, pool, "pv-desativado@hubradios.com", false, true)
+
+	mail := &recordingMailer{}
+	svc := newTestService(t, pool, mail, &fakeStore{})
+
+	rep := createDraftWithBlock(t, ctx, svc, seed)
+	require.NoError(t, svc.SetAssets(ctx, rep.ID, seed.CampaignID, capture()))
+
+	_, err := svc.Publish(ctx, rep.ID)
+	require.NoError(t, err)
+
+	require.Contains(t, mail.sent, "pv-cliente@empresa.com")
+	require.Contains(t, mail.sent, "pv-acompanha@hubradios.com")
+	require.NotContains(t, mail.sent, "pv-ignora@hubradios.com")
+	require.NotContains(t, mail.sent, "pv-desativado@hubradios.com")
+
+	loaded, err := svc.Repo().Get(ctx, rep.ID)
+	require.NoError(t, err)
+	tokens := map[string]string{}
+	for _, r := range loaded.Recipients {
+		require.NotContains(t, tokens, r.Email, "um destinatário, um email")
+		tokens[r.Email] = r.Token
+	}
+	require.NotEqual(t, tokens["pv-cliente@empresa.com"], tokens["pv-acompanha@hubradios.com"],
+		"token é por destinatário: é o que permite revogar um link sem derrubar o outro")
+
+	// O link do admin abre o mesmo documento congelado.
+	_, err = svc.Resolve(ctx, tokens["pv-acompanha@hubradios.com"])
+	require.NoError(t, err)
+}
+
+// O Publish NÃO deduplica entre os dois grupos porque o CHECK
+// users_client_role_consistency (migration 0027) torna a interseção impossível:
+// admin/operator tem client_id NULL. Se alguém relaxar esse CHECK, este teste
+// quebra antes de alguém receber dois emails do mesmo pós-venda.
+func TestPublish_AdminNaoDuplicaDestinatario(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO users (email, password_hash, role, client_id, name, receive_post_sale_emails)
+		 VALUES ($1, 'h', 'admin', $2, 'Impossível', TRUE)`,
+		"pv-hibrido@hubradios.com", seed.ClientID)
+	require.Error(t, err, "admin com client_id tem que ser recusado pelo banco")
+
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	require.Equal(t, "23514", pgErr.Code, "check_violation")
+	require.Equal(t, "users_client_role_consistency", pgErr.ConstraintName)
 }
 
 // O congelado não muda depois. Este é o teste que protege a promessa central

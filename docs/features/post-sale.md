@@ -5,6 +5,7 @@ codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
   - migrations/0060_post_sale_attachments_url.up.sql
+  - migrations/0061_user_post_sale_emails.up.sql
   - workers/internal/postsale/
   - workers/internal/reportcsv/reportcsv.go
   - workers/internal/api/handlers/post_sale.go
@@ -177,6 +178,7 @@ conforme o planejado" — o Checking nunca listava ninguém. Travado em
      b. sobe mapa.png, indicadores.png e relatorios.zip no S3
      c. RECALCULA os KPIs e congela payload_json + status='sent'
      d. cria 1 destinatário + token por usuário ATIVO do cliente
+        e por admin com a cópia interna ligada (ver abaixo)
      e. envia 1 email por destinatário
 ```
 
@@ -273,6 +275,37 @@ Duas coisas que ele **não** carrega:
 frontend filtra a lista, e um `null` viraria TypeError justamente na página que o
 cliente abre sozinho.
 
+## Quem recebe: o cliente e a cópia interna
+
+Dois grupos, calculados no publish
+([`publish.go`](../../workers/internal/postsale/publish.go)):
+
+| Grupo | Query | Regra |
+|---|---|---|
+| **Cliente** | `ActiveClientUsers` | `client_id = $1 AND is_active AND deleted_at IS NULL` |
+| **Cópia interna** | `InternalRecipients` | `role IN ('admin','operator') AND is_active AND deleted_at IS NULL AND receive_post_sale_emails` |
+
+A cópia interna é o opt-in `users.receive_post_sale_emails` (migration 0061),
+marcado em `/admin/users` no formulário do usuário — a checkbox **só aparece
+para Administrador**. Quem marca recebe **todo** pós-venda, de **qualquer**
+cliente. Default FALSE, sem backfill: ninguém passa a receber sozinho.
+
+Os dois grupos são destinatários iguais — token próprio, revogável, mesmo email
+e mesmo documento. **Não há dedup entre eles e isso é proposital:** o CHECK
+`users_client_role_consistency` (0027) garante `admin ⇒ client_id NULL`, então a
+interseção é vazia por construção. Quem trava o invariante é
+`TestPublish_AdminNaoDuplicaDestinatario`, que falha se alguém relaxar o CHECK.
+
+> **O que isso custa:** sem coluna separando os grupos na tabela de
+> destinatários, o admin que abrir o link entra em `recipients_count` e
+> `opened_count` — o "X de Y abriram" da listagem deixa de falar só do cliente.
+> Foi decisão consciente (2026-08-03), e é reversível sem migration: `user_id`
+> aponta pra `users`, então dá pra derivar `role` num join se virar ruído.
+
+**O passo 1 do wizard continua exigindo ≥1 usuário ativo do cliente.** Admin não
+destrava o envio: o documento é lido por link pessoal do cliente, e um
+fechamento que só o time recebe não é um fechamento.
+
 ## Segurança do link
 
 - Token: 32 bytes aleatórios em base64url, `UNIQUE`, **sem expiração** — vale
@@ -306,7 +339,20 @@ Admin (`RequireRole("admin")`):
 | `POST` | `/post-sale/reports/{id}/assets` (multipart: `map_png`, `insights_png`) |
 | `POST` | `/post-sale/reports/{id}/publish` |
 | `POST` | `/post-sale/reports/{id}/resend` |
+| `GET` | `/post-sale/recipients?client_id=` — quem receberia, antes do rascunho existir |
 | `POST` | `/post-sale/recipients/{rid}/revoke` |
+
+As duas rotas de destinatário devolvem os grupos separados, pelos **mesmos
+métodos que o publish usa**:
+
+```json
+{ "client": [{"email":"…","name":"…"}], "internal": [{"email":"…","name":"…"}] }
+```
+
+A versão por `client_id` existe porque o passo 1 do wizard precisa do número
+**antes** de o rascunho nascer. Antes disso o wizard recalculava a regra no
+frontend (`useUsersPaged`); com o admin entrando na conta, essa segunda fonte
+passaria a dizer "vai para 2 pessoas" enquanto saem 6 emails.
 
 ### Anexos: link externo, não upload
 
@@ -443,8 +489,10 @@ imprimir o documento para levar numa reunião.
 
 | Caso | Comportamento |
 |---|---|
-| Cliente sem usuário ativo | Passo 1 trava o avanço com explicação |
+| Cliente sem usuário ativo | Passo 1 trava o avanço — admin com cópia interna **não** destrava |
 | Usuário desativado | Não recebe (`ActiveClientUsers` filtra) |
+| Admin desativado/excluído com a cópia ligada | Não recebe (`InternalRecipients` filtra) |
+| Nenhum admin com a cópia ligada | Envio normal, só o cliente — o trilho nem mostra o bloco |
 | Campanha sem veiculação no período | Bloco entra com KPIs zerados e Checking vazio |
 | Nenhuma emissora com PMM no target | Cards "no target" somem (não mostram zero) |
 | Emissora sem `logo_url` | `StationAvatar` cai no ícone de rádio |
