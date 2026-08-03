@@ -234,6 +234,14 @@
   margin: 0;
 }
 
+/* Explica um grupo do trilho sem competir com a lista que vem abaixo. */
+.pv-rail-note {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--pv-ink-3);
+  margin: -6px 0 12px;
+}
+
 /* Lista de fatos, não cards aninhados. */
 .pv-facts { display: flex; flex-direction: column; gap: 10px; margin: 0; }
 
@@ -251,6 +259,12 @@
   color: var(--pv-ink);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+/* Quebra do total em cliente + interno: acompanha o número sem virar outro. */
+.pv-fact-note {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--pv-ink-3);
 }
 
 .pv-people {
