@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-30
+ultima-verificacao: 2026-08-03
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
