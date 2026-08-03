@@ -1207,3 +1207,48 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* ─── Captura offscreen (mapa + indicadores que viram PNG) ──────────────────
+ *
+ * Estas regras existiam desde o wizard original e foram perdidas na reescrita
+ * deste arquivo (6aee988). Sem elas o `OffscreenCapture` não é offscreen coisa
+ * nenhuma: renderiza no fluxo normal da página, e o html2canvas fotografa na
+ * largura que sobrar da janela do admin — foi o que deixou os KPIs e os
+ * gráficos empilhados, cada um esticado na largura toda, na foto do zip.
+ *
+ * A largura FIXA de 1280px é o ponto: a foto tem que sair igual
+ * independentemente do tamanho da janela de quem apertou "enviar". Sem ela,
+ * dois admins mandam pós-vendas visualmente diferentes do mesmo relatório.
+ * 1280px também é o breakpoint em que o InsightsPage.css ainda dá 5 colunas de
+ * card e 3 de gráfico — a foto sai no layout desktop cheio. */
+.psa-offscreen {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 1280px;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.psc-map-frame,
+.psc-insights-frame {
+  width: 1280px;
+  background: var(--c-bg);
+  padding: 28px 32px;
+  font-family: var(--font-body);
+}
+
+.psc-frame-title {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  margin-bottom: 16px;
+}
+
+/* O miolo usa as MESMAS classes do /insights (.in-row/.in-row--cards/
+   .in-row--charts, em InsightsPage.css) — a foto não pode ter grade própria,
+   senão diverge da tela toda vez que o dashboard mudar. Só o espaçamento entre
+   as faixas mora aqui, que na página vem do .in-page. */
+.psc-insights-frame .in-row + .in-row { margin-top: 18px; }
