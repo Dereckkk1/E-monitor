@@ -54,14 +54,15 @@ export default function PostSalePage() {
   const base = `${API_BASE}/public/post-sale/${encodeURIComponent(token)}`
 
   function handleDownload(block) {
-    // O endpoint redireciona (302) pra uma URL presignada de 15 minutos.
-    // window.location em vez de fetch: download atravessa o redirect sem CORS.
+    // O endpoint revalida o token e devolve os BYTES do zip (Content-Disposition
+    // attachment). Não é redirect pra URL presignada: em prod o host assado na
+    // presigned é localhost:9000, que o navegador do cliente não alcança.
     window.location.href = `${base}/campaigns/${block.campaign_id}/bundle.zip`
   }
 
   // O mapa é servido pela mesma rota pública, que revalida o token antes de
-  // presignar. A URL é montada aqui (e não gravada no payload) porque cada
-  // destinatário tem seu próprio token e a assinatura do S3 expira.
+  // abrir o objeto no bucket. A URL é montada aqui (e não gravada no payload)
+  // porque cada destinatário tem seu próprio token.
   function mapUrlFor(block) {
     if (!block.has_bundle) return null
     return `${base}/campaigns/${block.campaign_id}/image/map.png`

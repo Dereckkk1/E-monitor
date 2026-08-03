@@ -1,12 +1,13 @@
 package postsale
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,11 +38,18 @@ func (f *fakeStore) Put(_ context.Context, key string, body io.Reader, _ string)
 	return nil
 }
 
-func (f *fakeStore) PresignGet(_ context.Context, key string, ttl time.Duration) (string, time.Time, error) {
-	if _, ok := f.objects[key]; !ok {
-		return "", time.Time{}, errors.New("objeto inexistente")
+func (f *fakeStore) Get(_ context.Context, key string) (io.ReadCloser, string, int64, error) {
+	b, ok := f.objects[key]
+	if !ok {
+		return nil, "", 0, errors.New("objeto inexistente")
 	}
-	return "https://s3.test/" + key + "?sig=x", time.Now().Add(ttl), nil
+	ct := "application/octet-stream"
+	if strings.HasSuffix(key, ".png") {
+		ct = "image/png"
+	} else if strings.HasSuffix(key, ".zip") {
+		ct = "application/zip"
+	}
+	return io.NopCloser(bytes.NewReader(b)), ct, int64(len(b)), nil
 }
 
 // recordingMailer registra os envios e pode falhar em endereços escolhidos.
@@ -237,8 +245,9 @@ func TestPublish_SemSMTPMarcaDisabled(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// O bundle sai por presigned URL, e só depois de validar o token.
-func TestBundleURL_ExigeTokenValido(t *testing.T) {
+// Os artefatos saem em BYTES pela API (nunca redirect pra presigned, que em
+// prod aponta pra localhost:9000), e só depois de validar o token.
+func TestOpenAsset_ExigeTokenValido(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	seed := seedScenario(t, ctx, pool)
 	seedClientUser(t, ctx, pool, seed.ClientID, "cliente@empresa.com", true)
@@ -251,26 +260,37 @@ func TestBundleURL_ExigeTokenValido(t *testing.T) {
 	require.NoError(t, err)
 
 	tok := tokenOf(t, ctx, svc, rep.ID)
-	u, err := svc.BundleURL(ctx, tok, seed.CampaignID, 15*time.Minute)
+	zip, err := svc.OpenBundle(ctx, tok, seed.CampaignID)
 	require.NoError(t, err)
-	require.Contains(t, u, "post-sale/")
-	require.Contains(t, u, "sig=")
+	defer zip.Body.Close()
+	require.Equal(t, "application/zip", zip.ContentType)
+	blob, err := io.ReadAll(zip.Body)
+	require.NoError(t, err)
+	require.NotEmpty(t, blob)
+	require.Equal(t, int64(len(blob)), zip.Size)
 
-	_, err = svc.BundleURL(ctx, "token-invalido", seed.CampaignID, time.Minute)
+	_, err = svc.OpenBundle(ctx, "token-invalido", seed.CampaignID)
 	require.ErrorIs(t, err, ErrNotFound)
 
 	// O mapa vive como objeto PRÓPRIO, não só dentro do zip: o documento mostra
 	// a imagem na tela, e ninguém abre um zip pra ver o mapa.
-	mapURL, err := svc.ImageURL(ctx, tok, seed.CampaignID, AssetMap, time.Minute)
+	mapAsset, err := svc.OpenImage(ctx, tok, seed.CampaignID, AssetMap)
 	require.NoError(t, err)
-	require.Contains(t, mapURL, "mapa.png")
-
-	insURL, err := svc.ImageURL(ctx, tok, seed.CampaignID, AssetInsights, time.Minute)
+	defer mapAsset.Body.Close()
+	require.Equal(t, "image/png", mapAsset.ContentType)
+	mapBytes, err := io.ReadAll(mapAsset.Body)
 	require.NoError(t, err)
-	require.Contains(t, insURL, "indicadores.png")
+	require.Equal(t, capture().MapPNG, mapBytes)
 
-	// Token inválido não presigna imagem nenhuma.
-	_, err = svc.ImageURL(ctx, "token-invalido", seed.CampaignID, AssetMap, time.Minute)
+	insAsset, err := svc.OpenImage(ctx, tok, seed.CampaignID, AssetInsights)
+	require.NoError(t, err)
+	defer insAsset.Body.Close()
+	insBytes, err := io.ReadAll(insAsset.Body)
+	require.NoError(t, err)
+	require.Equal(t, capture().InsightsPNG, insBytes)
+
+	// Token inválido não abre imagem nenhuma.
+	_, err = svc.OpenImage(ctx, "token-invalido", seed.CampaignID, AssetMap)
 	require.ErrorIs(t, err, ErrNotFound)
 
 	// Os três objetos subiram (mapa, indicadores, zip).
