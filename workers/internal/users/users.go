@@ -25,9 +25,12 @@ type User struct {
 	PasswordHash string     `json:"-"`
 	Role         string     `json:"role"`
 	ClientID     *uuid.UUID `json:"client_id,omitempty"`
-	Name         string     `json:"name"`
-	Phone        *string    `json:"phone,omitempty"`
-	IsActive     bool       `json:"is_active"`
+	// ClientIDs é a carteira completa (tabela user_clients). Contém sempre o
+	// ClientID acima, que é o "principal". Vazio para admin/operator.
+	ClientIDs []uuid.UUID `json:"client_ids"`
+	Name      string      `json:"name"`
+	Phone     *string     `json:"phone,omitempty"`
+	IsActive  bool        `json:"is_active"`
 	// ReceiveAlertEmails controla se o usuário recebe os disparos diários de
 	// email (campanhas + emissoras offline). Default TRUE; só admins/operators
 	// são destinatários de qualquer forma (ver ActiveInternal).
@@ -38,9 +41,9 @@ type User struct {
 	// consome é postsale.Repo.InternalRecipients, que também filtra por role.
 	ReceivePostSaleEmails bool       `json:"receive_post_sale_emails"`
 	DeletedAt             *time.Time `json:"deleted_at,omitempty"`
-	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	LastLoginAt           *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 // Repo wraps a pgxpool.Pool and exposes CRUD operations for the users table.
@@ -51,16 +54,21 @@ type Repo struct {
 // NewRepo constructs a Repo backed by the given pool.
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
+// userColumns é a projeção de leitura. O array_agg correlacionado traz a
+// carteira sem N+1. Exige que a tabela apareça como `users` (sem alias) na
+// query — é o caso de todos os SELECTs deste arquivo.
 const userColumns = `id, email, password_hash, role, client_id, name, phone,
                      is_active, receive_alert_emails, receive_post_sale_emails,
-                     deleted_at, last_login_at, created_at, updated_at`
+                     deleted_at, last_login_at, created_at, updated_at,
+                     COALESCE((SELECT array_agg(uc.client_id ORDER BY uc.created_at, uc.client_id)
+                               FROM user_clients uc WHERE uc.user_id = users.id), '{}')`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.ClientID,
 		&u.Name, &u.Phone, &u.IsActive, &u.ReceiveAlertEmails, &u.ReceivePostSaleEmails,
 		&u.DeletedAt, &u.LastLoginAt,
-		&u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedAt, &u.UpdatedAt, &u.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -88,16 +96,21 @@ type CreateInput struct {
 // Os COALESCE espelham os DEFAULT das migrations 0037 e 0061 — mexeu num, mexa
 // no outro.
 func (r *Repo) Create(ctx context.Context, in CreateInput) (*User, error) {
-	row := r.pool.QueryRow(ctx,
+	var id uuid.UUID
+	if err := r.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, role, client_id, name, phone,
 		                    receive_alert_emails, receive_post_sale_emails)
 		 VALUES (LOWER($1), $2, $3, $4, $5, $6,
 		         COALESCE($7, TRUE), COALESCE($8, FALSE))
-		 RETURNING `+userColumns,
+		 RETURNING id`,
 		in.Email, in.PasswordHash, in.Role, in.ClientID, in.Name, in.Phone,
 		in.ReceiveAlertEmails, in.ReceivePostSaleEmails,
-	)
-	return scanUser(row)
+	).Scan(&id); err != nil {
+		return nil, err
+	}
+	// Relê pra trazer a carteira já materializada pelo trigger da 0062 — o
+	// array_agg num RETURNING roda antes do AFTER trigger e viria vazio.
+	return r.Get(ctx, id)
 }
 
 // Get busca por ID (inclui deletados).
@@ -171,9 +184,75 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	args = append(args, id)
 	q := `UPDATE users SET ` + strings.Join(sets, ", ") +
 		` WHERE id = $` + strconv.Itoa(idx) +
-		` RETURNING ` + userColumns
-	row := r.pool.QueryRow(ctx, q, args...)
-	return scanUser(row)
+		` RETURNING id`
+	var updatedID uuid.UUID
+	if err := r.pool.QueryRow(ctx, q, args...).Scan(&updatedID); err != nil {
+		return nil, err
+	}
+	// Relê pelo mesmo motivo do Create: array_agg num RETURNING não veria
+	// mudanças feitas por triggers AFTER UPDATE OF client_id da 0062.
+	return r.Get(ctx, updatedID)
+}
+
+// SetClients redefine a carteira de clientes do usuário numa transação:
+// insere os que faltam, remove os que saíram e reposiciona o cliente principal
+// (users.client_id).
+//
+// O principal é MANTIDO se continuar na lista; senão vira o primeiro id
+// recebido — regra determinística pra não embaralhar o cabeçalho da página de
+// boas-vindas a cada edição.
+//
+// Lista vazia é rejeitada: quem não tem cliente é admin/operator, e esse
+// caminho é o ClearClient do UpdateInput.
+func (r *Repo) SetClients(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return errors.New("client list must not be empty")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var current *uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT client_id FROM users WHERE id = $1 FOR UPDATE`, userID,
+	).Scan(&current); err != nil {
+		return err
+	}
+
+	primary := ids[0]
+	if current != nil {
+		for _, id := range ids {
+			if id == *current {
+				primary = *current
+				break
+			}
+		}
+	}
+
+	// Ordem: UPDATE primeiro (o trigger da 0062 insere o principal em
+	// user_clients), depois INSERT do resto, e o DELETE por último — assim o
+	// DELETE nunca apaga uma linha recém-criada. primary ∈ ids, então ele
+	// sobrevive ao <> ALL.
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET client_id = $2, updated_at = NOW() WHERE id = $1`,
+		userID, primary); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO user_clients (user_id, client_id)
+		 SELECT $1, unnest($2::uuid[])
+		 ON CONFLICT DO NOTHING`, userID, ids); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM user_clients
+		 WHERE user_id = $1 AND client_id <> ALL($2::uuid[])`,
+		userID, ids); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SetPassword troca o hash de senha.
@@ -259,7 +338,11 @@ func (r *Repo) List(ctx context.Context, in ListInput) ([]User, int, error) {
 		idx++
 	}
 	if in.ClientID != nil {
-		where = append(where, "client_id = $"+strconv.Itoa(idx))
+		// Casa por VÍNCULO (carteira), não só pelo principal: um usuário de
+		// agência filtrado por um cliente secundário precisa aparecer.
+		where = append(where,
+			"EXISTS (SELECT 1 FROM user_clients uc WHERE uc.user_id = users.id"+
+				" AND uc.client_id = $"+strconv.Itoa(idx)+")")
 		args = append(args, *in.ClientID)
 		idx++
 	}
