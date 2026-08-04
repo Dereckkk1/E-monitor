@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-03
+ultima-verificacao: 2026-08-04
 codigo-relacionado:
   - migrations/0027_user_management.up.sql
   - migrations/0037_stations_offline_email.up.sql
@@ -19,6 +19,13 @@ codigo-relacionado:
 ---
 
 # Gerenciamento de usuários
+
+> **Multi-cliente (agências):** um usuário pode estar vinculado a VÁRIOS
+> clientes desde 2026-08-04. `users.client_id` continua existindo, mas agora
+> significa "cliente principal" — a carteira completa mora em `user_clients`.
+> O campo de cliente do `/admin/users` é um multi-select e a API aceita
+> `client_ids[]` (com `client_id` ainda aceito como carteira de um).
+> Ver [multi-client-user.md](multi-client-user.md).
 
 CRUD de usuários no painel admin (`/admin/users`) e tela "Minha conta"
 (`/account`) para self-service. Suporta dois tipos de conta:
