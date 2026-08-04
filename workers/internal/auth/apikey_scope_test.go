@@ -107,3 +107,35 @@ func TestAPIKeyViewerScope_FailClosedInvalidClientID(t *testing.T) {
 		t.Fatalf("expected 401 fail-closed, got %d", rr.Code)
 	}
 }
+
+// TestAPIKeyViewerScope_ComposesWithScopeAllows closes the gap between the two
+// halves of the funnel: the tests above only exercise ClientScopesFromContext,
+// but the ~19 handler call sites that actually enforce ownership call
+// ScopeAllows. This asserts the API-key path composes with it — own client
+// allowed, any other client denied.
+func TestAPIKeyViewerScope_ComposesWithScopeAllows(t *testing.T) {
+	client := uuid.New()
+	other := uuid.New()
+
+	var ownAllowed, otherAllowed, nilAllowed bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ownAllowed = ScopeAllows(r.Context(), client)
+		otherAllowed = ScopeAllows(r.Context(), other)
+		nilAllowed = ScopeAllows(r.Context(), uuid.Nil)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/v1/detections", nil)
+	req = req.WithContext(ctxWithClientID(req.Context(), client.String()))
+	APIKeyViewerScope(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !ownAllowed {
+		t.Fatalf("key's own client was denied — the external API would 404 its own data")
+	}
+	if otherAllowed {
+		t.Fatalf("another tenant's client was allowed — BOLA (audit 2026-07-21, C-01)")
+	}
+	if nilAllowed {
+		t.Fatalf("uuid.Nil was allowed — probing with a zero id must never pass")
+	}
+}
