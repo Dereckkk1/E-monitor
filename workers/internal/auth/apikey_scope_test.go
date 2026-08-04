@@ -3,8 +3,8 @@ package auth
 // apikey_scope_test.go — regression coverage for the external client API
 // (/v1/*) tenant isolation. Before the 2026-07-21 security audit fix, the
 // API-key-authenticated routes reused the internal handlers, which resolve the
-// tenant via ClientScopeFromContext (JWT claims). An API-key request carries no
-// JWT claims, so ClientScopeFromContext returned nil ("see everything"),
+// tenant via ClientScopesFromContext (JWT claims). An API-key request carries no
+// JWT claims, so ClientScopesFromContext returned nil ("see everything"),
 // letting any client's key read every client's detections (BOLA / CWE-639).
 //
 // APIKeyViewerScope closes that gap by turning the key's client_id into
@@ -28,16 +28,17 @@ func ctxWithClientID(ctx context.Context, id string) context.Context {
 }
 
 // TestAPIKeyViewerScope_ScopesToKeyClient asserts that after the middleware
-// runs, a downstream handler resolving the tenant via ClientScopeFromContext
-// sees the API key's own client — never nil (which would leak all tenants).
+// runs, a downstream handler resolving the tenant via ClientScopesFromContext
+// sees the API key's own client as a portfolio of exactly one — never nil
+// (which would leak all tenants).
 func TestAPIKeyViewerScope_ScopesToKeyClient(t *testing.T) {
 	client := uuid.New()
 
-	var resolved *uuid.UUID
+	var resolved []uuid.UUID
 	var called bool
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		resolved = ClientScopeFromContext(r.Context())
+		resolved = ClientScopesFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -51,10 +52,13 @@ func TestAPIKeyViewerScope_ScopesToKeyClient(t *testing.T) {
 		t.Fatalf("next handler was not called (status %d)", rr.Code)
 	}
 	if resolved == nil {
-		t.Fatalf("ClientScopeFromContext returned nil — request is unscoped (BOLA)")
+		t.Fatalf("ClientScopesFromContext returned nil — request is unscoped (BOLA)")
 	}
-	if *resolved != client {
-		t.Fatalf("scoped to wrong client: got %s, want %s", resolved, client)
+	if len(resolved) != 1 {
+		t.Fatalf("expected a single-client portfolio, got %d clients: %v", len(resolved), resolved)
+	}
+	if resolved[0] != client {
+		t.Fatalf("scoped to wrong client: got %s, want %s", resolved[0], client)
 	}
 }
 

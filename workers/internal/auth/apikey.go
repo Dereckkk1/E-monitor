@@ -51,11 +51,13 @@ func ClientIDFromContext(ctx context.Context) (string, bool) {
 
 // APIKeyViewerScope turns the API key's client_id (recorded by Middleware
 // under clientIDKey) into synthetic viewer Claims, so handlers that resolve the
-// tenant via ClientScopeFromContext enforce isolation on the external /v1/*
-// surface identically to a JWT viewer.
+// tenant via ClientScopesFromContext enforce isolation on the external /v1/*
+// surface identically to a JWT viewer. The key's client becomes a portfolio of
+// exactly one — the external API can never be multi-client, even when the
+// key's owner user is (agências multi-cliente autenticam via JWT, não API key).
 //
 // Fail-closed: a request without a valid client_id in context is rejected 401
-// rather than passed through. Without this, ClientScopeFromContext would return
+// rather than passed through. Without this, ClientScopesFromContext would return
 // nil, which the system treats as "no scope = see everything" — the BOLA that
 // let one client's key read every client's data (audit 2026-07-21, C-01). Mount
 // this immediately after Middleware on any API-key-protected route group.
@@ -71,7 +73,9 @@ func APIKeyViewerScope(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		ctx := ContextWithClaims(r.Context(), &Claims{Role: "viewer", ClientID: &cid})
+		ctx := ContextWithClaims(r.Context(), &Claims{
+			Role: "viewer", ClientID: &cid, ClientIDs: []uuid.UUID{cid},
+		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
