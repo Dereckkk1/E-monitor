@@ -138,9 +138,12 @@ enxerga um cliente e vaza inconsistência silenciosa.
 
 - `handlers/campaigns.go:47` (List) e `:162` (Financials)
 - `handlers/detections.go:41` (List) e `:98` (AggregateByMaterial)
-- `handlers/insights.go:44`
 - `handlers/live_map.go:47`
 - `handlers/clients.go:32` (List — devolve os N clientes da carteira)
+
+**Cliente único obrigatório, validado contra a carteira:**
+
+- `handlers/insights.go:44` — ver §6.7.
 
 **Check pontual → `ScopeAllows`:**
 
@@ -209,6 +212,27 @@ vierem, `client_ids` vence.
 
 Validação: role "client" exige `client_ids` não-vazio; role "admin" exige vazio.
 
+### 6.7 `/insights` é estruturalmente por cliente
+
+`GET /insights` **já exige `client_id` mesmo do admin** (`handlers/insights.go:31`)
+e devolve 403 se qualquer campanha pedida não pertencer a ele. O repo reflete isso:
+`catalog.InsightsParams.ClientID` é `uuid.UUID`, não ponteiro — a tela inteira
+(target PMM, CPM, investido, valor consolidado) é calculada sobre um cliente.
+
+Portanto o usuário-agência **escolhe um cliente** no /insights, exatamente como o
+admin faz hoje. Não é uma restrição inventada aqui: é a semântica do endpoint, e
+somar valor consolidado de clientes diferentes não teria significado comercial.
+
+Regra do handler:
+
+- Sem escopo (admin): inalterado — `client_id` obrigatório na query.
+- Escopo com 1 cliente: `client_id` continua sendo **forçado** pelo JWT (ignora a
+  query), idêntico a hoje.
+- Escopo com N clientes: `client_id` da query é obrigatório e precisa pertencer à
+  carteira; fora dela devolve 403, ausente devolve 400 `client_id required`.
+
+O 403 de campanha cross-client continua valendo dentro do cliente escolhido.
+
 ## 7. Frontend
 
 Regra única, aplicada onde hoje existe `isAdmin ? <select Cliente> : <chip travado>`:
@@ -222,8 +246,10 @@ mesmo componente com a mesma fonte de dados.
 
 **Telas tocadas:**
 
-- `components/insights/FiltersBar.jsx:182` (/insights) — e o `useEffect:171` que
-  trava `clientId` no próprio cliente passa a travar só quando há 1 cliente.
+- `components/insights/FiltersBar.jsx:182` (/insights) — o `useEffect:171` que
+  trava `clientId` no próprio cliente passa a travar só quando há 1 cliente. Com
+  N clientes o select é **obrigatório** antes de escolher campanhas (§6.7), mesma
+  UX do admin.
 - `pages/LiveMapPage.jsx:124` — o `clientId` do viewer deixa de vir de
   `user.client_id` e passa a ser a seleção do filtro (`null` = todos), que também
   alimenta o chip de nome/logo do cabeçalho.
@@ -250,7 +276,7 @@ lista mostra `Cliente A +2`.
 | Pós-venda | Continua por cliente, link público por token; a agência recebe um email por cliente |
 | API keys externas `/v1/*` | Escopadas por cliente, não por usuário — inalterado |
 | Admin/operator | `client_ids` sempre vazio; CHECK 0027 continua barrando |
-| KPIs somados no /insights | Impactos e investido somam; CPM vira média ponderada (correta). PMM segue resolvido por `(campanha.client_id, station)` |
+| /insights com 2 clientes | Escolhe um cliente no seletor (§6.7) — a tela é por cliente por construção, inclusive pro admin |
 
 ## 9. Testes
 
