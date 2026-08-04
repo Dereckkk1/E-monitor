@@ -59,4 +59,30 @@ func TestClientScopes_ViewerNoClient_FailsClosed(t *testing.T) {
 	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Role: "viewer"})
 	require.Equal(t, []uuid.UUID{uuid.Nil}, auth.ClientScopesFromContext(ctx))
 	require.False(t, auth.ScopeAllows(ctx, uuid.New()))
+	// A sentinela não pode autorizar a si mesma: uuid.Parse aceita
+	// "00000000-0000-0000-0000-000000000000" vindo de um path param.
+	require.False(t, auth.ScopeAllows(ctx, uuid.Nil))
+}
+
+func TestScopeAllows_NilClientID_DeniedEvenForAdmin(t *testing.T) {
+	// Nenhum cliente real tem id zero (clients.id = uuid_generate_v4()), então
+	// um uuid.Nil chegando aqui é sempre bug ou sondagem — negar é a resposta
+	// certa mesmo pra quem não tem escopo.
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Role: "admin"})
+	require.Nil(t, auth.ClientScopesFromContext(ctx))
+	require.False(t, auth.ScopeAllows(ctx, uuid.Nil))
+}
+
+func TestClientScopes_ReturnsCopy_CallerCannotCorruptClaims(t *testing.T) {
+	// O slice desce como argumento de query pros repos. Se um caller ordenar
+	// ou dedupar in-place, as claims do resto do request iriam junto.
+	a, b := uuid.New(), uuid.New()
+	claims := &auth.Claims{Role: "viewer", ClientID: &a, ClientIDs: []uuid.UUID{a, b}}
+	ctx := auth.ContextWithClaims(context.Background(), claims)
+
+	got := auth.ClientScopesFromContext(ctx)
+	got[0] = uuid.New() // caller hostil/desatento
+
+	require.Equal(t, []uuid.UUID{a, b}, claims.ClientIDs, "claims foram corrompidas")
+	require.Equal(t, []uuid.UUID{a, b}, auth.ClientScopesFromContext(ctx))
 }

@@ -519,3 +519,18 @@ Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../op
   `smaps_rollup` (PSS) para travar o número. **Impacto:** dimensionar acima de 200
   emissoras carrega incerteza de ~50% na RAM. (O valor antigo de 14,8 MB/emissora já foi
   corrigido no `deploy.md` e no `docker-compose.yml`.)
+
+- **F-126** — Remover a tradução de JWT legado em `ClientScopesFromContext`.
+  Origem: feature multi-cliente (agências), Task 3 do plano
+  [2026-08-04-multi-client-user](../superpowers/plans/2026-08-04-multi-client-user.md).
+  `workers/internal/auth/scope.go` traduz token antigo (só `client_id`, sem
+  `client_ids`) numa carteira de um elemento. Sem isso, o deploy do backend
+  deslogaria todo cliente com sessão viva — o JWT vale 8h.
+
+  **Condição de remoção:** nenhum token emitido antes do deploy da Task 3 pode
+  estar vivo. Como o JWT não carrega marca de versão, a checagem barata é
+  esperar > 8h após o deploy. **Cuidado:** o mesmo branch dispara também quando
+  `users.Repo` devolve `ClientIDs` vazio pra um viewer que tem `client_id` — ou
+  seja, um bug de população se disfarça de "token velho" e some junto com a
+  remoção. Se quiser decidir por evidência em vez de relógio, instrumente o
+  branch com um contador Prometheus antes de remover e espere ele zerar.
