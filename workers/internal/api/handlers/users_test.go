@@ -558,3 +558,65 @@ func TestUsers_Delete_OK_AndIdempotent(t *testing.T) {
 func strconvI(i int) string {
 	return string(rune('0' + i))
 }
+
+// PATCH com um id inválido na carteira não pode DESTRUIR a carteira atual.
+//
+// O Update e o SetClients são transações separadas: se o Update gravar o
+// principal (podando os vínculos antigos) e o SetClients falhar depois, a
+// carteira fica truncada e o admin só vê um erro — parece que nada mudou.
+func TestUsers_Patch_UnknownClientInWallet_DoesNotTruncate(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "trunca@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Trunca",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{a.ID, b.ID}))
+	h := NewUsersHandler(repo, nil)
+
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+a.ID.String()+`","`+b.ID.String()+`","`+uuid.NewString()+`"]}`,
+		u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "client_not_found")
+
+	got, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs,
+		"carteira anterior tem que sobreviver a um PATCH recusado")
+	require.Equal(t, a.ID, *got.ClientID)
+}
+
+// A regra "mantém o principal atual quando ele continua na carteira" (§5.3)
+// tem que valer também vinda do PATCH — não só do SetClients direto.
+func TestUsers_Patch_KeepsCurrentPrincipalWhenStillInWallet(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "principal@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "P",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{a.ID, b.ID}))
+	h := NewUsersHandler(repo, nil)
+
+	// Manda a MESMA carteira com o principal em segundo lugar. Promover
+	// client_ids[0] aqui trocaria o principal a cada salvamento do formulário.
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+b.ID.String()+`","`+a.ID.String()+`"]}`, u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, a.ID, *got.ClientID, "principal atual tem que ser preservado")
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs)
+}

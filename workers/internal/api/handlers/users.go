@@ -439,11 +439,20 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		if !in.ClearClient {
 			in.ClientID = p.ClientID
 		}
-	} else if len(p.ClientIDs) > 0 && !in.ClearClient {
-		// Promover admin → cliente mandando SÓ a carteira: o Update precisa
-		// gravar um principal na MESMA transação em que grava role='viewer',
-		// senão o CHECK users_client_role_consistency estoura no caminho. O
-		// SetClients logo abaixo acrescenta os secundários.
+	} else if len(p.ClientIDs) > 0 && !in.ClearClient && current.ClientID == nil {
+		// SÓ na promoção admin → cliente (o usuário ainda não tem principal):
+		// o Update precisa gravar um principal na MESMA transação em que grava
+		// role='viewer', senão o CHECK users_client_role_consistency estoura no
+		// caminho. O SetClients logo abaixo acrescenta os secundários.
+		//
+		// Para quem JÁ é cliente, não tocamos client_id aqui de propósito. O
+		// Update poda a carteira sempre que mexe em client_id (é o que fecha o
+		// vazamento do caminho legado), então setá-lo aqui truncaria a carteira
+		// pra um cliente ANTES do SetClients rodar — e um SetClients que
+		// falhasse depois (id inválido na lista, por exemplo) deixaria a
+		// carteira destruída, com o admin vendo só um erro. Deixando client_id
+		// quieto, o SetClients faz tudo numa transação só e a regra "mantém o
+		// principal atual se ele continuar na carteira" (§5.3) continua valendo.
 		in.ClientID = &p.ClientIDs[0]
 	}
 
