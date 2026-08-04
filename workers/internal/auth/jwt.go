@@ -15,6 +15,10 @@ type Claims struct {
 	UserID   uuid.UUID  `json:"user_id"`
 	Role     string     `json:"role"`
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
+	// ClientIDs é a carteira completa do usuário (multi-cliente / agências).
+	// ClientID acima continua sendo o principal, mantido por compatibilidade
+	// com tokens e frontends anteriores à feature.
+	ClientIDs []uuid.UUID `json:"client_ids,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -34,9 +38,10 @@ func IssueTokenForUser(u *users.User) (string, error) {
 		return "", err
 	}
 	claims := Claims{
-		UserID:   u.ID,
-		Role:     u.Role,
-		ClientID: u.ClientID,
+		UserID:    u.ID,
+		Role:      u.Role,
+		ClientID:  u.ClientID,
+		ClientIDs: u.ClientIDs,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
