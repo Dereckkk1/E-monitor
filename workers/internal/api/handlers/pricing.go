@@ -32,7 +32,7 @@ func (h *PricingHandler) ListByCampaign(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Viewer scope: 404 quando a campanha não pertence ao cliente do JWT.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil && h.CampaignRepo != nil {
 		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -42,7 +42,7 @@ func (h *PricingHandler) ListByCampaign(w http.ResponseWriter, r *http.Request) 
 			}
 			return
 		}
-		if camp.ClientID != *scope {
+		if !auth.ScopeAllows(r.Context(), camp.ClientID) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}

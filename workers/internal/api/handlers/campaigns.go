@@ -147,7 +147,7 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Viewer scope: hide cross-client campaigns as 404 (anti-oracle).
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && out.ClientID != *scope {
+	if !auth.ScopeAllows(r.Context(), out.ClientID) {
 		http.Error(w, "not found", 404)
 		return
 	}
