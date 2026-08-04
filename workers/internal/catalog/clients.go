@@ -197,6 +197,35 @@ func (c *Clients) Get(ctx context.Context, id uuid.UUID) (*Client, error) {
 		`SELECT `+clientColumns+` FROM clients WHERE id = $1`, id))
 }
 
+// ListByIDs devolve os clientes pedidos, ordenados por nome. Ids inexistentes
+// são simplesmente omitidos (sem erro) — é o que a lista scope-aware precisa:
+// um vínculo órfão não pode derrubar a tela inteira. Como List, devolve ativos
+// E inativos: a carteira do JWT já é filtrada por atividade no login, e o
+// cliente desativado no meio da sessão ainda precisa resolver nome/logo.
+func (c *Clients) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]Client, error) {
+	rows, err := c.pool.Query(ctx,
+		`SELECT `+clientColumns+` FROM clients WHERE id = ANY($1) ORDER BY name`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Client
+	for rows.Next() {
+		cli, err := scanClient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *cli)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []Client{}
+	}
+	return out, nil
+}
+
 // List returns the full catalog (active AND inactive), ordered by name. This
 // is the lookup-map mode: callers resolve a client name/logo by id (campaign
 // rows, detection cells, dropdowns), so inactive clients must stay resolvable.

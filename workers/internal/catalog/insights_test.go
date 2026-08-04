@@ -988,7 +988,7 @@ func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
 	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
 	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
 
-	fins, err := campaignsRepo.FinancialsByCampaign(ctx, &client, parseDate("2026-07-15"))
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, parseDate("2026-07-15"))
 	if err != nil {
 		t.Fatalf("FinancialsByCampaign: %v", err)
 	}

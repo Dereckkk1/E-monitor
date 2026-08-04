@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -81,13 +80,14 @@ func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
 // ListPaged returns campaigns filtered by competence (YYYY-MM, month-overlap
 // semantics — same rule used by /detections) and free-text search across
 // campaign name + client name. Empty competence skips the date filter; empty
-// q skips the text filter. clientID, when non-nil, restricts results to that
-// client (used when the requester is a viewer with a JWT client scope).
+// q skips the text filter. clientIDs, when non-nil, restringe aos clientes da
+// carteira do requester (viewer com escopo no JWT); nil = admin, sem filtro;
+// slice vazio = nenhuma linha, falha fechada.
 //
 // Returns (rows, totalCount). Ordering matches the unpaged List(): lifecycle
 // status → programmed-soonest-first → start_date desc, so paging mirrors what
 // the user sees in the canonical list.
-func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientID *uuid.UUID, campaignID *uuid.UUID, page, pageSize int) ([]Campaign, int, error) {
+func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientIDs []uuid.UUID, campaignID *uuid.UUID, page, pageSize int) ([]Campaign, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -108,14 +108,14 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 	}
 
 	// $1 = q, $2 = competence flag, $3 = monthStart, $4 = monthEnd,
-	// $5 = clientID, $6 = campaignID (admin deep-link)
+	// $5 = clientIDs (carteira), $6 = campaignID (admin deep-link)
 	const where = `
 		WHERE
 		    ($2 = '' OR (c.start_date <= $4 AND c.end_date >= $3))
 		    AND ($1 = '' OR unaccent(lower(
 		        COALESCE(c.name,'') || ' ' || COALESCE(cl.name,'')
 		    )) LIKE '%' || unaccent(lower($1)) || '%')
-		    AND ($5::uuid IS NULL OR c.client_id = $5)
+		    AND ($5::uuid[] IS NULL OR c.client_id = ANY($5))
 		    AND ($6::uuid IS NULL OR c.id = $6)
 	`
 
@@ -125,7 +125,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		SELECT COUNT(*)
 		FROM campaigns c
 		LEFT JOIN clients cl ON cl.id = c.client_id`+where,
-		q, competence, monthStart, monthEnd, clientID, campaignID,
+		q, competence, monthStart, monthEnd, clientIDs, campaignID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -151,7 +151,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		CASE WHEN c.status = 'programada' THEN c.start_date ELSE NULL END ASC NULLS LAST,
 		c.start_date DESC
 		LIMIT $7 OFFSET $8`,
-		q, competence, monthStart, monthEnd, clientID, campaignID, pageSize, offset,
+		q, competence, monthStart, monthEnd, clientIDs, campaignID, pageSize, offset,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -172,14 +172,17 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 }
 
 // ListFiltered returns campaigns filtered by status and/or client. If statuses
-// is nil/empty, all lifecycle states are returned. clientID, when non-nil,
-// restricts results to that client (viewer JWT scope). Ordering follows the
-// lifecycle UX rule: ativas → programadas (próximas a entrar) → concluidas/canceladas.
-func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientID *uuid.UUID) ([]Campaign, error) {
+// is nil/empty, all lifecycle states are returned. clientIDs, when non-nil,
+// restringe aos clientes da carteira do viewer (nil = admin, sem filtro; slice
+// vazio = nenhuma linha, falha fechada). Ordering follows the lifecycle UX rule:
+// ativas → programadas (próximas a entrar) → concluidas/canceladas.
+func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientIDs []uuid.UUID) ([]Campaign, error) {
 	const baseQuery = `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
 		       fixed_cpm, created_at, updated_at
 		FROM campaigns
+		WHERE ($1::text[] IS NULL OR status = ANY($1))
+		  AND ($2::uuid[] IS NULL OR client_id = ANY($2))
 	`
 	const orderClause = `
 		ORDER BY CASE status
@@ -195,20 +198,10 @@ func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientI
 		END ASC NULLS LAST,
 		start_date DESC
 	`
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	switch {
-	case len(statuses) == 0 && clientID == nil:
-		rows, err = c.pool.Query(ctx, baseQuery+orderClause)
-	case len(statuses) == 0:
-		rows, err = c.pool.Query(ctx, baseQuery+` WHERE client_id = $1 `+orderClause, clientID)
-	case clientID == nil:
-		rows, err = c.pool.Query(ctx, baseQuery+` WHERE status = ANY($1) `+orderClause, statuses)
-	default:
-		rows, err = c.pool.Query(ctx, baseQuery+` WHERE status = ANY($1) AND client_id = $2 `+orderClause, statuses, clientID)
+	if len(statuses) == 0 {
+		statuses = nil // nil vira NULL no pgx = "sem filtro de status"
 	}
+	rows, err := c.pool.Query(ctx, baseQuery+orderClause, statuses, clientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -486,11 +479,11 @@ type CampaignFinancials struct {
 	FixedCPM *float64 `json:"fixed_cpm"`
 }
 
-// FinancialsByCampaign retorna o agregado das campanhas. Quando clientID
-// não é nil, filtra somente as campanhas do cliente — usado por viewers
-// para evitar vazamento cross-client. Admins/operators passam nil e recebem
-// todas as campanhas.
-func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
+// FinancialsByCampaign retorna o agregado das campanhas. Quando clientIDs
+// não é nil, filtra somente as campanhas da carteira — usado por viewers
+// para evitar vazamento cross-client (slice vazio = nenhuma linha, falha
+// fechada). Admins/operators passam nil e recebem todas as campanhas.
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
 	q := `
 		WITH per_ins AS (
 			-- Investimento, inserções e audiência no modo per_insertion:
@@ -576,9 +569,9 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientID *uuid.UUI
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
 		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
 		LEFT JOIN target_cov       ON target_cov.campaign_id       = c.id
-		WHERE ($1::uuid IS NULL OR c.client_id = $1)
+		WHERE ($1::uuid[] IS NULL OR c.client_id = ANY($1))
 	`
-	rows, err := c.pool.Query(ctx, q, clientID, orMaxDate(today))
+	rows, err := c.pool.Query(ctx, q, clientIDs, orMaxDate(today))
 	if err != nil {
 		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
 	}

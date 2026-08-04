@@ -13,7 +13,7 @@ import (
 // LiveMapRepo é a dependência mínima do handler. Mockável nos testes sem pool
 // real (mesmo padrão de InsightsHandler).
 type LiveMapRepo interface {
-	Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error)
+	Get(ctx context.Context, campaignID uuid.UUID, scopes []uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error)
 }
 
 type LiveMapHandler struct {
@@ -25,8 +25,8 @@ func NewLiveMapHandler(repo LiveMapRepo) *LiveMapHandler {
 }
 
 // Get GET /live-map?campaign_id=UUID — emissoras-alvo da campanha (com
-// coordenada) + as veiculações dela. Viewer fica restrito às campanhas do
-// próprio client_id via auth.ClientScopeFromContext (404 anti-oracle quando a
+// coordenada) + as veiculações dela. Viewer fica restrito às campanhas da
+// própria carteira via auth.ClientScopesFromContext (404 anti-oracle quando a
 // campanha é de outro cliente).
 //
 // include_terminal=1 pede o mapa mesmo de campanha cancelada. Quem usa é o
@@ -44,7 +44,7 @@ func (h *LiveMapHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope := auth.ClientScopeFromContext(r.Context())
+	scope := auth.ClientScopesFromContext(r.Context())
 	opts := catalog.LiveMapOpts{
 		IncludeTerminal: r.URL.Query().Get("include_terminal") == "1",
 	}
