@@ -185,8 +185,39 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	q := `UPDATE users SET ` + strings.Join(sets, ", ") +
 		` WHERE id = $` + strconv.Itoa(idx) +
 		` RETURNING id`
+
+	// Transação porque mexer em client_id obriga a podar a carteira junto: o
+	// trigger da 0062 só ADICIONA. Sem a poda, reatribuir um viewer do cliente
+	// A pro B deixaria A na carteira, e o escopo do JWT (que lê a carteira)
+	// continuaria dando acesso aos dados de A — vazamento, não sujeira.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
 	var updatedID uuid.UUID
-	if err := r.pool.QueryRow(ctx, q, args...).Scan(&updatedID); err != nil {
+	if err := tx.QueryRow(ctx, q, args...).Scan(&updatedID); err != nil {
+		return nil, err
+	}
+	switch {
+	case in.ClearClient:
+		// Virou admin/operator: sem carteira. Senão o filtro por vínculo do
+		// /admin/users continuaria achando o usuário pelo cliente antigo.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM user_clients WHERE user_id = $1`, updatedID); err != nil {
+			return nil, err
+		}
+	case in.ClientID != nil:
+		// client_id sozinho significa "este usuário tem EXATAMENTE este
+		// cliente". Carteira com N clientes se edita por SetClients.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM user_clients WHERE user_id = $1 AND client_id <> $2`,
+			updatedID, *in.ClientID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	// Relê pelo mesmo motivo do Create: array_agg num RETURNING não veria
