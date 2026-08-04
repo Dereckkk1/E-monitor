@@ -26,20 +26,17 @@ type ClientsHandler struct {
 //   - Paged (?page + ?page_size): returns {data, total, total_pages, page,
 //     page_size}. Optional ?q filters by name/city/state/cnpj/email/contact.
 func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
-	// Viewer scope: cliente só enxerga o próprio registro. Devolvemos no
-	// mesmo envelope {data: [...]} pra UI tratar igual à lista global — sem
-	// gates de role no frontend. Paginação não se aplica (lista de 1).
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
-		cli, err := h.Repo.Get(r.Context(), *scope)
+	// Viewer scope: cliente enxerga a própria carteira (1 item no caso comum,
+	// N no caso de agência). Mesmo envelope {data: [...]} da lista global — a
+	// UI trata igual, sem gates de role, e usa o tamanho da lista pra decidir
+	// se mostra o seletor de cliente. Paginação não se aplica.
+	if scopes := auth.ClientScopesFromContext(r.Context()); scopes != nil {
+		items, err := h.Repo.ListByIDs(r.Context(), scopes)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeJSON(w, 200, map[string]any{"data": []catalog.Client{}})
-				return
-			}
 			http.Error(w, "internal error", 500)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"data": []catalog.Client{*cli}})
+		writeJSON(w, 200, map[string]any{"data": items})
 		return
 	}
 

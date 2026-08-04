@@ -623,9 +623,9 @@ type ListFilter struct {
 	EndDate    *time.Time
 	Limit      int
 	Offset     int
-	// ClientID, when non-nil, restricts results to detections whose campaign
-	// belongs to this client (viewer JWT scope).
-	ClientID *uuid.UUID
+	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
+	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
+	ClientIDs []uuid.UUID
 }
 
 // ListPagedFilter mirrors ListFilter but with page-based pagination and an
@@ -641,9 +641,9 @@ type ListPagedFilter struct {
 	Sort       string // "detected_at_desc" (default) | "detected_at_asc"
 	Page       int    // 1-based
 	PageSize   int    // 1..200
-	// ClientID, when non-nil, restricts results to detections whose campaign
-	// belongs to this client (viewer JWT scope).
-	ClientID *uuid.UUID
+	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
+	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
+	ClientIDs []uuid.UUID
 }
 
 // ListPagedResult is the wire format returned to the frontend. Total is a
@@ -727,7 +727,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
-		  AND ($7::uuid IS NULL OR cmp.client_id = $7)
+		  AND ($7::uuid[] IS NULL OR cmp.client_id = ANY($7))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -748,7 +748,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 
 	offset := (f.Page - 1) * f.PageSize
 	rows, err := d.pool.Query(ctx, sql,
-		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientID)
+		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -817,11 +817,11 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 		  AND ($2::uuid IS NULL OR d.station_id = $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at >= $3)
 		  AND ($4::timestamptz IS NULL OR d.detected_at <= $4)
-		  AND ($7::uuid IS NULL OR cmp.client_id = $7)
+		  AND ($7::uuid[] IS NULL OR cmp.client_id = ANY($7))
 		  AND `+ApprovedDetectionsFilter+`
 		ORDER BY d.detected_at DESC
 		LIMIT $5 OFFSET $6`,
-		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset, f.ClientID)
+		f.CampaignID, f.StationID, f.StartDate, f.EndDate, f.Limit, f.Offset, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -954,10 +954,12 @@ type AggregateFilter struct {
 	StartDate  *time.Time
 	EndDate    *time.Time
 	Q          string
-	// ClientID, when non-nil, is used by the handler to verify campaign
-	// ownership before calling AggregateByMaterial (viewer scope guard).
-	// Not applied as a SQL filter here because campaign_id is already required.
-	ClientID *uuid.UUID
+	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
+	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
+	// Usado pelo handler pra verificar a posse da campanha antes de chamar
+	// AggregateByMaterial; não vira filtro SQL aqui porque campaign_id já é
+	// obrigatório.
+	ClientIDs []uuid.UUID
 }
 
 // AggregateByMaterial counts non-ignored, non-retracted detections grouped by

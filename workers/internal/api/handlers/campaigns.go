@@ -44,7 +44,7 @@ type CampaignSupervisor interface {
 
 func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	scope := auth.ClientScopeFromContext(r.Context())
+	scope := auth.ClientScopesFromContext(r.Context())
 
 	// Paged mode kicks in as soon as ?page or ?page_size shows up; legacy
 	// callers (DetectionsPage, AirtimeReportPage, wizard layout etc.) keep
@@ -157,9 +157,10 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Financials returns the per-campaign aggregate of investimento + total
 // inserções, usado pelo badge de CPM em /campaigns. Calculado em uma query
 // só (CTE) pra evitar N+1 chamadas no frontend.
-// Viewer scope: filtra pelo client_id do JWT para evitar vazamento cross-client.
+// Viewer scope: filtra pela carteira de clientes do JWT para evitar vazamento
+// cross-client.
 func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
-	scope := auth.ClientScopeFromContext(r.Context())
+	scope := auth.ClientScopesFromContext(r.Context())
 	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope, todaySaoPaulo())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

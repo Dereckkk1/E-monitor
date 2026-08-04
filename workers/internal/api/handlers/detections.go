@@ -38,7 +38,7 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f := catalog.ListFilter{
-		ClientID: auth.ClientScopeFromContext(r.Context()),
+		ClientIDs: auth.ClientScopesFromContext(r.Context()),
 	}
 	if v := q.Get("campaign_id"); v != "" {
 		id, err := uuid.Parse(v)
@@ -95,7 +95,7 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *DetectionsHandler) listPaged(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := catalog.ListPagedFilter{
-		ClientID: auth.ClientScopeFromContext(r.Context()),
+		ClientIDs: auth.ClientScopesFromContext(r.Context()),
 	}
 
 	if v := q.Get("campaign_id"); v != "" {

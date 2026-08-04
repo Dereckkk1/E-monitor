@@ -6,7 +6,7 @@
 //   - O CSV detalhado já existe em /detections/export — não duplicamos.
 //
 // Acesso: viewer (escopo do próprio cliente) também pode baixar — os
-// handlers verificam ClientScopeFromContext igual /detections/aggregate-by-material.
+// handlers verificam ClientScopesFromContext igual /detections/aggregate-by-material.
 
 package handlers
 
