@@ -120,37 +120,45 @@ function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
 /* ── Página ──────────────────────────────────────────────────────── */
 export default function LiveMapPage() {
   const { isAdmin, user } = useAuth()
-  const [adminClientId, setAdminClientId] = useState(null)
-  const clientId = isAdmin ? adminClientId : (user?.client_id ?? null)
+  const [pickedClientId, setPickedClientId] = useState(null)
   const [campaignId, setCampaignId] = useState(null)
   // Single-player coordination: só uma row toca por vez.
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
   const mapRef = useRef(null)
 
+  // /clients é scope-aware: admin recebe a lista inteira, Cliente recebe a
+  // própria carteira (1 no caso normal, N quando é agência). O seletor só
+  // aparece pra quem tem escolha — os demais seguem com o chip travado.
   const clientsQ = useClients()
   const clientOpts = useMemo(
     () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name, raw: c })),
     [clientsQ.data],
   )
-  // Para o viewer: resolve o próprio cliente (com logo) a partir da lista
-  // scope-aware do /clients (que devolve só ele).
+  const canPickClient = isAdmin || clientOpts.length > 1
+  // Sem seletor, o cliente é o único da carteira. Com seletor, null = a
+  // carteira inteira (o mapa ao vivo não exige escolher um cliente).
+  const clientId = canPickClient ? pickedClientId : (clientOpts[0]?.value ?? null)
+  // Para quem não escolhe: resolve o próprio cliente (com logo) a partir da
+  // lista scope-aware do /clients (que devolve só ele).
   const ownClient = useMemo(() => {
-    if (isAdmin) return null
-    return (clientsQ.data || []).find(c => c.id === user?.client_id) || null
-  }, [clientsQ.data, isAdmin, user?.client_id])
+    if (canPickClient) return null
+    return clientOpts[0]?.raw || null
+  }, [clientOpts, canPickClient])
 
   const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
   const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
   const campOpts = useMemo(() => {
     // Canceladas (terminais) não entram no seletor de mapa ao vivo — o backend
     // também as bloqueia (404) porque "ao vivo" implica campanha rodando.
-    const rows = (isAdmin
-      ? allCampaigns.filter(c => !clientId || c.client_id === clientId)
+    // O recorte por cliente vale pra qualquer role: no Cliente de um cliente
+    // só é no-op, na agência é o que separa a carteira.
+    const rows = (clientId
+      ? allCampaigns.filter(c => c.client_id === clientId)
       : allCampaigns
     ).filter(c => c.status !== 'cancelada')
     return rows.map(c => ({ value: c.id, label: c.name }))
-  }, [allCampaigns, clientId, isAdmin])
+  }, [allCampaigns, clientId])
 
   const { data, isLoading, isError, isFetching, refetch } = useLiveMap(campaignId)
   const stations = useMemo(() => data?.stations ?? [], [data])
@@ -266,13 +274,13 @@ export default function LiveMapPage() {
 
       {/* Filtros — mesmo padrão das telas de Veiculação */}
       <div className="lm-filters">
-        {isAdmin ? (
+        {canPickClient ? (
           <div className="lm-filter">
             <label className="lm-filter-label">Cliente</label>
             <RSelect
               options={clientOpts}
               value={clientOpts.find(o => o.value === clientId) || null}
-              onChange={opt => { setAdminClientId(opt?.value || null); setCampaignId(null) }}
+              onChange={opt => { setPickedClientId(opt?.value || null); setCampaignId(null) }}
               placeholder="Selecione…"
               isLoading={clientsQ.isPending}
               isClearable

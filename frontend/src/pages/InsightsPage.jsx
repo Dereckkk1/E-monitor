@@ -24,9 +24,13 @@ function lastOfMonthISO() {
 }
 
 export default function InsightsPage() {
-  const { isAdmin, user } = useAuth()
+  const { isAdmin, user, clientIds } = useAuth()
+  // O /insights é por cliente: admin escolhe, e a agência (carteira com 2+)
+  // também precisa escolher — o backend recusa a chamada sem client_id. Só o
+  // Cliente de um cliente só já entra com ele preenchido, como sempre foi.
+  const canPickClient = isAdmin || clientIds.length > 1
   const [filters, setFilters] = useState({
-    clientId: isAdmin ? null : (user?.client_id ?? null),
+    clientId: canPickClient ? null : (user?.client_id ?? null),
     campaignIds: [],
     from: firstOfMonthISO(),
     to: lastOfMonthISO(),
@@ -54,11 +58,14 @@ export default function InsightsPage() {
   const emptyVariant = useMemo(() => {
     if (!filters.clientId) return 'no-client'
     if (!filters.campaignIds || filters.campaignIds.length === 0) {
-      return isAdmin ? 'no-campaigns' : 'client-no-campaigns'
+      // "Você ainda não tem campanhas" só faz sentido pra quem enxerga um
+      // cliente só: quem escolheu um cliente da carteira precisa é escolher a
+      // campanha, igual ao admin.
+      return canPickClient ? 'no-campaigns' : 'client-no-campaigns'
     }
     if (data && data.kpis && data.kpis.veiculacoes_total === 0) return 'no-data'
     return null
-  }, [filters.clientId, filters.campaignIds, data, isAdmin])
+  }, [filters.clientId, filters.campaignIds, data, canPickClient])
 
   const handleExportImage = async () => {
     if (!dashboardRef.current) return
