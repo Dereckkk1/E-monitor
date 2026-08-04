@@ -846,6 +846,13 @@ func (d *Detections) List(ctx context.Context, f ListFilter) ([]Detection, error
 // IterateForExport streams enriched detections without paging, invoking the
 // callback once per row. Stops if cb returns an error. Uses the same WHERE
 // clause as ListPaged so filters/q behave identically.
+//
+// ATENÇÃO — esta é a única leitura de detections SEM recorte por cliente: ela
+// ignora f.ClientIDs de propósito, porque só roda em rotas admin-only
+// (/detections/export e o bundle do pós-venda, ver router.go). Mover esta
+// função pro subgrupo viewer-friendly do router serviria TODOS os clientes pra
+// qualquer um — se for preciso expô-la ao cliente, aplique o mesmo
+// `($N::uuid[] IS NULL OR cmp.client_id = ANY($N))` que ListPaged usa.
 func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 	cb func(DetectionEnriched) error) error {
 	var qTokens any = nil

@@ -101,6 +101,14 @@ func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scopes []uuid.U
 		return res, err
 	}
 	// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
+	//
+	// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
+	// catalog não pode importar auth sem inverter as camadas. Só é seguro
+	// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
+	// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
+	// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
+	// não casa com nada. Se algum dia existir linha com client_id zerado, esta
+	// checagem passa a autorizar demais.
 	if scopes != nil && !slices.Contains(scopes, clientID) {
 		return res, ErrCampaignNotFound
 	}
