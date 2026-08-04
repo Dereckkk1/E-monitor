@@ -1,13 +1,27 @@
 package users_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/users"
 )
+
+// seedTwoClients insere dois clientes e devolve os ids.
+func seedTwoClients(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	var a, b uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ('A') RETURNING id`).Scan(&a))
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ('B') RETURNING id`).Scan(&b))
+	return a, b
+}
 
 func TestSetClients_ReplacesWalletAndKeepsPrimary(t *testing.T) {
 	ctx, pool := newTestDB(t)
@@ -155,4 +169,128 @@ func TestActiveInternal_ScansWallet(t *testing.T) {
 	// Admin não tem carteira: a projeção tem que devolver array vazio, não erro
 	// de scan nem NULL.
 	require.Empty(t, list[0].ClientIDs)
+}
+
+// ── Consistência entre users.client_id e a carteira ──────────────────────
+//
+// O trigger da 0062 só ADICIONA. Sem poda no Update, reatribuir um viewer de
+// um cliente pra outro deixaria o antigo na carteira — e como o escopo do JWT
+// lê a carteira, o usuário continuaria enxergando dados do cliente de onde foi
+// removido. Vazamento de acesso, não sujeira cosmética.
+
+func TestUpdate_ReassigningClient_PrunesOldFromWallet(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, cliB := seedTwoClients(t, ctx, pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "realoca@example.com", PasswordHash: "x", Role: "viewer",
+		ClientID: &cliA, Name: "Realoca",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{cliA}, u.ClientIDs)
+
+	// Caminho legado do /admin/users: manda só client_id.
+	got, err := repo.Update(ctx, u.ID, users.UpdateInput{ClientID: &cliB})
+	require.NoError(t, err)
+	require.Equal(t, cliB, *got.ClientID)
+	require.Equal(t, []uuid.UUID{cliB}, got.ClientIDs,
+		"cliente antigo não pode sobreviver na carteira depois da reatribuição")
+}
+
+func TestUpdate_ReassigningClient_CollapsesMultiClientWallet(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, cliB := seedTwoClients(t, ctx, pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "colapsa@example.com", PasswordHash: "x", Role: "viewer",
+		ClientID: &cliA, Name: "Colapsa",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{cliA, cliB}))
+
+	// client_id sozinho significa "este usuário tem exatamente este cliente".
+	// Carteira com N clientes se edita por SetClients.
+	got, err := repo.Update(ctx, u.ID, users.UpdateInput{ClientID: &cliA})
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{cliA}, got.ClientIDs)
+}
+
+func TestUpdate_ClearClient_EmptiesWallet(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, cliB := seedTwoClients(t, ctx, pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "promove@example.com", PasswordHash: "x", Role: "viewer",
+		ClientID: &cliA, Name: "Promove",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{cliA, cliB}))
+
+	// Virar Administrador: sem esvaziar a carteira, o filtro por vínculo do
+	// /admin/users continuaria achando o usuário pelo cliente antigo.
+	admin := "admin"
+	got, err := repo.Update(ctx, u.ID, users.UpdateInput{
+		Role: &admin, ClearClient: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, got.ClientID)
+	require.Empty(t, got.ClientIDs)
+}
+
+// ── Bordas do SetClients ─────────────────────────────────────────────────
+
+func TestSetClients_UnknownUser_ReturnsErrNoRows(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, _ := seedTwoClients(t, ctx, pool)
+
+	err := repo.SetClients(ctx, uuid.New(), []uuid.UUID{cliA})
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+}
+
+func TestSetClients_UnknownClient_RollsBack(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, _ := seedTwoClients(t, ctx, pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "fk@example.com", PasswordHash: "x", Role: "viewer",
+		ClientID: &cliA, Name: "FK",
+	})
+	require.NoError(t, err)
+
+	// FK violation no INSERT: a transação inteira tem que voltar atrás,
+	// deixando carteira e principal como estavam.
+	require.Error(t, repo.SetClients(ctx, u.ID, []uuid.UUID{cliA, uuid.New()}))
+
+	got, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, cliA, *got.ClientID)
+	require.Equal(t, []uuid.UUID{cliA}, got.ClientIDs)
+}
+
+func TestSetClients_DuplicateIDsTolerated(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	resetUsersAndClients(t, ctx, pool)
+	repo := users.NewRepo(pool)
+	cliA, cliB := seedTwoClients(t, ctx, pool)
+
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "dup@example.com", PasswordHash: "x", Role: "viewer",
+		ClientID: &cliA, Name: "Dup",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{cliB, cliA, cliB}))
+	got, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []uuid.UUID{cliA, cliB}, got.ClientIDs)
 }
