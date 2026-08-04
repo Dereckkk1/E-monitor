@@ -43,7 +43,7 @@ func (h *MaterialsHandler) ListByClient(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid clientID", http.StatusBadRequest)
 		return
 	}
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && *scope != clientID {
+	if !auth.ScopeAllows(r.Context(), clientID) {
 		http.Error(w, "forbidden_client_scope", http.StatusForbidden)
 		return
 	}

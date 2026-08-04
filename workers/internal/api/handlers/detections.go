@@ -160,7 +160,7 @@ func (h *DetectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Viewer scope: verify campaign ownership before fetching full detail.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil {
 		clientID, err := h.Repo.GetClientID(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -170,7 +170,7 @@ func (h *DetectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if *clientID != *scope {
+		if !auth.ScopeAllows(r.Context(), *clientID) {
 			http.Error(w, "not found", 404)
 			return
 		}
@@ -201,7 +201,7 @@ func (h *DetectionsHandler) EvidenceURL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Viewer scope: verify campaign ownership before returning evidence URL.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil {
 		clientID, err := h.Repo.GetClientID(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -211,7 +211,7 @@ func (h *DetectionsHandler) EvidenceURL(w http.ResponseWriter, r *http.Request) 
 			}
 			return
 		}
-		if *clientID != *scope {
+		if !auth.ScopeAllows(r.Context(), *clientID) {
 			http.Error(w, "not found", 404)
 			return
 		}
@@ -248,7 +248,7 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Viewer scope: verify campaign ownership before serving evidence audio.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil {
 		clientID, err := h.Repo.GetClientID(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -258,7 +258,7 @@ func (h *DetectionsHandler) Evidence(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if *clientID != *scope {
+		if !auth.ScopeAllows(r.Context(), *clientID) {
 			http.Error(w, "not found", 404)
 			return
 		}
@@ -658,7 +658,7 @@ func (h *DetectionsHandler) AggregateByMaterial(w http.ResponseWriter, r *http.R
 		return
 	}
 	// Viewer scope: verify campaign ownership before aggregating.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil {
 		camp, err := h.CampaignRepo.Get(r.Context(), cid)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -668,7 +668,7 @@ func (h *DetectionsHandler) AggregateByMaterial(w http.ResponseWriter, r *http.R
 			}
 			return
 		}
-		if camp.ClientID != *scope {
+		if !auth.ScopeAllows(r.Context(), camp.ClientID) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -708,7 +708,7 @@ func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// Viewer scope: verify campaign ownership before returning summary.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && h.CampaignRepo != nil {
+	if auth.ClientScopesFromContext(r.Context()) != nil && h.CampaignRepo != nil {
 		camp, err := h.CampaignRepo.Get(r.Context(), campaignID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -718,7 +718,7 @@ func (h *DetectionsHandler) DailySummary(w http.ResponseWriter, r *http.Request)
 			}
 			return
 		}
-		if camp.ClientID != *scope {
+		if !auth.ScopeAllows(r.Context(), camp.ClientID) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
