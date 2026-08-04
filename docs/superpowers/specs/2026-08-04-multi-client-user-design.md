@@ -184,6 +184,14 @@ Queries com `client_id = $1` posicional e sem o guard de NULL
 - Novo `users.Repo.SetClients(ctx, userID, []uuid.UUID) error`: numa transação,
   insere os que faltam, remove os que saíram e ajusta `users.client_id` conforme
   a regra do principal (§5.3).
+- `users.Repo.Update` passa a **podar a carteira** na mesma transação sempre que
+  toca `client_id`: `ClearClient` esvazia a carteira, e `ClientID != nil` remove
+  todo vínculo que não seja esse cliente. Sem isso há **vazamento de acesso**: o
+  trigger da 0062 só adiciona, então reatribuir um viewer do cliente A pro B
+  pelo caminho legado (`client_id` sozinho, que o frontend antigo manda e que a
+  §6.6 mantém aceito) deixaria A na carteira — e a carteira é o escopo de
+  leitura. Semântica resultante: `client_id` sozinho significa "este usuário tem
+  exatamente este cliente"; carteira com N clientes se edita por `SetClients`.
 - `users.ListInput.ClientID` passa a filtrar por vínculo
   (`EXISTS (SELECT 1 FROM user_clients …)`), não só pelo principal.
 - `catalog.Clients.CountDependents` conta usuários via `user_clients` — senão o 409

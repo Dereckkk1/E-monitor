@@ -1680,34 +1680,19 @@ depois do `h.repo.Update` bem-sucedido:
 	}
 ```
 
-E, quando o usuário vira admin (`in.ClearClient == true`), limpar a carteira
-inteira — senão sobram vínculos órfãos que o filtro por vínculo ainda enxergaria:
+**Não** é preciso limpar a carteira aqui. A Task 2 (commit `b798f3c`) fez
+`users.Repo.Update` podar a carteira dentro da própria transação sempre que toca
+`client_id`:
 
-```go
-	if in.ClearClient {
-		if _, err := h.repo.ClearClients(r.Context(), id); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-	}
-```
+- `ClearClient` → apaga a carteira inteira (o usuário virou admin);
+- `ClientID != nil` → apaga tudo que não for esse cliente.
 
-Implementar em `workers/internal/users/users.go`:
-
-```go
-// ClearClients remove todos os vínculos do usuário. Usado quando um Cliente
-// vira Administrador — users.client_id já foi anulado pelo Update, e a carteira
-// precisa acompanhar, senão o filtro por vínculo continuaria encontrando o
-// usuário pelo cliente antigo.
-func (r *Repo) ClearClients(ctx context.Context, userID uuid.UUID) (int64, error) {
-	tag, err := r.pool.Exec(ctx,
-		`DELETE FROM user_clients WHERE user_id = $1`, userID)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
-}
-```
+Isso fecha um vazamento de acesso que existia no caminho legado: o trigger da
+0062 só **adiciona**, então reatribuir um viewer do cliente A pro B mandando só
+`client_id` deixava A na carteira — e o escopo do JWT lê a carteira. Como o
+`client_id` sozinho continua aceito nesta task (compatibilidade com o frontend
+antigo), a poda no repo é o que impede a regressão. **Não** contorne o
+`users.Repo.Update` fazendo `UPDATE users` cru em lugar nenhum.
 
 - [ ] **Step 5: `CountDependents` conta por vínculo**
 
