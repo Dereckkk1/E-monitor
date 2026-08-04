@@ -166,13 +166,21 @@ func (c *Clients) Delete(ctx context.Context, id uuid.UUID) error {
 // that block a hard-delete. Counts raw FK references (e.g. soft-deleted users
 // still hold the FK and still block RESTRICT), so the breakdown truthfully
 // explains why Delete was refused.
+//
+// Users are counted through user_clients (the portfolio, migration 0062), NOT
+// through users.client_id: an agency login linked to this client only as a
+// SECONDARY still holds a RESTRICT FK, so the delete is refused and the
+// breakdown has to say so — counting the principal alone would report zero
+// dependents right after refusing the delete. The 0062 trigger materializes
+// the principal in user_clients too, so this is a superset, never a
+// double-count (PK is (user_id, client_id)).
 func (c *Clients) CountDependents(ctx context.Context, id uuid.UUID) (DependentCounts, error) {
 	var d DependentCounts
 	err := c.pool.QueryRow(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM campaigns WHERE client_id = $1),
-			(SELECT COUNT(*) FROM materials WHERE client_id = $1),
-			(SELECT COUNT(*) FROM users     WHERE client_id = $1)`, id,
+			(SELECT COUNT(*) FROM campaigns    WHERE client_id = $1),
+			(SELECT COUNT(*) FROM materials    WHERE client_id = $1),
+			(SELECT COUNT(*) FROM user_clients WHERE client_id = $1)`, id,
 	).Scan(&d.Campaigns, &d.Materials, &d.Users)
 	return d, err
 }

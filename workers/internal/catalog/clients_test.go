@@ -50,6 +50,74 @@ func TestClients_Delete_BlockedByDependents(t *testing.T) {
 	}
 }
 
+// TestClients_Delete_BlockedBySecondaryLink: deletar um cliente vinculado só
+// como SECUNDÁRIO (carteira de agência, migration 0062) tem que dar 409, não
+// 500 — a FK de user_clients é RESTRICT, e CountDependents precisa enxergar o
+// vínculo pra UI oferecer "desativar" em vez de estourar um erro sem
+// explicação. Contar só users.client_id (o principal) deixaria esse caso com
+// Total()==0 e a UI diria "sem dependentes" logo depois de recusar o delete.
+func TestClients_Delete_BlockedBySecondaryLink(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClients(pool)
+
+	principal, err := repo.Create(ctx, CreateClientInput{Name: "Carteira Principal Co"})
+	if err != nil {
+		t.Fatalf("Create principal: %v", err)
+	}
+	secondary, err := repo.Create(ctx, CreateClientInput{Name: "Carteira Secundario Co"})
+	if err != nil {
+		t.Fatalf("Create secondary: %v", err)
+	}
+
+	// Usuário de agência: principal = clients[0], secundário só em user_clients.
+	// INSERT cru porque o package catalog não importa users (ciclo).
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, role, client_id, name)
+		VALUES ($1, 'x', 'viewer', $2, 'Agência Secondary Link')
+		RETURNING id`,
+		"secondary-link-"+uuid.NewString()+"@test.local", principal.ID,
+	).Scan(&userID); err != nil {
+		t.Fatalf("insert user fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = ANY($1)`,  //nolint:errcheck
+			[]uuid.UUID{principal.ID, secondary.ID})
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`,
+		userID, secondary.ID); err != nil {
+		t.Fatalf("insert user_clients fixture: %v", err)
+	}
+
+	if err := repo.Delete(ctx, secondary.ID); !errors.Is(err, ErrClientHasDependents) {
+		t.Fatalf("Delete(secondary) err = %v, want ErrClientHasDependents", err)
+	}
+
+	counts, err := repo.CountDependents(ctx, secondary.ID)
+	if err != nil {
+		t.Fatalf("CountDependents: %v", err)
+	}
+	if counts.Users != 1 {
+		t.Errorf("counts.Users = %d, want 1 (vínculo secundário em user_clients)", counts.Users)
+	}
+	if counts.Total() == 0 {
+		t.Errorf("counts.Total() = 0, mas o Delete foi recusado — a UI mostraria 409 sem motivo")
+	}
+
+	// O principal também continua bloqueado, e conta uma vez só (a trigger da
+	// 0062 materializou o principal em user_clients, então contar pela tabela
+	// de vínculo não duplica).
+	pcounts, err := repo.CountDependents(ctx, principal.ID)
+	if err != nil {
+		t.Fatalf("CountDependents(principal): %v", err)
+	}
+	if pcounts.Users != 1 {
+		t.Errorf("counts.Users(principal) = %d, want 1", pcounts.Users)
+	}
+}
+
 // TestClients_Delete_NoRows asserts an unknown id surfaces pgx.ErrNoRows (→ 404),
 // distinct from the dependents path.
 func TestClients_Delete_NoRows(t *testing.T) {
