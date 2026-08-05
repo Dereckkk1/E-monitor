@@ -2,8 +2,10 @@ package welcome
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +40,10 @@ type Resolved struct {
 	Role          string `json:"role"` // "admin" | "client"
 	ClientName    string `json:"client_name,omitempty"`
 	ClientLogoURL string `json:"client_logo_url,omitempty"`
+	// Clients é a carteira inteira (agências). client_name/client_logo_url
+	// acima seguem sendo o principal, pra uma página em cache no navegador do
+	// visitante não quebrar quando o backend novo sobe.
+	Clients []ResolvedClient `json:"clients,omitempty"`
 }
 
 // Repo é o acesso a user_welcome_invites.
@@ -149,6 +155,18 @@ type ResolvedRow struct {
 	Role          string // vocabulário do banco ('viewer' | 'admin' | 'operator')
 	ClientName    string
 	ClientLogoURL string
+	// Clients é a carteira inteira, na ordem canônica (user_clients.created_at,
+	// client_id). ClientName/ClientLogoURL acima continuam sendo o principal —
+	// mantidos porque o payload público é consumido por uma página que pode
+	// estar em cache no navegador do visitante.
+	Clients []ResolvedClient
+}
+
+// ResolvedClient é um cliente da carteira, do jeito que a página de boas-vindas
+// precisa: nome pra escrever e logo pra estampar.
+type ResolvedClient struct {
+	Name    string `json:"name"`
+	LogoURL string `json:"logo_url,omitempty"`
 }
 
 // Resolve carrega o convite pelo token da URL, junto com os dados do usuário e
@@ -160,8 +178,16 @@ type ResolvedRow struct {
 func (r *Repo) Resolve(ctx context.Context, token string) (*ResolvedRow, error) {
 	var row ResolvedRow
 	var clientName, clientLogo *string
+	var walletJSON []byte
 	err := r.pool.QueryRow(ctx,
-		`SELECT i.id, i.initial_password_enc, u.name, u.email, u.role, c.name, c.logo_url
+		`SELECT i.id, i.initial_password_enc, u.name, u.email, u.role, c.name, c.logo_url,
+		        COALESCE((
+		          SELECT json_agg(json_build_object('name', wc.name, 'logo_url', wc.logo_url)
+		                          ORDER BY uc.created_at, uc.client_id)
+		            FROM user_clients uc
+		            JOIN clients wc ON wc.id = uc.client_id
+		           WHERE uc.user_id = u.id
+		        ), '[]'::json)
 		   FROM user_welcome_invites i
 		   JOIN users u   ON u.id = i.user_id
 		   LEFT JOIN clients c ON c.id = u.client_id
@@ -170,7 +196,7 @@ func (r *Repo) Resolve(ctx context.Context, token string) (*ResolvedRow, error) 
 		    AND i.initial_password_enc IS NOT NULL
 		    AND u.deleted_at IS NULL`, token,
 	).Scan(&row.InviteID, &row.PasswordEnc, &row.Name, &row.Email, &row.Role,
-		&clientName, &clientLogo)
+		&clientName, &clientLogo, &walletJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -182,6 +208,11 @@ func (r *Repo) Resolve(ctx context.Context, token string) (*ResolvedRow, error) 
 	}
 	if clientLogo != nil {
 		row.ClientLogoURL = *clientLogo
+	}
+	// Carteira ilegível não derruba a página: ela perde os logos extras, não o
+	// acesso. O visitante está aqui pra pegar a senha.
+	if err := json.Unmarshal(walletJSON, &row.Clients); err != nil {
+		row.Clients = nil
 	}
 	return &row, nil
 }
@@ -206,6 +237,47 @@ func (r *Repo) ClientName(ctx context.Context, id uuid.UUID) string {
 		return ""
 	}
 	return name
+}
+
+// WalletNames devolve os nomes da carteira do usuário já prontos pra frase do
+// email: "Sofá & Cia", "Sofá & Cia e Milium", "Sofá & Cia, Milium e Uniube".
+//
+// Existe porque o email dizia "vinculada a {cliente}" resolvendo só o
+// principal — com carteira de agência isso afirma um vínculo e esconde os
+// outros. Falha devolve string vazia: o email perde a frase, não deixa de sair.
+func (r *Repo) WalletNames(ctx context.Context, userID uuid.UUID) string {
+	rows, err := r.pool.Query(ctx,
+		`SELECT c.name
+		   FROM user_clients uc
+		   JOIN clients c ON c.id = uc.client_id
+		  WHERE uc.user_id = $1
+		  ORDER BY uc.created_at, uc.client_id`, userID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return ""
+		}
+		names = append(names, n)
+	}
+	if rows.Err() != nil {
+		return ""
+	}
+
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	default:
+		// "A, B e C" — o "e" antes do último, que é como se lê em português.
+		return strings.Join(names[:len(names)-1], ", ") + " e " + names[len(names)-1]
+	}
 }
 
 // GetByID carrega um convite pelo id (usado pelo revoke do admin).

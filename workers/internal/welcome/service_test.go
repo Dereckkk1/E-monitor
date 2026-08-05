@@ -390,3 +390,98 @@ func tokenFromLink(link string) string {
 	}
 	return ""
 }
+
+// ── Carteira multi-cliente (agências) ────────────────────────────────────
+
+// A página de boas-vindas de um usuário de agência tem que trazer TODOS os
+// clientes da carteira, em ordem canônica — não só o principal. Sem isso o
+// hero estampa a marca de um cliente escolhido por um critério interno que a
+// agência desconhece.
+func TestService_ResolveTrazCarteiraInteira(t *testing.T) {
+	ctx, pool := newTestPool(t)
+	svc := newTestService(t, pool, &fakeMailer{}, false)
+
+	userID := seedUser(t, ctx, pool, "viewer", nil)
+	var segundo uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name, logo_url) VALUES ('Milium', 'https://x/milium.png')
+		 RETURNING id`).Scan(&segundo))
+	_, err := pool.Exec(ctx,
+		`INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`, userID, segundo)
+	require.NoError(t, err)
+
+	res, err := svc.Issue(ctx, SendInput{
+		UserID: userID, Email: "ana@cliente.com", Password: "senha-inicial-123", Role: "viewer",
+	})
+	require.NoError(t, err)
+
+	got, err := svc.Resolve(ctx, tokenFromLink(res.Link))
+	require.NoError(t, err)
+	require.Len(t, got.Clients, 2, "carteira inteira tem que chegar na página")
+
+	// O principal (criado primeiro pelo trigger da 0062) vem antes.
+	require.Equal(t, got.ClientName, got.Clients[0].Name,
+		"primeiro da carteira tem que ser o principal")
+	require.Equal(t, "Milium", got.Clients[1].Name)
+	require.Equal(t, "https://x/milium.png", got.Clients[1].LogoURL)
+}
+
+// Um cliente só: a carteira tem exatamente ele, e client_name segue igual ao
+// que a página antiga (em cache no navegador) espera.
+func TestService_ResolveComUmClienteMantemFormatoAntigo(t *testing.T) {
+	ctx, pool := newTestPool(t)
+	svc := newTestService(t, pool, &fakeMailer{}, false)
+
+	userID := seedUser(t, ctx, pool, "viewer", nil)
+	res, err := svc.Issue(ctx, SendInput{
+		UserID: userID, Email: "ana@cliente.com", Password: "senha-inicial-123", Role: "viewer",
+	})
+	require.NoError(t, err)
+
+	got, err := svc.Resolve(ctx, tokenFromLink(res.Link))
+	require.NoError(t, err)
+	require.Len(t, got.Clients, 1)
+	require.NotEmpty(t, got.ClientName)
+	require.Equal(t, got.ClientName, got.Clients[0].Name)
+}
+
+// Admin não tem carteira: a lista vem vazia e o hero não estampa marca nenhuma.
+func TestService_ResolveAdminSemCarteira(t *testing.T) {
+	ctx, pool := newTestPool(t)
+	svc := newTestService(t, pool, &fakeMailer{}, false)
+
+	userID := seedUser(t, ctx, pool, "admin", nil)
+	res, err := svc.Issue(ctx, SendInput{
+		UserID: userID, Email: "adm@hubradios.com", Password: "senha-inicial-123", Role: "admin",
+	})
+	require.NoError(t, err)
+
+	got, err := svc.Resolve(ctx, tokenFromLink(res.Link))
+	require.NoError(t, err)
+	require.Empty(t, got.Clients)
+	require.Empty(t, got.ClientName)
+}
+
+// A frase do email ("vinculada a ...") lista a carteira inteira, com "e" antes
+// do último — não só o principal.
+func TestRepo_WalletNames(t *testing.T) {
+	ctx, pool := newTestPool(t)
+	repo := NewRepo(pool)
+
+	userID := seedUser(t, ctx, pool, "viewer", nil)
+	umSo := repo.WalletNames(ctx, userID)
+	require.NotEmpty(t, umSo)
+	require.NotContains(t, umSo, " e ", "com um cliente não há conjunção")
+
+	for _, nome := range []string{"Milium", "Uniube"} {
+		var cid uuid.UUID
+		require.NoError(t, pool.QueryRow(ctx,
+			`INSERT INTO clients (name) VALUES ($1) RETURNING id`, nome).Scan(&cid))
+		_, err := pool.Exec(ctx,
+			`INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`, userID, cid)
+		require.NoError(t, err)
+	}
+
+	tres := repo.WalletNames(ctx, userID)
+	require.Equal(t, umSo+", Milium e Uniube", tres)
+}

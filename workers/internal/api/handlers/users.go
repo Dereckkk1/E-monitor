@@ -343,7 +343,12 @@ func (h *UsersHandler) issueWelcome(r *http.Request, u *users.User, plainPasswor
 		in.CreatedBy = &by
 	}
 	if u.ClientID != nil {
-		in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+		// Carteira inteira, não só o principal: "vinculada a A, B e C". Com um
+		// cliente só o texto é idêntico ao de antes.
+		in.ClientName = h.welcomeSvc.Repo().WalletNames(r.Context(), u.ID)
+		if in.ClientName == "" {
+			in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+		}
 	}
 	res, err := h.welcomeSvc.Issue(r.Context(), in)
 	if err != nil {
