@@ -57,8 +57,7 @@ export default function WelcomePage() {
     <div className="wel" ref={rootRef}>
       <Hero
         name={first}
-        clientName={data.client_name}
-        clientLogo={data.client_logo_url}
+        clients={walletOf(data)}
         isClient={isClient}
       />
 
@@ -76,7 +75,33 @@ export default function WelcomePage() {
 
 /* ── Hero ────────────────────────────────────────────────────────────── */
 
-function Hero({ name, clientName, clientLogo, isClient }) {
+/* Quantas marcas cabem no lockup antes de virar "+N". Quatro é folgado pro
+   caso real (agência com 2–3 clientes) e evita que uma carteira grande
+   empurre o título do hero pra fora da dobra. */
+const MAX_MARKS = 4
+
+/* walletOf normaliza o payload: `clients` é a carteira nova, os campos
+   client_name/client_logo_url são o formato antigo — que ainda chega quando a
+   página em cache do visitante fala com um backend anterior à feature. */
+function walletOf(data) {
+  if (Array.isArray(data.clients) && data.clients.length > 0) return data.clients
+  if (data.client_name) {
+    return [{ name: data.client_name, logo_url: data.client_logo_url }]
+  }
+  return []
+}
+
+/* Lista de nomes em português: "A", "A e B", "A, B e C". */
+function nameList(clients) {
+  const names = clients.map(c => c.name).filter(Boolean)
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}`
+}
+
+function Hero({ name, clients, isClient }) {
+  const wallet = isClient ? clients : []
+  const visible = wallet.slice(0, MAX_MARKS)
+  const overflow = wallet.length - visible.length
   return (
     <header className="wel-hero" data-wel-hero>
       <div className="wel-hero-media" data-wel-parallax aria-hidden="true" />
@@ -85,10 +110,21 @@ function Hero({ name, clientName, clientLogo, isClient }) {
       <div className="wel-hero-inner">
         <div className="wel-lockup">
           <img src="/E-monitor%20logo.png" alt="E-monitor" className="wel-hero-logo" />
-          {isClient && clientName ? (
+          {visible.length > 0 ? (
             <>
               <span className="wel-lockup-x" aria-hidden="true" />
-              <ClientMark name={clientName} logo={clientLogo} />
+              {/* As marcas do cliente formam UM grupo depois do traço: o gap
+                  interno é menor que o do lockup, pra ler "E-monitor | (A B C)"
+                  e não "E-monitor | A | B | C". data-count deixa o CSS
+                  encolher as placas quando a carteira cresce. */}
+              <span className="wel-lockup-marks" data-count={visible.length}>
+                {visible.map((c, i) => (
+                  <ClientMark key={`${c.name}-${i}`} name={c.name} logo={c.logo_url} />
+                ))}
+                {overflow > 0 && (
+                  <span className="wel-lockup-more">+{overflow}</span>
+                )}
+              </span>
             </>
           ) : null}
         </div>
@@ -100,7 +136,16 @@ function Hero({ name, clientName, clientLogo, isClient }) {
         <p className="wel-hero-lead" data-wel-fade>
           {isClient ? (
             <>
-              A partir de agora, cada comercial{clientName ? <> d{genderedArticle(clientName)} <strong>{clientName}</strong></> : null}{' '}
+              {/* Um cliente mantém a concordância ("da Milium"); vários usam
+                  "de" + lista, que é o único jeito de não errar o gênero de
+                  cada nome. */}
+              A partir de agora, cada comercial{
+                wallet.length === 1
+                  ? <> d{genderedArticle(wallet[0].name)} <strong>{wallet[0].name}</strong></>
+                  : wallet.length > 1
+                    ? <> de <strong>{nameList(wallet)}</strong></>
+                    : null
+              }{' '}
               que for ao ar nas rádios monitoradas fica registrado aqui — com data,
               hora, emissora e o áudio da veiculação.
             </>
