@@ -88,29 +88,34 @@ function lastOfMonthISO() {
 export default function FiltersBar({ value, onChange, onExportImage, onExportPDF }) {
   const { isAdmin, user } = useAuth()
 
-  // /clients é scope-aware: viewer recebe lista de 1 (o próprio cliente),
-  // admin recebe a lista inteira. Usamos a mesma fonte pras duas roles —
-  // admin pra montar o select, viewer pra resolver nome+logo do próprio
-  // cliente no chip travado.
+  // /clients é scope-aware: Cliente recebe a própria carteira (1 no caso
+  // normal, N quando é agência), admin recebe a lista inteira. Usamos a mesma
+  // fonte pras duas roles — o select é o MESMO componente alimentado pelos
+  // MESMOS dados; quem decide se ele aparece é o tamanho da carteira.
   const clientsQ = useClients()
   const clientOpts = useMemo(
     () => (clientsQ.data || []).map(c => ({ value: c.id, label: c.name, raw: c })),
     [clientsQ.data]
   )
+  // Só quem tem escolha vê o seletor: admin (lista inteira) ou carteira com
+  // 2+. Cliente de 1 cliente segue com o chip travado, como sempre foi.
+  const canPickClient = isAdmin || clientOpts.length > 1
   const ownClient = useMemo(() => {
-    if (isAdmin) return null
-    return (clientsQ.data || []).find(c => c.id === user?.client_id) || null
-  }, [clientsQ.data, isAdmin, user?.client_id])
+    if (canPickClient) return null
+    return clientOpts[0]?.raw || null
+  }, [clientOpts, canPickClient])
 
-  // Carrega todas as campanhas — backend já filtra pelo scope do cliente.
-  // Para admin, filtramos pelo client selecionado no client-side aqui mesmo.
+  // Carrega todas as campanhas — backend já filtra pelo scope do usuário.
+  // O recorte pelo cliente selecionado é client-side aqui mesmo, e vale pra
+  // qualquer role: pro Cliente de 1 cliente é no-op (todas as campanhas são
+  // dele), pra agência é o que separa a carteira.
   const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
 
   const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
 
   const campOpts = useMemo(() => {
-    const scoped = isAdmin
-      ? allCampaigns.filter(c => !value.clientId || c.client_id === value.clientId)
+    const scoped = value.clientId
+      ? allCampaigns.filter(c => c.client_id === value.clientId)
       : allCampaigns
     // Política "manter e marcar": canceladas (terminais) não são oferecidas
     // para uma nova seleção, mas se já estiverem selecionadas (deep-link /
@@ -124,7 +129,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
         label: c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
         raw: c,
       }))
-  }, [allCampaigns, value.clientId, value.campaignIds, isAdmin])
+  }, [allCampaigns, value.clientId, value.campaignIds])
 
   const stationsQ = useStations()
 
@@ -166,20 +171,24 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
     return { from: starts[0].slice(0, 10), to: ends[ends.length - 1].slice(0, 10) }
   }, [allCampaigns, value.campaignIds])
 
-  // Para role cliente: trava o clientId no próprio.
+  // Quem NÃO pode escolher (Cliente com um único cliente) fica travado nele.
+  // Agência/admin não são pinados: o /insights é por cliente e o backend exige
+  // a escolha explícita quando a carteira tem 2+.
   useEffect(() => {
-    if (!isAdmin && user?.client_id && value.clientId !== user.client_id) {
-      onChange({ ...value, clientId: user.client_id })
+    if (canPickClient) return
+    const own = clientOpts[0]?.value
+    if (own && value.clientId !== own) {
+      onChange({ ...value, clientId: own })
     }
     // Não dependemos de `value` inteiro pra evitar loop: só recalcula quando
-    // a sessão troca ou o clientId desvia.
+    // a carteira chega/troca.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, user?.client_id])
+  }, [canPickClient, clientOpts])
 
   return (
     <div className="in-filters">
       <div className="in-filters-row">
-        {isAdmin ? (
+        {canPickClient ? (
           <div className="in-filter">
             <label className="in-filter-label">Cliente</label>
             <RSelect
@@ -219,7 +228,7 @@ export default function FiltersBar({ value, onChange, onExportImage, onExportPDF
               stationIds: [], // resetar emissoras quando campanhas mudam
             })}
             placeholder="Selecione 1 ou mais…"
-            isDisabled={isAdmin && !value.clientId}
+            isDisabled={canPickClient && !value.clientId}
             isLoading={campaignsQ.isPending}
             closeMenuOnSelect={false}
           />

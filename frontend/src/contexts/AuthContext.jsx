@@ -50,6 +50,13 @@ export function AuthProvider({ children }) {
   const isAdmin = role === 'admin' || role === 'operator'
   const isClient = role === 'viewer'
   const clientId = user?.client_id ?? null
+  // clientIds é a carteira do usuário (agências acessam vários clientes).
+  // Cai pro principal quando a sessão veio de um backend anterior à feature —
+  // assim a lista nunca fica vazia pra um Cliente, e as telas podem decidir
+  // pelo TAMANHO dela se mostram o seletor de cliente.
+  const clientIds = user?.client_ids?.length
+    ? user.client_ids
+    : (clientId ? [clientId] : [])
 
   const value = {
     token,
@@ -58,6 +65,7 @@ export function AuthProvider({ children }) {
     isAdmin,
     isClient,
     clientId,
+    clientIds,
     login,
     logout,
   }

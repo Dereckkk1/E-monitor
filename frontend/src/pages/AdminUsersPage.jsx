@@ -441,9 +441,24 @@ export default function AdminUsersPage() {
                     <td className="au-cell-email" title={u.email}>{u.email}</td>
                     <td><RoleChip role={u.role} /></td>
                     <td className="au-cell-client">
-                      {u.client_id
-                        ? <span className="au-client-name">{clientById[u.client_id]?.name ?? `#${u.client_id.slice(0, 6)}`}</span>
-                        : <span className="au-muted">—</span>}
+                      {/* Carteira: mostra o primeiro cliente e um "+N" pro
+                          resto (agências). client_id sozinho é o fallback
+                          pra resposta anterior à feature. */}
+                      {u.client_ids?.length
+                        ? (
+                          <span
+                            className="au-client-name"
+                            title={u.client_ids.length > 1
+                              ? u.client_ids.map(id => clientById[id]?.name ?? `#${id.slice(0, 6)}`).join(', ')
+                              : undefined}
+                          >
+                            {clientById[u.client_ids[0]]?.name ?? `#${u.client_ids[0].slice(0, 6)}`}
+                            {u.client_ids.length > 1 && ` +${u.client_ids.length - 1}`}
+                          </span>
+                        )
+                        : u.client_id
+                          ? <span className="au-client-name">{clientById[u.client_id]?.name ?? `#${u.client_id.slice(0, 6)}`}</span>
+                          : <span className="au-muted">—</span>}
                     </td>
                     <td className={`au-cell-time au-time-${t.tone}`} title={t.title || undefined}>
                       {t.label}
