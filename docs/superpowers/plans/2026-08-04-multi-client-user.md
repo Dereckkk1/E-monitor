@@ -2045,17 +2045,59 @@ git commit -m "docs(multi-cliente): documenta a carteira de clientes por usuario
 
 ---
 
-## Ordem de deploy
+## Ordem de deploy — dois pushes, não um
 
-1. **Backend primeiro:** `./scripts/deploy.sh` na VM. O `shadow_migration_test`
-   aplica a 0062 sobre uma cópia dos dados de prod e aborta se falhar.
-2. **Smoke test** com um usuário Cliente existente: login continua funcionando e
-   `/campaigns` devolve as mesmas campanhas de antes (carteira de 1).
-3. **Frontend depois:** push para `master` publica no Cloudflare Pages.
+**Um push só de todo o branch quebra o `/admin/users`.** Todo push pra `master`
+publica o frontend no Cloudflare Pages imediatamente, enquanto a VM continua
+rodando a API antiga até alguém rodar o `deploy.sh`. Nessa janela:
+
+- `POST /admin/users` com role Cliente dá **400**: o modal novo manda só
+  `client_ids` e o backend antigo só conhece `client_id`;
+- `PATCH /admin/users/:id` **finge que funcionou**: o backend antigo ignora o
+  campo desconhecido, devolve 200, o modal fecha — e a reatribuição de cliente
+  não aconteceu. Pior que o 400, porque é silencioso.
+
+Nenhuma tela de cliente quebra nessa janela (o `AuthContext` cai pro
+`client_id`, e `/clients` devolve 1 → sem seletor), mas o admin fica com duas
+operações quebradas.
+
+Por isso o branch está ordenado com **todo o backend antes de todo o frontend**:
+os últimos commits são os únicos que tocam `frontend/`. Para achar a ponta do
+backend sem depender de nome de commit:
+
+```bash
+# último commit do branch que NÃO toca frontend/
+git log --format='%h %s' master..feat/multi-client-user -- . ':(exclude)frontend' | head -1
+
+# prova de que o corte é limpo (tem que sair vazio)
+git diff --stat master..<sha-da-ponta> -- frontend/
+```
+
+```bash
+# 1. sobe SÓ o backend (a ponta acima, não o branch inteiro)
+git checkout master
+git merge --no-ff <sha-da-ponta-do-backend>
+git push origin master
+#    o CF Pages vai publicar o frontend ANTIGO — que funciona contra a API nova
+
+# 2. na VM
+./scripts/deploy.sh
+#    o shadow_migration_test aplica a 0062 sobre cópia dos dados de prod e
+#    aborta o deploy se falhar
+
+# 3. smoke test com um usuário Cliente existente (carteira de 1)
+#    - login funciona e a resposta traz client_ids: ["<o cliente dele>"]
+#    - /campaigns devolve as mesmas campanhas de antes
+#    - /insights abre normalmente (client_id forçado pelo JWT)
+
+# 4. só então o frontend
+git merge --no-ff feat/multi-client-user
+git push origin master
+```
 
 O claim de compatibilidade (Task 3) e o `client_id` ainda aceito na API de
-usuários (Task 8) garantem que o frontend antigo funciona contra o backend novo
-durante a janela entre os dois.
+usuários (Task 8) são o que garante que o frontend antigo funciona contra o
+backend novo durante a janela entre os passos 1 e 4.
 
 ## Limpeza do ambiente de teste
 
