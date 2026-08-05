@@ -184,6 +184,7 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 		Role:          apiRole(row.Role),
 		ClientName:    row.ClientName,
 		ClientLogoURL: row.ClientLogoURL,
+		Clients:       row.Clients,
 	}, nil
 }
 
