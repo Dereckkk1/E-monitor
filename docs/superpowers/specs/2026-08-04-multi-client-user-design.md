@@ -280,7 +280,7 @@ lista mostra `Cliente A +2`.
 |---|---|
 | 1 de 2 clientes desativado | Login entra; JWT só com os ativos (§6.5) |
 | Deletar cliente com usuário vinculado | 409 via `CountDependents` contando `user_clients` |
-| Página de boas-vindas | Usa o cliente principal — sem mudança |
+| Página e email de boas-vindas | Mostram a carteira INTEIRA. A decisão original era "usa o principal"; ela caiu quando ficou claro que estampar a marca de um cliente escolhido por critério interno é errado pra uma agência |
 | Pós-venda | Continua por cliente, link público por token; a agência recebe um email por cliente |
 | API keys externas `/v1/*` | Escopadas por cliente, não por usuário — inalterado |
 | Admin/operator | `client_ids` sempre vazio; CHECK 0027 continua barrando |

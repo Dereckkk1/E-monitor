@@ -39,8 +39,14 @@ users                      user_clients                 clients
 `users.client_id` **continua existindo** e passa a significar **cliente
 principal**. Isso mantém intacta a CHECK `users_client_role_consistency` da
 migration 0027 (`role='viewer'` ⇒ `client_id NOT NULL`) e todo o código que já
-lia a coluna. O principal aparece no cabeçalho da página de boas-vindas e como
-rótulo curto; não é um privilégio, só um desempate.
+lia a coluna. É um **desempate, não um privilégio**: serve para rótulo curto e
+para a ordenação da carteira.
+
+O principal deliberadamente **não** manda em nada que o usuário vê. Toda tela
+que fala de "o cliente" mostra a carteira inteira — `/account`, o email e a
+página de boas-vindas, e os destinatários do pós-venda. Cada um desses foi um
+bug real durante a implementação: resolver pelo principal é sintaticamente
+correto e semanticamente errado, e o compilador não reclama.
 
 A tabela `user_clients` (migration 0062) é a carteira. `ON DELETE RESTRICT` no
 cliente é o que sustenta o 409 `client_has_dependents` ao tentar deletar um
@@ -138,6 +144,17 @@ sendo a fonte de verdade do operador.
 
 **A desativação vale a partir do próximo login.** Um token emitido antes segue
 válido até expirar (8h) — mesmo comportamento de antes da feature.
+
+## Onde a carteira aparece
+
+| Superfície | O que mostra |
+|---|---|
+| `/account` | todos os vínculos, rótulo no plural quando são 2+ |
+| Email de boas-vindas | "vinculada a A, B e C" |
+| Página `/boasvindas/:token` | as marcas de todos no lockup do hero (teto de 4 + "+N"); com 1 cliente o lockup 1:1 fica igual ao de antes |
+| Destinatários do pós-venda | quem tem AQUELE cliente na carteira — a agência recebe um email por cliente, em momentos diferentes |
+| `/campaigns`, `/detections`, `/materials`, `/live-map` | agregam a carteira inteira |
+| `/insights` | exige escolher **um** cliente (ver abaixo) |
 
 ## `/insights` é por cliente
 
