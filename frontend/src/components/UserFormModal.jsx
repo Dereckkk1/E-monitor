@@ -7,7 +7,9 @@ import './UserFormModal.css'
 
 const EMPTY = {
   role: 'client',
-  client_id: null,
+  // Carteira do Cliente: uma agência acessa vários clientes com um login só.
+  // O caso normal continua sendo uma lista de um elemento.
+  client_ids: [],
   name: '',
   email: '',
   phone: '',
@@ -96,13 +98,20 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
   const isEdit = mode === 'edit'
   const [v, setV] = useState(EMPTY)
   const [showPwd, setShowPwd] = useState(false)
+  // Erro de validação local (não veio do servidor) — divide o mesmo slot do
+  // erro do backend.
+  const [localError, setLocalError] = useState(null)
   const clientsQ = useClients()
 
   useEffect(() => {
     if (isEdit && initial) {
       setV({
         role: initial.role === 'viewer' ? 'client' : 'admin',
-        client_id: initial.client_id ?? null,
+        // client_ids é a carteira; client_id (o principal) é o fallback pra
+        // resposta de um backend anterior à feature.
+        client_ids: initial.client_ids?.length
+          ? initial.client_ids
+          : (initial.client_id ? [initial.client_id] : []),
         name: initial.name ?? '',
         email: initial.email,
         phone: initial.phone ?? '',
@@ -124,17 +133,27 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
     return () => window.removeEventListener('keydown', onKey)
   }, [busy, onClose])
 
-  function set(k, val) { setV(prev => ({ ...prev, [k]: val })) }
+  function set(k, val) { setLocalError(null); setV(prev => ({ ...prev, [k]: val })) }
 
   function handleSubmit(e) {
     e.preventDefault()
     if (busy) return
+    // Cliente sem nenhum cliente vinculado é recusado pelo servidor; barramos
+    // aqui pra mostrar o motivo no mesmo lugar dos outros erros do formulário.
+    if (v.role === 'client' && v.client_ids.length === 0) {
+      setLocalError('Selecione pelo menos um cliente vinculado.')
+      return
+    }
+    setLocalError(null)
     const payload = {
       role: v.role,
       name: v.name.trim(),
       phone: v.phone.trim() || null,
     }
-    if (v.role === 'client') payload.client_id = v.client_id
+    // A carteira inteira vai em client_ids e SUBSTITUI a anterior. O servidor
+    // mantém o cliente principal (client_id) se ele continuar na lista; se
+    // saiu, o primeiro da lista assume.
+    if (v.role === 'client') payload.client_ids = v.client_ids
     if (!isEdit) {
       payload.email = v.email.trim().toLowerCase()
       payload.password = v.password
@@ -152,9 +171,9 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
   }
 
   const clientOptions = (clientsQ.data ?? []).map(c => ({ value: c.id, label: c.name }))
-  const errorMsg = typeof error === 'string'
+  const errorMsg = localError ?? (typeof error === 'string'
     ? error
-    : (error?.error || error?.message || (error ? JSON.stringify(error) : null))
+    : (error?.error || error?.message || (error ? JSON.stringify(error) : null)))
 
   const initials = isEdit ? getInitials(v.name, v.email) : '+'
   const hue = isEdit ? getAvatarHue(v.email || v.name) : 332 // E-radios rose hue
@@ -238,13 +257,15 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
 
           {v.role === 'client' && (
             <div className="field ufm-client-field">
-              <label htmlFor="ufm-client">Cliente vinculado *</label>
+              <label htmlFor="ufm-client">Clientes vinculados *</label>
               <RSelect
                 inputId="ufm-client"
-                value={clientOptions.find(o => o.value === v.client_id) ?? null}
+                isMulti
+                value={clientOptions.filter(o => v.client_ids.includes(o.value))}
                 options={clientOptions}
-                onChange={o => set('client_id', o?.value ?? null)}
-                placeholder="Selecione um cliente"
+                onChange={opts => set('client_ids', (opts ?? []).map(o => o.value))}
+                placeholder="Selecione um ou mais clientes"
+                closeMenuOnSelect={false}
                 isClearable
                 isDisabled={busy}
               />
