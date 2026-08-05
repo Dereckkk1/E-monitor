@@ -546,12 +546,26 @@ func (r *Repo) CampaignBrief(ctx context.Context, id uuid.UUID) (*CampaignMeta, 
 // ActiveClientUsers lista quem recebe o email: usuários do cliente, ativos e
 // não excluídos. "Só ativos" é decisão de produto — mandar pós-venda pra conta
 // desativada é ruído.
+//
+// Casa pela CARTEIRA (user_clients), não por users.client_id: um usuário de
+// agência atende vários clientes e precisa receber o pós-venda de TODOS eles,
+// não só do principal. Sem isso a feature multi-cliente vira regressão — a
+// agência que hoje tem 5 logins e recebe 5 pós-vendas passaria a receber 1 ao
+// consolidar. Ver docs/features/multi-client-user.md.
+//
+// O filtro por role é o que mantém este conjunto disjunto de
+// InternalRecipients (ver a nota lá): a disjunção NÃO pode mais se apoiar no
+// CHECK users_client_role_consistency, porque ele fala de users.client_id e
+// nada impede uma linha de admin em user_clients.
 func (r *Repo) ActiveClientUsers(ctx context.Context, clientID uuid.UUID) ([]RecipientInput, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, email, COALESCE(name, '')
-		   FROM users
-		  WHERE client_id = $1 AND is_active = TRUE AND deleted_at IS NULL
-		  ORDER BY email`, clientID)
+		`SELECT u.id, u.email, COALESCE(u.name, '')
+		   FROM users u
+		  WHERE u.role = 'viewer'
+		    AND u.is_active = TRUE AND u.deleted_at IS NULL
+		    AND EXISTS (SELECT 1 FROM user_clients uc
+		                 WHERE uc.user_id = u.id AND uc.client_id = $1)
+		  ORDER BY u.email`, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("postsale: destinatários ativos: %w", err)
 	}
@@ -578,11 +592,18 @@ func (r *Repo) ActiveClientUsers(ctx context.Context, clientID uuid.UUID) ([]Rec
 // role IN ('admin','operator') espelha users.ActiveInternal — 'operator' é
 // sinônimo de admin no middleware de autorização.
 //
-// Não há dedup contra ActiveClientUsers e isso é proposital: o CHECK
-// users_client_role_consistency (migration 0027) garante que admin/operator tem
-// client_id NULL, então os dois conjuntos são disjuntos por construção. Um
-// guard aqui seria código morto defendendo estado impossível — quem trava o
-// invariante é TestPublish_AdminNaoDuplicaDestinatario.
+// Não há dedup contra ActiveClientUsers e isso é proposital: os dois conjuntos
+// são disjuntos por ROLE — lá exige `role = 'viewer'`, aqui exige
+// `role IN ('admin','operator')`.
+//
+// A disjunção costumava se apoiar no CHECK users_client_role_consistency
+// (migration 0027: admin ⇒ client_id NULL). Isso deixou de bastar quando
+// ActiveClientUsers passou a casar pela carteira (user_clients), porque nada no
+// schema impede uma linha de admin ali — o handler barra, o repo não. Se um dia
+// alguém tirar o filtro de role de lá, este comentário deixa de ser verdade e
+// volta a haver caminho de email duplicado. Quem trava o invariante são
+// TestPublish_AdminNaoDuplicaDestinatario e
+// TestRepo_ActiveClientUsers_IgnoraAdminComVinculo.
 func (r *Repo) InternalRecipients(ctx context.Context) ([]RecipientInput, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, email, COALESCE(name, '')
