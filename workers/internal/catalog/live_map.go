@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,10 +79,11 @@ type LiveMapOpts struct {
 }
 
 // Get retorna o mapa ao vivo de UMA campanha: as emissoras-alvo dela (com
-// coordenada) + as últimas veiculações dela. scope == nil = admin/operator;
-// scope != nil = client_id do viewer — a campanha precisa pertencer a ele,
-// senão ErrCampaignNotFound (anti-oracle).
-func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts LiveMapOpts) (LiveMapResult, error) {
+// coordenada) + as últimas veiculações dela. scopes == nil = admin/operator;
+// scopes != nil = carteira de clientes do viewer — a campanha precisa pertencer
+// a um deles, senão ErrCampaignNotFound (anti-oracle). Carteira vazia não
+// autoriza nada (falha fechada).
+func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scopes []uuid.UUID, opts LiveMapOpts) (LiveMapResult, error) {
 	var res LiveMapResult
 
 	// Existência + posse: resolve o client_id e o status da campanha uma vez.
@@ -98,7 +100,16 @@ func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUI
 		}
 		return res, err
 	}
-	if scope != nil && *scope != clientID {
+	// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
+	//
+	// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
+	// catalog não pode importar auth sem inverter as camadas. Só é seguro
+	// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
+	// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
+	// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
+	// não casa com nada. Se algum dia existir linha com client_id zerado, esta
+	// checagem passa a autorizar demais.
+	if scopes != nil && !slices.Contains(scopes, clientID) {
 		return res, ErrCampaignNotFound
 	}
 	// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então

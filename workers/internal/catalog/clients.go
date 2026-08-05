@@ -166,13 +166,21 @@ func (c *Clients) Delete(ctx context.Context, id uuid.UUID) error {
 // that block a hard-delete. Counts raw FK references (e.g. soft-deleted users
 // still hold the FK and still block RESTRICT), so the breakdown truthfully
 // explains why Delete was refused.
+//
+// Users are counted through user_clients (the portfolio, migration 0062), NOT
+// through users.client_id: an agency login linked to this client only as a
+// SECONDARY still holds a RESTRICT FK, so the delete is refused and the
+// breakdown has to say so — counting the principal alone would report zero
+// dependents right after refusing the delete. The 0062 trigger materializes
+// the principal in user_clients too, so this is a superset, never a
+// double-count (PK is (user_id, client_id)).
 func (c *Clients) CountDependents(ctx context.Context, id uuid.UUID) (DependentCounts, error) {
 	var d DependentCounts
 	err := c.pool.QueryRow(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM campaigns WHERE client_id = $1),
-			(SELECT COUNT(*) FROM materials WHERE client_id = $1),
-			(SELECT COUNT(*) FROM users     WHERE client_id = $1)`, id,
+			(SELECT COUNT(*) FROM campaigns    WHERE client_id = $1),
+			(SELECT COUNT(*) FROM materials    WHERE client_id = $1),
+			(SELECT COUNT(*) FROM user_clients WHERE client_id = $1)`, id,
 	).Scan(&d.Campaigns, &d.Materials, &d.Users)
 	return d, err
 }
@@ -195,6 +203,35 @@ func (c *Clients) SetActive(ctx context.Context, id uuid.UUID, active bool) (*Cl
 func (c *Clients) Get(ctx context.Context, id uuid.UUID) (*Client, error) {
 	return scanClient(c.pool.QueryRow(ctx,
 		`SELECT `+clientColumns+` FROM clients WHERE id = $1`, id))
+}
+
+// ListByIDs devolve os clientes pedidos, ordenados por nome. Ids inexistentes
+// são simplesmente omitidos (sem erro) — é o que a lista scope-aware precisa:
+// um vínculo órfão não pode derrubar a tela inteira. Como List, devolve ativos
+// E inativos: a carteira do JWT já é filtrada por atividade no login, e o
+// cliente desativado no meio da sessão ainda precisa resolver nome/logo.
+func (c *Clients) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]Client, error) {
+	rows, err := c.pool.Query(ctx,
+		`SELECT `+clientColumns+` FROM clients WHERE id = ANY($1) ORDER BY name`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Client
+	for rows.Next() {
+		cli, err := scanClient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *cli)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []Client{}
+	}
+	return out, nil
 }
 
 // List returns the full catalog (active AND inactive), ordered by name. This

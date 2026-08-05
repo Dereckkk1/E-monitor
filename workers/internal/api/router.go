@@ -107,7 +107,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Use(d.APIKey.Middleware)
 				// Scope every API-key request to its own client before any
 				// handler runs. Without this the shared internal handlers see
-				// no JWT claims → ClientScopeFromContext returns nil → "see
+				// no JWT claims → ClientScopesFromContext returns nil → "see
 				// everything" (cross-tenant BOLA, audit 2026-07-21 C-01).
 				r.Use(auth.APIKeyViewerScope)
 				r.Route("/detections", func(r chi.Router) {
@@ -193,7 +193,7 @@ func NewRouter(d Deps) http.Handler {
 
 				// GET /clients — admin/operator vê a lista inteira; viewer recebe
 				// uma lista com apenas o próprio cliente (scope-check no handler
-				// via auth.ClientScopeFromContext). Isso permite que componentes
+				// via auth.ClientScopesFromContext). Isso permite que componentes
 				// no frontend (CampaignsPage, DetectionsPage, FiltersBar, …)
 				// resolvam o nome/logo do cliente vinculado sem precisar de gates
 				// de role nem rotas separadas. Writes seguem admin/operator-only
@@ -218,7 +218,7 @@ func NewRouter(d Deps) http.Handler {
 				}
 
 				// Insights dashboard — admin vê tudo; cliente fica restrito ao
-				// próprio scope via auth.ClientScopeFromContext (anti-oracle dentro
+				// próprio scope via auth.ClientScopesFromContext (anti-oracle dentro
 				// do handler+repo).
 				if d.Insights != nil {
 					r.Get("/insights", d.Insights.Get)
@@ -226,7 +226,7 @@ func NewRouter(d Deps) http.Handler {
 
 				// Mapa ao vivo — admin vê todas as emissoras monitoradas + todas
 				// as veiculações; viewer fica restrito ao próprio client via
-				// auth.ClientScopeFromContext (scope no repo). Doc:
+				// auth.ClientScopesFromContext (scope no repo). Doc:
 				// docs/features/live-map.md.
 				if d.LiveMap != nil {
 					r.Get("/live-map", d.LiveMap.Get)
@@ -247,7 +247,7 @@ func NewRouter(d Deps) http.Handler {
 				//   - /material-types: registry global, sem client_id.
 				//   - /campaigns/{campaignID}/{materials|distribution-rules|pricing}:
 				//     fazem scope-check no handler (404 anti-oracle) via
-				//     auth.ClientScopeFromContext, mesmo padrão de
+				//     auth.ClientScopesFromContext, mesmo padrão de
 				//     /campaigns/{id} e /campaigns/{campaignID}/daily-summary.
 				r.Get("/stations", d.Stations.List)
 				r.Get("/stations/{id}", d.Stations.Get)

@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,12 +38,16 @@ type loginResponse struct {
 	User      loginUser `json:"user"`
 }
 
+// ClientIDs é a carteira ATIVA (o que o token carrega), não a carteira crua do
+// banco: cliente desativado não aparece. omitempty mantém a resposta do
+// admin/operator byte a byte igual à de antes da feature.
 type loginUser struct {
-	ID       uuid.UUID  `json:"id"`
-	Email    string     `json:"email"`
-	Role     string     `json:"role"`
-	Name     string     `json:"name"`
-	ClientID *uuid.UUID `json:"client_id,omitempty"`
+	ID        uuid.UUID   `json:"id"`
+	Email     string      `json:"email"`
+	Role      string      `json:"role"`
+	Name      string      `json:"name"`
+	ClientID  *uuid.UUID  `json:"client_id,omitempty"`
+	ClientIDs []uuid.UUID `json:"client_ids,omitempty"`
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -86,24 +92,53 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cliente desativado bloqueia o login de TODOS os seus usuários (a empresa
-	// foi suspensa, não cada conta individualmente). Fail-closed: se a linha
-	// do cliente sumiu (não deveria — FK users.client_id é RESTRICT), também
-	// bloqueia. Reusa o pool cru porque o gating é de auth, não pertence ao
-	// users.Repo.
-	if u.ClientID != nil {
-		var clientActive bool
-		switch err := h.db.QueryRow(r.Context(),
-			`SELECT is_active FROM clients WHERE id = $1`, *u.ClientID,
-		).Scan(&clientActive); {
-		case errors.Is(err, pgx.ErrNoRows):
-			http.Error(w, "client_disabled", http.StatusForbidden)
-			return
-		case err != nil:
+	// foi suspensa, não cada conta individualmente). Com carteira multi-cliente
+	// (agências), a regra é "pelo menos um cliente ativo": desativar um cliente
+	// da carteira não pode derrubar a conta inteira, só some com aquele cliente
+	// da visão. Com 1 cliente o comportamento é idêntico ao anterior.
+	//
+	// A lista ativa é a que vai no token, então isto é ao mesmo tempo o gate de
+	// login e o escopo da sessão. Fail-closed em dois pontos:
+	//
+	//  1. vínculo órfão (cliente deletado — não deveria, a FK é RESTRICT)
+	//     simplesmente não entra na lista ativa, porque a query só devolve
+	//     clientes que existem E estão ativos;
+	//  2. carteira vazia com principal preenchido (não deveria — o trigger da
+	//     0062 mantém o principal dentro dela) cai no fallback abaixo, senão o
+	//     gate seria pulado e um cliente desativado passaria batido.
+	//
+	// Reusa o pool cru porque o gating é de auth, não pertence ao users.Repo.
+	wallet := u.ClientIDs
+	if len(wallet) == 0 && u.ClientID != nil {
+		wallet = []uuid.UUID{*u.ClientID}
+	}
+	if len(wallet) > 0 {
+		activeSet, err := h.activeClients(r.Context(), wallet)
+		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
-		case !clientActive:
+		}
+		// Filtra preservando a ordem canônica da carteira (users.userColumns
+		// ordena por user_clients.created_at, client_id) em vez de confiar na
+		// ordem das linhas devolvidas pelo Postgres, que não é garantida sem
+		// ORDER BY. Isso torna o principal reposicionado abaixo determinístico:
+		// é sempre o vínculo mais antigo ainda ativo.
+		active := make([]uuid.UUID, 0, len(wallet))
+		for _, id := range wallet {
+			if _, ok := activeSet[id]; ok {
+				active = append(active, id)
+			}
+		}
+		if len(active) == 0 {
 			http.Error(w, "client_disabled", http.StatusForbidden)
 			return
+		}
+		u.ClientIDs = active
+		// O principal não pode ser um cliente que o usuário não enxerga mais:
+		// a sessão ficaria rotulada com ele (cabeçalho, defaults de tela) e
+		// qualquer check pontual contra o escopo daria 403.
+		if u.ClientID == nil || !slices.Contains(active, *u.ClientID) {
+			u.ClientID = &active[0]
 		}
 	}
 
@@ -127,8 +162,36 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	_ = h.users.TouchLastLogin(r.Context(), u.ID)
 
 	resp := loginResponse{Token: tok, ExpiresAt: expiresAt, User: loginUser{
-		ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name, ClientID: u.ClientID,
+		ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name,
+		ClientID: u.ClientID, ClientIDs: u.ClientIDs,
 	}}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// activeClients devolve, como conjunto, quais dos ids informados são de
+// clientes existentes E ativos. Conjunto (não slice) porque a ordem de saída
+// do Postgres sem ORDER BY não é garantida — quem chama reordena pela carteira.
+func (h *AuthHandler) activeClients(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	rows, err := h.db.Query(ctx,
+		`SELECT id FROM clients WHERE id = ANY($1) AND is_active = TRUE`, ids)
+	if err != nil {
+		return nil, err
+	}
+	// Close é idempotente e liberar a conexão é obrigatório em TODO caminho de
+	// saída, inclusive no erro de Scan — daí o defer em vez de Close manual.
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]struct{}, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

@@ -28,9 +28,9 @@ func (h *ClientTargetPmmHandler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	// Anti-oracle: viewer pedindo outro cliente recebe 404, não 403 — não
-	// confirma a existência do id. Mesmo padrão de /campaigns/{id}.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && *scope != id {
+	// Anti-oracle: viewer pedindo cliente fora da carteira recebe 404, não
+	// 403 — não confirma a existência do id. Mesmo padrão de /campaigns/{id}.
+	if !auth.ScopeAllows(r.Context(), id) {
 		http.Error(w, "not found", 404)
 		return
 	}

@@ -6,7 +6,7 @@
 //   - O CSV detalhado já existe em /detections/export — não duplicamos.
 //
 // Acesso: viewer (escopo do próprio cliente) também pode baixar — os
-// handlers verificam ClientScopeFromContext igual /detections/aggregate-by-material.
+// handlers verificam ClientScopesFromContext igual /detections/aggregate-by-material.
 
 package handlers
 
@@ -77,7 +77,7 @@ func (h *ReportsHandler) parseFilter(w http.ResponseWriter, r *http.Request) (ca
 		return catalog.AggregateFilter{}, nil, false
 	}
 	// Viewer scope: 404 (não 403) pra não vazar existência.
-	if scope := auth.ClientScopeFromContext(r.Context()); scope != nil && camp.ClientID != *scope {
+	if !auth.ScopeAllows(r.Context(), camp.ClientID) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return catalog.AggregateFilter{}, nil, false
 	}

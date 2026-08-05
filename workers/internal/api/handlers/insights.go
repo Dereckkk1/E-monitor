@@ -28,8 +28,9 @@ func NewInsightsHandler(repo InsightsRepo) *InsightsHandler {
 // Get GET /insights
 //
 // Query params:
-//   - client_id (uuid): obrigatório para admin; ignorado quando o JWT
-//     traz scope de viewer (forçado pelo scope — anti-oracle).
+//   - client_id (uuid): obrigatório para admin e para viewer com carteira de
+//     mais de um cliente; ignorado quando a carteira tem 1 cliente só (forçado
+//     pelo escopo — anti-oracle).
 //   - campaigns (csv de uuids): obrigatório, min 1, max 50.
 //   - from, to (YYYY-MM-DD): opcional. Default = mês corrente.
 //   - stations (csv de uuids): opcional. Vazio = todas.
@@ -39,14 +40,20 @@ func NewInsightsHandler(repo InsightsRepo) *InsightsHandler {
 // Erros 403 quando uma das campanhas pedidas não pertence ao client_id
 // resolvido (cross-client). Esse caminho é o que protege cliente B de
 // ler dados do cliente A passando apenas o uuid.
+//
+// A tela é estruturalmente POR CLIENTE (catalog.InsightsParams.ClientID é um
+// uuid, não lista): target PMM, CPM, investido e valor consolidado só têm
+// significado comercial dentro de um cliente. Logo o usuário-agência escolhe
+// UM cliente da carteira, igual o admin faz hoje. Ver spec §6.7 de
+// docs/superpowers/specs/2026-08-04-multi-client-user-design.md.
 func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	scope := auth.ClientScopeFromContext(r.Context())
+	scopes := auth.ClientScopesFromContext(r.Context())
 
-	// client_id — forçado pelo JWT quando o usuário é viewer
+	// client_id — forçado pelo JWT quando a carteira tem um cliente só.
 	var clientID uuid.UUID
-	if scope != nil {
-		clientID = *scope
+	if len(scopes) == 1 {
+		clientID = scopes[0]
 	} else {
 		cid := q.Get("client_id")
 		if cid == "" {
@@ -56,6 +63,12 @@ func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		parsed, err := uuid.Parse(cid)
 		if err != nil {
 			http.Error(w, "invalid client_id", http.StatusBadRequest)
+			return
+		}
+		// scopes == nil (admin) passa direto; viewer-agência precisa pedir um
+		// cliente da própria carteira.
+		if !auth.ScopeAllows(r.Context(), parsed) {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		clientID = parsed
