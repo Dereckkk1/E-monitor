@@ -155,6 +155,44 @@
   display: block;
 }
 
+/* Carteira de agência: as marcas dos clientes formam UM grupo depois do
+   traço. O gap aqui é deliberadamente menor que o do .wel-lockup — é o que
+   faz o olho ler "E-monitor │ (A B C)" em vez de "E-monitor │ A │ B │ C",
+   preservando a relação de hospedagem que o traço estabelece. */
+.wel-lockup-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(8px, 1vw, 12px);
+  flex-wrap: wrap;
+}
+
+/* A partir da terceira marca as placas descem um degrau. Três placas no
+   tamanho cheio empurram o lockup pra segunda linha em telas médias, e o
+   hero perde o alinhamento com o título. */
+.wel-lockup-marks[data-count="3"] .wel-lockup-plate,
+.wel-lockup-marks[data-count="4"] .wel-lockup-plate {
+  height: clamp(32px, 3.9vw, 42px);
+  min-width: clamp(46px, 5.6vw, 60px);
+  max-width: 148px;
+  padding: 6px 11px;
+}
+.wel-lockup-marks[data-count="3"] .wel-lockup-name,
+.wel-lockup-marks[data-count="4"] .wel-lockup-name {
+  font-size: clamp(0.92rem, 1.4vw, 1.06rem);
+  max-width: 16ch;
+}
+
+/* Estouro (carteira acima de MAX_MARKS — raro). Fecha o grupo sem competir
+   com as placas: peso de marca, mas sem a placa branca. */
+.wel-lockup-more {
+  font-family: var(--font-heading);
+  font-size: clamp(0.85rem, 1.1vw, 1rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.66);
+  padding-left: 2px;
+}
+
 /* Sem logo cadastrado: o nome vira a marca. */
 .wel-lockup-name {
   font-family: var(--font-heading);
@@ -791,6 +829,19 @@
 
   .wel-lockup { gap: 12px; }
   .wel-lockup-plate { height: 36px; min-width: 50px; padding: 6px 11px; }
+
+  /* No retrato o lockup já quebra linha; as marcas encolhem juntas pra
+     carteira de 2–3 caber numa linha só embaixo do E-monitor. */
+  .wel-lockup-marks { gap: 8px; }
+  .wel-lockup-marks[data-count="2"] .wel-lockup-plate,
+  .wel-lockup-marks[data-count="3"] .wel-lockup-plate,
+  .wel-lockup-marks[data-count="4"] .wel-lockup-plate {
+    height: 30px;
+    min-width: 42px;
+    max-width: 116px;
+    padding: 5px 9px;
+  }
+  .wel-lockup-marks .wel-lockup-name { font-size: 0.9rem; max-width: 13ch; }
 
   .wel-cta { align-self: stretch; justify-content: center; }
 
