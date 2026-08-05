@@ -14,14 +14,14 @@ import (
 
 type fakeLiveMapRepo struct {
 	gotCampaign uuid.UUID
-	gotScope    *uuid.UUID
+	gotScope    []uuid.UUID
 	gotOpts     catalog.LiveMapOpts
 	called      bool
 	result      catalog.LiveMapResult
 	err         error
 }
 
-func (f *fakeLiveMapRepo) Get(ctx context.Context, campaignID uuid.UUID, scope *uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error) {
+func (f *fakeLiveMapRepo) Get(ctx context.Context, campaignID uuid.UUID, scope []uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error) {
 	f.called = true
 	f.gotCampaign = campaignID
 	f.gotScope = scope
@@ -83,8 +83,8 @@ func TestLiveMapHandler_Viewer_ScopeIsClientID(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.Get(rr, newLiveMapReq("?campaign_id="+camp.String(),
 		&auth.Claims{Role: "viewer", ClientID: &cid}))
-	if fake.gotScope == nil || *fake.gotScope != cid {
-		t.Errorf("scope = %v, want %v", fake.gotScope, cid)
+	if len(fake.gotScope) != 1 || fake.gotScope[0] != cid {
+		t.Errorf("scope = %v, want [%v]", fake.gotScope, cid)
 	}
 }
 

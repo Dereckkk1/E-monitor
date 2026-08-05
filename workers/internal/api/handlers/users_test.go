@@ -225,7 +225,215 @@ func TestUsers_Create_InvalidRole_400(t *testing.T) {
 	require.Contains(t, w.Body.String(), "invalid_role")
 }
 
+// Criar usuário de agência com 2 clientes: o primeiro da lista vira o principal.
+func TestUsers_Create_Client_WithClientIDs(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+
+	body := `{"email":"ag@acme.com","password":"super-secret-pw-12345","name":"Agência",
+	          "role":"client","client_ids":["` + a.ID.String() + `","` + b.ID.String() + `"]}`
+	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.Create(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var u users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &u))
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, u.ClientIDs)
+	require.Equal(t, a.ID, *u.ClientID)
+}
+
+// O frontend antigo (janela entre o deploy do backend e o do frontend) manda
+// só client_id: tem que continuar criando um usuário com carteira de um.
+func TestUsers_Create_Client_LegacyClientIDStillWorks(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	clients := catalog.NewClients(pool)
+	c, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente Legado"})
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+
+	body := `{"email":"legacy@acme.com","password":"super-secret-pw-12345","name":"L",
+	          "role":"client","client_id":"` + c.ID.String() + `"}`
+	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.Create(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var u users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &u))
+	require.Equal(t, []uuid.UUID{c.ID}, u.ClientIDs)
+	require.Equal(t, c.ID, *u.ClientID)
+}
+
+// Carteira vazia com role client é o mesmo buraco do client_id ausente: sem
+// nenhum cliente, o escopo do JWT não resolve nada. 400, não 500.
+func TestUsers_Create_Client_EmptyWalletRejected(t *testing.T) {
+	_, pool := newUsersTestPool(t)
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+
+	body := `{"email":"vazio@acme.com","password":"super-secret-pw-12345","name":"V",
+	          "role":"client","client_ids":[]}`
+	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.Create(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "client_id_required")
+}
+
+// Id inexistente na carteira tem que virar client_not_found 400 — inclusive
+// quando ele está numa posição SECUNDÁRIA, onde quem estoura o 23503 é o
+// SetClients e não o INSERT do usuário.
+func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	clients := catalog.NewClients(pool)
+	real, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente Real"})
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+	bogus := uuid.New()
+
+	// (a) único elemento da carteira é inválido → falha já no INSERT.
+	body := `{"email":"ghost1@acme.com","password":"super-secret-pw-12345","name":"G",
+	          "role":"client","client_ids":["` + bogus.String() + `"]}`
+	req := httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.Create(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "client_not_found")
+
+	// (b) inválido em posição secundária → falha no SetClients. Sem tradução
+	// do 23503 isso viraria 500.
+	body = `{"email":"ghost2@acme.com","password":"super-secret-pw-12345","name":"G",
+	         "role":"client","client_ids":["` + real.ID.String() + `","` + bogus.String() + `"]}`
+	req = httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	h.Create(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "client_not_found")
+
+	// Trade-off documentado do caso (b): o INSERT do usuário já commitou antes
+	// do SetContext falhar, então ghost2 EXISTE com a carteira de um elemento.
+	// Não é vazamento (o vínculo inválido nunca entrou — SetClients é
+	// transacional), mas o admin que corrigir o id e reenviar toma
+	// email_taken 409 e precisa editar o usuário em vez de recriar.
+	orphan, err := users.NewRepo(pool).GetByEmail(ctx, "ghost2@acme.com")
+	require.NoError(t, err, "usuário parcial fica gravado — se isso mudar, atualize o comentário")
+	require.Equal(t, []uuid.UUID{real.ID}, orphan.ClientIDs,
+		"carteira parcial tem só o principal: SetClients falhou inteiro")
+}
+
 // ── Patch ───────────────────────────────────────────────────────────────
+
+// PATCH client_ids SUBSTITUI a carteira inteira (não é append): quem sai da
+// lista perde o acesso, que é o ponto — a carteira é o escopo de leitura.
+func TestUsers_Patch_ReplacesWallet(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "ag@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Ag",
+	})
+	require.NoError(t, err)
+	h := NewUsersHandler(repo, nil)
+
+	// [a] → [a, b]
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+a.ID.String()+`","`+b.ID.String()+`"]}`, u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs)
+	require.Equal(t, a.ID, *got.ClientID, "principal atual continua na lista → é mantido")
+
+	// [a, b] → [b]: `a` some da carteira E deixa de ser o principal.
+	req = reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+b.ID.String()+`"]}`, u.ID.String())
+	w = httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, []uuid.UUID{b.ID}, got.ClientIDs)
+	require.Equal(t, b.ID, *got.ClientID)
+}
+
+// Virar admin zera a carteira: senão o vínculo antigo sobreviveria e o filtro
+// por cliente do /admin/users continuaria achando o usuário.
+func TestUsers_Patch_ToAdmin_ClearsWallet(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "ag@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Ag",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{a.ID, b.ID}))
+
+	h := NewUsersHandler(repo, nil)
+	req := reqWithIDParam("PATCH", "/admin/users/x", `{"role":"admin"}`, u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, "admin", got.Role)
+	require.Nil(t, got.ClientID)
+	require.Empty(t, got.ClientIDs)
+
+	persisted, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.Empty(t, persisted.ClientIDs, "carteira tem que ter sido apagada no banco")
+
+	// E não dá pra reencher: admin com carteira é o vazamento que a poda do
+	// Update fechou. O CHECK users_client_role_consistency barra o principal,
+	// então o PATCH morre em 400 e a carteira continua vazia.
+	req = reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+b.ID.String()+`"]}`, u.ID.String())
+	w = httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "role_client_inconsistent")
+
+	persisted, err = repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.Empty(t, persisted.ClientIDs, "admin não pode acabar com carteira por caminho nenhum")
+	require.Nil(t, persisted.ClientID)
+}
+
+// Promover admin → cliente mandando SÓ client_ids (é o que o formulário novo
+// manda): o principal sai da lista, e o CHECK users_client_role_consistency
+// não pode ser violado no meio do caminho.
+func TestUsers_Patch_ToClient_WithClientIDsOnly(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "adm@acme.com", PasswordHash: "h", Role: "admin", Name: "Adm",
+	})
+	require.NoError(t, err)
+
+	h := NewUsersHandler(repo, nil)
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"role":"client","client_ids":["`+a.ID.String()+`","`+b.ID.String()+`"]}`, u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, "viewer", got.Role)
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs)
+	require.Equal(t, a.ID, *got.ClientID)
+}
 
 func TestUsers_Patch_RejectsEmail(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
@@ -349,4 +557,95 @@ func TestUsers_Delete_OK_AndIdempotent(t *testing.T) {
 // strconvI evita importar strconv só pra labels de email
 func strconvI(i int) string {
 	return string(rune('0' + i))
+}
+
+// PATCH com um id inválido na carteira não pode DESTRUIR a carteira atual.
+//
+// O Update e o SetClients são transações separadas: se o Update gravar o
+// principal (podando os vínculos antigos) e o SetClients falhar depois, a
+// carteira fica truncada e o admin só vê um erro — parece que nada mudou.
+func TestUsers_Patch_UnknownClientInWallet_DoesNotTruncate(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "trunca@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Trunca",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{a.ID, b.ID}))
+	h := NewUsersHandler(repo, nil)
+
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+a.ID.String()+`","`+b.ID.String()+`","`+uuid.NewString()+`"]}`,
+		u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "client_not_found")
+
+	got, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs,
+		"carteira anterior tem que sobreviver a um PATCH recusado")
+	require.Equal(t, a.ID, *got.ClientID)
+}
+
+// A regra "mantém o principal atual quando ele continua na carteira" (§5.3)
+// tem que valer também vinda do PATCH — não só do SetClients direto.
+func TestUsers_Patch_KeepsCurrentPrincipalWhenStillInWallet(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "principal@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "P",
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.SetClients(ctx, u.ID, []uuid.UUID{a.ID, b.ID}))
+	h := NewUsersHandler(repo, nil)
+
+	// Manda a MESMA carteira com o principal em segundo lugar. Promover
+	// client_ids[0] aqui trocaria o principal a cada salvamento do formulário.
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_ids":["`+b.ID.String()+`","`+a.ID.String()+`"]}`, u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, a.ID, *got.ClientID, "principal atual tem que ser preservado")
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs)
+}
+
+// Mandar client_id E client_ids na mesma requisição: client_ids vence, igual ao
+// Create. Aplicar os dois faria o Update podar a carteira pro client_id antes
+// do SetClients reconstruí-la — e um SetClients que falhasse depois deixaria a
+// carteira truncada, que é exatamente o que o fix anterior eliminou.
+func TestUsers_Patch_ClientIDsWinsOverClientID(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "ambos@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Ambos",
+	})
+	require.NoError(t, err)
+	h := NewUsersHandler(repo, nil)
+
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_id":"`+a.ID.String()+`","client_ids":["`+a.ID.String()+`","`+b.ID.String()+`"]}`,
+		u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs,
+		"client_ids tem que vencer — o client_id sozinho truncaria pra 1")
 }

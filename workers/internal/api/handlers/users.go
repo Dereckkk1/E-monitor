@@ -175,6 +175,11 @@ type createUserPayload struct {
 	Phone    *string    `json:"phone,omitempty"`
 	Role     string     `json:"role"` // "admin" | "client"
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
+	// ClientIDs é a carteira do usuário Cliente (agências). ClientID continua
+	// aceito e equivale a uma lista de um elemento — é o que o frontend antigo
+	// manda durante a janela entre o deploy do backend e o do frontend.
+	// Quando os dois vêm, ClientIDs vence.
+	ClientIDs []uuid.UUID `json:"client_ids,omitempty"`
 	// SendWelcome emite o convite e dispara o email de boas-vindas.
 	SendWelcome bool `json:"send_welcome,omitempty"`
 	// Preferências de email (só fazem sentido pra admin — as queries de
@@ -199,6 +204,30 @@ type welcomeInfo struct {
 	EmailError  string     `json:"email_error,omitempty"`
 }
 
+// writeUserPGError traduz os SQLSTATEs que o /admin/users sabe explicar e
+// devolve true quando escreveu a resposta. Um único lugar porque agora três
+// escritas distintas (INSERT em users, UPDATE em users, SetClients na
+// carteira) podem estourar os MESMOS códigos — o 23503 do SetClients é um id
+// de cliente inexistente na carteira, e sem essa tradução ele viraria um 500
+// mudo em vez de client_not_found.
+func writeUserPGError(w http.ResponseWriter, err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "23505": // unique_violation (email)
+		http.Error(w, "email_taken", http.StatusConflict)
+	case "23514": // check_violation (users_client_role_consistency)
+		http.Error(w, "role_client_inconsistent", http.StatusBadRequest)
+	case "23503": // foreign_key_violation (client_id inexistente)
+		http.Error(w, "client_not_found", http.StatusBadRequest)
+	default:
+		return false
+	}
+	return true
+}
+
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var p createUserPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -218,13 +247,25 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid_role", http.StatusBadRequest)
 		return
 	}
-	if dbRole == "viewer" && p.ClientID == nil {
+	// Normaliza carteira: client_ids vence, client_id é o fallback legado.
+	wallet := p.ClientIDs
+	if len(wallet) == 0 && p.ClientID != nil {
+		wallet = []uuid.UUID{*p.ClientID}
+	}
+	if dbRole == "viewer" && len(wallet) == 0 {
 		http.Error(w, "client_id_required", http.StatusBadRequest)
 		return
 	}
-	if dbRole != "viewer" && p.ClientID != nil {
+	if dbRole != "viewer" && len(wallet) > 0 {
 		http.Error(w, "client_id_not_allowed_for_admin", http.StatusBadRequest)
 		return
+	}
+	// O principal SEMPRE sai da carteira normalizada. Nunca indexe wallet[0]
+	// sem o guard: pra admin a lista é vazia (e o CHECK
+	// users_client_role_consistency exige client_id NULL nesse caso).
+	var primary *uuid.UUID
+	if len(wallet) > 0 {
+		primary = &wallet[0]
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), 10)
 	if err != nil {
@@ -235,29 +276,42 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Email:                 p.Email,
 		PasswordHash:          string(hash),
 		Role:                  dbRole,
-		ClientID:              p.ClientID,
+		ClientID:              primary,
 		Name:                  p.Name,
 		Phone:                 p.Phone,
 		ReceiveAlertEmails:    p.ReceiveAlertEmails,
 		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "23505": // unique_violation (email)
-				http.Error(w, "email_taken", http.StatusConflict)
-				return
-			case "23514": // check_violation
-				http.Error(w, "role_client_inconsistent", http.StatusBadRequest)
-				return
-			case "23503": // foreign_key_violation (client_id inválido)
-				http.Error(w, "client_not_found", http.StatusBadRequest)
-				return
-			}
+		if writeUserPGError(w, err) {
+			return
 		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// O INSERT + trigger da 0062 já deixou o principal na carteira; só os
+	// secundários exigem uma segunda escrita.
+	if len(wallet) > 1 {
+		if err := h.repo.SetClients(r.Context(), u.ID, wallet); err != nil {
+			// Mesma tradução do INSERT: um id inexistente na carteira estoura
+			// 23503 aqui, e tem que virar client_not_found 400, não 500.
+			//
+			// O usuário JÁ foi gravado (com a carteira de um elemento) — ver o
+			// comentário de writeUserPGError. Não desfazemos: o vínculo extra
+			// nunca chegou a existir (SetClients é transacional), então não há
+			// escopo de leitura a mais; o admin corrige o id e edita o usuário.
+			if writeUserPGError(w, err) {
+				return
+			}
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		u, err = h.repo.Get(r.Context(), u.ID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	resp := createUserResponse{User: u}
@@ -289,7 +343,12 @@ func (h *UsersHandler) issueWelcome(r *http.Request, u *users.User, plainPasswor
 		in.CreatedBy = &by
 	}
 	if u.ClientID != nil {
-		in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+		// Carteira inteira, não só o principal: "vinculada a A, B e C". Com um
+		// cliente só o texto é idêntico ao de antes.
+		in.ClientName = h.welcomeSvc.Repo().WalletNames(r.Context(), u.ID)
+		if in.ClientName == "" {
+			in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+		}
 	}
 	res, err := h.welcomeSvc.Issue(r.Context(), in)
 	if err != nil {
@@ -310,7 +369,11 @@ type updateUserPayload struct {
 	Phone    *string    `json:"phone,omitempty"`
 	Role     *string    `json:"role,omitempty"`
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
-	IsActive *bool      `json:"is_active,omitempty"`
+	// ClientIDs SUBSTITUI a carteira inteira (não é append): quem sai da lista
+	// perde o acesso, que é o ponto — a carteira é o escopo de leitura do JWT.
+	// Ausente = não mexe na carteira. Quando vem junto com ClientID, vence.
+	ClientIDs []uuid.UUID `json:"client_ids,omitempty"`
+	IsActive  *bool       `json:"is_active,omitempty"`
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
 	ReceiveAlertEmails *bool `json:"receive_alert_emails,omitempty"`
 	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda (admins).
@@ -365,8 +428,8 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Role = &dbRole
 		// Se vai virar admin, força client_id a nulo (consistência);
-		// se vai virar client, exige p.ClientID OU já estar com um.
-		if dbRole == "viewer" && p.ClientID == nil && current.ClientID == nil {
+		// se vai virar client, exige p.ClientID/p.ClientIDs OU já estar com um.
+		if dbRole == "viewer" && p.ClientID == nil && len(p.ClientIDs) == 0 && current.ClientID == nil {
 			http.Error(w, "client_id_required", http.StatusBadRequest)
 			return
 		}
@@ -374,30 +437,62 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			in.ClearClient = true
 		}
 	}
-	if p.ClientID != nil {
+	if p.ClientID != nil && len(p.ClientIDs) == 0 {
 		// ClientID só faz sentido se o usuário é (ou está virando) viewer.
 		// Se Role não veio mas current já é viewer, OK: trocar de cliente.
 		// Se Role veio como admin, ClearClient já está true acima e ignoramos.
+		//
+		// Quando client_ids TAMBÉM veio, ele vence e este ramo é pulado — igual
+		// ao Create. Aplicar os dois faria o Update podar a carteira pro
+		// client_id antes do SetClients reconstruí-la, e um SetClients que
+		// falhasse depois deixaria a carteira truncada.
 		if !in.ClearClient {
 			in.ClientID = p.ClientID
 		}
+	} else if len(p.ClientIDs) > 0 && !in.ClearClient && current.ClientID == nil {
+		// SÓ na promoção admin → cliente (o usuário ainda não tem principal):
+		// o Update precisa gravar um principal na MESMA transação em que grava
+		// role='viewer', senão o CHECK users_client_role_consistency estoura no
+		// caminho. O SetClients logo abaixo acrescenta os secundários.
+		//
+		// Para quem JÁ é cliente, não tocamos client_id aqui de propósito. O
+		// Update poda a carteira sempre que mexe em client_id (é o que fecha o
+		// vazamento do caminho legado), então setá-lo aqui truncaria a carteira
+		// pra um cliente ANTES do SetClients rodar — e um SetClients que
+		// falhasse depois (id inválido na lista, por exemplo) deixaria a
+		// carteira destruída, com o admin vendo só um erro. Deixando client_id
+		// quieto, o SetClients faz tudo numa transação só e a regra "mantém o
+		// principal atual se ele continuar na carteira" (§5.3) continua valendo.
+		in.ClientID = &p.ClientIDs[0]
 	}
 
 	u, err := h.repo.Update(r.Context(), id, in)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "23514":
-				http.Error(w, "role_client_inconsistent", http.StatusBadRequest)
-				return
-			case "23503":
-				http.Error(w, "client_not_found", http.StatusBadRequest)
-				return
-			}
+		if writeUserPGError(w, err) {
+			return
 		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// Carteira: client_ids vence; client_id sozinho já foi aplicado pelo Update
+	// acima (que também poda os vínculos antigos), então só entra aqui quando a
+	// lista veio explícita. ClearClient (virou admin) já esvaziou a carteira
+	// dentro do Update — não há SetClients pra chamar, e chamar seria devolver
+	// o acesso que a promoção acabou de tirar.
+	if len(p.ClientIDs) > 0 && !in.ClearClient {
+		if err := h.repo.SetClients(r.Context(), id, p.ClientIDs); err != nil {
+			if writeUserPGError(w, err) {
+				return
+			}
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		u, err = h.repo.Get(r.Context(), id)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, u)
 }
