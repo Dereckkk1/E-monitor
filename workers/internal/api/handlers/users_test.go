@@ -620,3 +620,32 @@ func TestUsers_Patch_KeepsCurrentPrincipalWhenStillInWallet(t *testing.T) {
 	require.Equal(t, a.ID, *got.ClientID, "principal atual tem que ser preservado")
 	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs)
 }
+
+// Mandar client_id E client_ids na mesma requisição: client_ids vence, igual ao
+// Create. Aplicar os dois faria o Update podar a carteira pro client_id antes
+// do SetClients reconstruí-la — e um SetClients que falhasse depois deixaria a
+// carteira truncada, que é exatamente o que o fix anterior eliminou.
+func TestUsers_Patch_ClientIDsWinsOverClientID(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	clients := catalog.NewClients(pool)
+	a, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente A"})
+	b, _ := clients.Create(ctx, catalog.CreateClientInput{Name: "Cliente B"})
+	u, err := repo.Create(ctx, users.CreateInput{
+		Email: "ambos@acme.com", PasswordHash: "h", Role: "viewer", ClientID: &a.ID, Name: "Ambos",
+	})
+	require.NoError(t, err)
+	h := NewUsersHandler(repo, nil)
+
+	req := reqWithIDParam("PATCH", "/admin/users/x",
+		`{"client_id":"`+a.ID.String()+`","client_ids":["`+a.ID.String()+`","`+b.ID.String()+`"]}`,
+		u.ID.String())
+	w := httptest.NewRecorder()
+	h.Patch(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var got users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs,
+		"client_ids tem que vencer — o client_id sozinho truncaria pra 1")
+}

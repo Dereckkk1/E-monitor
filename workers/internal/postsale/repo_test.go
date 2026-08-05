@@ -3,6 +3,7 @@ package postsale
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,5 +206,53 @@ func TestRepo_InternalRecipients_SoAtivosComFlag(t *testing.T) {
 		"pv-viewer@empresa.com",     // não é do time
 	} {
 		require.NotContains(t, byEmail, fora)
+	}
+}
+
+// Usuário de agência (carteira multi-cliente) tem que receber o pós-venda de
+// TODO cliente da carteira, não só do principal.
+//
+// Sem isso a feature multi-cliente vira regressão: hoje uma agência atendida
+// por 5 logins recebe 5 pós-vendas; consolidada num login só, receberia 1.
+// Silenciosamente — o preview do wizard lê a mesma query.
+func TestRepo_ActiveClientUsers_IncluiCarteiraSecundaria(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+
+	// Segundo cliente, do qual a agência é secundária.
+	var outro uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ('Cliente Secundário') RETURNING id`).Scan(&outro))
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM clients WHERE id = $1", outro) }) //nolint:errcheck
+
+	agencia := seedClientUser(t, ctx, pool, seed.ClientID, "agencia@empresa.com", true)
+	_, err := pool.Exec(ctx,
+		`INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`, agencia, outro)
+	require.NoError(t, err)
+
+	people, err := NewRepo(pool).ActiveClientUsers(ctx, outro)
+	require.NoError(t, err)
+	require.Len(t, people, 1, "agência tem que receber o pós-venda do cliente secundário")
+	require.Equal(t, "agencia@empresa.com", people[0].Email)
+}
+
+// A disjunção com InternalRecipients não pode depender de client_id: ao passar
+// a ler user_clients, um admin com linha na tabela viraria destinatário DUAS
+// vezes. O filtro por role é o que mantém os conjuntos separados.
+func TestRepo_ActiveClientUsers_IgnoraAdminComVinculo(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+
+	admin := seedInternalAdmin(t, ctx, pool, "pv-admin-vinculado@hubradios.com", true, true)
+	// Estado que nenhum handler cria, mas que o repo não impede.
+	_, err := pool.Exec(ctx,
+		`INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`, admin, seed.ClientID)
+	require.NoError(t, err)
+
+	people, err := NewRepo(pool).ActiveClientUsers(ctx, seed.ClientID)
+	require.NoError(t, err)
+	for _, p := range people {
+		require.NotEqual(t, "pv-admin-vinculado@hubradios.com", p.Email,
+			"admin não é destinatário de cliente — receberia duplicado")
 	}
 }

@@ -432,10 +432,15 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			in.ClearClient = true
 		}
 	}
-	if p.ClientID != nil {
+	if p.ClientID != nil && len(p.ClientIDs) == 0 {
 		// ClientID só faz sentido se o usuário é (ou está virando) viewer.
 		// Se Role não veio mas current já é viewer, OK: trocar de cliente.
 		// Se Role veio como admin, ClearClient já está true acima e ignoramos.
+		//
+		// Quando client_ids TAMBÉM veio, ele vence e este ramo é pulado — igual
+		// ao Create. Aplicar os dois faria o Update podar a carteira pro
+		// client_id antes do SetClients reconstruí-la, e um SetClients que
+		// falhasse depois deixaria a carteira truncada.
 		if !in.ClearClient {
 			in.ClientID = p.ClientID
 		}
