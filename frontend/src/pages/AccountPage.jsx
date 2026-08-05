@@ -229,11 +229,11 @@ export default function AccountPage() {
   const meQ = useMe()
   const updateM = useUpdateMe()
   const changeM = useChangeMyPassword()
-  const { clientId, isAdmin } = useAuth()
-  // /clients é admin-only no backend — viewer tem clientId mas não autoriza
-  // listar /clients, então gateamos por isAdmin pra evitar 403 ruidoso. O
-  // bloco que renderiza o nome do cliente vinculado some pra viewer.
-  const clientsQ = useClients({ enabled: isAdmin && !!clientId })
+  const { clientIds, isAdmin } = useAuth()
+  // /clients é scope-aware: admin recebe a lista inteira, Cliente recebe a
+  // própria carteira. Buscamos pra qualquer um que tenha vínculo — antes isto
+  // era gateado por isAdmin, e o Cliente acabava sem ver vínculo nenhum.
+  const clientsQ = useClients({ enabled: isAdmin || clientIds.length > 0 })
   const { toast, show, dismiss } = useToast()
 
   const [profile, setProfile] = useState({ name: '', phone: '' })
@@ -315,14 +315,21 @@ export default function AccountPage() {
 
   const me = meQ.data
   const roleInfo = classifyRole(me.role)
-  const linkedClient = clientId
-    ? (clientsQ.data ?? []).find(c => c.id === clientId)
-    : null
+  // Carteira completa, não só o principal: um usuário de agência precisa ver
+  // TODOS os clientes que acessa. Resolve pelos ids da sessão contra a lista
+  // scope-aware do /clients; ids que não resolvem são omitidos em vez de
+  // derrubar a seção.
+  const linkedClients = clientIds
+    .map(id => (clientsQ.data ?? []).find(c => c.id === id))
+    .filter(Boolean)
   const memberSince = formatMemberSince(me.created_at)
 
-  // Meta strip: papel · vínculo · membro desde
+  // Meta strip: papel · vínculo · membro desde. Com carteira grande a faixa
+  // vira "N clientes" pra não estourar a linha — a lista completa fica na
+  // seção Identidade logo abaixo.
   const metaParts = [roleInfo.label]
-  if (linkedClient) metaParts.push(linkedClient.name)
+  if (linkedClients.length === 1) metaParts.push(linkedClients[0].name)
+  else if (linkedClients.length > 1) metaParts.push(`${linkedClients.length} clientes`)
   else if (roleInfo.kind === 'admin') metaParts.push('E-radios')
   if (memberSince) metaParts.push(`membro desde ${memberSince}`)
 
@@ -363,10 +370,14 @@ export default function AccountPage() {
               {roleInfo.label}
             </dd>
           </div>
-          {linkedClient && (
+          {linkedClients.length > 0 && (
             <div className="account-def">
-              <dt className="account-def-key">vínculo</dt>
-              <dd className="account-def-val">{linkedClient.name}</dd>
+              <dt className="account-def-key">
+                {linkedClients.length > 1 ? 'vínculos' : 'vínculo'}
+              </dt>
+              <dd className="account-def-val">
+                {linkedClients.map(c => c.name).join(' · ')}
+              </dd>
             </div>
           )}
           {memberSince && (
