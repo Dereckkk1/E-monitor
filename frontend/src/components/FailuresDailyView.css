@@ -1,0 +1,782 @@
+/* ============================================================================
+ * Aba "Por dia" de /admin/station-failures — série temporal de falhas.
+ * Vocabulário herdado do AdminStationFailuresPage.css (.asf-hero, .asf-ckpi,
+ * .asf-error são reusados direto). O que é novo mora no prefixo .fd-.
+ * Doc: docs/features/admin-failures-daily.md
+ * ========================================================================== */
+
+.fd {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Refetch (troca de preset / de métrica) segura o render anterior levemente
+ * apagado em vez de voltar pro skeleton — sem pulo de altura, sem flash. */
+.fd--refetching {
+  opacity: 0.6;
+  transition: opacity 160ms ease-out;
+}
+
+.fd-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Barra de filtros — escopa TUDO abaixo dela ───────────────────────── */
+.fd-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 20px 28px;
+  padding: 14px 18px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.fd-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fd-filter-group--dates {
+  flex-direction: row;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.fd-filter-label {
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+/* Segmentado — mesmo desenho do .asf-mode-toggle, um passo menor. */
+.fd-presets,
+.fd-metrics {
+  display: inline-flex;
+  flex-wrap: wrap;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.fd-preset,
+.fd-metric {
+  border: none;
+  border-right: 1px solid var(--c-border);
+  background: transparent;
+  padding: 8px 14px;
+  min-height: 36px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.fd-preset:last-child,
+.fd-metric:last-child { border-right: none; }
+
+.fd-preset:hover,
+.fd-metric:hover { background: var(--c-surface-2); color: var(--c-text); }
+
+.fd-preset--active, .fd-preset--active:hover,
+.fd-metric--active, .fd-metric--active:hover {
+  background: var(--c-action);
+  color: #fff;
+  font-weight: 600;
+}
+
+.fd-preset:focus-visible,
+.fd-metric:focus-visible,
+.fd-table-toggle:focus-visible,
+.fd-table-open:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: -2px;
+}
+
+.fd-date {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+.fd-date input {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 11px;
+  min-height: 36px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.fd-date input:focus {
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.12);
+}
+.fd-date input::-webkit-calendar-picker-indicator {
+  filter: grayscale(1) opacity(0.5);
+  cursor: pointer;
+}
+.fd-date input:hover::-webkit-calendar-picker-indicator { filter: none; opacity: 1; }
+
+/* ── KPIs ──────────────────────────────────────────────────────────────
+ * Desenho idêntico ao .asf-ckpi da página, mas declarado AQUI: o componente
+ * não pode depender do CSS de quem o monta, senão sai sem estilo em qualquer
+ * outro contexto (foi exatamente o que aconteceu no harness de inspeção).
+ * -------------------------------------------------------------------- */
+.fd-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+
+.fd-kpis {
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  padding: 0;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.fd-kpi {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+.fd-kpi dd {
+  margin: 0;
+  order: 2;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: clamp(26px, 3vw, 32px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  /* Cifra grande usa figura proporcional: tabular-nums deixaria "121" solto. */
+  font-variant-numeric: normal;
+}
+.fd-kpi dt {
+  margin: 0;
+  order: 1;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+.fd-kpi-sep {
+  width: 1px;
+  background: var(--c-border);
+}
+
+.fd-kpi-of {
+  font-size: 0.5em;
+  font-weight: 600;
+  color: var(--c-text-3);
+  letter-spacing: 0;
+}
+.fd-kpi-note {
+  color: var(--c-text-2);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Erro ─────────────────────────────────────────────────────────────── */
+.fd-error {
+  padding: 14px 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-lg);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: #991b1b;
+}
+
+/* ── Cards ────────────────────────────────────────────────────────────── */
+.fd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 20px 16px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+
+.fd-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.fd-card-title {
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+}
+
+.fd-card-hint {
+  margin: 2px 0 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--c-text-2);
+  max-width: 62ch;
+  text-wrap: pretty; /* evita a última linha órfã ("...no / dia.") */
+}
+
+.fd-table-toggle {
+  flex-shrink: 0;
+  padding: 7px 14px;
+  min-height: 36px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--c-text-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.fd-table-toggle:hover {
+  border-color: var(--c-action-border);
+  color: var(--c-action);
+}
+.fd-table-toggle[aria-pressed='true'] {
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+
+/* ── Gráfico ──────────────────────────────────────────────────────────── */
+.fd-chart {
+  /* Altura inclui a faixa do eixo X — fixar só o plot faria o card ganhar um
+   * scroll interno de 20px que corta os rótulos de data. */
+  height: 320px;
+  margin-top: 12px;
+}
+
+.fd-chart-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 10px 0 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+.fd-chart-foot strong { font-weight: 600; color: var(--c-text); }
+
+.fd-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.fd-swatch--peak { background: #a4114f; }
+/* Traço tracejado que espelha a ReferenceLine da média. */
+.fd-swatch--avg {
+  width: 16px;
+  height: 0;
+  border-radius: 0;
+  border-top: 1px dashed #6b7280;
+}
+
+.fd-foot-sep { color: var(--c-border); }
+
+.fd-verdict-cap {
+  color: var(--c-text);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* Tooltip — mesma linguagem do .in-tooltip do /insights. */
+.fd-tooltip {
+  min-width: 190px;
+  padding: 10px 12px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-body);
+}
+.fd-tooltip-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--c-border);
+  text-transform: capitalize;
+}
+.fd-tooltip-rows { margin: 0; }
+.fd-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.fd-tooltip-row + .fd-tooltip-row { margin-top: 3px; }
+.fd-tooltip-row dt {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+.fd-tooltip-row dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+/* A métrica em foco fica em peso, não em cor: texto nunca veste a cor da
+ * série (a barra ao lado já carrega a identidade). */
+.fd-tooltip-row--on dt { color: var(--c-text); font-weight: 600; }
+.fd-tooltip-row--on dd { font-weight: 700; }
+.fd-tooltip-foot {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid var(--c-border);
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+/* Touch não tem hover: a dica de clique só faz sentido com ponteiro fino. */
+@media (hover: none) {
+  .fd-tooltip-foot { display: none; }
+}
+
+/* ── Painéis de padrão ────────────────────────────────────────────────── */
+.fd-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* `start`, não o stretch default: o painel de decêndios tem 3 linhas e o de
+   * dia da semana tem 7 — esticar os dois deixaria metade do card vazia. */
+  align-items: start;
+  gap: 16px;
+}
+
+/* Veredito em texto — é a resposta literal de "qual parte do mês dói mais",
+ * sem obrigar o leitor a comparar as barras de cabeça. */
+.fd-verdict {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--c-border);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+  text-wrap: pretty;
+}
+.fd-verdict strong { color: var(--c-text); font-weight: 600; }
+.fd-card--panel { gap: 4px; }
+
+.fd-pattern-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.fd-pattern-row {
+  display: grid;
+  grid-template-columns: 78px 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.fd-pattern-label {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.fd-pattern-track {
+  height: 12px;
+  border-radius: 3px;
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.fd-pattern-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 3px;
+  background: #ec4899;
+  transform-origin: left center;
+  animation: fdGrow 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fd-pattern-row--max .fd-pattern-label { color: var(--c-text); font-weight: 600; }
+.fd-pattern-row--max .fd-pattern-fill { background: #a4114f; }
+.fd-pattern-row--max .fd-pattern-value { color: var(--c-text); font-weight: 700; }
+
+.fd-pattern-value {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 46px;
+  text-align: right;
+}
+
+.fd-pattern-caption {
+  margin-top: 4px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+
+@keyframes fdGrow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* ── Tabela-gêmea do gráfico ──────────────────────────────────────────── */
+.fd-table-wrap {
+  margin-top: 12px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+
+.fd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+.fd-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--c-surface-2);
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-text-2);
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+.fd-table tbody th,
+.fd-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  text-align: left;
+}
+.fd-table tbody tr:last-child th,
+.fd-table tbody tr:last-child td { border-bottom: none; }
+.fd-table tbody tr:hover { background: var(--c-surface-2); }
+
+.fd-table-row--peak th,
+.fd-table-row--peak td { background: rgba(164, 17, 79, 0.06); font-weight: 600; }
+
+.fd-table-wday {
+  margin-left: 7px;
+  font-size: 11px;
+  color: var(--c-text-3);
+  font-weight: 400;
+}
+
+.fd-table-open {
+  padding: 4px 10px;
+  min-height: 28px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--c-action);
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.fd-table-open:hover {
+  border-color: var(--c-action-border);
+  background: var(--c-action-light);
+}
+
+/* ── Empty state (§4.7 DESIGN.md: shadow UI, não aviso seco) ──────────── */
+.fd-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: center;
+  padding: 32px 28px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+.fd-empty-text { display: flex; flex-direction: column; gap: 10px; }
+.fd-empty-mark { color: var(--c-success); }
+.fd-empty-text h2 {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--c-text);
+  text-wrap: balance;
+}
+.fd-empty-text p {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--c-text-2);
+  max-width: 52ch;
+  text-wrap: pretty;
+}
+
+.fd-empty-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+.fd-empty-preview-label {
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+.fd-empty-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 110px;
+}
+.fd-empty-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 3px 3px 0 0;
+  background: #f9a8d4;
+  opacity: 0.65;
+}
+.fd-empty-bar--peak { background: #a4114f; opacity: 0.5; }
+.fd-empty-legend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+.fd-empty-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.fd-empty-dot--peak { background: #a4114f; opacity: 0.5; }
+
+/* ── Skeleton ─────────────────────────────────────────────────────────── */
+.fd-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.fd-skel-kpis {
+  display: flex;
+  gap: 28px;
+  padding: 20px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+.fd-skel-kpi {
+  flex: 1;
+  height: 46px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+}
+.fd-skel-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 320px;
+  padding: 20px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+}
+.fd-skel-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 3px 3px 0 0;
+  background: var(--c-surface-2);
+}
+.fd-skel-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.fd-skel-panel {
+  height: 190px;
+  border-radius: var(--radius-xl);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+}
+.fd-skel-kpi,
+.fd-skel-bar,
+.fd-skel-panel {
+  animation: fdPulse 1.4s ease-in-out infinite;
+}
+@keyframes fdPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+/* ============================================================================
+ * Responsivo — recompõe, não encolhe.
+ * ========================================================================== */
+
+/* Tablet: os filtros ganham largura total e as datas dividem a linha. */
+@media (max-width: 900px) {
+  .fd-filters { gap: 16px 20px; }
+  .fd-filter-group--dates { flex: 1 1 100%; }
+  .fd-date { flex: 1; min-width: 0; }
+  .fd-date input { width: 100%; }
+  .fd-empty {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}
+
+@media (max-width: 640px) {
+  .fd-filters { padding: 14px; }
+  /* Os segmentados viram grade: 4 presets e 3 métricas não cabem numa linha
+   * de 360px, e reduzir a fonte deixaria o alvo de toque abaixo do mínimo. */
+  .fd-presets,
+  .fd-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+  .fd-preset,
+  .fd-metric {
+    border-right: 1px solid var(--c-border);
+    border-bottom: 1px solid var(--c-border);
+    padding: 10px 12px;
+    min-height: 44px;      /* alvo de toque */
+  }
+  .fd-preset:nth-child(2n),
+  .fd-metric:nth-child(2n) { border-right: none; }
+  .fd-preset:nth-last-child(-n + 2),
+  .fd-metric:last-child { border-bottom: none; }
+  /* 3 métricas em grade 2×2: a terceira ocupa a linha inteira. */
+  .fd-metric:last-child { grid-column: 1 / -1; border-right: none; }
+
+  /* 4 KPIs em linha não cabem em 390px: "dias com falha" quebrava em 3 linhas
+   * e "23h12" era cortado pela borda do card. Grade 2×2 dá largura pra cifra
+   * e pro rótulo em uma linha. Os separadores verticais somem — na grade eles
+   * dividiriam a coisa errada. */
+  .fd-kpis {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px 16px;
+  }
+  .fd-kpi-sep { display: none; }
+  .fd-kpi dd { font-size: 26px; }
+  .fd-kpi dt { font-size: 10px; }
+  .fd-kpi-card { padding: 16px 14px; }
+
+  .fd-card { padding: 16px 14px 14px; }
+  .fd-card-head { flex-direction: column; align-items: stretch; }
+  .fd-table-toggle { align-self: flex-start; }
+  .fd-chart { height: 260px; }
+  .fd-pattern-row { grid-template-columns: 66px 1fr auto; gap: 10px; }
+  .fd-pattern-label { font-size: 12px; }
+  .fd-empty { padding: 24px 18px; }
+  .fd-skel-chart { height: 260px; padding: 16px 14px; }
+  .fd-skel-kpis { gap: 14px; padding: 16px 14px; }
+}
+
+/* Touch: alvos maiores nos botões da tabela. */
+@media (pointer: coarse) {
+  .fd-table-open { min-height: 36px; padding: 8px 12px; }
+  .fd-table tbody th,
+  .fd-table tbody td { padding: 11px 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fd--refetching { transition: none; }
+  .fd-pattern-fill { animation: none; }
+  .fd-skel-kpi,
+  .fd-skel-bar,
+  .fd-skel-panel { animation: none; }
+  .fd-preset,
+  .fd-metric,
+  .fd-table-toggle,
+  .fd-table-open,
+  .fd-date input { transition: none; }
+}
+
+/* Impressão: o gráfico é a peça; filtros e ações não. */
+@media print {
+  .fd-filters,
+  .fd-table-toggle,
+  .fd-table-open,
+  .fd-chart-foot { display: none; }
+  .fd-card,
+  .fd-empty { box-shadow: none; break-inside: avoid; }
+  .fd--refetching { opacity: 1; }
+}

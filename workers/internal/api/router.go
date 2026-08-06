@@ -41,6 +41,7 @@ type Deps struct {
 	AdminMonitoring       *handlers.AdminMonitoringHandler
 	StationFailures       *handlers.StationFailuresHandler
 	CampaignFailures      *handlers.CampaignFailuresHandler
+	FailuresDaily         *handlers.FailuresDailyHandler
 	Webhooks              *handlers.WebhooksHandler
 	MaterialTypes         *handlers.MaterialTypesHandler
 	Materials             *handlers.MaterialsHandler
@@ -509,6 +510,17 @@ func NewRouter(d Deps) http.Handler {
 						r.Use(auth.RequireRole("admin"))
 						r.Get("/admin/campaign-failures", d.CampaignFailures.GetList)
 						r.Get("/admin/campaign-failures/{id}", d.CampaignFailures.GetByID)
+					})
+				}
+
+				// /admin/failures-daily — série temporal por dia das MESMAS
+				// falhas das duas rotas acima, pra responder "qual parte do mês
+				// quebra mais". Aba "Por dia" da mesma página. Docs em
+				// docs/features/admin-failures-daily.md.
+				if d.FailuresDaily != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/admin/failures-daily", d.FailuresDaily.Get)
 					})
 				}
 

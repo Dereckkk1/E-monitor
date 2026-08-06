@@ -64,3 +64,6 @@ docs/*.md.superpowers/
 dash campanha e multi campanha.txt
 # Visual brainstorming companion (superpowers)
 .superpowers/
+
+# RFC (portfolio Catolica SC) - HTML/PDF/prints gerados, nao versionados
+docs/RFC/

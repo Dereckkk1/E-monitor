@@ -82,6 +82,7 @@ docs/
 | [admin-system-overview.md](features/admin-system-overview.md) | Painel admin com health de toda a stack (infra + workers + streams + pipeline + atenção) |
 | [admin-monitoring.md](features/admin-monitoring.md) | Painel `/admin/monitoring` — telemetria HTTP (rotas/p95/erros/slow), identidades (IP × usuário com risco), Web Vitals, bloqueio de IP/usuário |
 | [admin-monitoring-user-journey.md](features/admin-monitoring-user-journey.md) | Aba `/admin/monitoring` → Jornada — fluxo de um usuário (telas/ações/horários por sessão), tradução rota→ação, sem backend novo |
+| [admin-failures-daily.md](features/admin-failures-daily.md) | Aba "Por dia" de `/admin/station-failures` — série temporal de falhas por dia + padrão por terço do mês e por dia da semana; 3 métricas (emissoras/veiculações perdidas/tempo fora); clique na barra abre o dia em "Por emissora" |
 | [login-page.md](features/login-page.md) | Tela `/login` com hero cinematográfico (globo + pulsos rosa) + form claro |
 | [not-found-page.md](features/not-found-page.md) | Tela 404 fullscreen com cena Three.js (constellation map + torre wireframe + ondas de glitch) |
 | [campaign-reports.md](features/campaign-reports.md) | Menu unificado de relatórios (CSV consolidado/detalhado + PDF com logo E-monitor) em /campaigns, /detections, /reports/airtime |
