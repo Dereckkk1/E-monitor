@@ -49,6 +49,12 @@ type WorkerConfig struct {
 	// false-positive defense — random audio cannot sustain delta-aligned hits.
 	MinTemporalCoverage float64
 	ConfirmTimeout      time.Duration // max detecting window (e.g. 30s)
+	// ShortSingleWindowFactor > 0 liga a confirmação em UMA janela para
+	// material <10s cujo UniqueScore atinja factor × minScore. Material curto
+	// tem 1-2 janelas úteis só, e exigir duas perde a maioria dos alinhamentos
+	// em stream comprimido (incidente 2026-07-24). 0 = desligado.
+	// docs/features/short-material-single-window.md
+	ShortSingleWindowFactor float64
 	// SegmentsOutputPattern is the absolute strftime path passed to ffmpeg's
 	// segment muxer; ffmpeg writes ADTS-AAC evidence files there at
 	// SegmentDuration cadence. The directory must already exist when the
@@ -278,6 +284,9 @@ func (w *Worker) Run(ctx context.Context) {
 				cooldown,
 				w.log,
 			)
+			if w.cfg.ShortSingleWindowFactor > 0 {
+				machines[id].EnableShortSingleWindow(w.cfg.ShortSingleWindowFactor)
+			}
 		}
 
 		// 4. Run PCM reader + matcher in this goroutine. The AAC stream is

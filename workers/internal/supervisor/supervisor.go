@@ -78,6 +78,11 @@ type Supervisor struct {
 	// dedup §18.2.2 escolher o corte de MAIOR cobertura em vez do mais longo
 	// (audit A2). OFF = comportamento inalterado.
 	disambigConfidenceAware bool
+
+	// shortSingleWindowFactor (env SHORT_SINGLE_WINDOW_FACTOR, default 0 =
+	// OFF) propaga pros workers a regra de confirmação em janela única para
+	// material <10s. Ver docs/features/short-material-single-window.md.
+	shortSingleWindowFactor float64
 	log                     *zap.Logger
 
 	// segmentsRoot is the directory under which each station gets a
@@ -117,6 +122,15 @@ const dedupBufferRetention = 60 * time.Second
 // subdir for ffmpeg's segment muxer to write evidence into. The directory
 // must exist and be writable; the supervisor creates per-station subdirs on
 // demand.
+// SetShortSingleWindowFactor liga (factor > 0) a confirmação em janela única
+// para material <10s nos workers criados daqui pra frente. Chamar no boot,
+// antes de subir os workers. Workers já rodando só pegam a mudança no próximo
+// restart — a flag não é hot-reload de propósito: mudar o critério de
+// confirmação no meio de uma janela de detecção deixaria estado inconsistente.
+func (s *Supervisor) SetShortSingleWindowFactor(factor float64) {
+	s.shortSingleWindowFactor = factor
+}
+
 func New(
 	db *pgxpool.Pool,
 	store *index.Store,
@@ -524,6 +538,9 @@ func (s *Supervisor) startStationWorker(ctx context.Context, stationID uuid.UUID
 		MinScoreCoverage:      0.02,
 		MinTemporalCoverage:   0.15,
 		ConfirmTimeout:        30 * time.Second,
+		// Material <10s: confirma em 1 janela se o score for factor× o piso.
+		// 0 = desligado. Ver SetShortSingleWindowFactor.
+		ShortSingleWindowFactor: s.shortSingleWindowFactor,
 		SegmentsOutputPattern: segmentsPattern,
 		HeartbeatFn:           heartbeatFn,
 		OnStreamUp:            onStreamUp,

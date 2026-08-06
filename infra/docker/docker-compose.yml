@@ -227,6 +227,14 @@ services:
       # DISAMBIG_BY_COVERAGE=true (§4e). O passthrough existe só pra que a env
       # não seja silenciosamente ignorada em testes futuros.
       DISAMBIG_CONFIDENCE_AWARE: ${DISAMBIG_CONFIDENCE_AWARE:-false}
+      # Material <10s (pulso/vinheta) confirma com UMA janela se o UniqueScore
+      # atingir FATOR × min_hashes da emissora. Vazio/0 = desligado (regra
+      # antiga de 2 janelas). 2.5 é o default recomendado: com min_hashes=19 o
+      # piso fica em ~48, contra ruído máximo medido de 12-13 — e o audit §9.9
+      # segue re-checando o clipe antes de publicar.
+      # Recall medido nas censuras reais: 12-37% → 75-87% dos alinhamentos.
+      # docs/features/short-material-single-window.md
+      SHORT_SINGLE_WINDOW_FACTOR: ${SHORT_SINGLE_WINDOW_FACTOR:-}
       # F-119 multi-atribuição: uma tocada conta p/ todas as campanhas que rodam o
       # mesmo áudio na emissora. OFF = 1:1 (idêntico ao pré-F-119). Liga via .env +
       # recreate --no-deps api. docs/features/multi-attribution.md

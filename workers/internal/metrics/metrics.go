@@ -226,6 +226,17 @@ var (
 		Help: "Detections affected by §18.2.2 version disambiguation, by action.",
 	}, []string{"action"}) // suppressed | suppressed_suspect | retracted | reattributed_by_coverage | restored_on_reject | reattributed_on_reject | duplicate_cofire_retracted
 
+	// MatchShortSingleWindow conta confirmações que só aconteceram por causa
+	// da regra de janela única para material curto (<10s). É o ganho bruto da
+	// feature: sem ela, cada uma destas seria uma veiculação perdida sem row
+	// nem log. Cruzar com radiocheck_audit_attempts_total{result="rejected"}
+	// na sombra — se as rejeições subirem junto, o piso está baixo demais.
+	// docs/features/short-material-single-window.md
+	MatchShortSingleWindow = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "radiocheck_match_short_single_window_total",
+		Help: "Detections confirmed by the short-material single-window rule.",
+	})
+
 	// ── §9.9 Audit de Evidência Pré-Persist ────────────────────────────
 	// AuditAttempts counts each audit run by outcome:
 	//   passed   — saved clip matches master, detection is kept
@@ -336,7 +347,7 @@ func init() {
 		StationThreshold, StationThresholdRefreshes,
 		WorkerCommercials, WorkerReconcileRuns, WorkerConnectBackoff,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
-		MatchDisambiguation,
+		MatchDisambiguation, MatchShortSingleWindow,
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,
 		NotificationsSentTotal, NotificationsFailedTotal, NotificationsRecipients,
 		FingerprintStuck, FingerprintRetriesTotal,
