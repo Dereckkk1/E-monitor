@@ -67,3 +67,10 @@ dash campanha e multi campanha.txt
 
 # RFC (portfolio Catolica SC) - HTML/PDF/prints gerados, nao versionados
 docs/RFC/
+
+# Skills clonadas de fora: a pasta e' um repo git proprio, entao um `git add`
+# a grava como GITLINK de submodulo (modo 160000) em vez de adicionar os
+# arquivos. Sem entrada correspondente no .gitmodules, o clone recursivo do
+# Cloudflare Pages morre com "No url found for submodule path" e o deploy do
+# frontend inteiro falha. Aconteceu no commit 38bd125 (06/08/2026).
+Anthropic-Cybersecurity-Skills/
