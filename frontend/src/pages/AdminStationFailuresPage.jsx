@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useStationFailures, useCampaignFailures } from '../api/hooks'
 import StationFailureCard from '../components/StationFailureCard'
 import CampaignFailureCard from '../components/CampaignFailureCard'
 import CampaignFailureRow from '../components/CampaignFailureRow'
 import CampaignFailureDrawer from '../components/CampaignFailureDrawer'
+import FailuresDailyView from '../components/FailuresDailyView'
 import './AdminStationFailuresPage.css'
 
 const MIN_DOWN_OPTIONS = [
@@ -426,8 +428,8 @@ export default function AdminStationFailuresPage() {
 
   // Toggle viewMode + sub-tab + drill-in state
   const [viewMode, setViewMode] = useState(
-    qpView === 'by_campaign' ? 'by_campaign' : 'by_station'
-  ) // 'by_station' | 'by_campaign'
+    qpView === 'by_campaign' ? 'by_campaign' : qpView === 'by_day' ? 'by_day' : 'by_station'
+  ) // 'by_station' | 'by_campaign' | 'by_day'
   const [subTab, setSubTab] = useState('daily')          // 'daily' | 'historical'
   const [historyPage, setHistoryPage] = useState(1)
   const [drillCampaignId, setDrillCampaignId] = useState(qpCampaign || null)
@@ -441,21 +443,36 @@ export default function AdminStationFailuresPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const isByStation = viewMode === 'by_station'
+  const isByStation  = viewMode === 'by_station'
+  const isByCampaign = viewMode === 'by_campaign'
+  const isByDay      = viewMode === 'by_day'
+
+  const queryClient = useQueryClient()
 
   const stationQ = useStationFailures({
     date, minDownSeconds: minDown,
+    enabled: isByStation,
   })
   const campaignQ = useCampaignFailures({
     mode: subTab === 'historical' ? 'historical' : 'by_date',
     date: subTab === 'daily' ? date : undefined,
     page: historyPage,
     pageSize: 50,
+    enabled: isByCampaign,
   })
 
-  const { isLoading, isFetching, refetch, error } = isByStation
-    ? stationQ
-    : campaignQ
+  // A aba "Por dia" é dona da própria query (ela tem seu seletor de período),
+  // então o botão de atualizar do header invalida a chave em vez de chamar um
+  // refetch que a página não segura.
+  const activeQ = isByStation ? stationQ : campaignQ
+  const isFetching = isByDay
+    ? queryClient.isFetching({ queryKey: ['failures-daily'] }) > 0
+    : activeQ.isFetching
+  const refetch = isByDay
+    ? () => queryClient.invalidateQueries({ queryKey: ['failures-daily'] })
+    : activeQ.refetch
+  const isLoading = isByDay ? false : activeQ.isLoading
+  const error     = isByDay ? null  : activeQ.error
 
   // Station view derived
   const stations = stationQ.data?.stations ?? []
@@ -486,29 +503,41 @@ export default function AdminStationFailuresPage() {
           <div className="asf-title-stack">
             <div className="asf-title-line">
               <h1 className="asf-title">Falhas das emissoras</h1>
-              <span className="asf-date-pill" title={`${masthead.wday}, ${masthead.day} de ${masthead.month} de ${masthead.year}`}>
-                {fmtRelativeDate(date)}
-              </span>
+              {!isByDay && (
+                <span className="asf-date-pill" title={`${masthead.wday}, ${masthead.day} de ${masthead.month} de ${masthead.year}`}>
+                  {fmtRelativeDate(date)}
+                </span>
+              )}
             </div>
             <p className="asf-subtitle">
-              {masthead.wday}, {masthead.day} de {masthead.month} de {masthead.year} <span aria-hidden="true">·</span>{' '}
-              cruzamento de stream-down e slot perdido por dia
+              {isByDay ? (
+                <>Série diária <span aria-hidden="true">·</span> qual parte do mês concentra as falhas</>
+              ) : (
+                <>
+                  {masthead.wday}, {masthead.day} de {masthead.month} de {masthead.year} <span aria-hidden="true">·</span>{' '}
+                  cruzamento de stream-down e slot perdido por dia
+                </>
+              )}
             </p>
           </div>
         </div>
 
         <div className="asf-controls">
-          <label className="asf-field">
-            <span>Data</span>
-            <input
-              type="date"
-              value={date}
-              onChange={e => e.target.value && setDate(e.target.value)}
-              max={isoToday()}
-              min={isoMinusDays(90)}
-            />
-          </label>
-          {isByStation && (
+          {/* Em "Por dia" o período mora dentro da própria aba (range, não um
+              dia só) — dois seletores de data competindo confundiria. */}
+          {!isByDay && (
+            <label className="asf-field">
+              <span>Data</span>
+              <input
+                type="date"
+                value={date}
+                onChange={e => e.target.value && setDate(e.target.value)}
+                max={isoToday()}
+                min={isoMinusDays(90)}
+              />
+            </label>
+          )}
+          {(isByStation || isByDay) && (
             <label className="asf-field">
               <span>Severidade</span>
               <select value={minDown} onChange={e => setMinDown(Number(e.target.value))}>
@@ -556,7 +585,7 @@ export default function AdminStationFailuresPage() {
       )}
 
       {/* ── KPI strip (por campanha) ─────────────────────────────────── */}
-      {!isByStation && campaignQ.data?.summary && (
+      {isByCampaign && campaignQ.data?.summary && (
         <section className="asf-hero">
           <CampaignKpiStrip
             summary={campaignQ.data.summary}
@@ -565,7 +594,7 @@ export default function AdminStationFailuresPage() {
         </section>
       )}
 
-      {/* ── Toggle Por emissora / Por campanha ─────────────────────── */}
+      {/* ── Toggle Por emissora / Por campanha / Por dia ─────────────── */}
       <div className="asf-mode-toggle" role="tablist" aria-label="Modo de visualização">
         <button
           role="tab"
@@ -577,11 +606,19 @@ export default function AdminStationFailuresPage() {
         </button>
         <button
           role="tab"
-          aria-selected={!isByStation}
-          className={`asf-mode-btn ${!isByStation ? 'asf-mode-btn--active' : ''}`}
+          aria-selected={isByCampaign}
+          className={`asf-mode-btn ${isByCampaign ? 'asf-mode-btn--active' : ''}`}
           onClick={() => setViewMode('by_campaign')}
         >
           Por campanha
+        </button>
+        <button
+          role="tab"
+          aria-selected={isByDay}
+          className={`asf-mode-btn ${isByDay ? 'asf-mode-btn--active' : ''}`}
+          onClick={() => setViewMode('by_day')}
+        >
+          Por dia
         </button>
       </div>
 
@@ -608,8 +645,26 @@ export default function AdminStationFailuresPage() {
         </ol>
       )}
 
-      {/* ── Conteúdo: por campanha (novo) ──────────────────────────── */}
-      {!isByStation && (
+      {/* ── Conteúdo: por dia (série temporal) ─────────────────────── */}
+      {isByDay && (
+        <FailuresDailyView
+          minDownSeconds={minDown}
+          onPickDay={iso => {
+            setDate(iso)
+            setViewMode('by_station')
+            // O toggle fica no topo da página; sem isso o usuário clica numa
+            // barra no meio do gráfico e o card do dia abre fora da viewport.
+            window.scrollTo({
+              top: 0,
+              behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+                ? 'auto' : 'smooth',
+            })
+          }}
+        />
+      )}
+
+      {/* ── Conteúdo: por campanha ─────────────────────────────────── */}
+      {isByCampaign && (
         <>
           <div className="asf-subtabs" role="tablist" aria-label="Sub-modo">
             <button

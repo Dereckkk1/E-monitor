@@ -721,6 +721,29 @@
   }
 }
 
+@media (max-width: 560px) {
+  /* Três abas ("Por emissora / Por campanha / Por dia") não cabem numa linha
+   * de 360px. Vira grade de largura total em vez de espremer a fonte — o alvo
+   * de toque tem que continuar clicável. */
+  .asf-mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    align-self: stretch;
+  }
+  .asf-mode-btn {
+    padding: 11px 12px;
+    min-height: 44px;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .asf-mode-btn:nth-child(2n) { border-right: none; }
+  .asf-mode-btn:last-child {
+    grid-column: 1 / -1;
+    border-right: none;
+    border-bottom: none;
+  }
+}
+
 @media (max-width: 480px) {
   .asf-hero { padding: 16px; }
   .asf-title { font-size: 22px; }

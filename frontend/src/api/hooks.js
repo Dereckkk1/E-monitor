@@ -184,12 +184,13 @@ export function useCampaignsPaged({ q = '', competence = '', id = '', page = 1, 
 // Admin — emissoras que falharam num dado dia (default ontem). Cruza
 // stream-down events + daily_play_summary deficits no único endpoint
 // /admin/station-failures.
-export function useStationFailures({ date, minDownSeconds = 60 } = {}) {
+export function useStationFailures({ date, minDownSeconds = 60, enabled = true } = {}) {
   return useQuery({
     queryKey: ['station-failures', date, minDownSeconds],
     queryFn: () => api.get('/admin/station-failures', {
       params: { date, min_down_seconds: minDownSeconds },
     }).then(r => r.data),
+    enabled,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   })
@@ -200,7 +201,7 @@ export function useStationFailures({ date, minDownSeconds = 60 } = {}) {
 //   - 'by_date':    grade de cards por campanha, falhas no dia
 //   - 'historical': tabela paginada de campanhas com qualquer falha
 // Doc em docs/features/admin-campaign-failures.md.
-export function useCampaignFailures({ mode = 'by_date', date, page = 1, pageSize = 50 } = {}) {
+export function useCampaignFailures({ mode = 'by_date', date, page = 1, pageSize = 50, enabled = true } = {}) {
   const params = {}
   if (mode === 'historical') {
     params.mode = 'historical'
@@ -212,9 +213,28 @@ export function useCampaignFailures({ mode = 'by_date', date, page = 1, pageSize
   return useQuery({
     queryKey: ['campaign-failures', mode, date, page, pageSize],
     queryFn: () => api.get('/admin/campaign-failures', { params }).then(r => r.data),
+    enabled,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     keepPreviousData: true,
+  })
+}
+
+// Admin — aba "Por dia" da mesma página: série temporal de falhas por dia,
+// pra enxergar qual parte do mês concentra os problemas. Mesma definição de
+// falha das outras duas abas. Doc em docs/features/admin-failures-daily.md.
+export function useFailuresDaily({ from, to, minDownSeconds = 60, enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['failures-daily', from, to, minDownSeconds],
+    queryFn: () => api.get('/admin/failures-daily', {
+      params: { from, to, min_down_seconds: minDownSeconds },
+    }).then(r => r.data),
+    enabled: enabled && Boolean(from && to),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    // Segura o render anterior enquanto troca de período — sem isso o gráfico
+    // pisca pro skeleton a cada clique de preset e a página pula de altura.
+    placeholderData: (prev) => prev,
   })
 }
 

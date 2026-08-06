@@ -552,6 +552,10 @@ func main() {
 			Repo: catalog.NewCampaignFailures(pool),
 			Log:  logger,
 		},
+		FailuresDaily: &handlers.FailuresDailyHandler{
+			Repo: catalog.NewFailuresDaily(pool),
+			Log:  logger,
+		},
 		Notifications: &handlers.NotificationsHandler{
 			Repo: catalog.NewNotifications(pool),
 			Log:  logger,
