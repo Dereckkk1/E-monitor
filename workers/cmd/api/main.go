@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -280,6 +281,20 @@ func main() {
 
 	// Supervisor.
 	sup := supervisor.New(pool, indexStore, nc, evidSvc, campaigns, stations, commercials, matsRepo, healthEvents, disambigConfidenceAware, cfg.SegmentsPath, logger)
+
+	// Material <10s (pulso/vinheta) tem 1-2 janelas de análise úteis só, e a
+	// state machine confirma na SEGUNDA janela qualificada. Em stream
+	// comprimido as janelas parciais desabam abaixo do gate, sobra uma, e a
+	// veiculação some sem row nem log. Varredura de fase sobre as censuras
+	// reais: exigindo duas janelas salva 12-37% dos alinhamentos; com esta
+	// regra, 75-87%. O fator multiplica o min_hashes calibrado da emissora
+	// (2.5 × 19 ≈ 48, contra ruído máximo medido de 12-13).
+	// 0/ausente = desligado. docs/features/short-material-single-window.md
+	if f, err := strconv.ParseFloat(os.Getenv("SHORT_SINGLE_WINDOW_FACTOR"), 64); err == nil && f > 0 {
+		sup.SetShortSingleWindowFactor(f)
+		logger.Info("confirmação em janela única para material <10s ENABLED",
+			zap.Float64("factor", f))
+	}
 
 	// §18.2.2 — subscribe to detections.pending so the supervisor can apply
 	// version disambiguation before re-emitting on detections.confirmed.

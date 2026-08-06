@@ -78,6 +78,79 @@ type StateMachine struct {
 	// cooldownReairSeen evita logar a mesma re-veiculação suspeita várias
 	// vezes dentro de um único período de cooldown (a métrica conta todas).
 	cooldownReairSeen bool
+
+	// shortSingleWindowFactor > 0 liga a confirmação em UMA janela para
+	// material curto (< shortMaterialMaxSeconds). 0 = desligado, que é o
+	// comportamento histórico. Ver EnableShortSingleWindow.
+	shortSingleWindowFactor float64
+}
+
+// shortMaterialMaxSeconds — acima disto o material tem janelas de análise de
+// sobra e a regra de janela única não se aplica. Alinhado com o
+// MinShareableDurationSeconds do sharing: <10s é a classe estruturalmente
+// frágil (fora da defesa de shared-hash e com 1-2 janelas úteis só).
+const shortMaterialMaxSeconds = 10.0
+
+// EnableShortSingleWindow liga a confirmação em UMA janela para material curto.
+//
+// Motivação (incidente 2026-07-24): um material de 5,7s tem no máximo 1-2
+// janelas úteis (janela 4s, hop 2s) e a state machine só confirma na SEGUNDA
+// janela qualificada. Em stream comprimido as janelas parciais desabam abaixo
+// do gate, sobra uma, e a veiculação some sem deixar row nem log. Varredura de
+// fase sobre as censuras reais: a regra de 2 janelas salva 12-37% dos
+// alinhamentos possíveis; com esta regra, 75-87%.
+//
+// factor é o multiplicador sobre minScore que a janela única precisa atingir.
+// Com minScore=19 (calibrado em prod) e factor 2.5 o piso fica em 48, contra
+// um ruído máximo medido de 12-13 — ~3,7× de margem. O audit §9.9 continua
+// como segunda barreira: re-checa o clipe contra o master antes de publicar.
+func (sm *StateMachine) EnableShortSingleWindow(factor float64) {
+	sm.shortSingleWindowFactor = factor
+}
+
+// confirm monta a ConfirmedDetection, arma o cooldown e zera o estado. `path`
+// identifica qual caminho confirmou (two_windows | short_single_window) e serve
+// pra separar os dois na sombra do rollout.
+func (sm *StateMachine) confirm(result MatchResult, now time.Time, path string) *ConfirmedDetection {
+	confidence := sm.coverage.Coverage()
+	detection := &ConfirmedDetection{
+		CommercialShortID: sm.commercialShortID,
+		StationID:         sm.stationID,
+		DetectedAt:        now,
+		FirstMatchAt:      sm.firstMatchAt,
+		OffsetFrames:      result.OffsetFrames,
+		FirstOffsetFrames: sm.firstOffsetFrames,
+		Confidence:        confidence,
+		TemporalCoverage:  confidence,
+		HashCount:         sm.cumulativeHashes,
+		VariantID:         sm.lastVariantID,
+		RateID:            sm.lastRateID,
+	}
+	sm.log.Info("detection confirmed",
+		zap.String("stationID", sm.stationID),
+		zap.Int32("commercialShortID", sm.commercialShortID),
+		zap.Float64("confidence", confidence),
+		zap.Int("hashCount", sm.cumulativeHashes),
+		zap.String("path", path),
+	)
+	sm.coverage.Reset()
+	sm.detectingWindows = 0
+	sm.cumulativeHashes = 0
+	sm.state = StateCooldown
+	sm.cooldownUntil = now.Add(sm.cooldownDuration)
+	sm.cooldownReairSeen = false
+	return detection
+}
+
+// shortSingleWindowConfirms decide se esta única janela já basta para confirmar.
+func (sm *StateMachine) shortSingleWindowConfirms(uniqueScore int) bool {
+	if sm.shortSingleWindowFactor <= 0 {
+		return false
+	}
+	if float64(sm.totalFrames)/framesPerSecond >= shortMaterialMaxSeconds {
+		return false
+	}
+	return float64(uniqueScore) >= sm.shortSingleWindowFactor*float64(sm.minScore)
 }
 
 // NewStateMachine creates a new StateMachine for tracking one commercial on one station.
@@ -156,6 +229,15 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 				zap.Int("uniqueScore", result.UniqueScore),
 				zap.Int("offsetFrames", result.OffsetFrames),
 			)
+
+			// Material curto com score muito acima do piso: esta janela já é
+			// evidência suficiente. Sem isto a tocada depende de uma SEGUNDA
+			// janela qualificada que, em stream comprimido, frequentemente não
+			// existe — e a veiculação se perde sem row nem log.
+			if sm.shortSingleWindowConfirms(result.UniqueScore) {
+				metrics.MatchShortSingleWindow.Inc()
+				return sm.confirm(result, now, "short_single_window")
+			}
 		}
 
 	case StateDetecting:
@@ -166,33 +248,7 @@ func (sm *StateMachine) Update(result MatchResult, now time.Time) *ConfirmedDete
 			sm.lastRateID = result.RateID
 			sm.coverage.Add(result.OffsetFrames, now)
 			if sm.coverage.Coverage() >= sm.minTemporalCoverage {
-				confidence := sm.coverage.Coverage()
-				detection := &ConfirmedDetection{
-					CommercialShortID: sm.commercialShortID,
-					StationID:         sm.stationID,
-					DetectedAt:        now,
-					FirstMatchAt:      sm.firstMatchAt,
-					OffsetFrames:      result.OffsetFrames,
-					FirstOffsetFrames: sm.firstOffsetFrames,
-					Confidence:        confidence,
-					TemporalCoverage:  confidence,
-					HashCount:         sm.cumulativeHashes,
-					VariantID:         sm.lastVariantID,
-					RateID:            sm.lastRateID,
-				}
-				sm.log.Info("detection confirmed",
-					zap.String("stationID", sm.stationID),
-					zap.Int32("commercialShortID", sm.commercialShortID),
-					zap.Float64("confidence", confidence),
-					zap.Int("hashCount", sm.cumulativeHashes),
-				)
-				sm.coverage.Reset()
-				sm.detectingWindows = 0
-				sm.cumulativeHashes = 0
-				sm.state = StateCooldown
-				sm.cooldownUntil = now.Add(sm.cooldownDuration)
-				sm.cooldownReairSeen = false
-				return detection
+				return sm.confirm(result, now, "two_windows")
 			}
 
 			// Transition to StateUncertain if coverage is in the ambiguous zone.
