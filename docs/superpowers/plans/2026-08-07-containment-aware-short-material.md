@@ -916,7 +916,12 @@ Em `workers/cmd/api/main.go`, logo **após** o bloco que faz `sup.SetShortSingle
 	}
 ```
 
-Adicionar `"radiocheck/internal/ingestor"` aos imports de `main.go` se ainda não estiver lá.
+`main.go` **não** importa `ingestor` hoje (verificado em 2026-08-07). Adicionar na lista de
+imports, em ordem alfabética entre `"radiocheck/internal/index"` e `"radiocheck/internal/match"`:
+
+```go
+	"radiocheck/internal/ingestor"
+```
 
 - [ ] **Step 2: Passthrough no compose**
 
