@@ -27,7 +27,11 @@ import { parseLocalDate, enumerateVisibleDays } from '../utils/dates'
  *      materialTitle: string,
  *      typeColor: string,
  *      ruleSummary: string | null,
- *      extraRules: number
+ *      extraRules: number,
+ *      outOfScope?: boolean   // linha que só existe por histórico: nenhum
+ *                             // material do tipo aponta mais para a emissora,
+ *                             // mas houve veiculação no período (ver
+ *                             // utils/gridRows.js). Renderiza um selo discreto.
  *    }>
  *  - cellData: Map<key, {expected, in_slot, deficit, bonus, out_slot, out_date, hasOverride}>
  *               where key = `${stationId}|${materialId}|${dateISO}`
@@ -267,6 +271,20 @@ export default function DistributionGrid({
                         fontStyle: 'italic',
                       }}>
                         · aguardando áudio
+                      </span>
+                    )}
+                    {row.outOfScope && (
+                      <span
+                        title="Nenhum material deste tipo aponta mais para esta emissora. As veiculações do período continuam sendo exibidas."
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          color: '#94a3b8',
+                          fontWeight: 500,
+                          fontStyle: 'italic',
+                        }}
+                      >
+                        · fora do escopo atual
                       </span>
                     )}
                   </div>

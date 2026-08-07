@@ -17,6 +17,7 @@ import AirtimePaginator from '../components/AirtimePaginator'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { buildGridReportModel } from '../utils/gridReport'
+import { buildGridRows } from '../utils/gridRows'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
   monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
@@ -679,19 +680,6 @@ export default function DetectionsPage() {
     [materialTypes]
   )
 
-  const typesInScopeByStation = useMemo(() => {
-    const m = new Map()
-    for (const cm of campaignMaterials) {
-      const mat = materialsById[cm.material_id]
-      if (!mat?.type_id) continue
-      for (const sid of cm.target_stations) {
-        if (!m.has(sid)) m.set(sid, new Set())
-        m.get(sid).add(mat.type_id)
-      }
-    }
-    return m
-  }, [campaignMaterials, materialsById])
-
   // Lookup dos materiais REAIS por (emissora × tipo) — a grade só conhece o
   // tipo (daily_play_summary agrega por type_id), então resolvemos o nome do
   // material aqui pra o relatório mostrar "Spot 30\" · #241 VERISURE Alarme 30s".
@@ -714,29 +702,15 @@ export default function DetectionsPage() {
     return m
   }, [campaignMaterials, materialsById])
 
-  const rows = useMemo(() => {
-    const r = []
-    for (const [sid, typeSet] of typesInScopeByStation.entries()) {
-      for (const tid of typeSet) {
-        const type = typeById[tid]
-        if (!type) continue
-        const matching = distributionRules.filter(rule =>
-          rule.type_id === tid && rule.station_ids.includes(sid))
-        const first = matching[0]
-        r.push({
-          stationId: sid,
-          materialId: tid,
-          materialTitle: type.name,
-          typeColor: type.color ?? '#94a3b8',
-          ruleSummary: first
-            ? `${first.plays_per_day}×/dia ${first.time_start}–${first.time_end}`
-            : null,
-          extraRules: Math.max(0, matching.length - 1),
-        })
-      }
-    }
-    return r
-  }, [typesInScopeByStation, typeById, distributionRules])
+  // Linhas = escopo atual (campaign_materials × target_stations) ∪ pares
+  // (emissora, tipo) com veiculação no período. A união é o que impede o
+  // histórico de sumir quando o operador tira a emissora do target_stations de
+  // um material: o escopo diz o que se monitora daqui pra frente, não reescreve
+  // o que já tocou. Regra e testes em utils/gridRows.js.
+  const rows = useMemo(() => buildGridRows({
+    campaignMaterials, materialsById, summary: rangedSummary,
+    typeById, distributionRules,
+  }), [campaignMaterials, materialsById, rangedSummary, typeById, distributionRules])
 
   const cellData = useMemo(() => {
     const m = new Map()

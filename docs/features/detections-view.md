@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-08
+ultima-verificacao: 2026-08-07
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
@@ -9,6 +9,7 @@ codigo-relacionado:
   - frontend/src/components/CampaignReportsMenu.jsx
   - frontend/src/utils/dates.js
   - frontend/src/utils/gridReport.js
+  - frontend/src/utils/gridRows.js
   - workers/internal/catalog/daily_summary.go
   - migrations/0018_detections_categorization.up.sql
 ---
@@ -23,6 +24,58 @@ Documenta a `/detections` refatorada pelo Plano 3.
 ## O que mudou
 
 A `/detections` antes era um calendário station × day com hits flat. Não comparava com o plano da campanha. Agora é uma grade station × material × day idêntica à etapa 4 do wizard, alimentada pela view `daily_play_summary`.
+
+## Quais linhas a grade mostra (escopo × histórico)
+
+A grade agrega por **tipo**, não por material: `daily_play_summary` devolve
+(campaign, `type_id`, `station_id`, `for_date`), então uma linha é "Spot 30\" na
+Rádio X" e pode ter N materiais por trás.
+
+As linhas saem da **união** de três fontes, nesta precedência
+([`utils/gridRows.js`](../../frontend/src/utils/gridRows.js)):
+
+| Origem | O que é | Marca |
+|--------|---------|-------|
+| **Escopo atual** | `campaign_materials` × `target_stations` — o que a campanha monitora hoje | linha normal |
+| **Plano** | par (emissora, tipo) coberto por uma `distribution_rule`, mesmo sem material vinculado | `ghost` → selo *"aguardando áudio"* |
+| **Histórico** | par com veiculação no período, lido do summary | `outOfScope` → selo *"fora do escopo atual"* |
+
+Material vence regra, regra vence histórico. É a mesma precedência do step 4 do
+wizard (`DistributionStep`, spec `2026-05-25-distribution-without-materials` §4.4),
+que já unia escopo com regras — a `/detections` é que não unia com nada.
+
+Linha só-histórica tem `expected = 0`, então as tocadas aparecem como bônus/órfã
+— a leitura honesta: tocou, mas hoje não há plano ali.
+
+**Por que a união existe (corrigido em 2026-08-07).** O escopo é mutável e não
+versionado no tempo. Quando o operador tirava a emissora do `target_stations` de
+um material (em `/campaigns/:id/edit` → materiais), a linha inteira sumia da
+grade **levando junto o histórico E o déficit dela** — e o mesmo buraco aparecia
+no CSV/PDF, que espelham `filteredRows`.
+
+O efeito prático era perverso nos dois sentidos: o material parecia nunca ter
+tocado, **e a campanha parecia melhorar** — as falhas sumiam da tela junto com a
+linha. O backend nunca deixou de contá-las: `daily_play_summary_for`
+([0052](../../migrations/0052_daily_play_summary_fn.up.sql)) vai por
+`detection_campaigns → detections → materials` e por `distribution_rules`, e
+**não olha `campaign_materials` em momento nenhum**. Por isso `/detections`
+divergia de `/admin/station-failures`, do sininho e dos emails de alerta, que
+leem a mesma função. As células chegavam no browser dentro do `cellData` e eram
+descartadas por não existir linha onde pendurá-las.
+
+A regra é: **`target_stations` governa o que o worker monitora daqui pra frente;
+não reescreve nem o que já tocou nem o que estava planejado.** Qualquer
+contagem/eixo novo derivado de `campaign_materials` precisa respeitar isso.
+
+Par sem material, sem regra e sem tocada continua não gerando linha.
+
+**Ainda acoplado ao escopo (não corrigido aqui):** `CreateManual`
+([detections.go](../../workers/internal/catalog/detections.go)) rejeita
+veiculação manual quando a emissora não está no `target_stations` do material.
+Ou seja, dá pra **ver** o histórico de uma linha fora de escopo, mas não dá pra
+**inserir** manual nela. A correção de fundo — transformar o vínculo num flag
+ativo/inativo que só tira o hash do índice, preservando histórico, atribuição e
+inserção manual — está em aberto.
 
 ## Cores
 
