@@ -48,10 +48,11 @@
 \set ON_ERROR_STOP on
 
 -- ▼▼▼ AJUSTE AQUI ▼▼▼ (datas locais, America/Sao_Paulo; to_date é inclusivo)
--- Janela = mês passado + o anterior (junho e julho/2026). Meses fechados: agosto
--- em curso ficaria de fora do denominador de propósito — manual de tocada
--- recente ainda não foi digitada, e isso inflaria a assertividade.
-\set from_date '2026-06-01'
+-- Janela = mês passado (julho/2026). Junho ficou de fora de propósito: o sistema
+-- ainda estava cru, e misturar os dois meses puxa o número pra baixo por causa
+-- de problema já resolvido. Agosto também fica fora — mês em curso ainda não
+-- teve as manuais digitadas, o que inflaria a assertividade pro outro lado.
+\set from_date '2026-07-01'
 \set to_date   '2026-07-31'
 -- folga em segundos aplicada nas duas pontas da janela de down (tolera o
 -- intervalo entre o stream cair de fato e o worker registrar o evento)
@@ -290,6 +291,42 @@ JOIN campaigns c ON c.id = m.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
 WHERE m.miss_nosso > 0
 ORDER BY m.miss_nosso DESC, c.name
+LIMIT 20;
+
+\echo ''
+\echo '===== [E2] TOP 20 MATERIAIS POR MISS NOSSO ================================='
+\echo '(mesma unidade da query ad-hoc por material: da pra conferir linha a linha)'
+SELECT COALESCE(mm.short_id, cc.short_id)                              AS short_id,
+       COALESCE(mm.title, cc.title, '(removido)')                      AS material,
+       COALESCE(a.auto, 0)                                             AS auto,
+       m.miss_nosso,
+       m.x_dup                                                         AS redigitada,
+       COALESCE(m.manual_total, 0)                                     AS manual_total,
+       ROUND(100.0 * COALESCE(a.auto, 0)
+             / NULLIF(COALESCE(a.auto, 0) + m.miss_nosso, 0), 2)       AS "assert %"
+FROM (
+  SELECT commercial_id,
+         COUNT(*) FILTER (WHERE bucket = 'miss_nosso')        AS miss_nosso,
+         COUNT(*) FILTER (WHERE bucket = 'duplicata_de_auto') AS x_dup,
+         COUNT(*)                                             AS manual_total
+  FROM t_manual GROUP BY 1
+) m
+LEFT JOIN (
+  SELECT dc.commercial_id, COUNT(*) AS auto
+  FROM detection_campaigns dc
+  JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+  CROSS JOIN t_win w
+  WHERE dc.detected_at >= w.ts_from AND dc.detected_at < w.ts_to
+    AND d.detected_at  >= w.ts_from AND d.detected_at  < w.ts_to
+    AND d.manual_at IS NULL
+    AND d.retracted_at IS NULL AND d.ignored_at IS NULL
+    AND d.evidence_status <> 'audit_rejected' AND d.evidence_status <> 'ambiguous'
+  GROUP BY 1
+) a ON a.commercial_id = m.commercial_id
+LEFT JOIN materials   mm ON mm.id = m.commercial_id
+LEFT JOIN commercials cc ON cc.id = m.commercial_id
+WHERE m.miss_nosso > 0
+ORDER BY m.miss_nosso DESC
 LIMIT 20;
 
 \echo ''
