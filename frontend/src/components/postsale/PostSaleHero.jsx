@@ -86,8 +86,6 @@ export default function PostSaleHero({ clientName, clientLogo, periodLabel }) {
           <p className="ps-hero-hint">Relatório de performance · {periodLabel}</p>
         )}
       </div>
-
-      <div className="ps-hero-fade" aria-hidden="true" />
     </header>
   )
 }

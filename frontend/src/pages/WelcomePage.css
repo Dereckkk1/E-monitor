@@ -88,20 +88,6 @@
     linear-gradient(105deg, rgba(2, 0, 26, 0.94) 0%, rgba(2, 0, 26, 0.8) 44%, rgba(2, 0, 26, 0.4) 100%);
 }
 
-.wel-hero-fade {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 64px;
-  background: linear-gradient(
-    to bottom,
-    rgba(248, 250, 252, 0) 0%,
-    rgba(248, 250, 252, 0.28) 58%,
-    var(--c-bg) 100%
-  );
-  z-index: 0;
-  pointer-events: none;
-}
-
 .wel-hero-inner { position: relative; z-index: 1; }
 
 /* ── Lockup de marca (E-monitor × cliente) ──────────────────────────── */
