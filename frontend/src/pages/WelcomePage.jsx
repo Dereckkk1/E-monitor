@@ -162,8 +162,6 @@ function Hero({ name, clients, isClient }) {
           Três passos rápidos e você está dentro.
         </p>
       </div>
-
-      <div className="wel-hero-fade" aria-hidden="true" />
     </header>
   )
 }
