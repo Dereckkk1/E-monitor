@@ -154,14 +154,51 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// maxFinancialsIDs caps ?ids= so a caller can't turn the recorte into a
+// full scan by pasting thousands of uuids. 200 = o teto de page_size de
+// /campaigns, então nenhuma tela legítima esbarra nele.
+const maxFinancialsIDs = 200
+
 // Financials returns the per-campaign aggregate of investimento + total
 // inserções, usado pelo badge de CPM em /campaigns. Calculado em uma query
 // só (CTE) pra evitar N+1 chamadas no frontend.
+//
+// ?ids=<uuid>,<uuid>,… recorta o agregado às campanhas pedidas — a PÁGINA
+// atual da listagem, tipicamente 12. É o filtro que faz a rota ser barata
+// (ver FinancialsByCampaign: só ele atravessa a view daily_play_summary).
+// Sem o parâmetro o comportamento é o antigo: todas as campanhas do escopo.
+//
 // Viewer scope: filtra pela carteira de clientes do JWT para evitar vazamento
-// cross-client.
+// cross-client. O ?ids= é INTERSEÇÃO com a carteira, nunca um bypass — pedir
+// o id de uma campanha de outro cliente devolve zero linhas.
 func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
 	scope := auth.ClientScopesFromContext(r.Context())
-	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope, todaySaoPaulo())
+
+	var campaignIDs []uuid.UUID
+	if raw := r.URL.Query().Get("ids"); raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) > maxFinancialsIDs {
+			http.Error(w, "too many ids", http.StatusBadRequest)
+			return
+		}
+		// Slice não-nil mesmo se todos os pedaços forem vazios: "?ids=" com
+		// lixo é "nenhuma campanha", não "todas".
+		campaignIDs = make([]uuid.UUID, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			id, err := uuid.Parse(p)
+			if err != nil {
+				http.Error(w, "invalid ids", http.StatusBadRequest)
+				return
+			}
+			campaignIDs = append(campaignIDs, id)
+		}
+	}
+
+	out, err := h.Repo.FinancialsByCampaign(r.Context(), scope, campaignIDs, todaySaoPaulo())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

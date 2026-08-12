@@ -411,11 +411,19 @@ Sugestões do code-review do Item G (entrega parcial mergeada como `worktree-age
 Itens deixados de fora do escopo da branch `perf/fase1-config` de propósito. Contexto
 completo em [docs/superpowers/plans/2026-07-17-otimizacoes-performance.md](../superpowers/plans/2026-07-17-otimizacoes-performance.md).
 
-- **F-PERF-01 — Cache RAM/Redis dos endpoints quentes.** `/campaigns/financials`,
-  `/management-overview`, `/admin/notifications` são polled e caros. Cachear com TTL 30-60s
-  (padrão `reqmetrics.BlockList`, ou usar o Redis que hoje está ocioso no stack). **É o
-  fix decidido para `/campaigns/financials`** (não migrar a query — ver decisão na Task 13
-  do plano). Se não for usar o Redis pra isso, removê-lo do compose (RAM + healthcheck à toa).
+- **F-PERF-01 — Cache RAM/Redis dos endpoints quentes.** `/management-overview` e
+  `/admin/notifications` são polled e caros. Cachear com TTL 30-60s (padrão
+  `reqmetrics.BlockList`, ou usar o Redis que hoje está ocioso no stack). Se não for usar
+  o Redis pra isso, removê-lo do compose (RAM + healthcheck à toa).
+
+  **`/campaigns/financials` saiu deste item.** A decisão de 2026-07-17 era "não migrar a
+  query, resolver por cache" (Task 13 do plano). Ela foi revista em 2026-08-11: a rota
+  passou a receber `?ids=` (as campanhas da página/dos cards) e a ler
+  `daily_play_summary_for(lo, hi, ids)` em vez da view. O motivo da revisão é que o cache
+  não resolvia a queixa real — a primeira carga (e toda invalidação por edição de pricing)
+  continuava pagando a base inteira, e o cliente esperava o mesmo que o admin apesar de ter
+  ordens de grandeza menos campanhas, porque o custo estava na view, não no filtro de
+  carteira. Cache continua sendo uma camada válida por cima, agora sobre uma query barata.
 - **F-PERF-02 — Métricas de saturação de pool + latência HTTP por rota no Prometheus.**
   Hoje `pgxpool.Stat()` não é exposto — saturação do pool (agora configurável via
   `DB_MAX_CONNS`) é invisível no Grafana. Pré-requisito pra dimensionar o pool medindo em

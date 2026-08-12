@@ -255,10 +255,27 @@ export function useCampaignFailureDetail(id) {
 // Retorna [{campaign_id, total_invested, total_insertions, total_audience}];
 // audience = Σ(inserções × stations.pmm). CPM = (invested / audience) × 1000,
 // calculado no frontend pra preservar precisão.
-export function useCampaignsFinancials() {
+//
+// `campaignIds` recorta o agregado às campanhas que a tela realmente mostra
+// (a página atual da listagem, os cards do dashboard). SEMPRE passe: sem o
+// recorte o backend agrega a base inteira — o custo é o mesmo pra admin e pra
+// cliente, porque o peso está na view daily_play_summary, não no filtro de
+// carteira. Omitir (undefined) mantém o comportamento antigo de "todas".
+//
+// A key é ordenada pra duas telas com o mesmo conjunto em ordem diferente
+// compartilharem cache. Sem keepPreviousData de propósito: ao trocar de
+// página a key muda, isPending volta a true e as linhas mostram o skeleton
+// do CPM em vez dos números da página anterior.
+export function useCampaignsFinancials(campaignIds) {
+  const ids = Array.isArray(campaignIds) ? [...campaignIds].sort() : null
   return useQuery({
-    queryKey: ['campaigns-financials'],
-    queryFn: () => api.get('/campaigns/financials').then(r => r.data ?? []),
+    queryKey: ['campaigns-financials', ids ? ids.join(',') : 'all'],
+    queryFn: () => api.get('/campaigns/financials', {
+      params: ids ? { ids: ids.join(',') } : {},
+    }).then(r => r.data ?? []),
+    // Lista vazia = nada pra perguntar. Sem o guard mandaríamos ?ids= vazio,
+    // que o backend (corretamente) lê como "nenhuma campanha".
+    enabled: ids == null || ids.length > 0,
   })
 }
 export function useCreateCampaign() {

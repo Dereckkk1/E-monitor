@@ -988,7 +988,7 @@ func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
 	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
 	insSeedStationPricing(t, ctx, pool, camp, st, "consolidated", 1000)
 
-	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, parseDate("2026-07-15"))
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, nil, parseDate("2026-07-15"))
 	if err != nil {
 		t.Fatalf("FinancialsByCampaign: %v", err)
 	}
@@ -1003,6 +1003,98 @@ func TestCampaigns_Financials_ConsolidatedAccruesByMonth(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("campanha %s não veio no FinancialsByCampaign", camp)
+	}
+}
+
+// PARIDADE do recorte por página: pedir SÓ a campanha A tem que devolver
+// exatamente a mesma linha que pedir todas. É o gate da troca de
+// daily_play_summary (view, sem pushdown) por daily_play_summary_for(lo,hi,ids),
+// cujo bound é [MIN(start_date), MAX(end_date)] do recorte.
+//
+// O cenário é montado pra o bound do recorte ser ESTRITAMENTE mais estreito
+// que o global (B vai até agosto) e pra exercitar as três formas de linha que
+// o bound poderia comer indevidamente:
+//   - in_slot dentro do período (dias 1–3);
+//   - bonus por excedente (2ª tocada do dia 1, expected=1 → bonus 1);
+//   - out_date FORA do período (05/07) — tem que continuar valendo 0, que é o
+//     que autoriza cortar a janela no período da campanha.
+func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	campaignsRepo := NewCampaigns(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+
+	campA := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	stA := insSeedStation(t, ctx, pool, "RA", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, campA, stA, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, campA, stA, typeID, 10.0)
+	insSeedDistributionRule(t, ctx, pool, campA, typeID, stA,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	for d := 1; d <= 3; d++ {
+		insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+	insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", "2026-06-01") // excedente → bonus
+	insSeedDetection(t, ctx, pool, campA, mat, stA, "out_date", "2026-07-05")
+
+	// B só existe pra alargar o bound global nas DUAS pontas: sem recorte a
+	// janela vira [01/05, 31/08], com recorte fica [01/06, 30/06]. A tocada de
+	// B fica em junho porque detections só tem partição a partir de 2026-06.
+	campB := insSeedCampaign(t, ctx, pool, client, "2026-05-01", "2026-08-31")
+	stB := insSeedStation(t, ctx, pool, "RB", 2000, 50, 50, 30, 40, 30, 30, 40, 30)
+	insSeedStationPricing(t, ctx, pool, campB, stB, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, campB, stB, typeID, 7.0)
+	insSeedDistributionRule(t, ctx, pool, campB, typeID, stB,
+		"2026-05-01", "2026-08-31", 0b1111111, "00:00:00", "23:59:00", 1)
+	insSeedDetection(t, ctx, pool, campB, mat, stB, "in_slot", "2026-06-10")
+
+	today := parseDate("2026-07-15")
+	all, err := campaignsRepo.FinancialsByCampaign(ctx, nil, nil, today)
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign(todas): %v", err)
+	}
+	var want *CampaignFinancials
+	for i := range all {
+		if all[i].CampaignID == campA {
+			want = &all[i]
+		}
+	}
+	if want == nil {
+		t.Fatalf("campanha A não veio na chamada sem recorte")
+	}
+	// Sanity: o cenário tem que produzir número, senão a paridade compara zeros.
+	// 4 tocadas in_slot (dias 1,1,2,3) + 1 bonus (excedente do dia 1, que a
+	// fórmula in_slot+bonus conta de novo) = 5 × unit 10. A tocada out_date de
+	// 05/07 NÃO entra — é justamente o que o bound recortado também descarta.
+	if !approxEq(want.TotalInvested, 50, 0.01) {
+		t.Fatalf("cenário inválido: invested = %v, want 50 (unit 10 × (4 in_slot + 1 bonus))", want.TotalInvested)
+	}
+
+	page, err := campaignsRepo.FinancialsByCampaign(ctx, nil, []uuid.UUID{campA}, today)
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign(recorte): %v", err)
+	}
+	if len(page) != 1 {
+		t.Fatalf("recorte devolveu %d linhas, want 1 (só a campanha pedida)", len(page))
+	}
+	got := page[0]
+	if got.CampaignID != campA {
+		t.Fatalf("recorte devolveu a campanha errada: %s", got.CampaignID)
+	}
+	if !approxEq(got.TotalInvested, want.TotalInvested, 0.01) {
+		t.Errorf("total_invested: recorte=%v, todas=%v", got.TotalInvested, want.TotalInvested)
+	}
+	if got.TotalInsertions != want.TotalInsertions {
+		t.Errorf("total_insertions: recorte=%d, todas=%d", got.TotalInsertions, want.TotalInsertions)
+	}
+	if !approxEq(got.TotalAudience, want.TotalAudience, 0.01) {
+		t.Errorf("total_audience: recorte=%v, todas=%v", got.TotalAudience, want.TotalAudience)
+	}
+	if !approxEq(got.TotalAudienceTarget, want.TotalAudienceTarget, 0.01) {
+		t.Errorf("total_audience_target: recorte=%v, todas=%v", got.TotalAudienceTarget, want.TotalAudienceTarget)
+	}
+	if got.StationsWithTarget != want.StationsWithTarget {
+		t.Errorf("stations_with_target: recorte=%d, todas=%d", got.StationsWithTarget, want.StationsWithTarget)
 	}
 }
 

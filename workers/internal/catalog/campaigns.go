@@ -479,13 +479,60 @@ type CampaignFinancials struct {
 	FixedCPM *float64 `json:"fixed_cpm"`
 }
 
-// FinancialsByCampaign retorna o agregado das campanhas. Quando clientIDs
-// não é nil, filtra somente as campanhas da carteira — usado por viewers
-// para evitar vazamento cross-client (slice vazio = nenhuma linha, falha
-// fechada). Admins/operators passam nil e recebem todas as campanhas.
-func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
+// FinancialsByCampaign retorna o agregado das campanhas. Dois filtros
+// independentes, ambos "nil = sem filtro" e "slice vazio = nenhuma linha"
+// (falha fechada):
+//
+//   - clientIDs: carteira do JWT. Viewers passam a própria carteira para
+//     evitar vazamento cross-client; admins/operators passam nil.
+//   - campaignIDs: recorte explícito do chamador — a PÁGINA atual de
+//     /campaigns (12 ids) ou os cards do dashboard. É o que torna a rota
+//     barata: sem ele a query custa o mesmo para admin e para cliente.
+//
+// Por que o recorte é o que importa (e não o filtro de cliente): o custo
+// dominante é a materialização de daily_play_summary. O WHERE por client_id
+// mora no SELECT final, DEPOIS do FULL OUTER JOIN da view — não atravessa,
+// e a view é montada inteira (generate_series de TODAS as regras + agregado
+// do histórico INTEIRO de detection_campaigns) qualquer que seja o filtro.
+// Por isso lemos daily_play_summary_for(lo, hi, ids) (migration 0052), que
+// aplica os filtros DENTRO das CTEs.
+//
+// Equivalência do bound [lo, hi] = [MIN(start_date), MAX(end_date)] do scope:
+// o categorizador classifica como out_date TODA tocada cujo dia local cai
+// fora de [campaign.start_date, campaign.end_date] (primeira cláusula de
+// categorizer.Categorize / recatClassifiedCTE). Logo in_slot e orphan — os
+// dois únicos componentes de (in_slot + bonus), que é tudo que somamos aqui —
+// só existem DENTRO do período da campanha. Linhas de fora contribuem 0, e
+// recortar a janela não muda o `expected` dos dias de dentro (a granularidade
+// da view é por dia). Nada de out_date/deficit é lido aqui, então a armadilha
+// do lower bound (memória daily-play-summary-for-out-date-lower-bound-trap)
+// não se aplica.
+func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs, campaignIDs []uuid.UUID, today time.Time) ([]CampaignFinancials, error) {
 	q := `
-		WITH per_ins AS (
+		WITH scope AS (
+			-- Universo de campanhas desta resposta: carteira ∩ recorte pedido.
+			SELECT c.id, c.client_id, c.start_date, c.end_date, c.fixed_cpm
+			FROM campaigns c
+			WHERE ($1::uuid[] IS NULL OR c.client_id = ANY($1))
+			  AND ($3::uuid[] IS NULL OR c.id = ANY($3))
+		),
+		win AS (
+			-- COALESCE p/ '{}' é obrigatório: array_agg de zero linhas é NULL, e
+			-- NULL em p_campaigns significa "TODAS as campanhas" na 0052 — o
+			-- oposto de falha fechada. lo/hi NULL (scope vazio) devolve vazio
+			-- por contrato da própria função.
+			SELECT COALESCE(array_agg(id), '{}')::uuid[] AS ids,
+			       MIN(start_date) AS lo,
+			       MAX(end_date)   AS hi
+			FROM scope
+		),
+		dps AS (
+			-- win é agregado sem GROUP BY → exatamente 1 linha, então o LATERAL
+			-- chama a função uma única vez. Referenciada duas vezes abaixo
+			-- (per_ins e consolidated_ins), o que a materializa uma só vez.
+			SELECT f.* FROM win, LATERAL daily_play_summary_for(win.lo, win.hi, win.ids) f
+		),
+		per_ins AS (
 			-- Investimento, inserções e audiência no modo per_insertion:
 			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
 			-- audience_target = mesma soma trocando pmm por pmm_target.
@@ -496,11 +543,11 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.U
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
 			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
+			JOIN scope cc ON cc.id = p.campaign_id
 			JOIN campaign_station_type_pricing tp
 				ON tp.campaign_id = p.campaign_id
 			   AND tp.station_id  = p.station_id
-			LEFT JOIN daily_play_summary s
+			LEFT JOIN dps s
 				ON s.campaign_id = p.campaign_id
 			   AND s.station_id  = p.station_id
 			   AND s.type_id     = tp.type_id
@@ -518,6 +565,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.U
 				p.campaign_id,
 				COALESCE(SUM(p.consolidated_value), 0)::float8 AS invested
 			FROM campaign_station_pricing p
+			JOIN scope cc ON cc.id = p.campaign_id
 			WHERE p.mode = 'consolidated'
 			GROUP BY p.campaign_id
 		),
@@ -530,8 +578,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.U
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
 			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
-			LEFT JOIN daily_play_summary s
+			JOIN scope cc ON cc.id = p.campaign_id
+			LEFT JOIN dps s
 				ON s.campaign_id = p.campaign_id
 			   AND s.station_id  = p.station_id
 			LEFT JOIN stations st
@@ -548,7 +596,7 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.U
 			SELECT p.campaign_id,
 			       COUNT(DISTINCT p.station_id)::int AS stations_with_target
 			FROM campaign_station_pricing p
-			JOIN campaigns cc ON cc.id = p.campaign_id
+			JOIN scope cc ON cc.id = p.campaign_id
 			JOIN client_station_pmm cst
 			  ON cst.client_id = cc.client_id AND cst.station_id = p.station_id
 			GROUP BY p.campaign_id
@@ -564,14 +612,13 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs []uuid.U
 			COALESCE(per_ins.audience_target, 0) + COALESCE(consolidated_ins.audience_target, 0) AS total_audience_target,
 			COALESCE(target_cov.stations_with_target, 0) AS stations_with_target,
 			c.fixed_cpm
-		FROM campaigns c
+		FROM scope c
 		LEFT JOIN per_ins          ON per_ins.campaign_id          = c.id
 		LEFT JOIN consolidated_inv ON consolidated_inv.campaign_id = c.id
 		LEFT JOIN consolidated_ins ON consolidated_ins.campaign_id = c.id
 		LEFT JOIN target_cov       ON target_cov.campaign_id       = c.id
-		WHERE ($1::uuid[] IS NULL OR c.client_id = ANY($1))
 	`
-	rows, err := c.pool.Query(ctx, q, clientIDs, orMaxDate(today))
+	rows, err := c.pool.Query(ctx, q, clientIDs, orMaxDate(today), campaignIDs)
 	if err != nil {
 		return nil, fmt.Errorf("campaigns.FinancialsByCampaign: query: %w", err)
 	}
