@@ -40,12 +40,18 @@ func TestCampaigns_ClientScopeArrayFilters(t *testing.T) {
 	require.Zero(t, totalEmpty, "COUNT também tem que respeitar a carteira vazia")
 
 	// --- FinancialsByCampaign ---
-	finNil, err := c.FinancialsByCampaign(ctx, nil, parseDate("2026-07-15"))
+	finNil, err := c.FinancialsByCampaign(ctx, nil, nil, parseDate("2026-07-15"))
 	require.NoError(t, err, "FinancialsByCampaign(nil) — admin sem filtro")
 
-	finEmpty, err := c.FinancialsByCampaign(ctx, []uuid.UUID{}, parseDate("2026-07-15"))
+	finEmpty, err := c.FinancialsByCampaign(ctx, []uuid.UUID{}, nil, parseDate("2026-07-15"))
 	require.NoError(t, err, "FinancialsByCampaign([]) — carteira vazia")
 	require.Empty(t, finEmpty)
+
+	// Recorte por página: slice vazio = nenhuma campanha (falha fechada),
+	// nunca "todas" — o COALESCE(array_agg,'{}') da query depende disso.
+	finNoIDs, err := c.FinancialsByCampaign(ctx, nil, []uuid.UUID{}, parseDate("2026-07-15"))
+	require.NoError(t, err, "FinancialsByCampaign(ids=[]) — recorte vazio")
+	require.Empty(t, finNoIDs)
 
 	t.Logf("admin: ListFiltered=%d ListPaged.total=%d Financials=%d",
 		len(allNil), totalNil, len(finNil))

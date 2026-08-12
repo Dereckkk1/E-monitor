@@ -331,16 +331,6 @@ function ClientDashboard() {
   // /clients devolve scope-aware: admin vê tudo, viewer recebe apenas o
   // próprio cliente. Suficiente pra resolver nome+logo do cliente vinculado.
   const clientsQ = useClients({ enabled: !!clientId })
-  // Financials por campanha — alimenta os KPIs (impactos, CPM, investimento)
-  // de cada card ativo. A query é cacheada por react-query, então não há
-  // custo extra se outras telas (CampaignsPage) também a chamarem.
-  const financialsQ = useCampaignsFinancials()
-  const financialsByCampaign = useMemo(() => {
-    const m = new Map()
-    ;(financialsQ.data ?? []).forEach(f => m.set(f.campaign_id, f))
-    return m
-  }, [financialsQ.data])
-
   const linkedClient = clientId
     ? (clientsQ.data ?? []).find(c => c.id === clientId)
     : null
@@ -377,6 +367,19 @@ function ClientDashboard() {
       .sort((a, b) => (b.start_date || '').localeCompare(a.start_date || ''))
       .slice(0, 8)
   }, [campaigns])
+
+  // Financials por campanha — alimenta os KPIs (impactos, CPM, investimento)
+  // de cada card ativo. Pedimos SÓ os 8 cards renderizados: o agregado varre
+  // daily_play_summary por campanha, então pedir a carteira inteira custa caro
+  // pra pintar no máximo 8 cards. Declarado depois de activeCampaigns porque
+  // depende dele.
+  const activeCampaignIds = useMemo(() => activeCampaigns.map(c => c.id), [activeCampaigns])
+  const financialsQ = useCampaignsFinancials(activeCampaignIds)
+  const financialsByCampaign = useMemo(() => {
+    const m = new Map()
+    ;(financialsQ.data ?? []).forEach(f => m.set(f.campaign_id, f))
+    return m
+  }, [financialsQ.data])
 
   // Concluídas recentes (lista compacta). Só concluídas — campanhas canceladas
   // não pertencem a uma seção rotulada "Concluídas" e ficam fora do dashboard

@@ -1279,12 +1279,6 @@ export default function CampaignsPage() {
   const { data: clients   = [] }            = useClients()
   const { data: allStationsData }           = useStations({ limit: 2000 })
   const allStations = allStationsData?.data ?? []
-  const { data: financialsList = [], isPending: financialsLoading } = useCampaignsFinancials()
-  const financialsByCampaign = useMemo(
-    () => Object.fromEntries(financialsList.map(f => [f.campaign_id, f])),
-    [financialsList]
-  )
-
   const cancelCampaign = useCancelCampaign()
 
   // Two-tier search state:
@@ -1347,6 +1341,18 @@ export default function CampaignsPage() {
   const pageCampaigns = pagedResp?.data ?? []
   const totalFiltered = pagedResp?.total ?? 0
   const totalPages    = pagedResp?.total_pages ?? 1
+
+  // CPM só das 12 campanhas visíveis. O agregado varre daily_play_summary,
+  // que é o passo caro da rota — pedir a base inteira pra pintar uma página
+  // fazia o cliente esperar o mesmo que o admin. O join no id abaixo é o
+  // recorte; a carteira do JWT continua valendo no backend.
+  const pageCampaignIds = useMemo(() => pageCampaigns.map(c => c.id), [pageCampaigns])
+  const { data: financialsList = [], isPending: financialsLoading } =
+    useCampaignsFinancials(pageCampaignIds)
+  const financialsByCampaign = useMemo(
+    () => Object.fromEntries(financialsList.map(f => [f.campaign_id, f])),
+    [financialsList]
+  )
 
   const filteredCampaignName = campaignFilterId
     ? (pageCampaigns[0]?.name || '')
