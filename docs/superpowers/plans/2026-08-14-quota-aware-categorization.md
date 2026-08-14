@@ -426,8 +426,21 @@ git commit -m "feat(categorizer): fechamento por celula-dia com cota (Settle)"
 
 ## Task 2: Migration 0063 — categoria `bonus`
 
+> **Correção aplicada durante a execução (2026-08-14):** a migration foi **dividida em
+> duas** porque juntar o `ALTER` e o `UPDATE` na mesma transação segura o ACCESS EXCLUSIVE
+> lock (parent + todas as partições) durante o rewrite inteiro — medido: SELECT concorrente
+> bloqueado ~4,9s num UPDATE de 375k linhas, e o `NOT VALID` não evita nada nesse arranjo.
+> Um arquivo com duas transações não tem precedente no repo (nenhuma das 122 migrations usa
+> dois `BEGIN;`), então dois arquivos:
+>
+> - **`0063_category_bonus_constraint`** — só os 4 `ALTER TABLE` (lock de milissegundos).
+> - **`0064_category_bonus_rename`** — só os dois `UPDATE orphan → bonus` (row locks).
+>
+> **Consequência de numeração: a migration da view (Task 6) passa de 0064 para `0065`.**
+
 **Files:**
-- Create: `migrations/0063_category_bonus.up.sql`, `migrations/0063_category_bonus.down.sql`
+- Create: `migrations/0063_category_bonus_constraint.{up,down}.sql`
+- Create: `migrations/0064_category_bonus_rename.{up,down}.sql`
 
 - [ ] **Step 1: Escrever a migration**
 
@@ -1065,10 +1078,14 @@ git commit -m "test(catalog): paridade Go x SQL do fechamento por celula-dia"
 
 ---
 
-## Task 6: Migration 0064 — déficit e bônus na view/função
+## Task 6: Migration 0065 — déficit e bônus na view/função
+
+> **Renumerada de 0064 para 0065** — a Task 2 foi dividida em duas migrations (ver a nota
+> lá). Trocar `0064_quota_aware_summary` por `0065_quota_aware_summary` em todos os passos
+> abaixo.
 
 **Files:**
-- Create: `migrations/0064_quota_aware_summary.{up,down}.sql`
+- Create: `migrations/0065_quota_aware_summary.{up,down}.sql`
 
 - [ ] **Step 1: Escrever a migration**
 
