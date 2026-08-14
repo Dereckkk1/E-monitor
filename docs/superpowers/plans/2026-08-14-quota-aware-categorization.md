@@ -54,6 +54,20 @@ em dois motores que precisam concordar bit a bit — Go (insert-path) e SQL (rec
 
 ## Task 1: `Settle` — o fechamento da célula-dia em Go
 
+> **Correções aplicadas durante a execução (2026-08-14) — Tasks 4 e 5 DEVEM seguir estas:**
+> 1. O helper chamado aqui de `matchesDateWeekday` colidia em nome com uma closure interna
+>    do `Categorize`. Nome final no código: **`ruleCoversDay`**. Semântica idêntica
+>    (`for_date BETWEEN start_date AND end_date` + máscara de dia-da-semana).
+> 2. `TestSettle_Override_WindowSupersedesRules` estava **errado como escrito abaixo**:
+>    com override `N=1` e a tocada das 14:30 preenchendo a meta, a das 09:00 vira `bonus`
+>    pelo passo 4, não `out_slot` — o próprio modelo. Corrigido subindo a meta do override
+>    pra `2`, o que mantém as duas asserções e ainda discrimina (se o motor usasse a faixa
+>    da regra, os dois papéis invertem e as duas asserções falham). **O SQL da Task 4 tem
+>    que devolver `bonus` nesse cenário também.**
+> 3. Adicionado `TestSettle_TwoWindows_QuotaIsDaily_NotPerWindow`, que cobre a linha
+>    "3 (2 faixas)" da tabela-verdade — a única que prova as duas metades de D1 (N é a
+>    soma das regras do dia; não há cota por faixa).
+
 **Files:**
 - Modify: `workers/internal/categorizer/categorizer.go`
 - Test: `workers/internal/categorizer/settle_test.go` (criar)
