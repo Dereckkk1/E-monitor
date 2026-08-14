@@ -115,7 +115,7 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 	}
 	defer tx.Rollback(ctx)
 
-	category, err := d.settleCellDay(ctx, tx, in, nil)
+	category, err := d.settleCellDay(ctx, tx, in, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -161,13 +161,35 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 // campanha respectiva. Mesmo settleCellDay usado no Create — logo, além de
 // devolver a categoria da projeção nova, reassenta as demais tocadas do dia
 // NAQUELA campanha (só as projeções dela; a tocada-base fica com a canônica).
+//
+// Abre transação própria: o advisory lock que serializa fechamentos da mesma
+// célula-dia é xact-scoped e não protege nada quando cada statement é sua
+// própria transação implícita.
+//
+// ATENÇÃO: a projeção pela qual este fechamento foi calculado só é gravada
+// DEPOIS, pelo InsertProjections do chamador — se ela não entrar, as reescritas
+// aqui já commitaram e sobra tocada rebaixada por uma projeção inexistente. O
+// chamador conserta com ResettleCellDay (ver evidence/service.go).
 func (d *Detections) CategorizeFor(ctx context.Context, campaignID, commercialID, stationID uuid.UUID, detectedAt time.Time) (string, error) {
-	return d.settleCellDay(ctx, d.pool, CreateDetectionInput{
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return categorizer.CatBonus, err
+	}
+	defer tx.Rollback(ctx)
+
+	cat, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
 		CampaignID:   campaignID,
 		CommercialID: commercialID,
 		StationID:    stationID,
 		DetectedAt:   detectedAt,
-	}, nil)
+	}, nil, true)
+	if err != nil {
+		return categorizer.CatBonus, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return categorizer.CatBonus, err
+	}
+	return cat, nil
 }
 
 // pgxQuerier é o subconjunto de pgxpool.Pool / pgx.Tx que o settleCellDay usa.
@@ -218,8 +240,44 @@ var spLoc, _ = time.LoadLocation("America/Sao_Paulo")
 // por dc.campaign_id e a reescrita só toca a projeção DESTA campanha. A
 // tocada-base (detections.category) só é espelhada quando a projeção é a
 // canônica (d.campaign_id = in.CampaignID), mesma guarda do recatApplySQL.
+//
+// includeNewPlay=false refecha a célula-dia SEM tocada nova (só o que já está
+// gravado) e devolve string vazia — é o caminho de convergência quando a tocada
+// que motivou um fechamento anterior acabou não sendo persistida (ver
+// ResettleCellDay).
 func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateDetectionInput,
-	replacingID *uuid.UUID) (string, error) {
+	replacingID *uuid.UUID, includeNewPlay bool) (string, error) {
+
+	local := in.DetectedAt.In(spLoc)
+	dayLocal := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLoc)
+	dayEnd := dayLocal.AddDate(0, 0, 1)
+
+	// PRIMEIRO STATEMENT, antes de QUALQUER leitura — serializa os fechamentos
+	// concorrentes da mesma célula-dia. Sem isso, duas transações lêem o mesmo
+	// conjunto (READ COMMITTED dá um snapshot por statement), ambas concluem que
+	// ainda há vaga na cota e ambas gravam in_slot: a célula fecha com
+	// in_slot > N, silenciosamente. Quando nada precisa ser reescrito elas não
+	// compartilham NENHUMA linha, então não existe lock de linha que as serialize
+	// — o advisory lock é o único ponto de encontro. Tomá-lo depois de ler já não
+	// adianta: a leitura teria saído do snapshot velho.
+	//
+	// A chave é (campanha, emissora, dia) e NÃO inclui o tipo do material de
+	// propósito: o type_id exige um SELECT em materials, e aí o lock deixaria de
+	// ser o primeiro statement. Chave mais grossa é conservadora — serializa
+	// também células de tipos diferentes da mesma campanha+emissora+dia, o que é
+	// contenção desprezível (a mesma emissora não recebe duas tocadas no mesmo
+	// instante) e nunca incorreta.
+	//
+	// _xact_ = escopo de transação: solta sozinho no commit/rollback. Fora de uma
+	// tx (caminho d.pool) cada statement é sua própria transação implícita, o
+	// lock nasce e morre nesse statement e não protege nada — por isso os callers
+	// que precisam da garantia passam uma tx (ver CategorizeFor).
+	if _, err := q.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+		in.CampaignID.String()+"|"+in.StationID.String()+"|"+dayLocal.Format("2006-01-02"),
+	); err != nil {
+		return categorizer.CatBonus, err
+	}
 
 	// typeID pode ser NULL (material legado sem tipo) e a linha pode nem estar em
 	// materials (commercial legado) — nos dois casos nenhuma regra/override casa.
@@ -235,9 +293,6 @@ func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateD
 		return categorizer.CatBonus, err
 	}
 
-	local := in.DetectedAt.In(spLoc)
-	dayLocal := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLoc)
-	dayEnd := dayLocal.AddDate(0, 0, 1)
 	cmp := categorizer.Campaign{StartDate: cmpStart, EndDate: cmpEnd}
 	newPlay := categorizer.Play{DetectedAt: in.DetectedAt, MaterialID: in.CommercialID}
 
@@ -245,6 +300,9 @@ func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateD
 		// Sem tipo não há célula: nenhuma regra e nenhum override podem casar, e
 		// as outras tocadas do dia pertencem a outras células. Fecha só ela —
 		// out_date fora do período da campanha, senão bonus (meta 0).
+		if !includeNewPlay {
+			return "", nil
+		}
 		return categorizer.Settle(dayLocal, []categorizer.Play{newPlay}, cmp, nil, nil)[0], nil
 	}
 
@@ -264,15 +322,19 @@ func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateD
 
 	// Pré-condição 2 de Settle (ordem por detected_at, id): as gravadas vêm
 	// ordenadas do SQL e a nova é apenas ANEXADA — a ordenação estável do Settle
-	// a coloca na posição certa por detected_at. Num empate exato de segundo com
-	// uma já gravada, a nova perde a vaga da cota (fica por último); o id dela
-	// ainda não existe, então não há como desempatar igual ao SQL. O recat
-	// posterior converge o caso.
+	// a coloca na posição certa por detected_at. Num empate EXATO de segundo com
+	// uma já gravada, a nova fica por último e perde a vaga da cota; o id dela
+	// ainda não existe (e será um UUID v4), então o desempate por id do recat SQL
+	// é efetivamente aleatório: os dois motores podem discordar do empate em
+	// QUALQUER direção, não só nessa. Inalcançável na prática (o cooldown do
+	// matcher impede duas tocadas no mesmo segundo) e o recat converge.
 	plays := make([]categorizer.Play, 0, len(existing)+1)
 	for _, r := range existing {
 		plays = append(plays, categorizer.Play{DetectedAt: r.detectedAt, MaterialID: r.materialID})
 	}
-	plays = append(plays, newPlay)
+	if includeNewPlay {
+		plays = append(plays, newPlay)
+	}
 
 	cats := categorizer.Settle(dayLocal, plays, cmp, rules, ov)
 
@@ -280,7 +342,38 @@ func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateD
 		dayLocal, dayEnd); err != nil {
 		return categorizer.CatBonus, err
 	}
+	if !includeNewPlay {
+		return "", nil
+	}
 	return cats[len(cats)-1], nil
+}
+
+// ResettleCellDay refecha a célula-dia SEM nenhuma tocada nova: reassenta só o
+// que já está gravado. É o caminho de convergência do fan-out (F-119) — o
+// CategorizeFor fecha a célula-dia da campanha secundária contando com uma
+// projeção que só é gravada DEPOIS, por InsertProjections; se essa gravação
+// falhar, as tocadas que já existiam ficam rebaixadas por uma tocada que não
+// existe. Chamar isto restaura a célula imediatamente, em vez de esperar o
+// projrecon. Roda na própria transação (o advisory lock do fechamento precisa
+// de uma pra valer).
+func (d *Detections) ResettleCellDay(ctx context.Context,
+	campaignID, commercialID, stationID uuid.UUID, at time.Time) error {
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
+		CampaignID:   campaignID,
+		CommercialID: commercialID,
+		StationID:    stationID,
+		DetectedAt:   at,
+	}, nil, false); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // loadRulesForCell carrega TODAS as regras da célula (campanha, tipo, emissora),
@@ -405,6 +498,18 @@ func (d *Detections) loadCellDayPlays(ctx context.Context, q pgxQuerier, in Crea
 // uma campanha SECUNDÁRIA do fan-out sobrescreveria a base com o veredito de
 // outra campanha). Uma única ida ao banco com os arrays; nenhuma quando nada
 // mudou, que é o caso comum no caminho quente de escrita.
+//
+// ORDEM DE LOCK — detections PRIMEIRO, detection_campaigns depois. O Postgres
+// executa o ModifyTable do statement PRINCIPAL antes do da CTE data-modifying,
+// então quem trava primeiro é a tabela do UPDATE de baixo. Essa ordem TEM que
+// bater com a dos outros caminhos que escrevem nas duas tabelas na mesma tx
+// (ReattributeDetection / ReattributeRejectedDetection → UPDATE detections e
+// depois syncCanonicalProjection). Com as ordens invertidas, um Create fechando
+// a célula-dia e um reattribute de outra tocada da MESMA célula deadlockam — o
+// Postgres mata um dos dois, e se a vítima for o Create a veiculação é perdida
+// (evidence.Service.handle só loga o erro, não tem retry). Reproduzido em duas
+// sessões psql antes da correção. Se mexer aqui, confirme com EXPLAIN que o
+// "Update on detections" continua sendo o nó de cima.
 func (d *Detections) rewriteCategories(ctx context.Context, q pgxQuerier, campaignID uuid.UUID,
 	plays []cellDayPlay, cats []string, dayLocal, dayEnd time.Time) error {
 
@@ -425,28 +530,33 @@ func (d *Detections) rewriteCategories(ctx context.Context, q pgxQuerier, campai
 		return nil
 	}
 
+	// `d.id = ANY($1)` / `dc.detection_id = ANY($1)` são redundantes com o JOIN em
+	// v, mas dão ao planner um predicado de igualdade sobre a PK — sem eles ele
+	// chuta a cardinalidade do unnest e varre a partição do mês inteira.
 	_, err := q.Exec(ctx, `
 		WITH v AS (
 		    SELECT * FROM unnest($1::uuid[], $2::timestamptz[], $3::text[])
 		           AS t(id, detected_at, category)
 		),
-		upd_det AS (
-		    UPDATE detections d
+		upd_proj AS (
+		    UPDATE detection_campaigns dc
 		    SET category = v.category
 		    FROM v
-		    WHERE d.id = v.id AND d.detected_at = v.detected_at
-		      AND d.detected_at >= $5 AND d.detected_at < $6
-		      AND d.campaign_id = $4
-		      AND d.category IS DISTINCT FROM v.category
+		    WHERE dc.detection_id = v.id AND dc.detected_at = v.detected_at
+		      AND dc.detection_id = ANY($1)
+		      AND dc.detected_at >= $5 AND dc.detected_at < $6
+		      AND dc.campaign_id = $4
+		      AND dc.category IS DISTINCT FROM v.category
 		    RETURNING 1
 		)
-		UPDATE detection_campaigns dc
+		UPDATE detections d
 		SET category = v.category
 		FROM v
-		WHERE dc.detection_id = v.id AND dc.detected_at = v.detected_at
-		  AND dc.detected_at >= $5 AND dc.detected_at < $6
-		  AND dc.campaign_id = $4
-		  AND dc.category IS DISTINCT FROM v.category`,
+		WHERE d.id = v.id AND d.detected_at = v.detected_at
+		  AND d.id = ANY($1)
+		  AND d.detected_at >= $5 AND d.detected_at < $6
+		  AND d.campaign_id = $4
+		  AND d.category IS DISTINCT FROM v.category`,
 		ids, ats, newCats, campaignID, dayLocal, dayEnd)
 	return err
 }
@@ -519,7 +629,7 @@ func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*D
 		CommercialID: in.CommercialID,
 		CampaignID:   in.CampaignID,
 		DetectedAt:   in.DetectedAt,
-	}, nil)
+	}, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -694,7 +804,7 @@ func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.
 		CommercialID: newCommercialID,
 		CampaignID:   newCampaignID,
 		DetectedAt:   detectedAt,
-	}, &detectionID)
+	}, &detectionID, true)
 	if err != nil {
 		return err
 	}
@@ -1599,7 +1709,7 @@ func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detection
 		CommercialID: newCommercialID,
 		CampaignID:   newCampaignID,
 		DetectedAt:   detectedAt,
-	}, &detectionID)
+	}, &detectionID, true)
 	if err != nil {
 		return err
 	}

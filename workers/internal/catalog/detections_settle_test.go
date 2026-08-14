@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -272,4 +273,86 @@ func TestSettleCellDay_SecondaryCampaignDoesNotTouchBaseRow(t *testing.T) {
 		`SELECT category FROM detection_campaigns WHERE detection_id=$1 AND campaign_id=$2`,
 		d1.ID, campA.ID).Scan(&projA))
 	require.Equal(t, "bonus", projA, "projeção canônica da A intocada")
+}
+
+// O fechamento tem que pegar o advisory lock da célula-dia ANTES de ler. É o
+// único ponto de encontro entre dois fechamentos concorrentes da mesma célula:
+// quando nada precisa ser reescrito eles não compartilham nenhuma linha, então
+// sem o lock os dois lêem o mesmo conjunto, os dois acham que há vaga na cota e
+// os dois gravam in_slot (in_slot > N, silencioso). Aqui uma sessão externa
+// segura a chave e o Create tem que ESPERAR — não passar direto.
+func TestSettleCellDay_TakesCellDayAdvisoryLockBeforeReading(t *testing.T) {
+	ctx, pool := newTestDB(t)
+
+	cli, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "lock-cli"})
+	require.NoError(t, err)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
+	cmp, err := NewCampaigns(pool).Create(ctx, CreateCampaignInput{
+		Name: "lock-cmp", ClientID: cli.ID,
+		StartDate: start, EndDate: end, TargetStations: []uuid.UUID{},
+	})
+	require.NoError(t, err)
+	typeID := seedType(t, ctx, pool, "lock-spot")
+	mat, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+		ClientID: cli.ID, Title: "lock-M", TypeID: &typeID, DurationSeconds: 30,
+		MasterStoragePath: "/tmp/lk", MasterSHA256: "lock-" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	stat, err := NewStations(pool).Create(ctx, CreateStationInput{
+		Name: "Lock FM", Band: "FM", StreamURL: "http://example.com/lock/" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	_, err = NewDistributionRules(pool).Create(ctx, CreateDistributionRuleInput{
+		CampaignID: cmp.ID, TypeID: typeID,
+		StationIDs: []uuid.UUID{stat.ID}, MaterialIDs: []uuid.UUID{},
+		StartDate: start, EndDate: end,
+		WeekdayMask: 127, TimeStart: "08:00", TimeEnd: "10:00", PlaysPerDay: 1,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM detection_campaigns dc USING detections d
+		                WHERE dc.detection_id = d.id AND dc.detected_at = d.detected_at
+		                  AND d.campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM detections WHERE campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM distribution_rules WHERE campaign_id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, mat.ID)
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE id = $1`, cmp.ID)
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, cli.ID)
+		pool.Exec(ctx, `DELETE FROM stations WHERE id = $1`, stat.ID)
+	})
+
+	sp, _ := time.LoadLocation("America/Sao_Paulo")
+	at := time.Date(2026, 6, 10, 9, 0, 0, 0, sp)
+	// Mesma chave que settleCellDay monta: (campanha, emissora, dia local SP).
+	key := cmp.ID.String() + "|" + stat.ID.String() + "|" + at.Format("2006-01-02")
+
+	holder, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, key)
+	require.NoError(t, err)
+
+	in := CreateDetectionInput{
+		StationID: stat.ID, CommercialID: mat.ID, CampaignID: cmp.ID,
+		DetectedAt: at, Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+	}
+	blockedCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	began := time.Now()
+	_, err = NewDetections(pool).Create(blockedCtx, in)
+	waited := time.Since(began)
+	require.Error(t, err, "com a célula-dia travada por outra sessão, o Create tem que esperar")
+	require.GreaterOrEqual(t, waited, 1500*time.Millisecond,
+		"tem que ter BLOQUEADO no lock, não falhado na hora")
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM detections WHERE campaign_id = $1`, cmp.ID).Scan(&n))
+	require.Zero(t, n, "nada persistido enquanto o lock estava tomado")
+
+	require.NoError(t, holder.Rollback(ctx)) // solta o advisory lock
+	det, err := NewDetections(pool).Create(ctx, in)
+	require.NoError(t, err, "solto o lock, o mesmo Create passa")
+	require.Equal(t, "in_slot", det.Category)
 }
