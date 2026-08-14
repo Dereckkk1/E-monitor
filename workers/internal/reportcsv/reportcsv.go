@@ -20,13 +20,19 @@ import (
 // bom é o marcador que faz o Excel pt-BR reconhecer UTF-8.
 var bom = []byte{0xEF, 0xBB, 0xBF}
 
-func saoPaulo() *time.Location {
+// SaoPaulo é o fuso de todos os relatórios. Exportada porque o handler HTTP
+// formata as datas do nome do arquivo no mesmo fuso do conteúdo — dois fusos
+// diferentes no mesmo download dariam um arquivo "01-05 a 31-05" com linhas de
+// 30/04 dentro.
+func SaoPaulo() *time.Location {
 	loc, err := time.LoadLocation("America/Sao_Paulo")
 	if err != nil {
 		return time.FixedZone("BRT", -3*3600)
 	}
 	return loc
 }
+
+func saoPaulo() *time.Location { return SaoPaulo() }
 
 // WriteConsolidated escreve o CSV consolidado: uma linha por material ×
 // emissora, com o breakdown por status.
