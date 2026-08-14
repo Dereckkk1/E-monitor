@@ -553,6 +553,12 @@ func (d *Detections) mutateApprovedSet(ctx context.Context, id uuid.UUID, detect
 // com a escrita: um crash entre as duas deixa a célula desatualizada até o
 // próximo fechamento ou recat. Prefira mutateApprovedSet sempre que a escrita
 // couber na mesma transação.
+//
+// Nasceu servindo o RestoreDisplacedShorterCut, que desde então passou a fazer
+// a escrita DENTRO do mutateApprovedSet (atômico) — por isso este helper é
+// exportado e hoje tem um único chamador, o CLI de backfill. Se você está
+// pensando em usá-lo num caminho de uma linha só, quase certamente quer o
+// mutateApprovedSet.
 func (d *Detections) ResettleDetectionCells(ctx context.Context, id uuid.UUID, detectedAt *time.Time) error {
 	return d.mutateApprovedSet(ctx, id, detectedAt, nil)
 }
@@ -1110,9 +1116,16 @@ func syncCanonicalProjection(ctx context.Context, tx pgx.Tx,
 // refechamento precisa do id da linha ANTES de escrever (o advisory lock da
 // célula tem que ser tomado antes de qualquer lock de linha — ver
 // lockCellDayKeys), e com um UPDATE ... RETURNING o id só apareceria depois.
-// A janela entre o SELECT e o UPDATE é coberta pelo guard `retracted_at IS NOT
-// NULL`: se outro caminho des-retratou a linha no meio, o UPDATE não toca nada
-// e o refechamento vira no-op sobre um conjunto que já estava certo.
+//
+// A janela entre o SELECT e o UPDATE é a única coisa que este caminho perdeu ao
+// deixar de ser um statement só, e é fechada aqui: o guard `retracted_at IS NOT
+// NULL` no UPDATE detecta a corrida (outro caminho des-retratou a linha no
+// meio), e ZERO linhas casadas devolve (nil, 0, nil) — exatamente o que o
+// ErrNoRows do statement único devolvia. Isso importa porque o chamador
+// (evidence/service.go) usa o nil pra cair no recoverRejectedByCoverage; se
+// respondêssemos "restaurei" numa restauração que não foi nossa, o fallthrough
+// sumiria e o restored_on_reject contaria uma recuperação inexistente.
+// A transação inteira sofre rollback nesse caso: não há nada pra refechar.
 func (d *Detections) RestoreDisplacedShorterCut(ctx context.Context,
 	rejectedID uuid.UUID, detectedAt time.Time, stationID uuid.UUID,
 ) (restoredID *uuid.UUID, restoredShortID int32, err error) {
@@ -1153,15 +1166,32 @@ func (d *Detections) RestoreDisplacedShorterCut(ctx context.Context,
 	}
 
 	if err := d.mutateApprovedSet(ctx, id, &restoAt, func(ctx context.Context, tx pgx.Tx) error {
-		_, e := tx.Exec(ctx, `
+		tag, e := tx.Exec(ctx, `
 			UPDATE detections SET retracted_at = NULL
 			WHERE id = $1 AND detected_at = $2 AND retracted_at IS NOT NULL`, id, restoAt)
-		return e
+		if e != nil {
+			return e
+		}
+		if tag.RowsAffected() == 0 {
+			return errRestoreLostRace
+		}
+		return nil
 	}); err != nil {
+		if errors.Is(err, errRestoreLostRace) {
+			return nil, 0, nil
+		}
 		return nil, 0, err
 	}
 	return &id, short, nil
 }
+
+// errRestoreLostRace sai do apply do RestoreDisplacedShorterCut quando o UPDATE
+// guardado não casa nenhuma linha — a linha escolhida pelo SELECT deixou de
+// estar retratada antes da escrita. Serve só pra abortar a transação (não há o
+// que refechar) e sinalizar "não restaurei nada" pro topo da função, que o
+// traduz em (nil, 0, nil). NUNCA escapa pro chamador: é detalhe interno do
+// protocolo com mutateApprovedSet, não um erro de verdade.
+var errRestoreLostRace = errors.New("catalog: restore candidate left the retracted set before the update")
 
 type ListFilter struct {
 	CampaignID *uuid.UUID
