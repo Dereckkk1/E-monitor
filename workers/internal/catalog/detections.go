@@ -676,6 +676,15 @@ type DetectionEnriched struct {
 	MaterialTypeColor   *string    `json:"material_type_color,omitempty"`
 	ClientID            *uuid.UUID `json:"client_id,omitempty"`
 	ClientName          *string    `json:"client_name,omitempty"`
+	// StationShortID é o identificador curto e estável da emissora
+	// (stations.short_id). Vira a coluna "Identificador" do CSV detalhado, que
+	// espelha o layout do relatório do fornecedor.
+	StationShortID *int32 `json:"station_short_id,omitempty"`
+	// UnitPrice é o valor unitário contratado pra (campanha, emissora, tipo de
+	// material). Só existe quando o pricing da emissora está em modo
+	// `per_insertion` — em `consolidated` não há valor por inserção, e o campo
+	// fica nil.
+	UnitPrice *float64 `json:"unit_price,omitempty"`
 }
 
 // ListPaged is the cronological detection list backing /reports/airtime.
@@ -878,7 +887,9 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
 		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm, cst.pmm_target,
 		       m.duration_seconds, mt.name, mt.color,
-		       cmp.client_id, cli.name
+		       cmp.client_id, cli.name,
+		       s.short_id,
+		       CASE WHEN csp.mode = 'per_insertion' THEN cstp.unit_value END
 		FROM detection_attributions d
 		LEFT JOIN stations s        ON s.id = d.station_id
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
@@ -888,6 +899,16 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		LEFT JOIN clients cli       ON cli.id = cmp.client_id
 		LEFT JOIN client_station_pmm cst
 		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
+		-- Preço unitário da coluna "Preço" do CSV detalhado. O CASE pelo modo é
+		-- o guard que a 0022_pricing delega à app: não há FK cruzando
+		-- campaign_station_pricing e campaign_station_type_pricing, então uma
+		-- linha órfã de type_pricing não pode virar cobrança no relatório.
+		LEFT JOIN campaign_station_pricing csp
+		       ON csp.campaign_id = d.campaign_id AND csp.station_id = d.station_id
+		LEFT JOIN campaign_station_type_pricing cstp
+		       ON cstp.campaign_id = d.campaign_id
+		      AND cstp.station_id  = d.station_id
+		      AND cstp.type_id     = m.type_id
 		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
@@ -925,7 +946,8 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
 			&det.StationLogoURL, &det.StationPMM, &det.StationPMMTarget,
 			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
-			&det.ClientID, &det.ClientName); err != nil {
+			&det.ClientID, &det.ClientName,
+			&det.StationShortID, &det.UnitPrice); err != nil {
 			return err
 		}
 		if err := cb(det); err != nil {
