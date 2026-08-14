@@ -775,11 +775,59 @@ git commit -m "feat(detections): insert-path fecha a celula-dia inteira"
 
 ---
 
+## Task 3b: Re-fechar a célula-dia quando uma tocada SAI do conjunto aprovado
+
+> **Task nova, descoberta na review da Task 3 (2026-08-14).** Não estava no plano original.
+
+**O buraco:** no modelo antigo, remover uma tocada não podia mudar a categoria de nenhuma
+outra — a classificação era isolada. Com cota, pode: liberar uma vaga deveria promover uma
+`out_slot` retida a `in_slot`. Hoje nada re-fecha a célula quando uma tocada sai do conjunto
+aprovado, e se nenhuma tocada nova cair naquela célula-dia, as categorias ficam erradas
+**pra sempre** — `in_slot` subnotificado e déficit superestimado.
+
+Caso concreto: o dedup de co-fire (`evidence/service.go:673,684`) retrata uma duplicata na
+mesma célula-dia. A vaga libera e ninguém reaproveita.
+
+**Files:**
+- Modify: `workers/internal/catalog/detections.go` — `RetractByID` (:1528), `Ignore` (:1279),
+  `MarkAmbiguous` (:1547), `ClearRetraction` (:1514), `Restore` (:1288)
+- Modify: `workers/internal/catalog/detections.go` — `ReattributeDetection` (:674): re-fechar
+  também a célula-dia de **ORIGEM**, não só a de destino
+- Test: `workers/internal/catalog/detections_settle_test.go`
+
+- [ ] **Step 1: Teste falhando** — célula com N=2: uma `in_slot`, uma `out_slot` retida.
+  Retratar a `in_slot` e afirmar que a `out_slot` foi promovida a `in_slot`.
+- [ ] **Step 2: Provar que falha** (hoje a `out_slot` fica congelada).
+- [ ] **Step 3:** chamar o re-fechamento da célula-dia em cada um dos 6 pontos acima,
+  dentro da transação de cada um. Cuidado: a tocada que está saindo não pode entrar na cota.
+- [ ] **Step 4:** rodar o pacote com `-p 1` e `TEST_DATABASE_URL` setada.
+- [ ] **Step 5: Commit.**
+
+---
+
 ## Task 4: Recat SQL — fechamento set-wise + expansão de escopo
+
+> **Herança da review da Task 3 — dois itens obrigatórios nesta task:**
+>
+> 1. **Filtro de aprovadas na cota.** O motor Go usa `ApprovedDetectionsFilter`
+>    (exclui retratada / ignorada / `audit_rejected` / `ambiguous`), mas a CTE `scope` do
+>    `recategorizeScope` (`distribution_rules.go:389-400`) **não filtra nada disso**. Se o
+>    SQL contar uma tocada retratada na cota, os dois motores discordam em toda célula-dia
+>    que tenha uma — que é exatamente o que o teste de paridade da Task 5 existe pra proibir.
+> 2. **Ordem de lock.** `recatApplySQL` (`distribution_rules.go:361-376`) trava
+>    `detection_campaigns` antes de `detections`. A Task 3 padronizou **detections-first**
+>    pra fechar um deadlock reproduzido contra o caminho de reatribuição. Inverter aqui
+>    também, senão o deadlock só muda de lugar.
 
 **Files:**
 - Modify: `workers/internal/catalog/distribution_rules.go:242-403`
 - Modify: `workers/internal/catalog/distribution_rules_override_test.go:17,76,91,168`
+
+> **Herança da Task 3:** `TestCarveOut_InPeriodWrongWeekday_Orphan_InsertAndRecat` ficou
+> **vermelho de propósito**. Ele existe pra provar que o insert-path Go e o recat SQL
+> concordam; a Task 3 flipou a metade Go pra `bonus` e a metade SQL só flipa aqui.
+> **As duas metades têm que virar `bonus` nesta task** — flipar só uma faria o teste
+> afirmar justamente a divergência que ele existe pra proibir.
 
 - [ ] **Step 1: Ajustar os testes existentes pra regra nova**
 
