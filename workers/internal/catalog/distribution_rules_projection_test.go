@@ -106,17 +106,20 @@ func TestRecategorizeForRule_ReachesFanoutProjections(t *testing.T) {
 		det.ID, campB.ID).Scan(&projB))
 	require.Equal(t, "in_slot", projB, "recat da regra deve alcançar a projeção fan-out")
 
-	// Guarda: base (campA) e projeção canônica da A ficam orphan — o recat da B
-	// não pode escrever categoria da B na tocada-base da A.
+	// Guarda: base (campA) e projeção canônica da A ficam como nasceram — o recat
+	// da B não pode escrever categoria da B na tocada-base da A. O valor esperado
+	// é 'bonus' porque a A não tem regra (meta 0) e o insert-path fecha a
+	// célula-dia com cota (spec 2026-08-14 D4: o antigo 'orphan' virou 'bonus');
+	// o que o teste prova continua sendo a INTOCABILIDADE, não o rótulo.
 	var base, projA string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detections WHERE id=$1 AND detected_at=$2`,
 		det.ID, det.DetectedAt).Scan(&base))
-	require.Equal(t, "orphan", base, "tocada-base da campanha A intocada")
+	require.Equal(t, "bonus", base, "tocada-base da campanha A intocada")
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detection_campaigns WHERE detection_id=$1 AND campaign_id=$2`,
 		det.ID, campA.ID).Scan(&projA))
-	require.Equal(t, "orphan", projA, "projeção canônica da A intocada")
+	require.Equal(t, "bonus", projA, "projeção canônica da A intocada")
 }
 
 // Mudança de tipo do material deve reclassificar as projeções que o carregam

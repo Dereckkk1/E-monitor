@@ -111,12 +111,15 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 	created := make([]uuid.UUID, 0, len(in.Entries))
 
 	for _, e := range in.Entries {
-		cat, err := d.categorize(ctx, tx, CreateDetectionInput{
+		// Fechamento por célula-dia na MESMA tx: cada entry já enxerga as
+		// anteriores do lote (inseridas acima), então a cota do dia é disputada
+		// pelo lote inteiro na ordem cronológica, não linha a linha isolada.
+		cat, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
 			StationID:    in.StationID,
 			CommercialID: e.CommercialID,
 			CampaignID:   in.CampaignID,
 			DetectedAt:   e.DetectedAt,
-		})
+		}, nil)
 		if err != nil {
 			return nil, err
 		}

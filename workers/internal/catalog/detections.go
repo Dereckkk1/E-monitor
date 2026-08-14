@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"radiocheck/internal/categorizer"
 )
@@ -30,12 +31,12 @@ type Detection struct {
 	// runs. After §18.2.2-v2 reattribution it reflects the WINNING cut's
 	// coverage. Surfaced on /detections/:id so an operator sees how much of the
 	// master the clip actually contained.
-	AuditCoverage *float64 `json:"audit_coverage,omitempty"`
-	VariantUsed   *int16   `json:"variant_used,omitempty"`
-	RateUsed           *int16    `json:"rate_used,omitempty"`
-	EvidenceStatus     string    `json:"evidence_status"`
-	EvidenceKey        *string   `json:"evidence_key,omitempty"`
-	EvidenceSizeBytes  *int64    `json:"evidence_size_bytes,omitempty"`
+	AuditCoverage     *float64 `json:"audit_coverage,omitempty"`
+	VariantUsed       *int16   `json:"variant_used,omitempty"`
+	RateUsed          *int16   `json:"rate_used,omitempty"`
+	EvidenceStatus    string   `json:"evidence_status"`
+	EvidenceKey       *string  `json:"evidence_key,omitempty"`
+	EvidenceSizeBytes *int64   `json:"evidence_size_bytes,omitempty"`
 	// Category is one of in_slot|out_slot|out_date|orphan (migration 0018).
 	// Consumed by the DayDetailModal to group detections under their category
 	// section; without it, the modal renders an empty list even when filtered
@@ -98,25 +99,26 @@ type CreateDetectionInput struct {
 }
 
 func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Detection, error) {
-	// Categoriza inline antes de inserir. Acessa campaigns + distribution_rules
-	// pra alimentar o categorizador puro. Mantém categorização consistente
-	// com o que a view daily_play_summary espera.
-	category, err := d.categorize(ctx, d.pool, in)
-	if err != nil {
-		return nil, err
-	}
-
-	// Transação: insere a detecção física E sua projeção canônica (1:1)
-	// atomicamente. F-119: a grade (daily_play_summary) e as leituras por-campanha
-	// lêem detection_campaigns, então TODA detecção precisa ao menos da projeção
-	// canônica — independente do caminho (evidence service, manual, backfill).
-	// O fan-out multi-atribuição (projeções extras) é feito pelo evidence.Service
-	// quando MULTI_ATTRIBUTION está ON; aqui é só a canônica.
+	// Transação: fecha a célula-dia, insere a detecção física E sua projeção
+	// canônica (1:1) atomicamente. F-119: a grade (daily_play_summary) e as
+	// leituras por-campanha lêem detection_campaigns, então TODA detecção precisa
+	// ao menos da projeção canônica — independente do caminho (evidence service,
+	// manual, backfill). O fan-out multi-atribuição (projeções extras) é feito
+	// pelo evidence.Service quando MULTI_ATTRIBUTION está ON; aqui é só a canônica.
+	//
+	// O fechamento roda DENTRO da tx (spec 2026-08-14): ele reescreve a categoria
+	// das outras tocadas do dia, e essas reescritas só podem valer se a tocada que
+	// as motivou for de fato gravada.
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	category, err := d.settleCellDay(ctx, tx, in, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	var det Detection
 	err = tx.QueryRow(ctx, `
@@ -154,58 +156,149 @@ func (d *Detections) Create(ctx context.Context, in CreateDetectionInput) (*Dete
 	return &det, nil
 }
 
-// CategorizeFor expõe a categorização por-campanha pra fora do pacote. F-119: o
+// CategorizeFor expõe o fechamento por-campanha pra fora do pacote. F-119: o
 // evidence.Service calcula a categoria de cada projeção fan-out com as regras da
-// campanha respectiva. Mesma lógica do categorize() usado no Create.
+// campanha respectiva. Mesmo settleCellDay usado no Create — logo, além de
+// devolver a categoria da projeção nova, reassenta as demais tocadas do dia
+// NAQUELA campanha (só as projeções dela; a tocada-base fica com a canônica).
 func (d *Detections) CategorizeFor(ctx context.Context, campaignID, commercialID, stationID uuid.UUID, detectedAt time.Time) (string, error) {
-	return d.categorize(ctx, d.pool, CreateDetectionInput{
+	return d.settleCellDay(ctx, d.pool, CreateDetectionInput{
 		CampaignID:   campaignID,
 		CommercialID: commercialID,
 		StationID:    stationID,
 		DetectedAt:   detectedAt,
-	})
+	}, nil)
 }
 
-// pgxQuerier é o subconjunto de pgxpool.Pool / pgx.Tx que categorize usa.
-// Existe pra categorize poder rodar DENTRO de uma transação: quando o caller
-// já segura uma conexão via tx, usar d.pool aqui exigiria uma SEGUNDA conexão
-// simultânea — com o pool no teto, N batches concorrentes deadlockam.
+// pgxQuerier é o subconjunto de pgxpool.Pool / pgx.Tx que o settleCellDay usa.
+// Existe pra ele poder rodar DENTRO de uma transação: quando o caller já segura
+// uma conexão via tx, usar d.pool aqui exigiria uma SEGUNDA conexão simultânea —
+// com o pool no teto, N batches concorrentes deadlockam.
+//
+// Exec entrou junto com o fechamento por célula-dia (spec 2026-08-14): o
+// settleCellDay não só LÊ pra decidir a categoria da tocada nova, ele REESCREVE
+// a das tocadas já gravadas do dia. Essa escrita tem que sair no MESMO querier
+// da leitura, senão o caller que está numa tx veria (e reescreveria) um estado
+// que a própria tx dele ainda não commitou.
 type pgxQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// categorize resolves the detection's category by loading the campaign,
-// applicable rules, AND any override on (campaign, type, station, date),
-// then invoking the pure categorizer.
+// spLoc é o fuso das datas de negócio. O "dia" de uma célula (campanha, tipo,
+// emissora, dia) é sempre o dia calendário local em São Paulo — é assim que o
+// categorizer, a view daily_play_summary e o recat SQL enxergam a grade.
+var spLoc, _ = time.LoadLocation("America/Sao_Paulo")
+
+// settleCellDay FECHA a célula-dia (campanha, tipo de material, emissora, dia
+// local SP) da tocada descrita por `in`: carrega TODAS as tocadas aprovadas
+// daquele dia naquela célula, roda categorizer.Settle sobre o conjunto inteiro,
+// regrava a categoria das que mudaram e devolve a categoria da tocada NOVA.
 //
-// Migration 0019: rules and overrides are keyed by material TYPE. We look
-// up the type of the detected material via JOIN materials.
-// Migration 0031: overrides now carry their own time_start/time_end and
-// supersede rules for the cell+day when present.
+// Substitui a categorização stateless (uma tocada por vez) — spec 2026-08-14: a
+// categoria depende da COTA do dia, então uma tocada que chega mais tarde pode
+// mudar o veredito de uma que já estava gravada (a das 03:00 vira excedente
+// quando a meta fecha dentro da faixa).
+//
+// Migration 0019: rules e overrides são chaveados pelo TIPO do material.
+// Migration 0031: o override carrega faixa própria e supersede as rules do dia.
 //
 // q é o querier a usar (d.pool fora de transação, ou a tx do caller quando já
 // segurando uma — ver pgxQuerier acima). Callers dentro de uma tx DEVEM passar
-// essa tx: usar d.pool ali exigiria uma segunda conexão simultânea do pool.
-func (d *Detections) categorize(ctx context.Context, q pgxQuerier, in CreateDetectionInput) (string, error) {
+// essa tx: usar d.pool ali exigiria uma segunda conexão simultânea do pool, e
+// as reescritas ficariam fora do átomo do caller.
+//
+// replacingID != nil identifica uma tocada que JÁ EXISTE no banco e cujo lugar
+// no dia está sendo recomputado (reatribuição): ela é excluída do conjunto
+// carregado e entra só como a tocada "nova", com o material/campanha novos.
+// Sem isso ela contaria duas vezes contra a cota.
+//
+// Multi-atribuição (F-119): o fechamento é POR CAMPANHA — o conjunto é escopado
+// por dc.campaign_id e a reescrita só toca a projeção DESTA campanha. A
+// tocada-base (detections.category) só é espelhada quando a projeção é a
+// canônica (d.campaign_id = in.CampaignID), mesma guarda do recatApplySQL.
+func (d *Detections) settleCellDay(ctx context.Context, q pgxQuerier, in CreateDetectionInput,
+	replacingID *uuid.UUID) (string, error) {
+
+	// typeID pode ser NULL (material legado sem tipo) e a linha pode nem estar em
+	// materials (commercial legado) — nos dois casos nenhuma regra/override casa.
+	// Por isso o subselect, e não um JOIN: um JOIN devolveria zero linhas e o
+	// insert falharia com ErrNoRows.
 	var cmpStart, cmpEnd time.Time
-	err := q.QueryRow(ctx,
-		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, in.CampaignID,
-	).Scan(&cmpStart, &cmpEnd)
+	var typeID *uuid.UUID
+	err := q.QueryRow(ctx, `
+		SELECT c.start_date, c.end_date, (SELECT m.type_id FROM materials m WHERE m.id = $2)
+		FROM campaigns c WHERE c.id = $1`, in.CampaignID, in.CommercialID,
+	).Scan(&cmpStart, &cmpEnd, &typeID)
 	if err != nil {
-		return categorizer.CatOrphan, err
+		return categorizer.CatBonus, err
 	}
+
+	local := in.DetectedAt.In(spLoc)
+	dayLocal := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, spLoc)
+	dayEnd := dayLocal.AddDate(0, 0, 1)
+	cmp := categorizer.Campaign{StartDate: cmpStart, EndDate: cmpEnd}
+	newPlay := categorizer.Play{DetectedAt: in.DetectedAt, MaterialID: in.CommercialID}
+
+	if typeID == nil {
+		// Sem tipo não há célula: nenhuma regra e nenhum override podem casar, e
+		// as outras tocadas do dia pertencem a outras células. Fecha só ela —
+		// out_date fora do período da campanha, senão bonus (meta 0).
+		return categorizer.Settle(dayLocal, []categorizer.Play{newPlay}, cmp, nil, nil)[0], nil
+	}
+
+	rules, err := d.loadRulesForCell(ctx, q, in.CampaignID, *typeID, in.StationID)
+	if err != nil {
+		return categorizer.CatBonus, err
+	}
+	ov, err := d.loadOverrideForCell(ctx, q, in.CampaignID, *typeID, in.StationID, dayLocal)
+	if err != nil {
+		return categorizer.CatBonus, err
+	}
+
+	existing, err := d.loadCellDayPlays(ctx, q, in, *typeID, dayLocal, dayEnd, replacingID)
+	if err != nil {
+		return categorizer.CatBonus, err
+	}
+
+	// Pré-condição 2 de Settle (ordem por detected_at, id): as gravadas vêm
+	// ordenadas do SQL e a nova é apenas ANEXADA — a ordenação estável do Settle
+	// a coloca na posição certa por detected_at. Num empate exato de segundo com
+	// uma já gravada, a nova perde a vaga da cota (fica por último); o id dela
+	// ainda não existe, então não há como desempatar igual ao SQL. O recat
+	// posterior converge o caso.
+	plays := make([]categorizer.Play, 0, len(existing)+1)
+	for _, r := range existing {
+		plays = append(plays, categorizer.Play{DetectedAt: r.detectedAt, MaterialID: r.materialID})
+	}
+	plays = append(plays, newPlay)
+
+	cats := categorizer.Settle(dayLocal, plays, cmp, rules, ov)
+
+	if err := d.rewriteCategories(ctx, q, in.CampaignID, existing, cats[:len(existing)],
+		dayLocal, dayEnd); err != nil {
+		return categorizer.CatBonus, err
+	}
+	return cats[len(cats)-1], nil
+}
+
+// loadRulesForCell carrega TODAS as regras da célula (campanha, tipo, emissora),
+// sem filtrar por dia: o Settle precisa das regras de outros dias pra decidir o
+// out_date do carve-out (material fora do período das regras que o nomeiam).
+func (d *Detections) loadRulesForCell(ctx context.Context, q pgxQuerier,
+	campaignID, typeID, stationID uuid.UUID) ([]categorizer.Rule, error) {
 
 	rows, err := q.Query(ctx, `
 		SELECT r.start_date, r.end_date, r.weekday_mask,
 		       r.time_start::text, r.time_end::text, r.plays_per_day, r.material_ids
 		FROM distribution_rules r
 		WHERE r.campaign_id = $1
-		  AND r.type_id = (SELECT type_id FROM materials WHERE id = $2)
+		  AND r.type_id = $2
 		  AND $3 = ANY(r.station_ids)`,
-		in.CampaignID, in.CommercialID, in.StationID)
+		campaignID, typeID, stationID)
 	if err != nil {
-		return categorizer.CatOrphan, err
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -216,62 +309,154 @@ func (d *Detections) categorize(ctx context.Context, q pgxQuerier, in CreateDete
 		var plays int16
 		if err := rows.Scan(&r.StartDate, &r.EndDate, &r.WeekdayMask,
 			&tsStr, &teStr, &plays, &r.MaterialIDs); err != nil {
-			return categorizer.CatOrphan, err
+			return nil, err
 		}
 		r.TimeStart, _ = time.Parse("15:04:05", tsStr)
 		r.TimeEnd, _ = time.Parse("15:04:05", teStr)
 		r.PlaysPerDay = plays
 		rules = append(rules, r)
 	}
-	if err := rows.Err(); err != nil {
-		return categorizer.CatOrphan, err
-	}
+	return rules, rows.Err()
+}
 
-	// Override lookup. (campaign, type, station, for_date) é PK em
-	// distribution_overrides. for_date é a data local em São Paulo
-	// derivada da timestamp da detection. Quando há override, o
-	// categorizador ignora rules pra essa célula+dia (D1/D7 do spec).
+// loadOverrideForCell devolve o override da célula+dia, ou nil. (campaign, type,
+// station, for_date) é PK em distribution_overrides; for_date é a data local SP.
+// Quando há override, ele supersede as rules pra essa célula+dia (D1/D7 do spec).
+func (d *Detections) loadOverrideForCell(ctx context.Context, q pgxQuerier,
+	campaignID, typeID, stationID uuid.UUID, dayLocal time.Time) (*categorizer.Override, error) {
+
 	var (
-		ov      *categorizer.Override
-		ovPlays int16
-		ovTsStr string
-		ovTeStr string
+		plays  int16
+		tsStr  string
+		teStr  string
+		forDay = dayLocal.Format("2006-01-02")
 	)
-	err = q.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT plays_expected, time_start::text, time_end::text
 		FROM distribution_overrides
-		WHERE campaign_id = $1
-		  AND type_id = (SELECT type_id FROM materials WHERE id = $2)
-		  AND station_id = $3
-		  AND for_date = ($4::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date`,
-		in.CampaignID, in.CommercialID, in.StationID, in.DetectedAt,
-	).Scan(&ovPlays, &ovTsStr, &ovTeStr)
-	switch {
-	case err == nil:
-		ts, _ := time.Parse("15:04:05", ovTsStr)
-		te, _ := time.Parse("15:04:05", ovTeStr)
-		ov = &categorizer.Override{PlaysExpected: ovPlays, TimeStart: ts, TimeEnd: te}
-	case errors.Is(err, pgx.ErrNoRows):
-		// Sem override — ov fica nil, comportamento antigo.
-	default:
-		return categorizer.CatOrphan, err
+		WHERE campaign_id = $1 AND type_id = $2 AND station_id = $3 AND for_date = $4::date`,
+		campaignID, typeID, stationID, forDay,
+	).Scan(&plays, &tsStr, &teStr)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ts, _ := time.Parse("15:04:05", tsStr)
+	te, _ := time.Parse("15:04:05", teStr)
+	return &categorizer.Override{PlaysExpected: plays, TimeStart: ts, TimeEnd: te}, nil
+}
+
+// cellDayPlay é uma tocada já gravada da célula-dia, com as categorias atuais
+// (projeção + base) pra decidir o que precisa ser reescrito.
+type cellDayPlay struct {
+	id           uuid.UUID
+	detectedAt   time.Time
+	materialID   uuid.UUID
+	projCategory string
+	baseCategory string
+	baseCampaign uuid.UUID
+}
+
+// loadCellDayPlays lê as tocadas APROVADAS já gravadas na célula-dia, ordenadas
+// por (detected_at, id) — a mesma ordem do ROW_NUMBER do recat SQL, que é a
+// pré-condição 2 do Settle. Escopa pela PROJEÇÃO (detection_campaigns) porque o
+// fechamento é por campanha: uma projeção fan-out F-119 pertence a esta campanha
+// mesmo quando a tocada-base é de outra. As duas tabelas são particionadas por
+// detected_at, então AMBAS levam o recorte do dia pra podar partição.
+func (d *Detections) loadCellDayPlays(ctx context.Context, q pgxQuerier, in CreateDetectionInput,
+	typeID uuid.UUID, dayLocal, dayEnd time.Time, replacingID *uuid.UUID) ([]cellDayPlay, error) {
+
+	rows, err := q.Query(ctx, `
+		SELECT d.id, d.detected_at, dc.commercial_id, dc.category, d.category, d.campaign_id
+		FROM detection_campaigns dc
+		JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
+		JOIN materials m ON m.id = dc.commercial_id
+		WHERE dc.campaign_id = $1
+		  AND m.type_id = $2
+		  AND d.station_id = $3
+		  AND dc.detected_at >= $4 AND dc.detected_at < $5
+		  AND d.detected_at  >= $4 AND d.detected_at  < $5
+		  AND ($6::uuid IS NULL OR d.id <> $6)
+		  AND `+ApprovedDetectionsFilter+`
+		ORDER BY d.detected_at, d.id`,
+		in.CampaignID, typeID, in.StationID, dayLocal, dayEnd, replacingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []cellDayPlay
+	for rows.Next() {
+		var p cellDayPlay
+		if err := rows.Scan(&p.id, &p.detectedAt, &p.materialID,
+			&p.projCategory, &p.baseCategory, &p.baseCampaign); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// rewriteCategories grava o veredito do fechamento nas tocadas JÁ existentes que
+// mudaram de categoria — projeção desta campanha sempre, tocada-base só quando a
+// projeção é a canônica (mesma guarda do recatApplySQL: sem ela o fechamento de
+// uma campanha SECUNDÁRIA do fan-out sobrescreveria a base com o veredito de
+// outra campanha). Uma única ida ao banco com os arrays; nenhuma quando nada
+// mudou, que é o caso comum no caminho quente de escrita.
+func (d *Detections) rewriteCategories(ctx context.Context, q pgxQuerier, campaignID uuid.UUID,
+	plays []cellDayPlay, cats []string, dayLocal, dayEnd time.Time) error {
+
+	ids := make([]uuid.UUID, 0, len(plays))
+	ats := make([]time.Time, 0, len(plays))
+	newCats := make([]string, 0, len(plays))
+	for i, p := range plays {
+		projStale := p.projCategory != cats[i]
+		baseStale := p.baseCampaign == campaignID && p.baseCategory != cats[i]
+		if !projStale && !baseStale {
+			continue
+		}
+		ids = append(ids, p.id)
+		ats = append(ats, p.detectedAt)
+		newCats = append(newCats, cats[i])
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 
-	return categorizer.Categorize(
-		in.DetectedAt,
-		categorizer.Campaign{StartDate: cmpStart, EndDate: cmpEnd},
-		in.CommercialID,
-		rules,
-		ov,
-	), nil
+	_, err := q.Exec(ctx, `
+		WITH v AS (
+		    SELECT * FROM unnest($1::uuid[], $2::timestamptz[], $3::text[])
+		           AS t(id, detected_at, category)
+		),
+		upd_det AS (
+		    UPDATE detections d
+		    SET category = v.category
+		    FROM v
+		    WHERE d.id = v.id AND d.detected_at = v.detected_at
+		      AND d.detected_at >= $5 AND d.detected_at < $6
+		      AND d.campaign_id = $4
+		      AND d.category IS DISTINCT FROM v.category
+		    RETURNING 1
+		)
+		UPDATE detection_campaigns dc
+		SET category = v.category
+		FROM v
+		WHERE dc.detection_id = v.id AND dc.detected_at = v.detected_at
+		  AND dc.detected_at >= $5 AND dc.detected_at < $6
+		  AND dc.campaign_id = $4
+		  AND dc.category IS DISTINCT FROM v.category`,
+		ids, ats, newCats, campaignID, dayLocal, dayEnd)
+	return err
 }
 
 // CreateManualInput é o payload da inserção retroativa "Adicionar veiculação
 // manualmente" que aparece na DayDetailModal. Os campos espelham a entrada
 // real (campaign / commercial / station / detected_at) mais a tripla de
-// auditoria que vai pra detections.manual_*. O categorizador roda igual à
-// engine — então out_slot / out_date / orphan funcionam exatamente como
-// veiculação real.
+// auditoria que vai pra detections.manual_*. O fechamento da célula-dia roda
+// igual à engine — então in_slot / out_slot / out_date / bonus funcionam
+// exatamente como numa veiculação real.
 type CreateManualInput struct {
 	StationID    uuid.UUID
 	CommercialID uuid.UUID
@@ -289,8 +474,9 @@ type CreateManualInput struct {
 //   - evidence_status = 'missing' (sem áudio)
 //   - manual_at = now(), manual_by, manual_note
 //
-// A categorização (in_slot/out_slot/out_date/orphan) sai do mesmo
-// categorizer.Categorize() que a engine real usa.
+// A categorização sai do mesmo settleCellDay() que a engine real usa: a
+// veiculação manual disputa a cota do dia junto com as automáticas e pode
+// reclassificar as que já estavam gravadas.
 func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*Detection, error) {
 	// Validação do vínculo: a emissora precisa estar no target_stations
 	// do material dentro daquela campanha. Sem isso o operador podia subir
@@ -312,30 +498,31 @@ func (d *Detections) CreateManual(ctx context.Context, in CreateManualInput) (*D
 		return nil, ErrMaterialNotLinkedToStation
 	}
 
-	// Reutiliza o categorizer existente passando os mesmos inputs.
-	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
-		StationID:    in.StationID,
-		CommercialID: in.CommercialID,
-		CampaignID:   in.CampaignID,
-		DetectedAt:   in.DetectedAt,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	var note *string
 	if trimmed := strings.TrimSpace(in.ManualNote); trimmed != "" {
 		note = &trimmed
 	}
 
-	// Transação: detecção manual + projeção canônica (1:1), igual ao Create.
-	// F-119: sem a projeção a veiculação manual sumiria da grade (que lê
-	// detection_campaigns).
+	// Transação: fechamento da célula-dia + detecção manual + projeção canônica
+	// (1:1), igual ao Create. F-119: sem a projeção a veiculação manual sumiria da
+	// grade (que lê detection_campaigns).
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Fecha a célula-dia igual à engine real — a veiculação manual disputa a
+	// mesma cota que as automáticas.
+	cat, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
+		StationID:    in.StationID,
+		CommercialID: in.CommercialID,
+		CampaignID:   in.CampaignID,
+		DetectedAt:   in.DetectedAt,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `
@@ -486,15 +673,6 @@ func (d *Detections) FindCutWithSiblings(ctx context.Context, masterID uuid.UUID
 // MESMA transação via syncCanonicalProjection.
 func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
 	newCommercialID, newCampaignID, stationID uuid.UUID) error {
-	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
-		StationID:    stationID,
-		CommercialID: newCommercialID,
-		CampaignID:   newCampaignID,
-		DetectedAt:   detectedAt,
-	})
-	if err != nil {
-		return err
-	}
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -505,6 +683,19 @@ func (d *Detections) ReattributeDetection(ctx context.Context, detectionID uuid.
 	if err := tx.QueryRow(ctx,
 		`SELECT campaign_id FROM detections WHERE id = $1 AND detected_at = $2`,
 		detectionID, detectedAt).Scan(&oldCampaignID); err != nil {
+		return err
+	}
+
+	// Fecha a célula-dia de DESTINO com esta tocada no lugar novo. replacingID
+	// exclui a linha do conjunto carregado: ela já existe no banco (com o corte
+	// antigo) e contaria duas vezes contra a cota do dia.
+	cat, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
+		StationID:    stationID,
+		CommercialID: newCommercialID,
+		CampaignID:   newCampaignID,
+		DetectedAt:   detectedAt,
+	}, &detectionID)
+	if err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -662,12 +853,12 @@ type ListPagedResult struct {
 // dedicated hook (useDetectionsPaged) that knows the shape.
 type DetectionEnriched struct {
 	Detection
-	StationFrequencyMHz *float64   `json:"station_frequency_mhz,omitempty"`
-	StationBand         *string    `json:"station_band,omitempty"`
-	StationCity         *string    `json:"station_city,omitempty"`
-	StationState        *string    `json:"station_state,omitempty"`
-	StationLogoURL      *string    `json:"station_logo_url,omitempty"`
-	StationPMM          *float64   `json:"station_pmm,omitempty"`
+	StationFrequencyMHz *float64 `json:"station_frequency_mhz,omitempty"`
+	StationBand         *string  `json:"station_band,omitempty"`
+	StationCity         *string  `json:"station_city,omitempty"`
+	StationState        *string  `json:"station_state,omitempty"`
+	StationLogoURL      *string  `json:"station_logo_url,omitempty"`
+	StationPMM          *float64 `json:"station_pmm,omitempty"`
 	// StationPMMTarget é o PMM no target do CLIENTE DONO da campanha desta
 	// atribuição, resolvido por (cmp.client_id × station_id). nil = sem cadastro.
 	StationPMMTarget    *int       `json:"station_pmm_target"`
@@ -1380,15 +1571,6 @@ var ErrReattributeNoRow = errors.New("reattribute: no audit_rejected row matched
 //     NÃO altera nada (G3 — falha mantém o estado, nunca orfana).
 func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detectionID uuid.UUID, detectedAt time.Time,
 	newCommercialID, newCampaignID, stationID uuid.UUID, coverage float64) error {
-	cat, err := d.categorize(ctx, d.pool, CreateDetectionInput{
-		StationID:    stationID,
-		CommercialID: newCommercialID,
-		CampaignID:   newCampaignID,
-		DetectedAt:   detectedAt,
-	})
-	if err != nil {
-		return err
-	}
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -1405,6 +1587,19 @@ func (d *Detections) ReattributeRejectedDetection(ctx context.Context, detection
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrReattributeNoRow
 	}
+	if err != nil {
+		return err
+	}
+
+	// Fecha a célula-dia de destino só DEPOIS da guarda: se a row não estava
+	// rejeitada, nada foi reassentado (G3 — falha não altera estado). replacingID
+	// tira a própria row do conjunto (ela vai entrar como a tocada nova).
+	cat, err := d.settleCellDay(ctx, tx, CreateDetectionInput{
+		StationID:    stationID,
+		CommercialID: newCommercialID,
+		CampaignID:   newCampaignID,
+		DetectedAt:   detectedAt,
+	}, &detectionID)
 	if err != nil {
 		return err
 	}
