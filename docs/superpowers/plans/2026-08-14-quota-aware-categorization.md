@@ -1140,6 +1140,26 @@ git add workers/internal/catalog/settle_parity_test.go
 git commit -m "test(catalog): paridade Go x SQL do fechamento por celula-dia"
 ```
 
+> **O que realmente entrou (2026-08-14).** `settle_parity_test.go` com 11 testes: a
+> tabela-verdade, limites de tolerância (900 e 901 s nos dois extremos, na faixa da regra
+> E na do override), empate no mesmo segundo, bordas do período da campanha, linhas fora
+> do conjunto aprovado, carve-out (incl. dia sem regra própria), override zerado,
+> independência entre tipos e entre emissoras, `meta.N` × `daily_play_summary_for().expected`
+> e o sweep aleatório. O lado SQL roda como SELECT puro (nenhum teste chama `Recategorize*`)
+> e o lado Go usa os loaders de produção.
+>
+> Dois desvios a registrar:
+> 1. **A linha "N=0" da tabela-verdade não é montável com `plays_per_day = 0`** — o CHECK
+>    `distribution_rules_plays_per_day_check` proíbe. As duas formas REAIS de N=0 viraram
+>    dois subcasos: override com `plays_expected = 0` (campanha 270) e regra que não cobre
+>    o dia-da-semana.
+> 2. **O sweep é parametrizado**: 150 cenários (~10 s) por padrão, 25 em `-short`,
+>    `SETTLE_PARITY_SCENARIOS`/`SETTLE_PARITY_SEED` pra reproduzir. Seed constante
+>    (`20260814`) e âncora sempre numa segunda-feira, pra ser determinístico em CI sem
+>    fixar uma data que sai da janela de partições. 600 cenários / 3.132 vereditos: 0
+>    divergências. Sensibilidade re-provada por mutação no SQL (`rn_in <= n+1`, tolerância
+>    899, teste extra de dia-da-semana no `is_out_date`): todas as três pegas.
+
 ---
 
 ## Task 6: Migration 0065 — déficit e bônus na view/função
