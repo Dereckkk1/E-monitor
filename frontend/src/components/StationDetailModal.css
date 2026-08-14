@@ -1,0 +1,246 @@
+/* ─────────────────────────────────────────────────────────────────
+   STATION DETAIL MODAL — ficha read-only da emissora
+   Usada por admin e cliente a partir de /stations (clique na linha).
+   ──────────────────────────────────────────────────────────────── */
+
+.sd-modal {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  width: 100%;
+  max-width: 680px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 48px rgba(6, 5, 91, .15);
+}
+
+/* ── Header ── */
+.sd-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.sd-header-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sd-header-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--c-text);
+  line-height: 1.25;
+  margin: 0;
+}
+
+.sd-header-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  font-family: var(--font-heading);
+  font-weight: 500;
+}
+
+.sd-header-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sd-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Body ── */
+.sd-body {
+  padding: 18px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sd-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-body);
+  margin: 0 0 10px;
+}
+
+/* KPI strip */
+.sd-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.sd-kpi {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.sd-kpi-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-body);
+}
+
+.sd-kpi-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* Chips */
+.sd-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Barras de audiência */
+.sd-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sd-bar-group-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-body);
+  margin-bottom: 8px;
+}
+
+.sd-bar-row {
+  display: grid;
+  grid-template-columns: 108px 1fr 44px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.sd-bar-row:last-child { margin-bottom: 0; }
+
+.sd-bar-label {
+  font-size: 12px;
+  color: var(--c-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sd-bar-track {
+  height: 6px;
+  border-radius: var(--radius-full, 100px);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  overflow: hidden;
+}
+
+.sd-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-action);
+  opacity: 0.85;
+}
+
+.sd-bar-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+  font-family: var(--font-heading);
+  text-align: right;
+}
+
+/* Lista de definições (contato / dados técnicos) */
+.sd-defs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 20px;
+}
+
+.sd-def-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-body);
+}
+
+.sd-def-value {
+  font-size: 13px;
+  color: var(--c-text);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.sd-def-value a {
+  color: var(--c-action);
+  text-decoration: none;
+}
+
+.sd-def-value a:hover { text-decoration: underline; }
+
+.sd-more-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-top: 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-action);
+  cursor: pointer;
+}
+
+.sd-more-btn:hover { text-decoration: underline; }
+
+.sd-empty {
+  font-size: 13px;
+  color: var(--c-text-3);
+  text-align: center;
+  padding: 20px 0;
+}
+
+/* Nota de rodapé: só o admin edita */
+.sd-footnote {
+  font-size: 11.5px;
+  color: var(--c-text-3);
+  border-top: 1px solid var(--c-border);
+  padding-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .sd-modal { max-height: calc(100vh - 24px); }
+  .sd-bar-row { grid-template-columns: 92px 1fr 40px; }
+}
