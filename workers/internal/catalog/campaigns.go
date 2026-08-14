@@ -233,6 +233,22 @@ func (c *Campaigns) Get(ctx context.Context, id uuid.UUID) (*Campaign, error) {
 	return &camp, nil
 }
 
+// ClientNameFor devolve o nome do cliente dono da campanha. Existe pro nome do
+// arquivo de export: `Get` carrega a campanha inteira e ainda assim só traz
+// `client_id`, não o nome do cliente.
+func (c *Campaigns) ClientNameFor(ctx context.Context, campaignID uuid.UUID) (string, error) {
+	var name string
+	err := c.pool.QueryRow(ctx, `
+		SELECT cli.name
+		FROM campaigns cmp
+		JOIN clients cli ON cli.id = cmp.client_id
+		WHERE cmp.id = $1`, campaignID).Scan(&name)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 func (c *Campaigns) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	_, err := c.pool.Exec(ctx,
 		`UPDATE campaigns SET status = $2, updated_at = now() WHERE id = $1`, id, status)
