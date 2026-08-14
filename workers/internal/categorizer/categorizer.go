@@ -1,6 +1,7 @@
 package categorizer
 
 import (
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,12 +40,24 @@ type Override struct {
 	TimeEnd       time.Time
 }
 
-// Category labels (idênticos aos valores do CHECK constraint em detections.category).
+// Category labels. Os quatro primeiros são exatamente os valores aceitos hoje
+// pelo CHECK constraint de detections.category (migration 0018) e
+// detection_campaigns.category (0041); CatBonus ainda NÃO — ver abaixo.
 const (
 	CatInSlot  = "in_slot"
 	CatOutSlot = "out_slot"
 	CatOutDate = "out_date"
-	CatOrphan  = "orphan"
+	// CatOrphan é o veredito antigo pra "tocou sem meta no dia". Continua sendo
+	// ESCRITO pela Categorize (que segue no insert-path até a Task 3) e lido em
+	// linhas antigas até o backfill global rodar.
+	CatOrphan = "orphan"
+	// CatBonus é a veiculação que excede a meta do dia — bonificação. Substitui
+	// o CatOrphan como veredito (spec 2026-08-14 D4).
+	//
+	// Só pode ser GRAVADO depois da migration 0063 (Task 2): os CHECKs de
+	// detections.category e detection_campaigns.category ainda não aceitam
+	// 'bonus', e persistir antes disso dá CHECK violation.
+	CatBonus = "bonus"
 )
 
 // SlotToleranceSeconds é a folga (15 min) aplicada a cada extremo da faixa de
@@ -68,6 +81,12 @@ func dateOnlySP(t time.Time) time.Time {
 }
 
 // Categorize classifica uma detection do material materialID.
+//
+// SUPERSEDIDA por Settle (spec 2026-08-14): classifica uma tocada isolada, sem
+// noção de cota do dia, e por isso diverge do modelo novo em célula-dia. Mantida
+// viva só enquanto o insert-path em internal/catalog/detections.go ainda a
+// chamar; a Task 3 troca esse caller e remove esta função com os testes dela.
+// Código novo deve chamar Settle.
 //
 // Carve-out (migration 0043): se materialID é nomeado em alguma regra com
 // MaterialIDs não-vazio, ele é julgado SÓ por essas regras (regras gerais do
@@ -174,6 +193,185 @@ func Categorize(detectedAt time.Time, cmp Campaign, materialID uuid.UUID, rules 
 		return CatOutSlot
 	}
 	return CatOrphan
+}
+
+// Play é uma tocada da célula-dia a ser fechada.
+type Play struct {
+	DetectedAt time.Time
+	MaterialID uuid.UUID
+}
+
+// Settle fecha uma célula-dia (campanha, tipo, emissora, dia) inteira e devolve
+// a categoria de cada tocada NA MESMA ORDEM do slice de entrada.
+//
+// Substitui a Categorize (uma tocada por vez) como regra canônica; as duas
+// coexistem de propósito até a Task 3 trocar o insert-path.
+//
+// Regra canônica (spec 2026-08-14 §2) — o "passo 0:" evita que o gofmt leia o
+// bloco como lista ordenada e reflue as continuações:
+//
+//	passo 0: out_date — fora do período da campanha, ou (carve-out) fora do
+//	               período das regras que nomeiam o material. Não consome cota.
+//	1. N         — override.PlaysExpected, senão Σ plays_per_day das regras do dia.
+//	2. "dentro da faixa" — casa ALGUMA faixa válida hoje (±SlotToleranceSeconds).
+//	                       Sem cota por faixa: a meta é do dia.
+//	3. dentro da faixa, em ordem cronológica: as N primeiras → in_slot, resto → bonus.
+//	4. fora da faixa: in_slot < N → out_slot, senão → bonus.
+//
+// `day` é a data local SP da célula à meia-noite — passada explicitamente pra que
+// N seja bem definido mesmo quando todas as tocadas são out_date.
+//
+// Pré-condições (contrato do caller — NÃO são validadas, violar dá resultado
+// silenciosamente errado):
+//
+//  1. TODAS as tocadas de `plays` pertencem à MESMA célula-dia `day`. N é
+//     calculado uma vez a partir de `day`, mas o teste de faixa usa a data local
+//     de cada tocada: misturar dias aplica a meta de um dia às faixas de outro.
+//     Quem monta o slice tem que filtrar por [day, day+1) em SP.
+//  2. `plays` vem ordenado por (detected_at, id) — a mesma ordem do
+//     ROW_NUMBER() do SQL. A ordenação interna é por detected_at apenas e
+//     estável, ou seja, empates no mesmo segundo preservam a ordem do slice:
+//     é o caller que decide quem leva a vaga da cota num empate, e ele só
+//     concorda com o SQL se tiver desempatado por id.
+//
+// PARIDADE: esta função e a CTE `classified` de
+// internal/catalog/distribution_rules.go (recatClassifiedCTE) DEVEM concordar.
+// O settle_parity_test.go provará isso — ainda não existe, é a Task 5.
+func Settle(day time.Time, plays []Play, cmp Campaign, rules []Rule, override *Override) []string {
+	out := make([]string, len(plays))
+	dayLocal := dateOnlySP(day)
+
+	// Meta do dia. Override supersede as regras (D1/D7 do spec 2026-05-19).
+	n := 0
+	if override != nil {
+		n = int(override.PlaysExpected)
+	} else {
+		for _, r := range rules {
+			if ruleCoversDay(r, dayLocal) {
+				n += int(r.PlaysPerDay)
+			}
+		}
+	}
+
+	// Índices que entram na cota, ordenados por detected_at com desempate estável
+	// pela posição no slice. Isso equivale ao ORDER BY (detected_at, id) do
+	// ROW_NUMBER no SQL apenas sob a pré-condição 2 — é o caller que traz o
+	// desempate por id, aqui só o preservamos.
+	type entry struct {
+		i        int
+		inWindow bool
+	}
+	entries := make([]entry, 0, len(plays))
+	for i, p := range plays {
+		local := p.DetectedAt.In(spLocation)
+		date := dateOnlySP(local)
+
+		if date.Before(dateOnlySP(cmp.StartDate)) || date.After(dateOnlySP(cmp.EndDate)) {
+			out[i] = CatOutDate
+			continue
+		}
+		// out_date do carve-out vale INDEPENDENTE de override — sem isso, uma
+		// célula zerada mascarava o material fora do período dele (bug 2026-08).
+		if carvedOutsidePeriod(date, p.MaterialID, rules) {
+			out[i] = CatOutDate
+			continue
+		}
+		entries = append(entries, entry{i: i, inWindow: inAnyWindow(local, date, p.MaterialID, rules, override)})
+	}
+	sort.SliceStable(entries, func(a, b int) bool {
+		return plays[entries[a].i].DetectedAt.Before(plays[entries[b].i].DetectedAt)
+	})
+
+	// Passo 3 — dentro da faixa preenche a meta.
+	inSlot := 0
+	for _, e := range entries {
+		if !e.inWindow {
+			continue
+		}
+		if inSlot < n {
+			out[e.i] = CatInSlot
+			inSlot++
+		} else {
+			out[e.i] = CatBonus
+		}
+	}
+	// Passo 4 — fora da faixa: segura o saldo enquanto a meta não fechou DENTRO
+	// da faixa; depois disso é excedente (D2).
+	for _, e := range entries {
+		if e.inWindow {
+			continue
+		}
+		if inSlot < n {
+			out[e.i] = CatOutSlot
+		} else {
+			out[e.i] = CatBonus
+		}
+	}
+	return out
+}
+
+// ruleCoversDay casa data+dia-da-semana de uma regra contra o dia da célula.
+// (No SQL: `for_date BETWEEN r.start_date AND r.end_date` + máscara do DOW.)
+func ruleCoversDay(r Rule, day time.Time) bool {
+	if day.Before(dateOnlySP(r.StartDate)) || day.After(dateOnlySP(r.EndDate)) {
+		return false
+	}
+	return (1<<int(day.Weekday()))&int(r.WeekdayMask) != 0
+}
+
+// carvedOutsidePeriod: o material é nomeado em alguma regra específica (carve-out)
+// e o dia está fora do range de datas de TODAS elas.
+func carvedOutsidePeriod(date time.Time, materialID uuid.UUID, rules []Rule) bool {
+	carved, inPeriod := false, false
+	for _, r := range rules {
+		if len(r.MaterialIDs) == 0 || !containsUUID(r.MaterialIDs, materialID) {
+			continue
+		}
+		carved = true
+		if !date.Before(dateOnlySP(r.StartDate)) && !date.After(dateOnlySP(r.EndDate)) {
+			inPeriod = true
+		}
+	}
+	return carved && !inPeriod
+}
+
+// inAnyWindow: a tocada cai em alguma faixa que vale hoje, com tolerância.
+// Com override, a faixa do override é a ÚNICA considerada. Sem override,
+// material carve-out é julgado só pelas regras que o nomeiam; material comum,
+// só pelas regras gerais.
+func inAnyWindow(local, date time.Time, materialID uuid.UUID, rules []Rule, override *Override) bool {
+	tod := local.Hour()*3600 + local.Minute()*60 + local.Second()
+	within := func(ts, te time.Time) bool {
+		s := ts.Hour()*3600 + ts.Minute()*60 + ts.Second()
+		e := te.Hour()*3600 + te.Minute()*60 + te.Second()
+		return tod >= s-SlotToleranceSeconds && tod <= e+SlotToleranceSeconds
+	}
+	if override != nil {
+		return within(override.TimeStart, override.TimeEnd)
+	}
+	carved := false
+	for _, r := range rules {
+		if len(r.MaterialIDs) > 0 && containsUUID(r.MaterialIDs, materialID) {
+			carved = true
+			break
+		}
+	}
+	for _, r := range rules {
+		specific := len(r.MaterialIDs) > 0
+		if carved != specific {
+			continue // carved usa só específicas; comum usa só gerais
+		}
+		if carved && !containsUUID(r.MaterialIDs, materialID) {
+			continue
+		}
+		if !ruleCoversDay(r, date) {
+			continue
+		}
+		if within(r.TimeStart, r.TimeEnd) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsUUID(ids []uuid.UUID, id uuid.UUID) bool {
