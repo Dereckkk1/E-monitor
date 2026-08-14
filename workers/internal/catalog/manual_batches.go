@@ -119,7 +119,7 @@ func (d *Detections) CreateManualBatch(ctx context.Context, in CreateManualBatch
 			CommercialID: e.CommercialID,
 			CampaignID:   in.CampaignID,
 			DetectedAt:   e.DetectedAt,
-		}, nil)
+		}, nil, true)
 		if err != nil {
 			return nil, err
 		}
