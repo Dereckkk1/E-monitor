@@ -425,22 +425,53 @@ func (s *Supervisor) retract(ctx context.Context, det match.ConfirmedDetection, 
 // was the prod double-count of 2026-06-09 (ASAAS SPOT 15 counted alongside the
 // 30s PLATAFORMA FINANCEIRA); retractions silently stopped working the moment
 // the catalog moved from commercials to the material library.
+//
+// A retração TIRA a tocada do conjunto aprovado (catalog.ApprovedDetectionsFilter)
+// e portanto LIBERA a vaga que ela ocupava na cota do dia — com a categorização
+// por célula-dia (spec 2026-08-14) isso muda a categoria das OUTRAS tocadas do
+// mesmo dia. Por isso a escrita deixou de ser um UPDATE cru aqui: resolvemos o
+// id e delegamos pro catalog.Detections.RetractByID, que retrata e REFECHA a
+// célula-dia na mesma transação. Com o UPDATE local a vaga liberada não era
+// reaproveitada por ninguém (in_slot subnotificado, déficit inflado pra sempre).
 func (s *Supervisor) markDetectionRetracted(ctx context.Context, shortID int32, stationID uuid.UUID, detectedAt, at time.Time) (int64, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE detections d
-		SET retracted_at = $1
-		WHERE d.station_id = $3
-		  AND d.detected_at = $4
+	rows, err := s.db.Query(ctx, `
+		SELECT d.id FROM detections d
+		WHERE d.station_id = $2
+		  AND d.detected_at = $3
 		  AND d.retracted_at IS NULL
 		  AND d.commercial_id IN (
-		      SELECT id FROM commercials WHERE short_id = $2
+		      SELECT id FROM commercials WHERE short_id = $1
 		      UNION
-		      SELECT id FROM materials   WHERE short_id = $2
+		      SELECT id FROM materials   WHERE short_id = $1
 		  )`,
-		at, shortID, stationID, detectedAt,
+		shortID, stationID, detectedAt,
 	)
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	// catalog.NewDetections só embrulha o pool — construir aqui evita mudar a
+	// assinatura do supervisor.New (e os testes que montam &Supervisor{} à mão).
+	dets := catalog.NewDetections(s.db)
+	var n int64
+	for _, id := range ids {
+		if err := dets.RetractByID(ctx, id, detectedAt, at); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }

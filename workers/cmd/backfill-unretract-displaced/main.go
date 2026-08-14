@@ -28,7 +28,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"radiocheck/internal/catalog"
 )
 
 func main() {
@@ -116,13 +119,49 @@ func main() {
 
 	// Apply: clear retracted_at on the distinct restore set. detected_at >= since
 	// keeps the UPDATE pruned to recent partitions.
-	tag, err := pool.Exec(ctx, candidateCTE+`
+	restoredRows, err := pool.Query(ctx, candidateCTE+`
 		UPDATE detections u
 		SET retracted_at = NULL
 		WHERE u.id IN (SELECT DISTINCT restore_id FROM restore)
-		  AND u.detected_at >= $1`, since, *windowSeconds)
+		  AND u.detected_at >= $1
+		RETURNING u.id, u.detected_at`, since, *windowSeconds)
 	if err != nil {
 		log.Fatalf("apply update: %v", err)
 	}
-	fmt.Printf("\nAPLICADO: %d linhas des-retratadas.\n", tag.RowsAffected())
+	type restored struct {
+		id uuid.UUID
+		at time.Time
+	}
+	var rest []restored
+	for restoredRows.Next() {
+		var r restored
+		if err := restoredRows.Scan(&r.id, &r.at); err != nil {
+			restoredRows.Close()
+			log.Fatalf("scan restored: %v", err)
+		}
+		rest = append(rest, r)
+	}
+	restoredRows.Close()
+	if err := restoredRows.Err(); err != nil {
+		log.Fatalf("restored rows: %v", err)
+	}
+	fmt.Printf("\nAPLICADO: %d linhas des-retratadas.\n", len(rest))
+
+	// Cada linha des-retratada VOLTA pro conjunto aprovado
+	// (catalog.ApprovedDetectionsFilter) e retoma a vaga dela na cota do dia —
+	// com a categorização por célula-dia (spec 2026-08-14), isso rebaixa quem
+	// tinha ocupado o lugar. Sem refechar, as células ficariam com in_slot
+	// duplicado até o próximo recat. Não é atômico com o UPDATE em lote (é um
+	// backfill; uma falha aqui deixa a célula pro recat), então só reportamos.
+	dets := catalog.NewDetections(pool)
+	var failed int
+	for _, r := range rest {
+		at := r.at
+		if err := dets.ResettleDetectionCells(ctx, r.id, &at); err != nil {
+			failed++
+			fmt.Printf("  refechamento da célula-dia falhou para %s: %v\n", r.id, err)
+		}
+	}
+	fmt.Printf("Células-dia refechadas: %d de %d (%d falhas — rode o recat nelas).\n",
+		len(rest)-failed, len(rest), failed)
 }
