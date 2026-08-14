@@ -2,21 +2,16 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStations, useCreateStation } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
+import StationDetailModal from '../components/StationDetailModal'
 import RSelect from '../components/RSelect'
 import { useRadioPlayer } from '../contexts/RadioPlayerContext'
 import { useAuth } from '../contexts/AuthContext'
+import { statusMetaFor } from '../utils/stationStatus'
 
 const BAND_OPTIONS = [
   { value: 'FM', label: 'FM' },
   { value: 'AM', label: 'AM' },
 ]
-
-const STATUS_META = {
-  active:      { label: 'Ativa',       cls: 'badge-success' },
-  calibrating: { label: 'Calibrando',  cls: 'badge-warning' },
-  paused:      { label: 'Sem campanha ativa', cls: 'badge-neutral' },
-  error:       { label: 'Erro',        cls: 'badge-danger'  },
-}
 
 function formatPMM(pmm) {
   if (pmm == null) return null
@@ -172,6 +167,10 @@ export default function StationsPage() {
   const stations = data?.data ?? []
   const total    = data?.total ?? 0
   const pages    = data?.pages ?? 1
+
+  // Ficha read-only da emissora. É o caminho pelo qual o usuário CLIENTE vê os
+  // dados de cada emissora — a tela de edição é admin-only.
+  const [detailStation, setDetailStation] = useState(null)
 
   // Create modal
   const [creating, setCreating] = useState(false)
@@ -343,7 +342,7 @@ export default function StationsPage() {
       ) : (
         <div className="stations-list">
           {stations.map(st => {
-            const statusMeta = STATUS_META[st.monitoring_status] ?? { label: st.monitoring_status, cls: 'badge-neutral' }
+            const statusMeta = statusMetaFor(st.monitoring_status)
             const cats       = st.meta?.categories ?? []
             const pmm        = formatPMM(st.pmm)
             const pop        = formatPop(st.meta?.total_population)
@@ -354,7 +353,20 @@ export default function StationsPage() {
             const loc        = [st.city, st.state].filter(Boolean).join('/')
 
             return (
-              <div key={st.id} className="station-row">
+              <div
+                key={st.id}
+                className="station-row station-row-clickable"
+                role="button"
+                tabIndex={0}
+                aria-label={`Ver detalhes de ${st.name}`}
+                onClick={() => setDetailStation(st)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setDetailStation(st)
+                  }
+                }}
+              >
                 <StationAvatar station={st} size={44} />
 
                 <div className="station-row-main">
@@ -393,11 +405,14 @@ export default function StationsPage() {
                       }
                       title={isStationPlaying(st.stream_url) ? 'Parar' : 'Ouvir ao vivo'}
                       aria-label={isStationPlaying(st.stream_url) ? 'Parar stream' : `Ouvir ${st.name}`}
-                      onClick={() => toggleStation({
-                        url: st.stream_url,
-                        name: st.name,
-                        logo: st.logo_url ?? null,
-                      })}
+                      onClick={e => {
+                        e.stopPropagation()
+                        toggleStation({
+                          url: st.stream_url,
+                          name: st.name,
+                          logo: st.logo_url ?? null,
+                        })
+                      }}
                     >
                       {isStationPlaying(st.stream_url) ? (
                         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
@@ -415,7 +430,10 @@ export default function StationsPage() {
                     <button
                       className="btn-icon"
                       title="Editar"
-                      onClick={() => navigate(`/stations/${st.id}/edit`)}
+                      onClick={e => {
+                        e.stopPropagation()
+                        navigate(`/stations/${st.id}/edit`)
+                      }}
                     >
                       <EditIcon />
                     </button>
@@ -448,6 +466,14 @@ export default function StationsPage() {
             Próxima →
           </button>
         </div>
+      )}
+
+      {/* Ficha da emissora (read-only, admin + cliente) */}
+      {detailStation && (
+        <StationDetailModal
+          station={detailStation}
+          onClose={() => setDetailStation(null)}
+        />
       )}
 
       {/* Create modal */}
