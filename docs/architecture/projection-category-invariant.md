@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-14
 codigo-relacionado:
   - workers/internal/catalog/distribution_rules.go
   - workers/internal/catalog/projection_reconcile.go
@@ -192,9 +192,18 @@ pelo reconciler.
 
 | Métrica | Tipo | Labels | Significado |
 |---------|------|--------|-------------|
-| `radiocheck_projection_drift_last_run` | gauge | — | Nº de divergências encontradas no último ciclo (`CountProjectionDrift`) |
+| `radiocheck_projection_drift_last_run` | gauge | — | Nº de divergências encontradas no último ciclo (`CountProjectionDrift`) — **projeções APROVADAS apenas** |
 | `radiocheck_projection_drift_healed_total` | counter | `from`, `to` | Projeções cuja categoria o reconciler corrigiu, por transição |
 | `radiocheck_recategorize_failures_total` | counter | `origin` | Falhas dos disparos best-effort de recategorização (ver camada 2/handlers) |
+
+> **Desde a categorização por cota (spec 2026-08-14):**
+> `radiocheck_projection_drift_last_run` e `radiocheck_projection_drift_healed_total`
+> cobrem **só projeções do conjunto aprovado** (`catalog.ApprovedDetectionsFilter`) —
+> tocada retratada/ignorada/`audit_rejected`/`ambiguous` não é contada nem curada.
+> Sob cota ela não tem veredito definido (não entra no `Settle`, nem no `classified`
+> do recat), então não haveria valor pro qual convergir; contá-la fixaria o
+> `ProjectionDriftPersistent` pra sempre em linhas que nenhuma tela lê. Efeito
+> prático: todo valor que o gauge mostra hoje é drift **visível ao usuário**.
 
 `origin` de `radiocheck_recategorize_failures_total`: `rule_create`,
 `rule_update`, `rule_delete`, `override_upsert`, `override_delete`,

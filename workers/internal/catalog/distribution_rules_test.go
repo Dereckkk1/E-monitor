@@ -288,9 +288,12 @@ func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 		return c
 	}
 
-	// Sanidade: começa orphan (tipo antigo não tem regra).
-	if got := readCat(); got != "orphan" {
-		t.Fatalf("pré-condição: category = %q, want orphan", got)
+	// Sanidade: começa bonus (tipo antigo não tem regra → meta do dia = 0 →
+	// a tocada é excedente). Era `orphan` antes da spec 2026-08-14, quando
+	// "tocou sem regra aplicável" tinha veredito próprio; agora cai no caso
+	// geral da cota e vira bonus explícito (D4).
+	if got := readCat(); got != "bonus" {
+		t.Fatalf("pré-condição: category = %q, want bonus", got)
 	}
 
 	// Operador troca o tipo do material pro tipo NOVO (que tem regra)...
@@ -478,13 +481,20 @@ func TestDistributionRules_RecategorizeRespectsSlotTolerance(t *testing.T) {
 
 	dets := NewDetections(pool)
 	// Quarta-feira 10/06/2026. Detections que exercitam a janela tolerada
-	// (±15 min) de uma rule 09:30–10:00:
-	//   09:20 → -10 min do início, dentro da tolerância → in_slot
-	//   09:15 → -15 min do início, exato no limite      → in_slot
-	//   09:14 → -16 min do início, fora                 → out_slot
-	//   10:14 → +14 min do fim,    dentro              → in_slot
-	//   10:15 → +15 min do fim,    exato no limite    → in_slot
-	//   10:16 → +16 min do fim,    fora               → out_slot
+	// (±15 min) de uma rule 09:30–10:00 com plays_per_day = 3.
+	//
+	// A tolerância decide só o booleano "dentro da faixa"; QUEM leva in_slot é a
+	// cota do dia (spec 2026-08-14). Dentro da faixa, em ordem cronológica:
+	// 09:15, 09:20, 10:14, 10:15 — as 3 primeiras preenchem N=3 e a 4ª sobra.
+	// Fora da faixa: como a meta já fechou DENTRO da faixa, não seguram déficit
+	// nenhum e também são excedente (passo 4 / decisão D2).
+	//
+	//   09:15 → -15 min do início, exato no limite → dentro, 1ª da cota → in_slot
+	//   09:20 → -10 min do início, dentro          → dentro, 2ª da cota → in_slot
+	//   10:14 → +14 min do fim,    dentro          → dentro, 3ª da cota → in_slot
+	//   10:15 → +15 min do fim,    exato no limite → dentro, excede N   → bonus
+	//   09:14 → -16 min do início, FORA            → meta cheia         → bonus
+	//   10:16 → +16 min do fim,    FORA            → meta cheia         → bonus
 	mk := func(h, m int, suffix string) *Detection {
 		t.Helper()
 		// BRT = UTC-3, então hora local h:m corresponde a (h+3):m UTC.
@@ -542,10 +552,10 @@ func TestDistributionRules_RecategorizeRespectsSlotTolerance(t *testing.T) {
 	}{
 		{"09:20 (-10min, in tolerance)", detEarlyIn, "in_slot"},
 		{"09:15 (-15min, edge)", detEarlyEdge, "in_slot"},
-		{"09:14 (-16min, out)", detEarlyOut, "out_slot"},
+		{"09:14 (-16min, out)", detEarlyOut, "bonus"},
 		{"10:14 (+14min, in)", detLateIn, "in_slot"},
-		{"10:15 (+15min, edge)", detLateEdge, "in_slot"},
-		{"10:16 (+16min, out)", detLateOut, "out_slot"},
+		{"10:15 (+15min, edge)", detLateEdge, "bonus"},
+		{"10:16 (+16min, out)", detLateOut, "bonus"},
 	}
 	for _, c := range cases {
 		if got := readCat(c.det); got != c.want {
