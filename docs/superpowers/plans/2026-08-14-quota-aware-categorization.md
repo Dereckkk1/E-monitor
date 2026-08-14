@@ -1024,6 +1024,22 @@ git commit -m "feat(recat): fechamento por celula-dia em SQL com expansao de esc
 
 ## Task 5: Teste de paridade Go × SQL
 
+> **Ponto de partida pronto (review da Task 4, 2026-08-14).** O revisor deixou um harness
+> diferencial funcionando no scratchpad da sessão, em `review-harness/` (5 arquivos):
+> roda `recatScopeByCampaignSQL + recatSelectTailSQL` como SELECT puro e compara contra
+> `categorizer.Settle` alimentado pelos **loaders de produção** (`loadRulesForCell`,
+> `loadOverrideForCell`, `loadCellDayPlays`) — ou seja, exatamente os inputs do insert-path.
+> Já rodou 600 cenários / 3.369 vereditos com 0 divergência, e provou sensibilidade por
+> mutação (3 mutações no SQL, todas pegas em <20 cenários).
+>
+> Promover esse harness pra teste versionado é a Task 5. Ele cobre 2 casos que o plano
+> original não previa e que devem entrar: **independência entre tipos** na mesma célula-dia
+> (a cota particiona por tipo) e **`meta.N` × o `expected` da view** (se divergirem, o
+> déficit sai errado mesmo com as categorias certas).
+>
+> Gerar também os limites exatos de tolerância (900 e 901 segundos), empates no mesmo
+> segundo, dias na borda do período da campanha, e linhas não-aprovadas.
+
 **Files:**
 - Create: `workers/internal/catalog/settle_parity_test.go`
 
@@ -1422,6 +1438,21 @@ Adicionar a linha nova em `docs/README.md` e no mapa de consulta do `CLAUDE.md`.
 git add docs/ CLAUDE.md
 git commit -m "docs: categorizacao por cota (spec 2026-08-14)"
 ```
+
+---
+
+## ⛔ Trava de deploy — esta branch NÃO pode chegar em prod antes da Task 6
+
+Descoberto na review da Task 4 (2026-08-14). A migration **0064 já renomeia todo o dado
+`orphan` → `bonus`**, mas enquanto a **0065 (Task 6)** não existir, a `daily_play_summary` e
+a `daily_play_summary_for` continuam calculando `bonus` como
+`COUNT(*) FILTER (WHERE category = 'orphan')` — que passa a ser **sempre 0**.
+
+No mesmo estado, seguem lendo `'orphan'`: `insights.go:405` e `:519`, `daily_summary.go`,
+`detections.go:1744` e o `DayDetailModal` do frontend.
+
+Efeito se subir assim: **bonificação lê zero em todas as telas e relatórios.** As Tasks 6, 7,
+9 e 11 têm que estar na mesma leva. Não existe deploy parcial seguro desta branch.
 
 ---
 
