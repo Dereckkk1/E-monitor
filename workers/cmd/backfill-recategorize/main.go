@@ -103,25 +103,41 @@ func main() {
 		log.Fatalf("rows: %v", err)
 	}
 
-	// Distribuição de out_date/orphan das campanhas-alvo, medida na projeção
-	// canônica (detection_campaigns.category) que a view daily_play_summary lê,
-	// com o mesmo gate "aprovado" (retracted/ignored/audit_rejected fora). É o
-	// número que o operador confere antes do --apply (§4.8).
-	countCats := func() (outDate, orphan int64, err error) {
+	// Distribuição de categorias das campanhas-alvo, medida na projeção canônica
+	// (detection_campaigns.category) que a view daily_play_summary lê, com o mesmo
+	// gate "aprovado" (retracted/ignored/audit_rejected fora). É o número que o
+	// operador confere antes do --apply (§4.8).
+	//
+	// TODAS as categorias, não só out_date/orphan: desde a spec 2026-08-14 o
+	// categorizador não emite mais 'orphan' (virou 'bonus') e a cota move tocada
+	// entre in_slot/out_slot/bonus. Reportar só as duas antigas mostraria
+	// "orphan -N" sem contrapartida nenhuma e esconderia justamente o delta
+	// financeiro (in_slot é o que fatura, out_slot não vale nada) que a decisão de
+	// alcance retroativo depende de medir contra um clone de prod.
+	type catCounts struct{ inSlot, outSlot, bonus, orphan, outDate int64 }
+	countCats := func() (c catCounts, err error) {
 		err = pool.QueryRow(ctx, `
 			SELECT
-			  COUNT(*) FILTER (WHERE dc.category = 'out_date'),
-			  COUNT(*) FILTER (WHERE dc.category = 'orphan')
+			  COUNT(*) FILTER (WHERE dc.category = 'in_slot'),
+			  COUNT(*) FILTER (WHERE dc.category = 'out_slot'),
+			  COUNT(*) FILTER (WHERE dc.category = 'bonus'),
+			  COUNT(*) FILTER (WHERE dc.category = 'orphan'),
+			  COUNT(*) FILTER (WHERE dc.category = 'out_date')
 			FROM detection_campaigns dc
 			JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
 			WHERE dc.campaign_id = ANY($1::uuid[])
 			  AND d.retracted_at IS NULL
 			  AND d.ignored_at IS NULL
-			  AND d.evidence_status <> 'audit_rejected'`, campIDs).Scan(&outDate, &orphan)
+			  AND d.evidence_status <> 'audit_rejected'`, campIDs).Scan(
+			&c.inSlot, &c.outSlot, &c.bonus, &c.orphan, &c.outDate)
 		return
 	}
+	fmtCats := func(c catCounts) string {
+		return fmt.Sprintf("in_slot=%d  out_slot=%d  bonus=%d  orphan=%d  out_date=%d",
+			c.inSlot, c.outSlot, c.bonus, c.orphan, c.outDate)
+	}
 
-	beforeOut, beforeOrphan, err := countCats()
+	before, err := countCats()
 	if err != nil {
 		log.Fatalf("count (antes): %v", err)
 	}
@@ -130,7 +146,7 @@ func main() {
 		alvo = "todas as campanhas com projeções"
 	}
 	fmt.Printf("\n=== backfill-recategorize (%d %s) ===\n", len(camps), alvo)
-	fmt.Printf("ANTES:  out_date=%d  orphan=%d\n", beforeOut, beforeOrphan)
+	fmt.Printf("ANTES:  %s\n", fmtCats(before))
 
 	if !*apply {
 		fmt.Printf("\nDRY-RUN: nada foi alterado. Rode com --apply (após --apply num CLONE, §4.8) para recategorizar.\n")
@@ -157,11 +173,14 @@ func main() {
 		ok++
 	}
 
-	afterOut, afterOrphan, err := countCats()
+	after, err := countCats()
 	if err != nil {
 		log.Fatalf("count (depois): %v", err)
 	}
-	fmt.Printf("\nDEPOIS: out_date=%d  orphan=%d\n", afterOut, afterOrphan)
-	fmt.Printf("DELTA:  out_date %+d  orphan %+d\n", afterOut-beforeOut, afterOrphan-beforeOrphan)
+	fmt.Printf("\nDEPOIS: %s\n", fmtCats(after))
+	fmt.Printf("DELTA:  in_slot %+d  out_slot %+d  bonus %+d  orphan %+d  out_date %+d\n",
+		after.inSlot-before.inSlot, after.outSlot-before.outSlot,
+		after.bonus-before.bonus, after.orphan-before.orphan,
+		after.outDate-before.outDate)
 	fmt.Printf("APLICADO: %d campanhas ok, %d falharam.\n", ok, failed)
 }

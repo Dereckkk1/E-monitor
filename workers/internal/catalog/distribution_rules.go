@@ -53,6 +53,29 @@ type CreateDistributionRuleInput struct {
 	PlaysPerDay int16
 }
 
+// normalizeMaterialIDs converte um slice nil em `{}`.
+//
+// distribution_rules.material_ids é `uuid[] NOT NULL DEFAULT '{}'` (migration
+// 0043), mas o DEFAULT só vale quando a coluna é OMITIDA do INSERT — passar um
+// slice nil como bind param manda NULL explícito e viola o NOT NULL. Como o zero
+// value de []uuid.UUID é nil, qualquer caller que simplesmente não preencha
+// MaterialIDs (o caso "regra geral, vale pra todos os materiais do tipo")
+// quebrava o INSERT em QUALQUER banco — não era falha de ambiente.
+//
+// `{}` é exatamente a representação canônica da regra geral: ver
+// cardinality(material_ids) = 0 no recatClassifiedCTE e len(Rule.MaterialIDs) == 0
+// no categorizer.
+//
+// station_ids NÃO recebe o mesmo tratamento de propósito: lá `{}` significaria
+// "regra que não vale pra emissora nenhuma", um no-op silencioso. Melhor
+// estourar o NOT NULL e o caller descobrir.
+func normalizeMaterialIDs(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
+}
+
 // ruleColumns uses to_char to normalize TIME to HH:MM string in SELECTs.
 const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids, name,
        start_date, end_date, weekday_mask,
@@ -68,7 +91,7 @@ func (dr *DistributionRules) Create(ctx context.Context, in CreateDistributionRu
 		   weekday_mask, time_start, time_end, plays_per_day)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time, $11)
 		RETURNING `+ruleColumns,
-		in.CampaignID, in.TypeID, in.StationIDs, in.MaterialIDs, in.Name,
+		in.CampaignID, in.TypeID, in.StationIDs, normalizeMaterialIDs(in.MaterialIDs), in.Name,
 		in.StartDate, in.EndDate, in.WeekdayMask,
 		in.TimeStart, in.TimeEnd, in.PlaysPerDay,
 	).Scan(&r.ID, &r.CampaignID, &r.TypeID, &r.StationIDs, &r.MaterialIDs, &r.Name,
@@ -174,7 +197,7 @@ func (dr *DistributionRules) Update(ctx context.Context, id uuid.UUID, in Create
 		    end_date = $6, weekday_mask = $7, time_start = $8::time,
 		    time_end = $9::time, plays_per_day = $10, name = $11, updated_at = now()
 		WHERE id = $1`,
-		id, in.TypeID, in.StationIDs, in.MaterialIDs, in.StartDate, in.EndDate,
+		id, in.TypeID, in.StationIDs, normalizeMaterialIDs(in.MaterialIDs), in.StartDate, in.EndDate,
 		in.WeekdayMask, in.TimeStart, in.TimeEnd, in.PlaysPerDay, in.Name)
 	return err
 }
@@ -466,6 +489,15 @@ SELECT id, detected_at, campaign_id, new_category FROM classified`
 // do código (não depende do ExecPostprocessPlan) E cada UPDATE devolve o próprio
 // tag, então a projeção volta a ser contada exatamente.
 //
+// O QUE ISTO **NÃO** FECHA: a ordem padronizada é a das TABELAS. Dentro do
+// `UPDATE detections ... FROM recat_verdict` as linhas são varridas na ordem
+// FÍSICA da temp table, que vem de um UNION ALL sem ORDER BY — enquanto o
+// rewriteCategories varre um unnest ordenado por (detected_at, id). Duas
+// transações que compartilhem 2+ linhas ainda podem deadlockar nos locks de
+// LINHA, em ordens opostas. É pré-existente (a CTE `classified` também não
+// tinha ordem) e o advisory lock cobre os caminhos estreitos, mas não assuma
+// que o problema está resolvido de ponta a ponta.
+//
 // A guarda `d.campaign_id = v.campaign_id` no UPDATE da base é o que impede o
 // recat de uma campanha SECUNDÁRIA (fan-out F-119) de sobrescrever a categoria da
 // tocada-base com o veredito de outra campanha. Ver spec 2026-07-14 §3-T1.
@@ -514,8 +546,10 @@ func (dr *DistributionRules) applyRecat(ctx context.Context, tx pgx.Tx,
 	if _, err := tx.Exec(ctx, `INSERT INTO recat_verdict `+scopeSQL+recatSelectTailSQL, args...); err != nil {
 		return 0, err
 	}
-	// Sem ANALYZE o planner assume o default de 1000 linhas pra temp table recém
-	// criada e escolhe o join errado contra as partições de detections.
+	// A temp table nasce com reltuples = -1; o planner ESTIMA pelo tamanho real
+	// da relação, então nem de longe erra por ordem de grandeza. O ANALYZE serve
+	// pro resto: reltuples exato, largura real das colunas e — o que importa —
+	// n_distinct das chaves do join contra as partições de detections.
 	if _, err := tx.Exec(ctx, `ANALYZE recat_verdict`); err != nil {
 		return 0, err
 	}
@@ -563,14 +597,26 @@ func (dr *DistributionRules) runRecat(ctx context.Context, scopeSQL string, args
 // inteiro × todas as emissoras), e travar todas custaria um lock por célula na
 // mesma transação — o lock table do Postgres é dimensionado por
 // max_locks_per_transaction (64 por padrão) e estouraria com "out of shared
-// memory". RISCO RESIDUAL: um recat amplo concorrente com um insert na mesma célula-dia
-// pode gravar um veredito calculado a partir de um snapshot sem a tocada nova —
-// a célula fica com in_slot a menos até o próximo fechamento (qualquer tocada
-// seguinte) ou até o projrecon (janela móvel) passar. É convergente, não
-// permanente, e o UPDATE de linha ainda serializa a escrita (não há perda de
-// dado, só um veredito velho). O caminho estreito — RecategorizeForOverride, uma
-// única célula-dia, disparado pela UI enquanto o rádio está no ar — TOMA o lock;
-// ver lá.
+// memory".
+//
+// RISCO RESIDUAL: um recat amplo concorrente com um fechamento da mesma
+// célula-dia pode gravar um veredito calculado a partir de um snapshot sem a
+// tocada nova. Isso NÃO é só "in_slot a menos" — pode QUEBRAR A INVARIANTE
+// in_slot <= N, e o gatilho é uma tocada que chega com timestamp ANTERIOR a
+// outra já assentada (veiculação manual, lote retroativo, evidência atrasada):
+//
+//	N = 1; P1 20:00 dentro da faixa → in_slot.
+//	P0 06:00 chega (mais CEDO) e o insert-path refecha: P0=in_slot, P1=bonus.
+//	o recat velho aplica o veredito computado sem P0: P0=in_slot, P1=in_slot
+//	→ in_slot = 2 com N = 1.
+//
+// Ou seja, o desvio é de SUPER-atribuição (entrega inflada, deficit = N − in_slot
+// zerado), não só de sub-atribuição. Continua convergente — o próximo fechamento
+// da célula ou a passagem do projrecon restauram — e o UPDATE de linha serializa
+// a escrita, então não há perda de dado; mas quem for julgar se o risco é
+// aceitável tem que saber que ele erra pro lado que fatura a mais. O caminho
+// estreito — RecategorizeForOverride, uma única célula-dia, disparado pela UI
+// enquanto o rádio está no ar — TOMA o lock; ver lá.
 func (dr *DistributionRules) recategorizeScope(ctx context.Context,
 	campaignID uuid.UUID, typeID *uuid.UUID, stationIDs []uuid.UUID,
 	from, to time.Time) error {
