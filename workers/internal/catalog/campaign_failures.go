@@ -24,6 +24,26 @@ var ErrCampaignNotFound = errors.New("campaign not found or cancelled")
 //	bonified  = (extras >= deficit) AND extras > 0 AND deficit > 0
 //
 // Zero deficit means nothing failed → never bonified (nothing to compensate).
+//
+// Desde a migration 0065 (modelo de cota, decisão D3) o déficit é
+// GREATEST(0, expected - in_slot) — out_slot NÃO abate mais o contrato. Um dia
+// inteiro tocado FORA da faixa contratada, que antes lia "cumprido", agora lê
+// deficit > 0. Como o painel /admin/station-failures alimenta o PDF de cobrança
+// enviado à emissora, o déficit é quebrado em DOIS tipos (decisão D7) para nunca
+// acusar de ausência quem de fato veiculou:
+//
+//	deficit_off_slot = LEAST(deficit, out_slot)          — tocou, no horário errado
+//	deficit_absent   = GREATEST(0, deficit - out_slot)   — não tocou nada
+//
+// A quebra é aplicada POR LINHA da daily_play_summary (célula
+// campaign × type × station × dia) e só depois somada. Aplicar LEAST/GREATEST
+// sobre os totais já somados seria errado: out_slot sobrando num dia passaria a
+// desculpar o silêncio de outro dia (dia A expected=2/in_slot=0/out_slot=0 +
+// dia B expected=2/in_slot=2/out_slot=5 ⇒ por linha off=0/absent=2, correto;
+// sobre os totais off=2/absent=0, que absolveria a emissora do dia A).
+//
+// Invariante, verdadeira em cada linha e portanto na soma:
+// deficit_off_slot + deficit_absent == deficit.
 func IsBonified(deficit, extras int) bool {
 	if deficit <= 0 || extras <= 0 {
 		return false
@@ -62,14 +82,19 @@ type StationFailureInfo struct {
 }
 
 type CampaignFailureStation struct {
-	Station           StationFailureInfo `json:"station"`
-	Programmed        int                `json:"programmed"`
-	Identified        int                `json:"identified"`
-	Deficit           int                `json:"deficit"`
-	Extras            int                `json:"extras"`
-	IsBonified        bool               `json:"is_bonified"`
-	FailureDaysOnDate []string           `json:"failure_days_on_date,omitempty"` // only in modo dia
-	FailureDays       []string           `json:"failure_days,omitempty"`         // only in drill-in
+	Station    StationFailureInfo `json:"station"`
+	Programmed int                `json:"programmed"`
+	Identified int                `json:"identified"`
+	Deficit    int                `json:"deficit"`
+	// DeficitOffSlot é a parte do déficit com veiculação fora da faixa por trás
+	// (a emissora tocou, no horário errado). DeficitAbsent é a parte em que nada
+	// foi ao ar. Somam exatamente Deficit — ver comentário de IsBonified.
+	DeficitOffSlot    int      `json:"deficit_off_slot"`
+	DeficitAbsent     int      `json:"deficit_absent"`
+	Extras            int      `json:"extras"`
+	IsBonified        bool     `json:"is_bonified"`
+	FailureDaysOnDate []string `json:"failure_days_on_date,omitempty"` // only in modo dia
+	FailureDays       []string `json:"failure_days,omitempty"`         // only in drill-in
 }
 
 type CampaignDailyFailure struct {
@@ -78,9 +103,11 @@ type CampaignDailyFailure struct {
 }
 
 type CampaignDailySummary struct {
-	Campaigns    int `json:"campaigns"`
-	Stations     int `json:"stations"`
-	TotalDeficit int `json:"total_deficit"`
+	Campaigns           int `json:"campaigns"`
+	Stations            int `json:"stations"`
+	TotalDeficit        int `json:"total_deficit"`
+	TotalDeficitOffSlot int `json:"total_deficit_off_slot"`
+	TotalDeficitAbsent  int `json:"total_deficit_absent"`
 }
 
 type DailyResult struct {
@@ -95,6 +122,8 @@ type CampaignHistoricalRow struct {
 	StationsWithFailure int          `json:"stations_with_failure"`
 	TotalFailureDays    int          `json:"total_failure_days"`
 	TotalDeficit        int          `json:"total_deficit"`
+	TotalDeficitOffSlot int          `json:"total_deficit_off_slot"`
+	TotalDeficitAbsent  int          `json:"total_deficit_absent"`
 	IsFullyBonified     bool         `json:"is_fully_bonified"`
 }
 
@@ -116,6 +145,8 @@ type DetailSummary struct {
 	StationsWithFailure int `json:"stations_with_failure"`
 	TotalFailureDays    int `json:"total_failure_days"`
 	TotalDeficit        int `json:"total_deficit"`
+	TotalDeficitOffSlot int `json:"total_deficit_off_slot"`
+	TotalDeficitAbsent  int `json:"total_deficit_absent"`
 }
 
 type DetailResult struct {
@@ -291,11 +322,16 @@ ORDER BY dps.campaign_id`, dayStr, campIDs)
 	}
 
 	// Q3: campaign-period aggregates (programmed/identified/deficit/extras)
+	// A quebra off_slot/absent é POR LINHA (célula-dia) e só depois somada —
+	// ver comentário de IsBonified: LEAST/GREATEST sobre os totais deixaria o
+	// out_slot de um dia desculpar o silêncio de outro.
 	rows3, err := r.pool.Query(ctx, `
 SELECT dps.campaign_id, dps.station_id,
        SUM(dps.expected)::int  AS programmed,
        SUM(dps.in_slot)::int   AS identified,
        SUM(dps.deficit)::int   AS deficit,
+       SUM(LEAST(dps.deficit, dps.out_slot))::int        AS deficit_off_slot,
+       SUM(GREATEST(0, dps.deficit - dps.out_slot))::int AS deficit_absent,
        (SUM(dps.out_slot) + SUM(dps.out_date) + SUM(dps.bonus))::int AS extras
 FROM daily_play_summary dps
 WHERE dps.campaign_id = ANY($1::uuid[])
@@ -308,14 +344,17 @@ GROUP BY dps.campaign_id, dps.station_id`, campIDs, stationIDs)
 	defer rows3.Close()
 	for rows3.Next() {
 		var cid, sid uuid.UUID
-		var programmed, identified, deficit, extras int
-		if err := rows3.Scan(&cid, &sid, &programmed, &identified, &deficit, &extras); err != nil {
+		var programmed, identified, deficit, deficitOffSlot, deficitAbsent, extras int
+		if err := rows3.Scan(&cid, &sid, &programmed, &identified, &deficit,
+			&deficitOffSlot, &deficitAbsent, &extras); err != nil {
 			return nil, err
 		}
 		if st, ok := statByPair[pair{cid, sid}]; ok {
 			st.Programmed = programmed
 			st.Identified = identified
 			st.Deficit = deficit
+			st.DeficitOffSlot = deficitOffSlot
+			st.DeficitAbsent = deficitAbsent
 			st.Extras = extras
 			st.IsBonified = IsBonified(deficit, extras)
 		}
@@ -333,6 +372,8 @@ GROUP BY dps.campaign_id, dps.station_id`, campIDs, stationIDs)
 
 	totalStations := 0
 	totalDeficit := 0
+	totalOffSlot := 0
+	totalAbsent := 0
 	for _, cid := range campIDs {
 		entry := campByID[cid]
 		// Stations inside campaign: deficit DESC, name ASC
@@ -340,6 +381,8 @@ GROUP BY dps.campaign_id, dps.station_id`, campIDs, stationIDs)
 		totalStations += len(entry.Stations)
 		for _, st := range entry.Stations {
 			totalDeficit += st.Deficit
+			totalOffSlot += st.DeficitOffSlot
+			totalAbsent += st.DeficitAbsent
 		}
 		result.Campaigns = append(result.Campaigns, *entry)
 	}
@@ -347,9 +390,11 @@ GROUP BY dps.campaign_id, dps.station_id`, campIDs, stationIDs)
 	sortCampaignsByImpact(result.Campaigns)
 
 	result.Summary = CampaignDailySummary{
-		Campaigns:    len(result.Campaigns),
-		Stations:     totalStations,
-		TotalDeficit: totalDeficit,
+		Campaigns:           len(result.Campaigns),
+		Stations:            totalStations,
+		TotalDeficit:        totalDeficit,
+		TotalDeficitOffSlot: totalOffSlot,
+		TotalDeficitAbsent:  totalAbsent,
 	}
 	return result, nil
 }
@@ -398,6 +443,8 @@ WITH agg AS (
          COUNT(DISTINCT dps.station_id) FILTER (WHERE dps.deficit > 0) AS stations_with_failure,
          COUNT(*) FILTER (WHERE dps.deficit > 0) AS total_failure_days,
          SUM(dps.deficit)::int AS total_deficit,
+         SUM(LEAST(dps.deficit, dps.out_slot))::int        AS total_deficit_off_slot,
+         SUM(GREATEST(0, dps.deficit - dps.out_slot))::int AS total_deficit_absent,
          SUM(dps.out_slot + dps.out_date + dps.bonus)::int AS total_extras
   FROM daily_play_summary dps
   WHERE ` + failureHorizonClause + `
@@ -410,6 +457,8 @@ SELECT c.id, c.name, c.start_date, c.end_date, c.status,
        a.stations_with_failure::int,
        a.total_failure_days::int,
        a.total_deficit::int,
+       a.total_deficit_off_slot::int,
+       a.total_deficit_absent::int,
        a.total_extras::int
 FROM agg a
 JOIN campaigns c ON c.id = a.campaign_id
@@ -427,10 +476,12 @@ LIMIT $1 OFFSET $2`, pageSize, offset)
 		var info CampaignInfo
 		var start, end time.Time
 		var stationsWithFailure, totalFailureDays, totalDeficit, totalExtras int
+		var totalDeficitOffSlot, totalDeficitAbsent int
 		if err := rows.Scan(
 			&info.ID, &info.Name, &start, &end, &info.Status,
 			&info.ClientID, &info.ClientName, &info.ClientLogoURL,
-			&stationsWithFailure, &totalFailureDays, &totalDeficit, &totalExtras,
+			&stationsWithFailure, &totalFailureDays, &totalDeficit,
+			&totalDeficitOffSlot, &totalDeficitAbsent, &totalExtras,
 		); err != nil {
 			return nil, err
 		}
@@ -441,6 +492,8 @@ LIMIT $1 OFFSET $2`, pageSize, offset)
 			StationsWithFailure: stationsWithFailure,
 			TotalFailureDays:    totalFailureDays,
 			TotalDeficit:        totalDeficit,
+			TotalDeficitOffSlot: totalDeficitOffSlot,
+			TotalDeficitAbsent:  totalDeficitAbsent,
 			IsFullyBonified:     IsBonified(totalDeficit, totalExtras),
 		})
 		totalFailureDaysSum += totalFailureDays
@@ -524,6 +577,8 @@ SELECT dps.station_id,
        SUM(dps.expected)::int  AS programmed,
        SUM(dps.in_slot)::int   AS identified,
        SUM(dps.deficit)::int   AS deficit,
+       SUM(LEAST(dps.deficit, dps.out_slot))::int        AS deficit_off_slot,
+       SUM(GREATEST(0, dps.deficit - dps.out_slot))::int AS deficit_absent,
        (SUM(dps.out_slot) + SUM(dps.out_date) + SUM(dps.bonus))::int AS extras,
        COALESCE(
          array_agg(DISTINCT dps.for_date::text ORDER BY dps.for_date::text)
@@ -544,15 +599,19 @@ ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)
 	defer rows.Close()
 
 	totalDeficit := 0
+	totalOffSlot := 0
+	totalAbsent := 0
 	totalFailureDays := 0
 	for rows.Next() {
 		var sid uuid.UUID
 		var name, band, freq, city, logo string
 		var programmed, identified, deficit, extras, failureDayCount int
+		var deficitOffSlot, deficitAbsent int
 		var failureDays []string
 		if err := rows.Scan(
 			&sid, &name, &band, &freq, &city, &logo,
-			&programmed, &identified, &deficit, &extras,
+			&programmed, &identified, &deficit,
+			&deficitOffSlot, &deficitAbsent, &extras,
 			&failureDays, &failureDayCount,
 		); err != nil {
 			return nil, err
@@ -562,14 +621,18 @@ ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)
 				ID: sid, Name: name, Dial: makeDial(freq, band),
 				City: city, LogoURL: logo,
 			},
-			Programmed:  programmed,
-			Identified:  identified,
-			Deficit:     deficit,
-			Extras:      extras,
-			IsBonified:  IsBonified(deficit, extras),
-			FailureDays: failureDays,
+			Programmed:     programmed,
+			Identified:     identified,
+			Deficit:        deficit,
+			DeficitOffSlot: deficitOffSlot,
+			DeficitAbsent:  deficitAbsent,
+			Extras:         extras,
+			IsBonified:     IsBonified(deficit, extras),
+			FailureDays:    failureDays,
 		})
 		totalDeficit += deficit
+		totalOffSlot += deficitOffSlot
+		totalAbsent += deficitAbsent
 		totalFailureDays += failureDayCount
 	}
 	if err := rows.Err(); err != nil {
@@ -580,6 +643,8 @@ ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)
 		StationsWithFailure: len(result.Stations),
 		TotalFailureDays:    totalFailureDays,
 		TotalDeficit:        totalDeficit,
+		TotalDeficitOffSlot: totalOffSlot,
+		TotalDeficitAbsent:  totalAbsent,
 	}
 	return result, nil
 }
