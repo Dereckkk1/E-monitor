@@ -24,8 +24,11 @@
 -- ele (é um snapshot no tempo, não um trigger). Essas linhas ficam 'orphan'
 -- até: (a) o reconciler `projrecon` re-assentar as últimas 48h a cada 15min e
 -- convertê-las, ou (b) o backfill global da Task 12 cobrir o histórico mais
--- antigo. Nenhuma delas é perdida — 'orphan' continua aceito no CHECK (0063)
--- e a view soma os dois valores até a migration que remove 'orphan' do CHECK.
+-- antigo. Nenhuma delas é rejeitada — 'orphan' continua aceito no CHECK (0063)
+-- —, mas a partir de 0065 a view/função contam SÓ 'bonus': enquanto não forem
+-- convertidas, elas não aparecem como bonificação. É deliberado (somar os dois
+-- valores esconderia um produtor que continuasse gravando 'orphan') e a janela
+-- é a de convergência do projrecon, ~15 min.
 
 BEGIN;
 
