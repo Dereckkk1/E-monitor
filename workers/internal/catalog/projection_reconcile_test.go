@@ -9,7 +9,7 @@ import (
 )
 
 // Count acha a divergência; Heal cura; Count volta a zero. Cenário: projeção
-// fan-out orphan + regra criada via repo (repo.Create NÃO dispara recat — quem
+// fan-out bonus + regra criada via repo (repo.Create NÃO dispara recat — quem
 // dispara é o handler), ou seja, drift real como o do caso COPA.
 func TestProjectionDrift_CountAndHeal(t *testing.T) {
 	ctx, pool := newTestDB(t)
@@ -62,7 +62,7 @@ func TestProjectionDrift_CountAndHeal(t *testing.T) {
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
-		VALUES ($1, $2, $3, $4, 'orphan')`,
+		VALUES ($1, $2, $3, $4, 'bonus')`,
 		det.ID, det.DetectedAt, campB.ID, matB.ID)
 	require.NoError(t, err)
 
@@ -86,13 +86,13 @@ func TestProjectionDrift_CountAndHeal(t *testing.T) {
 
 	since := day.Add(-2 * time.Hour)
 
-	// Count: 1 divergência orphan→in_slot na campanha B.
+	// Count: 1 divergência bonus→in_slot na campanha B.
 	drifts, err := rules.CountProjectionDrift(ctx, since)
 	require.NoError(t, err)
 	found := false
 	for _, dr := range drifts {
 		if dr.CampaignID == campB.ID {
-			require.Equal(t, "orphan", dr.From)
+			require.Equal(t, "bonus", dr.From)
 			require.Equal(t, "in_slot", dr.To)
 			require.GreaterOrEqual(t, dr.N, int64(1))
 			found = true
@@ -120,7 +120,7 @@ func TestProjectionDrift_CountAndHeal(t *testing.T) {
 
 // TestHealProjectionDriftForCampaign_ConvergesOutOfRange prova o fechamento do
 // gap I1 (review 2026-07-14): uma projeção cujo detected_at cai FORA do período
-// da campanha — categoria correta out_date — mas gravada errada (orphan) NUNCA é
+// da campanha — categoria correta out_date — mas gravada errada (bonus) NUNCA é
 // alcançada por RecategorizeForCampaign, que escopa por
 // date_trunc(...) BETWEEN start_date AND end_date (recategorizeScope). Logo o
 // backfill --all (que convergia campanha a campanha via RecategorizeForCampaign)
@@ -173,7 +173,7 @@ func TestHealProjectionDriftForCampaign_ConvergesOutOfRange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Tocada + projeção canônica fora do período. Create categoriza inline como
-	// out_date; forçamos a gravação errada 'orphan' pra instalar o drift I1.
+	// out_date; forçamos a gravação errada 'bonus' pra instalar o drift I1.
 	det, err := NewDetections(pool).Create(ctx, CreateDetectionInput{
 		StationID: stat.ID, CommercialID: mat.ID, CampaignID: camp.ID,
 		DetectedAt: outDay, MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
@@ -181,7 +181,7 @@ func TestHealProjectionDriftForCampaign_ConvergesOutOfRange(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx,
-		`UPDATE detection_campaigns SET category = 'orphan' WHERE detection_id = $1 AND campaign_id = $2`,
+		`UPDATE detection_campaigns SET category = 'bonus' WHERE detection_id = $1 AND campaign_id = $2`,
 		det.ID, camp.ID)
 	require.NoError(t, err)
 
@@ -197,13 +197,13 @@ func TestHealProjectionDriftForCampaign_ConvergesOutOfRange(t *testing.T) {
 	rules := NewDistributionRules(pool)
 
 	// (1) O caminho date-bounded (RecategorizeForCampaign) NÃO alcança a projeção
-	// fora do período [start,end] → continua orphan (o bug I1).
+	// fora do período [start,end] → continua bonus (o bug I1).
 	require.NoError(t, rules.RecategorizeForCampaign(ctx, camp.ID))
 	var afterBounded string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detection_campaigns WHERE detection_id=$1 AND campaign_id=$2`,
 		det.ID, camp.ID).Scan(&afterBounded))
-	require.Equal(t, "orphan", afterBounded,
+	require.Equal(t, "bonus", afterBounded,
 		"date-bounded RecategorizeForCampaign não pode alcançar projeção fora do período (I1)")
 
 	// (2) O heal date-UNBOUNDED alcança a projeção e converge pra out_date.

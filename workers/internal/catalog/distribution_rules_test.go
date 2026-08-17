@@ -170,7 +170,7 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 		pool.Exec(ctx, "DELETE FROM stations WHERE id = $1", stat.ID)
 	})
 
-	// 1. Cria uma detection ANTES de qualquer regra → category=orphan
+	// 1. Cria uma detection ANTES de qualquer regra → category=bonus
 	dets := NewDetections(pool)
 	// 10/06/2026 (qua) às 09:00 BRT (12:00 UTC)
 	detTime := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
@@ -216,10 +216,10 @@ func TestDistributionRules_RecategorizeAfterCreate(t *testing.T) {
 }
 
 // TestDistributionRules_RecategorizeForMaterial cobre o bug do print:
-// material cadastrado com um tipo, veicula (detection vira orphan porque não
+// material cadastrado com um tipo, veicula (detection vira bonus porque não
 // há regra pro tipo antigo), e depois o operador troca o tipo pra um que JÁ
-// TEM regra. Sem recategorizar por material, a detection continua 'orphan' e
-// some pra "bônus (sem regra)" no resumo diário. RecategorizeForMaterial,
+// TEM regra. Sem recategorizar por material, a detection continua 'bonus' e
+// some pra "bonificação (sem meta)" no resumo diário. RecategorizeForMaterial,
 // rodado após o UPDATE do type_id, precisa virar a detection pra in_slot.
 func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 	ctx, pool := newTestDB(t)
@@ -265,7 +265,7 @@ func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 	}
 
 	// Detection no horário coberto pela regra do tipo novo, mas o material
-	// ainda é do tipo antigo → categorizer marca orphan no insert.
+	// ainda é do tipo antigo → o fechamento por cota marca bonus no insert.
 	dets := NewDetections(pool)
 	detTime := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) // qua 09:00 BRT
 	det, err := dets.Create(ctx, CreateDetectionInput{
@@ -300,7 +300,7 @@ func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 	if err := mats.UpdateType(ctx, mat.ID, &typeNew); err != nil {
 		t.Fatalf("update type: %v", err)
 	}
-	// ...sem recategorizar, a detection segue orphan (é o bug). Recategoriza:
+	// ...sem recategorizar, a detection segue bonus (é o bug). Recategoriza:
 	if err := repo.RecategorizeForMaterial(ctx, mat.ID); err != nil {
 		t.Fatalf("recategorize for material: %v", err)
 	}

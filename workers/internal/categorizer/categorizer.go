@@ -40,25 +40,45 @@ type Override struct {
 	TimeEnd       time.Time
 }
 
-// Category labels. Os quatro primeiros são exatamente os valores aceitos hoje
-// pelo CHECK constraint de detections.category (migration 0018) e
-// detection_campaigns.category (0041); CatBonus ainda NÃO — ver abaixo.
+// Category labels. Todos são aceitos pelo CHECK constraint de
+// detections.category e detection_campaigns.category desde a migration 0063,
+// que alargou os dois pra 'bonus' SEM tirar 'orphan' (ver CatOrphan).
 const (
 	CatInSlot  = "in_slot"
 	CatOutSlot = "out_slot"
 	CatOutDate = "out_date"
-	// CatOrphan é o veredito antigo pra "tocou sem meta no dia". Continua sendo
-	// ESCRITO pela Categorize (que segue no insert-path até a Task 3) e lido em
-	// linhas antigas até o backfill global rodar.
-	CatOrphan = "orphan"
-	// CatBonus é a veiculação que excede a meta do dia — bonificação. Substitui
-	// o CatOrphan como veredito (spec 2026-08-14 D4).
+	// CatOrphan é o nome ANTIGO de CatBonus, aposentado como veredito pela spec
+	// 2026-08-14 (D4). Nenhum produtor de produção grava mais 'orphan': o
+	// insert-path usa Settle e a recategorização usa recatClassifiedCTE, e os
+	// dois emitem CatBonus. O único escritor que resta é Categorize, que já não
+	// tem caller de produção (só os testes dela).
 	//
-	// Só pode ser GRAVADO depois da migration 0063 (Task 2): os CHECKs de
-	// detections.category e detection_campaigns.category ainda não aceitam
-	// 'bonus', e persistir antes disso dá CHECK violation.
+	// Continua existindo por dois motivos, os dois de LEITURA:
+	//   1. janela de deploy — o binário antigo segue gravando 'orphan' entre o
+	//      `migrate up` e o recreate do container;
+	//   2. banco onde o backfill (cmd/backfill-recategorize) ainda não rodou.
+	//
+	// Consumidor que soma bonificação deve usar BonusCategoriesSQL, não este
+	// valor sozinho.
+	CatOrphan = "orphan"
+	// CatBonus é a veiculação que excede a meta do dia — bonificação. É o
+	// veredito atual: substituiu CatOrphan na spec 2026-08-14 (D4), as linhas
+	// existentes foram renomeadas pela migration 0064 e a view
+	// daily_play_summary passou a contá-lo direto na 0065.
 	CatBonus = "bonus"
 )
+
+// BonusCategoriesSQL é a lista de valores que contam como bonificação numa
+// cláusula SQL `IN`. Existe pra que nenhum consumidor precise repetir (nem
+// esquecer) o sinônimo legado: 'bonus' é o veredito atual, 'orphan' é o mesmo
+// conceito escrito pelo binário antigo durante a janela de deploy ou por um
+// banco onde o backfill da Task 12 ainda não rodou. Descartar 'orphan' num
+// total financeiro sumiria com veiculação real do relatório do cliente — o
+// erro caro é o oposto do de contá-la duas vezes (não há como: a mesma linha
+// só tem uma categoria).
+//
+// Escrita: nunca. Só CatBonus é gravado. Ver o godoc de CatOrphan.
+const BonusCategoriesSQL = `('bonus','orphan')`
 
 // SlotToleranceSeconds é a folga (15 min) aplicada a cada extremo da faixa de
 // horário ao classificar uma detection como in_slot. Cobre o jitter normal
@@ -82,16 +102,18 @@ func dateOnlySP(t time.Time) time.Time {
 
 // Categorize classifica uma detection do material materialID.
 //
-// SUPERSEDIDA por Settle (spec 2026-08-14): classifica uma tocada isolada, sem
-// noção de cota do dia, e por isso diverge do modelo novo em célula-dia. Mantida
-// viva só enquanto o insert-path em internal/catalog/detections.go ainda a
-// chamar; a Task 3 troca esse caller e remove esta função com os testes dela.
-// Código novo deve chamar Settle.
+// MORTA EM PRODUÇÃO. Superada por Settle (spec 2026-08-14): classifica uma
+// tocada isolada, sem noção de cota do dia, e por isso diverge do modelo novo em
+// célula-dia. O insert-path em internal/catalog/detections.go já migrou pra
+// settleCellDay e não sobrou nenhum caller fora dos testes desta própria função
+// — que continuam aqui só documentando o comportamento antigo. É também o único
+// lugar do código que ainda devolve CatOrphan. Código novo chama Settle;
+// deletar esta função (com categorizer_test.go) não afeta produção.
 //
 // Carve-out (migration 0043): se materialID é nomeado em alguma regra com
 // MaterialIDs não-vazio, ele é julgado SÓ por essas regras (regras gerais do
 // tipo — MaterialIDs vazio — deixam de valer pra ele). Tocar fora do período/
-// dia da regra dele vira out_date; fora da faixa, out_slot; nunca orphan.
+// dia da regra dele vira out_date; fora da faixa, out_slot; nunca CatOrphan.
 // Material sem regra específica usa as regras gerais, exatamente como antes.
 //
 // Comparações de data no fuso America/Sao_Paulo (ver Categorize original).
@@ -167,8 +189,9 @@ func Categorize(detectedAt time.Time, cmp Campaign, materialID uuid.UUID, rules 
 			return CatOutSlot
 		}
 		// Dentro do período do material mas em dia/faixa sem meta → dia extra
-		// dentro do período contratado → orphan (a view credita bônus). out_date
-		// fica reservado a tocadas FORA do período das regras do material.
+		// dentro do período contratado → bonificação (no vocabulário antigo
+		// desta função, CatOrphan). out_date fica reservado a tocadas FORA do
+		// período das regras do material.
 		if inRulePeriod {
 			return CatOrphan
 		}

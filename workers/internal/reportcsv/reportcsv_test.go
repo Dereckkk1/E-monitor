@@ -28,7 +28,7 @@ func TestWriteConsolidated_CabecalhoELinha(t *testing.T) {
 		StationCity: &city, StationState: &state, StationBand: &band,
 		StationFrequencyMHz: &freq,
 		StationPMM:          &pmm, StationPMMTarget: &target,
-		Count: 10, InSlotCount: 8, OutSlotCount: 1, OutDateCount: 0, OrphanCount: 1,
+		Count: 10, InSlotCount: 8, OutSlotCount: 1, OutDateCount: 0, BonusCount: 1,
 		FirstDetectedAt: time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC),
 		LastDetectedAt:  time.Date(2026, 6, 30, 18, 0, 0, 0, time.UTC),
 	}}
@@ -61,7 +61,7 @@ func TestWriteDetailed_TraduzCategoria(t *testing.T) {
 	det := []catalog.DetectionEnriched{
 		{
 			Detection: catalog.Detection{
-				StationName: "Radio X", CommercialName: "Spot 30s", Category: "orphan",
+				StationName: "Radio X", CommercialName: "Spot 30s", Category: "bonus",
 				DetectedAt: time.Date(2026, 6, 1, 15, 30, 0, 0, time.UTC),
 			},
 			StationBand: &band, StationFrequencyMHz: &freq,
@@ -70,6 +70,15 @@ func TestWriteDetailed_TraduzCategoria(t *testing.T) {
 			Detection: catalog.Detection{
 				StationName: "Radio Y", CommercialName: "Spot 30s", Category: "in_slot",
 				DetectedAt: time.Date(2026, 6, 2, 15, 30, 0, 0, time.UTC),
+			},
+		},
+		{
+			// Nome antigo da MESMA categoria: uma linha gravada pelo binário
+			// anterior na janela de deploy tem que sair rotulada, não com o
+			// enum cru "orphan" numa célula do CSV do cliente.
+			Detection: catalog.Detection{
+				StationName: "Radio Z", CommercialName: "Spot 30s", Category: "orphan",
+				DetectedAt: time.Date(2026, 6, 3, 15, 30, 0, 0, time.UTC),
 			},
 		},
 	}
@@ -88,7 +97,9 @@ func TestWriteDetailed_TraduzCategoria(t *testing.T) {
 	out := buf.String()
 	require.True(t, strings.HasPrefix(out, bomStr))
 	// Vocabulário PT-BR do DayDetailModal, não o enum do banco.
-	require.Contains(t, out, "Bônus")
+	require.Equal(t, 2, strings.Count(out, "Bonificação"),
+		"'bonus' e o sinônimo legado 'orphan' compartilham o mesmo rótulo")
 	require.Contains(t, out, "Dentro da faixa")
 	require.NotContains(t, out, "orphan")
+	require.NotContains(t, out, "bonus")
 }

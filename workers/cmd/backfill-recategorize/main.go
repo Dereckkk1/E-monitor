@@ -1,7 +1,7 @@
 // backfill-recategorize re-classifica detections/detection_campaigns de campanhas
 // com carve-out (distribution_rules.material_ids não-vazio) usando a lógica atual
 // do categorizador — necessário após a mudança do spec 2026-07-13 (dia extra
-// dentro do período do material vira orphan/bônus em vez de out_date). Idempotente:
+// dentro do período do material vira bonus em vez de out_date). Idempotente:
 // RecategorizeForCampaign só altera linhas cuja categoria muda.
 //
 //	# DEFAULT DRY-RUN (só reporta a distribuição atual, não altera nada):
@@ -114,6 +114,12 @@ func main() {
 	// "orphan -N" sem contrapartida nenhuma e esconderia justamente o delta
 	// financeiro (in_slot é o que fatura, out_slot não vale nada) que a decisão de
 	// alcance retroativo depende de medir contra um clone de prod.
+	//
+	// O contador de 'orphan' FICA, mesmo o categorizador nunca mais o emitindo:
+	// é justamente aqui que se enxerga o resíduo pré-backfill (linha gravada
+	// pelo binário antigo na janela de deploy, ou clone de um banco sem a 0064).
+	// Ele deve ir a 0 depois do --apply; se não for, sobrou linha fora do escopo
+	// e o operador precisa ver isso — não é ruído, é o sinal.
 	type catCounts struct{ inSlot, outSlot, bonus, orphan, outDate int64 }
 	countCats := func() (c catCounts, err error) {
 		err = pool.QueryRow(ctx, `

@@ -236,8 +236,8 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 	}
 	// O type_id mudou → a category gravada das detections desse material ficou
 	// obsoleta (foi computada no insert com o tipo antigo). Sem isto, detections
-	// que agora casam uma regra do tipo novo continuam 'orphan' e aparecem como
-	// "bônus (sem regra)" no resumo diário. Recategoriza em background
+	// que agora casam uma regra do tipo novo continuam 'bonus' e aparecem como
+	// "bonificação (sem meta)" no resumo diário. Recategoriza em background
 	// (best-effort, mesmo padrão dos handlers de distribution_rules).
 	if h.DistRules != nil {
 		go func() {

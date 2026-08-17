@@ -500,7 +500,7 @@ type CampaignFinancials struct {
 // Equivalência do bound [lo, hi] = [MIN(start_date), MAX(end_date)] do scope:
 // o categorizador classifica como out_date TODA tocada cujo dia local cai
 // fora de [campaign.start_date, campaign.end_date] (primeira cláusula de
-// categorizer.Categorize / recatClassifiedCTE). Logo in_slot e orphan — os
+// categorizer.Settle / recatClassifiedCTE). Logo in_slot e bonus — os
 // dois únicos componentes de (in_slot + bonus), que é tudo que somamos aqui —
 // só existem DENTRO do período da campanha. Linhas de fora contribuem 0, e
 // recortar a janela não muda o `expected` dos dias de dentro (a granularidade

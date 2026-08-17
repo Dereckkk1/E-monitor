@@ -525,8 +525,8 @@ func TestInsights_AggregateInvestment_PerInsertion(t *testing.T) {
 	if inv.Executado < 299 || inv.Executado > 301 {
 		t.Errorf("executado = %v, want ~300", inv.Executado)
 	}
-	// bonus da view = Σ_dia max(0, in_slot_dia - expected_dia) + orphan = 0
-	// (1 in_slot/dia == 1 expected/dia em cada um dos 6 dias).
+	// bonus da view = COUNT(category = 'bonus') = 0 desde a 0065 (todas as
+	// 6 tocadas são in_slot; 1 in_slot/dia == 1 expected/dia nos 6 dias).
 	if bon.Count != 0 || bon.Valor != 0 {
 		t.Errorf("bonificacao = %+v, want zero", bon)
 	}
