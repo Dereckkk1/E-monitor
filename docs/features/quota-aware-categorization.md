@@ -211,15 +211,26 @@ qualquer escrita de linha** — é o que impede o ciclo advisory↔linha.
 
 Veicular fora da faixa contratada **não fecha a obrigação e não fatura**:
 
-| Consumidor | Antes | Agora |
-|---|---|---|
-| `/insights` — executado / investido | `in_slot + out_slot` | `in_slot` |
-| `/campaigns` — investimento (`total_invested`) | `in_slot + bonus` | `in_slot` |
-| `/campaigns` — bonificação (`total_bonus_value`) | não existia (ia dentro do investido) | `bonus` |
-| `/campaigns` — inserções e impactos | `in_slot + bonus` | `in_slot + bonus` (inalterado) |
-| **CPM (as duas telas)** | `in_slot + out_slot` (insights) / `in_slot + bonus` (campaigns) | `in_slot + bonus` **nas duas** — o numerador soma investido + bonificado |
-| `daily_play_summary.deficit` | `expected − in_slot − out_slot` | `expected − in_slot` |
-| `daily_play_summary.bonus` | `GREATEST(0, in_slot − expected) + orphan` | `COUNT(category = 'bonus')` |
+| Consumidor | Antes (até 2026-08-16) | Agora (2026-08-17) | Direção |
+|---|---|---|---|
+| `/insights` — executado / investido | `in_slot + out_slot` | `in_slot` | ↓ cai |
+| `/campaigns` — investimento (`total_invested`) | `in_slot + bonus` | `in_slot` | ↓ cai (−6,5% agregado) |
+| `/campaigns` — bonificação (`total_bonus_value`) | não existia (ia dentro do investido) | `bonus` | campo novo |
+| `/campaigns` — inserções | `in_slot + bonus` | `in_slot + bonus` | = inalterado |
+| **Impactos — `/insights`, PDF/CSV de campanha, pós-venda** | `pmm × COUNT(*)` de **todas** as categorias aprovadas | `pmm × (in_slot + bonus)` | ↓ cai (−0,874% agregado) |
+| **Impactos — `/detections`** (grade + CSV/PDF da grade) | `pmm × in_slot` | `pmm × (in_slot + bonus)` | ↑ sobe (+13,0% agregado) |
+| **Impactos — `/campaigns` / `/dashboard`** | `pmm × (in_slot + bonus)` | `pmm × (in_slot + bonus)` | = já estava certo |
+| **CPM (as duas telas)** | `investido(in_slot + out_slot)` ÷ impactos (insights) / `investido(in_slot + bonus)` ÷ impactos (campaigns) | `(investido + bonificado) ÷ impactos` **nas duas** | ↑ sobe onde impactos caem |
+| `daily_play_summary.deficit` | `expected − in_slot − out_slot` | `expected − in_slot` | ↑ sobe (dia todo fora da faixa vira falha) |
+| `daily_play_summary.bonus` | `GREATEST(0, in_slot − expected) + orphan` | `COUNT(category = 'bonus')` | ↓ acaba o double-count |
+
+> **"Impactos" queria dizer três coisas.** Até 2026-08-16 a mesma palavra tinha três
+> definições em três telas — o dono conferiu à mão na campanha 189 (RÔGGA): `/detections`
+> mostrava **2.620 K**, `/campaigns` e `/insights` mostravam **13.969 K**. O fechamento por
+> cota agravou (8.029 veiculações migraram de `in_slot` pra `bonus`, então quem contava só
+> `in_slot` perdeu impacto entregue de verdade). Base canônica adotada em toda superfície:
+> **`Impactos = pmm × (in_slot + bonus)`** — é a base que fatura. Ver
+> [client-target-pmm.md](client-target-pmm.md).
 
 As duas telas passaram a valorizar **o mesmo conjunto de categorias**
 (`in_slot + bonus`) e a **parti-lo do mesmo jeito**: o dinheiro pago (`in_slot`)
@@ -296,6 +307,28 @@ deficit_off_slot + deficit_absent == deficit         -- invariante travada em te
 Aplicar `LEAST`/`GREATEST` sobre os totais já somados seria errado: `out_slot`
 sobrando num dia passaria a desculpar o silêncio de outro. Detalhes de UI e PDF em
 [admin-campaign-failures.md](admin-campaign-failures.md).
+
+## Decisões travadas — não re-litigar
+
+Estas foram decididas pelo dono do produto, **medidas** onde havia número, e não são
+bugs esperando conserto. Antes de "arrumar" qualquer uma, leia a justificativa; se
+ainda achar que deve mudar, é **decisão de produto** e vai pro dono, não pro código.
+
+| # | Decisão | Onde está documentada em detalhe |
+|---|---|---|
+| **D3** | `out_slot` **não vale nada** comercialmente: não fatura, não bonifica, não abate déficit, não conta impacto. Veicular fora da faixa contratada não fecha a obrigação. | este doc, §"O que isso vale em dinheiro" |
+| **Modo fornecedor por seleção** | O `/insights` entra em modo fornecedor quando **qualquer** emissora da seleção é `consolidated` — não por emissora. Deixa `/campaigns` e `/insights` com **R$ 271.179** de diferença no "Investimento" em campanhas de pricing misto, e esconde a bonificação precificada de **14 dos 28 clientes**. **Conhecido e aceito em 2026-08-17**; o CPM continua batendo (delta 0,00 nas 25 campanhas consolidadas do clone). | [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS" #1](insights-dashboard.md) |
+| **Consolidado não tem valor de bônus** | Em `consolidated` não existe `unit_value`, então não há taxa pra precificar a tocada de bônus. `total_bonus_value` é 0 nesse modo e o card do `/insights` some. É ausência de dado, não omissão. | [insights-dashboard.md §…#2](insights-dashboard.md) |
+| **`consolidated_value` é MENSAL e não vai ser renomeado** | O dono decidiu manter o rótulo. O `/detections` exibe o valor **cru** (mensal, sem multiplicar por mês), enquanto `/insights` e `/campaigns` exibem `cv × meses_decorridos` e o slow path do CPM usa o Modelo B — o mesmo cadastro lê **três números diferentes** entre telas. | [insights-dashboard.md §…#3](insights-dashboard.md) |
+| **`total_bonus_value` não é renderizado** | O campo existe na API (`GET /campaigns/financials`) e nenhuma tela o desenha; ele só entra no numerador do CPM. Deliberado — renderizar é decisão de produto pendente. | [insights-dashboard.md §…#4](insights-dashboard.md) |
+| **O numerador do CPM inclui a bonificação** | `CPM = (investido + bonificado) ÷ impactos × 1000`. A tocada de bônus já está no **denominador**, então tem que estar no numerador **a preço de tabela** — senão campanha com muito bônus exibe CPM artificialmente baixo, incomparável com as outras, e o CPM existe pra comparar. **Já foi "simplificado" por acidente uma vez** (`b4d8d45`, −6,5% no CPM agregado; consertado em `c749c47`) e hoje há uma **guarda de teste que falha** se o numerador voltar a ser só o pago. | [insights-dashboard.md §"O numerador do CPM inclui a bonificação"](insights-dashboard.md) + [campaign-fixed-cpm.md](campaign-fixed-cpm.md) |
+
+## Itens em aberto
+
+Estão registrados em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md) (F-127…F-132) —
+o **alcance do backfill retroativo (D9) segue indeciso** (a medição contra um dump fresco de
+prod foi interrompida antes de terminar), e há 5 bugs latentes achados na auditoria desta
+entrega que **não foram corrigidos** aqui, cada um com o tamanho medido.
 
 ## Efeitos colaterais que mordem
 

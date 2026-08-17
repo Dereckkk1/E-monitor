@@ -29,6 +29,8 @@ docs/
 
 - Toda doc nova **deve** ter header YAML com `status`, `ultima-verificacao` (formato AAAA-MM-DD) e `codigo-relacionado` (lista de paths).
 - Status: `implementado` | `parcialmente-implementado` | `legado` | `planejado`.
+- **`superpowers/` e `archive/` são REGISTROS DATADOS, não referência de comportamento atual.** Um spec de maio descreve o que se decidiu em maio; se a regra mudou depois, o spec **continua dizendo a coisa antiga** — e está certo assim, é um registro. Nunca copie fórmula, contrato de API ou regra de negócio de lá pra código novo sem conferir contra o doc vivo em `features/` ou `architecture/`. Quando um desses artefatos passa a contradizer o sistema, ele ganha um bloco **"⚠️ REGISTRO HISTÓRICO"** no topo apontando pro doc que o substituiu — essa nota é a **única** edição permitida nesses arquivos.
+- **Mudou o comportamento?** O doc vivo tem que dizer **o que era antes, o que é agora e desde quando** — não só o estado atual. Se um número que o cliente vê mudou, diga **em que direção** e por quê. Ver [features/quota-aware-categorization.md](features/quota-aware-categorization.md) como modelo do formato.
 - Nunca documente feature nova no `plano_implementacao.md` (esse é blueprint, não changelog).
 - Após implementar feature, criar/atualizar doc em `features/` ou `architecture/`.
 - Após incidente, criar `incidents/incident-AAAA-MM-DD-{slug}.md`.
@@ -93,7 +95,11 @@ docs/
 | [station-detail-modal.md](features/station-detail-modal.md) | Ficha read-only da emissora em `/stations` (clique na linha) — o caminho pelo qual o CLIENTE vê os dados de cada emissora; dados sensíveis e o botão Editar continuam admin-only |
 | [geocoding-emissoras.md](features/geocoding-emissoras.md) | lat/long de emissoras por cidade+UF (dataset IBGE embutido + backfill); geocode no Create/Update |
 | [material-specific-distribution-rules.md](features/material-specific-distribution-rules.md) | Escopagem de regras de distribuição a materiais específicos (carve-out via `material_ids[]`) — sobrescreve regras gerais do tipo |
-| [client-target-pmm.md](features/client-target-pmm.md) | PMM no target por (cliente, emissora) (migration 0054) — impactos e CPM no target em /insights, /detections, /campaigns e relatórios; ausência de linha ≠ `0`; cadastro em `/clients/:id/target-pmm` com colagem de planilha |
+| [client-target-pmm.md](features/client-target-pmm.md) | PMM no target por (cliente, emissora) (migration 0054) — impactos e CPM no target em /insights, /detections, /campaigns e relatórios; **base canônica única `pmm × (in_slot + bonus)` desde 2026-08-17**; ausência de linha ≠ `0`; cadastro em `/clients/:id/target-pmm` com colagem de planilha |
+| [insights-dashboard.md](features/insights-dashboard.md) | `/insights` — KPIs + 4 gráficos + export PNG/PDF. **Os números caíram em 2026-08-17** (executado deixou de somar `out_slot`, fim do double-count do excedente, impactos passaram a `in_slot + bonus`); traz também as **divergências conhecidas e ACEITAS** entre `/insights` e `/campaigns` |
+| [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
+| [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
+| [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
 
 ## `operations/` — operar o sistema em prod
 
@@ -158,3 +164,5 @@ Ver [runbooks/README.md](runbooks/README.md) para o índice. Cada alerta em `inf
 ## `superpowers/` — artefatos de planejamento
 
 Pasta gerenciada pelo workflow `superpowers:*`. Não editar manualmente — specs e plans são snapshots imutáveis de sessões de design/implementação.
+
+> **Leia como registro datado, nunca como referência viva.** Um spec descreve o que era verdade **na data dele**. Doze artefatos daqui foram marcados com um bloco **"⚠️ REGISTRO HISTÓRICO"** em 2026-08-17 porque descreviam o modelo de categorização anterior (`orphan`, `deficit = expected − in_slot − out_slot`, `bonus = GREATEST(0, in_slot − expected) + orphan`, "três fórmulas de impactos") — todos apontam pra [features/quota-aware-categorization.md](features/quota-aware-categorization.md), e os 4 que têm header YAML ganharam `status: legado`. Acrescentar a nota de supersessão (e virar o `status` pra `legado`) é a **única** edição manual permitida nesses arquivos — o conteúdo em si nunca é reescrito.

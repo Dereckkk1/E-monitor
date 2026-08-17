@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/webhook/safehttp.go
   - workers/internal/auth/jwt.go
@@ -8,7 +8,13 @@ codigo-relacionado:
   - workers/internal/webhook/worker.go
   - workers/internal/evidence/tiering.go
   - infra/scripts/backup.sh
+  - workers/internal/api/handlers/post_sale.go
+  - workers/internal/postsale/bundle.go
+  - workers/internal/catalog/insights.go
+  - workers/internal/catalog/campaigns.go
+  - migrations/0065_quota_aware_summary.up.sql
   # nota: 5 security fixes + F-02 resolvidos, ~40 itens ainda pendentes
+  # nota: F-127..F-132 abertos na auditoria da categorizacao por cota (2026-08-17)
 ---
 
 # Follow-ups da Fase 2 — dívida técnica registrada
@@ -542,3 +548,124 @@ Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../op
   seja, um bug de população se disfarça de "token velho" e some junto com a
   remoção. Se quiser decidir por evidência em vez de relógio, instrumente o
   branch com um contador Prometheus antes de remover e espere ele zerar.
+
+## Categorização por cota (F-127..F-132) — auditoria 2026-08-17
+
+Abertos durante a entrega do [fechamento por cota da célula-dia](../features/quota-aware-categorization.md)
+(branch `feat/quota-aware-categorization`, 24 commits). **Nenhum deles foi corrigido nessa
+entrega** — todos foram medidos e deixados registrados de propósito, pra não misturar
+escopo com a mudança de categorização. Cada item traz o tamanho medido.
+
+### F-127 — 🔴 PRÉ-DEPLOY: alcance do backfill retroativo (D9) segue INDECISO
+
+A decisão D9 da [spec](../superpowers/specs/2026-08-14-quota-aware-categorization-design.md)
+adiou o alcance do backfill pra depois de medir o delta contra um **clone do dump de prod**
+(regra 4.8 do CLAUDE.md). **Essa medição foi interrompida e nunca terminou** — o dump usado
+nas medições parciais desta entrega não é fresco, e a decisão do dono não foi tomada.
+
+O que já existe pronto pra decidir: `cmd/backfill-recategorize` roda **dry-run por padrão**
+e, desde `0c7559c`, imprime a **matriz de transição** (pra onde cada linha vai) e o **delta
+por campanha**, não só a distribuição agregada — porque `in_slot -2075` pode ser 2.075
+tocadas virando `bonus` (neutro pra receita: a base financeira é `in_slot + bonus`) ou
+virando `out_slot` (que não fatura nada), histórias opostas que o agregado não distingue.
+
+**O que falta:** dump fresco → clone descartável → dry-run → dono decide o alcance
+(últimas 48h se curam sozinhas pelo `projrecon`; o resto do histórico é escolha).
+
+> **Nota pra quem retomar:** os números desta entrega (investido agregado, CPM, impactos,
+> os R$ 271.179 de divergência de pricing misto, os 18/25 sem `fixed_cpm`) saíram de um
+> harness descartável `workers/cmd/measure-quota/` que roda o **código real** de
+> `Insights.Compute`, `Campaigns.FinancialsByCampaign` e `postsale.StationRows` campanha a
+> campanha contra um clone e imprime CSV. Ele **não está versionado** (não entra no
+> `workers.Dockerfile` de propósito, regra 6.7) e existe só na máquina de dev — se sumir,
+> refazer é meia hora, e é o caminho certo pra medir o delta do backfill.
+**Impacto de não decidir:** o histórico anterior à janela do reconciler fica no modelo
+antigo, com `orphan` residual e categorias que não batem com as telas novas.
+
+### F-128 — 🔴 PRÉ-DEPLOY: o deploy desta entrega é TUDO-OU-NADA
+
+Não é dívida técnica, é uma **trava operacional** que precisa estar visível pra quem for
+fazer o deploy. A migration **0064** renomeia o dado (`orphan → bonus`) e só a **0065** faz
+a `daily_play_summary` / `daily_play_summary_for` **contarem** `'bonus'`. Subir **0064 sem
+0065** deixa a view procurando `'orphan'`, que passou a ser sempre 0 →
+**bonificação lê ZERO em todas as telas financeiras, relatórios e CSVs**. O binário tem que
+subir junto (o código antigo lê `'orphan'` em `insights.go`, `daily_summary.go`,
+`detections.go` e no `DayDetailModal`). Ordem completa em
+[quota-aware-categorization.md §"Deploy é tudo-ou-nada"](../features/quota-aware-categorization.md).
+
+### F-129 — Zip do pós-venda filtra o período em UTC e perde ~4,5% das veiculações do mês
+
+`handlers/post_sale.go:240,245` usa `time.Parse("2006-01-02", …)` (**UTC**), não
+`ParseInLocation` em `America/Sao_Paulo`. Esses instantes viram o filtro dos CSVs do zip em
+`postsale/bundle.go:101-102,118`, comparados contra `detected_at timestamptz` em
+`catalog/detections.go:1776-1777` (CSV consolidado) e `:1471-1472` (detalhado). A janela
+efetiva é `[from 00:00Z, to 00:00Z]` = **`[from−1 21:00 BRT, to 21:00 BRT]`**: o CSV pega as
+últimas 3h do dia ANTERIOR ao início e **perde as últimas 3h do último dia**. Medido:
+**~4,5% das veiculações de um mês** ficam de fora.
+
+Pior que o erro absoluto: a divergência é **dentro do mesmo documento**. Os outros dois
+consumidores do mesmo `From`/`To` são timezone-corretos — `postsale/repo.go:43`
+(`dps.for_date BETWEEN $2::date AND $3::date`) e os KPIs via `insights.go:440`
+(`(d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN …`). Ou seja, **o número do
+KPI não bate com a contagem de linhas do CSV anexado ao mesmo pós-venda**.
+**Fix:** `time.ParseInLocation` + fim de dia inclusivo, no handler.
+
+### F-130 — Material sem `type_id` some do `/detections` e continua no `/insights` (28% medido)
+
+O filtro está na **view**, não no Go: `migrations/0065_quota_aware_summary.up.sql:89,93`
+(view) e `:187,196` (função) fazem `JOIN materials m ON m.id = dc.commercial_id … AND
+m.type_id IS NOT NULL`. Quem consome é `catalog/daily_summary.go:64` →
+`/campaigns/{id}/daily-summary` → a grade de `/detections`
+(`frontend/src/pages/DetectionsPage.jsx:572`). Já o `aggregateCore` do `/insights` lê
+`detection_attributions` direto, **sem join nenhum em material** (`insights.go:431-441`), e
+por isso conta a tocada.
+
+Resultado: a mesma veiculação **existe no `/insights` e não existe no `/detections`**.
+Medido: **28% das veiculações de uma campanha-mês** sumiam da grade por esse caminho. A
+limitação está reconhecida no cabeçalho do `insights.go:19-22`, mas como "conhecida" — não
+como o buraco de 28% que ela é. Note que as queries de **lista/CSV** de `detections.go` usam
+`LEFT JOIN material_types` e **preservam** a linha; só a view perde.
+**Fix candidato:** `type_id` obrigatório no material (com backfill) ou `LEFT JOIN` na view
+com bucket "sem tipo".
+
+### F-131 — O CPM de uma campanha muda ~3,7× conforme quais OUTRAS campanhas estão selecionadas
+
+`insights.go:777-789` decide fast path × slow path com um `EXISTS` sobre a **seleção
+inteira**: basta **uma** campanha da seleção ter `fixed_cpm` pra todas caírem na média
+ponderada por impactos (`insights.go:903-910`), em que cada campanha passa a usar o
+**numerador dela** (`per_campaign_valor`, `:819-878`) em vez da sua fatia do agregado. Some
+a isso a divergência fast/slow do consolidado (fast = `cv × meses_decorridos`,
+`insights.go:373`; slow = Modelo B `cv × entregue ÷ plano_cheio`, `:829-833`), já anotada em
+comentário no próprio arquivo (`insights.go:766-770`).
+
+Medido: **7 campanhas** exibem CPM diferente dependendo da companhia na seleção, com
+variação de até **~3,7×** na mesma campanha e no mesmo período. Não é o CPM fixo agindo —
+é a campanha **sem** `fixed_cpm` mudando de fórmula por causa da vizinha.
+**Fix candidato:** unificar o numerador por campanha nos dois caminhos (o slow path já é a
+forma correta; o fast path é que é o atalho).
+
+### F-132 — 11 veiculações em par (campanha, emissora) SEM linha de pricing: contadas no `/insights`, invisíveis no `/campaigns`
+
+`campaigns.go:583-591` (e `:618-622` na perna consolidada) tem `campaign_station_pricing`
+como **FROM**, com o resumo diário entrando por `LEFT JOIN` — emissora com tocada e **sem**
+linha de pricing não produz linha nenhuma, então contribui **0 inserções e 0 audiência** pro
+`/campaigns` (`campaigns.go:651-653`). O `aggregateCore` do `/insights` não toca pricing
+(`insights.go:431-441`) e conta normalmente.
+
+Medido: **11 veiculações** em prod nessa situação. Efeito colateral desagradável: dentro do
+próprio `/insights` o dinheiro concorda com o `/campaigns` (o `aggregateInvestment` TAMBÉM
+parte de `campaign_station_pricing`, `insights.go:706-712`), mas `impactos` /
+`veiculacoes_total` / `stations_count` não — a emissora sem pricing **infla o denominador do
+CPM** e derruba o CPM sem mexer no numerador.
+**Fix candidato:** validação que impeça `target_stations` sem linha de pricing, + relatório
+de reconciliação. Não dá pra "consertar" só no SQL: sem preço não há o que faturar; a
+pergunta é se a tocada deveria existir.
+
+### Corrigido nesta passagem de documentação (não é follow-up)
+
+- `docs/features/insights-dashboard.md` afirmava que **"consolidado sempre tem `fixed_cpm`
+  cadastrado"**. É **falso**: **18 das 25** campanhas com emissora consolidada no clone de
+  prod estão **sem** `fixed_cpm` — nada obriga o cadastro (coluna nullable em
+  `migrations/0035_campaign_fixed_cpm.up.sql:8,13`; o Step 6 do wizard não valida o campo,
+  `PricingStep.jsx:38-45`; a API só checa não-negatividade, `handlers/campaigns.go:279-281`).
+  O caminho dinâmico é o **comum**, não a exceção. Frase corrigida no doc.

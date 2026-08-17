@@ -163,3 +163,12 @@ A grid é paginada **por emissora** (a unidade visual do `DistributionGrid` em m
 - Export CSV/PDF: implementado e espelha a grade (busca + programado + por dia).
   Ver [detections-report-wysiwyg.md](detections-report-wysiwyg.md). O **CSV
   Detalhado** (admin, por veiculação) ainda não aplica o filtro de busca.
+- 🔴 **Material sem `type_id` SOME da grade — e continua no `/insights`.** O filtro
+  `AND m.type_id IS NOT NULL` mora dentro da própria view/função
+  (`migrations/0065_quota_aware_summary.up.sql:89,93` e `:187,196`), que é o que alimenta
+  esta tela via `daily_summary.go:64`. O `aggregateCore` do `/insights` lê
+  `detection_attributions` direto, sem join em material, e conta a mesma tocada. Resultado:
+  a veiculação **existe numa tela e não existe na outra**. Medido em 2026-08-17: **28% das
+  veiculações de uma campanha-mês**. As queries de lista/CSV de `detections.go` usam
+  `LEFT JOIN material_types` e **preservam** a linha — só a grade perde. Registrado como
+  **F-130** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md); não corrigido.

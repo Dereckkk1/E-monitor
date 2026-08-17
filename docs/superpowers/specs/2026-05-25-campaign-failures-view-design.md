@@ -1,6 +1,6 @@
 ---
-status: implementado
-ultima-verificacao: 2026-05-25
+status: legado  # superseded 2026-08-17 pela categorizacao por cota
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/campaign_failures.go (novo)
   - workers/internal/api/handlers/admin_campaign_failures.go (novo)
@@ -14,6 +14,17 @@ codigo-relacionado:
   - frontend/src/components/CampaignFailureDrawer.jsx (novo)
   - frontend/src/utils/pdfCampaignFailure.js (novo)
 ---
+
+> ⚠️ **REGISTRO HISTÓRICO — não descreve o comportamento atual.**
+> Este documento é um snapshot datado da sessão de design/implementação que o gerou.
+> Em **2026-08-17** a categorização de veiculação foi substituída pelo
+> [**fechamento por cota da célula-dia**](../../features/quota-aware-categorization.md):
+> `orphan` foi renomeada pra `bonus`; `out_slot` deixou de faturar e de abater o déficit;
+> `deficit = expected − in_slot`; `bonus = COUNT(category = 'bonus')` (acabou o termo
+> sintético `GREATEST(0, in_slot − expected)`); e **`Impactos = pmm × (in_slot + bonus)`**
+> em toda tela e exportável. O `deficit = max(0, expected − in_slot − out_slot)` abaixo é o do modelo ANTIGO; hoje o déficit ignora `out_slot` e vem partido em `deficit_absent` / `deficit_off_slot` (D7).
+> **Não copie fórmula daqui pra código novo** — a autoridade é
+> [`docs/features/quota-aware-categorization.md`](../../features/quota-aware-categorization.md).
 
 # Admin — Visão "Por campanha" em `/admin/station-failures`
 

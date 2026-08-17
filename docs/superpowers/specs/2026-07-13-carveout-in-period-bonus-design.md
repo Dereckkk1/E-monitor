@@ -1,3 +1,14 @@
+> ⚠️ **REGISTRO HISTÓRICO — não descreve o comportamento atual.**
+> Este documento é um snapshot datado da sessão de design/implementação que o gerou.
+> Em **2026-08-17** a categorização de veiculação foi substituída pelo
+> [**fechamento por cota da célula-dia**](../../features/quota-aware-categorization.md):
+> `orphan` foi renomeada pra `bonus`; `out_slot` deixou de faturar e de abater o déficit;
+> `deficit = expected − in_slot`; `bonus = COUNT(category = 'bonus')` (acabou o termo
+> sintético `GREATEST(0, in_slot − expected)`); e **`Impactos = pmm × (in_slot + bonus)`**
+> em toda tela e exportável. A decisão daqui (carve-out em dia sem meta vira bônus) **continua valendo**, mas pelo caminho novo: o veredito é `bonus` explícito, não `orphan` reaproveitado, e sai do passo de cota, não de um ramo especial.
+> **Não copie fórmula daqui pra código novo** — a autoridade é
+> [`docs/features/quota-aware-categorization.md`](../../features/quota-aware-categorization.md).
+
 # Design — Carve-out: tocada em dia extra dentro do período conta como bônus
 
 **Data:** 2026-07-13

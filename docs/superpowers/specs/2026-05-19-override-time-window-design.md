@@ -1,6 +1,6 @@
 ---
-status: planejado
-ultima-verificacao: 2026-05-19
+status: legado  # superseded 2026-08-17 pela categorizacao por cota
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0019_rules_by_type.up.sql
@@ -13,6 +13,17 @@ codigo-relacionado:
   - frontend/src/components/DistributionGrid.jsx
   - frontend/src/api/hooks.js
 ---
+
+> ⚠️ **REGISTRO HISTÓRICO — não descreve o comportamento atual.**
+> Este documento é um snapshot datado da sessão de design/implementação que o gerou.
+> Em **2026-08-17** a categorização de veiculação foi substituída pelo
+> [**fechamento por cota da célula-dia**](../../features/quota-aware-categorization.md):
+> `orphan` foi renomeada pra `bonus`; `out_slot` deixou de faturar e de abater o déficit;
+> `deficit = expected − in_slot`; `bonus = COUNT(category = 'bonus')` (acabou o termo
+> sintético `GREATEST(0, in_slot − expected)`); e **`Impactos = pmm × (in_slot + bonus)`**
+> em toda tela e exportável. A decisão D5 daqui ("faixa inerte" quando `plays_expected == 0`, devolvendo `out_slot`) foi **revogada**: com meta 0 toda tocada vira `bonus`. Era o bug da campanha 270.
+> **Não copie fórmula daqui pra código novo** — a autoridade é
+> [`docs/features/quota-aware-categorization.md`](../../features/quota-aware-categorization.md).
 
 # Faixa horária em overrides de distribuição
 

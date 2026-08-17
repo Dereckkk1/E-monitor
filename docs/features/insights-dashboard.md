@@ -144,6 +144,15 @@ Onde isso vive (mexeu num, mexa nos outros):
 Campanha com `fixed_cpm` continua exibindo o valor fixo; só a dica de "CPM
 dinâmico seria X" usa a fórmula corrigida.
 
+> **Há uma guarda de teste contra "simplificar" isso.** `TestInsights_FinancialBase_MatchesCampaigns`
+> ([`insights_test.go:1359-1370`](../../workers/internal/catalog/insights_test.go)) monta
+> o fixture de modo que o numerador só-do-pago e o numerador correto dão valores
+> **diferentes**, e **falha explicitamente** se o CPM calculado for igual ao numerador
+> só-do-pago. Ela existe porque essa exata regressão já aconteceu uma vez (commit
+> `b4d8d45` tirou o bônus do investido e levou o CPM junto sem querer, −6,5% agregado,
+> consertado em `c749c47`). Se você "limpar" o numerador, este teste fica vermelho —
+> **conserte o código, não o teste.**
+
 **Isso também fecha a divergência de pricing MISTO** entre `/campaigns` e
 `/insights`. Em modo fornecedor o `/insights` zera a Bonificação e embute o bônus
 no Investido, enquanto o `/campaigns` mostra as duas parcelas separadas — mas a
@@ -158,6 +167,72 @@ o total do `consolidatedSummary` (`cv × meses_decorridos`) e o slow path (o que
 roda quando alguma campanha tem `fixed_cpm`) usa o Modelo B
 (`cv × entregue ÷ plano_cheio`). Ligar um `fixed_cpm` numa seleção consolidada
 pode, por isso, mover o CPM das campanhas vizinhas.
+
+### Divergências CONHECIDAS E ACEITAS (decididas em 2026-08-17)
+
+As quatro abaixo foram levantadas na auditoria da entrega de cota, **medidas** e
+**mantidas por decisão do dono**. Estão aqui pra ninguém "consertar" nenhuma delas
+achando que é bug novo. Se for mexer, é mudança de produto — leve pro dono antes.
+
+#### 1. O modo fornecedor é disparado **por seleção**, não por emissora
+
+`hasConsolidated` é `true` quando **qualquer** emissora da seleção tem pricing
+`consolidated` ([`insights.go:192-205`](../../workers/internal/catalog/insights.go)),
+e a partir daí o `/insights` inteiro entra em modo fornecedor: o Investido vira o
+total do `consolidatedSummary` e **a Bonificação é zerada** (`bon = BonificacaoK{}`),
+com o frontend escondendo o card.
+
+| | `/campaigns` | `/insights` em modo fornecedor |
+|---|---|---|
+| Investimento | `unit_value × in_slot` das por-inserção | `cv × meses + unit_value × (in_slot + bonus)` das por-inserção |
+| Bonificação | `total_bonus_value` = `unit_value × bonus` | **card some** — a parcela entra embutida no Investido |
+
+**Consequência medida (clone de prod, 2026-08-17):** em campanhas de pricing
+**misto**, as duas telas exibem **R$ 271.179** de diferença no "Investimento" — não
+porque uma esteja errada, mas porque uma soma o bônus dentro do investido e a outra
+o mostra separado. E **14 dos 28 clientes** têm ao menos uma emissora consolidada na
+seleção típica, então **metade da base não vê a bonificação precificada no
+`/insights`**.
+
+**Por que fica assim:** a soma das duas parcelas é a mesma expressão dos dois lados
+(`pacote × meses + unit × (in_slot + bonus)`), então **o CPM bate** — verificado no
+clone: delta **0,00** entre os numeradores nas 25 campanhas com emissora consolidada,
+travado por `TestInsights_Compute_Mixed_MatchesCampaignsFormula`. É só a *exibição do
+dinheiro* que diverge. Disparar por emissora (mostrando o card de bonificação só pra
+parte da seleção) foi considerado e **recusado**: partiria o KPI agregado em duas
+semânticas dentro do mesmo card.
+
+#### 2. Consolidado não tem valor de bonificação — de propósito
+
+Em `consolidated` **não existe `unit_value`**: o preço é um pacote pela emissora, não
+por inserção. Logo não há taxa com que precificar a tocada de bônus, e
+`total_bonus_value` do `/campaigns` é **0** nesse modo (`FinancialsByCampaign`), assim
+como o card do `/insights` some. Não é omissão — é ausência de dado. Inventar uma taxa
+(ex.: `cv ÷ plano`) seria criar um preço que ninguém contratou.
+
+#### 3. `consolidated_value` é MENSAL, e o mesmo campo lê três números diferentes
+
+O campo cadastrado é o valor **por mês** (regra de 2026-07-08). O dono decidiu, em
+2026-08-17, **não renomear o rótulo na UI**. Consequência que um leitor precisa saber
+antes de comparar telas:
+
+| Onde | O que exibe a partir de `consolidated_value` |
+|---|---|
+| `/detections` (pill "Valor" da emissora, `DistributionGrid.jsx:492-495`) | **o valor cru** — o mensal, sem multiplicar por mês nenhum e sem olhar o período visível |
+| `/insights` (Investido executado) e `/campaigns` | `cv × meses_decorridos` (`monthsElapsedSQL`, virada de mês, limitado ao filtro de período) |
+| `/insights` slow path do CPM (quando há `fixed_cpm` na seleção) | Modelo B: `cv × entregue ÷ plano_da_campanha_inteira` |
+
+Ou seja: numa campanha de 3 meses, o mesmo cadastro de R$ 1.000 lê **1.000** no
+`/detections`, **3.000** no `/insights` no 3º mês, e um terceiro valor no CPM se
+houver `fixed_cpm` na seleção. **Conhecido e aceito.**
+
+#### 4. `total_bonus_value` existe na API e não é renderizado
+
+`GET /campaigns/financials` devolve `total_bonus_value` desde 2026-08-17, e **nenhuma
+tela o desenha** como card próprio — ele só entra no numerador do CPM
+(`CampaignsPage.jsx`, `DashboardPage.jsx`). É deliberado: o campo nasceu pra tirar o
+bônus do "Investimento" sem inventar UI nova na mesma entrega. Renderizá-lo é decisão
+de produto pendente, não bug.
 
 ### "Impactos" também mudou de base (2026-08-17)
 
@@ -211,7 +286,7 @@ Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` 
   - **Respeita o filtro de período:** filtrar só junho de uma campanha de 3 meses → 1 mês (não a campanha toda). O per-inserção também é escopado a `[from, to]`. Bate com o `/campaigns` (que não tem filtro) quando o filtro cobre a campanha inteira até hoje.
   - **`hoje`** vem do handler (America/Sao_Paulo); testes injetam via `InsightsParams.Today`; zero → sem cap de hoje (só o filtro escopa).
 - **Bonificação**: **some** — o backend zera e o frontend **não renderiza o card** (grid de cards vira 4 colunas). No fornecedor fica zerado.
-- **CPM**: usa o `fixed_cpm` da campanha (consolidado sempre tem cadastrado); sem ele, cai no dinâmico `total ÷ impactos × 1000`.
+- **CPM**: usa o `fixed_cpm` da campanha **quando existe**; sem ele, cai no dinâmico `(total + bonificação) ÷ impactos × 1000`. ⚠️ **Não presuma que consolidado tem `fixed_cpm`** — este doc afirmava "consolidado sempre tem cadastrado" e isso é **falso**: no clone de prod de 2026-08-17, **18 das 25** campanhas com emissora consolidada estavam **sem** `fixed_cpm`. Nada obriga o cadastro (a coluna é `NULL`-able, `campaigns.fixed_cpm NUMERIC(12,2) NULL`, e o Step 6 do wizard não exige o campo em modo consolidado), então o caminho dinâmico é o **comum**, não a exceção.
 - **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
 - **Campanha 100% `per_insertion`**: nada muda — segue por veiculação, com Bonificação.
 
@@ -274,7 +349,9 @@ Reutilizar o padrão de [pdfReport.js](../../frontend/src/utils/pdfReport.js) �
 
 - "Extras" no gráfico 4 e a Bonificação do KPI leem a mesma categoria `bonus`; o gráfico filtra pelo literal `'bonus'` (não pelo sinônimo legado `'orphan'`), então uma linha ainda não convertida pelo backfill/reconciler não aparece ali. Convergem em até ~15 min pelo `projrecon`.
 - Investido em modo `consolidated` prorrateia linearmente por dias (`overlap_days/total_days`), sem considerar distribuição irregular de slots dentro da campanha.
-- Materiais sem `type_id` ficam ausentes da view `daily_play_summary` — afeta os buckets do gráfico 4 (não aparecem ali), MAS continuam contando em `aggregateCore` (impactos + breakdown) que lê detections direto.
+- 🔴 **Materiais sem `type_id` ficam ausentes da view `daily_play_summary`** — afeta os buckets do gráfico 4 (não aparecem ali), MAS continuam contando em `aggregateCore` (impactos + breakdown), que lê detections direto. A mesma view alimenta a **grade do `/detections`**, então a veiculação **existe aqui e não existe lá**: medido em **28% das veiculações de uma campanha-mês** (2026-08-17). **F-130** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
+- 🔴 **O CPM de uma campanha muda conforme quais OUTRAS campanhas estão na seleção.** Basta uma campanha da seleção ter `fixed_cpm` (`EXISTS` sobre o array inteiro, `insights.go:777-789`) pra todas caírem no slow path, em que cada uma usa o numerador **dela** em vez da fatia do agregado. Medido: **7 campanhas** com variação de até **~3,7×** no mesmo período. **F-131**.
+- 🔴 **Emissora com veiculação e SEM linha de pricing conta aqui e não conta no `/campaigns`.** O `aggregateCore` não toca pricing (`insights.go:431-441`); o `/campaigns` tem `campaign_station_pricing` como FROM (`campaigns.go:583-591`), então a linha nem existe lá. Medido: **11 veiculações** em prod. Assimetria interna: o *dinheiro* do `/insights` concorda com o `/campaigns` (o `aggregateInvestment` também parte de pricing), mas `impactos`/`veiculacoes_total`/`stations_count` não — a emissora sem preço **infla o denominador do CPM**. **F-132**.
 - Estação sem `audience_profile.gender` (ou `socialClass`, `ageRanges`) → não soma na dimensão correspondente. O card de gênero pode subestimar quando muitas estações estão sem perfil.
 
 ## Decisões de modelagem que diferiram do plano original

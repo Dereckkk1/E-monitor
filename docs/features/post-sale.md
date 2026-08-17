@@ -83,10 +83,30 @@ usasse outra base, o documento contradiria o próprio anexo na frente do cliente
 Ausência de PMM no target **não é zero**: sem cadastro, os dois cards "no
 target" simplesmente não aparecem ([client-target-pmm.md](client-target-pmm.md)).
 
-> Existe divergência conhecida entre as bases do `/campaigns` e do `/insights`
-> — é o que a branch `feat/unify-campaigns-insights-financials-base` resolve.
-> O pós-venda nasce do lado do `/insights`; quando a unificação for deployada os
-> dois convergem e nada aqui muda.
+> **Atualizado em 2026-08-17.** A divergência entre as bases do `/campaigns` e do
+> `/insights` foi **fechada parcela a parcela** na entrega do
+> [fechamento por cota](quota-aware-categorization.md): as duas telas valorizam o
+> mesmo conjunto (`in_slot + bonus`), com `investido = unit × in_slot` e
+> `bonificação = unit × bonus` separados, e o CPM idêntico
+> (`TestInsights_FinancialBase_MatchesCampaigns`). **O que permanece, conhecido e
+> aceito:** em campanha de pricing MISTO o `/insights` entra em modo fornecedor e
+> embute o bônus no Investido, então o "Investimento" exibido difere do
+> `/campaigns` em **R$ 271.179** no agregado de prod — a soma é a mesma expressão
+> dos dois lados, só a partição do número muda. O pós-venda nasce do lado do
+> `/insights`, logo herda essa leitura. Ver
+> [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS"](insights-dashboard.md).
+
+> 🔴 **Bug conhecido, NÃO corrigido — o `.zip` perde o fim do último dia.** O
+> período do documento é parseado em **UTC** (`handlers/post_sale.go:240,245`,
+> `time.Parse` em vez de `ParseInLocation`) e esses instantes viram o filtro dos
+> CSVs em `postsale/bundle.go:101-102,118`, comparados contra `detected_at
+> timestamptz`. A janela efetiva é `[from−1 21:00 BRT, to 21:00 BRT]`: o CSV pega
+> as últimas 3h do dia ANTERIOR ao início e **perde as últimas 3h do último dia**
+> — **~4,5% das veiculações de um mês**. Os outros dois consumidores do mesmo
+> período são timezone-corretos (`postsale/repo.go:43` por `for_date::date`, e os
+> KPIs por `AT TIME ZONE 'America/Sao_Paulo'` em `insights.go:440`), então **o KPI
+> da página não bate com a contagem de linhas do CSV anexado ao mesmo documento**.
+> Registrado como **F-129** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
 
 ## O Checking
 

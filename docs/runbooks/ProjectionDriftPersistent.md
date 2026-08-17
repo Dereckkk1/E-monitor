@@ -160,5 +160,6 @@ de recategorização podia ficar meses em silêncio (caso COPA). Complementos:
   best-effort de recat (rule/override/material) — olhar junto se o drift
   coincidir com falhas recorrentes numa origem específica.
 - O log `zap.Warn` no fallback do fan-out (`evidence/service.go`) sinaliza
-  quando uma projeção nasce `orphan` por falha do `CategorizeFor`, o que pode
-  alimentar drift se o reconciler estiver desligado.
+  quando uma projeção nasce `bonus` (categoria chamada `orphan` até a migration
+  0064) por falha do `CategorizeFor`, o que pode alimentar drift se o reconciler
+  estiver desligado.
