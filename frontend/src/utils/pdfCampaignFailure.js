@@ -19,7 +19,45 @@ const TOKENS = {
   surface2:    [241, 245, 249],
   white:       [255, 255, 255],
   deficit:     [220, 38, 38],
+  offSlot:     [180, 83, 9],     // #b45309 — mesmo âmbar do out_slot no app
   bonified:    [168, 85, 247],
+}
+
+// Déficit separado nos dois tipos (D7): "não tocou" (nada foi ao ar) x "fora do
+// horário" (a emissora veiculou, mas fora da faixa contratada). Desde a
+// migration 0065 o out_slot não fecha mais a obrigação, então ele entra no
+// déficit — mas cobrar silêncio de quem veiculou fora da hora é acusação
+// errada num documento que vai pra emissora. Os dois SEMPRE somam o déficit.
+//
+// Backend antigo (sem os campos) → split null, e o PDF volta ao formato de
+// antes em vez de imprimir zeros.
+function splitOf(row) {
+  const total = Number(row?.deficit ?? row?.total_deficit) || 0
+  const hasSplit = Number.isFinite(row?.deficit_absent)
+    || Number.isFinite(row?.deficit_off_slot)
+    || Number.isFinite(row?.total_deficit_absent)
+    || Number.isFinite(row?.total_deficit_off_slot)
+  if (!hasSplit) return { total, absent: null, offSlot: null }
+  return {
+    total,
+    absent:  Number(row.deficit_absent   ?? row.total_deficit_absent)   || 0,
+    offSlot: Number(row.deficit_off_slot ?? row.total_deficit_off_slot) || 0,
+  }
+}
+
+// Escreve trechos coloridos em sequência na mesma linha (o autotable pinta a
+// célula inteira de uma cor só; aqui cada termo precisa da sua).
+// runs: [{ t, color, bold, size }] — devolve o x final.
+function drawRuns(doc, x, y, runs) {
+  let cx = x
+  for (const r of runs) {
+    doc.setFont('helvetica', r.bold ? 'bold' : 'normal')
+    doc.setFontSize(r.size ?? 8)
+    doc.setTextColor(...(r.color ?? TOKENS.text2))
+    doc.text(r.t, cx, y)
+    cx += doc.getTextWidth(r.t)
+  }
+  return cx
 }
 
 function pad2(n) { return String(n).padStart(2, '0') }
@@ -113,16 +151,19 @@ export async function generateCampaignFailurePdf(payload) {
 
   // ─── KPI strip ─────────────────────────────────────────────────
   const kpiY = 150
+  const kpiH = 84
   const kpiW = (pageW - margin * 2 - 16) / 3
+  const totalSplit = splitOf(summary)
   const kpis = [
     { label: 'Emissoras com falha', value: summary?.stations_with_failure ?? 0, color: TOKENS.text },
     { label: 'Dias com falha',      value: summary?.total_failure_days    ?? 0, color: TOKENS.text },
-    { label: 'Déficit total',       value: summary?.total_deficit         ?? 0, color: TOKENS.deficit },
+    { label: 'Déficit total',       value: summary?.total_deficit         ?? 0, color: TOKENS.deficit,
+      split: totalSplit },
   ]
   kpis.forEach((kpi, i) => {
     const x = margin + i * (kpiW + 8)
     doc.setFillColor(...TOKENS.surface2)
-    doc.roundedRect(x, kpiY, kpiW, 56, 8, 8, 'F')
+    doc.roundedRect(x, kpiY, kpiW, kpiH, 8, 8, 'F')
     doc.setTextColor(...kpi.color)
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(22)
@@ -131,6 +172,19 @@ export async function generateCampaignFailurePdf(payload) {
     doc.setFontSize(9)
     doc.setTextColor(...TOKENS.text3)
     doc.text(kpi.label.toUpperCase(), x + 14, kpiY + 48)
+    // O déficit total impresso já dividido, uma parcela por linha, com o "+"
+    // explícito: o leitor confere que as duas somam o número acima.
+    if (kpi.split && kpi.split.absent != null) {
+      drawRuns(doc, x + 14, kpiY + 64, [
+        { t: `${kpi.split.absent}`, color: TOKENS.deficit, bold: true, size: 8 },
+        { t: '  não tocou', color: TOKENS.deficit, size: 8 },
+      ])
+      drawRuns(doc, x + 14, kpiY + 76, [
+        { t: '+ ', color: TOKENS.text3, size: 8 },
+        { t: `${kpi.split.offSlot}`, color: TOKENS.offSlot, bold: true, size: 8 },
+        { t: '  fora do horário', color: TOKENS.offSlot, size: 8 },
+      ])
+    }
   })
 
   // ─── Stations table ────────────────────────────────────────────
@@ -141,9 +195,13 @@ export async function generateCampaignFailurePdf(payload) {
     const identified = s.identified || 0
     const extras = s.extras || 0
     const deficit = s.deficit || 0
+    const split = splitOf(s)
     const coverage = programmed > 0 ? Math.round((identified / programmed) * 100) : 0
+    // Linhas com déficit dividido são desenhadas à mão (uma cor por linha) —
+    // ver didParseCell/didDrawCell da coluna 4.
+    const splitRow = !s.is_bonified && deficit > 0 && split.absent != null
     return {
-      _raw: { programmed, identified, extras, deficit, coverage, isBonified: s.is_bonified },
+      _raw: { programmed, identified, extras, deficit, coverage, isBonified: s.is_bonified, split, splitRow },
       cells: [
         s.station.name + (s.station.city ? `\n${s.station.city}` : ''),
         String(programmed),
@@ -155,8 +213,8 @@ export async function generateCampaignFailurePdf(payload) {
   })
 
   autoTable(doc, {
-    startY: kpiY + 80,
-    head: [['Emissora', 'Programado', 'Veiculou', 'Dias com falha', 'Status']],
+    startY: kpiY + kpiH + 24,
+    head: [['Emissora', 'Programado', 'Veiculou', 'Dias com falha', 'Déficit a cobrar']],
     body: body.map(b => b.cells),
     margin: { left: margin, right: margin },
     styles: { fontSize: 9, cellPadding: { top: 7, right: 6, bottom: 12, left: 6 }, valign: 'top' },
@@ -169,16 +227,23 @@ export async function generateCampaignFailurePdf(payload) {
       1: { halign: 'right', cellWidth: 60 },
       2: { halign: 'right', cellWidth: 70 },
       3: { cellWidth: 'auto' },
-      4: { cellWidth: 95, halign: 'left' },
+      4: { cellWidth: 104, halign: 'left' },
     },
     didParseCell: (data) => {
       if (data.section !== 'body') return
       const raw = body[data.row.index]?._raw
       if (!raw) return
-      // Status column color
+      // Coluna do déficit: cor + (quando há split) desenho manual das parcelas.
       if (data.column.index === 4) {
         if (raw.isBonified) data.cell.styles.textColor = TOKENS.bonified
         else if (raw.deficit > 0) data.cell.styles.textColor = TOKENS.deficit
+        if (raw.splitRow) {
+          // Texto zerado + altura reservada: as 3 linhas saem no didDrawCell,
+          // cada uma com a sua cor (o autotable pinta a célula inteira de uma
+          // cor só e aqui vermelho e âmbar precisam conviver).
+          data.cell.text = ['']
+          data.cell.styles.minCellHeight = 48
+        }
       }
       // Veiculou column: bold coverage %
       if (data.column.index === 2) {
@@ -186,12 +251,41 @@ export async function generateCampaignFailurePdf(payload) {
       }
     },
     didDrawCell: (data) => {
+      if (data.section !== 'body') return
+      const rawCell = body[data.row.index]?._raw
+
+      // Coluna 4: total a cobrar + as duas parcelas, cada uma na sua cor.
+      if (data.column.index === 4) {
+        if (!rawCell?.splitRow) return
+        const cx = data.cell.x + 6
+        drawRuns(doc, cx, data.cell.y + 17, [
+          { t: `Cobrar (${rawCell.deficit})`, color: TOKENS.deficit, bold: true, size: 9 },
+        ])
+        let cy = data.cell.y + 31
+        if (rawCell.split.absent > 0) {
+          drawRuns(doc, cx, cy, [
+            { t: `${rawCell.split.absent} `, color: TOKENS.deficit, bold: true, size: 7.5 },
+            { t: 'não tocou', color: TOKENS.deficit, size: 7.5 },
+          ])
+          cy += 11
+        }
+        if (rawCell.split.offSlot > 0) {
+          drawRuns(doc, cx, cy, [
+            { t: `${rawCell.split.offSlot} `, color: TOKENS.offSlot, bold: true, size: 7.5 },
+            { t: 'fora do horário', color: TOKENS.offSlot, size: 7.5 },
+          ])
+        }
+        return
+      }
+
       // Draw a thin coverage bar UNDER the Veiculou cell.
-      if (data.section !== 'body' || data.column.index !== 2) return
-      const raw = body[data.row.index]?._raw
+      if (data.column.index !== 2) return
+      const raw = rawCell
       if (!raw || raw.programmed === 0) return
       const x = data.cell.x + 4
-      const y = data.cell.y + data.cell.height - 6
+      // Ancorado ao texto da própria célula (não ao rodapé da linha): linhas com
+      // o déficit dividido são mais altas e a barra ficaria solta lá embaixo.
+      const y = data.cell.y + 26
       const w = data.cell.width - 8
       const h = 3
       // Background track
@@ -214,6 +308,45 @@ export async function generateCampaignFailurePdf(payload) {
       }
     },
   })
+
+  // ─── Legenda dos dois tipos de déficit ─────────────────────────
+  // Sem isto o documento acusa de "não veiculou" a emissora que veiculou fora
+  // da faixa — e ela contesta com razão. O texto é factual: descreve o que foi
+  // medido, não a intenção da emissora.
+  if (totalSplit.absent != null) {
+    const pageH = doc.internal.pageSize.getHeight()
+    let ly = (doc.lastAutoTable?.finalY ?? kpiY + kpiH + 24) + 26
+    if (ly + 62 > pageH - 50) {
+      doc.addPage()
+      ly = 60
+    }
+    doc.setDrawColor(...TOKENS.border)
+    doc.setLineWidth(0.5)
+    doc.line(margin, ly - 14, pageW - margin, ly - 14)
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(8)
+    doc.setTextColor(...TOKENS.text3)
+    doc.text('COMO LER ESTE RELATÓRIO', margin, ly)
+
+    drawRuns(doc, margin, ly + 15, [
+      { t: 'Não tocou', color: TOKENS.deficit, bold: true },
+      { t: ' — nenhuma veiculação do material foi identificada no dia contratado.' },
+    ])
+    drawRuns(doc, margin, ly + 28, [
+      { t: 'Fora do horário', color: TOKENS.offSlot, bold: true },
+      { t: ' — a veiculação foi identificada, mas fora da faixa horária contratada;' },
+    ])
+    drawRuns(doc, margin, ly + 39, [
+      { t: 'por isso ela não cumpre a faixa e permanece no déficit.' },
+    ])
+    drawRuns(doc, margin, ly + 54, [
+      { t: 'Não tocou', color: TOKENS.deficit, bold: true },
+      { t: '  +  ' },
+      { t: 'fora do horário', color: TOKENS.offSlot, bold: true },
+      { t: '  =  déficit total de cada emissora.' },
+    ])
+  }
 
   // ─── Footer (every page) ───────────────────────────────────────
   const pages = doc.getNumberOfPages()

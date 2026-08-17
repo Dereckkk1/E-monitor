@@ -15,7 +15,17 @@ const CATEGORY_LABEL = {
   in_slot:  { label: 'Dentro da faixa programada', variant: 'green' },
   out_slot: { label: 'Tocou fora das faixas',      variant: 'yellow' },
   out_date: { label: 'Tocou fora da data',         variant: 'purple' },
-  orphan:   { label: 'Bônus (sem faixa)',          variant: 'blue' },
+  bonus:    { label: 'Bonificação (sem meta)',     variant: 'blue' },
+}
+
+// isBonusCategory: 'bonus' é o veredito atual do Settle (migration 0064,
+// spec 2026-08-14). 'orphan' é o nome antigo da mesma categoria — o CHECK de
+// 0063 continua aceitando os dois de propósito durante a janela de deploy, e
+// o UPDATE de backfill de 0064 é um snapshot no tempo, então uma linha
+// pontual ainda pode chegar aqui rotulada 'orphan'. Tratamos como sinônimo
+// pra bonificação nunca sumir da lista/summary por causa de um rótulo velho.
+function isBonusCategory(category) {
+  return category === 'bonus' || category === 'orphan'
 }
 
 // ── Plano do dia: helpers ───────────────────────────────────────
@@ -92,11 +102,25 @@ function weekdayMaskLabel(mask) {
   return [1, 2, 3, 4, 5, 6, 0].filter(x => set.has(x)).map(x => WD_SHORT[x]).join(', ')
 }
 
-// buildDayPlan: monta as faixas do dia + atribuição honesta das tocadas in_slot.
-// Cada in_slot é creditada a UMA faixa (respeitando carve-out por material,
-// janela ±15 min; empate → janela mais curta, depois começo mais cedo) pra a
-// soma nunca estourar o total autoritativo. In_slot que não casa nenhuma janela
-// atual (regra editada desde a categorização) vai pra `changedWindow`.
+// buildDayPlan: monta as faixas que valem hoje e uma atribuição best-effort das
+// tocadas in_slot a elas — SÓ para desenhar a barra de progresso por faixa.
+//
+// APRESENTAÇÃO, NUNCA VEREDITO: quem decide se uma tocada é
+// in_slot/out_slot/out_date/bonus é o backend (Settle em categorizer.go, spec
+// 2026-08-14) — lido aqui via `det.category`. A meta agora é da CÉLULA inteira
+// (campanha × tipo × emissora × dia), não por faixa: o Settle fecha as N
+// primeiras tocadas dentro de QUALQUER janela válida, em ordem cronológica,
+// sem cota por faixa. Este helper não sabe reconstruir essa ordem global — ele
+// só reparte, entre as tocadas que o backend JÁ rotulou in_slot, qual faixa
+// "credita" cada uma (respeitando carve-out por material; janela ±15 min;
+// empate → janela mais curta, depois começo mais cedo). Isso é só pra o
+// usuário ver "quanto tocou em cada janela"; a soma por faixa pode, em teoria,
+// divergir do `eff.in_slot` autoritativo (fontes diferentes: aqui é o
+// /detections paginado em 200; lá é a daily_play_summary). Quando divergirem,
+// o header "esperado" e a SaldoStrip usam sempre `eff` — nunca a soma das
+// faixas — de propósito: não reconciliamos silenciosamente. In_slot que não
+// casa nenhuma janela atual (regra editada desde a categorização) vai pra
+// `changedWindow`.
 function buildDayPlan({ rules, override = null, dateISO, detections, expected }) {
   // Override supersede as regras nesta célula+dia (categorizer.go / recatClassifyTailSQL).
   // A janela do override é a única que rege; atribuímos in_slot a ela (±15min).
@@ -308,7 +332,7 @@ export default function DayDetailModal({
     in_slot:  filtered.filter(d => d.category === 'in_slot'),
     out_slot: filtered.filter(d => d.category === 'out_slot'),
     out_date: filtered.filter(d => d.category === 'out_date'),
-    orphan:   filtered.filter(d => d.category === 'orphan'),
+    bonus:    filtered.filter(d => isBonusCategory(d.category)),
   }
 
   // id→título pra rotular faixas escopadas a material específico. availableMaterials
@@ -1281,20 +1305,25 @@ function NoMaterialsState({ materialType, station, onCancel }) {
 //
 // deriveSummary: saldo derivado das próprias detecções quando a célula não trouxe
 // summary (ex.: regra editada/removida depois da tocada). Garante que o bloco
-// NUNCA some quando há veiculação — espelha a fórmula da view daily_play_summary.
+// NUNCA some quando há veiculação — espelha a fórmula do Settle novo (spec
+// 2026-08-14, migration 0064/0065): deficit é só `expected − in_slot` (D3:
+// out_slot NÃO abate mais o contrato, deixou de "cumprir" a meta) e bonus é
+// direto a contagem de category='bonus' — sem o antigo excedente
+// `max(0, in_slot − expected)`, porque o Settle já capa in_slot em N por
+// construção (nunca sobra in_slot além da meta pra virar bônus aqui).
 function deriveSummary(detections, sumTargets) {
-  let inSlot = 0, outSlot = 0, outDate = 0, orphan = 0
+  let inSlot = 0, outSlot = 0, outDate = 0, bonus = 0
   for (const d of detections) {
     if (d.category === 'in_slot') inSlot++
     else if (d.category === 'out_slot') outSlot++
     else if (d.category === 'out_date') outDate++
-    else if (d.category === 'orphan') orphan++
+    else if (isBonusCategory(d.category)) bonus++
   }
   const expected = sumTargets
   return {
     expected, in_slot: inSlot, out_slot: outSlot, out_date: outDate,
-    deficit: Math.max(0, expected - inSlot - outSlot),
-    bonus: Math.max(0, inSlot - expected) + orphan,
+    deficit: Math.max(0, expected - inSlot),
+    bonus,
   }
 }
 
@@ -1406,11 +1435,20 @@ function DayPlan({ rules, override = null, dateISO, detections = [], cellSummary
           +{changedWindow} tocou na faixa, mas fora das janelas atuais (regra editada depois).
         </p>
       )}
+      {/* Meta zerada pelo ajuste do dia (plays_expected=0): pelo Settle novo
+          (spec 2026-08-14, D3) isso NUNCA gera out_slot — com N=0 toda tocada
+          já nasce "excedente" e vira bonus direto (in_slot < N é sempre falso
+          quando N=0). O caso antigo, que rotulava essa situação de "fora do
+          prazo", era o próprio bug que motivou a investigação (campanha 270,
+          Band Vale FM 102.9): bonificação sendo lida como inadimplência. */}
+      {gov && gov.plays_expected === 0 && eff.bonus > 0 && (
+        <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#1d4ed8', lineHeight: 1.45 }}>
+          {`${eff.bonus} tocou, mas o ajuste do dia zerou a meta — toda tocada conta como bonificação, não como fora do prazo.`}
+        </p>
+      )}
       {eff.out_slot > 0 && govWindow && (
         <p style={{ margin: 0, padding: '6px 12px 0', fontSize: 11, color: '#92400e', lineHeight: 1.45 }}>
-          {gov && gov.plays_expected === 0
-            ? `${eff.out_slot} tocou, mas o ajuste do dia zerou a meta — toda tocada conta como fora do prazo.`
-            : `${eff.out_slot} tocou fora da faixa ${govWindow} (${govSource}) — conta como fora do prazo. Tolerância de 15 min já considerada.`}
+          {`${eff.out_slot} tocou fora da faixa ${govWindow} (${govSource}) — conta como fora do prazo enquanto a meta não fecha. Tolerância de 15 min já considerada.`}
         </p>
       )}
 

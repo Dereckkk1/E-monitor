@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useCampaignFailureDetail } from '../api/hooks'
 import { generateCampaignFailurePdf } from '../utils/pdfCampaignFailure'
 import StationAvatar from './StationAvatar'
+import DeficitSplit from './DeficitSplit'
 import './CampaignFailureCard.css'
 
 const STATUS_LABEL = {
@@ -72,7 +73,10 @@ function FullCoverageBar({ programmed, identified, extras, deficit }) {
 }
 
 function StationRow({ entry }) {
-  const { station: s, programmed, identified, deficit, extras, is_bonified, failure_days } = entry
+  const {
+    station: s, programmed, identified, deficit,
+    deficit_absent, deficit_off_slot, extras, is_bonified, failure_days,
+  } = entry
   const pct = programmed > 0 ? Math.round((identified / programmed) * 100) : 0
   return (
     <>
@@ -89,6 +93,18 @@ function StationRow({ entry }) {
           <span className="cfc-num-ok">{identified.toLocaleString('pt-BR')}</span>
           <span className="cfd-num-pct"> ({pct}%)</span>
         </td>
+        <td className="cfd-def-cell">
+          {deficit > 0 ? (
+            <DeficitSplit
+              total={deficit}
+              absent={deficit_absent}
+              offSlot={deficit_off_slot}
+              stack
+            />
+          ) : (
+            <span className="cfd-def-none">—</span>
+          )}
+        </td>
         <td>
           <DaysChips days={failure_days || []} bonified={is_bonified} />
           {is_bonified && (
@@ -102,7 +118,7 @@ function StationRow({ entry }) {
         </td>
       </tr>
       <tr className="cfd-bar-row">
-        <td colSpan={4}>
+        <td colSpan={5}>
           <FullCoverageBar programmed={programmed} identified={identified} extras={extras} deficit={deficit} />
         </td>
       </tr>
@@ -216,6 +232,11 @@ export default function CampaignFailureDrawer({ campaignId, onClose }) {
             <div className="cfd-kpi">
               <span className="cfd-kpi-num cfd-kpi-num-deficit">{summary.total_deficit}</span>
               <span className="cfd-kpi-label">Veiculações faltam</span>
+              <DeficitSplit
+                total={summary.total_deficit}
+                absent={summary.total_deficit_absent}
+                offSlot={summary.total_deficit_off_slot}
+              />
             </div>
           </div>
         )}
@@ -238,6 +259,7 @@ export default function CampaignFailureDrawer({ campaignId, onClose }) {
                   <th>Emissora</th>
                   <th className="cfd-num">Programado</th>
                   <th className="cfd-num">Veiculou</th>
+                  <th className="cfd-def-cell">Déficit</th>
                   <th>Dias com falha</th>
                 </tr>
               </thead>
@@ -247,6 +269,15 @@ export default function CampaignFailureDrawer({ campaignId, onClose }) {
                 ))}
               </tbody>
             </table>
+          )}
+          {stations.length > 0 && (
+            <p className="cfd-legend">
+              <span className="dsplit-tag dsplit-tag--absent">não tocou</span>{' '}
+              nenhuma veiculação foi ao ar no dia contratado.{' '}
+              <span className="dsplit-tag dsplit-tag--offslot">fora do horário</span>{' '}
+              a emissora veiculou, mas fora da faixa contratada — a inserção não cumpre a
+              faixa e continua no déficit. Os dois somam o déficit total.
+            </p>
           )}
           {totalExtras > 0 && (
             <p className="cfd-foot-note">

@@ -426,7 +426,7 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         <ReportItem
           icon={<IconCsv />}
           label="CSV Detalhado"
-          hint={gridReport ? 'Uma linha por veiculação (sem filtro de busca)' : 'Uma linha por veiculação'}
+          hint={gridReport ? 'Uma linha por veiculação + resumo (sem filtro de busca)' : 'Uma linha por veiculação + resumo'}
           loading={busy === 'detailed'}
           disabled={!!busy || rangeInvalid}
           onClick={onDetailed}

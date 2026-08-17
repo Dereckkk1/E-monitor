@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import api from '../api/client'
 import StationAvatar from './StationAvatar'
+import DeficitSplit from './DeficitSplit'
 import { generateCampaignFailurePdf } from '../utils/pdfCampaignFailure'
 import './CampaignFailureCard.css'
 
@@ -91,7 +92,10 @@ function PdfButton({ campaignId }) {
 }
 
 function StationRow({ station }) {
-  const { station: s, programmed, identified, deficit, is_bonified } = station
+  const {
+    station: s, programmed, identified, deficit,
+    deficit_absent, deficit_off_slot, is_bonified,
+  } = station
   return (
     <li className="cfc-station-row">
       <StationAvatar station={s} size={28} />
@@ -109,9 +113,14 @@ function StationRow({ station }) {
         <CoverageBar identified={identified} programmed={programmed} isBonified={is_bonified} />
         {is_bonified ? (
           <span className="cfc-tag cfc-tag-bonif">falhou, bonificada</span>
-        ) : deficit > 0 ? (
-          <span className="cfc-tag cfc-tag-deficit">{deficit === 1 ? 'falta 1' : `faltam ${deficit.toLocaleString('pt-BR')}`}</span>
-        ) : null}
+        ) : (
+          <DeficitSplit
+            total={deficit}
+            absent={deficit_absent}
+            offSlot={deficit_off_slot}
+            align="end"
+          />
+        )}
       </div>
     </li>
   )

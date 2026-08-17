@@ -437,8 +437,16 @@ function RowSummaryCell({ row, days, cellData, stationTotalWidth, summary = 'ful
 // no bloco da estação. Sticky-right a 0 (encostado na borda).
 //
 // Cálculo:
-//   • Impactos    = pmm × Σ in_slot (somando todos os materiais da emissora)
-//   • Impactos no target = pmm_target × Σ in_slot (só quando cadastrado)
+//   • Impactos    = pmm × Σ (in_slot + bonus) (somando todos os materiais da
+//                   emissora). Essa é a BASE CANÔNICA de impactos do produto
+//                   inteiro — a mesma de /campaigns, /insights, do PDF/CSV de
+//                   campanha e do pós-venda. Fora-da-faixa (out_slot) não vale
+//                   nada comercialmente e fora-da-data (out_date) está fora do
+//                   período contratado, então nenhum dos dois entra. As pills de
+//                   veiculação abaixo continuam mostrando as 4 categorias
+//                   separadas de propósito: elas respondem "cumpriu a cota?",
+//                   que é outra pergunta. Ver docs/features/client-target-pmm.md.
+//   • Impactos no target = pmm_target × Σ (in_slot + bonus) (só quando cadastrado)
 //   • Valor:
 //       - consolidated  → consolidated_value (não depende das plays)
 //       - per_insertion → Σ (unit_value_tipo × in_slot_tipo) por tipo
@@ -506,10 +514,15 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null
     }
   }
 
-  const impactos = pmm > 0 ? pmm * inSlotStation : null
-  // Espelha a base da própria tela (Σ in_slot), trocando pmm por pmm_target.
+  // Base canônica de impactos: in_slot + bonus. O excedente dentro da faixa
+  // virou `bonus` na categorização por cota, então contar só in_slot escondia
+  // impacto entregue de verdade (era a causa do /detections divergir de
+  // /insights e /campaigns).
+  const impactBase = inSlotStation + bonusStation
+  const impactos = pmm > 0 ? pmm * impactBase : null
+  // Espelha a base de impactos da tela, trocando pmm por pmm_target.
   // null = sem cadastro pra essa emissora → pill não renderizada.
-  const impactosTarget = pmmTarget != null ? pmmTarget * inSlotStation : null
+  const impactosTarget = pmmTarget != null ? pmmTarget * impactBase : null
 
   return (
     <div style={{
@@ -533,7 +546,7 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null
         icon={<IconHeadset />}
         label={impactos != null ? fmtImpactos(impactos) : '—'}
         hint={impactos != null
-          ? `${fmtInt(impactos)} impactos = PMM ${fmtInt(pmm)} × ${inSlotStation} veiculações na estação`
+          ? `${fmtInt(impactos)} impactos = PMM ${fmtInt(pmm)} × ${impactBase} veiculações na estação (${inSlotStation} dentro da faixa + ${bonusStation} de bonificação)`
           : 'PMM não cadastrado pra essa emissora'}
       />
       {impactosTarget != null && (
@@ -541,7 +554,7 @@ function StationTotalCell({ rows, days, cellData, pricing, pmm, pmmTarget = null
           tone="teal"
           icon={<IconHeadset />}
           label={`${fmtImpactos(impactosTarget)} target`}
-          hint={`${fmtInt(impactosTarget)} impactos no target${targetLabel ? ` (${targetLabel})` : ''} = PMM no target ${fmtInt(pmmTarget)} × ${inSlotStation} veiculações na estação`}
+          hint={`${fmtInt(impactosTarget)} impactos no target${targetLabel ? ` (${targetLabel})` : ''} = PMM no target ${fmtInt(pmmTarget)} × ${impactBase} veiculações na estação (${inSlotStation} dentro da faixa + ${bonusStation} de bonificação)`}
         />
       )}
       <ValuePill

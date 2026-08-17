@@ -45,6 +45,21 @@ function fmtPeriod(from, to, campStart, campEnd) {
 function fmtNumber(n) {
   return Number(n || 0).toLocaleString('pt-BR')
 }
+// BASE CANÔNICA DE IMPACTOS: in_slot + bonus. Nunca `count` (que soma as quatro
+// categorias): fora-da-faixa não vale nada comercialmente (decisão D3 da
+// categorização por cota) e fora-da-data está fora do período contratado, então
+// nenhum dos dois é impacto entregue ao cliente. É a mesma base de /campaigns,
+// /insights, do CSV consolidado e do pós-venda — ver
+// docs/features/client-target-pmm.md.
+//
+// Prefere o `impact_count` que o backend manda; o fallback soma o breakdown que
+// já está na própria linha da tabela (Dentro + Bônus) porque o frontend sobe no
+// Cloudflare Pages ANTES do backend ir pra VM: sem o fallback, na janela entre
+// os dois deploys a coluna Impactos zeraria o PDF do cliente.
+function impactBase(row, bd) {
+  if (row?.impact_count != null) return row.impact_count
+  return (bd?.inSlot ?? 0) + (bd?.orphan ?? 0)
+}
 function slugify(s) {
   return String(s || 'campanha')
     .toLowerCase()
@@ -463,6 +478,10 @@ export async function buildCampaignReportPDF(summary) {
   doc.text('Por emissora', marginX, nextY)
 
   const byStation = Array.isArray(summary.by_station) ? summary.by_station : []
+  // ATENÇÃO ao ler a tabela: "Impactos" é pmm × (Dentro + Bônus), NÃO
+  // pmm × Total. Total soma as quatro categorias, e fora-da-faixa/fora-da-data
+  // não são impacto entregue — ver impactBase().
+  //
   // Cabeçalho + larguras de coluna: "Impactos" entra sempre; "Impactos no
   // target" só quando `hasTarget` (declarado no bloco de KPIs acima). As
   // larguras das colunas existentes foram reduzidas o suficiente pra abrir
@@ -514,10 +533,10 @@ export async function buildCampaignReportPDF(summary) {
         fmtNumber(bd.outDate),
         fmtNumber(bd.orphan),
         fmtNumber(s.count),
-        s.station_pmm != null ? fmtNumber(Math.round(s.station_pmm * s.count)) : '—',
+        s.station_pmm != null ? fmtNumber(Math.round(s.station_pmm * impactBase(s, bd))) : '—',
       ]
       if (hasTarget) {
-        row.push(s.station_pmm_target != null ? fmtNumber(s.station_pmm_target * s.count) : '—')
+        row.push(s.station_pmm_target != null ? fmtNumber(s.station_pmm_target * impactBase(s, bd)) : '—')
       }
       return row
     }),
@@ -754,9 +773,11 @@ export async function buildGridReportPDF(model) {
       doc.text(sub, marginX, nextY + 4.5)
     }
     // Nota de fora-faixa/fora-data/impactos quando houver (não some nada da
-    // grade). Impactos = pmm × Σ in_slot da emissora (calculado em
-    // buildGridReportModel, gridReport.js); "no target" só quando o cliente
-    // tem PMM no target cadastrado pra essa emissora especificamente.
+    // grade). Impactos = pmm × Σ (in_slot + bonus) da emissora (calculado em
+    // buildGridReportModel, gridReport.js — impactBase()); as veiculações fora
+    // da faixa/data listadas aqui ao lado NÃO entram nesse número. "No target"
+    // só quando o cliente tem PMM no target cadastrado pra essa emissora
+    // especificamente.
     const extras = []
     if (s.totals.outSlot > 0) extras.push(`${fmtNumber(s.totals.outSlot)} fora da faixa`)
     if (s.totals.outDate > 0) extras.push(`${fmtNumber(s.totals.outDate)} fora da data`)

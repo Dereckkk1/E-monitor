@@ -544,8 +544,14 @@ function ClientDashboard() {
               const fin = financialsByCampaign.get(c.id)
               const audience = fin?.total_audience ?? 0
               const invested = fin?.total_invested ?? 0
+              const bonusValue = fin?.total_bonus_value ?? 0
               const fixedCPM = fin?.fixed_cpm ?? null
-              const dynamicCPM = audience > 0 ? (invested / audience) * 1000 : null
+              // Numerador do CPM = investido + bonificado: o CPM mede a
+              // eficiência da mídia ENTREGUE a preço de tabela, e a tocada de
+              // bônus já está no denominador (audience conta in_slot + bonus).
+              // "Investido" continua sendo só o que o cliente pagou.
+              const entregue = invested + bonusValue
+              const dynamicCPM = audience > 0 ? (entregue / audience) * 1000 : null
               // CPM fixo (quando cadastrado no Step 6 do wizard) sobrescreve
               // o derivado nas telas de exibição.
               const cpm = fixedCPM != null ? fixedCPM : dynamicCPM
@@ -610,8 +616,10 @@ function ClientDashboard() {
                           fixedCPM != null
                             ? `CPM fixo da campanha: ${formatBRL(fixedCPM)} (dinâmico seria ${dynamicCPM != null ? formatBRL(dynamicCPM) : '—'})`
                             : cpm != null
-                              ? `${formatBRL(invested)} ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`
-                              : invested > 0
+                              ? (bonusValue > 0
+                                  ? `${formatBRL(entregue)} entregues a preço de tabela (${formatBRL(invested)} investidos + ${formatBRL(bonusValue)} de bonificação) ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`
+                                  : `${formatBRL(entregue)} ÷ ${Math.round(audience).toLocaleString('pt-BR')} impactos × 1000`)
+                              : entregue > 0
                                 ? 'Sem PMM ou sem inserções — CPM indeterminado'
                                 : 'Sem pricing cadastrado'
                         }

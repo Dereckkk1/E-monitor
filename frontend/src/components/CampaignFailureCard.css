@@ -265,6 +265,9 @@
   color: var(--c-text, #06055B);
 }
 .cfr-num-deficit { color: #b91c1c; }
+/* Split "não tocou / fora do horário" logo abaixo do total, alinhado à direita.
+   O total continua sendo a soma visível dos dois chips. */
+.cfr-num-deficit .dsplit { display: flex; margin-top: 5px; }
 .cfr-bonif { width: 130px; }
 
 .cfr-action { width: 50px; text-align: right; }
@@ -417,6 +420,12 @@
   font-variant-numeric: tabular-nums;
 }
 .cfd-kpi-num-deficit { color: #b91c1c; }
+.cfd-kpi .dsplit { display: flex; margin-top: 8px; }
+/* Coluna "Déficit" da tabela do drawer — chips empilhados à direita. */
+.cfd-def-cell { text-align: right; }
+.cfd-table thead th.cfd-def-cell { text-align: right; }
+.cfd-def-cell .dsplit { display: inline-flex; }
+.cfd-def-none { color: var(--c-text-3, #9ca3af); font-size: 12px; }
 .cfd-kpi-label {
   display: block; margin-top: 8px;
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
@@ -506,6 +515,18 @@
   margin-top: 4px;
   font-weight: 500;
 }
+/* Legenda dos dois tipos de déficit — o admin precisa saber o que vai no PDF. */
+.cfd-legend {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--c-border, #e2e8f0);
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--c-text-3, #9ca3af);
+}
+.cfd-legend .dsplit-tag { margin-right: 2px; }
+.cfd-legend + .cfd-foot-note { border-top: none; padding-top: 0; margin-top: 10px; }
+
 .cfd-foot-note {
   margin-top: 24px;
   font-size: 12px;
