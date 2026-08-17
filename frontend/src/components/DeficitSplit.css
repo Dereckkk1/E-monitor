@@ -1,0 +1,36 @@
+/* DeficitSplit.css — chips dos dois tipos de déficit.
+ * Cores reaproveitadas do design system (BadgePill / DayCell):
+ *   vermelho  = déficit          (#b91c1c sobre rgba(220,38,38,.12))
+ *   âmbar     = fora da faixa    (#b45309 sobre #fef3c7, mesmo do out_slot)
+ * Nenhuma cor nova. */
+
+.dsplit {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.dsplit--end   { justify-content: flex-end; }
+.dsplit--stack {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.dsplit-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.dsplit-tag--absent  { background: rgba(220, 38, 38, .12); color: #b91c1c; }
+.dsplit-tag--offslot { background: #fef3c7;                color: #b45309; }
+
+.dsplit-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
