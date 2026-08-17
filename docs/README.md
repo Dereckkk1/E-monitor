@@ -44,7 +44,7 @@ docs/
 | [fingerprint-pipeline.md](architecture/fingerprint-pipeline.md) | Pipeline offline que gera fingerprints acústicos (STFT → peaks → hashes) |
 | [shared-hash-detection.md](architecture/shared-hash-detection.md) | Algoritmo bidirecional de classificação subset/sting/skip de curtos |
 | [campaign-lifecycle.md](architecture/campaign-lifecycle.md) | Estados programada/ativa/concluida/cancelada + scheduler 60s |
-| [distribution-rules.md](architecture/distribution-rules.md) | Regras de distribuição + categorização in_slot/out_slot/out_date/orphan + view daily_play_summary |
+| [distribution-rules.md](architecture/distribution-rules.md) | Regras de distribuição + overrides + gatilhos de recategorização + view daily_play_summary (a **regra** de categorização está em features/quota-aware-categorization.md) |
 | [version-disambiguation.md](architecture/version-disambiguation.md) | Dedup pós-confirmação entre cortes 30s/60s do mesmo cliente |
 | [detection-count-consistency.md](architecture/detection-count-consistency.md) | Conjunto "aprovado" único (`catalog.ApprovedDetectionsFilter`) + matriz de toda query de contagem de veiculação + exceções deliberadas |
 | [projection-category-invariant.md](architecture/projection-category-invariant.md) | Invariante `detection_campaigns.category` sempre igual ao veredito do categorizador: recat escopado por projeção + guarda da base + reconciler contínuo `projrecon` (caso motivador COPA 10/07) |
@@ -63,6 +63,7 @@ docs/
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
 | [detections-report-wysiwyg.md](features/detections-report-wysiwyg.md) | Relatório WYSIWYG de /detections (CSV/PDF espelham a grade filtrada — busca + programado + por dia; frontend-only) |
+| [quota-aware-categorization.md](features/quota-aware-categorization.md) | **Como uma veiculação vira in_slot/out_slot/out_date/bonus**: fechamento por cota da célula-dia (campanha × tipo × emissora × dia), `out_slot` não vale nada nem abate o déficit, `orphan`→`bonus`. Leia antes de mexer em categoria, déficit, bonificação ou base financeira |
 | [detections-day-plan.md](features/detections-day-plan.md) | Bloco "Plano do dia" na DayDetailModal — faixas que valem no dia (janela · progresso · tocou/alvo), escopo por material, rodapé de faixas que não valem, saldo derivado |
 | [manual-airings-bulk-and-proof.md](features/manual-airings-bulk-and-proof.md) | Veiculações manuais em lote + comprovante PDF (1 PDF→N) + censura tardia (subir áudio depois em /detections/:id) + rótulo /stations "Sem campanha ativa" |
 | [materials-page.md](features/materials-page.md) | Tela `/materials` — materiais tocáveis por campanha + grade só-programado (Σ por emissora), admin + cliente |

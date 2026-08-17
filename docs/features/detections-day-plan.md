@@ -1,11 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-01
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - frontend/src/components/DayDetailModal.jsx
   - workers/internal/categorizer/categorizer.go
   - migrations/0029_daily_summary_exclude_audit_rejected.up.sql
   - migrations/0043_rule_material_scope.up.sql
+  - migrations/0065_quota_aware_summary.up.sql
 ---
 
 # Plano do dia — bloco de faixas na DayDetailModal
@@ -42,22 +43,47 @@ Por faixa que **vale naquela data** (uma linha compacta cada):
 - **Tira de saldo** com o não-zero (`tocou · faltou · fora da faixa · fora da
   data · bônus`).
 
-## Atribuição por faixa (honesta)
+## Atribuição por faixa — apresentação, nunca veredito
 
-A categoria gravada em `detections.category` (`in_slot`/`out_slot`/…) continua
-**a verdade** — o bloco não recategoriza nada. A contagem "tocou dentro desta
-faixa" é derivada no cliente espelhando o `categorizer.go`:
+A categoria gravada em `detections.category` (`in_slot`/`out_slot`/`out_date`/
+`bonus`) é **a verdade** — o bloco não recategoriza nada e, desde 2026-08-17, não
+tenta mais reproduzir a regra.
+
+**A meta é da célula-dia inteira, não por faixa.** O backend fecha as N primeiras
+tocadas dentro de **qualquer** janela válida, em ordem cronológica global
+([quota-aware-categorization.md](quota-aware-categorization.md)). O cliente não tem
+como reconstruir essa ordem — ele recebe `/detections` paginado —, então o
+`buildDayPlan` faz só o que é honesto fazer: reparte, **entre as tocadas que o
+backend já rotulou `in_slot`**, qual faixa credita cada uma, pra desenhar a barra
+de progresso.
 
 - cada `in_slot` é creditado a **uma** faixa (janela tolerante ±15 min =
-  `SlotToleranceSeconds`; empate → janela mais curta, depois começo mais cedo),
-  então a soma nunca estoura o total autoritativo;
+  `SlotToleranceSeconds`; empate → janela mais curta, depois começo mais cedo);
 - respeita o **carve-out**: material nomeado em regra específica é creditado só
   às faixas específicas dele; os demais, só às gerais;
 - `in_slot` que não casa nenhuma janela **atual** (regra editada depois da
   categorização) vira a nota `+K tocou … fora das janelas atuais`.
 
+A soma por faixa pode, em teoria, divergir do `in_slot` autoritativo (fontes
+diferentes: aqui é a lista paginada, lá é a `daily_play_summary`). Quando divergir,
+o header "esperado" e a tira de saldo usam **sempre** o autoritativo — de propósito,
+não reconciliamos em silêncio.
+
 Horário da tocada é calculado em `America/Sao_Paulo` (`Intl.DateTimeFormat`),
 o mesmo fuso do categorizador e da view — independe do fuso do browser.
+
+## Notas de rodapé do bloco
+
+| Situação | O que o bloco diz |
+|---|---|
+| `out_slot > 0` | "N tocou fora da faixa {janela} ({origem}) — conta como fora do prazo **enquanto a meta não fecha**. Tolerância de 15 min já considerada." |
+| Ajuste do dia com `plays_expected = 0` e bonificação | "N tocou, mas o ajuste do dia zerou a meta — toda tocada conta como **bonificação**, não como fora do prazo." (azul) |
+| `in_slot` fora das janelas atuais | "+K tocou na faixa, mas fora das janelas atuais (regra editada depois)." |
+
+A segunda linha era, até esta entrega, o texto errado que originou a investigação
+(campanha 270, Band Vale FM 102.9): dizia que meta zerada fazia toda tocada contar
+"como fora do prazo". Com N=0, `out_slot` é inalcançável — a tocada é sempre
+bonificação.
 
 ## Robustez (nunca some, nunca corta)
 
@@ -72,7 +98,10 @@ Dois bugs corrigidos na entrega, ambos de layout/dados:
    (ex.: regra removida/editada depois da tocada, deixando `in_slot` congelado
    sem linha na view). `deriveSummary` recalcula o saldo pela mesma fórmula da
    `daily_play_summary`, garantindo que o bloco apareça sempre que houver
-   veiculação.
+   veiculação. Desde a migration 0065 essa fórmula é `deficit = max(0, expected −
+   in_slot)` (sem abater `out_slot`) e `bonus` = contagem direta da categoria —
+   `'orphan'` é aceito como sinônimo de `'bonus'` na leitura, pra bonificação nunca
+   sumir por causa de um rótulo gravado pelo binário antigo.
 
 ## Override
 
@@ -85,4 +114,11 @@ honesta em vez de forçar um breakdown falso.
 - Não altera backend, schema, nem a categorização (só apresentação + derivação
   read-only no cliente).
 - Não mexe na lista de detecções abaixo (segue agrupada pela categoria
-  autoritativa).
+  autoritativa — o grupo azul agora se chama "Bonificação (sem meta)").
+- Não reconstrói a cota do dia no cliente: quem fecha a célula-dia é o backend.
+
+## Links
+
+- [quota-aware-categorization.md](quota-aware-categorization.md) — a regra que decide as categorias
+- [override-time-window.md](override-time-window.md) — a faixa "ajuste do dia"
+- [distribution-rules.md](../architecture/distribution-rules.md) — regras e gatilhos de recategorização

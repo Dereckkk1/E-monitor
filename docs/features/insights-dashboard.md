@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-08
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/insights.go
+  - migrations/0065_quota_aware_summary.up.sql
   - workers/internal/catalog/insights_test.go
   - workers/internal/api/handlers/insights.go
   - workers/internal/api/handlers/insights_test.go
@@ -53,19 +54,39 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 | **Impactos** | `Σ_estação (detections_count × PMM)`. Estação sem PMM → não soma (mas conta em `stations_count`) |
 | **Impactos por gênero** | `Σ (count × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`) |
 | **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo |
-| **Bonificação** | Soma do valor das veiculações "bonus" da view `daily_play_summary` (orphan + in_slot acima do expected). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
+| **Bonificação** | Soma do valor das veiculações `bonus` da view `daily_play_summary` — desde a migration 0065 é a **contagem direta da categoria** `bonus` gravada pelo categorizador (excedente da cota do dia dentro da faixa + tocada sem meta). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
-| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): **= o mesmo do `/campaigns`** = `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período); Bonificação some. **100% `per_insertion`**: inalterado — `Σ_type (unit_value × (in_slot+out_slot))` por veiculação, com Bonificação. **Ver §"Consolidado: valor MENSAL que acumula por mês"** |
+| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): **= o mesmo do `/campaigns`** = `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período); Bonificação some. **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação. **Ver §"Consolidado: valor MENSAL que acumula por mês"** |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
-| **Buckets — déficit** | `max(0, expected - in_slot - out_slot)` |
-| **Buckets — extras** | `count(detections WHERE category='orphan')` (NÃO inclui in_slot-acima-de-expected, pra evitar double-count no gráfico) |
+| **Buckets — déficit** | `max(0, expected - in_slot)` |
+| **Buckets — extras** | `count(detections WHERE category='bonus')` |
 
-### Por que "extras" no chart difere de "bonificação" no KPI
+### `out_slot` saiu da base (2026-08-17)
 
-- **Chart (`extras`):** orphan puro. Mostrar in_slot + extras no mesmo gráfico com extras = bonus seria double-count visual.
-- **KPI (`Bonificação`):** bonus completo (orphan + in_slot acima do expected). É a métrica comercial de "mídia ganha".
+Até esta entrega o executado somava `in_slot + out_slot` — ou seja, **faturava do
+cliente uma veiculação que foi ao ar fora do horário comprado**, enquanto o
+`/campaigns` a tratava como valendo zero. Pela decisão D3 do
+[fechamento por cota](quota-aware-categorization.md), `out_slot` não vale nada:
+não fatura, não bonifica e não abate o déficit. As duas telas passaram a
+compartilhar a base `in_slot + bonus`.
 
-Decisão deliberada e documentada nos comentários do `aggregateBuckets` em [workers/internal/catalog/insights.go](../../workers/internal/catalog/insights.go).
+**Os números caem — de propósito.** Duas quedas somadas: (1) o `out_slot` que saiu
+do executado/CPM; (2) o excedente que era contado **duas vezes** (era `in_slot` e
+reaparecia no termo `GREATEST(0, in_slot − expected)` do bônus da view). Comparar
+com um relatório anterior a 2026-08-17 vai mostrar diferença — o número velho é que
+estava errado. Pós-venda já enviado não muda (`payload_json` congelado).
+
+### "Extras" no chart × "Bonificação" no KPI
+
+Hoje **os dois leem a mesma coisa**: a categoria `bonus`. As categorias são
+disjuntas (cada tocada tem exatamente uma), então plotar `bonus` ao lado de
+`in_slot` no mesmo gráfico não duplica nada.
+
+> Antes da 0065 o `bonus` da view era sintetizado (`max(0, in_slot − expected) + orphan`)
+> e **sobrepunha** o `in_slot`; por isso o gráfico lia `orphan` puro e o KPI lia a
+> definição ampla. Essa distinção deixou de existir.
+
+Documentado nos comentários do `aggregateBuckets` em [workers/internal/catalog/insights.go](../../workers/internal/catalog/insights.go).
 
 ### Consolidado: valor MENSAL que acumula por mês (estilo fornecedor)
 
@@ -140,7 +161,7 @@ Reutilizar o padrão de [pdfReport.js](../../frontend/src/utils/pdfReport.js) �
 
 ## Limitações conhecidas
 
-- "Extras" no gráfico 4 captura **apenas** `category='orphan'`. Detections `in_slot` acima do expected NÃO viram extras nesse gráfico (continuam em `in_slot`). A bonificação total no KPI usa a definição mais ampla (orphan + in_slot acima).
+- "Extras" no gráfico 4 e a Bonificação do KPI leem a mesma categoria `bonus`; o gráfico filtra pelo literal `'bonus'` (não pelo sinônimo legado `'orphan'`), então uma linha ainda não convertida pelo backfill/reconciler não aparece ali. Convergem em até ~15 min pelo `projrecon`.
 - Investido em modo `consolidated` prorrateia linearmente por dias (`overlap_days/total_days`), sem considerar distribuição irregular de slots dentro da campanha.
 - Materiais sem `type_id` ficam ausentes da view `daily_play_summary` — afeta os buckets do gráfico 4 (não aparecem ali), MAS continuam contando em `aggregateCore` (impactos + breakdown) que lê detections direto.
 - Estação sem `audience_profile.gender` (ou `socialClass`, `ageRanges`) → não soma na dimensão correspondente. O card de gênero pode subestimar quando muitas estações estão sem perfil.

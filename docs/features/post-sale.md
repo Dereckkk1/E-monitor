@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-03
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
@@ -93,6 +93,15 @@ bonificacoes = SUM(bonus)
 entrega_pct  = programado > 0 ? round(100 × identificado ÷ programado)
                               : (identificado > 0 ? 100 : null)
 ```
+
+> **As colunas da view mudaram de definição em 2026-08-17** (migration 0065,
+> [fechamento por cota](quota-aware-categorization.md)): `deficit = max(0, expected − in_slot)`
+> (`out_slot` não abate mais) e `bonus` = contagem direta da categoria (sem o
+> antigo `max(0, in_slot − expected)`, que contava o excedente duas vezes). As
+> fórmulas acima continuam sendo o que o código faz — o que muda é o **valor**:
+> mais emissoras caem em "Compensações", e `bonificacoes` deixa de inflar. Nada
+> disso reescreve documento **já enviado**: o `payload_json` é congelado no
+> publish.
 
 Classificação ([`Classify`](../../workers/internal/postsale/checking.go)) —
 **déficit manda**:

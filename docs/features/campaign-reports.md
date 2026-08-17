@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/detections.go
+  - workers/internal/reportcsv/reportcsv.go
   - workers/internal/api/handlers/reports.go
   - workers/internal/api/router.go
   - workers/cmd/api/main.go
@@ -45,7 +46,7 @@ O menu oferece três opções:
 
 | Item | Forma | Granularidade | Acesso |
 |------|-------|---------------|--------|
-| CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total + breakdown por status (Dentro/Fora faixa/Fora data/Bônus) no período | viewer (próprio cliente) + operator + admin |
+| CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total + breakdown por status (Dentro da faixa/Fora da faixa/Fora da data/Bonificação) no período | viewer (próprio cliente) + operator + admin |
 | CSV Detalhado | mesmo formato | 1 linha por **veiculação**, coluna **Status** em PT-BR | **admin-only** (reusa `/detections/export`) |
 | PDF | A4, gerado no browser via jsPDF | capa + KPIs + **legenda de cores** + tabela por material + tabela por emissora + tabela material × emissora — as três com **breakdown por status** (Dentro · Fora faixa · Fora data · Bônus, coloridos como o semáforo da grade) | viewer (próprio cliente) + operator + admin |
 
@@ -74,12 +75,21 @@ não o enum técnico do banco. Mapeamento:
 | `in_slot`          | Dentro da faixa |
 | `out_slot`         | Fora da faixa |
 | `out_date`         | Fora da data |
-| `orphan`           | Bônus |
+| `bonus`            | Bonificação |
+| `orphan` (legado)  | Bonificação — mesmo rótulo, **não** cai no fallback |
 
-A conversão vive em `categoryLabelPT` ([detections.go](../../workers/internal/api/handlers/detections.go))
-— se aparecer um valor de categoria novo (improvável; a coluna é enum
-restrito por categorizer.go), o fallback escreve o valor cru pra não
-silenciar.
+A conversão canônica vive em `reportcsv.CategoryLabelPT`
+([reportcsv.go](../../workers/internal/reportcsv/reportcsv.go)); o
+`categoryLabelPT` dos handlers apenas delega. Se aparecer um valor de
+categoria novo (improvável; a coluna é enum restrito pelo CHECK), o
+fallback escreve o valor cru pra não silenciar.
+
+> `orphan` é o nome antigo de `bonus` ([quota-aware-categorization.md](quota-aware-categorization.md)).
+> Ele é mapeado explicitamente porque **este arquivo é o CSV que o cliente abre**:
+> uma linha gravada pelo binário antigo na janela de deploy imprimiria a string
+> crua "orphan" numa célula do relatório. O campo JSON `orphan_count` do agregado
+> também manteve o nome por compatibilidade com o frontend — o conteúdo é a
+> contagem de bonificação.
 
 ## Filtro de período (dentro do menu)
 

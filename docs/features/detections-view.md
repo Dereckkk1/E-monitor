@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-07
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
@@ -44,8 +44,8 @@ Material vence regra, regra vence histórico. É a mesma precedência do step 4 
 wizard (`DistributionStep`, spec `2026-05-25-distribution-without-materials` §4.4),
 que já unia escopo com regras — a `/detections` é que não unia com nada.
 
-Linha só-histórica tem `expected = 0`, então as tocadas aparecem como bônus/órfã
-— a leitura honesta: tocou, mas hoje não há plano ali.
+Linha só-histórica tem `expected = 0` — ou seja, meta do dia N = 0 — então as
+tocadas aparecem como **bonificação** (`bonus`): tocou, mas hoje não há plano ali.
 
 **Por que a união existe (corrigido em 2026-08-07).** O escopo é mutável e não
 versionado no tempo. Quando o operador tirava a emissora do `target_stations` de
@@ -83,12 +83,17 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 
 | Cor | Significado |
 |-----|-------------|
-| Cinza | Esperado (plano) |
-| Verde | Tocou dentro da faixa |
-| Vermelho | Saldo devedor (esperado − tocou − fora-faixa) |
-| Azul (+N) | Bônus (excesso na faixa OU sem regra) |
-| Amarelo (+N) | Tocou na data, fora da faixa |
+| Cinza | Esperado (meta do dia) |
+| Verde | Tocou dentro da faixa e ocupou vaga da meta (`in_slot`) |
+| Vermelho | Saldo devedor (`esperado − tocou dentro da faixa`) — **fora-faixa não abate** |
+| Azul (+N) | Bonificação (excedeu a meta do dia, ou tocou sem meta) |
+| Amarelo (+N) | Tocou na data, fora da faixa, com a meta ainda aberta |
 | Roxo (+N) | Tocou fora da data da campanha |
+
+> A fórmula do vermelho mudou em 2026-08-17: `out_slot` deixou de abater o
+> déficit (`deficit = max(0, expected − in_slot)`). Um dia inteiro veiculado no
+> horário errado agora aparece vermelho **e** amarelo — ver
+> [quota-aware-categorization.md](quota-aware-categorization.md).
 
 ## Como usar
 
