@@ -7,6 +7,7 @@ import CampaignFailureCard from '../components/CampaignFailureCard'
 import CampaignFailureRow from '../components/CampaignFailureRow'
 import CampaignFailureDrawer from '../components/CampaignFailureDrawer'
 import FailuresDailyView from '../components/FailuresDailyView'
+import DeficitSplit from '../components/DeficitSplit'
 import './AdminStationFailuresPage.css'
 
 const MIN_DOWN_OPTIONS = [
@@ -369,6 +370,16 @@ function CampaignKpiStrip({ summary, mode }) {
       <div className="asf-ckpi asf-ckpi--deficit">
         <dd>{(isHistorical ? null : summary.total_deficit) ?? '—'}</dd>
         <dt>veiculações faltam</dt>
+        {/* O déficit do dia separado nos dois tipos (D7): a emissora que tocou
+            fora da faixa não pode ser lida como silêncio. Os dois somam o total
+            acima. No histórico o summary não traz déficit — nada a separar. */}
+        {!isHistorical && (
+          <DeficitSplit
+            total={summary.total_deficit}
+            absent={summary.total_deficit_absent}
+            offSlot={summary.total_deficit_off_slot}
+          />
+        )}
       </div>
     </dl>
   )

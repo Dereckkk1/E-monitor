@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import api from '../api/client'
+import DeficitSplit from './DeficitSplit'
 import { generateCampaignFailurePdf } from '../utils/pdfCampaignFailure'
 import './CampaignFailureCard.css'
 
@@ -54,7 +55,10 @@ function InlinePdfButton({ campaignId }) {
 }
 
 export default function CampaignFailureRow({ entry, onOpen }) {
-  const { campaign, stations_with_failure, total_failure_days, total_deficit, is_fully_bonified } = entry
+  const {
+    campaign, stations_with_failure, total_failure_days, total_deficit,
+    total_deficit_off_slot, total_deficit_absent, is_fully_bonified,
+  } = entry
   return (
     <tr
       className="cfr-row"
@@ -79,7 +83,15 @@ export default function CampaignFailureRow({ entry, onOpen }) {
       </td>
       <td className="cfr-num">{stations_with_failure}</td>
       <td className="cfr-num">{total_failure_days}</td>
-      <td className="cfr-num cfr-num-deficit">{total_deficit}</td>
+      <td className="cfr-num cfr-num-deficit">
+        {total_deficit}
+        <DeficitSplit
+          total={total_deficit}
+          absent={total_deficit_absent}
+          offSlot={total_deficit_off_slot}
+          align="end"
+        />
+      </td>
       <td className="cfr-bonif">
         {is_fully_bonified ? (
           <span className="cfc-tag cfc-tag-bonif">100% bonificada</span>

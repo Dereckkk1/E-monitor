@@ -45,7 +45,7 @@ export default function KpiCards({ data }) {
   const targetSuffix = targetLabel ? ` (${targetLabel})` : ''
   return (
     <>
-      <div className="in-card" title="Impactos = soma de (detecções × PMM) por estação.">
+      <div className="in-card" title="Impactos = soma de (veiculações dentro da faixa + bonificação) × PMM, por emissora. Veiculações fora da faixa e fora da data não entram: não são impacto entregue.">
         <div className="in-card-head">
           <span className="in-card-icon"><IconChartBars /></span>
           <span className="in-card-label">Impactos</span>
@@ -54,7 +54,7 @@ export default function KpiCards({ data }) {
       </div>
 
       {hasTarget && (
-        <div className="in-card" title={`Impactos no target${targetSuffix} = soma de (detecções × PMM no target do cliente) por estação. ${k.stations_with_target} de ${k.stations_count} emissoras com target cadastrado.`}>
+        <div className="in-card" title={`Impactos no target${targetSuffix} = soma de (veiculações dentro da faixa + bonificação) × PMM no target do cliente, por emissora. ${k.stations_with_target} de ${k.stations_count} emissoras com target cadastrado.`}>
           <div className="in-card-head">
             <span className="in-card-icon"><IconChartBars /></span>
             <TargetLabel base="Impactos no target" label={targetLabel} />
@@ -64,7 +64,10 @@ export default function KpiCards({ data }) {
         </div>
       )}
 
-      <div className="in-card">
+      {/* O numerador soma a bonificação de propósito: o CPM mede a eficiência da
+          mídia ENTREGUE a preço de tabela, não a da negociação. A tocada de
+          bônus já está nos impactos do denominador. */}
+      <div className="in-card" title="CPM = (investido executado + bonificação) ÷ impactos × 1000. A bonificação entra no numerador a preço de tabela porque é mídia que foi ao ar e já conta nos impactos — sem ela, campanha com muito bônus exibiria um CPM artificialmente baixo, incomparável com o das outras.">
         <div className="in-card-head">
           <span className="in-card-icon"><IconMoney /></span>
           <span className="in-card-label">CPM</span>
@@ -73,7 +76,7 @@ export default function KpiCards({ data }) {
       </div>
 
       {hasTarget && (
-        <div className="in-card" title={`CPM no target${targetSuffix} = investido executado ÷ impactos no target × 1000. Sempre dinâmico, mesmo em campanha com CPM fixo: o CPM fixo é contratado sobre a audiência total, não sobre o recorte de público-alvo.`}>
+        <div className="in-card" title={`CPM no target${targetSuffix} = (investido executado + bonificação) ÷ impactos no target × 1000. Sempre dinâmico, mesmo em campanha com CPM fixo: o CPM fixo é contratado sobre a audiência total, não sobre o recorte de público-alvo.`}>
           <div className="in-card-head">
             <span className="in-card-icon"><IconMoney /></span>
             <TargetLabel base="CPM no target" label={targetLabel} />

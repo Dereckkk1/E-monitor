@@ -837,6 +837,12 @@
   order: 1;
 }
 .asf-ckpi--deficit dd { color: var(--c-danger); }
+/* Split "não tocou / fora do horário" abaixo do número (dt=1, dd=2 → split=3). */
+.asf-ckpi .dsplit {
+  order: 3;
+  display: flex;
+  margin-top: 4px;
+}
 .asf-ckpi-sep {
   width: 1px;
   background: var(--c-border);

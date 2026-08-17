@@ -256,8 +256,8 @@ function CampaignPanel({ block, preview, open, onToggle, onChange }) {
                   <div>
                     <span className="pv-label">CPM</span>
                     <div className="pv-derived">
-                      <span className="pv-derived-value">{brl.format(cpmOf(valor, impactos))}</span>
-                      <span className="pv-derived-note">valor ÷ impactos × 1000</span>
+                      <span className="pv-derived-value">{brl.format(cpmOf(Number(valor ?? 0) + Number(bonificacao ?? 0), impactos))}</span>
+                      <span className="pv-derived-note">(valor + bonificado) ÷ impactos × 1000</span>
                     </div>
                   </div>
                 </div>
