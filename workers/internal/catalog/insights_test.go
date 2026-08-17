@@ -688,10 +688,13 @@ func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *t
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-10", 0b1111111, "00:00:00", "23:59:00", 1)
 
-	// 2 in_slot/dia nos dias 01–10 → excedente de 1/dia.
+	// 2 tocadas/dia nos dias 01–10 contra plano de 1/dia → excedente de 1/dia.
+	// No modelo de cota (0065) o excedente é gravado como 'bonus' pelo próprio
+	// categorizador — in_slot nunca passa de expected. Semear as duas como
+	// 'in_slot' produziria um estado que produção não gera mais.
 	for d := 1; d <= 10; d++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
-		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+		insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", fmt.Sprintf("2026-06-%02d", d))
 	}
 
 	inv, bon, err := repo.aggregateInvestment(ctx, InsightsParams{
@@ -844,8 +847,12 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 100.0)
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
-	for i := 0; i < 10; i++ {
-		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	// 10 tocadas num dia de plano 1 → 1 preenche a cota e 9 são bônus. É assim
+	// que o categorizador de cota grava desde 0065; antes as 10 nasciam
+	// 'in_slot' e a view sintetizava o bônus pelo excedente.
+	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	for i := 0; i < 9; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-15")
 	}
 
 	out, err := repo.Compute(ctx, InsightsParams{
@@ -858,9 +865,13 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	if out.Consolidated {
 		t.Errorf("per_insertion não deveria marcar Consolidated")
 	}
-	// executado por-inserção = 100 × 10 = 1000 (inalterado)
-	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
-		t.Errorf("executado = %v, want ~1000 (per_insertion, inalterado)", out.KPIs.Investido.Executado)
+	// executado por-inserção = 100 × 1 in_slot = 100. Era 1000 antes de 0065,
+	// quando as 10 tocadas nasciam 'in_slot' e o investido faturava o excedente
+	// junto. No modelo de cota só a tocada que preenche a meta fatura; as outras
+	// 9 são bonificação (abaixo) — o valor entregue não muda de lugar, muda de
+	// KPI. (Este número não se move na Task 7: o fixture não tem out_slot.)
+	if !approxEq(out.KPIs.Investido.Executado, 100, 1) {
+		t.Errorf("executado = %v, want ~100 (per_insertion, só o in_slot da cota)", out.KPIs.Investido.Executado)
 	}
 	// Bonificação continua computada (10 tocadas no dia, plano 1 → bonus 9 × 100)
 	if out.KPIs.Bonificacao.Valor <= 0 {
@@ -1034,7 +1045,7 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 	for d := 1; d <= 3; d++ {
 		insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
-	insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", "2026-06-01") // excedente → bonus
+	insSeedDetection(t, ctx, pool, campA, mat, stA, "bonus", "2026-06-01") // excedente do dia 1
 	insSeedDetection(t, ctx, pool, campA, mat, stA, "out_date", "2026-07-05")
 
 	// B só existe pra alargar o bound global nas DUAS pontas: sem recorte a
@@ -1063,11 +1074,15 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 		t.Fatalf("campanha A não veio na chamada sem recorte")
 	}
 	// Sanity: o cenário tem que produzir número, senão a paridade compara zeros.
-	// 4 tocadas in_slot (dias 1,1,2,3) + 1 bonus (excedente do dia 1, que a
-	// fórmula in_slot+bonus conta de novo) = 5 × unit 10. A tocada out_date de
-	// 05/07 NÃO entra — é justamente o que o bound recortado também descarta.
-	if !approxEq(want.TotalInvested, 50, 0.01) {
-		t.Fatalf("cenário inválido: invested = %v, want 50 (unit 10 × (4 in_slot + 1 bonus))", want.TotalInvested)
+	// 3 in_slot (dias 1,2,3) + 1 bonus (o excedente do dia 1) = 4 tocadas ×
+	// unit 10 = 40. A tocada out_date de 05/07 NÃO entra — é justamente o que o
+	// bound recortado também descarta.
+	//
+	// Era 50 antes de 0065: a view antiga contava o excedente DUAS vezes (a
+	// tocada nascia 'in_slot' E o `GREATEST(in_slot - expected)` a somava de
+	// novo como bônus). No modelo de cota cada tocada tem uma categoria só.
+	if !approxEq(want.TotalInvested, 40, 0.01) {
+		t.Fatalf("cenário inválido: invested = %v, want 40 (unit 10 × (3 in_slot + 1 bonus))", want.TotalInvested)
 	}
 
 	page, err := campaignsRepo.FinancialsByCampaign(ctx, nil, []uuid.UUID{campA}, today)
