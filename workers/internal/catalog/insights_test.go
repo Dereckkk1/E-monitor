@@ -296,6 +296,15 @@ func TestInsights_FetchCampaigns_RejectsCrossClient(t *testing.T) {
 
 // ─── aggregateCore ──────────────────────────────────────────────────────────
 
+// BASE DE IMPACTOS = pmm × (in_slot + bonus). Este teste é a rede de segurança
+// da padronização: o fixture tem 5 in_slot + 2 out_slot + 1 bonus, e as 2
+// out_slot NÃO podem entrar em impactos nem nos rateios demográficos (D3 —
+// tocada fora da faixa contratada não vale nada comercialmente). Se alguém
+// voltar a base pra det_count (todas as categorias), Impactos vai de 6000 pra
+// 8000 e este teste quebra.
+//
+// veiculacoes_total continua sendo 8: é o KPI de CONTAGEM, exibido junto do
+// breakdown por categoria, e portanto tem que somar as quatro.
 func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
@@ -329,23 +338,33 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 		t.Fatalf("aggregateCore: %v", err)
 	}
 
-	// 8 detecções × 1000 = 8000 impactos
-	if core.Impactos != 8000 {
-		t.Errorf("impactos = %d, want 8000", core.Impactos)
+	// (5 in_slot + 1 bonus) × 1000 = 6000 impactos. As 2 out_slot ficam fora.
+	if core.Impactos != 6000 {
+		t.Errorf("impactos = %d, want 6000 (6 × 1000; as 2 out_slot não são impacto)", core.Impactos)
 	}
+	// Contagem de veiculações continua somando as 4 categorias (8).
 	if core.VeiculacoesTotal != 8 {
 		t.Errorf("veic = %d, want 8", core.VeiculacoesTotal)
 	}
-	// Gender M = 8000 × 60% = 4800
-	if core.Gender.M != 4800 {
-		t.Errorf("gender_m = %d, want 4800", core.Gender.M)
+	// Gender M = 6000 × 60% = 3600 — rateio do MESMO total de impactos.
+	if core.Gender.M != 3600 {
+		t.Errorf("gender_m = %d, want 3600", core.Gender.M)
 	}
-	if core.Gender.F != 3200 {
-		t.Errorf("gender_f = %d, want 3200", core.Gender.F)
+	if core.Gender.F != 2400 {
+		t.Errorf("gender_f = %d, want 2400", core.Gender.F)
 	}
-	// AB = 8000 × 20% = 1600
-	if core.Class.AB != 1600 {
-		t.Errorf("class_ab = %d, want 1600", core.Class.AB)
+	// Os splits demográficos têm que fechar de volta no total de impactos —
+	// senão o gráfico e o KPI do topo da mesma tela contam coisas diferentes.
+	if core.Gender.M+core.Gender.F != core.Impactos {
+		t.Errorf("gender M+F = %d, want == impactos %d", core.Gender.M+core.Gender.F, core.Impactos)
+	}
+	if core.Class.AB+core.Class.C+core.Class.DE != core.Impactos {
+		t.Errorf("class AB+C+DE = %d, want == impactos %d",
+			core.Class.AB+core.Class.C+core.Class.DE, core.Impactos)
+	}
+	// AB = 6000 × 20% = 1200
+	if core.Class.AB != 1200 {
+		t.Errorf("class_ab = %d, want 1200", core.Class.AB)
 	}
 	// Breakdown
 	if core.Breakdown.InSlot != 5 || core.Breakdown.OutSlot != 2 || core.Breakdown.ExtrasOrphan != 1 {
@@ -1173,6 +1192,12 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 // identidade que trava isso é:
 //
 //	insights.Investido.Executado + insights.Bonificacao.Valor == campaigns.TotalInvested
+//	insights.Impactos                                        == campaigns.TotalAudience
+//
+// A segunda identidade é a padronização de "Impactos" (2026-08-17): as duas
+// telas passaram a valorizar o MESMO conjunto (in_slot + bonus), então o número
+// que o cliente lê é o mesmo em qualquer lugar do produto. Antes o /insights
+// multiplicava PMM por TODAS as categorias aprovadas e vinha maior.
 //
 // O fixture tem UMA tocada out_slot de propósito: ela não pode aparecer em
 // nenhum dos dois lados (D3 — tocada fora da faixa contratada não vale nada).
@@ -1243,6 +1268,23 @@ func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
 	if out.VeiculacoesBreakdown.InSlot != 3 || out.VeiculacoesBreakdown.OutSlot != 1 ||
 		out.VeiculacoesBreakdown.ExtrasOrphan != 1 {
 		t.Errorf("breakdown = %+v, want in_slot 3 / out_slot 1 / extras 1", out.VeiculacoesBreakdown)
+	}
+
+	// PARIDADE DE IMPACTOS. pmm 1000 × (3 in_slot + 1 bonus) = 4000 nas DUAS
+	// telas. Se o /insights voltasse a multiplicar por todas as categorias
+	// aprovadas, a tocada out_slot do dia 4 levaria o número a 5000 e o cliente
+	// veria dois "Impactos" diferentes pra mesma campanha no mesmo período.
+	if out.KPIs.Impactos != 4000 {
+		t.Errorf("insights impactos = %d, want 4000 (1000 × (3 in_slot + 1 bonus); out_slot não é impacto)",
+			out.KPIs.Impactos)
+	}
+	if int64(fins[0].TotalAudience) != out.KPIs.Impactos {
+		t.Errorf("impactos divergiu: insights %d × campaigns %v",
+			out.KPIs.Impactos, fins[0].TotalAudience)
+	}
+	// E o CPM do /insights tem que usar esse mesmo denominador: 30 ÷ 4000 × 1000.
+	if !approxEq(out.KPIs.CPM, 7.5, 0.01) {
+		t.Errorf("insights cpm = %v, want 7.50 (executado 30 ÷ 4000 impactos × 1000)", out.KPIs.CPM)
 	}
 }
 

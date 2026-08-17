@@ -45,7 +45,7 @@ export default function KpiCards({ data }) {
   const targetSuffix = targetLabel ? ` (${targetLabel})` : ''
   return (
     <>
-      <div className="in-card" title="Impactos = soma de (detecções × PMM) por estação.">
+      <div className="in-card" title="Impactos = soma de (veiculações dentro da faixa + bonificação) × PMM, por emissora. Veiculações fora da faixa e fora da data não entram: não são impacto entregue.">
         <div className="in-card-head">
           <span className="in-card-icon"><IconChartBars /></span>
           <span className="in-card-label">Impactos</span>
@@ -54,7 +54,7 @@ export default function KpiCards({ data }) {
       </div>
 
       {hasTarget && (
-        <div className="in-card" title={`Impactos no target${targetSuffix} = soma de (detecções × PMM no target do cliente) por estação. ${k.stations_with_target} de ${k.stations_count} emissoras com target cadastrado.`}>
+        <div className="in-card" title={`Impactos no target${targetSuffix} = soma de (veiculações dentro da faixa + bonificação) × PMM no target do cliente, por emissora. ${k.stations_with_target} de ${k.stations_count} emissoras com target cadastrado.`}>
           <div className="in-card-head">
             <span className="in-card-icon"><IconChartBars /></span>
             <TargetLabel base="Impactos no target" label={targetLabel} />

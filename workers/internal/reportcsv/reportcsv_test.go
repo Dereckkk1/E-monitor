@@ -28,7 +28,11 @@ func TestWriteConsolidated_CabecalhoELinha(t *testing.T) {
 		StationCity: &city, StationState: &state, StationBand: &band,
 		StationFrequencyMHz: &freq,
 		StationPMM:          &pmm, StationPMMTarget: &target,
+		// Count 10 (as quatro categorias) × ImpactCount 9 (in_slot 8 + bonus 1):
+		// a coluna Impactos tem que usar o SEGUNDO. A out_slot é o discriminante —
+		// se o CSV voltasse a multiplicar por Count daria 12.000 em vez de 10.800.
 		Count: 10, InSlotCount: 8, OutSlotCount: 1, OutDateCount: 0, BonusCount: 1,
+		ImpactCount: 9,
 		FirstDetectedAt: time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC),
 		LastDetectedAt:  time.Date(2026, 6, 30, 18, 0, 0, 0, time.UTC),
 	}}
@@ -41,8 +45,9 @@ func TestWriteConsolidated_CabecalhoELinha(t *testing.T) {
 	require.Contains(t, out, "PMM no target (Mulheres 25-49)")
 	require.Contains(t, out, "Radio X")
 	require.Contains(t, out, ";", "separador tem que ser ponto-e-vírgula")
-	require.Contains(t, out, "12000", "impactos = 10 × 1200")
-	require.Contains(t, out, "3000", "impactos no target = 10 × 300")
+	require.Contains(t, out, "10800", "impactos = 9 (in_slot + bonus) × 1200")
+	require.Contains(t, out, "2700", "impactos no target = 9 × 300")
+	require.NotContains(t, out, "12000", "impactos não pode usar Count (10 × 1200): out_slot não é impacto")
 	// Decimal em pt-BR usa vírgula.
 	require.Contains(t, out, "98,5")
 }

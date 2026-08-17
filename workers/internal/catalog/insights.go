@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"radiocheck/internal/categorizer"
 )
 
 // Insights agrupa as queries de agregação do dashboard /insights.
@@ -378,6 +379,18 @@ type coreAggregates struct {
 // stations_count) mas NÃO somam impactos demográficos — o numerador
 // requer PMM, e a UI mostra "X de Y emissoras com perfil" como contexto.
 //
+// BASE DE IMPACTOS (canônica em todo o produto): impactos = pmm ×
+// (in_slot + bonus). Ver docs/features/client-target-pmm.md. `out_slot` não
+// vale nada comercialmente (decisão D3 da categorização por cota) e `out_date`
+// está fora do período contratado — nenhuma das duas é impacto entregue ao
+// cliente. A base é a MESMA de FinancialsByCampaign (/campaigns) e a mesma que
+// "Investido (executado)" + "Bonificação" somam, então /insights e /campaigns
+// batem no Impactos. NÃO use det_count (todas as categorias) para impactos.
+//
+// det_count continua existindo e alimenta SÓ veiculacoes_total — o KPI de
+// contagem, que é acompanhado do breakdown por categoria e portanto precisa
+// somar as quatro.
+//
 // O breakdown de veiculações (in_slot/out_slot/out_date/extras_orphan)
 // é calculado direto da coluna category — não usa a view daily_play_summary
 // porque queremos contar detecções mesmo para materiais sem type_id.
@@ -405,7 +418,13 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		           COUNT(*) FILTER (WHERE f.category='in_slot')::bigint  AS in_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_slot')::bigint AS out_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_date')::bigint AS out_date_n,
-		           COUNT(*) FILTER (WHERE f.category='bonus')::bigint    AS bonus_n
+		           -- Sinônimo legado 'orphan' incluído (BonusCategoriesSQL): uma
+		           -- linha gravada pelo binário antigo na janela de deploy sairia
+		           -- do bônus E do impacto, quebrando a paridade com /campaigns.
+		           COUNT(*) FILTER (WHERE f.category IN `+categorizer.BonusCategoriesSQL+`)::bigint AS bonus_n,
+		           -- imp_n = base canônica de impactos (in_slot + bonus).
+		           COUNT(*) FILTER (WHERE f.category='in_slot'
+		                               OR f.category IN `+categorizer.BonusCategoriesSQL+`)::bigint AS imp_n
 		    FROM filt f
 		    GROUP BY f.station_id, f.client_id
 		),
@@ -436,16 +455,18 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    COUNT(DISTINCT station_id)::int                                      AS stations_count,
 		    COUNT(DISTINCT station_id) FILTER (WHERE pmm IS NOT NULL)::int       AS stations_with_pmm,
 		    COUNT(DISTINCT station_id) FILTER (WHERE pmm_target IS NOT NULL)::int AS stations_with_target,
-		    COALESCE(SUM(det_count * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
-		    COALESCE(SUM(det_count * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
-		    COALESCE(SUM(det_count * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
-		    COALESCE(SUM(det_count * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
-		    COALESCE(SUM(det_count * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
-		    COALESCE(SUM(det_count * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
-		    COALESCE(SUM(det_count * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
-		    COALESCE(SUM(det_count * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
-		    COALESCE(SUM(det_count * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
-		    COALESCE(SUM(det_count * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50,
+		    -- imp_n (in_slot + bonus), NUNCA det_count: os splits demográficos são
+		    -- rateios do próprio total de impactos e têm que somar de volta a ele.
+		    COALESCE(SUM(imp_n * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
+		    COALESCE(SUM(imp_n * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
+		    COALESCE(SUM(imp_n * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
+		    COALESCE(SUM(imp_n * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
+		    COALESCE(SUM(imp_n * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
+		    COALESCE(SUM(imp_n * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
+		    COALESCE(SUM(imp_n * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
+		    COALESCE(SUM(imp_n * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
+		    COALESCE(SUM(imp_n * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
+		    COALESCE(SUM(imp_n * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50,
 		    COALESCE(SUM(in_slot_n),  0)::bigint AS sum_in,
 		    COALESCE(SUM(out_slot_n), 0)::bigint AS sum_out,
 		    COALESCE(SUM(out_date_n), 0)::bigint AS sum_outdate,
@@ -737,9 +758,12 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM detection_attributions d
 		    JOIN stations s ON s.id = d.station_id
 		    WHERE d.campaign_id = ANY($1::uuid[])
-		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — impactos
-		      -- do CPM têm que bater com veiculações_total do aggregateCore.
+		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — o peso do
+		      -- CPM tem que ser o MESMO impactos do aggregateCore.
 		      AND `+ApprovedDetectionsFilter+`
+		      -- Base canônica de impactos: in_slot + bonus (ver aggregateCore).
+		      -- Sem este filtro o peso da média ponderada divergiria do KPI.
+		      AND (d.category = 'in_slot' OR d.category IN `+categorizer.BonusCategoriesSQL+`)
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND s.pmm IS NOT NULL
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
