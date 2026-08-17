@@ -1,6 +1,6 @@
 ---
-status: implementado
-ultima-verificacao: 2026-05-19
+status: legado  # superseded 2026-08-17 pela categorizacao por cota
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/api/handlers/admin_station_failures.go (novo)
   - workers/internal/catalog/station_failures.go (novo)
@@ -19,6 +19,17 @@ codigo-relacionado:
   - frontend/src/App.jsx
   - frontend/src/pages/CampaignsPage.jsx
 ---
+
+> ⚠️ **REGISTRO HISTÓRICO — não descreve o comportamento atual.**
+> Este documento é um snapshot datado da sessão de design/implementação que o gerou.
+> Em **2026-08-17** a categorização de veiculação foi substituída pelo
+> [**fechamento por cota da célula-dia**](../../features/quota-aware-categorization.md):
+> `orphan` foi renomeada pra `bonus`; `out_slot` deixou de faturar e de abater o déficit;
+> `deficit = expected − in_slot`; `bonus = COUNT(category = 'bonus')` (acabou o termo
+> sintético `GREATEST(0, in_slot − expected)`); e **`Impactos = pmm × (in_slot + bonus)`**
+> em toda tela e exportável. A definição de déficit usada nas queries abaixo mudou (não abate mais `out_slot`), então a tela passou a acusar como falha o dia inteiro veiculado fora da faixa.
+> **Não copie fórmula daqui pra código novo** — a autoridade é
+> [`docs/features/quota-aware-categorization.md`](../../features/quota-aware-categorization.md).
 
 # Admin — Emissoras com falha (`/admin/station-failures`)
 

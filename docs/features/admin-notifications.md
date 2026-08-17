@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-25
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - frontend/src/components/NotificationBell.jsx
   - frontend/src/components/NotificationPopover.jsx
@@ -21,6 +21,7 @@ Sininho no header do `/dashboard` (admin-only) com inbox das campanhas que tiver
 
 - **Quem vê:** só admin. Cliente não vê.
 - **O que entra:** uma notificação por `(campanha, dia)` quando `daily_play_summary.deficit > 0` para aquela combinação. Campanhas com `status = 'cancelada'` são filtradas.
+  - Desde 2026-08-17 `deficit = max(0, expected − in_slot)`: veicular **fora da faixa não fecha mais a obrigação** ([quota-aware-categorization.md](quota-aware-categorization.md)), então dias "tocou tudo no horário errado" passam a gerar notificação. Volume esperado maior.
 - **Janela:** últimos 7 dias **fechados** (`CURRENT_DATE - INTERVAL '7 days'` até `CURRENT_DATE - 1`). O dia corrente é excluído porque uma campanha não pode ser considerada "falha" enquanto o dia ainda não acabou.
 - **Polling:** React Query `refetchInterval: 60_000` (1 min).
 - **Mark-as-read:** persistido por usuário em `notification_reads`. Marcar acontece no click do item OU em "Marcar todas como lidas" — abrir o popover NÃO marca.

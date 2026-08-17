@@ -61,14 +61,14 @@ type scenario struct {
 // junho/2026, 3 emissoras e uma regra de 2 tocadas/dia entre 01 e 05/06
 // (expected = 10 por emissora).
 //
-//	Radio Acima   → 10 in_slot + 3 orphan  → deficit 0, extras 3  → above, 100%
+//	Radio Acima   → 10 in_slot + 3 bonus   → deficit 0, extras 3  → above, 100%
 //	Radio Devendo →  7 in_slot             → deficit 3, extras 0  → compensation, 70%
 //	Radio Exata   → 10 in_slot             → deficit 0, extras 0  → conforming
 //
-// As colunas da view daily_play_summary que importam aqui (migration 0041):
+// As colunas da view daily_play_summary que importam aqui (migration 0065):
 //
-//	deficit = max(0, expected - in_slot - out_slot)
-//	bonus   = max(0, in_slot - expected) + orphan
+//	deficit = max(0, expected - in_slot)
+//	bonus   = COUNT(*) FILTER (category = 'bonus')
 func seedScenario(t *testing.T, ctx context.Context, pool *pgxpool.Pool) scenario {
 	t.Helper()
 	var s scenario
@@ -144,9 +144,12 @@ func seedScenario(t *testing.T, ctx context.Context, pool *pgxpool.Pool) scenari
 			seedDetection(t, ctx, pool, s, s.Exata, "in_slot", day, 10+i)
 		}
 	}
-	// Acima ganha 3 órfãs (mídia extra fora de plano) → bonus 3.
+	// Acima ganha 3 bonificações (mídia extra fora de plano) → bonus 3.
+	// Categoria 'bonus', não a antiga 'orphan': desde a 0065 a view conta a
+	// categoria direto, e semear o nome velho dava bonus = 0 (extras somem, a
+	// emissora vira "conforming" em vez de "above").
 	for i := 0; i < 3; i++ {
-		seedDetection(t, ctx, pool, s, s.Acima, "orphan", 3, 15+i)
+		seedDetection(t, ctx, pool, s, s.Acima, "bonus", 3, 15+i)
 	}
 	// Devendo: 2+2+2+1 = 7 in_slot em 4 dias; o 5º dia fica sem nada.
 	for day, n := range map[int]int{1: 2, 2: 2, 3: 2, 4: 1} {

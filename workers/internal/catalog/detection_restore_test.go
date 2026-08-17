@@ -139,6 +139,147 @@ func TestRestoreDisplacedShorterCut(t *testing.T) {
 	})
 }
 
+// TestRestoreDisplacedShorterCut_LostRaceRestoresNothing trava a corrida entre o
+// SELECT que escolhe o candidato e o UPDATE que o des-retrata.
+//
+// O caminho deixou de ser um statement único (UPDATE ... RETURNING) pra o
+// advisory lock da célula-dia poder ser tomado ANTES de qualquer lock de linha.
+// Isso abriu uma janela: entre o SELECT e o UPDATE, outro caminho pode
+// des-retratar a mesma linha. Quando isso acontece, o UPDATE guardado por
+// `retracted_at IS NOT NULL` casa ZERO linhas e a função TEM que devolver
+// (nil, 0, nil) — o mesmo que o ErrNoRows do statement único devolvia. É esse
+// nil que faz o evidence/service.go cair no recoverRejectedByCoverage em vez de
+// logar uma restauração que não foi dele e incrementar restored_on_reject.
+//
+// A INTERLEAVAÇÃO É REAL, não simulada: a conexão B segura o advisory lock da
+// célula-dia, o que trava a chamada exatamente entre o SELECT do candidato e o
+// UPDATE (lockCellDayKeys roda depois de um e antes do outro). Com a chamada
+// parada ali, B des-retrata a linha e commita, liberando o lock. Não há sleep
+// esperando "dar tempo": o teste espera o backend aparecer BLOQUEADO em
+// pg_locks antes de mexer na linha.
+func TestRestoreDisplacedShorterCut_LostRaceRestoresNothing(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewDetections(pool)
+
+	client := insSeedClient(t, ctx, pool, "RaceCo")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	st := insSeedStationNoProfile(t, ctx, pool, "RadioRace")
+	m15 := restSeedMaterial(t, ctx, pool, client, "RaceSpot15", 15)
+	m30 := restSeedMaterial(t, ctx, pool, client, "RaceSpot30", 30)
+	cov := 0.66
+
+	ts := time.Date(2026, 6, 20, 15, 0, 0, 0, time.UTC)
+	ts15 := ts.Add(-5 * time.Second)
+	det30 := restSeedDet(t, ctx, pool, camp, m30, st, ts, false, "audit_rejected", nil)
+	det15 := restSeedDet(t, ctx, pool, camp, m15, st, ts15, true, "available", &cov)
+
+	// A projeção canônica é o que torna o rollback OBSERVÁVEL: com ela, um
+	// refechamento que commitasse reescreveria a categoria de 'in_slot' pra
+	// 'bonus' (célula sem regra ⇒ meta 0 ⇒ tudo excedente). Se no fim a
+	// categoria continuar 'in_slot', nada foi escrito.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, 'in_slot')`, det15, ts15, camp, m15); err != nil {
+		t.Fatalf("seed projeção: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM detection_campaigns WHERE detection_id = $1 AND detected_at = $2`, det15, ts15)
+	})
+
+	// B segura o advisory lock da célula-dia do det15 — a MESMA chave que o
+	// mutateApprovedSet vai pedir.
+	key := cellDayLockKey(camp, st, dayStartSP(ts15))
+	bTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin B: %v", err)
+	}
+	defer bTx.Rollback(ctx)
+	if _, err := bTx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, key); err != nil {
+		t.Fatalf("B advisory lock: %v", err)
+	}
+
+	type result struct {
+		id  *uuid.UUID
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		got, _, err := repo.RestoreDisplacedShorterCut(ctx, det30, ts, st)
+		done <- result{id: got, err: err}
+	}()
+
+	// Espera a chamada ficar BLOQUEADA no advisory lock. Isso prova que o SELECT
+	// do candidato já rodou (e viu a linha retratada) e que o UPDATE ainda não
+	// rodou — é exatamente a janela da corrida.
+	deadline := time.Now().Add(10 * time.Second)
+	blocked := false
+	for time.Now().Before(deadline) {
+		var n int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND NOT granted
+			  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+		).Scan(&n); err != nil {
+			t.Fatalf("pg_locks: %v", err)
+		}
+		if n > 0 {
+			blocked = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !blocked {
+		// Sem o bloqueio confirmado a interleavação não é garantida e o teste
+		// passaria pelo motivo errado (candidato nem chegou a ser escolhido).
+		t.Fatal("a chamada não bloqueou no advisory lock — corrida não foi induzida")
+	}
+
+	// AGORA, com a chamada parada entre o SELECT e o UPDATE: outro caminho
+	// des-retrata a linha e commita, liberando o lock.
+	if _, err := bTx.Exec(ctx,
+		`UPDATE detections SET retracted_at = NULL WHERE id = $1 AND detected_at = $2`,
+		det15, ts15); err != nil {
+		t.Fatalf("B des-retrata: %v", err)
+	}
+	if err := bTx.Commit(ctx); err != nil {
+		t.Fatalf("commit B: %v", err)
+	}
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("RestoreDisplacedShorterCut não retornou depois de liberado o lock")
+	}
+
+	if res.err != nil {
+		t.Fatalf("perder a corrida não é erro, veio: %v", res.err)
+	}
+	if res.id != nil {
+		t.Fatalf("devolveu %v: não pode reivindicar uma restauração que outro caminho fez "+
+			"(o chamador perde o fallthrough pro recoverRejectedByCoverage)", *res.id)
+	}
+
+	// Rollback: nada foi escrito pela chamada.
+	var baseCat, projCat string
+	if err := pool.QueryRow(ctx,
+		`SELECT category FROM detections WHERE id = $1 AND detected_at = $2`, det15, ts15,
+	).Scan(&baseCat); err != nil {
+		t.Fatalf("read categoria base: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT category FROM detection_campaigns WHERE detection_id = $1 AND detected_at = $2 AND campaign_id = $3`,
+		det15, ts15, camp,
+	).Scan(&projCat); err != nil {
+		t.Fatalf("read categoria da projeção: %v", err)
+	}
+	if baseCat != "in_slot" || projCat != "in_slot" {
+		t.Errorf("a transação deveria ter sofrido rollback inteira; categorias viraram base=%q proj=%q",
+			baseCat, projCat)
+	}
+}
+
 // shortIDOf lê o short_id (SERIAL) de um material já semeado.
 func shortIDOf(t *testing.T, ctx context.Context, pool *pgxpool.Pool, materialID uuid.UUID) int32 {
 	t.Helper()

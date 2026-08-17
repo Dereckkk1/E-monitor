@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-06
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/campaign_failures.go
+  - frontend/src/components/DeficitSplit.jsx
   - workers/internal/catalog/campaign_failures_test.go
   - workers/internal/api/handlers/admin_campaign_failures.go
   - workers/internal/api/handlers/admin_campaign_failures_test.go
@@ -53,6 +54,40 @@ A view `daily_play_summary` já expõe todas as colunas necessárias — esta fe
 
 **Caveat:** em campanha ainda ativa, `bonified` é provisória — amanhã pode aparecer mais déficit. O drawer mostra banner amarelo discreto avisando.
 
+## Os dois tipos de déficit ("não tocou" × "fora do horário")
+
+A migration 0065 tirou o `out_slot` do déficit (D3 do modelo por cota): veicular fora
+da faixa contratada **não fecha mais a obrigação**. Consequência direta aqui — um dia
+inteiro veiculado no horário errado, que antes lia "cumprido", agora tem `deficit > 0`
+e entra na contagem de falhas.
+
+Como este painel alimenta o **PDF de cobrança que vai pra emissora**, seguir o déficit
+novo sem qualificar acusaria de "não veiculou" quem de fato veiculou. Decisão D7:
+seguir o déficit novo, **separando os dois tipos**. Por célula-dia, e só depois somado:
+
+```
+deficit_off_slot = LEAST(deficit, out_slot)          -- tocou, no horário errado
+deficit_absent   = GREATEST(0, deficit - out_slot)   -- não foi ao ar
+deficit_off_slot + deficit_absent == deficit         -- invariante travada em teste
+```
+
+Os dois campos vêm em toda linha de emissora (`deficit_off_slot` / `deficit_absent`) e
+nos summaries (`total_deficit_off_slot` / `total_deficit_absent`).
+
+No frontend, `DeficitSplit` (`frontend/src/components/DeficitSplit.jsx`) rende os dois
+chips em **toda superfície que mostra déficit**: KPI do modo dia, linhas de emissora do
+card, coluna "Déficit" do drawer, coluna "Déficit" do histórico e o PDF. Cores do design
+system, sem inventar token: **vermelho** = déficit/ausência (mesmo do `deficit` no
+`DayCell`), **âmbar** = fora da faixa (mesmo do `out_slot`/`BadgePill` yellow). Se o
+backend não mandar os campos (janela de deploy — o frontend sobe antes da API), o
+componente volta ao rótulo antigo "faltam N" em vez de imprimir zeros.
+
+No PDF de cobrança a separação aparece em 3 lugares: no KPI "Déficit total"
+(`N não tocou` + `N fora do horário`), na coluna **Déficit a cobrar** de cada emissora
+(`Cobrar (N)` + as duas parcelas) e numa legenda "COMO LER ESTE RELATÓRIO" ao pé da
+tabela, que define os dois termos e afirma que somam o déficit total. Sem essa legenda
+a emissora contesta o documento com razão.
+
 ## Horizonte de falha (só dias já encerrados)
 
 `daily_play_summary` **não é materializada**: ela emite uma linha de déficit pra **cada dia agendado até o `end_date` da regra** (`CROSS JOIN generate_series(start_date, end_date)` na migration 0041). Um dia futuro tem `expected>0` e `in_slot=0` → `deficit=expected` — mas **um dia que ainda não chegou não é falha**.
@@ -85,7 +120,9 @@ Detalhes de response no spec [2026-05-25-campaign-failures-view-design.md](../su
 
 ## PDF de cobrança
 
-Gerado no browser via jsPDF + jspdf-autotable em `frontend/src/utils/pdfCampaignFailure.js`. Layout: header E-monitor + cliente + período → 3 KPIs (Emissoras com falha · Dias · Déficit) → tabela `Emissora | Programado | Veiculou | Dias com falha | Status`. Bonificada marcada em roxo. Footer com `Gerado por E-monitor · DD/MM/YYYY HH:MM` + paginação.
+Gerado no browser via jsPDF + jspdf-autotable em `frontend/src/utils/pdfCampaignFailure.js`. Layout: header E-monitor + cliente + período → 3 KPIs (Emissoras com falha · Dias · Déficit total, este último com o split abaixo) → tabela `Emissora | Programado | Veiculou | Dias com falha | Déficit a cobrar` → legenda dos dois tipos de déficit. Bonificada marcada em roxo. Footer com `Gerado por E-monitor · DD/MM/YYYY HH:MM` + paginação.
+
+> A coluna "Déficit a cobrar" é desenhada à mão no `didDrawCell` (texto zerado no `didParseCell` + `minCellHeight`): o autotable pinta a célula inteira de uma cor só e ali vermelho e âmbar precisam conviver na mesma célula.
 
 Filename: `cobranca-{campanha-slug}-{YYYYMMDD}.pdf`.
 

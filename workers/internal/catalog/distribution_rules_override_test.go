@@ -8,13 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRecategorizeForCampaign_RespectsOverride: o insert-path (categorizer.Categorize)
+// TestRecategorizeForCampaign_RespectsOverride: o insert-path (categorizer.Settle)
 // respeita distribution_overrides — quando há override pra (campanha, tipo,
 // estação, dia), ele supersede as rules. Mas recatClassifyTailSQL (usado por
 // RecategorizeForRule/ForCampaign/ForMaterial) IGNORAVA overrides: re-rodar uma
 // regra reclassificava pela regra e flipava a categoria que o insert tinha
 // gravado pelo override (audit 2026-07-02 G1). Este teste prova que o recat
-// respeita o override (plays_expected=0 → out_slot), não a regra (in_slot).
+// respeita o override (plays_expected=0 → meta 0 → bonus), não a regra (in_slot).
+//
+// O veredito era out_slot até a spec 2026-08-14, quando plays_expected=0 tinha um
+// ramo próprio ("faixa inerte"). Agora não tem: 0 é só a meta do dia, a tocada
+// excede e vira bonus (D4/D3 — out_slot não vale nada e não abate déficit, então
+// carimbar uma bonificação de out_slot a fazia sumir do faturamento). O teste
+// encodava o modelo antigo; o que ele prova — recat obedece o override, não a
+// regra — continua idêntico.
 func TestRecategorizeForCampaign_RespectsOverride(t *testing.T) {
 	ctx, pool := newTestDB(t)
 
@@ -73,7 +80,7 @@ func TestRecategorizeForCampaign_RespectsOverride(t *testing.T) {
 		`SELECT category FROM detections WHERE id=$1 AND detected_at=$2`, det.ID, det.DetectedAt).Scan(&cat))
 	require.Equal(t, "in_slot", cat, "precondição: regra cobre o dia → in_slot")
 
-	// Override plays_expected=0 (faixa inerte) pra célula+dia → tudo out_slot.
+	// Override plays_expected=0 pra célula+dia → meta 0 → tudo bonus.
 	// for_date usa a MESMA expressão que insert-path (detections.go:233) e o recat.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO distribution_overrides
@@ -87,14 +94,16 @@ func TestRecategorizeForCampaign_RespectsOverride(t *testing.T) {
 
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detections WHERE id=$1 AND detected_at=$2`, det.ID, det.DetectedAt).Scan(&cat))
-	require.Equal(t, "out_slot", cat,
-		"recat deve respeitar override plays_expected=0 (out_slot), não a regra (in_slot)")
+	require.Equal(t, "bonus", cat,
+		"célula zerada por override: meta 0 → toda tocada é excedente (bonus), não in_slot pela regra")
 }
 
-// TestRecategorizeForOverride: criar override que exclui a tocada reclassifica
-// in_slot→out_slot (detections E projeção detection_campaigns); apagar o override
-// reverte pra regra (out_slot→in_slot). Prova o disparo dos DOIS caminhos com o
+// TestRecategorizeForOverride: criar override que zera a meta do dia reclassifica
+// in_slot→bonus (detections E projeção detection_campaigns); apagar o override
+// reverte pra regra (bonus→in_slot). Prova o disparo dos DOIS caminhos com o
 // escopo preciso de célula (campaign, type, station, dia).
+//
+// Também era out_slot até a spec 2026-08-14 — mesma razão do teste acima.
 func TestRecategorizeForOverride(t *testing.T) {
 	ctx, pool := newTestDB(t)
 
@@ -165,7 +174,7 @@ func TestRecategorizeForOverride(t *testing.T) {
 	require.Equal(t, "in_slot", base)
 	require.Equal(t, "in_slot", proj, "projeção deve nascer in_slot")
 
-	// Override plays_expected=0 (faixa inerte) → out_slot.
+	// Override plays_expected=0 → meta 0 → excedente → bonus.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO distribution_overrides
 		  (campaign_id, type_id, station_id, for_date, plays_expected, time_start, time_end)
@@ -175,8 +184,8 @@ func TestRecategorizeForOverride(t *testing.T) {
 
 	require.NoError(t, rules.RecategorizeForOverride(ctx, cmp.ID, typeID, stat.ID, forDate))
 	base, proj = catOf(t)
-	require.Equal(t, "out_slot", base, "override deve reclassificar base p/ out_slot")
-	require.Equal(t, "out_slot", proj, "override deve reclassificar a projeção também")
+	require.Equal(t, "bonus", base, "override com meta 0 deve reclassificar base p/ bonus")
+	require.Equal(t, "bonus", proj, "override deve reclassificar a projeção também")
 
 	// Apagar o override → volta pra regra (in_slot).
 	_, err = pool.Exec(ctx,

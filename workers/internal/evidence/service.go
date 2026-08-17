@@ -261,8 +261,8 @@ func (s *Service) handle(msg *nats.Msg) {
 					seen[p.CampaignID] = true
 					cat, cerr := s.detections.CategorizeFor(ctx, p.CampaignID, p.CommercialID, stationID, detectedAt)
 					if cerr != nil {
-						cat = "orphan"
-						s.log.Warn("evidence: fan-out CategorizeFor falhou; projeção nasce orphan (projrecon cura)",
+						cat = "bonus"
+						s.log.Warn("evidence: fan-out CategorizeFor falhou; projeção nasce bonus (projrecon cura)",
 							zap.String("detection_id", det.ID.String()),
 							zap.String("campaign_id", p.CampaignID.String()),
 							zap.Error(cerr))
@@ -274,6 +274,22 @@ func (s *Service) handle(msg *nats.Msg) {
 		if perr := s.detectionCampaigns.InsertProjections(ctx, det.ID, det.DetectedAt, projs); perr != nil {
 			s.log.Error("evidence: InsertProjections falhou",
 				zap.String("detection_id", det.ID.String()), zap.Error(perr))
+			// O CategorizeFor de cada campanha do fan-out JÁ fechou (e commitou) a
+			// célula-dia dela contando com a projeção que acabou de não entrar —
+			// tocadas antigas podem ter sido rebaixadas por uma tocada inexistente.
+			// Refecha cada célula sem tocada nova pra convergir agora, em vez de
+			// esperar o projrecon. A canônica fica de fora: ela foi gravada dentro
+			// da transação do Create, então existe de verdade.
+			for _, p := range projs {
+				if p.CampaignID == campaignID {
+					continue
+				}
+				if rerr := s.detections.ResettleCellDay(ctx, p.CampaignID, p.CommercialID, stationID, detectedAt); rerr != nil {
+					s.log.Warn("evidence: ResettleCellDay pós-falha de InsertProjections falhou (projrecon cura)",
+						zap.String("detection_id", det.ID.String()),
+						zap.String("campaign_id", p.CampaignID.String()), zap.Error(rerr))
+				}
+			}
 		}
 	}
 

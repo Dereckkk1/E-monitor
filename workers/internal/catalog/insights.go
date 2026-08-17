@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"radiocheck/internal/categorizer"
 )
 
 // Insights agrupa as queries de agregação do dashboard /insights.
@@ -123,9 +124,12 @@ type AgeRangesData struct {
 	R50Plus int64 `json:"r50_plus"`
 }
 
-// Note: extras_orphan aqui usa a definição da view daily_play_summary —
-// é o "bonus" (max(0, in_slot - expected) + orphan), não só orphan puro.
-// Reflete melhor a noção comercial de "mídia ganha".
+// Note: o campo JSON continua se chamando `extras_orphan` por compatibilidade
+// com o frontend, mas o conteúdo é a contagem da categoria `bonus` — a
+// categoria 'orphan' foi renomeada para 'bonus' na migration 0064 e a view
+// daily_play_summary passou a contá-la direto na 0065. É a "mídia ganha": as
+// tocadas dentro da faixa que excederam a cota do dia + as sem plano nenhum.
+// (out_slot NÃO entra aqui nem no investido — D3: não vale nada.)
 type VeiculacoesBreakdownData struct {
 	InSlot       int64 `json:"in_slot"`
 	OutSlot      int64 `json:"out_slot"`
@@ -147,8 +151,17 @@ type BucketRow struct {
 // (validate-campaigns → core → investment → buckets) e devolve o
 // payload completo formatado para serialização JSON.
 //
-// CPM padrão = (investido_executado / impactos) × 1000. Quando impactos = 0
-// (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
+// CPM padrão = ((investido_executado + bonificação) / impactos) × 1000. Quando
+// impactos = 0 (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
+//
+// POR QUE A BONIFICAÇÃO ENTRA NO NUMERADOR (definição do dono, 2026-08-17): o
+// CPM mede a EFICIÊNCIA DA MÍDIA ENTREGUE A PREÇO DE TABELA, não a eficiência da
+// negociação. A tocada `bonus` é mídia real que foi ao ar e que a audiência
+// ouviu — ela já está no denominador (impactos = pmm × (in_slot + bonus)), então
+// tem que estar no numerador ao preço de tabela dela. Numerador só com o pago
+// faria uma campanha com muito bônus exibir um CPM artificialmente baixo,
+// incomparável com o de qualquer outra campanha. "Investido" continua sendo só
+// o que o cliente pagou (unit × in_slot) — quem soma as duas parcelas é o CPM.
 //
 // Override por fixed_cpm: cada campanha pode ter um CPM fixo pré-acordado.
 // Quando setado, o CPM exibido é a média ponderada por impactos:
@@ -191,7 +204,15 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		bon = BonificacaoK{}
 	}
 
-	cpm, err := r.computeCPM(ctx, p, inv.Executado, core.Impactos)
+	// Numerador do CPM = investido executado + bonificação, SEMPRE calculado
+	// depois do override consolidado acima. Em modo fornecedor `bon` é zerado e
+	// `inv.Executado` já é o total do consolidatedSummary (que por construção já
+	// precifica as emissoras per_insertion por unit × (in_slot + bonus)), então a
+	// soma continua valendo nos dois modos — e é a MESMA expressão que o
+	// /campaigns usa (total_invested + total_bonus_value).
+	cpmNumerador := inv.Executado + bon.Valor
+
+	cpm, err := r.computeCPM(ctx, p, cpmNumerador, core.Impactos)
 	if err != nil {
 		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
@@ -201,12 +222,14 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("targetLabel: %w", err)
 	}
 
-	// CPM no target é SEMPRE dinâmico (executado ÷ impactos_target × 1000),
-	// mesmo em campanha com fixed_cpm: o CPM fixo é contratado sobre a base
-	// total de audiência, não sobre o recorte de público-alvo.
+	// CPM no target é SEMPRE dinâmico ((executado + bonificação) ÷
+	// impactos_target × 1000), mesmo em campanha com fixed_cpm: o CPM fixo é
+	// contratado sobre a base total de audiência, não sobre o recorte de
+	// público-alvo. O numerador é o MESMO do CPM cheio — muda só o denominador
+	// (pmm_target no lugar de pmm), e impactos_target também conta in_slot+bonus.
 	var cpmTarget float64
 	if core.ImpactosTarget > 0 {
-		cpmTarget = (inv.Executado / float64(core.ImpactosTarget)) * 1000.0
+		cpmTarget = (cpmNumerador / float64(core.ImpactosTarget)) * 1000.0
 	}
 
 	return &InsightsPayload{
@@ -309,6 +332,15 @@ func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) str
 //	  + per_insertion: unit_value × (in_slot + bonus)        (o ENTREGUE)
 //	)
 //
+// Em modo fornecedor esse `total` vira TAMBÉM o numerador do CPM (Compute soma
+// `inv.Executado + bon.Valor`, e aqui `bon` é zerado) — e a expressão acima é
+// byte-a-byte a mesma do numerador do /campaigns
+// (`total_invested + total_bonus_value`), que é o que fecha a divergência de CPM
+// entre as duas telas em campanha de pricing MISTO. O que ainda difere em modo
+// fornecedor é o dinheiro EXIBIDO: o /insights mostra um "Investido" que já
+// embute o bônus das emissoras por-inserção e esconde o card de Bonificação,
+// enquanto o /campaigns mostra as duas parcelas separadas.
+//
 // Não depende de from/to (whole-campaign); depende de `today` só pro acúmulo
 // mensal do consolidado.
 func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, from, to, today time.Time) (float64, bool, error) {
@@ -375,6 +407,18 @@ type coreAggregates struct {
 // stations_count) mas NÃO somam impactos demográficos — o numerador
 // requer PMM, e a UI mostra "X de Y emissoras com perfil" como contexto.
 //
+// BASE DE IMPACTOS (canônica em todo o produto): impactos = pmm ×
+// (in_slot + bonus). Ver docs/features/client-target-pmm.md. `out_slot` não
+// vale nada comercialmente (decisão D3 da categorização por cota) e `out_date`
+// está fora do período contratado — nenhuma das duas é impacto entregue ao
+// cliente. A base é a MESMA de FinancialsByCampaign (/campaigns) e a mesma que
+// "Investido (executado)" + "Bonificação" somam, então /insights e /campaigns
+// batem no Impactos. NÃO use det_count (todas as categorias) para impactos.
+//
+// det_count continua existindo e alimenta SÓ veiculacoes_total — o KPI de
+// contagem, que é acompanhado do breakdown por categoria e portanto precisa
+// somar as quatro.
+//
 // O breakdown de veiculações (in_slot/out_slot/out_date/extras_orphan)
 // é calculado direto da coluna category — não usa a view daily_play_summary
 // porque queremos contar detecções mesmo para materiais sem type_id.
@@ -402,7 +446,13 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		           COUNT(*) FILTER (WHERE f.category='in_slot')::bigint  AS in_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_slot')::bigint AS out_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_date')::bigint AS out_date_n,
-		           COUNT(*) FILTER (WHERE f.category='orphan')::bigint   AS orphan_n
+		           -- Sinônimo legado 'orphan' incluído (BonusCategoriesSQL): uma
+		           -- linha gravada pelo binário antigo na janela de deploy sairia
+		           -- do bônus E do impacto, quebrando a paridade com /campaigns.
+		           COUNT(*) FILTER (WHERE f.category IN `+categorizer.BonusCategoriesSQL+`)::bigint AS bonus_n,
+		           -- imp_n = base canônica de impactos (in_slot + bonus).
+		           COUNT(*) FILTER (WHERE f.category='in_slot'
+		                               OR f.category IN `+categorizer.BonusCategoriesSQL+`)::bigint AS imp_n
 		    FROM filt f
 		    GROUP BY f.station_id, f.client_id
 		),
@@ -433,20 +483,22 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    COUNT(DISTINCT station_id)::int                                      AS stations_count,
 		    COUNT(DISTINCT station_id) FILTER (WHERE pmm IS NOT NULL)::int       AS stations_with_pmm,
 		    COUNT(DISTINCT station_id) FILTER (WHERE pmm_target IS NOT NULL)::int AS stations_with_target,
-		    COALESCE(SUM(det_count * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
-		    COALESCE(SUM(det_count * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
-		    COALESCE(SUM(det_count * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
-		    COALESCE(SUM(det_count * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
-		    COALESCE(SUM(det_count * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
-		    COALESCE(SUM(det_count * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
-		    COALESCE(SUM(det_count * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
-		    COALESCE(SUM(det_count * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
-		    COALESCE(SUM(det_count * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
-		    COALESCE(SUM(det_count * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50,
+		    -- imp_n (in_slot + bonus), NUNCA det_count: os splits demográficos são
+		    -- rateios do próprio total de impactos e têm que somar de volta a ele.
+		    COALESCE(SUM(imp_n * pmm) FILTER (WHERE pmm IS NOT NULL), 0)::bigint                                  AS impactos,
+		    COALESCE(SUM(imp_n * pmm_target) FILTER (WHERE pmm_target IS NOT NULL), 0)::bigint                    AS impactos_target,
+		    COALESCE(SUM(imp_n * pmm * male_p   / 100.0) FILTER (WHERE pmm IS NOT NULL AND male_p   IS NOT NULL), 0)::bigint AS gender_m,
+		    COALESCE(SUM(imp_n * pmm * female_p / 100.0) FILTER (WHERE pmm IS NOT NULL AND female_p IS NOT NULL), 0)::bigint AS gender_f,
+		    COALESCE(SUM(imp_n * pmm * ab_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND ab_p     IS NOT NULL), 0)::bigint AS cls_ab,
+		    COALESCE(SUM(imp_n * pmm * c_p      / 100.0) FILTER (WHERE pmm IS NOT NULL AND c_p      IS NOT NULL), 0)::bigint AS cls_c,
+		    COALESCE(SUM(imp_n * pmm * de_p     / 100.0) FILTER (WHERE pmm IS NOT NULL AND de_p     IS NOT NULL), 0)::bigint AS cls_de,
+		    COALESCE(SUM(imp_n * pmm * r18_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r18_p    IS NOT NULL), 0)::bigint AS age_18,
+		    COALESCE(SUM(imp_n * pmm * r25_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r25_p    IS NOT NULL), 0)::bigint AS age_25,
+		    COALESCE(SUM(imp_n * pmm * r50_p    / 100.0) FILTER (WHERE pmm IS NOT NULL AND r50_p    IS NOT NULL), 0)::bigint AS age_50,
 		    COALESCE(SUM(in_slot_n),  0)::bigint AS sum_in,
 		    COALESCE(SUM(out_slot_n), 0)::bigint AS sum_out,
 		    COALESCE(SUM(out_date_n), 0)::bigint AS sum_outdate,
-		    COALESCE(SUM(orphan_n),   0)::bigint AS sum_orphan
+		    COALESCE(SUM(bonus_n),    0)::bigint AS sum_bonus
 		FROM joined
 	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
 
@@ -472,10 +524,16 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 // (YYYY-MM). A decisão é local pra evitar dependência circular com o
 // período computado no Compute() — o teste pode controlar via params.
 //
-// "extras" usa `orphan` puro (não `bonus`), pra evitar double-count com
-// `in_slot` no mesmo gráfico — bonus inclui in_slot-acima-de-expected
-// que já é mostrado em in_slot. Bonificação KPI (no aggregateInvestment)
-// usa bonus separadamente.
+// "extras" conta a categoria `bonus` da tabela (ex-`orphan`, renomeada na
+// migration 0064). No modelo de cota as categorias são disjuntas — cada tocada
+// tem exatamente uma —, então somar `bonus` ao lado de `in_slot` no mesmo
+// gráfico não duplica nada. Antes da 0065 o `bonus` da view era sintetizado
+// (`max(0, in_slot - expected) + orphan`) e sobrepunha o `in_slot`; por isso o
+// gráfico lia `orphan` puro. Bonificação KPI (aggregateInvestment) lê o bonus
+// da view, que agora é a mesma contagem.
+//
+// `deficit` usa a fórmula da 0065 (D3): `expected - in_slot`, sem abater
+// out_slot — tocada fora da faixa não fecha a obrigação do dia.
 //
 // A CTE `agg` lê daily_play_summary_for(from, to, campaigns) (migration 0052,
 // Task 13) em vez da view — pushdown, byte-idêntico ao original. As leituras
@@ -502,12 +560,14 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		           SUM(in_slot)::int   AS in_slot,
 		           SUM(out_slot)::int  AS out_slot,
 		           SUM(out_date)::int  AS out_date,
-		           GREATEST(0, SUM(expected) - SUM(in_slot) - SUM(out_slot))::int AS deficit
+		           -- D3: out_slot NÃO abate o contrato — tocada fora da faixa não
+			           -- fecha a obrigação. Mesma fórmula da view (migration 0065).
+			           GREATEST(0, SUM(expected) - SUM(in_slot))::int AS deficit
 		    FROM daily_play_summary_for($2::date, $3::date, $1::uuid[])
 		    WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		),
-		orphan AS (
+		bonus AS (
 		    SELECT %s AS bucket,
 		           COUNT(*)::int AS extras
 		    FROM detection_attributions d
@@ -516,20 +576,20 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		      -- filtrava retracted_at, deixando ignoradas/audit_rejected inflarem
 		      -- os "extras" do gráfico vs o resto do sistema.
 		      AND `+ApprovedDetectionsFilter+`
-		      AND d.category = 'orphan'
+		      AND d.category = 'bonus'
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		)
-		SELECT COALESCE(a.bucket, o.bucket) AS bucket,
+		SELECT COALESCE(a.bucket, b.bucket) AS bucket,
 		       COALESCE(a.programado, 0),
 		       COALESCE(a.in_slot,    0),
 		       COALESCE(a.out_slot,   0),
 		       COALESCE(a.out_date,   0),
 		       COALESCE(a.deficit,    0),
-		       COALESCE(o.extras,     0)
+		       COALESCE(b.extras,     0)
 		FROM agg a
-		FULL OUTER JOIN orphan o ON a.bucket = o.bucket
+		FULL OUTER JOIN bonus b ON a.bucket = b.bucket
 		ORDER BY bucket
 	`, summaryBucket, detectionBucket)
 
@@ -569,14 +629,20 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 //
 //   - contratado  = Σ_type (unit_value × expected)
 //
-//   - executado   = Σ_type (unit_value × (in_slot+out_slot))
+//   - executado   = Σ_type (unit_value × in_slot)
 //
 //   - bonificação = Σ_type (unit_value × bonus)
 //
-// "bonus" é o campo da view daily_play_summary que inclui orphan +
-// (in_slot acima do expected). Esse é o sentido comercial de "mídia
-// ganha" — alinha com a decisão da spec de incluir extras na bonificação.
-// Bonificação count usa bonus diretamente (não orphan_count puro).
+// D3 (modelo de cota, migrations 0063–0065): `out_slot` NÃO entra no executado
+// em nenhum dos dois modos. Tocada fora da faixa contratada não vale nada — não
+// fatura como entrega nem como bônus, e deixa o déficit do dia aberto pra
+// emissora repor. Até a Task 7 o executado somava `in_slot + out_slot`, ou seja,
+// cobrava do cliente uma veiculação fora do horário comprado.
+//
+// "bonus" é o campo da view daily_play_summary, que desde a 0065 é a contagem
+// direta da categoria `bonus` gravada pelo categorizador (excedente da cota
+// dentro da faixa + tocada sem plano). Esse é o sentido comercial de "mídia
+// ganha". Bonificação count usa bonus diretamente.
 func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (InvestidoK, BonificacaoK, error) {
 	row := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
@@ -591,8 +657,8 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		-- deflaciona (não precisa de clamp de "hoje").
 		cs_window AS (
 		    SELECT s.campaign_id, s.station_id,
-		           SUM(s.in_slot + s.out_slot)::bigint  AS executed,
-		           SUM(s.bonus)::bigint                 AS bonus
+		           SUM(s.in_slot)::bigint  AS executed,
+		           SUM(s.bonus)::bigint    AS bonus
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
@@ -613,9 +679,9 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		),
 		cs_per_ins AS (
 		    SELECT s.campaign_id, s.station_id,
-		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric                AS pi_contratado,
-		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado,
-		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric                  AS pi_bonus
+		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric AS pi_contratado,
+		           COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric  AS pi_executado,
+		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric    AS pi_bonus
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
@@ -684,16 +750,28 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 
 // computeCPM aplica a regra de fixed_cpm por campanha em cima dos números
 // agregados. Quando NENHUMA campanha selecionada tem fixed_cpm, devolve o
-// CPM dinâmico clássico (executado / impactos × 1000) — fast path. Quando
-// pelo menos uma tem fixed_cpm, faz uma query por-campanha pra calcular a
+// CPM dinâmico clássico (totalValorEntregue / impactos × 1000) — fast path.
+// Quando pelo menos uma tem fixed_cpm, faz uma query por-campanha pra calcular a
 // média ponderada por impactos:
 //
 //	per_campaign_cpm = COALESCE(fixed_cpm, dynamic_cpm)
 //	cpm_final = Σ(per_campaign_cpm × impactos) / Σ(impactos)
 //
+// `totalValorEntregue` é o NUMERADOR do CPM: investido executado + bonificação
+// (ver Compute) — o valor de tabela da mídia entregue, não o que o cliente
+// pagou. O slow path monta o mesmo numerador por campanha (executado + bônus nos
+// dois modos de pricing), senão ligar um fixed_cpm em qualquer campanha da
+// seleção mudaria o CPM de TODAS as outras.
+//
+// Divergência conhecida (pré-existente, não introduzida aqui): quando a seleção
+// tem emissora consolidada, o fast path usa o total do consolidatedSummary
+// (consolidated_value × meses_decorridos) enquanto o slow path usa o Modelo B
+// (consolidated_value × entregue ÷ plano_cheio). Ligar um fixed_cpm numa seleção
+// consolidada pode, por isso, mover o CPM das campanhas vizinhas.
+//
 // Campanhas sem impactos não contribuem (peso zero); se a soma total de
 // impactos for zero, devolve 0.
-func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecutado float64, totalImpactos int64) (float64, error) {
+func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorEntregue float64, totalImpactos int64) (float64, error) {
 	// Fast path: nenhum CPM fixo nas campanhas selecionadas → cálculo clássico.
 	var anyFixed bool
 	if err := r.pool.QueryRow(ctx, `
@@ -707,7 +785,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		if totalImpactos == 0 {
 			return 0, nil
 		}
-		return (totalExecutado / float64(totalImpactos)) * 1000.0, nil
+		return (totalValorEntregue / float64(totalImpactos)) * 1000.0, nil
 	}
 
 	// Path com fixed_cpm: precisa de impactos e executado por campanha.
@@ -720,9 +798,12 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM detection_attributions d
 		    JOIN stations s ON s.id = d.station_id
 		    WHERE d.campaign_id = ANY($1::uuid[])
-		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — impactos
-		      -- do CPM têm que bater com veiculações_total do aggregateCore.
+		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter) — o peso do
+		      -- CPM tem que ser o MESMO impactos do aggregateCore.
 		      AND `+ApprovedDetectionsFilter+`
+		      -- Base canônica de impactos: in_slot + bonus (ver aggregateCore).
+		      -- Sem este filtro o peso da média ponderada divergiria do KPI.
+		      AND (d.category = 'in_slot' OR d.category IN `+categorizer.BonusCategoriesSQL+`)
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND s.pmm IS NOT NULL
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
@@ -735,25 +816,33 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM campaigns
 		    WHERE id = ANY($1::uuid[])
 		),
-		per_campaign_exec AS (
+		per_campaign_valor AS (
+		    -- Numerador do CPM por campanha = executado + bonificação, nos dois
+		    -- modos. É o valor de tabela da mídia ENTREGUE (paga + gratuita) — o
+		    -- bônus está no denominador (impactos), então tem que estar aqui.
 		    SELECT csp.campaign_id,
 		           COALESCE(SUM(
 		               CASE
 		                   -- Espelha aggregateInvestment (Modelo B): entregue_janela ÷
-		                   -- plano_da_campanha_inteira, cap em 100%.
+		                   -- plano_da_campanha_inteira, cap em 100%; + o bônus à mesma
+		                   -- taxa estável (contrato ÷ plano_total), sem cap.
 		                   WHEN csp.mode='consolidated' AND COALESCE(pl.plan_expected, 0) > 0
-		                       THEN csp.consolidated_value * LEAST(1, COALESCE(w.executed, 0)::numeric / pl.plan_expected::numeric)
+		                       THEN csp.consolidated_value * (
+		                                LEAST(1, COALESCE(w.executed, 0)::numeric / pl.plan_expected::numeric)
+		                              + COALESCE(w.bonus, 0)::numeric / pl.plan_expected::numeric
+		                            )
 		                   WHEN csp.mode='per_insertion'
-		                       THEN COALESCE(pi.pi_executado, 0)
+		                       THEN COALESCE(pi.pi_executado, 0) + COALESCE(pi.pi_bonus, 0)
 		                   ELSE 0
 		               END
-		           ), 0)::float8 AS executado
+		           ), 0)::float8 AS valor_entregue
 		    FROM campaign_station_pricing csp
 		    JOIN camp_meta cm ON cm.id = csp.campaign_id
 		    LEFT JOIN (
-		        -- numerador: entregue na janela [from,to]
+		        -- numerador: entregue (+ bônus) na janela [from,to]
 		        SELECT s.campaign_id, s.station_id,
-		               SUM(s.in_slot + s.out_slot)::bigint AS executed
+		               SUM(s.in_slot)::bigint AS executed,
+		               SUM(s.bonus)::bigint   AS bonus
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
@@ -772,7 +861,8 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    ) pl ON pl.campaign_id = csp.campaign_id AND pl.station_id = csp.station_id
 		    LEFT JOIN (
 		        SELECT s.campaign_id, s.station_id,
-		               COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado
+		               COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric AS pi_executado,
+		               COALESCE(SUM(tp.unit_value * s.bonus),   0)::numeric AS pi_bonus
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        JOIN campaign_station_type_pricing tp
@@ -788,11 +878,11 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		)
 		SELECT cm.id,
 		       cm.fixed_cpm,
-		       COALESCE(pi.impactos, 0)::float8  AS impactos,
-		       COALESCE(pe.executado, 0)::float8 AS executado
+		       COALESCE(pi.impactos, 0)::float8       AS impactos,
+		       COALESCE(pv.valor_entregue, 0)::float8 AS valor_entregue
 		FROM camp_meta cm
 		LEFT JOIN per_campaign_impactos pi ON pi.campaign_id = cm.id
-		LEFT JOIN per_campaign_exec     pe ON pe.campaign_id = cm.id
+		LEFT JOIN per_campaign_valor    pv ON pv.campaign_id = cm.id
 	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
 	if err != nil {
 		return 0, err
@@ -803,8 +893,8 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 	for rows.Next() {
 		var id uuid.UUID
 		var fixed *float64
-		var impactos, executado float64
-		if err := rows.Scan(&id, &fixed, &impactos, &executado); err != nil {
+		var impactos, valorEntregue float64
+		if err := rows.Scan(&id, &fixed, &impactos, &valorEntregue); err != nil {
 			return 0, err
 		}
 		if impactos <= 0 {
@@ -814,7 +904,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		if fixed != nil {
 			perCPM = *fixed
 		} else {
-			perCPM = (executado / impactos) * 1000.0
+			perCPM = (valorEntregue / impactos) * 1000.0
 		}
 		weightedSum += perCPM * impactos
 		totalWeight += impactos

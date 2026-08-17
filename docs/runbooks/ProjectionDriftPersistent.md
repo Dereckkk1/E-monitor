@@ -1,8 +1,10 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-14
 codigo-relacionado:
   - workers/internal/catalog/projection_reconcile.go
+  - workers/internal/catalog/distribution_rules.go
+  - workers/internal/catalog/detection_filter.go
   - workers/internal/projrecon/scheduler.go
   - workers/internal/metrics/metrics.go
   - infra/prometheus/alerts.yml
@@ -39,14 +41,22 @@ ainda não foi recategorizada por nenhum caminho. O reconciler cura isso no tick
 seguinte e o gauge volta a 0. **Isso não deve disparar o alerta** (o threshold
 de 3+ ciclos sustentados existe justamente para absorver esse ruído normal).
 
-Um **pico no primeiro ciclo pós-deploy** também é esperado: `CountProjectionDrift`
-conta **toda** projeção divergente, inclusive linhas retratadas/ignoradas/
-`audit_rejected` — que **não** aparecem em nenhuma grade/relatório/cobrança (essas
-telas usam o gate "aprovado", `ApprovedDetectionsFilter`). O reconciler cura essas
-linhas benignas de uma vez no primeiro tick e o gauge assenta. Antes de tratar um
-pico como problema real, cheque se o drift está confinado a linhas **não-aprovadas**
-(retracted/ignored/audit_rejected) — se estiver, é inócuo para as telas, e o que
-importa é só que ele **não reapareça** ciclo após ciclo (§Causas Comuns).
+Um **pico no primeiro ciclo pós-deploy** também é esperado: um deploy que muda
+regra de categorização deixa o histórico da janela divergente até o primeiro tick.
+O reconciler cura de uma vez e o gauge assenta. O que importa é que ele **não
+reapareça** ciclo após ciclo (§Causas Comuns).
+
+> **Mudou em 2026-08-14 (categorização por cota).** `CountProjectionDrift` **não
+> conta mais** projeção de tocada retratada/ignorada/`audit_rejected`/`ambiguous` —
+> o `classified` só emite linha pro conjunto aprovado (`ApprovedDetectionsFilter`),
+> nas duas pontas (contar e curar). **Não perca tempo checando se o drift está
+> confinado a linhas não-aprovadas: essa condição é inalcançável hoje.** A razão da
+> mudança é que sob cota uma tocada fora do conjunto aprovado não tem veredito
+> definido — não existe valor pro qual o `Heal` convergir —, então contá-la
+> produziria drift **permanente** e este alerta ficaria preso pra sempre em linhas
+> que nenhuma tela lê. Todo drift que o gauge mostra agora é drift **real**, em
+> projeção que aparece em grade/relatório/cobrança. Trate qualquer valor sustentado
+> como problema de verdade e vá direto pra §Causas Comuns.
 
 ## Causas Comuns (drift que REAPARECE a cada ciclo)
 
@@ -60,7 +70,7 @@ Candidatos:
    fan-out do fingerprint) grava a categoria sem passar pelo categorizador, ou
    passa com dados desatualizados (regra/override obsoleto em cache).
 2. **Bug de sincronização de projeção** — algum código escreve
-   `detection_campaigns` diretamente (fora de `recatApplySQL`/produtores
+   `detection_campaigns` diretamente (fora de `recatApplyProjSQL`/produtores
    corretos) e não reflete a regra viva — classe do incidente
    `detection-campaigns-projection-sync-reattribution` (reatribuição não
    sincronizava a projeção).
@@ -114,7 +124,7 @@ grep -rn "UPDATE detection_campaigns" workers/internal/ --include="*.go"
    fazendo seu trabalho (curar); o bug está em quem re-suja a categoria depois.
    Comece pelos candidatos da lista de Causas Comuns: reatribuição/desambiguação
    (§18.2.2), o fallback do fan-out (`evidence/service.go`), ou qualquer
-   `UPDATE detection_campaigns` fora de `recatApplySQL`.
+   `UPDATE detection_campaigns` fora de `recatApplyProjSQL`.
 3. **NUNCA silencie o alerta** (subir o threshold, desligar
    `PROJECTION_RECONCILE`, ou ignorar) sem antes achar e corrigir o produtor.
    Silenciar sem investigar deixa a categoria errada acumulando visibilidade
@@ -150,5 +160,6 @@ de recategorização podia ficar meses em silêncio (caso COPA). Complementos:
   best-effort de recat (rule/override/material) — olhar junto se o drift
   coincidir com falhas recorrentes numa origem específica.
 - O log `zap.Warn` no fallback do fan-out (`evidence/service.go`) sinaliza
-  quando uma projeção nasce `orphan` por falha do `CategorizeFor`, o que pode
-  alimentar drift se o reconciler estiver desligado.
+  quando uma projeção nasce `bonus` (categoria chamada `orphan` até a migration
+  0064) por falha do `CategorizeFor`, o que pode alimentar drift se o reconciler
+  estiver desligado.

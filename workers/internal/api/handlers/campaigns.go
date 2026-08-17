@@ -159,9 +159,11 @@ func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
 // /campaigns, então nenhuma tela legítima esbarra nele.
 const maxFinancialsIDs = 200
 
-// Financials returns the per-campaign aggregate of investimento + total
-// inserções, usado pelo badge de CPM em /campaigns. Calculado em uma query
-// só (CTE) pra evitar N+1 chamadas no frontend.
+// Financials returns the per-campaign aggregate of investimento + bonificação +
+// total inserções, usado pelo badge de CPM em /campaigns. Calculado em uma query
+// só (CTE) pra evitar N+1 chamadas no frontend. O CPM é derivado no frontend a
+// partir de DUAS parcelas: (total_invested + total_bonus_value) ÷ total_audience
+// × 1000 — ver o comentário de catalog.CampaignFinancials pro porquê.
 //
 // ?ids=<uuid>,<uuid>,… recorta o agregado às campanhas pedidas — a PÁGINA
 // atual da listagem, tipicamente 12. É o filtro que faz a rota ser barata

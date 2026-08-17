@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-07
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
@@ -44,8 +44,8 @@ Material vence regra, regra vence histórico. É a mesma precedência do step 4 
 wizard (`DistributionStep`, spec `2026-05-25-distribution-without-materials` §4.4),
 que já unia escopo com regras — a `/detections` é que não unia com nada.
 
-Linha só-histórica tem `expected = 0`, então as tocadas aparecem como bônus/órfã
-— a leitura honesta: tocou, mas hoje não há plano ali.
+Linha só-histórica tem `expected = 0` — ou seja, meta do dia N = 0 — então as
+tocadas aparecem como **bonificação** (`bonus`): tocou, mas hoje não há plano ali.
 
 **Por que a união existe (corrigido em 2026-08-07).** O escopo é mutável e não
 versionado no tempo. Quando o operador tirava a emissora do `target_stations` de
@@ -83,12 +83,36 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 
 | Cor | Significado |
 |-----|-------------|
-| Cinza | Esperado (plano) |
-| Verde | Tocou dentro da faixa |
-| Vermelho | Saldo devedor (esperado − tocou − fora-faixa) |
-| Azul (+N) | Bônus (excesso na faixa OU sem regra) |
-| Amarelo (+N) | Tocou na data, fora da faixa |
+| Cinza | Esperado (meta do dia) |
+| Verde | Tocou dentro da faixa e ocupou vaga da meta (`in_slot`) |
+| Vermelho | Saldo devedor (`esperado − tocou dentro da faixa`) — **fora-faixa não abate** |
+| Azul (+N) | Bonificação (excedeu a meta do dia, ou tocou sem meta) |
+| Amarelo (+N) | Tocou na data, fora da faixa, com a meta ainda aberta |
 | Roxo (+N) | Tocou fora da data da campanha |
+
+> A fórmula do vermelho mudou em 2026-08-17: `out_slot` deixou de abater o
+> déficit (`deficit = max(0, expected − in_slot)`). Um dia inteiro veiculado no
+> horário errado agora aparece vermelho **e** amarelo — ver
+> [quota-aware-categorization.md](quota-aware-categorization.md).
+
+## Impactos na coluna-total por emissora
+
+A pill rosa (`StationTotalCell` em
+[`DistributionGrid.jsx`](../../frontend/src/components/DistributionGrid.jsx)) é
+`PMM × Σ (in_slot + bonus)` da emissora no período visível, e a pill teal ao lado
+é a mesma conta com `pmm_target`. **É a base canônica de impactos do produto** —
+igual ao `/campaigns`, ao `/insights`, ao PDF/CSV e ao pós-venda. Ver
+[client-target-pmm.md](client-target-pmm.md).
+
+> **Mudou em 2026-08-17**: contava só `in_slot`. Como o fechamento por cota manda
+> o excedente dentro da faixa pra `bonus`, a grade estava escondendo impacto
+> entregue de verdade e divergia das outras telas (a campanha 189 mostrava 2.620 K
+> onde o `/insights` mostrava 13.969 K). O CSV e o PDF da grade acompanharam.
+>
+> As **pills de veiculação** (verde/azul/amarelo/roxo) continuam separadas e
+> inalteradas: elas respondem "cumpriu a cota?", que é outra pergunta. Só o número
+> de impacto foi padronizado. Note que `Impactos ÷ PMM` = verde + azul, **não** a
+> soma das quatro pills.
 
 ## Como usar
 
@@ -139,3 +163,12 @@ A grid é paginada **por emissora** (a unidade visual do `DistributionGrid` em m
 - Export CSV/PDF: implementado e espelha a grade (busca + programado + por dia).
   Ver [detections-report-wysiwyg.md](detections-report-wysiwyg.md). O **CSV
   Detalhado** (admin, por veiculação) ainda não aplica o filtro de busca.
+- 🔴 **Material sem `type_id` SOME da grade — e continua no `/insights`.** O filtro
+  `AND m.type_id IS NOT NULL` mora dentro da própria view/função
+  (`migrations/0065_quota_aware_summary.up.sql:89,93` e `:187,196`), que é o que alimenta
+  esta tela via `daily_summary.go:64`. O `aggregateCore` do `/insights` lê
+  `detection_attributions` direto, sem join em material, e conta a mesma tocada. Resultado:
+  a veiculação **existe numa tela e não existe na outra**. Medido em 2026-08-17: **28% das
+  veiculações de uma campanha-mês**. As queries de lista/CSV de `detections.go` usam
+  `LEFT JOIN material_types` e **preservam** a linha — só a grade perde. Registrado como
+  **F-130** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md); não corrigido.

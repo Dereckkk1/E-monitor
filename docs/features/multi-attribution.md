@@ -44,7 +44,7 @@ Faseado e reversível: migração 0041 + backfill 1:1 (flag OFF = idêntico) →
 
 ## Sincronização de categoria
 
-O recategorizador escopa por **projeção** (`detection_campaigns.campaign_id`), não só pela campanha-base da tocada — resolvido pelo invariante de categoria por projeção (caso motivador: fan-out F-119 que ficava `orphan` para sempre porque o recat só alcançava a projeção canônica). Ver [projection-category-invariant.md](../architecture/projection-category-invariant.md) para o invariante, a guarda que impede uma projeção secundária de sobrescrever a categoria da base, e o reconciler contínuo que cura qualquer drift futuro.
+O recategorizador escopa por **projeção** (`detection_campaigns.campaign_id`), não só pela campanha-base da tocada — resolvido pelo invariante de categoria por projeção (caso motivador: fan-out F-119 que ficava `orphan` (hoje `bonus`) para sempre porque o recat só alcançava a projeção canônica). Ver [projection-category-invariant.md](../architecture/projection-category-invariant.md) para o invariante, a guarda que impede uma projeção secundária de sobrescrever a categoria da base, e o reconciler contínuo que cura qualquer drift futuro.
 
 ## Limitações conhecidas
 

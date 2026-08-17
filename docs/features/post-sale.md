@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-03
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
@@ -60,10 +60,20 @@ inteira** e não aceita recorte de período, e o pós-venda exige período por
 campanha. Além disso a **foto do `/insights` vai dentro do `.zip`** — se a página
 usasse outra base, o documento contradiria o próprio anexo na frente do cliente.
 
+> **Impactos do pós-venda seguem o `/insights` por reuso, não por cópia.**
+> `buildBlock` (em [`snapshot.go`](../../workers/internal/postsale/snapshot.go))
+> copia `ins.KPIs.Impactos` / `ins.KPIs.ImpactosTarget` direto — não existe SQL de
+> impacto próprio aqui. Então a padronização de 2026-08-17 (impactos =
+> `PMM × (in_slot + bonus)` em todo o produto — ver
+> [client-target-pmm.md](client-target-pmm.md)) chegou ao pós-venda de graça, e
+> chegou também ao CSV consolidado que vai no `.zip` (`reportcsv.WriteConsolidated`,
+> corrigido na mesma entrega). **Documento já publicado NÃO muda**: `payload_json`
+> é congelado no publish, o que é o comportamento desejado.
+
 | Rótulo na tela | Origem em `InsightsPayload` |
 |---|---|
 | **Valor entregue** | `kpis.investido.executado` |
-| **Impactos** | `kpis.impactos` |
+| **Impactos** | `kpis.impactos` = `PMM × (in_slot + bonus)` — base canônica ([client-target-pmm.md](client-target-pmm.md)) |
 | **Impactos no target** | `kpis.impactos_target` — só aparece com `stations_with_target > 0` |
 | **CPM** | `kpis.cpm` (respeita `campaigns.fixed_cpm`) |
 | **CPM no target** | `kpis.cpm_target` (sempre dinâmico) |
@@ -73,10 +83,30 @@ usasse outra base, o documento contradiria o próprio anexo na frente do cliente
 Ausência de PMM no target **não é zero**: sem cadastro, os dois cards "no
 target" simplesmente não aparecem ([client-target-pmm.md](client-target-pmm.md)).
 
-> Existe divergência conhecida entre as bases do `/campaigns` e do `/insights`
-> — é o que a branch `feat/unify-campaigns-insights-financials-base` resolve.
-> O pós-venda nasce do lado do `/insights`; quando a unificação for deployada os
-> dois convergem e nada aqui muda.
+> **Atualizado em 2026-08-17.** A divergência entre as bases do `/campaigns` e do
+> `/insights` foi **fechada parcela a parcela** na entrega do
+> [fechamento por cota](quota-aware-categorization.md): as duas telas valorizam o
+> mesmo conjunto (`in_slot + bonus`), com `investido = unit × in_slot` e
+> `bonificação = unit × bonus` separados, e o CPM idêntico
+> (`TestInsights_FinancialBase_MatchesCampaigns`). **O que permanece, conhecido e
+> aceito:** em campanha de pricing MISTO o `/insights` entra em modo fornecedor e
+> embute o bônus no Investido, então o "Investimento" exibido difere do
+> `/campaigns` em **R$ 271.179** no agregado de prod — a soma é a mesma expressão
+> dos dois lados, só a partição do número muda. O pós-venda nasce do lado do
+> `/insights`, logo herda essa leitura. Ver
+> [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS"](insights-dashboard.md).
+
+> 🔴 **Bug conhecido, NÃO corrigido — o `.zip` perde o fim do último dia.** O
+> período do documento é parseado em **UTC** (`handlers/post_sale.go:240,245`,
+> `time.Parse` em vez de `ParseInLocation`) e esses instantes viram o filtro dos
+> CSVs em `postsale/bundle.go:101-102,118`, comparados contra `detected_at
+> timestamptz`. A janela efetiva é `[from−1 21:00 BRT, to 21:00 BRT]`: o CSV pega
+> as últimas 3h do dia ANTERIOR ao início e **perde as últimas 3h do último dia**
+> — **~4,5% das veiculações de um mês**. Os outros dois consumidores do mesmo
+> período são timezone-corretos (`postsale/repo.go:43` por `for_date::date`, e os
+> KPIs por `AT TIME ZONE 'America/Sao_Paulo'` em `insights.go:440`), então **o KPI
+> da página não bate com a contagem de linhas do CSV anexado ao mesmo documento**.
+> Registrado como **F-129** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
 
 ## O Checking
 
@@ -93,6 +123,15 @@ bonificacoes = SUM(bonus)
 entrega_pct  = programado > 0 ? round(100 × identificado ÷ programado)
                               : (identificado > 0 ? 100 : null)
 ```
+
+> **As colunas da view mudaram de definição em 2026-08-17** (migration 0065,
+> [fechamento por cota](quota-aware-categorization.md)): `deficit = max(0, expected − in_slot)`
+> (`out_slot` não abate mais) e `bonus` = contagem direta da categoria (sem o
+> antigo `max(0, in_slot − expected)`, que contava o excedente duas vezes). As
+> fórmulas acima continuam sendo o que o código faz — o que muda é o **valor**:
+> mais emissoras caem em "Compensações", e `bonificacoes` deixa de inflar. Nada
+> disso reescreve documento **já enviado**: o `payload_json` é congelado no
+> publish.
 
 Classificação ([`Classify`](../../workers/internal/postsale/checking.go)) —
 **déficit manda**:
@@ -141,8 +180,15 @@ Como funciona:
   qual número é do sistema e qual é da mão.
 - Cada campo mostra `sistema: <valor>` e um **"usar do sistema"** que apaga o
   override.
-- **O CPM não é editável**: é derivado de `valor ÷ impactos × 1000` e recalcula
-  enquanto se digita. Um CPM digitado contradiria os dois números exibidos ao
+- **O CPM não é editável**: é derivado de
+  `(valor entregue + bonificação) ÷ impactos × 1000` e recalcula enquanto se
+  digita — com os overrides do admin já aplicados nas DUAS parcelas. O bônus
+  entra no numerador porque o CPM mede a eficiência da mídia entregue a preço de
+  tabela e a tocada de bônus já está nos impactos do denominador (ver
+  [insights-dashboard.md §"O numerador do CPM inclui a
+  bonificação"](insights-dashboard.md)); em campanha consolidada a bonificação é
+  0 e o valor entregue já embute tudo, então a soma continua correta. Um CPM
+  digitado contradiria os números exibidos ao
   lado dele. `cpm_target` segue a mesma regra, sobre os impactos no target (que
   continuam vindo do sistema — o admin ajusta o total, não o recorte de
   público-alvo).

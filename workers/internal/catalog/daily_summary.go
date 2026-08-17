@@ -13,8 +13,12 @@ import (
 // The 6 metric counts:
 //   - expected: programmed plays (gray) — sum of rules' plays_per_day or override
 //   - in_slot:  actual plays inside time slot (green)
-//   - deficit:  max(0, expected - in_slot - out_slot) (red, "still owed")
-//   - bonus:    max(0, in_slot - expected) + orphan_count (blue)
+//   - deficit:  max(0, expected - in_slot) (red, "still owed") — migration 0065:
+//     out_slot NÃO abate o contrato (spec 2026-08-14 D3). Tocada fora da faixa
+//     contratada não fecha a obrigação.
+//   - bonus:    contagem da categoria 'bonus' (blue) — migration 0065: o
+//     categorizador é a fonte única (in_slot <= expected por construção, então
+//     o antigo max(0, in_slot - expected) era sempre 0).
 //   - out_slot: plays in-date but out-of-slot (yellow)
 //   - out_date: plays out of campaign date range (purple)
 type DailySummaryRow struct {

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-06
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/failures_daily.go
   - workers/internal/catalog/failures_daily_test.go
@@ -42,6 +42,14 @@ definição de [admin-station-failures.md](admin-station-failures.md), e é
 deliberado: clicar numa barra do gráfico leva pra aba "Por emissora" naquela
 data, e os dois números têm que bater. Worker travado sem campanha agendada
 continua não contando (spec 2026-05-25).
+
+> **Degrau na série a partir de 2026-08-17.** A fórmula do `deficit` mudou
+> (migration 0065): `max(0, expected − in_slot)` — `out_slot` não abate mais.
+> Dias em que a emissora veiculou **tudo fora da faixa** agora contam como falha,
+> então as três métricas sobem a partir da data do deploy (e retroativamente, se e
+> quando o backfill de recategorização rodar sobre o histórico). Ao comparar
+> blocos de dias que atravessem essa data, você está comparando duas definições —
+> ver [quota-aware-categorization.md](quota-aware-categorization.md).
 
 Consequência importante para a métrica **tempo fora do ar**: ela soma o downtime
 **só das emissoras que tiveram déficit naquele dia**. Uma queda sem campanha

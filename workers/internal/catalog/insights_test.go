@@ -296,6 +296,15 @@ func TestInsights_FetchCampaigns_RejectsCrossClient(t *testing.T) {
 
 // ─── aggregateCore ──────────────────────────────────────────────────────────
 
+// BASE DE IMPACTOS = pmm × (in_slot + bonus). Este teste é a rede de segurança
+// da padronização: o fixture tem 5 in_slot + 2 out_slot + 1 bonus, e as 2
+// out_slot NÃO podem entrar em impactos nem nos rateios demográficos (D3 —
+// tocada fora da faixa contratada não vale nada comercialmente). Se alguém
+// voltar a base pra det_count (todas as categorias), Impactos vai de 6000 pra
+// 8000 e este teste quebra.
+//
+// veiculacoes_total continua sendo 8: é o KPI de CONTAGEM, exibido junto do
+// breakdown por categoria, e portanto tem que somar as quatro.
 func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	repo := NewInsights(pool)
@@ -313,7 +322,11 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
 	}
-	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+	// 'bonus' é a categoria do excedente/sem-plano desde 0064 ('orphan' era o
+	// nome antigo). O breakdown do /insights conta essa categoria — semear
+	// 'orphan' aqui deixava o teste verde só porque a query também procurava
+	// 'orphan'; os dois lados errados de forma consistente.
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-12")
 
 	from := parseDate("2026-06-01")
 	to := parseDate("2026-06-30")
@@ -325,23 +338,33 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 		t.Fatalf("aggregateCore: %v", err)
 	}
 
-	// 8 detecções × 1000 = 8000 impactos
-	if core.Impactos != 8000 {
-		t.Errorf("impactos = %d, want 8000", core.Impactos)
+	// (5 in_slot + 1 bonus) × 1000 = 6000 impactos. As 2 out_slot ficam fora.
+	if core.Impactos != 6000 {
+		t.Errorf("impactos = %d, want 6000 (6 × 1000; as 2 out_slot não são impacto)", core.Impactos)
 	}
+	// Contagem de veiculações continua somando as 4 categorias (8).
 	if core.VeiculacoesTotal != 8 {
 		t.Errorf("veic = %d, want 8", core.VeiculacoesTotal)
 	}
-	// Gender M = 8000 × 60% = 4800
-	if core.Gender.M != 4800 {
-		t.Errorf("gender_m = %d, want 4800", core.Gender.M)
+	// Gender M = 6000 × 60% = 3600 — rateio do MESMO total de impactos.
+	if core.Gender.M != 3600 {
+		t.Errorf("gender_m = %d, want 3600", core.Gender.M)
 	}
-	if core.Gender.F != 3200 {
-		t.Errorf("gender_f = %d, want 3200", core.Gender.F)
+	if core.Gender.F != 2400 {
+		t.Errorf("gender_f = %d, want 2400", core.Gender.F)
 	}
-	// AB = 8000 × 20% = 1600
-	if core.Class.AB != 1600 {
-		t.Errorf("class_ab = %d, want 1600", core.Class.AB)
+	// Os splits demográficos têm que fechar de volta no total de impactos —
+	// senão o gráfico e o KPI do topo da mesma tela contam coisas diferentes.
+	if core.Gender.M+core.Gender.F != core.Impactos {
+		t.Errorf("gender M+F = %d, want == impactos %d", core.Gender.M+core.Gender.F, core.Impactos)
+	}
+	if core.Class.AB+core.Class.C+core.Class.DE != core.Impactos {
+		t.Errorf("class AB+C+DE = %d, want == impactos %d",
+			core.Class.AB+core.Class.C+core.Class.DE, core.Impactos)
+	}
+	// AB = 6000 × 20% = 1200
+	if core.Class.AB != 1200 {
+		t.Errorf("class_ab = %d, want 1200", core.Class.AB)
 	}
 	// Breakdown
 	if core.Breakdown.InSlot != 5 || core.Breakdown.OutSlot != 2 || core.Breakdown.ExtrasOrphan != 1 {
@@ -368,8 +391,8 @@ func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
 	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
 	// dia 11: 1 out_slot
 	insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
-	// dia 12: 1 orphan
-	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+	// dia 12: 1 bonus (ex-'orphan', renomeada na 0064) → vira "extras" no gráfico
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-12")
 
 	buckets, gran, err := repo.aggregateBuckets(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
@@ -389,7 +412,13 @@ func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
 	if buckets[0].Bucket != "2026-06-10" || buckets[0].InSlot != 2 || buckets[0].Programado != 1 {
 		t.Errorf("day 10: %+v", buckets[0])
 	}
-	// 12: programado=1, extras=1 (orphan), deficit=1 (1-0-0)
+	// 11: programado=1, out_slot=1, deficit=1. D3 (0065 + Task 7): out_slot NÃO
+	// abate o contrato — antes era max(0, 1-0-1) = 0 e o dia aparecia cumprido
+	// mesmo tendo tocado só fora da faixa contratada.
+	if buckets[1].Bucket != "2026-06-11" || buckets[1].OutSlot != 1 || buckets[1].Deficit != 1 {
+		t.Errorf("day 11: %+v (out_slot não pode abater o déficit)", buckets[1])
+	}
+	// 12: programado=1, extras=1 (bonus), deficit=1 (1-0)
 	if buckets[2].Bucket != "2026-06-12" || buckets[2].Extras != 1 || buckets[2].Deficit != 1 {
 		t.Errorf("day 12: %+v", buckets[2])
 	}
@@ -515,8 +544,8 @@ func TestInsights_AggregateInvestment_PerInsertion(t *testing.T) {
 	if inv.Executado < 299 || inv.Executado > 301 {
 		t.Errorf("executado = %v, want ~300", inv.Executado)
 	}
-	// bonus da view = Σ_dia max(0, in_slot_dia - expected_dia) + orphan = 0
-	// (1 in_slot/dia == 1 expected/dia em cada um dos 6 dias).
+	// bonus da view = COUNT(category = 'bonus') = 0 desde a 0065 (todas as
+	// 6 tocadas são in_slot; 1 in_slot/dia == 1 expected/dia nos 6 dias).
 	if bon.Count != 0 || bon.Valor != 0 {
 		t.Errorf("bonificacao = %+v, want zero", bon)
 	}
@@ -688,10 +717,13 @@ func TestInsights_Investment_Consolidated_CapsAtContractOverDeliveryToBonus(t *t
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-10", 0b1111111, "00:00:00", "23:59:00", 1)
 
-	// 2 in_slot/dia nos dias 01–10 → excedente de 1/dia.
+	// 2 tocadas/dia nos dias 01–10 contra plano de 1/dia → excedente de 1/dia.
+	// No modelo de cota (0065) o excedente é gravado como 'bonus' pelo próprio
+	// categorizador — in_slot nunca passa de expected. Semear as duas como
+	// 'in_slot' produziria um estado que produção não gera mais.
 	for d := 1; d <= 10; d++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
-		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+		insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", fmt.Sprintf("2026-06-%02d", d))
 	}
 
 	inv, bon, err := repo.aggregateInvestment(ctx, InsightsParams{
@@ -844,8 +876,12 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 100.0)
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
-	for i := 0; i < 10; i++ {
-		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	// 10 tocadas num dia de plano 1 → 1 preenche a cota e 9 são bônus. É assim
+	// que o categorizador de cota grava desde 0065; antes as 10 nasciam
+	// 'in_slot' e a view sintetizava o bônus pelo excedente.
+	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-15")
+	for i := 0; i < 9; i++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-15")
 	}
 
 	out, err := repo.Compute(ctx, InsightsParams{
@@ -858,9 +894,13 @@ func TestInsights_Compute_PerInsertion_NotConsolidated(t *testing.T) {
 	if out.Consolidated {
 		t.Errorf("per_insertion não deveria marcar Consolidated")
 	}
-	// executado por-inserção = 100 × 10 = 1000 (inalterado)
-	if !approxEq(out.KPIs.Investido.Executado, 1000, 1) {
-		t.Errorf("executado = %v, want ~1000 (per_insertion, inalterado)", out.KPIs.Investido.Executado)
+	// executado por-inserção = 100 × 1 in_slot = 100. Era 1000 antes de 0065,
+	// quando as 10 tocadas nasciam 'in_slot' e o investido faturava o excedente
+	// junto. No modelo de cota só a tocada que preenche a meta fatura; as outras
+	// 9 são bonificação (abaixo) — o valor entregue não muda de lugar, muda de
+	// KPI. (Este número não se move na Task 7: o fixture não tem out_slot.)
+	if !approxEq(out.KPIs.Investido.Executado, 100, 1) {
+		t.Errorf("executado = %v, want ~100 (per_insertion, só o in_slot da cota)", out.KPIs.Investido.Executado)
 	}
 	// Bonificação continua computada (10 tocadas no dia, plano 1 → bonus 9 × 100)
 	if out.KPIs.Bonificacao.Valor <= 0 {
@@ -1034,7 +1074,7 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 	for d := 1; d <= 3; d++ {
 		insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
-	insSeedDetection(t, ctx, pool, campA, mat, stA, "in_slot", "2026-06-01") // excedente → bonus
+	insSeedDetection(t, ctx, pool, campA, mat, stA, "bonus", "2026-06-01") // excedente do dia 1
 	insSeedDetection(t, ctx, pool, campA, mat, stA, "out_date", "2026-07-05")
 
 	// B só existe pra alargar o bound global nas DUAS pontas: sem recorte a
@@ -1063,11 +1103,19 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 		t.Fatalf("campanha A não veio na chamada sem recorte")
 	}
 	// Sanity: o cenário tem que produzir número, senão a paridade compara zeros.
-	// 4 tocadas in_slot (dias 1,1,2,3) + 1 bonus (excedente do dia 1, que a
-	// fórmula in_slot+bonus conta de novo) = 5 × unit 10. A tocada out_date de
-	// 05/07 NÃO entra — é justamente o que o bound recortado também descarta.
-	if !approxEq(want.TotalInvested, 50, 0.01) {
-		t.Fatalf("cenário inválido: invested = %v, want 50 (unit 10 × (4 in_slot + 1 bonus))", want.TotalInvested)
+	// 3 in_slot (dias 1,2,3) × unit 10 = 30 investidos, mais 1 bonus (o
+	// excedente do dia 1) × 10 = 10 de bonificação — que desde 2026-08-17 fica
+	// FORA do investido (entrega gratuita). A tocada out_date de 05/07 NÃO
+	// entra — é justamente o que o bound recortado também descarta.
+	//
+	// Era 50 antes de 0065: a view antiga contava o excedente DUAS vezes (a
+	// tocada nascia 'in_slot' E o `GREATEST(in_slot - expected)` a somava de
+	// novo como bônus). No modelo de cota cada tocada tem uma categoria só.
+	if !approxEq(want.TotalInvested, 30, 0.01) {
+		t.Fatalf("cenário inválido: invested = %v, want 30 (unit 10 × 3 in_slot; bônus não fatura)", want.TotalInvested)
+	}
+	if !approxEq(want.TotalBonusValue, 10, 0.01) {
+		t.Fatalf("cenário inválido: bonus_value = %v, want 10 (unit 10 × 1 bonus)", want.TotalBonusValue)
 	}
 
 	page, err := campaignsRepo.FinancialsByCampaign(ctx, nil, []uuid.UUID{campA}, today)
@@ -1083,6 +1131,9 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 	}
 	if !approxEq(got.TotalInvested, want.TotalInvested, 0.01) {
 		t.Errorf("total_invested: recorte=%v, todas=%v", got.TotalInvested, want.TotalInvested)
+	}
+	if !approxEq(got.TotalBonusValue, want.TotalBonusValue, 0.01) {
+		t.Errorf("total_bonus_value: recorte=%v, todas=%v", got.TotalBonusValue, want.TotalBonusValue)
 	}
 	if got.TotalInsertions != want.TotalInsertions {
 		t.Errorf("total_insertions: recorte=%d, todas=%d", got.TotalInsertions, want.TotalInsertions)
@@ -1120,10 +1171,12 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, stIns,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
-	// por-inserção entrega só 3 (1/dia, sem bonus)
+	// por-inserção entrega 3 in_slot (1/dia) + 2 bonus (excedente do dia 1 e 2)
 	for d := 1; d <= 3; d++ {
 		insSeedDetection(t, ctx, pool, camp, mat, stIns, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-01")
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-02")
 
 	out, err := repo.Compute(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
@@ -1135,8 +1188,197 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 	if !out.Consolidated {
 		t.Errorf("mista tem consolidada → Consolidated deveria ser true")
 	}
-	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
-		t.Errorf("investido = %v, want ~430 (400 pacote + 30 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	// Modo fornecedor: Investido = pacote + ENTREGUE das por-inserção (in_slot +
+	// bonus, que é como o consolidatedSummary sempre precificou) = 400 + 50.
+	if !approxEq(out.KPIs.Investido.Executado, 450, 1) {
+		t.Errorf("investido = %v, want ~450 (400 pacote + 50 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	}
+
+	// PARIDADE DE CPM EM PRICING MISTO. É aqui que a divergência histórica entre
+	// as duas telas fecha: em modo fornecedor o /insights zera a Bonificação e
+	// embute o bônus no Investido, enquanto o /campaigns exibe as duas parcelas
+	// separadas — mas o NUMERADOR DO CPM é a mesma expressão dos dois lados:
+	//
+	//	/insights:  consolidatedSummary = pacote×meses + unit×(in_slot+bonus)
+	//	/campaigns: total_invested + total_bonus_value
+	//	          = (per_ins unit×in_slot + pacote×meses) + per_ins unit×bonus
+	//
+	// Sem somar `total_bonus_value` no /campaigns, o CPM daria 86,00 aqui contra
+	// 90,00 no /insights — dois CPMs pra mesma campanha no mesmo período.
+	campaignsRepo := NewCampaigns(pool)
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, []uuid.UUID{camp}, time.Time{})
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign: %v", err)
+	}
+	if len(fins) != 1 {
+		t.Fatalf("FinancialsByCampaign devolveu %d linhas, want 1", len(fins))
+	}
+	if int64(fins[0].TotalAudience) != out.KPIs.Impactos {
+		t.Errorf("impactos divergiu em pricing misto: insights %d × campaigns %v",
+			out.KPIs.Impactos, fins[0].TotalAudience)
+	}
+	campCPM := (fins[0].TotalInvested + fins[0].TotalBonusValue) / fins[0].TotalAudience * 1000
+	if !approxEq(campCPM, out.KPIs.CPM, 0.01) {
+		t.Errorf("cpm divergiu em pricing misto: campaigns %v × insights %v "+
+			"(invested %v + bonus_value %v ÷ audience %v)",
+			campCPM, out.KPIs.CPM, fins[0].TotalInvested, fins[0].TotalBonusValue, fins[0].TotalAudience)
+	}
+	if !approxEq(out.KPIs.CPM, 90.0, 0.01) {
+		t.Errorf("cpm = %v, want 90.00 ((400 pacote + 50 entregue) ÷ 5000 impactos × 1000)", out.KPIs.CPM)
+	}
+}
+
+// PARIDADE DA BASE FINANCEIRA /insights × /campaigns (Task 7).
+//
+// Depois da Task 7 as duas telas leem a MESMA base — `in_slot + bonus` —, e
+// desde 2026-08-17 partem essa base do MESMO jeito: o dinheiro pago
+// (`in_slot`) separado da entrega gratuita (`bonus`). As identidades que travam
+// isso são:
+//
+//	insights.Investido.Executado == campaigns.TotalInvested     (unit × in_slot)
+//	insights.Bonificacao.Valor   == campaigns.TotalBonusValue   (unit × bonus)
+//	insights.Impactos            == campaigns.TotalAudience
+//	insights.KPIs.CPM            == (TotalInvested + TotalBonusValue) ÷ TotalAudience × 1000
+//
+// A quarta identidade é a definição de CPM do produto (2026-08-17): o numerador
+// soma as DUAS parcelas — o CPM mede a eficiência da MÍDIA ENTREGUE A PREÇO DE
+// TABELA, não a eficiência da negociação. A tocada de bônus já está no
+// denominador (impactos conta in_slot + bonus), então tem que estar no numerador
+// ao preço de tabela dela; senão campanha com muito bônus exibiria um CPM
+// artificialmente baixo, incomparável com o de qualquer outra. Há uma asserção
+// explícita abaixo que FALHA se alguém "simplificar" o numerador de volta pro
+// valor pago.
+//
+// Antes de 2026-08-17 o /campaigns empacotava os dois num `total_invested` só,
+// e a identidade era a SOMA (`Executado + Bonificação == TotalInvested`). Isso
+// inflava o "Investimento" com veiculação que o cliente não pagou. As duas
+// igualdades acima são mais fortes que aquela soma: pinam cada parcela.
+//
+// A segunda identidade é a padronização de "Impactos" (2026-08-17): as duas
+// telas passaram a valorizar o MESMO conjunto (in_slot + bonus), então o número
+// que o cliente lê é o mesmo em qualquer lugar do produto. Antes o /insights
+// multiplicava PMM por TODAS as categorias aprovadas e vinha maior.
+//
+// O fixture tem UMA tocada out_slot de propósito: ela não pode aparecer em
+// nenhum dos dois lados (D3 — tocada fora da faixa contratada não vale nada).
+// Se o /insights voltasse a faturar out_slot como entrega, o Executado subiria
+// de 30 pra 40 e a soma estouraria o total do /campaigns.
+//
+// As duas telas só batem porque a janela do /insights aqui é a campanha
+// INTEIRA: o /insights é período-aware e o /campaigns não (whole-campaign).
+// Filtrar um sub-período no /insights legitimamente diverge do /campaigns —
+// não é bug, é escopo diferente.
+func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+	campaignsRepo := NewCampaigns(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 10.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	// 3 in_slot (dias 1–3) + 1 bonus (excedente do dia 1) + 1 out_slot (dia 4).
+	for d := 1; d <= 3; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-01")
+	insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-04")
+
+	today := parseDate("2026-07-15")
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today: today, StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, []uuid.UUID{camp}, today)
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign: %v", err)
+	}
+	if len(fins) != 1 {
+		t.Fatalf("FinancialsByCampaign devolveu %d linhas, want 1", len(fins))
+	}
+
+	// Executado = unit × in_slot = 10 × 3 = 30 (NÃO 40: o out_slot do dia 4 não
+	// fatura). Bonificação = unit × bonus = 10 × 1 = 10.
+	if !approxEq(out.KPIs.Investido.Executado, 30, 0.01) {
+		t.Errorf("insights executado = %v, want 30 (10 × 3 in_slot; out_slot não fatura)", out.KPIs.Investido.Executado)
+	}
+	if !approxEq(out.KPIs.Bonificacao.Valor, 10, 0.01) {
+		t.Errorf("insights bonificação = %v, want 10 (10 × 1 bonus)", out.KPIs.Bonificacao.Valor)
+	}
+	// /campaigns: invested = unit × in_slot = 10 × 3 = 30 (o bônus NÃO fatura),
+	// bonus_value = unit × bonus = 10 × 1 = 10.
+	if !approxEq(fins[0].TotalInvested, 30, 0.01) {
+		t.Errorf("campaigns total_invested = %v, want 30 (10 × 3 in_slot; bônus é entrega gratuita)", fins[0].TotalInvested)
+	}
+	if !approxEq(fins[0].TotalBonusValue, 10, 0.01) {
+		t.Errorf("campaigns total_bonus_value = %v, want 10 (10 × 1 bonus)", fins[0].TotalBonusValue)
+	}
+	// PARIDADE PARCELA A PARCELA — as duas metades, não a soma.
+	if !approxEq(out.KPIs.Investido.Executado, fins[0].TotalInvested, 0.01) {
+		t.Errorf("investido divergiu: insights executado %v × campaigns total_invested %v",
+			out.KPIs.Investido.Executado, fins[0].TotalInvested)
+	}
+	if !approxEq(out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue, 0.01) {
+		t.Errorf("bonificação divergiu: insights %v × campaigns total_bonus_value %v",
+			out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue)
+	}
+	// E o breakdown do /insights tem que ver a mesma coisa: 3/1/0/1.
+	if out.VeiculacoesBreakdown.InSlot != 3 || out.VeiculacoesBreakdown.OutSlot != 1 ||
+		out.VeiculacoesBreakdown.ExtrasOrphan != 1 {
+		t.Errorf("breakdown = %+v, want in_slot 3 / out_slot 1 / extras 1", out.VeiculacoesBreakdown)
+	}
+
+	// PARIDADE DE IMPACTOS. pmm 1000 × (3 in_slot + 1 bonus) = 4000 nas DUAS
+	// telas. Se o /insights voltasse a multiplicar por todas as categorias
+	// aprovadas, a tocada out_slot do dia 4 levaria o número a 5000 e o cliente
+	// veria dois "Impactos" diferentes pra mesma campanha no mesmo período.
+	if out.KPIs.Impactos != 4000 {
+		t.Errorf("insights impactos = %d, want 4000 (1000 × (3 in_slot + 1 bonus); out_slot não é impacto)",
+			out.KPIs.Impactos)
+	}
+	if int64(fins[0].TotalAudience) != out.KPIs.Impactos {
+		t.Errorf("impactos divergiu: insights %d × campaigns %v",
+			out.KPIs.Impactos, fins[0].TotalAudience)
+	}
+	// CPM = (investido + bonificado) ÷ impactos × 1000 = (30 + 10) ÷ 4000 × 1000
+	// = 10,00. O numerador NÃO é só o pago: o CPM mede a eficiência da mídia
+	// ENTREGUE a preço de tabela, e a tocada de bônus já está no denominador.
+	if !approxEq(out.KPIs.CPM, 10.0, 0.01) {
+		t.Errorf("insights cpm = %v, want 10.00 ((executado 30 + bonificação 10) ÷ 4000 impactos × 1000)", out.KPIs.CPM)
+	}
+	// GUARDA ANTI-"SIMPLIFICAÇÃO": se alguém voltar o numerador pro valor pago
+	// (executado ÷ impactos = 7,50), este teste tem que gritar. A checagem é
+	// explícita — não dá pra passar nos dois ao mesmo tempo.
+	paidOnlyCPM := out.KPIs.Investido.Executado / float64(out.KPIs.Impactos) * 1000
+	if approxEq(out.KPIs.CPM, paidOnlyCPM, 0.01) {
+		t.Errorf("cpm = %v == numerador só do pago (%v): a bonificação (%v) SUMIU do numerador. "+
+			"CPM = (investido + bonificado) ÷ impactos × 1000 — é o valor de tabela da mídia "+
+			"entregue, não a eficiência da negociação. Ver docs/features/insights-dashboard.md.",
+			out.KPIs.CPM, paidOnlyCPM, out.KPIs.Bonificacao.Valor)
+	}
+	// E o numerador é exatamente a soma das duas parcelas.
+	wantNum := (out.KPIs.Investido.Executado + out.KPIs.Bonificacao.Valor) / float64(out.KPIs.Impactos) * 1000
+	if !approxEq(out.KPIs.CPM, wantNum, 0.01) {
+		t.Errorf("cpm = %v, want %v ((executado + bonificação) ÷ impactos × 1000)", out.KPIs.CPM, wantNum)
+	}
+	// O CPM do /campaigns é derivado no frontend com as DUAS parcelas
+	// ((invested + bonus_value) ÷ audience × 1000). É a MESMA expressão do
+	// /insights — é isso que impede as duas telas de exibirem CPMs diferentes
+	// pra mesma campanha. Se o frontend voltar a dividir só `total_invested`,
+	// esta igualdade quebra.
+	campCPM := (fins[0].TotalInvested + fins[0].TotalBonusValue) / fins[0].TotalAudience * 1000
+	if !approxEq(campCPM, out.KPIs.CPM, 0.01) {
+		t.Errorf("cpm divergiu: campaigns %v × insights %v", campCPM, out.KPIs.CPM)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 
 // Regressão do caso COPA 10/07 (spec 2026-07-14): tocada física atribuída à
 // campanha A (base) carrega projeção fan-out F-119 na campanha B. A regra da B
-// é criada DEPOIS da tocada → projeção nasceu orphan. O recat disparado pela
+// é criada DEPOIS da tocada → projeção nasceu bonus. O recat disparado pela
 // criação da regra TEM que alcançar a projeção fan-out (escopo por
 // dc.campaign_id, não d.campaign_id) — e NÃO pode escrever na tocada-base nem
 // na projeção canônica da A (guarda d.campaign_id = cl.campaign_id).
@@ -62,7 +62,7 @@ func TestRecategorizeForRule_ReachesFanoutProjections(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Tocada física na base (campA/matA). Sem regra em A → orphan (base e projeção canônica).
+	// Tocada física na base (campA/matA). Sem regra em A → bonus (base e projeção canônica).
 	det, err := NewDetections(pool).Create(ctx, CreateDetectionInput{
 		StationID: stat.ID, CommercialID: matA.ID, CampaignID: campA.ID,
 		DetectedAt: day, MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
@@ -70,11 +70,11 @@ func TestRecategorizeForRule_ReachesFanoutProjections(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Projeção fan-out F-119 na campanha B (material da B), nascida orphan —
+	// Projeção fan-out F-119 na campanha B (material da B), nascida bonus —
 	// não havia regra na B no instante do insert. Espelha service.go/InsertProjections.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
-		VALUES ($1, $2, $3, $4, 'orphan')`,
+		VALUES ($1, $2, $3, $4, 'bonus')`,
 		det.ID, det.DetectedAt, campB.ID, matB.ID)
 	require.NoError(t, err)
 
@@ -106,17 +106,20 @@ func TestRecategorizeForRule_ReachesFanoutProjections(t *testing.T) {
 		det.ID, campB.ID).Scan(&projB))
 	require.Equal(t, "in_slot", projB, "recat da regra deve alcançar a projeção fan-out")
 
-	// Guarda: base (campA) e projeção canônica da A ficam orphan — o recat da B
-	// não pode escrever categoria da B na tocada-base da A.
+	// Guarda: base (campA) e projeção canônica da A ficam como nasceram — o recat
+	// da B não pode escrever categoria da B na tocada-base da A. O valor esperado
+	// é 'bonus' porque a A não tem regra (meta 0) e o insert-path fecha a
+	// célula-dia com cota (spec 2026-08-14 D4: o antigo 'orphan' virou 'bonus');
+	// o que o teste prova continua sendo a INTOCABILIDADE, não o rótulo.
 	var base, projA string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detections WHERE id=$1 AND detected_at=$2`,
 		det.ID, det.DetectedAt).Scan(&base))
-	require.Equal(t, "orphan", base, "tocada-base da campanha A intocada")
+	require.Equal(t, "bonus", base, "tocada-base da campanha A intocada")
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT category FROM detection_campaigns WHERE detection_id=$1 AND campaign_id=$2`,
 		det.ID, campA.ID).Scan(&projA))
-	require.Equal(t, "orphan", projA, "projeção canônica da A intocada")
+	require.Equal(t, "bonus", projA, "projeção canônica da A intocada")
 }
 
 // Mudança de tipo do material deve reclassificar as projeções que o carregam
@@ -182,10 +185,10 @@ func TestRecategorizeForMaterial_ReachesFanoutProjections(t *testing.T) {
 		Confidence: 0.95, HashCount: 100, TemporalCoverage: 0.85,
 	})
 	require.NoError(t, err)
-	// Projeção fan-out na B com matB (tipo errado → orphan no insert).
+	// Projeção fan-out na B com matB (tipo errado → bonus no insert).
 	_, err = pool.Exec(ctx, `
 		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
-		VALUES ($1, $2, $3, $4, 'orphan')`,
+		VALUES ($1, $2, $3, $4, 'bonus')`,
 		det.ID, det.DetectedAt, campB.ID, matB.ID)
 	require.NoError(t, err)
 

@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-25
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/station_failures.go
+  - migrations/0065_quota_aware_summary.up.sql
   - workers/internal/api/handlers/admin_station_failures.go
   - workers/internal/api/router.go
   - workers/cmd/api/main.go
@@ -41,6 +42,16 @@ Sidebar: novo item "Falhas por emissora" dentro do grupo Administração, entre 
 |------|--------|----------------|
 | `stream-down` | `stream_health_events.event_type='down'` no dia | Janela do down event cruza a faixa horária `[time_start, time_end]` de alguma regra da campanha |
 | `silent-gap`  | `daily_play_summary.deficit > 0` sem down explicando | Slot esperado, não tocou, stream parecia ok (provável worker travado, codec, override que ninguém respeitou) |
+
+> **A definição de `deficit` mudou em 2026-08-17** (migration 0065, decisão D3 do
+> [fechamento por cota](quota-aware-categorization.md)): `deficit = max(0, expected − in_slot)`
+> — veicular **fora da faixa não fecha mais a obrigação**. Um dia inteiro tocado
+> no horário errado, que antes lia "cumprido", passa a aparecer aqui. **Espere
+> mais linhas nesta aba.** A separação entre "não tocou" e "tocou fora do horário"
+> (`deficit_absent` / `deficit_off_slot`) existe hoje só na aba **Por campanha**
+> ([admin-campaign-failures.md](admin-campaign-failures.md)); esta aba e a "Por
+> dia" mostram o déficit total. Antes de cobrar uma emissora, confira lá qual
+> parte é ausência de verdade.
 
 Worker travado **sem campanha agendada** não aparece. Sem impacto, sem linha. Pra ver workers degradados agora, o operador continua usando `/admin/overview`.
 

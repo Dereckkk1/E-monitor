@@ -35,7 +35,9 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 	_ = typeID
 	st := insSeedStation(t, ctx, pool, "FanRadio", 1000, 60, 40, 20, 50, 30, 30, 50, 20)
 
-	// 1 tocada física (canônica campA) + 2 projeções: campA in_slot, campB orphan.
+	// 1 tocada física (canônica campA) + 2 projeções: campA in_slot, campB bonus.
+	// ('bonus' era 'orphan' até 0064/0065 — o categorizador de cota grava a
+	// categoria explícita e a view só conta 'bonus'.)
 	ts := parseDate("2026-06-10").Add(12 * time.Hour)
 	var detID uuid.UUID
 	if err := pool.QueryRow(ctx, `
@@ -48,7 +50,7 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
-		VALUES ($1, $2, $3, $4, 'in_slot'), ($1, $2, $5, $4, 'orphan')`,
+		VALUES ($1, $2, $3, $4, 'in_slot'), ($1, $2, $5, $4, 'bonus')`,
 		detID, ts, campA, mat, campB); err != nil {
 		t.Fatalf("seed projections: %v", err)
 	}
@@ -88,7 +90,7 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 		return n
 	}
 
-	// campA vê a tocada como in_slot; campB como orphan (vira bônus).
+	// campA vê a tocada como in_slot; campB como bônus.
 	if got := inSlotFor(campA); got != 1 {
 		t.Errorf("campA in_slot = %d, want 1", got)
 	}
@@ -96,7 +98,7 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 		t.Errorf("campB in_slot = %d, want 0", got)
 	}
 	if got := bonusFor(campB); got < 1 {
-		t.Errorf("campB bonus = %d, want >= 1 (orphan vira bônus)", got)
+		t.Errorf("campB bonus = %d, want >= 1 (a projeção de campB é bônus)", got)
 	}
 
 	// Leitura swapada roda sobre a view (smoke runtime).

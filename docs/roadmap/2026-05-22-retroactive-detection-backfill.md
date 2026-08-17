@@ -36,7 +36,8 @@ Cenário típico em que isso aconteceria:
 - **`segments.Extract(dir, from, to)`** — já assembla audio de qualquer faixa dentro da retenção. Trata gaps (`Partial`, `CoveredFraction`).
 - **`match.MatchWindow`** + **`match.StateMachine`** — já fazem o matching/state machine completo. Só precisam ser invocados com `now = tempo do segment` em vez de `time.Now()`.
 - **Tabela `detections`** — partitioned por dia, aceita inserts retroativos (`detected_at` no passado).
-- **`RecategorizeForCampaign`** — categoriza detecções (`in_slot`/`out_slot`/`out_date`/`orphan`) contra as `distribution_rules` da época. Já roda na pipeline atual e cobre o cenário backfill sem mudança.
+- **`RecategorizeForCampaign`** — categoriza detecções contra as `distribution_rules` da época. Já roda na pipeline atual e cobre o cenário backfill sem mudança.
+  > **Atualizado em 2026-08-17:** as categorias são `in_slot` / `out_slot` / `out_date` / **`bonus`** (`orphan` foi renomeada pela migration 0064) e o `RecategorizeForCampaign` deixou de classificar linha a linha — ele **expande o escopo pra célula-dia completa** e distribui a cota do dia. Pra um backfill retroativo isso importa: inserir uma tocada no passado **muda a categoria das outras tocadas do mesmo dia**, o que não acontecia no modelo antigo. Ver [quota-aware-categorization.md](../features/quota-aware-categorization.md).
 
 **O bloco que falta**: pipeline que orquestra tudo isso pra um material novo, somado a retenção estendida dos segments além dos 60 min atuais.
 
