@@ -1103,15 +1103,19 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 		t.Fatalf("campanha A não veio na chamada sem recorte")
 	}
 	// Sanity: o cenário tem que produzir número, senão a paridade compara zeros.
-	// 3 in_slot (dias 1,2,3) + 1 bonus (o excedente do dia 1) = 4 tocadas ×
-	// unit 10 = 40. A tocada out_date de 05/07 NÃO entra — é justamente o que o
-	// bound recortado também descarta.
+	// 3 in_slot (dias 1,2,3) × unit 10 = 30 investidos, mais 1 bonus (o
+	// excedente do dia 1) × 10 = 10 de bonificação — que desde 2026-08-17 fica
+	// FORA do investido (entrega gratuita). A tocada out_date de 05/07 NÃO
+	// entra — é justamente o que o bound recortado também descarta.
 	//
 	// Era 50 antes de 0065: a view antiga contava o excedente DUAS vezes (a
 	// tocada nascia 'in_slot' E o `GREATEST(in_slot - expected)` a somava de
 	// novo como bônus). No modelo de cota cada tocada tem uma categoria só.
-	if !approxEq(want.TotalInvested, 40, 0.01) {
-		t.Fatalf("cenário inválido: invested = %v, want 40 (unit 10 × (3 in_slot + 1 bonus))", want.TotalInvested)
+	if !approxEq(want.TotalInvested, 30, 0.01) {
+		t.Fatalf("cenário inválido: invested = %v, want 30 (unit 10 × 3 in_slot; bônus não fatura)", want.TotalInvested)
+	}
+	if !approxEq(want.TotalBonusValue, 10, 0.01) {
+		t.Fatalf("cenário inválido: bonus_value = %v, want 10 (unit 10 × 1 bonus)", want.TotalBonusValue)
 	}
 
 	page, err := campaignsRepo.FinancialsByCampaign(ctx, nil, []uuid.UUID{campA}, today)
@@ -1127,6 +1131,9 @@ func TestCampaigns_Financials_PageSliceMatchesFullSet(t *testing.T) {
 	}
 	if !approxEq(got.TotalInvested, want.TotalInvested, 0.01) {
 		t.Errorf("total_invested: recorte=%v, todas=%v", got.TotalInvested, want.TotalInvested)
+	}
+	if !approxEq(got.TotalBonusValue, want.TotalBonusValue, 0.01) {
+		t.Errorf("total_bonus_value: recorte=%v, todas=%v", got.TotalBonusValue, want.TotalBonusValue)
 	}
 	if got.TotalInsertions != want.TotalInsertions {
 		t.Errorf("total_insertions: recorte=%d, todas=%d", got.TotalInsertions, want.TotalInsertions)
@@ -1186,13 +1193,19 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 
 // PARIDADE DA BASE FINANCEIRA /insights × /campaigns (Task 7).
 //
-// Depois da Task 7 as duas telas leem a MESMA base — `in_slot + bonus` —, só
-// que apresentada diferente: o /campaigns soma tudo num `total_invested`, e o
-// /insights parte em dois KPIs (Investido = in_slot, Bonificação = bonus). A
-// identidade que trava isso é:
+// Depois da Task 7 as duas telas leem a MESMA base — `in_slot + bonus` —, e
+// desde 2026-08-17 partem essa base do MESMO jeito: o dinheiro pago
+// (`in_slot`) separado da entrega gratuita (`bonus`). As identidades que travam
+// isso são:
 //
-//	insights.Investido.Executado + insights.Bonificacao.Valor == campaigns.TotalInvested
-//	insights.Impactos                                        == campaigns.TotalAudience
+//	insights.Investido.Executado == campaigns.TotalInvested     (unit × in_slot)
+//	insights.Bonificacao.Valor   == campaigns.TotalBonusValue   (unit × bonus)
+//	insights.Impactos            == campaigns.TotalAudience
+//
+// Antes de 2026-08-17 o /campaigns empacotava os dois num `total_invested` só,
+// e a identidade era a SOMA (`Executado + Bonificação == TotalInvested`). Isso
+// inflava o "Investimento" com veiculação que o cliente não pagou. As duas
+// igualdades acima são mais fortes que aquela soma: pinam cada parcela.
 //
 // A segunda identidade é a padronização de "Impactos" (2026-08-17): as duas
 // telas passaram a valorizar o MESMO conjunto (in_slot + bonus), então o número
@@ -1255,14 +1268,22 @@ func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
 	if !approxEq(out.KPIs.Bonificacao.Valor, 10, 0.01) {
 		t.Errorf("insights bonificação = %v, want 10 (10 × 1 bonus)", out.KPIs.Bonificacao.Valor)
 	}
-	// /campaigns: unit × (in_slot + bonus) = 10 × 4 = 40.
-	if !approxEq(fins[0].TotalInvested, 40, 0.01) {
-		t.Errorf("campaigns total_invested = %v, want 40 (10 × (3 in_slot + 1 bonus))", fins[0].TotalInvested)
+	// /campaigns: invested = unit × in_slot = 10 × 3 = 30 (o bônus NÃO fatura),
+	// bonus_value = unit × bonus = 10 × 1 = 10.
+	if !approxEq(fins[0].TotalInvested, 30, 0.01) {
+		t.Errorf("campaigns total_invested = %v, want 30 (10 × 3 in_slot; bônus é entrega gratuita)", fins[0].TotalInvested)
 	}
-	base := out.KPIs.Investido.Executado + out.KPIs.Bonificacao.Valor
-	if !approxEq(base, fins[0].TotalInvested, 0.01) {
-		t.Errorf("base financeira divergiu: insights (executado %v + bonificação %v = %v) × campaigns %v",
-			out.KPIs.Investido.Executado, out.KPIs.Bonificacao.Valor, base, fins[0].TotalInvested)
+	if !approxEq(fins[0].TotalBonusValue, 10, 0.01) {
+		t.Errorf("campaigns total_bonus_value = %v, want 10 (10 × 1 bonus)", fins[0].TotalBonusValue)
+	}
+	// PARIDADE PARCELA A PARCELA — as duas metades, não a soma.
+	if !approxEq(out.KPIs.Investido.Executado, fins[0].TotalInvested, 0.01) {
+		t.Errorf("investido divergiu: insights executado %v × campaigns total_invested %v",
+			out.KPIs.Investido.Executado, fins[0].TotalInvested)
+	}
+	if !approxEq(out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue, 0.01) {
+		t.Errorf("bonificação divergiu: insights %v × campaigns total_bonus_value %v",
+			out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue)
 	}
 	// E o breakdown do /insights tem que ver a mesma coisa: 3/1/0/1.
 	if out.VeiculacoesBreakdown.InSlot != 3 || out.VeiculacoesBreakdown.OutSlot != 1 ||
@@ -1285,6 +1306,13 @@ func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
 	// E o CPM do /insights tem que usar esse mesmo denominador: 30 ÷ 4000 × 1000.
 	if !approxEq(out.KPIs.CPM, 7.5, 0.01) {
 		t.Errorf("insights cpm = %v, want 7.50 (executado 30 ÷ 4000 impactos × 1000)", out.KPIs.CPM)
+	}
+	// O CPM do /campaigns é derivado no frontend (invested ÷ audience × 1000).
+	// Com o bônus fora do numerador ele passa a dar o MESMO 7,50 — antes dava
+	// 10,00 (40 ÷ 4000), e o cliente via dois CPMs pra mesma campanha.
+	campCPM := fins[0].TotalInvested / fins[0].TotalAudience * 1000
+	if !approxEq(campCPM, out.KPIs.CPM, 0.01) {
+		t.Errorf("cpm divergiu: campaigns %v × insights %v", campCPM, out.KPIs.CPM)
 	}
 }
 
