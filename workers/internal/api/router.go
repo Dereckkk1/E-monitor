@@ -427,7 +427,7 @@ func NewRouter(d Deps) http.Handler {
 				// Admin-only manual entry ("Adicionar veiculação manualmente"):
 				// veiculações retroativas. A linha entra em daily_play_summary
 				// igual à automática — o categorizer roda pra decidir
-				// in_slot/out_slot/out_date/orphan.
+				// in_slot/out_slot/out_date/bonus.
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/detections/manual", d.Detections.CreateManual)

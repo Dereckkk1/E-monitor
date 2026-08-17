@@ -1,5 +1,15 @@
 package categorizer
 
+// AVISO — os testes de Categorize deste arquivo (e SÓ eles) ainda esperam o
+// veredito "orphan". Não é sinal de que a categoria continua viva: Categorize é
+// código morto em produção desde que o insert-path migrou pra Settle, e é o
+// último escritor de CatOrphan que resta. O veredito atual em todo o resto do
+// sistema é CatBonus. Estes testes existem só pra documentar o comportamento
+// antigo enquanto a função não for deletada; não os copie para código novo, e
+// não conclua deles que algum consumidor deve procurar por 'orphan'.
+//
+// Os testes de Settle, no mesmo pacote, são os que valem pra produção.
+
 import (
 	"testing"
 	"time"

@@ -9,7 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestDetections_Create_CategorizesOrphan(t *testing.T) {
+// Sem regra nenhuma no dia a meta é 0 → toda tocada é excedente. O veredito
+// mudou de nome com o fechamento por cota (spec 2026-08-14 D4): 'orphan' virou
+// 'bonus'. Mesma semântica de sempre (a view já somava orphan como bônus), só o
+// rótulo que o insert-path grava é outro.
+func TestDetections_Create_CategorizesBonus(t *testing.T) {
 	ctx, pool := newTestDB(t)
 
 	cli, _ := NewClients(pool).Create(ctx, CreateClientInput{Name: "T"})
@@ -45,7 +49,7 @@ func TestDetections_Create_CategorizesOrphan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Sem regras criadas → deve ser orphan
+	// Sem regras criadas → meta 0 → bonus
 	var category string
 	err = pool.QueryRow(ctx,
 		`SELECT category FROM detections WHERE id = $1 AND detected_at = $2`,
@@ -53,8 +57,8 @@ func TestDetections_Create_CategorizesOrphan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read category: %v", err)
 	}
-	if category != "orphan" {
-		t.Errorf("category = %q, want orphan", category)
+	if category != "bonus" {
+		t.Errorf("category = %q, want bonus", category)
 	}
 }
 

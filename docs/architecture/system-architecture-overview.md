@@ -338,7 +338,7 @@ erDiagram
         text evidence_key "→ S3 hot/cold/archive"
         text evidence_status
         text tier
-        text category "in_slot/out_slot/out_date/orphan"
+        text category "in_slot/out_slot/out_date/bonus"
         timestamptz retracted_at "version disambiguation"
         numeric audit_coverage
     }

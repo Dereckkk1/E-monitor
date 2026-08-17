@@ -130,6 +130,45 @@ func TestPreview_OverrideDoAdminRecalculaOCPM(t *testing.T) {
 	require.True(t, k.Overridden, "o payload marca que houve ajuste manual")
 }
 
+// O numerador do CPM soma a BONIFICAÇÃO ao valor entregue. O CPM mede a
+// eficiência da mídia entregue a preço de tabela, não a da negociação: a tocada
+// de bônus já está nos impactos do denominador, então tem que estar no numerador
+// ao preço de tabela dela. Sem isso, um pós-venda com muito bônus sairia com um
+// CPM artificialmente baixo, incomparável com o de qualquer outra campanha.
+func TestPreview_CPMSomaABonificacaoNoNumerador(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	seed := seedScenario(t, ctx, pool)
+	svc := newTestService(t, pool, &recordingMailer{}, &fakeStore{})
+
+	rep, err := svc.Repo().CreateDraft(ctx, CreateDraftInput{ClientID: seed.ClientID, Title: "T"})
+	require.NoError(t, err)
+
+	valor := 5000.0
+	bonif := 1000.0
+	impactos := int64(250000)
+	require.NoError(t, svc.Repo().ReplaceBlocks(ctx, rep.ID, []BlockRow{{
+		CampaignID: seed.CampaignID,
+		From:       date(2026, 6, 1),
+		To:         date(2026, 6, 30),
+		KPIOverrides: KPIOverrides{
+			ValorEntregue: &valor,
+			Bonificacao:   &bonif,
+			Impactos:      &impactos,
+		},
+	}}))
+
+	p, err := svc.Preview(ctx, rep.ID)
+	require.NoError(t, err)
+	k := p.Campaigns[0].KPIs
+
+	// (5000 + 1000) / 250000 × 1000 = 24,00 — e NÃO 20,00 (só o pago).
+	require.InDelta(t, 24.0, k.CPM, 0.001,
+		"CPM = (valor entregue + bonificação) ÷ impactos × 1000; 20,00 significa que a bonificação saiu do numerador")
+	// O valor entregue exibido ao lado continua sendo SÓ o que o cliente pagou.
+	require.InDelta(t, 5000.0, k.ValorEntregue, 0.001)
+	require.InDelta(t, 1000.0, k.Bonificacao, 0.001)
+}
+
 // Impactos zero com valor sobrescrito não pode gerar CPM infinito.
 func TestPreview_OverrideComImpactosZeroNaoExplodeOCPM(t *testing.T) {
 	ctx, pool := newTestDB(t)

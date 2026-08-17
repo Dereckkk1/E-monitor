@@ -27,7 +27,14 @@ package catalog
 //     a página renderiza os badges de estado.
 //   - system_health.go conta detecções CRUAS nos contadores de liveness do
 //     pipeline (o matcher está produzindo saída?), não é tally de veiculação.
-//   - O recategorizador dá UPDATE em todas as linhas do escopo, por design.
+//
+// O recategorizador (recatClassifiedCTE) APLICA este filtro desde o fechamento
+// por célula-dia (spec 2026-08-14) — antes ele dava UPDATE em toda linha do
+// escopo. Tinha que mudar: com cota, contar uma tocada retratada faria o motor
+// SQL divergir do Go (categorizer.Settle, alimentado por loadCellDayPlays, que
+// usa este mesmo filtro). Efeito colateral deliberado: a category da linha
+// não-aprovada não é mais reescrita pelo recat — ninguém a lê, e ela é regravada
+// quando a linha volta ao conjunto (mutateApprovedSet refecha a célula).
 //
 // evidence_status = 'ambiguous' (desambiguação de gêmeos acústicos, spec
 // 2026-07-01): tocada de gêmeo que o trecho discriminante não conseguiu atribuir

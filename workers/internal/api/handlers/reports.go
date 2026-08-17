@@ -194,8 +194,11 @@ type SummaryResponse struct {
 		Detections        int `json:"detections"`
 		DistinctMaterials int `json:"distinct_materials"`
 		DistinctStations  int `json:"distinct_stations"`
-		// Impactos = Σ (veiculações da emissora × PMM). ImpactosTarget usa o
-		// PMM no target; StationsWithTarget > 0 é o gate de exibição no PDF.
+		// Impactos = Σ (impact_count da emissora × PMM), onde impact_count =
+		// in_slot + bonus (base canônica — ver catalog.StationAggregateRow).
+		// NÃO é Detections/Count: out_slot não vale nada comercialmente e
+		// out_date está fora do período contratado. ImpactosTarget usa o PMM
+		// no target; StationsWithTarget > 0 é o gate de exibição no PDF.
 		Impactos           int64 `json:"impactos"`
 		ImpactosTarget     int64 `json:"impactos_target"`
 		StationsWithTarget int   `json:"stations_with_target"`
@@ -258,16 +261,20 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	// byMaterialStation — senão a mesma emissora entraria uma vez por material.
 	//
 	// math.Round, não truncamento: a coluna "Impactos" da tabela do PDF é
-	// calculada no frontend com Math.round(pmm × count) (utils/pdfReport.js).
-	// Truncar aqui faria o KPI do topo ficar ABAIXO da soma da própria coluna
-	// no mesmo documento — stations.pmm é numeric(10,2), então o produto é
-	// fracionário e a diferença chega a 1 por emissora.
+	// calculada no frontend com Math.round(pmm × impact_count)
+	// (utils/pdfReport.js). Truncar aqui faria o KPI do topo ficar ABAIXO da
+	// soma da própria coluna no mesmo documento — stations.pmm é
+	// numeric(10,2), então o produto é fracionário e a diferença chega a 1 por
+	// emissora.
+	//
+	// ImpactCount (in_slot + bonus), não Count: é a base canônica de impactos
+	// do produto inteiro, a mesma de /campaigns e /insights.
 	for _, s := range byStation {
 		if s.StationPMM != nil {
-			resp.Totals.Impactos += int64(math.Round(*s.StationPMM * float64(s.Count)))
+			resp.Totals.Impactos += int64(math.Round(*s.StationPMM * float64(s.ImpactCount)))
 		}
 		if s.StationPMMTarget != nil {
-			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.Count)
+			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.ImpactCount)
 			resp.Totals.StationsWithTarget++
 		}
 	}

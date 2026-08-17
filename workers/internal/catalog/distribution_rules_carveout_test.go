@@ -8,10 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Paridade Go(insert) × SQL(recat) do caso novo (spec 2026-07-13): material
-// carved toca DENTRO do range da regra dele mas em dia sem meta (sábado, regra
-// seg-sex) → orphan nas DUAS bordas. O insert-path (categorizer.Categorize) e o
-// recat-path (recatClassifyTailSQL) têm que concordar — divergir é bug silencioso.
+// Paridade Go(insert) × SQL(recat): material carved toca DENTRO do range da
+// regra dele mas em dia sem meta (sábado, regra seg-sex) → bonus nas DUAS bordas.
+// O insert-path (categorizer.Settle via settleCellDay) e o recat-path
+// (recatClassifyTailSQL) têm que concordar — divergir é bug silencioso.
+//
+// Era `orphan` até a spec 2026-08-14: o dia sem regra aplicável dá N = 0, a
+// tocada não casa faixa nenhuma e o passo 4 do Settle a manda pra bonus (in_slot
+// já fechou a meta zerada). `orphan` deixou de ser veredito — virou `bonus`
+// explícito (D4). O teste encodava o modelo antigo; a regra é que mudou.
 func TestCarveOut_InPeriodWrongWeekday_Orphan_InsertAndRecat(t *testing.T) {
 	ctx, pool := newTestDB(t)
 	saoPaulo, err := time.LoadLocation("America/Sao_Paulo")
@@ -80,14 +85,14 @@ func TestCarveOut_InPeriodWrongWeekday_Orphan_InsertAndRecat(t *testing.T) {
 		return base, proj
 	}
 
-	// Insert-path (Go): sábado dentro do range da regra → orphan.
+	// Insert-path (Go): sábado dentro do range da regra, sem meta no dia → bonus.
 	base, proj := catOf()
-	require.Equal(t, "orphan", base, "insert-path (Go) deve dar orphan")
-	require.Equal(t, "orphan", proj, "projeção nasce orphan")
+	require.Equal(t, "bonus", base, "insert-path (Go) deve dar bonus")
+	require.Equal(t, "bonus", proj, "projeção nasce bonus")
 
-	// Recat-path (SQL): recategoriza a campanha → tem que CONTINUAR orphan.
+	// Recat-path (SQL): recategoriza a campanha → tem que CONTINUAR bonus.
 	require.NoError(t, rules.RecategorizeForCampaign(ctx, cmp.ID))
 	base, proj = catOf()
-	require.Equal(t, "orphan", base, "recat-path (SQL) deve concordar com o insert (orphan)")
-	require.Equal(t, "orphan", proj, "projeção recategorizada deve ser orphan")
+	require.Equal(t, "bonus", base, "recat-path (SQL) deve concordar com o insert (bonus)")
+	require.Equal(t, "bonus", proj, "projeção recategorizada deve ser bonus")
 }

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-14
 codigo-relacionado:
   - workers/internal/catalog/distribution_rules.go
   - workers/internal/catalog/projection_reconcile.go
@@ -192,9 +192,18 @@ pelo reconciler.
 
 | Métrica | Tipo | Labels | Significado |
 |---------|------|--------|-------------|
-| `radiocheck_projection_drift_last_run` | gauge | — | Nº de divergências encontradas no último ciclo (`CountProjectionDrift`) |
+| `radiocheck_projection_drift_last_run` | gauge | — | Nº de divergências encontradas no último ciclo (`CountProjectionDrift`) — **projeções APROVADAS apenas** |
 | `radiocheck_projection_drift_healed_total` | counter | `from`, `to` | Projeções cuja categoria o reconciler corrigiu, por transição |
 | `radiocheck_recategorize_failures_total` | counter | `origin` | Falhas dos disparos best-effort de recategorização (ver camada 2/handlers) |
+
+> **Desde a categorização por cota (spec 2026-08-14):**
+> `radiocheck_projection_drift_last_run` e `radiocheck_projection_drift_healed_total`
+> cobrem **só projeções do conjunto aprovado** (`catalog.ApprovedDetectionsFilter`) —
+> tocada retratada/ignorada/`audit_rejected`/`ambiguous` não é contada nem curada.
+> Sob cota ela não tem veredito definido (não entra no `Settle`, nem no `classified`
+> do recat), então não haveria valor pro qual convergir; contá-la fixaria o
+> `ProjectionDriftPersistent` pra sempre em linhas que nenhuma tela lê. Efeito
+> prático: todo valor que o gauge mostra hoje é drift **visível ao usuário**.
 
 `origin` de `radiocheck_recategorize_failures_total`: `rule_create`,
 `rule_update`, `rule_delete`, `override_upsert`, `override_delete`,
@@ -202,7 +211,7 @@ pelo reconciler.
 e a categoria ficava velha em silêncio; agora incrementam o counter e logam via
 `zap.L().Error` (o reconciler continua sendo a rede de segurança — o recat
 segue best-effort/assíncrono). O fallback do fan-out em `evidence/service.go`
-(`CategorizeFor` falha → projeção nasce `"orphan"`) agora também loga
+(`CategorizeFor` falha → projeção nasce `"bonus"`, ex-`"orphan"`) agora também loga
 `zap.Warn` em vez de falhar silenciosamente.
 
 Alerta associado: [docs/runbooks/ProjectionDriftPersistent.md](../runbooks/ProjectionDriftPersistent.md).
@@ -234,14 +243,18 @@ projeção com `detected_at` **fora** do período — cujo veredito correto é
 alinha a cobertura do `--all` à do reconciler (que também não é date-bounded) e
 fecha a lacuna I1 do review 2026-07-14.
 
-Dry-run é o default em ambos os modos (só imprime `ANTES`/`DEPOIS`/`DELTA` de
-`out_date`/`orphan`); `--apply` muta. Procedimento canônico para rodar em prod
+Dry-run é o default em ambos os modos. Desde a categorização por cota (2026-08-17)
+ele imprime `ANTES`/`DEPOIS`/`DELTA` de **todas** as categorias
+(`in_slot`/`out_slot`/`bonus`/`orphan`/`out_date`), não só das duas antigas: a cota
+move tocada entre `in_slot`, `out_slot` e `bonus`, e é justamente aí que está o delta
+financeiro. O contador de `orphan` continua existindo pra expor resíduo pré-backfill —
+deve ir a 0 depois do `--apply`. `--apply` muta. Procedimento canônico para rodar em prod
 (regra 4.8 do `CLAUDE.md` — migração/backfill que depende de volume de dados
 não pode confiar em DB local vazio):
 
 1. Clonar o dump de prod para um Postgres descartável.
 2. Rodar `backfill-recategorize --all --apply` **contra o clone** e conferir o
-   delta reportado (`out_date`/`orphan` antes×depois) — espera-se um delta
+   delta reportado (todas as categorias, antes×depois) — espera-se um delta
    grande na primeira execução, incluindo a classe COPA em outras campanhas.
 3. Só então rodar `--all --apply` em prod, com o delta já conferido.
 
@@ -257,7 +270,7 @@ Sem mudança no `workers.Dockerfile` (o binário já está listado — regra 6.7
   material reclassifica projeções em campanhas ≠ base).
 - `workers/internal/catalog/projection_reconcile_test.go` —
   `TestProjectionDrift_CountAndHeal`: semeia drift real (projeção fan-out
-  `orphan` + regra criada via repo, sem disparar recat), confirma que `Count`
+  com categoria errada + regra criada via repo, sem disparar recat), confirma que `Count`
   acha a divergência e `Heal` a corrige (e que `Count` volta a não reportá-la).
 - `workers/internal/projrecon/scheduler_test.go` — `RunOnce` só chama `Heal`
   quando há drift; erro de `Count` propaga sem chamar `Heal`.

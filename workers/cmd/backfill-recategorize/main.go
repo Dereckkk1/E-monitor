@@ -1,7 +1,7 @@
 // backfill-recategorize re-classifica detections/detection_campaigns de campanhas
 // com carve-out (distribution_rules.material_ids não-vazio) usando a lógica atual
 // do categorizador — necessário após a mudança do spec 2026-07-13 (dia extra
-// dentro do período do material vira orphan/bônus em vez de out_date). Idempotente:
+// dentro do período do material vira bonus em vez de out_date). Idempotente:
 // RecategorizeForCampaign só altera linhas cuja categoria muda.
 //
 //	# DEFAULT DRY-RUN (só reporta a distribuição atual, não altera nada):
@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -103,25 +105,47 @@ func main() {
 		log.Fatalf("rows: %v", err)
 	}
 
-	// Distribuição de out_date/orphan das campanhas-alvo, medida na projeção
-	// canônica (detection_campaigns.category) que a view daily_play_summary lê,
-	// com o mesmo gate "aprovado" (retracted/ignored/audit_rejected fora). É o
-	// número que o operador confere antes do --apply (§4.8).
-	countCats := func() (outDate, orphan int64, err error) {
+	// Distribuição de categorias das campanhas-alvo, medida na projeção canônica
+	// (detection_campaigns.category) que a view daily_play_summary lê, com o mesmo
+	// gate "aprovado" (retracted/ignored/audit_rejected fora). É o número que o
+	// operador confere antes do --apply (§4.8).
+	//
+	// TODAS as categorias, não só out_date/orphan: desde a spec 2026-08-14 o
+	// categorizador não emite mais 'orphan' (virou 'bonus') e a cota move tocada
+	// entre in_slot/out_slot/bonus. Reportar só as duas antigas mostraria
+	// "orphan -N" sem contrapartida nenhuma e esconderia justamente o delta
+	// financeiro (in_slot é o que fatura, out_slot não vale nada) que a decisão de
+	// alcance retroativo depende de medir contra um clone de prod.
+	//
+	// O contador de 'orphan' FICA, mesmo o categorizador nunca mais o emitindo:
+	// é justamente aqui que se enxerga o resíduo pré-backfill (linha gravada
+	// pelo binário antigo na janela de deploy, ou clone de um banco sem a 0064).
+	// Ele deve ir a 0 depois do --apply; se não for, sobrou linha fora do escopo
+	// e o operador precisa ver isso — não é ruído, é o sinal.
+	type catCounts struct{ inSlot, outSlot, bonus, orphan, outDate int64 }
+	countCats := func() (c catCounts, err error) {
 		err = pool.QueryRow(ctx, `
 			SELECT
-			  COUNT(*) FILTER (WHERE dc.category = 'out_date'),
-			  COUNT(*) FILTER (WHERE dc.category = 'orphan')
+			  COUNT(*) FILTER (WHERE dc.category = 'in_slot'),
+			  COUNT(*) FILTER (WHERE dc.category = 'out_slot'),
+			  COUNT(*) FILTER (WHERE dc.category = 'bonus'),
+			  COUNT(*) FILTER (WHERE dc.category = 'orphan'),
+			  COUNT(*) FILTER (WHERE dc.category = 'out_date')
 			FROM detection_campaigns dc
 			JOIN detections d ON d.id = dc.detection_id AND d.detected_at = dc.detected_at
 			WHERE dc.campaign_id = ANY($1::uuid[])
 			  AND d.retracted_at IS NULL
 			  AND d.ignored_at IS NULL
-			  AND d.evidence_status <> 'audit_rejected'`, campIDs).Scan(&outDate, &orphan)
+			  AND d.evidence_status <> 'audit_rejected'`, campIDs).Scan(
+			&c.inSlot, &c.outSlot, &c.bonus, &c.orphan, &c.outDate)
 		return
 	}
+	fmtCats := func(c catCounts) string {
+		return fmt.Sprintf("in_slot=%d  out_slot=%d  bonus=%d  orphan=%d  out_date=%d",
+			c.inSlot, c.outSlot, c.bonus, c.orphan, c.outDate)
+	}
 
-	beforeOut, beforeOrphan, err := countCats()
+	before, err := countCats()
 	if err != nil {
 		log.Fatalf("count (antes): %v", err)
 	}
@@ -130,14 +154,77 @@ func main() {
 		alvo = "todas as campanhas com projeções"
 	}
 	fmt.Printf("\n=== backfill-recategorize (%d %s) ===\n", len(camps), alvo)
-	fmt.Printf("ANTES:  out_date=%d  orphan=%d\n", beforeOut, beforeOrphan)
+	fmt.Printf("ANTES:  %s\n", fmtCats(before))
+
+	dr := catalog.NewDistributionRules(pool)
+
+	// Delta ANTES de mutar: CountProjectionDrift é SELECT-only e devolve
+	// exatamente (campanha, from, to, N) — a matriz de transição que a decisão
+	// de alcance retroativo (D9) depende de ver. Sem isto o dry-run só mostra a
+	// distribuição atual, que não diz para onde as linhas vão: 'in_slot -2075'
+	// pode ser 2075 tocadas virando bonus (neutro pra receita, porque a base
+	// financeira é in_slot + bonus) ou virando out_slot (que não fatura nada).
+	// São histórias opostas e o número agregado não as distingue.
+	//
+	// since = 1970: a janela do reconciler é móvel (últimas 48h), mas aqui o
+	// alvo é o histórico INTEIRO. Não usar time.Time{} — o ano 1 estoura o
+	// range de timestamptz em algumas conversões.
+	since := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	drift, err := dr.CountProjectionDrift(ctx, since)
+	if err != nil {
+		log.Fatalf("drift: %v", err)
+	}
+	// CountProjectionDrift varre todas as campanhas; sem --all o alvo é só o
+	// subconjunto carve-out, então filtra pra matriz bater com o que o --apply
+	// realmente vai tocar.
+	target := make(map[uuid.UUID]bool, len(campIDs))
+	for _, id := range campIDs {
+		target[id] = true
+	}
+	names := make(map[uuid.UUID]string, len(camps))
+	for _, c := range camps {
+		names[c.id] = c.name
+	}
+	type transition struct{ from, to string }
+	byTransition := map[transition]int64{}
+	byCampaign := map[uuid.UUID]int64{}
+	var totalDrift int64
+	for _, d := range drift {
+		if !target[d.CampaignID] {
+			continue
+		}
+		byTransition[transition{d.From, d.To}] += d.N
+		byCampaign[d.CampaignID] += d.N
+		totalDrift += d.N
+	}
+
+	fmt.Printf("\nMUDAM DE CATEGORIA: %d projeções\n", totalDrift)
+	if totalDrift > 0 {
+		trs := make([]transition, 0, len(byTransition))
+		for t := range byTransition {
+			trs = append(trs, t)
+		}
+		sort.Slice(trs, func(i, j int) bool { return byTransition[trs[i]] > byTransition[trs[j]] })
+		fmt.Printf("\n  transição            linhas\n")
+		for _, t := range trs {
+			fmt.Printf("  %-8s -> %-8s %6d\n", t.from, t.to, byTransition[t])
+		}
+		ids := make([]uuid.UUID, 0, len(byCampaign))
+		for id := range byCampaign {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return byCampaign[ids[i]] > byCampaign[ids[j]] })
+		fmt.Printf("\n  por campanha (%d afetadas):\n", len(ids))
+		for _, id := range ids {
+			fmt.Printf("  %6d  %s\n", byCampaign[id], names[id])
+		}
+	}
 
 	if !*apply {
 		fmt.Printf("\nDRY-RUN: nada foi alterado. Rode com --apply (após --apply num CLONE, §4.8) para recategorizar.\n")
 		return
 	}
 
-	dr := catalog.NewDistributionRules(pool)
 	var ok, failed int
 	for _, c := range camps {
 		var err error
@@ -157,11 +244,14 @@ func main() {
 		ok++
 	}
 
-	afterOut, afterOrphan, err := countCats()
+	after, err := countCats()
 	if err != nil {
 		log.Fatalf("count (depois): %v", err)
 	}
-	fmt.Printf("\nDEPOIS: out_date=%d  orphan=%d\n", afterOut, afterOrphan)
-	fmt.Printf("DELTA:  out_date %+d  orphan %+d\n", afterOut-beforeOut, afterOrphan-beforeOrphan)
+	fmt.Printf("\nDEPOIS: %s\n", fmtCats(after))
+	fmt.Printf("DELTA:  in_slot %+d  out_slot %+d  bonus %+d  orphan %+d  out_date %+d\n",
+		after.inSlot-before.inSlot, after.outSlot-before.outSlot,
+		after.bonus-before.bonus, after.orphan-before.orphan,
+		after.outDate-before.outDate)
 	fmt.Printf("APLICADO: %d campanhas ok, %d falharam.\n", ok, failed)
 }
