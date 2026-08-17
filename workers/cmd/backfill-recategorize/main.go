@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -154,12 +156,75 @@ func main() {
 	fmt.Printf("\n=== backfill-recategorize (%d %s) ===\n", len(camps), alvo)
 	fmt.Printf("ANTES:  %s\n", fmtCats(before))
 
+	dr := catalog.NewDistributionRules(pool)
+
+	// Delta ANTES de mutar: CountProjectionDrift é SELECT-only e devolve
+	// exatamente (campanha, from, to, N) — a matriz de transição que a decisão
+	// de alcance retroativo (D9) depende de ver. Sem isto o dry-run só mostra a
+	// distribuição atual, que não diz para onde as linhas vão: 'in_slot -2075'
+	// pode ser 2075 tocadas virando bonus (neutro pra receita, porque a base
+	// financeira é in_slot + bonus) ou virando out_slot (que não fatura nada).
+	// São histórias opostas e o número agregado não as distingue.
+	//
+	// since = 1970: a janela do reconciler é móvel (últimas 48h), mas aqui o
+	// alvo é o histórico INTEIRO. Não usar time.Time{} — o ano 1 estoura o
+	// range de timestamptz em algumas conversões.
+	since := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	drift, err := dr.CountProjectionDrift(ctx, since)
+	if err != nil {
+		log.Fatalf("drift: %v", err)
+	}
+	// CountProjectionDrift varre todas as campanhas; sem --all o alvo é só o
+	// subconjunto carve-out, então filtra pra matriz bater com o que o --apply
+	// realmente vai tocar.
+	target := make(map[uuid.UUID]bool, len(campIDs))
+	for _, id := range campIDs {
+		target[id] = true
+	}
+	names := make(map[uuid.UUID]string, len(camps))
+	for _, c := range camps {
+		names[c.id] = c.name
+	}
+	type transition struct{ from, to string }
+	byTransition := map[transition]int64{}
+	byCampaign := map[uuid.UUID]int64{}
+	var totalDrift int64
+	for _, d := range drift {
+		if !target[d.CampaignID] {
+			continue
+		}
+		byTransition[transition{d.From, d.To}] += d.N
+		byCampaign[d.CampaignID] += d.N
+		totalDrift += d.N
+	}
+
+	fmt.Printf("\nMUDAM DE CATEGORIA: %d projeções\n", totalDrift)
+	if totalDrift > 0 {
+		trs := make([]transition, 0, len(byTransition))
+		for t := range byTransition {
+			trs = append(trs, t)
+		}
+		sort.Slice(trs, func(i, j int) bool { return byTransition[trs[i]] > byTransition[trs[j]] })
+		fmt.Printf("\n  transição            linhas\n")
+		for _, t := range trs {
+			fmt.Printf("  %-8s -> %-8s %6d\n", t.from, t.to, byTransition[t])
+		}
+		ids := make([]uuid.UUID, 0, len(byCampaign))
+		for id := range byCampaign {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return byCampaign[ids[i]] > byCampaign[ids[j]] })
+		fmt.Printf("\n  por campanha (%d afetadas):\n", len(ids))
+		for _, id := range ids {
+			fmt.Printf("  %6d  %s\n", byCampaign[id], names[id])
+		}
+	}
+
 	if !*apply {
 		fmt.Printf("\nDRY-RUN: nada foi alterado. Rode com --apply (após --apply num CLONE, §4.8) para recategorizar.\n")
 		return
 	}
 
-	dr := catalog.NewDistributionRules(pool)
 	var ok, failed int
 	for _, c := range camps {
 		var err error
