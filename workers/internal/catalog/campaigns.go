@@ -460,8 +460,8 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 //     bonus_value = 0 (não existe preço por inserção nesse modo)
 //     insertions  += in_slot + bonus
 //     audience    += (in_slot + bonus) × stations.pmm
-//   - CPM = invested / audience × 1000, calculado no caller (frontend)
-//     pra ter precisão decimal. audience = soma de impressões reais
+//   - CPM = (invested + bonus_value) / audience × 1000, calculado no caller
+//     (frontend) pra ter precisão decimal. audience = soma de impressões reais
 //     (cada inserção em uma emissora vale stations.pmm impressões).
 //   - audience_target: linha espelho da audience trocando stations.pmm pelo
 //     client_station_pmm.pmm_target do cliente dono da campanha (PMM no
@@ -476,9 +476,24 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 // (o mesmo número que o /insights mostra no card "Bonificação").
 //
 // Consequência DESEJADA: `insertions` e `audience`/`audience_target` continuam
-// somando o bônus (a tocada aconteceu, a audiência ouviu). Só o dinheiro muda.
-// Logo o CPM (invested ÷ audience × 1000) CAI — é o "CPM efetivo": impressão
-// gratuita baixa o custo por mil. É como o /insights sempre se comportou.
+// somando o bônus (a tocada aconteceu, a audiência ouviu). Só o "Investimento"
+// exibido muda.
+//
+// O CPM NÃO muda por causa disso (definição do dono, 2026-08-17): o numerador
+// dele é `invested + bonus_value`, não `invested` sozinho.
+//
+//	Investimento = unit_value × in_slot                 (só o que o cliente pagou)
+//	Impactos     = pmm × (in_slot + bonus)              (pago + bônus)
+//	CPM          = (investido + bonificado) ÷ impactos × 1000
+//	             = unit_value × (in_slot + bonus) ÷ impactos × 1000
+//
+// A RAZÃO: o CPM mede a eficiência da MÍDIA ENTREGUE A PREÇO DE TABELA, não a
+// eficiência da negociação. Tocada `bonus` é mídia real que foi ao ar e já está
+// no denominador — tem que estar no numerador ao preço de tabela dela. Com o
+// numerador só do pago, campanha com muito bônus exibiria um CPM artificialmente
+// baixo, incomparável com o de qualquer outra campanha. NÃO "simplifique" isso
+// de volta pra `invested ÷ audience`: o teste
+// TestInsights_FinancialBase_MatchesCampaigns falha se você fizer.
 type CampaignFinancials struct {
 	CampaignID    uuid.UUID `json:"campaign_id"`
 	TotalInvested float64   `json:"total_invested"`

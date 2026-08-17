@@ -30,7 +30,7 @@ codigo-relacionado:
 
 `stations.pmm` é a audiência **total** da emissora: um número global, igual para todo mundo. O **PMM no target** é a audiência **dentro do público-alvo de um cliente específico** naquela emissora — um inteiro por par (cliente, emissora). Serve para responder "quantas pessoas do meu público a campanha impactou", em vez de "quantas pessoas ouviram".
 
-A partir dele saem duas métricas derivadas que aparecem em toda superfície de veiculação: **impactos no target** (`veiculações × pmm_target`) e **CPM no target** (`investido ÷ impactos_no_target × 1000`).
+A partir dele saem duas métricas derivadas que aparecem em toda superfície de veiculação: **impactos no target** (`veiculações × pmm_target`) e **CPM no target** (`(investido + bonificado) ÷ impactos_no_target × 1000`).
 
 ## Modelo
 
@@ -207,8 +207,10 @@ Histórico: até 2026-08-16 este doc defendia a divergência ("cada superfície 
 ### CPM no target é sempre dinâmico
 
 ```
-cpm_target = investido_executado ÷ impactos_no_target × 1000
+cpm_target = (investido_executado + bonificação) ÷ impactos_no_target × 1000
 ```
+
+O numerador é o MESMO do CPM cheio — muda só o denominador (`pmm_target` no lugar de `pmm`). A bonificação entra nele de propósito: o CPM mede a **eficiência da mídia entregue a preço de tabela**, não a da negociação, e a tocada de bônus já está no denominador (impactos no target também conta `in_slot + bonus`). Ver [insights-dashboard.md §"O numerador do CPM inclui a bonificação"](insights-dashboard.md).
 
 **Inclusive em campanha com `fixed_cpm`.** O CPM fixo ([campaign-fixed-cpm.md](campaign-fixed-cpm.md)) é contratado sobre a **audiência total**; aplicá-lo ao recorte de público-alvo produziria um número sem significado comercial. Vale tanto no backend (`insights.Compute`) quanto no frontend (`CampaignFinancials` em `CampaignsPage.jsx`).
 

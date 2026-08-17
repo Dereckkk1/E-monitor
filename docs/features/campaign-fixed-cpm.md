@@ -17,11 +17,11 @@ codigo-relacionado:
 
 # CPM fixo por campanha
 
-Campo opcional no Step 6 (Pricing) do wizard de campanha que trava o CPM exibido em `/campaigns`, `/insights` e dashboard. Quando vazio, todas essas telas seguem o cálculo dinâmico padrão. Quando preenchido, vira a fonte de verdade nas telas de exibição — útil para campanhas com CPM consolidado pré-acordado em que o número derivado de `executado / impactos × 1000` distorce o que foi realmente contratado.
+Campo opcional no Step 6 (Pricing) do wizard de campanha que trava o CPM exibido em `/campaigns`, `/insights` e dashboard. Quando vazio, todas essas telas seguem o cálculo dinâmico padrão. Quando preenchido, vira a fonte de verdade nas telas de exibição — útil para campanhas com CPM consolidado pré-acordado em que o número derivado de `(executado + bonificado) / impactos × 1000` distorce o que foi realmente contratado.
 
 ## Por que existe
 
-CPM dinâmico = `(investido_executado / impactos) × 1000`. Funciona bem quando o pricing por emissora é granular e cada inserção é cobrada individualmente. Para campanhas "pacote fechado" (consolidated) com várias emissoras de PMM heterogêneo, o número derivado fica longe do CPM comercial acordado: a média ponderada por impactos sobrevaloriza emissoras grandes, e bonificações/extras distorcem o denominador. O cliente recebe um relatório com CPM que não bate com o do contrato.
+CPM dinâmico = `((investido_executado + bonificação) / impactos) × 1000` — o numerador soma as duas parcelas de propósito (ver abaixo). Funciona bem quando o pricing por emissora é granular e cada inserção é cobrada individualmente. Para campanhas "pacote fechado" (consolidated) com várias emissoras de PMM heterogêneo, o número derivado fica longe do CPM comercial acordado: a média ponderada por impactos sobrevaloriza emissoras grandes, e bonificações/extras distorcem o denominador. O cliente recebe um relatório com CPM que não bate com o do contrato.
 
 Solução: deixa o operador travar o CPM da campanha quando faz sentido, e mantém o dinâmico como default para o resto.
 
@@ -29,11 +29,26 @@ Solução: deixa o operador travar o CPM da campanha quando faz sentido, e mant�
 
 | Tela | Comportamento sem `fixed_cpm` | Com `fixed_cpm` |
 |---|---|---|
-| `/campaigns` (row badge `CPMBadge`) | `(invested / audience) × 1000` por campanha | Mostra `fixed_cpm`, badge ganha sufixo `(fixo)`, tooltip explica que o dinâmico seria X |
-| `/dashboard` (KPI por campanha ativa) | `(invested / audience) × 1000` por campanha | Mostra `fixed_cpm`, label vira `CPM (fixo)`, tooltip mostra dinâmico |
-| `/insights` (KPI agregado) | `Σ executado / Σ impactos × 1000` | Média ponderada por impactos: `Σ(per_campaign_cpm × impactos) / Σ(impactos)` onde `per_campaign_cpm = COALESCE(fixed_cpm, dynamic_cpm)` |
+| `/campaigns` (row badge `CPMBadge`) | `((invested + bonus_value) / audience) × 1000` por campanha | Mostra `fixed_cpm`, badge ganha sufixo `(fixo)`, tooltip explica que o dinâmico seria X |
+| `/dashboard` (KPI por campanha ativa) | `((invested + bonus_value) / audience) × 1000` por campanha | Mostra `fixed_cpm`, label vira `CPM (fixo)`, tooltip mostra dinâmico |
+| `/insights` (KPI agregado) | `(Σ executado + Σ bonificação) / Σ impactos × 1000` | Média ponderada por impactos: `Σ(per_campaign_cpm × impactos) / Σ(impactos)` onde `per_campaign_cpm = COALESCE(fixed_cpm, dynamic_cpm)` |
 
 Investido contratado/executado, bonificação, breakdown de veiculações e demais KPIs **não** são alterados — continuam refletindo o pricing real por emissora. Só o CPM exibido muda.
+
+### O numerador do CPM dinâmico soma investido + bonificado
+
+> **Definição do dono, confirmada (2026-08-17):** *"valor investido: só o que o cliente pagou — impactos: o que o cliente pagou + o que veio de bônus — CPM: valor investido + valor bonificado dividido pelos impactos"*.
+
+```
+CPM dinâmico = (investido + bonificado) ÷ impactos × 1000
+             = unit_value × (in_slot + bonus) ÷ (pmm × (in_slot + bonus)) × 1000
+```
+
+**A razão:** o CPM mede a **eficiência da mídia entregue a preço de tabela**, não a eficiência da negociação. A veiculação de bônus foi ao ar e já está no denominador (impactos = `pmm × (in_slot + bonus)`), então tem que estar no numerador ao preço de tabela dela. Numerador só com o valor pago faria uma campanha com muito bônus exibir um CPM artificialmente baixo — justamente incomparável com o das outras, que é o oposto do que o CPM serve. Detalhes e medição: [insights-dashboard.md §"O numerador do CPM inclui a bonificação"](insights-dashboard.md).
+
+Isso vale também para a dica de **"o CPM dinâmico seria X"** que aparece nos tooltips de campanha com `fixed_cpm`: ela usa a fórmula corrigida.
+
+No **slow path** do `/insights` (o que roda quando alguma campanha da seleção tem `fixed_cpm`), o numerador por campanha é montado do mesmo jeito nos dois modos de pricing: `pi_executado + pi_bonus` em `per_insertion`, `cv × (LEAST(1, entregue ÷ plano_cheio) + bônus ÷ plano_cheio)` em `consolidated`. Sem isso, ligar um `fixed_cpm` em UMA campanha mudaria o CPM de todas as outras da seleção.
 
 ## API
 
@@ -44,7 +59,7 @@ Investido contratado/executado, bonificação, breakdown de veiculações e dema
 ### Endpoints
 
 - `GET /campaigns/{id}` — retorna `fixed_cpm` no payload.
-- `GET /campaigns/financials[?ids=<uuid>,<uuid>,…]` — cada item inclui `fixed_cpm` ao lado de `total_invested/total_bonus_value/insertions/audience`. **`total_invested` é `unit_value × in_slot`** — desde 2026-08-17 a bonificação (entrega gratuita) saiu dele e vive em `total_bonus_value` (`unit_value × bonus`, só `per_insertion`); `audience` continua incluindo o bônus, então o CPM dinâmico exibido é o *efetivo* e ficou menor que antes. O `?ids=` recorta o agregado às campanhas pedidas (a página atual de `/campaigns`, os cards do dashboard) e é o que torna a rota barata: o custo dominante é a varredura de `daily_play_summary`, que o filtro de carteira do JWT não corta (ele mora no SELECT final, depois do FULL OUTER JOIN da view). Sem `?ids=` o comportamento é o antigo — todas as campanhas do escopo. O recorte é INTERSEÇÃO com a carteira, nunca um bypass. Teto de 200 ids (400 acima disso). Implementação: `catalog.Campaigns.FinancialsByCampaign`, que lê `daily_play_summary_for(MIN(start_date), MAX(end_date), ids)`.
+- `GET /campaigns/financials[?ids=<uuid>,<uuid>,…]` — cada item inclui `fixed_cpm` ao lado de `total_invested/total_bonus_value/insertions/audience`. **`total_invested` é `unit_value × in_slot`** — desde 2026-08-17 a bonificação (entrega gratuita) saiu dele e vive em `total_bonus_value` (`unit_value × bonus`, só `per_insertion`); `audience` continua incluindo o bônus, e **o CPM dinâmico soma as duas parcelas no numerador** (`(total_invested + total_bonus_value) / total_audience × 1000`) — por isso ele NÃO mudou quando o bônus saiu do investido. O `?ids=` recorta o agregado às campanhas pedidas (a página atual de `/campaigns`, os cards do dashboard) e é o que torna a rota barata: o custo dominante é a varredura de `daily_play_summary`, que o filtro de carteira do JWT não corta (ele mora no SELECT final, depois do FULL OUTER JOIN da view). Sem `?ids=` o comportamento é o antigo — todas as campanhas do escopo. O recorte é INTERSEÇÃO com a carteira, nunca um bypass. Teto de 200 ids (400 acima disso). Implementação: `catalog.Campaigns.FinancialsByCampaign`, que lê `daily_play_summary_for(MIN(start_date), MAX(end_date), ids)`.
 - `GET /insights` — `kpis.cpm` já vem com o override aplicado (cálculo no servidor).
 - `PUT /campaigns/{id}/fixed-cpm` — body `{ "fixed_cpm": <number> | null }`. `null` limpa o override. Valores negativos retornam 400.
 

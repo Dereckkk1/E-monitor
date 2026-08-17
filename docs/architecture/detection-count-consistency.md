@@ -165,6 +165,7 @@ duas compartilham a mesma base:
 | Base | Categorias que entram |
 |---|---|
 | Financeira em `/campaigns` e `/insights` | `in_slot` fatura (**Investido**), `bonus` é entrega gratuita (**Bonificação**). Desde 2026-08-17 as DUAS telas partem assim: `/campaigns` expõe `total_invested` (= `unit × in_slot`) e `total_bonus_value` (= `unit × bonus`) separados, espelhando os dois cards do `/insights`. Impactos e inserções continuam somando `in_slot + bonus` nas duas |
+| **CPM** (todas as telas + pós-venda) | `in_slot + bonus` — o numerador **soma as duas parcelas** (`investido + bonificado`), porque o CPM mede a eficiência da mídia entregue a preço de tabela e o bônus já está no denominador. Ver [insights-dashboard.md §"O numerador do CPM inclui a bonificação"](../features/insights-dashboard.md) |
 | Déficit (`daily_play_summary.deficit`) | `max(0, expected − in_slot)` |
 | Nada | `out_slot` — não fatura, não bonifica e **não abate o déficit** |
 

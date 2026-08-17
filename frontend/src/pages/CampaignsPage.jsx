@@ -998,28 +998,44 @@ function CampaignFinancials({ financials, loading, targetLabel = null }) {
   // Enquanto a query de financials não resolveu, reserva o espaço com o
   // esqueleto de mesma forma — evita layout shift quando o valor entra.
   if (loading) return <CampaignFinancialsSkeleton />
-  // Sem pricing cadastrado: nada a mostrar (o slot colapsa após o load).
-  if (!financials || !(financials.total_invested > 0)) return null
 
   const {
-    total_invested: inv, total_insertions: ins, total_audience: aud,
+    total_invested: inv, total_bonus_value: bonusValue = 0,
+    total_insertions: ins, total_audience: aud,
     total_audience_target: audTarget, stations_with_target: withTarget,
     fixed_cpm: fixed,
-  } = financials
+  } = financials ?? {}
+  // NUMERADOR DO CPM = investido + bonificado (definição do dono, 2026-08-17).
+  // "Investido" é só o que o cliente pagou (unit × in_slot); o bônus é entrega
+  // gratuita e vive em total_bonus_value. Mas o CPM mede a eficiência da MÍDIA
+  // ENTREGUE A PREÇO DE TABELA, não a da negociação: a tocada de bônus foi ao ar
+  // e já está no denominador (total_audience conta in_slot + bonus), então tem
+  // que estar no numerador ao preço de tabela dela. Só com o pago, campanha com
+  // muito bônus exibiria um CPM artificialmente baixo, incomparável com o das
+  // outras. Não "simplifique" de volta pra `inv / aud`.
+  const entregue = (inv ?? 0) + (bonusValue ?? 0)
+  // Sem pricing cadastrado: nada a mostrar (o slot colapsa após o load). O gate
+  // é o numerador inteiro — campanha 100% bonificada tem invested 0 e mesmo
+  // assim tem CPM.
+  if (!financials || !(entregue > 0)) return null
+
   // CPM fixo (quando setado na campanha) sobrescreve o cálculo dinâmico, pra
   // refletir o número comercial pré-acordado em vez do derivado de pricing.
-  const dynamicCPM = aud > 0 ? (inv / aud) * 1000 : null
+  const dynamicCPM = aud > 0 ? (entregue / aud) * 1000 : null
   const cpm = fixed != null ? fixed : dynamicCPM
   const isFixed = fixed != null
   // CPM no target é SEMPRE dinâmico — o CPM fixo é contratado sobre a audiência
-  // total, não sobre o recorte de público-alvo.
+  // total, não sobre o recorte de público-alvo. Mesmo numerador do CPM cheio.
   const hasTarget = (withTarget ?? 0) > 0 && audTarget > 0
-  const cpmTarget = hasTarget ? (inv / audTarget) * 1000 : null
+  const cpmTarget = hasTarget ? (entregue / audTarget) * 1000 : null
   const targetSuffix = targetLabel ? ` (${targetLabel})` : ''
+  const entregueTip = bonusValue > 0
+    ? `${_BRL_CAMPAIGN_LIST.format(entregue)} entregues a preço de tabela (${_BRL_CAMPAIGN_LIST.format(inv)} investidos + ${_BRL_CAMPAIGN_LIST.format(bonusValue)} de bonificação)`
+    : _BRL_CAMPAIGN_LIST.format(entregue)
   const cpmTip = isFixed
-    ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. Investimento ${_BRL_CAMPAIGN_LIST.format(inv)} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
+    ? `CPM fixo da campanha: ${_BRL_CAMPAIGN_LIST.format(fixed)}. ${entregueTip} sobre ${ins} inserções (CPM dinâmico seria ${dynamicCPM != null ? _BRL_CAMPAIGN_LIST.format(dynamicCPM) : '—'}).`
     : cpm != null
-      ? `${_BRL_CAMPAIGN_LIST.format(inv)} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
+      ? `${entregueTip} ÷ (${ins} inserções × PMM = ${Math.round(aud).toLocaleString('pt-BR')} impressões) × 1000`
       : ins > 0
         ? 'Emissoras sem PMM cadastrado — CPM indeterminado.'
         : 'Nenhuma inserção realizada ainda — CPM indeterminado.'
@@ -1036,7 +1052,7 @@ function CampaignFinancials({ financials, loading, targetLabel = null }) {
       </span>
       {hasTarget && (
         <span className="campaign-fin-sub"
-              title={`CPM no target${targetSuffix}: ${_BRL_CAMPAIGN_LIST.format(cpmTarget)}, sempre dinâmico (investimento ÷ impactos no target × 1000).`}>
+              title={`CPM no target${targetSuffix}: ${_BRL_CAMPAIGN_LIST.format(cpmTarget)}, sempre dinâmico ((investido + bonificado) ÷ impactos no target × 1000).`}>
           <span className="campaign-fin-sub-label">CPM no target</span> {_BRL_CAMPAIGN_LIST.format(cpmTarget)}
         </span>
       )}

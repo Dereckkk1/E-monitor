@@ -160,8 +160,15 @@ Como funciona:
   qual número é do sistema e qual é da mão.
 - Cada campo mostra `sistema: <valor>` e um **"usar do sistema"** que apaga o
   override.
-- **O CPM não é editável**: é derivado de `valor ÷ impactos × 1000` e recalcula
-  enquanto se digita. Um CPM digitado contradiria os dois números exibidos ao
+- **O CPM não é editável**: é derivado de
+  `(valor entregue + bonificação) ÷ impactos × 1000` e recalcula enquanto se
+  digita — com os overrides do admin já aplicados nas DUAS parcelas. O bônus
+  entra no numerador porque o CPM mede a eficiência da mídia entregue a preço de
+  tabela e a tocada de bônus já está nos impactos do denominador (ver
+  [insights-dashboard.md §"O numerador do CPM inclui a
+  bonificação"](insights-dashboard.md)); em campanha consolidada a bonificação é
+  0 e o valor entregue já embute tudo, então a soma continua correta. Um CPM
+  digitado contradiria os números exibidos ao
   lado dele. `cpm_target` segue a mesma regra, sobre os impactos no target (que
   continuam vindo do sistema — o admin ajusta o total, não o recorte de
   público-alvo).

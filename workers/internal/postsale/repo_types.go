@@ -58,8 +58,9 @@ type BlockRow struct {
 // legítimo (bonificação zerada, por exemplo), então não dá pra usar o valor
 // zero como sentinela.
 //
-// CPM NÃO entra aqui de propósito: é derivado de valor ÷ impactos × 1000. Um CPM
-// digitado à mão contradiria os dois números exibidos ao lado dele.
+// CPM NÃO entra aqui de propósito: é derivado de
+// (valor entregue + bonificação) ÷ impactos × 1000. Um CPM digitado à mão
+// contradiria os números exibidos ao lado dele.
 type KPIOverrides struct {
 	ValorEntregue *float64 `json:"valor_entregue,omitempty"`
 	Impactos      *int64   `json:"impactos,omitempty"`

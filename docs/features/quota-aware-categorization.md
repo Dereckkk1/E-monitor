@@ -213,10 +213,11 @@ Veicular fora da faixa contratada **não fecha a obrigação e não fatura**:
 
 | Consumidor | Antes | Agora |
 |---|---|---|
-| `/insights` — executado / investido / CPM | `in_slot + out_slot` | `in_slot` |
+| `/insights` — executado / investido | `in_slot + out_slot` | `in_slot` |
 | `/campaigns` — investimento (`total_invested`) | `in_slot + bonus` | `in_slot` |
 | `/campaigns` — bonificação (`total_bonus_value`) | não existia (ia dentro do investido) | `bonus` |
 | `/campaigns` — inserções e impactos | `in_slot + bonus` | `in_slot + bonus` (inalterado) |
+| **CPM (as duas telas)** | `in_slot + out_slot` (insights) / `in_slot + bonus` (campaigns) | `in_slot + bonus` **nas duas** — o numerador soma investido + bonificado |
 | `daily_play_summary.deficit` | `expected − in_slot − out_slot` | `expected − in_slot` |
 | `daily_play_summary.bonus` | `GREATEST(0, in_slot − expected) + orphan` | `COUNT(category = 'bonus')` |
 
@@ -234,11 +235,28 @@ fatura — e o déficit continua aberto pra emissora repor.
 > `total_bonus_value` — a identidade `insights.Investido.Executado ==
 > campaigns.TotalInvested` e `insights.Bonificacao.Valor ==
 > campaigns.TotalBonusValue` está travada por `TestInsights_FinancialBase_MatchesCampaigns`.
-> **Efeito colateral desejado:** o CPM do `/campaigns` (numerador `total_invested`,
-> denominador `total_audience` que continua com o bônus) **cai** — é o CPM
-> *efetivo*, impressão de graça baixa o custo por mil. Medido no clone de prod
-> (2026-08-17, 1.076 campanhas): investido agregado 7.433.634 → 6.949.640
-> (−483.994, −6,5%), CPM agregado R$ 6,72 → R$ 6,28.
+> Medido no clone de prod (2026-08-17, 1.076 campanhas): investido agregado
+> 7.433.634 → 6.949.640 (−483.994, −6,5%). Inserções, impactos e impactos no
+> target **não mudaram**.
+
+> **O CPM NÃO acompanha essa queda.** Tirar o bônus do investido é sobre o
+> *dinheiro exibido*; o CPM tem numerador próprio, que soma as duas parcelas:
+>
+> ```
+> Investimento = unit_value × in_slot                 ← só o que o cliente pagou
+> Impactos     = pmm × (in_slot + bonus)              ← pago + bônus
+> CPM          = (investido + bonificado) ÷ impactos × 1000
+> ```
+>
+> **A razão:** o CPM mede a **eficiência da mídia entregue a preço de tabela**,
+> não a eficiência da negociação. A tocada de bônus foi ao ar e já está no
+> denominador, então tem que estar no numerador ao preço de tabela dela. Com o
+> numerador só do pago, campanha com muito bônus exibiria um CPM artificialmente
+> baixo, incomparável com o de qualquer outra — e o CPM existe pra comparar.
+> No clone, o numerador só-do-pago tinha derrubado o CPM agregado de R$ 6,72 pra
+> R$ 6,28; com a fórmula correta ele volta a **R$ 6,7162**. Detalhes e maiores
+> movimentos em [insights-dashboard.md §"O numerador do CPM inclui a
+> bonificação"](insights-dashboard.md).
 
 ### Os números do cliente CAEM — e é correção, não regressão
 
@@ -252,9 +270,11 @@ Quem comparar antes/depois precisa saber de duas quedas somadas:
    dentro da faixa → antes `in_slot = 4`, `bonus = 2`, base **6** pra 4 veiculações;
    agora `in_slot = 2`, `bonus = 2`, base **4**.
 
-Impacto, investido e CPM **diminuem** em campanhas com excedente ou com tocadas
+Impacto e investido **diminuem** em campanhas com excedente ou com tocadas
 fora do horário. Não tente reconciliar com um relatório antigo: o número velho
-estava errado.
+estava errado. O CPM sobe onde os impactos caem (numerador e denominador não
+encolhem juntos) — o que ele NÃO faz é cair junto com o investido, porque a
+bonificação continua no numerador dele.
 
 Documento de pós-venda já enviado **não muda** — o `payload_json` é congelado no
 envio (ver [post-sale.md](post-sale.md)).
