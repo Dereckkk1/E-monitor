@@ -123,9 +123,12 @@ type AgeRangesData struct {
 	R50Plus int64 `json:"r50_plus"`
 }
 
-// Note: extras_orphan aqui usa a definição da view daily_play_summary —
-// é o "bonus" (max(0, in_slot - expected) + orphan), não só orphan puro.
-// Reflete melhor a noção comercial de "mídia ganha".
+// Note: o campo JSON continua se chamando `extras_orphan` por compatibilidade
+// com o frontend, mas o conteúdo é a contagem da categoria `bonus` — a
+// categoria 'orphan' foi renomeada para 'bonus' na migration 0064 e a view
+// daily_play_summary passou a contá-la direto na 0065. É a "mídia ganha": as
+// tocadas dentro da faixa que excederam a cota do dia + as sem plano nenhum.
+// (out_slot NÃO entra aqui nem no investido — D3: não vale nada.)
 type VeiculacoesBreakdownData struct {
 	InSlot       int64 `json:"in_slot"`
 	OutSlot      int64 `json:"out_slot"`
@@ -402,7 +405,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		           COUNT(*) FILTER (WHERE f.category='in_slot')::bigint  AS in_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_slot')::bigint AS out_slot_n,
 		           COUNT(*) FILTER (WHERE f.category='out_date')::bigint AS out_date_n,
-		           COUNT(*) FILTER (WHERE f.category='orphan')::bigint   AS orphan_n
+		           COUNT(*) FILTER (WHERE f.category='bonus')::bigint    AS bonus_n
 		    FROM filt f
 		    GROUP BY f.station_id, f.client_id
 		),
@@ -446,7 +449,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    COALESCE(SUM(in_slot_n),  0)::bigint AS sum_in,
 		    COALESCE(SUM(out_slot_n), 0)::bigint AS sum_out,
 		    COALESCE(SUM(out_date_n), 0)::bigint AS sum_outdate,
-		    COALESCE(SUM(orphan_n),   0)::bigint AS sum_orphan
+		    COALESCE(SUM(bonus_n),    0)::bigint AS sum_bonus
 		FROM joined
 	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
 
@@ -472,10 +475,16 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 // (YYYY-MM). A decisão é local pra evitar dependência circular com o
 // período computado no Compute() — o teste pode controlar via params.
 //
-// "extras" usa `orphan` puro (não `bonus`), pra evitar double-count com
-// `in_slot` no mesmo gráfico — bonus inclui in_slot-acima-de-expected
-// que já é mostrado em in_slot. Bonificação KPI (no aggregateInvestment)
-// usa bonus separadamente.
+// "extras" conta a categoria `bonus` da tabela (ex-`orphan`, renomeada na
+// migration 0064). No modelo de cota as categorias são disjuntas — cada tocada
+// tem exatamente uma —, então somar `bonus` ao lado de `in_slot` no mesmo
+// gráfico não duplica nada. Antes da 0065 o `bonus` da view era sintetizado
+// (`max(0, in_slot - expected) + orphan`) e sobrepunha o `in_slot`; por isso o
+// gráfico lia `orphan` puro. Bonificação KPI (aggregateInvestment) lê o bonus
+// da view, que agora é a mesma contagem.
+//
+// `deficit` usa a fórmula da 0065 (D3): `expected - in_slot`, sem abater
+// out_slot — tocada fora da faixa não fecha a obrigação do dia.
 //
 // A CTE `agg` lê daily_play_summary_for(from, to, campaigns) (migration 0052,
 // Task 13) em vez da view — pushdown, byte-idêntico ao original. As leituras
@@ -502,12 +511,14 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		           SUM(in_slot)::int   AS in_slot,
 		           SUM(out_slot)::int  AS out_slot,
 		           SUM(out_date)::int  AS out_date,
-		           GREATEST(0, SUM(expected) - SUM(in_slot) - SUM(out_slot))::int AS deficit
+		           -- D3: out_slot NÃO abate o contrato — tocada fora da faixa não
+			           -- fecha a obrigação. Mesma fórmula da view (migration 0065).
+			           GREATEST(0, SUM(expected) - SUM(in_slot))::int AS deficit
 		    FROM daily_play_summary_for($2::date, $3::date, $1::uuid[])
 		    WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		),
-		orphan AS (
+		bonus AS (
 		    SELECT %s AS bucket,
 		           COUNT(*)::int AS extras
 		    FROM detection_attributions d
@@ -516,20 +527,20 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		      -- filtrava retracted_at, deixando ignoradas/audit_rejected inflarem
 		      -- os "extras" do gráfico vs o resto do sistema.
 		      AND `+ApprovedDetectionsFilter+`
-		      AND d.category = 'orphan'
+		      AND d.category = 'bonus'
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		)
-		SELECT COALESCE(a.bucket, o.bucket) AS bucket,
+		SELECT COALESCE(a.bucket, b.bucket) AS bucket,
 		       COALESCE(a.programado, 0),
 		       COALESCE(a.in_slot,    0),
 		       COALESCE(a.out_slot,   0),
 		       COALESCE(a.out_date,   0),
 		       COALESCE(a.deficit,    0),
-		       COALESCE(o.extras,     0)
+		       COALESCE(b.extras,     0)
 		FROM agg a
-		FULL OUTER JOIN orphan o ON a.bucket = o.bucket
+		FULL OUTER JOIN bonus b ON a.bucket = b.bucket
 		ORDER BY bucket
 	`, summaryBucket, detectionBucket)
 
@@ -569,14 +580,20 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 //
 //   - contratado  = Σ_type (unit_value × expected)
 //
-//   - executado   = Σ_type (unit_value × (in_slot+out_slot))
+//   - executado   = Σ_type (unit_value × in_slot)
 //
 //   - bonificação = Σ_type (unit_value × bonus)
 //
-// "bonus" é o campo da view daily_play_summary que inclui orphan +
-// (in_slot acima do expected). Esse é o sentido comercial de "mídia
-// ganha" — alinha com a decisão da spec de incluir extras na bonificação.
-// Bonificação count usa bonus diretamente (não orphan_count puro).
+// D3 (modelo de cota, migrations 0063–0065): `out_slot` NÃO entra no executado
+// em nenhum dos dois modos. Tocada fora da faixa contratada não vale nada — não
+// fatura como entrega nem como bônus, e deixa o déficit do dia aberto pra
+// emissora repor. Até a Task 7 o executado somava `in_slot + out_slot`, ou seja,
+// cobrava do cliente uma veiculação fora do horário comprado.
+//
+// "bonus" é o campo da view daily_play_summary, que desde a 0065 é a contagem
+// direta da categoria `bonus` gravada pelo categorizador (excedente da cota
+// dentro da faixa + tocada sem plano). Esse é o sentido comercial de "mídia
+// ganha". Bonificação count usa bonus diretamente.
 func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (InvestidoK, BonificacaoK, error) {
 	row := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
@@ -591,8 +608,8 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		-- deflaciona (não precisa de clamp de "hoje").
 		cs_window AS (
 		    SELECT s.campaign_id, s.station_id,
-		           SUM(s.in_slot + s.out_slot)::bigint  AS executed,
-		           SUM(s.bonus)::bigint                 AS bonus
+		           SUM(s.in_slot)::bigint  AS executed,
+		           SUM(s.bonus)::bigint    AS bonus
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
@@ -613,9 +630,9 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		),
 		cs_per_ins AS (
 		    SELECT s.campaign_id, s.station_id,
-		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric                AS pi_contratado,
-		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado,
-		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric                  AS pi_bonus
+		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric AS pi_contratado,
+		           COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric  AS pi_executado,
+		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric    AS pi_bonus
 		    FROM daily_play_summary s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
@@ -753,7 +770,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    LEFT JOIN (
 		        -- numerador: entregue na janela [from,to]
 		        SELECT s.campaign_id, s.station_id,
-		               SUM(s.in_slot + s.out_slot)::bigint AS executed
+		               SUM(s.in_slot)::bigint AS executed
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
@@ -772,7 +789,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    ) pl ON pl.campaign_id = csp.campaign_id AND pl.station_id = csp.station_id
 		    LEFT JOIN (
 		        SELECT s.campaign_id, s.station_id,
-		               COALESCE(SUM(tp.unit_value * (s.in_slot + s.out_slot)), 0)::numeric AS pi_executado
+		               COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric AS pi_executado
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        JOIN campaign_station_type_pricing tp

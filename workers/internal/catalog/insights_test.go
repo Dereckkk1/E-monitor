@@ -313,7 +313,11 @@ func TestInsights_AggregateCore_ImpactosAndDemographics(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
 	}
-	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+	// 'bonus' é a categoria do excedente/sem-plano desde 0064 ('orphan' era o
+	// nome antigo). O breakdown do /insights conta essa categoria — semear
+	// 'orphan' aqui deixava o teste verde só porque a query também procurava
+	// 'orphan'; os dois lados errados de forma consistente.
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-12")
 
 	from := parseDate("2026-06-01")
 	to := parseDate("2026-06-30")
@@ -368,8 +372,8 @@ func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
 	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-06-10")
 	// dia 11: 1 out_slot
 	insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-11")
-	// dia 12: 1 orphan
-	insSeedDetection(t, ctx, pool, camp, mat, st, "orphan", "2026-06-12")
+	// dia 12: 1 bonus (ex-'orphan', renomeada na 0064) → vira "extras" no gráfico
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-12")
 
 	buckets, gran, err := repo.aggregateBuckets(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
@@ -389,7 +393,13 @@ func TestInsights_AggregateBuckets_DailyGranularity(t *testing.T) {
 	if buckets[0].Bucket != "2026-06-10" || buckets[0].InSlot != 2 || buckets[0].Programado != 1 {
 		t.Errorf("day 10: %+v", buckets[0])
 	}
-	// 12: programado=1, extras=1 (orphan), deficit=1 (1-0-0)
+	// 11: programado=1, out_slot=1, deficit=1. D3 (0065 + Task 7): out_slot NÃO
+	// abate o contrato — antes era max(0, 1-0-1) = 0 e o dia aparecia cumprido
+	// mesmo tendo tocado só fora da faixa contratada.
+	if buckets[1].Bucket != "2026-06-11" || buckets[1].OutSlot != 1 || buckets[1].Deficit != 1 {
+		t.Errorf("day 11: %+v (out_slot não pode abater o déficit)", buckets[1])
+	}
+	// 12: programado=1, extras=1 (bonus), deficit=1 (1-0)
 	if buckets[2].Bucket != "2026-06-12" || buckets[2].Extras != 1 || buckets[2].Deficit != 1 {
 		t.Errorf("day 12: %+v", buckets[2])
 	}
@@ -1152,6 +1162,87 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 	}
 	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
 		t.Errorf("investido = %v, want ~430 (400 pacote + 30 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	}
+}
+
+// PARIDADE DA BASE FINANCEIRA /insights × /campaigns (Task 7).
+//
+// Depois da Task 7 as duas telas leem a MESMA base — `in_slot + bonus` —, só
+// que apresentada diferente: o /campaigns soma tudo num `total_invested`, e o
+// /insights parte em dois KPIs (Investido = in_slot, Bonificação = bonus). A
+// identidade que trava isso é:
+//
+//	insights.Investido.Executado + insights.Bonificacao.Valor == campaigns.TotalInvested
+//
+// O fixture tem UMA tocada out_slot de propósito: ela não pode aparecer em
+// nenhum dos dois lados (D3 — tocada fora da faixa contratada não vale nada).
+// Se o /insights voltasse a faturar out_slot como entrega, o Executado subiria
+// de 30 pra 40 e a soma estouraria o total do /campaigns.
+//
+// As duas telas só batem porque a janela do /insights aqui é a campanha
+// INTEIRA: o /insights é período-aware e o /campaigns não (whole-campaign).
+// Filtrar um sub-período no /insights legitimamente diverge do /campaigns —
+// não é bug, é escopo diferente.
+func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+	campaignsRepo := NewCampaigns(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	st := insSeedStation(t, ctx, pool, "RX", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, st, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, st, typeID, 10.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, st,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+
+	// 3 in_slot (dias 1–3) + 1 bonus (excedente do dia 1) + 1 out_slot (dia 4).
+	for d := 1; d <= 3; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+	insSeedDetection(t, ctx, pool, camp, mat, st, "bonus", "2026-06-01")
+	insSeedDetection(t, ctx, pool, camp, mat, st, "out_slot", "2026-06-04")
+
+	today := parseDate("2026-07-15")
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"),
+		Today: today, StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, []uuid.UUID{camp}, today)
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign: %v", err)
+	}
+	if len(fins) != 1 {
+		t.Fatalf("FinancialsByCampaign devolveu %d linhas, want 1", len(fins))
+	}
+
+	// Executado = unit × in_slot = 10 × 3 = 30 (NÃO 40: o out_slot do dia 4 não
+	// fatura). Bonificação = unit × bonus = 10 × 1 = 10.
+	if !approxEq(out.KPIs.Investido.Executado, 30, 0.01) {
+		t.Errorf("insights executado = %v, want 30 (10 × 3 in_slot; out_slot não fatura)", out.KPIs.Investido.Executado)
+	}
+	if !approxEq(out.KPIs.Bonificacao.Valor, 10, 0.01) {
+		t.Errorf("insights bonificação = %v, want 10 (10 × 1 bonus)", out.KPIs.Bonificacao.Valor)
+	}
+	// /campaigns: unit × (in_slot + bonus) = 10 × 4 = 40.
+	if !approxEq(fins[0].TotalInvested, 40, 0.01) {
+		t.Errorf("campaigns total_invested = %v, want 40 (10 × (3 in_slot + 1 bonus))", fins[0].TotalInvested)
+	}
+	base := out.KPIs.Investido.Executado + out.KPIs.Bonificacao.Valor
+	if !approxEq(base, fins[0].TotalInvested, 0.01) {
+		t.Errorf("base financeira divergiu: insights (executado %v + bonificação %v = %v) × campaigns %v",
+			out.KPIs.Investido.Executado, out.KPIs.Bonificacao.Valor, base, fins[0].TotalInvested)
+	}
+	// E o breakdown do /insights tem que ver a mesma coisa: 3/1/0/1.
+	if out.VeiculacoesBreakdown.InSlot != 3 || out.VeiculacoesBreakdown.OutSlot != 1 ||
+		out.VeiculacoesBreakdown.ExtrasOrphan != 1 {
+		t.Errorf("breakdown = %+v, want in_slot 3 / out_slot 1 / extras 1", out.VeiculacoesBreakdown)
 	}
 }
 
