@@ -1,11 +1,14 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-03
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
   - migrations/0019_rules_by_type.up.sql
   - migrations/0043_rule_material_scope.up.sql
+  - migrations/0063_category_bonus_constraint.up.sql
+  - migrations/0064_category_bonus_rename.up.sql
+  - migrations/0065_quota_aware_summary.up.sql
   - workers/internal/api/handlers/distribution_rules.go
   - workers/internal/api/handlers/distribution_overrides.go
   - workers/internal/api/handlers/materials.go
@@ -58,22 +61,41 @@ Override tem precedencia sobre regras na view `daily_play_summary` — se ha ove
 
 ## Categorias de detection
 
-Cada detection e classificada em uma das 4 categorias (`detections.category` — migration 0018):
+Cada detection e classificada em uma das 4 categorias (`detections.category` —
+migration 0018, categoria `bonus` desde a 0063/0064):
 
 | Categoria | Significado | Cor na UI |
 |-----------|-------------|-----------|
-| `in_slot`  | Tocou dentro da faixa horaria de uma regra aplicavel | Verde |
-| `out_slot` | Tocou na data, mas fora da faixa horaria | Amarelo |
-| `out_date` | Tocou fora da data da campanha | Roxo |
-| `orphan`   | Tocou sem regra aplicavel (bonus puro) | Azul |
+| `in_slot`  | Preencheu uma vaga da meta do dia, tocando dentro de alguma faixa valida | Verde |
+| `out_slot` | Tocou fora da faixa **enquanto a meta do dia ainda nao fechou dentro dela** | Amarelo |
+| `out_date` | Tocou fora do periodo da campanha (ou, em carve-out, fora do periodo das regras do material) | Roxo |
+| `bonus`    | Excedeu a meta do dia, ou tocou num dia/celula sem meta — bonificacao | Azul |
+
+> **A regra canonica de categorizacao mudou em 2026-08-17.** Ela deixou de ser
+> "por tocada, sem estado" e passou a ser um **fechamento por cota da celula-dia**
+> (campanha × tipo × emissora × dia local SP): as N primeiras tocadas dentro de
+> faixa preenchem a meta, o excedente vira `bonus`, e `out_slot` so existe
+> enquanto a meta nao fechou dentro da faixa. A regra completa, a tabela-verdade,
+> os dois motores que precisam concordar e o efeito financeiro estao em
+> **[quota-aware-categorization.md](../features/quota-aware-categorization.md)** —
+> esse doc e a autoridade sobre categoria; este aqui cobre as regras/overrides que
+> alimentam a meta.
+>
+> `orphan` era o nome antigo de `bonus` (migration 0064 renomeou o dado). O CHECK
+> ainda aceita o valor legado durante a janela de deploy; quem soma bonificacao
+> lendo `detections` direto usa `categorizer.BonusCategoriesSQL`.
 
 A view `daily_play_summary` agrega por (campaign, material, station, data) e calcula os 6 numeros exibidos:
 - `expected` (cinza) = soma de `plays_per_day` das regras aplicaveis, OU override
-- `in_slot`  (verde) = count(in_slot)
-- `deficit` (vermelho) = max(0, expected - in_slot - out_slot)
-- `bonus`   (azul) = max(0, in_slot - expected) + count(orphan)
+- `in_slot`  (verde) = count(in_slot) — **limitado a `expected` por construcao**
+- `deficit` (vermelho) = max(0, expected - in_slot) — migration 0065: `out_slot` **nao** abate mais o contrato
+- `bonus`   (azul) = count(category = 'bonus') — migration 0065: o categorizador e a fonte unica do bonus
 - `out_slot` (amarelo) = count(out_slot)
 - `out_date` (roxo) = count(out_date)
+
+> Ate a migration 0065 o bonus era sintetizado como `max(0, in_slot - expected) + count(orphan)`,
+> o que **contava a tocada excedente duas vezes** na base financeira `in_slot + bonus`.
+> Corrigido — os numeros de impacto/investido caem em campanhas com excedente.
 
 ## Carve-out por material
 
@@ -102,6 +124,21 @@ Quando uma regra e criada/editada/excluida via API, o handler `DistributionRules
 
 A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_rules.go` — sem N+1 queries. Para uma campanha inteira leva milissegundos mesmo com centenas de milhares de detections.
 
+> **Expansao de escopo (obrigatoria desde 2026-08-17).** Com o fechamento por cota,
+> o veredito de uma tocada depende de **todas** as tocadas da celula-dia. Por isso a
+> CTE `recatClassifiedCTE` **expande o escopo recebido pras celulas-dia completas** e
+> recarrega o conjunto aprovado delas antes de classificar — mesmo quando o gatilho
+> foi uma unica celula (override) ou um unico material. Consequencia deliberada: o
+> recat **reescreve mais linhas do que o escopo pediu**. Classificar um escopo
+> parcial linha a linha produziria cota errada. Vale pra `RecategorizeForRule`,
+> `ForCampaign`, `ForMaterial`, `ForOverride`, `HealProjectionDrift` e
+> `HealProjectionDriftForCampaign`.
+>
+> O recat tambem passou a **filtrar pelo conjunto aprovado**
+> (`ApprovedDetectionsFilter`): tocada retratada/ignorada/`audit_rejected`/`ambiguous`
+> nao consome vaga na cota e nao tem a categoria reescrita. Sem isso o motor SQL
+> divergiria do Go em toda celula-dia que tivesse uma.
+
 ### Gatilho por override (create/edit/delete)
 
 Criar, editar ou apagar um override (`PUT`/`DELETE /distribution-overrides`) também dispara re-categorizacao — `DistributionOverridesHandler.Upsert`/`Delete` chamam `RecategorizeForOverride(campaignID, typeID, stationID, forDate)` em goroutine best-effort (mesmo padrao do handler de regra: sem bloquear a resposta, sem retry se falhar). O escopo e a **celula exata** (campanha + tipo + emissora + dia), via `recategorizeScope` com `stationIDs=[stationID]` e `from=to=forDate` — nao a campanha inteira.
@@ -110,11 +147,11 @@ Isso fecha uma lacuna que existia antes: mudar um override só trocava o `expect
 
 ### Gatilho por troca de tipo do material (não só por rule)
 
-A categoria é casada por **tipo** (`r.type_id = material.type_id`), então mudar o `type_id` de um material também invalida a categoria gravada das detections dele — calculada no insert com o tipo antigo. Sem recategorizar, uma detection que passa a casar uma regra do tipo novo continua `orphan` e some pra "bônus (sem regra)" no resumo diário.
+A categoria é casada por **tipo** (`r.type_id = material.type_id`), então mudar o `type_id` de um material também invalida a categoria gravada das detections dele — calculada no insert com o tipo antigo. Sem recategorizar, uma detection que passa a casar uma regra do tipo novo continua `bonus` e some pra "bonificação (sem meta)" no resumo diário.
 
 Por isso `PATCH /materials/{id}/type` (`MaterialsHandler.UpdateType`) dispara `RecategorizeForMaterial(materialID)` em goroutine best-effort após o `UPDATE` do `type_id`. Esse método recategoriza **todas as detections do material, em todas as campanhas** onde ele aparece (scope `d.commercial_id = $materialID`, sem filtro de campanha). Como o scope resolve `m.type_id` ao vivo (JOIN materials), rodar após o update reclassifica contra as regras do tipo atual.
 
-`RecategorizeForMaterial` e `recategorizeScope` compartilham o mesmo trecho de classificação SQL (`recatClassifyTailSQL`) — fonte única pra regra de tolerância de 15 min, evitando divergência entre os dois caminhos. O frontend (`useUpdateMaterialTypeId`) invalida `daily-summary` + `detections` no sucesso pra UI refletir a nova categoria sem reload.
+`RecategorizeForMaterial` e `recategorizeScope` compartilham o mesmo trecho de classificação SQL (`recatClassifiedCTE`, aplicado por `runRecat`/`applyRecat` — o antigo `recatClassifyTailSQL` deixou de existir) — fonte única pra regra de tolerância de 15 min e pro fechamento por cota, evitando divergência entre os dois caminhos. O frontend (`useUpdateMaterialTypeId`) invalida `daily-summary` + `detections` no sucesso pra UI refletir a nova categoria sem reload.
 
 > Bug corrigido em 2026-06-17: material trocava de tipo e as veiculações viravam todas "bônus" mesmo com regra existindo pro tipo novo — porque o `UpdateType` só trocava a coluna, sem recategorizar.
 
@@ -124,11 +161,15 @@ A faixa horária das rules é comparada com folga de **±900 segundos (15 min)**
 
 A tolerância existe pra absorver jitter de stream (buffer + atraso de programação ao vivo) — o operador entende "tocou às 6h" mesmo quando o trecho real veiculou às 05:45.
 
+A tolerância é o **teste booleano "dentro da faixa"** do fechamento por cota — ela decide se a tocada disputa vaga na meta, não se a vaga existe. `settle_parity_test.go` trava os limites exatos (900 e 901 s nos dois extremos) nos dois motores.
+
 Antes deste fix (2026-05-26), o SQL usava `BETWEEN r.time_start AND r.time_end` direto: detections que o Go categorizer tinha marcado `in_slot` viravam `out_slot` na primeira recategorize disparada por criação/edição de rule. Sintoma reportado pelo operador: "a tolerância não está funcionando, contagem some quando edito a regra".
 
 ### Leitura no modal — por que ficou fora
 
 O `DayDetailModal` da página `/detections` (bloco "Plano do dia", `DayPlan` em `frontend/src/components/DayDetailModal.jsx`) reconstrói no cliente qual janela **governa** aquela célula naquele dia, pra explicar visualmente o `out_slot` — em vez de deixar o operador adivinhar por que uma tocada não contou como `in_slot`.
+
+> **Desde 2026-08-17 isso é só apresentação.** O `buildDayPlan` não deriva mais veredito nenhum: ele reparte, entre as tocadas que o backend **já** rotulou `in_slot`, qual faixa credita cada uma, só pra desenhar a barra de progresso. A categoria vem sempre de `det.category`/`cellSummary`. A meta é da célula inteira, não por faixa — o cliente não teria como reconstruir a ordem cronológica global. Ver [detections-day-plan.md](../features/detections-day-plan.md).
 
 - Quando existe override pra (tipo, emissora, dia), ele **precede** a(s) regra(s) — igual à semântica do backend (`daily_play_summary` / `recategorizeScope`). O modal mostra essa janela como uma faixa **"ajuste do dia"** (selo âmbar) em vez das faixas de regra, com o texto "substitui a regra nesta emissora".
 - A frase de rodapé que explica o `out_slot` (`"{N} tocou fora da faixa {janela} ({origem}) — conta como fora do prazo."`) nomeia explicitamente qual janela é a culpada — `ajuste do dia` quando há override, `da regra` caso contrário — em vez de só mostrar o número. Isso é a raiz do incidente que motivou esta branch: uma janela de override mais estreita que a regra fazia veiculações contarem como "fora do prazo" sem nenhuma pista visual de qual janela estava valendo.

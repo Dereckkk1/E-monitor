@@ -1,8 +1,10 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - workers/internal/catalog/detection_filter.go
+  - workers/internal/catalog/distribution_rules.go
+  - migrations/0065_quota_aware_summary.up.sql
   - workers/internal/catalog/detections.go
   - workers/internal/catalog/insights.go
   - workers/internal/catalog/live_map.go
@@ -80,7 +82,7 @@ Toda query que conta/lista `detections` para exibição. `CANÔNICA` = aplica os
 | `detections.go` · `AggregateByMaterialStation` | CSV consolidado | ✅ CANÔNICA | ✅ CANÔNICA |
 | `detections.go` · `AggregateByStation` | PDF por emissora | ✅ CANÔNICA | ✅ CANÔNICA |
 | `insights.go` · `aggregateCore` | **/insights** KPIs/impactos/demografia | ❌ faltava `ignored` | ✅ CANÔNICA |
-| `insights.go` · `aggregateBuckets` (orphan) | **/insights** série temporal (extras) | ❌ faltava `ignored`+`audit_rejected` | ✅ CANÔNICA |
+| `insights.go` · `aggregateBuckets` (extras/bonus) | **/insights** série temporal (extras) | ❌ faltava `ignored`+`audit_rejected` | ✅ CANÔNICA |
 | `insights.go` · `computeCPM` (impactos) | **/insights** CPM/investimento | ❌ faltava `ignored`+`audit_rejected` | ✅ CANÔNICA |
 | `live_map.go` · `queryStations` (MAX) | **/live-map** "última veiculação" | ❌ faltava `retracted` | ✅ CANÔNICA |
 | `live_map.go` · `queryRecentDetections` | /live-map feed | ✅ CANÔNICA | ✅ CANÔNICA |
@@ -110,7 +112,14 @@ Estas **não** aplicam o filtro, por design. Comentadas no código pra ninguém
 | `system_health.go · summarizeDataPipeline` (`LastDetectionAt`, `Detections1h`) | Contadores de **liveness** do pipeline ("o matcher está produzindo saída?"). Uma detecção retratada ainda prova que o pipeline está vivo. Não é tally de veiculação por emissora. |
 | `system_health.go · AuditRejected7d` | Métrica **inversa** proposital (`evidence_status = 'audit_rejected'`) pra visibilidade operacional (incidente 2026-06-12). |
 | `commercials.go` (delete guard `COUNT(*) ... WHERE commercial_id`) | Guard de integridade referencial — bloqueia delete se existir **qualquer** linha (mesmo retratada). É "há linhas?", não "quantas veiculações?". |
-| `distribution_rules.go · recategorizeScope / RecategorizeForMaterial` | `UPDATE` que reclassifica **todas** as linhas do escopo, por design. |
+
+> **Deixou de ser exceção em 2026-08-17:** `distribution_rules.go · recategorizeScope /
+> RecategorizeForMaterial` (e o reconciler `projrecon`) **aplicam** o filtro canônico
+> desde o fechamento por cota. Tinha que mudar: com cota, uma tocada retratada
+> contada no SQL ocuparia vaga que o motor Go (`categorizer.Settle`, alimentado por
+> `loadCellDayPlays`) não conta — os dois motores divergiriam em toda célula-dia que
+> tivesse uma. Efeito: a categoria da linha **não-aprovada não é mais reescrita** pelo
+> recat; ela é regravada quando a linha volta ao conjunto (o refechamento da célula).
 
 ---
 
@@ -137,11 +146,37 @@ contava → 4 vs 2.
 Este doc padroniza **quais linhas contam** (o conjunto aprovado). Um problema
 distinto — e complementar — é garantir que, para uma linha que conta, a
 **categoria** gravada (`detection_campaigns.category`, o que a view
-`daily_play_summary` e a grade exibem como in_slot/out_slot/out_date/orphan)
+`daily_play_summary` e a grade exibem como in_slot/out_slot/out_date/bonus)
 está sempre certa em relação às regras/overrides vivos da campanha. Ver
 [projection-category-invariant.md](projection-category-invariant.md) — inclui
 o caso COPA 10/07, onde a categoria de uma projeção fan-out (F-119) ficou
-`orphan` presa porque o recat só escopava a campanha-base da tocada.
+`orphan` (hoje `bonus`) presa porque o recat só escopava a campanha-base da
+tocada.
+
+A regra que decide a categoria é o fechamento por cota da célula-dia —
+[quota-aware-categorization.md](../features/quota-aware-categorization.md).
+
+## Qual categoria vale dinheiro (base financeira)
+
+Contar as linhas certas não basta: `/campaigns` e `/insights` divergiam também
+porque **davam pesos diferentes às categorias**. Desde 2026-08-17 (decisão D3) as
+duas compartilham a mesma base:
+
+| Base | Categorias que entram |
+|---|---|
+| Financeira em `/campaigns` (Investido) e `/insights` (Investido executado + card Bonificação) | `in_slot + bonus` — o `/insights` mostra as duas parcelas separadas |
+| Déficit (`daily_play_summary.deficit`) | `max(0, expected − in_slot)` |
+| Nada | `out_slot` — não fatura, não bonifica e **não abate o déficit** |
+
+Antes, `/insights` somava `in_slot + out_slot` no executado (faturava veiculação
+fora do horário comprado) e o `bonus` da view re-somava o excedente que já estava
+em `in_slot`. Os números do cliente **caem** — é correção, não regressão.
+
+Contagens brutas continuam existindo e são outra coisa: o PDF de campanha e o CSV
+consolidado somam **todas** as categorias aprovadas (ver
+[client-target-pmm.md](../features/client-target-pmm.md)). Cada tela espelha a
+própria base — não tente reconciliar entre telas sem antes olhar qual base cada
+uma usa.
 
 ## Validação
 
