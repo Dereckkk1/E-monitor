@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-14
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - frontend/src/utils/gridReport.js
   - frontend/src/utils/pdfReport.js
@@ -65,6 +65,17 @@ total por emissora = KPIs).
 grade. Déficit em vermelho, Bônus em azul, **Fora da faixa em âmbar, Fora da
 data em roxo**, espelhando o semáforo da tela (cores de
 [`DayDetailModal.jsx`](../../frontend/src/components/DayDetailModal.jsx)).
+
+O CSV traz também **Impactos** (e **Impactos no target** quando o cliente tem
+cadastro), e o PDF traz os dois na nota de cada emissora. A base é
+`PMM × (Tocou + Bônus)` — `impactBase()` em
+[`gridReport.js`](../../frontend/src/utils/gridReport.js), a **mesma base
+canônica** do `/insights`, `/campaigns` e do CSV consolidado do backend. As
+colunas "Fora da faixa"/"Fora da data" que aparecem ao lado **não** entram nesse
+número. Ver [client-target-pmm.md](client-target-pmm.md).
+
+> **Mudou em 2026-08-17**: era `PMM × Tocou` (só `in_slot`), o que escondia toda a
+> bonificação e fazia este relatório divergir do `/insights` e do `/campaigns`.
 
 ### Material real × tipo (por que existe a linha-título)
 

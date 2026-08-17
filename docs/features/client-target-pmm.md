@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-21
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0054_client_station_pmm.up.sql
   - migrations/0055_client_target_label.up.sql
@@ -10,6 +10,13 @@ codigo-relacionado:
   - workers/internal/api/handlers/client_target_pmm.go
   - workers/internal/catalog/insights.go
   - workers/internal/catalog/campaigns.go
+  - workers/internal/catalog/detections.go
+  - workers/internal/reportcsv/reportcsv.go
+  - workers/internal/api/handlers/reports.go
+  - workers/internal/postsale/snapshot.go
+  - frontend/src/components/DistributionGrid.jsx
+  - frontend/src/utils/gridReport.js
+  - frontend/src/utils/pdfReport.js
   - workers/internal/catalog/detections.go
   - workers/internal/api/handlers/reports.go
   - frontend/src/pages/ClientTargetPmmPage.jsx
@@ -163,22 +170,39 @@ Todas as superfícies **escondem o bloco "no target"** quando não há cadastro 
 
 | Superfície | O que mostra | Base de contagem |
 |---|---|---|
-| `/insights` | cards **Impactos no target** (com sub "X de Y emissoras") e **CPM no target** | detecções aprovadas |
-| `/detections` (grid) | pill **teal** na coluna-total por emissora, abaixo da pill de impactos | Σ `in_slot` |
+| `/insights` | cards **Impactos no target** (com sub "X de Y emissoras") e **CPM no target** | `in_slot + bonus` |
+| `/detections` (grid) | pill **teal** na coluna-total por emissora, abaixo da pill de impactos | `in_slot + bonus` |
 | `/reports/airtime` | pill **teal** por linha, empilhada na mesma célula do PMM | — (é o `pmm_target` cru, não impactos) |
-| `/campaigns` (bloco financeiro) | **Impactos**, **Impactos no target**, **CPM no target** | `in_slot + bonus` |
+| `/campaigns` + `/dashboard` (bloco financeiro) | **Impactos**, **Impactos no target**, **CPM no target** | `in_slot + bonus` |
 | CSV detalhado (`/detections/export`) | coluna `PMM no target` | — (valor cru) |
-| CSV consolidado (`/reports/consolidated`) | `PMM`, `Impactos`, `PMM no target`, `Impactos no target` | detecções aprovadas |
-| PDF de campanha | KPIs `Impactos` / `Impactos no target` + colunas na tabela "Por emissora" | detecções aprovadas |
-| CSV/PDF da grade (WYSIWYG de `/detections`) | coluna `Impactos` (sempre) + `Impactos no target` (só com cadastro) | Σ `in_slot` |
+| CSV consolidado (`/reports/consolidated`) | `PMM`, `Impactos`, `PMM no target`, `Impactos no target` | `in_slot + bonus` |
+| PDF de campanha | KPIs `Impactos` / `Impactos no target` + colunas na tabela "Por emissora" | `in_slot + bonus` |
+| CSV/PDF da grade (WYSIWYG de `/detections`) | coluna `Impactos` (sempre) + `Impactos no target` (só com cadastro) | `in_slot + bonus` |
+| Pós-venda (documento do cliente + zip) | KPIs `Impactos` / `Impactos no target` / `CPM` | `in_slot + bonus` (reusa `Insights.Compute`) |
 
 ### Exceção à regra de esconder
 
 A coluna/linha **"Impactos"** (sem target) é **nova para todos os clientes** em `/campaigns`, no CSV consolidado, no PDF de campanha e no CSV/PDF da grade — pedido explícito do dono. Só o bloco **"no target"** é condicional.
 
-### Base de contagem: cada tela espelha a própria base
+### Base de contagem: UMA base, em todo o produto (2026-08-17)
 
-`/insights` conta **todas as detecções aprovadas**; `/campaigns` conta **`in_slot + bonus`** (via `daily_play_summary`); a grade conta **Σ `in_slot`**. Essa divergência é **anterior a esta feature** — ver [detection-count-consistency.md](../architecture/detection-count-consistency.md). A regra adotada foi **espelhar a base de cada tela**: impactos e impactos-no-target da MESMA tela usam sempre o mesmo denominador de veiculações, então os dois números são comparáveis entre si. Não tente reconciliar o "Impactos no target" de `/insights` com o de `/campaigns` — eles nunca vão bater, pelo mesmo motivo que os totais de veiculação já não batem.
+```
+Impactos          = pmm         × (in_slot + bonus)
+Impactos no target = pmm_target × (in_slot + bonus)
+```
+
+**Essa é a base canônica, em toda tela e todo exportável.** `/insights`, `/detections`, `/campaigns`, `/dashboard`, PDF de campanha, CSV consolidado, CSV/PDF da grade e o pós-venda devolvem o MESMO número para a mesma campanha no mesmo período. Se dois deles divergirem, é bug — abra ticket.
+
+Por que `in_slot + bonus` e não outra coisa:
+
+- É a base que **fatura**. `/campaigns` sempre usou ela (`total_invested`, `total_insertions`, `total_audience`), e no `/insights` "Investido (executado)" (= `in_slot`) + "Bonificação" (= `bonus`) somam exatamente esse conjunto. A identidade está travada por teste: `TestInsights_FinancialBase_MatchesCampaigns`, que desde 2026-08-17 também assere `insights.Impactos == campaigns.TotalAudience`.
+- `out_slot` **não vale nada comercialmente** (decisão D3 de [quota-aware-categorization.md](quota-aware-categorization.md)): não fatura e não abate déficit. Apresentar como impacto entregue seria cobrar audiência de uma tocada que o próprio sistema diz que não conta.
+- `out_date` está **fora do período contratado** — não é entrega dessa campanha.
+- `in_slot` sozinho **esconde entrega real**: com a categorização por cota, o excedente dentro da faixa vira `bonus`. O backfill da cota moveu 8.029 veiculações de `in_slot` para `bonus`; a grade, que contava só `in_slot`, perdeu esse impacto da noite pro dia (era a causa de `/detections` mostrar 2.620 K onde `/insights` mostrava 13.969 K na campanha 189).
+
+**A grade continua mostrando as 4 categorias separadas nas pills de veiculação** — de propósito. A pergunta da grade é "cumpriu a cota do dia?", que é outra pergunta; só o número de **impacto** foi padronizado.
+
+Histórico: até 2026-08-16 este doc defendia a divergência ("cada superfície espelha a base da sua tela de origem") e afirmava que `/insights` e `/campaigns` nunca bateriam. **Essa decisão foi revertida.** O dono conferiu à mão e as três telas davam três números para a mesma palavra. Ver também [detection-count-consistency.md](../architecture/detection-count-consistency.md), que trata da contagem de *veiculações* (assunto diferente: lá as bases legitimamente diferem por escopo de período).
 
 ### CPM no target é sempre dinâmico
 
@@ -197,21 +221,25 @@ O CSV consolidado é **por linha (material × emissora)**, então somar a coluna
 A CTE `target_cov` conta `DISTINCT station_id` de `campaign_station_pricing ⋈ client_station_pmm` — mas uma emissora em modo `per_insertion` **sem preço por tipo cadastrado** é eliminada pela CTE `per_ins` (`JOIN campaign_station_type_pricing`) e não soma audiência. O badge pode dizer "2 de N com target" com o valor vindo de **uma só**. É o mesmo comportamento que `total_audience` já tinha — não é regressão, mas confunde. (A CTE é separada de propósito: somar as contagens de `per_ins` + `consolidated_ins` contaria em dobro emissoras presentes nos dois modos.)
 
 **3. Arredondamento: tudo arredonda, e tem que continuar assim.**
-`stations.pmm` é `numeric(10,2)`, então `pmm × count` quase nunca é inteiro. Os três pontos de cálculo **arredondam**, de propósito:
-- CSV consolidado (`reports.go`): `fmt.Sprintf("%.0f", pmm*count)`.
-- Total do PDF (`Summary.Totals.Impactos`, Go): `int64(math.Round(pmm * count))`.
-- Coluna "Impactos" da tabela do PDF (`pdfReport.js`, JS): `Math.round(pmm*count)`.
+`stations.pmm` é `numeric(10,2)`, então `pmm × impact_count` quase nunca é inteiro. Os três pontos de cálculo **arredondam**, de propósito:
+- CSV consolidado (`reportcsv.go`): `fmt.Sprintf("%.0f", pmm*ImpactCount)`.
+- Total do PDF (`Summary.Totals.Impactos`, Go): `int64(math.Round(pmm * ImpactCount))`.
+- Coluna "Impactos" da tabela do PDF (`pdfReport.js`, JS): `Math.round(pmm * impactBase(...))`.
 
 O total do PDF **truncava** originalmente, o que fazia o KPI do topo ficar até 1×N **abaixo da soma da sua própria coluna, no mesmo documento**. Corrigido em `0c22def`. Se mexer em qualquer um dos três, mantenha o arredondamento nos outros dois. Impactos **no target** não sofre disso: `pmm_target` é `INTEGER`, o produto é exato.
 
-**4. "Impactos" tem DUAS definições nos exportáveis — decisão consciente do dono (2026-07-21).**
-- PDF de campanha e CSV consolidado: `pmm × count`, onde `count` são **todas** as categorias aprovadas (in_slot + out_slot + out_date + bônus).
-- CSV e PDF de **grade**: `pmm × Σ in_slot`.
+**4. "Impactos" tinha TRÊS definições. Agora tem UMA (2026-08-17).**
+Histórico, pra quem for comparar com relatório antigo:
+- PDF de campanha e CSV consolidado usavam `pmm × count` (**todas** as categorias aprovadas — inflava com out_slot e out_date).
+- CSV e PDF de **grade** usavam `pmm × Σ in_slot` (deflacionava: escondia a bonificação).
+- `/campaigns` já usava `pmm × (in_slot + bonus)` — era o único certo, e virou o padrão.
 
-O mesmo cliente, na mesma campanha, vê números diferentes conforme o relatório que baixar. **Isso não é bug.** É a mesma regra de "cada superfície espelha a base da sua tela de origem" descrita acima: o relatório de grade espelha a grade de `/detections` (que mostra `in_slot` na pill), e o PDF espelha o conjunto aprovado. Alternativa avaliada e **recusada**: unificar numa base só — quebraria a coerência entre cada relatório e a tela que o gerou.
+Hoje todos usam `pmm × (in_slot + bonus)`. Um relatório antigo **não vai bater** com um novo da mesma campanha: os PDFs/CSVs de campanha caem um pouco (saem out_slot/out_date) e os da grade sobem (entra a bonificação). É o antigo que estava errado.
+
+A coluna "Total" do PDF/CSV continua sendo a soma das quatro categorias: **`Impactos ÷ PMM ≠ Total`**, e sim `= Dentro + Bônus`. Quem for ler a tabela precisa saber disso.
 
 **4b. A coluna "Impactos" do CSV de grade É somável.**
-Ela é rateada **por material** (`pmm × in_slot daquele material naquela emissora`), não repetida por linha. Arrastar a coluna no Excel dá o total certo. Isso foi corrigido em `ddfff07` — a primeira versão emitia o valor de nível-emissora em cada linha de material, o que **triplicava** a soma numa emissora com 3 materiais. Se mexer no `buildGridReportModel`, o modelo mantém os dois níveis de propósito: `byStation[].impactos` (nível emissora, alimenta a nota do PDF e a pill do `StationTotalCell`) e o valor por linha do CSV. Não colapse os dois.
+Ela é rateada **por material** (`pmm × (in_slot + bonus) daquele material naquela emissora`), não repetida por linha. Arrastar a coluna no Excel dá o total certo. Isso foi corrigido em `ddfff07` — a primeira versão emitia o valor de nível-emissora em cada linha de material, o que **triplicava** a soma numa emissora com 3 materiais. Se mexer no `buildGridReportModel`, o modelo mantém os dois níveis de propósito: `byStation[].impactos` (nível emissora, alimenta a nota do PDF e a pill do `StationTotalCell`) e o valor por linha do CSV. Não colapse os dois.
 
 **5. O PDF de campanha tem menos detalhe que o CSV consolidado — decisão consciente do dono (2026-07-21).**
 O CSV traz as 4 colunas por **material × emissora**; no PDF só a tabela **"Por emissora"** ganhou as colunas. Motivo técnico: na tabela de detalhe do PDF sobram 42mm para a coluna "Material", e as duas colunas novas a deixariam com ~8mm (ou ~26mm mesmo encolhendo o resto) — títulos como "VERISURE CARVÃO 30S" não caberiam. Alternativas avaliadas e **adiadas**: virar aquela seção para paisagem (267mm úteis) ou trocar as 4 colunas de status por 1 de Impactos. Se a paridade PDF↔CSV virar demanda, a paisagem é o caminho.

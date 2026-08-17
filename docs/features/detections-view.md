@@ -95,6 +95,25 @@ Veja [`distribution-rules.md`](../architecture/distribution-rules.md) pra detalh
 > horário errado agora aparece vermelho **e** amarelo — ver
 > [quota-aware-categorization.md](quota-aware-categorization.md).
 
+## Impactos na coluna-total por emissora
+
+A pill rosa (`StationTotalCell` em
+[`DistributionGrid.jsx`](../../frontend/src/components/DistributionGrid.jsx)) é
+`PMM × Σ (in_slot + bonus)` da emissora no período visível, e a pill teal ao lado
+é a mesma conta com `pmm_target`. **É a base canônica de impactos do produto** —
+igual ao `/campaigns`, ao `/insights`, ao PDF/CSV e ao pós-venda. Ver
+[client-target-pmm.md](client-target-pmm.md).
+
+> **Mudou em 2026-08-17**: contava só `in_slot`. Como o fechamento por cota manda
+> o excedente dentro da faixa pra `bonus`, a grade estava escondendo impacto
+> entregue de verdade e divergia das outras telas (a campanha 189 mostrava 2.620 K
+> onde o `/insights` mostrava 13.969 K). O CSV e o PDF da grade acompanharam.
+>
+> As **pills de veiculação** (verde/azul/amarelo/roxo) continuam separadas e
+> inalteradas: elas respondem "cumpriu a cota?", que é outra pergunta. Só o número
+> de impacto foi padronizado. Note que `Impactos ÷ PMM` = verde + azul, **não** a
+> soma das quatro pills.
+
 ## Como usar
 
 1. Selecione uma campanha no dropdown do topo

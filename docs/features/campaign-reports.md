@@ -63,6 +63,41 @@ oferecia algo parecido; replicar isso é parte da entrega de paridade
 (§17 do plano). A versão Radiocheck é mais simples (3 formatos, escopo
 sempre por campanha) e leva a marca E-monitor no PDF.
 
+## Coluna "Impactos": `PMM × (Dentro da faixa + Bonificação)`
+
+Todo relatório desta feature — CSV Consolidado, PDF, e as versões WYSIWYG de
+grade — usa a **base canônica de impactos** do produto:
+
+```
+Impactos           = PMM        × (in_slot + bonus)
+Impactos no target = pmm_target × (in_slot + bonus)
+```
+
+No backend isso é `MaterialStationRow.ImpactCount` / `StationAggregateRow.ImpactCount`
+(computados no SQL de `AggregateByMaterialStation`/`AggregateByStation`); no
+frontend é `impactBase()` em [`pdfReport.js`](../../frontend/src/utils/pdfReport.js)
+e [`gridReport.js`](../../frontend/src/utils/gridReport.js). É o mesmo número que
+`/insights`, `/campaigns` e o pós-venda mostram. Ver
+[client-target-pmm.md](client-target-pmm.md).
+
+> ⚠️ **A coluna "Total" NÃO é o multiplicador.** `Total` soma as quatro categorias;
+> `Impactos ÷ PMM` = `Dentro da faixa + Bonificação`. Fora-da-faixa não vale nada
+> comercialmente (decisão D3 do [fechamento por cota](quota-aware-categorization.md))
+> e fora-da-data está fora do período contratado — nenhum dos dois é impacto
+> entregue ao cliente.
+>
+> **Mudou em 2026-08-17.** Antes: o CSV Consolidado e o PDF de campanha
+> multiplicavam por `Total` (todas as categorias, inflado), enquanto o CSV/PDF de
+> grade multiplicava só por `Dentro da faixa` (deflacionado — escondia a
+> bonificação). Um relatório novo não bate com um antigo da mesma campanha: o de
+> campanha cai um pouco, o de grade sobe. É o antigo que estava errado.
+>
+> `impactBase()` no `pdfReport.js` tem fallback pro breakdown da própria linha
+> (`Dentro + Bônus`) quando `impact_count` não vem no JSON. Isso é de propósito: o
+> frontend sobe no Cloudflare Pages **antes** do backend ir pra VM, e sem o
+> fallback a coluna Impactos zeraria no PDF do cliente durante a janela entre os
+> dois deploys.
+
 ## Rótulos de status nos CSVs
 
 A coluna **Status** (CSV Detalhado) e as colunas de breakdown (CSV

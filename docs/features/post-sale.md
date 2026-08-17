@@ -60,10 +60,20 @@ inteira** e não aceita recorte de período, e o pós-venda exige período por
 campanha. Além disso a **foto do `/insights` vai dentro do `.zip`** — se a página
 usasse outra base, o documento contradiria o próprio anexo na frente do cliente.
 
+> **Impactos do pós-venda seguem o `/insights` por reuso, não por cópia.**
+> `buildBlock` (em [`snapshot.go`](../../workers/internal/postsale/snapshot.go))
+> copia `ins.KPIs.Impactos` / `ins.KPIs.ImpactosTarget` direto — não existe SQL de
+> impacto próprio aqui. Então a padronização de 2026-08-17 (impactos =
+> `PMM × (in_slot + bonus)` em todo o produto — ver
+> [client-target-pmm.md](client-target-pmm.md)) chegou ao pós-venda de graça, e
+> chegou também ao CSV consolidado que vai no `.zip` (`reportcsv.WriteConsolidated`,
+> corrigido na mesma entrega). **Documento já publicado NÃO muda**: `payload_json`
+> é congelado no publish, o que é o comportamento desejado.
+
 | Rótulo na tela | Origem em `InsightsPayload` |
 |---|---|
 | **Valor entregue** | `kpis.investido.executado` |
-| **Impactos** | `kpis.impactos` |
+| **Impactos** | `kpis.impactos` = `PMM × (in_slot + bonus)` — base canônica ([client-target-pmm.md](client-target-pmm.md)) |
 | **Impactos no target** | `kpis.impactos_target` — só aparece com `stations_with_target > 0` |
 | **CPM** | `kpis.cpm` (respeita `campaigns.fixed_cpm`) |
 | **CPM no target** | `kpis.cpm_target` (sempre dinâmico) |

@@ -1727,7 +1727,15 @@ type MaterialStationRow struct {
 	// campo JSON continua `orphan_count` de propósito: frontend/src/utils/
 	// pdfReport.js lê essa chave, e renomeá-la aqui zeraria a coluna "Bônus"
 	// do PDF sem erro nenhum. Mesmo trato do `extras_orphan` em insights.go.
-	BonusCount      int       `json:"orphan_count"`
+	BonusCount int `json:"orphan_count"`
+	// ImpactCount é a BASE CANÔNICA DE IMPACTOS: in_slot + bonus. É ela que
+	// multiplica o PMM em todo relatório — nunca Count (que inclui out_slot e
+	// out_date). Ver docs/features/client-target-pmm.md: out_slot não vale nada
+	// comercialmente (D3 da categorização por cota) e out_date está fora do
+	// período contratado, então nenhum dos dois é impacto entregue ao cliente.
+	// Vem do SQL (não é InSlotCount+BonusCount somado em Go) pra que a base
+	// exista até para consumidores que ignoram o breakdown.
+	ImpactCount     int       `json:"impact_count"`
 	FirstDetectedAt time.Time `json:"first_detected_at"`
 	LastDetectedAt  time.Time `json:"last_detected_at"`
 }
@@ -1752,6 +1760,9 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		       -- binário antigo na janela de deploy sumiria das quatro colunas,
 		       -- quebrando a soma justo no relatório que o cliente recebe.
 		       COUNT(*) FILTER (WHERE d.category IN `+categorizer.BonusCategoriesSQL+`) AS bonus_count,
+		       -- Base canônica de impactos (in_slot + bonus) — ver ImpactCount.
+		       COUNT(*) FILTER (WHERE d.category = 'in_slot'
+		                           OR d.category IN `+categorizer.BonusCategoriesSQL+`) AS impact_count,
 		       MIN(d.detected_at), MAX(d.detected_at)
 		FROM detection_attributions d
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
@@ -1788,6 +1799,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 			&r.StationPMM, &r.StationPMMTarget,
 			&r.Count,
 			&r.InSlotCount, &r.OutSlotCount, &r.OutDateCount, &r.BonusCount,
+			&r.ImpactCount,
 			&r.FirstDetectedAt, &r.LastDetectedAt,
 		); err != nil {
 			return nil, err
@@ -1809,6 +1821,11 @@ type StationAggregateRow struct {
 	StationPMM       *float64 `json:"station_pmm,omitempty"`
 	StationPMMTarget *int     `json:"station_pmm_target"`
 	Count            int      `json:"count"`
+	// ImpactCount é a BASE CANÔNICA DE IMPACTOS: in_slot + bonus. Count é o
+	// total de veiculações (as quatro categorias) e continua alimentando a
+	// coluna "Total" do relatório; quem multiplica PMM usa ImpactCount.
+	// Ver MaterialStationRow.ImpactCount e docs/features/client-target-pmm.md.
+	ImpactCount int `json:"impact_count"`
 }
 
 // AggregateByStation devolve total de veiculações por emissora — usado tanto
@@ -1817,7 +1834,10 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 	rows, err := d.pool.Query(ctx, `
 		SELECT d.station_id, COALESCE(s.name, ''), s.band, s.frequency_mhz, s.city, s.state,
 		       s.pmm, cst.pmm_target,
-		       COUNT(*) AS cnt
+		       COUNT(*) AS cnt,
+		       -- Base canônica de impactos (in_slot + bonus) — ver ImpactCount.
+		       COUNT(*) FILTER (WHERE d.category = 'in_slot'
+		                           OR d.category IN `+categorizer.BonusCategoriesSQL+`) AS impact_count
 		FROM detection_attributions d
 		LEFT JOIN stations s ON s.id = d.station_id
 		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
@@ -1845,7 +1865,7 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 			&r.StationID, &r.StationName, &r.StationBand, &r.StationFrequencyMHz,
 			&r.StationCity, &r.StationState,
 			&r.StationPMM, &r.StationPMMTarget,
-			&r.Count,
+			&r.Count, &r.ImpactCount,
 		); err != nil {
 			return nil, err
 		}

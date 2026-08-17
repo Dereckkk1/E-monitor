@@ -51,9 +51,10 @@ Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, vei
 
 | Métrica | Como é calculada |
 |---|---|
-| **Impactos** | `Σ_estação (detections_count × PMM)`. Estação sem PMM → não soma (mas conta em `stations_count`) |
-| **Impactos por gênero** | `Σ (count × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`) |
-| **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo |
+| **Impactos** | `Σ_estação ((in_slot + bonus) × PMM)` — **base canônica de impactos do produto** ([client-target-pmm.md](client-target-pmm.md)); é o MESMO número do `/campaigns` (`total_audience`), travado por `TestInsights_FinancialBase_MatchesCampaigns`. `out_slot` e `out_date` **não entram** (não são impacto entregue). Estação sem PMM → não soma (mas conta em `stations_count`). **Mudou em 2026-08-17**: antes era `detections_count × PMM` (todas as categorias aprovadas) e vinha maior |
+| **Impactos por gênero** | `Σ ((in_slot + bonus) × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`). Mesma base do KPI de impactos, de propósito: os rateios demográficos têm que somar de volta ao total exibido logo acima deles |
+| **Veiculações total** | `COUNT(*)` das aprovadas — **as quatro** categorias. Este KPI é contagem, não impacto, e vem acompanhado do breakdown por categoria, então precisa fechar as quatro. Não confunda com a base de impactos |
+| **CPM** | Padrão: `(investido_executado / impactos) × 1000`. Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Como usa `investido_executado`, herda o comportamento proporcional consolidado abaixo. **Atenção ao numerador ≠ denominador**: "Investido (executado)" é `unit × in_slot` (não paga bonificação) enquanto o denominador é `in_slot + bonus` — o CPM exibido é o CPM *efetivo de mídia* (a bonificação melhora o CPM), exatamente como o `/campaigns` sempre calculou |
 | **Bonificação** | Soma do valor das veiculações `bonus` da view `daily_play_summary` — desde a migration 0065 é a **contagem direta da categoria** `bonus` gravada pelo categorizador (excedente da cota do dia dentro da faixa + tocada sem meta). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido) |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
 | **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): **= o mesmo do `/campaigns`** = `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período); Bonificação some. **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação. **Ver §"Consolidado: valor MENSAL que acumula por mês"** |
@@ -75,6 +76,29 @@ do executado/CPM; (2) o excedente que era contado **duas vezes** (era `in_slot` 
 reaparecia no termo `GREATEST(0, in_slot − expected)` do bônus da view). Comparar
 com um relatório anterior a 2026-08-17 vai mostrar diferença — o número velho é que
 estava errado. Pós-venda já enviado não muda (`payload_json` congelado).
+
+### "Impactos" também mudou de base (2026-08-17)
+
+O KPI **Impactos** (e o "no target", e os rateios de gênero/classe/idade) usava
+`COUNT(*) × PMM` sobre **todas** as categorias aprovadas. Passou a usar
+`(in_slot + bonus) × PMM` — a base canônica descrita em
+[client-target-pmm.md](client-target-pmm.md). O `/detections` (grid + CSV/PDF da
+grade), que contava só `in_slot`, e o PDF/CSV de campanha, que contava tudo,
+convergiram para a mesma base na mesma entrega.
+
+Efeito medido no clone de prod (junho/2026 em diante, 56.219 veiculações
+aprovadas): impactos do `/insights` **caem 0,874%** no agregado (os 201 `out_slot`
++ 554 `out_date` que saíram) e os do `/detections` **sobem 13,0%** no agregado (a
+bonificação que entrou). Por campanha, o `/insights` mexe pouco e só onde há
+`out_slot`/`out_date` — 189 RÔGGA COPA 0,0%, 244 UNIUBE −0,12%, 227 PARAFLU
+−3,76% — mas o `/detections` muda MUITO onde o bônus é concentrado: 189 RÔGGA vai
+de 2.620 K pra 13.969 K (+433%, porque 1.014 das 1.307 tocadas são `bonus`), 244
+UNIUBE de 14.454 K pra 27.020 K (+87%), 227 PARAFLU de 1.710 K pra 4.549 K (+166%).
+
+**O CPM sobe na mesma proporção em que os impactos caem** (o numerador,
+`investido_executado`, não mudou): 227 PARAFLU +3,91%, 244 UNIUBE +0,12%, 189
+RÔGGA 0% — e 189 tem `fixed_cpm`, então o card nem é dinâmico. Não é o CPM
+"quebrando": é o denominador deixando de contar audiência que não foi entregue.
 
 ### "Extras" no chart × "Bonificação" no KPI
 

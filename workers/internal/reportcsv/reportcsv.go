@@ -47,9 +47,12 @@ func WriteConsolidated(out io.Writer, rows []catalog.MaterialStationRow, targetS
 		// Breakdown por status — útil pra fechamento (saber quanto foi
 		// bonificação, quanto foi fora-faixa, dentro de cada combinação).
 		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bonificação",
-		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
-		// usa o PMM no target do cliente dono da campanha; fica vazia quando não
-		// há cadastro (que não é a mesma coisa que zero).
+		// Impactos = (Dentro da faixa + Bonificação) × PMM da emissora — a base
+		// canônica de impactos do produto (row.ImpactCount), NÃO "Total
+		// Veiculações": fora-da-faixa não vale nada comercialmente e fora-da-data
+		// está fora do período contratado. A coluna "no target" usa o PMM no
+		// target do cliente dono da campanha; fica vazia quando não há cadastro
+		// (que não é a mesma coisa que zero).
 		"PMM", "Impactos", "PMM no target" + targetSuffix, "Impactos no target" + targetSuffix,
 		"Primeira", "Última",
 	}); err != nil {
@@ -73,12 +76,12 @@ func WriteConsolidated(out io.Writer, rows []catalog.MaterialStationRow, targetS
 		pmmStr, impactosStr := "", ""
 		if row.StationPMM != nil {
 			pmmStr = strings.ReplaceAll(fmt.Sprintf("%.0f", *row.StationPMM), ".", ",")
-			impactosStr = fmt.Sprintf("%.0f", *row.StationPMM*float64(row.Count))
+			impactosStr = fmt.Sprintf("%.0f", *row.StationPMM*float64(row.ImpactCount))
 		}
 		pmmTargetStr, impactosTargetStr := "", ""
 		if row.StationPMMTarget != nil {
 			pmmTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget)
-			impactosTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget*row.Count)
+			impactosTargetStr = fmt.Sprintf("%d", *row.StationPMMTarget*row.ImpactCount)
 		}
 		if err := cw.Write([]string{
 			idLabel,
