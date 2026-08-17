@@ -38,7 +38,9 @@ type Detection struct {
 	EvidenceStatus    string   `json:"evidence_status"`
 	EvidenceKey       *string  `json:"evidence_key,omitempty"`
 	EvidenceSizeBytes *int64   `json:"evidence_size_bytes,omitempty"`
-	// Category is one of in_slot|out_slot|out_date|orphan (migration 0018).
+	// Category is one of in_slot|out_slot|out_date|bonus (migrations 0018 e
+	// 0063). 'orphan' é o nome antigo de 'bonus' e ainda pode chegar de linha
+	// gravada pelo binário anterior — ver categorizer.CatOrphan.
 	// Consumed by the DayDetailModal to group detections under their category
 	// section; without it, the modal renders an empty list even when filtered
 	// detections exist.
@@ -979,7 +981,7 @@ func (d *Detections) FindCutWithSiblings(ctx context.Context, masterID uuid.UUID
 // coverage-based audit found the evidence clip matches newCommercialID better
 // than the cut it was first attributed to. Sets commercial_id + campaign_id and
 // re-runs the categorizer for the new (campaign, cut, station, day) so in_slot /
-// out_slot / out_date / orphan stays consistent. detected_at is in the WHERE for
+// out_slot / out_date / bonus stays consistent. detected_at is in the WHERE for
 // partition pruning.
 //
 // F-119: a tocada base e sua projeção canônica em detection_campaigns DEVEM
@@ -1696,9 +1698,9 @@ func (d *Detections) Restore(ctx context.Context, id uuid.UUID) error {
 // MaterialStationRow é a granularidade do relatório consolidado: uma linha
 // por (material × emissora) com o total de veiculações no período. Inclui
 // metadata leve da emissora pra o CSV ficar legível sem JOIN no front, e
-// um breakdown por categoria (in_slot/out_slot/out_date/orphan) pra
-// fechamento comercial saber quantas veiculações foram bônus, fora-faixa
-// etc. dentro de cada combinação material × emissora.
+// um breakdown por categoria (in_slot/out_slot/out_date/bonus) pra
+// fechamento comercial saber quantas veiculações foram bonificação,
+// fora-faixa etc. dentro de cada combinação material × emissora.
 type MaterialStationRow struct {
 	MaterialID          uuid.UUID `json:"material_id"`
 	MaterialShortID     *int32    `json:"material_short_id,omitempty"`
@@ -1718,10 +1720,14 @@ type MaterialStationRow struct {
 	StationPMMTarget *int     `json:"station_pmm_target"`
 	Count            int      `json:"count"`
 	// Breakdown por status — soma sempre == Count.
-	InSlotCount     int       `json:"in_slot_count"`
-	OutSlotCount    int       `json:"out_slot_count"`
-	OutDateCount    int       `json:"out_date_count"`
-	OrphanCount     int       `json:"orphan_count"`
+	InSlotCount  int `json:"in_slot_count"`
+	OutSlotCount int `json:"out_slot_count"`
+	OutDateCount int `json:"out_date_count"`
+	// BonusCount é a bonificação (categoria `bonus`, ex-`orphan`). O nome do
+	// campo JSON continua `orphan_count` de propósito: frontend/src/utils/
+	// pdfReport.js lê essa chave, e renomeá-la aqui zeraria a coluna "Bônus"
+	// do PDF sem erro nenhum. Mesmo trato do `extras_orphan` em insights.go.
+	BonusCount      int       `json:"orphan_count"`
 	FirstDetectedAt time.Time `json:"first_detected_at"`
 	LastDetectedAt  time.Time `json:"last_detected_at"`
 }
@@ -1741,7 +1747,11 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		       COUNT(*) FILTER (WHERE d.category = 'in_slot')  AS in_slot_count,
 		       COUNT(*) FILTER (WHERE d.category = 'out_slot') AS out_slot_count,
 		       COUNT(*) FILTER (WHERE d.category = 'out_date') AS out_date_count,
-		       COUNT(*) FILTER (WHERE d.category = 'orphan')   AS orphan_count,
+		       -- Bonificação aceita o sinônimo legado 'orphan' (BonusCategoriesSQL):
+		       -- este breakdown promete "soma == Count", e uma linha gravada pelo
+		       -- binário antigo na janela de deploy sumiria das quatro colunas,
+		       -- quebrando a soma justo no relatório que o cliente recebe.
+		       COUNT(*) FILTER (WHERE d.category IN `+categorizer.BonusCategoriesSQL+`) AS bonus_count,
 		       MIN(d.detected_at), MAX(d.detected_at)
 		FROM detection_attributions d
 		LEFT JOIN commercials c     ON c.id = d.commercial_id
@@ -1777,7 +1787,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 			&r.StationBand, &r.StationFrequencyMHz, &r.StationCity, &r.StationState,
 			&r.StationPMM, &r.StationPMMTarget,
 			&r.Count,
-			&r.InSlotCount, &r.OutSlotCount, &r.OutDateCount, &r.OrphanCount,
+			&r.InSlotCount, &r.OutSlotCount, &r.OutDateCount, &r.BonusCount,
 			&r.FirstDetectedAt, &r.LastDetectedAt,
 		); err != nil {
 			return nil, err

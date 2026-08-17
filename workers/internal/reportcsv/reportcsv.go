@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/categorizer"
 )
 
 // bom é o marcador que faz o Excel pt-BR reconhecer UTF-8.
@@ -43,9 +44,9 @@ func WriteConsolidated(out io.Writer, rows []catalog.MaterialStationRow, targetS
 		"ID Material", "Material", "Tipo", "Duração (s)",
 		"Emissora", "Frequência", "Banda", "Cidade", "UF",
 		"Total Veiculações",
-		// Breakdown por status — útil pra fechamento (saber quanto foi bônus,
-		// quanto foi fora-faixa, dentro de cada combinação).
-		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bônus",
+		// Breakdown por status — útil pra fechamento (saber quanto foi
+		// bonificação, quanto foi fora-faixa, dentro de cada combinação).
+		"Dentro da faixa", "Fora da faixa", "Fora da data", "Bonificação",
 		// Impactos = Total Veiculações × PMM da emissora. A coluna "no target"
 		// usa o PMM no target do cliente dono da campanha; fica vazia quando não
 		// há cadastro (que não é a mesma coisa que zero).
@@ -93,7 +94,7 @@ func WriteConsolidated(out io.Writer, rows []catalog.MaterialStationRow, targetS
 			fmt.Sprintf("%d", row.InSlotCount),
 			fmt.Sprintf("%d", row.OutSlotCount),
 			fmt.Sprintf("%d", row.OutDateCount),
-			fmt.Sprintf("%d", row.OrphanCount),
+			fmt.Sprintf("%d", row.BonusCount),
 			pmmStr,
 			impactosStr,
 			pmmTargetStr,
@@ -174,9 +175,15 @@ func WriteDetailed(out io.Writer, iterate func(cb func(catalog.DetectionEnriched
 }
 
 // CategoryLabelPT mapeia o enum da coluna `category` (in_slot|out_slot|
-// out_date|orphan) pro rótulo PT-BR usado nos relatórios exportados. Mesmo
-// vocabulário do DayDetailModal.jsx — "Bônus" pra orphan (veiculação sem regra
-// correspondente, que conta como bônus comercial pro cliente).
+// out_date|bonus) pro rótulo PT-BR usado nos relatórios exportados. Mesmo
+// vocabulário do DayDetailModal.jsx — "Bonificação" pra `bonus` (veiculação que
+// excede a meta do dia ou toca em dia/faixa sem meta; vale como bônus comercial
+// pro cliente).
+//
+// 'orphan' é o nome antigo de 'bonus' (spec 2026-08-14 D4, migration 0064) e
+// cai no MESMO rótulo — não no default. Este arquivo escreve o CSV que o
+// cliente abre: uma linha gravada pelo binário antigo na janela de deploy
+// imprimiria a string crua "orphan" numa célula do relatório.
 func CategoryLabelPT(c string) string {
 	switch c {
 	case "in_slot":
@@ -185,8 +192,8 @@ func CategoryLabelPT(c string) string {
 		return "Fora da faixa"
 	case "out_date":
 		return "Fora da data"
-	case "orphan":
-		return "Bônus"
+	case categorizer.CatBonus, categorizer.CatOrphan:
+		return "Bonificação"
 	default:
 		return c // fallback defensivo se aparecer um valor novo
 	}

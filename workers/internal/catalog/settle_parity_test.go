@@ -23,8 +23,8 @@ package catalog
 //     receberem input montado por código de teste, o teste não prova nada sobre
 //     produção.
 //  2. O lado SQL é SELECT PURO — nada aqui pode gravar category. Por isso as
-//     detections nascem por INSERT cru (categoria 'orphan' de placeholder) e
-//     nenhum teste chama Recategorize*/Upsert de override.
+//     detections nascem por INSERT cru (categoria de placeholder) e nenhum teste
+//     chama Recategorize*/Upsert de override.
 //  3. Divergência aqui é BUG DE UM DOS MOTORES. Conserte o motor, nunca o
 //     teste.
 //
@@ -254,9 +254,11 @@ type parityRun struct {
 	ids    []uuid.UUID // paralelo a s.plays
 }
 
-// build materializa o cenário. As detections entram por INSERT cru, com
-// category 'orphan' de placeholder: nada aqui pode passar pelo insert-path (que
-// GRAVA categoria) — os dois motores têm que ser avaliados do zero.
+// build materializa o cenário. As detections entram por INSERT cru, com uma
+// category de placeholder: nada aqui pode passar pelo insert-path (que GRAVA
+// categoria) — os dois motores têm que ser avaliados do zero. O valor gravado é
+// irrelevante e nenhum dos dois lados o lê: loadCellDayPlays só usa a category
+// existente pro diff de staleness do UPDATE, que este teste não exercita.
 func (f *parityFixture) build(t *testing.T, s parityScenario) *parityRun {
 	t.Helper()
 	cmp, err := NewCampaigns(f.pool).Create(f.ctx, CreateCampaignInput{
@@ -308,12 +310,12 @@ func (f *parityFixture) build(t *testing.T, s parityScenario) *parityRun {
 			INSERT INTO detections (id, station_id, commercial_id, campaign_id, detected_at,
 			  match_start_offset_ms, match_end_offset_ms, confidence, hash_count,
 			  evidence_status, retracted_at, ignored_at, category)
-			VALUES ($1,$2,$3,$4,$5,0,30000,0.95,100,$6,$7,$8,'orphan')`,
+			VALUES ($1,$2,$3,$4,$5,0,30000,0.95,100,$6,$7,$8,'bonus')`,
 			id, station, p.mat, cmp.ID, p.at, evStatus, retracted, ignored)
 		require.NoError(t, err)
 		_, err = f.pool.Exec(f.ctx, `
 			INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
-			VALUES ($1,$2,$3,$4,'orphan')`, id, p.at, cmp.ID, p.mat)
+			VALUES ($1,$2,$3,$4,'bonus')`, id, p.at, cmp.ID, p.mat)
 		require.NoError(t, err)
 	}
 	t.Cleanup(run.teardown)

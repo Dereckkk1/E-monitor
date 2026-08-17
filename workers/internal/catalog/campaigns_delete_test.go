@@ -55,7 +55,7 @@ func TestCampaigns_Delete_BlockedWhenDetectionCarriesOtherCampaignProjection(t *
 	require.NoError(t, err)
 	// Projeção fan-out da campanha B na MESMA tocada física.
 	require.NoError(t, NewDetectionCampaigns(pool).InsertProjections(ctx, det.ID, det.DetectedAt,
-		[]Projection{{CampaignID: campB.ID, CommercialID: matB.ID, Category: "orphan"}}))
+		[]Projection{{CampaignID: campB.ID, CommercialID: matB.ID, Category: "bonus"}}))
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, `DELETE FROM detection_campaigns WHERE campaign_id IN ($1,$2)`, campA.ID, campB.ID)
@@ -109,7 +109,7 @@ func TestCampaigns_Delete_AllowedWhenNoForeignProjections(t *testing.T) {
 	require.NoError(t, err)
 	// Só a projeção da própria campanha (base).
 	require.NoError(t, NewDetectionCampaigns(pool).InsertProjections(ctx, det.ID, det.DetectedAt,
-		[]Projection{{CampaignID: camp.ID, CommercialID: mat.ID, Category: "orphan"}}))
+		[]Projection{{CampaignID: camp.ID, CommercialID: mat.ID, Category: "bonus"}}))
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, `DELETE FROM detection_campaigns WHERE campaign_id = $1`, camp.ID)

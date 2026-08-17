@@ -47,9 +47,9 @@ func TestRunOnce_HealsOnlyWhenDriftFound(t *testing.T) {
 	require.Equal(t, 0.0, testutil.ToFloat64(metrics.ProjectionDriftLastRun))
 
 	// Com drift → cura e reporta.
-	rec.drifts = []catalog.ProjectionDrift{{CampaignID: uuid.New(), From: "orphan", To: "in_slot", N: 10}}
+	rec.drifts = []catalog.ProjectionDrift{{CampaignID: uuid.New(), From: "bonus", To: "in_slot", N: 10}}
 	rec.healed = 10
-	healedBefore := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("orphan", "in_slot"))
+	healedBefore := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("bonus", "in_slot"))
 	found, healed, err = s.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(10), found)
@@ -58,7 +58,7 @@ func TestRunOnce_HealsOnlyWhenDriftFound(t *testing.T) {
 
 	// Métrica: contador da transição curada subiu pelo N do drift (delta —
 	// o registry é process-global e compartilhado entre os testes).
-	healedAfter := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("orphan", "in_slot"))
+	healedAfter := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("bonus", "in_slot"))
 	require.Equal(t, healedBefore+10, healedAfter)
 
 	// Lookback aplicado: since ≈ now-Lookback.
@@ -75,19 +75,19 @@ func TestRunOnce_CountErrorPropagates(t *testing.T) {
 
 func TestRunOnce_HealErrorPropagates(t *testing.T) {
 	rec := &fakeRec{
-		drifts:  []catalog.ProjectionDrift{{CampaignID: uuid.New(), From: "in_slot", To: "orphan", N: 7}},
+		drifts:  []catalog.ProjectionDrift{{CampaignID: uuid.New(), From: "in_slot", To: "bonus", N: 7}},
 		healErr: errors.New("heal boom"),
 	}
 	s := New(rec, nil)
 
 	// Heal falha → propaga erro, healed==0, e NÃO conta a transição curada.
-	healedBefore := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("in_slot", "orphan"))
+	healedBefore := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("in_slot", "bonus"))
 	found, healed, err := s.RunOnce(context.Background())
 	require.Error(t, err)
 	require.Equal(t, int64(7), found)
 	require.Zero(t, healed)
 	require.Equal(t, 1, rec.healCalls)
 
-	healedAfter := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("in_slot", "orphan"))
+	healedAfter := testutil.ToFloat64(metrics.ProjectionDriftHealed.WithLabelValues("in_slot", "bonus"))
 	require.Equal(t, healedBefore, healedAfter)
 }
