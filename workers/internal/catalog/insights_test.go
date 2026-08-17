@@ -1171,10 +1171,12 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
 	insSeedDistributionRule(t, ctx, pool, camp, typeID, stIns,
 		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
-	// por-inserção entrega só 3 (1/dia, sem bonus)
+	// por-inserção entrega 3 in_slot (1/dia) + 2 bonus (excedente do dia 1 e 2)
 	for d := 1; d <= 3; d++ {
 		insSeedDetection(t, ctx, pool, camp, mat, stIns, "in_slot", fmt.Sprintf("2026-06-%02d", d))
 	}
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-01")
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-02")
 
 	out, err := repo.Compute(ctx, InsightsParams{
 		ClientID: client, CampaignIDs: []uuid.UUID{camp},
@@ -1186,8 +1188,43 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 	if !out.Consolidated {
 		t.Errorf("mista tem consolidada → Consolidated deveria ser true")
 	}
-	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
-		t.Errorf("investido = %v, want ~430 (400 pacote + 30 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	// Modo fornecedor: Investido = pacote + ENTREGUE das por-inserção (in_slot +
+	// bonus, que é como o consolidatedSummary sempre precificou) = 400 + 50.
+	if !approxEq(out.KPIs.Investido.Executado, 450, 1) {
+		t.Errorf("investido = %v, want ~450 (400 pacote + 50 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	}
+
+	// PARIDADE DE CPM EM PRICING MISTO. É aqui que a divergência histórica entre
+	// as duas telas fecha: em modo fornecedor o /insights zera a Bonificação e
+	// embute o bônus no Investido, enquanto o /campaigns exibe as duas parcelas
+	// separadas — mas o NUMERADOR DO CPM é a mesma expressão dos dois lados:
+	//
+	//	/insights:  consolidatedSummary = pacote×meses + unit×(in_slot+bonus)
+	//	/campaigns: total_invested + total_bonus_value
+	//	          = (per_ins unit×in_slot + pacote×meses) + per_ins unit×bonus
+	//
+	// Sem somar `total_bonus_value` no /campaigns, o CPM daria 86,00 aqui contra
+	// 90,00 no /insights — dois CPMs pra mesma campanha no mesmo período.
+	campaignsRepo := NewCampaigns(pool)
+	fins, err := campaignsRepo.FinancialsByCampaign(ctx, []uuid.UUID{client}, []uuid.UUID{camp}, time.Time{})
+	if err != nil {
+		t.Fatalf("FinancialsByCampaign: %v", err)
+	}
+	if len(fins) != 1 {
+		t.Fatalf("FinancialsByCampaign devolveu %d linhas, want 1", len(fins))
+	}
+	if int64(fins[0].TotalAudience) != out.KPIs.Impactos {
+		t.Errorf("impactos divergiu em pricing misto: insights %d × campaigns %v",
+			out.KPIs.Impactos, fins[0].TotalAudience)
+	}
+	campCPM := (fins[0].TotalInvested + fins[0].TotalBonusValue) / fins[0].TotalAudience * 1000
+	if !approxEq(campCPM, out.KPIs.CPM, 0.01) {
+		t.Errorf("cpm divergiu em pricing misto: campaigns %v × insights %v "+
+			"(invested %v + bonus_value %v ÷ audience %v)",
+			campCPM, out.KPIs.CPM, fins[0].TotalInvested, fins[0].TotalBonusValue, fins[0].TotalAudience)
+	}
+	if !approxEq(out.KPIs.CPM, 90.0, 0.01) {
+		t.Errorf("cpm = %v, want 90.00 ((400 pacote + 50 entregue) ÷ 5000 impactos × 1000)", out.KPIs.CPM)
 	}
 }
 
@@ -1201,6 +1238,16 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 //	insights.Investido.Executado == campaigns.TotalInvested     (unit × in_slot)
 //	insights.Bonificacao.Valor   == campaigns.TotalBonusValue   (unit × bonus)
 //	insights.Impactos            == campaigns.TotalAudience
+//	insights.KPIs.CPM            == (TotalInvested + TotalBonusValue) ÷ TotalAudience × 1000
+//
+// A quarta identidade é a definição de CPM do produto (2026-08-17): o numerador
+// soma as DUAS parcelas — o CPM mede a eficiência da MÍDIA ENTREGUE A PREÇO DE
+// TABELA, não a eficiência da negociação. A tocada de bônus já está no
+// denominador (impactos conta in_slot + bonus), então tem que estar no numerador
+// ao preço de tabela dela; senão campanha com muito bônus exibiria um CPM
+// artificialmente baixo, incomparável com o de qualquer outra. Há uma asserção
+// explícita abaixo que FALHA se alguém "simplificar" o numerador de volta pro
+// valor pago.
 //
 // Antes de 2026-08-17 o /campaigns empacotava os dois num `total_invested` só,
 // e a identidade era a SOMA (`Executado + Bonificação == TotalInvested`). Isso
@@ -1303,14 +1350,33 @@ func TestInsights_FinancialBase_MatchesCampaigns(t *testing.T) {
 		t.Errorf("impactos divergiu: insights %d × campaigns %v",
 			out.KPIs.Impactos, fins[0].TotalAudience)
 	}
-	// E o CPM do /insights tem que usar esse mesmo denominador: 30 ÷ 4000 × 1000.
-	if !approxEq(out.KPIs.CPM, 7.5, 0.01) {
-		t.Errorf("insights cpm = %v, want 7.50 (executado 30 ÷ 4000 impactos × 1000)", out.KPIs.CPM)
+	// CPM = (investido + bonificado) ÷ impactos × 1000 = (30 + 10) ÷ 4000 × 1000
+	// = 10,00. O numerador NÃO é só o pago: o CPM mede a eficiência da mídia
+	// ENTREGUE a preço de tabela, e a tocada de bônus já está no denominador.
+	if !approxEq(out.KPIs.CPM, 10.0, 0.01) {
+		t.Errorf("insights cpm = %v, want 10.00 ((executado 30 + bonificação 10) ÷ 4000 impactos × 1000)", out.KPIs.CPM)
 	}
-	// O CPM do /campaigns é derivado no frontend (invested ÷ audience × 1000).
-	// Com o bônus fora do numerador ele passa a dar o MESMO 7,50 — antes dava
-	// 10,00 (40 ÷ 4000), e o cliente via dois CPMs pra mesma campanha.
-	campCPM := fins[0].TotalInvested / fins[0].TotalAudience * 1000
+	// GUARDA ANTI-"SIMPLIFICAÇÃO": se alguém voltar o numerador pro valor pago
+	// (executado ÷ impactos = 7,50), este teste tem que gritar. A checagem é
+	// explícita — não dá pra passar nos dois ao mesmo tempo.
+	paidOnlyCPM := out.KPIs.Investido.Executado / float64(out.KPIs.Impactos) * 1000
+	if approxEq(out.KPIs.CPM, paidOnlyCPM, 0.01) {
+		t.Errorf("cpm = %v == numerador só do pago (%v): a bonificação (%v) SUMIU do numerador. "+
+			"CPM = (investido + bonificado) ÷ impactos × 1000 — é o valor de tabela da mídia "+
+			"entregue, não a eficiência da negociação. Ver docs/features/insights-dashboard.md.",
+			out.KPIs.CPM, paidOnlyCPM, out.KPIs.Bonificacao.Valor)
+	}
+	// E o numerador é exatamente a soma das duas parcelas.
+	wantNum := (out.KPIs.Investido.Executado + out.KPIs.Bonificacao.Valor) / float64(out.KPIs.Impactos) * 1000
+	if !approxEq(out.KPIs.CPM, wantNum, 0.01) {
+		t.Errorf("cpm = %v, want %v ((executado + bonificação) ÷ impactos × 1000)", out.KPIs.CPM, wantNum)
+	}
+	// O CPM do /campaigns é derivado no frontend com as DUAS parcelas
+	// ((invested + bonus_value) ÷ audience × 1000). É a MESMA expressão do
+	// /insights — é isso que impede as duas telas de exibirem CPMs diferentes
+	// pra mesma campanha. Se o frontend voltar a dividir só `total_invested`,
+	// esta igualdade quebra.
+	campCPM := (fins[0].TotalInvested + fins[0].TotalBonusValue) / fins[0].TotalAudience * 1000
 	if !approxEq(campCPM, out.KPIs.CPM, 0.01) {
 		t.Errorf("cpm divergiu: campaigns %v × insights %v", campCPM, out.KPIs.CPM)
 	}

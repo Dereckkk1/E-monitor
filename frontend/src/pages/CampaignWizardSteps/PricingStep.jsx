@@ -413,7 +413,8 @@ function SummaryStrip({ total, validCount, totalCount, fixedCPM, onFixedCPMChang
 }
 
 // CPM fixo opcional da campanha. Quando vazio, /campaigns, /insights e o
-// dashboard calculam o CPM dinamicamente (executado / impactos × 1000). Quando
+// dashboard calculam o CPM dinamicamente ((executado + bonificado) / impactos ×
+// 1000 — o valor de tabela da mídia entregue, não só o que foi pago). Quando
 // preenchido aqui, esse valor é exibido em todos esses lugares — útil pra
 // campanhas com CPM pré-acordado que o cálculo derivado distorce.
 function FixedCPMField({ value, onChange }) {
@@ -429,7 +430,7 @@ function FixedCPMField({ value, onChange }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
       <span
-        title="Quando preenchido, sobrescreve o CPM exibido em /campaigns, /insights e dashboard. Deixe vazio para usar o cálculo dinâmico (executado ÷ impactos × 1000)."
+        title="Quando preenchido, sobrescreve o CPM exibido em /campaigns, /insights e dashboard. Deixe vazio para usar o cálculo dinâmico ((executado + bonificado) ÷ impactos × 1000)."
         style={{
           fontSize: 9.5, fontWeight: 700, letterSpacing: '0.14em',
           color: 'var(--c-text-3)', textTransform: 'uppercase',
@@ -691,7 +692,7 @@ function ConsolidatedField({ value, onChange }) {
     }}>
       <div style={{ flex: 1 }}>
         <Label>Valor total da campanha pra essa emissora</Label>
-        <Hint>Toda inserção que rodar conta dentro desse valor — bonificações são ignoradas no CPM.</Hint>
+        <Hint>Toda inserção que rodar conta dentro desse valor — bonificação nessa emissora não acrescenta valor, só impactos (e portanto baixa o CPM).</Hint>
       </div>
       <CurrencyInput value={value} onChange={onChange} placeholder="R$ 0,00" />
     </div>

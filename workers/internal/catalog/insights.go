@@ -151,8 +151,17 @@ type BucketRow struct {
 // (validate-campaigns → core → investment → buckets) e devolve o
 // payload completo formatado para serialização JSON.
 //
-// CPM padrão = (investido_executado / impactos) × 1000. Quando impactos = 0
-// (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
+// CPM padrão = ((investido_executado + bonificação) / impactos) × 1000. Quando
+// impactos = 0 (sem detecções na seleção), CPM = 0 (em vez de NaN/Inf).
+//
+// POR QUE A BONIFICAÇÃO ENTRA NO NUMERADOR (definição do dono, 2026-08-17): o
+// CPM mede a EFICIÊNCIA DA MÍDIA ENTREGUE A PREÇO DE TABELA, não a eficiência da
+// negociação. A tocada `bonus` é mídia real que foi ao ar e que a audiência
+// ouviu — ela já está no denominador (impactos = pmm × (in_slot + bonus)), então
+// tem que estar no numerador ao preço de tabela dela. Numerador só com o pago
+// faria uma campanha com muito bônus exibir um CPM artificialmente baixo,
+// incomparável com o de qualquer outra campanha. "Investido" continua sendo só
+// o que o cliente pagou (unit × in_slot) — quem soma as duas parcelas é o CPM.
 //
 // Override por fixed_cpm: cada campanha pode ter um CPM fixo pré-acordado.
 // Quando setado, o CPM exibido é a média ponderada por impactos:
@@ -195,7 +204,15 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		bon = BonificacaoK{}
 	}
 
-	cpm, err := r.computeCPM(ctx, p, inv.Executado, core.Impactos)
+	// Numerador do CPM = investido executado + bonificação, SEMPRE calculado
+	// depois do override consolidado acima. Em modo fornecedor `bon` é zerado e
+	// `inv.Executado` já é o total do consolidatedSummary (que por construção já
+	// precifica as emissoras per_insertion por unit × (in_slot + bonus)), então a
+	// soma continua valendo nos dois modos — e é a MESMA expressão que o
+	// /campaigns usa (total_invested + total_bonus_value).
+	cpmNumerador := inv.Executado + bon.Valor
+
+	cpm, err := r.computeCPM(ctx, p, cpmNumerador, core.Impactos)
 	if err != nil {
 		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
@@ -205,12 +222,14 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		return nil, fmt.Errorf("targetLabel: %w", err)
 	}
 
-	// CPM no target é SEMPRE dinâmico (executado ÷ impactos_target × 1000),
-	// mesmo em campanha com fixed_cpm: o CPM fixo é contratado sobre a base
-	// total de audiência, não sobre o recorte de público-alvo.
+	// CPM no target é SEMPRE dinâmico ((executado + bonificação) ÷
+	// impactos_target × 1000), mesmo em campanha com fixed_cpm: o CPM fixo é
+	// contratado sobre a base total de audiência, não sobre o recorte de
+	// público-alvo. O numerador é o MESMO do CPM cheio — muda só o denominador
+	// (pmm_target no lugar de pmm), e impactos_target também conta in_slot+bonus.
 	var cpmTarget float64
 	if core.ImpactosTarget > 0 {
-		cpmTarget = (inv.Executado / float64(core.ImpactosTarget)) * 1000.0
+		cpmTarget = (cpmNumerador / float64(core.ImpactosTarget)) * 1000.0
 	}
 
 	return &InsightsPayload{
@@ -312,6 +331,15 @@ func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) str
 //	                  acumula por ciclo mensal iniciado até `today`)
 //	  + per_insertion: unit_value × (in_slot + bonus)        (o ENTREGUE)
 //	)
+//
+// Em modo fornecedor esse `total` vira TAMBÉM o numerador do CPM (Compute soma
+// `inv.Executado + bon.Valor`, e aqui `bon` é zerado) — e a expressão acima é
+// byte-a-byte a mesma do numerador do /campaigns
+// (`total_invested + total_bonus_value`), que é o que fecha a divergência de CPM
+// entre as duas telas em campanha de pricing MISTO. O que ainda difere em modo
+// fornecedor é o dinheiro EXIBIDO: o /insights mostra um "Investido" que já
+// embute o bônus das emissoras por-inserção e esconde o card de Bonificação,
+// enquanto o /campaigns mostra as duas parcelas separadas.
 //
 // Não depende de from/to (whole-campaign); depende de `today` só pro acúmulo
 // mensal do consolidado.
@@ -722,16 +750,28 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 
 // computeCPM aplica a regra de fixed_cpm por campanha em cima dos números
 // agregados. Quando NENHUMA campanha selecionada tem fixed_cpm, devolve o
-// CPM dinâmico clássico (executado / impactos × 1000) — fast path. Quando
-// pelo menos uma tem fixed_cpm, faz uma query por-campanha pra calcular a
+// CPM dinâmico clássico (totalValorEntregue / impactos × 1000) — fast path.
+// Quando pelo menos uma tem fixed_cpm, faz uma query por-campanha pra calcular a
 // média ponderada por impactos:
 //
 //	per_campaign_cpm = COALESCE(fixed_cpm, dynamic_cpm)
 //	cpm_final = Σ(per_campaign_cpm × impactos) / Σ(impactos)
 //
+// `totalValorEntregue` é o NUMERADOR do CPM: investido executado + bonificação
+// (ver Compute) — o valor de tabela da mídia entregue, não o que o cliente
+// pagou. O slow path monta o mesmo numerador por campanha (executado + bônus nos
+// dois modos de pricing), senão ligar um fixed_cpm em qualquer campanha da
+// seleção mudaria o CPM de TODAS as outras.
+//
+// Divergência conhecida (pré-existente, não introduzida aqui): quando a seleção
+// tem emissora consolidada, o fast path usa o total do consolidatedSummary
+// (consolidated_value × meses_decorridos) enquanto o slow path usa o Modelo B
+// (consolidated_value × entregue ÷ plano_cheio). Ligar um fixed_cpm numa seleção
+// consolidada pode, por isso, mover o CPM das campanhas vizinhas.
+//
 // Campanhas sem impactos não contribuem (peso zero); se a soma total de
 // impactos for zero, devolve 0.
-func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecutado float64, totalImpactos int64) (float64, error) {
+func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorEntregue float64, totalImpactos int64) (float64, error) {
 	// Fast path: nenhum CPM fixo nas campanhas selecionadas → cálculo clássico.
 	var anyFixed bool
 	if err := r.pool.QueryRow(ctx, `
@@ -745,7 +785,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		if totalImpactos == 0 {
 			return 0, nil
 		}
-		return (totalExecutado / float64(totalImpactos)) * 1000.0, nil
+		return (totalValorEntregue / float64(totalImpactos)) * 1000.0, nil
 	}
 
 	// Path com fixed_cpm: precisa de impactos e executado por campanha.
@@ -776,25 +816,33 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    FROM campaigns
 		    WHERE id = ANY($1::uuid[])
 		),
-		per_campaign_exec AS (
+		per_campaign_valor AS (
+		    -- Numerador do CPM por campanha = executado + bonificação, nos dois
+		    -- modos. É o valor de tabela da mídia ENTREGUE (paga + gratuita) — o
+		    -- bônus está no denominador (impactos), então tem que estar aqui.
 		    SELECT csp.campaign_id,
 		           COALESCE(SUM(
 		               CASE
 		                   -- Espelha aggregateInvestment (Modelo B): entregue_janela ÷
-		                   -- plano_da_campanha_inteira, cap em 100%.
+		                   -- plano_da_campanha_inteira, cap em 100%; + o bônus à mesma
+		                   -- taxa estável (contrato ÷ plano_total), sem cap.
 		                   WHEN csp.mode='consolidated' AND COALESCE(pl.plan_expected, 0) > 0
-		                       THEN csp.consolidated_value * LEAST(1, COALESCE(w.executed, 0)::numeric / pl.plan_expected::numeric)
+		                       THEN csp.consolidated_value * (
+		                                LEAST(1, COALESCE(w.executed, 0)::numeric / pl.plan_expected::numeric)
+		                              + COALESCE(w.bonus, 0)::numeric / pl.plan_expected::numeric
+		                            )
 		                   WHEN csp.mode='per_insertion'
-		                       THEN COALESCE(pi.pi_executado, 0)
+		                       THEN COALESCE(pi.pi_executado, 0) + COALESCE(pi.pi_bonus, 0)
 		                   ELSE 0
 		               END
-		           ), 0)::float8 AS executado
+		           ), 0)::float8 AS valor_entregue
 		    FROM campaign_station_pricing csp
 		    JOIN camp_meta cm ON cm.id = csp.campaign_id
 		    LEFT JOIN (
-		        -- numerador: entregue na janela [from,to]
+		        -- numerador: entregue (+ bônus) na janela [from,to]
 		        SELECT s.campaign_id, s.station_id,
-		               SUM(s.in_slot)::bigint AS executed
+		               SUM(s.in_slot)::bigint AS executed,
+		               SUM(s.bonus)::bigint   AS bonus
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
@@ -813,7 +861,8 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		    ) pl ON pl.campaign_id = csp.campaign_id AND pl.station_id = csp.station_id
 		    LEFT JOIN (
 		        SELECT s.campaign_id, s.station_id,
-		               COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric AS pi_executado
+		               COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric AS pi_executado,
+		               COALESCE(SUM(tp.unit_value * s.bonus),   0)::numeric AS pi_bonus
 		        FROM daily_play_summary s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        JOIN campaign_station_type_pricing tp
@@ -829,11 +878,11 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		)
 		SELECT cm.id,
 		       cm.fixed_cpm,
-		       COALESCE(pi.impactos, 0)::float8  AS impactos,
-		       COALESCE(pe.executado, 0)::float8 AS executado
+		       COALESCE(pi.impactos, 0)::float8       AS impactos,
+		       COALESCE(pv.valor_entregue, 0)::float8 AS valor_entregue
 		FROM camp_meta cm
 		LEFT JOIN per_campaign_impactos pi ON pi.campaign_id = cm.id
-		LEFT JOIN per_campaign_exec     pe ON pe.campaign_id = cm.id
+		LEFT JOIN per_campaign_valor    pv ON pv.campaign_id = cm.id
 	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
 	if err != nil {
 		return 0, err
@@ -844,8 +893,8 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 	for rows.Next() {
 		var id uuid.UUID
 		var fixed *float64
-		var impactos, executado float64
-		if err := rows.Scan(&id, &fixed, &impactos, &executado); err != nil {
+		var impactos, valorEntregue float64
+		if err := rows.Scan(&id, &fixed, &impactos, &valorEntregue); err != nil {
 			return 0, err
 		}
 		if impactos <= 0 {
@@ -855,7 +904,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalExecut
 		if fixed != nil {
 			perCPM = *fixed
 		} else {
-			perCPM = (executado / impactos) * 1000.0
+			perCPM = (valorEntregue / impactos) * 1000.0
 		}
 		weightedSum += perCPM * impactos
 		totalWeight += impactos

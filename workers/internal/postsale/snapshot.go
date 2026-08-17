@@ -266,15 +266,24 @@ func applyOverrides(k *BlockKPIs, ov KPIOverrides) {
 	if ov.Bonificacao != nil {
 		k.Bonificacao = *ov.Bonificacao
 	}
-	k.CPM = cpmOf(k.ValorEntregue, k.Impactos)
+	// Numerador = valor entregue + bonificação, os dois já com o override
+	// aplicado. É a mesma definição do /insights: o CPM mede a eficiência da
+	// mídia ENTREGUE a preço de tabela (bônus incluído, porque ele já está nos
+	// impactos do denominador), não a eficiência da negociação. Só o valor pago
+	// no numerador faria um pós-venda com muito bônus exibir um CPM
+	// artificialmente baixo. Em campanha consolidada `Bonificacao` é 0 e
+	// `ValorEntregue` já é o total — a soma continua correta.
+	entregue := k.ValorEntregue + k.Bonificacao
+	k.CPM = cpmOf(entregue, k.Impactos)
 	// O CPM no target segue os impactos no target, que continuam vindo do
 	// sistema (o admin ajusta o total, não o recorte de público-alvo).
-	k.CPMTarget = cpmOf(k.ValorEntregue, k.ImpactosTarget)
+	k.CPMTarget = cpmOf(entregue, k.ImpactosTarget)
 	k.Overridden = true
 }
 
-// cpmOf = valor ÷ impactos × 1000, com guarda de divisão por zero (impactos
-// zerados significam "indeterminado", e o documento mostra 0 em vez de ∞).
+// cpmOf = valor entregue ÷ impactos × 1000, com guarda de divisão por zero
+// (impactos zerados significam "indeterminado", e o documento mostra 0 em vez
+// de ∞). `valor` aqui é investido + bonificado, nunca só o investido.
 func cpmOf(valor float64, impactos int64) float64 {
 	if impactos <= 0 {
 		return 0
