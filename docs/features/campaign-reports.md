@@ -2,8 +2,13 @@
 status: implementado
 ultima-verificacao: 2026-08-17
 codigo-relacionado:
-  - workers/internal/catalog/detections.go
   - workers/internal/reportcsv/reportcsv.go
+  - workers/internal/reportcsv/format.go
+  - workers/internal/reportcsv/footer.go
+  - workers/internal/catalog/detections.go
+  - workers/internal/catalog/campaigns.go
+  - workers/internal/categorizer/categorizer.go
+  - workers/internal/api/handlers/detections.go
   - workers/internal/api/handlers/reports.go
   - workers/internal/api/router.go
   - workers/cmd/api/main.go
@@ -47,7 +52,7 @@ O menu oferece três opções:
 | Item | Forma | Granularidade | Acesso |
 |------|-------|---------------|--------|
 | CSV Consolidado | `text/csv; charset=utf-8` (BOM, separador `;`) | 1 linha por **material × emissora** com total + breakdown por status (Dentro da faixa/Fora da faixa/Fora da data/Bonificação) no período | viewer (próprio cliente) + operator + admin |
-| CSV Detalhado | mesmo formato | 1 linha por **veiculação**, coluna **Status** em PT-BR | **admin-only** (reusa `/detections/export`) |
+| CSV Detalhado | mesmo formato | 1 linha por **veiculação**, no **layout do relatório do fornecedor** + rodapé de totais (ver seção abaixo), coluna **Status** em PT-BR | **admin-only** (reusa `/detections/export`) |
 | PDF | A4, gerado no browser via jsPDF | capa + KPIs + **legenda de cores** + tabela por material + tabela por emissora + tabela material × emissora — as três com **breakdown por status** (Dentro · Fora faixa · Fora data · Bônus, coloridos como o semáforo da grade) | viewer (próprio cliente) + operator + admin |
 
 > O CSV detalhado continua admin-only por decisão histórica (o endpoint
@@ -98,6 +103,143 @@ e [`gridReport.js`](../../frontend/src/utils/gridReport.js). É o mesmo número 
 > fallback a coluna Impactos zeraria no PDF do cliente durante a janela entre os
 > dois deploys.
 
+> A coluna **Impactos** é do CSV Consolidado e do PDF. O **CSV Detalhado** é uma
+> linha por veiculação e não tem coluna de impacto — o equivalente dele é a
+> coluna `PMM`, que o leitor multiplica pelas linhas que quiser.
+
+## CSV Detalhado — layout do fornecedor
+
+Desde **2026-08-14** o CSV Detalhado sai no formato do relatório do fornecedor
+externo que o E-monitor substitui (arquivo de referência:
+`183.1-Rogga-_-Midia-Geral-01-05-2026-31-05-2026.xlsx`). O objetivo é que o
+cliente abra o nosso relatório e reconheça o formato, sem reaprender a ler o
+arquivo.
+
+Continua sendo **CSV** (`;` + BOM UTF-8) — só o conjunto e a ordem das colunas
+mudaram. A formatação inteira vive em
+[`reportcsv.WriteDetailed`](../../workers/internal/reportcsv/reportcsv.go).
+
+### Colunas
+
+| # | Coluna | Origem |
+|---|--------|--------|
+| 1 | `Identificador` | `stations.short_id` |
+| 2 | `Data` | `detected_at` → `DD/MM/AAAA`, America/Sao_Paulo |
+| 3 | `Hora` | `detected_at` → `HH:MM:SS` |
+| 4 | `Rádio` | nome + banda + frequência → `Massa - FM (106.9)` |
+| 5 | `Cidade / UF` | `Joinville / SC` |
+| 6 | `Peça` | `material_types.name` (`Spot 30s`, `Jingle`, `Testemunhal`) |
+| 7 | `Comercial` | título do material |
+| 8 | `Status` | `category` em PT-BR (tabela abaixo) |
+| 9 | `PMM` | `stations.pmm` |
+| 10 | `Preço` | `campaign_station_type_pricing.unit_value` |
+| 11 | `Cliente` | `clients.name` |
+| 12 | `PMM no target` | `client_station_pmm.pmm_target` |
+| 13 | `Duração (s)` | `materials.duration_seconds` |
+
+**As colunas 1–10 são o layout do fornecedor, nesta ordem exata.** As 11–13 são
+nossas e vêm depois, pra não perder informação que o layout dele não cobre.
+`Cliente` é a que mais importa: `/detections/export` aceita `campaign_id`
+opcional, e sem ela um export cross-campanha viraria uma lista indistinguível.
+
+Ordenação: `detected_at DESC` (mais recente primeiro), igual ao fornecedor.
+
+**Diferenças deliberadas do arquivo original:**
+- **Sem a linha em branco** entre o cabeçalho e a primeira veiculação — ela
+  quebra importadores (Power Query, scripts) e não agrega nada visualmente.
+- **Frequência com ponto decimal** (`106.9`), ao contrário do resto do CSV que
+  usa vírgula: aqui é rótulo de dial, não número que o Excel vá somar.
+- **`R$ 6,00` com espaço comum**, não o NBSP do original — visualmente idêntico
+  e sem o risco de um byte invisível confundir quem processa o arquivo.
+- **Os 4 rótulos de status**, não só "Dentro da Faixa" (o fornecedor não tem o
+  conceito de fora-da-faixa/bonificação — no arquivo de referência as 1.671
+  linhas são *todas* "Dentro da Faixa"). Mantemos a nossa grafia
+  ("Dentro da faixa", f minúsculo) porque `CategoryLabelPT` é compartilhada com
+  o CSV Consolidado e o `DayDetailModal`.
+- **Ordem determinística no resumo por comercial**: em empate de total,
+  desempatamos por título asc. O arquivo do fornecedor não desempata (três
+  comerciais com 36 saem fora de ordem alfabética), o que tornaria o golden
+  test flaky.
+
+### Regra da coluna `Preço`
+
+Preenchida **somente** quando a linha é `in_slot` **e** existe `unit_value`
+cadastrado pra (campanha, emissora, tipo). Qualquer outro caso sai `R$ 0,00`.
+
+A restrição a `in_slot` segue a regra de cobrança da
+[`0022_pricing.up.sql`](../../migrations/0022_pricing.up.sql) — "valor total =
+`unit_value × in_slot`". Com ela, **a soma da coluna bate com o que é
+faturado**; preencher fora-da-faixa/fora-da-data/bonificação inflaria o número.
+
+> ⚠️ **Interação com o fechamento por cota (2026-08-17).** `in_slot` passou a ser
+> **limitado pela meta N da célula-dia**: as N primeiras tocadas dentro da faixa
+> são `in_slot`, o excedente vira `bonus`. A coluna `Preço` acompanha isso
+> automaticamente — o excedente sai `R$ 0,00`, que é o comportamento correto
+> (bonificação não fatura). No mesmo passo `out_slot` deixou de fechar a
+> obrigação, e continua `R$ 0,00` como sempre foi. Ver
+> [quota-aware-categorization.md](quota-aware-categorization.md).
+
+Campanha com pricing em modo `consolidated` não tem valor por inserção **por
+definição** → todas as linhas saem `R$ 0,00`, que é exatamente o que o arquivo
+do fornecedor mostra na maioria das emissoras.
+
+### Rodapé de totais
+
+Depois de **duas** linhas em branco, três blocos:
+
+```
+TOTAL DE RADIOS MONITORADAS;16
+TOTAL DE RÁDIOS POR ESTADO COM VEICULAÇÕES;16
+TOTAL DE VEICULAÇÕES;1671
+
+RESUMO DE RÁDIOS POR ESTADO COM VEICULAÇÕES
+UF;TOTAL
+SC;16
+
+RESUMO DE VEICULAÇÕES POR COMERCIAL
+Comercial;Total     ← desc; empate desempata por título asc
+```
+
+**"Rádios monitoradas" = emissoras com pelo menos uma veiculação no período**,
+não emissoras no `target_stations` da campanha. Emissora que ficou fora do ar o
+mês inteiro não aparece aqui — pra isso existe `/admin/station-failures`.
+
+O rodapé é acumulado **durante** o stream, em
+[`footer.go`](../../workers/internal/reportcsv/footer.go): guarda chaves
+distintas (emissoras, UFs, títulos), não linhas. Memória O(emissoras +
+materiais) — dezenas de entradas — e não O(veiculações), então o export
+continua streamando arquivo de qualquer tamanho.
+
+Emissora sem `state` cadastrado entra num grupo de chave vazia, por último no
+resumo por estado. Não é caso esperado, mas omiti-la faria o total geral
+divergir da soma do bloco por UF.
+
+### Nome do arquivo
+
+`{Cliente}-Veiculacoes-{DD-MM-AAAA}-{DD-MM-AAAA}.csv` — ex.
+`Rogga-Veiculacoes-01-05-2026-31-05-2026.csv`. Mesmo espírito do fornecedor,
+sem os códigos internos dele (`183.1`, `Midia Geral`).
+
+Fallbacks:
+- sem `campaign_id`, ou falha ao resolver o cliente → `veiculacoes_{timestamp}.csv`
+- sem `from`/`to` → `{Cliente}-Veiculacoes-{timestamp}.csv`
+
+O nome do cliente passa por `reportcsv.SanitizeFilename`: acentos removidos,
+caractere fora de `[A-Za-z0-9._-]` vira `-`, hifens repetidos colapsam,
+truncado em 60. `Content-Disposition` com byte não-ASCII quebra em parte dos
+navegadores, e sanitizar é mais simples que `filename*=UTF-8''`.
+
+### Efeito no zip do pós-venda
+
+O `relatorio-detalhado.csv` dentro do bundle do pós-venda usa **o mesmo**
+`WriteDetailed`, então também mudou de formato — o cliente recebe o mesmo
+layout pelos dois caminhos. O nome da entrada dentro do zip continua
+`relatorio-detalhado.csv` (é caminho fixo do bundle, não download avulso).
+
+**Pós-vendas já publicados não são regerados**: quem baixar um zip antigo pega
+o formato antigo. É o comportamento correto — o documento do pós-venda é
+congelado por design (ver [post-sale.md](post-sale.md)).
+
 ## Rótulos de status nos CSVs
 
 A coluna **Status** (CSV Detalhado) e as colunas de breakdown (CSV
@@ -115,16 +257,19 @@ não o enum técnico do banco. Mapeamento:
 
 A conversão canônica vive em `reportcsv.CategoryLabelPT`
 ([reportcsv.go](../../workers/internal/reportcsv/reportcsv.go)); o
-`categoryLabelPT` dos handlers apenas delega. Se aparecer um valor de
-categoria novo (improvável; a coluna é enum restrito pelo CHECK), o
-fallback escreve o valor cru pra não silenciar.
+`categoryLabelPT` de [detections.go](../../workers/internal/api/handlers/detections.go)
+é só um delegate pros outros handlers do arquivo. Se aparecer um valor de
+categoria novo (improvável; a coluna é enum restrito pelo CHECK e por
+`categorizer.go`), o fallback escreve o valor cru pra não silenciar.
 
 > `orphan` é o nome antigo de `bonus` ([quota-aware-categorization.md](quota-aware-categorization.md)).
-> Ele é mapeado explicitamente porque **este arquivo é o CSV que o cliente abre**:
-> uma linha gravada pelo binário antigo na janela de deploy imprimiria a string
-> crua "orphan" numa célula do relatório. O campo JSON `orphan_count` do agregado
-> também manteve o nome por compatibilidade com o frontend — o conteúdo é a
-> contagem de bonificação.
+> Ele é mapeado explicitamente — via `categorizer.CatBonus, categorizer.CatOrphan`
+> no mesmo `case` — porque **este arquivo é o CSV que o cliente abre**: uma linha
+> gravada pelo binário antigo na janela de deploy imprimiria a string crua
+> "orphan" numa célula do relatório. Isso vale para os dois CSVs: a coluna
+> `Status` do detalhado e o cabeçalho `Bonificação` do consolidado. O campo JSON
+> `orphan_count` do agregado também manteve o nome por compatibilidade com o
+> frontend — o conteúdo é a contagem de bonificação.
 
 ## Filtro de período (dentro do menu)
 

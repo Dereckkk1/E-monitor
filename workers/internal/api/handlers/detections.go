@@ -617,7 +617,27 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 		f.Sort = v
 	}
 
+	// Nome no espírito do relatório do fornecedor — "Rogga-Veiculacoes-
+	// 01-05-2026-31-05-2026.csv" — mas sem os códigos internos dele. Cai pro
+	// nome genérico quando o export não tem campanha (admin exportando várias
+	// de uma vez) ou quando o cliente não resolve: um nome de arquivo genérico
+	// é melhor que um 500 num export que, no resto, funcionaria.
 	filename := fmt.Sprintf("veiculacoes_%s.csv", time.Now().Format("20060102_150405"))
+	if f.CampaignID != nil {
+		if client, err := h.CampaignRepo.ClientNameFor(r.Context(), *f.CampaignID); err == nil {
+			if slug := reportcsv.SanitizeFilename(client); slug != "" {
+				if f.StartDate != nil && f.EndDate != nil {
+					loc := reportcsv.SaoPaulo()
+					filename = fmt.Sprintf("%s-Veiculacoes-%s-%s.csv", slug,
+						f.StartDate.In(loc).Format("02-01-2006"),
+						f.EndDate.In(loc).Format("02-01-2006"))
+				} else {
+					filename = fmt.Sprintf("%s-Veiculacoes-%s.csv", slug,
+						time.Now().Format("20060102_150405"))
+				}
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)

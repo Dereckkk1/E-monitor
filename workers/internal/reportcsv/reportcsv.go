@@ -10,6 +10,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,13 +21,19 @@ import (
 // bom é o marcador que faz o Excel pt-BR reconhecer UTF-8.
 var bom = []byte{0xEF, 0xBB, 0xBF}
 
-func saoPaulo() *time.Location {
+// SaoPaulo é o fuso de todos os relatórios. Exportada porque o handler HTTP
+// formata as datas do nome do arquivo no mesmo fuso do conteúdo — dois fusos
+// diferentes no mesmo download dariam um arquivo "01-05 a 31-05" com linhas de
+// 30/04 dentro.
+func SaoPaulo() *time.Location {
 	loc, err := time.LoadLocation("America/Sao_Paulo")
 	if err != nil {
 		return time.FixedZone("BRT", -3*3600)
 	}
 	return loc
 }
+
+func saoPaulo() *time.Location { return SaoPaulo() }
 
 // WriteConsolidated escreve o CSV consolidado: uma linha por material ×
 // emissora, com o breakdown por status.
@@ -112,7 +119,19 @@ func WriteConsolidated(out io.Writer, rows []catalog.MaterialStationRow, targetS
 	return cw.Error()
 }
 
-// WriteDetailed escreve o CSV detalhado: uma linha por veiculação.
+// WriteDetailed escreve o CSV detalhado: uma linha por veiculação, no layout
+// do relatório do fornecedor externo (Mídia Geral) que os clientes já
+// conhecem, seguido do rodapé de totais dele.
+//
+// As colunas 1–10 são o layout do fornecedor, nesta ordem exata. As 11–13 são
+// nossas, e vêm depois pra não perder informação que o layout dele não cobre —
+// `Cliente` importa porque este export aceita campaign_id opcional e pode
+// misturar campanhas de CLIENTES DIFERENTES.
+//
+// "PMM no target" fica SEM o rótulo de público-alvo do cliente aqui, ao
+// contrário do CSV consolidado, pelo mesmo motivo: um rótulo único no
+// cabeçalho estaria errado para parte das linhas, e rótulo errado é pior que
+// rótulo nenhum.
 //
 // O iterador é injetado para que o chamador escolha a fonte — streaming HTTP
 // (Detections.IterateForExport direto no ResponseWriter) ou buffer em memória
@@ -123,24 +142,22 @@ func WriteDetailed(out io.Writer, iterate func(cb func(catalog.DetectionEnriched
 	}
 	cw := csv.NewWriter(out)
 	cw.Comma = ';'
-	// "PMM no target" fica SEM o rótulo de público-alvo do cliente aqui, ao
-	// contrário do CSV consolidado: campaign_id é opcional neste export, então
-	// as linhas podem cobrir várias campanhas de CLIENTES DIFERENTES — cada uma
-	// com o seu target. Um rótulo único no cabeçalho estaria errado para parte
-	// das linhas, e rótulo errado é pior que rótulo nenhum.
 	if err := cw.Write([]string{
-		"Data", "Hora", "Emissora", "Frequência", "Banda", "Cidade", "UF",
-		"Material", "Duração (s)", "Tipo", "Cliente", "PMM", "PMM no target", "Status",
+		"Identificador", "Data", "Hora", "Rádio", "Cidade / UF",
+		"Peça", "Comercial", "Status", "PMM", "Preço",
+		"Cliente", "PMM no target", "Duração (s)",
 	}); err != nil {
 		return err
 	}
 
 	loc := saoPaulo()
+	totals := newDetailedTotals()
 	if err := iterate(func(d catalog.DetectionEnriched) error {
 		t := d.DetectedAt.In(loc)
-		freq := ""
-		if d.StationFrequencyMHz != nil {
-			freq = strings.ReplaceAll(fmt.Sprintf("%.1f", *d.StationFrequencyMHz), ".", ",")
+
+		id := ""
+		if d.StationShortID != nil {
+			id = strconv.FormatInt(int64(*d.StationShortID), 10)
 		}
 		pmm := ""
 		if d.StationPMM != nil {
@@ -148,33 +165,64 @@ func WriteDetailed(out io.Writer, iterate func(cb func(catalog.DetectionEnriched
 		}
 		pmmTarget := ""
 		if d.StationPMMTarget != nil {
-			pmmTarget = fmt.Sprintf("%d", *d.StationPMMTarget)
+			pmmTarget = strconv.Itoa(*d.StationPMMTarget)
 		}
 		dur := ""
 		if d.MaterialDurationSec != nil {
 			dur = strings.ReplaceAll(fmt.Sprintf("%.0f", *d.MaterialDurationSec), ".", ",")
 		}
+		uf := ""
+		if d.StationState != nil {
+			uf = strings.TrimSpace(*d.StationState)
+		}
+
+		totals.add(stationKey(d), uf, d.CommercialName)
+
 		return cw.Write([]string{
+			id,
 			t.Format("02/01/2006"),
 			t.Format("15:04:05"),
-			d.StationName,
-			freq,
-			strOrEmpty(d.StationBand),
-			strOrEmpty(d.StationCity),
-			strOrEmpty(d.StationState),
-			d.CommercialName,
-			dur,
+			formatRadio(d.StationName, d.StationBand, d.StationFrequencyMHz),
+			formatCityUF(d.StationCity, d.StationState),
 			strOrEmpty(d.MaterialTypeName),
-			strOrEmpty(d.ClientName),
-			pmm,
-			pmmTarget,
+			d.CommercialName,
 			CategoryLabelPT(d.Category),
+			pmm,
+			priceCell(d),
+			strOrEmpty(d.ClientName),
+			pmmTarget,
+			dur,
 		})
 	}); err != nil {
 		return err
 	}
+
+	if err := totals.write(cw); err != nil {
+		return err
+	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// priceCell devolve o preço unitário da veiculação. Só linha `in_slot` com
+// unit_value cadastrado tem valor: a regra de cobrança da 0022_pricing é
+// "unit_value × in_slot", então preencher fora-da-faixa / fora-da-data / bônus
+// faria a soma da coluna passar do que é efetivamente faturado.
+func priceCell(d catalog.DetectionEnriched) string {
+	if d.Category == "in_slot" && d.UnitPrice != nil {
+		return formatBRL(*d.UnitPrice)
+	}
+	return formatBRL(0)
+}
+
+// stationKey identifica a emissora nas contagens do rodapé. Usa short_id, que é
+// estável; o fallback pelo nome só existe porque o campo chega como ponteiro —
+// colapsar todas as emissoras sem id num bucket só falsearia o total.
+func stationKey(d catalog.DetectionEnriched) string {
+	if d.StationShortID != nil {
+		return "id:" + strconv.FormatInt(int64(*d.StationShortID), 10)
+	}
+	return "name:" + d.StationName
 }
 
 // CategoryLabelPT mapeia o enum da coluna `category` (in_slot|out_slot|
