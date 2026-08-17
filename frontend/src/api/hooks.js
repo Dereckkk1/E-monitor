@@ -252,9 +252,17 @@ export function useCampaignFailureDetail(id) {
 }
 
 // Agregado financeiro por campanha — alimenta o badge de CPM na listagem.
-// Retorna [{campaign_id, total_invested, total_insertions, total_audience}];
-// audience = Σ(inserções × stations.pmm). CPM = (invested / audience) × 1000,
-// calculado no frontend pra preservar precisão.
+// Retorna [{campaign_id, total_invested, total_bonus_value, total_insertions,
+// total_audience}]; audience = Σ(inserções × stations.pmm). CPM =
+// (invested / audience) × 1000, calculado no frontend pra preservar precisão.
+//
+// `total_invested` = unit_value × in_slot — só o que o contrato PAGOU. Desde
+// 2026-08-17 a bonificação (veiculação gratuita) saiu daqui e vive em
+// `total_bonus_value` (= unit_value × bonus, só per_insertion). O denominador
+// do CPM (`total_audience`) continua incluindo o bônus de propósito: a tocada
+// aconteceu e a audiência ouviu. Logo o CPM exibido é o EFETIVO e é menor que
+// o de antes — mesmo comportamento do /insights. `total_bonus_value` ainda não
+// é renderizado em nenhuma tela.
 //
 // `campaignIds` recorta o agregado às campanhas que a tela realmente mostra
 // (a página atual da listagem, os cards do dashboard). SEMPRE passe: sem o

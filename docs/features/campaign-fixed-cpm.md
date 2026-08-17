@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-11
+ultima-verificacao: 2026-08-17
 codigo-relacionado:
   - migrations/0035_campaign_fixed_cpm.up.sql
   - migrations/0052_daily_play_summary_fn.up.sql
@@ -44,7 +44,7 @@ Investido contratado/executado, bonificação, breakdown de veiculações e dema
 ### Endpoints
 
 - `GET /campaigns/{id}` — retorna `fixed_cpm` no payload.
-- `GET /campaigns/financials[?ids=<uuid>,<uuid>,…]` — cada item inclui `fixed_cpm` ao lado de `total_invested/insertions/audience`. O `?ids=` recorta o agregado às campanhas pedidas (a página atual de `/campaigns`, os cards do dashboard) e é o que torna a rota barata: o custo dominante é a varredura de `daily_play_summary`, que o filtro de carteira do JWT não corta (ele mora no SELECT final, depois do FULL OUTER JOIN da view). Sem `?ids=` o comportamento é o antigo — todas as campanhas do escopo. O recorte é INTERSEÇÃO com a carteira, nunca um bypass. Teto de 200 ids (400 acima disso). Implementação: `catalog.Campaigns.FinancialsByCampaign`, que lê `daily_play_summary_for(MIN(start_date), MAX(end_date), ids)`.
+- `GET /campaigns/financials[?ids=<uuid>,<uuid>,…]` — cada item inclui `fixed_cpm` ao lado de `total_invested/total_bonus_value/insertions/audience`. **`total_invested` é `unit_value × in_slot`** — desde 2026-08-17 a bonificação (entrega gratuita) saiu dele e vive em `total_bonus_value` (`unit_value × bonus`, só `per_insertion`); `audience` continua incluindo o bônus, então o CPM dinâmico exibido é o *efetivo* e ficou menor que antes. O `?ids=` recorta o agregado às campanhas pedidas (a página atual de `/campaigns`, os cards do dashboard) e é o que torna a rota barata: o custo dominante é a varredura de `daily_play_summary`, que o filtro de carteira do JWT não corta (ele mora no SELECT final, depois do FULL OUTER JOIN da view). Sem `?ids=` o comportamento é o antigo — todas as campanhas do escopo. O recorte é INTERSEÇÃO com a carteira, nunca um bypass. Teto de 200 ids (400 acima disso). Implementação: `catalog.Campaigns.FinancialsByCampaign`, que lê `daily_play_summary_for(MIN(start_date), MAX(end_date), ids)`.
 - `GET /insights` — `kpis.cpm` já vem com o override aplicado (cálculo no servidor).
 - `PUT /campaigns/{id}/fixed-cpm` — body `{ "fixed_cpm": <number> | null }`. `null` limpa o override. Valores negativos retornam 400.
 

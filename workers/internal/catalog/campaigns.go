@@ -450,13 +450,16 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 // badge de CPM na listagem. Calculado server-side pra evitar N fetches de
 // pricing+daily-summary no frontend.
 //
-// Fórmulas (alinhadas com a especificação 2026-05-12):
-//   - per_insertion: invested += unit_value × (in_slot + bonus)
-//     insertions += in_slot + bonus
-//     audience  += (in_slot + bonus) × stations.pmm
+// Fórmulas (alinhadas com a especificação 2026-05-12; parcela de bonificação
+// separada em 2026-08-17):
+//   - per_insertion: invested   += unit_value × in_slot
+//     bonus_value += unit_value × bonus
+//     insertions  += in_slot + bonus
+//     audience    += (in_slot + bonus) × stations.pmm
 //   - consolidated:  invested += consolidated_value (independente das plays)
-//     insertions += in_slot + bonus
-//     audience  += (in_slot + bonus) × stations.pmm
+//     bonus_value = 0 (não existe preço por inserção nesse modo)
+//     insertions  += in_slot + bonus
+//     audience    += (in_slot + bonus) × stations.pmm
 //   - CPM = invested / audience × 1000, calculado no caller (frontend)
 //     pra ter precisão decimal. audience = soma de impressões reais
 //     (cada inserção em uma emissora vale stations.pmm impressões).
@@ -464,11 +467,27 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 //     client_station_pmm.pmm_target do cliente dono da campanha (PMM no
 //     target). Ausência de linha em client_station_pmm = emissora não
 //     cadastrada (soma zero e não conta em stations_with_target).
+//
+// Por que `invested` NÃO soma o bônus (mudança 2026-08-17): tocada `bonus` é,
+// por definição, entrega GRATUITA — a emissora passou da cota do dia ou tocou
+// fora da faixa depois da meta cumprida. Precificá-la a `unit_value` e chamar o
+// resultado de "Investimento" superestima o que o cliente pagou. O contrato
+// pagou `in_slot`. O valor que saiu daqui não sumiu: vive em `total_bonus_value`
+// (o mesmo número que o /insights mostra no card "Bonificação").
+//
+// Consequência DESEJADA: `insertions` e `audience`/`audience_target` continuam
+// somando o bônus (a tocada aconteceu, a audiência ouviu). Só o dinheiro muda.
+// Logo o CPM (invested ÷ audience × 1000) CAI — é o "CPM efetivo": impressão
+// gratuita baixa o custo por mil. É como o /insights sempre se comportou.
 type CampaignFinancials struct {
-	CampaignID      uuid.UUID `json:"campaign_id"`
-	TotalInvested   float64   `json:"total_invested"`
-	TotalInsertions int       `json:"total_insertions"`
-	TotalAudience   float64   `json:"total_audience"`
+	CampaignID    uuid.UUID `json:"campaign_id"`
+	TotalInvested float64   `json:"total_invested"`
+	// TotalBonusValue é o valor das veiculações `bonus` a preço de tabela
+	// (unit_value × bonus, só em per_insertion). NÃO entra em TotalInvested —
+	// é o que o cliente recebeu de graça. Espelha insights.Bonificacao.Valor.
+	TotalBonusValue float64 `json:"total_bonus_value"`
+	TotalInsertions int     `json:"total_insertions"`
+	TotalAudience   float64 `json:"total_audience"`
 	// TotalAudienceTarget espelha TotalAudience trocando stations.pmm pelo
 	// client_station_pmm.pmm_target do cliente DONO da campanha.
 	// StationsWithTarget > 0 é o gate de exibição no frontend.
@@ -533,12 +552,16 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs, campaig
 			SELECT f.* FROM win, LATERAL daily_play_summary_for(win.lo, win.hi, win.ids) f
 		),
 		per_ins AS (
-			-- Investimento, inserções e audiência no modo per_insertion:
+			-- Investimento, bonificação, inserções e audiência no modo
+			-- per_insertion. invested = unit_value × in_slot (o que o contrato
+			-- pagou); bonus_value = unit_value × bonus (entrega gratuita, fica
+			-- FORA do investido). insertions/audience seguem somando os dois:
 			-- audience = (in_slot + bonus) × stations.pmm somado por campanha.
 			-- audience_target = mesma soma trocando pmm por pmm_target.
 			SELECT
 				p.campaign_id,
-				COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::float8 AS invested,
+				COALESCE(SUM(tp.unit_value * s.in_slot), 0)::float8            AS invested,
+				COALESCE(SUM(tp.unit_value * s.bonus), 0)::float8              AS bonus_value,
 				COALESCE(SUM(s.in_slot + s.bonus), 0)::int                    AS insertions,
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(st.pmm, 0)), 0)::float8 AS audience,
 				COALESCE(SUM((s.in_slot + s.bonus) * COALESCE(cst.pmm_target, 0)), 0)::float8 AS audience_target
@@ -607,6 +630,9 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs, campaig
 			-- hoje ($2). per_insertion segue pelo entregue. Mesma regra do /insights.
 			COALESCE(per_ins.invested, 0)
 			  + COALESCE(consolidated_inv.invested, 0) * ` + monthsElapsedSQL("c.start_date", "c.end_date", "$2", "c.start_date", "c.end_date") + ` AS total_invested,
+			-- Valor da bonificação a preço de tabela. Só per_insertion tem preço
+			-- por inserção; no consolidado o pacote não muda com a entrega.
+			COALESCE(per_ins.bonus_value, 0) AS total_bonus_value,
 			COALESCE(per_ins.insertions, 0) + COALESCE(consolidated_ins.insertions, 0) AS total_insertions,
 			COALESCE(per_ins.audience, 0) + COALESCE(consolidated_ins.audience, 0) AS total_audience,
 			COALESCE(per_ins.audience_target, 0) + COALESCE(consolidated_ins.audience_target, 0) AS total_audience_target,
@@ -626,7 +652,8 @@ func (c *Campaigns) FinancialsByCampaign(ctx context.Context, clientIDs, campaig
 	out := make([]CampaignFinancials, 0)
 	for rows.Next() {
 		var f CampaignFinancials
-		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalInsertions, &f.TotalAudience,
+		if err := rows.Scan(&f.CampaignID, &f.TotalInvested, &f.TotalBonusValue,
+			&f.TotalInsertions, &f.TotalAudience,
 			&f.TotalAudienceTarget, &f.StationsWithTarget, &f.FixedCPM); err != nil {
 			return nil, fmt.Errorf("campaigns.FinancialsByCampaign: scan: %w", err)
 		}

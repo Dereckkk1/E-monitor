@@ -214,14 +214,31 @@ Veicular fora da faixa contratada **não fecha a obrigação e não fatura**:
 | Consumidor | Antes | Agora |
 |---|---|---|
 | `/insights` — executado / investido / CPM | `in_slot + out_slot` | `in_slot` |
-| `/campaigns` — base financeira | `in_slot + bonus` | `in_slot + bonus` (inalterado) |
+| `/campaigns` — investimento (`total_invested`) | `in_slot + bonus` | `in_slot` |
+| `/campaigns` — bonificação (`total_bonus_value`) | não existia (ia dentro do investido) | `bonus` |
+| `/campaigns` — inserções e impactos | `in_slot + bonus` | `in_slot + bonus` (inalterado) |
 | `daily_play_summary.deficit` | `expected − in_slot − out_slot` | `expected − in_slot` |
 | `daily_play_summary.bonus` | `GREATEST(0, in_slot − expected) + orphan` | `COUNT(category = 'bonus')` |
 
 As duas telas passaram a valorizar **o mesmo conjunto de categorias**
-(`in_slot + bonus`) — o `/insights` apenas o apresenta partido em dois cards
-(Investido executado = `in_slot`; Bonificação = `bonus`). Se não fecha o contrato,
-também não fatura — e o déficit continua aberto pra emissora repor.
+(`in_slot + bonus`) e a **parti-lo do mesmo jeito**: o dinheiro pago (`in_slot`)
+separado da entrega gratuita (`bonus`). O `/insights` mostra isso em dois cards
+(Investido executado / Bonificação); o `/campaigns` em dois campos
+(`total_invested` / `total_bonus_value`). Se não fecha o contrato, também não
+fatura — e o déficit continua aberto pra emissora repor.
+
+> **`bonus` não é investimento.** Até 2026-08-17 o `/campaigns` somava
+> `unit_value × bonus` dentro de "Investimento". Bonificação é, por definição,
+> veiculação que o cliente **não pagou** (excedente da cota ou tocada sem meta),
+> então o número superestimava o gasto. Agora o valor mora em
+> `total_bonus_value` — a identidade `insights.Investido.Executado ==
+> campaigns.TotalInvested` e `insights.Bonificacao.Valor ==
+> campaigns.TotalBonusValue` está travada por `TestInsights_FinancialBase_MatchesCampaigns`.
+> **Efeito colateral desejado:** o CPM do `/campaigns` (numerador `total_invested`,
+> denominador `total_audience` que continua com o bônus) **cai** — é o CPM
+> *efetivo*, impressão de graça baixa o custo por mil. Medido no clone de prod
+> (2026-08-17, 1.076 campanhas): investido agregado 7.433.634 → 6.949.640
+> (−483.994, −6,5%), CPM agregado R$ 6,72 → R$ 6,28.
 
 ### Os números do cliente CAEM — e é correção, não regressão
 
