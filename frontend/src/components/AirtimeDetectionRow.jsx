@@ -30,8 +30,11 @@ function fmtCost(n) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(n)
 }
 
-function resolveCost(detection, pricingByStation) {
-  const p = pricingByStation?.[detection.station_id]
+// pricingByKey é indexado por `${campaign_id}|${station_id}`: a lista pode
+// misturar campanhas, e duas campanhas do mesmo cliente podem contratar a mesma
+// emissora com preços (e até modos) diferentes.
+function resolveCost(detection, pricingByKey) {
+  const p = pricingByKey?.[`${detection.campaign_id}|${detection.station_id}`]
   if (!p) return { value: null, mode: 'none' }
   if (p.mode === 'consolidated') return { value: null, mode: 'consolidated' }
   if (p.mode === 'per_insertion') {
@@ -72,7 +75,7 @@ function IconCheck() {
 
 export default function AirtimeDetectionRow({
   detection,
-  pricingByStation,
+  pricingByKey,
   isPlaying,
   onPlayRequest,
   onPlayClose,
@@ -123,7 +126,7 @@ export default function AirtimeDetectionRow({
   }
 
   const matColor = materialColor(detection.commercial_id)
-  const cost = resolveCost(detection, pricingByStation)
+  const cost = resolveCost(detection, pricingByKey)
   const pmm = fmtPMM(detection.station_pmm)
   const pmmTarget = detection.station_pmm_target != null ? fmtPMM(detection.station_pmm_target) : null
   const noEvidence = detection.evidence_status !== 'available'
@@ -236,8 +239,17 @@ export default function AirtimeDetectionRow({
           <span className="airtime-row-cat-dot" style={{ background: catDotColor }} aria-hidden />
           {detection.commercial_name}
         </button>
-        {detection.client_name && (
-          <span className="airtime-row-material-client">{detection.client_name}</span>
+        {/* Campanha, não cliente: o filtro da tela já trava um cliente só, e
+            com seleção múltipla o que a linha precisa dizer é de QUAL campanha
+            a veiculação veio — mesma leitura do feed do /management. Cai pro
+            cliente quando a campanha não resolve. */}
+        {(detection.campaign_name || detection.client_name) && (
+          <span
+            className="airtime-row-material-client"
+            title={[detection.client_name, detection.campaign_name].filter(Boolean).join(' · ')}
+          >
+            {detection.campaign_name ?? detection.client_name}
+          </span>
         )}
       </div>
 

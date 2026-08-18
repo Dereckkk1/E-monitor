@@ -570,7 +570,7 @@ export default function MaterialsPage() {
           <label className="flow-filter-label" htmlFor="materials-campaign">
             <span className="flow-filter-label-step">2</span>Campanha
             {selectedMonth && filterStep === 2 && campaignCount > 0 && (
-              <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, fontSize: 11, fontWeight: 600, color: 'var(--c-text-3)' }}>
+              <span className="flow-filter-hint">
                 {campaignCount === 1 ? '1 disponível' : `${campaignCount} disponíveis`}
               </span>
             )}
@@ -598,8 +598,8 @@ export default function MaterialsPage() {
           <label className="flow-filter-label">
             <span className="flow-filter-label-step">3</span>Período
             {rangeIsCustom && (
-              <button type="button" className="flow-range-reset" onClick={handleResetRange}
-                      title="Resetar pro intervalo completo da campanha no mês" style={{ marginLeft: 'auto' }}>
+              <button type="button" className="flow-range-reset flow-filter-hint" onClick={handleResetRange}
+                      title="Resetar pro intervalo completo da campanha no mês">
                 Resetar
               </button>
             )}

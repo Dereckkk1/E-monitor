@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"radiocheck/internal/auth"
 )
 
 // TestStations_Create_BadJSON rejects malformed body with 400.
@@ -67,6 +68,98 @@ func TestStations_Get_InvalidID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/stations/garbage", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestStations_SuggestRoute_NotSwallowedByGetByID guards a silent breakage:
+// /stations/suggest e /stations/{id} moram no mesmo nível, e se o roteador
+// tratasse "suggest" como um id o autocomplete devolveria 400 pra sempre. Com o
+// Repo nil, um Suggest realmente roteado entraria em panic ao consultar o
+// banco — então panic aqui é a PROVA de que a rota certa foi escolhida, e um
+// 400 seria a falha que este teste existe pra pegar.
+func TestStations_SuggestRoute_NotSwallowedByGetByID(t *testing.T) {
+	h := &StationsHandler{}
+	r := chi.NewRouter()
+	r.Get("/stations/suggest", h.Suggest)
+	r.Get("/stations/{id}", h.Get)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Suggest não foi chamado — a rota caiu no Get by id")
+		}
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/stations/suggest?q=jb", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+// TestStations_List_InvalidStationID rejeita station_id que não é UUID com 400
+// em vez de deixar o pgx estourar lá embaixo.
+func TestStations_List_InvalidStationID(t *testing.T) {
+	h := &StationsHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/stations?station_id=garbage", nil)
+	rec := httptest.NewRecorder()
+	h.List(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// ─── contracted_by: o único filtro de /stations que atravessa tenant ────────
+
+func stationsListAs(claims *auth.Claims, query string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/stations?"+query, nil)
+	if claims == nil {
+		return req
+	}
+	return req.WithContext(auth.ContextWithClaims(req.Context(), claims))
+}
+
+func viewerClaims(clientIDs ...uuid.UUID) *auth.Claims {
+	return &auth.Claims{UserID: uuid.New(), Role: "viewer", ClientIDs: clientIDs}
+}
+
+// O teste que justifica o gate: cliente pedindo a carteira de OUTRO cliente
+// leva 404 — e 404, não 403, pra não confirmar que aquele id existe.
+func TestStations_List_ContractedBy_ForeignClientIs404(t *testing.T) {
+	meu, alheio := uuid.New(), uuid.New()
+	h := &StationsHandler{} // Repo nil: se passar do gate, entra em panic — e o
+	// panic seria a falha. Chegar em 404 prova que parou antes.
+	rec := httptest.NewRecorder()
+	h.List(rec, stationsListAs(viewerClaims(meu), "contracted_by="+alheio.String()))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// Carteira com 2 clientes: pedir os dois passa; pedir os dois + um de fora não.
+func TestStations_List_ContractedBy_WalletMemberAllowed_OutsiderNot(t *testing.T) {
+	a, b, fora := uuid.New(), uuid.New(), uuid.New()
+
+	rec := httptest.NewRecorder()
+	(&StationsHandler{}).List(rec, stationsListAs(viewerClaims(a, b),
+		"contracted_by="+a.String()+","+b.String()+","+fora.String()))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("com um id de fora: status = %d, want 404", rec.Code)
+	}
+
+	// Só os da carteira: passa do gate e morre no Repo nil — o que prova que
+	// autorizou. Sem esse braço, o teste acima passaria mesmo se o handler
+	// recusasse TUDO.
+	defer func() {
+		if recover() == nil {
+			t.Fatal("carteira própria foi barrada pelo gate")
+		}
+	}()
+	(&StationsHandler{}).List(httptest.NewRecorder(),
+		stationsListAs(viewerClaims(a, b), "contracted_by="+a.String()+","+b.String()))
+}
+
+func TestStations_List_ContractedBy_Invalid400(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&StationsHandler{}).List(rec, stationsListAs(nil, "contracted_by=garbage"))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

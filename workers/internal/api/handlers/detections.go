@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,35 @@ type DetectionsHandler struct {
 	CampaignRepo *catalog.Campaigns
 	Storage      *storage.Client
 	SummaryRepo  *catalog.DailySummaryRepo
+}
+
+// parseCampaignIDs lê a seleção de campanhas da querystring. Aceita
+// `campaigns` (CSV de uuids — o formato que /insights, /management e /live-map
+// já usam pra seleção múltipla) e o `campaign_id` legado de uma campanha só,
+// que mantém deep-links antigos de /reports/airtime funcionando. Devolve nil
+// quando nenhum dos dois vem: os filtros leem nil como "sem recorte por
+// campanha", diferente de um slice vazio (que casa zero linhas).
+func parseCampaignIDs(q url.Values) ([]uuid.UUID, error) {
+	raw := q.Get("campaigns")
+	if raw == "" {
+		raw = q.Get("campaign_id")
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out []uuid.UUID
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := uuid.Parse(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -98,14 +128,12 @@ func (h *DetectionsHandler) listPaged(w http.ResponseWriter, r *http.Request) {
 		ClientIDs: auth.ClientScopesFromContext(r.Context()),
 	}
 
-	if v := q.Get("campaign_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid campaign_id", 400)
-			return
-		}
-		f.CampaignID = &id
+	campaignIDs, err := parseCampaignIDs(q)
+	if err != nil {
+		http.Error(w, "invalid campaign_id", 400)
+		return
 	}
+	f.CampaignIDs = campaignIDs
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
@@ -586,14 +614,12 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := catalog.ListPagedFilter{}
 
-	if v := q.Get("campaign_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid campaign_id", http.StatusBadRequest)
-			return
-		}
-		f.CampaignID = &id
+	campaignIDs, err := parseCampaignIDs(q)
+	if err != nil {
+		http.Error(w, "invalid campaign_id", http.StatusBadRequest)
+		return
 	}
+	f.CampaignIDs = campaignIDs
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
@@ -623,8 +649,8 @@ func (h *DetectionsHandler) Export(w http.ResponseWriter, r *http.Request) {
 	// de uma vez) ou quando o cliente não resolve: um nome de arquivo genérico
 	// é melhor que um 500 num export que, no resto, funcionaria.
 	filename := fmt.Sprintf("veiculacoes_%s.csv", time.Now().Format("20060102_150405"))
-	if f.CampaignID != nil {
-		if client, err := h.CampaignRepo.ClientNameFor(r.Context(), *f.CampaignID); err == nil {
+	if len(f.CampaignIDs) == 1 {
+		if client, err := h.CampaignRepo.ClientNameFor(r.Context(), f.CampaignIDs[0]); err == nil {
 			if slug := reportcsv.SanitizeFilename(client); slug != "" {
 				if f.StartDate != nil && f.EndDate != nil {
 					loc := reportcsv.SaoPaulo()
@@ -662,38 +688,29 @@ func strOrEmpty(s *string) string {
 	return *s
 }
 
-// AggregateByMaterial backs the airtime-report sidebar panel. Requires
-// campaign_id; accepts from/to (RFC3339) and q (same semantics as the
-// paginated list so the sidebar stays in sync with the lista's filters).
+// AggregateByMaterial backs the airtime-report sidebar panel. Requires ao menos
+// uma campanha (`campaigns` CSV ou o `campaign_id` legado); accepts from/to
+// (RFC3339) and q (same semantics as the paginated list so the sidebar stays in
+// sync with the lista's filters).
 func (h *DetectionsHandler) AggregateByMaterial(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	cidStr := q.Get("campaign_id")
-	if cidStr == "" {
-		http.Error(w, "campaign_id required", http.StatusBadRequest)
-		return
-	}
-	cid, err := uuid.Parse(cidStr)
+	campaignIDs, err := parseCampaignIDs(q)
 	if err != nil {
 		http.Error(w, "invalid campaign_id", http.StatusBadRequest)
 		return
 	}
-	// Viewer scope: verify campaign ownership before aggregating.
-	if auth.ClientScopesFromContext(r.Context()) != nil {
-		camp, err := h.CampaignRepo.Get(r.Context(), cid)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
-			} else {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-			}
-			return
-		}
-		if !auth.ScopeAllows(r.Context(), camp.ClientID) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
+	if len(campaignIDs) == 0 {
+		http.Error(w, "campaign_id required", http.StatusBadRequest)
+		return
 	}
-	f := catalog.AggregateFilter{CampaignID: cid}
+	// Viewer scope: a carteira vira filtro SQL dentro do agregado (ver
+	// AggregateFilter.ClientIDs). Checar posse campanha a campanha aqui
+	// custaria um round-trip por campanha selecionada e daria a mesma
+	// resposta que a lista já dá — campanha de outro cliente não soma.
+	f := catalog.AggregateFilter{
+		CampaignIDs: campaignIDs,
+		ClientIDs:   auth.ClientScopesFromContext(r.Context()),
+	}
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {

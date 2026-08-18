@@ -25,28 +25,41 @@ export default function BroadcastShareChart({ data }) {
       <div className="in-donut-wrap">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
+            {/* Geometria toda relativa, nada em px fixo. O recharts já desconta
+                a legenda vertical da área do gráfico, então cx=50% centraliza
+                a rosca no espaço QUE SOBRA (com cx=35% + raio fixo de 92px ela
+                escapava pela esquerda do card assim que a legenda comia largura
+                — o corte em telas médias). Os raios em % seguem o menor lado da
+                área útil, então a rosca encolhe junto em vez de vazar. */}
             <Pie
               data={rows}
               dataKey="value"
-              cx="35%"
+              cx="50%"
               cy="50%"
-              innerRadius={60}
-              outerRadius={92}
+              innerRadius="60%"
+              outerRadius="88%"
               paddingAngle={2}
               isAnimationActive={false}
             >
               {rows.map((r, i) => <Cell key={i} fill={r.fill} />)}
               <Label
                 content={({ viewBox }) => {
-                  const { cx, cy } = viewBox
+                  // O rótulo central acompanha o raio: com a rosca menor, um
+                  // corpo fixo de 22px estourava o furo do donut.
+                  const { cx, cy, innerRadius } = viewBox
+                  const r = innerRadius || 60
+                  const big = Math.max(14, Math.min(22, r * 0.36))
+                  const small = Math.max(8, Math.min(10, r * 0.16))
                   return (
-                    <g>
-                      <text x={cx} y={cy - 6} textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontFamily: 'Space Grotesk, sans-serif', fontSize: 22, fontWeight: 700, fill: '#06055B' }}>
+                    // pointer-events:none — o rótulo central ficava por cima do
+                    // furo do donut e sequestrava o hover das fatias.
+                    <g style={{ pointerEvents: 'none' }}>
+                      <text x={cx} y={cy - big * 0.3} textAnchor="middle" dominantBaseline="middle"
+                            style={{ fontFamily: 'Space Grotesk, sans-serif', fontSize: big, fontWeight: 700, fill: '#06055B' }}>
                         {fmtBR.format(total)}
                       </text>
-                      <text x={cx} y={cy + 14} textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: 10, fill: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      <text x={cx} y={cy + big * 0.66} textAnchor="middle" dominantBaseline="middle"
+                            style={{ fontSize: small, fill: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                         veiculações
                       </text>
                     </g>
@@ -64,6 +77,7 @@ export default function BroadcastShareChart({ data }) {
                     <div className="in-tooltip-label">{p.name}</div>
                     <div className="in-tooltip-rows">
                       <div className="in-tooltip-row">
+                        <span className="in-tooltip-dot" style={{ background: p.payload?.fill }} />
                         <span className="in-tooltip-name">Total</span>
                         <span className="in-tooltip-value">{fmtBR.format(p.value)} ({pct}%)</span>
                       </div>
@@ -72,12 +86,16 @@ export default function BroadcastShareChart({ data }) {
                 )
               }}
             />
+            {/* maxWidth trava o quanto a legenda pode roubar da rosca: sem
+                teto, "Extras / Sem faixa definida: 0" numa linha só levava
+                metade do card e espremia o gráfico. Com teto, o rótulo longo
+                quebra em 2 linhas e a rosca mantém o espaço dela. */}
             <Legend
               layout="vertical"
               align="right"
               verticalAlign="middle"
               iconType="circle"
-              wrapperStyle={{ fontSize: 12 }}
+              wrapperStyle={{ fontSize: 12, maxWidth: '46%', lineHeight: 1.45 }}
               formatter={(v, e) => {
                 const val = e?.payload?.value || 0
                 return `${v}: ${fmtBR.format(val)}`

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 
 // Stations
@@ -7,6 +7,24 @@ export function useStations({ enabled = true, ...params } = {}) {
     queryKey: ['stations', params],
     queryFn: () => api.get('/stations', { params }).then(r => r.data),
     enabled,
+  })
+}
+// Autocomplete do campo de busca de emissoras: devolve { stations, cities,
+// states } já agrupados e com contagem real.
+//
+// `retry: false` é deliberado. O frontend sobe pelo CF Pages a cada push, mas o
+// backend só com o deploy.sh — entre um e outro este endpoint responde 404. Sem
+// isso, cada tecla viraria 4 tentativas de um 404 garantido.
+export function useStationSuggest({ q, band, enabled = true } = {}) {
+  const query = (q ?? '').trim()
+  return useQuery({
+    queryKey: ['stations', 'suggest', query, band ?? ''],
+    queryFn: () => api.get('/stations/suggest', {
+      params: { q: query, band: band || undefined },
+    }).then(r => r.data),
+    enabled: enabled && query.length >= 2,
+    staleTime: 30_000,
+    retry: false,
   })
 }
 export function useStation(id) {
@@ -417,14 +435,20 @@ export function useDetections(filters = {}) {
 // total, total_pages}. Separate hook from useDetections so the DayDetailModal
 // (which expects the unpaginated array shape) stays untouched.
 export function useDetectionsPaged({
-  campaignId, from, to, q = '', sort = 'detected_at_desc',
+  campaignIds = [], from, to, q = '', sort = 'detected_at_desc',
   page = 1, pageSize = 10,
 } = {}) {
+  const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
+  // Ordena só pra chave: a mesma seleção em ordem diferente é o mesmo cache.
+  const key = [...ids].sort().join(',')
   return useQuery({
-    queryKey: ['detections-paged', campaignId, from, to, q, sort, page, pageSize],
+    queryKey: ['detections-paged', key, from, to, q, sort, page, pageSize],
     queryFn: () => api.get('/detections', {
       params: {
-        campaign_id: campaignId,
+        // Campanha única segue em `campaign_id` (formato que a rota sempre
+        // aceitou); o csv `campaigns` entra na seleção múltipla, como em
+        // /insights, /management e /live-map.
+        ...(ids.length === 1 ? { campaign_id: ids[0] } : { campaigns: ids.join(',') }),
         from, to,
         q: q || undefined,
         sort,
@@ -432,7 +456,7 @@ export function useDetectionsPaged({
         page_size: pageSize,
       },
     }).then(r => r.data),
-    enabled: !!campaignId && !!from && !!to,
+    enabled: ids.length > 0 && !!from && !!to,
     placeholderData: (prev) => prev,
   })
 }
@@ -440,17 +464,19 @@ export function useDetectionsPaged({
 // Material aggregate panel for /reports/airtime. Returns
 // {data: [{material_id, material_title, material_type_color, count, ...}],
 //  total_detections, distinct_materials}.
-export function useMaterialAggregate({ campaignId, from, to, q = '' } = {}) {
+export function useMaterialAggregate({ campaignIds = [], from, to, q = '' } = {}) {
+  const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
+  const key = [...ids].sort().join(',')
   return useQuery({
-    queryKey: ['material-aggregate', campaignId, from, to, q],
+    queryKey: ['material-aggregate', key, from, to, q],
     queryFn: () => api.get('/detections/aggregate-by-material', {
       params: {
-        campaign_id: campaignId,
+        ...(ids.length === 1 ? { campaign_id: ids[0] } : { campaigns: ids.join(',') }),
         from, to,
         q: q || undefined,
       },
     }).then(r => r.data),
-    enabled: !!campaignId && !!from && !!to,
+    enabled: ids.length > 0 && !!from && !!to,
     placeholderData: (prev) => prev,
   })
 }
@@ -670,21 +696,29 @@ export function useStreamHealth(params = {}) {
   })
 }
 
-// Live map de UMA campanha: emissoras-alvo (com coordenada) + veiculações dela.
-// Backend escopa pelo client do viewer. Só dispara quando há campanha
-// selecionada; polling de 20s; mantém o último payload bom durante o refetch.
+// Live map de UMA OU MAIS campanhas: união das emissoras-alvo (com coordenada,
+// sem repetir emissora compartilhada) + as veiculações delas. Aceita um id
+// solto ou um array. Backend escopa pelo client do viewer. Só dispara quando há
+// campanha selecionada; polling de 20s; mantém o último payload bom durante o
+// refetch.
 // includeTerminal: pede o mapa mesmo de campanha cancelada. Só o pós-venda usa
 // — ele é documento histórico. A tela ao vivo omite e segue tomando 404.
-export function useLiveMap(campaignId, { includeTerminal = false } = {}) {
+export function useLiveMap(campaignIds, { includeTerminal = false } = {}) {
+  const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
+  // Ordena só pra chave: a mesma seleção em ordem diferente é o mesmo cache.
+  const key = [...ids].sort().join(',')
   return useQuery({
-    queryKey: ['live-map', campaignId, includeTerminal],
+    queryKey: ['live-map', key, includeTerminal],
     queryFn: () => api.get('/live-map', {
       params: {
-        campaign_id: campaignId,
+        // Campanha única continua indo em `campaign_id` (o formato que o
+        // pós-venda sempre usou); o csv `campaigns` só entra na seleção
+        // múltipla, como em /insights e /management.
+        ...(ids.length === 1 ? { campaign_id: ids[0] } : { campaigns: ids.join(',') }),
         ...(includeTerminal ? { include_terminal: 1 } : {}),
       },
     }).then(r => r.data),
-    enabled: !!campaignId,
+    enabled: ids.length > 0,
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
   })
@@ -898,6 +932,38 @@ export function useAcknowledgeSimilarity() {
 
 // ─── Campaign Materials (N:N link) ─────────────────────────────────────────
 
+// Materiais vinculados a VÁRIAS campanhas de uma vez — alimenta o passo
+// "Materiais" do /insights, onde a seleção é multi-campanha.
+//
+// useQueries em vez de um endpoint em lote: /campaigns/{id}/materials já
+// existe, devolve poucos bytes (só os ids do vínculo) e cada campanha vira uma
+// entrada de cache reaproveitada entre telas. Um endpoint novo só se pagaria
+// com seleções bem maiores que as reais.
+//
+// Devolve { ids: Set<material_id>, key, isPending }. `key` é a lista ordenada
+// em string: serve de dependência estável pra useMemo do consumidor, já que o
+// Set é reconstruído a cada render.
+export function useCampaignMaterialsMany(campaignIds = []) {
+  const results = useQueries({
+    queries: campaignIds.map(id => ({
+      queryKey: ['campaign-materials', id],
+      queryFn: () => api.get(`/campaigns/${id}/materials`).then(r => r.data ?? []),
+      staleTime: 60_000,
+    })),
+  })
+  const ids = new Set()
+  for (const r of results) {
+    for (const link of (r.data || [])) {
+      if (link?.material_id) ids.add(link.material_id)
+    }
+  }
+  return {
+    ids,
+    key: [...ids].sort().join(','),
+    isPending: results.some(r => r.isPending),
+  }
+}
+
 export function useCampaignMaterials(campaignId) {
   return useQuery({
     queryKey: ['campaign-materials', campaignId],
@@ -1047,6 +1113,28 @@ export function useCampaignPricing(campaignId) {
 //   { mode: 'consolidated' | 'per_insertion',
 //     consolidated_value?: number,
 //     per_type?: [{ type_id, unit_value }] }
+// Pricing de VÁRIAS campanhas de uma vez — /reports/airtime aceita seleção
+// múltipla e a pill "Custo" de cada linha depende do pricing da campanha
+// DAQUELA veiculação. Devolve um mapa `${campaign_id}|${station_id}` → pricing;
+// indexar só por station_id daria o valor de outra campanha quando duas
+// contratam a mesma emissora com preços diferentes.
+export function useCampaignPricingByCampaignStation(campaignIds = []) {
+  const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
+  const results = useQueries({
+    queries: ids.map(id => ({
+      // Mesma queryKey de useCampaignPricing: o cache é compartilhado com
+      // /campaigns e o wizard, sem refetch redundante.
+      queryKey: ['pricing', id],
+      queryFn: () => api.get(`/campaigns/${id}/pricing`).then(r => r.data ?? []),
+    })),
+  })
+  const map = {}
+  results.forEach((res, i) => {
+    for (const p of res.data ?? []) map[`${ids[i]}|${p.station_id}`] = p
+  })
+  return map
+}
+
 export function useUpsertStationPricing() {
   const qc = useQueryClient()
   return useMutation({
@@ -1235,13 +1323,16 @@ export function useAckDailyFailuresDigest() {
 // queryKey ordena as listas pra evitar invalidação espúria quando o usuário
 // reordena seleções. placeholderData mantém o último resultado durante
 // refetches (sensação de "ajusto filtro → vejo as novas barras subindo").
-export function useInsights({ clientId, campaignIds, from, to, stationIds } = {}) {
+export function useInsights({ clientId, campaignIds, from, to, stationIds, materialIds } = {}) {
   const ready = Boolean(clientId) && Array.isArray(campaignIds) && campaignIds.length > 0
   const camps = ready ? [...campaignIds].sort().join(',') : ''
   const sts = stationIds && stationIds.length ? [...stationIds].sort().join(',') : ''
+  // Recorte por material. Vazio = todos. Com filtro ativo o payload volta com
+  // material_prorated=true e os números em R$ rateados — ver o aviso na tela.
+  const mats = materialIds && materialIds.length ? [...materialIds].sort().join(',') : ''
   return useQuery({
     enabled: ready,
-    queryKey: ['insights', clientId, camps, from, to, sts],
+    queryKey: ['insights', clientId, camps, from, to, sts, mats],
     queryFn: () => api.get('/insights', {
       params: {
         client_id: clientId,
@@ -1249,6 +1340,7 @@ export function useInsights({ clientId, campaignIds, from, to, stationIds } = {}
         from: from || undefined,
         to: to || undefined,
         stations: sts || undefined,
+        materials: mats || undefined,
       },
     }).then(r => r.data),
     // NOTA: SEM placeholderData. Quando o usuário muda data/emissoras/

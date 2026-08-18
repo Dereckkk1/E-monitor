@@ -2,12 +2,10 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,9 +45,18 @@ type LiveDetection struct {
 	CommercialID   uuid.UUID `json:"commercial_id"`
 	CommercialName string    `json:"commercial_name"`
 	ClientName     *string   `json:"client_name,omitempty"`
-	// CampaignName só é populado no feed do /management (visão cross-campanha);
-	// no /live-map fica nil e é omitido do JSON.
-	CampaignName *string `json:"campaign_name,omitempty"`
+	// CampaignID/CampaignName só são populados quando a resposta MISTURA
+	// campanhas: o feed do /management (visão cross-campanha) e o /live-map com
+	// seleção múltipla. Com UMA campanha ficam nil e somem do JSON — a linha
+	// não repete o que o filtro já diz, e o pós-venda (que sempre pede uma)
+	// mantém a foto inalterada.
+	//
+	// Com MULTI_ATTRIBUTION a mesma tocada física projeta em N campanhas; se
+	// duas delas estiverem selecionadas, a tocada aparece uma vez por campanha.
+	// Por isso o CampaignID acompanha o nome: é ele que dá ao frontend a chave
+	// estável (tocada + campanha) pra listar sem colidir.
+	CampaignID   *uuid.UUID `json:"campaign_id,omitempty"`
+	CampaignName *string    `json:"campaign_name,omitempty"`
 	// EvidenceStatus permite o frontend habilitar/desabilitar o play button
 	// sem disparar /evidence pra deteccoes sem clipe salvo.
 	EvidenceStatus string `json:"evidence_status"`
@@ -78,56 +85,79 @@ type LiveMapOpts struct {
 	IncludeTerminal bool
 }
 
-// Get retorna o mapa ao vivo de UMA campanha: as emissoras-alvo dela (com
-// coordenada) + as últimas veiculações dela. scopes == nil = admin/operator;
-// scopes != nil = carteira de clientes do viewer — a campanha precisa pertencer
-// a um deles, senão ErrCampaignNotFound (anti-oracle). Carteira vazia não
+// Get retorna o mapa ao vivo de UMA OU MAIS campanhas: a UNIÃO das
+// emissoras-alvo delas (com coordenada, sem repetir emissora compartilhada) +
+// as últimas veiculações de todas. scopes == nil = admin/operator; scopes != nil
+// = carteira de clientes do viewer — TODA campanha pedida precisa pertencer a
+// um deles, senão ErrCampaignNotFound (anti-oracle). Carteira vazia não
 // autoriza nada (falha fechada).
-func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scopes []uuid.UUID, opts LiveMapOpts) (LiveMapResult, error) {
+//
+// A validação é tudo-ou-nada de propósito: uma campanha inexistente, de outro
+// cliente ou cancelada derruba a requisição inteira em 404, como já era com o
+// seletor único. Devolver o resto silenciosamente viraria oracle ("sumiu = essa
+// existe mas não é sua") e faria o mapa mentir sobre o que está mostrando.
+func (m *LiveMap) Get(ctx context.Context, campaignIDs []uuid.UUID, scopes []uuid.UUID, opts LiveMapOpts) (LiveMapResult, error) {
 	var res LiveMapResult
 
-	// Existência + posse: resolve o client_id e o status da campanha uma vez.
-	// 404 quando não existe ou quando o viewer tenta uma campanha de outro
-	// cliente.
-	var clientID uuid.UUID
-	var status string
-	err := m.pool.QueryRow(ctx,
-		`SELECT client_id, status FROM campaigns WHERE id = $1`, campaignID,
-	).Scan(&clientID, &status)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return res, ErrCampaignNotFound
-		}
-		return res, err
-	}
-	// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
-	//
-	// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
-	// catalog não pode importar auth sem inverter as camadas. Só é seguro
-	// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
-	// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
-	// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
-	// não casa com nada. Se algum dia existir linha com client_id zerado, esta
-	// checagem passa a autorizar demais.
-	if scopes != nil && !slices.Contains(scopes, clientID) {
-		return res, ErrCampaignNotFound
-	}
-	// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
-	// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
-	// campanha que rodou normalmente até o fim. Ver docs/architecture/
-	// campaign-lifecycle.md. IncludeTerminal abre exceção pra documento
-	// histórico (pós-venda), que precisa fotografar o mapa do que já rodou.
-	if status == "cancelada" && !opts.IncludeTerminal {
+	ids := dedupUUIDs(campaignIDs)
+	if len(ids) == 0 {
 		return res, ErrCampaignNotFound
 	}
 
-	stations, err := m.queryStations(ctx, campaignID)
+	// Existência + posse + status das N campanhas numa query só.
+	rows, err := m.pool.Query(ctx,
+		`SELECT id, client_id, status FROM campaigns WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return res, err
+	}
+	defer rows.Close()
+
+	found := 0
+	for rows.Next() {
+		var id, clientID uuid.UUID
+		var status string
+		if err := rows.Scan(&id, &clientID, &status); err != nil {
+			return res, err
+		}
+		found++
+		// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
+		//
+		// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
+		// catalog não pode importar auth sem inverter as camadas. Só é seguro
+		// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
+		// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
+		// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
+		// não casa com nada. Se algum dia existir linha com client_id zerado, esta
+		// checagem passa a autorizar demais.
+		if scopes != nil && !slices.Contains(scopes, clientID) {
+			return res, ErrCampaignNotFound
+		}
+		// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
+		// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
+		// campanha que rodou normalmente até o fim. Ver docs/architecture/
+		// campaign-lifecycle.md. IncludeTerminal abre exceção pra documento
+		// histórico (pós-venda), que precisa fotografar o mapa do que já rodou.
+		if status == "cancelada" && !opts.IncludeTerminal {
+			return res, ErrCampaignNotFound
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	// Alguma das pedidas não existe → 404, a mesma resposta de "não é sua".
+	if found != len(ids) {
+		return res, ErrCampaignNotFound
+	}
+
+	stations, err := m.queryStations(ctx, ids)
 	if err != nil {
 		return res, err
 	}
 	res.Stations = stations
 
-	dets, err := m.queryRecentDetections(ctx, campaignID)
+	// Com uma campanha só a linha do feed não repete o nome dela (o filtro já
+	// diz qual é); misturando campanhas, cada linha precisa se identificar.
+	dets, err := m.queryRecentDetections(ctx, ids, len(ids) > 1)
 	if err != nil {
 		return res, err
 	}
@@ -135,19 +165,49 @@ func (m *LiveMap) Get(ctx context.Context, campaignID uuid.UUID, scopes []uuid.U
 	return res, nil
 }
 
-func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]LiveStation, error) {
+// dedupUUIDs preserva a ordem e remove repetidos: o cliente pode mandar o mesmo
+// id duas vezes, e a checagem de existência (found != len) depende de não haver
+// duplicata na lista pedida.
+func dedupUUIDs(in []uuid.UUID) []uuid.UUID {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[uuid.UUID]struct{}, len(in))
+	out := make([]uuid.UUID, 0, len(in))
+	for _, id := range in {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// queryStations devolve a UNIÃO das emissoras-alvo das campanhas pedidas.
+// Emissora que aparece em duas campanhas selecionadas sai UMA vez — o
+// unnest + DISTINCT garante isso; o JOIN direto em campaigns que existia aqui
+// a duplicaria no mapa. last_detection_at é o MAX sobre todas as campanhas.
+func (m *LiveMap) queryStations(ctx context.Context, campaignIDs []uuid.UUID) ([]LiveStation, error) {
 	rows, err := m.pool.Query(ctx, `
+		WITH scoped AS (
+		    SELECT target_stations FROM campaigns WHERE id = ANY($1)
+		),
+		mon_stations AS (
+		    SELECT DISTINCT st AS station_id
+		    FROM scoped, unnest(target_stations) AS st
+		)
 		SELECT s.id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		       s.latitude, s.longitude, s.health_status,
 		       (SELECT MAX(d.detected_at)
 		          FROM detection_attributions d
 		         WHERE d.station_id = s.id
-		           AND d.campaign_id = $1
+		           AND d.campaign_id = ANY($1)
 		           AND `+ApprovedDetectionsFilter+`) AS last_detection_at
 		FROM stations s
-		JOIN campaigns cmp ON cmp.id = $1 AND s.id = ANY(cmp.target_stations)
+		JOIN mon_stations ms ON ms.station_id = s.id
 		WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
-		ORDER BY s.name`, campaignID)
+		ORDER BY s.name`, campaignIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +232,15 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignID uuid.UUID) ([]Li
 // ativa são todas recentes de qualquer forma. O LIMIT 200 é só um teto de
 // segurança pra campanhas de volume alto dentro dessas 24h. Ver
 // docs/features/live-map.md.
-func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUID) ([]LiveDetection, error) {
+//
+// withCampaign popula campaign_id/campaign_name na linha — só quando a resposta
+// mistura campanhas (seleção múltipla).
+func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignIDs []uuid.UUID, withCampaign bool) ([]LiveDetection, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id, d.station_id, COALESCE(s.name, ''), s.logo_url,
 		       COALESCE(s.band, ''), s.frequency_mhz, s.city, s.state,
 		       d.detected_at, d.commercial_id, COALESCE(m.title, c.title, ''), cli.name,
+		       d.campaign_id, cmp.name,
 		       d.evidence_status
 		FROM detection_attributions d
 		LEFT JOIN stations s    ON s.id = d.station_id
@@ -184,13 +248,13 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 		LEFT JOIN materials m   ON m.id = d.commercial_id
 		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli   ON cli.id = cmp.client_id
-		WHERE d.campaign_id = $1
+		WHERE d.campaign_id = ANY($1)
 		  AND d.detected_at >= now() - interval '24 hours'
 		  AND d.evidence_status <> 'audit_rejected'
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		ORDER BY d.detected_at DESC
-		LIMIT 200`, campaignID)
+		LIMIT 200`, campaignIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -199,11 +263,18 @@ func (m *LiveMap) queryRecentDetections(ctx context.Context, campaignID uuid.UUI
 	var out []LiveDetection
 	for rows.Next() {
 		var d LiveDetection
+		var campID *uuid.UUID
+		var campName *string
 		if err := rows.Scan(&d.ID, &d.StationID, &d.StationName, &d.StationLogoURL,
 			&d.Band, &d.FrequencyMHz, &d.City, &d.State,
 			&d.DetectedAt, &d.CommercialID, &d.CommercialName, &d.ClientName,
+			&campID, &campName,
 			&d.EvidenceStatus); err != nil {
 			return nil, err
+		}
+		if withCampaign {
+			d.CampaignID = campID
+			d.CampaignName = campName
 		}
 		out = append(out, d)
 	}

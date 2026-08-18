@@ -3,6 +3,7 @@ import RSelect from './RSelect'
 import CampaignReportsMenu from './CampaignReportsMenu'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { parseLocalDate } from '../utils/dates'
+import { campaignsUnionRange } from '../utils/campaignRange'
 
 function pad2(n) { return String(n).padStart(2, '0') }
 function isoFromDate(d) {
@@ -76,34 +77,46 @@ function ClientMiniAvatar({ name = '', logo = null, size = 22 }) {
 }
 
 /**
- * Filter bar for /airtime-report. Mirrors the 3-step flow from /detections:
- * Competência → Campanha → Período. Competência filters the campaign select
- * (only campaigns whose lifecycle overlaps the month appear). Date range
- * defaults to the intersection of (month ∩ campaign) but can be pushed
- * outside that window via the presets.
+ * Filter bar for /airtime-report. Fluxo de 4 passos:
+ * Cliente → Competência → Campanhas → Período.
+ *
+ * O cliente é o primeiro recorte (mesma ordem de /insights e /live-map) e é
+ * quem garante que a seleção múltipla de campanhas nunca mistura clientes —
+ * a lista, o painel de materiais e o rótulo de público-alvo assumem um cliente
+ * só. Pra quem não tem escolha (viewer de 1 cliente) o passo vira um chip
+ * travado e não custa clique. Competência filtra as campanhas (só as que
+ * cruzam o mês aparecem) e o período nasce na interseção (mês ∩ união das
+ * vigências), podendo ser esticado pelos presets.
  *
  * Props:
- *   - competence: 'YYYY-MM' | '' — controlled by parent (URL-backed)
+ *   - clients, campaigns: catálogos completos (scope-aware, vindos da página)
+ *   - clientId, onClientChange(id)
+ *   - canPickClient: false → chip travado no lugar do select
+ *   - competence: 'YYYY-MM' | '' — controlado pelo pai (URL-backed)
  *   - onCompetenceChange(v)
- *   - campaignId, onCampaignChange(id)
+ *   - campaignIds: string[] — seleção múltipla
+ *   - onCampaignsChange(ids)
  *   - from, to: 'YYYY-MM-DD' — date range
  *   - onFromChange, onToChange, onRangeChange({from,to})
  *   - q: search string (debounced internally before propagation)
  *   - onQChange(v)
  *
- * Export agora vive em CampaignReportsMenu — renderizado inline aqui;
- * não precisa mais de onExportClick/exporting vindo de fora.
+ * Export vive em CampaignReportsMenu — renderizado inline aqui; com mais de
+ * uma campanha selecionada o próprio menu pergunta de qual delas é o relatório.
  */
 export default function AirtimeFiltersBar({
   campaigns = [],
   clients = [],
+  clientId,
+  canPickClient = true,
   competence,
   onCompetenceChange,
-  campaignId,
+  campaignIds = [],
   from,
   to,
   q,
-  onCampaignChange,
+  onClientChange,
+  onCampaignsChange,
   onFromChange,
   onToChange,
   onRangeChange,
@@ -115,6 +128,16 @@ export default function AirtimeFiltersBar({
     return m
   }, [clients])
 
+  const clientOptions = useMemo(() => clients.map(c => ({
+    value: c.id,
+    label: c.name,
+    logo: c.logo_url ?? null,
+  })), [clients])
+
+  const selectedClient = useMemo(
+    () => clientMap.get(clientId) ?? null,
+    [clientMap, clientId])
+
   const allCampaignOptions = useMemo(() => campaigns.map(c => {
     const client = clientMap.get(c.client_id) ?? null
     return {
@@ -122,6 +145,7 @@ export default function AirtimeFiltersBar({
       // Sufixo só no valor selecionado (deep-link); o dropdown exclui canceladas.
       label: c.status === 'cancelada' ? `${c.name} (cancelada)` : c.name,
       status: c.status,
+      clientId: c.client_id,
       clientName: client?.name ?? '',
       clientLogo: client?.logo_url ?? null,
       startDate: c.start_date,
@@ -129,60 +153,67 @@ export default function AirtimeFiltersBar({
     }
   }), [campaigns, clientMap])
 
-  // Campaign options scoped by competence (same semantics as /detections).
+  // Campaign options scoped by client + competence (mesma semântica de
+  // /detections pro mês, mesma de /live-map pro cliente).
   // Canceladas ficam fora do seletor, mas seguem resolvíveis via
   // allCampaignOptions (deep-link de relatório histórico continua abrindo).
   const campaignOptions = useMemo(() => {
-    if (!competence) return []
+    if (!clientId || !competence) return []
     const { start, end } = monthToRange(competence)
     return allCampaignOptions.filter(o => {
+      if (o.clientId !== clientId) return false
       if (o.status === 'cancelada') return false
       if (!o.startDate || !o.endDate) return false
       const cs = parseLocalDate(o.startDate)
       const ce = parseLocalDate(o.endDate)
       return cs <= end && ce >= start
     })
-  }, [allCampaignOptions, competence])
+  }, [allCampaignOptions, clientId, competence])
 
-  // Selected campaign object — used both for the controlled value of the
-  // select and for the "Campanha inteira" preset detection below.
-  const selectedCampaignOption = useMemo(
-    () => allCampaignOptions.find(o => o.value === campaignId) ?? null,
-    [allCampaignOptions, campaignId])
-  const selectedCampaignRaw = useMemo(
-    () => campaigns.find(c => c.id === campaignId) ?? null,
-    [campaigns, campaignId])
+  // Objetos selecionados — alimentam o value do select, os presets de período
+  // e o menu de relatórios.
+  const selectedOptions = useMemo(
+    () => allCampaignOptions.filter(o => campaignIds.includes(o.value)),
+    [allCampaignOptions, campaignIds])
+  const selectedCampaignsRaw = useMemo(
+    () => campaigns.filter(c => campaignIds.includes(c.id)),
+    [campaigns, campaignIds])
+  const unionRange = useMemo(
+    () => campaignsUnionRange(selectedCampaignsRaw),
+    [selectedCampaignsRaw])
 
-  function formatCampaignOption(opt, { context }) {
-    const isValue = context === 'value'
-    const size = isValue ? 18 : 22
-    const period = formatCampaignPeriod(opt.startDate, opt.endDate)
+  function formatClientOption(opt, { context }) {
+    const size = context === 'value' ? 18 : 22
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-        <ClientMiniAvatar name={opt.clientName} logo={opt.clientLogo} size={size} />
+        <ClientMiniAvatar name={opt.label} logo={opt.logo} size={size} />
+        <span style={{
+          fontWeight: 600, color: '#06055B', fontSize: 13,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{opt.label}</span>
+      </div>
+    )
+  }
+
+  function formatCampaignOption(opt, { context }) {
+    const period = formatCampaignPeriod(opt.startDate, opt.endDate)
+    // Chip do multi-select: só o nome. O cliente já está travado no passo 1 e
+    // repeti-lo em cada chip estouraria a largura da barra.
+    if (context === 'value') {
+      return (
+        <span style={{ fontSize: 12.5, color: '#06055B', whiteSpace: 'nowrap' }}>
+          {opt.label}
+        </span>
+      )
+    }
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+        <ClientMiniAvatar name={opt.clientName} logo={opt.clientLogo} size={22} />
         <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0, overflow: 'hidden' }}>
-            {opt.clientName && (
-              <span style={{ fontWeight: 600, color: '#06055B', whiteSpace: 'nowrap', fontSize: 13 }}>
-                {opt.clientName}
-              </span>
-            )}
-            {opt.clientName && (
-              <span style={{ color: '#cbd5e1', fontSize: 11, flexShrink: 0 }}>|</span>
-            )}
-            <span style={{ color: '#4b5563', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {opt.label}
-            </span>
-            {isValue && period && (
-              <>
-                <span style={{ color: '#cbd5e1', fontSize: 11, flexShrink: 0 }}>•</span>
-                <span style={{ color: '#94a3b8', fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  {period}
-                </span>
-              </>
-            )}
-          </div>
-          {!isValue && period && (
+          <span style={{ color: '#4b5563', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {opt.label}
+          </span>
+          {period && (
             <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>
               {period}
             </span>
@@ -193,7 +224,8 @@ export default function AirtimeFiltersBar({
   }
 
   // Step state drives the active/locked/done classes on each filter cell.
-  const step = !competence ? 1 : !campaignId ? 2 : 3
+  const hasCampaigns = campaignIds.length > 0
+  const step = !clientId ? 1 : !competence ? 2 : !hasCampaigns ? 3 : 4
   const invalidRange = from && to && from > to
 
   // Preset detection — derive which chip is "active" purely from current
@@ -208,22 +240,18 @@ export default function AirtimeFiltersBar({
       const eISO = isoFromDate(end)
       const monthEndCapped = eISO < t ? eISO : t
       if (from === sISO && to === monthEndCapped) return 'fullMonth'
-      if (selectedCampaignRaw) {
-        const cs = String(selectedCampaignRaw.start_date).slice(0, 10)
-        const ce = String(selectedCampaignRaw.end_date).slice(0, 10)
-        const intStart = cs > sISO ? cs : sISO
-        const intEnd   = ce < monthEndCapped ? ce : monthEndCapped
+      if (unionRange) {
+        const intStart = unionRange.start > sISO ? unionRange.start : sISO
+        const intEnd   = unionRange.end < monthEndCapped ? unionRange.end : monthEndCapped
         if (from === intStart && to === intEnd) return 'monthCampaign'
       }
     }
-    if (selectedCampaignRaw) {
-      const start = String(selectedCampaignRaw.start_date).slice(0, 10)
-      const end   = String(selectedCampaignRaw.end_date).slice(0, 10)
-      const tEnd = end && end < t ? end : t
-      if (from === start && to === tEnd) return 'fullCampaign'
+    if (unionRange) {
+      const tEnd = unionRange.end && unionRange.end < t ? unionRange.end : t
+      if (from === unionRange.start && to === tEnd) return 'fullCampaign'
     }
     return 'custom'
-  }, [from, to, competence, selectedCampaignRaw])
+  }, [from, to, competence, unionRange])
 
   function applyPreset(p) {
     const t = todayISO()
@@ -235,20 +263,19 @@ export default function AirtimeFiltersBar({
       const eISO = isoFromDate(end)
       return onRangeChange({ from: sISO, to: eISO < t ? eISO : t })
     }
-    if (p === 'monthCampaign' && competence && selectedCampaignRaw) {
+    if (p === 'monthCampaign' && competence && unionRange) {
       const { start, end } = monthToRange(competence)
       const sISO = isoFromDate(start)
       const eISO = isoFromDate(end)
       const monthEndCapped = eISO < t ? eISO : t
-      const cs = String(selectedCampaignRaw.start_date).slice(0, 10)
-      const ce = String(selectedCampaignRaw.end_date).slice(0, 10)
-      return onRangeChange({ from: cs > sISO ? cs : sISO, to: ce < monthEndCapped ? ce : monthEndCapped })
+      return onRangeChange({
+        from: unionRange.start > sISO ? unionRange.start : sISO,
+        to:   unionRange.end < monthEndCapped ? unionRange.end : monthEndCapped,
+      })
     }
-    if (p === 'fullCampaign' && selectedCampaignRaw) {
-      const start = String(selectedCampaignRaw.start_date).slice(0, 10)
-      const end   = String(selectedCampaignRaw.end_date).slice(0, 10)
-      const tEnd = end && end < t ? end : t
-      return onRangeChange({ from: start, to: tEnd })
+    if (p === 'fullCampaign' && unionRange) {
+      const tEnd = unionRange.end && unionRange.end < t ? unionRange.end : t
+      return onRangeChange({ from: unionRange.start, to: tEnd })
     }
   }
 
@@ -273,14 +300,45 @@ export default function AirtimeFiltersBar({
   }, [])
 
   const campaignCount = campaignOptions.length
+  const multi = campaignIds.length > 1
 
   return (
     <div>
-      {/* 3-step filter bar */}
-      <div className="flow-filters">
+      {/* 4-step filter bar */}
+      <div className="flow-filters flow-filters--auto at-flow">
         <div className={`flow-filter ${step === 1 ? 'flow-filter--active' : 'flow-filter--done'}`}>
-          <label className="flow-filter-label" htmlFor="airtime-month">
+          <label className="flow-filter-label" htmlFor="airtime-client">
             <span className="flow-filter-label-step">1</span>
+            Cliente
+          </label>
+          {canPickClient ? (
+            <RSelect
+              inputId="airtime-client"
+              options={clientOptions}
+              value={clientOptions.find(o => o.value === clientId) ?? null}
+              onChange={opt => onClientChange(opt?.value ?? '')}
+              formatOptionLabel={formatClientOption}
+              placeholder="Selecione…"
+              isClearable
+            />
+          ) : (
+            <div className="flow-locked-chip">
+              <ClientMiniAvatar
+                name={selectedClient?.name ?? ''}
+                logo={selectedClient?.logo_url}
+                size={22}
+              />
+              <span>{selectedClient?.name ?? 'Sua conta'}</span>
+            </div>
+          )}
+        </div>
+
+        <div className={`flow-filter ${
+          !clientId ? 'flow-filter--locked' :
+          step === 2 ? 'flow-filter--active' : 'flow-filter--done'
+        }`}>
+          <label className="flow-filter-label" htmlFor="airtime-month">
+            <span className="flow-filter-label-step">2</span>
             Competência
           </label>
           <input
@@ -289,33 +347,39 @@ export default function AirtimeFiltersBar({
             type="month"
             value={competence ?? ''}
             onChange={e => onCompetenceChange(e.target.value)}
+            disabled={!clientId}
           />
         </div>
 
         <div className={`flow-filter ${
-          !competence ? 'flow-filter--locked' :
-          step === 2 ? 'flow-filter--active' : 'flow-filter--done'
+          !clientId || !competence ? 'flow-filter--locked' :
+          step === 3 ? 'flow-filter--active' : 'flow-filter--done'
         }`}>
           <label className="flow-filter-label" htmlFor="airtime-campaign">
-            <span className="flow-filter-label-step">2</span>
-            Campanha
-            {competence && step === 2 && campaignCount > 0 && (
-              <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, fontSize: 11, fontWeight: 600, color: 'var(--c-text-3)' }}>
-                {campaignCount === 1 ? '1 disponível' : `${campaignCount} disponíveis`}
+            <span className="flow-filter-label-step">3</span>
+            Campanhas
+            {clientId && competence && campaignCount > 0 && (
+              <span className="flow-filter-hint">
+                {hasCampaigns
+                  ? `${campaignIds.length} de ${campaignCount}`
+                  : campaignCount === 1 ? '1 disponível' : `${campaignCount} disponíveis`}
               </span>
             )}
           </label>
           <RSelect
             inputId="airtime-campaign"
+            isMulti
+            closeMenuOnSelect={false}
             options={campaignOptions}
-            value={selectedCampaignOption}
-            onChange={opt => onCampaignChange(opt?.value ?? '')}
+            value={selectedOptions}
+            onChange={opts => onCampaignsChange((opts || []).map(o => o.value))}
             formatOptionLabel={formatCampaignOption}
-            isDisabled={!competence}
+            isDisabled={!clientId || !competence}
             placeholder={
+              !clientId ? 'Escolha um cliente primeiro' :
               !competence ? 'Escolha uma competência primeiro' :
               campaignCount === 0 ? `Nenhuma campanha em ${monthLabel(competence)}` :
-              `${campaignCount === 1 ? '1 campanha' : `${campaignCount} campanhas`} em ${monthLabel(competence)}`
+              'Selecione 1 ou mais…'
             }
             noOptionsMessage={() => `Nenhuma campanha em ${monthLabel(competence)}`}
             isClearable
@@ -323,10 +387,10 @@ export default function AirtimeFiltersBar({
         </div>
 
         <div className={`flow-filter ${
-          step < 3 ? 'flow-filter--locked' : 'flow-filter--active'
+          step < 4 ? 'flow-filter--locked' : 'flow-filter--active'
         }`}>
           <label className="flow-filter-label">
-            <span className="flow-filter-label-step">3</span>
+            <span className="flow-filter-label-step">4</span>
             Período
           </label>
           <div className={'flow-range' + (invalidRange ? ' flow-range--error' : '')}>
@@ -334,7 +398,7 @@ export default function AirtimeFiltersBar({
               type="date"
               value={from ?? ''}
               onChange={e => onFromChange(e.target.value)}
-              disabled={step < 3}
+              disabled={step < 4}
               aria-label="Data de início"
             />
             <span className="flow-range-arrow">→</span>
@@ -342,20 +406,20 @@ export default function AirtimeFiltersBar({
               type="date"
               value={to ?? ''}
               onChange={e => onToChange(e.target.value)}
-              disabled={step < 3}
+              disabled={step < 4}
               aria-label="Data de fim"
             />
           </div>
         </div>
       </div>
 
-      {/* Range presets (only meaningful once we're at step 3). */}
-      {step === 3 && (
+      {/* Range presets (only meaningful once we're at the last step). */}
+      {step === 4 && (
         <div className="airtime-filters-presets">
           {[
-            { id: 'monthCampaign', label: 'Vigência no mês', disabled: !selectedCampaignRaw },
+            { id: 'monthCampaign', label: 'Vigência no mês', disabled: !unionRange },
             { id: 'fullMonth',     label: 'Mês inteiro' },
-            { id: 'fullCampaign',  label: 'Campanha inteira', disabled: !selectedCampaignRaw },
+            { id: 'fullCampaign',  label: multi ? 'Campanhas inteiras' : 'Campanha inteira', disabled: !unionRange },
             { id: 'last7',         label: 'Últimos 7 dias' },
             { id: 'last30',        label: 'Últimos 30 dias' },
             { id: 'custom',        label: 'Personalizado', readonly: true },
@@ -372,7 +436,7 @@ export default function AirtimeFiltersBar({
       )}
 
       {/* Secondary toolbar: search + export. Visible whenever a campaign is set. */}
-      {step === 3 && (
+      {step === 4 && (
         <div className="flow-toolbar">
           <div className="airtime-filters-search-wrap">
             <span className="airtime-filters-search-icon" aria-hidden>
@@ -394,16 +458,19 @@ export default function AirtimeFiltersBar({
           {/* Menu unificado de relatórios — substituiu o botão "Exportar CSV"
               admin-only que vivia aqui. Agora viewer também consegue baixar
               consolidado/PDF (escopado ao próprio cliente no backend); CSV
-              detalhado continua admin-only — o componente esconde a opção. */}
+              detalhado continua admin-only — o componente esconde a opção.
+              Relatório é POR CAMPANHA: com seleção múltipla o menu abre com um
+              seletor de campanha em cima do de período. */}
           <div style={{ marginLeft: 'auto' }}>
             <CampaignReportsMenu
-              campaignId={campaignId}
+              campaignId={campaignIds[0] ?? ''}
+              campaignOptions={selectedOptions.map(o => ({ id: o.value, name: o.label }))}
               from={from}
               to={to}
               variant="compact"
               placement="bottom-end"
-              disabled={!campaignId || invalidRange}
-              disabledReason={!campaignId ? 'Selecione uma campanha' : 'Intervalo inválido'}
+              disabled={!hasCampaigns || invalidRange}
+              disabledReason={!hasCampaigns ? 'Selecione uma campanha' : 'Intervalo inválido'}
               label="Relatórios"
             />
           </div>

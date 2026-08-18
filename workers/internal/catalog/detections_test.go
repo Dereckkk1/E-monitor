@@ -191,7 +191,7 @@ func TestDetections_ListPaged_BasicPaging(t *testing.T) {
 	}
 
 	res, err := dets.ListPaged(ctx, ListPagedFilter{
-		CampaignID: &campID, Page: 1, PageSize: 10,
+		CampaignIDs: []uuid.UUID{campID}, Page: 1, PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListPaged page 1: %v", err)
@@ -207,7 +207,7 @@ func TestDetections_ListPaged_BasicPaging(t *testing.T) {
 	}
 
 	res2, err := dets.ListPaged(ctx, ListPagedFilter{
-		CampaignID: &campID, Page: 3, PageSize: 10,
+		CampaignIDs: []uuid.UUID{campID}, Page: 3, PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListPaged page 3: %v", err)
@@ -232,7 +232,7 @@ func TestDetections_ListPaged_QFilter(t *testing.T) {
 	}
 
 	res, err := dets.ListPaged(ctx, ListPagedFilter{
-		CampaignID: &campID, Q: "cha", Page: 1, PageSize: 10,
+		CampaignIDs: []uuid.UUID{campID}, Q: "cha", Page: 1, PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListPaged q='cha': %v", err)
@@ -242,7 +242,7 @@ func TestDetections_ListPaged_QFilter(t *testing.T) {
 	}
 
 	res2, err := dets.ListPaged(ctx, ListPagedFilter{
-		CampaignID: &campID, Q: "xyz-impossivel", Page: 1, PageSize: 10,
+		CampaignIDs: []uuid.UUID{campID}, Q: "xyz-impossivel", Page: 1, PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListPaged q='xyz': %v", err)
@@ -293,7 +293,7 @@ func TestDetections_AggregateByMaterial(t *testing.T) {
 		}
 	}
 
-	res, err := dets.AggregateByMaterial(ctx, AggregateFilter{CampaignID: campID})
+	res, err := dets.AggregateByMaterial(ctx, AggregateFilter{CampaignIDs: []uuid.UUID{campID}})
 	if err != nil {
 		t.Fatalf("AggregateByMaterial: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	}
 
 	res, err := dets.ListPaged(ctx, ListPagedFilter{
-		CampaignID: &campID, Page: 1, PageSize: 10,
+		CampaignIDs: []uuid.UUID{campID}, Page: 1, PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListPaged: %v", err)

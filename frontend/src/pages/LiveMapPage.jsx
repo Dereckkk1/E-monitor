@@ -7,6 +7,7 @@ import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
 import { safeLogoUrl } from '../utils/logoUrl'
 import BrazilMap from '../components/BrazilMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
+import FlowEmptyState from '../components/FlowEmptyState'
 import './LiveMapPage.css'
 
 /* Avatar mini de cliente (logo + fallback iniciais) — espelha o que o
@@ -63,10 +64,26 @@ const GHOST_FEED = [
   { id: 'g3', station_name: 'Rádio Exemplo FM', city: 'Curitiba', state: 'PR', band: 'FM', frequency_mhz: 98.1, commercial_name: 'Sua campanha aqui', commercial_id: 'g3', detected_at: new Date().toISOString() },
 ]
 
-function EmptyTutorial({ title, description, cta }) {
+const STEP_LABELS = ['Cliente', 'Campanhas']
+
+const ICON_PIN = (
+  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 21s7-6.3 7-11a7 7 0 0 0-14 0c0 4.7 7 11 7 11z" />
+    <circle cx="12" cy="10" r="2.5" />
+  </svg>
+)
+
+function EmptyTutorial({ step, title, description, cta, steps = STEP_LABELS }) {
   return (
-    <div className="lm-empty">
-      <div className="lm-empty-ghost" aria-hidden="true">
+    <FlowEmptyState
+      className="lm-empty detection-empty--veil"
+      step={step}
+      steps={steps}
+      icon={ICON_PIN}
+      title={title}
+      description={description}
+      actions={cta}
+      ghost={(
         <LiveCanvas
           feedTitle="Últimas Veiculações"
           mapTitle="Emissoras monitoradas"
@@ -74,21 +91,8 @@ function EmptyTutorial({ title, description, cta }) {
           feed={<div className="la-list">{GHOST_FEED.map(d => <LiveAiringRow key={d.id} detection={d} />)}</div>}
           map={<BrazilMap stations={[]} />}
         />
-      </div>
-      <div className="lm-empty-overlay">
-        <div className="lm-empty-card">
-          <div className="lm-empty-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 21s7-6.3 7-11a7 7 0 0 0-14 0c0 4.7 7 11 7 11z" />
-              <circle cx="12" cy="10" r="2.5" />
-            </svg>
-          </div>
-          <h3>{title}</h3>
-          <p>{description}</p>
-          {cta}
-        </div>
-      </div>
-    </div>
+      )}
+    />
   )
 }
 
@@ -121,7 +125,9 @@ function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
 export default function LiveMapPage() {
   const { isAdmin, user } = useAuth()
   const [pickedClientId, setPickedClientId] = useState(null)
-  const [campaignId, setCampaignId] = useState(null)
+  // Seleção múltipla, igual /insights: o mapa passa a mostrar a UNIÃO das
+  // emissoras e o feed mistura as veiculações das campanhas escolhidas.
+  const [campaignIds, setCampaignIds] = useState([])
   // Single-player coordination: só uma row toca por vez.
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
@@ -160,7 +166,10 @@ export default function LiveMapPage() {
     return rows.map(c => ({ value: c.id, label: c.name }))
   }, [allCampaigns, clientId])
 
-  const { data, isLoading, isError, isFetching, refetch } = useLiveMap(campaignId)
+  const hasCampaigns = campaignIds.length > 0
+  const multiCampaign = campaignIds.length > 1
+
+  const { data, isLoading, isError, isFetching, refetch } = useLiveMap(campaignIds)
   const stations = useMemo(() => data?.stations ?? [], [data])
   const detections = useMemo(() => data?.recent_detections ?? [], [data])
 
@@ -175,19 +184,21 @@ export default function LiveMapPage() {
   if (isAdmin && !clientId) {
     emptyTutorial = (
       <EmptyTutorial
-        title="Escolha um cliente e uma campanha"
-        description="Selecione o cliente e a campanha nos filtros acima para ver, em tempo real, onde as emissoras estão sendo monitoradas e as últimas veiculações."
+        step={1}
+        title={<>Comece pelo <strong>cliente</strong></>}
+        description="Escolha o cliente no filtro acima. As campanhas dele ficam disponíveis logo em seguida."
       />
     )
-  } else if (!campaignId) {
+  } else if (!hasCampaigns) {
     const noCampaigns = !campaignsQ.isPending && campOpts.length === 0
     emptyTutorial = (
       <EmptyTutorial
-        title={noCampaigns ? 'Nenhuma campanha por aqui' : 'Selecione uma campanha'}
+        step={2}
+        title={noCampaigns ? 'Nenhuma campanha por aqui' : <>Escolha as <strong>campanhas</strong></>}
         description={
           noCampaigns
             ? 'Quando houver uma campanha ativa, suas emissoras aparecem pulsando no mapa e as veiculações entram no feed em tempo real.'
-            : 'Escolha uma campanha no filtro acima para ver as emissoras dela no mapa e o feed de veiculações ao vivo.'
+            : 'Escolha uma ou mais campanhas no filtro acima para ver as emissoras delas no mapa e o feed de veiculações ao vivo.'
         }
         cta={noCampaigns ? <Link className="btn btn-primary" to="/campaigns">Ver campanhas</Link> : null}
       />
@@ -198,10 +209,13 @@ export default function LiveMapPage() {
     ? `${stations.length} emissora${stations.length === 1 ? '' : 's'} · ${activeStates} estado${activeStates === 1 ? '' : 's'}`
     : ''
 
+  // Vira o slug do PNG do mapa. Com várias campanhas nenhum nome representa a
+  // imagem, então a contagem é o rótulo honesto.
   const campaignName = useMemo(() => {
-    if (!campaignId) return ''
-    return (allCampaigns.find(c => c.id === campaignId)?.name || '').trim()
-  }, [campaignId, allCampaigns])
+    if (campaignIds.length === 0) return ''
+    if (campaignIds.length > 1) return `${campaignIds.length} campanhas`
+    return (allCampaigns.find(c => c.id === campaignIds[0])?.name || '').trim()
+  }, [campaignIds, allCampaigns])
 
   async function handleDownloadMap() {
     const el = mapRef.current
@@ -263,7 +277,7 @@ export default function LiveMapPage() {
     <div className="lm-page">
       <header className="lm-header">
         <h1 className="lm-title">Mapa ao Vivo</h1>
-        {campaignId && !isLoading && !isError && (
+        {hasCampaigns && !isLoading && !isError && (
           <span className="lm-live">
             <span className="lm-live-dot" />
             ao vivo · atualiza a cada 20s
@@ -272,45 +286,78 @@ export default function LiveMapPage() {
         )}
       </header>
 
-      {/* Filtros — mesmo padrão das telas de Veiculação */}
-      <div className="lm-filters">
-        {canPickClient ? (
-          <div className="lm-filter">
-            <label className="lm-filter-label">Cliente</label>
+      {/* Barra de filtros em passos — mesma das telas de Veiculação.
+          Cadeia real: sem cliente o backend não tem o que listar, então o
+          passo 2 nasce bloqueado. Quem enxerga um cliente só já entra com o
+          passo 1 concluído (chip travado). */}
+      <div className="flow-filters flow-filters--auto lm-flow">
+        <div className={`flow-filter ${
+          clientId ? 'flow-filter--done' :
+          isAdmin ? 'flow-filter--active' : 'flow-filter--optional'
+        }`}>
+          <label className="flow-filter-label" htmlFor="lm-client">
+            <span className="flow-filter-label-step">1</span>
+            Cliente
+            {/* Agência (carteira 2+) pode ver a carteira inteira: aqui o
+                cliente é recorte, não pré-requisito. Só o admin é obrigado. */}
+            {canPickClient && !isAdmin && !clientId && (
+              <span className="flow-filter-tag">opcional</span>
+            )}
+          </label>
+          {canPickClient ? (
             <RSelect
+              inputId="lm-client"
               options={clientOpts}
               value={clientOpts.find(o => o.value === clientId) || null}
-              onChange={opt => { setPickedClientId(opt?.value || null); setCampaignId(null) }}
+              onChange={opt => { setPickedClientId(opt?.value || null); setCampaignIds([]) }}
               placeholder="Selecione…"
               isLoading={clientsQ.isPending}
               isClearable
               formatOptionLabel={formatClientOption}
             />
-          </div>
-        ) : (
-          <div className="lm-filter">
-            <label className="lm-filter-label">Cliente</label>
-            <div className="lm-locked-chip">
+          ) : (
+            <div className="flow-locked-chip">
               <ClientMiniAvatar
                 name={ownClient?.name || user?.client_name || user?.email || ''}
                 logo={ownClient?.logo_url}
-                size={20}
+                size={22}
               />
               <span>{ownClient?.name || user?.client_name || user?.email || 'Sua conta'}</span>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        <div className="lm-filter lm-filter--wide">
-          <label className="lm-filter-label">Campanha</label>
+        <div className={`flow-filter ${
+          isAdmin && !clientId ? 'flow-filter--locked' :
+          hasCampaigns ? 'flow-filter--done' : 'flow-filter--active'
+        }`}>
+          <label className="flow-filter-label" htmlFor="lm-campaign">
+            <span className="flow-filter-label-step">2</span>
+            Campanhas
+            {!(isAdmin && !clientId) && campOpts.length > 0 && (
+              <span className="flow-filter-hint">
+                {hasCampaigns
+                  ? `${campaignIds.length} de ${campOpts.length}`
+                  : campOpts.length === 1 ? '1 disponível' : `${campOpts.length} disponíveis`}
+              </span>
+            )}
+          </label>
           <RSelect
+            inputId="lm-campaign"
+            isMulti
             options={campOpts}
-            value={campOpts.find(o => o.value === campaignId) || null}
-            onChange={opt => setCampaignId(opt?.value || null)}
-            placeholder="Selecione uma campanha…"
+            value={campOpts.filter(o => campaignIds.includes(o.value))}
+            onChange={opts => setCampaignIds((opts || []).map(o => o.value))}
+            placeholder={
+              isAdmin && !clientId ? 'Escolha um cliente primeiro' :
+              campaignsQ.isPending ? 'Carregando…' :
+              campOpts.length === 0 ? 'Nenhuma campanha ao vivo' :
+              'Selecione 1 ou mais…'
+            }
             isDisabled={isAdmin && !clientId}
             isLoading={campaignsQ.isPending}
-            isClearable
+            closeMenuOnSelect={false}
+            noOptionsMessage={() => 'Nenhuma campanha ao vivo'}
           />
         </div>
       </div>
@@ -336,18 +383,30 @@ export default function LiveMapPage() {
             isLoading ? (
               <FeedSkeleton />
             ) : detections.length === 0 ? (
-              <div className="la-empty">Nenhuma veiculação recente nesta campanha.</div>
+              <div className="la-empty">
+                {multiCampaign
+                  ? 'Nenhuma veiculação recente nestas campanhas.'
+                  : 'Nenhuma veiculação recente nesta campanha.'}
+              </div>
             ) : (
               <div className="la-list la-stagger">
-                {detections.map(d => (
-                  <LiveAiringRow
-                    key={d.id}
-                    detection={d}
-                    isPlaying={playingId === d.id}
-                    onPlayRequest={(id) => setPlayingId(id)}
-                    onPlayClose={() => setPlayingId(null)}
-                  />
-                ))}
+                {detections.map(d => {
+                  // Com multi-atribuição a MESMA tocada pode projetar em duas
+                  // campanhas selecionadas e vir duas vezes (uma por campanha,
+                  // cada uma rotulada). A chave — e o "quem está tocando" —
+                  // precisa então da campanha junto, senão as duas linhas
+                  // colidem e tocam ao mesmo tempo.
+                  const rowKey = d.campaign_id ? `${d.id}:${d.campaign_id}` : d.id
+                  return (
+                    <LiveAiringRow
+                      key={rowKey}
+                      detection={d}
+                      isPlaying={playingId === rowKey}
+                      onPlayRequest={() => setPlayingId(rowKey)}
+                      onPlayClose={() => setPlayingId(null)}
+                    />
+                  )
+                })}
               </div>
             )
           }

@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 /**
  * Avatar de cliente: se tem logo_url, mostra <img>; senão, mostra um
  * círculo cinza com a inicial do nome em branco. Usado no sininho de
@@ -8,9 +10,22 @@
  *  - size: pixels (default 32)
  */
 export default function ClientAvatar({ client, size = 32 }) {
-  const url = client?.logo_url || client?.client_logo_url
+  // Logo que não carrega cai na inicial, não num círculo vazio. A maioria das
+  // logos aponta pra host externo (gstatic, cdn de terceiro), e link podre é
+  // questão de tempo — some num seletor de ~110 clientes.
+  const [imgErr, setImgErr] = useState(false)
+  const rawUrl = client?.logo_url || client?.client_logo_url
+  const url = imgErr ? null : rawUrl
   const name = client?.name || client?.client_name || '?'
   const initial = name.trim().charAt(0).toUpperCase() || '?'
+
+  // Trocar de cliente sem remontar o componente (react-select reusa a linha)
+  // não pode carregar o erro da logo anterior pra logo nova.
+  const [prevUrl, setPrevUrl] = useState(rawUrl)
+  if (rawUrl !== prevUrl) {
+    setPrevUrl(rawUrl)
+    setImgErr(false)
+  }
 
   const baseStyle = {
     width: size, height: size,
@@ -33,7 +48,7 @@ export default function ClientAvatar({ client, size = 32 }) {
           src={url}
           alt={name}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={(e) => { e.currentTarget.style.display = 'none' }}
+          onError={() => setImgErr(true)}
         />
       </span>
     )

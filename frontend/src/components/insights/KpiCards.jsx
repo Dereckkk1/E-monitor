@@ -1,3 +1,4 @@
+import CardValue from './CardValue'
 import { IconChartBars, IconMoney, IconGift } from './icons'
 
 const fmtBR = new Intl.NumberFormat('pt-BR')
@@ -50,7 +51,7 @@ export default function KpiCards({ data }) {
           <span className="in-card-icon"><IconChartBars /></span>
           <span className="in-card-label">Impactos</span>
         </div>
-        <div className="in-card-value in-card-value--num">{fmtBR.format(k.impactos)}</div>
+        <CardValue className="in-card-value--num">{fmtBR.format(k.impactos)}</CardValue>
       </div>
 
       {hasTarget && (
@@ -59,7 +60,7 @@ export default function KpiCards({ data }) {
             <span className="in-card-icon"><IconChartBars /></span>
             <TargetLabel base="Impactos no target" label={targetLabel} />
           </div>
-          <div className="in-card-value in-card-value--num">{fmtBR.format(k.impactos_target ?? 0)}</div>
+          <CardValue className="in-card-value--num">{fmtBR.format(k.impactos_target ?? 0)}</CardValue>
           <div className="in-card-sub">{k.stations_with_target} de {k.stations_count} emissoras</div>
         </div>
       )}
@@ -72,7 +73,7 @@ export default function KpiCards({ data }) {
           <span className="in-card-icon"><IconMoney /></span>
           <span className="in-card-label">CPM</span>
         </div>
-        <div className="in-card-value">{fmtCurrency.format(k.cpm)}</div>
+        <CardValue>{fmtCurrency.format(k.cpm)}</CardValue>
       </div>
 
       {hasTarget && (
@@ -81,7 +82,7 @@ export default function KpiCards({ data }) {
             <span className="in-card-icon"><IconMoney /></span>
             <TargetLabel base="CPM no target" label={targetLabel} />
           </div>
-          <div className="in-card-value">{fmtCurrency.format(k.cpm_target ?? 0)}</div>
+          <CardValue>{fmtCurrency.format(k.cpm_target ?? 0)}</CardValue>
         </div>
       )}
 
@@ -94,7 +95,7 @@ export default function KpiCards({ data }) {
             <span className="in-card-icon"><IconGift /></span>
             <span className="in-card-label">Bonificação</span>
           </div>
-          <div className="in-card-value">{fmtCurrency.format(k.bonificacao.valor)}</div>
+          <CardValue>{fmtCurrency.format(k.bonificacao.valor)}</CardValue>
         </div>
       )}
     </>

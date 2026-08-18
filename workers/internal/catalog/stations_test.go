@@ -2,9 +2,11 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"radiocheck/internal/db"
@@ -18,6 +20,24 @@ func newTestPool(t *testing.T) (context.Context, *Stations) {
 	}
 	ctx := context.Background()
 	pool, err := db.New(ctx, url, zap.NewNop())
+	require.NoError(t, err)
+	// Zera ANTES, não só depois. Todo teste daqui afirma sobre o conjunto
+	// inteiro da tabela ("a busca devolve só a JB", "a lista tem 1 emissora"),
+	// e outros testes do pacote criam emissoras sem limpar — rodar o pacote
+	// completo fazia esses testes falharem por lixo herdado.
+	//
+	// TRUNCATE ... CASCADE e não DELETE: emissora herdada costuma vir com
+	// veiculação pendurada, e a FK barra o DELETE. Cascatear é seguro aqui —
+	// TEST_DATABASE_URL é banco descartável e todo teste do pacote semeia o
+	// que precisa no próprio começo.
+	//
+	// Efeito colateral a conhecer: isso deixa `stations` em ZERO. O guard do
+	// pacote internal/api/handlers usa "stations < 50 E clients > 10" como
+	// heurística de "isso é DB real, recuso rodar" — então encadear os dois
+	// pacotes no MESMO banco (`go test ./internal/catalog/ ./internal/api/...`)
+	// faz o handlers abortar. Rode um pacote por banco, ou limpe `clients`
+	// entre eles.
+	_, err = pool.Exec(ctx, `TRUNCATE stations CASCADE`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		pool.Exec(ctx, `DELETE FROM stations`)
@@ -157,4 +177,77 @@ func TestStations_Update_Geocoding(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, st.Latitude)
 	require.Equal(t, savedLat, *st.Latitude)
+}
+
+// TestStations_List_ByIDs cobre a regressão que deixava o seletor de emissoras
+// do /insights VAZIO em produção, sem erro nenhum no console.
+//
+// O seletor chamava List sem filtro e sem limit. O default é a 1ª página de 20,
+// ordenada por monitoring_status/pmm/nome — com 7,5 mil emissoras no catálogo
+// de prod, as 20 primeiras praticamente nunca são as da campanha, e o filtro
+// client-side por target_stations zerava a lista. Em dev, com poucas emissoras,
+// as 20 cobriam tudo e o bug não aparecia.
+//
+// O teste reproduz a forma da falha: mais emissoras do que a página default, e
+// as pedidas ficam FORA dela (paused ordena depois de active). Sem o filtro
+// IDs, List devolveria as 20 primeiras e nenhuma das pedidas.
+func TestStations_List_ByIDs(t *testing.T) {
+	ctx, repo := newTestPool(t)
+
+	var wanted []uuid.UUID
+	for i := 0; i < 25; i++ {
+		st, err := repo.Create(ctx, CreateStationInput{
+			Name:      fmt.Sprintf("Emissora %02d", i),
+			Band:      "FM",
+			StreamURL: "http://example.com/s",
+		})
+		require.NoError(t, err)
+		// As duas últimas ficam 'paused' (default) e as demais 'active', então
+		// as pedidas caem no fim da ordenação — fora da página de 20.
+		if i < 23 {
+			require.NoError(t, repo.UpdateMonitoringStatus(ctx, st.ID, "active"))
+		} else {
+			wanted = append(wanted, st.ID)
+		}
+	}
+
+	// Como era antes: sem filtro, página default de 20 — nenhuma das pedidas.
+	def, err := repo.List(ctx, ListInput{})
+	require.NoError(t, err)
+	require.Len(t, def.Data, 20, "default continua paginando em 20")
+	for _, got := range def.Data {
+		require.NotContains(t, wanted, got.ID, "as pedidas estão fora da 1ª página")
+	}
+
+	// Com IDs: exatamente as pedidas, sem depender de page/limit.
+	out, err := repo.List(ctx, ListInput{IDs: wanted})
+	require.NoError(t, err)
+	require.Len(t, out.Data, len(wanted))
+	got := make([]uuid.UUID, 0, len(out.Data))
+	for _, s := range out.Data {
+		got = append(got, s.ID)
+	}
+	require.ElementsMatch(t, wanted, got)
+}
+
+// IDs ignora a paginação de propósito: o caller pediu um conjunto fechado, e
+// truncar em 20 devolveria um subconjunto em silêncio — o mesmo modo de falha
+// que o filtro veio corrigir.
+func TestStations_List_ByIDs_IgnoraPaginacao(t *testing.T) {
+	ctx, repo := newTestPool(t)
+
+	var ids []uuid.UUID
+	for i := 0; i < 30; i++ {
+		st, err := repo.Create(ctx, CreateStationInput{
+			Name:      fmt.Sprintf("Emissora %02d", i),
+			Band:      "FM",
+			StreamURL: "http://example.com/s",
+		})
+		require.NoError(t, err)
+		ids = append(ids, st.ID)
+	}
+
+	out, err := repo.List(ctx, ListInput{IDs: ids, Limit: 5, Page: 3})
+	require.NoError(t, err)
+	require.Len(t, out.Data, 30, "limit/page não podem cortar o conjunto pedido")
 }

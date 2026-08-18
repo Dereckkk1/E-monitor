@@ -99,7 +99,7 @@ func assetKey(reportID, campaignID uuid.UUID, name string) string {
 // botão "Relatórios" — é o pacote reportcsv que garante isso.
 func (s *Service) buildCSVs(ctx context.Context, b BlockRow) (consolidated, detailed []byte, err error) {
 	from, to := b.From, b.To
-	f := catalog.AggregateFilter{CampaignID: b.CampaignID, StartDate: &from, EndDate: &to}
+	f := catalog.AggregateFilter{CampaignIDs: []uuid.UUID{b.CampaignID}, StartDate: &from, EndDate: &to}
 	rows, err := s.detections.AggregateByMaterialStation(ctx, f)
 	if err != nil {
 		return nil, nil, fmt.Errorf("postsale: agregado consolidado: %w", err)
@@ -114,8 +114,11 @@ func (s *Service) buildCSVs(ctx context.Context, b BlockRow) (consolidated, deta
 		return nil, nil, err
 	}
 
-	campaignID := b.CampaignID
-	pf := catalog.ListPagedFilter{CampaignID: &campaignID, StartDate: &from, EndDate: &to}
+	pf := catalog.ListPagedFilter{
+		CampaignIDs: []uuid.UUID{b.CampaignID},
+		StartDate:   &from,
+		EndDate:     &to,
+	}
 	err = reportcsv.WriteDetailed(&dbuf, func(cb func(catalog.DetectionEnriched) error) error {
 		return s.detections.IterateForExport(ctx, pf, cb)
 	})

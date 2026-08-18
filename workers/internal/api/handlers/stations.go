@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/probe"
 )
@@ -33,6 +35,69 @@ func (h *StationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		Q:     q.Get("q"),
 		Band:  q.Get("band"),
 		State: q.Get("state"),
+		City:  q.Get("city"),
+	}
+	if raw := q.Get("station_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			http.Error(w, "invalid station_id", 400)
+			return
+		}
+		in.StationID = &id
+	}
+	// ids: conjunto fechado de emissoras (csv de uuids). Quem já tem os uuids
+	// e só quer os rótulos — o seletor do /insights parte de
+	// campaigns.target_stations. Sem isto o caller cairia na paginação padrão
+	// de 20 e receberia, em silêncio, emissoras que não pediu.
+	//
+	// Não atravessa tenant (diferente de contracted_by logo abaixo): /stations
+	// já é legível por qualquer usuário autenticado — emissora é dado de
+	// catálogo, não de cliente. O teto de 500 é anti-abuso: mantém a query e o
+	// payload limitados sem atrapalhar nenhum uso real (a maior campanha em
+	// prod tem dezenas de emissoras).
+	if raw := q.Get("ids"); raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) > 500 {
+			http.Error(w, "ids max=500", 400)
+			return
+		}
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := uuid.Parse(part)
+			if err != nil {
+				http.Error(w, "invalid ids", 400)
+				return
+			}
+			in.IDs = append(in.IDs, id)
+		}
+	}
+	// contracted_by: emissoras que ESTES clientes têm contratadas agora. Lista
+	// separada por vírgula porque usuário de agência tem carteira.
+	//
+	// Este é o único filtro de /stations que atravessa tenant, então cada id
+	// passa por ScopeAllows: cliente só enxerga a própria carteira, e pedir a
+	// de outro responde 404 (anti-oracle, mesmo padrão de /campaigns/{id} e
+	// /detections). Admin/operator não tem escopo e escolhe livre.
+	if raw := q.Get("contracted_by"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := uuid.Parse(part)
+			if err != nil {
+				http.Error(w, "invalid contracted_by", 400)
+				return
+			}
+			if !auth.ScopeAllows(r.Context(), id) {
+				http.Error(w, "not found", 404)
+				return
+			}
+			in.ContractedBy = append(in.ContractedBy, id)
+		}
 	}
 	if p, _ := strconv.Atoi(q.Get("page")); p > 0 {
 		in.Page = p
@@ -48,6 +113,22 @@ func (h *StationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := h.Repo.List(r.Context(), in)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+// Suggest alimenta o dropdown de busca de /stations: emissoras, cidades e UF
+// agrupadas. Abaixo de catalog.SuggestMinChars devolve os três grupos vazios
+// (200, não 400) — o campo chama a cada tecla e um 4xx só polui o console.
+func (h *StationsHandler) Suggest(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.Repo.Suggest(r.Context(), catalog.SuggestInput{
+		Q:    q.Get("q"),
+		Band: q.Get("band"),
+	})
 	if err != nil {
 		http.Error(w, "internal error", 500)
 		return

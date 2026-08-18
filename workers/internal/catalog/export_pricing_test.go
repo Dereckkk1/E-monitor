@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func TestIterateForExport_ShortIDEPrecoUnitario(t *testing.T) {
 	collect := func() []DetectionEnriched {
 		var got []DetectionEnriched
 		require.NoError(t, dets.IterateForExport(ctx,
-			ListPagedFilter{CampaignID: &campID},
+			ListPagedFilter{CampaignIDs: []uuid.UUID{campID}},
 			func(d DetectionEnriched) error { got = append(got, d); return nil }))
 		return got
 	}

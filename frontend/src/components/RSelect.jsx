@@ -1,4 +1,4 @@
-import ReactSelect from 'react-select'
+import ReactSelect, { components as RS } from 'react-select'
 
 const C = {
   action:       '#E81E75',
@@ -33,6 +33,10 @@ const buildStyles = (overrides = {}) => ({
   valueContainer: (base) => ({
     ...base,
     padding: '2px 10px',
+    // No modo compacto o container NÃO quebra linha: é justamente o que evita
+    // o controle crescer em altura e empurrar a página. O primeiro chip
+    // encolhe com reticências e o "+N" fica sempre visível ao lado dele.
+    ...(overrides.compact ? { flexWrap: 'nowrap', overflow: 'hidden' } : null),
   }),
   menu: (base) => ({
     ...base,
@@ -77,6 +81,7 @@ const buildStyles = (overrides = {}) => ({
     background: C.actionLight,
     borderRadius: 9999,
     padding: '0 2px',
+    ...(overrides.compact ? { minWidth: 0, maxWidth: '100%' } : null),
   }),
   multiValueLabel: (base) => ({
     ...base,
@@ -129,14 +134,68 @@ const buildStyles = (overrides = {}) => ({
   }),
 })
 
-export default function RSelect({ styleOverrides, ...props }) {
+// Separador do tooltip do contador "+N".
+const NEWLINE = '\n'
+
+// Resumo da seleção múltipla: mantém os primeiros N chips e colapsa o resto
+// num contador "+N".
+//
+// Por que existe: o controle cresce em altura a cada item escolhido, e como ele
+// vive dentro da barra de filtros, a barra inteira empurra o conteúdo da página
+// pra baixo. Com 10+ materiais selecionados a tela vira uma lista de chips com
+// um dashboard escondido embaixo.
+//
+// O contador leva os nomes restantes no `title` — a informação não some, muda
+// de lugar. Quem precisa remover um item específico abre o menu e desmarca
+// (por isso `hideSelectedOptions` vai a false junto: sem os chips visíveis, o
+// menu passa a ser o único caminho de desmarcar).
+function makeCompactMultiValue(visible) {
+  return function CompactMultiValue(props) {
+    const { index, getValue } = props
+    const all = getValue() || []
+    if (index < visible) return <RS.MultiValue {...props} />
+    if (index > visible) return null
+    const rest = all.slice(visible)
+    return (
+      <div
+        title={rest.map(o => o.label).join(NEWLINE)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          margin: 2,
+          padding: '2px 9px',
+          borderRadius: 9999,
+          background: C.surface2,
+          color: C.text2,
+          fontFamily: C.fontBody,
+          fontSize: 11,
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          cursor: 'default',
+        }}
+      >
+        +{rest.length}
+      </div>
+    )
+  }
+}
+
+// compactValues: `true` mantém 1 chip visível, número N mantém N. Opt-in — sem
+// a prop o RSelect se comporta exatamente como antes em toda tela que já o usa.
+export default function RSelect({ styleOverrides, compactValues, components, ...props }) {
+  const visible = compactValues === true ? 1 : (Number(compactValues) || 0)
+  const compact = visible > 0 && props.isMulti
   return (
     <ReactSelect
-      styles={buildStyles(styleOverrides)}
+      styles={buildStyles({ ...styleOverrides, compact })}
       noOptionsMessage={() => 'Nenhuma opção'}
       menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
       menuPosition="fixed"
+      {...(compact ? { hideSelectedOptions: false } : null)}
       {...props}
+      components={compact
+        ? { MultiValue: makeCompactMultiValue(visible), ...components }
+        : components}
     />
   )
 }
