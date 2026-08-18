@@ -27,6 +27,20 @@ export function useStationSuggest({ q, band, enabled = true } = {}) {
     retry: false,
   })
 }
+// Busca TODAS as emissoras que casam com os filtros, ignorando a paginação da
+// tela — é o conjunto que vai pro arquivo exportado. Não é hook: roda no clique
+// do botão, não no render.
+//
+// O teto de 5000 é folgado de propósito: a maior carteira em prod tem dezenas
+// de emissoras, e o backend já recusa acima de 10000. Se um dia estourar, é
+// melhor o arquivo vir truncado com o número visível na tela do que a página
+// carregar 10 mil linhas a cada render.
+export async function fetchStationsForExport(params = {}) {
+  const { data } = await api.get('/stations', {
+    params: { ...params, page: 1, limit: 5000 },
+  })
+  return data?.data ?? []
+}
 export function useStation(id) {
   return useQuery({
     queryKey: ['stations', id],

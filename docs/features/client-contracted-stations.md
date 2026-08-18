@@ -5,6 +5,9 @@ codigo-relacionado:
   - workers/internal/catalog/stations.go
   - workers/internal/api/handlers/stations.go
   - frontend/src/pages/StationsPage.jsx
+  - frontend/src/components/StationsExportMenu.jsx
+  - frontend/src/utils/stationsExport.js
+  - frontend/src/utils/pdfReport.js
 ---
 
 # Emissoras contratadas pelo cliente
@@ -162,6 +165,83 @@ em vez de passar por `Date`.
 Cliente sem campanha vigente vê "Nenhuma emissora contratada no momento" mais a
 explicação de que só campanha em andamento ou programada conta, e um botão para
 o catálogo. Lista vazia sem explicação vira chamado de suporte.
+
+## Exportação (CSV e PDF)
+
+Com um cliente selecionado, a barra de filtros ganha **Exportar**. No catálogo
+inteiro o botão não existe: 7.500 emissoras não são um documento, e o valor
+aqui vem justamente de o conjunto ser o do cliente.
+
+Vale para os dois papéis — no modo "Minhas" do cliente também há um cliente
+selecionado (o próprio), e o escopo do backend garante que ele só exporta o que
+é dele.
+
+### O arquivo é o que está na tela
+
+O conjunto exportado respeita **todos** os filtros ativos (cliente + banda +
+busca), mesmo princípio WYSIWYG que `/detections` já usa
+([detections-report-wysiwyg.md](detections-report-wysiwyg.md)). O cabeçalho do
+PDF imprime os filtros aplicados, e o menu os mostra **antes** do clique —
+descobrir o recorte depois de abrir o arquivo é tarde.
+
+O que **não** segue a tela é a paginação: o clique busca o conjunto completo
+(`fetchStationsForExport`, `limit` 5000). Exportar as 25 linhas da página
+visível de um cliente com 37 emissoras seria um recorte silencioso.
+
+### Gating de campo sensível
+
+O CSV do cliente **não** traz e-mail comercial, razão social, nome fantasia nem
+classe de antena. É exatamente o gating da ficha da emissora
+([station-detail-modal.md](station-detail-modal.md)): esses campos são admin
+apenas, e o CSV não pode virar a porta dos fundos para um dado que a tela
+esconde. Guardado por dois testes em `stationsExport.test.mjs` — um afirma que
+o cabeçalho e a linha do cliente não contêm os campos, o outro que o do admin
+contém.
+
+O PDF é sempre livre de campo sensível: é o documento que circula.
+
+**`cnpj` não entra em nenhum dos dois.** O metadata guarda um token opaco do
+catálogo (`CATALOGn--ndZ274648MtDEksRNN0`), não um CNPJ. A ficha da emissora
+ainda o exibe rotulado como "CNPJ" para admin — inconsistência pré-existente,
+não corrigida aqui.
+
+### Colunas do CSV
+
+Identificação (`Emissora`, `Dial`, `Banda`, `Cidade`, `UF`), contrato
+(`Situação`, `Campanhas`), audiência (`PMM`, `População de cobertura`,
+`Cidades cobertas`), perfil editorial (`Categorias`, `Site`) e o perfil de
+audiência achatado em colunas somáveis: `Masculino/Feminino (%)`,
+`18-24 / 25-49 / 50+ (%)`, `Classe AB / C / DE (%)` e `Faixa etária (resumo)`.
+
+Preenchimento entre as contratadas (medido em 2026-08-18): perfil de audiência
+94%, categorias / população / e-mail / razão social 85%, geo 99% — bem
+diferente dos 22% do catálogo inteiro, porque a exportação cai justamente na
+fatia curada.
+
+Ficaram de fora por serem colunas mortas: `coverage_states` (array vazio),
+`power_watts` (zero preenchidos) e `website` (NULL em 100% das linhas — o
+endereço real veio em `audiency_site`, agora mapeado em `StationMeta`).
+
+### PDF
+
+Capa com logo E-monitor, faixa rosa e nome do cliente; cinco KPIs (Emissoras,
+Praças, Estados, No ar, PMM somado); tabela Emissora / Dial / Praça / PMM /
+Situação / Campanhas / Categorias. Mesmo design system dos outros dois
+relatórios — tokens, card, KPI, rodapé e **cabeçalho de tabela claro**
+(`surface2` com texto navy), não invertido.
+
+**População de cobertura não é somada nos KPIs.** As cidades se sobrepõem entre
+emissoras da mesma praça, e o total seria uma inflação sem significado. PMM é
+somado porque é assim que o sistema já compõe impacto entre emissoras
+([client-target-pmm.md](client-target-pmm.md)).
+
+### Onde mora o quê
+
+| Arquivo | Papel |
+|---------|-------|
+| `frontend/src/utils/stationsExport.js` | **PURO**: formatação, CSV, resumo. Sem jsPDF — é o que permite testar com `node --test` |
+| `frontend/src/utils/pdfReport.js` | `buildStationsPDF` / `exportStationsPdf`, ao lado dos outros dois relatórios; importa os formatadores do módulo puro |
+| `frontend/src/components/StationsExportMenu.jsx` | botão + menu, busca do conjunto completo, estados de carregando/erro |
 
 ## Não faz parte
 

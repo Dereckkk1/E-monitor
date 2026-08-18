@@ -50,6 +50,12 @@ type StationMeta struct {
 	TotalPopulation *int64            `json:"total_population,omitempty"`
 	SocialMedia     map[string]string `json:"social_media,omitempty"`
 	Website         *string           `json:"website,omitempty"`
+	// AudiencySite guarda o site da emissora sob a chave que o import gravou.
+	// `website` acima existe no struct desde sempre mas está NULL em 100% das
+	// linhas; o endereço real ficou em `audiency_site` (146 das 170 emissoras
+	// contratadas). Sem mapear, o dado existe no banco e nunca chega na tela.
+	// A chave mantém o nome de origem para round-trip fiel do metadata.
+	AudiencySite *string `json:"audiency_site,omitempty"`
 	CommercialEmail *string           `json:"commercial_email,omitempty"`
 	FoundationYear  *int              `json:"foundation_year,omitempty"`
 	PowerWatts      *float64          `json:"power_watts,omitempty"`

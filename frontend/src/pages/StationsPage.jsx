@@ -5,6 +5,7 @@ import StationAvatar from '../components/StationAvatar'
 import StationDetailModal from '../components/StationDetailModal'
 import StationSearch, { selectionLabel } from '../components/StationSearch'
 import ClientAvatar from '../components/ClientAvatar'
+import StationsExportMenu from '../components/StationsExportMenu'
 import RSelect from '../components/RSelect'
 import { useRadioPlayer } from '../contexts/RadioPlayerContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -112,14 +113,36 @@ export default function StationsPage() {
     band, page, limit: LIMIT,
   })
 
-  // Seletor de cliente do admin. O cliente não carrega isso: ele não escolhe
-  // cliente nenhum, e a rota é admin-only.
-  const clientsQ = useClients({ enabled: isAdmin })
+  // Clientes. Alimenta o seletor do admin e, pro viewer, resolve o nome do
+  // próprio cliente pro cabeçalho do arquivo exportado — o backend escopa
+  // /clients por carteira, então o viewer recebe só o dele.
+  const clientsQ = useClients()
   const clientOpts = (clientsQ.data ?? []).map(c => ({
     value: c.id,
     label: c.name,
     logo: c.logo_url ?? null,
   }))
+
+  // Nome do cliente no arquivo exportado. Resolve pelo `useClients`, que o
+  // backend já escopa por carteira — o viewer recebe o próprio cliente, então
+  // vale pros dois papéis. Carteira de agência com vários vira "N clientes":
+  // o arquivo é a união deles, e forjar um nome só seria mentira sobre o
+  // conteúdo.
+  const exportClientName = (() => {
+    if (!contract) return ''
+    if (contract.ids.length === 1) {
+      return clientOpts.find(o => o.value === contract.ids[0])?.label
+        ?? (contract.label === 'minhas' ? 'Minhas emissoras' : contract.label)
+    }
+    return `${contract.ids.length} clientes`
+  })()
+
+  // Some no documento quando não há filtro extra: escrever "Filtros: —" só
+  // acrescenta ruído a um PDF que já é a lista inteira do cliente.
+  const filtersLabel = [
+    band ? `banda ${band}` : null,
+    selection ? `busca "${selectionLabel(selection)}"` : null,
+  ].filter(Boolean).join(' · ') || null
 
   // Logo + nome, como no seletor de cliente de /reports/airtime. Com ~110
   // clientes na lista, a marca é o que o admin reconhece antes de ler.
@@ -247,6 +270,17 @@ export default function StationsPage() {
             </button>
           ))}
         </div>
+
+        {/* Exportação só existe no recorte por cliente. No catálogo inteiro
+            não aparece: 7.500 emissoras não são um documento. */}
+        {contract && (
+          <StationsExportMenu
+            clientName={exportClientName}
+            filterParams={{ ...listFilter, contracted_by: contract.ids.join(','), band }}
+            filtersLabel={filtersLabel}
+            isAdmin={isAdmin}
+          />
+        )}
       </div>
 
       {/* List */}

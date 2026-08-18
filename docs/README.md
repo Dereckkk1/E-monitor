@@ -79,7 +79,7 @@ docs/
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
 | [evidence-local-retention.md](features/evidence-local-retention.md) | Prune por idade do clipe de evidência no MinIO (§11.4 variante prod): apaga áudio >N dias (`EVIDENCE_RETENTION_DAYS`=30, dry-run pro 1º rollout) e marca a detecção `expired`; PDF de comprovante preservado (incidente 2026-07-02) |
 | [broadcaster-search.md](features/broadcaster-search.md) | Busca multi-token AND/field-OR de emissoras |
-| [client-contracted-stations.md](features/client-contracted-stations.md) | Recorte "emissoras que o cliente tem contratadas agora" em /stations (campanha ativa ou programada) |
+| [client-contracted-stations.md](features/client-contracted-stations.md) | Recorte "emissoras que o cliente tem contratadas agora" em /stations (campanha ativa ou programada) + export CSV/PDF do conjunto |
 | [material-library.md](features/material-library.md) | Catálogo de materiais por cliente (decuplado de campanha) |
 | [material-fingerprint-pipeline.md](features/material-fingerprint-pipeline.md) | Pipeline polimórfico (material_id OU commercial_id) + hot-reload |
 | [material-similarity-warning.md](features/material-similarity-warning.md) | Alerta de duplicata por similaridade ≥50% no upload |
