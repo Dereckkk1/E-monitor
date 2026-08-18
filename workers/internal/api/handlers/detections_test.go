@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -170,5 +171,54 @@ func TestDetectionsHandler_Aggregate_BadFromDate(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for bad from", rr.Code)
+	}
+}
+
+// TestParseCampaignIDs cobre os dois formatos que /detections aceita: o CSV
+// `campaigns` (seleção múltipla de /reports/airtime, mesmo formato de
+// /insights e /management) e o `campaign_id` legado de deep-links antigos.
+func TestParseCampaignIDs(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name    string
+		query   string
+		want    int
+		wantErr bool
+	}{
+		{"vazio devolve nil", "", 0, false},
+		{"campaign_id legado", "campaign_id=" + a.String(), 1, false},
+		{"campaigns csv", "campaigns=" + a.String() + "," + b.String(), 2, false},
+		{"campaigns com espaços", "campaigns=" + a.String() + ", " + b.String(), 2, false},
+		{"campaigns ganha do legado", "campaigns=" + a.String() + "&campaign_id=" + b.String(), 1, false},
+		{"uuid inválido", "campaigns=nao-e-uuid", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := url.ParseQuery(tc.query)
+			if err != nil {
+				t.Fatalf("query de teste inválida: %v", err)
+			}
+			got, err := parseCampaignIDs(q)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("esperava erro, veio %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseCampaignIDs: %v", err)
+			}
+			if len(got) != tc.want {
+				t.Errorf("len = %d, want %d", len(got), tc.want)
+			}
+		})
+	}
+
+	// nil ≠ slice vazio: nil é "sem recorte por campanha" no filtro SQL.
+	q, _ := url.ParseQuery("")
+	got, _ := parseCampaignIDs(q)
+	if got != nil {
+		t.Errorf("sem param, parseCampaignIDs = %v, want nil", got)
 	}
 }

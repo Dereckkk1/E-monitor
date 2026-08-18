@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-30
+ultima-verificacao: 2026-08-18
 codigo-relacionado:
   - workers/internal/catalog/live_map.go
   - workers/internal/api/handlers/live_map.go
@@ -14,22 +14,49 @@ codigo-relacionado:
 
 # Mapa ao Vivo (/live-map)
 
-Tela (admin + cliente) com mapa do Brasil mostrando as emissoras de **uma
-campanha** monitoradas ao vivo (pulsando) + feed de **últimas veiculações** da
-campanha. Acessível pela seção "Veiculação" do menu (admin e cliente).
+Tela (admin + cliente) com mapa do Brasil mostrando as emissoras de **uma ou
+mais campanhas** monitoradas ao vivo (pulsando) + feed de **últimas
+veiculações** delas. Acessível pela seção "Veiculação" do menu (admin e
+cliente).
 
 ## Fluxo (igual às outras telas de Veiculação)
 
-O usuário seleciona **Cliente → Campanha** nos filtros do topo (mesmo padrão de
-`/insights`); só então o mapa e o feed daquela campanha aparecem. Para o viewer
-(cliente), o cliente fica travado no próprio; o admin escolhe o cliente e a
-campanha é filtrada por ele.
+O usuário seleciona **Cliente → Campanhas** nos filtros do topo (mesmo padrão de
+`/insights`); só então o mapa e o feed aparecem. Para o viewer (cliente), o
+cliente fica travado no próprio; o admin escolhe o cliente e as campanhas são
+filtradas por ele.
+
+### Seleção múltipla (2026-08-18)
+
+O passo 2 é **multi-select**, igual ao de `/insights` (`isMulti`,
+`closeMenuOnSelect={false}`, contador "N de M" no rótulo). Com mais de uma
+campanha escolhida:
+
+- O mapa mostra a **união** das emissoras-alvo. Emissora que serve duas
+  campanhas selecionadas aparece **uma vez** (o `unnest` + `DISTINCT` da query
+  garante isso), e o `last_detection_at` dela é o MAX sobre todas as campanhas
+  do recorte.
+- O feed mistura as veiculações e cada linha passa a exibir **o nome da
+  campanha** (`campaign_name`), como já acontece no feed do `/management`. Com
+  **uma** campanha só, esse rótulo continua ausente — o filtro já diz qual é, e
+  o pós-venda (que sempre pede uma) mantém a foto inalterada.
+- Trocar o cliente **limpa** a seleção de campanhas (elas são de outro cliente).
+
+**Multi-atribuição.** Com `MULTI_ATTRIBUTION` a mesma tocada física projeta em N
+campanhas; se duas delas estiverem selecionadas, ela aparece **uma vez por
+campanha**, cada linha rotulada com a sua — mesmo comportamento do
+`/management`. Por isso o payload traz também `campaign_id`: é ele que dá ao
+frontend a chave estável (`detection_id:campaign_id`) pra listar sem colidir a
+`key` do React nem fazer duas linhas tocarem o áudio ao mesmo tempo.
 
 ## Fonte de dados
 
-`GET /v1/internal/live-map?campaign_id=UUID` (subgrupo viewer-friendly do
-router, `RequireRole("admin","operator","viewer")`). `campaign_id` é
-obrigatório (400 se ausente/ inválido). Scope-aware via
+`GET /v1/internal/live-map?campaigns=UUID[,UUID...]` (subgrupo viewer-friendly
+do router, `RequireRole("admin","operator","viewer")`). O csv `campaigns` é o
+mesmo nome/formato de `/insights` e `/management`; `campaign_id=UUID` (uuid
+único) continua aceito e é o que o **pós-venda** manda. Pelo menos um dos dois é
+obrigatório (400 se ausente/inválido), teto de **200** campanhas por
+requisição. Scope-aware via
 `auth.ClientScopeFromContext` — mesmo padrão de `/detections` e `/insights`:
 
 - **Admin/operator** (scope nil): qualquer campanha.
@@ -39,6 +66,11 @@ obrigatório (400 se ausente/ inválido). Scope-aware via
 Campanha **cancelada** também é **404**: "ao vivo" pressupõe campanha rodando
 (concluída segue acessível — rodou até o fim). Ver
 [campaign-lifecycle.md](../architecture/campaign-lifecycle.md).
+
+A validação é **tudo-ou-nada**: basta UMA campanha da lista não existir, ser de
+outro cliente ou estar cancelada pra requisição inteira responder 404 — não há
+resposta parcial. Devolver o resto silenciosamente viraria oracle ("sumiu = essa
+existe mas não é sua") e faria o mapa mentir sobre o que está mostrando.
 
 ### `include_terminal=1` — exceção para documento histórico
 
@@ -79,15 +111,18 @@ e distritos (que o geocoding pula) não aparecem no mapa.
   ],
   "recent_detections": [
     { "id", "station_name", "band", "frequency_mhz", "city", "state",
-      "detected_at", "commercial_name", "client_name" }
+      "detected_at", "commercial_name", "client_name",
+      // só quando a resposta mistura campanhas (seleção múltipla):
+      "campaign_id", "campaign_name" }
   ]
 }
 ```
 
-O repo (`catalog.LiveMap`) resolve o `client_id` da campanha uma vez (existência
-+ posse), depois faz duas queries: `stations` (emissoras-alvo com coordenada;
-`last_detection_at` = MAX por emissora **dentro da campanha**) e
-`recent_detections` (veiculações da campanha nas últimas 24h, ignorando
+O repo (`catalog.LiveMap`) resolve `client_id` + `status` das N campanhas numa
+query só (existência + posse + terminal), depois faz duas queries:
+`stations` (união das emissoras-alvo com coordenada, sem repetir emissora
+compartilhada; `last_detection_at` = MAX por emissora **sobre as campanhas do
+recorte**) e `recent_detections` (veiculações delas nas últimas 24h, ignorando
 `audit_rejected`, `ignored_at` e `retracted_at`; `ORDER BY detected_at DESC
 LIMIT 200`).
 
@@ -115,19 +150,21 @@ A `LiveMapPage` segue o visual do sistema (header `lm-title` 26px Space Grotesk 
 filtros `.lm-filters` espelhando `.in-filters`) e implementa:
 
 - **Sem seleção** → *tutorial estilizado* (design.md §4.7): ghost desfocado do
-  mapa + feed e card central ("Escolha um cliente e uma campanha" / "Selecione
-  uma campanha"; se o cliente não tem campanha, CTA leva a `/campaigns`).
+  mapa + feed e card central ("Comece pelo cliente" / "Escolha as campanhas"; se
+  o cliente não tem campanha, CTA leva a `/campaigns`).
 - **Skeleton** shape-matched (linhas do feed + silhueta do mapa com shimmer).
 - **Loaded** com entrada escalonada das linhas do feed.
-- **Campanha sem emissora geocodada** → mapa do Brasil + aviso.
+- **Campanhas sem emissora geocodada** → mapa do Brasil + aviso.
 - **Error** com botão "Tentar de novo" (`refetch`).
 - **Updating**: spinner discreto no cabeçalho do painel do mapa durante o refetch.
 
 ## Atualização
 
-react-query (`useLiveMap(campaignId, { includeTerminal })` em
-`frontend/src/api/hooks.js` — a flag entra na `queryKey`, então o cache do
-pós-venda não se mistura com o da tela) com `enabled: !!campaignId`, `refetchInterval` de 20s e `placeholderData` (mantém o
+react-query (`useLiveMap(campaignIds, { includeTerminal })` em
+`frontend/src/api/hooks.js` — aceita um id solto ou um array; a flag entra na
+`queryKey`, então o cache do pós-venda não se mistura com o da tela, e os ids
+entram na chave **ordenados**, então a mesma seleção em ordem diferente reusa o
+cache) com `enabled` só quando há campanha, `refetchInterval` de 20s e `placeholderData` (mantém o
 último payload bom durante o refetch — o mapa não "pisca"). O pulso é animação
 CSS contínua, independente do refresh. `prefers-reduced-motion` desliga as
 animações.
@@ -158,6 +195,9 @@ isso apareciam mesmo quando os polígonos preenchiam tudo.
 
 - O mapa só plota emissoras com coordenada. Não há contagem de "monitoradas sem
   localização" no payload atual.
+- O seletor de campanhas é alimentado por `useCampaignsPaged({ pageSize: 200 })`
+  — cliente com mais de 200 campanhas teria a lista truncada (mesmo teto do
+  `/insights`), e é por isso que o backend recusa acima de 200 por requisição.
 - Sem testes de frontend automatizados (o projeto não tem test runner JS); a
   lógica de scope é coberta pelo teste do handler
   (`workers/internal/api/handlers/live_map_test.go`).

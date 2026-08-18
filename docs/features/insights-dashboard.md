@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-08-18
 codigo-relacionado:
   - workers/internal/catalog/insights.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -36,7 +36,7 @@ O backend resolve isso via `auth.ClientScopeFromContext(r.Context())`. Quando o 
 
 ## Endpoint
 
-`GET /api/v1/internal/insights?client_id=<uuid>&campaigns=<csv>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>&stations=<csv>`
+`GET /api/v1/internal/insights?client_id=<uuid>&campaigns=<csv>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>&stations=<csv>&materials=<csv>`
 
 | Param | Obrigatório? | Default | Notas |
 |---|---|---|---|
@@ -44,8 +44,54 @@ O backend resolve isso via `auth.ClientScopeFromContext(r.Context())`. Quando o 
 | `campaigns` | sim | — | CSV de uuids, 1 ≤ N ≤ 50 |
 | `from` / `to` | não | mês corrente | YYYY-MM-DD |
 | `stations` | não | todas | CSV de uuids; vazio = todas |
+| `materials` | não | todos | CSV de uuids, max 200; vazio = todos. **Liga o rateio** — ver abaixo |
 
-Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, veiculacoes_breakdown, buckets.
+Resposta: ver `catalog.InsightsPayload` — KPIs, class_pyramid, age_ranges, veiculacoes_breakdown, buckets, `material_prorated`, `material_share`.
+
+## Filtro por material — exato na entrega, RATEIO no dinheiro (2026-08-18)
+
+O passo 5 da barra recorta por material (o spot específico). O recorte tem duas
+naturezas diferentes, e a distinção é a coisa mais importante desta seção:
+
+| O que | Com filtro de material | Por quê |
+|---|---|---|
+| Impactos, Impactos no target, Veiculações, breakdown (donut), gênero/classe/faixa etária | **Exato** | `detection_attributions.commercial_id` diz qual material tocou |
+| `in_slot`/`out_slot`/`out_date`/extras do gráfico | **Exato** | idem — o `CASE` em `aggregateBuckets` troca a fonte pra tocada quando o filtro está ativo |
+| Investido, Bonificação (R$), CPM, CPM no target, "Programado" e déficit do gráfico | **Rateio** | O contrato **não tem dimensão de material** |
+
+**Por que o financeiro não pode ser recortado.** O pricing é por
+(campanha × emissora × **tipo** × dia): dois materiais de 30s dividem a mesma
+célula de cota e o mesmo `unit_value`. No modo `consolidated` é pior — o valor é
+um número único por (campanha, emissora), sem quebra alguma. Não existe no dado
+"quanto deste contrato é do material X". O mesmo vale pro `expected` de
+`distribution_rules`, que é a meta do **tipo** no dia.
+
+**O rateio.** `share = veiculações do material ÷ veiculações da seleção`, na base
+canônica de impactos (`in_slot + bonus` — ver
+[client-target-pmm.md](client-target-pmm.md)). `out_slot` e `out_date` ficam de
+fora do numerador **e** do denominador: não valem nada comercialmente, então não
+podem puxar valor pro material. O fator multiplica `investido.contratado`,
+`investido.executado`, `bonificacao.valor` e o `programado` de cada bucket.
+
+O rateio do CPM é **por campanha**, não pelo fator global (`shares.ByCampaign`):
+`impactos` já vem recortado por campanha, então usar o fator global faria uma
+campanha onde o material tocou pouco herdar valor de outra onde tocou muito.
+
+**A UI avisa.** `material_prorated: true` no payload renderiza a tarja
+`.in-prorated-note` acima dos cards, com o `share` em %. Isso não é decoração:
+esses números viram cobrança, e um valor rateado apresentado como valor contratual
+é o tipo de coisa que vira discussão com cliente.
+
+**Invariantes** (medidos contra a cópia de prod de 2026-08-17, cliente UNIUBE,
+3 campanhas, ago/2026):
+
+- Filtrar por **todos** os materiais que tocaram ⇒ resultado idêntico ao sem
+  filtro, `share = 1.0000`. O filtro não move a base.
+- **Σ dos materiais individuais = total sem filtro**, tanto em impactos
+  (8.459.633) quanto em investido (R$ 76.697,66). O rateio particiona; não cria
+  nem perde valor.
+
+Vale a pena manter esses dois invariantes como teste ao mexer aqui.
 
 ## Fórmulas (autoridade é a spec; cópia rápida aqui)
 
@@ -343,6 +389,22 @@ Reutilizar o padrão de [pdfReport.js](../../frontend/src/utils/pdfReport.js) �
 - **Export PNG vazio:** confira se `dashboardRef.current` está mountado (a captura roda em `handleExport*`). Se o usuário clica antes do payload carregar, o ref é válido mas o conteúdo é o empty state — comportamento esperado.
 - **PDF cortado:** ajustar `margin` em [exportInsights.js:73](../../frontend/src/utils/exportInsights.js) ou diminuir `scale` do html2canvas (atualmente 2).
 - **Performance ruim (>2s):** rodar com tracing habilitado (Jaeger) e identificar o CTE lento. Candidatos: `aggregateCore` se há muitas estações, `aggregateInvestment` se há muitas campanhas. Se passar de 2s P95 em prod, considerar materialized view por mês.
+- **A tela levava ~12s e agora leva <1s (2026-08-18).** `aggregateInvestment` e `computeCPM` liam `daily_play_summary` — **view sem pushdown de predicado**: cada leitura materializava o resumo do banco INTEIRO (todas as campanhas, todo o histórico) pra depois descartar 99%. Eram 3 leituras num statement, e mais 3 no slow path do `fixed_cpm`. Medido na cópia de prod de 2026-08-17 (ENGIE, 9 campanhas, ago/2026):
+
+  | Etapa | Antes | Depois |
+  |---|---:|---:|
+  | fetchCampaigns | 249 ms | 183 ms |
+  | aggregateCore | 552 ms | 423 ms |
+  | **aggregateInvestment** | **10.793 ms** | **161 ms** |
+  | aggregateBuckets | 258 ms | 40 ms |
+  | consolidatedSummary | 82 ms | 26 ms |
+  | computeCPM | 5 ms | 2 ms |
+  | targetLabel | 15 ms | 5 ms |
+  | **total** | **11.954 ms** | **840 ms** |
+
+  A correção foi trocar a view pela função `daily_play_summary_for(from, to, campanhas)` (migration 0052), materializada **uma vez** por statement numa CTE `dps` e reusada pelas três CTEs — o intervalo pedido é a união das três janelas (`MIN(start_date)`..`MAX(end_date)`), e cada CTE mantém o próprio `BETWEEN`. Equivalência provada no banco: `daily_play_summary WHERE for_date BETWEEN lo AND hi` × `daily_play_summary_for(lo, hi, NULL)` devolvem **23.727 linhas cada, 0 divergências** (`EXCEPT ALL` nos dois sentidos), e os 4 números do `aggregateInvestment` batem em **24/24 casos** (8 clientes × 3 janelas, incluindo janela que ultrapassa o fim das campanhas).
+
+  **Cuidado ao repetir isso em outro consumidor:** a função corta linhas fora de `[p_from, p_to]`. Quem agrega `out_date` **sem lower bound** não pode migrar — ver a armadilha em [daily-play-summary-for](../operations/migrations.md) e os 4 consumidores que continuam na view em `campaign_failures.go` (Q3/Get/ListHistorical), deliberadamente.
 - **Cliente com 50+ campanhas:** o select faz busca local; se ficar lento, virtualizar o `RSelect` ou adicionar busca server-side.
 
 ## Limitações conhecidas

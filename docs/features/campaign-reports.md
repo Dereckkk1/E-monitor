@@ -359,11 +359,20 @@ página — é só o recorte do relatório.
     payload crua pro builder do PDF.
   - `exportDetectionsCsv` (já existia) — usado pelo "CSV Detalhado".
 
+- **Seletor de campanha dentro do menu** (prop `campaignOptions`, `[{id, name}]`):
+  relatório é sempre de UMA campanha, mas `/reports/airtime` passou a aceitar
+  seleção múltipla. Com 2+ opções o dropdown ganha um seletor de campanha
+  **acima** do de período; com 0 ou 1 o menu é exatamente o de antes. Se a
+  campanha escolhida sai da seleção da página, o menu cai de volta pra
+  `campaignId` — nunca gera relatório de campanha que não está mais na tela.
+  Ver [airtime-report.md](airtime-report.md).
+
 ## Como tirar do ar / debug
 
 - Comportamento esperado: o botão fica desabilitado em `/reports/airtime`
   enquanto não tem campanha selecionada (mostra "Selecione uma campanha"
-  no tooltip).
+  no tooltip). Com 2+ campanhas selecionadas ele abre com o seletor de
+  campanha no topo do dropdown.
 - Se a logo não carregar (404, CORS), o PDF degrada pra texto "E-monitor"
   rosa no topo. Não é erro fatal — só uma marca menos pomposa.
 - Erros de backend (404, 500) caem em `window.alert` com mensagem PT-BR.

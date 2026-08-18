@@ -1,3 +1,4 @@
+import CardValue from './CardValue'
 import { IconWallet } from './icons'
 
 const fmtCurrency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -16,7 +17,7 @@ export default function InvestmentToggleCard({ data }) {
         <span className="in-card-icon"><IconWallet /></span>
         <span className="in-card-label">Investido</span>
       </div>
-      <div className="in-card-value">{fmtCurrency.format(inv.executado)}</div>
+      <CardValue>{fmtCurrency.format(inv.executado)}</CardValue>
     </div>
   )
 }

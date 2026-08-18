@@ -669,3 +669,47 @@ pergunta é se a tocada deveria existir.
   `migrations/0035_campaign_fixed_cpm.up.sql:8,13`; o Step 6 do wizard não valida o campo,
   `PricingStep.jsx:38-45`; a API só checa não-negatividade, `handlers/campaigns.go:279-281`).
   O caminho dinâmico é o **comum**, não a exceção. Frase corrigida no doc.
+
+---
+
+## Achados de 2026-08-18 (correção do `/insights`)
+
+### F-133 — `daily_play_summary` sem pushdown: 4 consumidores ainda materializam a view inteira
+
+O `/insights` levava ~12s porque `aggregateInvestment` (3 leituras) e `computeCPM` (3 leituras)
+liam a view `daily_play_summary` direto. A view não aceita pushdown de predicado — cada
+leitura materializa o resumo do **banco inteiro** (todas as campanhas, todo o histórico) pra
+depois descartar 99%. Medido na cópia de prod de 2026-08-17: `aggregateInvestment` sozinho
+= **10,8s dos 12s**. Migrado pra `daily_play_summary_for()` (0052): **161ms**, com paridade
+provada (23.727 linhas × 0 divergências no `EXCEPT ALL` bilateral; 24/24 casos idênticos no
+agregado). Detalhes em [insights-dashboard.md](../features/insights-dashboard.md).
+
+**Ainda na view** (`campaign_failures.go:336,449,509,589`) — `/admin/station-failures`. Três
+deles agregam `out_date` **sem lower bound** e por isso **não podem** migrar com
+`p_from = MIN(start_date)` (a função corta o que está fora da janela; ver a armadilha
+registrada em 2026-07-17). O quarto merece ser medido: se o painel também estiver na casa dos
+segundos, é a mesma causa.
+
+**Fix candidato:** medir os 4 chamadores; migrar os que têm bound; pros que não têm, avaliar
+uma variante da função com bound inferior aberto.
+
+### F-134 — `/detections` e `/materials` baixam ~3 MB de catálogo de emissoras por page load
+
+Ambas chamam `useStations({ limit: 2000 })` pra montar mapa de id → nome. O catálogo de prod
+tem **7.521 emissoras a ~1,5 KB cada** (o `SELECT` inclui `metadata::text` com o perfil de
+audiência inteiro): 2.000 linhas ≈ **3 MB**, o catálogo completo ≈ **10,9 MB**. Além do peso,
+`limit: 2000` **não cobre o catálogo** — as 5.521 restantes ficam de fora, então o mapa tem
+buracos silenciosos (mesma classe do bug corrigido no `/insights`).
+
+**Fix candidato:** usar `GET /stations?ids=` (implementado em 2026-08-18, ver
+[broadcaster-search.md](../features/broadcaster-search.md)) com os ids que a tela realmente
+precisa. Alternativa complementar: uma projeção enxuta no endpoint (sem `metadata`) pra quem
+só quer rótulo.
+
+### F-135 — `catalog.Stations.List` sem filtro leva ~2,3s pra devolver 20 linhas
+
+Medido na cópia de prod: `GET /stations` (página default) = **2.267ms**; a mesma query com
+`?ids=` = **91ms**. Suspeitos: o `COUNT(*) OVER()` de total sobre 7.521 linhas e o `ORDER BY`
+por `CASE monitoring_status` + `pmm` sem índice de apoio. Afeta toda tela que pagina emissora.
+
+**Fix candidato:** índice de cobertura pra ordenação, e/ou contagem separada/aproximada.

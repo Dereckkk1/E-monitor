@@ -34,6 +34,10 @@ func NewInsightsHandler(repo InsightsRepo) *InsightsHandler {
 //   - campaigns (csv de uuids): obrigatório, min 1, max 50.
 //   - from, to (YYYY-MM-DD): opcional. Default = mês corrente.
 //   - stations (csv de uuids): opcional. Vazio = todas.
+//   - materials (csv de uuids): opcional, max 200. Vazio = todos. Recorta
+//     impactos/veiculações/demografia de forma EXATA; os números em R$ passam
+//     a ser rateados pela participação do material nas veiculações (o contrato
+//     é por tipo, não por material) e o payload marca material_prorated.
 //
 // Resposta: catalog.InsightsPayload (JSON).
 //
@@ -101,6 +105,21 @@ func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		stations = []uuid.UUID{}
 	}
 
+	// materials (opcional) — recorte por material. Máximo alinhado ao de
+	// campanhas: uma seleção maior que isso não é filtro, é a lista inteira.
+	materials, err := parseUUIDList(q.Get("materials"))
+	if err != nil {
+		http.Error(w, "invalid materials: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(materials) > 200 {
+		http.Error(w, "materials max=200", http.StatusBadRequest)
+		return
+	}
+	if materials == nil {
+		materials = []uuid.UUID{}
+	}
+
 	// from / to — default = mês corrente
 	now := time.Now().UTC()
 	defaultFrom := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -118,6 +137,7 @@ func (h *InsightsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		From:        from,
 		To:          to,
 		StationIDs:  stations,
+		MaterialIDs: materials,
 		// "Hoje" em America/Sao_Paulo: o valor consolidado acumula por mês
 		// (ciclos mensais iniciados até hoje).
 		Today: todaySaoPaulo(),

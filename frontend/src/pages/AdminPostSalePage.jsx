@@ -194,15 +194,20 @@ export default function AdminPostSalePage() {
 
       {!isLoading && (total > 0 || dirty) && (
         <>
-          {/* Mesma barra das telas de Veiculação — sem o encadeamento
-              obrigatório: aqui todo filtro é opcional e nenhum destrava o
-              seguinte, então não há passo numerado nem campo bloqueado. */}
-          <div className="flow-filters pv-flow">
-            <div className="flow-filter">
-              <label className="flow-filter-label" htmlFor="pv-q">Buscar</label>
+          {/* Mesma barra das telas de Veiculação. Aqui nenhum filtro destrava
+              o seguinte — a lista abre inteira e os campos só estreitam —, então
+              os quatro passos são opcionais: badge vazada enquanto vazios, e
+              acesa quando o recorte está aplicado. */}
+          <div className="flow-filters flow-filters--auto pv-flow">
+            <div className={`flow-filter flow-filter--optional ${q ? 'flow-filter--done' : ''}`}>
+              <label className="flow-filter-label" htmlFor="pv-q">
+                <span className="flow-filter-label-step">1</span>
+                Buscar
+                {!q && <span className="flow-filter-tag">opcional</span>}
+              </label>
               <input
                 id="pv-q"
-                className="flow-month-input"
+                className="flow-input"
                 type="search"
                 placeholder="Título ou cliente…"
                 value={q}
@@ -210,8 +215,12 @@ export default function AdminPostSalePage() {
               />
             </div>
 
-            <div className="flow-filter">
-              <label className="flow-filter-label" htmlFor="pv-client">Cliente</label>
+            <div className={`flow-filter flow-filter--optional ${client ? 'flow-filter--done' : ''}`}>
+              <label className="flow-filter-label" htmlFor="pv-client">
+                <span className="flow-filter-label-step">2</span>
+                Cliente
+                {!client && <span className="flow-filter-tag">opcional</span>}
+              </label>
               <RSelect
                 inputId="pv-client"
                 options={clientOptions}
@@ -222,25 +231,32 @@ export default function AdminPostSalePage() {
               />
             </div>
 
-            <div className="flow-filter">
-              <label className="flow-filter-label" htmlFor="pv-month">Competência</label>
+            <div className={`flow-filter flow-filter--optional ${month ? 'flow-filter--done' : ''}`}>
+              <label className="flow-filter-label" htmlFor="pv-month">
+                <span className="flow-filter-label-step">3</span>
+                Competência
+                {!month && <span className="flow-filter-tag">opcional</span>}
+              </label>
               <input
                 id="pv-month"
-                className="flow-month-input"
+                className="flow-input"
                 type="month"
                 value={month}
                 onChange={e => { setMonth(e.target.value); setPage(1) }}
               />
             </div>
 
-            <div className="flow-filter">
+            <div className={`flow-filter flow-filter--optional ${filter !== 'all' ? 'flow-filter--done' : ''}`}>
               <label className="flow-filter-label" htmlFor="pv-status">
+                <span className="flow-filter-label-step">4</span>
                 Estado
-                {dirty && (
-                  <button type="button" className="pv-clear" onClick={clearFilters}>
-                    Limpar
-                  </button>
-                )}
+                {dirty
+                  ? (
+                    <button type="button" className="flow-range-reset flow-filter-hint" onClick={clearFilters}>
+                      Limpar
+                    </button>
+                  )
+                  : <span className="flow-filter-tag">opcional</span>}
               </label>
               <RSelect
                 inputId="pv-status"

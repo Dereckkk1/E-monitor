@@ -81,6 +81,22 @@ type Station struct {
 	ConsecutiveFailures int32        `json:"consecutive_failures"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
+
+	// Contract descreve o vínculo da emissora com o cliente pelo qual a
+	// listagem foi escopada. nil quando a listagem não é escopada por cliente
+	// — o que cai de graça do LEFT JOIN: sem match, as colunas vêm NULL.
+	Contract *StationContract `json:"contract,omitempty"`
+}
+
+// StationContract é o "por que esta emissora é minha": em quantas campanhas
+// vigentes ela entra, se já está no ar e, quando ainda não está, quando começa.
+type StationContract struct {
+	Campaigns int `json:"campaigns"`
+	// OnAir = existe campanha `ativa` usando a emissora hoje.
+	OnAir bool `json:"on_air"`
+	// StartsAt = início da campanha `programada` mais próxima. Só vem quando
+	// não há nenhuma ativa — é o que a UI mostra como "a partir de DD/MM".
+	StartsAt *time.Time `json:"starts_at,omitempty"`
 }
 
 func parseMeta(raw *string) *StationMeta {
@@ -111,6 +127,34 @@ type ListInput struct {
 	Q     string
 	Band  string
 	State string
+	// City filtra pela cidade EXATA (accent-insensitive). É o que o clique numa
+	// sugestão de cidade aplica. Passar o nome da cidade em Q traria de quebra
+	// emissoras de outra cidade que tivessem esse nome no `name`.
+	City string
+	// StationID filtra uma emissora específica — o clique numa sugestão de
+	// emissora. Nome não serve como chave: há homônimos entre praças.
+	StationID *uuid.UUID
+	// ContractedBy restringe às emissoras que estes clientes têm contratadas
+	// AGORA (campanha `ativa` ou `programada`). Lista, e não id único, porque
+	// usuário de agência tem carteira com vários clientes.
+	//
+	// É filtro que atravessa tenant: quem monta esse slice tem que ter passado
+	// cada id por auth.ScopeAllows antes. Ver StationsHandler.List.
+	ContractedBy []uuid.UUID
+	// IDs resolve um conjunto FECHADO de emissoras de uma vez — quem já tem os
+	// uuids na mão e só precisa dos rótulos (nome, logo, dial, praça). É o caso
+	// do seletor de emissoras do /insights, que parte de
+	// campaigns.target_stations.
+	//
+	// Existe porque as duas alternativas eram ruins: sem filtro, List devolve
+	// as 20 primeiras por monitoring_status/pmm/nome — em prod (7,5 mil
+	// emissoras) isso praticamente nunca inclui as da campanha, e o seletor
+	// aparecia VAZIO sem nenhum erro. Subir o limit corrigiria a listagem e
+	// criaria um problema de payload: o catálogo inteiro serializado passa de
+	// 10 MB.
+	//
+	// Com IDs preenchido a paginação é ignorada — ver List.
+	IDs   []uuid.UUID
 	Page  int
 	Limit int
 }
@@ -150,27 +194,26 @@ func (s *Stations) List(ctx context.Context, in ListInput) (ListOutput, error) {
 	if in.Limit <= 0 {
 		in.Limit = 20
 	}
+	// Conjunto fechado por id: o caller quer as N emissoras que pediu, não uma
+	// página delas. Truncar em 20 aqui devolveria um subconjunto em silêncio —
+	// que é exatamente o modo de falha que este filtro veio corrigir.
+	if len(in.IDs) > 0 {
+		in.Limit = len(in.IDs)
+		in.Page = 1
+	}
 	if in.Page <= 0 {
 		in.Page = 1
 	}
 	offset := (in.Page - 1) * in.Limit
 
-	var whereParts []string
-	args := []any{}
-	n := 1
+	// Busca multi-token: cada token precisa casar com ao menos um de name,
+	// city, state, band ou dial — tokens diferentes podem casar com campos
+	// diferentes. Ver buildTokenSearch em station_search.go.
+	ts := buildTokenSearch(in.Q, 1)
+	whereParts := ts.Where
+	args := ts.Args
+	n := ts.Next
 
-	// Each token must match at least one of: name, city, state, band, frequency.
-	// metadata is intentionally excluded — it contains coverage_cities/states
-	// which made searches for a city return every station that *covers* it
-	// rather than stations *located* in it (paridade com /marketplace do E-radios).
-	for _, tok := range strings.Fields(in.Q) {
-		whereParts = append(whereParts, fmt.Sprintf(
-			`(name ILIKE '%%'||$%d||'%%' OR city ILIKE '%%'||$%d||'%%' OR state ILIKE '%%'||$%d||'%%' OR band ILIKE '%%'||$%d||'%%' OR COALESCE(frequency_mhz::text,'') ILIKE '%%'||$%d||'%%')`,
-			n, n, n, n, n,
-		))
-		args = append(args, tok)
-		n++
-	}
 	if in.Band != "" {
 		whereParts = append(whereParts, fmt.Sprintf("band = $%d", n))
 		args = append(args, in.Band)
@@ -181,6 +224,32 @@ func (s *Stations) List(ctx context.Context, in ListInput) (ListOutput, error) {
 		args = append(args, in.State)
 		n++
 	}
+	if in.City != "" {
+		whereParts = append(whereParts, fmt.Sprintf("unaccent(COALESCE(city,'')) ILIKE unaccent($%d)", n))
+		args = append(args, in.City)
+		n++
+	}
+	if in.StationID != nil {
+		whereParts = append(whereParts, fmt.Sprintf("id = $%d", n))
+		args = append(args, *in.StationID)
+		n++
+	}
+	if len(in.IDs) > 0 {
+		whereParts = append(whereParts, fmt.Sprintf("id = ANY($%d::uuid[])", n))
+		args = append(args, in.IDs)
+		n++
+	}
+
+	// Emissoras contratadas pelo cliente. O JOIN com a CTE entra SEMPRE — com
+	// a lista vazia a CTE não devolve linha nenhuma, as três colunas vêm NULL
+	// e o campo `contract` some do JSON. É o que permite uma query só pros dois
+	// modos, sem SQL dinâmico nem ramo de scan.
+	contractedN := n
+	args = append(args, in.ContractedBy)
+	n++
+	if len(in.ContractedBy) > 0 {
+		whereParts = append(whereParts, "ct.station_id IS NOT NULL")
+	}
 
 	where := ""
 	if len(whereParts) > 0 {
@@ -190,20 +259,34 @@ func (s *Stations) List(ctx context.Context, in ListInput) (ListOutput, error) {
 	args = append(args, in.Limit, offset)
 	limitN, offsetN := n, n+1
 
+	// Relevância só entra quando há busca. Sem Q a ordenação continua sendo
+	// exatamente a de sempre — o wizard de campanha pré-carrega 10.000
+	// emissoras contando com ela (ver comentário do cap de limit no handler).
+	orderBy := stationOrderBy
+	if ts.Score != "" {
+		orderBy = fmt.Sprintf("(%s) DESC,%s", ts.Score, stationOrderBy)
+	}
+
+	// A CTE parte das CAMPANHAS (poucas) e cai na PK de stations. O sentido
+	// inverso — varrer as ~7.500 emissoras testando `target_stations @> id` —
+	// foi medido em 303ms contra 24ms deste.
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT %s, COUNT(*) OVER() AS total_count
+		WITH contracted AS (
+			SELECT st AS station_id,
+			       COUNT(*)::int                                          AS campaigns,
+			       bool_or(c.status = 'ativa')                            AS on_air,
+			       MIN(c.start_date) FILTER (WHERE c.status = 'programada') AS starts_at
+			FROM campaigns c, LATERAL unnest(c.target_stations) st
+			WHERE c.client_id = ANY($%d) AND c.status IN ('ativa','programada')
+			GROUP BY st
+		)
+		SELECT %s, ct.campaigns, ct.on_air, ct.starts_at, COUNT(*) OVER() AS total_count
 		FROM stations
+		LEFT JOIN contracted ct ON ct.station_id = stations.id
 		%s
-		ORDER BY
-		  CASE monitoring_status
-		    WHEN 'active'      THEN 0
-		    WHEN 'calibrating' THEN 1
-		    WHEN 'paused'      THEN 2
-		    ELSE 3
-		  END,
-		  pmm DESC NULLS LAST,
-		  name
-		LIMIT $%d OFFSET $%d`, stationSelectCols, where, limitN, offsetN),
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d`,
+		contractedN, stationSelectCols, where, orderBy, limitN, offsetN),
 		args...)
 	if err != nil {
 		return ListOutput{}, err
@@ -216,17 +299,29 @@ func (s *Stations) List(ctx context.Context, in ListInput) (ListOutput, error) {
 		var st Station
 		var metaRaw *string
 		var totalCount int64
+		var campaigns *int
+		var onAir *bool
+		var startsAt *time.Time
 		if err := rows.Scan(
 			&st.ID, &st.ShortID, &st.Name, &st.Band, &st.FrequencyMHz,
 			&st.City, &st.State, &st.StreamURL,
 			&st.LogoURL, &st.PMM, &st.Latitude, &st.Longitude,
 			&st.MonitoringStatus, &st.LastHealthCheck, &st.HealthStatus,
 			&st.ConsecutiveFailures, &st.CreatedAt, &st.UpdatedAt,
-			&metaRaw, &totalCount,
+			&metaRaw, &campaigns, &onAir, &startsAt, &totalCount,
 		); err != nil {
 			return ListOutput{}, err
 		}
 		st.Meta = parseMeta(metaRaw)
+		if campaigns != nil {
+			c := StationContract{Campaigns: *campaigns, OnAir: onAir != nil && *onAir}
+			// "a partir de" só faz sentido enquanto nada está no ar: com uma
+			// campanha ativa a emissora já está entregando hoje.
+			if !c.OnAir {
+				c.StartsAt = startsAt
+			}
+			st.Contract = &c
+		}
 		out.Total = totalCount
 		out.Data = append(out.Data, st)
 	}

@@ -14,23 +14,31 @@
   gap: 18px;
   font-family: var(--font-body);
   color: var(--c-text);
-  padding: 18px;
+  /* padding: 18px; */
 }
 
 .in-header {
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* Exportar mora na linha do título, encostado à direita. */
+.in-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .in-title {
   margin: 0;
   font-family: var(--font-heading);
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--c-text);
-  line-height: 1.1;
 }
 
 .in-body {
@@ -58,93 +66,69 @@
 }
 
 /* ── Filters bar ────────────────────────────────────────────────── */
-.in-filters {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
+/* Filtros — barra em passos do sistema compartilhado (index.css).
+   4 passos: cliente e campanhas são cadeia, período sempre tem valor e
+   emissoras é refino opcional. Aqui só a proporção das colunas. */
+/* 5 passos: cliente, campanhas, período, emissoras e materiais. Cliente e
+   período têm largura previsível e ficam apertados; o resto divide a sobra.
+   Os 5 na mesma linha só a partir de 1500px — a soma dos mínimos (~940px mais
+   gaps) não cabe na área de conteúdo abaixo disso, e grid não quebra sozinho:
+   ele estoura a largura do container. Entre 1180 e 1500 a barra vira 3 colunas
+   e emissoras/materiais caem pra segunda linha; abaixo de 1180 o colapso
+   genérico do .flow-filters--auto (index.css) assume. */
+.in-flow {
+  --flow-cols: minmax(140px, 180px) minmax(200px, 1.15fr) 230px minmax(160px, 1fr) minmax(160px, 1fr);
+  margin-bottom: 18px;
+}
+
+@media (max-width: 1500px) {
+  .in-flow {
+    --flow-cols: minmax(140px, 190px) minmax(220px, 1fr) 230px;
+  }
+}
+
+/* Aviso de rateio — aparece só quando há filtro de material ativo. */
+.in-prorated-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.07);
   border-radius: var(--radius-lg);
-  padding: 14px 18px;
-  display: flex;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 1rem;
-}
-
-.in-filters-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  flex: 1;
-}
-
-.in-filter { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
-.in-filter--wide { min-width: 220px; flex: 1; }
-
-.in-filter--locked .in-locked-chip {
-  padding: 8px 12px;
-  background: rgba(232, 30, 117, 0.1);
-  color: var(--c-action);
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.in-filter-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--c-text-2);
-}
-
-.in-date {
-  padding: 7px 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  font: inherit;
-  background: white;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--c-text);
-  min-height: 38px;
-  box-sizing: border-box;
 }
-.in-date:focus {
-  outline: none;
-  border-color: var(--c-action);
-  box-shadow: 0 0 0 3px rgba(232,30,117,.1);
-}
+.in-prorated-note svg { flex-shrink: 0; color: #b45309; margin-top: 1px; }
+.in-prorated-note strong { font-weight: 700; }
+.in-prorated-note span { color: var(--c-text-2); }
 
-.in-chip {
+.in-btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 8px 14px;
   border: 1px solid var(--c-border);
   background: white;
-  border-radius: 999px;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--c-text);
-  transition: border-color 200ms, color 200ms;
-}
-.in-chip:hover:not(:disabled) { border-color: var(--c-action); color: var(--c-action); }
-.in-chip:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.in-filters-actions { display: flex; gap: 10px; align-items: flex-end; }
-
-.in-btn-outline {
-  padding: 9px 16px;
-  border: 1px solid var(--c-border);
-  background: white;
   border-radius: 8px;
   cursor: pointer;
   font: inherit;
   font-weight: 600;
   font-size: 13px;
+  line-height: 1;
   color: var(--c-text);
-  transition: border-color 200ms, color 200ms, background 200ms;
+  transition: border-color 200ms, color 200ms, background 200ms, box-shadow 200ms;
 }
-.in-btn-outline:hover { border-color: var(--c-action); color: var(--c-action); }
+.in-btn-outline svg { flex-shrink: 0; color: var(--c-text-2); transition: color 200ms; }
+.in-btn-outline:hover:not(:disabled) {
+  border-color: var(--c-action);
+  color: var(--c-action);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.07);
+}
+.in-btn-outline:hover:not(:disabled) svg { color: var(--c-action); }
+.in-btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Rows ───────────────────────────────────────────────────────── */
 .in-row {
@@ -195,6 +179,10 @@
   flex-direction: column;
   gap: 6px;
   transition: transform 200ms, border-color 200ms, box-shadow 200ms;
+  /* Container query: o valor do card se dimensiona pela largura DO CARD
+     (unidade cqi), não pela viewport — são 4 a 7 cards por linha, cada um
+     numa trilha de largura diferente conforme o breakpoint. */
+  container-type: inline-size;
 }
 .in-card:hover {
   transform: translateY(-2px);
@@ -257,18 +245,37 @@
 
 .in-card-value {
   font-family: var(--font-heading);
-  font-size: 30px;
+  font-size: 30px; /* fallback: navegador sem container queries */
   font-weight: 700;
   color: var(--c-text);
   line-height: 1.1;
   letter-spacing: -0.02em;
-}
-/* Variante pra números longos (impactos sem abreviação) — tabular pra
-   alinhar os dígitos e font menor pra caber em cards estreitos. */
-.in-card-value--num {
-  font-size: 22px;
   font-variant-numeric: tabular-nums;
+  /* Nunca quebrar: o card ficaria mais alto que os vizinhos da mesma linha
+     do grid. Em vez de quebrar, o corpo encolhe (regra abaixo). */
+  white-space: nowrap;
+}
+
+/* Corpo auto-ajustável — o que impede "R$ 299.315,84" de vazar do card.
+   Largura útil = 100cqi (largura do card) menos os 40px de padding lateral.
+   Dividida pelo nº de glifos (--len, injetado inline pelo CardValue.jsx)
+   vezes 0.62em, que é a largura média de um dígito tabular do Space Grotesk
+   — estimativa deliberadamente conservadora, erra pro lado de caber.
+   clamp() segura o resultado entre um piso legível e o corpo de projeto: um
+   valor curto ("R$ 9,43") continua nos 30px de sempre; só os longos encolhem,
+   e só o quanto for preciso. */
+.in-card-value {
+  font-size: clamp(15px, calc((100cqi - 40px) / (var(--len, 10) * 0.62)), 30px);
+}
+
+/* Impactos: números longos sem abreviação. Mesmo ajuste, com teto menor —
+   o valor sem unidade não precisa competir com o dos cards de moeda. */
+.in-card-value--num {
+  font-size: 22px; /* fallback */
   letter-spacing: -0.01em;
+}
+.in-card-value--num {
+  font-size: clamp(14px, calc((100cqi - 40px) / (var(--len, 10) * 0.62)), 22px);
 }
 
 .in-card-sub { font-size: 12px; color: var(--c-text-2); }
@@ -363,9 +370,13 @@
   flex-direction: column;
   gap: 4px;
 }
+/* Flex, não grid de 3 colunas fixas: a linha nem sempre tem o ponto colorido
+   (o donut de % Veiculações montava a linha só com nome + valor). No grid, o
+   nome caía na trilha de 10px do ponto e transbordava POR CIMA do valor —
+   "Tota" sobrescrito por "1.607 (99.9%)". Com flex a linha se monta com 2 ou
+   3 filhos indiferentemente, e o valor é empurrado pra direita pelo auto. */
 .in-tooltip-row {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
+  display: flex;
   gap: 8px;
   align-items: center;
 }
@@ -374,14 +385,30 @@
   height: 8px;
   border-radius: 50%;
   display: inline-block;
+  flex: none;
 }
-.in-tooltip-name { color: var(--c-text-2); }
-.in-tooltip-value { font-weight: 600; color: var(--c-text); }
+.in-tooltip-name {
+  color: var(--c-text-2);
+  min-width: 0;
+}
+.in-tooltip-value {
+  font-weight: 600;
+  color: var(--c-text);
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Donut ──────────────────────────────────────────────────────── */
+/* min-width:0 é o que permite o card de gráfico encolher dentro do grid de 3
+   colunas (item de grid tem min-width:auto = largura do conteúdo por padrão,
+   e o ResponsiveContainer media a largura "cheia" e desenhava fora do card). */
 .in-donut-wrap {
   height: 260px;
+  min-width: 0;
 }
+.in-chart-card { min-width: 0; }
+.in-chart-card .recharts-legend-item-text { white-space: normal; }
 
 /* ── Class pyramid (SVG manual) ─────────────────────────────────── */
 .in-pyramid {
@@ -497,54 +524,19 @@
 }
 .in-skel-chart-body--tall { min-height: 340px; }
 
-/* ── Empty tutorial ─────────────────────────────────────────────── */
-.in-empty {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 40px;
-  align-items: center;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: 48px;
-  min-height: 420px;
-}
-@media (max-width: 1024px) { .in-empty { grid-template-columns: 1fr; } }
-
-.in-empty-action {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  align-items: flex-start;
-}
-.in-empty-icon {
-  width: 72px;
-  height: 72px;
-  border-radius: 999px;
-  background: rgba(232, 30, 117, 0.1);
-  color: var(--c-action);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 36px;
-}
-.in-empty-title {
-  margin: 0;
-  font-family: var(--font-heading);
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--c-text);
-  letter-spacing: -0.02em;
-}
-.in-empty-text {
-  margin: 0;
-  color: var(--c-text-2);
-  max-width: 380px;
-  line-height: 1.5;
-}
+/* ── Empty tutorial ───────────────────────────────────────────────
+   Shell (silhueta + cartão + stepper) vem do sistema compartilhado
+   `.detection-empty` no index.css. Aqui fica só a silhueta do dashboard. */
+.in-empty { min-height: 520px; }
+/* A silhueta aqui é feita de blocos claros, sem texto: no 0.22 padrão do
+   shell ela some contra o fundo da página. */
+.in-empty .detection-empty-ghost { opacity: 0.6; }
 
 .in-empty-preview {
-  opacity: 0.35;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   gap: 12px;

@@ -6,7 +6,11 @@
 // Aparece em /campaigns (por card), /detections (na barra de filtros) e
 // /reports/airtime (no header da sidebar de materiais). Props mínimos:
 //
-//   - campaignId (uuid, obrigatório)
+//   - campaignId (uuid, obrigatório) — campanha default do relatório
+//   - campaignOptions ([{id, name}], opcional) — com 2+ itens o dropdown ganha
+//                 um seletor de campanha acima do de período. Usado por
+//                 /reports/airtime, que aceita seleção múltipla; relatório
+//                 continua sendo de UMA campanha por vez.
 //   - from, to   (ISO date 'YYYY-MM-DD' ou full RFC3339; opcionais — usados
 //                 como valor *inicial* do seletor de período dentro do menu.
 //                 Sem eles, o menu defaulta para o mês corrente inteiro.
@@ -122,6 +126,11 @@ function IconSpinner({ size = 14 }) {
 
 export default function CampaignReportsMenu({
   campaignId,
+  // campaignOptions ([{id, name}]) liga o seletor de campanha DENTRO do
+  // dropdown. Existe porque /reports/airtime passou a aceitar seleção múltipla
+  // e relatório é por campanha: com 2+ na tela, o menu pergunta de qual delas
+  // é o relatório em vez de adivinhar. Com 0 ou 1 opção o menu é o de sempre.
+  campaignOptions = [],
   from = '',
   to = '',
   variant = 'button',
@@ -171,6 +180,22 @@ export default function CampaignReportsMenu({
     const pt = toDateOnly(to)
     if (pf || pt) setLocalRange({ from: pf, to: pt })
   }
+
+  // Campanha escolhida dentro do menu. Só aparece com 2+ opções; nas demais
+  // telas o valor é sempre o campaignId da prop. Mesmo padrão de re-sync do
+  // range: quando a página troca a seleção, o menu acompanha.
+  const [pickedCampaignId, setPickedCampaignId] = useState(campaignId)
+  const [campaignSnapshot, setCampaignSnapshot] = useState(campaignId)
+  if (campaignSnapshot !== campaignId) {
+    setCampaignSnapshot(campaignId)
+    setPickedCampaignId(campaignId)
+  }
+  // Se a campanha escolhida saiu da seleção da página (usuário removeu o chip),
+  // cai pra prop — nunca gera relatório de campanha que não está mais na tela.
+  const activeCampaignId = campaignOptions.length > 1
+    && campaignOptions.some(o => o.id === pickedCampaignId)
+    ? pickedCampaignId
+    : campaignId
 
   // Validação básica de range: from > to bloqueia as ações.
   const rangeInvalid = !!(localRange.from && localRange.to && localRange.from > localRange.to)
@@ -229,7 +254,7 @@ export default function CampaignReportsMenu({
         exportGridReportCsv(gridReport.model)
       } else {
         const { from: f, to: t } = rangeRFC3339()
-        await exportConsolidatedCsv({ campaignId, from: f, to: t })
+        await exportConsolidatedCsv({ campaignId: activeCampaignId, from: f, to: t })
       }
       setOpen(false)
     } catch (err) {
@@ -249,7 +274,7 @@ export default function CampaignReportsMenu({
     setBusy('detailed')
     try {
       const { from: f, to: t } = rangeRFC3339()
-      await exportDetectionsCsv({ campaignId, from: f, to: t })
+      await exportDetectionsCsv({ campaignId: activeCampaignId, from: f, to: t })
       setOpen(false)
     } catch (err) {
       console.error('CSV detalhado falhou:', err)
@@ -272,7 +297,7 @@ export default function CampaignReportsMenu({
         await buildGridReportPDF(gridReport.model)
       } else {
         const { from: f, to: t } = rangeRFC3339()
-        const summary = await fetchCampaignReportSummary({ campaignId, from: f, to: t })
+        const summary = await fetchCampaignReportSummary({ campaignId: activeCampaignId, from: f, to: t })
         await buildCampaignReportPDF(summary)
       }
       setOpen(false)
@@ -337,6 +362,9 @@ export default function CampaignReportsMenu({
           busy={busy}
           showDetailed={showDetailed && isAdmin}
           gridReport={gridReport}
+          campaignOptions={campaignOptions}
+          activeCampaignId={activeCampaignId}
+          onCampaignChange={setPickedCampaignId}
           range={localRange}
           rangeInvalid={rangeInvalid}
           onRangeChange={setLocalRange}
@@ -358,6 +386,7 @@ export default function CampaignReportsMenu({
 const ReportsDropdown = forwardRef(function ReportsDropdown(
   {
     anchorRect, placement, busy, showDetailed, gridReport,
+    campaignOptions = [], activeCampaignId, onCampaignChange,
     range, rangeInvalid,
     onRangeChange, onResetToMonth, onClearRange,
     onConsolidated, onDetailed, onPdf,
@@ -399,6 +428,17 @@ const ReportsDropdown = forwardRef(function ReportsDropdown(
         animation: 'reportsMenuIn 130ms ease-out',
       }}
     >
+      {/* Relatório é por campanha: com 2+ selecionadas na tela, escolher qual
+          vem ANTES do período — é a pergunta mais externa das duas. */}
+      {campaignOptions.length > 1 && (
+        <CampaignSection
+          options={campaignOptions}
+          value={activeCampaignId}
+          onChange={onCampaignChange}
+          disabled={!!busy}
+        />
+      )}
+
       {gridReport ? (
         <FilterNoteSection note={gridReport.filterNote} />
       ) : (
@@ -542,6 +582,34 @@ function RangeSection({ range, rangeInvalid, onRangeChange, onResetToMonth, onCl
           Intervalo inválido — a data inicial precisa ser anterior à final.
         </p>
       )}
+    </div>
+  )
+}
+
+// CampaignSection — seletor de qual campanha da seleção vira relatório.
+// Select nativo de propósito: mora dentro de um dropdown já portalizado, e
+// empilhar o menu do react-select em cima disso custaria z-index e foco por
+// nada — a lista aqui é curta e sem busca.
+function CampaignSection({ options, value, onChange, disabled }) {
+  return (
+    <div style={{ padding: '6px 8px 2px' }}>
+      <div style={{ marginBottom: 6 }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+          color: 'var(--c-text-3)', textTransform: 'uppercase',
+        }}>Campanha</span>
+      </div>
+      <select
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        aria-label="Campanha do relatório"
+        style={{ ...dateInputStyle(false), width: '100%', cursor: 'pointer' }}
+      >
+        {options.map(o => (
+          <option key={o.id} value={o.id}>{o.name}</option>
+        ))}
+      </select>
     </div>
   )
 }

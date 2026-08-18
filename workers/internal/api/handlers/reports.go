@@ -83,7 +83,7 @@ func (h *ReportsHandler) parseFilter(w http.ResponseWriter, r *http.Request) (ca
 	}
 
 	q := r.URL.Query()
-	f := catalog.AggregateFilter{CampaignID: id}
+	f := catalog.AggregateFilter{CampaignIDs: []uuid.UUID{id}}
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
