@@ -14,6 +14,7 @@
 
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { fmtDial, contractStatusLabel, summarizeStations, stampNow } from './stationsExport.js'
 
 // ── Design tokens ────────────────────────────────────────────────
 // Mantidos em sync com src/index.css. Se mudar lá, mudar aqui — não há
@@ -882,4 +883,127 @@ export async function buildGridReportPDF(model) {
   // 6) Download.
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   doc.save(`relatorio-veiculacoes-${model.slug}-${stamp}.pdf`)
+}
+
+// ═══ PDF: emissoras contratadas por um cliente ═══════════════════
+//
+// Terceiro relatório do arquivo, ao lado do de campanha e do da grade. Os
+// formatadores e o resumo vêm do módulo PURO stationsExport.js — é lá que a
+// lógica é testada, sem arrastar o jsPDF.
+
+// Hero: faixa rosa + título + cliente + filtros aplicados. Devolve o Y da base.
+function drawStationsHero(doc, { clientName, filters }, marginX, y) {
+  const pageW = doc.internal.pageSize.getWidth()
+  const w = pageW - marginX * 2
+  const cardH = filters ? 42 : 34
+
+  setColor(doc, 'fill', TOKENS.action)
+  doc.rect(marginX, y, w, 2.5, 'F')
+  drawCard(doc, marginX, y + 2.5, w, cardH)
+
+  setColor(doc, 'text', TOKENS.text3)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.text('EMISSORAS CONTRATADAS', marginX + 8, y + 11)
+
+  setColor(doc, 'text', TOKENS.text)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(20)
+  doc.text(doc.splitTextToSize(clientName || '—', w - 60)[0], marginX + 8, y + 21)
+
+  setColor(doc, 'text', TOKENS.text2)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  doc.text(`Posição em ${fmtDate(new Date())}`, marginX + 8, y + 30)
+
+  // Linha de filtros: o documento tem que dizer que NÃO é a lista inteira
+  // quando há busca ou banda ativa — senão vira um recorte silencioso.
+  if (filters) {
+    setColor(doc, 'text', TOKENS.text3)
+    doc.setFontSize(9)
+    doc.text(doc.splitTextToSize(`Filtros: ${filters}`, w - 16)[0], marginX + 8, y + 38)
+  }
+  return y + 2.5 + cardH
+}
+
+export async function buildStationsPDF({ stations, clientName, filters }) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+  const marginX = 15
+  const pageW = doc.internal.pageSize.getWidth()
+
+  const logoData = await loadLogoDataURL()
+  if (logoData) {
+    try { doc.addImage(logoData, 'PNG', marginX, 12, 28, 11, '', 'FAST') } catch { /* segue sem logo */ }
+  } else {
+    setColor(doc, 'text', TOKENS.action)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(14)
+    doc.text('E-monitor', marginX, 20)
+  }
+
+  const heroBottom = drawStationsHero(doc, { clientName, filters }, marginX, 30)
+
+  // KPIs
+  const s = summarizeStations(stations)
+  const kpis = [
+    ['Emissoras', fmtNumber(s.total)],
+    ['Praças', fmtNumber(s.cities)],
+    ['Estados', fmtNumber(s.states)],
+    ['No ar', fmtNumber(s.onAir)],
+    ['PMM somado', fmtNumber(Math.round(s.pmm))],
+  ]
+  const kpiY = heroBottom + 7.5
+  const kpiH = 22
+  const gap = 4
+  const kpiW = (pageW - marginX * 2 - gap * (kpis.length - 1)) / kpis.length
+  kpis.forEach(([label, value], i) => {
+    drawKPI(doc, marginX + i * (kpiW + gap), kpiY, kpiW, kpiH, label, value)
+  })
+
+  // Tabela. Sem dado sensível: o PDF é o documento que circula, e o gating de
+  // campo cadastral/e-mail vale aqui do mesmo jeito que na ficha.
+  const body = (stations ?? []).map(st => [
+    st.name ?? '—',
+    `${fmtDial(st.frequency_mhz)} ${st.band ?? ''}`.trim(),
+    [st.city, st.state].filter(Boolean).join('/') || '—',
+    st.pmm != null ? fmtNumber(st.pmm) : '—',
+    contractStatusLabel(st.contract) || '—',
+    st.contract?.campaigns != null ? String(st.contract.campaigns) : '—',
+    (st.meta?.categories ?? []).slice(0, 2).join(', ') || '—',
+  ])
+
+  autoTable(doc, {
+    startY: kpiY + kpiH + 8,
+    head: [['Emissora', 'Dial', 'Praça', 'PMM', 'Situação', 'Camp.', 'Categorias']],
+    body,
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2, lineColor: TOKENS.border, lineWidth: 0.1 },
+    // Mesmo cabeçalho claro das tabelas do relatório de campanha e da grade —
+    // é o que padroniza os três PDFs do sistema.
+    headStyles: {
+      fillColor: TOKENS.surface2,
+      textColor: TOKENS.text,
+      fontStyle: 'bold',
+      fontSize: 8,
+      lineColor: TOKENS.border,
+    },
+    alternateRowStyles: { fillColor: [250, 250, 252] },
+    columnStyles: {
+      3: { halign: 'right' },
+      5: { halign: 'center' },
+    },
+    margin: { left: marginX, right: marginX, bottom: 18 },
+  })
+
+  const total = doc.getNumberOfPages()
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i)
+    drawFooter(doc, total)
+  }
+  return doc
+}
+
+export async function exportStationsPdf({ stations, clientName, filters }) {
+  const doc = await buildStationsPDF({ stations, clientName, filters })
+  doc.save(`emissoras-${slugify(clientName || "emissoras")}-${stampNow()}.pdf`)
 }
