@@ -204,8 +204,19 @@ export default function FiltersBar({ value, onChange }) {
   const stationOpts = useMemo(() => {
     const d = stationsQ.data
     const list = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : [])
-    return list.map(s => ({ value: s.id, label: s.name, raw: s }))
-  }, [stationsQ.data])
+    // O recorte por target_stations é redundante contra o backend que entende
+    // ?ids= (ele já devolve exatamente esse conjunto) e é a rede de segurança
+    // contra o que NÃO entende: API antiga ignora o parâmetro e responde as 20
+    // primeiras do catálogo, que apareceriam aqui como emissoras alheias à
+    // campanha. Com o filtro, o pior caso volta a ser "seletor vazio" em vez de
+    // "seletor com opções erradas". Importa na janela entre o deploy do
+    // frontend (Cloudflare Pages, automático no push) e o do backend
+    // (deploy.sh na VM) — ver docs/features/broadcaster-search.md.
+    const alvo = new Set(targetStationIds)
+    return list
+      .filter(s => alvo.has(s.id))
+      .map(s => ({ value: s.id, label: s.name, raw: s }))
+  }, [stationsQ.data, targetStationIds])
 
   // Materiais oferecidos = os VINCULADOS às campanhas selecionadas, e não a
   // biblioteca inteira do cliente: filtrar por um material que não roda nessas
