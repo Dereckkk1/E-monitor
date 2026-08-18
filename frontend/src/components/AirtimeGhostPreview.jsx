@@ -1,6 +1,9 @@
 import FlowStepper from './FlowStepper'
 
-const STEP_LABELS = ['Competência', 'Campanha', 'Período']
+// Espelha os 4 passos da AirtimeFiltersBar. Pro viewer de 1 cliente o passo
+// 1 vem travado na barra, mas segue no stepper: some-lo mudaria a numeração
+// entre o que ele lê aqui e o que vê no filtro.
+const STEP_LABELS = ['Cliente', 'Competência', 'Campanhas', 'Período']
 
 // SVG library — kept inline to avoid an external icon dependency on this
 // screen. Calendar/megaphone/alert/search map to the same semantic intent
@@ -37,7 +40,7 @@ const ICONS = {
 /**
  * Empty-state ghost preview for /airtime-report. Renders 3 desaturated
  * row mockups behind a centered card. Variants control:
- *   - step:    1, 2, or 3 → shows the FlowStepper at the top
+ *   - step:    1..4 → shows the FlowStepper at the top
  *   - icon:    'calendar' | 'campaign' | 'alert' | 'search'
  *   - accent:  'action' (default pink) | 'mute' (gray) — controls icon tint
  */

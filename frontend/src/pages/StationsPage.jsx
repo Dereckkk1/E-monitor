@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useStations, useCreateStation } from '../api/hooks'
+import { useStations, useCreateStation, useClients } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
 import StationDetailModal from '../components/StationDetailModal'
+import StationSearch, { selectionLabel } from '../components/StationSearch'
+import ClientAvatar from '../components/ClientAvatar'
 import RSelect from '../components/RSelect'
 import { useRadioPlayer } from '../contexts/RadioPlayerContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -28,36 +30,18 @@ function streamDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return null }
 }
 
-function CityIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M2 14V7l3-2 3 2v7" />
-      <path d="M8 14V4l3-2 3 2v10" />
-      <path d="M1 14h14" />
-      <path d="M4 10v0M4 12v0M10.5 7v0M10.5 9.5v0M10.5 12v0" />
-    </svg>
-  )
-}
-function CityPinIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M2 14V8l2.5-1.5L7 8v6" />
-      <path d="M7 14V4.5L10 3l3 1.5V14" />
-      <path d="M1 14h14" />
-    </svg>
-  )
+// Formata a data de início da campanha programada como DD/MM.
+//
+// Fatia a string em vez de passar por `new Date`: o backend manda uma DATE
+// serializada como "2026-09-01T00:00:00Z", e construir um Date com isso no
+// fuso do Brasil (UTC-3) devolve 31/08. É um dia inteiro de erro num rótulo
+// que o cliente lê como "quando minha campanha começa".
+function formatStartDate(iso) {
+  if (!iso) return null
+  const [y, m, d] = String(iso).slice(0, 10).split('-')
+  return y && m && d ? `${d}/${m}` : null
 }
 
-// Normaliza pra match accent-insensitive client-side (mesma regra do
-// helper utils/search.js: NFD + remove combining marks).
-function normalize(s) {
-  return (s ?? '')
-    .toString()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .trim()
-}
 function PlusIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -93,77 +77,63 @@ const LIMIT = 25
 export default function StationsPage() {
   const navigate = useNavigate()
   const { toggleStation, isStationPlaying } = useRadioPlayer()
-  const { isAdmin } = useAuth()
+  const { isAdmin, clientIds } = useAuth()
 
-  // Search dropdown:
-  //   - `searchInput`: o que o usuário digita no campo
-  //   - `searchInputDebounced`: usado pra alimentar o autocomplete (limita
-  //     hits no backend)
-  //   - `selectedOption`: opção clicada — só ela filtra a lista renderizada.
-  //   Sem clique, sem filtro (mostra catálogo inteiro).
-  const [searchInput, setSearchInput] = useState('')
-  const [searchInputDebounced, setSearchInputDebounced] = useState('')
-  const [selectedOption, setSelectedOption] = useState(null)
+  // O que o usuário escolheu no campo de busca. União discriminada: emissora,
+  // cidade, UF ou texto livre (Enter sem escolher nada). `null` = sem filtro.
+  const [selection, setSelection] = useState(null)
 
-  useEffect(() => {
-    const t = setTimeout(() => setSearchInputDebounced(searchInput), 250)
-    return () => clearTimeout(t)
-  }, [searchInput])
+  // Recorte por contrato. O CLIENTE abre já nas dele: cair num catálogo de
+  // 7.500 emissoras das quais ~25 são suas responde uma pergunta que ele não
+  // fez. O ADMIN abre no catálogo e escolhe o cliente quando quiser.
+  //   null                  → catálogo inteiro
+  //   { ids: [...], label } → só as contratadas por esses clientes
+  const ownWallet = clientIds.length > 0 ? { ids: clientIds, label: 'minhas' } : null
+  const [contract, setContract] = useState(() => (isAdmin ? null : ownWallet))
 
   const [band, setBand] = useState('')
   const [page, setPage] = useState(1)
-  useEffect(() => { setPage(1) }, [band])
+  useEffect(() => { setPage(1) }, [band, selection, contract])
 
-  // Autocomplete por CIDADE: busca emissoras que casam com a string digitada
-  // (server-side faz match amplo: name/city/state/band/freq), e a gente filtra
-  // pra deduplicar por cidade e mostrar só as cidades cujo nome casa com o
-  // input. Limit alto pra pegar várias cidades distintas num único hit.
-  const { data: suggestData, isFetching: suggestLoading } = useStations({
-    q: searchInputDebounced,
-    band,
-    page: 1,
-    limit: 50,
-    enabled: searchInputDebounced.trim().length >= 2,
-  })
-
-  // Reduz pra lista de cidades distintas, em ordem alfabética, contando
-  // quantas emissoras a cidade tem nos resultados (apenas as que vieram da
-  // página atual — número aproximado, suficiente como pista).
-  const normalizedQ = normalize(searchInputDebounced)
-  const cityOptions = (() => {
-    const byKey = new Map()
-    for (const st of suggestData?.data ?? []) {
-      const city = (st.city ?? '').trim()
-      if (!city) continue
-      // Mantém só cidades cujo nome casa com a busca (accent-insensitive).
-      // Sem esse filtro, o backend devolveria também stations cujo match foi
-      // por name/band/freq, poluindo as sugestões de cidade.
-      if (normalizedQ && !normalize(city).includes(normalizedQ)) continue
-      const key = `${city}|${st.state ?? ''}`
-      const cur = byKey.get(key)
-      if (cur) cur.count += 1
-      else byKey.set(key, { city, state: st.state ?? null, count: 1 })
-    }
-    return [...byKey.values()]
-      .sort((a, b) => a.city.localeCompare(b.city, 'pt-BR'))
-      .slice(0, 10)
-      .map(c => ({
-        value: c.state ? `${c.city}|${c.state}` : c.city,
-        label: c.state ? `${c.city}/${c.state}` : c.city,
-        city: c.city,
-        state: c.state,
-        count: c.count,
-      }))
+  // Cada tipo de seleção vira um filtro diferente no backend. A cidade usa o
+  // filtro `city` exato em vez de `q`: passar o nome da cidade como busca ampla
+  // traria de quebra emissoras de OUTRA cidade que tenham esse nome no `name`.
+  const listFilter = (() => {
+    if (!selection) return {}
+    if (selection.kind === 'station') return { station_id: selection.id }
+    if (selection.kind === 'city')    return { city: selection.city, state: selection.state ?? undefined }
+    if (selection.kind === 'state')   return { state: selection.state }
+    return { q: selection.q }
   })()
 
-  // Filtro real aplicado à lista: nome da cidade escolhida.
-  // Quando nada selecionado → mostra todas (q vazio). Passar só a cidade
-  // como q usa o ILIKE amplo do backend; cidade casa primeiro com o campo
-  // `city`. Edge case raro: station com a cidade no `name` apareceria mesmo
-  // estando em outra cidade — aceitável até existir filtro `city` no backend.
-  const activeQ = selectedOption?.city ?? ''
+  const { data, isLoading } = useStations({
+    ...listFilter,
+    contracted_by: contract ? contract.ids.join(',') : undefined,
+    band, page, limit: LIMIT,
+  })
 
-  const { data, isLoading } = useStations({ q: activeQ, band, page, limit: LIMIT })
+  // Seletor de cliente do admin. O cliente não carrega isso: ele não escolhe
+  // cliente nenhum, e a rota é admin-only.
+  const clientsQ = useClients({ enabled: isAdmin })
+  const clientOpts = (clientsQ.data ?? []).map(c => ({
+    value: c.id,
+    label: c.name,
+    logo: c.logo_url ?? null,
+  }))
+
+  // Logo + nome, como no seletor de cliente de /reports/airtime. Com ~110
+  // clientes na lista, a marca é o que o admin reconhece antes de ler.
+  function formatClientOption(opt, { context }) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+        <ClientAvatar client={{ name: opt.label, logo_url: opt.logo }} size={context === 'value' ? 18 : 22} />
+        <span style={{
+          fontWeight: 600, fontSize: 13, color: 'var(--c-text)',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{opt.label}</span>
+      </div>
+    )
+  }
   const stations = data?.data ?? []
   const total    = data?.total ?? 0
   const pages    = data?.pages ?? 1
@@ -215,6 +185,7 @@ export default function StationsPage() {
           {total > 0 && (
             <span className="text-muted" style={{ fontSize: 13, fontWeight: 400 }}>
               {total.toLocaleString('pt-BR')}
+              {contract ? ` contratada${total === 1 ? '' : 's'}${contract.label === 'minhas' ? '' : ` por ${contract.label}`}` : ''}
             </span>
           )}
         </div>
@@ -228,67 +199,42 @@ export default function StationsPage() {
       {/* Filters */}
       <div className="stations-filters">
         <div className="stations-search-dropdown">
-          <RSelect
-            inputId="stations-search"
-            placeholder="Buscar por cidade…"
-            options={cityOptions}
-            value={selectedOption}
-            onChange={opt => {
-              setSelectedOption(opt)
-              setPage(1)
-              if (!opt) {
-                setSearchInput('')
-                setSearchInputDebounced('')
-              }
-            }}
-            inputValue={searchInput}
-            onInputChange={(val, meta) => {
-              if (meta.action === 'input-change') setSearchInput(val)
-            }}
-            isClearable
-            isLoading={suggestLoading && searchInputDebounced.trim().length >= 2}
-            filterOption={null}
-            loadingMessage={() => 'Buscando cidades…'}
-            noOptionsMessage={() => {
-              const q = searchInput.trim()
-              if (q.length === 0) return 'Digite o nome de uma cidade'
-              if (q.length < 2)  return 'Digite ao menos 2 caracteres'
-              if (suggestLoading) return 'Buscando cidades…'
-              return `Nenhuma cidade encontrada para "${q}"`
-            }}
-            components={{
-              DropdownIndicator: () => (
-                <div style={{ paddingRight: 10, color: 'var(--c-text-3)', display: 'flex' }}>
-                  <CityIcon />
-                </div>
-              ),
-            }}
-            formatOptionLabel={(opt, { context }) => {
-              if (context === 'value') {
-                return (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'var(--c-text-3)', display: 'inline-flex' }}><CityPinIcon /></span>
-                    {opt.label}
-                  </span>
-                )
-              }
-              return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: 'var(--c-text-3)', display: 'inline-flex' }}><CityPinIcon /></span>
-                  <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text)' }}>
-                      {opt.city}
-                      {opt.state ? <span style={{ color: 'var(--c-text-3)', fontWeight: 400 }}>{` / ${opt.state}`}</span> : null}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
-                      {opt.count} emissora{opt.count === 1 ? '' : 's'}
-                    </div>
-                  </div>
-                </div>
-              )
-            }}
-          />
+          <StationSearch value={selection} onChange={setSelection} band={band} />
         </div>
+
+        {/* Recorte por contrato. Admin escolhe o cliente; cliente alterna
+            entre as dele e o catálogo. Quem não é nem um nem outro (usuário
+            sem carteira) não vê controle nenhum. */}
+        {isAdmin ? (
+          <div className="stations-contract-picker">
+            <RSelect
+              inputId="stations-contract"
+              placeholder="Contratadas por…"
+              options={clientOpts}
+              value={contract ? clientOpts.find(o => o.value === contract.ids[0]) ?? null : null}
+              onChange={opt => setContract(opt ? { ids: [opt.value], label: opt.label } : null)}
+              formatOptionLabel={formatClientOption}
+              isClearable
+              isLoading={clientsQ.isLoading}
+              noOptionsMessage={() => 'Nenhum cliente'}
+            />
+          </div>
+        ) : ownWallet ? (
+          <div className="stations-band-filter">
+            <button
+              className={`band-tab${contract ? ' active' : ''}`}
+              onClick={() => setContract(ownWallet)}
+            >
+              Minhas
+            </button>
+            <button
+              className={`band-tab${contract ? '' : ' active'}`}
+              onClick={() => setContract(null)}
+            >
+              Todas
+            </button>
+          </div>
+        ) : null}
 
         <div className="stations-band-filter">
           {['', 'FM', 'AM'].map(b => (
@@ -329,11 +275,26 @@ export default function StationsPage() {
       ) : stations.length === 0 ? (
         <div className="card" style={{ padding: '48px 24px', textAlign: 'center' }}>
           <p className="text-muted" style={{ fontSize: 15 }}>
-            {activeQ
-              ? `Nenhum resultado para "${activeQ}"`
-              : 'Nenhuma emissora cadastrada.'}
+            {selection
+              ? `Nenhum resultado para "${selectionLabel(selection)}"${contract ? ' entre as contratadas' : ''}`
+              : contract
+                ? 'Nenhuma emissora contratada no momento.'
+                : 'Nenhuma emissora cadastrada.'}
           </p>
-          {!activeQ && isAdmin && (
+          {/* Lista vazia sem explicação vira chamado de suporte. Diz o que
+              "contratada" significa aqui — só campanha vigente conta. */}
+          {contract && !selection && (
+            <p className="text-muted" style={{ fontSize: 13, marginTop: 8 }}>
+              Só entram emissoras de campanhas em andamento ou já programadas.
+              Campanhas encerradas não aparecem aqui.
+            </p>
+          )}
+          {contract && (
+            <button className="btn" style={{ marginTop: 16 }} onClick={() => setContract(null)}>
+              Ver todas as emissoras
+            </button>
+          )}
+          {!selection && !contract && isAdmin && (
             <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => setCreating(true)}>
               <PlusIcon /> Adicionar emissora
             </button>
@@ -351,6 +312,9 @@ export default function StationsPage() {
               : null
             const domain     = streamDomain(st.stream_url)
             const loc        = [st.city, st.state].filter(Boolean).join('/')
+            // Só existe quando a listagem foi escopada por cliente.
+            const ct         = st.contract ?? null
+            const startsAt   = formatStartDate(ct?.starts_at)
 
             return (
               <div
@@ -377,12 +341,27 @@ export default function StationsPage() {
                   </div>
                 </div>
 
+                {/* No recorte por contrato, o vínculo ganha o espaço dos
+                    gêneros: aqui a pergunta é "por que esta emissora é minha",
+                    não que estilo ela toca. Os gêneros cedem lugar, não somem. */}
                 <div className="station-row-cats">
-                  {cats.slice(0, 3).map(c => (
+                  {ct && (
+                    <span className={`contract-tag${ct.on_air ? ' contract-tag-onair' : ' contract-tag-soon'}`}>
+                      {ct.on_air
+                        ? 'veiculando'
+                        : startsAt ? `a partir de ${startsAt}` : 'programada'}
+                    </span>
+                  )}
+                  {ct && (
+                    <span className="contract-tag">
+                      {ct.campaigns} campanha{ct.campaigns === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {cats.slice(0, ct ? 1 : 3).map(c => (
                     <span key={c} className="category-tag">{c}</span>
                   ))}
-                  {cats.length > 3 && (
-                    <span className="category-tag category-tag-more">+{cats.length - 3}</span>
+                  {cats.length > (ct ? 1 : 3) && (
+                    <span className="category-tag category-tag-more">+{cats.length - (ct ? 1 : 3)}</span>
                   )}
                 </div>
 

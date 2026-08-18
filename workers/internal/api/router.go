@@ -251,6 +251,9 @@ func NewRouter(d Deps) http.Handler {
 				//     auth.ClientScopesFromContext, mesmo padrão de
 				//     /campaigns/{id} e /campaigns/{campaignID}/daily-summary.
 				r.Get("/stations", d.Stations.List)
+				// Antes de /stations/{id}: chi prioriza rota estática sobre
+				// param, mas a ordem deixa explícito que "suggest" não é um id.
+				r.Get("/stations/suggest", d.Stations.Suggest)
 				r.Get("/stations/{id}", d.Stations.Get)
 				r.Get("/material-types", d.MaterialTypes.List)
 				r.Get("/campaigns/{campaignID}/materials", d.CampaignMaterials.ListByCampaign)

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,10 +36,102 @@ type InsightsParams struct {
 	From        time.Time   // inclusive (date-only, UTC)
 	To          time.Time   // inclusive (date-only, UTC end-of-day)
 	StationIDs  []uuid.UUID // vazio = todas as estações das campanhas
+	// MaterialIDs recorta por material (o spot específico que foi ao ar).
+	// Vazio = todos.
+	//
+	// O recorte é EXATO para tudo que sai da tocada — impactos, veiculações,
+	// breakdown por categoria, demografia — porque detection_attributions
+	// carrega commercial_id. Já o financeiro NÃO tem dimensão de material: o
+	// contrato é precificado por (campanha × emissora × TIPO × dia), vários
+	// materiais dividem o mesmo tipo de 30s, e no modo consolidado o valor é
+	// um só por (campanha, emissora). Com filtro ativo, os valores em R$ são
+	// RATEADOS pela participação do material nas veiculações — ver
+	// materialShares e o campo MaterialProrated do payload.
+	MaterialIDs []uuid.UUID
 	// Today é "hoje" no fuso America/Sao_Paulo (date-only). Usado para acumular
 	// o valor consolidado por mês (ciclos mensais já iniciados até hoje — ver
 	// consolidatedSummary). Zero value = sem "hoje" → cai no total cheio.
 	Today time.Time
+}
+
+// materialIDs devolve o filtro de material como slice NÃO-nil. pgx serializa
+// nil como NULL, e `NULL = '{}'` é NULL (não true) — a flag "sem filtro" das
+// queries pararia de funcionar e o resultado viria vazio. Mesmo cuidado que o
+// handler já toma com StationIDs.
+func (p InsightsParams) materialIDs() []uuid.UUID {
+	if p.MaterialIDs == nil {
+		return []uuid.UUID{}
+	}
+	return p.MaterialIDs
+}
+
+// materialShares mede a participação do filtro de material nas veiculações —
+// o fator de rateio dos números em R$.
+//
+// Por que rateio e não recorte: o contrato não conhece material. O pricing é
+// (campanha × emissora × TIPO × dia) e, no modo consolidado, um valor único por
+// (campanha, emissora). Não existe "o quanto deste contrato é do material X" no
+// dado — existe o quanto ele representou do que foi ao ar. Decisão do dono
+// (2026-08-18): mostrar o rateio, marcado como rateio na UI, em vez de esconder
+// os cards financeiros.
+//
+// A base é a canônica de impactos — in_slot + bonus (docs/features/
+// client-target-pmm.md) — e NÃO COUNT(*): out_slot não vale nada
+// comercialmente e out_date está fora do período, então nenhum dos dois pode
+// puxar valor pro material. Usar a mesma base dos impactos mantém o CPM
+// coerente (numerador e denominador rateados pelo mesmo critério).
+//
+// Devolve a participação global (usada no investido/bonificação agregados) e a
+// por campanha (usada na média ponderada do fixed_cpm — escalar todas as
+// campanhas pelo fator global distorceria o peso de cada uma).
+type materialShareResult struct {
+	Global     float64
+	ByCampaign map[uuid.UUID]float64
+}
+
+func (r *Insights) materialShares(ctx context.Context, p InsightsParams) (materialShareResult, error) {
+	out := materialShareResult{ByCampaign: map[uuid.UUID]float64{}}
+	if len(p.MaterialIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT d.campaign_id,
+		       COUNT(*) FILTER (WHERE d.commercial_id = ANY($5::uuid[]))::float8 AS do_material,
+		       COUNT(*)::float8                                                  AS total
+		FROM detection_attributions d
+		WHERE d.campaign_id = ANY($1::uuid[])
+		  AND `+ApprovedDetectionsFilter+`
+		  -- base canônica de impactos: in_slot + bonus
+		  AND (d.category = 'in_slot' OR d.category IN `+categorizer.BonusCategoriesSQL+`)
+		  AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
+		  AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
+		GROUP BY d.campaign_id
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs, p.materialIDs())
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+
+	var somaMaterial, somaTotal float64
+	for rows.Next() {
+		var id uuid.UUID
+		var doMaterial, total float64
+		if err := rows.Scan(&id, &doMaterial, &total); err != nil {
+			return out, err
+		}
+		somaMaterial += doMaterial
+		somaTotal += total
+		if total > 0 {
+			out.ByCampaign[id] = doMaterial / total
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if somaTotal > 0 {
+		out.Global = somaMaterial / somaTotal
+	}
+	return out, nil
 }
 
 // InsightsPayload é o response completo do endpoint.
@@ -62,6 +155,16 @@ type InsightsPayload struct {
 	// somam públicos-alvo diferentes e rotular seria mentira. Sem omitempty —
 	// `null` é o valor significativo ("mostre só 'no target'").
 	TargetLabel *string `json:"target_label"`
+	// MaterialProrated é true quando há filtro de material ativo. Sinaliza pra
+	// UI que os números em R$ (investido, bonificação, CPM) e o "programado" da
+	// série são RATEIO pela participação do material nas veiculações, não
+	// recorte contratual — o contrato não separa valor por material. Os demais
+	// números (impactos, veiculações, demografia) seguem exatos.
+	MaterialProrated bool `json:"material_prorated"`
+	// MaterialShare é a participação usada no rateio: veiculações do material
+	// ÷ veiculações totais da seleção, na mesma base canônica de impactos
+	// (in_slot + bonus). 0 quando não há filtro.
+	MaterialShare float64 `json:"material_share"`
 }
 
 type PeriodSpec struct {
@@ -210,9 +313,43 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	// precifica as emissoras per_insertion por unit × (in_slot + bonus)), então a
 	// soma continua valendo nos dois modos — e é a MESMA expressão que o
 	// /campaigns usa (total_invested + total_bonus_value).
+	// RATEIO POR MATERIAL. Roda DEPOIS do override consolidado de propósito: o
+	// que se rateia é o valor final que a tela mostraria sem o filtro, nos dois
+	// modos de pricing. Aplicar antes deixaria o modo consolidado passar
+	// incólume (o override sobrescreve inv.Executado).
+	//
+	// Só os valores em R$ são rateados. Impactos, veiculações, breakdown e
+	// demografia já vêm exatos do aggregateCore (a tocada sabe o material), e
+	// bon.Count idem — rateá-los seria jogar fora um número que existe.
+	shares, err := r.materialShares(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("materialShares: %w", err)
+	}
+	if len(p.MaterialIDs) > 0 {
+		inv.Contratado *= shares.Global
+		inv.Executado *= shares.Global
+		bon.Valor *= shares.Global
+		bon.Count = core.Breakdown.ExtrasOrphan
+
+		// Série temporal: o executado já veio exato da tocada (ver o CASE em
+		// aggregateBuckets). Falta o lado do PLANO — "programado" sai de
+		// distribution_rules, que tem meta por TIPO, não por material: dois
+		// materiais de 30s dividem a mesma célula de cota. Rateia pelo mesmo
+		// fator do financeiro, e o déficit é recalculado da dupla já ajustada
+		// (mesma fórmula D3 da migration 0065: out_slot não abate).
+		for i := range buckets {
+			buckets[i].Programado = int(math.Round(float64(buckets[i].Programado) * shares.Global))
+			d := buckets[i].Programado - buckets[i].InSlot
+			if d < 0 {
+				d = 0
+			}
+			buckets[i].Deficit = d
+		}
+	}
+
 	cpmNumerador := inv.Executado + bon.Valor
 
-	cpm, err := r.computeCPM(ctx, p, cpmNumerador, core.Impactos)
+	cpm, err := r.computeCPM(ctx, p, cpmNumerador, core.Impactos, shares)
 	if err != nil {
 		return nil, fmt.Errorf("computeCPM: %w", err)
 	}
@@ -259,6 +396,8 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		Buckets:              buckets,
 		Consolidated:         hasConsolidated,
 		TargetLabel:          targetLabel,
+		MaterialProrated:     len(p.MaterialIDs) > 0,
+		MaterialShare:        shares.Global,
 	}, nil
 }
 
@@ -439,6 +578,9 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		      AND `+ApprovedDetectionsFilter+`
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
+		      -- Recorte por material: exato, porque a tocada sabe qual spot foi
+		      -- ao ar. Vazio = todos (mesma convenção de $4).
+		      AND ($5::uuid[] = '{}' OR d.commercial_id = ANY($5::uuid[]))
 		),
 		per_station AS (
 		    SELECT f.station_id, f.client_id,
@@ -500,7 +642,7 @@ func (r *Insights) aggregateCore(ctx context.Context, p InsightsParams) (*coreAg
 		    COALESCE(SUM(out_date_n), 0)::bigint AS sum_outdate,
 		    COALESCE(SUM(bonus_n),    0)::bigint AS sum_bonus
 		FROM joined
-	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs, p.materialIDs())
 
 	out := &coreAggregates{}
 	if err := row.Scan(
@@ -567,33 +709,48 @@ func (r *Insights) aggregateBuckets(ctx context.Context, p InsightsParams) ([]Bu
 		    WHERE ($4::uuid[] = '{}' OR station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		),
-		bonus AS (
+		-- det: contadores vindos da própria tocada. Sempre alimenta os "extras"
+		-- (bônus) do gráfico; com filtro de material ativo passa a alimentar
+		-- TAMBÉM in_slot/out_slot/out_date, porque aí o número exato existe e a
+		-- view não sabe separar por material (ela agrega por TIPO).
+		--
+		-- O guard "$5 <> '{}' OR category = bonus" mantém a CTE, sem filtro de
+		-- material, com exatamente as linhas que ela tinha antes (só bônus).
+		-- Sem ele, um bucket que só tenha tocada de material sem type_id
+		-- entraria pelo FULL OUTER JOIN e apareceria como ponto zerado novo no
+		-- gráfico de quem não filtrou nada.
+		det AS (
 		    SELECT %s AS bucket,
-		           COUNT(*)::int AS extras
+		           COUNT(*) FILTER (WHERE d.category = 'in_slot')::int  AS in_slot,
+		           COUNT(*) FILTER (WHERE d.category = 'out_slot')::int AS out_slot,
+		           COUNT(*) FILTER (WHERE d.category = 'out_date')::int AS out_date,
+		           COUNT(*) FILTER (WHERE d.category IN `+categorizer.BonusCategoriesSQL+`)::int AS extras
 		    FROM detection_attributions d
 		    WHERE d.campaign_id = ANY($1::uuid[])
+		      -- Extras vêm da tocada, então recortam por material sem rateio.
+		      AND ($5::uuid[] = '{}' OR d.commercial_id = ANY($5::uuid[]))
 		      -- conjunto "aprovado" (catalog.ApprovedDetectionsFilter): antes só
 		      -- filtrava retracted_at, deixando ignoradas/audit_rejected inflarem
 		      -- os "extras" do gráfico vs o resto do sistema.
 		      AND `+ApprovedDetectionsFilter+`
-		      AND d.category = 'bonus'
+		      AND ($5::uuid[] <> '{}' OR d.category IN `+categorizer.BonusCategoriesSQL+`)
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
 		    GROUP BY 1
 		)
 		SELECT COALESCE(a.bucket, b.bucket) AS bucket,
 		       COALESCE(a.programado, 0),
-		       COALESCE(a.in_slot,    0),
-		       COALESCE(a.out_slot,   0),
-		       COALESCE(a.out_date,   0),
+		       CASE WHEN $5::uuid[] = '{}' THEN COALESCE(a.in_slot,  0) ELSE COALESCE(b.in_slot,  0) END,
+		       CASE WHEN $5::uuid[] = '{}' THEN COALESCE(a.out_slot, 0) ELSE COALESCE(b.out_slot, 0) END,
+		       CASE WHEN $5::uuid[] = '{}' THEN COALESCE(a.out_date, 0) ELSE COALESCE(b.out_date, 0) END,
 		       COALESCE(a.deficit,    0),
 		       COALESCE(b.extras,     0)
 		FROM agg a
-		FULL OUTER JOIN bonus b ON a.bucket = b.bucket
+		FULL OUTER JOIN det b ON a.bucket = b.bucket
 		ORDER BY bucket
 	`, summaryBucket, detectionBucket)
 
-	rows, err := r.pool.Query(ctx, query, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	rows, err := r.pool.Query(ctx, query, p.CampaignIDs, p.From, p.To, p.StationIDs, p.materialIDs())
 	if err != nil {
 		return nil, "", err
 	}
@@ -652,6 +809,32 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		    FROM campaigns
 		    WHERE id = ANY($1::uuid[])
 		),
+		-- PUSHDOWN (migration 0052): as três CTEs abaixo liam daily_play_summary
+		-- direto, e a view NÃO aceita pushdown de predicado — cada leitura
+		-- materializava o resumo do banco INTEIRO (todas as campanhas, todo o
+		-- histórico) pra depois jogar 99% fora. Eram 3 leituras num statement só,
+		-- ~10,8s dos ~12s do /insights medidos sobre a cópia de prod de 2026-08-17.
+		-- daily_play_summary_for() é a mesma definição com from/to/campanhas
+		-- empurrados pra dentro (paridade garantida por
+		-- scripts/sql/paridade-dps-function.sql).
+		--
+		-- Uma chamada só, materializada e reusada pelas três: o intervalo pedido é
+		-- a UNIÃO das três janelas — cs_plan precisa do range CHEIO da campanha
+		-- (o plano não depende do período filtrado), que contém as janelas de
+		-- cs_window/cs_per_ins. Pedir um superconjunto é seguro porque cada CTE
+		-- mantém o próprio BETWEEN: a função não altera valor de linha, só decide
+		-- quais linhas devolve.
+		--
+		-- COALESCE nos bounds: com camp_meta vazia MIN/MAX são NULL, e a função
+		-- devolve VAZIO com bound NULL (contrato da 0052) — o resultado final já
+		-- seria zero de qualquer forma (todo mundo entra por JOIN camp_meta), mas
+		-- passar $2/$3 mantém a chamada limitada em vez de indefinida.
+		dps AS MATERIALIZED (
+		    SELECT * FROM daily_play_summary_for(
+		        COALESCE((SELECT MIN(start_date) FROM camp_meta), $2::date),
+		        COALESCE((SELECT MAX(end_date)   FROM camp_meta), $3::date),
+		        $1::uuid[])
+		),
 		-- NUMERADOR consolidado: entregue + bônus DENTRO da janela [from,to].
 		-- Dia futuro/não-veiculado entrega 0, então alargar a janela nunca
 		-- deflaciona (não precisa de clamp de "hoje").
@@ -659,7 +842,7 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		    SELECT s.campaign_id, s.station_id,
 		           SUM(s.in_slot)::bigint  AS executed,
 		           SUM(s.bonus)::bigint    AS bonus
-		    FROM daily_play_summary s
+		    FROM dps s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    WHERE s.for_date BETWEEN GREATEST(cm.start_date, $2::date) AND LEAST(cm.end_date, $3::date)
 		      AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
@@ -671,7 +854,7 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		cs_plan AS (
 		    SELECT s.campaign_id, s.station_id,
 		           SUM(s.expected)::bigint AS plan_expected
-		    FROM daily_play_summary s
+		    FROM dps s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    WHERE s.for_date BETWEEN cm.start_date AND cm.end_date
 		      AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
@@ -682,7 +865,7 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 		           COALESCE(SUM(tp.unit_value * s.expected), 0)::numeric AS pi_contratado,
 		           COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric  AS pi_executado,
 		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric    AS pi_bonus
-		    FROM daily_play_summary s
+		    FROM dps s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
 		      ON tp.campaign_id = s.campaign_id
@@ -771,7 +954,7 @@ func (r *Insights) aggregateInvestment(ctx context.Context, p InsightsParams) (I
 //
 // Campanhas sem impactos não contribuem (peso zero); se a soma total de
 // impactos for zero, devolve 0.
-func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorEntregue float64, totalImpactos int64) (float64, error) {
+func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorEntregue float64, totalImpactos int64, shares materialShareResult) (float64, error) {
 	// Fast path: nenhum CPM fixo nas campanhas selecionadas → cálculo clássico.
 	var anyFixed bool
 	if err := r.pool.QueryRow(ctx, `
@@ -807,6 +990,9 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		      AND (d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
 		      AND s.pmm IS NOT NULL
 		      AND ($4::uuid[] = '{}' OR d.station_id = ANY($4::uuid[]))
+		      -- Mesmo recorte de material do aggregateCore: o peso da média
+		      -- ponderada tem que ser o MESMO impactos que o KPI mostra.
+		      AND ($5::uuid[] = '{}' OR d.commercial_id = ANY($5::uuid[]))
 		    GROUP BY d.campaign_id
 		),
 		camp_meta AS (
@@ -815,6 +1001,16 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		           (end_date - start_date + 1)::int AS total_days
 		    FROM campaigns
 		    WHERE id = ANY($1::uuid[])
+		),
+		-- Mesmo pushdown do aggregateInvestment (ver o comentário longo lá): as
+		-- três subqueries abaixo liam a view inteira, uma vez cada. Este caminho
+		-- só roda quando alguma campanha tem fixed_cpm, então a lentidão dependia
+		-- da seleção — o que fazia o /insights parecer aleatoriamente lento.
+		dps AS MATERIALIZED (
+		    SELECT * FROM daily_play_summary_for(
+		        COALESCE((SELECT MIN(start_date) FROM camp_meta), $2::date),
+		        COALESCE((SELECT MAX(end_date)   FROM camp_meta), $3::date),
+		        $1::uuid[])
 		),
 		per_campaign_valor AS (
 		    -- Numerador do CPM por campanha = executado + bonificação, nos dois
@@ -843,7 +1039,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		        SELECT s.campaign_id, s.station_id,
 		               SUM(s.in_slot)::bigint AS executed,
 		               SUM(s.bonus)::bigint   AS bonus
-		        FROM daily_play_summary s
+		        FROM dps s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        WHERE s.for_date BETWEEN GREATEST(cm2.start_date, $2::date) AND LEAST(cm2.end_date, $3::date)
 		          AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
@@ -853,7 +1049,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		        -- denominador: plano da campanha inteira
 		        SELECT s.campaign_id, s.station_id,
 		               SUM(s.expected)::bigint AS plan_expected
-		        FROM daily_play_summary s
+		        FROM dps s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        WHERE s.for_date BETWEEN cm2.start_date AND cm2.end_date
 		          AND ($4::uuid[] = '{}' OR s.station_id = ANY($4::uuid[]))
@@ -863,7 +1059,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		        SELECT s.campaign_id, s.station_id,
 		               COALESCE(SUM(tp.unit_value * s.in_slot), 0)::numeric AS pi_executado,
 		               COALESCE(SUM(tp.unit_value * s.bonus),   0)::numeric AS pi_bonus
-		        FROM daily_play_summary s
+		        FROM dps s
 		        JOIN camp_meta cm2 ON cm2.id = s.campaign_id
 		        JOIN campaign_station_type_pricing tp
 		          ON tp.campaign_id = s.campaign_id
@@ -883,7 +1079,7 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		FROM camp_meta cm
 		LEFT JOIN per_campaign_impactos pi ON pi.campaign_id = cm.id
 		LEFT JOIN per_campaign_valor    pv ON pv.campaign_id = cm.id
-	`, p.CampaignIDs, p.From, p.To, p.StationIDs)
+	`, p.CampaignIDs, p.From, p.To, p.StationIDs, p.materialIDs())
 	if err != nil {
 		return 0, err
 	}
@@ -899,6 +1095,14 @@ func (r *Insights) computeCPM(ctx context.Context, p InsightsParams, totalValorE
 		}
 		if impactos <= 0 {
 			continue
+		}
+		// Rateio POR CAMPANHA, não pelo fator global: `impactos` já vem
+		// recortado no material, então o numerador tem que ser recortado com a
+		// participação DESTA campanha. Com o fator global, uma campanha onde o
+		// material tocou pouco herdaria o valor de outra onde ele tocou muito e
+		// o CPM dela sairia distorcido.
+		if len(p.MaterialIDs) > 0 {
+			valorEntregue *= shares.ByCampaign[id]
 		}
 		var perCPM float64
 		if fixed != nil {

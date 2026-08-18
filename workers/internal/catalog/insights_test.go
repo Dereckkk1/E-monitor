@@ -1415,7 +1415,9 @@ func TestInsights_ComputeCPM_Consolidated_SlowPathUsesWholePlanDenominator(t *te
 		ClientID: client, CampaignIDs: []uuid.UUID{campA, campB},
 		From: parseDate("2026-06-01"), To: parseDate("2026-06-15"),
 		StationIDs: []uuid.UUID{},
-	}, 0, 0)
+		// Sem filtro de material: shares zerado é o caminho "não rateia"
+		// (computeCPM só consulta o mapa quando MaterialIDs está preenchido).
+	}, 0, 0, materialShareResult{})
 	if err != nil {
 		t.Fatalf("computeCPM: %v", err)
 	}

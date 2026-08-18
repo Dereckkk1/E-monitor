@@ -1213,13 +1213,16 @@ type ListFilter struct {
 // different shape (ListPagedResult); keeping the types distinct avoids
 // breaking the unpaginated consumers (DayDetailModal).
 type ListPagedFilter struct {
-	CampaignID *uuid.UUID
-	StartDate  *time.Time
-	EndDate    *time.Time
-	Q          string // free text; empty disables the filter
-	Sort       string // "detected_at_desc" (default) | "detected_at_asc"
-	Page       int    // 1-based
-	PageSize   int    // 1..200
+	// CampaignIDs restringe às detecções dessas campanhas. nil = sem recorte
+	// por campanha (a lista sem filtro do admin). Slice VAZIO ≠ nil: encodado
+	// como '{}', casa zero linhas — é a leitura correta de "seleção vazia".
+	CampaignIDs []uuid.UUID
+	StartDate   *time.Time
+	EndDate     *time.Time
+	Q           string // free text; empty disables the filter
+	Sort        string // "detected_at_desc" (default) | "detected_at_asc"
+	Page        int    // 1-based
+	PageSize    int    // 1..200
 	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
 	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
 	ClientIDs []uuid.UUID
@@ -1255,6 +1258,11 @@ type DetectionEnriched struct {
 	MaterialTypeColor   *string    `json:"material_type_color,omitempty"`
 	ClientID            *uuid.UUID `json:"client_id,omitempty"`
 	ClientName          *string    `json:"client_name,omitempty"`
+	// CampaignName é o nome da campanha desta atribuição. Existe porque
+	// /reports/airtime aceita várias campanhas de uma vez e a linha precisa
+	// dizer de qual delas a veiculação veio — o mesmo que o feed do
+	// /management faz.
+	CampaignName *string `json:"campaign_name,omitempty"`
 	// StationShortID é o identificador curto e estável da emissora
 	// (stations.short_id). Vira a coluna "Identificador" do CSV detalhado, que
 	// espelha o layout do relatório do fornecedor.
@@ -1301,7 +1309,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		       d.manual_at, d.manual_by, d.manual_note, d.created_at,
 		       s.frequency_mhz, s.band, s.city, s.state, s.logo_url, s.pmm, cst.pmm_target,
 		       m.duration_seconds, mt.name, mt.color,
-		       cmp.client_id, cli.name,
+		       cmp.client_id, cli.name, cmp.name,
 		       COUNT(*) OVER () AS total
 		FROM detection_attributions d
 		LEFT JOIN stations s        ON s.id = d.station_id
@@ -1312,7 +1320,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		LEFT JOIN clients cli       ON cli.id = cmp.client_id
 		LEFT JOIN client_station_pmm cst
 		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
-		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
+		WHERE ($1::uuid[] IS NULL OR d.campaign_id = ANY($1))
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND ($7::uuid[] IS NULL OR cmp.client_id = ANY($7))
@@ -1336,7 +1344,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 
 	offset := (f.Page - 1) * f.PageSize
 	rows, err := d.pool.Query(ctx, sql,
-		f.CampaignID, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs)
+		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1358,7 +1366,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 			&det.StationFrequencyMHz, &det.StationBand, &det.StationCity, &det.StationState,
 			&det.StationLogoURL, &det.StationPMM, &det.StationPMMTarget,
 			&det.MaterialDurationSec, &det.MaterialTypeName, &det.MaterialTypeColor,
-			&det.ClientID, &det.ClientName,
+			&det.ClientID, &det.ClientName, &det.CampaignName,
 			&total); err != nil {
 			return nil, err
 		}
@@ -1488,7 +1496,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		       ON cstp.campaign_id = d.campaign_id
 		      AND cstp.station_id  = d.station_id
 		      AND cstp.type_id     = m.type_id
-		WHERE ($1::uuid IS NULL OR d.campaign_id = $1)
+		WHERE ($1::uuid[] IS NULL OR d.campaign_id = ANY($1))
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
@@ -1507,7 +1515,7 @@ func (d *Detections) IterateForExport(ctx context.Context, f ListPagedFilter,
 		      FROM unnest($4::text[]) AS tok
 		  ))
 		ORDER BY d.detected_at `+order,
-		f.CampaignID, f.StartDate, f.EndDate, qTokens)
+		f.CampaignIDs, f.StartDate, f.EndDate, qTokens)
 	if err != nil {
 		return err
 	}
@@ -1555,18 +1563,21 @@ type MaterialAggregateResult struct {
 	DistinctMaterials int                    `json:"distinct_materials"`
 }
 
-// AggregateFilter is the query input — campaign is required, the rest mirror
-// ListPagedFilter so the panel stays consistent with the list.
+// AggregateFilter is the query input — at least one campaign is required, the
+// rest mirror ListPagedFilter so the panel stays consistent with the list.
 type AggregateFilter struct {
-	CampaignID uuid.UUID
-	StartDate  *time.Time
-	EndDate    *time.Time
-	Q          string
+	// CampaignIDs é obrigatório (>= 1). O painel de /reports/airtime manda a
+	// seleção inteira; o pós-venda manda uma campanha só.
+	CampaignIDs []uuid.UUID
+	StartDate   *time.Time
+	EndDate     *time.Time
+	Q           string
 	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
 	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
-	// Usado pelo handler pra verificar a posse da campanha antes de chamar
-	// AggregateByMaterial; não vira filtro SQL aqui porque campaign_id já é
-	// obrigatório.
+	// Vira filtro SQL em AggregateByMaterial: com N campanhas na seleção,
+	// checar posse uma a uma no handler custaria N round-trips, e o filtro no
+	// WHERE é o mesmo que ListPaged já aplica — campanha fora da carteira não
+	// soma nada.
 	ClientIDs []uuid.UUID
 }
 
@@ -1594,9 +1605,10 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		LEFT JOIN stations s        ON s.id = d.station_id
 		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
 		LEFT JOIN clients cli       ON cli.id = cmp.client_id
-		WHERE d.campaign_id = $1
+		WHERE d.campaign_id = ANY($1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  AND ($5::uuid[] IS NULL OR cmp.client_id = ANY($5))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -1614,7 +1626,7 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		  ))
 		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
 		ORDER BY cnt DESC, c.title ASC`,
-		f.CampaignID, f.StartDate, f.EndDate, qTokens)
+		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,7 +1806,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		LEFT JOIN campaigns cmp     ON cmp.id = d.campaign_id
 		LEFT JOIN client_station_pmm cst
 		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
-		WHERE d.campaign_id = $1
+		WHERE d.campaign_id = ANY($1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
@@ -1804,7 +1816,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		         d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		         s.pmm, cst.pmm_target
 		ORDER BY COALESCE(m.title, c.title, '') ASC, s.name ASC`,
-		f.CampaignID, f.StartDate, f.EndDate)
+		f.CampaignIDs, f.StartDate, f.EndDate)
 	if err != nil {
 		return nil, err
 	}
@@ -1865,7 +1877,7 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		LEFT JOIN campaigns cmp ON cmp.id = d.campaign_id
 		LEFT JOIN client_station_pmm cst
 		       ON cst.client_id = cmp.client_id AND cst.station_id = d.station_id
-		WHERE d.campaign_id = $1
+		WHERE d.campaign_id = ANY($1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND d.ignored_at IS NULL
@@ -1874,7 +1886,7 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		         s.pmm, cst.pmm_target
 		ORDER BY cnt DESC, s.name ASC`,
-		f.CampaignID, f.StartDate, f.EndDate)
+		f.CampaignIDs, f.StartDate, f.EndDate)
 	if err != nil {
 		return nil, err
 	}

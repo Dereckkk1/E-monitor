@@ -14,20 +14,46 @@
 @keyframes mg-pulse { 70% { box-shadow: 0 0 0 7px rgba(232,30,117,0); } 100% { box-shadow: 0 0 0 0 rgba(232,30,117,0); } }
 @keyframes mg-spin { to { transform: rotate(360deg); } }
 
-/* Filtros */
-.mg-filters { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; background: var(--color-white, #fff); border: 1px solid var(--color-gray-200, #e2e8f0); border-radius: 16px; padding: 16px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-.mg-filter { flex: 1 1 200px; min-width: 170px; display: flex; flex-direction: column; gap: 6px; }
-.mg-filter--narrow { flex: 0 0 150px; min-width: 150px; }
-.mg-filter--date { flex: 0 0 150px; min-width: 140px; }
-.mg-filter-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-gray-500, #94a3b8); font-weight: 600; }
+/* Filtros — barra em passos do sistema compartilhado (index.css).
+   4 passos: o período é o único que sempre tem valor; os outros três são
+   recortes opcionais. Aqui só a proporção das colunas. */
+.mg-flow {
+  --flow-cols: minmax(170px, 210px) minmax(240px, 1fr) 250px minmax(150px, 190px);
+  margin-bottom: 18px;
+}
 
-/* Input de data — casa com a aparência do RSelect (controle de 38px,
-   borda cinza, raio 8, foco rosa). NÃO usar .field (que é wrapper flex). */
-.mg-date { width: 100%; height: 38px; box-sizing: border-box; border: 1px solid var(--color-gray-200, #e2e8f0); border-radius: 8px; background: var(--color-white, #fff); padding: 0 10px; font-family: 'Fira Sans Condensed', -apple-system, sans-serif; font-size: 13px; color: var(--color-gray-900, #06055B); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
-.mg-date:hover { border-color: var(--color-gray-300, #cbd5e1); }
-.mg-date:focus { outline: none; border-color: var(--color-tertiary-500, #E81E75); box-shadow: 0 0 0 3px rgba(232,30,117,.12); }
-.mg-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; transition: opacity .15s; }
-.mg-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+/* ── Vazio ───────────────────────────────────────────────────────────
+   Shell compartilhado `.detection-empty`; a silhueta reproduz a coluna de
+   KPIs + o mapa na proporção real do painel. */
+.mg-empty { min-height: 520px; }
+/* Silhueta de blocos claros, sem texto: no 0.22 padrão do shell ela some
+   contra o fundo da página (mesmo caso do /insights). */
+.mg-empty .detection-empty-ghost { opacity: 0.6; }
+.mg-ghost {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 16px;
+  height: 100%;
+}
+.mg-ghost-kpis { display: flex; flex-direction: column; gap: 14px; }
+.mg-ghost-kpi {
+  flex: 1;
+  gap: 8px;
+  box-shadow: none;
+  align-items: flex-start;
+}
+.mg-ghost-bar {
+  height: 9px;
+  width: 82%;
+  border-radius: 999px;
+  background: var(--c-surface-2);
+}
+.mg-ghost-bar--n { height: 20px; width: 46%; background: var(--c-action-light); }
+.mg-ghost-map { box-shadow: none; }
+
+@media (max-width: 900px) {
+  .mg-ghost { grid-template-columns: 1fr; }
+}
 
 /* Layout: linha (KPIs à esquerda + mapa à direita) e feed full width embaixo */
 .mg-grid { display: flex; flex-direction: column; gap: 16px; }
@@ -87,7 +113,7 @@ body.mg-fs .app-content { padding: 0 !important; }
 /* Página ocupa a viewport e divide mapa+cards | feed numa tela só */
 .mg-page--fs { padding: 16px 22px 18px; height: 100svh; box-sizing: border-box; display: flex; flex-direction: column; }
 .mg-page--fs .mg-header { margin-bottom: 12px; }
-.mg-page--fs .mg-filters { margin-bottom: 12px; }
+.mg-page--fs .mg-flow { margin-bottom: 12px; }
 .mg-page--fs .mg-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); grid-template-rows: 1fr; align-items: stretch; }
 .mg-page--fs .mg-top { min-height: 0; align-content: start; }
 .mg-page--fs .mg-map-card { min-height: 0; display: flex; flex-direction: column; }

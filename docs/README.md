@@ -52,7 +52,7 @@ docs/
 | [projection-category-invariant.md](architecture/projection-category-invariant.md) | Invariante `detection_campaigns.category` sempre igual ao veredito do categorizador: recat escopado por projeção + guarda da base + reconciler contínuo `projrecon` (caso motivador COPA 10/07) |
 | [evidence-audit.md](architecture/evidence-audit.md) | Re-fingerprint do clipe salvo × master antes de confirmar veiculação (§9.9) |
 | [evidence-segments.md](architecture/evidence-segments.md) | ffmpeg escreve segmentos ADTS-AAC 30s; evidence extrai por timestamp |
-| [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect) |
+| [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect), barra de filtros em passos (`.flow-filters`) e shell de estado vazio (`FlowEmptyState`) |
 
 ## `features/` — feature implementada
 
@@ -65,6 +65,7 @@ docs/
 | [detections-calendar.md](features/detections-calendar.md) | Grade station × dia da página /detections |
 | [detections-view.md](features/detections-view.md) | Grade station × material × dia refatorada (Plano 3) |
 | [detections-report-wysiwyg.md](features/detections-report-wysiwyg.md) | Relatório WYSIWYG de /detections (CSV/PDF espelham a grade filtrada — busca + programado + por dia; frontend-only) |
+| [airtime-report.md](features/airtime-report.md) | `/reports/airtime` — lista cronológica de veiculações. Fluxo Cliente → Competência → **Campanhas (seleção múltipla)** → Período; cada linha diz de qual campanha veio; relatório continua sendo por campanha (seletor dentro do menu) |
 | [quota-aware-categorization.md](features/quota-aware-categorization.md) | **Como uma veiculação vira in_slot/out_slot/out_date/bonus**: fechamento por cota da célula-dia (campanha × tipo × emissora × dia), `out_slot` não vale nada nem abate o déficit, `orphan`→`bonus`. Leia antes de mexer em categoria, déficit, bonificação ou base financeira |
 | [detections-day-plan.md](features/detections-day-plan.md) | Bloco "Plano do dia" na DayDetailModal — faixas que valem no dia (janela · progresso · tocou/alvo), escopo por material, rodapé de faixas que não valem, saldo derivado |
 | [manual-airings-bulk-and-proof.md](features/manual-airings-bulk-and-proof.md) | Veiculações manuais em lote + comprovante PDF (1 PDF→N) + censura tardia (subir áudio depois em /detections/:id) + rótulo /stations "Sem campanha ativa" |
@@ -78,6 +79,7 @@ docs/
 | [evidence-presigned-urls.md](features/evidence-presigned-urls.md) | URLs pré-assinadas de 5min pro frontend acessar evidências |
 | [evidence-local-retention.md](features/evidence-local-retention.md) | Prune por idade do clipe de evidência no MinIO (§11.4 variante prod): apaga áudio >N dias (`EVIDENCE_RETENTION_DAYS`=30, dry-run pro 1º rollout) e marca a detecção `expired`; PDF de comprovante preservado (incidente 2026-07-02) |
 | [broadcaster-search.md](features/broadcaster-search.md) | Busca multi-token AND/field-OR de emissoras |
+| [client-contracted-stations.md](features/client-contracted-stations.md) | Recorte "emissoras que o cliente tem contratadas agora" em /stations (campanha ativa ou programada) |
 | [material-library.md](features/material-library.md) | Catálogo de materiais por cliente (decuplado de campanha) |
 | [material-fingerprint-pipeline.md](features/material-fingerprint-pipeline.md) | Pipeline polimórfico (material_id OU commercial_id) + hot-reload |
 | [material-similarity-warning.md](features/material-similarity-warning.md) | Alerta de duplicata por similaridade ≥50% no upload |

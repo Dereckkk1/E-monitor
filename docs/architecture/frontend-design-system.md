@@ -1,9 +1,11 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-08-18
 codigo-relacionado:
   - frontend/src/index.css
   - frontend/src/components/RSelect.jsx
+  - frontend/src/components/FlowEmptyState.jsx
+  - frontend/src/components/FlowStepper.jsx
   - frontend/src/App.css
 ---
 
@@ -26,6 +28,7 @@ Documenta os padrões de botões, inputs e selects do Radiocheck. Qualquer novo 
 | `--c-text` | `#06055B` | Texto principal |
 | `--c-text-2` | `#4b5563` | Labels e texto de suporte |
 | `--c-text-3` | `#9ca3af` | Placeholder e texto muted |
+| `--c-label` | `#6b7280` | Label de campo — o único cinza de rótulo que passa no WCAG AA (4,65:1 sobre `--c-bg`; `--c-text-3` dá 2,5:1) |
 | `--radius-md` | `8px` | Border-radius padrão de inputs e botões |
 | `--font-body` | `Fira Sans Condensed` | Fonte de inputs, labels e botões |
 
@@ -192,3 +195,114 @@ Para grupos de filtro estilo tab/pill:
 ```
 
 Ativo: fundo `--c-action` (rosa), texto branco. Inativo: transparente, hover cinza.
+
+
+---
+
+## Barra de filtros em passos (`.flow-filters`)
+
+**É a barra de recorte padrão de toda tela que filtra dados.** Nasceu em
+`/detections` e hoje vale para `/detections`, `/materials`, `/campaigns`,
+`/reports/airtime`, `/insights`, `/management`, `/live-map` e
+`/admin/pos-venda`. Tela nova com filtro usa esta barra — não invente um card
+de filtros.
+
+### Anatomia
+
+- **Sem card.** A barra vive direto sobre o fundo da página (`--c-bg`). Nada de
+  superfície branca com borda e sombra em volta: o card rouba o alinhamento do
+  primeiro campo com o título da página e engorda a tela sem informar nada.
+- **Label** `.flow-filter-label`: 10,5px, 700, caixa alta, `--c-label`.
+- **Badge numerada** `.flow-filter-label-step`: 16px, redonda, dentro do label.
+- **Controle** de **38px** de altura: `.flow-input` (month/date/search),
+  `.flow-range` (par de datas com seta) ou `RSelect`.
+
+```jsx
+<div className="flow-filters flow-filters--auto minha-flow">
+  <div className={`flow-filter ${valor ? 'flow-filter--done' : 'flow-filter--active'}`}>
+    <label className="flow-filter-label" htmlFor="x">
+      <span className="flow-filter-label-step">1</span>
+      Cliente
+    </label>
+    <RSelect inputId="x" … />
+  </div>
+</div>
+```
+
+### Os dois tipos de passo
+
+| Tipo | Quando | Classes | Badge |
+|---|---|---|---|
+| **Encadeado** | O filtro destrava o próximo (o backend não tem o que devolver sem ele) | `--locked` → `--active` → `--done` | vazia → rosa cheia → rosa clara |
+| **Opcional** | Nunca bloqueia; só estreita o recorte | `--optional`, ganha `--done` quando preenchido | anel vazado → rosa clara |
+
+Passo opcional leva `<span className="flow-filter-tag">opcional</span>` colado
+ao rótulo. O anel vazado é o sinal silencioso; a palavra é a confirmação.
+
+`--optional` e `--locked` **podem** conviver: é o caso de um refino cujas
+opções derivam de um passo anterior (Emissoras no `/insights` só existe depois
+das campanhas). O que `--optional` garante não é que o campo esteja sempre
+disponível — é que ele **nunca impede o usuário de chegar ao resultado**.
+
+### Meta e atalhos
+
+`.flow-filter-hint` (alinhado à direita do label) carrega contagem
+(`4 disponíveis`, `1 de 2`) ou um atalho — `Resetar`, `Limpar`,
+`Período completo` — combinado com `.flow-range-reset`.
+
+### Colunas
+
+Barras de 3 passos usam a grade default. Qualquer outro número usa
+`.flow-filters--auto` e declara as colunas em `--flow-cols`, dosando pelo que
+cada campo carrega (nome de campanha é longo, status é curto):
+
+```css
+.minha-flow { --flow-cols: minmax(170px, 210px) minmax(240px, 1fr) 250px minmax(150px, 190px); }
+```
+
+O colapso responsivo é do sistema: 2 colunas ≤1180px, 1 coluna ≤720px.
+
+**Grid não quebra sozinho — ele estoura.** A soma dos mínimos das colunas
+declaradas tem que caber na área de conteúdo; se não couber, a barra transborda
+a largura da página em vez de passar pra linha de baixo. Com 5+ passos isso
+acontece antes do breakpoint de 1180px, então declare um degrau intermediário
+com menos colunas (o `/insights` cai pra 3 colunas ≤1500px, deixando os dois
+passos opcionais na segunda linha — ver `.in-flow` em `InsightsPage.css`).
+
+---
+
+## Estado vazio das telas com filtro (`FlowEmptyState`)
+
+Toda tela com `.flow-filters` usa o mesmo shell de vazio: **silhueta desbotada
+do resultado ao fundo + cartão centrado**. A silhueta é o que separa "ensinar a
+tela" de "nada aqui" — o usuário reconhece o formato do que vai receber antes
+de escolher qualquer filtro.
+
+```jsx
+<FlowEmptyState
+  className="minha-empty detection-empty--veil"
+  step={2} steps={['Cliente', 'Campanha']}
+  icon={<IconeQualquer />}
+  tone="action"            // 'action' | 'warn' | 'mute'
+  title={<>Escolha uma <strong>campanha</strong></>}
+  description="…"
+  actions={<button className="detection-empty-cta">…</button>}
+  ghost={<SilhuetaDaTela />}
+/>
+```
+
+- **`step`/`steps`** desenham o `FlowStepper` (pílulas numeradas). Só liste os
+  passos **encadeados** — passo opcional não é etapa de um caminho.
+  Sem cadeia (ex.: `/management`), não passe `step`.
+- **`ghost`** é a silhueta. Reaproveite os componentes reais com dados vazios
+  (mapa, canvas) ou blocos de skeleton na proporção do layout.
+- **`detection-empty--veil`** adiciona um véu radial. Use quando a silhueta tem
+  massa no miolo (mapa, blocos grandes) e o cartão perde leitura; silhueta de
+  linhas finas dispensa.
+- Silhueta feita só de blocos claros some no `opacity: .22` do shell — suba
+  para `.6` na classe da página.
+
+As classes CSS mantêm o prefixo `detection-*` por serem as originais de
+`/detections`; o bloco no `index.css` está marcado como compartilhado.
+`/detections` e `/materials` montam esse DOM à mão (equivalente), o resto usa o
+componente.
