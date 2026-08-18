@@ -686,42 +686,12 @@
 /* ── Listagem ────────────────────────────────────────────────────────── */
 
 /* Herda .flow-filters das telas de Veiculação; aqui são quatro campos de peso
- * parecido em vez dos três encadeados de lá. Dupla classe no seletor porque a
- * regra base mora no index.css e a ordem de bundle não é garantida. */
-.flow-filters.pv-flow {
-  grid-template-columns: repeat(4, minmax(170px, 1fr));
+ * parecido em vez dos três encadeados de lá. O colapso responsivo vem do
+ * modificador --auto no index.css. */
+.pv-flow {
+  --flow-cols: repeat(4, minmax(170px, 1fr));
 }
 
-@media (max-width: 1100px) {
-  .flow-filters.pv-flow { grid-template-columns: 1fr 1fr; }
-  .flow-filters.pv-flow > .flow-filter:nth-child(3) { grid-column: auto; }
-}
-
-@media (max-width: 720px) {
-  .flow-filters.pv-flow { grid-template-columns: 1fr; }
-}
-
-/* Mora dentro do .flow-filter-label do Estado. Padding e tamanho copiam o
- * rótulo: qualquer folga a mais empurra só aquele campo pra baixo e desalinha
- * a fileira inteira de controles. */
-.pv-clear {
-  margin-left: auto;
-  border: 0;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: inherit;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--pv-ink-3);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  transition: color 150ms ease;
-}
-.pv-clear:hover { color: var(--c-action); }
 
 /* Paginação — informação à esquerda, navegação à direita. */
 .pv-pager {

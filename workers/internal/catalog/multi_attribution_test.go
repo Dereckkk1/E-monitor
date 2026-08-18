@@ -101,9 +101,13 @@ func TestMultiAttribution_OneAiringTwoCampaigns(t *testing.T) {
 		t.Errorf("campB bonus = %d, want >= 1 (a projeção de campB é bônus)", got)
 	}
 
-	// Leitura swapada roda sobre a view (smoke runtime).
-	if _, err := NewLiveMap(pool).Get(ctx, campA, nil, LiveMapOpts{}); err != nil {
+	// Leitura swapada roda sobre a view (smoke runtime) — uma campanha e as
+	// duas juntas (o /live-map aceita seleção múltipla).
+	if _, err := NewLiveMap(pool).Get(ctx, []uuid.UUID{campA}, nil, LiveMapOpts{}); err != nil {
 		t.Fatalf("LiveMap.Get: %v", err)
+	}
+	if _, err := NewLiveMap(pool).Get(ctx, []uuid.UUID{campA, campB}, nil, LiveMapOpts{}); err != nil {
+		t.Fatalf("LiveMap.Get multi: %v", err)
 	}
 
 	// Gate aprovado: retrair a tocada BASE esconde das DUAS campanhas.

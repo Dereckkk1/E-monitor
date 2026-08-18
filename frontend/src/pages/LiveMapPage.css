@@ -8,7 +8,6 @@
   gap: 18px;
   font-family: var(--font-body);
   color: var(--c-text);
-  padding: 18px;
 }
 
 /* ── Header ──────────────────────────────────────────────────────── */
@@ -16,11 +15,10 @@
 .lm-title {
   margin: 0;
   font-family: var(--font-heading);
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--c-text);
-  line-height: 1.1;
 }
 .lm-live {
   display: inline-flex; align-items: center; gap: 7px;
@@ -44,28 +42,12 @@
 }
 @keyframes lm-spin { to { transform: rotate(360deg); } }
 
-/* ── Filtros (igual .in-filters) ─────────────────────────────────── */
-.lm-filters {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: 14px 18px;
-  display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
-  box-shadow: var(--shadow-sm);
-}
-.lm-filter { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
-.lm-filter--wide { min-width: 280px; flex: 1; }
-.lm-filter-label {
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--c-text-2);
-}
-.lm-locked-chip {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px 6px 6px;
-  background: rgba(232, 30, 117, 0.1);
-  color: var(--c-action);
-  border-radius: 999px; font-weight: 600; font-size: 13px;
-  white-space: nowrap; align-self: flex-start;
+/* ── Filtros ─────────────────────────────────────────────────────── */
+/* Barra de filtros: classes do sistema compartilhado (index.css). Aqui só a
+   proporção — o cliente é um campo curto e a campanha carrega nomes longos. */
+.lm-flow {
+  --flow-cols: minmax(200px, 280px) minmax(280px, 1fr);
+  margin-bottom: 0;
 }
 
 /* Mini avatar de cliente (na select e no chip travado do viewer) */
@@ -352,22 +334,13 @@
 }
 
 /* ── Empty (tutorial) ────────────────────────────────────────────── */
-.lm-empty { position: relative; min-height: 480px; }
-.lm-empty-ghost { opacity: 0.18; filter: blur(1px); pointer-events: none; user-select: none; }
-.lm-empty-overlay {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(ellipse at center,
-    rgba(255,255,255,0.94) 0%, rgba(255,255,255,0.6) 60%, rgba(255,255,255,0.12) 100%);
-}
-.lm-empty-card { text-align: center; max-width: 420px; padding: 32px; }
-.lm-empty-icon {
-  width: 72px; height: 72px; margin: 0 auto 18px; border-radius: 18px;
-  background: rgba(232, 30, 117, 0.07); color: var(--c-action);
-  display: flex; align-items: center; justify-content: center;
-}
-.lm-empty-card h3 { font-family: var(--font-heading); font-weight: 700; font-size: 21px; color: var(--c-text); margin: 0 0 8px; }
-.lm-empty-card p { font-size: 14px; line-height: 1.6; color: var(--c-text-2); margin: 0 0 20px; }
+/* ── Vazio ───────────────────────────────────────────────────────────
+   O shell (silhueta ao fundo + cartão centrado + stepper) é o compartilhado
+   `.detection-empty` do index.css. Aqui só ajustamos a silhueta, que é o
+   canvas inteiro do mapa e precisa de mais respiro que a padrão. */
+.lm-empty { min-height: 520px; }
+.lm-empty .detection-empty-ghost { padding: 0; }
+
 
 /* ── Error ───────────────────────────────────────────────────────── */
 .lm-error {

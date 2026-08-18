@@ -14,6 +14,10 @@ function fmtId(shortId, materialId) {
 export default function AirtimeMaterialPanel({
   aggregate,
   loading = false,
+  // campaignCount > 1 marca no cabeçalho que o total soma mais de uma
+  // campanha — o painel agrupa por material, então sem isso o número parece
+  // ser de uma campanha só.
+  campaignCount = 1,
   highlightedMaterialId = null,
   onHover = () => {},
   onLeave = () => {},
@@ -59,6 +63,7 @@ export default function AirtimeMaterialPanel({
           <span className="airtime-panel-summary-sep">·</span>
           <span className="airtime-panel-summary-meta">
             {aggregate?.distinct_materials ?? 0} materiais distintos
+            {campaignCount > 1 && ` · ${campaignCount} campanhas`}
           </span>
         </div>
       </header>

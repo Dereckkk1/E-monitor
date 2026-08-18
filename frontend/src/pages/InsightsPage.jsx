@@ -9,6 +9,7 @@ import BroadcastShareChart from '../components/insights/BroadcastShareChart'
 import DailySummaryChart from '../components/insights/DailySummaryChart'
 import EmptyTutorial from '../components/insights/EmptyTutorial'
 import SkeletonLoader from '../components/insights/SkeletonLoader'
+import { IconImage, IconFilePdf } from '../components/insights/icons'
 import { useInsights } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { exportInsightsPNG, exportInsightsPDF } from '../utils/exportInsights'
@@ -35,6 +36,7 @@ export default function InsightsPage() {
     from: firstOfMonthISO(),
     to: lastOfMonthISO(),
     stationIds: [],
+    materialIds: [],
   })
 
   const { data, isPending, error } = useInsights({
@@ -43,6 +45,7 @@ export default function InsightsPage() {
     from: filters.from,
     to: filters.to,
     stationIds: filters.stationIds,
+    materialIds: filters.materialIds,
   })
 
   const dashboardRef = useRef(null)
@@ -84,20 +87,68 @@ export default function InsightsPage() {
     <div className="in-page">
       <header className="in-header">
         <h1 className="in-title">Dashboard de Veiculação</h1>
+        {/* Exportar não é filtro e não deve aparecer dentro do próprio
+            print — por isso os botões ficam no header, fora do .in-capture. */}
+        <div className="in-header-actions">
+          <button
+            type="button"
+            className="in-btn-outline"
+            onClick={handleExportImage}
+            disabled={!data || !!emptyVariant}
+            title="Baixar o dashboard como imagem (PNG)"
+          >
+            <IconImage />
+            Imagem
+          </button>
+          <button
+            type="button"
+            className="in-btn-outline"
+            onClick={handleExportPDF}
+            disabled={!data || !!emptyVariant}
+            title="Baixar o dashboard como PDF"
+          >
+            <IconFilePdf />
+            PDF
+          </button>
+        </div>
       </header>
 
       {/* dashboardRef envolve filtros + body pra que o print/PDF inclua
           o contexto dos filtros aplicados. */}
       <div ref={dashboardRef} className="in-capture">
-      <FiltersBar
-        value={filters}
-        onChange={setFilters}
-        onExportImage={handleExportImage}
-        onExportPDF={handleExportPDF}
-      />
+      <FiltersBar value={filters} onChange={setFilters} />
 
       <div className="in-body">
         {error && <div className="in-error">Erro ao carregar: {String(error.message || error)}</div>}
+
+        {/* O filtro de material recorta com exatidão o que sai da tocada
+            (impactos, veiculações, demografia), mas o contrato não tem
+            dimensão de material — é precificado por campanha × emissora ×
+            TIPO × dia. Os valores em R$ e o "programado" do gráfico viram
+            rateio pela participação do material nas veiculações, e isso
+            precisa estar dito na tela: são os números que viram cobrança. */}
+        {data?.material_prorated && (
+          <div className="in-prorated-note">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 8h.01M11 12h1v4h1" />
+            </svg>
+            <div>
+              <strong>Valores rateados por material.</strong>{' '}
+              <span>
+                Impactos, veiculações e perfil de audiência são exatos.
+                Investido, bonificação, CPM e o programado do gráfico são
+                rateio: o contrato é fechado por tipo de inserção, não por
+                material, então cada valor entra na proporção das veiculações
+                deste material
+                {typeof data.material_share === 'number' && data.material_share > 0
+                  ? ` (${(data.material_share * 100).toFixed(1)}% da seleção)`
+                  : ''}.
+              </span>
+            </div>
+          </div>
+        )}
 
         {emptyVariant ? (
           <EmptyTutorial variant={emptyVariant} />

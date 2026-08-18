@@ -4,6 +4,7 @@ import RSelect from '../components/RSelect'
 import BrazilMap from '../components/BrazilMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
 import { useClients, useCampaignsPaged, useManagementOverview } from '../api/hooks'
+import FlowEmptyState from '../components/FlowEmptyState'
 import { safeLogoUrl } from '../utils/logoUrl'
 import './LiveMapPage.css'
 import './ManagementPage.css'
@@ -70,6 +71,41 @@ const ICON_AIR = (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M5.5 8l1.5 1.5L10.5 6" /></svg>
 )
 
+const ICON_FILTER = (
+  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" />
+  </svg>
+)
+const ICON_RADAR = (
+  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 12 19 7" />
+  </svg>
+)
+
+/* Silhueta do resultado, atrás do cartão do vazio: a coluna de KPIs e o mapa
+   na mesma proporção do painel real, pro usuário reconhecer o formato do que
+   vai receber antes de mexer em qualquer filtro. */
+function ManagementGhost() {
+  return (
+    <div className="mg-ghost">
+      <div className="mg-ghost-kpis">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="mg-kpi mg-ghost-kpi">
+            <span className="mg-ghost-bar mg-ghost-bar--n" />
+            <span className="mg-ghost-bar" style={{ width: '68%' }} />
+            <span className="mg-ghost-bar" style={{ width: '44%' }} />
+          </div>
+        ))}
+      </div>
+      <div className="mg-map-card mg-ghost-map">
+        <BrazilMap stations={[]} />
+      </div>
+    </div>
+  )
+}
+
 export default function ManagementPage() {
   const [clientId, setClientId] = useState(null)
   const [campaignIds, setCampaignIds] = useState([])
@@ -95,12 +131,16 @@ export default function ManagementPage() {
 
   // Período default = ano corrente (01/01 → hoje). Datas em ISO YYYY-MM-DD.
   const year = new Date().getFullYear()
-  const [from, setFrom] = useState(`${year}-01-01`)
-  const [to, setTo] = useState(() => {
+  const defaultFrom = `${year}-01-01`
+  const defaultTo = useMemo(() => {
     const d = new Date()
     const p = (n) => String(n).padStart(2, '0')
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-  })
+  }, [])
+  const [from, setFrom] = useState(defaultFrom)
+  const [to, setTo] = useState(defaultTo)
+  const isDefaultRange = from === defaultFrom && to === defaultTo
+  const resetRange = () => { setFrom(defaultFrom); setTo(defaultTo) }
 
   const clientsQ = useClients()
   const clientOpts = useMemo(
@@ -125,6 +165,19 @@ export default function ManagementPage() {
   const livePct = kpis.stations_monitored
     ? Math.round((kpis.stations_live / kpis.stations_monitored) * 100)
     : 0
+
+  // Vazio = a consulta voltou e não há nada pra desenhar. Duas leituras
+  // diferentes: "seus filtros não cruzaram" (o usuário tem o que desfazer) e
+  // "não houve operação no período" (só o período resolve).
+  const hasFilters = Boolean(clientId || campaignIds.length || status)
+  const showEmpty = !isLoading && !!data &&
+    stations.length === 0 && detections.length === 0 && !kpis.stations_monitored
+
+  function clearFilters() {
+    setClientId(null)
+    setCampaignIds([])
+    setStatus(null)
+  }
 
   async function handleDownloadMap() {
     const el = mapRef.current
@@ -178,10 +231,20 @@ export default function ManagementPage() {
         </div>
       </header>
 
-      <div className="mg-filters">
-        <div className="mg-filter">
-          <label className="mg-filter-label">Cliente</label>
+      {/* Barra de filtros em passos — mesma das telas de Veiculação. Aqui
+          nenhum filtro destrava o próximo: a Visão Gerencial abre mostrando a
+          operação inteira e os recortes só estreitam. Por isso os passos 1, 2
+          e 4 são opcionais (badge vazada) e nada nasce bloqueado. O período
+          sempre tem valor, então já entra concluído. */}
+      <div className="flow-filters flow-filters--auto mg-flow">
+        <div className={`flow-filter flow-filter--optional ${clientId ? 'flow-filter--done' : ''}`}>
+          <label className="flow-filter-label" htmlFor="mg-client">
+            <span className="flow-filter-label-step">1</span>
+            Cliente
+            {!clientId && <span className="flow-filter-tag">opcional</span>}
+          </label>
           <RSelect
+            inputId="mg-client"
             options={clientOpts}
             value={clientOpts.find(o => o.value === clientId) || null}
             onChange={opt => { setClientId(opt?.value || null); setCampaignIds([]) }}
@@ -191,9 +254,19 @@ export default function ManagementPage() {
             formatOptionLabel={formatClientOption}
           />
         </div>
-        <div className="mg-filter">
-          <label className="mg-filter-label">Campanhas</label>
+
+        <div className={`flow-filter flow-filter--optional ${campaignIds.length ? 'flow-filter--done' : ''}`}>
+          <label className="flow-filter-label" htmlFor="mg-campaigns">
+            <span className="flow-filter-label-step">2</span>
+            Campanhas
+            {campaignIds.length
+              ? <span className="flow-filter-hint">
+                  {campaignIds.length} selecionada{campaignIds.length === 1 ? '' : 's'}
+                </span>
+              : <span className="flow-filter-tag">opcional</span>}
+          </label>
           <RSelect
+            inputId="mg-campaigns"
             options={campOpts}
             value={campOpts.filter(o => campaignIds.includes(o.value))}
             onChange={opts => setCampaignIds((opts || []).map(o => o.value))}
@@ -201,19 +274,40 @@ export default function ManagementPage() {
             isLoading={campaignsQ.isPending}
             isMulti
             isClearable
+            closeMenuOnSelect={false}
           />
         </div>
-        <div className="mg-filter mg-filter--date">
-          <label className="mg-filter-label">De</label>
-          <input type="date" className="mg-date" value={from} max={to} onChange={e => setFrom(e.target.value)} />
+
+        <div className="flow-filter flow-filter--done">
+          <label className="flow-filter-label">
+            <span className="flow-filter-label-step">3</span>
+            Período
+            {!isDefaultRange && (
+              <button
+                type="button"
+                className="flow-range-reset flow-filter-hint"
+                onClick={resetRange}
+                title="Voltar pro ano corrente"
+              >
+                Resetar
+              </button>
+            )}
+          </label>
+          <div className="flow-range">
+            <input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} aria-label="Data de início" />
+            <span className="flow-range-arrow">→</span>
+            <input type="date" value={to} min={from} onChange={e => setTo(e.target.value)} aria-label="Data de fim" />
+          </div>
         </div>
-        <div className="mg-filter mg-filter--date">
-          <label className="mg-filter-label">Até</label>
-          <input type="date" className="mg-date" value={to} min={from} onChange={e => setTo(e.target.value)} />
-        </div>
-        <div className="mg-filter mg-filter--narrow">
-          <label className="mg-filter-label">Status</label>
+
+        <div className={`flow-filter flow-filter--optional ${status ? 'flow-filter--done' : ''}`}>
+          <label className="flow-filter-label" htmlFor="mg-status">
+            <span className="flow-filter-label-step">4</span>
+            Status
+            {!status && <span className="flow-filter-tag">opcional</span>}
+          </label>
           <RSelect
+            inputId="mg-status"
             options={STATUS_OPTS}
             value={STATUS_OPTS.find(o => o.value === status) || null}
             onChange={opt => setStatus(opt?.value || null)}
@@ -223,7 +317,25 @@ export default function ManagementPage() {
         </div>
       </div>
 
-      {isError && !data ? (
+      {!isError && showEmpty ? (
+        <FlowEmptyState
+          className="mg-empty detection-empty--veil"
+          icon={hasFilters ? ICON_FILTER : ICON_RADAR}
+          tone={hasFilters ? 'action' : 'mute'}
+          title={hasFilters
+            ? <>Nenhuma emissora nesse <strong>recorte</strong></>
+            : 'Nada monitorado no período'}
+          description={hasFilters
+            ? 'Os filtros acima não cruzaram com nenhuma veiculação. Tire um deles ou amplie o período.'
+            : 'Não há emissoras monitoradas entre as datas escolhidas. Amplie o período para ver a operação.'}
+          actions={hasFilters
+            ? <button type="button" className="detection-empty-cta" onClick={clearFilters}>Limpar filtros</button>
+            : (!isDefaultRange
+              ? <button type="button" className="detection-empty-cta" onClick={resetRange}>Voltar pro ano corrente</button>
+              : null)}
+          ghost={<ManagementGhost />}
+        />
+      ) : isError && !data ? (
         <div className="mg-error">
           <svg viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
           <p className="mg-error-title">Não foi possível carregar a visão gerencial</p>

@@ -2,8 +2,19 @@
 .airtime-page { padding: 0; }
 
 /* --- Filters bar -------------------------------------------------- */
-/* The 3-step bar (.flow-filters) is defined in index.css; the page just
- * gives it a sticky positioning so it stays in view as the list scrolls. */
+/* A barra de passos (.flow-filters) é definida no index.css; a página declara
+ * as próprias colunas (--flow-cols, via .flow-filters--auto) porque a grade
+ * default do index.css é de 3 passos e aqui são 4 — sem isso o Período cai
+ * sozinho pra segunda linha.
+ *
+ * A proporção segue o que cada campo carrega: Competência é só um input de mês
+ * (o mais estreito de todos), Campanhas é multi-select de chips e leva a folga,
+ * e Período precisa de espaço fixo pros dois date inputs nativos + a seta. */
+.at-flow {
+  --flow-cols: minmax(170px, 220px) minmax(140px, 175px) minmax(260px, 1fr) minmax(240px, 285px);
+}
+
+/* Sticky pra barra seguir visível enquanto a lista rola. */
 .airtime-page .flow-filters {
   position: sticky;
   top: 0;
@@ -667,7 +678,10 @@
   box-shadow: 0 20px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.04);
   padding: 32px;
   text-align: center;
-  max-width: 380px;
+  /* 472 = os 398px que o stepper de 4 passos mede (Fira Sans Condensed 11/600)
+     + os 64 de padding + 10 de folga. Com os 380 originais, dimensionados pra
+     3 passos, o stepper transbordava 84px pra fora do card. */
+  max-width: 472px;
   width: calc(100% - 48px);
 }
 .airtime-ghost-icon {
