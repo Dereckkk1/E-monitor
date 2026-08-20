@@ -717,6 +717,32 @@ export function useStreamHealth(params = {}) {
 // refetch.
 // includeTerminal: pede o mapa mesmo de campanha cancelada. Só o pós-venda usa
 // — ele é documento histórico. A tela ao vivo omite e segue tomando 404.
+// Cobertura estimada (municipios no raio da antena) das emissoras das
+// campanhas. Endereco separado do useLiveMap de proposito: aquele faz polling
+// de 20s e este e ESTATICO -- so muda quando a Anatel republica o Plano Basico.
+// Juntar os dois retransmitiria dezenas de KB imutaveis a cada ciclo, o dia
+// inteiro, em toda sessao aberta.
+//
+// Sem refetchInterval e com staleTime longo: trocar de campanha e voltar nao
+// refaz a requisicao.
+export function useLiveMapCoverage(campaignIds, { includeTerminal = false } = {}) {
+  const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
+  const key = [...ids].sort().join(',')
+  return useQuery({
+    queryKey: ['live-map-coverage', key, includeTerminal],
+    queryFn: () => api.get('/live-map/coverage', {
+      params: {
+        ...(ids.length === 1 ? { campaign_id: ids[0] } : { campaigns: ids.join(',') }),
+        ...(includeTerminal ? { include_terminal: 1 } : {}),
+      },
+    }).then(r => r.data),
+    enabled: ids.length > 0,
+    staleTime: 30 * 60_000,
+    gcTime: 60 * 60_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useLiveMap(campaignIds, { includeTerminal = false } = {}) {
   const ids = (Array.isArray(campaignIds) ? campaignIds : [campaignIds]).filter(Boolean)
   // Ordena só pra chave: a mesma seleção em ordem diferente é o mesmo cache.
