@@ -458,7 +458,7 @@ export default function LiveMapPage() {
                 <span className="lm-map-empty-msg">As emissoras desta campanha ainda não têm localização cadastrada.</span>
               </div>
             ) : (
-              <div ref={mapRef}>
+              <div className="lm-map-capture" ref={mapRef}>
                 <CoverageMap
                   // Remonta ao trocar a seleção: zera foco, tour e câmera de
                   // uma vez. É o idioma React pra "resetar estado quando a

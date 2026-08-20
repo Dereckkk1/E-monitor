@@ -91,7 +91,7 @@
      abre a ficha de cidades. O feed é uma lista vertical, estreita por
      natureza — os 580px que ele tinha espremiam justamente o que o usuário
      veio ver. */
-  grid-template-columns: minmax(320px, 380px) 1px 1fr;
+  grid-template-columns: minmax(360px, 430px) 1px 1fr;
   align-items: stretch;
 }
 .lm-canvas-sep { background: var(--c-border); width: 1px; }
@@ -365,4 +365,38 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .lm-live-dot, .live-halo, .la-skel, .la-stagger > *, .lm-refreshing { animation: none; }
+}
+
+/* ── Caber na viewport (sem scroll vertical) ──────────────────────────
+ *
+ * A pagina ganha altura DEFINIDA e o canvas ocupa o que sobra; o palco do mapa
+ * e flex:1 dentro dele. Como o viewBox assume a proporcao MEDIDA do palco
+ * (ResizeObserver, ver CoverageMap.jsx), o mapa preenche exatamente o espaco
+ * disponivel — sem sobra a direita e sem empurrar a pagina para baixo.
+ *
+ * So a partir de 981px, que e onde o layout de 2 colunas vale. Abaixo disso o
+ * feed e o mapa empilham, e espremer os dois numa viewport de celular deixaria
+ * os dois inuteis — ali o scroll e o comportamento certo.
+ */
+@media (min-width: 981px) {
+  .lm-page {
+    height: calc(100svh - var(--app-content-pad-y, 28px) * 2);
+    min-height: 0;
+  }
+
+  .lm-canvas { flex: 1; min-height: 0; overflow: hidden; }
+  .lm-canvas-grid { height: 100%; min-height: 0; }
+  .lm-canvas-feed,
+  .lm-canvas-map { min-height: 0; }
+
+  /* O feed deixa de ter teto calculado na mao e passa a ocupar o que sobra. */
+  .lm-canvas-feed .la-list { flex: 1; min-height: 0; max-height: none; }
+
+  /* O wrapper existe para o html2canvas fotografar so o mapa. Sem entrar na
+     cadeia de altura ele viraria um `div` de altura automatica no meio do
+     caminho, e o palco colapsava para 0. */
+  .lm-map-capture { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  .cvm { flex: 1; min-height: 0; }
+  .cvm-stage { min-height: 0; }
 }
