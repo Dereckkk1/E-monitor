@@ -231,6 +231,10 @@ func NewRouter(d Deps) http.Handler {
 				// docs/features/live-map.md.
 				if d.LiveMap != nil {
 					r.Get("/live-map", d.LiveMap.Get)
+					// Cobertura (municípios no raio da antena) tem endereço
+					// próprio porque é estática — o /live-map faz polling de
+					// 20s e não pode carregar dado imutável junto.
+					r.Get("/live-map/coverage", d.LiveMap.GetCoverage)
 				}
 
 				// Web Vitals telemetry — qualquer usuário autenticado posta
@@ -559,12 +563,12 @@ func NewRouter(d Deps) http.Handler {
 				if d.Suggestions != nil {
 					r.Post("/suggestions", d.Suggestions.Create)
 					r.Get("/suggestions", d.Suggestions.List)
-					r.Get("/suggestions/summary", d.Suggestions.Summary)              // handler barra não-dev
+					r.Get("/suggestions/summary", d.Suggestions.Summary) // handler barra não-dev
 					r.Get("/suggestions/unread-count", d.Suggestions.UnreadCount)
 					r.Get("/suggestions/attachments/{aid}/url", d.Suggestions.AttachmentURL)
 					r.Get("/suggestions/attachments/{aid}", d.Suggestions.ProxyAttachment) // proxy dos bytes (JWT) — browser não alcança presigned localhost:9000
 					r.Get("/suggestions/{id}", d.Suggestions.Get)
-					r.Patch("/suggestions/{id}", d.Suggestions.Patch)                 // handler barra não-dev
+					r.Patch("/suggestions/{id}", d.Suggestions.Patch) // handler barra não-dev
 					r.Post("/suggestions/{id}/comments", d.Suggestions.AddComment)
 					r.Post("/suggestions/{id}/attachments", d.Suggestions.UploadAttachment)
 					r.Post("/suggestions/{id}/read", d.Suggestions.MarkRead)

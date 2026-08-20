@@ -19,6 +19,7 @@ type fakeLiveMapRepo struct {
 	gotOpts      catalog.LiveMapOpts
 	called       bool
 	result       catalog.LiveMapResult
+	coverage     catalog.LiveCoverageResult
 	err          error
 }
 
@@ -28,6 +29,14 @@ func (f *fakeLiveMapRepo) Get(ctx context.Context, campaignIDs []uuid.UUID, scop
 	f.gotScope = scope
 	f.gotOpts = opts
 	return f.result, f.err
+}
+
+func (f *fakeLiveMapRepo) Coverage(ctx context.Context, campaignIDs []uuid.UUID, scope []uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveCoverageResult, error) {
+	f.called = true
+	f.gotCampaigns = campaignIDs
+	f.gotScope = scope
+	f.gotOpts = opts
+	return f.coverage, f.err
 }
 
 func newLiveMapReq(query string, claims *auth.Claims) *http.Request {
@@ -201,5 +210,62 @@ func TestLiveMapHandler_JSONShape(t *testing.T) {
 	}
 	if _, ok := body.RecentDetections[0]["campaign_id"]; ok {
 		t.Error("campaign_id não deveria aparecer com campanha única")
+	}
+}
+
+// TestLiveMapCoverage_SharesAntiOracleGate: o endereço de cobertura revela
+// quais emissoras a campanha tem, então precisa do MESMO 404 do Get para
+// campanha de outro cliente. Se este teste quebrar, /live-map/coverage virou
+// o oracle que /live-map fecha.
+func TestLiveMapCoverage_SharesAntiOracleGate(t *testing.T) {
+	repo := &fakeLiveMapRepo{err: catalog.ErrCampaignNotFound}
+	h := &LiveMapHandler{Repo: repo}
+	rr := httptest.NewRecorder()
+	cid := uuid.New()
+	req := httptest.NewRequest("GET", "/live-map/coverage?campaign_id="+uuid.New().String(), nil)
+	req = req.WithContext(auth.ContextWithClaims(req.Context(),
+		&auth.Claims{Role: "viewer", ClientID: &cid}))
+
+	h.GetCoverage(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, esperado 404 anti-oracle", rr.Code)
+	}
+	if repo.gotScope == nil {
+		t.Error("scope do viewer não chegou ao repo — cobertura sairia sem recorte por cliente")
+	}
+}
+
+// TestLiveMapCoverage_ValidatesLikeGet: os dois endpoints têm que recusar as
+// mesmas requisições malformadas, senão a diferença de status já é sinal.
+func TestLiveMapCoverage_ValidatesLikeGet(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"sem campanha", ""},
+		{"campanha inválida", "?campaigns=nao-e-uuid"},
+		{"campaign_id inválido", "?campaign_id=nao-e-uuid"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := &LiveMapHandler{Repo: &fakeLiveMapRepo{}}
+			claims := &auth.Claims{Role: "admin"}
+
+			rrGet := httptest.NewRecorder()
+			h.Get(rrGet, newLiveMapReq(c.query, claims))
+
+			rrCov := httptest.NewRecorder()
+			reqCov := httptest.NewRequest("GET", "/live-map/coverage"+c.query, nil)
+			reqCov = reqCov.WithContext(auth.ContextWithClaims(reqCov.Context(), claims))
+			h.GetCoverage(rrCov, reqCov)
+
+			if rrGet.Code != rrCov.Code {
+				t.Errorf("Get=%d mas Coverage=%d — validação divergiu", rrGet.Code, rrCov.Code)
+			}
+			if rrCov.Code != http.StatusBadRequest {
+				t.Errorf("status=%d, esperado 400", rrCov.Code)
+			}
+		})
 	}
 }

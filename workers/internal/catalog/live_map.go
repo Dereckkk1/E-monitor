@@ -28,6 +28,24 @@ type LiveStation struct {
 	Longitude       float64    `json:"longitude"`
 	HealthStatus    *string    `json:"health_status,omitempty"`
 	LastDetectionAt *time.Time `json:"last_detection_at,omitempty"`
+	LogoURL         *string    `json:"logo_url,omitempty"`
+
+	// Cobertura estimada a partir da classe do Plano Basico da Anatel.
+	// Ver docs/features/anatel-station-class-coverage.md.
+	//
+	// AnatelCoverageKm/AnatelReachKm sao NULOS em toda emissora AM (a norma de
+	// OM define o contorno protegido em mV/m, nao em distancia) e em qualquer
+	// emissora que o cruzamento nao identificou. Nulo significa COBERTURA
+	// INDETERMINADA, nunca cobertura zero: o mapa desenha essas emissoras com
+	// marcador proprio em vez de um circulo de raio 0.
+	AnatelClass      *string  `json:"anatel_class,omitempty"`
+	AnatelCoverageKm *float64 `json:"anatel_coverage_km,omitempty"`
+	AnatelReachKm    *float64 `json:"anatel_reach_km,omitempty"`
+	// Coordenada da ANTENA segundo o plano. Distinta de Latitude/Longitude,
+	// que sao o centroide do municipio do cadastro. O circulo de cobertura tem
+	// que ser ancorado na antena; sem ela o mapa cai no centroide.
+	AnatelLatitude  *float64 `json:"anatel_latitude,omitempty"`
+	AnatelLongitude *float64 `json:"anatel_longitude,omitempty"`
 }
 
 // LiveDetection é uma linha do feed "Últimas Veiculações" (modelo data/hora —
@@ -103,50 +121,8 @@ func (m *LiveMap) Get(ctx context.Context, campaignIDs []uuid.UUID, scopes []uui
 	if len(ids) == 0 {
 		return res, ErrCampaignNotFound
 	}
-
-	// Existência + posse + status das N campanhas numa query só.
-	rows, err := m.pool.Query(ctx,
-		`SELECT id, client_id, status FROM campaigns WHERE id = ANY($1)`, ids)
-	if err != nil {
+	if err := m.validateCampaigns(ctx, ids, scopes, opts); err != nil {
 		return res, err
-	}
-	defer rows.Close()
-
-	found := 0
-	for rows.Next() {
-		var id, clientID uuid.UUID
-		var status string
-		if err := rows.Scan(&id, &clientID, &status); err != nil {
-			return res, err
-		}
-		found++
-		// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
-		//
-		// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
-		// catalog não pode importar auth sem inverter as camadas. Só é seguro
-		// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
-		// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
-		// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
-		// não casa com nada. Se algum dia existir linha com client_id zerado, esta
-		// checagem passa a autorizar demais.
-		if scopes != nil && !slices.Contains(scopes, clientID) {
-			return res, ErrCampaignNotFound
-		}
-		// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
-		// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
-		// campanha que rodou normalmente até o fim. Ver docs/architecture/
-		// campaign-lifecycle.md. IncludeTerminal abre exceção pra documento
-		// histórico (pós-venda), que precisa fotografar o mapa do que já rodou.
-		if status == "cancelada" && !opts.IncludeTerminal {
-			return res, ErrCampaignNotFound
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return res, err
-	}
-	// Alguma das pedidas não existe → 404, a mesma resposta de "não é sua".
-	if found != len(ids) {
-		return res, ErrCampaignNotFound
 	}
 
 	stations, err := m.queryStations(ctx, ids)
@@ -163,6 +139,62 @@ func (m *LiveMap) Get(ctx context.Context, campaignIDs []uuid.UUID, scopes []uui
 	}
 	res.RecentDetections = dets
 	return res, nil
+}
+
+// validateCampaigns faz a checagem de existência + posse + status das campanhas
+// pedidas, numa query só. É o portão anti-oracle compartilhado por Get e
+// Coverage: qualquer endpoint novo que exponha dado derivado das campanhas TEM
+// que passar por aqui antes de consultar o que quer que seja, senão vira o
+// oracle que os outros fecham ("sumiu = essa campanha existe mas não é sua").
+//
+// Tudo-ou-nada de propósito: uma campanha inexistente, de outro cliente ou
+// cancelada derruba a requisição inteira em ErrCampaignNotFound.
+func (m *LiveMap) validateCampaigns(ctx context.Context, ids []uuid.UUID, scopes []uuid.UUID, opts LiveMapOpts) error {
+	// Existência + posse + status das N campanhas numa query só.
+	rows, err := m.pool.Query(ctx,
+		`SELECT id, client_id, status FROM campaigns WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	found := 0
+	for rows.Next() {
+		var id, clientID uuid.UUID
+		var status string
+		if err := rows.Scan(&id, &clientID, &status); err != nil {
+			return err
+		}
+		found++
+		// scopes == nil = admin/operator. Fora da carteira → 404 anti-oracle.
+		//
+		// Diferente de auth.ScopeAllows, aqui não há guarda contra uuid.Nil — o
+		// catalog não pode importar auth sem inverter as camadas. Só é seguro
+		// porque campaigns.client_id é NOT NULL com FK pra clients(id), e
+		// clients.id nasce de uuid_generate_v4() (migration 0001): nenhuma campanha
+		// real tem cliente zerado, então a sentinela de falha-fechada [uuid.Nil]
+		// não casa com nada. Se algum dia existir linha com client_id zerado, esta
+		// checagem passa a autorizar demais.
+		if scopes != nil && !slices.Contains(scopes, clientID) {
+			return ErrCampaignNotFound
+		}
+		// Campanha cancelada é terminal: "ao vivo" implica campanha rodando, então
+		// tratamos como inexistente aqui (404). Concluída segue acessível — é uma
+		// campanha que rodou normalmente até o fim. Ver docs/architecture/
+		// campaign-lifecycle.md. IncludeTerminal abre exceção pra documento
+		// histórico (pós-venda), que precisa fotografar o mapa do que já rodou.
+		if status == "cancelada" && !opts.IncludeTerminal {
+			return ErrCampaignNotFound
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Alguma das pedidas não existe → 404, a mesma resposta de "não é sua".
+	if found != len(ids) {
+		return ErrCampaignNotFound
+	}
+	return nil
 }
 
 // dedupUUIDs preserva a ordem e remove repetidos: o cliente pode mandar o mesmo
@@ -198,7 +230,9 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignIDs []uuid.UUID) ([
 		    FROM scoped, unnest(target_stations) AS st
 		)
 		SELECT s.id, s.name, s.band, s.frequency_mhz, s.city, s.state,
-		       s.latitude, s.longitude, s.health_status,
+		       s.latitude, s.longitude, s.health_status, s.logo_url,
+		       s.anatel_class, s.anatel_coverage_km, s.anatel_reach_km,
+		       s.anatel_latitude, s.anatel_longitude,
 		       (SELECT MAX(d.detected_at)
 		          FROM detection_attributions d
 		         WHERE d.station_id = s.id
@@ -218,7 +252,10 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignIDs []uuid.UUID) ([
 		var st LiveStation
 		if err := rows.Scan(&st.ID, &st.Name, &st.Band, &st.FrequencyMHz,
 			&st.City, &st.State, &st.Latitude, &st.Longitude,
-			&st.HealthStatus, &st.LastDetectionAt); err != nil {
+			&st.HealthStatus, &st.LogoURL,
+			&st.AnatelClass, &st.AnatelCoverageKm, &st.AnatelReachKm,
+			&st.AnatelLatitude, &st.AnatelLongitude,
+			&st.LastDetectionAt); err != nil {
 			return nil, err
 		}
 		out = append(out, st)

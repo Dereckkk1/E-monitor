@@ -713,3 +713,28 @@ Medido na cópia de prod: `GET /stations` (página default) = **2.267ms**; a mes
 por `CASE monitoring_status` + `pmm` sem índice de apoio. Afeta toda tela que pagina emissora.
 
 **Fix candidato:** índice de cobertura pra ordenação, e/ou contagem separada/aproximada.
+
+### F-133 — Emissora nova nasce sem classe Anatel: a cobertura só é preenchida pelo backfill
+
+`stations.anatel_*` e `station_coverage_cities` são preenchidos **só** pelo
+`cmd/backfill-anatel` (migration 0066, doc em
+[anatel-station-class-coverage.md](../features/anatel-station-class-coverage.md)).
+`Stations.Create`/`Update` não chamam o matcher — diferente do geocoding, que já
+resolve lat/long no próprio INSERT (`internal/geo`).
+
+Efeito: emissora cadastrada depois do backfill entra no `/live-map` **sem anel de
+cobertura e sem cidades**, indistinguível de uma emissora que o cruzamento não
+conseguiu identificar. Não quebra nada — o mapa trata "sem raio" como caso
+normal — mas silenciosamente degrada com o tempo, e ninguém é avisado.
+
+Correções possíveis, em ordem de esforço:
+
+1. **Operacional (o que vale hoje):** rodar `backfill-anatel` depois de qualquer
+   importação de emissoras em lote. É idempotente e leva ~7s pra base inteira.
+2. **Plugar no `Stations.Create`/`Update`**, como o geocoding já faz. Cuidado: o
+   cálculo de cobertura é emissora × 5.570 municípios, então dentro de um request
+   isso precisa ser assíncrono ou limitado ao raio da classe.
+3. **Job periódico** rodando o backfill em modo `--dry-run` e alertando quando o
+   número de emissoras sem classe crescer.
+
+Escolhido por ora: **(1)**, documentado na limitação do doc da feature.

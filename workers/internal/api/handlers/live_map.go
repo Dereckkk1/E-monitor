@@ -19,6 +19,7 @@ const liveMapMaxCampaigns = 200
 // real (mesmo padrão de InsightsHandler).
 type LiveMapRepo interface {
 	Get(ctx context.Context, campaignIDs []uuid.UUID, scopes []uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveMapResult, error)
+	Coverage(ctx context.Context, campaignIDs []uuid.UUID, scopes []uuid.UUID, opts catalog.LiveMapOpts) (catalog.LiveCoverageResult, error)
 }
 
 type LiveMapHandler struct {
@@ -42,42 +43,81 @@ func NewLiveMapHandler(repo LiveMapRepo) *LiveMapHandler {
 // pós-venda, que é documento histórico — a tela ao vivo não manda o parâmetro
 // e continua vendo 404. O recorte por cliente vale igual nos dois casos.
 func (h *LiveMapHandler) Get(w http.ResponseWriter, r *http.Request) {
+	campaignIDs, opts, ok := parseLiveMapQuery(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.Repo.Get(r.Context(), campaignIDs, auth.ClientScopesFromContext(r.Context()), opts)
+	if err != nil {
+		writeLiveMapErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetCoverage GET /live-map/coverage?campaigns=UUID[,UUID...] — os municípios
+// ao alcance estimado das emissoras-alvo, para o mapa desenhar o raio de
+// cobertura e as cidades dentro dele.
+//
+// Endereço próprio, e não um campo a mais no /live-map, porque a resposta é
+// ESTÁTICA: cobertura só muda quando a Anatel republica o plano. O /live-map
+// faz polling de 20s; carregar isto junto retransmitiria dezenas de KB
+// imutáveis a cada ciclo, em toda sessão aberta o dia inteiro. O frontend
+// busca uma vez por seleção de campanha e cacheia.
+//
+// Mesmos parâmetros, mesmo recorte por cliente e mesmo 404 anti-oracle do Get.
+func (h *LiveMapHandler) GetCoverage(w http.ResponseWriter, r *http.Request) {
+	campaignIDs, opts, ok := parseLiveMapQuery(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.Repo.Coverage(r.Context(), campaignIDs, auth.ClientScopesFromContext(r.Context()), opts)
+	if err != nil {
+		writeLiveMapErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// parseLiveMapQuery lê os parâmetros comuns a /live-map e /live-map/coverage.
+// Escreve a resposta de erro e devolve ok=false quando algo não valida — o
+// chamador só precisa retornar.
+func parseLiveMapQuery(w http.ResponseWriter, r *http.Request) ([]uuid.UUID, catalog.LiveMapOpts, bool) {
 	q := r.URL.Query()
+	var opts catalog.LiveMapOpts
 
 	campaignIDs, err := parseUUIDList(q.Get("campaigns"))
 	if err != nil {
 		http.Error(w, "invalid campaigns: "+err.Error(), http.StatusBadRequest)
-		return
+		return nil, opts, false
 	}
 	if cid := q.Get("campaign_id"); cid != "" {
 		campaignID, err := uuid.Parse(cid)
 		if err != nil {
 			http.Error(w, "invalid campaign_id", http.StatusBadRequest)
-			return
+			return nil, opts, false
 		}
 		campaignIDs = append(campaignIDs, campaignID)
 	}
 	if len(campaignIDs) == 0 {
 		http.Error(w, "campaigns required", http.StatusBadRequest)
-		return
+		return nil, opts, false
 	}
 	if len(campaignIDs) > liveMapMaxCampaigns {
 		http.Error(w, "campaigns max=200", http.StatusBadRequest)
-		return
+		return nil, opts, false
 	}
+	opts.IncludeTerminal = q.Get("include_terminal") == "1"
+	return campaignIDs, opts, true
+}
 
-	scope := auth.ClientScopesFromContext(r.Context())
-	opts := catalog.LiveMapOpts{
-		IncludeTerminal: q.Get("include_terminal") == "1",
-	}
-	out, err := h.Repo.Get(r.Context(), campaignIDs, scope, opts)
-	if err != nil {
-		if errors.Is(err, catalog.ErrCampaignNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
+// writeLiveMapErr mantém o 404 anti-oracle idêntico nos dois endpoints: se um
+// deles vazasse 403 ou 500 onde o outro dá 404, a diferença já revelaria a
+// existência da campanha.
+func writeLiveMapErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, catalog.ErrCampaignNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	http.Error(w, "internal error", http.StatusInternalServerError)
 }
