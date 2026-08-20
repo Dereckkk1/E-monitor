@@ -11,6 +11,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,17 @@ type coord struct{ Lat, Lng float64 }
 
 // Geocoder holds an in-memory index keyed by "<normalized name>|<UF>".
 type Geocoder struct {
-	byKey map[string]coord
+	byKey    map[string]coord
+	idxByKey map[string]int // mesma chave de byKey, apontando para `all`
+	all      []Municipality
+}
+
+// Municipality é um município do dataset IBGE com seu centroide.
+type Municipality struct {
+	IBGECode int
+	Name     string
+	UF       string
+	Lat, Lng float64
 }
 
 // ufByCode maps the numeric IBGE state code to the 2-letter UF abbreviation.
@@ -73,10 +84,15 @@ func New() (*Geocoder, error) {
 	iLat, okLa := col["latitude"]
 	iLng, okLo := col["longitude"]
 	iUF, okU := col["codigo_uf"]
+	iCode := col["codigo_ibge"]
 	if !okN || !okLa || !okLo || !okU {
 		return nil, fmt.Errorf("geo: dataset missing required columns (have %v)", header)
 	}
-	g := &Geocoder{byKey: make(map[string]coord, 6000)}
+	g := &Geocoder{
+		byKey:    make(map[string]coord, 6000),
+		idxByKey: make(map[string]int, 6000),
+		all:      make([]Municipality, 0, 6000),
+	}
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
@@ -95,6 +111,15 @@ func New() (*Geocoder, error) {
 			continue
 		}
 		g.byKey[key(normalize(rec[iName]), uf)] = coord{Lat: lat, Lng: lng}
+		code, _ := strconv.Atoi(strings.TrimSpace(rec[iCode]))
+		g.idxByKey[key(normalize(rec[iName]), uf)] = len(g.all)
+		g.all = append(g.all, Municipality{
+			IBGECode: code,
+			Name:     strings.TrimSpace(rec[iName]),
+			UF:       uf,
+			Lat:      lat,
+			Lng:      lng,
+		})
 	}
 	if len(g.byKey) == 0 {
 		return nil, fmt.Errorf("geo: empty dataset")
@@ -117,6 +142,21 @@ func (g *Geocoder) Lookup(city, state string) (lat, lng float64, ok bool) {
 	return c.Lat, c.Lng, true
 }
 
+// LookupMunicipality é como Lookup, mas devolve o município inteiro (código
+// IBGE e nome oficial), não só o centroide.
+func (g *Geocoder) LookupMunicipality(city, state string) (Municipality, bool) {
+	city = strings.TrimSpace(city)
+	state = strings.ToUpper(strings.TrimSpace(state))
+	if city == "" || state == "" {
+		return Municipality{}, false
+	}
+	i, ok := g.idxByKey[key(normalize(city), state)]
+	if !ok {
+		return Municipality{}, false
+	}
+	return g.all[i], true
+}
+
 var (
 	defaultOnce sync.Once
 	defaultGeo  *Geocoder
@@ -136,3 +176,26 @@ func Default() *Geocoder {
 	})
 	return defaultGeo
 }
+
+// All devolve todos os municípios do dataset embutido. A fatia é a interna —
+// tratada como somente-leitura pelos chamadores (o dataset é imutável).
+func (g *Geocoder) All() []Municipality { return g.all }
+
+// DistanceKm devolve a distância em grande-círculo (haversine) entre dois
+// pontos, em quilômetros. Precisão de esfera basta aqui: o erro contra o
+// elipsoide (<0,3%) é ordens de grandeza menor que o erro de usar o centroide
+// do município como posição da cidade.
+func DistanceKm(lat1, lng1, lat2, lng2 float64) float64 {
+	const earthKm = 6371.0
+	rad := func(d float64) float64 { return d * math.Pi / 180 }
+	dLat, dLng := rad(lat2-lat1), rad(lng2-lng1)
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(rad(lat1))*math.Cos(rad(lat2))*math.Sin(dLng/2)*math.Sin(dLng/2)
+	return 2 * earthKm * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
+// Normalize expõe a normalização de nome de município usada no índice
+// (minúsculas, sem acentos, espaços colapsados). Outros pacotes que cruzam
+// nomes de cidade com este dataset PRECISAM usar a mesma função, senão as
+// chaves divergem.
+func Normalize(s string) string { return normalize(s) }
