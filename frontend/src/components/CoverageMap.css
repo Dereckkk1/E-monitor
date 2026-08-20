@@ -28,11 +28,17 @@
 .cvm-stage {
   position: relative;
   width: 100%;
-  /* aspect-ratio vem do JS (STAGE_ASPECT) — fonte única. Ele TEM que bater
-     com o aspect do viewBox: a camada de anotação posiciona em % do palco, e
-     qualquer letterbox do preserveAspectRatio dessincronizaria marcador e
-     geografia. Este valor é só o fallback antes do inline style aplicar. */
-  aspect-ratio: 1.2;
+  /* SEM aspect-ratio: o palco ocupa a caixa que o layout der, e o viewBox é
+     que assume a proporção medida dele (ResizeObserver → `aspect`). O caminho
+     inverso — proporção fixa aqui — obrigava o enquadramento a encher de vazio
+     para chegar nela, e ainda deixava o palco mais estreito que a coluna.
+
+     A invariante continua valendo: proporção do viewBox == proporção do palco,
+     que é o que mantém a camada de anotação (posicionada em % do palco)
+     alinhada com a geografia. Só que agora ela é satisfeita medindo, não
+     impondo. */
+  flex: 1;
+  min-height: 320px;
   border-radius: var(--radius-lg);
   overflow: hidden;
   isolation: isolate;

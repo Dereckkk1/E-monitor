@@ -212,10 +212,20 @@ Nada de WebGL: o botão "Baixar" usa `html2canvas`, que **não fotografa canvas*
 
 Três armadilhas que essa escolha traz, todas já resolvidas no código:
 
-1. **A proporção do palco tem que bater com a do viewBox.** A camada de anotação
+1. **A proporção do viewBox tem que bater com a do palco.** A camada de anotação
    posiciona em % do palco; qualquer letterbox do `preserveAspectRatio`
-   dessincronizaria marcador e geografia. Por isso o `aspect-ratio` do CSS vem
-   do `STAGE_ASPECT` exportado pelo JS, e não é repetido à mão.
+   dessincronizaria marcador e geografia.
+
+   A invariante é satisfeita **medindo, não impondo**: o palco ocupa a caixa que
+   o layout der (`flex: 1`, sem `aspect-ratio`), um `ResizeObserver` mede essa
+   caixa e o viewBox assume a proporção dela. A câmera guarda **centro +
+   largura** e a altura é derivada na hora de desenhar — por isso redimensionar
+   a janela reflui sozinho.
+
+   O caminho inverso (proporção fixa no CSS, que foi a primeira versão)
+   obrigava o enquadramento a encher de vazio para chegar nela: uma campanha de
+   pegada alta, tipo CE→RS, sobrava uma faixa larga à direita, **e** o palco
+   ainda ficava mais estreito que a coluna. Vazio duas vezes.
 2. **Texto em SVG escala com o viewBox.** As siglas de UF recebem
    `fontSize={11 / zoom}` — sem isso, um zoom de 15× rende um "GO" de 165px
    atravessando o mapa.
@@ -350,10 +360,26 @@ mesmas requisições inválidas (`live_map_test.go`).
 ## Layout
 
 O mapa é o painel **principal** e o feed virou trilho lateral
-(`minmax(320px, 380px) 1px 1fr`, antes `minmax(440px, 580px)`). O mapa passou a
+(`minmax(360px, 430px) 1px 1fr`, antes `minmax(440px, 580px)`). O mapa passou a
 ser o painel mais denso dos dois — enquadra a pegada, desenha os raios e abre a
 ficha de cidades — e os 580px do feed espremiam justamente o que o usuário veio
 ver. As linhas do feed em si **não mudaram**.
+
+### A tela cabe na viewport (≥ 981px)
+
+Sem scroll vertical: `.lm-page` recebe altura definida
+(`100svh` menos o padding vertical do `.app-content`, exposto como
+`--app-content-pad-y` para não virar número mágico), o canvas ocupa o que sobra
+e o palco é `flex: 1` dentro dele.
+
+⚠️ O `<div ref={mapRef}>` que envolve o mapa (existe para o `html2canvas`
+fotografar só ele) **precisa entrar na cadeia de altura**
+(`.lm-map-capture { flex: 1; min-height: 0; display: flex }`). Sem isso ele vira
+um `div` de altura automática no meio do caminho e o palco colapsa para 0.
+
+Abaixo de 981px o feed e o mapa empilham e a página volta a rolar — espremer os
+dois numa viewport de celular deixaria os dois inúteis. Lá o palco tem piso de
+`min-height: 320px`.
 
 ## Estados da tela
 

@@ -32,12 +32,12 @@ import './CoverageMap.css'
 const WIDTH = 720
 const HEIGHT = 760
 
-// Proporção do palco. O viewBox é uma JANELA sobre o espaço projetado, então
-// esta constante não precisa bater com WIDTH/HEIGHT — mas TEM que bater com o
-// aspect-ratio do CSS, senão o preserveAspectRatio letterboxa e a camada de
-// anotação (posicionada em % do palco) desalinha da geografia. Por isso o CSS
-// recebe o valor daqui em vez de repeti-lo.
-export const STAGE_ASPECT = 1.2
+// Proporção do palco enquanto ele ainda não foi medido. Ela NÃO manda no
+// layout: o palco ocupa a caixa que o CSS der, e o viewBox é que assume a
+// proporção medida. Fazer o contrário (aspect-ratio fixo no CSS) obrigava o
+// enquadramento a encher de vazio para chegar na proporção — e ainda deixava o
+// palco mais estreito que a coluna.
+const FALLBACK_ASPECT = 1.2
 
 // Km por grau de arco de grande-círculo. geoCircle mede o raio em GRAUS, então
 // é essa constante que converte o raio da classe Anatel para a esfera.
@@ -105,21 +105,30 @@ function initialsOf(name = '') {
 const MIN_PANORAMA_W = 260
 const PANORAMA_PAD = 1.18
 // Quadro de partida enquanto não há emissora (fantasma do estado vazio).
-const BRAZIL_VIEW = { x: 0, y: (HEIGHT - WIDTH / STAGE_ASPECT) / 2, w: WIDTH, h: WIDTH / STAGE_ASPECT }
+const BRAZIL_VIEW = { cx: WIDTH / 2, cy: HEIGHT / 2, w: WIDTH }
 
-/* Enquadra um bounding box projetado respeitando o aspect do palco. */
-function viewForBounds(bounds, { pad = FOCUS_PAD, minW = MIN_VIEW_W } = {}) {
+/* A câmera guarda CENTRO + largura; a altura é derivada da proporção do palco
+ * na hora de desenhar. Assim redimensionar a janela reflui sozinho, sem
+ * precisar reenquadrar — e a proporção do viewBox nunca diverge da do palco,
+ * que é o que mantém a camada de anotação (posicionada em %) alinhada. */
+function viewBoxOf(view, aspect) {
+  const h = view.w / aspect
+  return { x: view.cx - view.w / 2, y: view.cy - h / 2, w: view.w, h }
+}
+
+/* Enquadra um bounding box projetado dentro da proporção do palco. */
+function viewForBounds(bounds, aspect, { pad = FOCUS_PAD, minW = MIN_VIEW_W } = {}) {
   const [[x0, y0], [x1, y1]] = bounds
   const cx = (x0 + x1) / 2
   const cy = (y0 + y1) / 2
-  let w = Math.max(x1 - x0, 1) * pad
-  let h = Math.max(y1 - y0, 1) * pad
-  if (w / h > STAGE_ASPECT) h = w / STAGE_ASPECT
-  else w = h * STAGE_ASPECT
-  if (w < minW) { w = minW; h = w / STAGE_ASPECT }
-  const maxW = WIDTH * 1.08
-  if (w > maxW) { w = maxW; h = w / STAGE_ASPECT }
-  return { x: cx - w / 2, y: cy - h / 2, w, h }
+  const bw = Math.max(x1 - x0, 1) * pad
+  const bh = Math.max(y1 - y0, 1) * pad
+  // Largura que faz caber nos DOIS eixos: a própria largura da pegada, ou a
+  // largura necessária para a altura dela caber na proporção do palco.
+  let w = Math.max(bw, bh * aspect)
+  w = Math.max(w, minW)
+  w = Math.min(w, WIDTH * 1.6)
+  return { cx, cy, w }
 }
 
 /* União dos bounding boxes — a pegada geográfica da campanha inteira. */
@@ -230,6 +239,25 @@ export default function CoverageMap({
 
   const byId = useMemo(() => new Map(points.map(p => [p.st.id, p])), [points])
 
+  const stageRef = useRef(null)
+  const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
+
+  // Caixa real do palco. A LARGURA serve pro desconto da ficha (que é em px);
+  // a ALTURA define a proporção do viewBox — é ela que faz o mapa preencher o
+  // espaço disponível em vez de o espaço se ajustar a uma proporção fixa.
+  useEffect(() => {
+    const el = stageRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(([e]) => {
+      setStageBox({ w: e.contentRect.width, h: e.contentRect.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const stageW = stageBox.w
+  const aspect = stageBox.w > 0 && stageBox.h > 0 ? stageBox.w / stageBox.h : FALLBACK_ASPECT
+
   /* O panorama enquadra a PEGADA DA CAMPANHA, não o país. Uma campanha
    * regional abre já perto — que é o ponto: no quadro do Brasil inteiro
    * metade da tela é geografia sem emissora nenhuma. Inclui o bounding box
@@ -239,8 +267,8 @@ export default function CoverageMap({
     const b = unionBounds(points.map(p => p.bounds
       ?? [[p.x - 6, p.y - 6], [p.x + 6, p.y + 6]]))
     if (!b) return BRAZIL_VIEW
-    return viewForBounds(b, { pad: PANORAMA_PAD, minW: MIN_PANORAMA_W })
-  }, [points])
+    return viewForBounds(b, aspect, { pad: PANORAMA_PAD, minW: MIN_PANORAMA_W })
+  }, [points, aspect])
 
   /* A câmera NASCE na pegada — não parte do Brasil inteiro para depois voar
    * até ela. Abrir a tela com uma animação de aproximação seria coreografia
@@ -248,6 +276,7 @@ export default function CoverageMap({
    * (Trocar de campanha remonta o componente via `key`, então o enquadramento
    * inicial acompanha a seleção sem precisar de efeito sincronizando estado.) */
   const [view, setView] = useState(panorama)
+  const [lastAspect, setLastAspect] = useState(aspect)
   const [focusId, setFocusId] = useState(null)
   const [hoverId, setHoverId] = useState(null)
   const [touring, setTouring] = useState(false)
@@ -264,18 +293,26 @@ export default function CoverageMap({
   const viewRef = useRef({ ...panorama })
   const tweenRef = useRef(null)
   const tourTimer = useRef(null)
-  const stageRef = useRef(null)
-  const [stageW, setStageW] = useState(0)
 
-  // Largura real do palco: o deslocamento da câmera e a exclusão de rótulos
-  // sob a ficha são ambos em px, e o palco é fluido.
-  useEffect(() => {
-    const el = stageRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return undefined
-    const ro = new ResizeObserver(([e]) => setStageW(e.contentRect.width))
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  // Último quadro efetivamente comprometido no DOM. O gsap anima MUTANDO
+  // viewRef, então quando a câmera é reposicionada fora de um voo (o reajuste
+  // de proporção abaixo) o viewRef fica velho — e o voo seguinte partiria do
+  // lugar errado, com um solavanco. Semear o tween daqui elimina isso.
+  const committedRef = useRef(view)
+  useEffect(() => { committedRef.current = view })
+
+  /* Proporção do palco mudou (janela redimensionada). A ALTURA do viewBox
+   * reflui sozinha, porque é derivada — mas a LARGURA que enquadrava a pegada
+   * pode ter deixado de caber. Ajuste de estado durante o render: o padrão que
+   * o React sanciona para estado derivado que ficou obsoleto.
+   *
+   * Só reenquadra quem NÃO está em foco: em foco o anel continua no lugar, e
+   * reenquadrar no meio de um redimensionamento pareceria a câmera fugindo da
+   * mão do usuário. */
+  if (aspect !== lastAspect) {
+    setLastAspect(aspect)
+    if (!focusId) setView(panorama)
+  }
 
   // Fração do palco coberta pela ficha (0 quando ela está no rodapé).
   const sidePanel = stageW >= PANEL_SIDE_MIN_PX
@@ -307,6 +344,9 @@ export default function CoverageMap({
   /* ── Câmera ──────────────────────────────────────────────────────── */
   const flyTo = useCallback((target) => {
     tweenRef.current?.kill()
+    // Parte sempre do último quadro comprometido, nunca do que sobrou de um
+    // voo interrompido ou de um reajuste de proporção.
+    Object.assign(viewRef.current, committedRef.current)
     if (prefersReducedMotion()) {
       viewRef.current = { ...target }
       setView({ ...target })
@@ -331,16 +371,16 @@ export default function CoverageMap({
     // Sem raio (AM, ou emissora que o cruzamento não identificou) não há
     // bounding box do alcance — enquadra por um piso fixo em vez de sumir.
     const b = p.bounds ?? [[p.x - MIN_VIEW_W / 2, p.y - MIN_VIEW_W / 2], [p.x + MIN_VIEW_W / 2, p.y + MIN_VIEW_W / 2]]
-    const v = viewForBounds(b)
-    // Desloca a janela para descontar a ficha: a emissora anda para o lado
-    // (ou para cima) e fica centrada na área que sobra, em vez de ficar atrás
-    // dela. Um eixo por vez — a ficha só ocupa um dos dois.
+    const v = viewForBounds(b, aspect)
+    // Desloca o centro para descontar a ficha: a emissora anda para o lado (ou
+    // para cima) e fica centrada na área que sobra, em vez de ficar atrás dela.
+    // Um eixo por vez — a ficha só ocupa um dos dois.
     flyTo({
       ...v,
-      x: v.x - (panelFrac / 2) * v.w,
-      y: v.y + (panelVFrac / 2) * v.h,
+      cx: v.cx - (panelFrac / 2) * v.w,
+      cy: v.cy + (panelVFrac / 2) * (v.w / aspect),
     })
-  }, [byId, flyTo, panorama, panelFrac, panelVFrac])
+  }, [byId, flyTo, panorama, panelFrac, panelVFrac, aspect])
 
   const goPanorama = useCallback(() => {
     setTouring(false)
@@ -439,10 +479,12 @@ export default function CoverageMap({
   // reconhecível. Acima disso viram bolotas sobrepostas e o ponto lê melhor.
   const showLogos = points.length <= 40
 
+  const box = useMemo(() => viewBoxOf(view, aspect), [view, aspect])
+
   const toPct = useCallback((x, y) => ({
-    left: ((x - view.x) / view.w) * 100,
-    top: ((y - view.y) / view.h) * 100,
-  }), [view])
+    left: ((x - box.x) / box.w) * 100,
+    top: ((y - box.y) / box.h) * 100,
+  }), [box])
 
   const markers = useMemo(() => points
     .map(p => ({ ...p, ...toPct(p.x, p.y) }))
@@ -522,10 +564,10 @@ export default function CoverageMap({
 
   return (
     <div className={`cvm cvm--${mode}${touring ? ' cvm--touring' : ''}`}>
-      <div className="cvm-stage" ref={stageRef} style={{ aspectRatio: String(STAGE_ASPECT) }}>
+      <div className="cvm-stage" ref={stageRef}>
         <svg
           className="cvm-svg"
-          viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+          viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label={`Mapa do Brasil com ${points.length} emissoras monitoradas`}

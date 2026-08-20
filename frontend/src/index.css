@@ -120,9 +120,12 @@ a {
 }
 
 .app-content {
+  /* Exposto como variavel para telas que precisam caber na viewport sem
+     scroll (ex.: /live-map) descontarem este padding sem repetir o numero. */
+  --app-content-pad-y: 28px;
   flex: 1;
   min-width: 0;
-  padding: 28px 32px;
+  padding: var(--app-content-pad-y) 32px;
   background: var(--c-bg);
 }
 
