@@ -1,11 +1,12 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import { useAuth } from '../contexts/AuthContext'
-import { useClients, useCampaignsPaged, useLiveMap } from '../api/hooks'
+import { useClients, useCampaignsPaged, useLiveMap, useLiveMapCoverage } from '../api/hooks'
 import { safeLogoUrl } from '../utils/logoUrl'
 import BrazilMap from '../components/BrazilMap'
+import CoverageMap from '../components/CoverageMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
 import FlowEmptyState from '../components/FlowEmptyState'
 import './LiveMapPage.css'
@@ -173,6 +174,17 @@ export default function LiveMapPage() {
   const stations = useMemo(() => data?.stations ?? [], [data])
   const detections = useMemo(() => data?.recent_detections ?? [], [data])
 
+  // Cobertura vem de endereco proprio, sem polling: e dado estatico. Carrega
+  // em paralelo e o mapa ja e util antes dela chegar (so a ficha de foco
+  // depende dela).
+  const coverageQ = useLiveMapCoverage(campaignIds)
+  const coverage = useMemo(() => coverageQ.data?.cities ?? [], [coverageQ.data])
+
+  // Ponte feed <-> mapa: passar o mouse numa veiculacao acende a emissora no
+  // mapa, e vice-versa. Sem isso os dois paineis da tela se ignoram.
+  const [hoverStationId, setHoverStationId] = useState(null)
+  const handleMapHover = useCallback((id) => setHoverStationId(id), [])
+
   const activeStates = useMemo(() => {
     const set = new Set()
     for (const s of stations) if (s.state) set.add(String(s.state).toUpperCase())
@@ -226,6 +238,28 @@ export default function LiveMapPage() {
         backgroundColor: '#ffffff',
         scale: 2,
         logging: false,
+        // A barra de controles do mapa é chrome de interação, não conteúdo —
+        // não faz sentido no arquivo exportado.
+        ignoreElements: (node) => node.classList?.contains('cvm-controls'),
+        // O html2canvas refaz o download de cada <img> por conta própria, e o
+        // CDN dos logos não manda Access-Control-Allow-Origin: eles saíam como
+        // quadrados vazios no PNG mesmo aparecendo normais na tela (e com
+        // useCORS o navegador ainda logava um erro por imagem). Na CÓPIA que é
+        // fotografada, o logo vira as iniciais — que é o mesmo fallback que a
+        // tela já usa quando a imagem falha.
+        onclone: (doc) => {
+          doc.querySelectorAll('[data-initials]').forEach((box) => {
+            const img = box.querySelector('img')
+            if (!img) return
+            img.remove()
+            const span = doc.createElement('span')
+            span.className = box.classList.contains('cvm-focus-logo')
+              ? 'cvm-focus-initials'
+              : 'cvm-marker-initials'
+            span.textContent = box.dataset.initials
+            box.appendChild(span)
+          })
+        },
       })
       canvas.toBlob((blob) => {
         if (!blob) return
@@ -398,13 +432,18 @@ export default function LiveMapPage() {
                   // colidem e tocam ao mesmo tempo.
                   const rowKey = d.campaign_id ? `${d.id}:${d.campaign_id}` : d.id
                   return (
-                    <LiveAiringRow
+                    <div
                       key={rowKey}
-                      detection={d}
-                      isPlaying={playingId === rowKey}
-                      onPlayRequest={() => setPlayingId(rowKey)}
-                      onPlayClose={() => setPlayingId(null)}
-                    />
+                      onMouseEnter={() => setHoverStationId(d.station_id)}
+                      onMouseLeave={() => setHoverStationId(cur => (cur === d.station_id ? null : cur))}
+                    >
+                      <LiveAiringRow
+                        detection={d}
+                        isPlaying={playingId === rowKey}
+                        onPlayRequest={() => setPlayingId(rowKey)}
+                        onPlayClose={() => setPlayingId(null)}
+                      />
+                    </div>
                   )
                 })}
               </div>
@@ -420,7 +459,19 @@ export default function LiveMapPage() {
               </div>
             ) : (
               <div ref={mapRef}>
-                <BrazilMap stations={stations} />
+                <CoverageMap
+                  // Remonta ao trocar a seleção: zera foco, tour e câmera de
+                  // uma vez. É o idioma React pra "resetar estado quando a
+                  // identidade da entrada muda" — mais confiável que sincronizar
+                  // três estados na mão.
+                  key={campaignIds.join(',')}
+                  stations={stations}
+                  coverage={coverage}
+                  coverageLoading={coverageQ.isPending}
+                  highlightId={hoverStationId}
+                  onHoverStation={handleMapHover}
+                  recentDetections={detections}
+                />
               </div>
             )
           }

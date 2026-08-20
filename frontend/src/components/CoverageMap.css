@@ -1,0 +1,582 @@
+/* Mapa de cobertura do /live-map.
+ *
+ * Paleta herdada do BrazilMap, intencionalmente idêntica: estado com emissora
+ * em rosa (#fbd2e7/#ec4f93), estado sem emissora em cinza (#e6ebf2/#aeb9c9),
+ * emissora em --c-action. É a continuidade visual com o E-radios que o
+ * PRODUCT.md pede — não é um mapa novo, é o mesmo mapa que agora dá zoom.
+ *
+ * O problema que essa herança cria: estado rosa + anel rosa + ponto rosa vira
+ * uma mancha só. Resolvido por VALOR, não por matiz — no foco o preenchimento
+ * do estado recua (--cvm-state-focus) e o anel assume o rosa cheio.
+ */
+
+.cvm {
+  --cvm-state: #e6ebf2;
+  --cvm-state-stroke: #aeb9c9;
+  --cvm-state-active: #fbd2e7;
+  --cvm-state-active-stroke: #ec4f93;
+  /* Rosa lavado: o estado sai do caminho do anel sem virar cinza (o que leria
+     como "essa UF não tem emissora"). */
+  --cvm-state-focus: #fdeef6;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.cvm-stage {
+  position: relative;
+  width: 100%;
+  /* aspect-ratio vem do JS (STAGE_ASPECT) — fonte única. Ele TEM que bater
+     com o aspect do viewBox: a camada de anotação posiciona em % do palco, e
+     qualquer letterbox do preserveAspectRatio dessincronizaria marcador e
+     geografia. Este valor é só o fallback antes do inline style aplicar. */
+  aspect-ratio: 1.2;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.cvm-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ── Geografia ────────────────────────────────────────────────────── */
+.cvm-state {
+  fill: var(--cvm-state);
+  stroke: var(--cvm-state-stroke);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+  transition: fill 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cvm-state--active {
+  fill: var(--cvm-state-active);
+  stroke: var(--cvm-state-active-stroke);
+}
+
+.cvm--focus .cvm-state--active { fill: var(--cvm-state-focus); }
+
+.cvm-uf-labels { transition: opacity 260ms ease; }
+
+.cvm-uf {
+  font-family: var(--font-body);
+  /* font-size vem do JSX (contra-escalado pelo zoom) — em SVG o texto escala
+     com o viewBox, então um valor fixo aqui só valeria no panorama. */
+  font-weight: 700;
+  fill: #6b7280;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.cvm-uf--active { fill: var(--c-action); }
+
+/* ── Anéis de cobertura ───────────────────────────────────────────── */
+.cvm-ring {
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* Transbordo: tracejado porque não é uma fronteira garantida — é estimativa
+   de onde o sinal ainda é ouvido. A linha contínua fica pro que a Anatel
+   protege de fato. */
+.cvm-ring--reach {
+  fill: rgba(232, 30, 117, 0.05);
+  stroke: rgba(232, 30, 117, 0.34);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.cvm-ring--contour {
+  fill: rgba(232, 30, 117, 0.13);
+  stroke: rgba(232, 30, 117, 0.72);
+  stroke-width: 1.25;
+}
+
+.cvm-ring-group {
+  transition: opacity 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cvm-ring-group.is-dimmed { opacity: 0.16; }
+
+.cvm-ring-group.is-focused .cvm-ring--contour {
+  stroke: var(--c-action);
+  stroke-width: 1.6;
+}
+
+/* ── Camada de anotação ───────────────────────────────────────────── */
+.cvm-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cvm-overlay > * { pointer-events: auto; }
+
+/* ── Marcador de emissora ─────────────────────────────────────────── */
+.cvm-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  z-index: 2;
+  /* Sem transição de width/height: o tamanho só muda quando a contagem de
+     emissoras cruza o limiar de logo, o que não acontece no meio da sessão.
+     Todo estado interativo (hover/foco/destaque) anima transform na face. */
+}
+
+.cvm-marker--logo { width: 28px; height: 28px; }
+
+.cvm-marker-face {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+  box-shadow: 0 0 0 1.5px #fff, var(--shadow-sm);
+  overflow: hidden;
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 180ms ease;
+}
+
+.cvm-marker--logo .cvm-marker-face { background: var(--c-surface); }
+.cvm-marker--degraded .cvm-marker-face { background: var(--c-warning); }
+.cvm-marker--down .cvm-marker-face { background: #94a3b8; }
+
+.cvm-marker-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cvm-marker-initials {
+  font-family: var(--font-body);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-text-2);
+}
+
+.cvm-marker:hover { z-index: 40; }
+.cvm-marker:hover .cvm-marker-face { transform: scale(1.16); }
+
+.cvm-marker:focus-visible { outline: none; }
+.cvm-marker:focus-visible .cvm-marker-face {
+  box-shadow: 0 0 0 1.5px #fff, 0 0 0 4.5px rgba(232, 30, 117, 0.35);
+}
+
+.cvm-marker--highlight { z-index: 42; }
+.cvm-marker--highlight .cvm-marker-face {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 5px rgba(232, 30, 117, 0.28), var(--shadow-md);
+}
+
+.cvm-marker--focused { z-index: 45; }
+.cvm-marker--focused .cvm-marker-face {
+  transform: scale(1.3);
+  box-shadow: 0 0 0 2.5px #fff, var(--shadow-md);
+}
+
+.cvm--focus .cvm-marker:not(.cvm-marker--focused) { opacity: 0.35; }
+
+/* Halo permanente de "monitorando" — o mesmo pulso do mapa antigo. */
+.cvm-marker-halo {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+  opacity: 0.5;
+  transform-origin: center;
+  animation: cvm-halo 1.9s ease-out infinite;
+  pointer-events: none;
+}
+
+.cvm-marker--degraded .cvm-marker-halo { background: var(--c-warning); }
+
+@keyframes cvm-halo {
+  0% { transform: scale(1); opacity: 0.45; }
+  70%, 100% { transform: scale(3.2); opacity: 0; }
+}
+
+/* Ping: veiculação nova nesta emissora agora. Distinto do halo contínuo
+   (que só diz "está no ar") — este é um evento. */
+.cvm-marker--ping .cvm-marker-face {
+  animation: cvm-ping 2.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cvm-ping {
+  0% { box-shadow: 0 0 0 1.5px #fff, 0 0 0 0 rgba(232, 30, 117, 0.55); }
+  22% { box-shadow: 0 0 0 1.5px #fff, 0 0 0 14px rgba(232, 30, 117, 0); }
+  30% { box-shadow: 0 0 0 1.5px #fff, 0 0 0 0 rgba(232, 30, 117, 0.4); }
+  55%, 100% { box-shadow: 0 0 0 1.5px #fff, 0 0 0 16px rgba(232, 30, 117, 0); }
+}
+
+.cvm-marker-tag {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-text);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Cidades cobertas ─────────────────────────────────────────────── */
+.cvm-city {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 1;
+  animation: cvm-city-in 320ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+@keyframes cvm-city-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
+}
+
+/* Perto da borda direita o rótulo sairia do palco: inverte a ordem para ele
+   crescer para dentro. O ponto continua exatamente sobre a coordenada. */
+.cvm-city--flip { flex-direction: row-reverse; }
+
+.cvm-city-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
+
+.cvm-city--core .cvm-city-dot { background: var(--c-action); }
+/* Vazado: mesma família, menos peso — a cidade está no transbordo, não na
+   área protegida. */
+.cvm-city--spill .cvm-city-dot {
+  background: var(--c-surface);
+  box-shadow: 0 0 0 1.5px var(--c-action-border);
+}
+
+.cvm-city-name {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--c-text);
+  paint-order: stroke;
+  text-shadow:
+    0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff,
+    0 1px 2px rgba(255, 255, 255, 0.9);
+}
+
+.cvm-city--spill .cvm-city-name {
+  color: var(--c-text-2);
+  font-weight: 400;
+}
+
+/* ── Ficha da emissora em foco ────────────────────────────────────── */
+.cvm-focus {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 246px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  animation: cvm-focus-in 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cvm-focus-in {
+  from { opacity: 0; transform: translateY(-8px); }
+}
+
+.cvm-focus-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.cvm-focus-close:hover { background: var(--c-surface-2); color: var(--c-text); }
+
+.cvm-focus-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 24px;
+}
+
+.cvm-focus-logo {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+}
+
+.cvm-focus-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.cvm-focus-initials {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-2);
+}
+
+.cvm-focus-id { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+.cvm-focus-name {
+  font-family: var(--font-heading);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--c-text);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.cvm-focus-meta { font-size: 11.5px; color: var(--c-label); }
+
+.cvm-focus-radii {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 12px 0 0;
+}
+
+.cvm-focus-radius {
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+}
+
+.cvm-focus-radius dt {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--c-label);
+  line-height: 1.3;
+}
+
+.cvm-focus-radius dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+/* O par de fichas reusa a mesma linguagem dos anéis: cheio = contorno,
+   tracejado = transbordo. É a legenda, sem precisar de uma legenda. */
+.cvm-focus-radius--core { box-shadow: inset 0 0 0 1.25px var(--c-action); }
+.cvm-focus-radius--core dd { color: var(--c-action); }
+.cvm-focus-radius--spill {
+  background: var(--c-surface);
+  border: 1.25px dashed var(--c-action-border);
+}
+
+.cvm-focus-noradius {
+  margin: 12px 0 0;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--c-text-2);
+}
+
+.cvm-focus-cities {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--c-border);
+}
+
+.cvm-focus-cities-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-label);
+}
+
+.cvm-focus-cities-head strong {
+  font-size: 14px;
+  letter-spacing: 0;
+  color: var(--c-action);
+}
+
+.cvm-focus-split { margin: 5px 0 8px; font-size: 11px; color: var(--c-label); }
+
+.cvm-focus-loading { padding: 10px 0; font-size: 11.5px; color: var(--c-text-3); }
+
+.cvm-focus-list {
+  margin: 0;
+  padding: 0 4px 0 0;
+  list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.cvm-focus-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3.5px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--c-surface-2);
+}
+
+.cvm-focus-list li:last-child { border-bottom: 0; }
+.cvm-focus-list li.is-spill { color: var(--c-text-2); }
+
+.cvm-focus-city { min-width: 0; overflow-wrap: anywhere; }
+
+.cvm-focus-dist { flex: none; font-variant-numeric: tabular-nums; color: var(--c-label); font-size: 11px; }
+
+/* ── Controles ────────────────────────────────────────────────────── */
+.cvm-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  align-self: center;
+  padding: 4px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.cvm-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--c-text-2);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.cvm-ctl:hover:not(:disabled) { background: var(--c-surface-2); color: var(--c-text); }
+.cvm-ctl:disabled { opacity: 0.4; cursor: default; }
+.cvm-ctl:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(232, 30, 117, 0.22);
+}
+
+.cvm-ctl--play.is-on { background: var(--c-action); color: #fff; }
+.cvm-ctl--play.is-on:hover { background: var(--c-action-hover); color: #fff; }
+
+.cvm-ctl--icon { padding: 6px 8px; }
+
+.cvm-ctl-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--c-border);
+}
+
+.cvm-counter {
+  min-width: 68px;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-label);
+}
+
+/* ── Responsivo ───────────────────────────────────────────────────── */
+@media (max-width: 700px) {
+  .cvm-focus {
+    top: auto;
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-height: 46%;
+  }
+  .cvm-counter { min-width: 52px; }
+  .cvm-ctl span:not(.cvm-counter) { display: none; }
+  .cvm-ctl { padding: 7px 9px; }
+}
+
+/* ── Movimento reduzido ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .cvm-state,
+  .cvm-ring-group,
+  .cvm-marker,
+  .cvm-marker-face,
+  .cvm-uf-labels,
+  .cvm-ctl,
+  .cvm-focus-close { transition-duration: 1ms; }
+
+  /* O halo e o ping viram estados estáticos: o halo some (a cor do marcador
+     já diz que está monitorando) e o ping vira um anel fixo, que o timeout
+     de 2,6s remove — a informação sobrevive sem o movimento. */
+  .cvm-marker-halo { animation: none; opacity: 0.28; transform: scale(2); }
+  .cvm-marker--ping .cvm-marker-face {
+    animation: none;
+    box-shadow: 0 0 0 1.5px #fff, 0 0 0 5px rgba(232, 30, 117, 0.45);
+  }
+  .cvm-city,
+  .cvm-focus { animation: none; }
+}
