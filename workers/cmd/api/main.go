@@ -16,6 +16,7 @@ import (
 
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
+	"radiocheck/internal/assertiveness"
 	"radiocheck/internal/audit"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/calibration"
@@ -54,7 +55,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("logger: %v", err)
 	}
-	defer logger.Sync() //nolint:errcheck
+	defer logger.Sync()        //nolint:errcheck
 	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
@@ -500,6 +501,13 @@ func main() {
 			zap.String("base_url", cfg.NotificationsBaseURL))
 	}
 
+	assertivenessRepo := assertiveness.New(pool)
+	// Assertividade da plataforma: job que recomputa assertiveness_daily.
+	// Sempre ligado — é dado derivado e barato, e sem ele o card da Visão
+	// Gerencial nasce vazio. Recomputa na subida e a cada 6h.
+	assertivenessSched := assertiveness.NewScheduler(pool, assertivenessRepo, logger)
+	go assertivenessSched.Run(ctx)
+
 	// Reconciler da fila de fingerprint (incidente 2026-06-12): re-publica
 	// fingerprint.generate para materiais presos em pending/generating/failed.
 	// Sempre ligado — é rede de segurança, não feature.
@@ -598,6 +606,7 @@ func main() {
 		Insights:              handlers.NewInsightsHandler(catalog.NewInsights(pool)),
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
 		ManagementOverview:    &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: sup},
+		Assertiveness:         handlers.NewAssertivenessHandler(assertivenessRepo),
 		Suggestions: &handlers.SuggestionsHandler{
 			Repo:     catalog.NewSuggestions(pool),
 			Users:    usersRepo,

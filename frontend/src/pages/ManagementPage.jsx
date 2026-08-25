@@ -3,7 +3,7 @@ import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import BrazilMap from '../components/BrazilMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
-import { useClients, useCampaignsPaged, useManagementOverview } from '../api/hooks'
+import { useClients, useCampaignsPaged, useManagementOverview, useAssertiveness } from '../api/hooks'
 import FlowEmptyState from '../components/FlowEmptyState'
 import { safeLogoUrl } from '../utils/logoUrl'
 import './LiveMapPage.css'
@@ -47,9 +47,18 @@ function formatClientOption(opt, { context }) {
 
 function nf(n) { return new Intl.NumberFormat('pt-BR').format(n ?? 0) }
 
-function KpiCard({ value, label, sub, live, icon }) {
+// "2026-07" -> "julho". O card mostra o mês por extenso porque o número é de um
+// mês fechado específico, não do período filtrado na tela.
+const MONTH_NAMES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+function monthNameFromISO(iso) {
+  const m = Number(String(iso || '').slice(5, 7))
+  return MONTH_NAMES[m - 1] ?? String(iso || '')
+}
+
+function KpiCard({ value, label, sub, live, icon, title }) {
   return (
-    <div className={'mg-kpi' + (live ? ' mg-kpi--live' : '')}>
+    <div className={'mg-kpi' + (live ? ' mg-kpi--live' : '')} title={title}>
       <span className="mg-kpi-ic" aria-hidden>{icon}</span>
       <div className="mg-kpi-n">{value}</div>
       <div className="mg-kpi-l">{label}</div>
@@ -64,9 +73,18 @@ const ICON_MAP = (
 const ICON_LIVE = (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="2" /><path d="M5.2 5.2a4 4 0 0 0 0 5.6M10.8 5.2a4 4 0 0 1 0 5.6" /></svg>
 )
-const ICON_MAT = (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 13V4l7-1.2V11" /><circle cx="4" cy="13" r="2" /><circle cx="11" cy="11" r="2" /></svg>
+const ICON_ASSERT = (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><circle cx="8" cy="8" r="2.4" /><path d="M8 2v1.6M8 12.4V14M2 8h1.6M12.4 8H14" /></svg>
 )
+
+/* O tooltip carrega as duas ressalvas que o card não tem espaço pra mostrar e
+   que, sem elas, o número é fácil de ler errado. */
+const ASSERT_HELP = `De tudo que veiculou, quanto o sistema detectou sozinho — o resto alguém teve que digitar na mão depois.
+
+Janela: sempre o último mês FECHADO, independente do filtro de período. O mês em curso mentiria pra cima — a emissora manda o comprovante depois, então as veiculações manuais daquele mês ainda não foram digitadas.
+
+Só enxerga o miss que alguém reportou: se ninguém digitou, o miss fica invisível. Por isso o volume aparece sempre ao lado do percentual.`
+
 const ICON_AIR = (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M5.5 8l1.5 1.5L10.5 6" /></svg>
 )
@@ -159,6 +177,10 @@ export default function ManagementPage() {
     clientId, campaignIds, status, from, to,
   })
 
+  // Assertividade: escopo (cliente/campanhas) sim, período NÃO — a janela é
+  // sempre o mês fechado anterior, decidida no backend.
+  const { data: assertiveness, isLoading: loadingAssert } = useAssertiveness({ clientId, campaignIds })
+
   const kpis = data?.kpis ?? {}
   const stations = useMemo(() => data?.stations ?? [], [data])
   const detections = useMemo(() => data?.recent_detections ?? [], [data])
@@ -169,6 +191,25 @@ export default function ManagementPage() {
   // Vazio = a consulta voltou e não há nada pra desenhar. Duas leituras
   // diferentes: "seus filtros não cruzaram" (o usuário tem o que desfazer) e
   // "não houve operação no período" (só o período resolve).
+  // Assertividade — derivados do card. Ponteiro nulo em pct significa "não há
+  // veiculação no período": mostramos "—", nunca 0% ou 100% inventados.
+  const assertCur = assertiveness?.current ?? null
+  const assertPct = loadingAssert || !assertCur || assertCur.pct == null
+    ? '—'
+    : `${assertCur.pct.toFixed(1).replace('.', ',')}%`
+  const assertSub = (() => {
+    if (loadingAssert || !assertCur) return ''
+    const total = assertCur.auto + assertCur.miss
+    const mes = monthNameFromISO(assertCur.month)
+    if (!total) return `${mes} · sem veiculação no período`
+    // O volume anda SEMPRE junto do percentual: um time que parou de digitar
+    // manual é indistinguível de um matcher perfeito se só o % aparecer.
+    const base = `${mes} · ${nf(assertCur.miss)} de ${nf(total)} não detectadas`
+    const d = assertiveness?.delta_pp
+    if (d == null || Math.abs(d) < 0.05) return base
+    return `${base} · ${d > 0 ? '▲' : '▼'}${Math.abs(d).toFixed(1).replace('.', ',')}pp`
+  })()
+
   const hasFilters = Boolean(clientId || campaignIds.length || status)
   const showEmpty = !isLoading && !!data &&
     stations.length === 0 && detections.length === 0 && !kpis.stations_monitored
@@ -351,12 +392,11 @@ export default function ManagementPage() {
             <KpiCard icon={ICON_LIVE} live value={isLoading ? '—' : nf(kpis.stations_live)}
               label="Monitorando agora"
               sub={isLoading ? '' : `worker saudável · ${livePct}% online`} />
-            <KpiCard icon={ICON_MAT} value={isLoading ? '—' : nf(kpis.materials_monitored)}
-              label="Materiais monitorados"
-              sub={isLoading ? '' : `em ${nf(kpis.campaigns_count)} campanha${kpis.campaigns_count === 1 ? '' : 's'}`} />
+            <KpiCard icon={ICON_ASSERT} value={assertPct} label="Assertividade"
+              sub={assertSub} title={ASSERT_HELP} />
             <KpiCard icon={ICON_AIR} value={isLoading ? '—' : nf(kpis.airings_total)}
               label="Veiculações no período"
-              sub={isLoading ? '' : `+${nf(kpis.airings_today)} hoje`} />
+              sub={isLoading ? '' : `+${nf(kpis.airings_today)} hoje · ${nf(kpis.campaigns_count)} campanha${kpis.campaigns_count === 1 ? '' : 's'} · ${nf(kpis.materials_monitored)} materiais`} />
             </div>
 
             <section className="mg-card mg-map-card">

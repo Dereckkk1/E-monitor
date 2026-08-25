@@ -779,6 +779,29 @@ export function useManagementOverview({ clientId, campaignIds, status, from, to 
   })
 }
 
+/**
+ * Assertividade da plataforma — card da Visão Gerencial.
+ *
+ * Aceita os filtros de ESCOPO da tela (cliente/campanhas), mas NÃO os de
+ * período: a janela é sempre o mês fechado anterior, decidida no backend. O mês
+ * em curso mentiria pra cima — no dia 3 quase nenhuma manual daquele mês foi
+ * digitada ainda (a emissora manda o comprovante depois).
+ *
+ * Sem refetchInterval: o número muda no máximo a cada 6h (o job que recomputa),
+ * então ficar repolindo a cada 20s como o /management-overview seria desperdício.
+ */
+export function useAssertiveness({ clientId, campaignIds } = {}) {
+  const params = {}
+  if (clientId) params.client_id = clientId
+  if (campaignIds && campaignIds.length) params.campaigns = campaignIds.join(',')
+  return useQuery({
+    queryKey: ['assertiveness', clientId || null, (campaignIds || []).join(',')],
+    queryFn: () => api.get('/assertiveness', { params }).then(r => r.data),
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useStationHealthEvents(stationId, days = 7) {
   return useQuery({
     queryKey: ['stream-health-events', stationId, days],
