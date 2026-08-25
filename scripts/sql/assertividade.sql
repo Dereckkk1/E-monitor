@@ -41,6 +41,12 @@
 -- pra perdoar ninguém e a assertividade sai artificialmente baixa. O bloco [A]
 -- mostra a cobertura real — confira antes de esticar as datas.
 --
+-- PAPEL DESTE SCRIPT: ferramenta de VERIFICAÇÃO. A fonte que alimenta o card da
+-- Visão Gerencial é workers/internal/assertiveness/compute.go, que grava a
+-- tabela assertiveness_daily. Este script roda a mesma conta de forma ad-hoc —
+-- use quando desconfiar do número da tela e compare os dois. Se divergirem, um
+-- dos dois está errado: mexeu num, mexa no outro.
+--
 -- Só cria TEMP TABLEs (some ao fechar a sessão). Nenhum INSERT/UPDATE/DELETE
 -- em tabela real.
 -- ============================================================================
@@ -78,12 +84,25 @@ SELECT (:'from_date'::date + time '00:00') AT TIME ZONE 'America/Sao_Paulo' AS t
 
 -- ── janelas de stream fora do ar, com folga ─────────────────────────────────
 CREATE TEMP TABLE t_down AS
+-- Fim da janela, nesta ordem: duration_seconds quando existe; senão o próximo
+-- evento 'up' da emissora; senão agora. E nunca depois de agora.
+--
+-- Fechar em NOW() direto é armadilha: um down que ficou ABERTO (sem duration e
+-- sem 'up' subsequente) teria janela crescendo pra sempre e passaria a
+-- "perdoar" todos os meses seguintes — inflando a assertividade.
 SELECT h.station_id,
        tstzrange(
          h.event_at - (:grace_seconds * INTERVAL '1 second'),
-         h.event_at + (COALESCE(h.duration_seconds, EXTRACT(EPOCH FROM (NOW() - h.event_at))::int)
-                       * INTERVAL '1 second')
-                    + (:grace_seconds * INTERVAL '1 second'),
+         LEAST(
+           COALESCE(
+             h.event_at + (h.duration_seconds * INTERVAL '1 second'),
+             (SELECT MIN(u.event_at) FROM stream_health_events u
+               WHERE u.station_id = h.station_id
+                 AND u.event_type = 'up'
+                 AND u.event_at > h.event_at),
+             NOW()),
+           NOW()
+         ) + (:grace_seconds * INTERVAL '1 second'),
          '[]'
        ) AS win
 FROM stream_health_events h, t_win w

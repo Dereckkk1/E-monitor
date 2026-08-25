@@ -60,6 +60,7 @@ type Deps struct {
 	Insights              *handlers.InsightsHandler
 	LiveMap               *handlers.LiveMapHandler
 	ManagementOverview    *handlers.ManagementOverviewHandler
+	Assertiveness         *handlers.AssertivenessHandler
 	Suggestions           *handlers.SuggestionsHandler
 	ClientTargetPmm       *handlers.ClientTargetPmmHandler
 
@@ -287,6 +288,14 @@ func NewRouter(d Deps) http.Handler {
 				// docs/features/management-overview.md.
 				if d.ManagementOverview != nil {
 					r.Get("/management-overview", d.ManagementOverview.Get)
+				}
+				// Assertividade da plataforma — alimenta o card da Visão
+				// Gerencial. Mesmo gating e mesmos filtros de escopo do
+				// /management-overview, mas SEM from/to: a janela é sempre o
+				// mês fechado anterior (o mês em curso mentiria pra cima).
+				// Doc: docs/features/assertiveness-metric.md.
+				if d.Assertiveness != nil {
+					r.Get("/assertiveness", d.Assertiveness.Get)
 				}
 				// Writes em /clients. NÃO usar r.Route() aqui — Route monta
 				// sub-tree que captura todos os métodos do prefixo e mascara o

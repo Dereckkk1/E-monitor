@@ -59,6 +59,7 @@ docs/
 | Doc | Sobre |
 |-----|-------|
 | [campaign-wizard.md](features/campaign-wizard.md) | Wizard de 6 etapas para criar/editar campanha |
+| [assertiveness-metric.md](features/assertiveness-metric.md) | Assertividade da plataforma (card da Visão Gerencial): quanto o matcher pegou sozinho vs o que foi digitado na mão. Janela = último mês **fechado** (o mês em curso mente pra cima); a métrica só vê o miss **reportado**, por isso o volume anda sempre junto do % |
 | [cancelled-campaign-handling.md](features/cancelled-campaign-handling.md) | Campanha cancelada fora de seletores/telas ao vivo/KPIs/cobrança; histórico mantido+marcado, déficit congelado em `cancelled_at` (migration 0044) |
 | [multi-attribution.md](features/multi-attribution.md) | F-119: mesma tocada conta p/ N campanhas (flag `MULTI_ATTRIBUTION`, tabela `detection_campaigns` + view `detection_attributions`) |
 | [campaign-connection-step.md](features/campaign-connection-step.md) | Step 3 "Conexão" — testar (ping/stream/worker efêmeros) e trocar a stream_url por emissora |
