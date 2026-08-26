@@ -59,6 +59,19 @@ type Config struct {
 	// vira "Autor" (só as próprias). Configurável por env pra ser testável sem
 	// recompilar; cai no default seguro quando ausente.
 	SuggestionsDevEmail string // SUGGESTIONS_DEV_EMAIL
+
+	// ── E-Hub (Central de Clientes) — RFC-001 §8.1 ──
+	// HubURL: base da API do hub, usada para trocar o código de uso único que
+	// chega em /sso. HubPlatformKey: a chave DESTA plataforma, gerada no admin
+	// do hub e exibida uma vez só.
+	//
+	// Opcionais de propósito, e NÃO entram no `required` do Load(): ausentes, o
+	// endpoint de SSO responde 503 e o resto do sistema não muda em nada. O
+	// login local continua sendo o caminho de sempre (decisão D5 do RFC —
+	// coexistência permanente). Torná-las obrigatórias faria a API inteira
+	// deixar de subir por causa de uma integração opcional.
+	HubURL         string // HUB_URL
+	HubPlatformKey string // HUB_PLATFORM_KEY
 }
 
 func Load() (*Config, error) {
@@ -147,6 +160,12 @@ func Load() (*Config, error) {
 	if cfg.SuggestionsDevEmail == "" {
 		cfg.SuggestionsDevEmail = "tatico3@hubradios.com"
 	}
+
+	// E-Hub: sem default. Uma URL padrão aqui faria a API tentar trocar códigos
+	// com um host que ninguém configurou, e o erro apareceria como falha de rede
+	// no meio do login de alguém — em vez do 503 honesto de "não configurado".
+	cfg.HubURL = strings.TrimRight(os.Getenv("HUB_URL"), "/")
+	cfg.HubPlatformKey = os.Getenv("HUB_PLATFORM_KEY")
 
 	return cfg, nil
 }

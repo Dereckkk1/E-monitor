@@ -62,6 +62,9 @@ type Deps struct {
 	ManagementOverview    *handlers.ManagementOverviewHandler
 	Assertiveness         *handlers.AssertivenessHandler
 	Suggestions           *handlers.SuggestionsHandler
+	// HubSSO: entrada pela Central de Clientes (RFC-001 §8.1). nil quando a
+	// integracao nao esta configurada — a rota simplesmente nao e registrada.
+	HubSSO                *handlers.HubSSOHandler
 	ClientTargetPmm       *handlers.ClientTargetPmmHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
@@ -139,6 +142,12 @@ func NewRouter(d Deps) http.Handler {
 		// não tem sessão, é justamente onde ele descobre a senha. O token de 32
 		// bytes é a credencial. Throttle no mesmo limiter do login porque o
 		// endpoint é enumerável em tese (na prática, 2^256 de espaço de busca).
+		// Entrada pela Central de Clientes: publica pelo mesmo motivo do login —
+		// quem chega aqui ainda nao tem sessao. O codigo de uso unico e a
+		// credencial, e ele vive 60s. Mesmo throttle do login.
+		if d.HubSSO != nil {
+			r.With(loginLimiter.Middleware).Post("/auth/sso", d.HubSSO.Login)
+		}
 		if d.Welcome != nil {
 			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
 		}

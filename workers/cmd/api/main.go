@@ -23,6 +23,7 @@ import (
 	"radiocheck/internal/campaignalerts"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
+	"radiocheck/internal/hub"
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
@@ -547,6 +548,7 @@ func main() {
 		Health:       &handlers.HealthHandler{DB: pool, NATS: nc, Sup: sup},
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations, Sup: sup},
 		Auth:         handlers.NewAuthHandler(pool, usersRepo),
+		HubSSO:       handlers.NewHubSSOHandler(pool, usersRepo, hub.New(cfg.HubURL, cfg.HubPlatformKey)),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
 		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Threshold: sup, Calibration: calibrationScheduler, Log: logger},
