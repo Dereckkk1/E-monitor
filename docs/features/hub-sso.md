@@ -12,6 +12,8 @@ codigo-relacionado:
   - workers/internal/api/router.go
   - workers/cmd/api/main.go
   - frontend/src/pages/HubSsoPage.jsx
+  - frontend/e2e/hub-sso.spec.js
+  - frontend/playwright.config.js
   - frontend/src/pages/HubSsoPage.css
   - frontend/src/App.jsx
   - frontend/src/api/client.js
@@ -156,7 +158,51 @@ rodar de verdade (headers, tradução de status, parsing). **O que isso não pro
 é que o hub real responde neste formato — para isso existe o roteiro de ponta a
 ponta com os dois sistemas no ar, exigido pela §15 do RFC.
 
-> ⚠️ **O frontend não tem teste**, e não por esquecimento: o `frontend/` do
-> E-monitor não tem infraestrutura de testes nenhuma (sem script `test`, sem
-> arquivos de teste). Introduzir um framework inteiro fugiria do escopo desta
-> feature. Fica registrado como lacuna real.
+### A página, em navegador — 2026-08-26
+
+`frontend/e2e/hub-sso.spec.js` — **4 testes**, Playwright, `npm run test:e2e`.
+
+Existem porque a tela foi entregue com os 15 testes acima verdes e **não
+funcionava em navegador nenhum**. Ninguém a tinha aberto. O defeito vivia
+exatamente onde aqueles testes não chegam — no browser, **depois** da resposta
+do backend:
+
+> A 1ª passada do efeito marcava `jaTrocou` e disparava a troca; o React
+> desmontava (StrictMode) e a limpeza fazia `cancelado = true`; a 2ª passada
+> saltava a troca pela guarda `jaTrocou`, **antes** de criar um `cancelado`
+> novo. Quando a troca resolvia, `if (cancelado) return` matava a única passada
+> que fez trabalho: nem `login`, nem `navigate`. O backend respondia **200**, a
+> sessão de 8h era emitida, e a pessoa ficava olhando o **spinner para sempre**.
+
+A guarda `jaTrocou` e o `cancelado` se cancelavam. Quem garante troca única é o
+`jaTrocou` — e só ele precisa garantir. **Não reintroduzir um `cancelado` de
+limpeza nesta página**; há comentário no código dizendo o porquê, e o teste
+falha se voltar. A mesma linha quebrava a `/sso` da Plura do mesmo jeito.
+
+Os 4 testes falseiam a API com `page.route` de propósito — o que está sendo
+provado é a **tela**, e amarrar isso a Postgres + NATS + MinIO + Go faria um
+teste que ninguém roda. Além do caminho feliz, eles travam os três recados que
+alguém vai ver de verdade: sem código, 410, e `client_not_provisioned` — este
+último porque não é erro de borda, é o caminho normal até a Fase 3 existir.
+**Verificado reintroduzindo o defeito**: o caminho feliz trava e o teste falha.
+
+> **Playwright entrou aqui, e só ele.** O `frontend/` não tinha framework de
+> teste nenhum, e a tela que precisava de prova era justamente uma que depende
+> de rede e de navegação. `@playwright/test` é **uma** devDependency; o lockfile
+> foi conferido pela regra 5.4 do `CLAUDE.md` (`emnapi` em 11 antes e depois,
+> bindings linux em 21 antes e depois) e validado com um `npm ci` de verdade em
+> diretório limpo. O `npm install` **podou** `@emnapi/core`, `@emnapi/runtime` e
+> `yaml`, exatamente como a regra 5.2 avisa — os três foram devolvidos, e o
+> diff do lockfile saiu **só com inserções**.
+
+**Roteiro de clique completo, com TUDO no ar: 13 de 13** — hub em `:3010`,
+frontend em `:5174`, API Go nativa em `:8080` contra Postgres, NATS e MinIO em
+container com as 68 migrations aplicadas. Código real emitido pelo hub, trocado
+pelo Go de verdade, sessão de admin de verdade: sai da `/sso`, cai em
+`/stations` (o mesmo `HomeRedirect` do login local) e as chamadas
+`/v1/internal/*` seguintes respondem 200.
+
+> **Observação, não defeito da `/sso`:** a `/stations` acumula ~17
+> `ERR_BLOCKED_BY_ORB` de logos de emissora hospedados no Google. Medido abrindo
+> `/stations` com a sessão pronta, **sem passar pela `/sso`**: os mesmos 17.
+> É da página de destino, e aconteceria igual entrando pelo login local.
