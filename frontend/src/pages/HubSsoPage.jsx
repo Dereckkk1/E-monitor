@@ -37,16 +37,32 @@ export default function HubSsoPage() {
     if (jaTrocou.current) return
     jaTrocou.current = true
 
-    let cancelado = false
+    /**
+     * NÃO reintroduzir um `cancelado` de limpeza aqui. Ele existiu e matava a
+     * página inteira, em conluio com a guarda `jaTrocou` logo acima:
+     *
+     *   1ª passada do efeito — marca `jaTrocou` e dispara a troca;
+     *   o React desmonta (StrictMode) e a limpeza faz `cancelado = true`;
+     *   2ª passada — sai no `if (jaTrocou.current) return`, ANTES de criar um
+     *   `cancelado` novo, então o `true` da 1ª passada continua valendo;
+     *   a troca resolve — `if (cancelado) return` mata a única passada que fez
+     *   trabalho: nem `login`, nem `navigate`.
+     *
+     * Resultado: o backend respondia 200, a sessão de 8h era emitida, e a
+     * pessoa ficava olhando o spinner para sempre. Achado abrindo a tela em
+     * navegador; a mesma linha quebrava a `/sso` da Plura do mesmo jeito.
+     *
+     * Quem garante troca única é o `jaTrocou` — e só ele precisa garantir.
+     * Desmontar no meio não é motivo para descartar o resultado: a sessão já
+     * foi emitida do outro lado, e guardá-la é o comportamento certo.
+     */
     ;(async () => {
       try {
         const { data } = await api.post('/auth/sso', { code })
-        if (cancelado) return
         login(data.token, data.user)
         // Mesmo destino do login local: a raiz resolve a home pelo role.
         navigate('/', { replace: true })
       } catch (err) {
-        if (cancelado) return
         const status = err?.response?.status
         // `data` do backend Go vem como texto puro (http.Error), não JSON.
         const corpo = typeof err?.response?.data === 'string' ? err.response.data.trim() : ''
@@ -54,7 +70,6 @@ export default function HubSsoPage() {
       }
     })()
 
-    return () => { cancelado = true }
   }, [code, navigate, login])
 
   // Derivado no render, não setado no efeito: sem o código na URL a página já
