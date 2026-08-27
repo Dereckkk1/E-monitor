@@ -22,7 +22,7 @@ codigo-relacionado:
 # Entrada pela Central de Clientes (E-Hub) — `POST /v1/internal/auth/sso`
 
 Segunda porta de entrada no E-monitor, **pública**. Quem tem conta na Central de
-Clientes (`clientes.emidiastec.com`) clica no card do E-monitor e chega aqui já
+Clientes (`clientes.emidiastec.com.br`) clica no card do E-monitor e chega aqui já
 logado, sem digitar senha de novo.
 
 **Não substitui o login local.** As duas portas coexistem para sempre — é a
@@ -136,7 +136,7 @@ Conta criada agora nasce ativa, então esses gates só alcançam quem já existi
 ## Configuração
 
 ```
-HUB_URL=https://api-clientes.emidiastec.com
+HUB_URL=https://api-clientes.emidiastec.com.br
 HUB_PLATFORM_KEY=pk_…    # gerada no admin do hub, exibida UMA vez
 ```
 

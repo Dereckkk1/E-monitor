@@ -113,7 +113,7 @@ func payloadCliente(hubClientID string) map[string]any {
 func payloadInterno() map[string]any {
 	return map[string]any{
 		"hubUserId":        "665f1a2b3c4d5e6f70819999",
-		"email":            "time@emidiastec.com",
+		"email":            "time@emidiastec.com.br",
 		"name":             "Equipe",
 		"phone":            nil,
 		"level":            "internal",
@@ -173,7 +173,7 @@ func TestHubSSO_JIT_InternoViraAdminSemCliente(t *testing.T) {
 	rec := entrar(t, NewHubSSOHandler(pool, repo, hc))
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	u, err := repo.GetByEmail(ctx, "time@emidiastec.com")
+	u, err := repo.GetByEmail(ctx, "time@emidiastec.com.br")
 	require.NoError(t, err)
 	require.Equal(t, "admin", u.Role)
 	require.Nil(t, u.ClientID)
