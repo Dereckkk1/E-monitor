@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useStations, useUpdateCampaignStations } from '../../api/hooks'
 import RSelect from '../../components/RSelect'
 import StationAvatar from '../../components/StationAvatar'
+import { planStationsSave } from '../../utils/stationsSavePlan.js'
 
 /**
  * Step 2 of the wizard: pick stations via RSelect multi-select with server-side
@@ -25,8 +26,17 @@ export default function StationsStep({ campaignId, allStations, currentSelection
       .map(toOption)
   )
 
-  // Re-sync if currentSelection changes externally (edit mode hydration)
+  // Marca que a selecao mudou POR ACAO DO USUARIO. E a unica coisa que
+  // autoriza um PUT: sem isso, estado derivado (hidratacao, refetch do
+  // invalidate, remontagem) vira escrita destrutiva — foi o que zerou a
+  // campanha 6fa29650 em 2026-08-31. Ver utils/stationsSavePlan.js.
+  const dirtyRef = useRef(false)
+
+  // Re-sync if currentSelection changes externally (edit mode hydration).
+  // Enquanto ha edicao pendente do usuario nao resincroniza: o refetch
+  // disparado pelo onSuccess do save chegaria por cima da selecao recem-feita.
   useEffect(() => {
+    if (dirtyRef.current) return
     setSelectedOpts(
       (currentSelection ?? [])
         .map(id => allStations.find(s => s.id === id))
@@ -54,6 +64,8 @@ export default function StationsStep({ campaignId, allStations, currentSelection
     return [...results, ...extra]
   }, [searchResults, selectedOpts])
 
+  const allStationIds = useMemo(() => allStations.map(s => s.id), [allStations])
+
   const updateCampaign = useUpdateCampaignStations()
 
   // Holds the latest diff that hasn't reached the backend yet. Cleared
@@ -62,45 +74,34 @@ export default function StationsStep({ campaignId, allStations, currentSelection
   // another step (or refreshes) while the 500ms debounce is still pending.
   const pendingSaveRef = useRef(null)
 
-  // Save with debounce (not on every keystroke).
-  //
-  // The hydration guard skips when `allStations` hasn't loaded yet —
-  // without it, the selectedOpts initializer (which uses `allStations.find`)
-  // starts empty and the effect would auto-save target_stations=[] over a
-  // populated list.
-  //
-  // `unresolved` carries any currentSelection ids that aren't in
-  // `allStations` — usually a station that was deleted (target_stations is
-  // a plain UUID[] without a FK, so refs can orphan) or one beyond the
-  // limit=2000 window. Since the PUT replaces target_stations wholesale,
-  // we must include those ids in the payload, otherwise toggling any
-  // VISIBLE station would silently drop the invisible orphans. This also
-  // replaces the previous `allCurrentResolved` guard (e7b9745), which
-  // bricked the form forever when an orphan existed: the guard would
-  // assume "hydration in progress" and abort every save indefinitely.
+  // Save with debounce (not on every keystroke). A decisao inteira — inclusive
+  // a preservacao dos ids que o catalogo nao resolve e a exigencia de `dirty` —
+  // mora em planStationsSave, que e testado em utils/stationsSavePlan.test.mjs.
   useEffect(() => {
-    if (!campaignId) return
-    if (!allStations || allStations.length === 0) return
-    const visibleIds = selectedOpts.map(o => o.value)
-    const unresolved = currentSelection.filter(
-      id => !allStations.some(s => s.id === id)
-    )
-    const fullIds = unresolved.length === 0
-      ? visibleIds
-      : [...visibleIds, ...unresolved]
-    const sameAsCurrent = fullIds.length === currentSelection.length &&
-      fullIds.every(id => currentSelection.includes(id))
-    if (sameAsCurrent) {
-      pendingSaveRef.current = null
+    const plan = planStationsSave({
+      dirty: dirtyRef.current,
+      campaignId,
+      allStationIds,
+      selectedIds: selectedOpts.map(o => o.value),
+      currentSelection,
+    })
+    if (!plan.save) {
+      // 'unchanged' = a tela ja bate com o servidor. Nada pendente, e a edicao
+      // do usuario esta liquidada — libera a resync do effect la em cima.
+      if (plan.reason === 'unchanged') {
+        dirtyRef.current = false
+        pendingSaveRef.current = null
+      }
       return
     }
-    pendingSaveRef.current = { campaignId, ids: fullIds }
+    pendingSaveRef.current = { campaignId, ids: plan.ids }
     const t = setTimeout(() => {
-      updateCampaign.mutate({ id: campaignId, targetStations: fullIds })
+      updateCampaign.mutate({ id: campaignId, targetStations: plan.ids })
+      dirtyRef.current = false
       pendingSaveRef.current = null
     }, 500)
     return () => clearTimeout(t)
-  }, [selectedOpts, campaignId, allStations, currentSelection])
+  }, [selectedOpts, campaignId, allStations, allStationIds, currentSelection])
 
   // Flush pending save on unmount. Without this, navigating to step 3 (or
   // back to step 1) within the 500ms debounce window cancels the timeout
@@ -117,10 +118,12 @@ export default function StationsStep({ campaignId, allStations, currentSelection
   }, [])
 
   function removeOne(id) {
+    dirtyRef.current = true
     setSelectedOpts(opts => opts.filter(o => o.value !== id))
   }
 
   function clearAll() {
+    dirtyRef.current = true
     setSelectedOpts([])
   }
 
@@ -218,7 +221,10 @@ export default function StationsStep({ campaignId, allStations, currentSelection
             isMulti
             options={stationOptions}
             value={selectedOpts}
-            onChange={opts => setSelectedOpts(opts ?? [])}
+            onChange={opts => {
+              dirtyRef.current = true
+              setSelectedOpts(opts ?? [])
+            }}
             onInputChange={(val, { action }) => {
               if (action === 'input-change') setStationInput(val)
             }}
