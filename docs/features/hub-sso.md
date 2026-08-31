@@ -145,6 +145,33 @@ o endpoint de SSO responde 503 e o resto do sistema não muda. Tornar
 obrigatórias faria a API inteira deixar de subir por causa de uma integração
 opcional.
 
+### ⚠️ Não basta pôr no `.env` da VM — o compose precisa repassar
+
+O serviço `api` do `infra/docker/docker-compose.yml` usa um bloco `environment:`
+**explícito**: só chega no container o que está listado ali. O `--env-file` que o
+`scripts/deploy.sh` passa serve para **interpolar** `${VAR}` dentro do compose;
+ele não injeta nada no processo.
+
+Aconteceu na entrega: código no ar, migration aplicada, as duas variáveis no
+`.env` da VM — e o endpoint respondendo **503**, porque o container nunca as
+recebeu. As duas linhas que fecham isso estão no compose:
+
+```yaml
+      HUB_URL: ${HUB_URL:-}
+      HUB_PLATFORM_KEY: ${HUB_PLATFORM_KEY:-}
+```
+
+**Os 15 testes de `hubsso_test.go` não pegam esse caso** — eles setam a env direto
+no processo, sem passar pelo compose. A checagem que pega é uma só, e vale sempre
+que uma variável nova entrar:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml \
+  --env-file infra/docker/.env exec api env | grep HUB_
+```
+
+Se não imprimir as duas, elas não estão lá — não importa o que o `.env` diga.
+
 Rotacionar a chave no hub mantém a anterior válida por **24h** — a janela para
 publicar a nova aqui sem derrubar o SSO.
 

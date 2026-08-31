@@ -185,6 +185,26 @@ services:
       MASTERS_PATH: /data/masters
       SEGMENTS_PATH: /data/segments
       API_PORT: "8080"
+      # E-Hub (Central de Clientes) — entrada por SSO. Ver docs/features/hub-sso.md
+      #
+      # ⚠️ ESTE BLOCO `environment:` E EXPLICITO: só chega no container o que
+      # está listado aqui. O `--env-file` que o scripts/deploy.sh passa serve
+      # para INTERPOLAR `${VAR}` dentro deste arquivo — ele não injeta nada no
+      # processo. Variável nova que o binário lê com os.Getenv precisa de uma
+      # linha aqui, senão chega vazia.
+      #
+      # Foi exatamente o que aconteceu na entrega do SSO: o código subiu, a
+      # migration rodou, as vars estavam no .env da VM, e o endpoint respondia
+      # 503 ("integração desligada") porque o container nunca as recebeu. Os 15
+      # testes de hubsso_test.go não pegam isso — eles setam a env direto no
+      # processo, sem passar pelo compose.
+      #
+      # As duas são OPCIONAIS de propósito (config.Load não as exige): ausentes,
+      # só o endpoint de SSO responde 503 e o resto do sistema não muda. Por
+      # isso o `:-` — sem ele, o compose falharia a interpolação numa instalação
+      # que não usa o hub.
+      HUB_URL: ${HUB_URL:-}
+      HUB_PLATFORM_KEY: ${HUB_PLATFORM_KEY:-}
       # Teto soft do HEAP GO — o GC fica agressivo perto do limite em vez de
       # deixar o heap crescer sem controle. IMPORTANTE (correção 2026-07-17):
       # isso NÃO protege o container do OOM killer do kernel. O RSS deste
