@@ -137,10 +137,31 @@ shadow_migration_test() {
   # benigno (extensões já presentes); validamos pelo schema_migrations.
   $COMPOSE exec -T postgres sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>/dev/null \
     | docker exec -i "$SHADOW_NAME" pg_restore -U radiocheck -d radiocheck --no-owner --no-acl >/dev/null 2>&1 || true
-  if ! docker exec "$SHADOW_NAME" psql -U radiocheck -d radiocheck -Atc \
-        "SELECT 1 FROM information_schema.tables WHERE table_name='schema_migrations'" 2>/dev/null | grep -q 1; then
-    warn "clone de dados pra sombra falhou — pulando teste (deploy segue)."; shadow_cleanup; return 0
+  # A guarda aqui já perguntou só se a tabela `schema_migrations` EXISTE — e um
+  # restore parcial passa por ela: a tabela vem no dump junto com as outras, mas
+  # sem a linha de versão. O migrate então lê versão 0, roda TUDO desde a 0001
+  # sobre tabelas que o restore já criou, e aborta com
+  # `relation "clients" already exists` — erro da 0001, não da migration nova.
+  #
+  # Foi o falso positivo do deploy de 2026-08-31 (postmortem do go-live do E-Hub,
+  # §5.12). O custo real não é o susto: é alguém concluir que a guarda mente e
+  # pegar o hábito de `SKIP_MIGRATION_SHADOW=yes`. Guarda que dá alarme falso é
+  # guarda que se desliga de vez — e aí a regra 4.8 do CLAUDE.md fica sem defesa.
+  #
+  # Agora compara a VERSÃO (e o `dirty`): a sombra só serve como teste se estiver
+  # exatamente no mesmo ponto que a produção. Divergiu, o clone está incompleto e
+  # o certo é PULAR — não reprovar o deploy por um problema que não é dele.
+  local v_prod v_sombra
+  v_prod=$($COMPOSE exec -T postgres sh -c \
+      'psql -tAF/ -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT version, dirty FROM schema_migrations LIMIT 1"' \
+      2>/dev/null | tr -d '\r' | head -1)
+  v_sombra=$(docker exec "$SHADOW_NAME" psql -tAF/ -U radiocheck -d radiocheck \
+      -c "SELECT version, dirty FROM schema_migrations LIMIT 1" 2>/dev/null | tr -d '\r' | head -1)
+  if [ -z "$v_sombra" ] || [ "$v_sombra" != "$v_prod" ]; then
+    warn "clone pra sombra incompleto (prod=${v_prod:-vazio}, sombra=${v_sombra:-vazio}) — pulando teste (deploy segue)."
+    shadow_cleanup; return 0
   fi
+  ok "sombra confere com prod (schema_migrations version/dirty = $v_prod)"
 
   # ── o teste de verdade: aplica as migrations pendentes sobre os dados reais ──
   step "teste de migrations em sombra (cópia dos dados de prod)"
