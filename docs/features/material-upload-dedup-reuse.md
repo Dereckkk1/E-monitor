@@ -101,6 +101,18 @@ Só bytes idênticos. O mesmo áudio reencodado (outro bitrate, outro container)
 gera `sha` diferente e passa como material novo — é aí que a checagem de
 similaridade entra, e o modal bloqueante a partir de 0,50 de score. Materiais
 221 e 220 do cliente UNIFIQUE são exatamente esse caso: mesmo spot, `sha`
-diferente, `similarity_score = 1`, ambos vinculados à mesma campanha. Ver
-[version-disambiguation.md](../architecture/version-disambiguation.md) para o
-efeito disso na atribuição.
+diferente, `similarity_score = 1`, ambos vinculados à mesma campanha.
+
+**Isso não gera dupla contagem.** Medido em 2026-08-31: os dois co-disparam no
+mesmo segundo (24 pares, delta 0,0s, `confidence` e `temporal_coverage`
+idênticos), mas as 24 detecções do 221 estão todas `retracted_at IS NOT NULL` —
+a desambiguação pós-confirmação retrata um lado e o
+[`ApprovedDetectionsFilter`](../../workers/internal/catalog/detection_filter.go)
+descarta. Na base inteira, em 90 dias: 8.032 pares no mesmo segundo, dos quais
+7.366 (91,7%) já retratados e 568 contando duas vezes (~0,7% do volume).
+
+Ao investigar contagem de veiculação, **conte sempre com o
+`ApprovedDetectionsFilter`**: `detection_campaigns.category` sozinho inclui
+linhas retratadas e produz alarme falso. Ver
+[detection-count-consistency.md](../architecture/detection-count-consistency.md)
+e [version-disambiguation.md](../architecture/version-disambiguation.md).
