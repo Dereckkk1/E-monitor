@@ -172,6 +172,12 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// cliente (mesmo áudio em clientes distintos pode ser produção legítima).
 	// O arquivo já está salvo em <sha>.<ext> (conteúdo idêntico), então nada a limpar.
 	if existing, gerr := h.Repo.GetByClientAndSHA(r.Context(), clientID, sha); gerr == nil {
+		// O arquivo foi gravado ANTES desta checagem e agora não é referenciado
+		// por linha nenhuma. Sem isto cada retentativa do operador deixa uma
+		// cópia de vários MB pra trás (prod 2026-08-31: mesmo áudio como .mp3
+		// referenciado e .mpeg órfão). Best-effort: falhar em remover o órfão
+		// não pode derrubar o upload.
+		_ = discardRedundantMaster(finalPath, existing.MasterStoragePath)
 		writeJSON(w, http.StatusOK, existing)
 		return
 	} else if !errors.Is(gerr, pgx.ErrNoRows) {
@@ -213,6 +219,28 @@ func (h *MaterialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, mat)
+}
+
+// discardRedundantMaster remove o arquivo que o Upload acabou de gravar quando
+// o dedup por master_sha256 decidiu reusar um material que já existia.
+//
+// Duas guardas, ambas contra perda de dado irreversível:
+//
+//   - newPath == existingPath: o arquivo recém-gravado É o master do material
+//     existente (re-upload do mesmo arquivo com a mesma extensão, que produz o
+//     mesmo <sha>.<ext>). Remover aqui apagaria o master de um material vivo e
+//     mataria a detecção desse áudio pro cliente inteiro.
+//
+//   - master do existente ausente do disco: a cópia recém-enviada é a única que
+//     restou. Qualquer erro no Stat conta como ausente — na dúvida, não apaga.
+func discardRedundantMaster(newPath, existingPath string) error {
+	if newPath == existingPath {
+		return nil
+	}
+	if _, err := os.Stat(existingPath); err != nil {
+		return nil
+	}
+	return os.Remove(newPath)
 }
 
 // UpdateType sets or clears the type_id for a material.

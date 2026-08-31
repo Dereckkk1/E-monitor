@@ -5,6 +5,8 @@ import {
   useUpdateMaterialTypeId, useUpdateMaterialScript, useUpdateCampaignMaterialStations,
 } from '../../api/hooks'
 import api from '../../api/client'
+import { describeLinkedStations } from '../../utils/linkedStationsChip.js'
+import { planUploadOutcome } from '../../utils/uploadOutcome'
 import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
 import SimilarityWarningModal from '../../components/SimilarityWarningModal'
@@ -308,18 +310,21 @@ function MaterialCard({
   // blocker for advancing the wizard. Otherwise it carries the type's color.
   const typeColor = type?.color ?? '#ca8a04'
 
-  const totalStations = campaignStations.length
-  const linkedCount   = link.target_stations.length
-  const allLinked     = linkedCount === totalStations && totalStations > 0
-  const noneLinked    = linkedCount === 0
-
-  // Visual signal for the stations chip — green when all, amber when partial,
-  // red when zero (material won't be detected anywhere).
-  const stationsChip = noneLinked
-    ? { bg: '#fee2e2', fg: 'var(--c-danger)',  label: 'sem emissora — não será detectado' }
-    : allLinked
-    ? { bg: '#dcfce7', fg: 'var(--c-success)', label: `em todas (${totalStations})` }
-    : { bg: '#fef9c3', fg: '#a16207',          label: `${linkedCount} de ${totalStations} emissoras` }
+  // Verde quando cobre a campanha inteira, ambar quando parcial ou com orfa,
+  // vermelho quando o material nao seria detectado em lugar nenhum. O texto
+  // vem de describeLinkedStations — as duas listas sao colunas independentes
+  // e podem divergir, entao o rotulo precisa dizer a verdade sobre a
+  // divergencia em vez de imprimir "N de 0".
+  const CHIP_TONE = {
+    danger:  { bg: '#fee2e2', fg: 'var(--c-danger)'  },
+    warn:    { bg: '#fef9c3', fg: '#a16207'          },
+    success: { bg: '#dcfce7', fg: 'var(--c-success)' },
+  }
+  const chipInfo = describeLinkedStations({
+    linkedIds: link.target_stations,
+    campaignStationIds: campaignStations.map(s => s.id),
+  })
+  const stationsChip = { ...CHIP_TONE[chipInfo.tone], label: chipInfo.label }
 
   return (
     <div
@@ -1202,11 +1207,40 @@ function AddMaterialPanel({
         if (entry.script && entry.script.trim()) fd.append('script', entry.script.trim())
         fd.append('audio', entry.file)
 
-        let mat
+        let res
         try {
-          mat = await upload.mutateAsync(fd)
+          res = await upload.mutateAsync(fd)
         } catch (e) {
           setEntryStage(entry.key, 'error', { errorMsg: 'Falha no upload' })
+          continue
+        }
+        const mat = res.material
+
+        // 1b. Reuso por dedup (HTTP 200): o cliente já tinha material com este
+        // master_sha256. A API devolveu a linha existente e NÃO publicou
+        // `fingerprint.generate` — não há fingerprint pra gerar nem similaridade
+        // pra checar, então encenar as etapas seria mentira. Diagnóstico
+        // 2026-08-31: o silêncio aqui fez o operador subir o mesmo áudio várias
+        // vezes achando que o pipeline estava quebrado.
+        const plan = planUploadOutcome({
+          status: res.status, material: mat, alreadyLinkedIds,
+        })
+        if (plan.reused) {
+          // Só vincula quando ainda NÃO está na campanha. Relinkar não é
+          // inofensivo: Link é upsert com DO UPDATE SET target_stations =
+          // EXCLUDED.target_stations, e mandamos todas as emissoras da campanha
+          // — um re-upload sobrescreveria em silêncio um escopo restrito.
+          if (plan.shouldLink) {
+            try {
+              await link.mutateAsync({
+                campaignId, material_id: mat.id, target_stations: defaultStationIds,
+              })
+            } catch {
+              setEntryStage(entry.key, 'error', { errorMsg: 'Falha ao vincular à campanha' })
+              continue
+            }
+          }
+          setEntryStage(entry.key, 'reused', { materialId: mat.id, notice: plan.notice })
           continue
         }
 
@@ -1899,6 +1933,10 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
   const isDone = entry.stage === 'done'
   const isRemoved = entry.stage === 'removed'
   const isQueued = entry.stage === 'queued'
+  // 'reused' é terminal e deliberadamente NÃO conta como 'done': o drawer só
+  // fecha sozinho quando tudo terminou limpo, e aqui o operador precisa ler o
+  // aviso de que o áudio já existia antes de sair da tela.
+  const isReused = entry.stage === 'reused'
   const currentIdx = STAGE_ORDER.indexOf(entry.stage)
 
   // Border accent communicates the entry's overall state
@@ -1906,6 +1944,7 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
   if (isError) borderColor = 'color-mix(in srgb, var(--c-danger) 50%, transparent)'
   else if (isDone) borderColor = 'color-mix(in srgb, var(--c-success) 50%, transparent)'
   else if (isRemoved) borderColor = 'color-mix(in srgb, var(--c-text-3) 35%, transparent)'
+  else if (isReused) borderColor = 'color-mix(in srgb, var(--c-warning) 45%, transparent)'
   else if (currentIdx >= 0) borderColor = 'color-mix(in srgb, var(--c-action) 45%, transparent)'
 
   return (
@@ -1923,10 +1962,12 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
           background: isDone ? 'var(--c-success-light, color-mix(in srgb, var(--c-success) 14%, transparent))'
             : isError ? 'color-mix(in srgb, var(--c-danger) 12%, transparent)'
             : isRemoved ? 'var(--c-surface-2)'
+            : isReused ? 'color-mix(in srgb, var(--c-warning) 12%, transparent)'
             : 'color-mix(in srgb, var(--c-action) 10%, transparent)',
           color: isDone ? 'var(--c-success)'
             : isError ? 'var(--c-danger)'
             : isRemoved ? 'var(--c-text-3)'
+            : isReused ? 'var(--c-warning)'
             : 'var(--c-action)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexShrink: 0,
@@ -1942,6 +1983,12 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
           ) : isRemoved ? (
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 5h10M6 5V3.5h4V5M5 5l1 9h4l1-9" />
+            </svg>
+          ) : isReused ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M8 7.25v4" />
+              <path d="M8 4.75h.01" />
             </svg>
           ) : (
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -1985,7 +2032,7 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
       </div>
 
       {/* Stage list — visible only while flowing OR when settled with detail */}
-      {!isQueued && !isRemoved && !isDone && (
+      {!isQueued && !isRemoved && !isDone && !isReused && (
         <ul style={{
           listStyle: 'none', padding: 0, margin: 0,
           display: 'flex', flexDirection: 'column', gap: 4,
@@ -2047,6 +2094,16 @@ function VerificationEntryCard({ entry, busy, onRetry, onRemove }) {
           fontSize: 12, color: 'var(--c-danger)', fontWeight: 600,
         }}>
           {entry.errorMsg ?? 'Falha durante o processamento'}
+        </div>
+      )}
+      {/* Reuso por dedup de master_sha256 — o áudio já era material do cliente.
+          Diz o que de fato aconteceu em vez de encenar as 5 etapas. */}
+      {isReused && entry.notice && (
+        <div role="status" style={{
+          fontSize: 12, lineHeight: 1.5, fontWeight: 500,
+          color: 'var(--c-text-2)',
+        }}>
+          {entry.notice}
         </div>
       )}
       {/* Aviso de material <10s (incident-2026-07-24-pulso-milium): informativo,

@@ -911,14 +911,19 @@ export function useMaterials(clientId, q = '') {
   })
 }
 
+// Devolve { material, status } — o status HTTP é informação de negócio aqui,
+// não detalhe de transporte. O handler responde 201 quando criou material novo
+// (e publicou `fingerprint.generate`) e 200 quando o dedup por master_sha256
+// devolveu a linha que o cliente já tinha, saindo ANTES do publish. Quem
+// interpreta é planUploadOutcome em utils/uploadOutcome.js.
 export function useUploadMaterial() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (formData) => api.post('/materials', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-    }).then(r => r.data),
-    onSuccess: (mat) => {
-      qc.invalidateQueries({ queryKey: ['materials', mat.client_id] })
+    }).then(r => ({ material: r.data, status: r.status })),
+    onSuccess: ({ material }) => {
+      qc.invalidateQueries({ queryKey: ['materials', material.client_id] })
     },
   })
 }
