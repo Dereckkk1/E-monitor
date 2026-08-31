@@ -86,6 +86,7 @@ docs/
 | [material-library.md](features/material-library.md) | Catálogo de materiais por cliente (decuplado de campanha) |
 | [material-fingerprint-pipeline.md](features/material-fingerprint-pipeline.md) | Pipeline polimórfico (material_id OU commercial_id) + hot-reload |
 | [material-similarity-warning.md](features/material-similarity-warning.md) | Alerta de duplicata por similaridade ≥50% no upload |
+| [material-upload-dedup-reuse.md](features/material-upload-dedup-reuse.md) | Reuso por `master_sha256` no upload: 201 = novo × 200 = dedup (não gera fingerprint nem similaridade), aviso na tela, re-upload não sobrescreve emissoras, limpeza do master órfão |
 | [override-time-window.md](features/override-time-window.md) | Faixa horária por célula em distribution_overrides + popover com herança inteligente |
 | [admin-system-overview.md](features/admin-system-overview.md) | Painel admin com health de toda a stack (infra + workers + streams + pipeline + atenção) |
 | [admin-monitoring.md](features/admin-monitoring.md) | Painel `/admin/monitoring` — telemetria HTTP (rotas/p95/erros/slow), identidades (IP × usuário com risco), Web Vitals, bloqueio de IP/usuário |
