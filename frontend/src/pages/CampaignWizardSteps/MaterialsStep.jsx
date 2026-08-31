@@ -5,6 +5,7 @@ import {
   useUpdateMaterialTypeId, useUpdateMaterialScript, useUpdateCampaignMaterialStations,
 } from '../../api/hooks'
 import api from '../../api/client'
+import { describeLinkedStations } from '../../utils/linkedStationsChip.js'
 import { planUploadOutcome } from '../../utils/uploadOutcome'
 import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
@@ -309,18 +310,21 @@ function MaterialCard({
   // blocker for advancing the wizard. Otherwise it carries the type's color.
   const typeColor = type?.color ?? '#ca8a04'
 
-  const totalStations = campaignStations.length
-  const linkedCount   = link.target_stations.length
-  const allLinked     = linkedCount === totalStations && totalStations > 0
-  const noneLinked    = linkedCount === 0
-
-  // Visual signal for the stations chip — green when all, amber when partial,
-  // red when zero (material won't be detected anywhere).
-  const stationsChip = noneLinked
-    ? { bg: '#fee2e2', fg: 'var(--c-danger)',  label: 'sem emissora — não será detectado' }
-    : allLinked
-    ? { bg: '#dcfce7', fg: 'var(--c-success)', label: `em todas (${totalStations})` }
-    : { bg: '#fef9c3', fg: '#a16207',          label: `${linkedCount} de ${totalStations} emissoras` }
+  // Verde quando cobre a campanha inteira, ambar quando parcial ou com orfa,
+  // vermelho quando o material nao seria detectado em lugar nenhum. O texto
+  // vem de describeLinkedStations — as duas listas sao colunas independentes
+  // e podem divergir, entao o rotulo precisa dizer a verdade sobre a
+  // divergencia em vez de imprimir "N de 0".
+  const CHIP_TONE = {
+    danger:  { bg: '#fee2e2', fg: 'var(--c-danger)'  },
+    warn:    { bg: '#fef9c3', fg: '#a16207'          },
+    success: { bg: '#dcfce7', fg: 'var(--c-success)' },
+  }
+  const chipInfo = describeLinkedStations({
+    linkedIds: link.target_stations,
+    campaignStationIds: campaignStations.map(s => s.id),
+  })
+  const stationsChip = { ...CHIP_TONE[chipInfo.tone], label: chipInfo.label }
 
   return (
     <div
