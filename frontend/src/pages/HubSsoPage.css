@@ -1,0 +1,79 @@
+/*
+ * /sso — tela de passagem da Central de Clientes.
+ *
+ * Quando dá certo, ninguém lê isto: a página vive menos de um segundo. Por isso
+ * é um cartão centrado e nada mais — sem shell, sem menu. O peso do design vai
+ * para o caso ruim, que é o único que alguém chega a ler.
+ */
+.hubsso-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--c-surface-2);
+}
+
+.hubsso-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 440px;
+  padding: 40px 32px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  text-align: center;
+}
+
+.hubsso-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.hubsso-message {
+  margin: 0;
+  max-width: 42ch;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+  text-wrap: pretty;
+}
+
+.hubsso-exit {
+  margin-top: 8px;
+  padding: 10px 20px;
+  border: 1px solid var(--c-action-border);
+  border-radius: 8px;
+  background: var(--c-action);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.hubsso-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--c-border);
+  border-top-color: var(--c-action);
+  border-radius: 50%;
+  animation: hubsso-girar 0.8s linear infinite;
+}
+
+@keyframes hubsso-girar {
+  to { transform: rotate(360deg); }
+}
+
+/* Quem pediu menos movimento não precisa de um spinner girando — o texto do
+   role="status" já conta o que está acontecendo. */
+@media (prefers-reduced-motion: reduce) {
+  .hubsso-spinner { animation: none; }
+}

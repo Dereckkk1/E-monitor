@@ -35,7 +35,11 @@ api.interceptors.request.use((config) => {
 // sem token, tomava 401, e o interceptor engolia a página antes dela renderizar.
 //
 // TODA rota pública nova precisa entrar nesta lista.
-const PUBLIC_ROUTES = [/^\/login$/, /^\/boasvindas(\/|$)/, /^\/pos-venda(\/|$)/, /^\/404$/]
+// `/sso` entra aqui pelo mesmo motivo do `/login`: quem está nela ainda não tem
+// sessão, então um 401 ali é resposta de negócio — não "sessão expirada". Sem
+// isto, o interceptor limparia o storage e redirecionaria para /login no meio
+// da troca do código, trocando a mensagem real por um redirect silencioso.
+const PUBLIC_ROUTES = [/^\/login$/, /^\/sso$/, /^\/boasvindas(\/|$)/, /^\/pos-venda(\/|$)/, /^\/404$/]
 
 function onPublicRoute() {
   const path = window.location.pathname
