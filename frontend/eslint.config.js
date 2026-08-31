@@ -18,4 +18,10 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // Config e testes do Playwright rodam em Node, nao no browser:
+    // sem isto o `process.env` do playwright.config.js vira no-undef.
+    files: ['playwright.config.js', 'e2e/**/*.js'],
+    languageOptions: { globals: globals.node },
+  },
 ])

@@ -89,6 +89,9 @@ type CreateInput struct {
 	// vê essas opções no formulário.
 	ReceiveAlertEmails    *bool
 	ReceivePostSaleEmails *bool
+	// HubID vincula o usuário ao E-Hub já na criação (JIT provisioning do
+	// primeiro SSO). nil para todo cadastro local.
+	HubID *string
 }
 
 // Create insere um novo usuário.
@@ -99,12 +102,12 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*User, error) {
 	var id uuid.UUID
 	if err := r.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, role, client_id, name, phone,
-		                    receive_alert_emails, receive_post_sale_emails)
+		                    receive_alert_emails, receive_post_sale_emails, hub_id)
 		 VALUES (LOWER($1), $2, $3, $4, $5, $6,
-		         COALESCE($7, TRUE), COALESCE($8, FALSE))
+		         COALESCE($7, TRUE), COALESCE($8, FALSE), $9)
 		 RETURNING id`,
 		in.Email, in.PasswordHash, in.Role, in.ClientID, in.Name, in.Phone,
-		in.ReceiveAlertEmails, in.ReceivePostSaleEmails,
+		in.ReceiveAlertEmails, in.ReceivePostSaleEmails, in.HubID,
 	).Scan(&id); err != nil {
 		return nil, err
 	}
@@ -126,6 +129,31 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (*User, error) {
 		`SELECT `+userColumns+` FROM users
 		 WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL`, email)
 	return scanUser(row)
+}
+
+// GetByHubID busca pelo vínculo com o E-Hub, entre não-deletados.
+//
+// `deleted_at IS NULL` pelo mesmo motivo do GetByEmail: conta deletada não
+// ressuscita por SSO. Ela cai em pgx.ErrNoRows e o fluxo segue para o match por
+// e-mail — que também filtra deletados —, então o pior caso é criar uma conta
+// nova, nunca reviver a antiga por baixo dos panos.
+func (r *Repo) GetByHubID(ctx context.Context, hubID string) (*User, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users
+		 WHERE hub_id = $1 AND deleted_at IS NULL`, hubID)
+	return scanUser(row)
+}
+
+// SetHubID grava o vínculo com o E-Hub num usuário que já existia aqui.
+//
+// Fora do UpdateInput de propósito: aquele é o formulário do admin, e o vínculo
+// não é campo editável por gente — é consequência de um SSO bem-sucedido. Um
+// `hub_id` digitado à mão numa tela apontaria a identidade desta conta para
+// outra pessoa no hub.
+func (r *Repo) SetHubID(ctx context.Context, id uuid.UUID, hubID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET hub_id = $2, updated_at = NOW() WHERE id = $1`, id, hubID)
+	return err
 }
 
 // UpdateInput permite mudar campos opcionais. Pointer == nil → não muda.
