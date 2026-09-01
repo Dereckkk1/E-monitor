@@ -549,6 +549,16 @@ func main() {
 		StreamHealth: &handlers.StreamHealthHandler{HealthEvents: healthEvents, Stations: stations, Sup: sup},
 		Auth:         handlers.NewAuthHandler(pool, usersRepo),
 		HubSSO:       handlers.NewHubSSOHandler(pool, usersRepo, hub.New(cfg.HubURL, cfg.HubPlatformKey)),
+		// Mesma chave, sentido oposto (RFC-001 §9.2): no SSO o E-monitor
+		// pergunta ao hub; aqui o hub avisa o E-monitor. Nenhuma variavel de
+		// ambiente nova — e portanto nenhuma linha nova no bloco `environment:`
+		// do compose para alguem esquecer, que foi o 503 do PR #8.
+		HubSync:      handlers.NewHubSyncHandler(pool, hub.New(cfg.HubURL, cfg.HubPlatformKey)),
+		// Fecha a janela de 8h em que um usuario desativado seguia usando o
+		// sistema com o token que ja tinha — vale tanto para o `user.deactivate`
+		// do hub quanto para o botao de bloqueio do /admin/monitoring, cujo
+		// proprio comentario registrava a lacuna.
+		Ativos:       auth.NovoVerificadorAtivo(pool, time.Minute),
 		APIKey:       auth.NewAPIKeyMiddleware(pool),
 		APIKeys:      handlers.NewAPIKeysHandler(pool),
 		Admin:        &handlers.AdminHandler{Tiering: tieringJob, Threshold: sup, Calibration: calibrationScheduler, Log: logger},

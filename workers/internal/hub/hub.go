@@ -12,6 +12,7 @@ package hub
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,6 +81,29 @@ func New(baseURL, platformKey string) *Client {
 // Configured diz se esta instalação tem a integração ligada.
 func (c *Client) Configured() bool {
 	return c != nil && c.baseURL != "" && c.platformKey != ""
+}
+
+// ChaveConfere autentica uma requisição que o HUB fez para cá — o sentido
+// oposto do Exchange (RFC-001 §9.2).
+//
+// A MESMA chave serve nas duas direções, e isso é decisão, não acaso: uma chave
+// nova exigiria variável de ambiente nova, e variável nova neste repositório
+// significa lembrar do bloco `environment:` explícito do compose. Foi
+// exatamente o esquecimento que fez o SSO responder 503 em produção com tudo
+// aparentemente certo no `.env` (PR #8). Reusar `HUB_PLATFORM_KEY` remove a
+// classe inteira do problema.
+//
+// Devolve um acessor booleano em vez de expor a chave: quem chama precisa saber
+// se confere, não qual é.
+//
+// `subtle.ConstantTimeCompare` porque a comparação acontece antes de qualquer
+// autenticação — é a própria autenticação — e `==` em string vaza o prefixo
+// comum pelo tempo de resposta.
+func (c *Client) ChaveConfere(apresentada string) bool {
+	if !c.Configured() || apresentada == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.platformKey), []byte(apresentada)) == 1
 }
 
 // Exchange troca o código pelos dados do usuário.

@@ -38,6 +38,32 @@ func RequireJWT(next http.Handler) http.Handler {
 	})
 }
 
+// RequireJWTAtivo é o RequireJWT mais a checagem de `is_active` (ver
+// VerificadorAtivo). Um middleware novo em vez de mudar a assinatura do
+// RequireJWT: os testes de rota montam o router sem banco, e forçá-los a ter um
+// pgxpool só para exercitar autorização seria pagar caro por nada.
+//
+// `v` nil devolve o RequireJWT puro — é o mesmo "nil desliga a peça" que o
+// router já usa para HubSSO, Metrics e BlockList.
+func RequireJWTAtivo(v *VerificadorAtivo) func(http.Handler) http.Handler {
+	if v == nil {
+		return RequireJWT
+	}
+	return func(next http.Handler) http.Handler {
+		return RequireJWT(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if ok && !v.Ativo(r.Context(), c.UserID) {
+				// 401 e não 403: para o cliente HTTP a sessão deixou de valer, e
+				// é isso que faz o frontend mandar a pessoa para o /login em vez
+				// de mostrar "sem permissão" numa tela que ela não pode mais ver.
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+	}
+}
+
 // WithClaims é a contraparte exportada de ClaimsFromContext, usada por
 // tests de handler que precisam injetar claims sem passar pelo middleware
 // JWT real. Em código de produção, RequireJWT é o único setter.
