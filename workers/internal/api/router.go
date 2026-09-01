@@ -165,6 +165,9 @@ func NewRouter(d Deps) http.Handler {
 		// recuperação da fila em oito tentativas perdidas.
 		if d.HubSync != nil {
 			r.Post("/hub/sync", d.HubSync.Receive)
+			// Listagem para a reconciliacao noturna do §9.6. Mesma porta do
+			// sync — chave de plataforma, sem sessao.
+			r.Get("/hub/users", d.HubSync.ListUsers)
 		}
 		if d.Welcome != nil {
 			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
