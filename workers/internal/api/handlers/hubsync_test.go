@@ -83,9 +83,14 @@ func TestHubSync_SemEventIdE400(t *testing.T) {
 
 // Evento que esta versão não implementa é ACEITO. É o que permite o hub subir
 // antes deste lado sem enterrar na DLQ eventos que não têm defeito nenhum.
+//
+// O exemplo era `user.upsert` até a fatia 2 implementá-lo — e o teste passou a
+// falhar, que é exatamente o comportamento desejado: implementar um evento tem de
+// tirá-lo do ramo `default`, e o teste é quem cobra isso. Agora usa
+// `user.password_changed`, o único do §9.3 que segue sem implementação (fatia 3).
 func TestHubSync_EventoDesconhecidoEAceito(t *testing.T) {
 	h := NewHubSyncHandler(nil, hubConfigurado())
-	rec, req := pedidoSync(`{"eventId":"1","event":"user.upsert","data":{}}`, chaveDeTeste)
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.password_changed","data":{}}`, chaveDeTeste)
 	h.Receive(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
