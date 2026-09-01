@@ -21,9 +21,17 @@ import (
 // `environment:` explícito do compose, que é justamente o que foi esquecido e
 // fez o SSO responder 503 em produção com o `.env` aparentemente certo (PR #8).
 //
-// A fatia 1 da Fase 3 entrega só `user.deactivate`. Os outros eventos do §9.3
-// respondem `{"ok":true}` e não fazem nada — o que permite o hub subir antes
-// deste lado sem encher a DLQ com eventos que aqui ainda não existem.
+// Implementados: `user.deactivate` (fatia 1), `client.upsert` e `user.upsert`
+// (fatia 2). Falta `user.password_changed`, que é a fatia 3 — e ele responde
+// `{"ok":true}` e não faz nada, como qualquer evento desconhecido. Isso permite
+// o hub subir antes deste lado sem encher a DLQ com eventos que aqui ainda não
+// existem.
+//
+// ⚠️ Quando a fatia 3 chegar, o `user.password_changed` PRECISA deixar de cair
+// no ramo `default`: enquanto ele responder ok sem fazer nada, o hub vai marcar
+// a senha como sincronizada e ela não terá sido. Aceitar em silêncio é a
+// escolha certa para evento que não se conhece, e a errada para evento que se
+// conhece e não se implementou.
 type HubSyncHandler struct {
 	db  *pgxpool.Pool
 	hub *hub.Client
@@ -77,6 +85,10 @@ func (h *HubSyncHandler) Receive(w http.ResponseWriter, r *http.Request) {
 	switch env.Event {
 	case "user.deactivate":
 		h.desativar(w, r, env)
+	case "client.upsert":
+		h.upsertCliente(w, r, env)
+	case "user.upsert":
+		h.upsertUsuario(w, r, env)
 	default:
 		// Evento que esta versão não implementa é ACEITO e ignorado.
 		//
@@ -133,4 +145,166 @@ func (h *HubSyncHandler) desativar(w http.ResponseWriter, r *http.Request, env s
 	}
 
 	h.responde(w, &id)
+}
+
+// ── client.upsert ───────────────────────────────────────────────────────────
+
+type dadosCliente struct {
+	HubClientID string  `json:"hubClientId"`
+	Name        string  `json:"name"`
+	CNPJ        *string `json:"cnpj"`
+	LogoURL     *string `json:"logoUrl"`
+	ContactName *string `json:"contactName"`
+	Phone       *string `json:"phone"`
+	City        *string `json:"city"`
+	State       *string `json:"state"`
+	Active      *bool   `json:"active"`
+}
+
+// upsertCliente materializa o tenant que o hub acabou de criar ou editar.
+//
+// **Aqui o E-monitor CRIA, e no SSO ele não cria — e a diferença é deliberada.**
+// O `criarPorJit` recusa inventar um cliente porque lá a informação chega no meio
+// do login de alguém, como efeito colateral de um clique: adivinhar um tenant ali
+// geraria cliente fantasma que ninguém pediu. Este evento é o oposto — alguém
+// habilitou o produto para aquele cliente no admin do hub, deliberadamente. O
+// §9.3 manda "criar com defaults mínimos se não existir", e é barato: `clients`
+// só exige `name`. Contrato, PMM alvo e regras de distribuição continuam vazios
+// e continuam sendo preenchidos por aqui, como sempre foram.
+//
+// É isto que destrava o `client_not_provisioned` do §8.1 — o erro que hoje barra
+// todo usuário de cliente cuja empresa ainda não tem `hub_id` carimbado.
+func (h *HubSyncHandler) upsertCliente(w http.ResponseWriter, r *http.Request, env syncEnvelope) {
+	var d dadosCliente
+	if err := json.Unmarshal(env.Data, &d); err != nil || d.HubClientID == "" || d.Name == "" {
+		http.Error(w, "missing_client_fields", http.StatusBadRequest)
+		return
+	}
+	ativo := d.Active == nil || *d.Active
+
+	// 1) Já vinculado: atualiza pelo `hub_id`, que é a chave forte.
+	var id string
+	err := h.db.QueryRow(r.Context(), `
+		UPDATE clients SET name=$2, cnpj=COALESCE($3,cnpj), logo_url=COALESCE($4,logo_url),
+		       contact_name=COALESCE($5,contact_name), phone=COALESCE($6,phone),
+		       city=COALESCE($7,city), state=COALESCE($8,state), is_active=$9, updated_at=NOW()
+		 WHERE hub_id=$1 RETURNING id`,
+		d.HubClientID, d.Name, d.CNPJ, d.LogoURL, d.ContactName, d.Phone, d.City, d.State, ativo,
+	).Scan(&id)
+	if err == nil {
+		h.responde(w, &id)
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// 2) Sem vínculo, mas com CNPJ IGUAL: carimba o `hub_id` no que já existe.
+	//
+	// Só por CNPJ, e só quando ele não é vazio. Casar por NOME seria repetir o
+	// defeito que a §9.5 registrou no importador: um cliente renomeado no
+	// E-monitor virava um cliente novo no hub, em silêncio. CNPJ é identidade;
+	// nome é rótulo.
+	if d.CNPJ != nil && *d.CNPJ != "" {
+		err = h.db.QueryRow(r.Context(), `
+			UPDATE clients SET hub_id=$1, name=$2, is_active=$3, updated_at=NOW()
+			 WHERE cnpj=$4 AND hub_id IS NULL RETURNING id`,
+			d.HubClientID, d.Name, ativo, *d.CNPJ).Scan(&id)
+		if err == nil {
+			h.responde(w, &id)
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 3) Ninguém: cria com o mínimo.
+	err = h.db.QueryRow(r.Context(), `
+		INSERT INTO clients (name, cnpj, logo_url, contact_name, phone, city, state, is_active, hub_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+		d.Name, d.CNPJ, d.LogoURL, d.ContactName, d.Phone, d.City, d.State, ativo, d.HubClientID,
+	).Scan(&id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	h.responde(w, &id)
+}
+
+// ── user.upsert ─────────────────────────────────────────────────────────────
+
+type dadosUsuario struct {
+	HubUserID string  `json:"hubUserId"`
+	Email     string  `json:"email"`
+	Name      *string `json:"name"`
+	Phone     *string `json:"phone"`
+	Active    *bool   `json:"active"`
+}
+
+// upsertUsuario atualiza a identidade de quem JÁ existe aqui, e vincula quem
+// existe pelo e-mail. **Não cria conta nova.**
+//
+// Essa é a única decisão desta fatia que diverge da leitura literal do §9.3
+// ("criar/atualizar"), e ela é conservadora de propósito:
+//
+//   - A conta na plataforma nasce no PRIMEIRO CLIQUE (JIT), e isso não é detalhe
+//     de implementação — é o modelo mental que o RFC §8.1 e o handoff descrevem.
+//     O `criarPorJit` já cria com este mesmo payload, no momento em que a pessoa
+//     de fato aparece.
+//   - Criar aqui povoaria o `users` do E-monitor com dezenas de contas de gente
+//     que talvez nunca clique. As telas de operação listam usuários.
+//   - Acrescentar a criação depois é uma linha. Apagar contas criadas por engano
+//     em produção não é.
+//
+// O casamento por e-mail EXISTE e é o que evita a duplicata que a §9.5 chama de
+// pior caso: alguém que já tem conta local ganha o `hub_id` em vez de uma segunda
+// conta. É a mesma escada do `acharOuCriar`, sem o degrau de criação.
+func (h *HubSyncHandler) upsertUsuario(w http.ResponseWriter, r *http.Request, env syncEnvelope) {
+	var d dadosUsuario
+	if err := json.Unmarshal(env.Data, &d); err != nil || d.HubUserID == "" {
+		http.Error(w, "missing_hub_user_id", http.StatusBadRequest)
+		return
+	}
+	ativo := d.Active == nil || *d.Active
+
+	// 1) Já vinculado.
+	var id string
+	err := h.db.QueryRow(r.Context(), `
+		UPDATE users SET name=COALESCE($2,name), phone=COALESCE($3,phone),
+		       is_active=$4, updated_at=NOW()
+		 WHERE hub_id=$1 AND deleted_at IS NULL RETURNING id`,
+		d.HubUserID, d.Name, d.Phone, ativo).Scan(&id)
+	if err == nil {
+		h.responde(w, &id)
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// 2) Mesmo e-mail, ainda sem vínculo → vincula em vez de duplicar.
+	if d.Email != "" {
+		err = h.db.QueryRow(r.Context(), `
+			UPDATE users SET hub_id=$1, name=COALESCE($3,name), phone=COALESCE($4,phone),
+			       is_active=$5, updated_at=NOW()
+			 WHERE LOWER(email)=LOWER($2) AND hub_id IS NULL AND deleted_at IS NULL
+			 RETURNING id`,
+			d.HubUserID, d.Email, d.Name, d.Phone, ativo).Scan(&id)
+		if err == nil {
+			h.responde(w, &id)
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 3) Ninguém. Não é erro: a pessoa ainda não clicou, e o JIT a criará com
+	// este mesmo payload quando clicar. `externalId` nulo encerra o evento.
+	h.responde(w, nil)
 }
