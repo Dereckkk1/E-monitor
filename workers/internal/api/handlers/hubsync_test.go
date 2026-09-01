@@ -120,12 +120,19 @@ func poolDeTeste(t *testing.T) (context.Context, *pgxpool.Pool) {
 	return ctx, pool
 }
 
+// `admin` com `client_id` NULO, e não `viewer`: o schema real tem o CHECK
+// `users_client_role_consistency` (viewer EXIGE client_id; admin/operator exigem
+// client_id nulo). A primeira versão deste helper criava um viewer órfão e só o
+// Postgres de verdade reprovou — banco vazio ou mock teria aceitado, que é a
+// regra 4.8 do CLAUDE.md cobrada na prática.
+//
+// O papel é indiferente para a desativação: o handler casa por `hub_id`.
 func criaUsuario(t *testing.T, ctx context.Context, pool *pgxpool.Pool, hubID *string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, role, name, hub_id, is_active)
-		 VALUES ($1, 'x', 'viewer', 'Fulano', $2, TRUE) RETURNING id`,
+		 VALUES ($1, 'x', 'admin', 'Fulano', $2, TRUE) RETURNING id`,
 		"u"+uuid.NewString()[:8]+"@teste.com", hubID).Scan(&id)
 	require.NoError(t, err)
 	return id
