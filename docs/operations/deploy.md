@@ -100,7 +100,17 @@ Desde a Fase 1 de otimização de performance, o `command:` do service
 valores de fábrica do PG16 / sem limite (no-op em dev). Setar no `.env` da VM
 (Bloco I abaixo):
 
-| Var | Dev (default) | Prod (VM c3-highcpu-8, 16GB RAM) | Motivo |
+> ⚠️ **Estes valores foram calculados contra a VM de 16 GB e ainda não foram
+> revisados para os 64 GB atuais** (migração de 2026-09-01). Toda a conta
+> apertada abaixo — as duas rodadas de revisão que levaram `work_mem` a 8 MB e
+> `PG_MEM_LIMIT` a 6g — existe *porque* a máquina antiga era pequena. Com
+> 64 GB há folga para afrouxar, e as queries pesadas de dashboard se
+> beneficiariam. **Mas isso exige recriar o `postgres`**, então vale a regra
+> 4.1 do CLAUDE.md (`--no-deps` obrigatório) e uma janela própria — não faça
+> junto de outra mudança. Enquanto não for revisado, os valores atuais são
+> conservadores e seguros, só desperdiçam RAM.
+
+| Var | Dev (default) | Prod (valores dimensionados p/ a VM de 16 GB — ver nota) | Motivo |
 |---|---|---|---|
 | `PG_SHARED_BUFFERS` | `128MB` | `2GB` | Cache dedicado do PG — cabe no SSD `/mnt/db` (300GB) e na RAM da VM. |
 | `PG_EFFECTIVE_CACHE_SIZE` | `4GB` | `5GB` | `shared_buffers` (2GB) + page cache realista (~3GB). NÃO 8GB: o box de 16GB é compartilhado com `api` (**~6GB** projetado com os ffmpeg a 200 emissoras — número corrigido em 2026-07-21, era ~3GB; ver tabela acima), `minio` (1GB) e stack fixa (~0.5GB) + OS (~1GB); um valor inflado engana o planner a superestimar cache hits. **Revisitar:** com o `api` no dobro do previsto, o page cache realista encolhe — `5GB` pode estar otimista. |
@@ -268,29 +278,69 @@ Todo `git push origin master` dispara rebuild automático.
 | Campo | Valor | Motivo |
 |---|---|---|
 | **Region** | `southamerica-east1` | São Paulo — menor latência para streams brasileiras (~15–40 ms). LGPD: dados no Brasil. |
-| **Zone** | `southamerica-east1-b` | Zona mais estável historicamente em SP. |
+| **Zone** | `southamerica-east1-a` | Zona onde a VM efetivamente roda. ⚠️ Até 2026-09-01 este documento dizia `-b` em dois lugares, o que estava **errado** — comandos copiados daqui falhavam com "resource not found". |
 
 ### Tipo de máquina
 
 | Campo | Valor |
 |---|---|
-| **Família** | C3 (Intel Sapphire Rapids) |
-| **Tipo** | `c3-highcpu-8` |
-| **vCPUs** | 8 |
-| **RAM** | 16 GB |
+| **Nome da instância** | `vm-e-monitor` |
+| **Família** | C2D (AMD EPYC Milan) |
+| **Tipo** | `c2d-standard-16` |
+| **vCPUs** | 16 (8 cores físicos + SMT) |
+| **RAM** | 64 GB |
+| **IP externo** | `34.39.163.110` — **reservado** (`radiocheck-prod-ip`) |
 
-> Máquina em produção desde 2026-06-08 (era `c3-standard-4` / 4 vCPU / 16 GB).
+> **Histórico:** `c3-standard-4` → `c3-highcpu-8` (2026-06-08) →
+> **`c2d-standard-16` (2026-09-01)**.
 
-**Por que 8 vCPU e não 4?** Stress test com 50 workers mostrou ~140% CPU no ambiente de dev. Em produção com 200 FFmpeg simultâneos + matching em Go, 4 cores aperiam. Além disso, o fix de densidade **#2** (peak-picking ~4× mais denso — ver [migração de re-fingerprint](refingerprint-density-migration.md)) **dobrou o custo do matcher por janela**, então 8 vCPU passou a ser necessário tanto pela escala quanto pelo algoritmo. **Uso medido em 2026-07-21 com 173 emissoras: ~53% de CPU** (`us` 42-46% + `sy` 8-9%, `wa`=0) — ver [capacity-and-unit-cost.md](capacity-and-unit-cost.md).
+**Por que trocou em 2026-09-01?** Com 268 emissoras a `c3-highcpu-8` chegou a
+**0% de CPU ociosa**, PSI de 76% e p99 da janela de matching em **2,39 s —
+acima da própria cadência de 2 s**. Demanda medida: **7,84 cores numa máquina
+de 8**. Postmortem completo:
+[incident-2026-09-01](../incidents/incident-2026-09-01-cpu-saturation-vm-resize.md).
 
-> ⚠️ **Não dimensione por `load average` nesta máquina.** O load fica em ~6.9
-> de 8 com a CPU em 53%, e o `r` do `vmstat` oscila entre 1 e 23. A carga é
-> **em rajada** (os workers fecham janela de matching em ondas sincronizadas):
-> satura os 8 cores por instantes e fica ociosa entre elas. O load lê como
-> "máquina cheia" quando há 47% de idle. Use `vmstat 1 5` (linhas 2+, a
-> primeira é média desde o boot), não `uptime`.
+**Por que C2D e não outro C3?** Porque **a família C3 não tem shape de 16
+vCPU** — os tamanhos são 4 → 8 → **22** → 44 → 88 → 176. O degrau seguinte
+(`c3-highcpu-22`) custaria R$5.437/mês para capacidade de ~530 emissoras:
+capacidade parada demais. O `c2d-standard-16` entrega os mesmos 8 cores
+físicos por R$4.409/mês.
 
-**Por que `highcpu` (16 GB) e não `standard` (32 GB)?** A carga é **CPU-bound** (matching + 200 FFmpeg); o índice de fingerprint é **leve** — ~10 MB para ~300 comerciais, ~40 MB mesmo com a densidade #2. **Ao escalar para 200 emissoras:** com a correção de RAM de 2026-07-21 (~30 MB/emissora, não 14.8), os ~200 FFmpeg + PostgreSQL projetam **~9–12 GB dos 16 GB** — folga real, mas bem menor que o previsto antes. Se passar de ~200 emissoras, migrar para `c3-standard-8` (32 GB).
+**Por que não C4?** O `c4-highcpu-16` seria melhor em tudo — R$200/mês mais
+barato e ~34% mais rápido por core (Emerald Rapids). Mas **C4 exige
+Hyperdisk** e os três discos desta VM são Persistent Disk:
+
+```
+ERROR: pd-balanced disk type cannot be used by c4-highcpu-16 machine type
+```
+
+Migrar os discos para Hyperdisk é o follow-up **F-CAP-13**. Enquanto não for
+feito, C4 está fora.
+
+**Por que não `t2d-standard-16`?** Ele tem 16 cores **físicos** (SMT desligado)
+e PassMark 30.446 — seria o melhor throughput do lote. Mas **T2D não está na
+lista de elegíveis do Compute Flexible CUD**, então migrar para lá perderia os
+28% de desconto *e* manteria o commitment atual, que não pode ser cancelado.
+
+> ⚠️ **Não dimensione por `load average`.** A carga é **em rajada** — os workers
+> fecham janela de matching em ondas sincronizadas de 2 s, saturam os cores por
+> instantes e ficam ociosos entre elas. O load lê como "máquina cheia" quando há
+> idle de sobra. Use `vmstat 1 5` (linhas 2+, a primeira é média desde o boot) e
+> principalmente **`cat /proc/pressure/cpu`**, que é a única métrica que não
+> clipa no teto. Ver [capacity-and-unit-cost.md §6](capacity-and-unit-cost.md).
+
+**Por que `standard` (4 GB/vCPU) e não `highcpu` (2 GB/vCPU)?** A carga
+continua **CPU-bound**, e 32 GB bastariam até o teto de capacidade
+(~26 MB/emissora medidos no cgroup × ~460 emissoras + Postgres ≈ 16 GB). Os
+64 GB do `standard` vieram junto no shape por R$200/mês a mais, e o benefício
+concreto é poder **afrouxar o tuning apertado do Postgres** (`PG_MEM_LIMIT=6g`,
+`work_mem=8MB`) que só existe porque a máquina antiga tinha 16 GB.
+
+> ⚠️ **O custo por emissora não é constante — depende do tamanho do índice de
+> matching.** Foi exatamente isso que fez a projeção de julho subestimar e a
+> máquina saturar. Qualquer novo dimensionamento precisa declarar contra qual
+> tamanho de índice foi medido. Ver
+> [capacity-and-unit-cost.md §4](capacity-and-unit-cost.md).
 
 ### Discos
 
@@ -300,12 +350,24 @@ Todo `git push origin master` dispara rebuild automático.
 | **PostgreSQL** | SSD Persistent Disk | 300 GB | `/mnt/db` | IOPS alto para queries de fingerprint |
 | **Áudio / Logs** | Standard HDD | 300 GB | `/mnt/data` | Clips de evidência + logs |
 
-> ⚠️ **Esta tabela NÃO bate com o billing real (verificado 2026-07-21).** Os
-> SKUs faturados implicam **~192 GB de Balanced PD** e **~94 GB de SSD PD**, e
-> **nenhum SKU de Standard HDD** — ver [§6](#6-análise-de-custos). Ou seja: o
-> layout acima é o *planejado*, não o *provisionado*. Antes de dimensionar
-> disco, confirme o real com `df -h /mnt/db /mnt/data` na VM e a lista de
-> discos no console GCP. Follow-up: **F-CAP-07**.
+> ⚠️ **Esta tabela é o layout *planejado*, não o *provisionado*.** Os SKUs
+> faturados implicam **~199 GB de Balanced PD** e **~99 GB de SSD PD**, e
+> **nenhum SKU de Standard HDD** — apesar do nome do disco. Nomes reais dos
+> três discos (2026-09-01), todos **Persistent Disk**:
+>
+> ```
+> vm-e-monitor          (boot)
+> radiocheck-db-ssd
+> radiocheck-data-hdd   ← nome enganoso: NÃO é Standard HDD
+> ```
+>
+> Antes de dimensionar disco, confirme com `df -h /mnt/db /mnt/data` na VM.
+> Follow-up: **F-CAP-07**.
+>
+> **Consequência não óbvia:** por serem Persistent Disk e não Hyperdisk, as
+> famílias C4/C4A/C4D/N4 estão **indisponíveis** para esta VM — o
+> `set-machine-type` falha com `pd-balanced disk type cannot be used by ...`.
+> Ver F-CAP-13.
 
 Não use disco único — contenção de I/O entre PostgreSQL e OS degrada latência de detecção.
 
@@ -317,23 +379,129 @@ Não use disco único — contenção de I/O entre PostgreSQL e OS degrada latê
 
 | Campo | Valor |
 |---|---|
-| External IP | Static (não efêmero) |
+| External IP | Static (não efêmero) — `radiocheck-prod-ip` = `34.39.163.110` |
 | Network tier | Premium |
 | HTTP / HTTPS | Bloqueados (Cloudflare Tunnel cuida disso) |
 | SSH | Porta 22, restrita ao seu IP |
+
+### Trocar o tipo de máquina (resize)
+
+Procedimento validado em 2026-09-01
+([postmortem](../incidents/incident-2026-09-01-cpu-saturation-vm-resize.md)).
+A VM precisa ser **parada** para o `set-machine-type`, então há janela de
+indisponibilidade — e enquanto os workers estiverem fora, **o áudio não é
+capturado nem gravado**: é buraco de detecção irrecuperável. Faça de madrugada.
+
+> ⚠️ **Não use o `scripts/deploy.sh` para isso.** Ele faz `git pull` + rebuild +
+> migrations — trocar hardware e software no mesmo passo destrói a capacidade de
+> saber o que quebrou. Além disso o health check dele tem 60 s e a API só escuta
+> **depois** de carregar o índice inteiro (`loader.LoadAll` precede
+> `srv.ListenAndServe` em `cmd/api/main.go`); com Postgres frio pós-reboot isso
+> passa de 60 s e o deploy aborta sem que nada esteja errado.
+
+**1. Pré-flight (Cloud Shell).** Confirme que o tipo alvo existe na zona — nem
+toda família tem todo shape (o C3 pula de 8 para 22 vCPU):
+
+```bash
+export VM=vm-e-monitor ZONE=southamerica-east1-a
+gcloud compute machine-types describe <TIPO> --zone="$ZONE" \
+  --format='value(name,guestCpus,memoryMb)'
+```
+
+**2. Confirme que o IP externo é reservado.** Se for efêmero, o stop/start
+troca o IP e invalida qualquer allowlist negociada com painéis de emissora:
+
+```bash
+gcloud compute addresses list --filter="address=34.39.163.110"
+```
+
+Vazio = efêmero. Promova antes de continuar:
+`gcloud compute addresses create radiocheck-prod-ip --addresses=34.39.163.110 --region=southamerica-east1`
+
+**3. Backup verificado (na VM).** Regra 4.5 do CLAUDE.md — confirme que o
+arquivo chegou ao destino, não só que o comando rodou:
+
+```bash
+$COMPOSE exec backup sh /backup.sh
+```
+
+**4. Snapshot dos três discos (Cloud Shell).** O `--storage-location` evita
+aumentar o problema do F-CAP-06 (snapshots vivendo nos EUA):
+
+```bash
+for d in vm-e-monitor radiocheck-db-ssd radiocheck-data-hdd; do
+  gcloud compute disks snapshot "$d" --zone="$ZONE" \
+    --snapshot-names="pre-resize-$d-$(date +%Y%m%d)" \
+    --storage-location=southamerica-east1
+done
+```
+
+**5. Pare a stack graciosamente (na VM).** `stop`, não `down` — deixa o
+Postgres desligar limpo em vez de tomar SIGKILL no shutdown da VM:
+
+```bash
+$COMPOSE stop
+```
+
+**6. Troque (Cloud Shell).**
+
+```bash
+gcloud compute instances stop "$VM" --zone="$ZONE"
+gcloud compute instances set-machine-type "$VM" --zone="$ZONE" --machine-type=<TIPO>
+gcloud compute instances start "$VM" --zone="$ZONE"
+
+gcloud compute instances describe "$VM" --zone="$ZONE" \
+  --format='value(machineType.basename(),status,networkInterfaces[0].accessConfigs[0].natIP)'
+```
+
+A última linha confirma tipo novo, `RUNNING` e que o IP não mudou.
+
+**7. Suba a stack — este passo NÃO é automático.**
+
+> 🔴 **Dos 25 serviços do compose, só o `segments-cleanup` tem
+> `restart: unless-stopped`.** `postgres`, `api`, `minio`, `redis`, `nats`,
+> `prometheus` e `backup` estão todos no default `no`. Depois do
+> `instances start`, o Docker sobe e **nada mais**. Follow-up: F-CAP-12.
+
+```bash
+$COMPOSE up -d
+$COMPOSE logs -f api | grep -m1 'index loaded'
+```
+
+O `grep -m1` fica pendurado até o índice terminar de carregar e sai sozinho.
+Demora ali é esperada (Postgres frio + índice inteiro), **não é falha**.
+
+**8. Valide.**
+
+```bash
+nproc; free -m; $COMPOSE ps
+cat /proc/pressure/cpu     # some deve estar < 10%
+vmstat 1 5                 # r em 1 dígito, id bem acima de 0
+docker stats --no-stream
+```
+
+E, após ~10 min acumulando dados novos, o critério de aceitação real:
+
+```bash
+curl -sG 'http://localhost:9090/api/v1/query' --data-urlencode \
+ 'query=histogram_quantile(0.99, sum by (le) (rate(radiocheck_match_window_duration_seconds_bucket[10m])))'
+```
+
+**O p99 tem que ficar em dezenas de milissegundos.** A cadência de janela é 2 s;
+p99 próximo disso significa que o teto de capacidade já foi ultrapassado.
 
 ### Criando a VM no console GCP
 
 ```
 Menu → Compute Engine → VM Instances → Create Instance
 
-Name: radiocheck-prod
+Name: vm-e-monitor
 Region: southamerica-east1
-Zone: southamerica-east1-b
+Zone: southamerica-east1-a
 
 Machine configuration:
-  Series: C3
-  Machine type: c3-highcpu-8
+  Series: C2D
+  Machine type: c2d-standard-16
 
 Boot disk:
   OS: Ubuntu 22.04 LTS
@@ -389,7 +557,7 @@ Protocols: TCP:22
 Conecte via SSH:
 
 ```bash
-gcloud compute ssh radiocheck-prod --zone southamerica-east1-b
+gcloud compute ssh vm-e-monitor --zone southamerica-east1-a
 ```
 
 ---
@@ -909,17 +1077,21 @@ Com o CUD assinado, o custo por emissora no teto de capacidade cai de
 
 ### Cenários
 
-> **Máquina em produção (desde 2026-06-08): `c3-highcpu-8` (8 vCPU, 16 GB).**
-> Custo real medido em 2026-07-21: **R$2.322/mês ≈ US$407** de compute
-> (core + RAM), **não os ~$305 estimados**. Os cenários `n2d` abaixo ficam como
-> referência histórica — não use pra decidir nada; use a quebra por SKU da §6.
+> ⚠️ **Toda esta seção §6 é histórica (2026-07-21, `c3-highcpu-8`, 173
+> emissoras, sem CUD).** A máquina foi trocada em 2026-09-01 e o CUD foi
+> assinado em ~19/08. Para os números que valem hoje, use
+> [capacity-and-unit-cost.md §7](capacity-and-unit-cost.md). O que segue fica
+> como registro de como a estimativa de projeto errou — vale ler antes de
+> confiar em qualquer projeção nova.
 
-> 🔴 **CUD pendente e vencido.** A recomendação original ("on-demand por 30 dias,
-> depois assine CUD de 1 ano") venceu — a VM está em prod desde 2026-06-08 e o
-> billing de 2026-07-21 mostra **zero** em "Programas de economia" em todas as
-> linhas. O CUD de 1 ano do C3 (~37% sobre compute) economiza **~R$860/mês
-> (~R$10,3k/ano)** e é, com folga, a maior alavanca de custo do sistema.
-> Follow-up: **F-CAP-05**.
+> ✅ **CUD assinado em ~2026-08-19 — F-CAP-05 resolvido.** Mas **não como este
+> documento previa**: o desconto real é de **28,00%** (Compute Flexible CUD de
+> 1 ano), **não os 37% do resource-based** que as tabelas abaixo assumem.
+> Confirmado aritmeticamente no extrato de agosto (`R$530,10 ÷ R$1.893,23 =
+> 28,00%` no core, `R$120,49 ÷ R$430,33 = 28,00%` na RAM). **C3 e C2D em São
+> Paulo não são elegíveis ao resource-based** — só ao flexível, que é portátil
+> entre famílias mas desconta menos. Toda estimativa de economia neste
+> documento que use 37%/55% está errada por construção.
 
 | Cenário | Configuração | $/mês | R$/mês |
 |---|---|---|---|
@@ -959,29 +1131,43 @@ multi-region não revisado. Ver F-CAP-06.
 
 ### Estratégia de compromisso
 
-> **Status em 2026-07-21: a recomendação abaixo foi cumprida pela metade.** A VM
-> rodou on-demand muito além dos 30 dias (prod desde 2026-06-08) e o CUD **nunca
-> foi assinado** — billing mostra zero em "Programas de economia".
+**Estado atual (2026-09-01): Compute Flexible CUD de 1 ano, ativo desde
+~19/08, aplicando 28,00%.**
 
-Recomendação original: subir **on-demand por 30 dias**, monitorar RAM e CPU, e
-então assinar **CUD de 1 ano**. Com os dados reais de produção agora em mãos
-(CPU 53% com 173 emissoras, RAM projetada 9–12 GB de 16 a 200 emissoras), a
-máquina está validada e **não há mais motivo para adiar o CUD**.
+O que a recomendação original deste documento errou, e que vale registrar:
 
-Economia recalculada sobre o compute real (R$2.322/mês), não sobre a estimativa
-antiga de US$86:
+| | previsto aqui | real |
+|---|---|---|
+| Produto | resource-based CUD | **Compute Flexible CUD** |
+| Desconto 1 ano | ~37% | **28,00%** |
+| Desconto 3 anos | ~55% | 46% |
+| Trava o tipo de máquina? | sim | **não** — é portátil entre famílias e regiões |
 
-| Compromisso | Desconto | Economia/mês | Economia/ano |
-|---|---|---|---|
-| **CUD 1 ano** (recomendado) | ~37% | **~R$860** | **~R$10,3k** |
-| CUD 3 anos | ~55% | ~R$1.277 | ~R$15,3k |
+Essa última linha é a boa notícia: o desconto **acompanhou sozinho** a migração
+`c3-highcpu-8` → `c2d-standard-16` em 01/09, sem nenhuma ação. A ressalva é que
+**T2D não está na lista de elegíveis** (`C3, C3D, C4, C4A, C4D, E2, N1, N2,
+N2D, N4, N4D, N4A` + `H3, H4D, C2, C2D`) — migrar para lá perderia o desconto.
 
-Só considere 3 anos se o projeto for estratégico de longo prazo — o CUD trava
-o *tipo* de máquina, e passar de ~200 emissoras exige migrar para
-`c3-standard-8` (32 GB de RAM).
+### Pendente: ampliar o commitment
 
-> **Confirmar os percentuais de desconto no console** antes de assinar — variam
-> por família e região, e os valores acima são a faixa típica do C3.
+Flex CUD é compromisso de **gasto por hora**, não de máquina. O commitment
+atual absorve ~R$3,14/h, que era a máquina antiga inteira; a nova consome
+~R$6,71/h. **Até ser ampliado, metade da máquina roda a preço cheio —
+~R$650/mês.**
+
+Regras para ampliar (é irreversível por 12 meses):
+
+1. **Espere 5–7 dias de regime** na máquina nova antes de comprar. Os
+   follow-ups de CPU (F-CAP-08/09/10) podem reduzir a necessidade em até 43%, e
+   um commitment comprado grande demais fica ocioso por um ano.
+2. **Comprometa o piso do gasto horário medido**, nunca o pico — flex CUD não
+   reembolsa folga.
+3. **Compre pelo Console** (Faturamento → Descontos por uso contínuo →
+   Comprar). Não há forma `gcloud` confirmada para a compra *spend-based*: o
+   `gcloud compute commitments create --resources vcpu=...` da documentação é o
+   **resource-based**, que é outro produto.
+4. **Não pode ser cancelado nem redimensionado** — para aumentar cobertura,
+   compra-se um commitment adicional.
 
 ---
 

@@ -475,10 +475,14 @@ completo em [docs/superpowers/plans/2026-07-17-otimizacoes-performance.md](../su
   1079` (agora que o default global já desliga). Cosmético; os `staleTime` de 60s/5min
   dessas mesmas queries ficam.
 
-## Capacidade e custo (F-CAP-01..04) — auditoria 2026-07-21
+## Capacidade e custo (F-CAP-01..14)
 
-Abertos ao medir custo por emissora em prod (173 emissoras, `c3-highcpu-8`).
-Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../operations/capacity-and-unit-cost.md).
+Abertos em duas rodadas: **auditoria 2026-07-21** (173 emissoras,
+`c3-highcpu-8`) e **saturação + migração 2026-09-01** (268 emissoras →
+`c2d-standard-16`). Contexto completo e método em
+[capacity-and-unit-cost.md](../operations/capacity-and-unit-cost.md); a história
+da migração em
+[incident-2026-09-01](../incidents/incident-2026-09-01-cpu-saturation-vm-resize.md).
 
 - **F-CAP-01 — `radiocheck_detections_total` não retorna nenhuma série em 7 dias.**
   `sum by (station_id,status) (increase(radiocheck_detections_total[7d]))` → `result: []`.
@@ -500,16 +504,22 @@ Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../op
   documentado). Tabela completa em [deploy.md §6](../operations/deploy.md#6-análise-de-custos).
   Desdobrou-se em F-CAP-05, F-CAP-06 e F-CAP-07.
 
-- **F-CAP-05 — 🔴 CUD nunca assinado; compute 100% on-demand. ~R$860/mês na mesa.**
-  O billing de 2026-07-21 mostra **zero** em "Programas de economia" em todas as linhas,
-  e compute é 79,6% da conta (R$2.322/mês). O `deploy.md` recomendava assinar CUD de 1 ano
-  após 30 dias on-demand — a VM está em prod desde **2026-06-08**, prazo vencido.
-  **Ação:** GCP Console → Compute Engine → Committed use discounts → CUD de 1 ano para
-  `c3-highcpu-8` em `southamerica-east1`. ~37% sobre compute = **~R$860/mês ≈ R$10,3k/ano**;
-  derruba o custo/emissora no teto de R$12,42 para ~R$8,76. **Maior alavanca de custo do
-  sistema — e é uma assinatura no console, não desenvolvimento.** Confirmar o % real de
-  desconto antes de assinar. Cuidado: o CUD trava o tipo de máquina, e passar de ~200
-  emissoras exige migrar pra `c3-standard-8` (32 GB).
+- **~~F-CAP-05~~ — ✅ RESOLVIDO ~2026-08-19. CUD assinado.** Mas **não como
+  previsto**: é **Compute Flexible CUD de 1 ano a 28,00%**, não o resource-based
+  de 37%. Confirmado no extrato de agosto (`530,10÷1.893,23 = 28,00%` no core,
+  `120,49÷430,33 = 28,00%` na RAM). **C3/C2D em São Paulo não são elegíveis ao
+  resource-based.** Boa notícia colateral: flex CUD é **portátil entre famílias**,
+  então o desconto acompanhou sozinho a migração para `c2d-standard-16`. A
+  ressalva "o CUD trava o tipo de máquina" que estava escrita aqui **era falsa**.
+
+- **F-CAP-05b — 🟡 Ampliar o flex commitment para a máquina nova. ~R$650/mês.**
+  O commitment atual absorve ~R$3,14/h (a máquina antiga inteira); a
+  `c2d-standard-16` consome ~R$6,71/h, então **metade dela roda a preço cheio**.
+  **Não compre antes de 5–7 dias de regime medido** — F-CAP-08/09/10 podem
+  reduzir a necessidade em até 43%, e flex CUD é irreversível por 12 meses e não
+  reembolsa folga. Comprometa o **piso** do gasto horário, pelo Console
+  (Faturamento → Descontos por uso contínuo); não há forma `gcloud` confirmada
+  para compra spend-based.
 
 - **F-CAP-06 — Snapshots nos EUA (~R$81/mês) + egress 4× o previsto (~R$200/mês).**
   Três SKUs revelam que snapshots/imagem de máquina de uma VM de **São Paulo** estão
@@ -526,13 +536,103 @@ Contexto completo e método em [docs/operations/capacity-and-unit-cost.md](../op
   ↑88% de variação indicam crescimento recente. **Ação:** `df -h /mnt/db /mnt/data` na VM +
   lista de discos no console; corrigir a tabela da §4. Não é alavanca de custo (discos são
   10,6%), mas é premissa falsa pra qualquer dimensionamento de disco.
+  **Parcialmente fechado em 2026-09-01:** os três discos são
+  `vm-e-monitor` (boot), `radiocheck-db-ssd` e `radiocheck-data-hdd` — este
+  último com **nome enganoso**, é Persistent Disk e não Standard HDD, o que
+  bate com a ausência do SKU no billing. Falta só o `df -h` para fechar
+  tamanhos. **Consequência nova:** por serem PD e não Hyperdisk, as famílias
+  C4/C4A/C4D/N4 estão indisponíveis para esta VM (ver F-CAP-13).
 
-- **F-CAP-04 — RAM líquida por emissora não fechada (falta PSS).**
-  Σ RSS dos 173 ffmpeg = 7,59 GB (44,9 MB/proc), mas RSS double-conta páginas
-  compartilhadas entre processos idênticos; `used`−`shared` situa em ~30 MB. Medir com
-  `smaps_rollup` (PSS) para travar o número. **Impacto:** dimensionar acima de 200
-  emissoras carrega incerteza de ~50% na RAM. (O valor antigo de 14,8 MB/emissora já foi
-  corrigido no `deploy.md` e no `docker-compose.yml`.)
+- **~~F-CAP-04~~ — ✅ RESOLVIDO 2026-09-01, sem precisar de PSS.**
+  O `MEM USAGE` do `docker stats` **já é o número do cgroup**, ou seja, líquido.
+  Medido: container `api` em 5,82 GiB para 268 emissoras = **~26 MB/emissora**,
+  enquanto a soma de RSS do `ps` dizia 11,75 GB — **2× de dupla contagem**,
+  exatamente a suspeita. Regra: para RAM, use `docker stats`, nunca `ps`.
+
+---
+
+### Rodada 2026-09-01 — saturação de CPU a 268 emissoras
+
+Abertos ao diagnosticar e migrar a VM. Os três primeiros são **leveres de CPU**
+que, somados, valem ~2,9 de 6,72 cores (43%) e levariam o teto de ~460 para
+**~740 emissoras na mesma máquina**. Nenhum é urgente com a máquina a 42%.
+
+- **F-CAP-08 — 🟢 `percentile` ordena o espectrograma inteiro para ler 1 elemento. ~0,58 core.**
+  `workers/pkg/audio/peaks.go` calcula o 80º percentil com `sort.Slice` (que ainda
+  usa reflexão) sobre todas as magnitudes do espectrograma, a cada janela, em
+  cada emissora. No perfil de CPU isso aparece espalhado em seis entradas:
+  `sort.pdqsort_func` **20,42%**, `sort.partition_func` 16,23%,
+  `percentile.func1` 8,57% (o closure de comparação), mais `insertionSort_func`,
+  `median_func`, `choosePivot_func` e `reflectlite.Swapper.func6`. Quickselect é
+  O(n) contra O(n log n) e **devolve exatamente o mesmo valor** → mesmo
+  `threshold` → mesmos peaks → **mesmos hashes**. O aviso do topo do arquivo
+  sobre re-fingerprintar a base atomicamente vale para mudar as *constantes*,
+  não o algoritmo que calcula o mesmo número. **Melhor relação risco/retorno do
+  lote:** função pura, contrato fechado, provável por teste de igualdade.
+
+- **F-CAP-09 — 🟡 64% das emissoras pagam re-encode AAC. ~1,5 core estimado.**
+  `workers/internal/ingestor/ffmpeg.go` segmenta com `-c:a copy` quando o stream
+  já é AAC e com `-c:a aac -b:a 128k` caso contrário, porque o muxer ADTS só
+  aceita AAC. Amostra de 487 `ffmpeg: starting`: **176 com `copy` (36%)**, 311
+  (64%) em re-encode. O ffmpeg é **57% da CPU da máquina** (3,86 de 6,72 cores),
+  o maior componente isolado. **O custo relativo dos dois caminhos NÃO foi
+  medido** — meça antes de mexer:
+  ```bash
+  ps -eo pcpu,args --no-headers | grep '[f]fmpeg' \
+  | awk '{ if (index($0,"copy")) {c+=$1;cn++} else {r+=$1;rn++} }
+         END {printf "copy: n=%d media=%.3f%%\nreencode: n=%d media=%.3f%%\nrazao=%.2fx\n", cn,c/cn, rn,r/rn, (r/rn)/(c/cn)}'
+  ```
+  Se a razão for ~2×, vale atacar (segmentar no formato nativo, ou `-b:a 64k -ac 1`).
+  Risco médio-alto: muda o formato da evidência, e os leitores assumem ADTS
+  (ver [evidence-segments.md](../architecture/evidence-segments.md)).
+
+- **F-CAP-10 — 🟡 Índice global: cada janela pontua contra TODOS os materiais do sistema. Até 0,90 core.**
+  `internal/match/engine.go` (`histogramFromHashes`) constrói histograma para
+  todo material do índice, mas só os materiais-alvo daquela emissora viram state
+  machine (`supervisor.go` → `CommercialShortIDs`). Filtrar os postings pelo
+  conjunto da emissora elimina os `map` inserts correspondentes — 31,6% do
+  processo Go, dominado por `runtime.mapassign` (25,20%). **Ataca a causa raiz da
+  saturação**: é este termo que cresce quando o catálogo cresce, e foi ele que
+  fez a projeção linear de julho falhar. Risco médio: muda a semântica do noise
+  sampler da calibração, que hoje amostra o pico global.
+  **Sub-item barato:** o loader inclui campanhas `programada` **sem horizonte** —
+  campanha que só começa em novembro já pesa no índice hoje. Limitar a
+  `start_date <= CURRENT_DATE + 7` é uma cláusula no `WHERE` de
+  `internal/index/loader.go` e quase sem risco (a inclusão de `programada` existe
+  só para evitar corrida no flip `programada → ativa`).
+
+- **F-CAP-11 — 🔴 `alertmanager` fora do ar. Alertas do Prometheus não chegam a ninguém.**
+  Não aparece no `docker compose ps` nem no `docker stats` **anterior** à
+  migração — ou seja, já estava fora antes, não foi causado pelo resize. Explica
+  a máquina ter chegado a 100% de CPU sem ninguém ser avisado. **Ação:**
+  `docker logs docker-alertmanager-1 --tail 30`, corrigir, e adicionar um alerta
+  de watchdog que detecte o próprio alertmanager fora.
+
+- **F-CAP-12 — 🔴 24 de 25 serviços do compose sem política de `restart`.**
+  Só o `segments-cleanup` tem `restart: unless-stopped`. `postgres`, `api`,
+  `minio`, `redis`, `nats`, `prometheus` e `backup` estão no default `no`, então
+  **a stack não volta sozinha após reboot da VM** — descoberto na migração de
+  01/09, onde o `docker compose up -d` manual foi obrigatório. **Ação:**
+  `restart: unless-stopped` nos serviços de longa duração (mantendo
+  `restart: "no"` no `migrate` e nos one-shot). Cuidado: com restart automático,
+  um `api` em crash loop reinicia sozinho e pode mascarar falha de boot — vale
+  junto com o F-CAP-11.
+
+- **F-CAP-13 — 🟡 C4 indisponível: exige Hyperdisk, discos atuais são PD. ~R$200/mês + ~34%/core.**
+  `set-machine-type` para `c4-highcpu-16` falha com
+  `pd-balanced disk type cannot be used by c4-highcpu-16 machine type`. O C4
+  (Emerald Rapids) seria mais barato **e** mais rápido que o C2D escolhido
+  (Geekbench single 2.314 contra 1.666). **Ação:** avaliar migração dos três
+  discos para Hyperdisk em janela própria — não se faz junto de um resize.
+
+- **F-CAP-14 — 🟡 VM `t2d-standard-1` em Montreal, propósito não identificado. R$200,05/mês.**
+  O extrato de agosto tem `T2D AMD Instance Core in Montreal` (739,44 core-h) e
+  `T2D AMD Instance Ram in Montreal` (2.957,77 GiB-h). A razão 2.957,77 ÷ 739,44
+  = 4,0 GiB/core identifica um **`t2d-standard-1` rodando 24/7** em
+  `northamerica-northeast1`; o `External IP Charge` de 1.478,88 h = 2 × 739,44
+  confirma dois IPs estáticos, um por VM. Hipótese: proxy do plano de contorno do
+  ban de IP dos painéis (memória `ip-block-connect-backoff-2026-06`). **Ação:**
+  confirmar o uso ou desligar. Se estiver ociosa, são R$2.400/ano.
 
 - **F-126** — Remover a tradução de JWT legado em `ClientScopesFromContext`.
   Origem: feature multi-cliente (agências), Task 3 do plano
