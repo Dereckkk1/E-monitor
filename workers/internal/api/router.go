@@ -65,6 +65,13 @@ type Deps struct {
 	// HubSSO: entrada pela Central de Clientes (RFC-001 §8.1). nil quando a
 	// integracao nao esta configurada — a rota simplesmente nao e registrada.
 	HubSSO                *handlers.HubSSOHandler
+	// HubSync: mutacoes de identidade empurradas pelo hub (RFC-001 §9.2) — o
+	// sentido oposto do HubSSO. nil quando a integracao nao esta configurada.
+	HubSync               *handlers.HubSyncHandler
+	// Ativos: checagem de is_active por requisicao, com cache. nil mantem o
+	// comportamento antigo (so assinatura do JWT) — e e o que os testes de
+	// rota usam, por nao terem banco.
+	Ativos                *auth.VerificadorAtivo
 	ClientTargetPmm       *handlers.ClientTargetPmmHandler
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
@@ -148,6 +155,20 @@ func NewRouter(d Deps) http.Handler {
 		if d.HubSSO != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/sso", d.HubSSO.Login)
 		}
+		// Sync do hub: fica FORA do grupo autenticado por JWT de propósito —
+		// quem chama é o hub, servidor a servidor, e a credencial dele é a
+		// chave de plataforma no cabeçalho, conferida dentro do handler. Não
+		// há sessão nem usuário nesta chamada.
+		//
+		// Sem o loginLimiter: o hub reentrega em rajada legítima quando volta
+		// de uma indisponibilidade, e estrangular isso por IP transformaria a
+		// recuperação da fila em oito tentativas perdidas.
+		if d.HubSync != nil {
+			r.Post("/hub/sync", d.HubSync.Receive)
+			// Listagem para a reconciliacao noturna do §9.6. Mesma porta do
+			// sync — chave de plataforma, sem sessao.
+			r.Get("/hub/users", d.HubSync.ListUsers)
+		}
 		if d.Welcome != nil {
 			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
 		}
@@ -162,7 +183,7 @@ func NewRouter(d Deps) http.Handler {
 
 		// Protected: all other internal routes require a valid JWT.
 		r.Group(func(r chi.Router) {
-			r.Use(auth.RequireJWT)
+			r.Use(auth.RequireJWTAtivo(d.Ativos))
 
 			// ── Subgrupo A — viewer-friendly reads ────────────────────────────
 			// Chi accumulates middlewares — inner groups do NOT override an outer
