@@ -3,6 +3,7 @@ status: parcialmente-implementado
 ultima-verificacao: 2026-09-01
 codigo-relacionado:
   - workers/internal/api/handlers/hubsync.go
+  - workers/internal/api/handlers/hubsync_upsert_test.go
   - workers/internal/auth/ativo.go
   - workers/internal/auth/middleware.go
   - workers/internal/hub/hub.go
@@ -11,10 +12,18 @@ codigo-relacionado:
 
 # Sincronização vinda da Central de Clientes (`POST /v1/internal/hub/sync`)
 
-> **`parcialmente-implementado` porque só um evento existe.** O receptor aceita
-> os quatro tipos do RFC-001 §9.3, mas apenas `user.deactivate` faz alguma coisa.
-> Os outros respondem `{"ok":true}` e são ignorados de propósito — ver
-> [Eventos desconhecidos](#eventos-desconhecidos-sao-aceitos).
+> **`parcialmente-implementado` porque falta um dos quatro.** Estão de pé
+> `user.deactivate` (fatia 1), `client.upsert` e `user.upsert` (fatia 2). Falta
+> `user.password_changed` — a fatia 3 —, que hoje cai no ramo `default` e
+> responde `{"ok":true}` sem fazer nada.
+>
+> ⚠️ **Quando a fatia 3 chegar, ele PRECISA sair do `default`.** Enquanto
+> responder ok sem agir, o hub marca a senha como sincronizada e ela não terá
+> sido. Aceitar em silêncio é a escolha certa para evento que não se conhece, e a
+> errada para evento que se conhece e não se implementou. Há um teste
+> (`TestHubSync_EventoDesconhecidoEAceito`) que usa justamente esse evento como
+> exemplo do ramo `default`: implementá-lo vai quebrar o teste, e isso é o
+> mecanismo, não um acidente.
 
 ## O que resolve
 
@@ -80,20 +89,89 @@ mandaria o hub para oito tentativas e a DLQ por um evento sem defeito.
 **500 é reservado a falha de banco**, que é o único caso que melhora sozinho e
 portanto o único que merece o retry do hub.
 
-### Idempotência
+### Idempotência — vale para os três eventos
 
-A operação é idempotente por natureza: repetir o `UPDATE` não muda nada. É o que
-o §9.2 aceita ("ignorar repetido é aceitável"). **Não há tabela de dedup por
-`eventId`** — ela entra quando chegar o primeiro evento que não se basta sozinho
-(o `user.upsert`); hoje seria uma migration sem uso.
+Os três são idempotentes **por natureza**: repetir qualquer um deles é repetir um
+`UPDATE` que já não muda nada. É o que o §9.2 aceita ("ignorar repetido é
+aceitável").
+
+**Não há tabela de dedup por `eventId`**, e ela só passa a fazer falta com um
+evento que não se baste sozinho. O candidato é o `user.password_changed` da fatia
+3: reprocessar uma troca de senha antiga sobrescreveria uma mais nova. Hoje a
+tabela seria uma migration sem uso.
 
 ### Eventos desconhecidos são aceitos
 
-`user.upsert`, `client.upsert` e `user.password_changed` respondem `{"ok":true}` e
-não fazem nada. Responder erro faria o hub tentar oito vezes e enterrar na DLQ um
-evento que não tem defeito nenhum — só chegou antes do código que o entende.
-Aceitar é o que permite hub e plataforma subirem em ordens diferentes, que é a
-única forma realista de evoluir quatro repositórios.
+Só `user.password_changed` cai neste ramo hoje. Ele responde `{"ok":true}` e não
+faz nada.
+
+Responder erro faria o hub tentar oito vezes e enterrar na DLQ um evento que não
+tem defeito nenhum — só chegou antes do código que o entende. Aceitar é o que
+permite hub e plataforma subirem em ordens diferentes, que é a única forma
+realista de evoluir quatro repositórios.
+
+⚠️ Repetindo o aviso do topo porque é o ponto em que isso vira defeito: **ao
+implementar a fatia 3, tire o `user.password_changed` daqui**. Um evento
+conhecido, não implementado e respondendo ok faz o hub marcar a senha como
+sincronizada sem que tenha sido.
+
+## `client.upsert`
+
+```jsonc
+{ "hubClientId": "...", "name": "...", "cnpj": "...", "logoUrl": "...",
+  "contactName": "...", "phone": "...", "city": "...", "state": "...", "active": true }
+```
+
+A escada, nesta ordem: **`hub_id`** (chave forte) → **CNPJ igual e sem vínculo**
+(carimba o `hub_id` no registro que já existe) → **cria** com o mínimo.
+
+**Aqui o E-monitor CRIA cliente, e no SSO ele não cria.** A diferença é
+deliberada. O `criarPorJit` recusa inventar um tenant porque lá a informação
+chega no meio do login de alguém, como efeito colateral de um clique — adivinhar
+ali geraria cliente fantasma que ninguém pediu. Este evento é o oposto: alguém
+habilitou o produto para aquele cliente no admin do hub, de propósito. O §9.3
+manda "criar com defaults mínimos se não existir", e é barato — `clients` só
+exige `name`. Contrato, PMM alvo e regras de distribuição seguem vazios e seguem
+sendo preenchidos por aqui, como sempre foram.
+
+**É isto que destrava o `client_not_provisioned`** do §8.1 — o erro que barra
+todo usuário de cliente cuja empresa não tem `hub_id` carimbado.
+
+⚠️ **Casar por NOME ficou de fora, e é regra, não esquecimento.** A §9.5 do RFC
+registra que o importador casava por `cnpj || nome`, e um cliente renomeado no
+E-monitor virava um cliente **novo** no hub, em silêncio. Nome é rótulo; CNPJ é
+identidade. Prefere-se um registro a mais, visível, a um vínculo errado — e há
+teste (`TestHubSync_ClientUpsert_NaoCasaPorNome`) que falha se alguém "melhorar"
+isso.
+
+## `user.upsert`
+
+```jsonc
+{ "hubUserId": "...", "email": "...", "name": "...", "phone": "...",
+  "level": "client", "active": true, "client": {...} | null, "provisionProfile": {} }
+```
+
+Atualiza `name`, `phone` e `is_active`. A escada: **`hub_id`** → **e-mail igual
+com `hub_id IS NULL`** (vincula em vez de duplicar) → **nada**.
+
+⚠️ **Não cria conta**, e essa é a única divergência consciente da leitura literal
+do §9.3 ("criar/atualizar"):
+
+- A conta na plataforma nasce no **primeiro clique** (JIT). Não é detalhe de
+  implementação — é o modelo mental do §8.1 e do handoff, e o `criarPorJit` já
+  cria com este mesmo payload no momento em que a pessoa aparece.
+- Criar aqui povoaria o `users` com dezenas de contas de gente que talvez nunca
+  clique, e as telas de operação listam usuários.
+- Acrescentar a criação depois é uma linha. Apagar contas criadas por engano em
+  produção não é.
+
+O degrau do e-mail exige **`hub_id IS NULL`**. Sem essa guarda, um evento
+reapontaria para outra pessoa a identidade de uma conta já vinculada — há teste
+(`TestHubSync_UserUpsert_NaoRoubaVinculoDeOutroHubId`).
+
+`provisionProfile` chega no payload e é **ignorado** aqui, pela mesma razão que o
+`hubsso.go` já documenta: no E-monitor todo usuário de cliente é `viewer`, não há
+escolha a fazer. Ele existe no contrato porque o E-rádios precisa dele.
 
 ## A janela de 8 horas, e por que ela precisou ser fechada junto
 
