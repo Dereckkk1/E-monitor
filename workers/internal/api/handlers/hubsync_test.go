@@ -1,0 +1,217 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
+	"radiocheck/internal/db"
+	"radiocheck/internal/dbtest"
+	"radiocheck/internal/hub"
+)
+
+const chaveDeTeste = "pk_chave_desta_plataforma"
+
+func hubConfigurado() *hub.Client {
+	return hub.New("https://api-clientes.emidiastec.com.br", chaveDeTeste)
+}
+
+func pedidoSync(corpo, chave string) (*httptest.ResponseRecorder, *http.Request) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/internal/hub/sync", strings.NewReader(corpo))
+	if chave != "" {
+		req.Header.Set("X-Hub-Platform-Key", chave)
+	}
+	return httptest.NewRecorder(), req
+}
+
+// ── Sem DB: a porta ──────────────────────────────────────────────────────
+
+func TestHubSync_SemChave(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.deactivate","data":{}}`, "")
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestHubSync_ChaveErrada(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.deactivate","data":{}}`, "pk_outra")
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// A chave é conferida ANTES do corpo: responder 400 a quem não se autenticou
+// contaria a quem sonda que o endpoint existe e o que ele espera.
+func TestHubSync_CorpoInvalidoSemChaveAindaE401(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`isto nao e json`, "pk_outra")
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestHubSync_IntegracaoDesligadaRecusa(t *testing.T) {
+	// hub.New("","") => Configured() falso. Sem chave configurada não há como
+	// autenticar ninguém, e aceitar seria pior que recusar.
+	h := NewHubSyncHandler(nil, hub.New("", ""))
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.deactivate","data":{}}`, chaveDeTeste)
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestHubSync_CorpoInvalidoComChaveE400(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`isto nao e json`, chaveDeTeste)
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHubSync_SemEventIdE400(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`{"event":"user.deactivate","data":{}}`, chaveDeTeste)
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// Evento que esta versão não implementa é ACEITO. É o que permite o hub subir
+// antes deste lado sem enterrar na DLQ eventos que não têm defeito nenhum.
+func TestHubSync_EventoDesconhecidoEAceito(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.upsert","data":{}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var r syncResposta
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &r))
+	require.True(t, r.OK)
+	require.Nil(t, r.ExternalID)
+}
+
+func TestHubSync_DeactivateSemHubUserIdE400(t *testing.T) {
+	h := NewHubSyncHandler(nil, hubConfigurado())
+	rec, req := pedidoSync(`{"eventId":"1","event":"user.deactivate","data":{}}`, chaveDeTeste)
+	h.Receive(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// ── Com Postgres real (regra 4.8: banco vazio dá falso verde) ────────────
+
+func poolDeTeste(t *testing.T) (context.Context, *pgxpool.Pool) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := db.New(ctx, url, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { pool.Close() })
+	dbtest.GuardOrSkip(t, ctx, pool)
+	_, err = pool.Exec(ctx, `TRUNCATE users, clients RESTART IDENTITY CASCADE`)
+	require.NoError(t, err)
+	return ctx, pool
+}
+
+func criaUsuario(t *testing.T, ctx context.Context, pool *pgxpool.Pool, hubID *string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, role, name, hub_id, is_active)
+		 VALUES ($1, 'x', 'viewer', 'Fulano', $2, TRUE) RETURNING id`,
+		"u"+uuid.NewString()[:8]+"@teste.com", hubID).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
+
+func ativoNoBanco(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) bool {
+	t.Helper()
+	var a bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT is_active FROM users WHERE id = $1`, id).Scan(&a))
+	return a
+}
+
+func TestHubSync_DesativaEDevolveOIdLocal(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	hubID := "hub-user-123"
+	id := criaUsuario(t, ctx, pool, &hubID)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	rec, req := pedidoSync(
+		`{"eventId":"e1","event":"user.deactivate","data":{"hubUserId":"hub-user-123","email":"u@teste.com"}}`,
+		chaveDeTeste)
+	h.Receive(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var r syncResposta
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &r))
+	require.True(t, r.OK)
+	// O externalId é o que o hub grava em userPlatformIdentities (§5.6).
+	require.NotNil(t, r.ExternalID)
+	require.Equal(t, id.String(), *r.ExternalID)
+	require.False(t, ativoNoBanco(t, ctx, pool, id))
+}
+
+func TestHubSync_RepetirEIdempotente(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	hubID := "hub-user-123"
+	id := criaUsuario(t, ctx, pool, &hubID)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+	corpo := `{"eventId":"e1","event":"user.deactivate","data":{"hubUserId":"hub-user-123"}}`
+
+	rec1, req1 := pedidoSync(corpo, chaveDeTeste)
+	h.Receive(rec1, req1)
+	rec2, req2 := pedidoSync(corpo, chaveDeTeste)
+	h.Receive(rec2, req2)
+
+	// O §9.2 aceita "ignorar repetido"; aqui a operação é idempotente por
+	// natureza, então a segunda entrega responde igual à primeira.
+	require.Equal(t, http.StatusOK, rec2.Code)
+	require.JSONEq(t, rec1.Body.String(), rec2.Body.String())
+	require.False(t, ativoNoBanco(t, ctx, pool, id))
+}
+
+func TestHubSync_HubIdInexistenteNaoEErro(t *testing.T) {
+	_, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	rec, req := pedidoSync(
+		`{"eventId":"e1","event":"user.deactivate","data":{"hubUserId":"ninguem"}}`,
+		chaveDeTeste)
+	h.Receive(rec, req)
+
+	// A pessoa nunca entrou por aqui (o provisionamento é JIT). Não há o que
+	// desativar, e insistir não faria aparecer — 200 com externalId nulo encerra
+	// o evento em vez de mandá-lo para oito tentativas e a DLQ.
+	require.Equal(t, http.StatusOK, rec.Code)
+	var r syncResposta
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &r))
+	require.True(t, r.OK)
+	require.Nil(t, r.ExternalID)
+}
+
+func TestHubSync_NaoCasaPorEmail(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	// Usuário local SEM hub_id, com o mesmo e-mail que vem no payload.
+	id := criaUsuario(t, ctx, pool, nil)
+	var email string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, id).Scan(&email))
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	rec, req := pedidoSync(
+		`{"eventId":"e1","event":"user.deactivate","data":{"hubUserId":"hub-x","email":"`+email+`"}}`,
+		chaveDeTeste)
+	h.Receive(rec, req)
+
+	// Casar por e-mail desativaria a pessoa errada quando dois sistemas têm o
+	// mesmo endereço em pessoas diferentes. O e-mail vem para diagnóstico.
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, ativoNoBanco(t, ctx, pool, id))
+}
