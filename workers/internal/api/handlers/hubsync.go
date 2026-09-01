@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"radiocheck/internal/hub"
 )
@@ -21,17 +22,17 @@ import (
 // `environment:` explícito do compose, que é justamente o que foi esquecido e
 // fez o SSO responder 503 em produção com o `.env` aparentemente certo (PR #8).
 //
-// Implementados: `user.deactivate` (fatia 1), `client.upsert` e `user.upsert`
-// (fatia 2). Falta `user.password_changed`, que é a fatia 3 — e ele responde
-// `{"ok":true}` e não faz nada, como qualquer evento desconhecido. Isso permite
-// o hub subir antes deste lado sem encher a DLQ com eventos que aqui ainda não
-// existem.
+// **Os quatro eventos do §9.3 estão implementados**: `user.deactivate` (fatia 1),
+// `client.upsert` e `user.upsert` (fatia 2), `user.password_changed` (fatia 3).
+// O ramo `default` continua existindo para eventos que uma versão futura do hub
+// invente — ele aceita e ignora, o que permite os dois lados subirem em ordens
+// diferentes sem encher a DLQ.
 //
-// ⚠️ Quando a fatia 3 chegar, o `user.password_changed` PRECISA deixar de cair
-// no ramo `default`: enquanto ele responder ok sem fazer nada, o hub vai marcar
-// a senha como sincronizada e ela não terá sido. Aceitar em silêncio é a
-// escolha certa para evento que não se conhece, e a errada para evento que se
-// conhece e não se implementou.
+// ⚠️ A regra que o `default` carrega: aceitar em silêncio é certo para evento que
+// não se conhece e ERRADO para evento que se conhece e não se implementou. Um
+// evento conhecido caindo ali faz o hub marcar como sincronizado algo que não
+// foi. Ao acrescentar um evento novo ao §9.3, ou se implementa o `case`, ou se
+// aceita conscientemente que o hub vai mentir sobre ele.
 type HubSyncHandler struct {
 	db  *pgxpool.Pool
 	hub *hub.Client
@@ -89,6 +90,8 @@ func (h *HubSyncHandler) Receive(w http.ResponseWriter, r *http.Request) {
 		h.upsertCliente(w, r, env)
 	case "user.upsert":
 		h.upsertUsuario(w, r, env)
+	case "user.password_changed":
+		h.trocarSenha(w, r, env)
 	default:
 		// Evento que esta versão não implementa é ACEITO e ignorado.
 		//
@@ -307,4 +310,75 @@ func (h *HubSyncHandler) upsertUsuario(w http.ResponseWriter, r *http.Request, e
 	// 3) Ninguém. Não é erro: a pessoa ainda não clicou, e o JIT a criará com
 	// este mesmo payload quando clicar. `externalId` nulo encerra o evento.
 	h.responde(w, nil)
+}
+
+// ── user.password_changed ───────────────────────────────────────────────────
+
+type dadosSenha struct {
+	HubUserID string `json:"hubUserId"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+}
+
+// trocarSenha aplica a senha que o hub propagou — RFC-001 §9.4, decisão D8.
+//
+// # Por que a senha chega em texto claro
+//
+// Os hashes são incompatíveis entre as três plataformas: bcrypt aqui e no
+// E-rádios, Argon2id na Plura. Sincronizar hash exigiria rebaixar a Plura ao
+// algoritmo mais fraco. A D8 escolheu o modelo do SCIM (RFC 7644): a senha viaja
+// em claro no envelope, sobre HTTPS e autenticada pela chave de plataforma, e
+// cada lado faz o hash com o algoritmo nativo e DESCARTA o claro.
+//
+// No hub ela fica cifrada (AES-256-GCM) enquanto espera na fila e é decifrada só
+// no instante da entrega. Aqui ela existe apenas dentro desta função.
+//
+// # A senha não pode aparecer em lugar nenhum
+//
+// Nem em log, nem em erro, nem em telemetria — §9.4, mitigação 2. Por isso
+// nenhuma mensagem daqui ecoa o corpo, e o `dadosSenha` nunca é impresso. O
+// `reqmetrics` já registra só rota, método e duração, sem payload.
+//
+// # Só quem é vinculado
+//
+// O casamento é por `hub_id`, como nos outros eventos. Uma conta local que nunca
+// veio do hub não tem a senha trocada por ele: a coexistência (D5) diz que o
+// login local dela é dela.
+func (h *HubSyncHandler) trocarSenha(w http.ResponseWriter, r *http.Request, env syncEnvelope) {
+	var d dadosSenha
+	if err := json.Unmarshal(env.Data, &d); err != nil || d.HubUserID == "" || d.Password == "" {
+		// A mensagem não diz qual campo faltou quando o que falta é a senha —
+		// "missing_password" num log de acesso já é mais do que se precisa saber.
+		http.Error(w, "missing_fields", http.StatusBadRequest)
+		return
+	}
+
+	// Custo 10, o mesmo do `me.go`, do `users.go` e do JIT do SSO. Divergir aqui
+	// criaria contas com força de hash diferente conforme o caminho pelo qual a
+	// senha foi definida — e ninguém saberia disso olhando a tabela.
+	hash, err := bcrypt.GenerateFromPassword([]byte(d.Password), 10)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var id string
+	err = h.db.QueryRow(r.Context(),
+		`UPDATE users SET password_hash = $2, updated_at = NOW()
+		  WHERE hub_id = $1 AND deleted_at IS NULL
+		  RETURNING id`, d.HubUserID, string(hash)).Scan(&id)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Ninguém vinculado: a pessoa ainda não clicou, e o JIT vai criá-la com
+		// uma senha aleatória no primeiro acesso. Não há o que trocar — 200 com
+		// externalId nulo encerra o evento em vez de mandá-lo para a DLQ.
+		h.responde(w, nil)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	h.responde(w, &id)
 }
