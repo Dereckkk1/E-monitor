@@ -1,5 +1,6 @@
 import { Fragment } from 'react'
 import DayCell from './DayCell'
+import { indexStations, resolveStation } from '../utils/stationCatalog'
 import TypeIconPill from './TypeIconPill'
 import StationAvatar from './StationAvatar'
 import { parseLocalDate, enumerateVisibleDays } from '../utils/dates'
@@ -115,6 +116,11 @@ export default function DistributionGrid({
     byStation.get(r.stationId).push(r)
   }
 
+  // Índice em vez de um find() linear por bloco — e, principalmente, o ponto
+  // onde a linha deixa de poder sumir: resolveStation devolve placeholder para
+  // emissora fora do catálogo carregado (ver utils/stationCatalog.js).
+  const stationIndex = indexStations(stations)
+
   // Layout do resumo dividido em DUAS colunas:
   //   200px → "row summary"  : badges (programada/veiculada/bônus/etc) + count
   //                            chip. Uma por material row.
@@ -183,8 +189,12 @@ export default function DistributionGrid({
 
         {/* Station blocks + material rows */}
         {[...byStation.entries()].map(([stationId, stationRows]) => {
-          const station = stations.find(s => s.id === stationId)
-          if (!station) return null
+          // NUNCA `return null` aqui. Emissora ausente do catálogo (página
+          // truncada, request em voo, API antiga) sumia com a linha inteira e
+          // com as veiculações dela, enquanto o rodapé seguia contando a
+          // emissora — bug de 2026-09-02 na campanha 191. Placeholder feio é
+          // melhor que número errado em silêncio.
+          const station = resolveStation(stationIndex, stationId)
           return (
             <Fragment key={`sb-${stationId}`}>
               {/* Station header (full-width) — inner content sticks to the
@@ -238,7 +248,9 @@ export default function DistributionGrid({
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}>{station.name}</span>
                         <span style={{ color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
-                          {station.band ?? ''} {station.frequency_mhz ?? ''}
+                          {station.unresolved
+                            ? 'cadastro não carregado'
+                            : `${station.band ?? ''} ${station.frequency_mhz ?? ''}`}
                         </span>
                         <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>
                           {station.city ?? ''}{station.state ? ` / ${station.state}` : ''}

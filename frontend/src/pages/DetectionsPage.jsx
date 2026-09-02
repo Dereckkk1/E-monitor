@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  useCampaigns, useStations, useClients,
+  useCampaigns, useStationsByIds, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary, useCampaignPricing,
   useClientTargetPmm,
@@ -18,6 +18,7 @@ import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { buildGridReportModel } from '../utils/gridReport'
 import { buildGridRows } from '../utils/gridRows'
+import { collectStationIds, indexStations, resolveStation } from '../utils/stationCatalog'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
   monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
@@ -25,6 +26,10 @@ import {
 } from '../utils/dates'
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
+// Identidade estável pro estado "catálogo ainda não chegou": um [] literal
+// por render invalidaria todo useMemo que depende do catálogo.
+const EMPTY_STATIONS = []
+
 const PAGE_SIZE_OPTIONS = [5, 10, 15]
 const DEFAULT_PAGE_SIZE = 5
 
@@ -465,9 +470,6 @@ export default function DetectionsPage() {
     document.getElementById('detection-campaign')?.focus()
   }, [])
 
-  const { data: stationsResp } = useStations({ limit: 2000, enabled: isAdmin })
-  const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
-
   // Client lookup map
   const clientMap = useMemo(() => {
     const m = new Map()
@@ -712,6 +714,19 @@ export default function DetectionsPage() {
     typeById, distributionRules,
   }), [campaignMaterials, materialsById, rangedSummary, typeById, distributionRules])
 
+  // Cadastro das emissoras que a grade pode desenhar: as das linhas mais as
+  // da campanha (algumas ainda sem linha). Conjunto EXATO via `?ids=` — pedir
+  // `limit: 2000` devolvia uma página do catálogo de 7,5 mil e a emissora que
+  // não coubesse sumia da tela junto com as veiculações dela (bug de
+  // 2026-09-02: campanha 191 mostrava 3 de 4 e o rodapé dizia 4). Sem gate por
+  // role: /stations é legível por qualquer usuário autenticado e o cliente
+  // precisa do cadastro pra grade dele renderizar — igual /materials.
+  const gridStationIds = useMemo(() => collectStationIds({
+    rows, extraIds: selectedCampaign?.target_stations ?? [],
+  }), [rows, selectedCampaign])
+
+  const { data: stationCatalog = EMPTY_STATIONS } = useStationsByIds(gridStationIds)
+
   const cellData = useMemo(() => {
     const m = new Map()
     for (const s of rangedSummary) {
@@ -730,11 +745,12 @@ export default function DetectionsPage() {
   const filteredRows = useMemo(() => {
     const tokens = tokenize(search)
     if (tokens.length === 0) return rows
-    const stationById = new Map(stationCatalog.map(s => [s.id, s]))
+    const stationById = indexStations(stationCatalog)
     const fields = ['name', 'city', 'state', 'band', 'freq', 'title']
     return rows.filter(r => {
-      const st = stationById.get(r.stationId)
-      if (!st) return false
+      // Emissora não resolvida entra na busca pelo placeholder (e pelo título
+      // do material), em vez de ser descartada de saída.
+      const st = resolveStation(stationById, r.stationId)
       const haystack = {
         name:  st.name  ?? '',
         city:  st.city  ?? '',
@@ -804,10 +820,15 @@ export default function DetectionsPage() {
     pmmTargetByStation,
   }), [selectedCampaign, clientMap, filteredRows, stationCatalog, reportDays, cellData, search, rangeStart, rangeEnd, materialsByStationType, pmmTargetByStation])
 
-  // Só liga o modo WYSIWYG quando temos o catálogo de emissoras pra resolver
-  // nomes/dial (admin). Sem catálogo (ex.: viewer), cai no relatório backend
-  // atual — sem regressão. Ver docs/features/detections-report-wysiwyg.md.
-  const gridReport = stationCatalog.length > 0
+  // Gate do modo WYSIWYG. Era `stationCatalog.length > 0`, que funcionava como
+  // proxy de role porque só o admin buscava o catálogo. Desde que a página
+  // resolve emissora por `?ids=` o cliente também tem catálogo, então o proxy
+  // deixou de valer: manter o gate implícito passaria o cliente pro relatório
+  // novo de carona numa correção de grade. O gate virou explícito e o
+  // comportamento do cliente segue o de hoje (relatório do backend). Trocar
+  // pra `stationCatalog.length > 0` é o que liga WYSIWYG pro cliente, quando
+  // for uma decisão de produto. Ver docs/features/detections-report-wysiwyg.md.
+  const gridReport = isAdmin && stationCatalog.length > 0
     ? { model: reportModel, filterNote: reportModel.header.filterLabel }
     : null
 

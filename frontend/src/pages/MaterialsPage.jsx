@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  useCampaigns, useStations, useClients,
+  useCampaigns, useStationsByIds, useClients,
   useCampaignMaterials, useMaterials, useDistributionRules,
   useMaterialTypes, useDailySummary,
 } from '../api/hooks'
@@ -12,11 +12,15 @@ import FlowStepper from '../components/FlowStepper'
 import AirtimePaginator from '../components/AirtimePaginator'
 import MaterialPlaybackList from '../components/MaterialPlaybackList'
 import { tokenize, matchesAllTokens } from '../utils/search'
+import { collectStationIds, indexStations, resolveStation } from '../utils/stationCatalog'
 import { safeLogoUrl } from '../utils/logoUrl'
 import {
   parseLocalDate, monthFromDate, isoFromDate, monthToRange,
   monthLabel, rangeLabel, defaultRangeForCampaign, campaignRangeISO, formatCampaignPeriod,
 } from '../utils/dates'
+
+// Identidade estável pro "catálogo ainda não chegou" (ver DetectionsPage).
+const EMPTY_STATIONS = []
 
 const STEP_LABELS = ['Competência', 'Campanha', 'Período']
 const PAGE_SIZE_OPTIONS = [5, 10, 15]
@@ -245,12 +249,6 @@ export default function MaterialsPage() {
     document.getElementById('materials-campaign')?.focus()
   }, [])
 
-  // Stations fetched for EVERYONE (admin + client). /stations is readable by
-  // any authenticated user (see App.jsx), so — unlike /detections — we don't
-  // gate by isAdmin: the grid needs station objects to render rows for clients.
-  const { data: stationsResp } = useStations({ limit: 2000 })
-  const stationCatalog = useMemo(() => stationsResp?.data ?? [], [stationsResp])
-
   const clientMap = useMemo(() => {
     const m = new Map()
     clients.forEach(c => m.set(c.id, c))
@@ -439,15 +437,26 @@ export default function MaterialsPage() {
     )
   }
 
+  // Cadastro das emissoras que a grade pode desenhar — conjunto EXATO via
+  // `?ids=`. Era `limit: 2000`, que devolve só a 1ª página de um catálogo de
+  // 7,5 mil ordenado por (monitoring_status, pmm DESC NULLS LAST, name): a
+  // emissora que não coubesse sumia da grade em silêncio (mesmo bug que a
+  // /detections mostrou em 2026-09-02 na campanha 191). /stations é legível
+  // por qualquer usuário autenticado, então não há gate por role.
+  const gridStationIds = useMemo(() => collectStationIds({
+    rows, extraIds: selectedCampaign?.target_stations ?? [],
+  }), [rows, selectedCampaign])
+
+  const { data: stationCatalog = EMPTY_STATIONS } = useStationsByIds(gridStationIds)
+
   // ── Search filter ─────────────────────────────────────────────
   const filteredRows = useMemo(() => {
     const tokens = tokenize(search)
     if (tokens.length === 0) return rows
-    const stationById = new Map(stationCatalog.map(s => [s.id, s]))
+    const stationById = indexStations(stationCatalog)
     const fields = ['name', 'city', 'state', 'band', 'freq', 'title']
     return rows.filter(r => {
-      const st = stationById.get(r.stationId)
-      if (!st) return false
+      const st = resolveStation(stationById, r.stationId)
       const haystack = {
         name: st.name ?? '', city: st.city ?? '', state: st.state ?? '',
         band: st.band ?? '', freq: st.frequency_mhz != null ? String(st.frequency_mhz) : '',
