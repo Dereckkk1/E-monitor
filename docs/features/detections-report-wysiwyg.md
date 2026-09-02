@@ -114,12 +114,20 @@ mudança de backend / schema / migration**.
 
 ## Fallback do viewer (sem regressão)
 
-O modelo precisa do catálogo de emissoras (`useStations`, hoje admin-only) pra
-resolver nome/dial. A `DetectionsPage` só passa `gridReport` quando
-`stationCatalog.length > 0`. Sem catálogo (ex.: viewer), o menu **cai no
-relatório backend atual** — o viewer continua baixando consolidado/PDF como
-antes, sem quebra. O gate é robusto independentemente de como (ou se) o viewer
-recebe o catálogo.
+O modelo precisa do catálogo de emissoras pra resolver nome/dial, e o gate era
+`stationCatalog.length > 0` — que funcionava como *proxy* de role, porque só o
+admin buscava catálogo. Desde 2026-09-02 a página resolve emissora por `?ids=`
+e **o cliente também tem catálogo** (ver
+[incident-2026-09-02](../incidents/incident-2026-09-02-detections-station-hidden-by-catalog-page.md)),
+então o proxy deixou de valer: o gate virou **explícito**, `isAdmin &&
+stationCatalog.length > 0`. O viewer continua baixando consolidado/PDF do backend
+como antes — sem regressão e sem ganhar o relatório novo de carona numa correção
+de grade. Ligar WYSIWYG pro cliente é remover o `isAdmin &&`, quando for decisão
+de produto.
+
+Emissora que não vier no catálogo **não some** do modelo: entra com placeholder
+e com os números dela. Pular era o que fazia o CSV/PDF entregue ao cliente
+perder veiculações em silêncio.
 
 ## Regras de exibição respeitadas
 

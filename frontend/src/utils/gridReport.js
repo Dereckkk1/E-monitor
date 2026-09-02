@@ -28,7 +28,8 @@
 // dateISO segue a mesma construção da grade (`d.toISOString().slice(0,10)`), que
 // em America/Sao_Paulo (UTC-3) coincide com o for_date da view.
 
-import { pad2 } from './dates'
+import { pad2 } from './dates.js'
+import { indexStations, resolveStation } from './stationCatalog.js'
 
 function isoDayKey(d) { return d.toISOString().slice(0, 10) }
 function dayLabel(d)  { return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}` }
@@ -135,7 +136,7 @@ export function buildGridReportModel({
   campaign, client, filteredRows, stations, days, cellData, filterInfo = {},
   materialLookup = null, pmmTargetByStation = {},
 }) {
-  const stationById = new Map((stations ?? []).map(s => [s.id, s]))
+  const stationById = indexStations(stations)
 
   // Agrupa as linhas filtradas por emissora preservando a ordem de aparição
   // (idêntico ao byStation da grade).
@@ -153,8 +154,11 @@ export function buildGridReportModel({
   const byStation = []
 
   for (const stationId of order) {
-    const st = stationById.get(stationId)
-    if (!st) continue // emissora fora do catálogo → pulada, exatamente como a grade
+    // Emissora fora do catálogo carregado NÃO é pulada: vem placeholder e os
+    // números dela continuam no relatório. Pular era o bug de 2026-09-02 — o
+    // CSV/PDF entregue ao cliente perdia 258 veiculações sem nenhum aviso, e a
+    // nota do rodapé ("N emissoras") seguia contando a linha ausente.
+    const st = resolveStation(stationById, stationId)
 
     const stationTotals = zeroTotals()
     const materials = []

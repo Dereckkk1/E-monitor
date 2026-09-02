@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-09-02
 codigo-relacionado:
   - frontend/src/pages/DetectionsPage.jsx
   - frontend/src/components/DistributionGrid.jsx
@@ -10,6 +10,7 @@ codigo-relacionado:
   - frontend/src/utils/dates.js
   - frontend/src/utils/gridReport.js
   - frontend/src/utils/gridRows.js
+  - frontend/src/utils/stationCatalog.js
   - workers/internal/catalog/daily_summary.go
   - migrations/0018_detections_categorization.up.sql
 ---
@@ -76,6 +77,36 @@ Ou seja, dá pra **ver** o histórico de uma linha fora de escopo, mas não dá 
 **inserir** manual nela. A correção de fundo — transformar o vínculo num flag
 ativo/inativo que só tira o hash do índice, preservando histórico, atribuição e
 inserção manual — está em aberto.
+
+## Como o cadastro da emissora é resolvido (e por que não é uma página)
+
+A grade conhece `station_id`; nome, dial, praça, logo e PMM vêm do cadastro. Esse
+cadastro é buscado por **conjunto fechado** (`GET /stations?ids=…`, hook
+`useStationsByIds`), com os ids de todas as linhas mais os `target_stations` da
+campanha — nunca por `limit`.
+
+O motivo está em [incident-2026-09-02](../incidents/incident-2026-09-02-detections-station-hidden-by-catalog-page.md):
+`?limit=2000` devolve a **primeira página** de 7,5 mil emissoras ordenada por
+`(monitoring_status, pmm DESC NULLS LAST, name)`. Quando uma campanha termina, o
+supervisor marca a emissora como `paused`; se ela também tiver `pmm NULL`, cai
+para a posição ~2.700 e não vem na página. A grade descartava a linha inteira em
+silêncio e o rodapé continuava contando a emissora — a campanha 191 exibia 3 de 4
+e escondia 258 veiculações, na tela e no CSV/PDF.
+
+Duas regras ficam valendo pra qualquer tela que desenhe emissoras a partir de ids:
+
+1. **Peça o conjunto, não uma página.** Subir o `limit` não é a saída: o catálogo
+   inteiro serializado passa de 10 MB. `?ids=` aceita 500 por request —
+   `chunkIds` fatia, não trunca.
+2. **Emissora não resolvida não some.** `resolveStation`
+   ([utils/stationCatalog.js](../../frontend/src/utils/stationCatalog.js))
+   devolve placeholder marcado, e a linha aparece com os números certos e o
+   rótulo "cadastro não carregado". Rótulo feio é melhor que número errado sem
+   aviso.
+
+O cliente também recebe o cadastro (não há gate por role: `GET /stations` é
+legível por qualquer autenticado). Antes, `enabled: isAdmin` deixava o cliente
+sem catálogo — e, com a regra antiga, **sem nenhuma linha na grade**.
 
 ## Cores
 

@@ -1,5 +1,6 @@
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from './client'
+import { chunkIds } from '../utils/stationCatalog'
 
 // Stations
 export function useStations({ enabled = true, ...params } = {}) {
@@ -9,6 +10,37 @@ export function useStations({ enabled = true, ...params } = {}) {
     enabled,
   })
 }
+// Resolve o cadastro de um CONJUNTO FECHADO de emissoras (`?ids=`), em vez de
+// pedir uma página do catálogo. É o que /detections usa pra grade.
+//
+// Por que não `limit`: o catálogo de prod tem 7,5 mil emissoras ordenadas por
+// (monitoring_status, pmm DESC NULLS LAST, name). `limit: 2000` devolve uma
+// PÁGINA — emissora `paused` com pmm nulo cai na ~2.700 e não vem. Quem
+// consome achava que tinha o catálogo inteiro e sumia com a linha (bug de
+// 2026-09-02, campanha 191: 3 de 4 emissoras na tela). Subir o limit também
+// não serve: o catálogo inteiro serializado passa de 10 MB — mesmo raciocínio
+// do seletor do /insights (components/insights/FiltersBar.jsx).
+//
+// O cap do backend é 500 ids por request, então a lista é fatiada e as páginas
+// remontadas aqui: nada de truncar em 500, que seria o mesmo bug com outro
+// número. A chave é normalizada (únicos + ordenados) pro cache não duplicar
+// entrada por causa de ordem.
+export function useStationsByIds(ids = [], { enabled = true } = {}) {
+  const key = [...new Set((ids ?? []).filter(Boolean))].sort().join(',')
+  return useQuery({
+    queryKey: ['stations', 'by-ids', key],
+    queryFn: async () => {
+      const pages = await Promise.all(
+        chunkIds(key.split(',')).map(chunk =>
+          api.get('/stations', { params: { ids: chunk.join(',') } }).then(r => r.data))
+      )
+      return pages.flatMap(d => (Array.isArray(d) ? d : (d?.data ?? [])))
+    },
+    enabled: enabled && key.length > 0,
+    staleTime: 60_000,
+  })
+}
+
 // Autocomplete do campo de busca de emissoras: devolve { stations, cities,
 // states } já agrupados e com contagem real.
 //
