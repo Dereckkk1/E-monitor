@@ -12,18 +12,30 @@ codigo-relacionado:
 
 # Sincronização vinda da Central de Clientes (`POST /v1/internal/hub/sync`)
 
-> **`parcialmente-implementado` porque falta um dos quatro.** Estão de pé
-> `user.deactivate` (fatia 1), `client.upsert` e `user.upsert` (fatia 2). Falta
-> `user.password_changed` — a fatia 3 —, que hoje cai no ramo `default` e
-> responde `{"ok":true}` sem fazer nada.
+> ## ✅ EM PRODUÇÃO desde 2026-09-01 — os quatro eventos implementados
 >
-> ⚠️ **Quando a fatia 3 chegar, ele PRECISA sair do `default`.** Enquanto
-> responder ok sem agir, o hub marca a senha como sincronizada e ela não terá
-> sido. Aceitar em silêncio é a escolha certa para evento que não se conhece, e a
-> errada para evento que se conhece e não se implementou. Há um teste
-> (`TestHubSync_EventoDesconhecidoEAceito`) que usa justamente esse evento como
-> exemplo do ramo `default`: implementá-lo vai quebrar o teste, e isso é o
-> mecanismo, não um acidente.
+> `user.deactivate` (fatia 1), `client.upsert` e `user.upsert` (fatia 2) e
+> `user.password_changed` (fatia 3). Nenhum cai mais no ramo `default`.
+>
+> **Provado em produção neste dia, não só em teste:** desativar uma pessoa no
+> `/admin/usuarios` do hub gravou `is_active = false` na tabela `users` daqui, e
+> reativar trouxe de volta para `true`. Foi a primeira vez que os dois sistemas
+> conversaram — até então todos os testes dos dois lados eram de um lado só, com
+> o outro falseado.
+>
+> ⚠️ **A regra que o `default` carrega continua valendo para o PRÓXIMO evento.**
+> Enquanto um evento conhecido responder ok sem agir, o hub marca como
+> sincronizado algo que não foi. Aceitar em silêncio é a escolha certa para
+> evento que **não se conhece**, e a errada para evento que se conhece e não se
+> implementou. Ao acrescentar um evento novo ao §9.3 do RFC: ou se implementa o
+> `case`, ou se aceita conscientemente que o hub vai mentir sobre ele.
+>
+> ⚠️ **`{"ok":true}` daqui NÃO significa que alguma linha mudou.** Os quatro
+> handlers casam por `WHERE hub_id = $1`; sem linha casada eles respondem **200
+> com `externalId` nulo**, de propósito — o provisionamento é JIT e a pessoa pode
+> não ter clicado no card ainda. Quem lê só o status da fila no hub tem um falso
+> positivo; o sinal certo é o `externalId`. Hoje há **3** usuários com `hub_id`
+> aqui.
 
 ## O que resolve
 
@@ -240,6 +252,36 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
 A prova que vale é a de ponta: desativar alguém no `/admin/usuarios` do hub e ver
 `is_active` virar `false` aqui, e a sessão dela cair em ≤60s. Suíte verde não
 prova isto — o §8 do postmortem do go-live é sobre exatamente essa diferença.
+
+### Foi feita em 2026-09-01, e o resultado está aqui
+
+`401` nas duas rotas (`/hub/sync` e `/hub/users`), e a prova de ponta nos dois
+sentidos com `marketing@hubradios.com`:
+
+```
+antes    marketing@hubradios.com | t   ← estado inicial
+desativa no /admin/usuarios do hub
+depois   marketing@hubradios.com | f   ← gravado por user.deactivate
+reativa no /admin/usuarios do hub
+depois   marketing@hubradios.com | t   ← gravado por user.upsert
+```
+
+Fila do hub em `delivered`, `dead: 0`, `identidadesEmErro: 0`. A consulta:
+
+```bash
+COMPOSE="docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env"
+$COMPOSE exec -T postgres psql -U radiocheck -d radiocheck -c \
+  "SELECT email, is_active, hub_id FROM users WHERE hub_id IS NOT NULL AND deleted_at IS NULL ORDER BY email;"
+```
+
+O `-f` do override não é opcional (regra 4.7 do `CLAUDE.md`): sem ele o comando
+roda contra uma configuração que não é a real.
+
+> ⚠️ **Um furo que só apareceu depois, e não está fechado.** Trocar a senha no
+> hub **não derruba a sessão viva** daqui. A conferência que a fatia 1
+> acrescentou ao `RequireJWT` olha `is_active`, não troca de senha — e o token
+> vale 8h. Desativar corta em ≤60s; trocar a senha corta só o próximo login.
+> **Para cortar o acesso de alguém comprometido: desative, não troque a senha.**
 
 ## Testes
 
