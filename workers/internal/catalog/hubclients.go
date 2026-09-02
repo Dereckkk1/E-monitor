@@ -7,12 +7,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"radiocheck/internal/auth"
 )
 
 // ErrHubClientNaoLigado: o hub nomeou um cliente que não tem ponte com este
 // tenant. É o mesmo desfecho para "não existe" e para "existe mas ninguém
 // mapeou": distinguir os dois contaria a quem sonda qual id é real.
-var ErrHubClientNaoLigado = errors.New("hub client not linked")
+//
+// É o MESMO valor que `auth.ErrHubClientNaoLigado`, e não uma cópia: o
+// middleware compara com `errors.Is`, e dois erros com a mesma mensagem em
+// pacotes diferentes não são iguais. `catalog` pode importar `auth`; o
+// contrário não (ver o comentário em auth/hubkey.go).
+var ErrHubClientNaoLigado = auth.ErrHubClientNaoLigado
 
 // HubClients resolve o tenant local a partir do id que o CLIENTE tem NO HUB.
 //
