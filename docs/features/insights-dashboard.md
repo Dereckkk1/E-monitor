@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-18
+ultima-verificacao: 2026-09-03
 codigo-relacionado:
   - workers/internal/catalog/insights.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -13,6 +13,7 @@ codigo-relacionado:
   - frontend/src/pages/InsightsPage.css
   - frontend/src/components/insights/
   - frontend/src/utils/exportInsights.js
+  - frontend/src/utils/insightsCards.js
   - frontend/src/api/hooks.js (useInsights)
   - frontend/src/components/Sidebar.jsx
   - frontend/src/App.jsx
@@ -100,10 +101,10 @@ Vale a pena manter esses dois invariantes como teste ao mexer aqui.
 | **Impactos** | `Σ_estação ((in_slot + bonus) × PMM)` — **base canônica de impactos do produto** ([client-target-pmm.md](client-target-pmm.md)); é o MESMO número do `/campaigns` (`total_audience`), travado por `TestInsights_FinancialBase_MatchesCampaigns`. `out_slot` e `out_date` **não entram** (não são impacto entregue). Estação sem PMM → não soma (mas conta em `stations_count`). **Mudou em 2026-08-17**: antes era `detections_count × PMM` (todas as categorias aprovadas) e vinha maior |
 | **Impactos por gênero** | `Σ ((in_slot + bonus) × PMM × gender_pct / 100)` (percentuais em escala 0-100 no `stations.metadata.audience_profile`). Mesma base do KPI de impactos, de propósito: os rateios demográficos têm que somar de volta ao total exibido logo acima deles |
 | **Veiculações total** | `COUNT(*)` das aprovadas — **as quatro** categorias. Este KPI é contagem, não impacto, e vem acompanhado do breakdown por categoria, então precisa fechar as quatro. Não confunda com a base de impactos |
-| **CPM** | Padrão: `((investido_executado + bonificação) / impactos) × 1000` — **o numerador soma as duas parcelas** (ver §"O numerador do CPM inclui a bonificação"). Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Herda o comportamento proporcional consolidado abaixo (em modo fornecedor a Bonificação é 0 e o Investido já embute o entregue das por-inserção, então a soma continua valendo). É a MESMA expressão do `/campaigns` (`total_invested + total_bonus_value`) ÷ `total_audience`, travada por `TestInsights_FinancialBase_MatchesCampaigns` |
-| **Bonificação** | Soma do valor das veiculações `bonus` da view `daily_play_summary` — desde a migration 0065 é a **contagem direta da categoria** `bonus` gravada pelo categorizador (excedente da cota do dia dentro da faixa + tocada sem meta). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido). Em per_insertion é o mesmo número que o `/campaigns` expõe em `total_bonus_value` (2026-08-17) |
+| **CPM** | Padrão: `((investido_executado + bonificação) / impactos) × 1000` — **o numerador soma as duas parcelas** (ver §"O numerador do CPM inclui a bonificação"). Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Herda o comportamento proporcional consolidado abaixo (em modo fornecedor as duas parcelas são as duas metades do mesmo total do `consolidatedSummary`, então a soma continua valendo — repartir a exibição em 2026-09-03 não moveu o CPM). É a MESMA expressão do `/campaigns` (`total_invested + total_bonus_value`) ÷ `total_audience`, travada por `TestInsights_FinancialBase_MatchesCampaigns` |
+| **Bonificação** | Soma do valor das veiculações `bonus` da view `daily_play_summary` — desde a migration 0065 é a **contagem direta da categoria** `bonus` gravada pelo categorizador (excedente da cota do dia dentro da faixa + tocada sem meta). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido). Em per_insertion é o mesmo número que o `/campaigns` expõe em `total_bonus_value` (2026-08-17). **Desde 2026-09-03 o card NÃO some mais quando a seleção tem emissora consolidada**: exibe a parcela das por-inserção (a consolidada não tem preço por inserção com que precificar bônus) — ver §"Bonificação em seleção mista" |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
-| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período); Bonificação some (o pacote já embute o bônus). **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação à parte. **Ver §"Consolidado: valor MENSAL que acumula por mês"**. ⚠️ Em campanha MISTA o `/campaigns` exibe um "Investimento" MENOR que este número pelo `unit_value × bonus` das emissoras por-inserção — lá o bônus vive num campo separado (`total_bonus_value`) e o modo fornecedor daqui o embute. **Só a exibição do dinheiro diverge; o CPM não** (o numerador soma as duas parcelas dos dois lados, e a soma é a mesma expressão) |
+| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período). **Desde 2026-09-03 o bônus das por-inserção NÃO fica mais embutido aqui**: o mesmo total é partido em `Investido = total − unit×bonus` e `Bonificação = unit×bonus`, o que faz esta célula bater com o `total_invested` do `/campaigns`. **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação à parte. **Ver §"Consolidado: valor MENSAL que acumula por mês"**. ⚠️ Em campanha MISTA o `/campaigns` exibe um "Investimento" MENOR que este número pelo `unit_value × bonus` das emissoras por-inserção — lá o bônus vive num campo separado (`total_bonus_value`) e o modo fornecedor daqui o embute. **Só a exibição do dinheiro diverge; o CPM não** (o numerador soma as duas parcelas dos dois lados, e a soma é a mesma expressão) |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
 | **Buckets — déficit** | `max(0, expected - in_slot)` |
 | **Buckets — extras** | `count(detections WHERE category='bonus')` |
@@ -217,44 +218,72 @@ pode, por isso, mover o CPM das campanhas vizinhas.
 ### Divergências CONHECIDAS E ACEITAS (decididas em 2026-08-17)
 
 As quatro abaixo foram levantadas na auditoria da entrega de cota, **medidas** e
-**mantidas por decisão do dono**. Estão aqui pra ninguém "consertar" nenhuma delas
-achando que é bug novo. Se for mexer, é mudança de produto — leve pro dono antes.
+**mantidas por decisão do dono** em 2026-08-17. Estão aqui pra ninguém "consertar"
+nenhuma delas achando que é bug novo. Se for mexer, é mudança de produto — leve
+pro dono antes.
 
-#### 1. O modo fornecedor é disparado **por seleção**, não por emissora
+**Uma delas já não vale:** a #1 (Bonificação zerada em seleção com consolidada)
+foi revertida a pedido do dono em 2026-09-03 e está reescrita abaixo. As outras
+três seguem de pé.
 
-`hasConsolidated` é `true` quando **qualquer** emissora da seleção tem pricing
-`consolidated` ([`insights.go:192-205`](../../workers/internal/catalog/insights.go)),
-e a partir daí o `/insights` inteiro entra em modo fornecedor: o Investido vira o
-total do `consolidatedSummary` e **a Bonificação é zerada** (`bon = BonificacaoK{}`),
-com o frontend escondendo o card.
+#### 1. ~~O modo fornecedor zera a Bonificação~~ — RESOLVIDO em 2026-09-03
 
-| | `/campaigns` | `/insights` em modo fornecedor |
-|---|---|---|
-| Investimento | `unit_value × in_slot` das por-inserção | `cv × meses + unit_value × (in_slot + bonus)` das por-inserção |
-| Bonificação | `total_bonus_value` = `unit_value × bonus` | **card some** — a parcela entra embutida no Investido |
+> Esta era uma das quatro divergências aceitas em 2026-08-17. O dono pediu a
+> mudança em 2026-09-03: *"tirando esse valor de todas, a gente perde um insight
+> valioso"*. O que segue descreve o estado NOVO; o antigo fica registrado
+> abaixo porque relatório tirado antes dessa data mostra outro Investido.
 
-**Consequência medida (clone de prod, 2026-08-17):** em campanhas de pricing
-**misto**, as duas telas exibem **R$ 271.179** de diferença no "Investimento" — não
-porque uma esteja errada, mas porque uma soma o bônus dentro do investido e a outra
-o mostra separado. E **14 dos 28 clientes** têm ao menos uma emissora consolidada na
-seleção típica, então **metade da base não vê a bonificação precificada no
-`/insights`**.
+`hasConsolidated` continua sendo `true` quando **qualquer** emissora da seleção
+tem pricing `consolidated`
+([`insights.go`](../../workers/internal/catalog/insights.go)) — o gatilho é por
+seleção, e isso não mudou. O que mudou é o que ele faz com o dinheiro.
 
-**Por que fica assim:** a soma das duas parcelas é a mesma expressão dos dois lados
-(`pacote × meses + unit × (in_slot + bonus)`), então **o CPM bate** — verificado no
-clone: delta **0,00** entre os numeradores nas 25 campanhas com emissora consolidada,
-travado por `TestInsights_Compute_Mixed_MatchesCampaignsFormula`. É só a *exibição do
-dinheiro* que diverge. Disparar por emissora (mostrando o card de bonificação só pra
-parte da seleção) foi considerado e **recusado**: partiria o KPI agregado em duas
-semânticas dentro do mesmo card.
+**Antes:** `inv.Executado = total; bon = BonificacaoK{}` — o bônus das
+por-inserção ficava embutido no Investido e o card de Bonificação sumia da tela.
+Como **14 dos 28 clientes** têm ao menos uma emissora consolidada na seleção
+típica, metade da base nunca via a bonificação precificada.
+
+**Agora:** o mesmo total é **partido em duas parcelas exibidas**:
+
+```
+Investido   = total − unit×bonus   (pacote × meses + o que o cliente pagou)
+Bonificação = unit×bonus           (o que veio de graça, a preço de tabela)
+```
+
+A soma é idêntica à de antes, então **o numerador do CPM não se moveu** e a
+paridade segue travada por `TestInsights_Compute_Mixed_MatchesCampaignsFormula`.
+É repartição de exibição, não número novo.
+
+**Efeito colateral bom:** essa é exatamente a partição que o `/campaigns` já
+usava (`total_invested` separado de `total_bonus_value`), então a divergência de
+**R$ 271.179** no "Investimento" de campanhas mistas — medida no clone de prod em
+2026-08-17 e aceita na época — **fecha**. O teste passou a exigir isso parcela a
+parcela (`Investido == TotalInvested`, `Bonificacao.Valor == TotalBonusValue`).
+
+**O que NÃO mudou:** a emissora consolidada continua sem valor de bônus (§2
+abaixo), o gatilho continua por seleção, e o pedaço consolidado do Investido
+continua contando meses por argumentos diferentes nas duas telas (§3).
+
+**Quem lê relatório antigo precisa saber:** numa seleção mista, o "Investido"
+exibido **caiu** exatamente o valor que agora aparece em "Bonificação". Nada foi
+perdido e o CPM é o mesmo — mas os dois cards, lado a lado, somam o que antes
+aparecia num só.
 
 #### 2. Consolidado não tem valor de bonificação — de propósito
 
 Em `consolidated` **não existe `unit_value`**: o preço é um pacote pela emissora, não
 por inserção. Logo não há taxa com que precificar a tocada de bônus, e
-`total_bonus_value` do `/campaigns` é **0** nesse modo (`FinancialsByCampaign`), assim
-como o card do `/insights` some. Não é omissão — é ausência de dado. Inventar uma taxa
-(ex.: `cv ÷ plano`) seria criar um preço que ninguém contratou.
+`total_bonus_value` do `/campaigns` é **0** nesse modo (`FinancialsByCampaign`). Não é
+omissão — é ausência de dado. Inventar uma taxa (ex.: `cv ÷ plano`) seria criar um
+preço que ninguém contratou.
+
+Isso **continua valendo depois da mudança de 2026-09-03** e é o que define o
+recorte do card: numa seleção mista, a Bonificação exibida cobre só as emissoras
+por-inserção, e o rótulo diz isso ("Bonificação (por inserção)"). Numa seleção
+**100% consolidada** o card continua sumindo — ali o zero significaria "não há
+preço", e exibi-lo afirmaria "não houve bônus", que é outra coisa. As tocadas de
+bônus da consolidada continuam contadas em impactos e no breakdown de
+veiculações; o que não existe é o valor delas.
 
 #### 3. `consolidated_value` é MENSAL, e o mesmo campo lê três números diferentes
 

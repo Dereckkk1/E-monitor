@@ -293,23 +293,44 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 	}
 
 	// Regra do fornecedor: se QUALQUER emissora da seleção é consolidada, o
-	// Investido mostra o valor TOTAL contratado (fixo — não cresce com o
-	// período) e a Bonificação some (zerada; o frontend esconde o card). O
-	// cálculo por-veiculação/Modelo B do aggregateInvestment é preservado (útil
-	// se a regra mudar) mas sobrescrito aqui pra consolidado. Campanha 100%
-	// por-inserção segue por veiculação (inv/bon inalterados).
-	total, hasConsolidated, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.From, p.To, p.Today)
+	// Investido sai do consolidatedSummary (pacote pelo ciclo mensal + entregue
+	// das por-inserção) em vez do cálculo por-veiculação/Modelo B do
+	// aggregateInvestment — que é preservado acima, útil se a regra mudar.
+	// Campanha 100% por-inserção segue por veiculação (inv/bon inalterados).
+	//
+	// A BONIFICAÇÃO NÃO É MAIS ZERADA (2026-09-03). Até aqui, uma única
+	// emissora consolidada na seleção fazia a Bonificação sumir da visão
+	// inteira, com o bônus das por-inserção embutido dentro do Investido —
+	// e 14 dos 28 clientes têm ao menos uma consolidada na seleção típica, ou
+	// seja, metade da base nunca via a bonificação precificada. Agora o MESMO
+	// total é PARTIDO em duas parcelas exibidas:
+	//
+	//	Investido   = total − pi_bonus  (pacote + o que o cliente pagou)
+	//	Bonificação = pi_bonus          (o que veio de graça, a preço de tabela)
+	//
+	// A soma das duas é o total de antes, então o numerador do CPM (logo
+	// abaixo) não se move e a paridade com o /campaigns continua travada por
+	// TestInsights_Compute_Mixed_MatchesCampaignsFormula. É repartição de
+	// exibição, não número novo — e é a mesma partição que o /campaigns já
+	// mostra (total_invested separado de total_bonus_value).
+	//
+	// A emissora CONSOLIDADA continua sem valor de bônus: não existe unit_value
+	// nela, e inventar uma taxa (cv ÷ plano) seria exibir um preço que ninguém
+	// contratou. Por isso pi_bonus só soma as por-inserção; a tocada de bônus
+	// da consolidada segue contada em impactos e no breakdown de veiculações.
+	cs, err := r.consolidatedSummary(ctx, p.CampaignIDs, p.StationIDs, p.From, p.To, p.Today)
 	if err != nil {
 		return nil, fmt.Errorf("consolidatedSummary: %w", err)
 	}
+	hasConsolidated := cs.HasConsolidated
 	if hasConsolidated {
-		inv.Executado = total
-		bon = BonificacaoK{}
+		inv.Executado = cs.Total - cs.PIBonusValue
+		bon = BonificacaoK{Valor: cs.PIBonusValue, Count: cs.PIBonusCount}
 	}
 
 	// Numerador do CPM = investido executado + bonificação, SEMPRE calculado
-	// depois do override consolidado acima. Em modo fornecedor `bon` é zerado e
-	// `inv.Executado` já é o total do consolidatedSummary (que por construção já
+	// depois do override consolidado acima. Em modo fornecedor as duas parcelas
+	// são as duas metades do total do consolidatedSummary (que por construção já
 	// precifica as emissoras per_insertion por unit × (in_slot + bonus)), então a
 	// soma continua valendo nos dois modos — e é a MESMA expressão que o
 	// /campaigns usa (total_invested + total_bonus_value).
@@ -329,7 +350,13 @@ func (r *Insights) Compute(ctx context.Context, p InsightsParams) (*InsightsPayl
 		inv.Contratado *= shares.Global
 		inv.Executado *= shares.Global
 		bon.Valor *= shares.Global
-		bon.Count = core.Breakdown.ExtrasOrphan
+		// bon.Count exato da tocada — MENOS em modo fornecedor, onde o card
+		// precifica só as por-inserção: trocar pelo total de bônus (que inclui
+		// a consolidada, não precificável) deixaria contagem e valor falando de
+		// conjuntos diferentes dentro do mesmo card.
+		if !hasConsolidated {
+			bon.Count = core.Breakdown.ExtrasOrphan
+		}
 
 		// Série temporal: o executado já veio exato da tocada (ver o CASE em
 		// aggregateBuckets). Falta o lado do PLANO — "programado" sai de
@@ -454,10 +481,15 @@ func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) str
 	    AND LEAST((gm.ms + interval '1 month' - interval '1 day')::date, ` + endCol + `) >= (` + fromExpr + `)::date)`
 }
 
-// consolidatedSummary devolve o valor TOTAL da campanha e se há QUALQUER
-// emissora consolidada na seleção (respeitando o filtro de estações). Quando há
-// consolidada, o /insights entra em modo fornecedor: Investido = esse total e
-// Bonificação some.
+// consolidatedSummary devolve o valor TOTAL da campanha, a PARCELA DE BÔNUS
+// das emissoras por-inserção embutida nesse total (valor e contagem) e se há
+// QUALQUER emissora consolidada na seleção (respeitando o filtro de estações).
+//
+// Quando há consolidada, o /insights entra em modo fornecedor: Investido e
+// Bonificação saem os dois deste total, PARTIDO em duas parcelas —
+// `Investido = total − pi_bonus` e `Bonificação = pi_bonus`. A parcela é
+// devolvida separada justamente pra essa repartição não precisar recalcular
+// nada nem inventar taxa (ver o bloco em Compute).
 //
 // per_ins_delivered lê daily_play_summary_for(from, to, campaigns) (migration
 // 0052, Task 13) em vez da view — pushdown, byte-idêntico ao original.
@@ -472,19 +504,30 @@ func monthsElapsedSQL(startCol, endCol, todayParam, fromExpr, toExpr string) str
 //	)
 //
 // Em modo fornecedor esse `total` vira TAMBÉM o numerador do CPM (Compute soma
-// `inv.Executado + bon.Valor`, e aqui `bon` é zerado) — e a expressão acima é
-// byte-a-byte a mesma do numerador do /campaigns
-// (`total_invested + total_bonus_value`), que é o que fecha a divergência de CPM
-// entre as duas telas em campanha de pricing MISTO. O que ainda difere em modo
-// fornecedor é o dinheiro EXIBIDO: o /insights mostra um "Investido" que já
-// embute o bônus das emissoras por-inserção e esconde o card de Bonificação,
-// enquanto o /campaigns mostra as duas parcelas separadas.
+// `inv.Executado + bon.Valor`, que desde 2026-09-03 são as duas metades deste
+// mesmo total) — e a expressão acima é byte-a-byte a mesma do numerador do
+// /campaigns (`total_invested + total_bonus_value`), que é o que fecha a
+// divergência de CPM entre as duas telas em campanha de pricing MISTO.
+//
+// pi_bonus é só a fatia por-inserção: a emissora consolidada NÃO tem
+// unit_value (o preço é pacote pela emissora, não por inserção), então a tocada
+// de bônus dela não é precificável e fica fora dessa parcela — e do card. Ela
+// continua contada no breakdown de veiculações e em impactos.
 //
 // Não depende de from/to (whole-campaign); depende de `today` só pro acúmulo
 // mensal do consolidado.
-func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, from, to, today time.Time) (float64, bool, error) {
-	var total float64
-	var hasConsolidated bool
+type consolidatedTotals struct {
+	Total float64 // pacote × meses + unit × (in_slot + bonus) das por-inserção
+	// PIBonusValue/PIBonusCount: a fatia de bônus das por-inserção que está
+	// DENTRO de Total. Separada pra Compute exibir Investido e Bonificação sem
+	// mexer na soma (e, portanto, sem mexer no CPM).
+	PIBonusValue float64
+	PIBonusCount int64
+	HasConsolidated bool
+}
+
+func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, stationIDs []uuid.UUID, from, to, today time.Time) (consolidatedTotals, error) {
+	var out consolidatedTotals
 	err := r.pool.QueryRow(ctx, `
 		WITH camp_meta AS (
 		    SELECT id, start_date, end_date,
@@ -495,7 +538,11 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		    -- valor ENTREGUE das emissoras por-inserção NA JANELA [from,to]:
 		    -- unit × (in_slot + bonus), igual ao /campaigns (não o plano cheio).
 		    SELECT s.campaign_id, s.station_id,
-		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::numeric AS pi_delivered
+		           COALESCE(SUM(tp.unit_value * (s.in_slot + s.bonus)), 0)::numeric AS pi_delivered,
+		           -- a fatia de bônus DENTRO de pi_delivered, devolvida à parte
+		           -- pro Compute partir Investido × Bonificação sem recalcular.
+		           COALESCE(SUM(tp.unit_value * s.bonus), 0)::numeric AS pi_bonus,
+		           COALESCE(SUM(s.bonus), 0)::bigint                  AS pi_bonus_count
 		    FROM daily_play_summary_for($3::date, $4::date, $1::uuid[]) s
 		    JOIN camp_meta cm ON cm.id = s.campaign_id
 		    JOIN campaign_station_type_pricing tp
@@ -512,6 +559,16 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		             THEN COALESCE(csp.consolidated_value, 0)::numeric * cm.months_elapsed
 		             ELSE COALESCE(pd.pi_delivered, 0) END
 		    ), 0)::float8 AS total,
+		    -- Só as por-inserção: a consolidada não tem preço por inserção com
+		    -- que precificar bônus (o CASE devolve 0 pra ela de propósito).
+		    COALESCE(SUM(
+		        CASE WHEN csp.mode='consolidated' THEN 0
+		             ELSE COALESCE(pd.pi_bonus, 0) END
+		    ), 0)::float8 AS pi_bonus_value,
+		    COALESCE(SUM(
+		        CASE WHEN csp.mode='consolidated' THEN 0
+		             ELSE COALESCE(pd.pi_bonus_count, 0) END
+		    ), 0)::bigint AS pi_bonus_count,
 		    COALESCE(BOOL_OR(csp.mode='consolidated'), false) AS has_consolidated
 		FROM campaign_station_pricing csp
 		JOIN camp_meta cm ON cm.id = csp.campaign_id
@@ -519,11 +576,12 @@ func (r *Insights) consolidatedSummary(ctx context.Context, campaignIDs, station
 		  ON pd.campaign_id = csp.campaign_id AND pd.station_id = csp.station_id
 		WHERE csp.campaign_id = ANY($1::uuid[])
 		  AND ($2::uuid[] = '{}' OR csp.station_id = ANY($2::uuid[]))
-	`, campaignIDs, stationIDs, from, to, orMaxDate(today)).Scan(&total, &hasConsolidated)
+	`, campaignIDs, stationIDs, from, to, orMaxDate(today)).Scan(
+		&out.Total, &out.PIBonusValue, &out.PIBonusCount, &out.HasConsolidated)
 	if err != nil {
-		return 0, false, err
+		return consolidatedTotals{}, err
 	}
-	return total, hasConsolidated, nil
+	return out, nil
 }
 
 // coreAggregates é o resultado interno usado pelo Compute().

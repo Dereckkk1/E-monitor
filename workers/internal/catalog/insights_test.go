@@ -1188,10 +1188,17 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 	if !out.Consolidated {
 		t.Errorf("mista tem consolidada → Consolidated deveria ser true")
 	}
-	// Modo fornecedor: Investido = pacote + ENTREGUE das por-inserção (in_slot +
-	// bonus, que é como o consolidatedSummary sempre precificou) = 400 + 50.
-	if !approxEq(out.KPIs.Investido.Executado, 450, 1) {
-		t.Errorf("investido = %v, want ~450 (400 pacote + 50 entregue; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	// Modo fornecedor: Investido = pacote + o que o cliente PAGOU nas
+	// por-inserção = 400 + 30. Desde 2026-09-03 o bônus (10 × 2 = 20) não é
+	// mais embutido aqui — ele aparece no card de Bonificação, e a SOMA das
+	// duas parcelas continua 450, que é o que o CPM lá embaixo usa. Ver
+	// TestInsights_Compute_Mixed_BonusIsSplitOutNotZeroed.
+	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
+		t.Errorf("investido = %v, want ~430 (400 pacote + 30 pago; NÃO 700 = plano cheio)", out.KPIs.Investido.Executado)
+	}
+	if !approxEq(out.KPIs.Investido.Executado+out.KPIs.Bonificacao.Valor, 450, 1) {
+		t.Errorf("investido + bonificação = %v, want 450 (o total do consolidatedSummary, partido em dois)",
+			out.KPIs.Investido.Executado+out.KPIs.Bonificacao.Valor)
 	}
 
 	// PARIDADE DE CPM EM PRICING MISTO. É aqui que a divergência histórica entre
@@ -1225,6 +1232,109 @@ func TestInsights_Compute_Mixed_MatchesCampaignsFormula(t *testing.T) {
 	}
 	if !approxEq(out.KPIs.CPM, 90.0, 0.01) {
 		t.Errorf("cpm = %v, want 90.00 ((400 pacote + 50 entregue) ÷ 5000 impactos × 1000)", out.KPIs.CPM)
+	}
+
+	// PARIDADE PARCELA A PARCELA (2026-09-03). Antes só o NUMERADOR do CPM
+	// batia: o /insights somava as duas parcelas dentro do Investido e escondia
+	// a Bonificação, então o dinheiro EXIBIDO divergia (R$ 271.179 medidos no
+	// clone de prod em campanhas mistas). Com a repartição, cada parcela do
+	// /insights bate com a sua no /campaigns — a divergência de exibição fecha.
+	//
+	// Vale pro pedaço por-inserção, que é a mesma expressão dos dois lados.
+	// O pedaço consolidado conta meses por argumentos diferentes nas duas telas
+	// (divergência #3 do doc, intocada aqui); neste fixture os dois dão 1 mês.
+	if !approxEq(out.KPIs.Investido.Executado, fins[0].TotalInvested, 0.01) {
+		t.Errorf("investido divergiu do /campaigns: insights %v × campaigns %v",
+			out.KPIs.Investido.Executado, fins[0].TotalInvested)
+	}
+	if !approxEq(out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue, 0.01) {
+		t.Errorf("bonificação divergiu do /campaigns: insights %v × campaigns %v",
+			out.KPIs.Bonificacao.Valor, fins[0].TotalBonusValue)
+	}
+}
+
+// A BONIFICAÇÃO NÃO SOME MAIS EM SELEÇÃO MISTA (2026-09-03).
+//
+// Regra antiga (decisão de 2026-08-17): UMA emissora consolidada na seleção
+// zerava a Bonificação da visão inteira e embutia o bônus das por-inserção
+// dentro do Investido. Como 14 dos 28 clientes têm ao menos uma consolidada na
+// seleção típica, metade da base nunca via a bonificação precificada — e a
+// bonificação é justamente o insight que o dono quer ver.
+//
+// Regra nova: o MESMO total é partido em duas parcelas exibidas —
+//
+//	Investido    = pacote × meses + unit × in_slot   (o que o cliente pagou)
+//	Bonificação  = unit × bonus                      (o que veio de graça)
+//
+// A soma é idêntica à de antes, então o CPM não se mexe e a paridade com o
+// /campaigns continua de pé. É repartição de exibição, não número novo.
+//
+// A emissora CONSOLIDADA continua sem valor de bônus: nela não existe
+// unit_value (o preço é pacote pela emissora, não por inserção), e inventar uma
+// taxa — cv ÷ plano, por exemplo — seria exibir um preço que ninguém contratou.
+// Por isso a tocada de bônus dela entra em impactos e no contador do breakdown,
+// mas não no valor do card.
+func TestInsights_Compute_Mixed_BonusIsSplitOutNotZeroed(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewInsights(pool)
+
+	client := insSeedClient(t, ctx, pool, "X")
+	camp := insSeedCampaign(t, ctx, pool, client, "2026-06-01", "2026-06-30")
+	typeID, mat := insSeedTypeAndMaterial(t, ctx, pool, client, "Spot30")
+	stCons := insSeedStation(t, ctx, pool, "CONS", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+	stIns := insSeedStation(t, ctx, pool, "INS", 1000, 50, 50, 30, 40, 30, 30, 40, 30)
+
+	insSeedStationPricing(t, ctx, pool, camp, stCons, "consolidated", 400)
+	insSeedStationPricing(t, ctx, pool, camp, stIns, "per_insertion", 0)
+	insSeedTypePricing(t, ctx, pool, camp, stIns, typeID, 10.0)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, stCons,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	insSeedDistributionRule(t, ctx, pool, camp, typeID, stIns,
+		"2026-06-01", "2026-06-30", 0b1111111, "00:00:00", "23:59:00", 1)
+	// por-inserção: 3 in_slot (1/dia) + 2 bonus (excedente dos dias 1 e 2)
+	for d := 1; d <= 3; d++ {
+		insSeedDetection(t, ctx, pool, camp, mat, stIns, "in_slot", fmt.Sprintf("2026-06-%02d", d))
+	}
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-01")
+	insSeedDetection(t, ctx, pool, camp, mat, stIns, "bonus", "2026-06-02")
+	// consolidada: 1 bonus, que NÃO pode ganhar preço nenhum.
+	insSeedDetection(t, ctx, pool, camp, mat, stCons, "bonus", "2026-06-01")
+
+	out, err := repo.Compute(ctx, InsightsParams{
+		ClientID: client, CampaignIDs: []uuid.UUID{camp},
+		From: parseDate("2026-06-01"), To: parseDate("2026-06-30"), StationIDs: []uuid.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+
+	// O card volta a existir: unit 10 × 2 bônus das por-inserção.
+	if !approxEq(out.KPIs.Bonificacao.Valor, 20, 0.01) {
+		t.Errorf("bonificação = %v, want 20 (10 × 2 bônus das por-inserção; 0 = regra antiga zerando)",
+			out.KPIs.Bonificacao.Valor)
+	}
+	// A contagem acompanha o valor: só as tocadas que o card precifica. A
+	// tocada de bônus da consolidada continua visível no breakdown.
+	if out.KPIs.Bonificacao.Count != 2 {
+		t.Errorf("bonificação.count = %d, want 2 (só as precificáveis)", out.KPIs.Bonificacao.Count)
+	}
+	if out.VeiculacoesBreakdown.ExtrasOrphan != 3 {
+		t.Errorf("breakdown.extras = %d, want 3 (as três tocadas de bônus, precificáveis ou não)",
+			out.VeiculacoesBreakdown.ExtrasOrphan)
+	}
+	// Investido perde exatamente o que a Bonificação ganhou.
+	if !approxEq(out.KPIs.Investido.Executado, 430, 1) {
+		t.Errorf("investido = %v, want ~430 (400 pacote + 30 pago; o bônus saiu daqui)",
+			out.KPIs.Investido.Executado)
+	}
+	// A INVARIANTE: a soma das duas parcelas é o mesmo total de antes.
+	soma := out.KPIs.Investido.Executado + out.KPIs.Bonificacao.Valor
+	if !approxEq(soma, 450, 1) {
+		t.Errorf("investido + bonificação = %v, want 450 — a repartição não pode criar nem sumir com dinheiro", soma)
+	}
+	// E o CPM não se mexe: 450 ÷ 6000 impactos ((5+1) × 1000) × 1000.
+	if !approxEq(out.KPIs.CPM, 75.0, 0.01) {
+		t.Errorf("cpm = %v, want 75.00 — repartir exibição não pode mover o CPM", out.KPIs.CPM)
 	}
 }
 
