@@ -1,4 +1,5 @@
 import CardValue from './CardValue'
+import { showBonificacao } from '../../utils/insightsCards'
 import { IconChartBars, IconMoney, IconGift } from './icons'
 
 const fmtBR = new Intl.NumberFormat('pt-BR')
@@ -86,14 +87,29 @@ export default function KpiCards({ data }) {
         </div>
       )}
 
-      {/* Consolidado (estilo fornecedor): a Bonificação some — o card não é
-          renderizado. O grid (.in-row--cards) se auto-ajusta ao número de
-          cards (ver InsightsPage.css), então não precisa contar colunas aqui. */}
-      {!data?.consolidated && (
-        <div className="in-card">
+      {/* Bonificação. Antes de 2026-09-03 o card sumia inteiro quando a seleção
+          tinha QUALQUER emissora consolidada — e metade da base tem —, então
+          metade dos clientes nunca via a bonificação precificada. Agora ele
+          aparece sempre que exista valor precificável: em seleção mista o
+          número é o das emissoras por-inserção (a consolidada é pacote pela
+          emissora, não tem preço por inserção com que precificar bônus).
+
+          Seleção 100% consolidada continua sem card: ali o valor é zero por
+          AUSÊNCIA DE PREÇO, não por não ter havido bônus — exibir "R$ 0,00"
+          afirmaria que não houve bonificação, que é diferente. As tocadas
+          continuam visíveis no breakdown de veiculações.
+
+          O grid (.in-row--cards) se auto-ajusta ao número de cards (ver
+          InsightsPage.css). */}
+      {showBonificacao(data) && (
+        <div className="in-card" title={data?.consolidated
+          ? 'Valor das veiculações de bônus a preço de tabela. Em seleção com emissora consolidada, cobre só as emissoras por inserção: o pacote consolidado não tem preço por inserção com que precificar o bônus.'
+          : 'Valor das veiculações de bônus a preço de tabela (unit_value × bônus).'}>
           <div className="in-card-head">
             <span className="in-card-icon"><IconGift /></span>
-            <span className="in-card-label">Bonificação</span>
+            <span className="in-card-label">
+              {data?.consolidated ? 'Bonificação (por inserção)' : 'Bonificação'}
+            </span>
           </div>
           <CardValue>{fmtCurrency.format(k.bonificacao.valor)}</CardValue>
         </div>

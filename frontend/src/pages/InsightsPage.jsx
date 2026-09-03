@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import FiltersBar from '../components/insights/FiltersBar'
 import KpiCards from '../components/insights/KpiCards'
+import { showBonificacao } from '../utils/insightsCards'
 import InvestmentToggleCard from '../components/insights/InvestmentToggleCard'
 import GenderCard from '../components/insights/GenderCard'
 import ClassPyramidChart from '../components/insights/ClassPyramidChart'
@@ -156,12 +157,18 @@ export default function InsightsPage() {
           <SkeletonLoader />
         ) : data ? (
           <>
-            {/* Consolidado esconde a Bonificação → 4 cards → grid de 4 colunas.
+            {/* Grid de 4 colunas SÓ quando o card de Bonificação não é
+                renderizado — que desde 2026-09-03 não é mais todo modo
+                consolidado, só a seleção sem parcela por-inserção pra
+                precificar. A condição vem do próprio KpiCards
+                (showBonificacao) pra as duas não se descolarem: contar 4
+                colunas com 5 cards é exatamente o que acontecia enquanto a
+                regra estava duplicada aqui.
                 Com target no cliente, o KpiCards ganha até 2 cards extras
                 (5→7 ou 4→6) → in-row--cards--target troca pra auto-fit (só
                 quando a classe é aplicada — sem target, layout idêntico ao
                 de antes da feature; ver InsightsPage.css). */}
-            <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}${(data?.kpis?.stations_with_target ?? 0) > 0 ? ' in-row--cards--target' : ''}`}>
+            <div className={`in-row in-row--cards${showBonificacao(data) ? '' : ' in-row--cards--4'}${(data?.kpis?.stations_with_target ?? 0) > 0 ? ' in-row--cards--target' : ''}`}>
               <KpiCards data={data} />
               <InvestmentToggleCard data={data} />
               <GenderCard data={data} />
