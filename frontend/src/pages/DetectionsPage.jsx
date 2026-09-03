@@ -14,6 +14,7 @@ import CoverageSummary from '../components/CoverageSummary'
 import FlowStepper from '../components/FlowStepper'
 import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import AirtimePaginator from '../components/AirtimePaginator'
+import MonthStepper from '../components/MonthStepper'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { buildGridReportModel } from '../utils/gridReport'
@@ -837,8 +838,9 @@ export default function DetectionsPage() {
   // and the empty-state variant. Single source of truth.
   const filterStep = !selectedMonth ? 1 : !selectedCampaignId ? 2 : 3
 
-  function handleMonthChange(e) {
-    const v = e.target.value
+  // Recebe o VALOR ('AAAA-MM'), não o evento: quem chama é o MonthStepper,
+  // que dispara tanto pela digitação no input quanto pelas setas ‹ ›.
+  function handleMonthChange(v) {
     setSelectedMonthRaw(v)
     // Changing the month invalidates user-picked range — the picked dates
     // probably don't belong to the new month at all.
@@ -942,11 +944,9 @@ export default function DetectionsPage() {
             <span className="flow-filter-label-step">1</span>
             Competência
           </label>
-          <input
+          <MonthStepper
             id="detection-month"
-            ref={monthInputRef}
-            className="flow-month-input"
-            type="month"
+            inputRef={monthInputRef}
             value={selectedMonth}
             onChange={handleMonthChange}
             placeholder="Selecione o mês"

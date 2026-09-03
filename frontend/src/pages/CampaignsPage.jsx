@@ -14,6 +14,7 @@ import AirtimePaginator from '../components/AirtimePaginator'
 import { useConfirm, useAlert } from '../components/ConfirmModal'
 import CampaignReportsMenu from '../components/CampaignReportsMenu'
 import { useAuth } from '../contexts/AuthContext'
+import MonthStepper from '../components/MonthStepper'
 
 const CAMPAIGNS_PAGE_SIZE = 12
 
@@ -1478,12 +1479,10 @@ function CampaignFilters({
             <span className="flow-filter-label-step">1</span>
             Competência
           </label>
-          <input
+          <MonthStepper
             id="campaigns-competence"
-            className="flow-month-input"
-            type="month"
             value={competence}
-            onChange={e => onCompetenceChange(e.target.value)}
+            onChange={onCompetenceChange}
           />
         </div>
 

@@ -1,11 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-18
+ultima-verificacao: 2026-09-03
 codigo-relacionado:
   - frontend/src/index.css
   - frontend/src/components/RSelect.jsx
   - frontend/src/components/FlowEmptyState.jsx
   - frontend/src/components/FlowStepper.jsx
+  - frontend/src/components/MonthStepper.jsx
+  - frontend/src/utils/monthStep.js
   - frontend/src/App.css
 ---
 
@@ -214,8 +216,9 @@ de filtros.
   primeiro campo com o título da página e engorda a tela sem informar nada.
 - **Label** `.flow-filter-label`: 10,5px, 700, caixa alta, `--c-label`.
 - **Badge numerada** `.flow-filter-label-step`: 16px, redonda, dentro do label.
-- **Controle** de **38px** de altura: `.flow-input` (month/date/search),
-  `.flow-range` (par de datas com seta) ou `RSelect`.
+- **Controle** de **38px** de altura: `.flow-input` (date/search),
+  `MonthStepper` (competência), `.flow-range` (par de datas com seta) ou
+  `RSelect`.
 
 ```jsx
 <div className="flow-filters flow-filters--auto minha-flow">
@@ -243,6 +246,41 @@ ao rótulo. O anel vazado é o sinal silencioso; a palavra é a confirmação.
 opções derivam de um passo anterior (Emissoras no `/insights` só existe depois
 das campanhas). O que `--optional` garante não é que o campo esteja sempre
 disponível — é que ele **nunca impede o usuário de chegar ao resultado**.
+
+### Competência usa `MonthStepper`, não `<input type="month">` solto
+
+Todo campo de **competência** (o mês de referência da tela) usa o
+[`MonthStepper`](../../frontend/src/components/MonthStepper.jsx) — o input
+nativo dentro de uma caixa `.flow-month-step` com as setas `‹` `›` de passo de
+mês:
+
+```jsx
+<MonthStepper
+  id="detection-month"
+  value={selectedMonth}          // 'AAAA-MM'
+  onChange={handleMonthChange}   // recebe o VALOR, não o evento
+  inputRef={monthInputRef}       // opcional: telas que dão foco no passo 1
+  disabled={!clientId}           // opcional
+/>
+```
+
+Por que as setas: andar um mês é o gesto mais frequente dessas telas, e o
+seletor nativo obriga a abrir calendário ou digitar pra isso.
+
+Regras que fazem o controle não se descolar do resto da barra:
+
+- **Só competência.** O filtro de **período** (intervalo de dias) continua em
+  `.flow-range`: ali as duas pontas se movem de forma independente e "um mês
+  pra frente" não quer dizer nada.
+- **A moldura é do wrapper**, não do input — inclusive no foco, via
+  `:focus-within`. O input perde borda e fundo; se ele mantivesse os seus, o
+  anel rosa apareceria por dentro das setas.
+- **O default de cada tela não muda.** `/detections`, `/materials`,
+  `/campaigns` e `/reports/airtime` já abrem no mês atual e continuam assim; a
+  competência do `/admin/pos-venda` é **opcional** (vazio = todas) e continua
+  nascendo vazia. Ali a seta parte do mês atual — `shiftMonth` trata vazio e
+  valor inválido caindo no mês de hoje, nunca em 1970
+  ([monthStep.js](../../frontend/src/utils/monthStep.js), com testes).
 
 ### Meta e atalhos
 

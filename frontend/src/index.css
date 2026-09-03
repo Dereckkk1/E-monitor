@@ -969,6 +969,87 @@ textarea.input {
   box-shadow: 0 0 0 3px var(--c-action-light);
 }
 
+/* Competência com passo de mês: ‹ [input] ›
+
+   Uma caixa só, com a mesma métrica de .flow-range (38px, borda e raio dos
+   tokens), pra ler como UM controle em vez de três. O input perde a borda
+   própria — quem desenha a moldura é o wrapper, inclusive no foco, via
+   :focus-within, senão o anel rosa apareceria por dentro das setas.
+
+   Só a competência usa isto; o filtro de período segue em .flow-range. */
+.flow-month-step {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  transition: border-color 150ms, box-shadow 150ms;
+  overflow: hidden;
+}
+
+.flow-month-step:hover:not(.flow-month-step--disabled) {
+  border-color: var(--c-action-border);
+}
+
+.flow-month-step:focus-within {
+  border-color: var(--c-action);
+  box-shadow: 0 0 0 3px var(--c-action-light);
+}
+
+.flow-month-step--disabled {
+  background: var(--c-bg);
+  opacity: 0.7;
+}
+
+.flow-month-step-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  /* respiro entre o texto do mês e as setas — sem isso o rótulo encosta na
+     seta esquerda e o controle lê como uma coisa amassada */
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--c-text);
+}
+
+.flow-month-step-input:focus {
+  outline: none;
+}
+
+/* Botão de passo: alvo de 30px (a caixa tem 38 de altura), sem borda própria.
+   O hover usa o mesmo par ação/ação-clara dos outros controles pra a seta
+   acender igual ao resto da barra. */
+.flow-month-step-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--c-label);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.flow-month-step-btn:hover:not(:disabled) {
+  background: var(--c-action-light);
+  color: var(--c-action);
+}
+
+.flow-month-step-btn:disabled {
+  color: var(--c-border);
+  cursor: not-allowed;
+}
+
 .flow-range {
   display: flex;
   align-items: center;
