@@ -693,7 +693,7 @@ subir junto (o código antigo lê `'orphan'` em `insights.go`, `daily_summary.go
 `detections.go` e no `DayDetailModal`). Ordem completa em
 [quota-aware-categorization.md §"Deploy é tudo-ou-nada"](../features/quota-aware-categorization.md).
 
-### F-129 — Zip do pós-venda filtra o período em UTC e perde ~4,5% das veiculações do mês
+### ~~F-129~~ — ✅ **RESOLVIDO 2026-09-03.** Zip do pós-venda filtrava o período em UTC e perdia o ÚLTIMO DIA INTEIRO
 
 `handlers/post_sale.go:240,245` usa `time.Parse("2006-01-02", …)` (**UTC**), não
 `ParseInLocation` em `America/Sao_Paulo`. Esses instantes viram o filtro dos CSVs do zip em
@@ -708,7 +708,21 @@ consumidores do mesmo `From`/`To` são timezone-corretos — `postsale/repo.go:4
 (`dps.for_date BETWEEN $2::date AND $3::date`) e os KPIs via `insights.go:440`
 (`(d.detected_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN …`). Ou seja, **o número do
 KPI não bate com a contagem de linhas do CSV anexado ao mesmo pós-venda**.
-**Fix:** `time.ParseInLocation` + fim de dia inclusivo, no handler.
+**Medição revisada na correção:** a perda é maior que os ~4,5% estimados. Com `period_to` sendo o
+último dia **inclusivo** do mês (que é como o wizard o preenche), `to 00:00Z` = `to−1 21:00 BRT`
+— some **o último dia inteiro**, mais as 3h finais da véspera. Confirmado em produção: pós-venda
+de agosto/2026, campanha 27/08→30/09, CSV parou em 28/08 19:01 (29 e 30 = fim de semana) com
+veiculação real na segunda 31/08.
+
+**Fix aplicado — em `postsale.csvWindow` (`bundle.go`), NÃO no handler.** A proposta original
+(`ParseInLocation` no handler) causaria regressão: `From`/`To` são dias em meia-noite UTC por
+convenção do pacote, e os outros dois consumidores comparam por `::date` — um fim-de-dia BRT
+(`31/08 23:59:59-03` = `01/09 02:59Z`) empurraria checking e KPIs pro **dia seguinte**. A conversão
+dia→instante mora agora no único consumidor que compara `timestamptz`. Regressão travada por
+`TestCSVWindow_AbrangeODiaInteiroEmSaoPaulo`.
+
+**Não retroage:** o zip é congelado no S3 no publish e `Publish` recusa relatório `sent`.
+Documento enviado antes do fix precisa ser reemitido.
 
 ### F-130 — Material sem `type_id` some do `/detections` e continua no `/insights` (28% medido)
 

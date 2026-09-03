@@ -220,11 +220,7 @@ func NewToken() (string, error) {
 // todaySaoPaulo devolve "hoje" no fuso do Brasil, date-only — é o que o cálculo
 // consolidado do Insights espera em InsightsParams.Today.
 func todaySaoPaulo() time.Time {
-	loc, err := time.LoadLocation("America/Sao_Paulo")
-	if err != nil {
-		loc = time.FixedZone("BRT", -3*3600)
-	}
-	n := time.Now().In(loc)
+	n := time.Now().In(saoPaulo())
 	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
 }
 

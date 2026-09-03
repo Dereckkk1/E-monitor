@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -95,10 +96,37 @@ func assetKey(reportID, campaignID uuid.UUID, name string) string {
 	return fmt.Sprintf("post-sale/%s/%s/%s", reportID, campaignID, name)
 }
 
+// saoPaulo é o fuso em que o período do pós-venda é escrito. O fallback fixo
+// existe porque a imagem pode não trazer tzdata, e errar o fuso aqui entrega
+// mês errado ao cliente.
+func saoPaulo() *time.Location {
+	if loc, err := time.LoadLocation("America/Sao_Paulo"); err == nil {
+		return loc
+	}
+	return time.FixedZone("BRT", -3*3600)
+}
+
+// csvWindow converte o período do bloco — DATEs, carregadas como meia-noite UTC
+// pela convenção do pacote — nos instantes que delimitam esses dias em São
+// Paulo.
+//
+// A conversão mora aqui, e não no handler que faz o parse, porque os CSVs são o
+// ÚNICO consumidor do período que compara contra `detected_at timestamptz`
+// (catalog/detections.go). Os outros dois comparam por `::date` — o checking em
+// repo.go e os KPIs via `AT TIME ZONE` em insights.go — e já estão corretos:
+// mover a correção pro handler os quebraria, empurrando o fim do intervalo pro
+// dia seguinte. Fim de dia em microssegundos, a precisão do timestamptz.
+func csvWindow(from, to time.Time) (time.Time, time.Time) {
+	loc := saoPaulo()
+	start := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, loc)
+	end := time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999000, loc)
+	return start, end
+}
+
 // buildCSVs gera os dois CSVs do período do bloco, com a MESMA formatação do
 // botão "Relatórios" — é o pacote reportcsv que garante isso.
 func (s *Service) buildCSVs(ctx context.Context, b BlockRow) (consolidated, detailed []byte, err error) {
-	from, to := b.From, b.To
+	from, to := csvWindow(b.From, b.To)
 	f := catalog.AggregateFilter{CampaignIDs: []uuid.UUID{b.CampaignID}, StartDate: &from, EndDate: &to}
 	rows, err := s.detections.AggregateByMaterialStation(ctx, f)
 	if err != nil {

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-09-03
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
@@ -96,17 +96,28 @@ target" simplesmente não aparecem ([client-target-pmm.md](client-target-pmm.md)
 > `/insights`, logo herda essa leitura. Ver
 > [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS"](insights-dashboard.md).
 
-> 🔴 **Bug conhecido, NÃO corrigido — o `.zip` perde o fim do último dia.** O
-> período do documento é parseado em **UTC** (`handlers/post_sale.go:240,245`,
-> `time.Parse` em vez de `ParseInLocation`) e esses instantes viram o filtro dos
-> CSVs em `postsale/bundle.go:101-102,118`, comparados contra `detected_at
-> timestamptz`. A janela efetiva é `[from−1 21:00 BRT, to 21:00 BRT]`: o CSV pega
-> as últimas 3h do dia ANTERIOR ao início e **perde as últimas 3h do último dia**
-> — **~4,5% das veiculações de um mês**. Os outros dois consumidores do mesmo
-> período são timezone-corretos (`postsale/repo.go:43` por `for_date::date`, e os
-> KPIs por `AT TIME ZONE 'America/Sao_Paulo'` em `insights.go:440`), então **o KPI
-> da página não bate com a contagem de linhas do CSV anexado ao mesmo documento**.
-> Registrado como **F-129** em [follow-ups-fase2.md](../roadmap/follow-ups-fase2.md).
+> ✅ **Corrigido em 2026-09-03 — o `.zip` cobria o dia errado (F-129).** O
+> período do bloco é `DATE`, mas os CSVs filtram `detected_at timestamptz`.
+> Enquanto o dia virava instante em **UTC cru** (`handlers/post_sale.go:240,245`),
+> `period_to = 31/08` virava **30/08 21:00 BRT**: o CSV perdia **o último dia
+> inteiro** — não só as 3h finais, como o follow-up estimava — e ainda engolia as
+> últimas 3h da véspera do início. Como o KPI da página (`AT TIME ZONE`,
+> [`insights.go:106`](../../workers/internal/catalog/insights.go)) e o checking
+> (`for_date::date`, [`repo.go:43`](../../workers/internal/postsale/repo.go))
+> sempre contaram certo, **o documento contradizia o próprio anexo**. Caso real:
+> pós-venda de agosto/2026 de uma campanha 27/08→30/09, cujo CSV parou em
+> **28/08 19:01** (29 e 30 caíram em sábado e domingo) mesmo havendo veiculação na
+> segunda **31/08**.
+>
+> O fix é `csvWindow` em [`bundle.go`](../../workers/internal/postsale/bundle.go)
+> — e **não** no handler, como o F-129 propunha: `From`/`To` são dias em
+> meia-noite UTC por convenção do pacote, e os outros dois consumidores comparam
+> por `::date`; passar fim-de-dia BRT pra eles empurraria o intervalo pro **dia
+> seguinte**. Regressão travada por `TestCSVWindow_AbrangeODiaInteiroEmSaoPaulo`.
+>
+> **Documento já publicado não muda.** O zip é congelado no S3 no publish e
+> `Publish` recusa relatório `sent` (`ErrAlreadySent`): pós-venda enviado antes do
+> fix precisa ser **reemitido** pra sair com o mês cheio.
 
 ## O Checking
 
