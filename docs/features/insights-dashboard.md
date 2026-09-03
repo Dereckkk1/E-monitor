@@ -279,7 +279,8 @@ preço que ninguém contratou.
 
 Isso **continua valendo depois da mudança de 2026-09-03** e é o que define o
 recorte do card: numa seleção mista, a Bonificação exibida cobre só as emissoras
-por-inserção, e o rótulo diz isso ("Bonificação (por inserção)"). Numa seleção
+por-inserção. O rótulo é sempre "Bonificação" (decisão do dono, 2026-09-03) e
+quem conta o recorte é o tooltip do card. Numa seleção
 **100% consolidada** o card continua sumindo — ali o zero significaria "não há
 preço", e exibi-lo afirmaria "não houve bônus", que é outra coisa. As tocadas de
 bônus da consolidada continuam contadas em impactos e no breakdown de
