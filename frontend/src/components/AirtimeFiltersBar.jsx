@@ -4,6 +4,7 @@ import CampaignReportsMenu from './CampaignReportsMenu'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { parseLocalDate } from '../utils/dates'
 import { campaignsUnionRange } from '../utils/campaignRange'
+import MonthStepper from './MonthStepper'
 
 function pad2(n) { return String(n).padStart(2, '0') }
 function isoFromDate(d) {
@@ -341,12 +342,10 @@ export default function AirtimeFiltersBar({
             <span className="flow-filter-label-step">2</span>
             Competência
           </label>
-          <input
+          <MonthStepper
             id="airtime-month"
-            className="flow-month-input"
-            type="month"
             value={competence ?? ''}
-            onChange={e => onCompetenceChange(e.target.value)}
+            onChange={onCompetenceChange}
             disabled={!clientId}
           />
         </div>

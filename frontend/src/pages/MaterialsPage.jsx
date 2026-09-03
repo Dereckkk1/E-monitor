@@ -10,6 +10,7 @@ import RSelect from '../components/RSelect'
 import DistributionGrid from '../components/DistributionGrid'
 import FlowStepper from '../components/FlowStepper'
 import AirtimePaginator from '../components/AirtimePaginator'
+import MonthStepper from '../components/MonthStepper'
 import MaterialPlaybackList from '../components/MaterialPlaybackList'
 import { tokenize, matchesAllTokens } from '../utils/search'
 import { collectStationIds, indexStations, resolveStation } from '../utils/stationCatalog'
@@ -513,8 +514,8 @@ export default function MaterialsPage() {
   const campaignCount = campaignOptions.length
 
   // ── Handlers ──────────────────────────────────────────────────
-  function handleMonthChange(e) {
-    const v = e.target.value
+  // Recebe o VALOR ('AAAA-MM') — ver DetectionsPage.handleMonthChange.
+  function handleMonthChange(v) {
     setSelectedMonthRaw(v)
     setUserRange({ start: '', end: '' })
     setPage(1)
@@ -571,8 +572,9 @@ export default function MaterialsPage() {
           <label className="flow-filter-label" htmlFor="materials-month">
             <span className="flow-filter-label-step">1</span>Competência
           </label>
-          <input id="materials-month" ref={monthInputRef} className="flow-month-input" type="month"
-                 value={selectedMonth} onChange={handleMonthChange} placeholder="Selecione o mês" />
+          <MonthStepper id="materials-month" inputRef={monthInputRef}
+                        value={selectedMonth} onChange={handleMonthChange}
+                        placeholder="Selecione o mês" />
         </div>
 
         <div className={`flow-filter ${!selectedMonth ? 'flow-filter--locked' : filterStep === 2 ? 'flow-filter--active' : 'flow-filter--done'}`}>

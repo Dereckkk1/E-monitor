@@ -14,6 +14,7 @@ import RSelect from '../components/RSelect'
 import StationAvatar from '../components/StationAvatar'
 import { IconEnvelope } from './PostSaleSteps/icons'
 import './AdminPostSalePage.css'
+import MonthStepper from '../components/MonthStepper'
 
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
@@ -237,12 +238,10 @@ export default function AdminPostSalePage() {
                 Competência
                 {!month && <span className="flow-filter-tag">opcional</span>}
               </label>
-              <input
+              <MonthStepper
                 id="pv-month"
-                className="flow-input"
-                type="month"
                 value={month}
-                onChange={e => { setMonth(e.target.value); setPage(1) }}
+                onChange={v => { setMonth(v); setPage(1) }}
               />
             </div>
 
