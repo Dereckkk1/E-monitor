@@ -138,10 +138,10 @@
 /* LINHA DE KPIs — fileiras sempre cheias.
    flex, não grid: o número de colunas vem do JS em --in-cards-cols
    (utils/insightsCards.js divide os cards em fileiras iguais respeitando o
-   teto de 5 — 6 cards viram 3+3), e o flex-grow fecha a última fileira quando
-   a divisão não é exata (7 → 4+3, os três esticam). Com grid, essa última
-   fileira ficaria com célula vazia; com auto-fit, o navegador enfiava 6 e 7
-   numa linha só. */
+   teto de 6 — as contagens de hoje, 3 a 6, ficam todas numa fileira única), e
+   o flex-grow fecha a última fileira quando a divisão não é exata (7 → 4+3, os
+   três esticam). Com grid, essa última fileira ficaria com célula vazia; com
+   auto-fit, era o navegador que decidia e sobrava card órfão. */
 .in-row--cards {
   display: flex;
   flex-wrap: wrap;

@@ -58,14 +58,13 @@ test('sem investido no payload o card não conta', () => {
   assert.equal(kpiCardCount({ consolidated: true, kpis: {} }), 2)
 })
 
-test('até 5 cards cabem numa fileira só, cheia', () => {
+test('toda contagem que a tela produz hoje (3 a 6) cabe numa fileira só', () => {
   assert.equal(kpiColumns({ ...base, consolidated: true }), 3)
   assert.equal(kpiColumns(comBonus({ ...base, consolidated: true })), 4)
   assert.equal(kpiColumns(comTarget({ ...base, consolidated: true })), 5)
-})
-
-test('6 cards viram 3+3, não 5+1 com quatro buracos', () => {
-  assert.equal(kpiColumns(comBonus(comTarget({ ...base, consolidated: true }))), 3)
+  // 6 numa linha, não 3+3: duas fileiras de cards altos empurravam os
+  // gráficos pra fora da primeira tela.
+  assert.equal(kpiColumns(comBonus(comTarget({ ...base, consolidated: true }))), 6)
 })
 
 test('nunca devolve 0 (grid com zero colunas some da tela)', () => {
@@ -73,11 +72,11 @@ test('nunca devolve 0 (grid com zero colunas some da tela)', () => {
   assert.equal(kpiColumns() >= 1, true)
 })
 
-test('teto de 5 por fileira vale também para contagens futuras', () => {
-  // Blindagem: se um card novo entrar na linha, a distribuição continua
-  // fechando fileiras cheias em vez de estourar pra 6, 7 numa linha só.
+test('acima do teto continua fechando fileiras equilibradas', () => {
+  // Blindagem: se um card novo entrar na linha, a distribuição não estoura
+  // pra 7 numa fileira nem deixa 1 sozinho com 5 buracos do lado.
   assert.equal(kpiColumns.forCount(7), 4)   // 4+3
   assert.equal(kpiColumns.forCount(8), 4)   // 4+4
-  assert.equal(kpiColumns.forCount(10), 5)  // 5+5
-  assert.equal(kpiColumns.forCount(11), 4)  // 4+4+3
+  assert.equal(kpiColumns.forCount(12), 6)  // 6+6
+  assert.equal(kpiColumns.forCount(13), 5)  // 5+5+3
 })

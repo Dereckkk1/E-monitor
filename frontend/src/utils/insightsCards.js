@@ -29,8 +29,16 @@ export function showBonificacao(data) {
   return (b?.valor ?? 0) > 0 || (b?.count ?? 0) > 0
 }
 
-/** Teto de cards por fileira na linha de KPIs. */
-export const MAX_KPI_CARDS_PER_ROW = 5
+/**
+ * Teto de cards por fileira na linha de KPIs.
+ *
+ * 6 é a contagem máxima que a tela produz hoje (target + bonificação), e a
+ * escolha é deliberada: com teto 5 os 6 cards viravam 3+3, cada card ficava
+ * largo e ALTO, e as duas fileiras somadas à faixa do gênero empurravam os
+ * gráficos pra fora da primeira tela. Numa fileira só, cada card fica com
+ * ~245px em 1600px de viewport — largura em que os valores já couberam.
+ */
+export const MAX_KPI_CARDS_PER_ROW = 6
 
 /**
  * Quantos cards a linha de KPIs vai renderizar, com as MESMAS condições dos
@@ -53,10 +61,12 @@ export function kpiCardCount(data) {
 /**
  * Em quantas colunas dividir a linha pra NENHUMA fileira ficar com buraco.
  *
- * Divide em fileiras iguais respeitando o teto de 5: 6 cards viram 3+3, não
- * 5+1 (que deixava o Investido sozinho com quatro células vazias ao lado).
- * Quando a divisão não é exata — 7 → 4+3 — o flex-grow da última fileira
- * fecha o resto (ver .in-row--cards em InsightsPage.css).
+ * Divide em fileiras iguais respeitando o teto de MAX_KPI_CARDS_PER_ROW. Hoje
+ * isso significa uma fileira única (3, 4, 5 ou 6 cards, todos na mesma linha),
+ * e o cálculo continua existindo pra contagem que estoure o teto: 7 vira 4+3,
+ * não 6+1 com cinco células vazias ao lado. Quando a divisão não é exata, o
+ * flex-grow da última fileira fecha o resto (.in-row--cards em
+ * InsightsPage.css).
  */
 function columnsForCount(n) {
   const total = Math.max(1, n)
