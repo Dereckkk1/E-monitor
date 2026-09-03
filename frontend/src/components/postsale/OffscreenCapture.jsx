@@ -27,6 +27,7 @@ import DailySummaryChart from '../insights/DailySummaryChart'
 // alguma outra página importou. Todo seletor do arquivo é prefixado .in-*, não
 // vaza no wizard. Import idempotente: o Vite dedupa o módulo.
 import '../../pages/InsightsPage.css'
+import { kpiColumns } from '../../utils/insightsCards'
 
 // Tempo pro Recharts assentar depois que o dado chegou.
 const LAYOUT_SETTLE_MS = 400
@@ -97,11 +98,13 @@ export default function OffscreenCapture({ job, onReady, onError }) {
         <div className="psc-frame-title">{job.campaignName}</div>
         {data && (
           <>
-            {/* Mesmas faixas, mesma ordem e MESMAS classes do InsightsPage —
-                inclusive as modificadoras de consolidado e de target. A foto é
-                o /insights, então a grade tem que ser a de lá: qualquer grade
-                própria aqui diverge da tela na primeira mudança do dashboard. */}
-            <div className={`in-row in-row--cards${data.consolidated ? ' in-row--cards--4' : ''}${(data?.kpis?.stations_with_target ?? 0) > 0 ? ' in-row--cards--target' : ''}`}>
+            {/* Mesmas faixas, mesma ordem, MESMAS classes e a MESMA conta de
+                colunas (kpiColumns) do InsightsPage. A foto é o /insights,
+                então a divisão tem que ser a de lá: qualquer regra própria
+                aqui diverge da tela na primeira mudança do dashboard — foi o
+                que aconteceu quando o gate do card de bonificação mudou só de
+                um lado. */}
+            <div className="in-row in-row--cards" style={{ '--in-cards-cols': kpiColumns(data) }}>
               <KpiCards data={data} />
               <InvestmentToggleCard data={data} />
               <GenderCard data={data} />

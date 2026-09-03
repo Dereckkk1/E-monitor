@@ -10,7 +10,9 @@ export default function GenderCard({ data }) {
   const fPct = total > 0 ? (g.f / total) * 100 : 0
 
   return (
-    <div className="in-card">
+    // --gender ocupa a linha inteira da grade em qualquer variante (ver
+    // InsightsPage.css): é uma barra proporcional, não um número.
+    <div className="in-card in-card--gender">
       <div className="in-card-head">
         <span className="in-card-icon"><IconPeople /></span>
         <span className="in-card-label">Gênero (M / F)</span>
