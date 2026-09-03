@@ -107,9 +107,7 @@ export default function KpiCards({ data }) {
           : 'Valor das veiculações de bônus a preço de tabela (unit_value × bônus).'}>
           <div className="in-card-head">
             <span className="in-card-icon"><IconGift /></span>
-            <span className="in-card-label">
-              {data?.consolidated ? 'Bonificação (por inserção)' : 'Bonificação'}
-            </span>
+            <span className="in-card-label">Bonificação</span>
           </div>
           <CardValue>{fmtCurrency.format(k.bonificacao.valor)}</CardValue>
         </div>
