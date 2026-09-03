@@ -28,3 +28,46 @@ export function showBonificacao(data) {
   const b = data?.kpis?.bonificacao
   return (b?.valor ?? 0) > 0 || (b?.count ?? 0) > 0
 }
+
+/** Teto de cards por fileira na linha de KPIs. */
+export const MAX_KPI_CARDS_PER_ROW = 5
+
+/**
+ * Quantos cards a linha de KPIs vai renderizar, com as MESMAS condições dos
+ * componentes (KpiCards + InvestmentToggleCard). O card de Gênero não entra:
+ * ele ocupa a linha inteira sozinho.
+ *
+ * Impactos e CPM são fixos; target acrescenta os dois "no target";
+ * bonificação segue showBonificacao; Investido some se o payload não trouxer
+ * (InvestmentToggleCard devolve null).
+ */
+export function kpiCardCount(data) {
+  const k = data?.kpis ?? {}
+  let n = 2
+  if ((k.stations_with_target ?? 0) > 0) n += 2
+  if (showBonificacao(data)) n += 1
+  if (k.investido) n += 1
+  return n
+}
+
+/**
+ * Em quantas colunas dividir a linha pra NENHUMA fileira ficar com buraco.
+ *
+ * Divide em fileiras iguais respeitando o teto de 5: 6 cards viram 3+3, não
+ * 5+1 (que deixava o Investido sozinho com quatro células vazias ao lado).
+ * Quando a divisão não é exata — 7 → 4+3 — o flex-grow da última fileira
+ * fecha o resto (ver .in-row--cards em InsightsPage.css).
+ */
+function columnsForCount(n) {
+  const total = Math.max(1, n)
+  const rows = Math.ceil(total / MAX_KPI_CARDS_PER_ROW)
+  return Math.ceil(total / rows)
+}
+
+export function kpiColumns(data) {
+  return columnsForCount(kpiCardCount(data))
+}
+
+// Exposto pra teste: a regra de distribuição vale pra qualquer contagem, não
+// só pras 3..6 que a tela produz hoje.
+kpiColumns.forCount = columnsForCount

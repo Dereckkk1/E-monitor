@@ -365,7 +365,7 @@ Se **QUALQUER emissora da seleção** tem pricing `consolidated`, o `/insights` 
 - **Flag `consolidated: true`** no payload dispara o comportamento no frontend.
 - **Campanha 100% `per_insertion`**: nada muda — segue por veiculação, com Bonificação.
 
-Implementação: `catalog.Insights.consolidatedSummary(…, today)` calcula o total + a flag; `Compute` sobrescreve `inv.Executado` e zera `bon` quando `hasConsolidated`. O `/campaigns` (`FinancialsByCampaign(…, today)`) usa a MESMA `monthsElapsedSQL`. Frontend: `KpiCards` esconde a Bonificação e `InsightsPage` aplica `in-row--cards--4` quando `data.consolidated`. **Compatível com campanhas de 1 mês** (meses_decorridos = 1 → inalterado).
+Implementação: `catalog.Insights.consolidatedSummary(…, today)` calcula o total, a parcela de bônus das por-inserção e a flag; `Compute` sobrescreve `inv.Executado` com `total − pi_bonus` e põe `pi_bonus` na Bonificação quando `hasConsolidated` (**até 2026-09-03 ele zerava `bon`** — ver §1 das divergências). O `/campaigns` (`FinancialsByCampaign(…, today)`) usa a MESMA `monthsElapsedSQL`. Frontend: `KpiCards` renderiza a Bonificação conforme `showBonificacao` e a linha de KPIs se divide por `kpiColumns` ([utils/insightsCards.js](../../frontend/src/utils/insightsCards.js)) — fileiras iguais com teto de 5, o card de Gênero sempre ocupando a linha inteira. **Compatível com campanhas de 1 mês** (meses_decorridos = 1 → inalterado).
 
 > **Nota:** o cálculo **Modelo B (proporcional)** abaixo continua existindo no `aggregateInvestment` (e nos testes diretos), mas é **sobrescrito** pelo total fixo para consolidado no `Compute` — preservado caso a regra mude de novo. Vale hoje só como o número por-veiculação de campanhas `per_insertion`.
 
