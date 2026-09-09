@@ -68,6 +68,13 @@ type Deps struct {
 	// HubSync: mutacoes de identidade empurradas pelo hub (RFC-001 §9.2) — o
 	// sentido oposto do HubSSO. nil quando a integracao nao esta configurada.
 	HubSync               *handlers.HubSyncHandler
+	// HubClient/HubClients: a porta de LEITURA do hub (Central consolidada,
+	// spec 2026-09-02 §5.3) — o sentido oposto do HubSync, que ESCREVE. São
+	// interfaces, e nao os tipos concretos, para o teste de rota montar o
+	// router sem banco; e o mesmo motivo de `InsightsRepo` ser interface no
+	// handler. Ambos nil = as rotas /hub/* de leitura nao sao registradas.
+	HubClient             auth.HubKeyChecker
+	HubClients            auth.HubClientResolver
 	// Ativos: checagem de is_active por requisicao, com cache. nil mantem o
 	// comportamento antigo (so assinatura do JWT) — e e o que os testes de
 	// rota usam, por nao terem banco.
@@ -168,6 +175,39 @@ func NewRouter(d Deps) http.Handler {
 			// Listagem para a reconciliacao noturna do §9.6. Mesma porta do
 			// sync — chave de plataforma, sem sessao.
 			r.Get("/hub/users", d.HubSync.ListUsers)
+		}
+		// Leitura do hub (Central consolidada, spec 2026-09-02 §5.3): a mesma
+		// porta servidor-a-servidor do /hub/sync, e pelo mesmo motivo — quem
+		// chama é o hub, e a credencial dele é a chave de plataforma, não um
+		// JWT de pessoa.
+		//
+		// Os handlers são OS MESMOS de /insights, /campaigns/{id} e
+		// /campaigns/{campaignID}/daily-summary. Nenhuma fórmula é duplicada:
+		// quando o cálculo mudar (como mudou em 2026-08-17), o hub muda junto
+		// sem deploy. O middleware injeta Claims de viewer com UM cliente, e a
+		// partir daí o 403 cross-client do /insights e o 404 anti-oráculo do
+		// /campaigns/{id} valem exatamente como valem para um cliente logado.
+		//
+		// Este `Route("/hub")` convive com os `/hub/sync` e `/hub/users`
+		// literais acima — medido com o chi v5.2.5 do go.mod. O que NÃO pode é
+		// um segundo `Route` no mesmo prefixo: dois viram panic no boot.
+		if d.HubClient != nil && d.HubClients != nil {
+			r.Route("/hub", func(r chi.Router) {
+				r.Use(auth.RequireHubKeyScoped(d.HubClient, d.HubClients))
+				if d.Insights != nil {
+					r.Get("/insights", d.Insights.Get)
+				}
+				if d.Campaigns != nil {
+					r.Get("/campaigns/{id}", d.Campaigns.Get)
+				}
+				if d.Detections != nil {
+					// `{campaignID}` e não `{id}`: é o nome que
+					// DetectionsHandler.DailySummary lê com chi.URLParam. A
+					// spec §5.3 escreveu {id} — está errada, e um param com
+					// nome trocado devolve 400 "invalid campaignID" para sempre.
+					r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
+				}
+			})
 		}
 		if d.Welcome != nil {
 			r.With(loginLimiter.Middleware).Get("/public/welcome/{token}", d.Welcome.Resolve)
