@@ -107,6 +107,34 @@ Campanha `programada` não precisa de reconciliação de worker: o
 `PromoteScheduledLifecycle` lê `target_stations` fresco na promoção. Se
 estivesse `ativa`, seria preciso re-salvar pela UI pro supervisor reconciliar.
 
+### Quase-pior-caso: a cópia de recuperação não era garantida
+
+O reparo só foi possível porque `campaign_materials.target_stations` guardava as
+15 emissoras. Isso foi **sorte, não desenho** — aquela coluna não é backup de
+nada, e é sobrescrivível:
+
+```sql
+-- catalog/campaign_materials.go, Link()
+ON CONFLICT (campaign_id, material_id) DO UPDATE
+   SET target_stations = EXCLUDED.target_stations
+```
+
+O wizard manda a lista cheia no vínculo. Ou seja: **um re-upload do áudio na
+STIHL entre 31/08 19:02 e o reparo teria sobrescrito a única cópia sobrevivente**
+— e aí o dado seria irrecuperável, não só difícil de recuperar. O backup mais
+recente de `campaigns` é anterior a 28/08, data em que a campanha foi criada:
+restaurá-lo não traria a linha.
+
+O que fecha esse caminho específico é o fix de dedup silencioso mergeado no
+mesmo PR (#9): depois de um `200` de dedup, `planUploadOutcome` devolve
+`shouldLink: !linked`, então o wizard não re-vincula material que já está
+vinculado. **A semântica de upsert do `Link` continua sobrescrevendo por
+design** ("operator may re-add to reset stations") — quem remover e re-adicionar
+o material pela UI ainda zera `target_stations` do vínculo. A lição fica: essa
+coluna nunca deve ser tratada como fonte de recuperação, e a poda
+`link ⊆ campanha` dos follow-ups vai deixar as duas listas explicitamente
+acopladas, não redundantes por acidente.
+
 ## Correções aplicadas
 
 1. **`utils/stationsSavePlan.js`** — a decisão de salvar virou função pura com

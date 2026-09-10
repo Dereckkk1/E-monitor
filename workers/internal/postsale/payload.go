@@ -78,7 +78,16 @@ type BlockKPIs struct {
 	Impactos      int64   `json:"impactos"`
 	CPM           float64 `json:"cpm"`
 	Bonificacao   float64 `json:"bonificacao"`
-	StationsCount int     `json:"stations_count"`
+	// BonificacaoCount é a contagem de tocadas por trás do valor acima. Só a UI
+	// usa, e só pra decidir EXIBIÇÃO: numa emissora por-inserção com
+	// unit_value = 0 o valor sai zero mas houve bônus, e a regra do /insights
+	// mostra o card por causa da contagem. Sem este campo o pós-venda decidiria
+	// por uma regra mais pobre que a do dashboard de onde tira os números.
+	//
+	// Ausente nos payloads congelados antes de 2026-09-10 → 0 no unmarshal →
+	// a decisão cai no valor, que é como aqueles documentos já eram exibidos.
+	BonificacaoCount int64 `json:"bonificacao_count"`
+	StationsCount    int   `json:"stations_count"`
 
 	// Bloco "no target": a UI só renderiza quando StationsWithTarget > 0.
 	// Ausência de cadastro NÃO é zero — ver docs/features/client-target-pmm.md.
@@ -87,8 +96,15 @@ type BlockKPIs struct {
 	StationsWithTarget int     `json:"stations_with_target"`
 	TargetLabel        *string `json:"target_label"`
 
-	// Consolidated vem do InsightsPayload: em pricing consolidado a bonificação
-	// fica zerada e o card some, mesma regra do /insights.
+	// Consolidated vem do InsightsPayload: true quando QUALQUER emissora do
+	// bloco tem pricing consolidado. NÃO significa "sem bonificação" — desde
+	// 2026-09-03 o /insights parte o total em Investido × Bonificação também em
+	// campanha mista, e este bloco herda a partição. É só metade do gate de
+	// exibição: quem decide é showBonificacaoDe (frontend/src/utils/
+	// insightsCards.js), que junta este flag ao valor e à contagem.
+	//
+	// Em bloco 100% consolidado a Bonificação é zero por AUSÊNCIA DE PREÇO (o
+	// pacote é pela emissora, não por inserção) — aí sim o card some.
 	Consolidated bool `json:"consolidated"`
 
 	// Overridden marca que algum número deste bloco foi ajustado à mão pelo
