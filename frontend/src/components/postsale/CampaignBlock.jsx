@@ -7,6 +7,7 @@
 // onda de rádio é a metáfora da casa (sinal indo ao ar), não enfeite genérico.
 import CheckingList from './CheckingList'
 import { brl, int, stationDial, useCountUp, useRevealOnce } from './motion'
+import { showBonificacaoDe } from '../../utils/insightsCards'
 
 const STATUS_LABEL = {
   programada: 'Programada',
@@ -155,9 +156,21 @@ export default function CampaignBlock({
                   format={brl.format}
                 />
               )}
-              {/* Em pricing consolidado a bonificação fica zerada por definição —
-                  o card some, mesma regra do /insights. */}
-              {!k.consolidated && (
+              {/* MESMA regra do /insights (showBonificacaoDe), não uma cópia:
+                  os números deste bloco saem do insights.Compute, então o gate
+                  de exibição tem que sair de lá também. Enquanto era `!k.consolidated`
+                  duplicado aqui, uma única emissora consolidada na campanha
+                  escondia do cliente a bonificação das por-inserção — e campanha
+                  mista é o caso comum, não a exceção.
+
+                  Bloco 100% consolidado segue sem card: ali o zero é ausência de
+                  PREÇO (pacote pela emissora, não por inserção), e "R$ 0,00"
+                  afirmaria que não houve bônus, que é outra coisa. */}
+              {showBonificacaoDe({
+                consolidated: k.consolidated,
+                valor: k.bonificacao,
+                count: k.bonificacao_count,
+              }) && (
                 <Kpi
                   label="Bonificação"
                   value={k.bonificacao ?? 0}

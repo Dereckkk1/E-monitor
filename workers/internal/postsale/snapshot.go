@@ -211,11 +211,21 @@ func (s *Service) buildBlock(ctx context.Context, clientID uuid.UUID, b BlockInp
 		}
 	}
 
+	// Cópia direta do InsightsPayload, sem recálculo: é o que garante que o
+	// bloco do mês bate EXATAMENTE com o /insights filtrado no mesmo período —
+	// mesma função (insights.Compute), mesmos parâmetros, mesmo `today` (os
+	// dois lados usam todaySaoPaulo). Qualquer conta própria aqui abriria uma
+	// segunda fonte de verdade pro mesmo número.
+	//
+	// Em campanha MISTA, `Investido.Executado` e `Bonificacao.Valor` já vêm
+	// partidos da origem (total − bônus das por-inserção, e o bônus): a soma
+	// dos dois é o total de sempre, então o CPM não se move.
 	kpis := BlockKPIs{
 		ValorEntregue:      ins.KPIs.Investido.Executado,
 		Impactos:           ins.KPIs.Impactos,
 		CPM:                ins.KPIs.CPM,
 		Bonificacao:        ins.KPIs.Bonificacao.Valor,
+		BonificacaoCount:   ins.KPIs.Bonificacao.Count,
 		StationsCount:      ins.KPIs.StationsCount,
 		ImpactosTarget:     ins.KPIs.ImpactosTarget,
 		CPMTarget:          ins.KPIs.CPMTarget,
@@ -266,13 +276,18 @@ func applyOverrides(k *BlockKPIs, ov KPIOverrides) {
 	if ov.Bonificacao != nil {
 		k.Bonificacao = *ov.Bonificacao
 	}
+	// BonificacaoCount fica com o número do sistema de propósito: ela não é
+	// exibida em lugar nenhum, só entra no gate de exibição do card. Quantas
+	// tocadas foram de bônus continua sendo fato do banco mesmo quando o admin
+	// reprecifica quanto elas valem.
 	// Numerador = valor entregue + bonificação, os dois já com o override
 	// aplicado. É a mesma definição do /insights: o CPM mede a eficiência da
 	// mídia ENTREGUE a preço de tabela (bônus incluído, porque ele já está nos
 	// impactos do denominador), não a eficiência da negociação. Só o valor pago
 	// no numerador faria um pós-venda com muito bônus exibir um CPM
-	// artificialmente baixo. Em campanha consolidada `Bonificacao` é 0 e
-	// `ValorEntregue` já é o total — a soma continua correta.
+	// artificialmente baixo. Em campanha MISTA as duas parcelas são as duas
+	// metades do mesmo total, e em 100% consolidada `Bonificacao` é 0 com
+	// `ValorEntregue` já valendo o total — a soma continua correta nos três.
 	entregue := k.ValorEntregue + k.Bonificacao
 	k.CPM = cpmOf(entregue, k.Impactos)
 	// O CPM no target segue os impactos no target, que continuam vindo do
