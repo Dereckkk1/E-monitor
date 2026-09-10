@@ -11,6 +11,7 @@ import { useState } from 'react'
 
 import StationAvatar from '../../components/StationAvatar'
 import { stationDial } from '../../components/postsale/motion'
+import { showBonificacaoDe } from '../../utils/insightsCards'
 import { IconChevron, IconTrash } from './icons'
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -240,10 +241,15 @@ function CampaignPanel({ block, preview, open, onToggle, onChange }) {
                     system={k?.impactos ?? 0}
                     onChange={v => setOverride('impactos', v, k?.impactos ?? 0)}
                   />
-                  {/* Em pricing consolidado a bonificação fica zerada por
-                      definição e o documento nem mostra o card — um campo
-                      editável aqui seria controle morto. */}
-                  {!k?.consolidated && (
+                  {/* O campo existe exatamente quando o card existe no
+                      documento (mesma showBonificacaoDe do /insights): editar
+                      um número que o cliente não vai ler seria controle morto,
+                      e esconder um que ele VAI ler tira do admin o ajuste. */}
+                  {showBonificacaoDe({
+                    consolidated: k?.consolidated,
+                    valor: k?.bonificacao,
+                    count: k?.bonificacao_count,
+                  }) && (
                     <ValueField
                       label="Valor bonificado"
                       money

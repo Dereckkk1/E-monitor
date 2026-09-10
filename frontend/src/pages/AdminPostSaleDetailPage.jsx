@@ -13,6 +13,7 @@ import {
   useRevokePostSaleRecipient,
 } from '../api/hooks'
 import StationAvatar from '../components/StationAvatar'
+import { showBonificacaoDe } from '../utils/insightsCards'
 import { IconArrowLeft, IconExternal } from './PostSaleSteps/icons'
 import './AdminPostSalePage.css'
 
@@ -387,7 +388,15 @@ export default function AdminPostSaleDetailPage() {
                           <dt>cpm</dt>
                           <dd>{brl.format(k.cpm ?? 0)}</dd>
                         </div>
-                        {!k.consolidated && (
+                        {/* Mesmo gate do documento do cliente (showBonificacaoDe):
+                            esta tela existe pra responder "de onde veio esse
+                            valor?", então tem que mostrar as MESMAS parcelas que
+                            o cliente viu — nem uma a mais, nem uma a menos. */}
+                        {showBonificacaoDe({
+                          consolidated: k.consolidated,
+                          valor: k.bonificacao,
+                          count: k.bonificacao_count,
+                        }) && (
                           <>
                             <div className="pv-fnum-sep" aria-hidden="true" />
                             <div className="pv-fnum">

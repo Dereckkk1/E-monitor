@@ -5,10 +5,16 @@
  * KpiCards decide se renderiza o card e o InsightsPage decide o número de
  * colunas do grid a partir dela. Enquanto a regra estava duplicada, o grid
  * contava 4 colunas com 5 cards.
+ *
+ * O pós-venda também consome daqui (showBonificacaoDe): os números do
+ * documento vêm do MESMO insights.Compute, então a regra de exibição tem que
+ * ser a mesma — foi ela ficar duplicada que deixou o pós-venda escondendo a
+ * bonificação depois que o /insights parou de escondê-la.
  */
 
 /**
- * O card de Bonificação aparece?
+ * O card de Bonificação aparece? Núcleo da regra, sobre os três valores que
+ * decidem — sem depender do formato do payload de quem pergunta.
  *
  * Fora do modo fornecedor: sempre. O valor pode ser zero, e zero ali é
  * informação verdadeira — existe preço por inserção, não houve bônus.
@@ -23,10 +29,18 @@
  * Antes de 2026-09-03 o card sumia em TODA seleção com consolidada, o que
  * escondia a bonificação das emissoras por-inserção de metade da base.
  */
+export function showBonificacaoDe({ consolidated, valor, count } = {}) {
+  if (!consolidated) return true
+  return (valor ?? 0) > 0 || (count ?? 0) > 0
+}
+
+/** Adaptador pro payload do /insights (bonificação aninhada em kpis). */
 export function showBonificacao(data) {
-  if (!data?.consolidated) return true
-  const b = data?.kpis?.bonificacao
-  return (b?.valor ?? 0) > 0 || (b?.count ?? 0) > 0
+  return showBonificacaoDe({
+    consolidated: data?.consolidated,
+    valor: data?.kpis?.bonificacao?.valor,
+    count: data?.kpis?.bonificacao?.count,
+  })
 }
 
 /**
