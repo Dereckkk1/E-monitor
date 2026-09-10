@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-09-10
 codigo-relacionado:
   - migrations/0057_post_sale_reports.up.sql
   - migrations/0059_post_sale_overrides.up.sql
@@ -18,6 +18,7 @@ codigo-relacionado:
   - frontend/src/pages/AdminPostSaleDetailPage.jsx
   - frontend/src/pages/PostSaleSteps/
   - frontend/src/components/postsale/
+  - frontend/src/utils/insightsCards.js
 ---
 
 # Pós-venda
@@ -77,8 +78,39 @@ usasse outra base, o documento contradiria o próprio anexo na frente do cliente
 | **Impactos no target** | `kpis.impactos_target` — só aparece com `stations_with_target > 0` |
 | **CPM** | `kpis.cpm` (respeita `campaigns.fixed_cpm`) |
 | **CPM no target** | `kpis.cpm_target` (sempre dinâmico) |
-| **Bonificação** | `kpis.bonificacao.valor` — **escondida** quando `consolidated`, igual ao `/insights` |
+| **Bonificação** | `kpis.bonificacao.valor` (+ `.count` em `bonificacao_count`) — exibição pela regra do `/insights`, ver abaixo |
 | **Emissoras** | `kpis.stations_count` |
+
+#### Quando o card de Bonificação aparece
+
+A decisão é `showBonificacaoDe()` de
+[`frontend/src/utils/insightsCards.js`](../../frontend/src/utils/insightsCards.js)
+— a **mesma função** que o `/insights` usa, importada, não copiada:
+
+| Pricing do bloco | Card | Por quê |
+|---|---|---|
+| 100% por-inserção | **aparece** (mesmo zerado) | existe preço por inserção; zero ali é fato — não houve bônus |
+| **misto** | **aparece**, com o bônus das por-inserção | a parcela existe e é precificável |
+| 100% consolidado | **some** | zero por ausência de PREÇO (pacote pela emissora), não por ausência de bônus |
+
+Em bloco misto o total vem **partido** da origem — `valor_entregue = total − bônus`
+e `bonificacao = bônus das por-inserção` —, então a **soma não muda e o CPM não se
+move**. A emissora consolidada nunca contribui bônus: ela não tem `unit_value`, e
+inventar uma taxa exibiria um preço que ninguém contratou. As tocadas de bônus
+dela seguem contadas em impactos e no breakdown.
+
+> **Por que `bonificacao_count` viaja no payload:** numa emissora por-inserção com
+> `unit_value = 0` o valor sai zero mas houve bônus, e a regra do `/insights` mostra
+> o card por causa da contagem. Sem o campo, o pós-venda decidiria por uma regra
+> mais pobre que a do dashboard de onde tira os números. Payload congelado antes de
+> 2026-09-10 não tem o campo → `0` no unmarshal → decide pelo valor, que é como
+> aqueles documentos já eram exibidos.
+>
+> **Corrigido em 2026-09-10.** Até então o gate era `!consolidated` duplicado em três
+> componentes do pós-venda, e ele ficou pra trás quando o `/insights` parou de esconder
+> a bonificação em campanha mista (2026-09-03). Uma única emissora consolidada
+> escondia do cliente o bônus de todas as por-inserção — medido no restore de prod:
+> R$ 15.781 numa campanha da TINTAS RENNER, R$ 9.895 numa da VERISURE.
 
 Ausência de PMM no target **não é zero**: sem cadastro, os dois cards "no
 target" simplesmente não aparecem ([client-target-pmm.md](client-target-pmm.md)).
@@ -88,13 +120,16 @@ target" simplesmente não aparecem ([client-target-pmm.md](client-target-pmm.md)
 > [fechamento por cota](quota-aware-categorization.md): as duas telas valorizam o
 > mesmo conjunto (`in_slot + bonus`), com `investido = unit × in_slot` e
 > `bonificação = unit × bonus` separados, e o CPM idêntico
-> (`TestInsights_FinancialBase_MatchesCampaigns`). **O que permanece, conhecido e
-> aceito:** em campanha de pricing MISTO o `/insights` entra em modo fornecedor e
-> embute o bônus no Investido, então o "Investimento" exibido difere do
-> `/campaigns` em **R$ 271.179** no agregado de prod — a soma é a mesma expressão
-> dos dois lados, só a partição do número muda. O pós-venda nasce do lado do
-> `/insights`, logo herda essa leitura. Ver
-> [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS"](insights-dashboard.md).
+> (`TestInsights_FinancialBase_MatchesCampaigns`).
+>
+> **Superado em 2026-09-03 (`01fe59b`):** a divergência que restava aqui era o
+> pricing MISTO — o `/insights` embutia o bônus no Investido, e o "Investimento"
+> exibido diferia do `/campaigns` em **R$ 271.179** no agregado de prod (número
+> medido ANTES do fix). Agora o `/insights` também parte as duas parcelas, com a
+> mesma expressão do `/campaigns`, e o pós-venda herda a partição. Demais
+> divergências seguem em
+> [insights-dashboard.md §"Divergências CONHECIDAS E ACEITAS"](insights-dashboard.md)
+> — **não "conserte" nenhuma sem falar com o dono**.
 
 > 🔴 **Bug conhecido, NÃO corrigido — o `.zip` perde o fim do último dia.** O
 > período do documento é parseado em **UTC** (`handlers/post_sale.go:240,245`,
@@ -186,8 +221,9 @@ Como funciona:
   entra no numerador porque o CPM mede a eficiência da mídia entregue a preço de
   tabela e a tocada de bônus já está nos impactos do denominador (ver
   [insights-dashboard.md §"O numerador do CPM inclui a
-  bonificação"](insights-dashboard.md)); em campanha consolidada a bonificação é
-  0 e o valor entregue já embute tudo, então a soma continua correta. Um CPM
+  bonificação"](insights-dashboard.md)); em campanha mista as duas parcelas são
+  as duas metades do mesmo total, e em 100% consolidada a bonificação é 0 com o
+  valor entregue já valendo tudo — a soma continua correta nos três. Um CPM
   digitado contradiria os números exibidos ao
   lado dele. `cpm_target` segue a mesma regra, sobre os impactos no target (que
   continuam vindo do sistema — o admin ajusta o total, não o recorte de
@@ -195,8 +231,13 @@ Como funciona:
 - Impactos zero não gera CPM infinito: cai para 0 (indeterminado).
 - O bloco ganha `overridden: true` no payload. O **painel admin** mostra o selo
   "ajustado à mão"; a **página do cliente não** — pra ele, o número é o número.
-- Em pricing **consolidado** o campo de bonificação nem aparece: ela é zerada por
-  definição e o documento não mostra o card, então seria controle morto.
+- O campo de bonificação existe **exatamente quando o card existe no documento**
+  (mesma `showBonificacaoDe`): editar um número que o cliente não vai ler seria
+  controle morto, e esconder um que ele vai ler tiraria do admin o ajuste. Em
+  bloco 100% consolidado, portanto, o campo não aparece.
+- `bonificacao_count` **não é sobrescrevível**: ela não é exibida em lugar nenhum,
+  só entra no gate. Quantas tocadas foram de bônus segue sendo fato do banco mesmo
+  quando o admin reprecifica quanto elas valem.
 
 ### Checking intocado × Checking esvaziado (`checking_edited`)
 

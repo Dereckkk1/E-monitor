@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-09-03
+ultima-verificacao: 2026-09-10
 codigo-relacionado:
   - workers/internal/catalog/insights.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -104,7 +104,7 @@ Vale a pena manter esses dois invariantes como teste ao mexer aqui.
 | **CPM** | Padrão: `((investido_executado + bonificação) / impactos) × 1000` — **o numerador soma as duas parcelas** (ver §"O numerador do CPM inclui a bonificação"). Guard pra impactos=0 → CPM=0. Override por `campaigns.fixed_cpm` quando setado: média ponderada por impactos do `COALESCE(fixed_cpm, dynamic_cpm)` de cada campanha — ver [campaign-fixed-cpm.md](campaign-fixed-cpm.md). Herda o comportamento proporcional consolidado abaixo (em modo fornecedor as duas parcelas são as duas metades do mesmo total do `consolidatedSummary`, então a soma continua valendo — repartir a exibição em 2026-09-03 não moveu o CPM). É a MESMA expressão do `/campaigns` (`total_invested + total_bonus_value`) ÷ `total_audience`, travada por `TestInsights_FinancialBase_MatchesCampaigns` |
 | **Bonificação** | Soma do valor das veiculações `bonus` da view `daily_play_summary` — desde a migration 0065 é a **contagem direta da categoria** `bonus` gravada pelo categorizador (excedente da cota do dia dentro da faixa + tocada sem meta). Valor é `unit_value × bonus_count` em modo per_insertion; em consolidated é `cv × bonus_na_janela / plano_da_campanha_INTEIRA` (mesma taxa estável por inserção do investido). Em per_insertion é o mesmo número que o `/campaigns` expõe em `total_bonus_value` (2026-08-17). **Desde 2026-09-03 o card NÃO some mais quando a seleção tem emissora consolidada**: exibe a parcela das por-inserção (a consolidada não tem preço por inserção com que precificar bônus) — ver §"Bonificação em seleção mista" |
 | **Investido contratado** | `consolidated`: `cv × overlap_days/total_days`. `per_insertion`: `Σ_type (unit_value × expected_count)`. (Não é exibido em nenhum card hoje) |
-| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período). **Desde 2026-09-03 o bônus das por-inserção NÃO fica mais embutido aqui**: o mesmo total é partido em `Investido = total − unit×bonus` e `Bonificação = unit×bonus`, o que faz esta célula bater com o `total_invested` do `/campaigns`. **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação à parte. **Ver §"Consolidado: valor MENSAL que acumula por mês"**. ⚠️ Em campanha MISTA o `/campaigns` exibe um "Investimento" MENOR que este número pelo `unit_value × bonus` das emissoras por-inserção — lá o bônus vive num campo separado (`total_bonus_value`) e o modo fornecedor daqui o embute. **Só a exibição do dinheiro diverge; o CPM não** (o numerador soma as duas parcelas dos dois lados, e a soma é a mesma expressão) |
+| **Investido executado** | **Se QUALQUER emissora da seleção é `consolidated`** (regra do fornecedor): `Σ (consolidated_value × meses_decorridos + unit_value×(in_slot+bonus) das por-inserção)`. `consolidated_value` é MENSAL e **acumula por mês** (não varia com o filtro de período). **Desde 2026-09-03 o bônus das por-inserção NÃO fica mais embutido aqui**: o mesmo total é partido em `Investido = total − unit×bonus` e `Bonificação = unit×bonus`, o que faz esta célula bater com o `total_invested` do `/campaigns`. **100% `per_insertion`**: `Σ_type (unit_value × in_slot)` por veiculação, com Bonificação à parte. **Ver §"Consolidado: valor MENSAL que acumula por mês"**. ⚠️ Até 2026-09-03 esta célula divergia do `/campaigns` em campanha MISTA: o modo fornecedor embutia aqui o `unit_value × bonus` das por-inserção, que lá vive num campo separado (`total_bonus_value`). Com a partição, as duas telas exibem as mesmas duas parcelas — e o CPM já não divergia antes (o numerador soma as duas dos dois lados, e a soma é a mesma expressão) |
 | **Buckets — programado** | `SUM(expected)` da view daily_play_summary |
 | **Buckets — déficit** | `max(0, expected - in_slot)` |
 | **Buckets — extras** | `count(detections WHERE category='bonus')` |
@@ -285,6 +285,15 @@ quem conta o recorte é o tooltip do card. Numa seleção
 preço", e exibi-lo afirmaria "não houve bônus", que é outra coisa. As tocadas de
 bônus da consolidada continuam contadas em impactos e no breakdown de
 veiculações; o que não existe é o valor delas.
+
+> **O gate é compartilhado com o pós-venda.** `showBonificacaoDe()`, em
+> [`frontend/src/utils/insightsCards.js`](../../frontend/src/utils/insightsCards.js),
+> é importada tanto pelos cards daqui quanto pelos três pontos do pós-venda
+> (documento do cliente, campo de override do wizard e ficha do admin) — os
+> números de lá saem deste mesmo `insights.Compute`, então a regra de exibição
+> tem que ser a mesma função, não uma cópia. Foi a duplicação que deixou o
+> pós-venda escondendo a bonificação por mais uma semana depois desta mudança;
+> ver [post-sale.md §"Quando o card de Bonificação aparece"](post-sale.md).
 
 #### 3. `consolidated_value` é MENSAL, e o mesmo campo lê três números diferentes
 
