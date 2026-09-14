@@ -207,6 +207,72 @@ func NewRouter(d Deps) http.Handler {
 					// nome trocado devolve 400 "invalid campaignID" para sempre.
 					r.Get("/campaigns/{campaignID}/daily-summary", d.Detections.DailySummary)
 				}
+
+				// ——— Módulo Checking (spec do hub 2026-09-14 §4) ———
+				//
+				// A grade de /detections não se monta só com o daily-summary:
+				// ela precisa do escopo (materiais × emissoras), do plano
+				// (regras), do cadastro das emissoras, dos tipos, do preço e do
+				// PMM alvo. A modal do dia precisa da lista de veiculações e do
+				// áudio de cada uma. São OS MESMOS handlers das rotas com JWT —
+				// nenhuma fórmula nova, como na Central consolidada.
+				//
+				// O escopo de cliente que cada handler aplica para um viewer
+				// logado vale aqui porque o RequireHubKeyScoped injeta
+				// Claims{Role:"viewer", ClientIDs:[cliente do hub_id]}.
+				//
+				// ⚠️ O nome do parâmetro é o que o handler LÊ: `campaignID` em
+				// materials/rules/pricing, `clientID` em clients/*, `id` em
+				// evidence e reports. Há teste enumerando os padrões
+				// registrados (TestRotasHub_AsRotasDeLeituraEstaoRegistradas) —
+				// nenhum código de status pegaria isso.
+				//
+				// FORA daqui, e é decisão: `distribution-overrides`. O
+				// ListByDateRange (handlers/distribution_overrides.go:135) não
+				// chama ScopeAllows em lugar nenhum, então sob esta porta ele
+				// entregaria o ajuste de qualquer campanha a qualquer chave.
+				// Entra quando ganhar a checagem; até lá a modal do dia do hub
+				// mostra a nota honesta de "ajuste manual neste dia" em vez de
+				// um detalhamento que não pode buscar.
+				if d.CampaignMaterials != nil {
+					r.Get("/campaigns/{campaignID}/materials", d.CampaignMaterials.ListByCampaign)
+				}
+				if d.DistributionRules != nil {
+					r.Get("/campaigns/{campaignID}/distribution-rules", d.DistributionRules.ListByCampaign)
+				}
+				if d.Pricing != nil {
+					r.Get("/campaigns/{campaignID}/pricing", d.Pricing.ListByCampaign)
+				}
+				if d.Materials != nil {
+					r.Get("/clients/{clientID}/materials", d.Materials.ListByClient)
+				}
+				if d.ClientTargetPmm != nil {
+					r.Get("/clients/{clientID}/target-pmm", d.ClientTargetPmm.List)
+				}
+				// Catálogo, não dado de cliente — /stations já é legível por
+				// qualquer autenticado aqui dentro. O hub chama sempre com
+				// `?ids=` (conjunto fechado, teto de 500 no próprio handler).
+				if d.Stations != nil {
+					r.Get("/stations", d.Stations.List)
+				}
+				if d.MaterialTypes != nil {
+					r.Get("/material-types", d.MaterialTypes.List)
+				}
+				if d.Detections != nil {
+					// A lista de veiculações de um dia/emissora (a modal) e o
+					// áudio de cada uma. O Evidence PROXIA os bytes; a variante
+					// presigned (/evidence/url) fica de fora de propósito — a
+					// URL que ela assina aponta para o MinIO interno, que o
+					// navegador de fora não alcança.
+					r.Get("/detections", d.Detections.List)
+					r.Get("/detections/{id}/evidence", d.Detections.Evidence)
+				}
+				if d.Reports != nil {
+					// O CSV consolidado que o CLIENTE já recebe hoje pela
+					// /detections com JWT. O CSV detalhado (/detections/export)
+					// continua admin-only e fora daqui.
+					r.Get("/reports/campaigns/{id}/consolidated.csv", d.Reports.Consolidated)
+				}
 			})
 		}
 		if d.Welcome != nil {
@@ -716,11 +782,32 @@ func NewRouter(d Deps) http.Handler {
 	// top of the stack rewrites them to the matched route pattern (e.g.
 	// "GET /v1/internal/clients/{clientID}/api-keys") once chi resolves it,
 	// so dashboards don't blow up cardinality with raw IDs.
-	return otelhttp.NewHandler(r, "radiocheck-api",
-		otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
-			return req.Method + " " + req.URL.Path
-		}),
-	)
+	return Router{
+		Handler: otelhttp.NewHandler(r, "radiocheck-api",
+			otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
+				return req.Method + " " + req.URL.Path
+			}),
+		),
+		Mux: r,
+	}
+}
+
+// Router é o que NewRouter devolve: o handler embrulhado em telemetria, com o
+// roteador chi por baixo exposto.
+//
+// O `Mux` existe por uma razão só, e é de TESTE: sem ele não há como enumerar
+// as rotas registradas (`chi.Walk`), porque o `otelhttp.NewHandler` esconde o
+// mux atrás de um `http.Handler` opaco. E enumerar é a ÚNICA forma honesta de
+// provar que uma rota do grupo `/hub` existe: um caminho inventado ali dentro
+// responde 401, não 404 — o middleware do grupo roda antes do roteamento
+// interno —, então nenhum código de status distingue "rota registrada" de
+// "rota que nunca existiu". Medido em produção em 2026-09-14.
+//
+// O embedding mantém `NewRouter` com assinatura `http.Handler`: nada fora dos
+// testes precisa saber que este tipo existe.
+type Router struct {
+	http.Handler
+	Mux *chi.Mux
 }
 
 // otelRoutePatternMiddleware rewrites the active span name to the matched
