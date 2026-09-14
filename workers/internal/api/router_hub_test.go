@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
@@ -46,6 +47,17 @@ func routerComHub(t *testing.T) http.Handler {
 		Insights:   &handlers.InsightsHandler{},
 		Campaigns:  &handlers.CampaignsHandler{},
 		Detections: &handlers.DetectionsHandler{},
+		// Os do módulo Checking (spec do hub 2026-09-14 §4). Precisam ser
+		// não-nil para as rotas serem REGISTRADAS — com nil elas não existem e
+		// todo teste de 401/403 passaria a medir o NotFound, não o middleware.
+		CampaignMaterials: &handlers.CampaignMaterialsHandler{},
+		DistributionRules: &handlers.DistributionRulesHandler{},
+		Pricing:           &handlers.PricingHandler{},
+		Materials:         &handlers.MaterialsHandler{},
+		ClientTargetPmm:   &handlers.ClientTargetPmmHandler{},
+		Stations:          &handlers.StationsHandler{},
+		MaterialTypes:     &handlers.MaterialTypesHandler{},
+		Reports:           &handlers.ReportsHandler{},
 	})
 }
 
@@ -119,6 +131,104 @@ func TestRotasHub_NaoPassamPeloJWT(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "invalid id",
 		"passou do middleware do hub e caiu na validação do CampaignsHandler")
+}
+
+// caminhosDeLeitura são TODAS as rotas de leitura do hub — as três originais
+// (Central consolidada) mais as dez do módulo Checking (spec do hub
+// 2026-09-14 §4).
+//
+// Cada uma aparece com um valor de parâmetro VÁLIDO: o que este teste mede é o
+// middleware, e um uuid inválido faria o handler responder 400 por outro
+// motivo, escondendo justamente o que se quer provar.
+func caminhosDeLeitura(id string) []string {
+	return []string{
+		// as três que já existiam
+		"/v1/internal/hub/insights?campaigns=" + id + "&from=2026-08-01&to=2026-08-31",
+		"/v1/internal/hub/campaigns/" + id,
+		"/v1/internal/hub/campaigns/" + id + "/daily-summary?from=2026-08-01&to=2026-08-31",
+		// as dez do checking
+		"/v1/internal/hub/campaigns/" + id + "/materials",
+		"/v1/internal/hub/campaigns/" + id + "/distribution-rules",
+		"/v1/internal/hub/campaigns/" + id + "/pricing",
+		"/v1/internal/hub/clients/" + id + "/materials",
+		"/v1/internal/hub/clients/" + id + "/target-pmm",
+		"/v1/internal/hub/stations?ids=" + id,
+		"/v1/internal/hub/material-types",
+		"/v1/internal/hub/detections?campaign_id=" + id,
+		"/v1/internal/hub/detections/" + id + "/evidence",
+		"/v1/internal/hub/reports/campaigns/" + id + "/consolidated.csv",
+	}
+}
+
+// TestRotasHub_AsRotasDeLeituraEstaoRegistradas enumera o que o chi REALMENTE
+// registrou, e é o único teste deste arquivo que prova EXISTÊNCIA.
+//
+// ⚠️ Nenhum código de status prova isso. Um caminho inventado sob `/hub/`
+// responde **401**, não 404, porque o `RequireHubKeyScoped` é middleware do
+// grupo e roda antes do roteamento interno dele. Medido em produção em
+// 2026-09-14: `/v1/internal/hub/detections` respondia 401 numa versão que não
+// tinha essa rota. Um teste de 401 para uma rota que não existe passa —
+// exatamente o falso verde que este aqui fecha.
+//
+// De quebra, ele prova o NOME do parâmetro: o padrão registrado aparece
+// literal, então `{campaignID}` trocado por `{id}` falha aqui em vez de virar
+// um 400 "invalid campaignID" eterno em produção.
+func TestRotasHub_AsRotasDeLeituraEstaoRegistradas(t *testing.T) {
+	h := routerComHub(t)
+	r, ok := h.(Router)
+	require.True(t, ok, "NewRouter deve devolver api.Router para o mux ser enumerável")
+
+	registradas := map[string]bool{}
+	require.NoError(t, chi.Walk(r.Mux, func(metodo, rota string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		registradas[metodo+" "+rota] = true
+		return nil
+	}))
+
+	esperadas := []string{
+		// as três da Central consolidada
+		"GET /v1/internal/hub/insights",
+		"GET /v1/internal/hub/campaigns/{id}",
+		"GET /v1/internal/hub/campaigns/{campaignID}/daily-summary",
+		// as dez do módulo Checking
+		"GET /v1/internal/hub/campaigns/{campaignID}/materials",
+		"GET /v1/internal/hub/campaigns/{campaignID}/distribution-rules",
+		"GET /v1/internal/hub/campaigns/{campaignID}/pricing",
+		"GET /v1/internal/hub/clients/{clientID}/materials",
+		"GET /v1/internal/hub/clients/{clientID}/target-pmm",
+		"GET /v1/internal/hub/stations",
+		"GET /v1/internal/hub/material-types",
+		"GET /v1/internal/hub/detections",
+		"GET /v1/internal/hub/detections/{id}/evidence",
+		"GET /v1/internal/hub/reports/campaigns/{id}/consolidated.csv",
+	}
+	for _, e := range esperadas {
+		require.True(t, registradas[e], "rota não registrada no grupo /hub: %s", e)
+	}
+}
+
+// TestRotasHub_TodaLeituraExigeChaveEClienteLigado é o teste que impede uma
+// rota nova de entrar no grupo sem a guarda.
+//
+// ⚠️ Ele NÃO prova que a rota existe — ver o teste acima. Prova que ninguém
+// sem a chave, e ninguém de outro cliente, atravessa. As duas coisas juntas é
+// que fecham a porta.
+//
+// Nenhum caso aqui chega ao handler: o middleware responde antes. É de
+// propósito — os handlers deste arquivo são structs vazios, com repositório
+// nil, e MaterialTypes.List vai direto ao repo sem validar nada. Uma
+// requisição bem-sucedida aqui seria panic, não asserção.
+func TestRotasHub_TodaLeituraExigeChaveEClienteLigado(t *testing.T) {
+	h := routerComHub(t)
+	id := uuid.NewString()
+	for _, c := range caminhosDeLeitura(id) {
+		// Sem chave: 401, e NUNCA 404 — 404 aqui diria "esta rota não existe",
+		// que é informação para quem sonda.
+		require.Equal(t, http.StatusUnauthorized, pede(t, h, c, "", "hub-ok").Code, c)
+		// Chave boa, cliente não ligado a nenhum tenant daqui: 403.
+		require.Equal(t, http.StatusForbidden, pede(t, h, c, "chave-boa", "hub-alheio").Code, c)
+		// Chave boa, sem o header de cliente: 400.
+		require.Equal(t, http.StatusBadRequest, pede(t, h, c, "chave-boa", "").Code, c)
+	}
 }
 
 func TestRotasHub_OInsightsForcaOClienteDoEscopo(t *testing.T) {
