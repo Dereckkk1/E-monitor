@@ -232,3 +232,108 @@ func TestHubSync_NaoCasaPorEmail(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.True(t, ativoNoBanco(t, ctx, pool, id))
 }
+
+func TestUpsertCliente_CNPJComMascaraCasaComCNPJSemMascara(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	// O cliente que JA existe aqui, com o CNPJ em digitos puros e sem hub_id.
+	var existente string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO clients (name, cnpj) VALUES ($1,$2) RETURNING id`,
+		"Acme", "12345678000190").Scan(&existente); err != nil {
+		t.Fatalf("semear: %v", err)
+	}
+
+	// O hub manda o MESMO CNPJ, com mascara — e como um humano digitou la.
+	rec, req := pedidoSync(`{"eventId":"e1","event":"client.upsert","data":{
+		"hubClientId":"hub-1","name":"Acme","cnpj":"12.345.678/0001-90"}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	// ⚠️ O defeito: hoje nasce um SEGUNDO cliente, e o hub_id vai para ele.
+	if n != 1 {
+		t.Fatalf("esperava 1 cliente, achei %d — a mascara criou duplicata", n)
+	}
+
+	var hubID *string
+	if err := pool.QueryRow(ctx, `SELECT hub_id FROM clients WHERE id=$1`, existente).Scan(&hubID); err != nil {
+		t.Fatal(err)
+	}
+	if hubID == nil || *hubID != "hub-1" {
+		t.Errorf("o hub_id nao foi carimbado no cliente que ja existia: %v", hubID)
+	}
+}
+
+func TestUpsertCliente_CNPJSemMascaraCasaComCNPJComMascara(t *testing.T) {
+	// O sentido INVERSO: o cadastro local e que tem mascara.
+	ctx, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO clients (name, cnpj) VALUES ($1,$2)`, "Acme", "12.345.678/0001-90"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, req := pedidoSync(`{"eventId":"e1","event":"client.upsert","data":{
+		"hubClientId":"hub-1","name":"Acme","cnpj":"12345678000190"}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("esperava 1 cliente, achei %d — a normalizacao so funciona num sentido", n)
+	}
+}
+
+func TestUpsertCliente_CNPJDiferenteNaoJunta(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO clients (name, cnpj) VALUES ($1,$2)`, "Acme", "12345678000190"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, req := pedidoSync(`{"eventId":"e1","event":"client.upsert","data":{
+		"hubClientId":"hub-1","name":"Outra","cnpj":"99.999.999/9999-99"}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`).Scan(&n)
+	// ⚠️ Normalizar NAO pode passar a juntar quem e diferente. Este e o teste
+	// que impede o conserto de virar um defeito pior que o original: juntar
+	// cliente errado e a unica falha aqui que vaza dado de um para outro.
+	if n != 2 {
+		t.Fatalf("esperava 2 clientes, achei %d — a normalizacao juntou quem nao devia", n)
+	}
+}
+
+func TestUpsertCliente_CNPJVazioNaoJuntaComNinguem(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	// Dois clientes locais SEM cnpj. Se a normalizacao tratar "" como valor,
+	// eles casariam entre si e com qualquer evento sem cnpj.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO clients (name, cnpj) VALUES ($1,NULL), ($2,'')`, "Um", "Dois"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, req := pedidoSync(`{"eventId":"e1","event":"client.upsert","data":{
+		"hubClientId":"hub-1","name":"Terceiro"}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("esperava 3 clientes, achei %d — cnpj vazio virou chave de juncao", n)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -177,6 +178,34 @@ type dadosCliente struct {
 //
 // É isto que destrava o `client_not_provisioned` do §8.1 — o erro que hoje barra
 // todo usuário de cliente cuja empresa ainda não tem `hub_id` carimbado.
+
+// soDigitos deixa so os algarismos.
+//
+// Existe porque o hub grava o CNPJ COMO FOI DIGITADO — nao ha normalizacao do
+// outro lado — e comparar "12.345.678/0001-90" com "12345678000190" falha. O
+// passo 2 entao erra, cai no passo 3 e CRIA um cliente duplicado, com o hub_id
+// no duplicado e o cadastro real orfao.
+//
+// Hoje o estrago fica contido neste banco. No dia em que o retrato periodico do
+// hub ligar, cada duplicata vira um inquilino a mais no portal — e e por isso
+// que este conserto tem de vir ANTES dele.
+func soDigitos(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func (h *HubSyncHandler) upsertCliente(w http.ResponseWriter, r *http.Request, env syncEnvelope) {
 	var d dadosCliente
 	if err := json.Unmarshal(env.Data, &d); err != nil || d.HubClientID == "" || d.Name == "" {
@@ -209,11 +238,12 @@ func (h *HubSyncHandler) upsertCliente(w http.ResponseWriter, r *http.Request, e
 	// defeito que a §9.5 registrou no importador: um cliente renomeado no
 	// E-monitor virava um cliente novo no hub, em silêncio. CNPJ é identidade;
 	// nome é rótulo.
-	if d.CNPJ != nil && *d.CNPJ != "" {
+	if digitos := soDigitos(deref(d.CNPJ)); digitos != "" {
 		err = h.db.QueryRow(r.Context(), `
 			UPDATE clients SET hub_id=$1, name=$2, is_active=$3, updated_at=NOW()
-			 WHERE cnpj=$4 AND hub_id IS NULL RETURNING id`,
-			d.HubClientID, d.Name, ativo, *d.CNPJ).Scan(&id)
+			 WHERE regexp_replace(COALESCE(cnpj,''), '\D', '', 'g') = $4
+			   AND hub_id IS NULL RETURNING id`,
+			d.HubClientID, d.Name, ativo, digitos).Scan(&id)
 		if err == nil {
 			h.responde(w, &id)
 			return
