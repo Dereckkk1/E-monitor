@@ -25,6 +25,11 @@
 -- Não importa qual dos dois tem mais campanhas: elas vão todas para o mesmo
 -- lugar de qualquer forma.
 --
+-- ⚠️ **E não importa de que lado está o `hub_id`.** As duas metades da ponte
+-- são carimbadas por caminhos diferentes e podem discordar — foi o caso do
+-- Panvel em 2026-09-16. O passo 0 consolida o carimbo no sobrevivente, e o
+-- resultado é que as duas metades passam a concordar.
+--
 -- ## COMO RODAR
 --
 -- 1. Preencha os dois ids no bloco `parametros` abaixo.
@@ -63,6 +68,8 @@ DECLARE
   n_sai int;
   cnpj_fica text;
   cnpj_sai text;
+  hub_fica text;
+  hub_sai text;
 BEGIN
   SELECT * INTO p FROM parametros;
 
@@ -86,10 +93,28 @@ BEGIN
     RAISE EXCEPTION 'CNPJs DIFERENTES (% vs %) — estes dois nao sao a mesma empresa', cnpj_fica, cnpj_sai;
   END IF;
 
-  -- ⚠️ O que some não pode ser o que o hub aponta: seria quebrar o vínculo.
-  IF EXISTS (SELECT 1 FROM clients WHERE id = p.sai AND hub_id IS NOT NULL)
-     AND NOT EXISTS (SELECT 1 FROM clients WHERE id = p.fica AND hub_id IS NOT NULL) THEN
-    RAISE EXCEPTION 'o cliente que SOME tem hub_id e o que FICA nao — voce inverteu os dois ids';
+  /* ⚠️ Só o caso genuinamente ambíguo aborta: os DOIS carimbados, com valores
+   * DIFERENTES. Aí há dois clientes no hub disputando, e escolher um em
+   * silêncio deixaria o outro apontando para um id apagado.
+   *
+   * A versão anterior desta guarda barrava também "o `hub_id` está no que SAI"
+   * e chamava isso de ids invertidos. Estava errado, e o Panvel provou em
+   * 2026-09-16: o hub apontava para um cadastro e o `hub_id` estava no outro.
+   * As duas metades da ponte são carimbadas por caminhos diferentes — o
+   * `emonitorClientId` pela carga de importação, o `hub_id` pelo
+   * `client.upsert` — e com a comparação literal de CNPJ cada uma escolheu um
+   * duplicado. Isso não é erro de digitação de quem roda o script: é o próprio
+   * defeito que a fusão vem consertar, e o passo 0 abaixo o resolve. */
+  SELECT hub_id INTO hub_fica FROM clients WHERE id = p.fica;
+  SELECT hub_id INTO hub_sai  FROM clients WHERE id = p.sai;
+  IF hub_fica IS NOT NULL AND hub_sai IS NOT NULL AND hub_fica <> hub_sai THEN
+    RAISE EXCEPTION
+      'os DOIS tem hub_id e sao diferentes (% e %) — ha dois clientes no hub para esta empresa, e juntar aqui deixaria um deles apontando para um id apagado. Resolva no hub primeiro.',
+      hub_fica, hub_sai;
+  END IF;
+
+  IF hub_fica IS NULL AND hub_sai IS NOT NULL THEN
+    RAISE NOTICE 'o hub_id (%) esta no cadastro que SAI — o passo 0 vai move-lo para o que FICA', hub_sai;
   END IF;
 
   RAISE NOTICE 'guardas ok: mesmo CNPJ (%), os dois existem', cnpj_fica;
@@ -117,6 +142,36 @@ SELECT 'ANTES' AS momento, c.id, c.name, c.cnpj, c.hub_id,
 -- │  `clients(id)`. A mesma consulta confirmou que NÃO existe coluna com      │
 -- │  cara de `client_id` sem FK — ou seja, não há tabela escondida.           │
 -- ╰──────────────────────────────────────────────────────────────────────────╯
+
+-- 0) O `hub_id` — a ponte com o E-Hub — antes de qualquer outra coisa.
+--
+--    ⚠️ ANULAR no que sai ANTES de gravar no que fica, e nunca o contrário: a
+--    coluna é UNIQUE (`clients_hub_id_key`) e os dois cadastros coexistem até o
+--    DELETE lá no fim. Gravar primeiro violaria a unicidade e abortaria tudo.
+--
+--    COALESCE: se o que fica já tem o carimbo, ele permanece — a guarda acima
+--    já garantiu que, se os dois têm, são o mesmo valor.
+--
+--    Sem este passo, fundir o Panvel apagaria o único cadastro que o E-monitor
+--    sabia ligar ao hub, e o SSO de quem trabalha nele passaria a responder
+--    `client_not_provisioned` — o erro do §8.1, que é justamente o que a ponte
+--    existe para evitar.
+--    ⚠️ CAPTURAR ANTES DE ANULAR. A primeira versao deste passo anulava o
+--    `hub_id` do que sai e so depois tentava le-lo para gravar no que fica —
+--    lendo, claro, o NULL que ela mesma acabara de escrever. A ponte sumia em
+--    silencio, e o SSO de quem trabalha naquele cliente passaria a responder
+--    `client_not_provisioned`. So o teste contra Postgres pegou.
+CREATE TEMP TABLE ponte ON COMMIT DROP AS
+SELECT COALESCE(
+         (SELECT c.hub_id FROM clients c, parametros p WHERE c.id = p.fica),
+         (SELECT c.hub_id FROM clients c, parametros p WHERE c.id = p.sai)
+       ) AS hub_id;
+
+UPDATE clients SET hub_id = NULL
+ WHERE id = (SELECT sai FROM parametros) AND hub_id IS NOT NULL;
+
+UPDATE clients SET hub_id = (SELECT hub_id FROM ponte)
+ WHERE id = (SELECT fica FROM parametros);
 
 -- 1) Usuários. O gatilho `trg_sync_user_primary_client` dispara neste UPDATE e
 --    INSERE (usuario, fica) em `user_clients` com ON CONFLICT DO NOTHING. Ele
