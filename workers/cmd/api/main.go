@@ -537,6 +537,7 @@ func main() {
 		Repo:       campaigns,
 		Supervisor: sup,
 		Log:        logger,
+		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
 	}
 
 	deps := api.Deps{

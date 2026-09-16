@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/hub"
 )
 
 // validStatuses lists the four lifecycle states accepted by the ?status= filter.
@@ -28,6 +30,10 @@ type CampaignsHandler struct {
 	Repo       *catalog.Campaigns
 	Supervisor CampaignSupervisor
 	Log        *zap.Logger // optional; used to surface Pause/Start/Reload failures
+	// Hub é opcional: nil ou não configurado significa "esta instalação não
+	// avisa o hub", e a criação de campanha segue igual. É o mesmo portão que
+	// o SSO já usa, e é o que faz dev e teste não baterem em produção.
+	Hub *hub.Client
 }
 
 // CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
@@ -128,6 +134,7 @@ func (h *CampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", 500)
 		return
 	}
+	avisarHubDaCampanha(h.Hub, out)
 	writeJSON(w, 201, out)
 }
 
@@ -461,4 +468,48 @@ func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(204)
+}
+
+// avisarHubDaCampanha manda `campanha.upsert` FORA do caminho da resposta.
+//
+// # Por que goroutine, e por que context.Background
+//
+// A criação da campanha NÃO PODE depender do hub estar de pé. E o `r.Context()`
+// morre quando a resposta é escrita: usá-lo cancelaria a emissão no exato
+// instante em que ela começa — defeito intermitente e silencioso, a pior
+// combinação possível.
+//
+// # O preço desta escolha, escrito para quem for mexer
+//
+// Evento perdido é campanha que nunca chega ao hub, e não há nada em tela
+// nenhuma dizendo que falta alguma. Quem conserta isso é o retrato periódico
+// do §5 do desenho, que não está construído. Até lá, isto é atraso invisível,
+// não erro visível.
+func avisarHubDaCampanha(h *hub.Client, c *catalog.Campaign) {
+	if h == nil || !h.Configured() || c == nil {
+		return
+	}
+	// Os campos são copiados AQUI, síncrono, de propósito: a goroutine não
+	// pode ler `c` depois que o handler seguiu adiante e talvez o alterou.
+	dados := hub.CampanhaUpsert{
+		IDNaPlataforma:        c.ID.String(),
+		IDClienteNaPlataforma: c.ClientID.String(),
+	}
+	id := c.ID.String()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.Emitir(ctx, "campanha.upsert", dados); err != nil {
+			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
+			// seria inventar uma fila sem durabilidade.
+			//
+			// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
+			// `recat_failures.go` — o outro fire-and-forget deste pacote — já
+			// documenta: os handlers não carregam logger próprio, e o log
+			// estruturado é o que o resto da casa consulta. Só o
+			// `campaign_id` e o erro; o payload NÃO vai para o log.
+			zap.L().Error("hub: campanha.upsert falhou",
+				zap.String("campaign_id", id), zap.Error(err))
+		}
+	}()
 }
