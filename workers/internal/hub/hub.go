@@ -215,6 +215,19 @@ type ClienteUpsert struct {
 	UF              *string `json:"uf,omitempty"`
 }
 
+// CampanhaUpsert são os DOIS ids que a porta do hub lê. Só ids, de propósito:
+// o hub busca nome, datas e status em `GET /v1/internal/hub/campaigns/{id}`,
+// com a chave que ele já tem.
+//
+// ⚠️ Mandar os dados aqui criaria uma SEGUNDA fonte da verdade para nome, datas
+// e status — e quando ela divergisse da primeira (evento perdido, retentativa
+// fora de ordem) não haveria como saber qual está certa. Buscando, o hub lê
+// sempre o estado atual.
+type CampanhaUpsert struct {
+	IDNaPlataforma        string `json:"idNaPlataforma"`
+	IDClienteNaPlataforma string `json:"idClienteNaPlataforma"`
+}
+
 type envelopeEvento struct {
 	Tipo       string `json:"tipo"`
 	OcorridoEm string `json:"ocorridoEm"`
