@@ -165,20 +165,6 @@ type dadosCliente struct {
 	Active      *bool   `json:"active"`
 }
 
-// upsertCliente materializa o tenant que o hub acabou de criar ou editar.
-//
-// **Aqui o E-monitor CRIA, e no SSO ele não cria — e a diferença é deliberada.**
-// O `criarPorJit` recusa inventar um cliente porque lá a informação chega no meio
-// do login de alguém, como efeito colateral de um clique: adivinhar um tenant ali
-// geraria cliente fantasma que ninguém pediu. Este evento é o oposto — alguém
-// habilitou o produto para aquele cliente no admin do hub, deliberadamente. O
-// §9.3 manda "criar com defaults mínimos se não existir", e é barato: `clients`
-// só exige `name`. Contrato, PMM alvo e regras de distribuição continuam vazios
-// e continuam sendo preenchidos por aqui, como sempre foram.
-//
-// É isto que destrava o `client_not_provisioned` do §8.1 — o erro que hoje barra
-// todo usuário de cliente cuja empresa ainda não tem `hub_id` carimbado.
-
 // soDigitos deixa so os algarismos.
 //
 // Existe porque o hub grava o CNPJ COMO FOI DIGITADO — nao ha normalizacao do
@@ -206,6 +192,19 @@ func deref(s *string) string {
 	return *s
 }
 
+// upsertCliente materializa o tenant que o hub acabou de criar ou editar.
+//
+// **Aqui o E-monitor CRIA, e no SSO ele não cria — e a diferença é deliberada.**
+// O `criarPorJit` recusa inventar um cliente porque lá a informação chega no meio
+// do login de alguém, como efeito colateral de um clique: adivinhar um tenant ali
+// geraria cliente fantasma que ninguém pediu. Este evento é o oposto — alguém
+// habilitou o produto para aquele cliente no admin do hub, deliberadamente. O
+// §9.3 manda "criar com defaults mínimos se não existir", e é barato: `clients`
+// só exige `name`. Contrato, PMM alvo e regras de distribuição continuam vazios
+// e continuam sendo preenchidos por aqui, como sempre foram.
+//
+// É isto que destrava o `client_not_provisioned` do §8.1 — o erro que hoje barra
+// todo usuário de cliente cuja empresa ainda não tem `hub_id` carimbado.
 func (h *HubSyncHandler) upsertCliente(w http.ResponseWriter, r *http.Request, env syncEnvelope) {
 	var d dadosCliente
 	if err := json.Unmarshal(env.Data, &d); err != nil || d.HubClientID == "" || d.Name == "" {
