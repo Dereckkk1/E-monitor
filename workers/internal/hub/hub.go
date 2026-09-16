@@ -194,3 +194,81 @@ func AsError(err error) (*Error, bool) {
 
 // String é usado só em log/diagnóstico; nunca inclui o código nem a chave.
 func (e *Error) String() string { return fmt.Sprintf("hub: %d %s", e.Status, e.Message) }
+
+// ── A porta de eventos do hub (desenho de 2026-09-16) ───────────────────────
+
+// ClienteUpsert são os campos que a porta do hub lê.
+//
+// ⚠️ Todo campo opcional é ponteiro COM `omitempty`, e isso é o contrato, não
+// estilo: do outro lado, campo ausente significa "não falei dele" e campo
+// presente significa "é este o valor de hoje". Um `string` comum viajaria como
+// `""` e diria ao hub que o cliente não tem cidade.
+type ClienteUpsert struct {
+	IDNaPlataforma  string  `json:"idNaPlataforma"`
+	Nome            string  `json:"nome"`
+	CNPJ            *string `json:"cnpj,omitempty"`
+	LogoURL         *string `json:"logoUrl,omitempty"`
+	ContatoNome     *string `json:"contatoNome,omitempty"`
+	ContatoEmail    *string `json:"contatoEmail,omitempty"`
+	ContatoTelefone *string `json:"contatoTelefone,omitempty"`
+	Cidade          *string `json:"cidade,omitempty"`
+	UF              *string `json:"uf,omitempty"`
+}
+
+type envelopeEvento struct {
+	Tipo       string `json:"tipo"`
+	OcorridoEm string `json:"ocorridoEm"`
+	Dados      any    `json:"dados"`
+}
+
+// Emitir avisa o hub de uma mutação que aconteceu AQUI — o sentido oposto do
+// que o `hubsync.go` recebe.
+//
+// `ocorridoEm` é carimbado aqui, em UTC, e é a guarda de ORDEM do hub: sem ele
+// um retrato antigo sobrescreveria um dado novo. Não é auditoria.
+//
+// ⚠️ O hub recusa `ocorridoEm` mais de 5 minutos no futuro. Relógio da VM
+// adiantado faz TODA emissão voltar 400 — e o sintoma (nada chega ao hub) não
+// aponta para o relógio.
+func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
+	if !c.Configured() {
+		return ErrNotConfigured
+	}
+
+	body, err := json.Marshal(envelopeEvento{
+		Tipo:       tipo,
+		OcorridoEm: time.Now().UTC().Format(time.RFC3339),
+		Dados:      dados,
+	})
+	if err != nil {
+		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/api/platform/events", bytes.NewReader(body))
+	if err != nil {
+		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return &Error{
+			Status:  http.StatusBadGateway,
+			Message: "não foi possível falar com a Central de Clientes",
+		}
+	}
+	defer resp.Body.Close()
+	// Drena o corpo antes de fechar: sem isto a conexão não volta para o pool
+	// keep-alive, e cada cliente criado abre um socket novo.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+
+	if resp.StatusCode != http.StatusOK {
+		return &Error{
+			Status:  resp.StatusCode,
+			Message: fmt.Sprintf("a Central de Clientes recusou o evento %s", tipo),
+		}
+	}
+	return nil
+}
