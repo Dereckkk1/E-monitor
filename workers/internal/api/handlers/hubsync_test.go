@@ -337,3 +337,45 @@ func TestUpsertCliente_CNPJVazioNaoJuntaComNinguem(t *testing.T) {
 		t.Fatalf("esperava 3 clientes, achei %d — cnpj vazio virou chave de juncao", n)
 	}
 }
+
+// TestUpsertCliente_ExistenteSemCNPJNaoCasaComEventoComCNPJ exercita o
+// COALESCE(cnpj,”) do lado do SQL.
+//
+// O irmao acima (CNPJVazioNaoJuntaComNinguem) prova a guarda do lado GO: quando
+// o EVENTO nao traz cnpj, a consulta nem roda. Este prova o outro sentido, que
+// so o SQL defende: o evento TRAZ cnpj e quem esta no banco tem NULL. Sem o
+// COALESCE, `regexp_replace(NULL, ...)` devolve NULL, a comparacao vira NULL
+// (nem verdadeiro nem falso) e a linha simplesmente nao casa — que por sorte e
+// o resultado certo. Mas e por sorte, e sorte nao se testa: um dia alguem troca
+// o operador por `IS NOT DISTINCT FROM` e o NULL passa a casar com tudo.
+func TestUpsertCliente_ExistenteSemCNPJNaoCasaComEventoComCNPJ(t *testing.T) {
+	ctx, pool := poolDeTeste(t)
+	h := NewHubSyncHandler(pool, hubConfigurado())
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO clients (name, cnpj) VALUES ($1, NULL)`, "Sem CNPJ"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, req := pedidoSync(`{"eventId":"e1","event":"client.upsert","data":{
+		"hubClientId":"hub-1","name":"Acme","cnpj":"12.345.678/0001-90"}}`, chaveDeTeste)
+	h.Receive(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM clients`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("esperava 2 clientes, achei %d — o NULL casou com um cnpj real", n)
+	}
+
+	// E o que ja estava la continua sem vinculo: o hub_id foi para o novo.
+	var vinculado int
+	_ = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM clients WHERE name='Sem CNPJ' AND hub_id IS NULL`).Scan(&vinculado)
+	if vinculado != 1 {
+		t.Errorf("o cliente sem cnpj foi carimbado indevidamente")
+	}
+}
