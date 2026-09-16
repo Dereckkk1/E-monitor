@@ -541,7 +541,7 @@ func main() {
 
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
-		Clients:      &handlers.ClientsHandler{Repo: clients},
+		Clients:      &handlers.ClientsHandler{Repo: clients, Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, CampaignRepo: campaigns, Storage: s3Client, SummaryRepo: dailySumRepo},
