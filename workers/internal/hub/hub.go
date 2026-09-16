@@ -262,9 +262,22 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 	defer resp.Body.Close()
 	// Drena o corpo antes de fechar: sem isto a conexão não volta para o pool
 	// keep-alive, e cada cliente criado abre um socket novo.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	//
+	// ⚠️ SEM `io.LimitReader`, ao contrário do `Exchange`. Lá o limite protege a
+	// memória, porque o corpo é lido com `io.ReadAll` e alocado inteiro. Aqui o
+	// destino é `io.Discard` e o `io.Copy` usa buffer fixo — não há o que
+	// limitar. E limitar seria contraproducente: um corpo maior que o teto (a
+	// página de erro HTML de um proxy mal configurado, por exemplo) pararia no
+	// meio, a conexão não seria reaproveitada, e o drain deixaria de cumprir a
+	// única razão de existir. O teto real é o `Timeout` do `http.Client`.
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		// Ao contrário do `Exchange`, SEM tradução por status. Lá o erro vira a
+		// tela que alguém vê no meio de um login, então 401 vira 503 e 410 vira
+		// "link expirado". Aqui ninguém está esperando: pelo §5 do desenho, a
+		// criação do cliente nunca falha por causa disto e o erro só vai para
+		// log. Traduzir esconderia do log o status que o hub de fato devolveu.
 		return &Error{
 			Status:  resp.StatusCode,
 			Message: fmt.Sprintf("a Central de Clientes recusou o evento %s", tipo),
