@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
@@ -275,7 +275,14 @@ func avisarHubDoCliente(h *hub.Client, c *catalog.Client) {
 		if err := h.Emitir(ctx, "cliente.upsert", dados); err != nil {
 			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
 			// seria inventar uma fila sem durabilidade.
-			log.Printf("hub: cliente.upsert falhou para %s: %v", id, err)
+			//
+			// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
+			// `recat_failures.go` — o outro fire-and-forget deste pacote — já
+			// documenta: os handlers não carregam logger próprio, e o log
+			// estruturado é o que o resto da casa consulta. Só o `client_id`
+			// e o erro; o payload NÃO vai para o log.
+			zap.L().Error("hub: cliente.upsert falhou",
+				zap.String("client_id", id), zap.Error(err))
 		}
 	}()
 }
