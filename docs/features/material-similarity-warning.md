@@ -3,10 +3,15 @@ status: implementado
 ultima-verificacao: 2026-06-18
 codigo-relacionado:
   - workers/internal/similarity/similarity.go
+  - workers/internal/similarity/segments.go
+  - workers/internal/similarity/overlap.go
   - workers/internal/similarity/similarity_test.go
   - workers/internal/similarity/dense_audio_test.go
   - migrations/0025_material_similarity.up.sql
+  - migrations/0040_similarity_segments.up.sql
   - frontend/src/components/SimilarityWarningModal.jsx
+  - frontend/src/components/SimilarityTimeline.jsx
+  - frontend/src/components/SimilarityHeadsUp.jsx
 ---
 
 # Material Similarity Warning
@@ -177,6 +182,46 @@ test songs from 55% → 0% while a real 30s subset stays at 100%. Regression
 guard: `dense_audio_test.go` (synthetic broadband noise reproduces the
 false positive at 100% with the guard off, 0% with it on; a real subset stays
 ≥90%).
+
+## Timeline de sobreposição (2026-06-18)
+
+Além do score, o scan agora persiste **onde** os dois materiais batem, pra
+desenhar uma timeline no upload. Spec:
+[docs/superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md](../superpowers/specs/2026-06-18-similarity-overlap-timeline-design.md).
+
+- **Trechos por eixo (merge):** `runScan` acumula os ranges casados em cada
+  eixo (`ownRanges`/`otherRanges`). `mergeRegionsSec` (`segments.go`) funde a
+  união mínima de cada eixo, clampa em [0, duração] e converte pra segundos →
+  duas listas independentes (`own_segments`, `other_segments`).
+  **Por que por-eixo e não pares `own↔other`:** o offset estimado por janela é
+  ruidoso (variantes com ruído), então parear fragmentava material idêntico em
+  vários segmentos e dobrava o total. Como a timeline não tem conectores, a
+  união por eixo é o modelo certo — limpo e consistente com o `cov`.
+- **Persistência:** coluna `materials.similarity_segments` (JSONB, migration
+  0040) guarda `{ own_cov, other_cov, own_duration, other_duration,
+  own_segments, other_segments }` em segundos. O **piso de persistência caiu de
+  0.50 → 0.25** (`PersistThreshold`): abaixo disso a linha fica limpa (`NULL`).
+- **Headline:** o número mostrado é `own_cov` (% do material novo que é igual),
+  não o `max`. O `similarity_score` persistido continua sendo o `max` e é ele
+  que decide o bloqueio.
+- **Dois estados no upload (wizard):**
+  - `score ≥ 0.50` → modal **bloqueante** (`SimilarityWarningModal`) com a
+    timeline embutida (manter/remover).
+  - `0.25 ≤ score < 0.50` → **heads-up não-bloqueante** (`SimilarityHeadsUp`):
+    mesma timeline, uma ação "Entendi, seguir" que sempre prossegue.
+  - `< 0.25` → nada.
+- **Componente:** `SimilarityTimeline.jsx` (duas faixas, trechos iguais em
+  verde) é compartilhado pelos dois estados.
+
+**Limitações conhecidas (verificadas no e2e 2026-06-18):**
+- O `similarity_score` (e portanto a faixa bloqueante/heads-up) ainda pode ser
+  **inflado** por casamentos fantasma além da duração — `coverages()` usa os
+  ranges crus, sem clamp (as `own_segments`/`other_segments` desenhadas, sim,
+  são clampadas). Pré-existente (não introduzido por esta feature); follow-up:
+  clampar os ranges em `coverages()` também, pra a faixa bater com o desenho.
+- Histórico: a 1ª versão pareava `own↔other` por offset e fragmentava material
+  idêntico (11 trechos, total > duração). Trocado por merge-por-eixo
+  (regressão: `TestIdentical_*` no dev; `mergeRegionsSec` nos unit tests).
 
 ## Known limitations / follow-ups
 

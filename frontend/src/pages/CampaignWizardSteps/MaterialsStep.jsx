@@ -8,6 +8,7 @@ import api from '../../api/client'
 import StationAvatar from '../../components/StationAvatar'
 import { useConfirm } from '../../components/ConfirmModal'
 import SimilarityWarningModal from '../../components/SimilarityWarningModal'
+import SimilarityHeadsUp from '../../components/SimilarityHeadsUp'
 
 /**
  * Step 3 of the wizard: link/upload materials to the campaign.
@@ -1235,14 +1236,18 @@ function AddMaterialPanel({
           continue
         }
 
-        // 4. If similarity ≥ threshold AND not ack: block on the modal
-        const needsDecision = verified.similarity_check_status === 'ready' &&
-          verified.similarity_score != null &&
-          verified.similarity_score >= 0.50 &&
-          !verified.similarity_acknowledged_at &&
-          verified.most_similar_material_id
+        // 4. Surface por faixa de similaridade:
+        //    ≥0.50 → modal bloqueante (manter/remover)
+        //    0.25–0.50 → heads-up não-bloqueante (segue sempre)
+        //    <0.25 → nada
+        const score = verified.similarity_check_status === 'ready'
+          ? (verified.similarity_score ?? 0) : 0
+        const hasMatch = !verified.similarity_acknowledged_at && verified.most_similar_material_id
+        const kind = hasMatch && score >= 0.50 ? 'blocking'
+          : hasMatch && score >= 0.25 ? 'headsup'
+          : null
 
-        if (needsDecision) {
+        if (kind) {
           // Fetch the comparison target
           let similar
           try {
@@ -1257,18 +1262,14 @@ function AddMaterialPanel({
           if (similar) {
             setEntryStage(entry.key, 'deciding')
             const decision = await new Promise((resolve) => {
-              setPendingDecision({
-                newMaterial: verified,
-                similarMaterial: similar,
-                resolve,
-              })
+              setPendingDecision({ kind, newMaterial: verified, similarMaterial: similar, resolve })
             })
             setPendingDecision(null)
             if (decision === 'removed') {
               setEntryStage(entry.key, 'removed')
               continue
             }
-            // decision === 'kept' → fall through to link
+            // 'kept' (modal) ou 'continue' (heads-up) → segue pro link
           }
         }
 
@@ -1540,13 +1541,20 @@ function AddMaterialPanel({
         </div>
       </aside>
 
-      {/* ── Blocking similarity decision modal ───────────────────── */}
-      {pendingDecision && (
+      {/* ── Similaridade: bloqueante (≥50%) ou heads-up (25–50%) ── */}
+      {pendingDecision && pendingDecision.kind === 'blocking' && (
         <SimilarityWarningModal
           newMaterial={pendingDecision.newMaterial}
           similarMaterial={pendingDecision.similarMaterial}
           onKept={() => pendingDecision.resolve('kept')}
           onRemoved={() => pendingDecision.resolve('removed')}
+        />
+      )}
+      {pendingDecision && pendingDecision.kind === 'headsup' && (
+        <SimilarityHeadsUp
+          newMaterial={pendingDecision.newMaterial}
+          similarMaterial={pendingDecision.similarMaterial}
+          onContinue={() => pendingDecision.resolve('continue')}
         />
       )}
     </div>
