@@ -35,7 +35,13 @@ func buildOverlapJSON(ownCov, otherCov, ownDur, otherDur float64, ownSegs, other
 		OwnSegments:   ownSegs,
 		OtherSegments: otherSegs,
 	}
-	b, _ := json.Marshal(out) // overlapJSON é sempre serializável
+	// json.Marshal falha em float64 NaN/±Inf, e os valores vêm de divisões em
+	// coverages/framesToSec. Sem tratamento, a coluna receberia bytes vazios
+	// em silêncio. nil aqui é "sem overlap", que o leitor já trata.
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
 	return b
 }
 
