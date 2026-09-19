@@ -22,6 +22,9 @@ export default function SimilarityTimeline({ newTitle, otherTitle, data }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
       <style>{`
+        @media (prefers-reduced-motion: reduce) {
+          .sim-seg { animation: none !important; }
+        }
         @keyframes sim-seg-in {
           from { transform: scaleX(0); opacity: 0; }
           to   { transform: scaleX(1); opacity: 1; }
@@ -105,11 +108,12 @@ function Track({ tag, tagFilled, title, duration, segments }) {
           return (
             <div
               key={i}
+              className="sim-seg"
               title={`${fmtClock(from)} – ${fmtClock(to)} igual`}
               style={{
                 position: 'absolute', top: 0, bottom: 0,
                 left: `${left}%`, width: `${width}%`,
-                background: 'linear-gradient(180deg, #34d399, #10b981)',
+                background: 'var(--c-similarity-match)',
                 boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.35)',
                 transformOrigin: 'left center',
                 animation: `sim-seg-in 360ms cubic-bezier(0.16,1,0.3,1) ${i * 60}ms both`,
@@ -132,7 +136,7 @@ function Track({ tag, tagFilled, title, duration, segments }) {
 
 function Legend({ swatch, children }) {
   const style = swatch === 'match'
-    ? { background: 'linear-gradient(180deg, #34d399, #10b981)' }
+    ? { background: 'var(--c-similarity-match)' }
     : { background: 'repeating-linear-gradient(45deg, var(--c-surface-2) 0, var(--c-surface-2) 3px, var(--c-bg) 3px, var(--c-bg) 6px)', border: '1px solid var(--c-border)' }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
