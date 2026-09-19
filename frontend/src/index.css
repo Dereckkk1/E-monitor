@@ -23,6 +23,7 @@
 
   /* Semânticos */
   --c-success: #16a34a;
+  --c-similarity-match: linear-gradient(180deg, #34d399, #10b981);
   --c-warning: #ca8a04;
   --c-danger: #dc2626;
   --c-info: #0284c7;
