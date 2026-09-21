@@ -2,7 +2,10 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,7 +62,7 @@ func TestConferirCodigoMandaAFormaCanonica(t *testing.T) {
 	var caminho string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		caminho = r.URL.Path
-		_, _ = w.Write([]byte(`{"nome":"x","cliente":{}}`))
+		_, _ = w.Write([]byte(`{"hubCampaignId":"66f0","nome":"x","cliente":{}}`))
 	}))
 	defer srv.Close()
 
@@ -137,23 +140,12 @@ func TestConferirCodigoHubMudoVira503(t *testing.T) {
 	}
 }
 
-// Qualquer outro status do hub é 502: é resposta que chegou e não dá para usar,
-// diferente de resposta que não chegou.
-func TestConferirCodigoOutroStatusVira502(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
+/*
+O 502 ficou para UM caso só: resposta que chegou com 200 e não dá para ler.
 
-	c := New(srv.URL, "chave")
-	_, err := c.ConferirCodigo(context.Background(), "EH-7K4M2X")
-
-	var e *Error
-	if !errors.As(err, &e) || e.Status != http.StatusBadGateway {
-		t.Fatalf("err = %v, quero *Error 502", err)
-	}
-}
-
+	Os outros status viraram 503 — ver `TestConferirCodigoProblemaNossoVira503`
+	e o porquê no comentário de lá.
+*/
 func TestConferirCodigoRespostaIlegivelVira502(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`isto não é json`))
@@ -176,11 +168,134 @@ func TestConferirCodigoSemConfiguracao(t *testing.T) {
 	}
 }
 
-// O `CampanhaUpsert` carrega o código: sem ele o hub IGNORA o evento (§6.1), e
-// a campanha simplesmente não entra — sem erro, sem retentativa.
-func TestCampanhaUpsertCarregaOHubCode(t *testing.T) {
-	e := CampanhaUpsert{IDNaPlataforma: "a", IDClienteNaPlataforma: "b", HubCode: "EH-7K4M2X"}
-	if e.HubCode != "EH-7K4M2X" {
-		t.Fatalf("HubCode = %q", e.HubCode)
+/*
+⚠️ A forma canônica SAI da função. Antes ela era calculada, usada na URL e
+jogada fora — e a justificativa inteira desta task é "o que não funciona é
+gravar cru". Sem isto, quem grava depende de lembrar de chamar `NormalizaCodigo`
+por conta própria, e o trecho da Task 4 no plano, como está escrito, não lembra.
+*/
+func TestConferirCodigoDevolveAFormaCanonica(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"hubCampaignId":"66f0","nome":"x","cliente":{}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "chave")
+	got, err := c.ConferirCodigo(context.Background(), "  eh 7k4m2x ")
+	if err != nil {
+		t.Fatalf("ConferirCodigo: %v", err)
+	}
+	if got.Codigo != "EH-7K4M2X" {
+		t.Fatalf("Codigo = %q, quero a forma canônica", got.Codigo)
+	}
+}
+
+/*
+⚠️ 200 com corpo degenerado NÃO é sucesso.
+
+Sem esta guarda, envelope novo do hub, rota que mudou ou proxy respondendo 200
+com JSON próprio viram `CampanhaDoHub` de campos vazios — e a barreira do §4.4
+falha EM ABERTO: o handler lê `IDNaPlataforma == ""` como "sem ponte, aceita", e
+qualquer código passa, inclusive inexistente.
+*/
+func TestConferirCodigo200DegeneradoVira502(t *testing.T) {
+	for _, corpo := range []string{`null`, `{}`, `{"cliente":null}`, `{"nome":"x"}`, `{"data":{"hubCampaignId":"66f0"}}`} {
+		t.Run(corpo, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(corpo))
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, "chave")
+			_, err := c.ConferirCodigo(context.Background(), "EH-7K4M2X")
+			var e *Error
+			if !errors.As(err, &e) || e.Status != http.StatusBadGateway {
+				t.Fatalf("corpo %s: err = %v, quero *Error 502", corpo, err)
+			}
+		})
+	}
+}
+
+/*
+⚠️ 401, 429 e 5xx são problema NOSSO, não do código digitado — e viram 503,
+como o hub mudo.
+
+O eixo que a tela usa é "é o código dela × é problema nosso", não "resposta
+chegou × não chegou". O hub devolve 401 tanto para chave errada quanto para
+produto desativado em `/admin/catalogo`; e o 429 dele é por IP, ou seja a
+plataforma inteira divide o balde com o job de reemissão. Os dois como 502
+pintariam de vermelho um cadastro perfeito.
+*/
+func TestConferirCodigoProblemaNossoVira503(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, "chave")
+			_, err := c.ConferirCodigo(context.Background(), "EH-7K4M2X")
+			var e *Error
+			if !errors.As(err, &e) || e.Status != http.StatusServiceUnavailable {
+				t.Fatalf("hub deu %d: err = %v, quero *Error 503", status, err)
+			}
+			// O número tem de sobreviver na mensagem, senão o log perde o
+			// diagnóstico — que é a parte legítima do 502 que estava aqui.
+			if !strings.Contains(e.Message, fmt.Sprint(status)) {
+				t.Fatalf("mensagem %q não diz qual status o hub devolveu", e.Message)
+			}
+		})
+	}
+}
+
+/*
+⚠️ A conexão tem de voltar para o pool mesmo quando a resposta não é 200.
+
+O 404 aqui é o caminho NORMAL — é o que acontece toda vez que alguém erra uma
+letra num campo que confere ao sair do foco. Sem drenar o corpo, cada um desses
+queima um socket novo; em produção, com HTTPS, isso é TCP + TLS inteiros por
+tecla errada.
+*/
+func TestConferirCodigoReaproveitaAConexaoNo404(t *testing.T) {
+	novas := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"código não encontrado"}}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			novas++
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	c := New(srv.URL, "chave")
+	for i := 0; i < 5; i++ {
+		_, _ = c.ConferirCodigo(context.Background(), "EH-ZZZZZZ")
+	}
+	if novas != 1 {
+		t.Fatalf("5 chamadas abriram %d conexões, quero 1 — o corpo não está sendo drenado", novas)
+	}
+}
+
+/*
+⚠️ O campo viaja como `hubCode` no JSON, e é disso que a §6.1 depende para o hub
+não IGNORAR o evento. O teste anterior montava a struct e lia o campo de volta —
+isso testa atribuição de struct do Go, não o contrato. Renomear a tag passava
+verde.
+*/
+func TestCampanhaUpsertSerializaOHubCode(t *testing.T) {
+	b, err := json.Marshal(CampanhaUpsert{
+		IDNaPlataforma: "a", IDClienteNaPlataforma: "b", HubCode: "EH-7K4M2X",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, chave := range []string{`"idNaPlataforma":"a"`, `"idClienteNaPlataforma":"b"`, `"hubCode":"EH-7K4M2X"`} {
+		if !strings.Contains(string(b), chave) {
+			t.Fatalf("json = %s, falta %s", b, chave)
+		}
 	}
 }
