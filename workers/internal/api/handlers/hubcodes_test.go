@@ -140,14 +140,45 @@ func TestHubCodes503QuandoOHubNaoResponde(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
-// 401 (chave errada OU produto desmarcado) e 429 (o balde por IP que esta rota
-// divide com o job de reemissão) são problema NOSSO, não do que a pessoa
-// digitou. Âmbar, não vermelho.
-func TestHubCodes401E429ViramAmbar(t *testing.T) {
-	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusBadGateway} {
+// 401 (chave errada OU produto desmarcado), 429 (o balde por IP que esta rota
+// divide com o job de reemissão) e 5xx são problema NOSSO, não do que a pessoa
+// digitou. Todos viram 503 — âmbar, não vermelho.
+func TestHubCodesStatusNossosViramAmbar(t *testing.T) {
+	for _, status := range []int{
+		http.StatusUnauthorized, http.StatusTooManyRequests,
+		http.StatusBadGateway, http.StatusInternalServerError,
+	} {
 		hb, _ := hubFalsoParaCodigo(t, status, `{}`)
 		rec := getHubCode(t, &HubCodesHandler{Hub: hb}, "EH-7K4M2X")
 		require.Equalf(t, http.StatusServiceUnavailable, rec.Code, "status %d do hub", status)
+	}
+}
+
+/*
+⚠️ O 200 MENTIROSO — o quarto status, e o que nenhum teste prendia.
+
+O hub responde 200 com um corpo que não dá para usar: envelope novo
+(`{"data":{…}}`), rota que mudou, proxy respondendo 200 com JSON próprio. A
+guarda do `ConferirCodigo` transforma isso em 502, e é ESSE o status que chega
+à tela — não 503.
+
+Este ecossistema já foi mordido por envelope que quebra contrato de fora e pelo
+200 + index.html da SPA do Pages. O teste existe para o contrato do front ser
+"404 é vermelho, qualquer outro não-200 é âmbar": se alguém escrever
+`status === 503 ? âmbar : erro`, esta é a rota por onde o vermelho errado entra.
+*/
+func TestHubCodes200IlegivelVira502ENaoVermelho(t *testing.T) {
+	for _, corpo := range []string{
+		`{"data":{"nome":"Verão 2026"}}`, // envelope que quebra o contrato
+		`{}`,                             // 200 sem hubCampaignId
+		`nao e json`,
+	} {
+		hb, _ := hubFalsoParaCodigo(t, http.StatusOK, corpo)
+		rec := getHubCode(t, &HubCodesHandler{Hub: hb}, "EH-7K4M2X")
+		require.Equalf(t, http.StatusBadGateway, rec.Code, "corpo %q", corpo)
+		// O que NÃO pode acontecer é virar 404: 404 é o único vermelho, e um
+		// hub com o envelope trocado não é código errado da pessoa.
+		require.NotEqual(t, http.StatusNotFound, rec.Code)
 	}
 }
 
@@ -171,10 +202,25 @@ Este teste é o que impede alguém de apagar o deadline local achando que o do
 cliente basta.
 */
 func TestHubCodesNaoEsperaOTimeoutDoCliente(t *testing.T) {
+	/* Aceita a conexão e NUNCA responde — é exatamente isso que o teste mede.
+
+	   ⚠️ O `solta` não é enfeite: `httptest.Server.Close()` ESPERA os handlers
+	   em voo terminarem, então um handler parado aqui faz o teste custar o
+	   tempo inteiro da espera. E esperar só por `r.Context().Done()` NÃO basta
+	   — medido nesta máquina em 2026-09-21: a requisição que o emissor dispara
+	   em goroutine não teve o contexto cancelado quando o cliente desistiu, e o
+	   pacote passou de 284s para estourar o timeout de 2 min.
+
+	   Os defers são LIFO: o `close(solta)` roda ANTES do `Close()`. */
+	solta := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(30 * time.Second) // aceita a conexão e nunca responde
+		select {
+		case <-solta:
+		case <-r.Context().Done():
+		}
 	}))
 	defer srv.Close()
+	defer close(solta)
 
 	comecou := time.Now()
 	rec := getHubCode(t, &HubCodesHandler{Hub: hub.New(srv.URL, "chave")}, "EH-7K4M2X")

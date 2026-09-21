@@ -555,16 +555,17 @@ func main() {
 		// ambiente nova — e portanto nenhuma linha nova no bloco `environment:`
 		// do compose para alguem esquecer, que foi o 503 do PR #8.
 		HubSync:      handlers.NewHubSyncHandler(pool, hub.New(cfg.HubURL, cfg.HubPlatformKey)),
-		// A conferencia do codigo da campanha para a tela (spec do hub
-		// 2026-09-18 §4.3). Mesma chave e mesma origem das outras pontes —
-		// nenhuma variavel de ambiente nova.
-		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		// A porta de LEITURA do hub (Central consolidada, spec 2026-09-02
 		// §5.3): mesma chave e mesma origem das duas linhas acima — uma
 		// configuracao so para os tres sentidos da ponte, e por isso tambem
 		// sem variavel de ambiente nova.
 		HubClient:    hub.New(cfg.HubURL, cfg.HubPlatformKey),
 		HubClients:   catalog.NewHubClients(pool),
+		// A conferencia do codigo da campanha para a TELA (spec do hub
+		// 2026-09-18 §4.3) — o quarto sentido da ponte, e o unico em que o
+		// pedido nasce no navegador. Mesma chave das linhas acima, e por isso
+		// tambem sem variavel de ambiente nova.
+		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		// Fecha a janela de 8h em que um usuario desativado seguia usando o
 		// sistema com o token que ja tinha — vale tanto para o `user.deactivate`
 		// do hub quanto para o botao de bloqueio do /admin/monitoring, cujo

@@ -488,11 +488,16 @@ func NewRouter(d Deps) http.Handler {
 				// Edita o trio básico (name, start_date, end_date) — usado
 				// pelo Step 1 do wizard em modo edit. client_id continua imutável.
 				r.Put("/campaigns/{id}", d.Campaigns.Update)
-
+				r.Put("/campaigns/{id}/stations", d.Campaigns.UpdateStations)
+				// CPM fixo opcional, setado no Step 6 (pricing) do wizard.
+				// Sobrescreve o CPM derivado nas telas de exibição.
+				r.Put("/campaigns/{id}/fixed-cpm", d.Campaigns.UpdateFixedCPM)
+				r.Delete("/campaigns/{id}", d.Campaigns.Delete)
 				/* A conferência do código do hub para a TELA (spec do hub
-				   2026-09-18 §4.3). Fica aqui, ao lado do POST /campaigns, e não
-				   no subgrupo A: quem precisa dela é quem CADASTRA campanha, e
-				   esse é o mesmo par de papéis do POST logo acima.
+				   2026-09-18 §4.3). Fica no bloco de ESCRITA de campanha, e não
+				   no subgrupo A: quem precisa dela é quem cadastra campanha, e
+				   esse é exatamente o par de papéis do `POST /campaigns` deste
+				   mesmo bloco.
 
 				   ⚠️ E ela NÃO pode ir para o subgrupo viewer. A resposta diz o
 				   nome da campanha e o nome do cliente de qualquer código que se
@@ -508,11 +513,7 @@ func NewRouter(d Deps) http.Handler {
 				if d.HubCodes != nil {
 					r.Get("/hub-codes/{code}", d.HubCodes.Get)
 				}
-				r.Put("/campaigns/{id}/stations", d.Campaigns.UpdateStations)
-				// CPM fixo opcional, setado no Step 6 (pricing) do wizard.
-				// Sobrescreve o CPM derivado nas telas de exibição.
-				r.Put("/campaigns/{id}/fixed-cpm", d.Campaigns.UpdateFixedCPM)
-				r.Delete("/campaigns/{id}", d.Campaigns.Delete)
+
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/campaigns/{id}/cancel", d.Campaigns.Cancel)
