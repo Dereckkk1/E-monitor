@@ -63,12 +63,33 @@ ALTER TABLE campaigns
 ALTER TABLE campaigns
     ADD COLUMN IF NOT EXISTS hub_notified_at TIMESTAMPTZ;
 
+-- Quando o job TENTOU entregar esta campanha pela última vez — deu certo ou não.
+--
+-- ⚠️ Ela existe para a fila RODAR, e a ausência dela causava fome permanente.
+-- Medido em 2026-09-21: o job pega `ORDER BY created_at LIMIT 50` e só marca o
+-- `hub_notified_at` de quem ENTREGOU. Uma campanha que falha sempre — código
+-- que não existe mais no hub, `clients.hub_id` não preenchido (o hub devolve
+-- 502 `plataforma_indisponivel`), relógio da VM adiantado, chave rodada — não é
+-- marcada, não sai do topo, e como quem falha há mais tempo é justamente a mais
+-- velha, o veneno fica PARA SEMPRE na cabeça da fila. Com 500 pendentes e 50
+-- envenenadas, as outras 450 nunca são tentadas uma única vez.
+--
+-- Carimbando toda TENTATIVA e ordenando por ela, a fila vira rodízio: quem
+-- nunca foi tentada passa primeiro (NULLS FIRST), e ninguém fica preso atrás de
+-- ninguém.
+ALTER TABLE campaigns
+    ADD COLUMN IF NOT EXISTS hub_notify_tentado_em TIMESTAMPTZ;
+
 -- O índice do job: ele pergunta "quem tem código e não tem confirmação?" a cada
 -- 15 minutos. Sem índice, isso é varredura da tabela inteira quatro vezes por
 -- hora. PARCIAL porque só essas linhas interessam — em regime, são zero, e o
 -- índice ocupa praticamente nada.
+--
+-- A ordem das colunas do índice é a ordem do `ORDER BY` do `PendentesDeHub`, e
+-- as duas têm de andar juntas: ordenar por outra coisa faz a varredura ignorar
+-- o índice e voltar a ler a tabela inteira quatro vezes por hora.
 CREATE INDEX IF NOT EXISTS idx_campaigns_hub_pendentes
-    ON campaigns (created_at)
+    ON campaigns (hub_notify_tentado_em NULLS FIRST, created_at)
     WHERE hub_code IS NOT NULL AND hub_notified_at IS NULL;
 
 COMMIT;

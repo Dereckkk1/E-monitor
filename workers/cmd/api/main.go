@@ -50,7 +50,20 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	ctx := context.Background()
+	/* ⚠️ O ctx do processo MORRE no SIGTERM, e antes de 2026-09-21 ele não
+	   morria: era `context.Background()` puro, e nenhum cancel saía dele. Todo
+	   `case <-ctx.Done(): return` das goroutinas deste arquivo — reconcile do
+	   índice, manutenção de partição, reemissão para o hub — era CÓDIGO MORTO:
+	   elas seguiam rodando durante o `srv.Shutdown` e morriam de repente quando
+	   `main` retornava, podendo pegar o `pool.Close()` no meio de uma consulta.
+
+	   ⚠️ E por isso o `shutdownCtx` lá embaixo nasce de `context.Background()` e
+	   NÃO deste ctx: derivado daqui ele já nasceria cancelado, e o
+	   `srv.Shutdown` devolveria na hora em vez de drenar as requisições em voo
+	   — trocaria uma parada abrupta por outra. */
+	ctx, pararDeOuvirSinais := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer pararDeOuvirSinais()
 
 	// Logger.
 	logger, err := zap.NewProduction()
@@ -554,7 +567,14 @@ func main() {
 	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para
 	   CLI novo entrar na imagem, e um job que nao entra na imagem e um job que
 	   nunca roda. Como goroutine, ele sobe com a API e morre com ela. */
-	if hubClient := hub.New(cfg.HubURL, cfg.HubPlatformKey); hubClient.Configured() {
+	/* ⚠️ `NewComTimeout` e nao `New`: os 10s do New sao MENORES que os 15s que o
+	   hub espera ao chamar de volta a porta de leitura daqui enquanto trata o
+	   `campanha.upsert`. Com 10s, uma ida-e-volta legitima de 12s faz o hub
+	   gravar a proposta e este lado ler timeout — a campanha nunca e marcada,
+	   o job a reemite para sempre, e cada repeticao escreve mais uma linha no
+	   AuditLog de la, que nao tem TTL. Quem espera aqui e um job, nao uma
+	   pessoa: pode esperar mais que o outro lado. */
+	if hubClient := hub.NewComTimeout(cfg.HubURL, cfg.HubPlatformKey, 25*time.Second); hubClient.Configured() {
 		hubnotify.Iniciar(ctx, campaigns, hubnotify.EmissorHTTP{Hub: hubClient})
 		logger.Info("hubnotify: reemissao de campanhas ligada",
 			zap.Duration("intervalo", hubnotify.Intervalo), zap.Int("por_ciclo", hubnotify.PorCiclo))
@@ -709,12 +729,12 @@ func main() {
 		}()
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	<-ctx.Done()
 	log.Println("shutting down...")
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Background, e não `ctx`: ver o comentário do `signal.NotifyContext` no
+	// topo. Derivado do ctx, este deadline já nasceria vencido.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(shutdownCtx) //nolint:errcheck
 }

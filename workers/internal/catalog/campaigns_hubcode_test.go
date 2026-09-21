@@ -121,7 +121,7 @@ func TestTodoLeitorDeCampanhaTrazAsDuasColunas(t *testing.T) {
 
 	   Nenhum leitor da tabela escreve nesta coluna (o `UpdateFixedCPM` mexe só
 	   no CPM), então a ordem dos subtestes continua sem importar. */
-	require.NoError(t, repo.MarcarHubNotificada(ctx, criada.ID))
+	require.NoError(t, repo.MarcarHubNotificada(ctx, criada.ID, "EH-7K4M2X"))
 
 	leitores := []struct {
 		nome string
@@ -196,7 +196,7 @@ func TestAtualizarHubCodeZeraAConfirmacao(t *testing.T) {
 	cliente := seedClienteHubCode(t, ctx, pool)
 	c := campanhaCom(t, ctx, repo, cliente, "Vai trocar de código", "EH-AAAAAA")
 
-	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID))
+	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, deref(c.HubCode)))
 	antes, err := repo.Get(ctx, c.ID)
 	require.NoError(t, err)
 	require.NotNil(t, antes.HubNotifiedAt, "pré-condição: tinha de estar confirmada")
@@ -231,7 +231,7 @@ func TestApagarOHubCodeDeixaNuloEZeraAConfirmacao(t *testing.T) {
 	} {
 		t.Run(caso.rotulo, func(t *testing.T) {
 			c := campanhaCom(t, ctx, repo, cliente, "Vai perder o código "+caso.rotulo, "EH-AAAAA"+caso.rotulo[:1])
-			require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID))
+			require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, deref(c.HubCode)))
 
 			require.NoError(t, repo.AtualizarHubCode(ctx, c.ID, caso.novo))
 
@@ -251,7 +251,7 @@ func TestPendentesDeHubSoTrazQuemTemCodigoESemConfirmacao(t *testing.T) {
 	pendente := campanhaCom(t, ctx, repo, cliente, "Pendente", "EH-AAAAAA")
 	confirmada := campanhaCom(t, ctx, repo, cliente, "Confirmada", "EH-BBBBBB")
 	semCodigo := campanhaCom(t, ctx, repo, cliente, "Sem código", "")
-	require.NoError(t, repo.MarcarHubNotificada(ctx, confirmada.ID))
+	require.NoError(t, repo.MarcarHubNotificada(ctx, confirmada.ID, "EH-BBBBBB"))
 
 	rows, err := repo.PendentesDeHub(ctx, 100)
 	require.NoError(t, err)
@@ -384,4 +384,56 @@ func TestPendentesDeHubTrazOCodigo(t *testing.T) {
 		}
 	}
 	t.Fatal("a campanha pendente não veio na fila")
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+/*
+⚠️ A marcação só vale se o código gravado ainda for o que foi ENTREGUE.
+
+Sem esta guarda, a goroutine de um evento ANTIGO — ainda em voo quando um PUT já
+gravou um código novo — carimba a linha como notificada. Medido em 2026-09-21:
+coluna `EH-BBBBBB`, hub recebeu só `EH-AAAAAA`, `hub_notified_at` preenchido, e a
+campanha fora da fila de reemissão para sempre. O E-monitor passa a afirmar um
+vínculo que o hub nunca recebeu, e nada reconcilia.
+*/
+func TestMarcarHubNotificadaIgnoraCodigoDesatualizado(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+	c := campanhaCom(t, ctx, repo, cliente, "Trocou de código no meio", "EH-BBBBBB")
+
+	// O evento em voo era do código ANTIGO.
+	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, "EH-AAAAAA"))
+
+	depois, err := repo.Get(ctx, c.ID)
+	require.NoError(t, err)
+	require.Nil(t, depois.HubNotifiedAt,
+		"carimbou a confirmação de um código que o hub nunca recebeu")
+
+	// E com o código certo ela marca normalmente — o controle positivo.
+	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, "EH-BBBBBB"))
+	depois, err = repo.Get(ctx, c.ID)
+	require.NoError(t, err)
+	require.NotNil(t, depois.HubNotifiedAt)
+}
+
+// O congelamento: código NULL dos dois lados TEM de marcar. `NULL = NULL` é
+// NULL, não verdadeiro — por isso o SQL usa `IS NOT DISTINCT FROM`.
+func TestMarcarHubNotificadaFuncionaComCodigoNulo(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+	c := campanhaCom(t, ctx, repo, cliente, "Sem código", "")
+
+	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, ""))
+
+	depois, err := repo.Get(ctx, c.ID)
+	require.NoError(t, err)
+	require.NotNil(t, depois.HubNotifiedAt, "o congelamento nunca seria confirmado")
 }

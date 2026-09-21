@@ -23,6 +23,7 @@ SET LOCAL statement_timeout = '60s';
 
 DROP INDEX IF EXISTS idx_campaigns_hub_pendentes;
 
+ALTER TABLE campaigns DROP COLUMN IF EXISTS hub_notify_tentado_em;
 ALTER TABLE campaigns DROP COLUMN IF EXISTS hub_notified_at;
 ALTER TABLE campaigns DROP COLUMN IF EXISTS hub_code;
 
