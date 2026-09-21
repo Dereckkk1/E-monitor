@@ -28,6 +28,7 @@ type repoFalso struct {
 	limitePedido int
 	ciclos       int
 	marcadas     map[uuid.UUID]bool
+	tentadas     []uuid.UUID
 }
 
 func (r *repoFalso) PendentesDeHub(_ context.Context, limite int) ([]catalog.Campaign, error) {
@@ -41,7 +42,7 @@ func (r *repoFalso) PendentesDeHub(_ context.Context, limite int) ([]catalog.Cam
 	return r.pendentes, nil
 }
 
-func (r *repoFalso) MarcarHubNotificada(_ context.Context, id uuid.UUID) error {
+func (r *repoFalso) MarcarHubNotificada(_ context.Context, id uuid.UUID, _ string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.erroMarcar != nil {
@@ -52,6 +53,24 @@ func (r *repoFalso) MarcarHubNotificada(_ context.Context, id uuid.UUID) error {
 	}
 	r.marcadas[id] = true
 	return nil
+}
+
+func (r *repoFalso) MarcarTentativaDeHub(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tentadas = append(r.tentadas, id)
+	return nil
+}
+
+func (r *repoFalso) foiTentada(id uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range r.tentadas {
+		if t == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *repoFalso) foiMarcada(id uuid.UUID) bool {
@@ -300,17 +319,32 @@ func TestIniciarNaoRodaNoBoot(t *testing.T) {
 	require.Zero(t, repo.quantosCiclos(), "rodou um ciclo no boot")
 }
 
-// Cancelar o contexto encerra o laço — senão o job sobreviveria ao shutdown e
-// seguiria batendo no banco depois do `Close()` do pool.
+/*
+Cancelar o contexto encerra o laço — senão o job sobreviveria ao shutdown e
+seguiria batendo no banco depois do `Close()` do pool.
+
+⚠️ Este teste JÁ FOI uma asserção que não conseguia falhar: com o `Intervalo` de
+15 minutos fixo, ele dormia 200ms e passava com o `case <-ctx.Done()` APAGADO —
+medido, 13 de 13 verdes. Ele só prova alguma coisa porque o intervalo é
+injetável e porque ele espera o laço RODAR antes de cancelar: sem ver ciclo
+nenhum primeiro, "parou" e "nunca começou" são indistinguíveis.
+*/
 func TestIniciarParaQuandoOContextoMorre(t *testing.T) {
 	repo := &repoFalso{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	Iniciar(ctx, repo, &emissorFalso{})
-	cancel()
-	time.Sleep(200 * time.Millisecond)
+	IniciarCom(ctx, repo, &emissorFalso{}, 10*time.Millisecond)
 
-	require.Zero(t, repo.quantosCiclos())
+	// Primeiro: provar que ele ESTÁ rodando.
+	require.Eventually(t, func() bool { return repo.quantosCiclos() > 0 },
+		2*time.Second, 5*time.Millisecond, "o laço nem chegou a rodar")
+
+	cancel()
+	time.Sleep(50 * time.Millisecond) // deixa o cancelamento ser visto
+	parou := repo.quantosCiclos()
+	time.Sleep(200 * time.Millisecond) // ~20 ticks, se ainda estivesse vivo
+
+	require.Equal(t, parou, repo.quantosCiclos(), "seguiu rodando depois do cancelamento")
 }
 
 func TestOsNumerosDoJob(t *testing.T) {
@@ -320,4 +354,124 @@ func TestOsNumerosDoJob(t *testing.T) {
 	// exatamente quando ele acabou de voltar.
 	require.Equal(t, 15*time.Minute, Intervalo)
 	require.Equal(t, 50, PorCiclo)
+}
+
+// ─────────── C1: 200 não é entrega ───────────
+
+/*
+⚠️ O DEFEITO CRÍTICO QUE ESTE TESTE FECHA (medido em 2026-09-21).
+
+O hub responde **HTTP 200** com `{"acao":"ignorado","motivo":"codigo-inexistente"}`
+quando DESCARTA o evento pela regra dele (§6.1) — e também para
+`cliente-divergente`, `codigo-malformado`, `sem-codigo` e `cliente-sem-par`.
+
+Lendo só o status, o job contava isso como entrega e marcava `hub_notified_at`.
+A campanha saía da fila PARA SEMPRE sem nunca ter chegado ao hub, e o log dizia
+"reentregues: 1" quando foi descartada. A rede de segurança do §8 fechando, ela
+mesma, o buraco que existe para vigiar.
+
+E o caminho não é hipotético: o `Create` aceita código não conferido exatamente
+quando o hub está mudo (decisão 2), que é o mesmo instante que põe a campanha
+nesta fila.
+*/
+func TestHubQueResponde200IgnoradoNaoContaComoEntrega(t *testing.T) {
+	for _, motivo := range []string{"codigo-inexistente", "cliente-divergente", "codigo-malformado"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"acao":"ignorado","motivo":"` + motivo + `"}`))
+		}))
+
+		c := campanhaPendente("EH-AAAAAA")
+		repo := &repoFalso{pendentes: []catalog.Campaign{c}}
+		n, err := RodarUmCiclo(context.Background(), repo,
+			EmissorHTTP{Hub: hub.New(srv.URL, "chave")}, 100)
+
+		require.NoError(t, err)
+		require.Zerof(t, n, "motivo %q: contou um evento IGNORADO como entregue", motivo)
+		require.Falsef(t, repo.foiMarcada(c.ID),
+			"motivo %q: marcou hub_notified_at de uma campanha que o hub descartou", motivo)
+		// ⚠️ Mas a TENTATIVA tem de ficar registrada, senão esta campanha —
+		// que vai falhar para sempre — trava a cabeça da fila.
+		require.Truef(t, repo.foiTentada(c.ID), "motivo %q: não carimbou a tentativa", motivo)
+		srv.Close()
+	}
+}
+
+// O espelho do teste acima: o desfecho de SUCESSO continua contando. Sem este
+// controle positivo, bastaria o emissor passar a recusar tudo para o teste de
+// cima ficar permanentemente verde.
+func TestHubQueAceitaContaComoEntrega(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"acao":"atualiza","campanhaId":"66f0"}`))
+	}))
+	defer srv.Close()
+
+	c := campanhaPendente("EH-AAAAAA")
+	repo := &repoFalso{pendentes: []catalog.Campaign{c}}
+	n, err := RodarUmCiclo(context.Background(), repo,
+		EmissorHTTP{Hub: hub.New(srv.URL, "chave")}, 100)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.True(t, repo.foiMarcada(c.ID))
+}
+
+// 200 com corpo ilegível (envelope novo do hub, proxy respondendo por ele) NÃO
+// é falha de entrega: o hub disse que aceitou. Devolver erro aqui trocaria um
+// defeito silencioso por outro — reemitir para sempre uma campanha que chegou.
+func TestHubQueResponde200ComCorpoIlegivelContaComoEntrega(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html>proxy no meio do caminho</html>`))
+	}))
+	defer srv.Close()
+
+	c := campanhaPendente("EH-AAAAAA")
+	repo := &repoFalso{pendentes: []catalog.Campaign{c}}
+	n, err := RodarUmCiclo(context.Background(), repo,
+		EmissorHTTP{Hub: hub.New(srv.URL, "chave")}, 100)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}
+
+// ─────────── C2: a fila roda, não morre na cabeça ───────────
+
+/*
+⚠️ A TENTATIVA É CARIMBADA MESMO QUANDO A ENTREGA FALHA.
+
+É o que impede a fome permanente. O `PendentesDeHub` ordena por
+`hub_notify_tentado_em NULLS FIRST` com `LIMIT 50`; uma campanha que falha
+sempre (código que sumiu do hub, `clients.hub_id` vazio, chave rodada) nunca é
+marcada como notificada, e sem o carimbo de tentativa ela continuaria sendo a
+mais antiga não-tentada — as MESMAS 50 linhas todo ciclo, para sempre. Com 500
+pendentes e 50 envenenadas, as outras 450 nunca seriam tentadas uma única vez.
+*/
+func TestCarimbaATentativaAindaQueAEntregaFalhe(t *testing.T) {
+	c1, c2 := campanhaPendente("EH-AAAAAA"), campanhaPendente("EH-BBBBBB")
+	repo := &repoFalso{pendentes: []catalog.Campaign{c1, c2}}
+	emissor := &emissorFalso{erro: errors.New("502 permanente")}
+
+	_, err := RodarUmCiclo(context.Background(), repo, emissor, 100)
+
+	require.NoError(t, err)
+	require.True(t, repo.foiTentada(c1.ID), "a que falhou não foi carimbada — ela trava a fila")
+	require.True(t, repo.foiTentada(c2.ID))
+	require.False(t, repo.foiMarcada(c1.ID), "tentativa não pode virar confirmação")
+	require.False(t, repo.foiMarcada(c2.ID))
+}
+
+// Campanha sem código não é sequer tentada: ela não vai à rede, então não há
+// tentativa que carimbar.
+func TestCampanhaSemCodigoNaoEhTentada(t *testing.T) {
+	semCodigo := catalog.Campaign{ID: uuid.New(), ClientID: uuid.New(), HubCode: nil}
+	repo := &repoFalso{pendentes: []catalog.Campaign{semCodigo}}
+
+	_, err := RodarUmCiclo(context.Background(), repo, &emissorFalso{}, 100)
+
+	require.NoError(t, err)
+	require.False(t, repo.foiTentada(semCodigo.ID))
 }

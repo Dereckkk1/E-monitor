@@ -15,6 +15,7 @@ package hubnotify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -49,8 +50,17 @@ tem os testes dele, no `catalog`.
 */
 type Repo interface {
 	PendentesDeHub(ctx context.Context, limite int) ([]catalog.Campaign, error)
-	MarcarHubNotificada(ctx context.Context, id uuid.UUID) error
+	MarcarHubNotificada(ctx context.Context, id uuid.UUID, codigoEntregue string) error
+	// MarcarTentativaDeHub carimba a tentativa — é o que faz a fila rodar em
+	// vez de morrer na cabeça. Ver o comentário do laço.
+	MarcarTentativaDeHub(ctx context.Context, id uuid.UUID) error
 }
+
+// ⚠️ A asserção que faz o contrato falhar NO PACOTE QUE O DECLARA. Sem ela,
+// renomear um método no `catalog` quebra o `cmd/api` e deixa `go build
+// ./internal/...` verde — a falha cai em quem CONSOME o contrato, não em quem o
+// define.
+var _ Repo = (*catalog.Campaigns)(nil)
 
 // Emissor manda o `campanha.upsert`. `EmissorHTTP` é a implementação de
 // produção, com o `hub.Client` dentro.
@@ -61,16 +71,30 @@ type Emissor interface {
 type EmissorHTTP struct{ Hub *hub.Client }
 
 func (e EmissorHTTP) Emitir(ctx context.Context, c catalog.Campaign) error {
-	/* ⚠️ `Hub.Emitir(ctx, tipo, dados)` é o MESMO método que o
-	   `avisarHubDaCampanha` dos handlers usa. Montar um segundo caminho de
-	   emissão aqui faria os dois divergirem no dia em que o envelope mudasse —
-	   e o que divergiria é justamente a rede de segurança, que é a que ninguém
-	   está olhando. */
-	return e.Hub.Emitir(ctx, "campanha.upsert", hub.CampanhaUpsert{
+	/* ⚠️ O MESMO método que o `avisarHubDaCampanha` dos handlers usa. Montar um
+	   segundo caminho de emissão faria os dois divergirem no dia em que o
+	   envelope mudasse — e o que divergiria é justamente a rede de segurança,
+	   que é a que ninguém está olhando. */
+	resposta, err := e.Hub.EmitirComResposta(ctx, "campanha.upsert", hub.CampanhaUpsert{
 		IDNaPlataforma:        c.ID.String(),
 		IDClienteNaPlataforma: c.ClientID.String(),
 		HubCode:               deref(c.HubCode),
 	})
+	if err != nil {
+		return err
+	}
+	/* ⚠️ 200 NÃO É ENTREGA, e ler só o status era um defeito crítico medido em
+	   2026-09-21. O hub responde 200 com `{"acao":"ignorado","motivo":"..."}`
+	   quando DESCARTA o evento pela regra dele — código inexistente, cliente
+	   divergente, código malformado. Tratando isso como sucesso, o job marcava
+	   `hub_notified_at` e a campanha saía da fila PARA SEMPRE sem nunca ter
+	   chegado ao hub: a rede de segurança do §8 fechando o próprio buraco que
+	   existe para vigiar, e o log dizendo "3 reentregues" quando foram 3
+	   descartadas. */
+	if resposta.Ignorado() {
+		return fmt.Errorf("o hub ignorou o evento (motivo: %s)", resposta.Motivo)
+	}
+	return nil
 }
 
 // RodarUmCiclo pergunta quem está pendente e tenta entregar cada um. Devolve
@@ -103,6 +127,19 @@ func RodarUmCiclo(ctx context.Context, repo Repo, emissor Emissor, limite int) (
 			continue
 		}
 
+		/* ⚠️ A tentativa é carimbada ANTES do resultado, e de propósito. É ela
+		   que tira esta campanha da cabeça da fila no próximo ciclo, e é
+		   justamente quando a entrega FALHA que isso precisa acontecer —
+		   carimbar só no sucesso deixaria as que falham sempre presas no topo,
+		   impedindo todas as outras de serem tentadas uma única vez.
+
+		   Se o carimbo falhar, seguimos assim mesmo: perder o rodízio de um
+		   ciclo é muito menos grave que não tentar entregar. */
+		if err := repo.MarcarTentativaDeHub(ctx, c.ID); err != nil {
+			zap.L().Warn("hubnotify: nao deu para carimbar a tentativa",
+				zap.String("campaign_id", c.ID.String()), zap.Error(err))
+		}
+
 		if err := emissor.Emitir(ctx, c); err != nil {
 			/* Segue para a próxima: uma campanha cujo código não existe mais no
 			   hub falha para SEMPRE, e parar o laço nela deixaria todas as
@@ -112,7 +149,7 @@ func RodarUmCiclo(ctx context.Context, repo Repo, emissor Emissor, limite int) (
 			continue
 		}
 
-		if err := repo.MarcarHubNotificada(ctx, c.ID); err != nil {
+		if err := repo.MarcarHubNotificada(ctx, c.ID, deref(c.HubCode)); err != nil {
 			/* Entregou e não marcou: o `hub_notified_at` fica nulo e o próximo
 			   ciclo reemite esta campanha. É seguro — o `campanha.upsert` é
 			   idempotente por cliente do outro lado (§6.3) —, e por isso ela
@@ -137,8 +174,17 @@ avisado pelo emissor; esta fila é para o que se PERDEU, e quinze minutos de
 atraso nela não custam nada.
 */
 func Iniciar(ctx context.Context, repo Repo, emissor Emissor) {
+	IniciarCom(ctx, repo, emissor, Intervalo)
+}
+
+// IniciarCom é o `Iniciar` com o intervalo aberto. Existe para o TESTE: com o
+// intervalo fixo em 15 minutos, um teste de "o laço para quando o contexto
+// morre" dorme 200ms e passa com o cancelamento REMOVIDO — medido, 13 de 13
+// verdes com o `case <-ctx.Done()` apagado. Asserção que não consegue falhar
+// não prova nada, e sem intervalo injetável não existe teste honesto do laço.
+func IniciarCom(ctx context.Context, repo Repo, emissor Emissor, intervalo time.Duration) {
 	go func() {
-		t := time.NewTicker(Intervalo)
+		t := time.NewTicker(intervalo)
 		defer t.Stop()
 		for {
 			select {

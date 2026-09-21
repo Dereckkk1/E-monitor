@@ -79,6 +79,28 @@ func New(baseURL, platformKey string) *Client {
 	}
 }
 
+/*
+NewComTimeout é o `New` com outro teto de espera.
+
+⚠️ Existe porque os 10s do `New` são curtos DEMAIS para o `campanha.upsert`, e
+não podem ser aumentados lá: aquele mesmo cliente serve o `Exchange`, que roda
+dentro de um login e não pode segurar uma pessoa olhando spinner.
+
+O problema medido: ao tratar um `campanha.upsert`, o hub CHAMA DE VOLTA o
+E-monitor (`GET /v1/internal/hub/campaigns/{id}`) e espera até 15s por essa
+resposta. Numa ida-e-volta legítima de 10 a 16 segundos, o hub termina, grava a
+proposta e responde 200 — e este lado já desistiu aos 10s e leu erro. A campanha
+nunca é marcada, o job a reemite de 15 em 15 minutos para sempre, e cada
+repetição escreve mais uma linha no AuditLog de lá, que não tem TTL.
+
+Quem espera aqui é um job, não uma pessoa: pode esperar mais que o outro lado.
+*/
+func NewComTimeout(baseURL, platformKey string, timeout time.Duration) *Client {
+	c := New(baseURL, platformKey)
+	c.http = &http.Client{Timeout: timeout}
+	return c
+}
+
 // Configured diz se esta instalação tem a integração ligada.
 func (c *Client) Configured() bool {
 	return c != nil && c.baseURL != "" && c.platformKey != ""
@@ -253,9 +275,39 @@ type envelopeEvento struct {
 // ⚠️ O hub recusa `ocorridoEm` mais de 5 minutos no futuro. Relógio da VM
 // adiantado faz TODA emissão voltar 400 — e o sintoma (nada chega ao hub) não
 // aponta para o relógio.
+/*
+RespostaEvento é o corpo que o hub devolve num 200 de `/api/platform/events`.
+
+⚠️ ELE IMPORTA, e ignorá-lo foi um defeito medido em 2026-09-21. O hub responde
+**200** mesmo quando DESCARTA o evento pela regra dele: `{"acao":"ignorado",
+"motivo":"codigo-inexistente"}` (e também `cliente-divergente`,
+`codigo-malformado`, `sem-codigo`, `cliente-sem-par`…). Ler só o status faz
+"aceitei a requisição" passar por "levei o evento a sério" — e quem grava
+`hub_notified_at` com base nisso tira a campanha da fila de reemissão PARA
+SEMPRE, sem ela nunca ter chegado ao hub. A rede de segurança do §8 estaria
+fechando o próprio buraco que existe para vigiar.
+*/
+type RespostaEvento struct {
+	Acao   string `json:"acao"`
+	Motivo string `json:"motivo"`
+}
+
+// Ignorado diz se o hub descartou o evento pela regra dele. `ignorado` é o
+// vocabulário do próprio controller de lá (`platformEventsController.ts`), e
+// todo desfecho de recusa chega com essa ação — o motivo é que varia.
+func (r *RespostaEvento) Ignorado() bool { return r != nil && r.Acao == "ignorado" }
+
+// Emitir avisa o hub e descarta o que ele respondeu. Serve a quem não tem o que
+// fazer com o desfecho; quem PRECISA saber se o evento entrou usa
+// `EmitirComResposta`.
 func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
+	_, err := c.EmitirComResposta(ctx, tipo, dados)
+	return err
+}
+
+func (c *Client) EmitirComResposta(ctx context.Context, tipo string, dados any) (*RespostaEvento, error) {
 	if !c.Configured() {
-		return ErrNotConfigured
+		return nil, ErrNotConfigured
 	}
 
 	body, err := json.Marshal(envelopeEvento{
@@ -264,20 +316,20 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 		Dados:      dados,
 	})
 	if err != nil {
-		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/api/platform/events", bytes.NewReader(body))
 	if err != nil {
-		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Status:  http.StatusBadGateway,
 			Message: "não foi possível falar com a Central de Clientes",
 		}
@@ -293,7 +345,12 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 	// página de erro HTML de um proxy mal configurado, por exemplo) pararia no
 	// meio, a conexão não seria reaproveitada, e o drain deixaria de cumprir a
 	// única razão de existir. O teto real é o `Timeout` do `http.Client`.
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// ⚠️ O drain agora é DEFERIDO, e não imediato: o corpo passou a ser lido
+	// (a `RespostaEvento` diz se o hub aceitou ou ignorou), e drenar antes
+	// deixaria o decoder sem nada. O que o defer faz é garantir que o resto do
+	// corpo — o que o decoder não consumiu — seja escoado antes do Close, que é
+	// a condição para a conexão voltar ao pool keep-alive.
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body) }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Ao contrário do `Exchange`, SEM tradução por status. Lá o erro vira a
@@ -301,12 +358,25 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 		// "link expirado". Aqui ninguém está esperando: pelo §5 do desenho, a
 		// criação do cliente nunca falha por causa disto e o erro só vai para
 		// log. Traduzir esconderia do log o status que o hub de fato devolveu.
-		return &Error{
+		return nil, &Error{
 			Status:  resp.StatusCode,
 			Message: fmt.Sprintf("a Central de Clientes recusou o evento %s", tipo),
 		}
 	}
-	return nil
+
+	var out RespostaEvento
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+		/* 200 com corpo ilegível. NÃO é erro de entrega: o hub respondeu que
+		   aceitou, e o corpo é informação extra. Devolver erro aqui faria o job
+		   reemitir para sempre uma campanha que CHEGOU — trocaria um defeito
+		   silencioso por outro, na direção oposta.
+
+		   Um envelope novo do hub cai aqui ou decodifica com `acao` vazio; os
+		   dois levam a "não foi ignorado", que é o comportamento que existia
+		   antes desta mudança. */
+		return &RespostaEvento{}, nil
+	}
+	return &out, nil
 }
 
 // CampanhaDoHub é a resposta de `GET /api/platform/campaigns/by-code/{code}`,

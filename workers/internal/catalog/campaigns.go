@@ -122,10 +122,51 @@ func (c *Campaigns) AtualizarHubCode(ctx context.Context, id uuid.UUID, code str
 	return err
 }
 
-// MarcarHubNotificada registra que o hub confirmou o recebimento desta campanha.
-func (c *Campaigns) MarcarHubNotificada(ctx context.Context, id uuid.UUID) error {
+/*
+MarcarHubNotificada registra que o hub confirmou o recebimento desta campanha —
+mas SÓ se o código gravado ainda for o que foi entregue.
+
+⚠️ A guarda do `hub_code` não é zelo: sem ela, a marcação carimba um código que
+o hub NUNCA recebeu. O emissor é uma goroutine, e duas coisas fazem a ordem
+furar:
+
+  - o evento de um código ANTIGO ainda em voo enquanto um PUT já gravou um
+    código novo. Quando o antigo confirma, ele marca a linha — e a linha agora
+    diz outro código. Medido em 2026-09-21: coluna `EH-BBBBBB`, hub recebeu só
+    `EH-AAAAAA`, `hub_notified_at` carimbado e fora da fila;
+  - dois PUTs concorrentes cujos eventos chegam ao hub fora de ordem: o
+    E-monitor fica dizendo `EH-CCCCCC` e a proposta do hub foi movida para
+    `EH-BBBBBB`, permanentemente, sem nada reconciliar.
+
+`IS NOT DISTINCT FROM` e não `=`: o código pode ser NULL dos dois lados (o caso
+do congelamento), e `NULL = NULL` é NULL, não verdadeiro — a marcação nunca
+aconteceria.
+*/
+func (c *Campaigns) MarcarHubNotificada(ctx context.Context, id uuid.UUID, codigoEntregue string) error {
 	_, err := c.pool.Exec(ctx,
-		`UPDATE campaigns SET hub_notified_at = now() WHERE id = $1`, id)
+		`UPDATE campaigns SET hub_notified_at = now()
+		  WHERE id = $1 AND hub_code IS NOT DISTINCT FROM NULLIF(btrim($2), '')`,
+		id, codigoEntregue)
+	return err
+}
+
+/*
+MarcarTentativaDeHub carimba que o job TENTOU entregar esta campanha agora —
+tenha dado certo ou não.
+
+⚠️ É o que faz a fila RODAR em vez de morrer na cabeça. Sem este carimbo, quem
+falha sempre (código que sumiu do hub, `clients.hub_id` vazio, chave rodada)
+nunca é marcada, nunca sai do topo do `ORDER BY created_at`, e as campanhas
+atrás dela não são tentadas UMA VEZ SEQUER. Medido em 2026-09-21 com 500
+pendentes e 50 envenenadas: as outras 450 nunca saíam.
+
+Separada do `MarcarHubNotificada` de propósito: uma diz "tentei", a outra diz
+"chegou". Confundir as duas é exatamente o defeito que a rede de segurança do §8
+existe para não ter.
+*/
+func (c *Campaigns) MarcarTentativaDeHub(ctx context.Context, id uuid.UUID) error {
+	_, err := c.pool.Exec(ctx,
+		`UPDATE campaigns SET hub_notify_tentado_em = now() WHERE id = $1`, id)
 	return err
 }
 
@@ -139,9 +180,15 @@ func (c *Campaigns) MarcarHubNotificada(ctx context.Context, id uuid.UUID) error
 // evento, e buscá-lo campanha a campanha seria N+1 numa varredura que roda de
 // 15 em 15 minutos.
 //
-// ⚠️ O `ORDER BY created_at` casa com o índice parcial `idx_campaigns_hub_pendentes`
-// da migração 0069. Ordenar por outra coisa faria a varredura ignorar o índice
-// e voltar a ler a tabela inteira quatro vezes por hora.
+// ⚠️ O `ORDER BY` casa com o índice parcial `idx_campaigns_hub_pendentes` da
+// migração 0069, coluna por coluna e na mesma ordem. Mudar um sem o outro faz a
+// varredura ignorar o índice e voltar a ler a tabela inteira quatro vezes por
+// hora.
+//
+// ⚠️ E a primeira coluna da ordem é a TENTATIVA, não o `created_at`: é ela que
+// transforma a fila em rodízio. Quem nunca foi tentada passa primeiro
+// (`NULLS FIRST`), e quem falhou vai para o fim — senão uma campanha que falha
+// para sempre prende todas as outras atrás dela, indefinidamente.
 func (c *Campaigns) PendentesDeHub(ctx context.Context, limit int) ([]Campaign, error) {
 	// ⚠️ `LIMIT` negativo é ERRO do Postgres (SQLSTATE 2201W), não lista vazia:
 	// um `limit` mal calculado derrubaria o ciclo inteiro do job em vez de não
@@ -155,7 +202,7 @@ func (c *Campaigns) PendentesDeHub(ctx context.Context, limit int) ([]Campaign, 
 		SELECT id, client_id, name, hub_code
 		  FROM campaigns
 		 WHERE hub_code IS NOT NULL AND hub_notified_at IS NULL
-		 ORDER BY created_at
+		 ORDER BY hub_notify_tentado_em NULLS FIRST, created_at
 		 LIMIT $1`, limit)
 	if err != nil {
 		return nil, err

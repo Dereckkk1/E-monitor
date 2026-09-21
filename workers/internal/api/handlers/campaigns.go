@@ -337,13 +337,16 @@ func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// Update edits the basic data trio (name, start_date, end_date) of an existing
-// campaign — what the wizard's Step 1 surfaces in edit mode. client_id stays
-// locked because Step 3 is hydrated against the client's material library.
+// Update edits the basic data (name, start_date, end_date, hub_code) of an
+// existing campaign — what the wizard's Step 1 surfaces in edit mode. client_id
+// stays locked because Step 3 is hydrated against the client's material library.
 //
 // Returns:
 //   - 200 + updated campaign on success.
-//   - 400 on invalid JSON, missing required fields, or end_date <= start_date.
+//   - 400 on invalid JSON, missing required fields, or end_date BEFORE start_date
+//     (end_date == start_date is a valid one-day campaign and passes).
+//   - 422 when hub_code is present and the hub says it is malformed, unknown, or
+//     belongs to another client — the §4.4 barrier, shared with Create.
 //   - 404 if the id does not exist.
 func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -421,10 +424,25 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/* ⚠️ Só emite quando o código MUDOU. O nome da campanha daqui vira o nome da
-	   proposta no hub e é atualizado na varredura de métricas — emitir a cada
-	   renomeação seria uma chamada de rede por tecla salva, sem nada de novo do
-	   outro lado.
+	/* ⚠️ Só emite quando o código MUDOU.
+
+	   ⚠️ E ISSO TEM UM PREÇO QUE O PLANO NÃO NOMEOU: renomear a campanha ou
+	   mudar o status dela NÃO chega ao hub depois da criação. Este handler e o
+	   `Create` são os DOIS únicos chamadores do emissor.
+
+	   A justificativa que estava escrita aqui — "o nome é atualizado na
+	   varredura de métricas" — é FALSA, e foi medida em 2026-09-21:
+	   `metricas/coletor.ts` só renomeia proposta que tem `nomeNaFonte`, e hoje
+	   só a Plura o preenche. Proposta vinda do E-monitor nunca é renomeada por
+	   lá. E o hub GRAVA nome e `statusExterno` quando trata um `campanha.upsert`
+	   (desfecho `atualiza`), então há sim coisa nova do outro lado.
+
+	   Consequência: a §6.2 quer o nome da proposta igual ao da campanha daqui
+	   justamente para dois PIs serem distinguíveis, e a §6.4 define "campanha
+	   cancelada ⟺ todas as propostas canceladas" — regra que nunca dispara,
+	   porque o `statusExterno` congela no valor da criação. Emitir a cada
+	   renomeação é uma decisão de produto (uma chamada de rede por "salvar"),
+	   não um detalhe deste handler: está registrado no handoff para o Dereck.
 
 	   E apagar TEM de emitir: é o evento sem código que faz o hub pôr
 	   `coletaAtiva = false` na proposta (§6.5). Sem ele, a proposta seguiria
@@ -688,16 +706,30 @@ func avisarHubDaCampanha(h *hub.Client, repo *catalog.Campaigns, c *catalog.Camp
 		   sem retentativa, e sem nada em tela nenhuma denunciando. A campanha
 		   nasceria certa aqui e nunca chegaria lá.
 
-		   Vazio é significativo e não é omissão: é o que o hub lê como "o
-		   código foi apagado", e faz ele congelar a coleta da proposta em vez
-		   de ignorar o evento (§6.5). */
+		   Vazio é significativo e não é omissão — mas ele só CONGELA quando o
+		   hub já tem proposta daquela fonte: `campanhaDaPlataforma.ts` exige um
+		   `Client` com a ponte casando E uma proposta achada para cair em
+		   `congela` (§6.5); fora disso é `sem-codigo`, ignorado. Pelo `Create`,
+		   onde nunca há proposta anterior, vazio é sempre ignorado. */
 		HubCode: deref(c.HubCode),
 	}
 	id := c.ID
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := h.Emitir(ctx, "campanha.upsert", dados); err != nil {
+		resposta, err := h.EmitirComResposta(ctx, "campanha.upsert", dados)
+		if err == nil && resposta.Ignorado() {
+			/* ⚠️ 200 NÃO é entrega. O hub responde 200 com
+			   `{"acao":"ignorado","motivo":"codigo-inexistente"}` quando
+			   DESCARTA o evento pela regra dele (§6.1). Marcar aqui tiraria a
+			   campanha da fila de reemissão para sempre sem ela nunca ter
+			   chegado — e nada em tela nenhuma denunciaria. */
+			zap.L().Error("hub: campanha.upsert foi IGNORADO pelo hub",
+				zap.String("campaign_id", id.String()),
+				zap.String("motivo", resposta.Motivo))
+			return
+		}
+		if err != nil {
 			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
 			// seria inventar uma fila sem durabilidade.
 			//
@@ -721,7 +753,9 @@ func avisarHubDaCampanha(h *hub.Client, repo *catalog.Campaigns, c *catalog.Camp
 		   ⚠️ E com o `ctx` desta goroutine, que nasce de `context.Background()`:
 		   o `r.Context()` do handler já morreu quando a resposta foi escrita. */
 		if repo != nil {
-			if err := repo.MarcarHubNotificada(ctx, id); err != nil {
+			// O código vai junto: a marcação só vale se a coluna ainda disser o
+			// que ESTE evento entregou. Ver o comentário do repositório.
+			if err := repo.MarcarHubNotificada(ctx, id, dados.HubCode); err != nil {
 				zap.L().Warn("hub: entregou a campanha mas nao marcou hub_notified_at",
 					zap.String("campaign_id", id.String()), zap.Error(err))
 			}
