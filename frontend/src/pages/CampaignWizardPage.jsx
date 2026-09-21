@@ -19,7 +19,7 @@ export default function CampaignWizardPage() {
   const isEdit = !!routeId
 
   const [draftCampaign, setDraftCampaign] = useState({
-    name: '', client_id: '', start_date: '', end_date: '',
+    name: '', client_id: '', start_date: '', end_date: '', hub_code: '',
   })
   const [campaignId, setCampaignId] = useState(routeId ?? null)
   const [currentStep, setCurrentStep] = useState(1)
@@ -33,6 +33,7 @@ export default function CampaignWizardPage() {
         client_id: existingCampaign.client_id,
         start_date: existingCampaign.start_date?.slice(0, 10) ?? '',
         end_date: existingCampaign.end_date?.slice(0, 10) ?? '',
+        hub_code: existingCampaign.hub_code ?? '',
       })
       setCampaignId(existingCampaign.id)
       // Em modo edit todas as etapas anteriores são consideradas concluídas,
@@ -110,13 +111,21 @@ export default function CampaignWizardPage() {
       const startChanged = (existingCampaign?.start_date?.slice(0, 10) ?? '') !== draftCampaign.start_date
       const endChanged   = (existingCampaign?.end_date?.slice(0, 10)   ?? '') !== draftCampaign.end_date
       const nameChanged  = (existingCampaign?.name ?? '')               !== draftCampaign.name
-      if (startChanged || endChanged || nameChanged) {
+      const codeChanged  = (existingCampaign?.hub_code ?? '')           !== draftCampaign.hub_code
+      if (startChanged || endChanged || nameChanged || codeChanged) {
         try {
           await updateCampaign.mutateAsync({
             id: campaignId,
             name: draftCampaign.name,
             start_date: draftCampaign.start_date + 'T00:00:00Z',
             end_date:   draftCampaign.end_date   + 'T00:00:00Z',
+            /* ⚠️ `hub_code` vai SÓ quando mudou, e a omissão é o desenho: o
+               backend trata campo ausente como "não mexe" e campo vazio como
+               "apaga", e apagar o código CONGELA a coleta da proposta no hub
+               (§6.5). Mandar sempre significaria que qualquer falha em carregar
+               o código para o rascunho apagaria o código de uma campanha boa
+               na primeira edição de nome. */
+            ...(codeChanged ? { hub_code: draftCampaign.hub_code.trim() } : {}),
           })
         } catch {
           window.alert('Erro ao salvar alterações da campanha. Tente novamente.')
@@ -160,8 +169,12 @@ export default function CampaignWizardPage() {
         isEditMode={isEdit}
       />
     )
+    // Decisão 6 da spec: o código é obrigatório na CRIAÇÃO. Campanha antiga
+    // continua salvando sem ele — senão corrigir uma data numa campanha de
+    // junho viraria "vá ao hub criar uma campanha primeiro".
     nextDisabled = !draftCampaign.name || !draftCampaign.client_id ||
-                   !draftCampaign.start_date || !draftCampaign.end_date
+                   !draftCampaign.start_date || !draftCampaign.end_date ||
+                   (!isEdit && !(draftCampaign.hub_code ?? '').trim())
   } else if (currentStep === 2) {
     stepContent = (
       <StationsStep
