@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -302,9 +303,48 @@ func TestCreateRecusadoNaoEmiteEvento(t *testing.T) {
 		campanhaNova(cliente, "EH-ZZZZZZ"))
 
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	/* ⚠️ `time.After` e NÃO `default:`. Com `default:` esta asserção NÃO CONSEGUE
+	   FALHAR, e isso foi provado por mutação: o `avisarHubDaCampanha` dispara uma
+	   goroutine, e o `select` roda microssegundos depois — antes de o POST do
+	   evento chegar ao hub falso. Emitindo de propósito no caminho recusado, o
+	   teste continuava verde 10 de 10 vezes; com a espera, fica vermelho 10 de
+	   10, e no código limpo continua verde 10 de 10 (não flaka).
+
+	   O idioma certo já existia no mesmo pacote, 30 linhas adiante:
+	   `TestAvisarHubDaCampanha_SemConfiguracaoNaoChama` usa `time.After(300ms)`.
+	   Este arquivo tinha regredido de um padrão que a casa já tinha. */
 	select {
 	case env := <-emitiu:
 		t.Fatalf("saiu evento para uma campanha que não foi criada: %v", env)
-	default:
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+/*
+⚠️ O CONTROLE POSITIVO, sem o qual o teste negativo acima não prova nada.
+
+Medido: apagar `avisarHubDaCampanha(h.Hub, out)` do `Create` deixa o pacote com
+366 PASS e 0 FAIL. O `Create` podia parar de avisar o hub INTEIRAMENTE sem um
+único teste vermelho — o `campaigns_emissao_test.go` testa a FUNÇÃO
+`avisarHubDaCampanha` direto, e ninguém testava que o handler a chama.
+
+E este teste é o que dá sentido ao negativo: sem ele, bastaria o
+`hubFalsoParaCodigo` mudar para nunca alimentar o canal `emitiu` para o teste
+negativo virar permanentemente vazio, sem nada denunciar.
+*/
+func TestCreateAceitoEmiteOEvento(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	cliente := seedClienteLocal(t, ctx, pool)
+	hb, emitiu := hubFalsoParaCodigo(t, http.StatusOK, corpoDoHub(cliente.String()))
+
+	rec := postCampanha(t, &CampaignsHandler{Repo: catalog.NewCampaigns(pool), Hub: hb},
+		campanhaNova(cliente, "EH-7K4M2X"))
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	select {
+	case env := <-emitiu:
+		require.Equal(t, "campanha.upsert", env["tipo"])
+	case <-time.After(5 * time.Second):
+		t.Fatal("o Create não emitiu campanha.upsert")
 	}
 }
