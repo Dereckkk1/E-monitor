@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,6 +130,63 @@ func (h *CampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name and client_id are required", 400)
 		return
 	}
+
+	/* A conferência do código do hub (spec §4.4). Esta é a barreira de verdade:
+	   a conferência da tela (§4.3) é conveniência, e pode ser pulada por quem
+	   chamar a API direto.
+
+	   ⚠️ TRÊS desfechos, e eles não são o mesmo:
+	    - o hub diz que o código é de OUTRO cliente → 422. É erro de quem
+	      digitou, e a mensagem diz de quem é o código para a pessoa conseguir
+	      achar o certo;
+	    - o hub diz 404 → 422, idem;
+	    - o hub NÃO respondeu (ou está mudo, ou devolveu 401/429/5xx) → SEGUE.
+	      Decisão 2 da spec: uma queda do hub não pode parar o cadastro de
+	      campanha no E-monitor. O `hub_notified_at` fica nulo e o job de
+	      reemissão leva a campanha quando o hub voltar. Recusar aqui seria o
+	      contrário do que a decisão 2 pede.
+
+	   ⚠️ E a gravação é CANÔNICA. `ConferirCodigo` devolve a forma normalizada
+	   e é ela que vai para a coluna: sem isto, `EH-7K4M2X` e `eh7k4m2x` viram
+	   códigos diferentes aqui enquanto para o hub são o mesmo, e a §10 exige a
+	   canônica na coluna. Vale inclusive quando o hub não respondeu — aí a
+	   normalização é local, que é o que `hub.NormalizaCodigo` faz sem rede. */
+	if canonico := hub.NormalizaCodigo(in.HubCode); canonico != "" {
+		in.HubCode = canonico
+		if h.Hub.Configured() {
+			doHub, err := h.Hub.ConferirCodigo(r.Context(), canonico)
+			var he *hub.Error
+			switch {
+			case err == nil:
+				/* Ponte vazia não é divergência: o cliente do hub ainda não foi
+				   ligado a este E-monitor, e não há o que comparar. Recusar
+				   faria todo cliente ainda não ligado ser barrado justamente na
+				   primeira campanha dele. */
+				if doHub.Cliente.IDNaPlataforma != "" &&
+					doHub.Cliente.IDNaPlataforma != in.ClientID.String() {
+					http.Error(w, fmt.Sprintf(
+						"esse código é da campanha %q, de outro cliente (%s)",
+						doHub.Nome, doHub.Cliente.Nome), http.StatusUnprocessableEntity)
+					return
+				}
+			case errors.As(err, &he) && he.Status == http.StatusNotFound:
+				http.Error(w, "código do hub não encontrado", http.StatusUnprocessableEntity)
+				return
+			default:
+				// Não deu para conferir. Loga e segue — ver a decisão 2 acima.
+				if h.Log != nil {
+					h.Log.Warn("nao deu para conferir o codigo do hub",
+						zap.String("hub_code", canonico), zap.Error(err))
+				}
+			}
+		}
+	} else if strings.TrimSpace(in.HubCode) != "" {
+		/* Veio alguma coisa, e não é código. Recusar daqui evita gravar lixo na
+		   coluna que o job vai ler de 15 em 15 minutos para sempre. */
+		http.Error(w, "código do hub inválido", http.StatusUnprocessableEntity)
+		return
+	}
+
 	out, err := h.Repo.Create(r.Context(), in)
 	if err != nil {
 		http.Error(w, "internal error", 500)
