@@ -24,6 +24,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/hub"
+	"radiocheck/internal/hubnotify"
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
@@ -538,6 +539,25 @@ func main() {
 		Supervisor: sup,
 		Log:        logger,
 		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+	}
+
+	/* A rede de seguranca do §8 da spec do codigo da campanha (2026-09-18).
+	   O `campanha.upsert` e dispara-e-esquece: sem esta varredura, um evento
+	   perdido vira campanha que NUNCA chega ao hub, e nao ha nada em tela
+	   nenhuma dizendo que falta alguma. Em regime ela devolve zero linhas.
+
+	   ⚠️ So com o hub configurado: sem este portao, dev e teste ficariam
+	   batendo numa URL vazia a cada 15 minutos. E o mesmo portao que o SSO e o
+	   `avisarHubDaCampanha` ja usam.
+
+	   ⚠️ Goroutine dentro do `cmd/api`, e NAO um binario proprio em `cmd/*`:
+	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para
+	   CLI novo entrar na imagem, e um job que nao entra na imagem e um job que
+	   nunca roda. Como goroutine, ele sobe com a API e morre com ela. */
+	if hubClient := hub.New(cfg.HubURL, cfg.HubPlatformKey); hubClient.Configured() {
+		hubnotify.Iniciar(ctx, campaigns, hubnotify.EmissorHTTP{Hub: hubClient})
+		logger.Info("hubnotify: reemissao de campanhas ligada",
+			zap.Duration("intervalo", hubnotify.Intervalo), zap.Int("por_ciclo", hubnotify.PorCiclo))
 	}
 
 	deps := api.Deps{
