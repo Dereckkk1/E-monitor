@@ -326,8 +326,28 @@ type CampanhaDoHub struct {
 		// O `emonitorClientId` do cliente no hub — a ponte. Vazio quando o
 		// cliente do hub ainda não foi ligado a este E-monitor, que é estado
 		// normal e NÃO é erro: quem decide o que fazer é o handler.
+		//
+		// ⚠️ O controller do hub manda `null` e não campo ausente, com um
+		// comentário dizendo que é para o E-monitor separar "não tem ponte" de
+		// "versão velha do hub". **Este lado não consegue fazer essa
+		// distinção**, e trocar para `*string` NÃO resolve: medido, o
+		// `encoding/json` do Go deixa o ponteiro nil tanto para `null` quanto
+		// para campo ausente. Separá-los exigiria `json.RawMessage` ou um
+		// `UnmarshalJSON` próprio. Hoje é latente — os dois casos levam ao mesmo
+		// desfecho (aceita) —, e vira defeito no dia em que alguém quiser "hub
+		// velho → âmbar, peça deploy". Fica registrado, não consertado.
 		IDNaPlataforma string `json:"idNaPlataforma"`
 	} `json:"cliente"`
+
+	// Codigo é a forma CANÔNICA do código consultado — calculada aqui, não
+	// devolvida pelo hub.
+	//
+	// ⚠️ Existe para quem GRAVA não ter de lembrar de normalizar. A justificativa
+	// inteira desta função é "o que não funciona é gravar cru", e antes disto o
+	// canônico era calculado, usado na URL e jogado fora: `campaigns.hub_code`
+	// dependia de duas tasks futuras chamarem `NormalizaCodigo` por conta
+	// própria. Fazer a coisa certa ser a mais fácil vale mais que um aviso.
+	Codigo string `json:"-"`
 }
 
 // ConferirCodigo pergunta ao hub de quem é um código.
@@ -366,16 +386,38 @@ func (c *Client) ConferirCodigo(ctx context.Context, code string) (*CampanhaDoHu
 		// mudo dão a mesma tela.
 		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "a Central de Clientes não respondeu"}
 	}
-	defer resp.Body.Close()
+	// ⚠️ DRENA o corpo antes de fechar, como o `Emitir` faz oito dezenas de
+	// linhas acima (e explica em 8 linhas). Sem isto a conexão não volta para o
+	// pool keep-alive e cada chamada abre um socket novo — medido: 5 chamadas
+	// com 404 abriam 5 conexões, contra 1 quando o corpo é lido até o fim. E o
+	// 404 aqui é o caminho NORMAL, não o excepcional: é o que acontece toda vez
+	// que alguém erra uma letra num campo que confere ao sair do foco. Em
+	// produção o hub é HTTPS, então cada uma paga TCP + TLS inteiros.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, &Error{Status: http.StatusNotFound, Message: "código não encontrado na Central de Clientes"}
 	}
 	if resp.StatusCode != http.StatusOK {
-		// Resposta que CHEGOU e não dá para usar — diferente de resposta que não
-		// chegou. Inclui o 401 de chave recusada, que é problema de configuração
-		// desta instalação e não de quem está cadastrando.
-		return nil, &Error{Status: http.StatusBadGateway,
+		/* ⚠️ 503, e não o 502 de "resposta que chegou e não dá para usar".
+		   O eixo que importa não é "chegou × não chegou" — é "é problema do
+		   código que a pessoa digitou × é problema NOSSO", porque é a única
+		   decisão que a tela toma. Por esse eixo, só o 404 é dela.
+
+		   E os dois status mais prováveis aqui são justamente nossos: o hub
+		   devolve **401** para chave errada E para produto desativado, de
+		   propósito e identicamente (§11.3 da spec) — desmarcar "Visível no
+		   portal" pintaria de vermelho todo cadastro e mandaria a operação
+		   caçar um código que está perfeito; e **429**, porque o limitador de
+		   lá é por IP, ou seja, a plataforma inteira divide o balde com o job
+		   de reemissão que dispara de 15 em 15 minutos.
+
+		   O número vai na mensagem para o log não perder o diagnóstico — que é
+		   a parte legítima do 502 que estava aqui. */
+		return nil, &Error{Status: http.StatusServiceUnavailable,
 			Message: fmt.Sprintf("a Central de Clientes respondeu %d", resp.StatusCode)}
 	}
 
@@ -383,5 +425,16 @@ func (c *Client) ConferirCodigo(ctx context.Context, code string) (*CampanhaDoHu
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
 		return nil, &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
 	}
+	/* ⚠️ A guarda de campo mínimo, igual à que o `Exchange` tem. Sem ela, um 200
+	   de forma inesperada — envelope novo (`{data:{…}}`), rota que mudou, proxy
+	   respondendo 200 com JSON próprio — vira sucesso com tudo vazio. E aí a
+	   barreira do §4.4 falha EM ABERTO: o handler lê `IDNaPlataforma == ""` como
+	   "sem ponte, aceita", e QUALQUER código passa, inclusive inexistente. Este
+	   ecossistema já foi mordido por envelope que quebra contrato de fora e por
+	   200 mentiroso de SPA. */
+	if out.HubCampaignID == "" {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
+	}
+	out.Codigo = canonico
 	return &out, nil
 }

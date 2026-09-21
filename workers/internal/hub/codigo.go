@@ -45,9 +45,29 @@ var letrasDoPrefixo = strings.ReplaceAll(prefixo, "-", "")
 // encontrado" sem ter errado nada. São ~1 em 900 códigos. Depois de tirar o que
 // não é alfanumérico sobram duas formas válidas e só duas: 8 caracteres
 // começando com EH (o código inteiro) ou 6 (só o corpo).
+// ⚠️ FILTRA primeiro, maiusculiza depois — e a ordem é o contrário da intuição
+// por um motivo medido em 2026-09-21.
+//
+// Maiusculizando antes, as duas implementações DIVERGEM. O `toUpperCase()` do
+// JavaScript aplica o case mapping COMPLETO do Unicode, onde um caractere pode
+// virar vários: `ﬀ` (U+FB00) vira `FF`, `ß` vira `SS`, `ŉ` vira `ʼN`. O
+// `strings.ToUpper` do Go aplica só o mapping SIMPLES (1→1) e deixa os três
+// intactos. Como a maiusculização vinha antes do filtro, o texto limpo ficava
+// com tamanhos diferentes nos dois lados — e é o TAMANHO que decide se há
+// prefixo. Medido: `EH` + `ﬀ` + `K2M4` dava `EH-FFK2M4` no hub e `EH-EHK2M4`
+// aqui. Não é "um aceita e o outro recusa": são os dois dizendo sim para
+// campanhas DIFERENTES, e o hub re-normaliza o código a cada `campanha.upsert`
+// (`campanhaDaPlataforma.ts`), então as duas se encontram no fio.
+//
+// Filtrando primeiro, só resta ASCII, e maiúscula de ASCII é 1→1 idêntica nas
+// duas linguagens: a classe inteira do defeito some por construção, em vez de
+// depender de alguém lembrar de mais um caso de teste.
 func NormalizaCodigo(bruto string) string {
 	limpo := make([]rune, 0, len(bruto))
-	for _, r := range strings.ToUpper(bruto) {
+	for _, r := range bruto {
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
 		if (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') {
 			limpo = append(limpo, r)
 		}
