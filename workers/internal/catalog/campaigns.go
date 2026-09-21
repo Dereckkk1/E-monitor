@@ -42,7 +42,15 @@ type Campaign struct {
 	HubCode *string `json:"hub_code"`
 	// HubNotifiedAt é quando o hub confirmou o recebimento. NULL = ele ainda
 	// não sabe desta campanha, e o job de reemissão a pega.
-	HubNotifiedAt *time.Time `json:"hub_notified_at"`
+	//
+	// ⚠️ `json:"-"`: é encanamento entre os dois servidores, e NÃO desce para o
+	// navegador. `/v1/campaigns` atende `viewer` com escopo de cliente, e "o
+	// evento chegou ao hub?" não é assunto de quem vê a campanha — ninguém no
+	// front lê este campo, nem nas telas que este plano ainda vai fazer (o job
+	// lê do BANCO, não de JSON). É a mesma postura que o plano toma na Task 5
+	// ao recusar mandar os ids do hub para o navegador. O `hub_code` desce por
+	// necessidade: a tela de edição precisa dele preenchido.
+	HubNotifiedAt *time.Time `json:"-"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	// MaterialCount só é populado pelo ListPaged (não pelas outras queries —
@@ -131,10 +139,18 @@ func (c *Campaigns) MarcarHubNotificada(ctx context.Context, id uuid.UUID) error
 // evento, e buscá-lo campanha a campanha seria N+1 numa varredura que roda de
 // 15 em 15 minutos.
 //
-// ⚠️ O `ORDER BY created_at` casa com o índice parcial `campaigns_hub_pendentes`
+// ⚠️ O `ORDER BY created_at` casa com o índice parcial `idx_campaigns_hub_pendentes`
 // da migração 0069. Ordenar por outra coisa faria a varredura ignorar o índice
 // e voltar a ler a tabela inteira quatro vezes por hora.
 func (c *Campaigns) PendentesDeHub(ctx context.Context, limit int) ([]Campaign, error) {
+	// ⚠️ `LIMIT` negativo é ERRO do Postgres (SQLSTATE 2201W), não lista vazia:
+	// um `limit` mal calculado derrubaria o ciclo inteiro do job em vez de não
+	// fazer nada. E `LIMIT 0` devolveria zero linhas caladamente, que é a fila
+	// parando sem ninguém saber. Mesma guarda que o `ListPaged` faz com `page`
+	// e `pageSize` logo acima neste arquivo.
+	if limit <= 0 {
+		limit = 100
+	}
 	rows, err := c.pool.Query(ctx, `
 		SELECT id, client_id, name, hub_code
 		  FROM campaigns
