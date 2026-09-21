@@ -62,9 +62,19 @@ func TestCreateGuardaHubCode(t *testing.T) {
 
 	require.NotNil(t, got.HubCode)
 	require.Equal(t, "EH-7K4M2X", *got.HubCode)
-	// Recém-criada, o hub ainda não sabe dela: é o que põe a campanha na fila
-	// do job de reemissão se o evento se perder.
-	require.Nil(t, got.HubNotifiedAt)
+
+	/* Recém-criada, o hub ainda não sabe dela: é o que põe a campanha na fila do
+	   job de reemissão se o evento se perder.
+
+	   ⚠️ A conferência é pelo `Get`, e não pelo `got` do `Create`. `nil` é o
+	   valor ZERO do ponteiro: `require.Nil(t, got.HubNotifiedAt)` passava
+	   também quando o `RETURNING` do `Create` perdia a coluna — medido, a suíte
+	   ficava verde. Uma asserção que não consegue falhar no caso que promete
+	   cobrir não é rede, é decoração. Lendo do banco, ela falsifica. */
+	lido, err := repo.Get(ctx, got.ID)
+	require.NoError(t, err)
+	require.Nil(t, lido.HubNotifiedAt)
+	require.NotNil(t, lido.HubCode, "o Create gravou o código mesmo?")
 }
 
 // String vazia vira NULL: "" e "não tem" são a mesma coisa aqui, e deixar as
@@ -98,11 +108,20 @@ sem nada ficar vermelho.
 
 Uma tabela por leitor é o que transforma o aviso em rede.
 */
-func TestTodoLeitorDeCampanhaTrazOHubCode(t *testing.T) {
+func TestTodoLeitorDeCampanhaTrazAsDuasColunas(t *testing.T) {
 	ctx, pool := hubCodePool(t)
 	repo := NewCampaigns(pool)
 	cliente := seedClienteHubCode(t, ctx, pool)
 	criada := campanhaCom(t, ctx, repo, cliente, "Com código", "EH-7K4M2X")
+	/* ⚠️ Confirmada de propósito, e é o que faz esta tabela guardar as DUAS
+	   colunas em vez de uma. A primeira versão só afirmava o `HubCode`: tirar
+	   `hub_notified_at` do SELECT do `ListPaged` — a consulta que serve a tela
+	   principal — deixava a suíte inteira verde, e o campo voltaria `null` para
+	   toda campanha, para sempre.
+
+	   Nenhum leitor da tabela escreve nesta coluna (o `UpdateFixedCPM` mexe só
+	   no CPM), então a ordem dos subtestes continua sem importar. */
+	require.NoError(t, repo.MarcarHubNotificada(ctx, criada.ID))
 
 	leitores := []struct {
 		nome string
@@ -147,6 +166,7 @@ func TestTodoLeitorDeCampanhaTrazOHubCode(t *testing.T) {
 			c := l.ler(t)
 			require.NotNil(t, c.HubCode, "%s perdeu o hub_code — o SELECT dele não tem a coluna", l.nome)
 			require.Equal(t, "EH-7K4M2X", *c.HubCode)
+			require.NotNil(t, c.HubNotifiedAt, "%s perdeu o hub_notified_at — o SELECT dele não tem a coluna", l.nome)
 		})
 	}
 }
@@ -189,22 +209,38 @@ func TestAtualizarHubCodeZeraAConfirmacao(t *testing.T) {
 	require.Nil(t, depois.HubNotifiedAt, "trocar o código tem de devolver a campanha para a fila")
 }
 
-// Apagar o código também zera: sem código ela não entra na fila (é a regra do
-// §8 — "só reemite o que tem código"), e deixar a confirmação velha ali seria
-// afirmar que o hub conhece um vínculo que não existe mais.
+/*
+Apagar o código também zera: sem código ela não entra na fila (é a regra do §8 —
+"só reemite o que tem código"), e deixar a confirmação velha ali seria afirmar
+que o hub conhece um vínculo que não existe mais.
+
+⚠️ Os DOIS casos, e o de espaços é o que importa. O `btrim` do `Create` tinha
+teste; o do `AtualizarHubCode` não — e medido, tirá-lo só daqui deixava a suíte
+verde. É o caminho PIOR dos dois: `AtualizarHubCode` é o que a Task 6 chama
+quando alguém reedita o código no wizard, que é exatamente onde o "colei com
+espaço em volta" acontece.
+*/
 func TestApagarOHubCodeDeixaNuloEZeraAConfirmacao(t *testing.T) {
 	ctx, pool := hubCodePool(t)
 	repo := NewCampaigns(pool)
 	cliente := seedClienteHubCode(t, ctx, pool)
-	c := campanhaCom(t, ctx, repo, cliente, "Vai perder o código", "EH-AAAAAA")
-	require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID))
 
-	require.NoError(t, repo.AtualizarHubCode(ctx, c.ID, ""))
+	for _, caso := range []struct{ rotulo, novo string }{
+		{"string vazia", ""},
+		{"só espaços", "   "},
+	} {
+		t.Run(caso.rotulo, func(t *testing.T) {
+			c := campanhaCom(t, ctx, repo, cliente, "Vai perder o código "+caso.rotulo, "EH-AAAAA"+caso.rotulo[:1])
+			require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID))
 
-	depois, err := repo.Get(ctx, c.ID)
-	require.NoError(t, err)
-	require.Nil(t, depois.HubCode)
-	require.Nil(t, depois.HubNotifiedAt)
+			require.NoError(t, repo.AtualizarHubCode(ctx, c.ID, caso.novo))
+
+			depois, err := repo.Get(ctx, c.ID)
+			require.NoError(t, err)
+			require.Nil(t, depois.HubCode, "%q tinha de virar NULL", caso.novo)
+			require.Nil(t, depois.HubNotifiedAt)
+		})
+	}
 }
 
 func TestPendentesDeHubSoTrazQuemTemCodigoESemConfirmacao(t *testing.T) {
@@ -231,19 +267,103 @@ func TestPendentesDeHubSoTrazQuemTemCodigoESemConfirmacao(t *testing.T) {
 	require.False(t, ids[semCodigo.ID], "campanha sem código não entra na fila")
 }
 
-// O `limit` existe para o primeiro ciclo depois de uma queda longa do hub não
-// virar uma rajada de centenas de chamadas.
+/*
+O `limit` existe para o primeiro ciclo depois de uma queda longa do hub não
+virar uma rajada de centenas de chamadas.
+
+⚠️ DOIS limites, e não um. Com um só valor, cravar esse número no SQL (`LIMIT 2`
+em vez de `LIMIT $1`) passa — medido. Um teste que fixa um único valor autoriza
+hardcodar justamente esse valor.
+
+⚠️ E confere QUAIS linhas vieram, não só quantas. `PendentesDeHub` é consulta
+GLOBAL — não filtra cliente —, e o `t.Cleanup` da semente engole erro. Sobra de
+uma rodada interrompida com `hub_code` preenchido satisfaz um `Len(2)` sem que
+nenhuma das campanhas deste teste apareça.
+*/
 func TestPendentesDeHubRespeitaOLimite(t *testing.T) {
 	ctx, pool := hubCodePool(t)
 	repo := NewCampaigns(pool)
 	cliente := seedClienteHubCode(t, ctx, pool)
+	meus := map[uuid.UUID]bool{}
 	for i := 0; i < 3; i++ {
-		campanhaCom(t, ctx, repo, cliente, "Pendente", "EH-AAAAA"+string(rune('A'+i)))
+		c := campanhaCom(t, ctx, repo, cliente, "Pendente", "EH-AAAAA"+string(rune('A'+i)))
+		meus[c.ID] = true
 	}
 
-	rows, err := repo.PendentesDeHub(ctx, 2)
+	curto, err := repo.PendentesDeHub(ctx, 2)
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
+	require.Len(t, curto, 2)
+
+	largo, err := repo.PendentesDeHub(ctx, 100)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(largo), 3, "com limite alto, as três têm de caber")
+
+	nossas := 0
+	for _, r := range largo {
+		if meus[r.ID] {
+			nossas++
+		}
+	}
+	require.Equal(t, 3, nossas, "as três campanhas deste teste têm de estar na fila")
+}
+
+/*
+A fila é FIFO, e isso tem consequência funcional além do índice: com `LIMIT` e
+SEM ordenação, o Postgres pode devolver o mesmo subconjunto indefinidamente, e
+uma campanha do fim da fila nunca sairia dela. O `ORDER BY created_at` não tinha
+nada guardando — removê-lo deixava a suíte verde.
+*/
+func TestPendentesDeHubEhFilaPorAntiguidade(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+
+	/* ⚠️ A NOVA é inserida PRIMEIRO, e a velha depois (com o `created_at`
+	   empurrado para trás). A ordem importa, e custou uma mutação para
+	   descobrir: inserindo a velha primeiro, a ordem FÍSICA da tabela já
+	   coincide com a cronológica, e tirar o `ORDER BY` deixava este teste
+	   verde — o Postgres devolvia em ordem de heap, que dava o mesmo
+	   resultado. Invertendo, as duas ordens DISCORDAM, e só quem ordena de
+	   verdade passa. */
+	nova := campanhaCom(t, ctx, repo, cliente, "Nova", "EH-NNNNNN")
+	velha := campanhaCom(t, ctx, repo, cliente, "Velha", "EH-VVVVVV")
+	_, err := pool.Exec(ctx, `UPDATE campaigns SET created_at = now() - interval '2 days' WHERE id = $1`, velha.ID)
+	require.NoError(t, err)
+
+	rows, err := repo.PendentesDeHub(ctx, 100)
+	require.NoError(t, err)
+
+	posVelha, posNova := -1, -1
+	for i, r := range rows {
+		if r.ID == velha.ID {
+			posVelha = i
+		}
+		if r.ID == nova.ID {
+			posNova = i
+		}
+	}
+	require.NotEqual(t, -1, posVelha)
+	require.NotEqual(t, -1, posNova)
+	require.Less(t, posVelha, posNova, "a mais antiga sai primeiro da fila")
+}
+
+/*
+⚠️ `LIMIT` negativo é ERRO do Postgres (SQLSTATE 2201W), não lista vazia: um
+`limit` mal calculado derrubaria o ciclo inteiro do job em vez de não fazer
+nada. O `ListPaged`, no mesmo arquivo, normaliza `page` e `pageSize` — esta não
+normalizava.
+*/
+func TestPendentesDeHubNormalizaLimiteInvalido(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+	campanhaCom(t, ctx, repo, cliente, "Pendente", "EH-ZZZZZZ")
+
+	for _, limite := range []int{0, -1} {
+		rows, err := repo.PendentesDeHub(ctx, limite)
+		require.NoError(t, err, "limite %d não pode derrubar o job", limite)
+		require.NotEmpty(t, rows, "limite %d devia cair no padrão, não em zero linhas", limite)
+	}
 }
 
 // A fila traz o CÓDIGO junto: o job precisa dele para remontar o evento, e uma
