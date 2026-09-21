@@ -49,21 +49,37 @@ type HubCodesHandler struct {
 // escolhido), 404 (✗ vermelho, o único caso em que o problema é do que a pessoa
 // digitou) e qualquer outra coisa (⚠ âmbar, "não deu para conferir agora").
 func (h *HubCodesHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if h.Hub == nil || !h.Hub.Configured() {
-		http.Error(w, "integração com a Central de Clientes não está configurada",
-			http.StatusServiceUnavailable)
-		return
-	}
+	/* ⚠️ SEM guarda de `h.Hub == nil || !Configured()` aqui, e a ausência é
+	   medida, não esquecimento. O `ConferirCodigo` já começa por
+	   `if !c.Configured()` e devolve `hub.ErrNotConfigured` — 503, com esta
+	   mesma mensagem —, e o `Configured()` é nil-safe (`c != nil && …`). Uma
+	   guarda aqui ficava idêntica byte a byte: apagá-la não mudava NENHUMA
+	   resposta, o que a tornava código que dois testes diziam guardar e não
+	   guardavam. Pior, ela duplicava a string da mensagem, e duas fontes para o
+	   mesmo texto divergem na primeira vez que alguém reescreve uma.
 
+	   Quem prende o comportamento são o `TestHubCodesSemHubConfigurado` e o
+	   `TestHubCodesHubNilNaoPanica`. */
 	ctx, cancel := context.WithTimeout(r.Context(), prazoDeConferencia)
 	defer cancel()
 
 	doHub, err := h.Hub.ConferirCodigo(ctx, chi.URLParam(r, "code"))
 	if err != nil {
-		/* O status vem do `ConferirCodigo` e desce CRU, porque o status É a
-		   tela. Ele já traduziu o eixo que importa — "é problema do código que
-		   a pessoa digitou (404) × é problema nosso (503)" —, e reescrevê-lo
-		   aqui só poderia estragar essa tradução. */
+		/* O status vem do `ConferirCodigo` e desce CRU.
+
+		   ⚠️ E são QUATRO, não dois — o contrato da tela depende de saber disto:
+
+		     404  o código não existe, ou nem é código  → ✗ VERMELHO
+		     503  hub mudo, 401, 429, 5xx, não configurado → ⚠ âmbar
+		     502  respondeu 200 com corpo que não dá para usar → ⚠ âmbar
+		     500  `HUB_URL` malformada                  → ⚠ âmbar
+
+		   Por isso a regra do front é **"404 é vermelho; QUALQUER outro não-200
+		   é âmbar"**, e nunca `status === 503 ? âmbar : erro`. O 502 é
+		   exatamente a assinatura da falha mais provável do dia a dia — o hub
+		   mudando o envelope da resposta, ou um proxy respondendo 200 com JSON
+		   próprio —, e tratá-lo como erro duro pintaria de vermelho um cadastro
+		   perfeito, que é o contrário da decisão 2. */
 		var e *hub.Error
 		if errors.As(err, &e) {
 			http.Error(w, e.Message, e.Status)
