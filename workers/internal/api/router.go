@@ -68,6 +68,10 @@ type Deps struct {
 	// HubSync: mutacoes de identidade empurradas pelo hub (RFC-001 §9.2) — o
 	// sentido oposto do HubSSO. nil quando a integracao nao esta configurada.
 	HubSync               *handlers.HubSyncHandler
+	// HubCodes: a conferencia do codigo da campanha para a TELA (spec do hub
+	// 2026-09-18 §4.3). O front daqui pergunta ao proprio backend, e e ele que
+	// fala com o hub — a chave da plataforma nao desce para o navegador.
+	HubCodes              *handlers.HubCodesHandler
 	// HubClient/HubClients: a porta de LEITURA do hub (Central consolidada,
 	// spec 2026-09-02 §5.3) — o sentido oposto do HubSync, que ESCREVE. São
 	// interfaces, e nao os tipos concretos, para o teste de rota montar o
@@ -484,6 +488,26 @@ func NewRouter(d Deps) http.Handler {
 				// Edita o trio básico (name, start_date, end_date) — usado
 				// pelo Step 1 do wizard em modo edit. client_id continua imutável.
 				r.Put("/campaigns/{id}", d.Campaigns.Update)
+
+				/* A conferência do código do hub para a TELA (spec do hub
+				   2026-09-18 §4.3). Fica aqui, ao lado do POST /campaigns, e não
+				   no subgrupo A: quem precisa dela é quem CADASTRA campanha, e
+				   esse é o mesmo par de papéis do POST logo acima.
+
+				   ⚠️ E ela NÃO pode ir para o subgrupo viewer. A resposta diz o
+				   nome da campanha e o nome do cliente de qualquer código que se
+				   adivinhe — é um oráculo sobre o hub inteiro, e viewer é papel
+				   de cliente externo.
+
+				   ⚠️ Nem sob `/v1/internal/hub`: aquele sub-router é guardado
+				   por `RequireHubKeyScoped`, a porta por onde o HUB entra aqui
+				   com a chave da plataforma. Esta rota é o contrário — o front
+				   daqui, com JWT de pessoa, pedindo ao próprio backend que
+				   pergunte ao hub, justamente para a chave não descer para o
+				   navegador. */
+				if d.HubCodes != nil {
+					r.Get("/hub-codes/{code}", d.HubCodes.Get)
+				}
 				r.Put("/campaigns/{id}/stations", d.Campaigns.UpdateStations)
 				// CPM fixo opcional, setado no Step 6 (pricing) do wizard.
 				// Sobrescreve o CPM derivado nas telas de exibição.

@@ -555,6 +555,10 @@ func main() {
 		// ambiente nova — e portanto nenhuma linha nova no bloco `environment:`
 		// do compose para alguem esquecer, que foi o 503 do PR #8.
 		HubSync:      handlers.NewHubSyncHandler(pool, hub.New(cfg.HubURL, cfg.HubPlatformKey)),
+		// A conferencia do codigo da campanha para a tela (spec do hub
+		// 2026-09-18 §4.3). Mesma chave e mesma origem das outras pontes —
+		// nenhuma variavel de ambiente nova.
+		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		// A porta de LEITURA do hub (Central consolidada, spec 2026-09-02
 		// §5.3): mesma chave e mesma origem das duas linhas acima — uma
 		// configuracao so para os tres sentidos da ponte, e por isso tambem
