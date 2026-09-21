@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -226,6 +227,15 @@ type ClienteUpsert struct {
 type CampanhaUpsert struct {
 	IDNaPlataforma        string `json:"idNaPlataforma"`
 	IDClienteNaPlataforma string `json:"idClienteNaPlataforma"`
+	// ⚠️ HubCode é a EXCEÇÃO ao "só ids" do comentário acima, e não contradiz o
+	// motivo dele: ele não é DADO da campanha que o hub possa buscar de volta —
+	// é o ENDEREÇO de onde ela vai morar lá. O hub não tem como descobri-lo
+	// perguntando, porque quem o escolheu foi a pessoa que cadastrou aqui.
+	//
+	// Sem ele o hub IGNORA o evento (regra do corte, §6.1 da spec). Um evento
+	// sem código não é erro nem retentativa: é campanha que não entra, e nada
+	// em tela nenhuma denuncia.
+	HubCode string `json:"hubCode"`
 }
 
 type envelopeEvento struct {
@@ -297,4 +307,81 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 		}
 	}
 	return nil
+}
+
+// CampanhaDoHub é a resposta de `GET /api/platform/campaigns/by-code/{code}`,
+// campo a campo (spec do hub 2026-09-18 §5).
+type CampanhaDoHub struct {
+	HubCampaignID string `json:"hubCampaignId"`
+	Nome          string `json:"nome"`
+	// 'YYYY-MM-DD', dia de calendário SEM fuso: são datas de veiculação, não
+	// instantes. Ficam como string de propósito — convertê-las para time.Time
+	// aqui obrigaria a escolher um fuso, e escolher errado desloca o começo da
+	// campanha em um dia.
+	Inicio  string `json:"inicio"`
+	Fim     string `json:"fim"`
+	Cliente struct {
+		ID   string `json:"id"`
+		Nome string `json:"nome"`
+		// O `emonitorClientId` do cliente no hub — a ponte. Vazio quando o
+		// cliente do hub ainda não foi ligado a este E-monitor, que é estado
+		// normal e NÃO é erro: quem decide o que fazer é o handler.
+		IDNaPlataforma string `json:"idNaPlataforma"`
+	} `json:"cliente"`
+}
+
+// ConferirCodigo pergunta ao hub de quem é um código.
+//
+// ⚠️ Leitura pura: não cria nem amarra nada. Quem amarra é o `campanha.upsert`
+// depois que a campanha existe aqui. Serve para a tela mostrar no que a pessoa
+// está amarrando ANTES de salvar, e para o `Create` recusar código inválido.
+func (c *Client) ConferirCodigo(ctx context.Context, code string) (*CampanhaDoHub, error) {
+	if !c.Configured() {
+		return nil, ErrNotConfigured
+	}
+
+	// ⚠️ Normaliza ANTES de sair, e recusa daqui o que nem é código. Perguntar
+	// ao hub por "banana" gasta uma ida à rede para receber o 404 que dá para
+	// dar aqui — e num campo que confere ao sair do foco, isso é uma ida por
+	// digitação abandonada.
+	canonico := NormalizaCodigo(code)
+	if canonico == "" {
+		return nil, &Error{Status: http.StatusNotFound, Message: "código não encontrado na Central de Clientes"}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/api/platform/campaigns/by-code/"+url.PathEscape(canonico), nil)
+	if err != nil {
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+	}
+	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// ⚠️ 503 e não o 502 que o `Exchange` usa logo acima. A decisão 2 da
+		// spec diz que hub fora do ar NÃO trava o cadastro, e para isso a tela
+		// precisa separar "não deu para conferir agora" (âmbar, siga) de "este
+		// código é de outro cliente" (vermelho, pare). É o mesmo status do
+		// `ErrNotConfigured`, e isso também é certo: instalação sem hub e hub
+		// mudo dão a mesma tela.
+		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "a Central de Clientes não respondeu"}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &Error{Status: http.StatusNotFound, Message: "código não encontrado na Central de Clientes"}
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Resposta que CHEGOU e não dá para usar — diferente de resposta que não
+		// chegou. Inclui o 401 de chave recusada, que é problema de configuração
+		// desta instalação e não de quem está cadastrando.
+		return nil, &Error{Status: http.StatusBadGateway,
+			Message: fmt.Sprintf("a Central de Clientes respondeu %d", resp.StatusCode)}
+	}
+
+	var out CampanhaDoHub
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
+	}
+	return &out, nil
 }
