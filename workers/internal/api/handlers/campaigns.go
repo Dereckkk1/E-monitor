@@ -131,69 +131,133 @@ func (h *CampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/* A conferência do código do hub (spec §4.4). Esta é a barreira de verdade:
-	   a conferência da tela (§4.3) é conveniência, e pode ser pulada por quem
-	   chamar a API direto.
-
-	   ⚠️ TRÊS desfechos, e eles não são o mesmo:
-	    - o hub diz que o código é de OUTRO cliente → 422. É erro de quem
-	      digitou, e a mensagem diz de quem é o código para a pessoa conseguir
-	      achar o certo;
-	    - o hub diz 404 → 422, idem;
-	    - o hub NÃO respondeu (ou está mudo, ou devolveu 401/429/5xx) → SEGUE.
-	      Decisão 2 da spec: uma queda do hub não pode parar o cadastro de
-	      campanha no E-monitor. O `hub_notified_at` fica nulo e o job de
-	      reemissão leva a campanha quando o hub voltar. Recusar aqui seria o
-	      contrário do que a decisão 2 pede.
-
-	   ⚠️ E a gravação é CANÔNICA. `ConferirCodigo` devolve a forma normalizada
-	   e é ela que vai para a coluna: sem isto, `EH-7K4M2X` e `eh7k4m2x` viram
-	   códigos diferentes aqui enquanto para o hub são o mesmo, e a §10 exige a
-	   canônica na coluna. Vale inclusive quando o hub não respondeu — aí a
-	   normalização é local, que é o que `hub.NormalizaCodigo` faz sem rede. */
-	if canonico := hub.NormalizaCodigo(in.HubCode); canonico != "" {
-		in.HubCode = canonico
-		if h.Hub.Configured() {
-			doHub, err := h.Hub.ConferirCodigo(r.Context(), canonico)
-			var he *hub.Error
-			switch {
-			case err == nil:
-				/* Ponte vazia não é divergência: o cliente do hub ainda não foi
-				   ligado a este E-monitor, e não há o que comparar. Recusar
-				   faria todo cliente ainda não ligado ser barrado justamente na
-				   primeira campanha dele. */
-				if doHub.Cliente.IDNaPlataforma != "" &&
-					doHub.Cliente.IDNaPlataforma != in.ClientID.String() {
-					http.Error(w, fmt.Sprintf(
-						"esse código é da campanha %q, de outro cliente (%s)",
-						doHub.Nome, doHub.Cliente.Nome), http.StatusUnprocessableEntity)
-					return
-				}
-			case errors.As(err, &he) && he.Status == http.StatusNotFound:
-				http.Error(w, "código do hub não encontrado", http.StatusUnprocessableEntity)
-				return
-			default:
-				// Não deu para conferir. Loga e segue — ver a decisão 2 acima.
-				if h.Log != nil {
-					h.Log.Warn("nao deu para conferir o codigo do hub",
-						zap.String("hub_code", canonico), zap.Error(err))
-				}
-			}
-		}
-	} else if strings.TrimSpace(in.HubCode) != "" {
-		/* Veio alguma coisa, e não é código. Recusar daqui evita gravar lixo na
-		   coluna que o job vai ler de 15 em 15 minutos para sempre. */
-		http.Error(w, "código do hub inválido", http.StatusUnprocessableEntity)
+	// A barreira do §4.4. O mesmo helper serve o `Update` — ver o comentário
+	// dele para o porquê de ser compartilhado.
+	canonico, ok := h.conferirCodigoOuRecusar(w, r, in.ClientID, in.HubCode)
+	if !ok {
 		return
 	}
+	in.HubCode = canonico
 
 	out, err := h.Repo.Create(r.Context(), in)
 	if err != nil {
 		http.Error(w, "internal error", 500)
 		return
 	}
-	avisarHubDaCampanha(h.Hub, out)
+	avisarHubDaCampanha(h.Hub, h.Repo, out)
 	writeJSON(w, 201, out)
+}
+
+/*
+conferirCodigoOuRecusar é a barreira de verdade do §4.4 da spec, compartilhada
+pelo `Create` e pelo `Update`.
+
+Devolve o código na forma CANÔNICA e `ok` verdadeiro quando dá para seguir.
+Quando devolve `ok` falso, a resposta de erro JÁ FOI ESCRITA — quem chama só
+precisa voltar.
+
+⚠️ COMPARTILHADA de propósito, e isso é conserto de um buraco real. O plano
+desta série conferia só no `Create`; com isso a barreira virava opcional em duas
+requisições:
+
+	POST /campaigns      {"hub_code": ""}                   → 201 (a decisão 6 permite)
+	PUT  /campaigns/{id} {"hub_code": "<de outro cliente>"} → gravava, e emitia
+
+E era pior que pular a conferência: o `AtualizarHubCode` ZERA o
+`hub_notified_at`, então a campanha entrava na fila do job do §8 e passava a
+bater no hub de 15 em 15 minutos com o código do cliente errado, para sempre.
+
+⚠️ TRÊS desfechos, e eles não são o mesmo:
+  - o hub diz que o código é de OUTRO cliente → 422. É erro de quem digitou, e a
+    mensagem diz de quem é o código para a pessoa conseguir achar o certo;
+  - o hub diz 404 → 422, idem;
+  - o hub NÃO respondeu (mudo, 401, 429, 5xx) → SEGUE. Decisão 2 da spec: uma
+    queda do hub não pode parar o cadastro de campanha no E-monitor. O
+    `hub_notified_at` fica nulo e o job de reemissão leva a campanha quando o hub
+    voltar. Recusar aqui seria o contrário do que a decisão 2 pede.
+
+⚠️ E o que volta é CANÔNICO. Sem isto, `EH-7K4M2X` e `eh7k4m2x` viram códigos
+diferentes aqui enquanto para o hub são o mesmo, e a §10 exige a forma canônica
+na coluna. Vale inclusive quando o hub não respondeu — aí a normalização é
+local, que é o que `hub.NormalizaCodigo` faz sem tocar a rede.
+*/
+func (h *CampaignsHandler) conferirCodigoOuRecusar(
+	w http.ResponseWriter, r *http.Request, clientID uuid.UUID, bruto string,
+) (canonico string, ok bool) {
+	canonico = hub.NormalizaCodigo(bruto)
+	if canonico == "" {
+		if strings.TrimSpace(bruto) != "" {
+			/* Veio alguma coisa, e não é código. Recusar daqui evita gravar
+			   lixo na coluna que o job vai ler de 15 em 15 minutos para
+			   sempre. */
+			http.Error(w, "código do hub inválido", http.StatusUnprocessableEntity)
+			return "", false
+		}
+		// Sem código nenhum: a decisão 6 permite (campanha antiga, ou criada
+		// por carga). Quem exige o campo é a tela, na criação.
+		return "", true
+	}
+	if !h.Hub.Configured() {
+		// Sem hub não há com quem conferir, e a normalização local já entrega o
+		// que a §10 exige na coluna.
+		return canonico, true
+	}
+
+	/* ⚠️ Deadline PRÓPRIO, e curto. O `hub.New` fixa `http.Client{Timeout: 10s}`
+	   e esses 10s não podem ser mexidos — é o mesmo cliente do `Exchange`, que
+	   roda dentro de um login. Aqui quem espera é uma pessoa no fim de um wizard
+	   inteiro preenchido, e um hub que aceita a conexão e não responde gastava
+	   os 10s para devolver o MESMO 201 que devolveria em 1s: medido em
+	   2026-09-21. O deadline cai no `default:` abaixo e o comportamento fica
+	   idêntico, só que em 2 segundos. */
+	ctx, cancel := context.WithTimeout(r.Context(), prazoDeConferencia)
+	defer cancel()
+
+	doHub, err := h.Hub.ConferirCodigo(ctx, canonico)
+	var he *hub.Error
+	switch {
+	case err == nil:
+		if !clienteDoHubConfere(doHub.Cliente.IDNaPlataforma, clientID) {
+			http.Error(w, fmt.Sprintf(
+				"esse código é da campanha %q, de outro cliente (%s)",
+				doHub.Nome, doHub.Cliente.Nome), http.StatusUnprocessableEntity)
+			return "", false
+		}
+	case errors.As(err, &he) && he.Status == http.StatusNotFound:
+		http.Error(w, "código do hub não encontrado", http.StatusUnprocessableEntity)
+		return "", false
+	default:
+		// Não deu para conferir. Loga e segue — ver a decisão 2 acima.
+		if h.Log != nil {
+			h.Log.Warn("nao deu para conferir o codigo do hub",
+				zap.String("hub_code", canonico), zap.Error(err))
+		}
+	}
+	return canonico, true
+}
+
+/*
+clienteDoHubConfere diz se a ponte que o hub devolveu aponta para ESTE cliente.
+
+⚠️ Compara UUID com UUID, e não string com string. Deste lado o valor é sempre
+`uuid.String()` — minúsculo, canônico. No hub, `Client.emonitorClientId` é
+`String` com `trim` e mais nada, digitado no formulário de `/admin/clientes`. Um
+UUID colado em MAIÚSCULAS (que é exatamente como o Compass o mostra) fazia TODA
+campanha daquele cliente levar 422 dizendo "é de outro cliente (Y)" — onde Y é o
+nome do PRÓPRIO cliente. Falha fechada, com a mensagem mais confusa possível.
+
+⚠️ E "não é UUID" é ponte AUSENTE, não divergência — o mesmo tratamento que a
+§6.1 da spec dá ao cliente do hub sem `emonitorClientId`. Lixo naquele campo não
+é afirmação de que a campanha é de outro cliente; é afirmação de que ninguém
+ligou os dois cadastros direito. Recusar aqui barraria o cliente inteiro por um
+erro de digitação do outro lado.
+*/
+func clienteDoHubConfere(idNaPlataforma string, local uuid.UUID) bool {
+	doHub, err := uuid.Parse(strings.TrimSpace(idNaPlataforma))
+	if err != nil {
+		return true
+	}
+	return doHub == local
 }
 
 func (h *CampaignsHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +355,12 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Name      string    `json:"name"`
 		StartDate time.Time `json:"start_date"`
 		EndDate   time.Time `json:"end_date"`
+		/* ⚠️ PONTEIRO, e o ponteiro é o desenho: `nil` = o corpo não falou do
+		   código (não mexe), `""` = mandou vazio (apaga). Sem ele, todo PUT do
+		   wizard que editasse só a data apagaria o código — e apagar o código
+		   congela a coleta da proposta no hub (§6.5). Um campo ausente e um
+		   campo vazio querem dizer coisas opostas aqui. */
+		HubCode *string `json:"hub_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid request", 400)
@@ -308,6 +378,35 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "end_date must be on or after start_date", 400)
 		return
 	}
+
+	/* ⚠️ A conferência vem ANTES de qualquer escrita, e é só por isso que este
+	   `Get` existe.
+
+	   Conferindo depois do `UpdateBasic` — que é como o plano escreveu esta task
+	   —, um PUT que muda o nome E traz um código de outro cliente responderia
+	   422 com o nome JÁ GRAVADO. Resposta de erro com escrita parcial é defeito
+	   que só aparece meses depois, quando alguém repara que o nome mudou numa
+	   edição que "deu erro". */
+	var canonico string
+	var codigoMudou bool
+	if in.HubCode != nil {
+		atual, err := h.Repo.Get(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", 404)
+			} else {
+				http.Error(w, "internal error", 500)
+			}
+			return
+		}
+		var ok bool
+		canonico, ok = h.conferirCodigoOuRecusar(w, r, atual.ClientID, *in.HubCode)
+		if !ok {
+			return
+		}
+		codigoMudou = deref(atual.HubCode) != canonico
+	}
+
 	out, err := h.Repo.UpdateBasic(r.Context(), id, catalog.UpdateBasicInput{
 		Name:      strings.TrimSpace(in.Name),
 		StartDate: in.StartDate,
@@ -321,7 +420,38 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	/* ⚠️ Só emite quando o código MUDOU. O nome da campanha daqui vira o nome da
+	   proposta no hub e é atualizado na varredura de métricas — emitir a cada
+	   renomeação seria uma chamada de rede por tecla salva, sem nada de novo do
+	   outro lado.
+
+	   E apagar TEM de emitir: é o evento sem código que faz o hub pôr
+	   `coletaAtiva = false` na proposta (§6.5). Sem ele, a proposta seguiria
+	   coletando para sempre, amarrada a uma campanha que não aponta mais para
+	   ela. */
+	if codigoMudou {
+		// O `AtualizarHubCode` já zera o `hub_notified_at` sozinho, e tem teste
+		// para isso — não refaça essa parte aqui.
+		if err := h.Repo.AtualizarHubCode(r.Context(), id, canonico); err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		out.HubCode = ptrOuNil(canonico)
+		out.HubNotifiedAt = nil
+		avisarHubDaCampanha(h.Hub, h.Repo, out)
+	}
 	writeJSON(w, 200, out)
+}
+
+// ptrOuNil devolve nil para string vazia — é o par do `NULLIF` que o
+// `AtualizarHubCode` usa, para a resposta do handler dizer o mesmo que a coluna
+// passou a guardar.
+func ptrOuNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // UpdateFixedCPM seta (ou limpa, quando fixed_cpm = null) o CPM fixo da
@@ -543,7 +673,7 @@ func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request
 // nenhuma dizendo que falta alguma. Quem conserta isso é o retrato periódico
 // do §5 do desenho, que não está construído. Até lá, isto é atraso invisível,
 // não erro visível.
-func avisarHubDaCampanha(h *hub.Client, c *catalog.Campaign) {
+func avisarHubDaCampanha(h *hub.Client, repo *catalog.Campaigns, c *catalog.Campaign) {
 	if h == nil || !h.Configured() || c == nil {
 		return
 	}
@@ -552,8 +682,18 @@ func avisarHubDaCampanha(h *hub.Client, c *catalog.Campaign) {
 	dados := hub.CampanhaUpsert{
 		IDNaPlataforma:        c.ID.String(),
 		IDClienteNaPlataforma: c.ClientID.String(),
+		/* ⚠️ SEM esta linha, nada da série funciona. O hub casa a campanha pelo
+		   código; um `campanha.upsert` sem ele é ignorado com
+		   `platform.campanha.ignorada` motivo `sem-codigo` (§6.1) — sem erro,
+		   sem retentativa, e sem nada em tela nenhuma denunciando. A campanha
+		   nasceria certa aqui e nunca chegaria lá.
+
+		   Vazio é significativo e não é omissão: é o que o hub lê como "o
+		   código foi apagado", e faz ele congelar a coleta da proposta em vez
+		   de ignorar o evento (§6.5). */
+		HubCode: deref(c.HubCode),
 	}
-	id := c.ID.String()
+	id := c.ID
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -567,7 +707,24 @@ func avisarHubDaCampanha(h *hub.Client, c *catalog.Campaign) {
 			// estruturado é o que o resto da casa consulta. Só o
 			// `campaign_id` e o erro; o payload NÃO vai para o log.
 			zap.L().Error("hub: campanha.upsert falhou",
-				zap.String("campaign_id", id), zap.Error(err))
+				zap.String("campaign_id", id.String()), zap.Error(err))
+			return
+		}
+		/* A confirmação é o que TIRA a campanha da fila do job de reemissão.
+		   Sem ela, uma campanha entregue com sucesso continuaria sendo
+		   reenviada de 15 em 15 minutos para sempre.
+
+		   ⚠️ Só depois do sucesso. Marcar um envio que falhou transformaria
+		   "tentou e não deu" em "já avisou", e a campanha sairia da fila sem
+		   nunca ter chegado — fila que esquece é pior que fila que repete.
+
+		   ⚠️ E com o `ctx` desta goroutine, que nasce de `context.Background()`:
+		   o `r.Context()` do handler já morreu quando a resposta foi escrita. */
+		if repo != nil {
+			if err := repo.MarcarHubNotificada(ctx, id); err != nil {
+				zap.L().Warn("hub: entregou a campanha mas nao marcou hub_notified_at",
+					zap.String("campaign_id", id.String()), zap.Error(err))
+			}
 		}
 	}()
 }

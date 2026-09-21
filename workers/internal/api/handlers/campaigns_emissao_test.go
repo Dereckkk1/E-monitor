@@ -33,7 +33,7 @@ func TestAvisarHubDaCampanha_MandaOsCamposCertos(t *testing.T) {
 	defer srv.Close()
 
 	c := campanhaDeTeste()
-	avisarHubDaCampanha(hub.New(srv.URL, "k"), c)
+	avisarHubDaCampanha(hub.New(srv.URL, "k"), nil, c)
 
 	select {
 	case env := <-recebido:
@@ -55,13 +55,28 @@ func TestAvisarHubDaCampanha_MandaOsCamposCertos(t *testing.T) {
 // ⚠️ O TESTE QUE DEFINE O DESENHO. Se ele ficar vermelho, a escolha mudou: o
 // E-monitor passou a depender do hub estar de pé para criar campanha.
 func TestAvisarHubDaCampanha_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
+	/* Aceita a conexão e NUNCA responde — é exatamente isso que o teste mede.
+
+	   ⚠️ O `solta` não é enfeite: `httptest.Server.Close()` ESPERA os handlers
+	   em voo terminarem, então um handler parado aqui faz o teste custar o
+	   tempo inteiro da espera. E esperar só por `r.Context().Done()` NÃO basta
+	   — medido nesta máquina em 2026-09-21: a requisição que o emissor dispara
+	   em goroutine não teve o contexto cancelado quando o cliente desistiu, e o
+	   pacote passou de 284s para estourar o timeout de 2 min.
+
+	   Os defers são LIFO: o `close(solta)` roda ANTES do `Close()`. */
+	solta := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(30 * time.Second) // aceita a conexão e nunca responde
+		select {
+		case <-solta:
+		case <-r.Context().Done():
+		}
 	}))
 	defer srv.Close()
+	defer close(solta)
 
 	comecou := time.Now()
-	avisarHubDaCampanha(hub.New(srv.URL, "k"), campanhaDeTeste())
+	avisarHubDaCampanha(hub.New(srv.URL, "k"), nil, campanhaDeTeste())
 	demorou := time.Since(comecou)
 
 	if demorou > 500*time.Millisecond {
@@ -70,11 +85,11 @@ func TestAvisarHubDaCampanha_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
 }
 
 func TestAvisarHubDaCampanha_HubNilNaoPanica(t *testing.T) {
-	avisarHubDaCampanha(nil, campanhaDeTeste())
+	avisarHubDaCampanha(nil, nil, campanhaDeTeste())
 }
 
 func TestAvisarHubDaCampanha_CampanhaNilNaoPanica(t *testing.T) {
-	avisarHubDaCampanha(hub.New("http://exemplo", "k"), nil)
+	avisarHubDaCampanha(hub.New("http://exemplo", "k"), nil, nil)
 }
 
 func TestAvisarHubDaCampanha_SemConfiguracaoNaoChama(t *testing.T) {
@@ -84,7 +99,7 @@ func TestAvisarHubDaCampanha_SemConfiguracaoNaoChama(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	avisarHubDaCampanha(hub.New("", ""), campanhaDeTeste())
+	avisarHubDaCampanha(hub.New("", ""), nil, campanhaDeTeste())
 
 	select {
 	case <-chamou:
