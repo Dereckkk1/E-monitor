@@ -60,9 +60,22 @@ func TestCodigoDaCampanha_ContraHubReal(t *testing.T) {
 	ctx, pool := poolHubCode(t)
 
 	local := uuid.MustParse(clienteDoHub)
-	// Cria o cliente local com o MESMO id que o hub tem na ponte.
-	_, err := pool.Exec(ctx, `INSERT INTO clients (id, name) VALUES ($1, $2)
-		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`, local, "Cliente E2E")
+	/* Cria o cliente local com o MESMO id que o hub tem na ponte, E com o
+	   `hub_id` apontando de volta.
+
+	   ⚠️ O `hub_id` não é detalhe: é o que o `RequireHubKeyScoped` usa para
+	   traduzir o cliente do hub neste aqui quando o hub CHAMA DE VOLTA a porta
+	   de leitura no meio do `campanha.upsert`. Sem ele a chamada leva 403
+	   `client_not_linked`, o hub devolve 502 `plataforma_indisponivel`, e a
+	   campanha nunca é confirmada — e o teste falha dizendo "não foi marcado em
+	   5s", que não aponta para lugar nenhum.
+
+	   A primeira versão deste teste omitia o `hub_id` e passava só porque o
+	   cliente já estava semeado à mão no banco; o `t.Cleanup` o apagava, e a
+	   rodada seguinte falhava. */
+	_, err := pool.Exec(ctx, `INSERT INTO clients (id, name, hub_id) VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hub_id = EXCLUDED.hub_id`,
+		local, "Cliente E2E", os.Getenv("HUB_E2E_CODIGO_HUBCLIENTE"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM campaigns WHERE client_id = $1`, local)
@@ -112,8 +125,9 @@ func TestCodigoDeOutroCliente_ContraHubReal(t *testing.T) {
 	ctx, pool := poolHubCode(t)
 
 	local := uuid.MustParse(clienteDoHub)
-	_, err := pool.Exec(ctx, `INSERT INTO clients (id, name) VALUES ($1, $2)
-		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`, local, "Cliente E2E")
+	_, err := pool.Exec(ctx, `INSERT INTO clients (id, name, hub_id) VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hub_id = EXCLUDED.hub_id`,
+		local, "Cliente E2E", os.Getenv("HUB_E2E_CODIGO_HUBCLIENTE"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM campaigns WHERE client_id = $1`, local)
