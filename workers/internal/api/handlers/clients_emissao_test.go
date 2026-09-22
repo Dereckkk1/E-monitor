@@ -107,10 +107,25 @@ func TestAvisarHubDoCliente_CampoVazioNaoViaja(t *testing.T) {
 // ⚠️ O TESTE QUE DEFINE O DESENHO. Se ele ficar vermelho, a escolha mudou: o
 // E-monitor passou a depender do hub estar de pé para criar cliente.
 func TestAvisarHubDoCliente_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
+	/* Aceita a conexão e NUNCA responde — é exatamente isso que o teste mede.
+
+	   ⚠️ O `solta` não é enfeite: `httptest.Server.Close()` ESPERA os handlers
+	   em voo terminarem, então um handler parado aqui faz o teste custar o
+	   tempo inteiro da espera. E esperar só por `r.Context().Done()` NÃO basta
+	   — medido nesta máquina em 2026-09-21: a requisição que o emissor dispara
+	   em goroutine não teve o contexto cancelado quando o cliente desistiu, e o
+	   pacote passou de 284s para estourar o timeout de 2 min.
+
+	   Os defers são LIFO: o `close(solta)` roda ANTES do `Close()`. */
+	solta := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(30 * time.Second) // aceita a conexão e nunca responde
+		select {
+		case <-solta:
+		case <-r.Context().Done():
+		}
 	}))
 	defer srv.Close()
+	defer close(solta)
 
 	comecou := time.Now()
 	avisarHubDoCliente(hub.New(srv.URL, "k"), clienteDeTeste())

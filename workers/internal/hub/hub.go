@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -76,6 +77,28 @@ func New(baseURL, platformKey string) *Client {
 		// desistir sozinho.
 		http: &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+/*
+NewComTimeout é o `New` com outro teto de espera.
+
+⚠️ Existe porque os 10s do `New` são curtos DEMAIS para o `campanha.upsert`, e
+não podem ser aumentados lá: aquele mesmo cliente serve o `Exchange`, que roda
+dentro de um login e não pode segurar uma pessoa olhando spinner.
+
+O problema medido: ao tratar um `campanha.upsert`, o hub CHAMA DE VOLTA o
+E-monitor (`GET /v1/internal/hub/campaigns/{id}`) e espera até 15s por essa
+resposta. Numa ida-e-volta legítima de 10 a 16 segundos, o hub termina, grava a
+proposta e responde 200 — e este lado já desistiu aos 10s e leu erro. A campanha
+nunca é marcada, o job a reemite de 15 em 15 minutos para sempre, e cada
+repetição escreve mais uma linha no AuditLog de lá, que não tem TTL.
+
+Quem espera aqui é um job, não uma pessoa: pode esperar mais que o outro lado.
+*/
+func NewComTimeout(baseURL, platformKey string, timeout time.Duration) *Client {
+	c := New(baseURL, platformKey)
+	c.http = &http.Client{Timeout: timeout}
+	return c
 }
 
 // Configured diz se esta instalação tem a integração ligada.
@@ -226,6 +249,15 @@ type ClienteUpsert struct {
 type CampanhaUpsert struct {
 	IDNaPlataforma        string `json:"idNaPlataforma"`
 	IDClienteNaPlataforma string `json:"idClienteNaPlataforma"`
+	// ⚠️ HubCode é a EXCEÇÃO ao "só ids" do comentário acima, e não contradiz o
+	// motivo dele: ele não é DADO da campanha que o hub possa buscar de volta —
+	// é o ENDEREÇO de onde ela vai morar lá. O hub não tem como descobri-lo
+	// perguntando, porque quem o escolheu foi a pessoa que cadastrou aqui.
+	//
+	// Sem ele o hub IGNORA o evento (regra do corte, §6.1 da spec). Um evento
+	// sem código não é erro nem retentativa: é campanha que não entra, e nada
+	// em tela nenhuma denuncia.
+	HubCode string `json:"hubCode"`
 }
 
 type envelopeEvento struct {
@@ -243,9 +275,39 @@ type envelopeEvento struct {
 // ⚠️ O hub recusa `ocorridoEm` mais de 5 minutos no futuro. Relógio da VM
 // adiantado faz TODA emissão voltar 400 — e o sintoma (nada chega ao hub) não
 // aponta para o relógio.
+/*
+RespostaEvento é o corpo que o hub devolve num 200 de `/api/platform/events`.
+
+⚠️ ELE IMPORTA, e ignorá-lo foi um defeito medido em 2026-09-21. O hub responde
+**200** mesmo quando DESCARTA o evento pela regra dele: `{"acao":"ignorado",
+"motivo":"codigo-inexistente"}` (e também `cliente-divergente`,
+`codigo-malformado`, `sem-codigo`, `cliente-sem-par`…). Ler só o status faz
+"aceitei a requisição" passar por "levei o evento a sério" — e quem grava
+`hub_notified_at` com base nisso tira a campanha da fila de reemissão PARA
+SEMPRE, sem ela nunca ter chegado ao hub. A rede de segurança do §8 estaria
+fechando o próprio buraco que existe para vigiar.
+*/
+type RespostaEvento struct {
+	Acao   string `json:"acao"`
+	Motivo string `json:"motivo"`
+}
+
+// Ignorado diz se o hub descartou o evento pela regra dele. `ignorado` é o
+// vocabulário do próprio controller de lá (`platformEventsController.ts`), e
+// todo desfecho de recusa chega com essa ação — o motivo é que varia.
+func (r *RespostaEvento) Ignorado() bool { return r != nil && r.Acao == "ignorado" }
+
+// Emitir avisa o hub e descarta o que ele respondeu. Serve a quem não tem o que
+// fazer com o desfecho; quem PRECISA saber se o evento entrou usa
+// `EmitirComResposta`.
 func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
+	_, err := c.EmitirComResposta(ctx, tipo, dados)
+	return err
+}
+
+func (c *Client) EmitirComResposta(ctx context.Context, tipo string, dados any) (*RespostaEvento, error) {
 	if !c.Configured() {
-		return ErrNotConfigured
+		return nil, ErrNotConfigured
 	}
 
 	body, err := json.Marshal(envelopeEvento{
@@ -254,20 +316,20 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 		Dados:      dados,
 	})
 	if err != nil {
-		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/api/platform/events", bytes.NewReader(body))
 	if err != nil {
-		return &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Status:  http.StatusBadGateway,
 			Message: "não foi possível falar com a Central de Clientes",
 		}
@@ -283,7 +345,12 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 	// página de erro HTML de um proxy mal configurado, por exemplo) pararia no
 	// meio, a conexão não seria reaproveitada, e o drain deixaria de cumprir a
 	// única razão de existir. O teto real é o `Timeout` do `http.Client`.
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// ⚠️ O drain agora é DEFERIDO, e não imediato: o corpo passou a ser lido
+	// (a `RespostaEvento` diz se o hub aceitou ou ignorou), e drenar antes
+	// deixaria o decoder sem nada. O que o defer faz é garantir que o resto do
+	// corpo — o que o decoder não consumiu — seja escoado antes do Close, que é
+	// a condição para a conexão voltar ao pool keep-alive.
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body) }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Ao contrário do `Exchange`, SEM tradução por status. Lá o erro vira a
@@ -291,10 +358,153 @@ func (c *Client) Emitir(ctx context.Context, tipo string, dados any) error {
 		// "link expirado". Aqui ninguém está esperando: pelo §5 do desenho, a
 		// criação do cliente nunca falha por causa disto e o erro só vai para
 		// log. Traduzir esconderia do log o status que o hub de fato devolveu.
-		return &Error{
+		return nil, &Error{
 			Status:  resp.StatusCode,
 			Message: fmt.Sprintf("a Central de Clientes recusou o evento %s", tipo),
 		}
 	}
-	return nil
+
+	var out RespostaEvento
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+		/* 200 com corpo ilegível. NÃO é erro de entrega: o hub respondeu que
+		   aceitou, e o corpo é informação extra. Devolver erro aqui faria o job
+		   reemitir para sempre uma campanha que CHEGOU — trocaria um defeito
+		   silencioso por outro, na direção oposta.
+
+		   Um envelope novo do hub cai aqui ou decodifica com `acao` vazio; os
+		   dois levam a "não foi ignorado", que é o comportamento que existia
+		   antes desta mudança. */
+		return &RespostaEvento{}, nil
+	}
+	return &out, nil
+}
+
+// CampanhaDoHub é a resposta de `GET /api/platform/campaigns/by-code/{code}`,
+// campo a campo (spec do hub 2026-09-18 §5).
+type CampanhaDoHub struct {
+	HubCampaignID string `json:"hubCampaignId"`
+	Nome          string `json:"nome"`
+	// 'YYYY-MM-DD', dia de calendário SEM fuso: são datas de veiculação, não
+	// instantes. Ficam como string de propósito — convertê-las para time.Time
+	// aqui obrigaria a escolher um fuso, e escolher errado desloca o começo da
+	// campanha em um dia.
+	Inicio  string `json:"inicio"`
+	Fim     string `json:"fim"`
+	Cliente struct {
+		ID   string `json:"id"`
+		Nome string `json:"nome"`
+		// O `emonitorClientId` do cliente no hub — a ponte. Vazio quando o
+		// cliente do hub ainda não foi ligado a este E-monitor, que é estado
+		// normal e NÃO é erro: quem decide o que fazer é o handler.
+		//
+		// ⚠️ O controller do hub manda `null` e não campo ausente, com um
+		// comentário dizendo que é para o E-monitor separar "não tem ponte" de
+		// "versão velha do hub". **Este lado não consegue fazer essa
+		// distinção**, e trocar para `*string` NÃO resolve: medido, o
+		// `encoding/json` do Go deixa o ponteiro nil tanto para `null` quanto
+		// para campo ausente. Separá-los exigiria `json.RawMessage` ou um
+		// `UnmarshalJSON` próprio. Hoje é latente — os dois casos levam ao mesmo
+		// desfecho (aceita) —, e vira defeito no dia em que alguém quiser "hub
+		// velho → âmbar, peça deploy". Fica registrado, não consertado.
+		IDNaPlataforma string `json:"idNaPlataforma"`
+	} `json:"cliente"`
+
+	// Codigo é a forma CANÔNICA do código consultado — calculada aqui, não
+	// devolvida pelo hub.
+	//
+	// ⚠️ Existe para quem GRAVA não ter de lembrar de normalizar. A justificativa
+	// inteira desta função é "o que não funciona é gravar cru", e antes disto o
+	// canônico era calculado, usado na URL e jogado fora: `campaigns.hub_code`
+	// dependia de duas tasks futuras chamarem `NormalizaCodigo` por conta
+	// própria. Fazer a coisa certa ser a mais fácil vale mais que um aviso.
+	Codigo string `json:"-"`
+}
+
+// ConferirCodigo pergunta ao hub de quem é um código.
+//
+// ⚠️ Leitura pura: não cria nem amarra nada. Quem amarra é o `campanha.upsert`
+// depois que a campanha existe aqui. Serve para a tela mostrar no que a pessoa
+// está amarrando ANTES de salvar, e para o `Create` recusar código inválido.
+func (c *Client) ConferirCodigo(ctx context.Context, code string) (*CampanhaDoHub, error) {
+	if !c.Configured() {
+		return nil, ErrNotConfigured
+	}
+
+	// ⚠️ Normaliza ANTES de sair, e recusa daqui o que nem é código. Perguntar
+	// ao hub por "banana" gasta uma ida à rede para receber o 404 que dá para
+	// dar aqui — e num campo que confere ao sair do foco, isso é uma ida por
+	// digitação abandonada.
+	canonico := NormalizaCodigo(code)
+	if canonico == "" {
+		return nil, &Error{Status: http.StatusNotFound, Message: "código não encontrado na Central de Clientes"}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/api/platform/campaigns/by-code/"+url.PathEscape(canonico), nil)
+	if err != nil {
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+	}
+	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// ⚠️ 503 e não o 502 que o `Exchange` usa logo acima. A decisão 2 da
+		// spec diz que hub fora do ar NÃO trava o cadastro, e para isso a tela
+		// precisa separar "não deu para conferir agora" (âmbar, siga) de "este
+		// código é de outro cliente" (vermelho, pare). É o mesmo status do
+		// `ErrNotConfigured`, e isso também é certo: instalação sem hub e hub
+		// mudo dão a mesma tela.
+		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "a Central de Clientes não respondeu"}
+	}
+	// ⚠️ DRENA o corpo antes de fechar, como o `Emitir` faz oito dezenas de
+	// linhas acima (e explica em 8 linhas). Sem isto a conexão não volta para o
+	// pool keep-alive e cada chamada abre um socket novo — medido: 5 chamadas
+	// com 404 abriam 5 conexões, contra 1 quando o corpo é lido até o fim. E o
+	// 404 aqui é o caminho NORMAL, não o excepcional: é o que acontece toda vez
+	// que alguém erra uma letra num campo que confere ao sair do foco. Em
+	// produção o hub é HTTPS, então cada uma paga TCP + TLS inteiros.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &Error{Status: http.StatusNotFound, Message: "código não encontrado na Central de Clientes"}
+	}
+	if resp.StatusCode != http.StatusOK {
+		/* ⚠️ 503, e não o 502 de "resposta que chegou e não dá para usar".
+		   O eixo que importa não é "chegou × não chegou" — é "é problema do
+		   código que a pessoa digitou × é problema NOSSO", porque é a única
+		   decisão que a tela toma. Por esse eixo, só o 404 é dela.
+
+		   E os dois status mais prováveis aqui são justamente nossos: o hub
+		   devolve **401** para chave errada E para produto desativado, de
+		   propósito e identicamente (§11.3 da spec) — desmarcar "Visível no
+		   portal" pintaria de vermelho todo cadastro e mandaria a operação
+		   caçar um código que está perfeito; e **429**, porque o limitador de
+		   lá é por IP, ou seja, a plataforma inteira divide o balde com o job
+		   de reemissão que dispara de 15 em 15 minutos.
+
+		   O número vai na mensagem para o log não perder o diagnóstico — que é
+		   a parte legítima do 502 que estava aqui. */
+		return nil, &Error{Status: http.StatusServiceUnavailable,
+			Message: fmt.Sprintf("a Central de Clientes respondeu %d", resp.StatusCode)}
+	}
+
+	var out CampanhaDoHub
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
+	}
+	/* ⚠️ A guarda de campo mínimo, igual à que o `Exchange` tem. Sem ela, um 200
+	   de forma inesperada — envelope novo (`{data:{…}}`), rota que mudou, proxy
+	   respondendo 200 com JSON próprio — vira sucesso com tudo vazio. E aí a
+	   barreira do §4.4 falha EM ABERTO: o handler lê `IDNaPlataforma == ""` como
+	   "sem ponte, aceita", e QUALQUER código passa, inclusive inexistente. Este
+	   ecossistema já foi mordido por envelope que quebra contrato de fora e por
+	   200 mentiroso de SPA. */
+	if out.HubCampaignID == "" {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
+	}
+	out.Codigo = canonico
+	return &out, nil
 }
