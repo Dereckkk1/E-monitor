@@ -13,6 +13,21 @@ import MaterialsStep from './CampaignWizardSteps/MaterialsStep'
 import DistributionStep from './CampaignWizardSteps/DistributionStep'
 import PricingStep from './CampaignWizardSteps/PricingStep'
 
+/*
+A recusa do servidor, quando ela é para a PESSOA ler.
+
+O `Create`/`Update` devolvem 422 em texto puro com a frase que diz de quem é o
+código ("esse código é da campanha X, de outro cliente (Y)"). Só o 422 sobe:
+os outros status são falha nossa, e despejar "internal error" numa caixa de
+alerta não ajuda ninguém.
+*/
+function mensagemDoServidor(e) {
+  if (e?.response?.status !== 422) return null
+  const corpo = e.response.data
+  const txt = typeof corpo === 'string' ? corpo.trim() : ''
+  return txt || null
+}
+
 export default function CampaignWizardPage() {
   const { id: routeId } = useParams()
   const navigate = useNavigate()
@@ -100,8 +115,13 @@ export default function CampaignWizardPage() {
         })
         setCampaignId(created.id)
         navigate(`/campaigns/${created.id}/edit`, { replace: true })
-      } catch {
-        window.alert('Erro ao criar campanha. Tente novamente.')
+      } catch (e) {
+        /* ⚠️ O 422 da barreira do §4.4 É a mensagem: ela diz de QUEM é o código
+           e o que fazer. Trocá-la por "tente novamente" manda a pessoa repetir
+           uma ação que vai falhar sempre — e é o caminho NORMAL quando o hub
+           estava mudo na hora de digitar (âmbar, "pode seguir") e voltou na
+           hora de salvar. */
+        window.alert(mensagemDoServidor(e) ?? 'Erro ao criar campanha. Tente novamente.')
         return
       }
     } else if (currentStep === 1 && campaignId) {
@@ -127,8 +147,8 @@ export default function CampaignWizardPage() {
                na primeira edição de nome. */
             ...(codeChanged ? { hub_code: draftCampaign.hub_code.trim() } : {}),
           })
-        } catch {
-          window.alert('Erro ao salvar alterações da campanha. Tente novamente.')
+        } catch (e) {
+          window.alert(mensagemDoServidor(e) ?? 'Erro ao salvar alterações da campanha. Tente novamente.')
           return
         }
       }

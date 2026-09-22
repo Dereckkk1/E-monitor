@@ -259,3 +259,309 @@ test.describe('Step 1 — o código do hub', () => {
     await expect(avancar).toBeEnabled()
   })
 })
+
+/* ────────── o que a revisão da Task 8 achou (2026-09-22) ────────── */
+
+/**
+ * ⚠️ O DEFEITO QUE APAGA TRABALHO DIGITADO.
+ *
+ * `setField` monta `{...value, [k]: v}` com o `value` do render em que o blur
+ * aconteceu, e `conferir` é async: tudo o que a pessoa digitar entre o blur e a
+ * resposta é DESFEITO quando o write-back do código canônico roda com a cópia
+ * velha. Só dispara quando o canônico difere do digitado — ou seja, quando a
+ * pessoa DIGITOU em vez de colar, que é exatamente a entrada que a §3.1 existe
+ * para aceitar.
+ */
+test('digitar durante a conferência não é desfeito pelo write-back', async ({ page }) => {
+  await abrirWizard(page)
+  await page.route(ROTA_CODIGO, async (route) => {
+    await new Promise(r => setTimeout(r, 900))
+    await route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify(campanhaDoHub(CLIENTE.id)) })
+  })
+
+  await escolherCliente(page, 'Rôgga')
+  await colarCodigo(page, 'eh7k4m2x')            // dispara a conferência lenta
+  const nome = page.getByPlaceholder('ex: Verão 2026 — Rôgga')
+  await nome.fill('Nome digitado DEPOIS do blur') // digita enquanto ela vai e volta
+  await page.locator('input[type="date"]').first().fill('2026-12-01')
+
+  await expect(page.getByRole('status')).toContainText('Verão 2026', { timeout: 15000 })
+
+  await expect(nome, 'o nome digitado foi apagado pelo write-back').toHaveValue('Nome digitado DEPOIS do blur')
+  await expect(page.locator('input[type="date"]').first()).toHaveValue('2026-12-01')
+  await expect(campoDoCodigo(page)).toHaveValue('EH-7K4M2X')
+})
+
+// ⚠️ Apagar o campo durante a ida em voo é a operação de CONGELAR a coleta
+// (§6.5). O write-back não pode ressuscitar o código.
+test('apagar o código durante a conferência não é desfeito', async ({ page }) => {
+  await abrirWizard(page)
+  await page.route(ROTA_CODIGO, async (route) => {
+    await new Promise(r => setTimeout(r, 900))
+    await route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify(campanhaDoHub(CLIENTE.id)) })
+  })
+
+  await escolherCliente(page, 'Rôgga')
+  await colarCodigo(page, 'eh7k4m2x')
+  await campoDoCodigo(page).fill('')     // apaga sem sair do campo
+  await page.waitForTimeout(1400)
+
+  await expect(campoDoCodigo(page), 'o código apagado voltou sozinho').toHaveValue('')
+})
+
+/**
+ * ⚠️ 200 com corpo inutilizável vira VERDE VAZIO — uma caixa verde com o ✓ e
+ * nada escrito. O backend traduz "200 que não dá para usar" em 502 → âmbar; a
+ * tela tem de fazer o mesmo quando o corpo ruim vem da PRÓPRIA rota (proxy,
+ * envelope novo, rota renomeada).
+ */
+test('200 com corpo inutilizável é âmbar, nunca verde vazio', async ({ page }) => {
+  await abrirWizard(page)
+  for (const corpo of ['{}', '{"data":{"nome":"Verão"}}', '[]']) {
+    await page.unroute(ROTA_CODIGO).catch(() => {})
+    await page.route(ROTA_CODIGO, route => route.fulfill({
+      status: 200, contentType: 'application/json', body: corpo }))
+    await escolherCliente(page, 'Rôgga')
+    await colarCodigo(page, 'EH-7K4M2X')
+    await expect(page.getByRole('status'), `corpo ${corpo}`).toContainText(/não deu para conferir/i)
+  }
+})
+
+/**
+ * ⚠️ A ponte tem de ser comparada como UUID, igual ao `clienteDoHubConfere` do
+ * Go. A tela comparava string crua, então um UUID sem hífen, com `urn:uuid:` ou
+ * com espaço — todos que o `uuid.Parse` aceita — pintavam VERMELHO dizendo
+ * "de outro cliente (Rôgga)", nomeando o cliente que a pessoa escolheu e
+ * oferecendo uma saída que não existe.
+ */
+test('a ponte é comparada como UUID, como no servidor', async ({ page }) => {
+  const iguais = [
+    CLIENTE.id.replace(/-/g, ''),
+    `urn:uuid:${CLIENTE.id}`,
+    `  ${CLIENTE.id}  `,
+    CLIENTE.id.toUpperCase(),
+    'colar aqui o id',   // lixo = ponte AUSENTE (§6.1), não divergência
+    '',                  // sem ponte
+  ]
+  for (const ponte of iguais) {
+    await abrirWizard(page)   // página nova por caso: o RSelect não sobrevive ao laço
+    await page.route(ROTA_CODIGO, route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ ...campanhaDoHub(CLIENTE.id),
+        cliente: { nome: 'Rôgga', idNaPlataforma: ponte } }) }))
+
+    await escolherCliente(page, 'Rôgga')
+    /* ⚠️ Provar que o cliente FICOU escolhido. Sem isto o teste passa pelo
+       motivo errado: com `client_id` vazio a comparação curto-circuita e tudo
+       vira verde — foi exatamente o que aconteceu na primeira versão daqui. */
+    await expect(page.getByText('Cliente não selecionado')).toHaveCount(0)
+
+    await colarCodigo(page, 'EH-7K4M2X')
+    const rotulo = `ponte ${JSON.stringify(ponte)}`
+    /* ⚠️ A asserção NÃO pode ser `toContainText('Verão 2026')`: a mensagem
+       VERMELHA também nomeia a campanha, então ela passaria nos dois estados.
+       E `not.toContainText(/outro cliente/i)` também não serve — o texto
+       vermelho diz "outro CÓDIGO", não "outro cliente". As duas versões
+       anteriores deste teste não conseguiam falhar. O que separa os dois
+       estados é a frase de saída do vermelho. */
+    await expect(page.getByRole('status'), rotulo).not.toContainText('Escolha esse cliente')
+    await expect(page.getByRole('status'), rotulo).toContainText('01/12/2026')
+  }
+})
+
+// O controle negativo: cliente REALMENTE diferente continua vermelho. Sem ele,
+// bastaria a comparação sumir para o teste de cima ficar permanentemente verde.
+test('ponte de outro cliente continua vermelha', async ({ page }) => {
+  await abrirWizard(page)
+  await page.route(ROTA_CODIGO, route => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify(campanhaDoHub(OUTRO.id, 'Colheita 2026')) }))
+  await escolherCliente(page, 'Rôgga')
+  await expect(page.getByText('Cliente não selecionado')).toHaveCount(0)
+  await colarCodigo(page, 'EH-7K4M2X')
+  await expect(page.getByRole('status')).toContainText('Escolha esse cliente')
+  await expect(page.getByRole('status')).toContainText('Pilecco')
+})
+
+// ⚠️ O 422 da barreira do §4.4 é a mensagem que diz DE QUEM é o código. Trocá-la
+// por "Tente novamente" manda a pessoa repetir uma ação que vai falhar sempre —
+// e é o caminho NORMAL quando o hub está mudo na hora de digitar (âmbar, "pode
+// seguir") e volta na hora de salvar.
+test('a recusa do servidor chega inteira à pessoa', async ({ page }) => {
+  await abrirWizard(page)
+  await page.route(ROTA_CODIGO, route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(campanhaDoHub(CLIENTE.id)) }))
+  await page.route('**/v1/internal/campaigns**', route => route.fulfill({
+    status: 422, contentType: 'text/plain',
+    body: 'esse código é da campanha "Colheita 2026", de outro cliente (Pilecco)' }))
+
+  await escolherCliente(page, 'Rôgga')
+  await page.getByPlaceholder('ex: Verão 2026 — Rôgga').fill('Vai levar 422')
+  await page.locator('input[type="date"]').first().fill('2026-12-01')
+  await page.locator('input[type="date"]').nth(1).fill('2027-02-28')
+  await colarCodigo(page, 'EH-7K4M2X')
+  await expect(page.getByRole('status')).toContainText('Verão 2026')
+  await page.getByRole('button', { name: /avançar/i }).click()
+
+  /* ⚠️ A aviso NAO e um dialogo nativo: o `ConfirmModal` desta casa
+     SUBSTITUI o `window.alert` por um modal proprio. Por isso `page.on('dialog')`
+     nunca dispara e um `window.alert` trocado por `addInitScript` e sobrescrito
+     — as duas tecnicas dao falso negativo aqui, medido em 2026-09-22. Quem ve a
+     mensagem e o DOM. */
+  await expect(page.getByText(/de outro cliente/i)).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Colheita 2026')).toBeVisible()
+  await expect(page.getByText(/Tente novamente/i)).toHaveCount(0)
+})
+
+/**
+ * ⚠️ A LINHA QUE O COMMIT MAIS DEFENDE, E QUE NÃO TINHA PROVA NENHUMA.
+ *
+ * O backend lê `hub_code` ausente como "não mexe" e vazio como "apaga", e
+ * apagar CONGELA a coleta da proposta no hub (§6.5). Se a tela mandasse o campo
+ * sempre, qualquer falha em carregar o código para o rascunho apagaria o código
+ * de uma campanha boa na primeira edição de nome — em silêncio, do outro lado.
+ *
+ * A mutação "mandar `hub_code` sempre" passava pelos 9 testes originais.
+ */
+test('editando só o nome, o PUT não fala do código', async ({ page }) => {
+  const ID = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const corpos = []
+
+  await page.addInitScript(() => {
+    sessionStorage.setItem('rc_token', 'jwt.de.teste')
+    sessionStorage.setItem('rc_user', JSON.stringify({
+      id: '0', name: 'QA', email: 'qa@teste.local', role: 'admin', client_id: null }))
+  })
+  await page.route(ROTA_CLIENTES, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify({ data: [CLIENTE, OUTRO] }) }))
+  await page.route(ROTA_MATERIAIS, r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' }))
+  await page.route(ROTA_CODIGO, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify(campanhaDoHub(CLIENTE.id)) }))
+  await page.route(`**/v1/internal/campaigns/${ID}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      corpos.push(route.request().postDataJSON())
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"' + ID + '"}' })
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: ID, client_id: CLIENTE.id, name: 'Nome antigo',
+      start_date: '2026-12-01T00:00:00Z', end_date: '2027-02-28T00:00:00Z',
+      hub_code: 'EH-7K4M2X', status: 'programada', target_stations: [] }) })
+  })
+
+  await page.goto(`/campaigns/${ID}/edit`)
+  await expect(campoDoCodigo(page)).toHaveValue('EH-7K4M2X')
+
+  await page.getByPlaceholder('ex: Verão 2026 — Rôgga').fill('Nome NOVO')
+  await page.getByRole('button', { name: /avançar/i }).click()
+
+  await expect.poll(() => corpos.length, { timeout: 15000 }).toBeGreaterThan(0)
+  expect(corpos[0], 'o PUT falou do código numa edição que não o tocou').not.toHaveProperty('hub_code')
+  expect(corpos[0].name).toBe('Nome NOVO')
+})
+
+// O controle positivo: quando o código MUDA, ele tem de ir. Sem este, bastaria
+// a tela parar de mandar `hub_code` sempre para o teste de cima ficar verde.
+test('mudando o código, o PUT leva o código novo', async ({ page }) => {
+  const ID = 'bbbbbbbb-1111-2222-3333-444444444444'
+  const corpos = []
+
+  await page.addInitScript(() => {
+    sessionStorage.setItem('rc_token', 'jwt.de.teste')
+    sessionStorage.setItem('rc_user', JSON.stringify({
+      id: '0', name: 'QA', email: 'qa@teste.local', role: 'admin', client_id: null }))
+  })
+  await page.route(ROTA_CLIENTES, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify({ data: [CLIENTE, OUTRO] }) }))
+  await page.route(ROTA_MATERIAIS, r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' }))
+  await page.route(ROTA_CODIGO, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify({ ...campanhaDoHub(CLIENTE.id), codigo: 'EH-BBBBBB' }) }))
+  await page.route(`**/v1/internal/campaigns/${ID}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      corpos.push(route.request().postDataJSON())
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"' + ID + '"}' })
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: ID, client_id: CLIENTE.id, name: 'Nome antigo',
+      start_date: '2026-12-01T00:00:00Z', end_date: '2027-02-28T00:00:00Z',
+      hub_code: 'EH-7K4M2X', status: 'programada', target_stations: [] }) })
+  })
+
+  await page.goto(`/campaigns/${ID}/edit`)
+  await expect(campoDoCodigo(page)).toHaveValue('EH-7K4M2X')
+  await colarCodigo(page, 'EH-BBBBBB')
+  await page.getByRole('button', { name: /avançar/i }).click()
+
+  await expect.poll(() => corpos.length, { timeout: 15000 }).toBeGreaterThan(0)
+  expect(corpos[0].hub_code).toBe('EH-BBBBBB')
+})
+
+// ⚠️ O POST tem de LEVAR o código. A mutação que o tirava do corpo passava pelos
+// 9 testes originais: o código nunca chegava ao banco e a feature estava morta,
+// com a suíte verde.
+test('o POST da criação leva o código', async ({ page }) => {
+  await abrirWizard(page)
+  const corpos = []
+  await page.route(ROTA_CODIGO, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify(campanhaDoHub(CLIENTE.id)) }))
+  await page.route('**/v1/internal/campaigns', async (route) => {
+    if (route.request().method() === 'POST') corpos.push(route.request().postDataJSON())
+    return route.fulfill({ status: 201, contentType: 'application/json',
+      body: '{"id":"cccccccc-1111-2222-3333-444444444444"}' })
+  })
+
+  await escolherCliente(page, 'Rôgga')
+  await page.getByPlaceholder('ex: Verão 2026 — Rôgga').fill('Com código')
+  await page.locator('input[type="date"]').first().fill('2026-12-01')
+  await page.locator('input[type="date"]').nth(1).fill('2027-02-28')
+  await colarCodigo(page, 'EH-7K4M2X')
+  await expect(page.getByRole('status')).toContainText('Verão 2026')
+  await page.getByRole('button', { name: /avançar/i }).click()
+
+  await expect.poll(() => corpos.length, { timeout: 15000 }).toBeGreaterThan(0)
+  expect(corpos[0].hub_code, 'o POST não levou o código — a feature estaria morta').toBe('EH-7K4M2X')
+})
+
+/**
+ * ⚠️ A DECISÃO 6, do lado que importa: campanha ANTIGA, sem código, continua
+ * editável. Exigir o campo também na edição faria "corrigir uma data numa
+ * campanha de junho" virar "vá ao hub criar uma campanha primeiro".
+ *
+ * ⚠️ E é o único jeito de pegar a mutação: num teste de edição cuja campanha JÁ
+ * tem código, tornar o campo obrigatório não trava nada, e a mutação sobrevive.
+ */
+test('campanha antiga SEM código continua editável (decisão 6)', async ({ page }) => {
+  const ID = 'dddddddd-1111-2222-3333-444444444444'
+  const corpos = []
+
+  await page.addInitScript(() => {
+    sessionStorage.setItem('rc_token', 'jwt.de.teste')
+    sessionStorage.setItem('rc_user', JSON.stringify({
+      id: '0', name: 'QA', email: 'qa@teste.local', role: 'admin', client_id: null }))
+  })
+  await page.route(ROTA_CLIENTES, r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify({ data: [CLIENTE, OUTRO] }) }))
+  await page.route(ROTA_MATERIAIS, r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' }))
+  await page.route(`**/v1/internal/campaigns/${ID}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      corpos.push(route.request().postDataJSON())
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"' + ID + '"}' })
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: ID, client_id: CLIENTE.id, name: 'Campanha de junho',
+      start_date: '2026-06-01T00:00:00Z', end_date: '2026-06-30T00:00:00Z',
+      hub_code: null, status: 'concluida', target_stations: [] }) })
+  })
+
+  await page.goto(`/campaigns/${ID}/edit`)
+  await expect(campoDoCodigo(page)).toHaveValue('')
+
+  await page.getByPlaceholder('ex: Verão 2026 — Rôgga').fill('Campanha de junho, renomeada')
+  const avancar = page.getByRole('button', { name: /avançar/i })
+  await expect(avancar, 'campanha antiga sem código ficou travada').toBeEnabled()
+  await avancar.click()
+
+  await expect.poll(() => corpos.length, { timeout: 15000 }).toBeGreaterThan(0)
+  expect(corpos[0]).not.toHaveProperty('hub_code')
+})
