@@ -24,6 +24,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/hub"
+	"radiocheck/internal/hubnotify"
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
@@ -49,7 +50,20 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	ctx := context.Background()
+	/* ⚠️ O ctx do processo MORRE no SIGTERM, e antes de 2026-09-21 ele não
+	   morria: era `context.Background()` puro, e nenhum cancel saía dele. Todo
+	   `case <-ctx.Done(): return` das goroutinas deste arquivo — reconcile do
+	   índice, manutenção de partição, reemissão para o hub — era CÓDIGO MORTO:
+	   elas seguiam rodando durante o `srv.Shutdown` e morriam de repente quando
+	   `main` retornava, podendo pegar o `pool.Close()` no meio de uma consulta.
+
+	   ⚠️ E por isso o `shutdownCtx` lá embaixo nasce de `context.Background()` e
+	   NÃO deste ctx: derivado daqui ele já nasceria cancelado, e o
+	   `srv.Shutdown` devolveria na hora em vez de drenar as requisições em voo
+	   — trocaria uma parada abrupta por outra. */
+	ctx, pararDeOuvirSinais := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer pararDeOuvirSinais()
 
 	// Logger.
 	logger, err := zap.NewProduction()
@@ -537,11 +551,38 @@ func main() {
 		Repo:       campaigns,
 		Supervisor: sup,
 		Log:        logger,
+		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+	}
+
+	/* A rede de seguranca do §8 da spec do codigo da campanha (2026-09-18).
+	   O `campanha.upsert` e dispara-e-esquece: sem esta varredura, um evento
+	   perdido vira campanha que NUNCA chega ao hub, e nao ha nada em tela
+	   nenhuma dizendo que falta alguma. Em regime ela devolve zero linhas.
+
+	   ⚠️ So com o hub configurado: sem este portao, dev e teste ficariam
+	   batendo numa URL vazia a cada 15 minutos. E o mesmo portao que o SSO e o
+	   `avisarHubDaCampanha` ja usam.
+
+	   ⚠️ Goroutine dentro do `cmd/api`, e NAO um binario proprio em `cmd/*`:
+	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para
+	   CLI novo entrar na imagem, e um job que nao entra na imagem e um job que
+	   nunca roda. Como goroutine, ele sobe com a API e morre com ela. */
+	/* ⚠️ `NewComTimeout` e nao `New`: os 10s do New sao MENORES que os 15s que o
+	   hub espera ao chamar de volta a porta de leitura daqui enquanto trata o
+	   `campanha.upsert`. Com 10s, uma ida-e-volta legitima de 12s faz o hub
+	   gravar a proposta e este lado ler timeout — a campanha nunca e marcada,
+	   o job a reemite para sempre, e cada repeticao escreve mais uma linha no
+	   AuditLog de la, que nao tem TTL. Quem espera aqui e um job, nao uma
+	   pessoa: pode esperar mais que o outro lado. */
+	if hubClient := hub.NewComTimeout(cfg.HubURL, cfg.HubPlatformKey, 25*time.Second); hubClient.Configured() {
+		hubnotify.Iniciar(ctx, campaigns, hubnotify.EmissorHTTP{Hub: hubClient})
+		logger.Info("hubnotify: reemissao de campanhas ligada",
+			zap.Duration("intervalo", hubnotify.Intervalo), zap.Int("por_ciclo", hubnotify.PorCiclo))
 	}
 
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
-		Clients:      &handlers.ClientsHandler{Repo: clients},
+		Clients:      &handlers.ClientsHandler{Repo: clients, Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, CampaignRepo: campaigns, Storage: s3Client, SummaryRepo: dailySumRepo},
@@ -560,6 +601,11 @@ func main() {
 		// sem variavel de ambiente nova.
 		HubClient:    hub.New(cfg.HubURL, cfg.HubPlatformKey),
 		HubClients:   catalog.NewHubClients(pool),
+		// A conferencia do codigo da campanha para a TELA (spec do hub
+		// 2026-09-18 §4.3) — o quarto sentido da ponte, e o unico em que o
+		// pedido nasce no navegador. Mesma chave das linhas acima, e por isso
+		// tambem sem variavel de ambiente nova.
+		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		// Fecha a janela de 8h em que um usuario desativado seguia usando o
 		// sistema com o token que ja tinha — vale tanto para o `user.deactivate`
 		// do hub quanto para o botao de bloqueio do /admin/monitoring, cujo
@@ -683,12 +729,12 @@ func main() {
 		}()
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	<-ctx.Done()
 	log.Println("shutting down...")
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Background, e não `ctx`: ver o comentário do `signal.NotifyContext` no
+	// topo. Derivado do ctx, este deadline já nasceria vencido.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(shutdownCtx) //nolint:errcheck
 }

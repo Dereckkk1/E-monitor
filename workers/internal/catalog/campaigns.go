@@ -29,9 +29,30 @@ type Campaign struct {
 	// FixedCPM, quando setado, sobrescreve o CPM calculado dinamicamente nas
 	// telas de exibição (/campaigns, /insights, dashboard). NULL = usa o
 	// cálculo dinâmico (executado / impactos × 1000).
-	FixedCPM  *float64  `json:"fixed_cpm"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	FixedCPM *float64 `json:"fixed_cpm"`
+	// HubCode é o código da campanha no E-Hub (`EH-7K4M2X`), colado por quem
+	// cadastra. É por ele que o hub sabe DENTRO de qual campanha dele esta aqui
+	// vira proposta — sem ele, a campanha não entra lá.
+	//
+	// Ponteiro porque a coluna é nullable, e o nil tem significado: campanha
+	// antiga (nunca teve código) e campanha que teve o código apagado leem
+	// igual daqui. As duas ficam fora da fila de reemissão, que é o que
+	// importa; distinguir uma da outra é assunto do audit do hub, não desta
+	// struct.
+	HubCode *string `json:"hub_code"`
+	// HubNotifiedAt é quando o hub confirmou o recebimento. NULL = ele ainda
+	// não sabe desta campanha, e o job de reemissão a pega.
+	//
+	// ⚠️ `json:"-"`: é encanamento entre os dois servidores, e NÃO desce para o
+	// navegador. `/v1/campaigns` atende `viewer` com escopo de cliente, e "o
+	// evento chegou ao hub?" não é assunto de quem vê a campanha — ninguém no
+	// front lê este campo, nem nas telas que este plano ainda vai fazer (o job
+	// lê do BANCO, não de JSON). É a mesma postura que o plano toma na Task 5
+	// ao recusar mandar os ids do hub para o navegador. O `hub_code` desce por
+	// necessidade: a tela de edição precisa dele preenchido.
+	HubNotifiedAt *time.Time `json:"-"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 	// MaterialCount só é populado pelo ListPaged (não pelas outras queries —
 	// ficam em zero). Usado pela UI pra mostrar chip "sem material".
 	MaterialCount int `json:"material_count"`
@@ -51,6 +72,11 @@ type CreateCampaignInput struct {
 	StartDate      time.Time   `json:"start_date"`
 	EndDate        time.Time   `json:"end_date"`
 	TargetStations []uuid.UUID `json:"target_stations"`
+	// HubCode é string (não ponteiro) de propósito: aqui "não informado" e
+	// "informado vazio" são a MESMA coisa, e quem transforma os dois em NULL é
+	// o `NULLIF` do INSERT. Ponteiro faria a chamada distinguir dois estados
+	// que o banco guarda igual.
+	HubCode string `json:"hub_code"`
 }
 
 func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campaign, error) {
@@ -62,15 +88,136 @@ func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campai
 		targetStations = []uuid.UUID{}
 	}
 	var camp Campaign
+	// ⚠️ `NULLIF(btrim($6), '')` e não `NULLIF($6, '')`: quem digita no wizard
+	// cola o código com espaço em volta mais vezes do que se imagina, e um
+	// `hub_code` de " " passaria pelo NULLIF cru. Aí a campanha entra na fila de
+	// reemissão com um código que o hub recusa, para sempre, de 15 em 15
+	// minutos. O `btrim` faz " " e "" serem a mesma coisa, que é o que são.
 	err := c.pool.QueryRow(ctx, `
-		INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations, hub_code)
+		VALUES ($1, $2, $3, $4, $5, NULLIF(btrim($6), ''))
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
-		          fixed_cpm, created_at, updated_at`,
-		in.ClientID, in.Name, in.StartDate, in.EndDate, targetStations,
+		          fixed_cpm, hub_code, hub_notified_at, created_at, updated_at`,
+		in.ClientID, in.Name, in.StartDate, in.EndDate, targetStations, in.HubCode,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM,
+		&camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt)
 	return &camp, err
+}
+
+// AtualizarHubCode troca o código da campanha e ZERA a confirmação.
+//
+// ⚠️ Zerar o `hub_notified_at` não é zelo: o código novo aponta para OUTRA
+// campanha do hub, que nunca ouviu falar desta. Sem zerar, o job de reemissão
+// acharia que já avisou, e a campanha ficaria amarrada ao lugar antigo para
+// sempre — sem nada em tela nenhuma denunciando.
+//
+// Apagar o código (string vazia) cai no mesmo caminho e pelo mesmo motivo: sem
+// código ela não entra na fila, e guardar a confirmação velha seria afirmar um
+// vínculo que não existe mais.
+func (c *Campaigns) AtualizarHubCode(ctx context.Context, id uuid.UUID, code string) error {
+	_, err := c.pool.Exec(ctx,
+		`UPDATE campaigns SET hub_code = NULLIF(btrim($2), ''), hub_notified_at = NULL, updated_at = now()
+		 WHERE id = $1`, id, code)
+	return err
+}
+
+/*
+MarcarHubNotificada registra que o hub confirmou o recebimento desta campanha —
+mas SÓ se o código gravado ainda for o que foi entregue.
+
+⚠️ A guarda do `hub_code` não é zelo: sem ela, a marcação carimba um código que
+o hub NUNCA recebeu. O emissor é uma goroutine, e duas coisas fazem a ordem
+furar:
+
+  - o evento de um código ANTIGO ainda em voo enquanto um PUT já gravou um
+    código novo. Quando o antigo confirma, ele marca a linha — e a linha agora
+    diz outro código. Medido em 2026-09-21: coluna `EH-BBBBBB`, hub recebeu só
+    `EH-AAAAAA`, `hub_notified_at` carimbado e fora da fila;
+  - dois PUTs concorrentes cujos eventos chegam ao hub fora de ordem: o
+    E-monitor fica dizendo `EH-CCCCCC` e a proposta do hub foi movida para
+    `EH-BBBBBB`, permanentemente, sem nada reconciliar.
+
+`IS NOT DISTINCT FROM` e não `=`: o código pode ser NULL dos dois lados (o caso
+do congelamento), e `NULL = NULL` é NULL, não verdadeiro — a marcação nunca
+aconteceria.
+*/
+func (c *Campaigns) MarcarHubNotificada(ctx context.Context, id uuid.UUID, codigoEntregue string) error {
+	_, err := c.pool.Exec(ctx,
+		`UPDATE campaigns SET hub_notified_at = now()
+		  WHERE id = $1 AND hub_code IS NOT DISTINCT FROM NULLIF(btrim($2), '')`,
+		id, codigoEntregue)
+	return err
+}
+
+/*
+MarcarTentativaDeHub carimba que o job TENTOU entregar esta campanha agora —
+tenha dado certo ou não.
+
+⚠️ É o que faz a fila RODAR em vez de morrer na cabeça. Sem este carimbo, quem
+falha sempre (código que sumiu do hub, `clients.hub_id` vazio, chave rodada)
+nunca é marcada, nunca sai do topo do `ORDER BY created_at`, e as campanhas
+atrás dela não são tentadas UMA VEZ SEQUER. Medido em 2026-09-21 com 500
+pendentes e 50 envenenadas: as outras 450 nunca saíam.
+
+Separada do `MarcarHubNotificada` de propósito: uma diz "tentei", a outra diz
+"chegou". Confundir as duas é exatamente o defeito que a rede de segurança do §8
+existe para não ter.
+*/
+func (c *Campaigns) MarcarTentativaDeHub(ctx context.Context, id uuid.UUID) error {
+	_, err := c.pool.Exec(ctx,
+		`UPDATE campaigns SET hub_notify_tentado_em = now() WHERE id = $1`, id)
+	return err
+}
+
+// PendentesDeHub são as campanhas que têm código e que o hub não confirmou.
+//
+// Em regime isto devolve ZERO linhas: só cai aqui quem perdeu o evento. O
+// `limit` existe para o primeiro ciclo depois de uma queda longa do hub não
+// virar uma rajada de centenas de chamadas.
+//
+// ⚠️ Traz o `hub_code` junto, e não só o id: o job precisa dele para remontar o
+// evento, e buscá-lo campanha a campanha seria N+1 numa varredura que roda de
+// 15 em 15 minutos.
+//
+// ⚠️ O `ORDER BY` casa com o índice parcial `idx_campaigns_hub_pendentes` da
+// migração 0069, coluna por coluna e na mesma ordem. Mudar um sem o outro faz a
+// varredura ignorar o índice e voltar a ler a tabela inteira quatro vezes por
+// hora.
+//
+// ⚠️ E a primeira coluna da ordem é a TENTATIVA, não o `created_at`: é ela que
+// transforma a fila em rodízio. Quem nunca foi tentada passa primeiro
+// (`NULLS FIRST`), e quem falhou vai para o fim — senão uma campanha que falha
+// para sempre prende todas as outras atrás dela, indefinidamente.
+func (c *Campaigns) PendentesDeHub(ctx context.Context, limit int) ([]Campaign, error) {
+	// ⚠️ `LIMIT` negativo é ERRO do Postgres (SQLSTATE 2201W), não lista vazia:
+	// um `limit` mal calculado derrubaria o ciclo inteiro do job em vez de não
+	// fazer nada. E `LIMIT 0` devolveria zero linhas caladamente, que é a fila
+	// parando sem ninguém saber. Mesma guarda que o `ListPaged` faz com `page`
+	// e `pageSize` logo acima neste arquivo.
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := c.pool.Query(ctx, `
+		SELECT id, client_id, name, hub_code
+		  FROM campaigns
+		 WHERE hub_code IS NOT NULL AND hub_notified_at IS NULL
+		 ORDER BY hub_notify_tentado_em NULLS FIRST, created_at
+		 LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Campaign
+	for rows.Next() {
+		var camp Campaign
+		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.HubCode); err != nil {
+			return nil, err
+		}
+		out = append(out, camp)
+	}
+	return out, rows.Err()
 }
 
 func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
@@ -133,7 +280,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 	offset := (page - 1) * pageSize
 	rows, err := c.pool.Query(ctx, `
 		SELECT c.id, c.client_id, c.name, c.start_date, c.end_date, c.status, c.target_stations,
-		       c.fixed_cpm, c.created_at, c.updated_at,
+		       c.fixed_cpm, c.hub_code, c.hub_notified_at, c.created_at, c.updated_at,
 		       COALESCE((
 		         SELECT COUNT(*)::int
 		         FROM campaign_materials cm
@@ -163,7 +310,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
 			&camp.EndDate, &camp.Status, &camp.TargetStations,
-			&camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt, &camp.MaterialCount); err != nil {
+			&camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt, &camp.MaterialCount); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, camp)
@@ -179,7 +326,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientIDs []uuid.UUID) ([]Campaign, error) {
 	const baseQuery = `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
-		       fixed_cpm, created_at, updated_at
+		       fixed_cpm, hub_code, hub_notified_at, created_at, updated_at
 		FROM campaigns
 		WHERE ($1::text[] IS NULL OR status = ANY($1))
 		  AND ($2::uuid[] IS NULL OR client_id = ANY($2))
@@ -211,7 +358,7 @@ func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientI
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate,
 			&camp.EndDate, &camp.Status, &camp.TargetStations,
-			&camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt); err != nil {
+			&camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, camp)
@@ -223,10 +370,10 @@ func (c *Campaigns) Get(ctx context.Context, id uuid.UUID) (*Campaign, error) {
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `
 		SELECT id, client_id, name, start_date, end_date, status, target_stations,
-		       fixed_cpm, created_at, updated_at
+		       fixed_cpm, hub_code, hub_notified_at, created_at, updated_at
 		FROM campaigns WHERE id = $1`, id,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -431,10 +578,10 @@ func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasi
 		SET name = $2, start_date = $3, end_date = $4, updated_at = now()
 		WHERE id = $1
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
-		          fixed_cpm, created_at, updated_at`,
+		          fixed_cpm, hub_code, hub_notified_at, created_at, updated_at`,
 		id, in.Name, in.StartDate, in.EndDate,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -452,10 +599,10 @@ func (c *Campaigns) UpdateFixedCPM(ctx context.Context, id uuid.UUID, value *flo
 		SET fixed_cpm = $2, updated_at = now()
 		WHERE id = $1
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
-		          fixed_cpm, created_at, updated_at`,
+		          fixed_cpm, hub_code, hub_notified_at, created_at, updated_at`,
 		id, value,
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
-		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.CreatedAt, &camp.UpdatedAt)
+		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

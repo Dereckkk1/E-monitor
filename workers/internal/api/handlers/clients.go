@@ -1,22 +1,30 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/hub"
 )
 
 type ClientsHandler struct {
 	Repo *catalog.Clients
+	// Hub é opcional: nil ou não configurado significa "esta instalação não
+	// avisa o hub", e a criação de cliente segue igual. É o mesmo portão que o
+	// SSO já usa, e é o que faz dev e teste não baterem em produção.
+	Hub *hub.Client
 }
 
 // List supports two modes:
@@ -130,6 +138,7 @@ func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", 500)
 		return
 	}
+	avisarHubDoCliente(h.Hub, out)
 	writeJSON(w, 201, out)
 }
 
@@ -225,4 +234,55 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+// avisarHubDoCliente manda `cliente.upsert` FORA do caminho da resposta.
+//
+// # Por que goroutine, e por que context.Background
+//
+// A criação do cliente NÃO PODE depender do hub estar de pé. E o `r.Context()`
+// morre quando a resposta é escrita: usá-lo cancelaria a emissão no exato
+// instante em que ela começa — defeito intermitente e silencioso, a pior
+// combinação possível.
+//
+// # O preço desta escolha, escrito para quem for mexer
+//
+// Evento perdido é cliente que nunca chega ao hub, e não há nada em tela
+// nenhuma dizendo que falta alguém. Quem conserta isso é o retrato periódico
+// do §5 do desenho, que não está construído. Até lá, isto é atraso invisível,
+// não erro visível.
+func avisarHubDoCliente(h *hub.Client, c *catalog.Client) {
+	if h == nil || !h.Configured() || c == nil {
+		return
+	}
+	// Os campos são copiados AQUI, síncrono, de propósito: a goroutine não
+	// pode ler `c` depois que o handler seguiu adiante e talvez o alterou.
+	dados := hub.ClienteUpsert{
+		IDNaPlataforma:  c.ID.String(),
+		Nome:            c.Name,
+		CNPJ:            c.CNPJ,
+		LogoURL:         c.LogoURL,
+		ContatoNome:     c.ContactName,
+		ContatoEmail:    c.ContactEmail,
+		ContatoTelefone: c.Phone,
+		Cidade:          c.City,
+		UF:              c.State,
+	}
+	id := c.ID.String()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.Emitir(ctx, "cliente.upsert", dados); err != nil {
+			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
+			// seria inventar uma fila sem durabilidade.
+			//
+			// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
+			// `recat_failures.go` — o outro fire-and-forget deste pacote — já
+			// documenta: os handlers não carregam logger próprio, e o log
+			// estruturado é o que o resto da casa consulta. Só o `client_id`
+			// e o erro; o payload NÃO vai para o log.
+			zap.L().Error("hub: cliente.upsert falhou",
+				zap.String("client_id", id), zap.Error(err))
+		}
+	}()
 }
