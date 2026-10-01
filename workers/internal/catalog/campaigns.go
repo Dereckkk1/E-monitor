@@ -451,16 +451,19 @@ func (c *Campaigns) CountByStatus(ctx context.Context) (map[string]int, error) {
 
 // PromoteScheduledLifecycle runs the lifecycle transitions in a single TX:
 //   - concluida → ativa/programada  when end_date >= today (RECOVERY, see below)
+//   - ativa     → programada        when start_date > today (DEMOTE, see below)
 //   - programada → ativa            when start_date <= today (America/Sao_Paulo)
 //   - ativa     → concluida         when end_date < today (America/Sao_Paulo)
 //
 // Returns the IDs that became 'ativa' (in `activated`, including recovered ones,
-// so the scheduler starts their workers) and the IDs that became 'concluida'
-// (in `ended`). Idempotent: if no rows match, returns empty slices and nil error.
-func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []uuid.UUID, ended []uuid.UUID, err error) {
+// so the scheduler starts their workers), the IDs that became 'concluida'
+// (in `ended`) and the IDs demoted back to 'programada' (in `demoted`, so the
+// scheduler stops their workers). Idempotent: if no rows match, returns empty
+// slices and nil error.
+func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated, ended, demoted []uuid.UUID, err error) {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -485,14 +488,14 @@ func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []
 		   AND end_date >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
 		RETURNING id, status`)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for rows0.Next() {
 		var id uuid.UUID
 		var status string
 		if err := rows0.Scan(&id, &status); err != nil {
 			rows0.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if status == "ativa" {
 			activated = append(activated, id)
@@ -500,7 +503,38 @@ func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []
 	}
 	rows0.Close()
 	if err := rows0.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+
+	// DEMOTE: ativa → programada when start_date is still in the future.
+	// Self-heals campaigns that are 'ativa' ahead of time — the canonical cause
+	// is an operator pushing start_date forward AFTER the campaign activated
+	// (UpdateBasic does not touch status), the other is a manual
+	// PUT /campaigns/{id}/start (Supervisor.Start flips to 'ativa' without
+	// looking at dates). Either way every target station ran a worker a day
+	// early (incident 2026-10-01, campaign "FSJ - Pedido Jack", 239 stations).
+	// Runs before programada → ativa, whose start_date filter leaves the
+	// demoted rows alone.
+	rowsD, err := tx.Query(ctx, `
+		UPDATE campaigns
+		   SET status = 'programada', updated_at = now()
+		 WHERE status = 'ativa'
+		   AND start_date > (now() AT TIME ZONE 'America/Sao_Paulo')::date
+		RETURNING id`)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for rowsD.Next() {
+		var id uuid.UUID
+		if err := rowsD.Scan(&id); err != nil {
+			rowsD.Close()
+			return nil, nil, nil, err
+		}
+		demoted = append(demoted, id)
+	}
+	rowsD.Close()
+	if err := rowsD.Err(); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// programada → ativa
@@ -511,19 +545,19 @@ func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []
 		   AND start_date <= (now() AT TIME ZONE 'America/Sao_Paulo')::date
 		RETURNING id`)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for rows1.Next() {
 		var id uuid.UUID
 		if err := rows1.Scan(&id); err != nil {
 			rows1.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		activated = append(activated, id)
 	}
 	rows1.Close()
 	if err := rows1.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// ativa → concluida
@@ -534,25 +568,25 @@ func (c *Campaigns) PromoteScheduledLifecycle(ctx context.Context) (activated []
 		   AND end_date < (now() AT TIME ZONE 'America/Sao_Paulo')::date
 		RETURNING id`)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for rows2.Next() {
 		var id uuid.UUID
 		if err := rows2.Scan(&id); err != nil {
 			rows2.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		ended = append(ended, id)
 	}
 	rows2.Close()
 	if err := rows2.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return activated, ended, nil
+	return activated, ended, demoted, nil
 }
 
 // UpdateBasicInput é o subset editável depois que a campanha foi criada.
@@ -571,6 +605,9 @@ type UpdateBasicInput struct {
 // próxima rodada do PromoteScheduledLifecycle a recupera para ativa/programada
 // (passo RECOVERY). Antes de 2026-06-05 essa recuperação NÃO existia e a
 // campanha ficava presa em 'concluida' — ver o incidente TINTAS RENNER.
+// Simetricamente, empurrar o start_date de uma campanha 'ativa' pro futuro faz
+// a próxima rodada devolvê-la a 'programada' e parar os workers (passo DEMOTE,
+// incidente 2026-10-01).
 func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasicInput) (*Campaign, error) {
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `

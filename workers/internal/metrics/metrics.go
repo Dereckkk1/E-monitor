@@ -170,7 +170,9 @@ var (
 
 	// WorkerReconcileRuns counts every reconciler pass per outcome.
 	// 'unchanged' = list matched DB; 'restarted' = list differed and worker
-	// was rebuilt; 'error' = the lookup failed (previous state preserved).
+	// was rebuilt; 'stopped' = no 'ativa' campaign covers the station any more,
+	// so the worker was stopped; 'error' = the lookup failed (previous state
+	// preserved).
 	WorkerReconcileRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_worker_reconcile_runs_total",
 		Help: "Outcome of the per-station commercial reconciler ticks.",
