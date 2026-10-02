@@ -1,12 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-10-01
+ultima-verificacao: 2026-10-02
 codigo-relacionado:
   - workers/internal/supervisor/lifecycle_scheduler.go
   - workers/internal/catalog/campaigns.go
   - workers/internal/api/handlers/campaigns.go
   - workers/internal/supervisor/station_changes.go
   - workers/internal/supervisor/reconcile.go
+  - workers/internal/supervisor/fleet_reconcile.go
   - migrations/0011_campaign_lifecycle.up.sql
   - migrations/0044_campaign_cancelled_at.up.sql
   - workers/internal/metrics/metrics.go
@@ -34,7 +35,9 @@ estados são equivalentes para o supervisor (worker desligado).
 `start_date` no futuro é estado inválido: o scheduler a devolve para
 `programada` e para os workers (passo DEMOTE, abaixo). O reconciler de cada
 worker também para o worker de qualquer emissora que nenhuma campanha `ativa`
-cubra mais ([worker-commercial-reconciler](../operations/worker-commercial-reconciler.md)).
+cubra mais, e o reconciler da frota sobe o worker que falta e mantém
+`stations.monitoring_status` coerente com as campanhas `ativa`
+([worker-commercial-reconciler](../operations/worker-commercial-reconciler.md#reconciler-da-frota-2026-10-02)).
 
 > Nuance pós-2026-05-08: o índice em memória de fingerprints (separado dos
 > workers) carrega hashes de `programada` E `ativa`. Isso elimina a janela

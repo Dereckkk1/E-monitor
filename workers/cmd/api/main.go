@@ -333,6 +333,10 @@ func main() {
 	// Lifecycle scheduler (§18.2.1): promote programada→ativa→concluida by date.
 	sup.StartLifecycle(ctx)
 
+	// Fleet reconciler: starts workers missing for stations of active campaigns
+	// and keeps stations.monitoring_status in sync (incident 2026-10-02).
+	sup.StartFleetReconciler(ctx)
+
 	// Daily calibration job: promote stations out of calibration mode after 7 days (§9.4).
 	// This handles the *initial* calibration window — stations entering the
 	// system collect noise samples for 7 days, then get promoted with their
