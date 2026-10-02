@@ -947,6 +947,27 @@ func (c *Campaigns) CountForeignProjections(ctx context.Context, id uuid.UUID) (
 	return n, err
 }
 
+// StationsCoveredByActive returns every station targeted by at least one
+// 'ativa' campaign — the set that must have a worker. Used by the supervisor's
+// fleet reconciler.
+func (c *Campaigns) StationsCoveredByActive(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := c.pool.Query(ctx, `
+		SELECT DISTINCT unnest(target_stations) FROM campaigns WHERE status = 'ativa'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ActiveCampaignsForStation returns IDs of all currently-active campaigns that include the given station.
 func (c *Campaigns) ActiveCampaignsForStation(ctx context.Context, stationID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := c.pool.Query(ctx, `
