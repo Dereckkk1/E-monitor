@@ -1,8 +1,9 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-10-02
 codigo-relacionado:
   - workers/internal/supervisor/reconcile.go
+  - workers/internal/supervisor/fleet_reconcile.go
   - workers/internal/supervisor/supervisor.go
   - workers/internal/supervisor/station_changes.go
   - workers/internal/ingestor/worker.go
@@ -52,16 +53,21 @@ A arquitetura tinha três fragilidades encadeadas:
 A cada 30 segundos, para cada worker em execução:
 
 1. Chama `stations.Get(stationID)` pra obter a `stream_url` atual.
-2. Chama `ListReadyByCampaignsForStation(activeCampaigns, station)` pra obter
+2. Chama `ActiveCampaignsForStation(stationID)`. **Se nenhuma campanha `ativa`
+   cobre a emissora → para o worker** (cancela o context, remove do mapa,
+   `monitoring_status = 'paused'`, loga `supervisor.reconcile: no active
+   campaign covers station — worker stopped`) e não respawna. Ver
+   [§Worker órfão](#worker-órfão-emissora-sem-campanha-ativa-2026-10-01).
+3. Chama `ListReadyByCampaignsForStation(activeCampaigns, station)` pra obter
    o set de `short_id` (comerciais + materiais) que o worker deveria estar
    matcheando.
-3. Compara `(station.StreamURL, wantedIDs)` com
+4. Compara `(station.StreamURL, wantedIDs)` com
    `(worker.StreamURL(), worker.CommercialShortIDs())` via
    [`reconcileReason`](../../workers/internal/supervisor/reconcile.go).
-4. Se a função retornar string vazia → atualiza a métrica
+5. Se a função retornar string vazia → atualiza a métrica
    `radiocheck_worker_commercials` com a contagem corrente e dorme até o
    próximo tick.
-5. Caso contrário → loga `supervisor.reconcile: drift detected — restarting
+6. Caso contrário → loga `supervisor.reconcile: drift detected — restarting
    worker` com o motivo (`"stream_url changed"`, `"commercial list changed"`
    ou `"stream_url and commercial list changed"`), cancela o context do
    worker, remove do mapa e respawna via `startStationWorker(stationID)`. O
@@ -70,6 +76,27 @@ A cada 30 segundos, para cada worker em execução:
 A comparação de comerciais é insensível a ordem (os SELECTs não têm
 `ORDER BY`) e a duplicatas (são tratadas como o mesmo elemento). Veja
 [`reconcile.go::commercialSetEqual`](../../workers/internal/supervisor/reconcile.go).
+
+### Worker órfão: emissora sem campanha ativa (2026-10-01)
+
+Antes do passo 2, um worker cuja emissora perdeu todas as campanhas `ativa`
+(campanha voltou pra `programada`, ou saiu de `ativa` por um caminho que não
+chamou `StopWorkersForCampaign`) **nunca parava**: o reconciler via a lista de
+comerciais mudar, recriava o worker com lista vazia, e dali em diante "vazio ==
+vazio" era lido como "nada mudou" — o ffmpeg seguia puxando o stream para
+ninguém. Foi o que impediu o alívio via SQL no incidente `FSJ - Pedido Jack`
+(239 emissoras monitoradas um dia antes do início; ver
+[campaign-lifecycle §Demote](../architecture/campaign-lifecycle.md#demote-ativa--programada-2026-10-01)).
+
+Emissora coberta por campanha `ativa` **sem material pronto** (fingerprint
+pendente) continua com worker: `activeIDs` não é vazio, só a lista de
+comerciais é. O worker carrega o material em ≤30s quando ele fica pronto.
+
+Corrida com `Start()`: o reconciler só para o **próprio** worker. Se o context
+dele já foi cancelado, o entry no mapa é de um worker mais novo (ex.: uma
+campanha acabou de ativar) e é deixado em paz. Cobertura:
+`TestReconcileOnce_StopsWorkerWithoutActiveCampaign`,
+`TestReconcileOnce_KeepsWorkerWithActiveCampaignButNoReadyMaterial`.
 
 ### Por que a URL drift também vive aqui
 
@@ -89,6 +116,48 @@ documenta que tentativas anteriores de "Reload via handler" silenciaram
 erros e mascararam bugs. Aceitar latência de até 30s pra uma operação que é
 raríssima (operador editando URL) é um trade-off explícito.
 
+## Reconciler da frota (2026-10-02)
+
+O reconciler acima é **por worker**: só vigia worker que já existe. Os dois
+furos que ele não enxerga são cobertos por um segundo laço, no nível do
+supervisor ([`fleet_reconcile.go`](../../workers/internal/supervisor/fleet_reconcile.go)),
+que roda a cada **2 minutos** (`fleetReconcileInterval`), ligado no
+`cmd/api/main.go` logo após o `StartLifecycle`:
+
+1. **Worker que falta.** Compara "emissoras cobertas por campanha `ativa`"
+   (`Campaigns.StationsCoveredByActive`) com as chaves do mapa do supervisor e
+   sobe o worker das que faltam. Antes, um `startStationWorker` que falhava
+   (`Start`, respawn do stall watchdog, rebuild do reconciler — todos só logam
+   o erro) ou uma campanha posta em `ativa` por SQL direto deixavam a emissora
+   sem monitoramento até o próximo restart da API.
+2. **Marcação `monitoring_status`.** `Stations.SyncMonitoringStatus` acerta a
+   coluna: `active` sem campanha ativa → `paused`; `paused` coberta → `active`.
+   `calibrating`/`error` não são tocados. A coluna não governa worker, mas é o
+   denominador do "Streams ao ar" e do "Atenção agora" — marcação velha
+   aparece lá como "Worker não registrado — drift do reconciler" falso.
+
+**Carência de 2 passadas.** Uma emissora só ganha worker se faltava também na
+passada anterior (`planFleetStarts`). Na primeira, pode ser um `Start()` ou um
+respawn do watchdog em andamento — subir junto criaria dois
+`startStationWorker` concorrentes na mesma emissora, e o segundo sobrescreve a
+entrada do primeiro sem cancelá-lo (ffmpeg órfão fora do mapa). Pior caso de
+emissora sem worker: ~4 min.
+
+**O que fica de fora, de propósito:** emissora parada pelo circuit breaker tem
+marcador no mapa (`worker == nil`) e conta como presente — o respawn é do
+breaker. Worker sobrando (emissora sem campanha ativa) é parado pelo
+reconciler por worker (§Worker órfão), não por este.
+
+> **Incidente 2026-10-02.** Depois do alívio manual da FSJ (`UPDATE` de status
+> + restart, que passa por fora do `StopWorkersForCampaign`), 80 emissoras
+> ficaram `active` sem campanha nenhuma (saíram da lista com a FSJ ainda
+> `programada`, caminho que só grava no banco). O dashboard mostrava Workers
+> 369/369 "todos ok" e Streams 449/457, e o `/admin/overview` acusava 80
+> "drift do reconciler". Não houve perda de monitoramento; o reparo foi um
+> `UPDATE` de `monitoring_status`. Cobertura:
+> `TestFleetSync_CoveredStationsAndMonitoringStatus`, `TestPlanFleetStarts`,
+> `TestReconcileFleetOnce`.
+
 ## Janela de detecção perdida
 
 No pior caso, um comercial recém-vinculado a uma estação cuja chamada de
@@ -105,13 +174,14 @@ com tráfego real.
 
 ## Métricas Prometheus
 
-Duas métricas novas vivem em
+As métricas vivem em
 [`internal/metrics/metrics.go`](../../workers/internal/metrics/metrics.go):
 
 | Métrica | Tipo | Significado |
 |---------|------|-------------|
 | `radiocheck_worker_commercials{station_id}` | gauge | Quantos comerciais o worker tem carregados agora. |
-| `radiocheck_worker_reconcile_runs_total{station_id, outcome}` | counter | `unchanged` \| `restarted` \| `error` por tick. |
+| `radiocheck_worker_reconcile_runs_total{station_id, outcome}` | counter | `unchanged` \| `restarted` \| `stopped` (sem campanha ativa) \| `error` por tick. |
+| `radiocheck_fleet_reconcile_actions_total{action}` | counter | Correções do reconciler da frota: `started` \| `start_failed` (worker que faltava) \| `status_paused` \| `status_activated` (linhas de `monitoring_status`). Qualquer valor ≠ 0 = algo deixou deriva pra trás; vale ler o log `supervisor.fleet`. |
 
 ### Alerta recomendado
 

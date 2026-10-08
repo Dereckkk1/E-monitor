@@ -114,6 +114,8 @@ type LifecycleAction func(ctx context.Context, campaignID uuid.UUID)
 // clock (§18.2.1):
 //
 //	programada → ativa     when start_date <= today (America/Sao_Paulo)
+//	ativa     → programada when start_date > today (self-heal, see DEMOTE in
+//	                        Campaigns.PromoteScheduledLifecycle)
 //	ativa     → concluida  when end_date < today
 //
 // Each transition emits a NATS event AND invokes the in-process callback so
@@ -127,6 +129,10 @@ type LifecycleScheduler struct {
 
 	OnActivated LifecycleAction
 	OnEnded     LifecycleAction
+	// OnDemoted runs for campaigns sent back from 'ativa' to 'programada'
+	// because their start_date is still in the future. No NATS event: nothing
+	// outside the supervisor reacts to it.
+	OnDemoted LifecycleAction
 }
 
 // NewLifecycleScheduler builds a scheduler with the default 60s interval.
@@ -191,7 +197,7 @@ func (s *LifecycleScheduler) tick(ctx context.Context) {
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	activated, ended, err := s.campaigns.PromoteScheduledLifecycle(scanCtx)
+	activated, ended, demoted, err := s.campaigns.PromoteScheduledLifecycle(scanCtx)
 	if err != nil {
 		s.log.Error("lifecycle scheduler: promote failed", zap.Error(err))
 		return
@@ -200,7 +206,19 @@ func (s *LifecycleScheduler) tick(ctx context.Context) {
 	span.SetAttributes(
 		attribute.Int("activated_count", len(activated)),
 		attribute.Int("ended_count", len(ended)),
+		attribute.Int("demoted_count", len(demoted)),
 	)
+
+	for _, id := range demoted {
+		metrics.CampaignTransitions.WithLabelValues("ativa", "programada").Inc()
+		s.log.Warn("lifecycle: campaign demoted — ativa before its start_date",
+			zap.String("campaign_id", id.String()))
+		if s.OnDemoted != nil {
+			cbCtx, cbCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			s.OnDemoted(cbCtx, id)
+			cbCancel()
+		}
+	}
 
 	for _, id := range activated {
 		metrics.CampaignTransitions.WithLabelValues("programada", "ativa").Inc()

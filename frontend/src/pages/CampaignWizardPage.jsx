@@ -13,13 +13,28 @@ import MaterialsStep from './CampaignWizardSteps/MaterialsStep'
 import DistributionStep from './CampaignWizardSteps/DistributionStep'
 import PricingStep from './CampaignWizardSteps/PricingStep'
 
+/*
+A recusa do servidor, quando ela é para a PESSOA ler.
+
+O `Create`/`Update` devolvem 422 em texto puro com a frase que diz de quem é o
+código ("esse código é da campanha X, de outro cliente (Y)"). Só o 422 sobe:
+os outros status são falha nossa, e despejar "internal error" numa caixa de
+alerta não ajuda ninguém.
+*/
+function mensagemDoServidor(e) {
+  if (e?.response?.status !== 422) return null
+  const corpo = e.response.data
+  const txt = typeof corpo === 'string' ? corpo.trim() : ''
+  return txt || null
+}
+
 export default function CampaignWizardPage() {
   const { id: routeId } = useParams()
   const navigate = useNavigate()
   const isEdit = !!routeId
 
   const [draftCampaign, setDraftCampaign] = useState({
-    name: '', client_id: '', start_date: '', end_date: '',
+    name: '', client_id: '', start_date: '', end_date: '', hub_code: '',
   })
   const [campaignId, setCampaignId] = useState(routeId ?? null)
   const [currentStep, setCurrentStep] = useState(1)
@@ -33,6 +48,7 @@ export default function CampaignWizardPage() {
         client_id: existingCampaign.client_id,
         start_date: existingCampaign.start_date?.slice(0, 10) ?? '',
         end_date: existingCampaign.end_date?.slice(0, 10) ?? '',
+        hub_code: existingCampaign.hub_code ?? '',
       })
       setCampaignId(existingCampaign.id)
       // Em modo edit todas as etapas anteriores são consideradas concluídas,
@@ -99,8 +115,13 @@ export default function CampaignWizardPage() {
         })
         setCampaignId(created.id)
         navigate(`/campaigns/${created.id}/edit`, { replace: true })
-      } catch {
-        window.alert('Erro ao criar campanha. Tente novamente.')
+      } catch (e) {
+        /* ⚠️ O 422 da barreira do §4.4 É a mensagem: ela diz de QUEM é o código
+           e o que fazer. Trocá-la por "tente novamente" manda a pessoa repetir
+           uma ação que vai falhar sempre — e é o caminho NORMAL quando o hub
+           estava mudo na hora de digitar (âmbar, "pode seguir") e voltou na
+           hora de salvar. */
+        window.alert(mensagemDoServidor(e) ?? 'Erro ao criar campanha. Tente novamente.')
         return
       }
     } else if (currentStep === 1 && campaignId) {
@@ -110,16 +131,24 @@ export default function CampaignWizardPage() {
       const startChanged = (existingCampaign?.start_date?.slice(0, 10) ?? '') !== draftCampaign.start_date
       const endChanged   = (existingCampaign?.end_date?.slice(0, 10)   ?? '') !== draftCampaign.end_date
       const nameChanged  = (existingCampaign?.name ?? '')               !== draftCampaign.name
-      if (startChanged || endChanged || nameChanged) {
+      const codeChanged  = (existingCampaign?.hub_code ?? '')           !== draftCampaign.hub_code
+      if (startChanged || endChanged || nameChanged || codeChanged) {
         try {
           await updateCampaign.mutateAsync({
             id: campaignId,
             name: draftCampaign.name,
             start_date: draftCampaign.start_date + 'T00:00:00Z',
             end_date:   draftCampaign.end_date   + 'T00:00:00Z',
+            /* ⚠️ `hub_code` vai SÓ quando mudou, e a omissão é o desenho: o
+               backend trata campo ausente como "não mexe" e campo vazio como
+               "apaga", e apagar o código CONGELA a coleta da proposta no hub
+               (§6.5). Mandar sempre significaria que qualquer falha em carregar
+               o código para o rascunho apagaria o código de uma campanha boa
+               na primeira edição de nome. */
+            ...(codeChanged ? { hub_code: draftCampaign.hub_code.trim() } : {}),
           })
-        } catch {
-          window.alert('Erro ao salvar alterações da campanha. Tente novamente.')
+        } catch (e) {
+          window.alert(mensagemDoServidor(e) ?? 'Erro ao salvar alterações da campanha. Tente novamente.')
           return
         }
       }
@@ -160,8 +189,12 @@ export default function CampaignWizardPage() {
         isEditMode={isEdit}
       />
     )
+    // Decisão 6 da spec: o código é obrigatório na CRIAÇÃO. Campanha antiga
+    // continua salvando sem ele — senão corrigir uma data numa campanha de
+    // junho viraria "vá ao hub criar uma campanha primeiro".
     nextDisabled = !draftCampaign.name || !draftCampaign.client_id ||
-                   !draftCampaign.start_date || !draftCampaign.end_date
+                   !draftCampaign.start_date || !draftCampaign.end_date ||
+                   (!isEdit && !(draftCampaign.hub_code ?? '').trim())
   } else if (currentStep === 2) {
     stepContent = (
       <StationsStep
