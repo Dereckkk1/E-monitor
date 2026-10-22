@@ -220,6 +220,32 @@ func (c *Campaigns) PendentesDeHub(ctx context.Context, limit int) ([]Campaign, 
 	return out, rows.Err()
 }
 
+// PendentesDoCliente é o `PendentesDeHub` de UM cliente, sem limite: o que o
+// botão Ligar reemite logo depois de ligar. Filtrar no SQL, e não na lista
+// global com LIMIT, é o que garante que as campanhas deste cliente não fiquem
+// fora da página quando a fila geral está grande.
+func (c *Campaigns) PendentesDoCliente(ctx context.Context, clientID uuid.UUID) ([]Campaign, error) {
+	rows, err := c.pool.Query(ctx, `
+		SELECT id, client_id, name, hub_code
+		  FROM campaigns
+		 WHERE client_id = $1 AND hub_code IS NOT NULL AND hub_notified_at IS NULL
+		 ORDER BY hub_notify_tentado_em NULLS FIRST, created_at`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Campaign
+	for rows.Next() {
+		var camp Campaign
+		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.HubCode); err != nil {
+			return nil, err
+		}
+		out = append(out, camp)
+	}
+	return out, rows.Err()
+}
+
 func (c *Campaigns) List(ctx context.Context) ([]Campaign, error) {
 	return c.ListFiltered(ctx, nil, nil)
 }
