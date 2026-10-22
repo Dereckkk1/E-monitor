@@ -35,6 +35,10 @@ type CampaignsHandler struct {
 	// avisa o hub", e a criação de campanha segue igual. É o mesmo portão que
 	// o SSO já usa, e é o que faz dev e teste não baterem em produção.
 	Hub *hub.Client
+	// Ligacoes liga a barreira da ligação com o hub (spec 2026-10-22 §4.1.4).
+	// nil = só a conferência antiga de "outro cliente" — é o que os testes
+	// anteriores a esta série constroem. Produção preenche em main.go.
+	Ligacoes *catalog.Ligacoes
 }
 
 // CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
@@ -217,7 +221,18 @@ func (h *CampaignsHandler) conferirCodigoOuRecusar(
 	var he *hub.Error
 	switch {
 	case err == nil:
-		if !clienteDoHubConfere(doHub.Cliente.IDNaPlataforma, clientID) {
+		if h.Ligacoes != nil {
+			/* A regra da ligação SUBSTITUI a de "outro cliente": ela também
+			   cobre esse caso (hub apontando para outro cliente em uso →
+			   bloqueado) e separa dele o duplicado vazio, que tem conserto. */
+			f, ferr := h.Ligacoes.Fatos(r.Context(), clientID, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma)
+			if ferr == nil {
+				if l := catalog.EstadoDaLigacao(*f, doHub.Cliente.ID, doHub.Cliente.Nome); l.Estado != catalog.EstadoLigado {
+					http.Error(w, l.Mensagem, http.StatusUnprocessableEntity)
+					return "", false
+				}
+			}
+		} else if !clienteDoHubConfere(doHub.Cliente.IDNaPlataforma, clientID) {
 			http.Error(w, fmt.Sprintf(
 				"esse código é da campanha %q, de outro cliente (%s)",
 				doHub.Nome, doHub.Cliente.Nome), http.StatusUnprocessableEntity)
