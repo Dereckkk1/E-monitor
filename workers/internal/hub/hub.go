@@ -508,3 +508,61 @@ func (c *Client) ConferirCodigo(ctx context.Context, code string) (*CampanhaDoHu
 	out.Codigo = canonico
 	return &out, nil
 }
+
+// RespostaLigar é o corpo de 200 de `POST /api/platform/clientes/ligar`.
+type RespostaLigar struct {
+	Acao      string `json:"acao"`
+	ClienteID string `json:"clienteId"`
+}
+
+/*
+LigarCliente pede ao hub para gravar `idNaPlataforma` no cliente DONO do código
+(spec do hub 2026-10-22 §4.2). O hub acha o dono pelo código; este lado não
+manda id de cliente do hub nenhum.
+
+⚠️ Só o 409 é "não": o hub achou outro cliente dele usando este id e coletando.
+Todo o resto (401, 404 de hub ainda sem a rota, 429, 5xx, rede) é "não deu
+agora" e vira 503 — o botão diz "aperte de novo", e o lado local já gravado é
+idempotente.
+*/
+func (c *Client) LigarCliente(ctx context.Context, code, idNaPlataforma string) (*RespostaLigar, error) {
+	if !c.Configured() {
+		return nil, ErrNotConfigured
+	}
+	codigo := NormalizaCodigo(code)
+	if codigo == "" {
+		codigo = code
+	}
+	body, _ := json.Marshal(map[string]string{"hubCode": codigo, "idNaPlataforma": idNaPlataforma})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/api/platform/clientes/ligar", bytes.NewReader(body))
+	if err != nil {
+		return nil, &Error{Status: http.StatusInternalServerError, Message: "erro interno"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hub-Platform-Key", c.platformKey)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "a Central de Clientes não respondeu"}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+		_ = resp.Body.Close()
+	}()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var out RespostaLigar
+		_ = json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out)
+		return &out, nil
+	case http.StatusConflict:
+		var corpo struct {
+			Cliente string `json:"cliente"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&corpo)
+		return nil, &Error{Status: http.StatusConflict, Message: fmt.Sprintf(
+			"O cliente %q do hub já usa este cliente do E-monitor e coleta dele. Fale com um admin.", corpo.Cliente)}
+	default:
+		return nil, &Error{Status: http.StatusServiceUnavailable,
+			Message: fmt.Sprintf("a Central de Clientes respondeu %d", resp.StatusCode)}
+	}
+}
