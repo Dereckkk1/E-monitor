@@ -407,6 +407,10 @@ type CampanhaDoHub struct {
 		// desfecho (aceita) —, e vira defeito no dia em que alguém quiser "hub
 		// velho → âmbar, peça deploy". Fica registrado, não consertado.
 		IDNaPlataforma string `json:"idNaPlataforma"`
+		// CNPJ do cliente do hub como foi digitado lá (pode ter máscara); `null`
+		// vira "". Serve só para a regra da ligação (CNPJ divergente trava) e
+		// NÃO desce para o navegador: o `GET /hub-codes` monta o próprio `cliente`.
+		CNPJ string `json:"cnpj"`
 	} `json:"cliente"`
 
 	// Codigo é a forma CANÔNICA do código consultado — calculada aqui, não

@@ -90,3 +90,46 @@ func TestEstado_HubClientIDVazio_FaltaLigar(t *testing.T) {
 	l := EstadoDaLigacao(FatosDaLigacao{Escolhido: escolhido("qualquer")}, "", "")
 	require.Equal(t, EstadoFaltaLigar, l.Estado)
 }
+
+// ---------- CNPJ divergente (decisão de 2026-10-22) ----------
+
+func comCNPJ(c ClienteResumo, cnpj string) ClienteResumo { c.CNPJ = cnpj; return c }
+
+func TestEstado_CNPJDivergenteBloqueia(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), "07714104000107"), CNPJNoHub: "03.984.660/0001-81", HubSemPonte: true}
+	l := EstadoDaLigacao(f, hubDono, "Lojas Renner")
+	require.Equal(t, EstadoBloqueado, l.Estado)
+	require.Contains(t, l.Mensagem, "07.714.104/0001-07")
+	require.Contains(t, l.Mensagem, "03.984.660/0001-81")
+	require.Contains(t, l.Mensagem, "LOJAS RENNER")
+	require.Contains(t, l.Mensagem, "Lojas Renner")
+}
+
+// Renner foi consertada à mão com CNPJs diferentes: ligação completa não se desfaz.
+func TestEstado_CNPJDivergenteJaLigadoContinuaLigado(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(hubDono), "07714104000107"), CNPJNoHub: "03.984.660/0001-81", HubApontaEscolhido: true}
+	l := EstadoDaLigacao(f, hubDono, "Lojas Renner")
+	require.Equal(t, EstadoLigado, l.Estado)
+}
+
+// CNPJ ausente ou incompleto em qualquer lado: não compara, cai no estado de sempre.
+func TestEstado_CNPJIncompletoNaoCompara(t *testing.T) {
+	casos := [][2]string{
+		{"", "03.984.660/0001-81"},
+		{"07714104000107", ""},
+		{"0771410400010", "03.984.660/0001-81"},
+		{"07714104000107", "03.984.660/0001-8"},
+	}
+	for _, c := range casos {
+		f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), c[0]), CNPJNoHub: c[1], HubSemPonte: true}
+		l := EstadoDaLigacao(f, hubDono, "Lojas Renner")
+		require.Equal(t, EstadoFaltaLigar, l.Estado, "%q x %q", c[0], c[1])
+	}
+}
+
+// Máscara de um lado e só dígitos do outro, mesmos dígitos: é o mesmo CNPJ.
+func TestEstado_CNPJComMascaraIgualNaoBloqueia(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), "07714104000107"), CNPJNoHub: "07.714.104/0001-07", HubSemPonte: true}
+	l := EstadoDaLigacao(f, hubDono, "Lojas Renner")
+	require.Equal(t, EstadoFaltaLigar, l.Estado)
+}

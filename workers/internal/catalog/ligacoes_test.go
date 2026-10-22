@@ -85,7 +85,7 @@ func TestFatos_DetentorDuplicadoVazio(t *testing.T) {
 	escolhido := novoCliente(t, ctx, pool, "GIGA MAIS FIBRA", nil)
 	novoCliente(t, ctx, pool, "Giga + Internet", ptr(hubID))
 
-	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, hubID, escolhido.String())
+	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, hubID, escolhido.String(), "")
 	require.NoError(t, err)
 	require.Equal(t, "GIGA MAIS FIBRA", f.Escolhido.Nome)
 	require.NotNil(t, f.Detentor)
@@ -100,7 +100,7 @@ func TestFatos_HubApontaParaOutroEmUso(t *testing.T) {
 	outro := novoCliente(t, ctx, pool, "Pilecco", nil)
 	comCampanha(t, ctx, pool, outro)
 
-	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-"+uuid.NewString(), outro.String())
+	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-"+uuid.NewString(), outro.String(), "")
 	require.NoError(t, err)
 	require.NotNil(t, f.ApontadoPeloHub)
 	require.Equal(t, outro, f.ApontadoPeloHub.ID)
@@ -111,7 +111,7 @@ func TestFatos_HubSemPonteOuComLixoOuInexistente(t *testing.T) {
 	ctx, pool := hubClientsPool(t)
 	escolhido := novoCliente(t, ctx, pool, "Rôgga", nil)
 	for _, id := range []string{"", "lixo", uuid.NewString()} {
-		f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-x", id)
+		f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-x", id, "")
 		require.NoError(t, err)
 		require.True(t, f.HubSemPonte, "id %q", id)
 		require.Nil(t, f.ApontadoPeloHub)
@@ -248,7 +248,7 @@ func TestFatos_EscolhidoJaSegura_SemDetentor_Ligado(t *testing.T) {
 	hubID := "hub-" + uuid.NewString()
 	c := novoCliente(t, ctx, pool, "Renner", ptr(hubID))
 
-	f, err := NewLigacoes(pool).Fatos(ctx, c, hubID, c.String())
+	f, err := NewLigacoes(pool).Fatos(ctx, c, hubID, c.String(), "")
 	require.NoError(t, err)
 	require.Nil(t, f.Detentor)
 	require.Equal(t, EstadoLigado, EstadoDaLigacao(*f, hubID, "Renner").Estado)
@@ -256,6 +256,6 @@ func TestFatos_EscolhidoJaSegura_SemDetentor_Ligado(t *testing.T) {
 
 func TestFatos_EscolhidoInexistente(t *testing.T) {
 	ctx, pool := hubClientsPool(t)
-	_, err := NewLigacoes(pool).Fatos(ctx, uuid.New(), "hub-x", "")
+	_, err := NewLigacoes(pool).Fatos(ctx, uuid.New(), "hub-x", "", "")
 	require.True(t, errors.Is(err, pgx.ErrNoRows))
 }

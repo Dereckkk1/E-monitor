@@ -91,8 +91,8 @@ func clienteVazio(ctx context.Context, q consulta, id uuid.UUID) (bool, error) {
 func resumoDoCliente(ctx context.Context, q consulta, where string, args ...any) (*ClienteResumo, error) {
 	var r ClienteResumo
 	err := q.QueryRow(ctx,
-		`SELECT id, name, COALESCE(hub_id, '') FROM clients WHERE `+where+` LIMIT 1`, args...).
-		Scan(&r.ID, &r.Nome, &r.HubID)
+		`SELECT id, name, COALESCE(hub_id, ''), COALESCE(cnpj, '') FROM clients WHERE `+where+` LIMIT 1`, args...).
+		Scan(&r.ID, &r.Nome, &r.HubID, &r.CNPJ)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -105,14 +105,15 @@ func resumoDoCliente(ctx context.Context, q consulta, where string, args ...any)
 /*
 Fatos junta o que o banco daqui sabe com o que o hub respondeu na conferência:
 `hubClientID` é o dono do código, `idNaPlataforma` é o id daqui que o hub tem
-gravado (texto livre do lado de lá — pode ser vazio ou lixo).
+gravado (texto livre do lado de lá — pode ser vazio ou lixo), `cnpjNoHub` é o
+CNPJ do dono do código como o hub o tem (com ou sem máscara, ou vazio).
 
 Devolve `pgx.ErrNoRows` se o escolhido não existe.
 
 Lê SEM snapshot compartilhado de propósito: é consultivo, e `LigarLocal`
 reconfere o duplicado dentro da transação.
 */
-func (l *Ligacoes) Fatos(ctx context.Context, escolhido uuid.UUID, hubClientID, idNaPlataforma string) (*FatosDaLigacao, error) {
+func (l *Ligacoes) Fatos(ctx context.Context, escolhido uuid.UUID, hubClientID, idNaPlataforma, cnpjNoHub string) (*FatosDaLigacao, error) {
 	c, err := resumoDoCliente(ctx, l.pool, `id = $1`, escolhido)
 	if err != nil {
 		return nil, err
@@ -120,7 +121,7 @@ func (l *Ligacoes) Fatos(ctx context.Context, escolhido uuid.UUID, hubClientID, 
 	if c == nil {
 		return nil, pgx.ErrNoRows
 	}
-	f := &FatosDaLigacao{Escolhido: *c}
+	f := &FatosDaLigacao{Escolhido: *c, CNPJNoHub: cnpjNoHub}
 
 	if hubClientID != "" {
 		d, err := resumoDoCliente(ctx, l.pool, `hub_id = $1 AND id <> $2`, hubClientID, escolhido)

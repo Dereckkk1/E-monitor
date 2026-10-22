@@ -150,7 +150,7 @@ func (h *HubCodesHandler) ligacaoPara(ctx context.Context, clientID string, doHu
 	// O mesmo teto da conferência: quem espera é uma pessoa saindo do campo.
 	ctx, cancel := context.WithTimeout(ctx, prazoDeConferencia)
 	defer cancel()
-	f, err := h.Ligacoes.Fatos(ctx, id, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma)
+	f, err := h.Ligacoes.Fatos(ctx, id, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma, doHub.Cliente.CNPJ)
 	if err != nil {
 		// Cliente que não existe é resposta, não falha: não polui o log.
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -243,7 +243,7 @@ func (h *HubCodesHandler) Ligar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma)
+	f, err := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma, doHub.Cliente.CNPJ)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		http.Error(w, "cliente não encontrado", http.StatusNotFound)
@@ -274,7 +274,7 @@ func (h *HubCodesHandler) Ligar(w http.ResponseWriter, r *http.Request) {
 			/* Alguém mudou o banco entre o Fatos e a transação: relê e conta.
 			   409 só se o estado relido for bloqueio — se o outro clique já
 			   ligou este mesmo cliente, é "ligado" e a tela pinta verde. */
-			f2, ferr := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma)
+			f2, ferr := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma, doHub.Cliente.CNPJ)
 			if ferr == nil {
 				l := catalog.EstadoDaLigacao(*f2, H, nome)
 				respostaLigacao(w, statusDoEstado(l), l)

@@ -63,3 +63,20 @@ func TestUpdateQueMudaOCodigoTambemPassaPelaLigacao(t *testing.T) {
 
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 }
+
+// CNPJ do cliente escolhido ≠ CNPJ do dono do código no hub: o salvar trava.
+func TestCreateComCNPJDivergenteDa422(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	c := clienteComHubID(t, ctx, pool, "LOJAS RENNER", nil)
+	_, err := pool.Exec(ctx, `UPDATE clients SET cnpj = '07714104000107' WHERE id = $1`, c)
+	require.NoError(t, err)
+	fake, hb := novoHubDaLigacao(t)
+	fake.mudar(func(f *hubLigacaoFalso) { f.cnpj = "03.984.660/0001-81" })
+	h := &CampaignsHandler{Repo: catalog.NewCampaigns(pool), Hub: hb, Ligacoes: catalog.NewLigacoes(pool)}
+
+	rec := postCampanha(t, h, campanhaNova(c, "EH-7K4M2X"))
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "CNPJ")
+	require.Equal(t, 0, contaCampanhas(t, ctx, pool, c))
+}

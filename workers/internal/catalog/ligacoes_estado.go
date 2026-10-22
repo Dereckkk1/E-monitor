@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -26,6 +27,7 @@ type ClienteResumo struct {
 	ID    uuid.UUID
 	Nome  string
 	HubID string // "" quando a coluna é NULL
+	CNPJ  string // como foi digitado aqui; "" quando a coluna é NULL
 }
 
 /*
@@ -45,6 +47,7 @@ type FatosDaLigacao struct {
 	ApontadoVazio      bool
 	HubSemPonte        bool
 	HubApontaEscolhido bool
+	CNPJNoHub          string // CNPJ do dono do código no hub, com ou sem máscara; "" se o hub não tem
 }
 
 type Ligacao struct {
@@ -58,6 +61,20 @@ func EstadoDaLigacao(f FatosDaLigacao, hubClientID, nomeNoHub string) Ligacao {
 	if hubClientID == "" {
 		return Ligacao{EstadoFaltaLigar, fmt.Sprintf(
 			"%s ainda não está ligado a %s do hub. Sem isso a campanha não chega lá.", c.Nome, nomeNoHub)}
+	}
+	/* Ligação completa não se desfaz — nem pelo CNPJ abaixo. Lojas Renner foi
+	   ligada à mão em 2026-10-22 com CNPJs diferentes dos dois lados, e uma
+	   regra nova não pode derrubar o que já funciona (decisão do Dereck). */
+	if c.HubID == hubClientID && f.HubApontaEscolhido {
+		return Ligacao{Estado: EstadoLigado}
+	}
+	/* CNPJ divergente: os dois lados têm 14 dígitos e eles não batem → é
+	   provável que o cliente escolhido seja outra empresa. Sem botão: um admin
+	   resolve. CNPJ ausente ou incompleto em qualquer lado não compara. */
+	if a, b := digitosDoCNPJ(c.CNPJ), digitosDoCNPJ(f.CNPJNoHub); len(a) == 14 && len(b) == 14 && a != b {
+		return Ligacao{EstadoBloqueado, fmt.Sprintf(
+			"O CNPJ de %s aqui (%s) é diferente do de %s no hub (%s). Confira se escolheu o cliente certo; se for a mesma empresa, um admin precisa corrigir o CNPJ antes de ligar.",
+			c.Nome, cnpjFormatado(a), nomeNoHub, cnpjFormatado(b))}
 	}
 	if c.HubID != "" && c.HubID != hubClientID {
 		return Ligacao{EstadoBloqueado, fmt.Sprintf(
@@ -88,4 +105,23 @@ func EstadoDaLigacao(f FatosDaLigacao, hubClientID, nomeNoHub string) Ligacao {
 			"%s ainda não está ligado a %s do hub. Sem isso a campanha não chega lá.", c.Nome, nomeNoHub)}
 	}
 	return Ligacao{Estado: EstadoLigado}
+}
+
+// digitosDoCNPJ tira a máscara: "07.714.104/0001-07" e "07714104000107" dão o mesmo.
+func digitosDoCNPJ(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// cnpjFormatado põe 14 dígitos no formato 00.000.000/0000-00.
+func cnpjFormatado(d string) string {
+	if len(d) != 14 {
+		return d
+	}
+	return d[:2] + "." + d[2:5] + "." + d[5:8] + "/" + d[8:12] + "-" + d[12:]
 }

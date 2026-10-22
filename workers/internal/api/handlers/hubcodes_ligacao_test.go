@@ -36,6 +36,7 @@ type hubLigacaoFalso struct {
 	mu             sync.Mutex
 	hubID          string
 	idNaPlataforma string
+	cnpj           string // "" vai como `null`, como o hub manda quando não tem
 	statusCodigo   int
 	statusLigar    int
 	corpoLigar     string
@@ -54,7 +55,7 @@ func novoHubDaLigacao(t *testing.T) (*hubLigacaoFalso, *hub.Client) {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		hubID, idNaPlat, stCod, stLig, corpoLig := f.hubID, f.idNaPlataforma, f.statusCodigo, f.statusLigar, f.corpoLigar
+		hubID, idNaPlat, stCod, stLig, corpoLig, cnpj := f.hubID, f.idNaPlataforma, f.statusCodigo, f.statusLigar, f.corpoLigar, f.cnpj
 		f.mu.Unlock()
 		switch {
 		case strings.Contains(r.URL.Path, "/api/platform/campaigns/by-code/"):
@@ -63,8 +64,13 @@ func novoHubDaLigacao(t *testing.T) (*hubLigacaoFalso, *hub.Client) {
 				_, _ = w.Write([]byte(`{}`))
 				return
 			}
+			cnpjJSON := "null"
+			if cnpj != "" {
+				b, _ := json.Marshal(cnpj)
+				cnpjJSON = string(b)
+			}
 			_, _ = w.Write([]byte(`{"hubCampaignId":"66f0","nome":"Verão 2026","inicio":"2026-12-01","fim":"2027-02-28",` +
-				`"cliente":{"id":"` + hubID + `","nome":"Lojas Renner","idNaPlataforma":"` + idNaPlat + `"}}`))
+				`"cliente":{"id":"` + hubID + `","nome":"Lojas Renner","idNaPlataforma":"` + idNaPlat + `","cnpj":` + cnpjJSON + `}}`))
 		case strings.HasSuffix(r.URL.Path, "/api/platform/clientes/ligar"):
 			atomic.AddInt32(&f.ligou, 1)
 			w.WriteHeader(stLig)
@@ -489,4 +495,62 @@ func TestLigar_HubJaApontaMasLocalSoltoChamaOHub(t *testing.T) {
 	require.Equal(t, catalog.EstadoLigado, ligacaoDe(t, rec).Estado)
 	require.Equal(t, int32(1), f.chamadasAoLigar())
 	require.Equal(t, f.id(), *hubIDDe(t, ctx, pool, c))
+}
+
+// ---------- CNPJ divergente entre os dois lados (decisão de 2026-10-22) ----------
+
+func comCNPJNoBanco(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, cnpj string) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `UPDATE clients SET cnpj = $2 WHERE id = $1`, id, cnpj)
+	require.NoError(t, err)
+}
+
+func TestLigar_CNPJDivergenteBloqueiaSemChamarOHubNemGravar(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	c := clienteComHubID(t, ctx, pool, "LOJAS RENNER", nil)
+	comCNPJNoBanco(t, ctx, pool, c, "07714104000107")
+	f, hb := novoHubDaLigacao(t)
+	f.mudar(func(f *hubLigacaoFalso) { f.cnpj = "03.984.660/0001-81" })
+
+	rec := postLigar(t, &HubCodesHandler{Hub: hb, Ligacoes: catalog.NewLigacoes(pool)}, c)
+
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	l := ligacaoDe(t, rec)
+	require.Equal(t, catalog.EstadoBloqueado, l.Estado)
+	require.Contains(t, l.Mensagem, "CNPJ")
+	require.Equal(t, int32(0), f.chamadasAoLigar())
+	require.Nil(t, hubIDDe(t, ctx, pool, c))
+}
+
+func TestConferencia_CNPJDivergenteEhBloqueadoEOCNPJDoHubNaoVaiNoCliente(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	c := clienteComHubID(t, ctx, pool, "LOJAS RENNER", nil)
+	comCNPJNoBanco(t, ctx, pool, c, "07714104000107")
+	f, hb := novoHubDaLigacao(t)
+	f.mudar(func(f *hubLigacaoFalso) { f.cnpj = "03.984.660/0001-81" })
+
+	rec := getConferencia(t, &HubCodesHandler{Hub: hb, Ligacoes: catalog.NewLigacoes(pool)}, c.String())
+
+	require.Equal(t, catalog.EstadoBloqueado, ligacaoDe(t, rec).Estado)
+	var out struct {
+		Cliente map[string]any `json:"cliente"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out), rec.Body.String())
+	require.NotNil(t, out.Cliente)
+	require.NotContains(t, out.Cliente, "cnpj", "o CNPJ do hub não desce no `cliente`")
+}
+
+// Ligação completa (Renner, consertada à mão) não se desfaz por CNPJ diferente.
+func TestLigar_CNPJDivergenteJaLigadoContinuaLigado(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	f, hb := novoHubDaLigacao(t)
+	h := f.id()
+	c := clienteComHubID(t, ctx, pool, "LOJAS RENNER", &h)
+	comCNPJNoBanco(t, ctx, pool, c, "07714104000107")
+	f.mudar(func(f *hubLigacaoFalso) { f.idNaPlataforma = c.String(); f.cnpj = "03.984.660/0001-81" })
+
+	rec := postLigar(t, &HubCodesHandler{Hub: hb, Ligacoes: catalog.NewLigacoes(pool)}, c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, catalog.EstadoLigado, ligacaoDe(t, rec).Estado)
 }
