@@ -91,6 +91,9 @@ export default function CampaignWizardPage() {
   const pricingRef = useRef(null)
 
   function handleStepClick(step) {
+    // ⚠️ O stepper é a outra porta para fora do passo 1: na edição todos os
+    // passos estão "concluídos" e clicáveis. Trava como o Avançar.
+    if (currentStep === 1 && step !== 1 && ligacaoTrava) return
     if (step <= currentStep || completedSteps.includes(step - 1)) {
       setCurrentStep(step)
     }
