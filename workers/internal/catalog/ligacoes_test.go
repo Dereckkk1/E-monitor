@@ -2,9 +2,12 @@ package catalog
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
@@ -54,15 +57,24 @@ func TestClienteVazio_ComCampanha(t *testing.T) {
 // escrita à mão conheceria também conta.
 func TestClienteVazio_TabelaNovaComFK(t *testing.T) {
 	ctx, pool := hubClientsPool(t)
-	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS teste_fk_ligacao (id serial PRIMARY KEY, cliente uuid REFERENCES clients(id))`)
+	// Tudo dentro de uma transação revertida: o DDL não aparece no banco compartilhado.
+	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS teste_fk_ligacao`) })
-	id := novoCliente(t, ctx, pool, "FK nova "+uuid.NewString()[:6], nil)
-	_, err = pool.Exec(ctx, `INSERT INTO teste_fk_ligacao (cliente) VALUES ($1)`, id)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM teste_fk_ligacao WHERE cliente = $1`, id) })
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	vazio, err := NewLigacoes(pool).ClienteVazio(ctx, id)
+	var id uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ($1) RETURNING id`, "FK nova "+uuid.NewString()[:6]).Scan(&id))
+	_, err = tx.Exec(ctx, `CREATE TABLE teste_fk_ligacao (id serial PRIMARY KEY, cliente uuid REFERENCES clients(id))`)
+	require.NoError(t, err)
+
+	vazio, err := clienteVazio(ctx, tx, id)
+	require.NoError(t, err)
+	require.True(t, vazio)
+
+	_, err = tx.Exec(ctx, `INSERT INTO teste_fk_ligacao (cliente) VALUES ($1)`, id)
+	require.NoError(t, err)
+	vazio, err = clienteVazio(ctx, tx, id)
 	require.NoError(t, err)
 	require.False(t, vazio)
 }
@@ -146,6 +158,13 @@ func TestLigarLocal_MoveDoDuplicadoVazio(t *testing.T) {
 	require.True(t, mudou)
 	require.Equal(t, hubID, hubIDDe(t, ctx, pool, c))
 	require.Equal(t, "", hubIDDe(t, ctx, pool, d))
+	var tipo string
+	var meta map[string]any
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT actor_type, metadata FROM audit_log WHERE action = 'client.hub_link' AND resource_id = $1`, c).Scan(&tipo, &meta))
+	require.Equal(t, "system", tipo)
+	require.Equal(t, d.String(), meta["de"])
+	require.Equal(t, hubID, meta["hub_id"])
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM audit_log WHERE resource_id = $1`, c) })
 }
 
@@ -166,8 +185,10 @@ func TestLigarLocal_RecusaEscolhidoDeOutroClienteDoHub(t *testing.T) {
 	ctx, pool := hubClientsPool(t)
 	c := novoCliente(t, ctx, pool, "Renner", ptr("hub-"+uuid.NewString()))
 
+	antes := hubIDDe(t, ctx, pool, c)
 	_, err := NewLigacoes(pool).LigarLocal(ctx, c, "hub-"+uuid.NewString(), nil)
 	require.ErrorIs(t, err, ErrEscolhidoDeOutro)
+	require.Equal(t, antes, hubIDDe(t, ctx, pool, c))
 }
 
 func TestLigarLocal_JaLigadoNaoMudaNem_Audita(t *testing.T) {
@@ -181,4 +202,60 @@ func TestLigarLocal_JaLigadoNaoMudaNem_Audita(t *testing.T) {
 	var n int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE resource_id = $1`, c).Scan(&n))
 	require.Equal(t, 0, n)
+}
+
+func TestLigarLocal_Corrida_NuncaVazaErroCruDoPg(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c1 := novoCliente(t, ctx, pool, "Corrida A", nil)
+	c2 := novoCliente(t, ctx, pool, "Corrida B", nil)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM audit_log WHERE resource_id = ANY($1)`, []uuid.UUID{c1, c2})
+	})
+
+	l := NewLigacoes(pool)
+	largada := make(chan struct{})
+	var wg sync.WaitGroup
+	erros := make([]error, 2)
+	for i, c := range []uuid.UUID{c1, c2} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-largada
+			_, erros[i] = l.LigarLocal(ctx, c, hubID, nil)
+		}()
+	}
+	close(largada)
+	wg.Wait()
+
+	ok := 0
+	for _, err := range erros {
+		if err == nil {
+			ok++
+			continue
+		}
+		require.True(t, errors.Is(err, ErrDetentorEmUso) || errors.Is(err, ErrLigacaoConcorrente), "erro cru: %v", err)
+	}
+	require.GreaterOrEqual(t, ok, 1)
+	// O índice único garante: no máximo um dos dois segura o código.
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM clients WHERE hub_id = $1`, hubID).Scan(&n))
+	require.Equal(t, 1, n)
+}
+
+func TestFatos_EscolhidoJaSegura_SemDetentor_Ligado(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c := novoCliente(t, ctx, pool, "Renner", ptr(hubID))
+
+	f, err := NewLigacoes(pool).Fatos(ctx, c, hubID, c.String())
+	require.NoError(t, err)
+	require.Nil(t, f.Detentor)
+	require.Equal(t, EstadoLigado, EstadoDaLigacao(*f, hubID, "Renner").Estado)
+}
+
+func TestFatos_EscolhidoInexistente(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	_, err := NewLigacoes(pool).Fatos(ctx, uuid.New(), "hub-x", "")
+	require.True(t, errors.Is(err, pgx.ErrNoRows))
 }
