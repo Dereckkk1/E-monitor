@@ -295,22 +295,22 @@ func (h *HubCodesHandler) Ligar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !f.HubApontaEscolhido {
-		if _, err := h.Hub.LigarCliente(ctx, doHub.Codigo, in.ClientID.String()); err != nil {
-			var e *hub.Error
-			if errors.As(err, &e) && e.Status == http.StatusConflict {
-				respostaLigacao(w, http.StatusConflict, catalog.Ligacao{Estado: catalog.EstadoBloqueado, Mensagem: e.Message})
-				return
-			}
-			zap.L().Warn("ligar: o hub não confirmou", zap.String("cliente", in.ClientID.String()), zap.Error(err))
-			// A frase do hub vai junto: "avise o suporte" (404/401) e "aperte
-			// de novo" (o resto) pedem coisas diferentes de quem está na tela.
-			respostaLigacao(w, http.StatusServiceUnavailable, catalog.Ligacao{
-				Estado:   catalog.EstadoFaltaLigar,
-				Mensagem: "O E-monitor já está ligado; falta o hub confirmar: " + err.Error(),
-			})
+	/* Sempre avisa o hub, mesmo que ele já aponte para o escolhido: o ligar é
+	   idempotente e é ele que zera o backoff do coletor lá. */
+	if _, err := h.Hub.LigarCliente(ctx, doHub.Codigo, in.ClientID.String()); err != nil {
+		var e *hub.Error
+		if errors.As(err, &e) && e.Status == http.StatusConflict {
+			respostaLigacao(w, http.StatusConflict, catalog.Ligacao{Estado: catalog.EstadoBloqueado, Mensagem: e.Message})
 			return
 		}
+		zap.L().Warn("ligar: o hub não confirmou", zap.String("cliente", in.ClientID.String()), zap.Error(err))
+		// A frase do hub vai junto: "avise o suporte" (404/401) e "aperte
+		// de novo" (o resto) pedem coisas diferentes de quem está na tela.
+		respostaLigacao(w, http.StatusServiceUnavailable, catalog.Ligacao{
+			Estado:   catalog.EstadoFaltaLigar,
+			Mensagem: "O E-monitor já está ligado; falta o hub confirmar: " + err.Error(),
+		})
+		return
 	}
 
 	h.reemitirPendentes(in.ClientID)

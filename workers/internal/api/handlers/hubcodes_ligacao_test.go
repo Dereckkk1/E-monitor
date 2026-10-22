@@ -473,3 +473,20 @@ func TestLigar_ForaDoEscopo404(t *testing.T) {
 	require.Equal(t, int32(0), f.chamadasAoLigar())
 	require.Nil(t, hubIDDe(t, ctx, pool, c))
 }
+
+// O hub já aponta para o escolhido mas o lado local está solto (faltaLigar
+// vindo daqui): o ligar do hub é idempotente e zera o backoff do coletor lá,
+// então É chamado.
+func TestLigar_HubJaApontaMasLocalSoltoChamaOHub(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	f, hb := novoHubDaLigacao(t)
+	c := clienteComHubID(t, ctx, pool, "LOJAS RENNER", nil)
+	f.mudar(func(f *hubLigacaoFalso) { f.idNaPlataforma = c.String() })
+
+	rec := postLigar(t, &HubCodesHandler{Hub: hb, Ligacoes: catalog.NewLigacoes(pool)}, c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, catalog.EstadoLigado, ligacaoDe(t, rec).Estado)
+	require.Equal(t, int32(1), f.chamadasAoLigar())
+	require.Equal(t, f.id(), *hubIDDe(t, ctx, pool, c))
+}
