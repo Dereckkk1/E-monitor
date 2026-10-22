@@ -556,6 +556,7 @@ func main() {
 		Supervisor: sup,
 		Log:        logger,
 		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+		Ligacoes:   catalog.NewLigacoes(pool),
 	}
 
 	/* A rede de seguranca do §8 da spec do codigo da campanha (2026-09-18).
