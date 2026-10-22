@@ -39,6 +39,9 @@ export default function CampaignWizardPage() {
   const [campaignId, setCampaignId] = useState(routeId ?? null)
   const [currentStep, setCurrentStep] = useState(1)
   const [completedSteps, setCompletedSteps] = useState([])
+  // A ligação ao hub quebrada trava o Avançar (spec 2026-10-22 §3.1). Quem
+  // decide é o BasicDataStep, que é quem conversa com a conferência.
+  const [ligacaoTrava, setLigacaoTrava] = useState(false)
 
   const { data: existingCampaign } = useCampaign(routeId)
   useEffect(() => {
@@ -187,6 +190,7 @@ export default function CampaignWizardPage() {
         onChange={setDraftCampaign}
         clients={clients}
         isEditMode={isEdit}
+        onBloqueioChange={setLigacaoTrava}
       />
     )
     // Decisão 6 da spec: o código é obrigatório na CRIAÇÃO. Campanha antiga
@@ -194,7 +198,7 @@ export default function CampaignWizardPage() {
     // junho viraria "vá ao hub criar uma campanha primeiro".
     nextDisabled = !draftCampaign.name || !draftCampaign.client_id ||
                    !draftCampaign.start_date || !draftCampaign.end_date ||
-                   (!isEdit && !(draftCampaign.hub_code ?? '').trim())
+                   (!isEdit && !(draftCampaign.hub_code ?? '').trim()) || ligacaoTrava
   } else if (currentStep === 2) {
     stepContent = (
       <StationsStep

@@ -55,8 +55,9 @@ function diffInDays(a, b) {
  *  - onChange: (newValue) => void
  *  - clients: Array<{id, name}>
  *  - isEditMode: bool — disables client field after creation
+ *  - onBloqueioChange: (bool) => void — a ligação com o hub trava o Avançar
  */
-export default function BasicDataStep({ value, onChange, clients, isEditMode }) {
+export default function BasicDataStep({ value, onChange, clients, isEditMode, onBloqueioChange }) {
   /* ⚠️ O valor CORRENTE, não o do render que fechou sobre ele.
      `onChange({...value})` com o `value` capturado parece inofensivo até alguém
      chamar `setField` de dentro de uma função ASSÍNCRONA: a conferência do
@@ -97,7 +98,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
   const pedidoAtual = useRef(0)
   const codigoDigitado = (value.hub_code ?? '').trim()
 
-  async function conferir(bruto) {
+  async function conferir(bruto, { reescrever = true } = {}) {
     const code = (bruto ?? '').trim()
     if (!code) {
       pedidoAtual.current += 1
@@ -108,7 +109,10 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
     // o campo perde o foco, mesmo sem edição — medido, 4 idas à rede para o
     // mesmo código só entrando e saindo. Cada uma divide com o job de 15 em 15
     // minutos o balde por IP do hub.
-    if (code === conferencia.codigo && conferencia.estado === 'achou') return
+    // O cliente entra na guarda: a LIGAÇÃO que volta é a do cliente enviado, e
+    // a de outro cliente não vale (spec 2026-10-22).
+    const clienteAgora = valorAtual.current.client_id || ''
+    if (code === conferencia.codigo && conferencia.estado === 'achou' && conferencia.clienteId === clienteAgora) return
 
     const meuPedido = (pedidoAtual.current += 1)
     setConferencia({ estado: 'conferindo', codigo: code })
@@ -117,7 +121,12 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
          nunca). O teto de 2s de que a feature fala é do SERVIDOR; sem este, uma
          conexão pendurada deixa "Conferindo com a Central…" para sempre, sem
          saída a não ser reeditar o campo. */
-      const { data } = await api.get(`/hub-codes/${encodeURIComponent(code)}`, { timeout: 8000 })
+      const { data } = await api.get(`/hub-codes/${encodeURIComponent(code)}`, {
+        timeout: 8000,
+        // O estado da ligação depende do cliente escolhido (spec 2026-10-22).
+        // Sem cliente, o servidor só confere o código e não devolve `ligacao`.
+        params: clienteAgora ? { client_id: clienteAgora } : undefined,
+      })
       if (meuPedido !== pedidoAtual.current) return
 
       /* ⚠️ 200 com corpo inutilizável NÃO é sucesso. Sem esta guarda, um
@@ -143,8 +152,14 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
         setConferencia({ estado: 'vazio' })
         return
       }
-      if (canonico !== code) setField('hub_code', canonico)
-      setConferencia({ estado: 'achou', campanha: data, codigo: canonico })
+      /* ⚠️ A conferência AO ABRIR (modo edição) não reescreve: ninguém editou o
+         campo, e mudar o código ali faria o PUT da próxima edição de nome levar
+         `hub_code` — que é o que `campanha-codigo-do-hub.spec.js` garante que
+         não acontece. Sem reescrever, a conferência fica guardada com o código
+         como está no campo, para o veredito continuar casando com ele. */
+      const reescreve = reescrever && canonico !== code
+      if (reescreve) setField('hub_code', canonico)
+      setConferencia({ estado: 'achou', campanha: data, codigo: reescreve ? canonico : code, clienteId: clienteAgora })
     } catch (err) {
       if (meuPedido !== pedidoAtual.current) return
       /* ⚠️ 404 é o ÚNICO vermelho — é o caso em que o problema é do que a
@@ -160,6 +175,65 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
         estado: status === 404 ? 'inexistente' : 'naoConferido',
         codigo: code,
       })
+    }
+  }
+
+  /* Ao trocar de cliente, a ligação muda: reconfere o código já conferido.
+
+     ⚠️ Só quando há o que o servidor possa dizer de novo: a resposta anterior
+     trouxe `ligacao` (servidor novo) ou foi pedida SEM cliente. Um servidor
+     antigo não fala de ligação, e para ele o veredito "de outro cliente" já se
+     deriva aqui do que voltou — reconferir só gastaria o balde por IP do hub
+     (é o que `campanha-codigo-do-hub.spec.js` prova com `idas === 1`). */
+  useEffect(() => {
+    const c = conferencia
+    if (c.estado !== 'achou' || c.clienteId === (value.client_id || '')) return
+    if (c.campanha?.ligacao || !c.clienteId) conferir(c.codigo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.client_id])
+
+  /* Em modo edição a conferência roda AO ABRIR: uma campanha antiga com a
+     ligação quebrada mostra o problema e o botão sem esperar o blur do campo. */
+  const conferiuAoAbrir = useRef(false)
+  useEffect(() => {
+    if (!isEditMode || conferiuAoAbrir.current) return
+    if ((value.hub_code ?? '').trim() && value.client_id) {
+      conferiuAoAbrir.current = true
+      conferir(value.hub_code, { reescrever: false })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode, value.hub_code, value.client_id])
+
+  /* O botão "Ligar os dois clientes". A resposta traz a ligação JÁ decidida pelo
+     servidor e ela substitui a da conferência: 200 é normalmente `ligado`, mas
+     pode ser outro estado se alguém ligou no meio; 409 é `bloqueado`; 503 é
+     `faltaLigar` com a mensagem dizendo que o hub não confirmou. Só o erro SEM
+     `ligacao` (400/404/500 em texto puro) vira o aviso genérico. */
+  const [ligando, setLigando] = useState(false)
+  async function ligar() {
+    const code = conferencia.codigo
+    const clientId = valorAtual.current.client_id
+    if (!code || !clientId) return
+    setLigando(true)
+    try {
+      const { data } = await api.post(`/hub-codes/${encodeURIComponent(code)}/ligar`, { client_id: clientId }, { timeout: 15000 })
+      /* ⚠️ 200 sem `ligacao` NÃO é sucesso: gravar `undefined` aqui faria o
+         veredito cair no caminho do servidor antigo, pintar verde e destravar
+         o Avançar sem ninguém ter confirmado a ligação. */
+      if (!data?.ligacao?.estado) {
+        window.alert('Não deu para ligar agora. Tente de novo em instantes.')
+        return
+      }
+      setConferencia(c => ({ ...c, campanha: { ...c.campanha, ligacao: data.ligacao } }))
+    } catch (err) {
+      const lig = err?.response?.data?.ligacao
+      if (lig) {
+        setConferencia(c => ({ ...c, campanha: { ...c.campanha, ligacao: lig } }))
+      } else {
+        window.alert('Não deu para ligar agora. Tente de novo em instantes.')
+      }
+    } finally {
+      setLigando(false)
     }
   }
 
@@ -180,7 +254,20 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
     }
     if (c.estado !== 'achou') return { tipo: c.estado }
 
-    const dono = ponteComoUUID(c.campanha?.cliente?.idNaPlataforma)
+    /* A ligação que o SERVIDOR decidiu (spec 2026-10-22 §3.1) manda sobre a
+       comparação local: ele vê os dois lados (o `hub_id` do cliente daqui e o
+       `emonitorClientId` do hub) e esta tela só vê um. A mensagem vem pronta
+       dele e é mostrada como chegou. */
+    const lig = c.campanha?.ligacao
+    if (lig) {
+      const tipo = {
+        ligado: 'achou', faltaLigar: 'faltaLigar', ligacaoNoDuplicado: 'duplicado', bloqueado: 'bloqueado',
+      }[lig.estado] ?? 'achou'
+      return { tipo, campanha: c.campanha, mensagem: lig.mensagem }
+    }
+
+    // Daqui para baixo é o caminho de um servidor que ainda não devolve `ligacao`.
+    const dono =ponteComoUUID(c.campanha?.cliente?.idNaPlataforma)
     /* ⚠️ Ponte AUSENTE ou ilegível NÃO é divergência: o cliente do hub ainda não
        foi ligado a este E-monitor, e não há o que comparar (§6.1). Tratar
        ausência como divergência barraria todo cliente ainda não ligado
@@ -196,6 +283,12 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
     }
     return { tipo: 'achou', campanha: c.campanha }
   }, [conferencia, codigoDigitado, value.client_id])
+
+  /* A ligação quebrada trava o Avançar da página (§3.1): salvar com ela quebrada
+     levaria a campanha a um cliente do hub que não é o dela. A queda do hub
+     (`naoConferido`) continua NÃO travando — decisão 2 da spec de 09-18. */
+  const bloqueia = ['faltaLigar', 'duplicado', 'bloqueado'].includes(veredito.tipo)
+  useEffect(() => { onBloqueioChange?.(bloqueia) }, [bloqueia, onBloqueioChange])
 
   return (
     <div style={{
@@ -277,7 +370,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
                tomou o vermelho não ouve nada ao tentar de novo. */
             required={!isEditMode}
             aria-describedby="hub-code-estado"
-            aria-invalid={veredito.tipo === 'inexistente' || veredito.tipo === 'outroCliente'}
+            aria-invalid={['inexistente', 'outroCliente', 'faltaLigar', 'duplicado', 'bloqueado'].includes(veredito.tipo)}
             style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.04em' }}
           />
           {/* ⚠️ Altura reservada. O resultado chega ao SAIR do campo, que é o
@@ -293,13 +386,21 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
               ⚠️ 56 e não 42: medido em 2026-09-22, o bloco de "outro cliente"
               ocupa 54,8px a 1280 e 72,2px a 390. Os 42 só bastavam a partir de
               1440 — abaixo disso ele empurrava o campo de data, que é o alvo do
-              clique seguinte, que é exatamente o que reservar altura evita. */}
+              clique seguinte, que é exatamente o que reservar altura evita.
+
+              ⚠️ 110 e não 56: com a ligação (spec 2026-10-22) o bloco âmbar
+              leva a mensagem do servidor E o botão "Ligar os dois clientes".
+              Medido em 2026-10-22 com o botão visível e a fonte carregada:
+              91,6px a 1280 e 109,0px a 390 (mensagem de 3 linhas). Um nome
+              longo que quebre em 4 linhas a 390 chega a 126,4px (medido com a
+              fonte de reserva) — aí o campo de data ainda desce, mas uma vez,
+              ao aparecer o caso raro, e não a cada conferência. */}
           <div
             id="hub-code-estado"
             role="status"
-            style={{ minHeight: 56, display: 'flex', alignItems: 'center' }}
+            style={{ minHeight: 110, display: 'flex', alignItems: 'center' }}
           >
-            <ConferenciaDoCodigo veredito={veredito} />
+            <ConferenciaDoCodigo veredito={veredito} onLigar={ligar} ligando={ligando} />
           </div>
         </FieldBlock>
 
@@ -472,7 +573,7 @@ da conformidade antes de qualquer aviso.
 (certo, cruz, triângulo) e uma frase que diz o que houve. Quem não distingue
 verde de vermelho lê a mesma coisa.
 */
-function ConferenciaDoCodigo({ veredito }) {
+function ConferenciaDoCodigo({ veredito, onLigar, ligando }) {
   const { tipo } = veredito
 
   if (tipo === 'idle') {
@@ -504,6 +605,11 @@ function ConferenciaDoCodigo({ veredito }) {
     outroCliente: 'var(--c-danger)',
     inexistente: 'var(--c-danger)',
     naoConferido: 'var(--c-warning)',
+    // Os dois âmbares da ligação têm saída na própria tela (o botão); o
+    // vermelho não tem — só um admin desfaz.
+    faltaLigar: 'var(--c-warning)',
+    duplicado: 'var(--c-warning)',
+    bloqueado: 'var(--c-danger)',
   }
   const cor = cores[tipo] ?? 'var(--c-text-2)'
   const campanha = veredito.campanha
@@ -532,6 +638,10 @@ function ConferenciaDoCodigo({ veredito }) {
     ),
     inexistente: <>Código não encontrado na Central. Confira no cabeçalho da campanha, no hub.</>,
     naoConferido: <>Não deu para conferir agora. Pode seguir: o código é conferido ao salvar.</>,
+    // A frase é do servidor: é ele que sabe os nomes dos dois lados.
+    faltaLigar: <>{veredito.mensagem}</>,
+    duplicado: <>{veredito.mensagem}</>,
+    bloqueado: <>{veredito.mensagem}</>,
   }[tipo]
 
   return (
@@ -547,7 +657,14 @@ function ConferenciaDoCodigo({ veredito }) {
       }}
     >
       <IconeDoVeredito tipo={tipo} />
-      <span>{conteudo}</span>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+        <span>{conteudo}</span>
+        {(tipo === 'faltaLigar' || tipo === 'duplicado') && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onLigar} disabled={ligando}>
+            {ligando ? 'Ligando…' : 'Ligar os dois clientes'}
+          </button>
+        )}
+      </span>
     </span>
   )
 }
@@ -566,7 +683,7 @@ function IconeDoVeredito({ tipo }) {
   if (tipo === 'achou') {
     return <svg {...comum}><circle cx="8" cy="8" r="6.25" /><path d="M5.3 8.2l1.9 1.9 3.5-4" /></svg>
   }
-  if (tipo === 'naoConferido') {
+  if (tipo === 'naoConferido' || tipo === 'faltaLigar' || tipo === 'duplicado') {
     return <svg {...comum}><path d="M8 2.1 1.7 13.2h12.6L8 2.1Z" /><path d="M8 6.3v3.1M8 11.4h.01" /></svg>
   }
   return <svg {...comum}><circle cx="8" cy="8" r="6.25" /><path d="M6.1 6.1l3.8 3.8M9.9 6.1l-3.8 3.8" /></svg>
