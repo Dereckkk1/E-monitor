@@ -105,3 +105,80 @@ func TestFatos_HubSemPonteOuComLixoOuInexistente(t *testing.T) {
 		require.Nil(t, f.ApontadoPeloHub)
 	}
 }
+
+func hubIDDe(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) string {
+	t.Helper()
+	var h *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT hub_id FROM clients WHERE id = $1`, id).Scan(&h))
+	if h == nil {
+		return ""
+	}
+	return *h
+}
+
+func TestLigarLocal_ClienteSemLigacao(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c := novoCliente(t, ctx, pool, "CCGL", nil)
+	ator := uuid.New()
+
+	mudou, err := NewLigacoes(pool).LigarLocal(ctx, c, hubID, &ator)
+	require.NoError(t, err)
+	require.True(t, mudou)
+	require.Equal(t, hubID, hubIDDe(t, ctx, pool, c))
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = 'client.hub_link' AND resource_id = $1 AND actor_id = $2`,
+		c, ator).Scan(&n))
+	require.Equal(t, 1, n)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM audit_log WHERE resource_id = $1`, c) })
+}
+
+func TestLigarLocal_MoveDoDuplicadoVazio(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c := novoCliente(t, ctx, pool, "GIGA MAIS FIBRA", nil)
+	d := novoCliente(t, ctx, pool, "Giga + Internet", ptr(hubID))
+
+	mudou, err := NewLigacoes(pool).LigarLocal(ctx, c, hubID, nil)
+	require.NoError(t, err)
+	require.True(t, mudou)
+	require.Equal(t, hubID, hubIDDe(t, ctx, pool, c))
+	require.Equal(t, "", hubIDDe(t, ctx, pool, d))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM audit_log WHERE resource_id = $1`, c) })
+}
+
+func TestLigarLocal_RecusaDuplicadoEmUso_SemMexerEmNada(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c := novoCliente(t, ctx, pool, "GIGA MAIS FIBRA", nil)
+	d := novoCliente(t, ctx, pool, "Giga + Internet", ptr(hubID))
+	comCampanha(t, ctx, pool, d)
+
+	_, err := NewLigacoes(pool).LigarLocal(ctx, c, hubID, nil)
+	require.ErrorIs(t, err, ErrDetentorEmUso)
+	require.Equal(t, "", hubIDDe(t, ctx, pool, c))
+	require.Equal(t, hubID, hubIDDe(t, ctx, pool, d))
+}
+
+func TestLigarLocal_RecusaEscolhidoDeOutroClienteDoHub(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	c := novoCliente(t, ctx, pool, "Renner", ptr("hub-"+uuid.NewString()))
+
+	_, err := NewLigacoes(pool).LigarLocal(ctx, c, "hub-"+uuid.NewString(), nil)
+	require.ErrorIs(t, err, ErrEscolhidoDeOutro)
+}
+
+func TestLigarLocal_JaLigadoNaoMudaNem_Audita(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	c := novoCliente(t, ctx, pool, "Renner", ptr(hubID))
+
+	mudou, err := NewLigacoes(pool).LigarLocal(ctx, c, hubID, nil)
+	require.NoError(t, err)
+	require.False(t, mudou)
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE resource_id = $1`, c).Scan(&n))
+	require.Equal(t, 0, n)
+}
