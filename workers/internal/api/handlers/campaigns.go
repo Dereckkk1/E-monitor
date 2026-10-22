@@ -225,7 +225,7 @@ func (h *CampaignsHandler) conferirCodigoOuRecusar(
 			/* A regra da ligação SUBSTITUI a de "outro cliente": ela também
 			   cobre esse caso (hub apontando para outro cliente em uso →
 			   bloqueado) e separa dele o duplicado vazio, que tem conserto. */
-			f, ferr := h.Ligacoes.Fatos(r.Context(), clientID, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma)
+			f, ferr := h.Ligacoes.Fatos(r.Context(), clientID, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma, doHub.Cliente.CNPJ)
 			if ferr == nil {
 				if l := catalog.EstadoDaLigacao(*f, doHub.Cliente.ID, doHub.Cliente.Nome); l.Estado != catalog.EstadoLigado {
 					http.Error(w, l.Mensagem, http.StatusUnprocessableEntity)

@@ -90,3 +90,46 @@ func TestEstado_HubClientIDVazio_FaltaLigar(t *testing.T) {
 	l := EstadoDaLigacao(FatosDaLigacao{Escolhido: escolhido("qualquer")}, "", "")
 	require.Equal(t, EstadoFaltaLigar, l.Estado)
 }
+
+// ---------- CNPJ divergente (decisão de 2026-10-22) ----------
+
+func comCNPJ(c ClienteResumo, cnpj string) ClienteResumo { c.CNPJ = cnpj; return c }
+
+func TestEstado_CNPJDivergenteBloqueia(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), "11444777000161"), CNPJNoHub: "03.984.660/0001-81", HubSemPonte: true}
+	l := EstadoDaLigacao(f, hubDono, "Cliente Bravo")
+	require.Equal(t, EstadoBloqueado, l.Estado)
+	require.Contains(t, l.Mensagem, "11.444.777/0001-61")
+	require.Contains(t, l.Mensagem, "03.984.660/0001-81")
+	require.Contains(t, l.Mensagem, "CLIENTE BRAVO")
+	require.Contains(t, l.Mensagem, "Cliente Bravo")
+}
+
+// Cliente Bravo foi consertada à mão com CNPJs diferentes: ligação completa não se desfaz.
+func TestEstado_CNPJDivergenteJaLigadoContinuaLigado(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(hubDono), "11444777000161"), CNPJNoHub: "03.984.660/0001-81", HubApontaEscolhido: true}
+	l := EstadoDaLigacao(f, hubDono, "Cliente Bravo")
+	require.Equal(t, EstadoLigado, l.Estado)
+}
+
+// CNPJ ausente ou incompleto em qualquer lado: não compara, cai no estado de sempre.
+func TestEstado_CNPJIncompletoNaoCompara(t *testing.T) {
+	casos := [][2]string{
+		{"", "03.984.660/0001-81"},
+		{"11444777000161", ""},
+		{"0771410400010", "03.984.660/0001-81"},
+		{"11444777000161", "03.984.660/0001-8"},
+	}
+	for _, c := range casos {
+		f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), c[0]), CNPJNoHub: c[1], HubSemPonte: true}
+		l := EstadoDaLigacao(f, hubDono, "Cliente Bravo")
+		require.Equal(t, EstadoFaltaLigar, l.Estado, "%q x %q", c[0], c[1])
+	}
+}
+
+// Máscara de um lado e só dígitos do outro, mesmos dígitos: é o mesmo CNPJ.
+func TestEstado_CNPJComMascaraIgualNaoBloqueia(t *testing.T) {
+	f := FatosDaLigacao{Escolhido: comCNPJ(escolhido(""), "11444777000161"), CNPJNoHub: "11.444.777/0001-61", HubSemPonte: true}
+	l := EstadoDaLigacao(f, hubDono, "Cliente Bravo")
+	require.Equal(t, EstadoFaltaLigar, l.Estado)
+}
