@@ -512,6 +512,10 @@ func NewRouter(d Deps) http.Handler {
 				   navegador. */
 				if d.HubCodes != nil {
 					r.Get("/hub-codes/{code}", d.HubCodes.Get)
+					// O botão "Ligar os dois clientes" (spec 2026-10-22). Mesmo
+					// bloco de escrita de campanha: quem cadastra campanha é quem
+					// precisa ligar (decisão 2).
+					r.Post("/hub-codes/{code}/ligar", d.HubCodes.Ligar)
 				}
 
 				r.Group(func(r chi.Router) {
