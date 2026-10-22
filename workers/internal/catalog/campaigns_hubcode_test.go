@@ -437,3 +437,24 @@ func TestMarcarHubNotificadaFuncionaComCodigoNulo(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, depois.HubNotifiedAt, "o congelamento nunca seria confirmado")
 }
+
+// O botão Ligar reemite SÓ as pendentes do cliente que acabou de ligar.
+func TestPendentesDoClienteSoTrazAsDele(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+	outro := seedClienteHubCode(t, ctx, pool)
+
+	pendente := campanhaCom(t, ctx, repo, cliente, "Pendente", "EH-AAAAAA")
+	confirmada := campanhaCom(t, ctx, repo, cliente, "Confirmada", "EH-BBBBBB")
+	_ = campanhaCom(t, ctx, repo, cliente, "Sem código", "")
+	_ = campanhaCom(t, ctx, repo, outro, "De outro", "EH-CCCCCC")
+	require.NoError(t, repo.MarcarHubNotificada(ctx, confirmada.ID, "EH-BBBBBB"))
+
+	rows, err := repo.PendentesDoCliente(ctx, cliente)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, pendente.ID, rows[0].ID)
+	require.Equal(t, cliente, rows[0].ClientID)
+	require.Equal(t, "EH-AAAAAA", *rows[0].HubCode)
+}

@@ -559,8 +559,21 @@ func (c *Client) LigarCliente(ctx context.Context, code, idNaPlataforma string) 
 			Cliente string `json:"cliente"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&corpo)
+		if corpo.Cliente == "" {
+			// Sem o nome, a frase não pode sair com aspas vazias.
+			return nil, &Error{Status: http.StatusConflict, Message: "Outro cliente do hub já usa este cliente do E-monitor e coleta dele. Fale com um admin."}
+		}
 		return nil, &Error{Status: http.StatusConflict, Message: fmt.Sprintf(
 			"O cliente %q do hub já usa este cliente do E-monitor e coleta dele. Fale com um admin.", corpo.Cliente)}
+	/* 404 e 401 continuam 503 ("não deu agora") para quem chama, mas com frase
+	   própria: nenhum dos dois se resolve apertando de novo. 404 é o hub sem a
+	   rota (falta deploy lá); 401 é a chave recusada. */
+	case http.StatusNotFound:
+		return nil, &Error{Status: http.StatusServiceUnavailable,
+			Message: "o hub ainda não foi atualizado para ligar clientes — avise o suporte"}
+	case http.StatusUnauthorized:
+		return nil, &Error{Status: http.StatusServiceUnavailable,
+			Message: "a chave do hub foi recusada — avise o suporte"}
 	default:
 		return nil, &Error{Status: http.StatusServiceUnavailable,
 			Message: fmt.Sprintf("a Central de Clientes respondeu %d", resp.StatusCode)}

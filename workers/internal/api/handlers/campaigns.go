@@ -697,7 +697,13 @@ func avisarHubDaCampanha(h *hub.Client, repo *catalog.Campaigns, c *catalog.Camp
 	}
 	// Os campos são copiados AQUI, síncrono, de propósito: a goroutine não
 	// pode ler `c` depois que o handler seguiu adiante e talvez o alterou.
-	dados := hub.CampanhaUpsert{
+	dados := upsertDaCampanha(c)
+	go emitirCampanhaNoHub(h, repo, c.ID, dados)
+}
+
+// upsertDaCampanha monta o `campanha.upsert` de uma campanha daqui.
+func upsertDaCampanha(c *catalog.Campaign) hub.CampanhaUpsert {
+	return hub.CampanhaUpsert{
 		IDNaPlataforma:        c.ID.String(),
 		IDClienteNaPlataforma: c.ClientID.String(),
 		/* ⚠️ SEM esta linha, nada da série funciona. O hub casa a campanha pelo
@@ -713,52 +719,57 @@ func avisarHubDaCampanha(h *hub.Client, repo *catalog.Campaigns, c *catalog.Camp
 		   onde nunca há proposta anterior, vazio é sempre ignorado. */
 		HubCode: deref(c.HubCode),
 	}
-	id := c.ID
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resposta, err := h.EmitirComResposta(ctx, "campanha.upsert", dados)
-		if err == nil && resposta.Ignorado() {
-			/* ⚠️ 200 NÃO é entrega. O hub responde 200 com
-			   `{"acao":"ignorado","motivo":"codigo-inexistente"}` quando
-			   DESCARTA o evento pela regra dele (§6.1). Marcar aqui tiraria a
-			   campanha da fila de reemissão para sempre sem ela nunca ter
-			   chegado — e nada em tela nenhuma denunciaria. */
-			zap.L().Error("hub: campanha.upsert foi IGNORADO pelo hub",
-				zap.String("campaign_id", id.String()),
-				zap.String("motivo", resposta.Motivo))
-			return
-		}
-		if err != nil {
-			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
-			// seria inventar uma fila sem durabilidade.
-			//
-			// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
-			// `recat_failures.go` — o outro fire-and-forget deste pacote — já
-			// documenta: os handlers não carregam logger próprio, e o log
-			// estruturado é o que o resto da casa consulta. Só o
-			// `campaign_id` e o erro; o payload NÃO vai para o log.
-			zap.L().Error("hub: campanha.upsert falhou",
+}
+
+/*
+emitirCampanhaNoHub é a emissão SÍNCRONA que o `avisarHubDaCampanha` roda numa
+goroutine. Separada para quem já está fora do caminho da resposta (a reemissão
+do botão Ligar) emitir em sequência, sem abrir uma goroutine por campanha.
+*/
+func emitirCampanhaNoHub(h *hub.Client, repo *catalog.Campaigns, id uuid.UUID, dados hub.CampanhaUpsert) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resposta, err := h.EmitirComResposta(ctx, "campanha.upsert", dados)
+	if err == nil && resposta.Ignorado() {
+		/* ⚠️ 200 NÃO é entrega. O hub responde 200 com
+		   `{"acao":"ignorado","motivo":"codigo-inexistente"}` quando
+		   DESCARTA o evento pela regra dele (§6.1). Marcar aqui tiraria a
+		   campanha da fila de reemissão para sempre sem ela nunca ter
+		   chegado — e nada em tela nenhuma denunciaria. */
+		zap.L().Error("hub: campanha.upsert foi IGNORADO pelo hub",
+			zap.String("campaign_id", id.String()),
+			zap.String("motivo", resposta.Motivo))
+		return
+	}
+	if err != nil {
+		// Log e mais nada: não há a quem devolver o erro, e repetir aqui
+		// seria inventar uma fila sem durabilidade.
+		//
+		// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
+		// `recat_failures.go` — o outro fire-and-forget deste pacote — já
+		// documenta: os handlers não carregam logger próprio, e o log
+		// estruturado é o que o resto da casa consulta. Só o
+		// `campaign_id` e o erro; o payload NÃO vai para o log.
+		zap.L().Error("hub: campanha.upsert falhou",
+			zap.String("campaign_id", id.String()), zap.Error(err))
+		return
+	}
+	/* A confirmação é o que TIRA a campanha da fila do job de reemissão.
+	   Sem ela, uma campanha entregue com sucesso continuaria sendo
+	   reenviada de 15 em 15 minutos para sempre.
+
+	   ⚠️ Só depois do sucesso. Marcar um envio que falhou transformaria
+	   "tentou e não deu" em "já avisou", e a campanha sairia da fila sem
+	   nunca ter chegado — fila que esquece é pior que fila que repete.
+
+	   ⚠️ E com o `ctx` desta goroutine, que nasce de `context.Background()`:
+	   o `r.Context()` do handler já morreu quando a resposta foi escrita. */
+	if repo != nil {
+		// O código vai junto: a marcação só vale se a coluna ainda disser o
+		// que ESTE evento entregou. Ver o comentário do repositório.
+		if err := repo.MarcarHubNotificada(ctx, id, dados.HubCode); err != nil {
+			zap.L().Warn("hub: entregou a campanha mas nao marcou hub_notified_at",
 				zap.String("campaign_id", id.String()), zap.Error(err))
-			return
 		}
-		/* A confirmação é o que TIRA a campanha da fila do job de reemissão.
-		   Sem ela, uma campanha entregue com sucesso continuaria sendo
-		   reenviada de 15 em 15 minutos para sempre.
-
-		   ⚠️ Só depois do sucesso. Marcar um envio que falhou transformaria
-		   "tentou e não deu" em "já avisou", e a campanha sairia da fila sem
-		   nunca ter chegado — fila que esquece é pior que fila que repete.
-
-		   ⚠️ E com o `ctx` desta goroutine, que nasce de `context.Background()`:
-		   o `r.Context()` do handler já morreu quando a resposta foi escrita. */
-		if repo != nil {
-			// O código vai junto: a marcação só vale se a coluna ainda disser o
-			// que ESTE evento entregou. Ver o comentário do repositório.
-			if err := repo.MarcarHubNotificada(ctx, id, dados.HubCode); err != nil {
-				zap.L().Warn("hub: entregou a campanha mas nao marcou hub_notified_at",
-					zap.String("campaign_id", id.String()), zap.Error(err))
-			}
-		}
-	}()
+	}
 }
