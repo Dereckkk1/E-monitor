@@ -133,6 +133,9 @@ func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
+	if h.recusaCNPJRepetido(w, r, in.CNPJ, uuid.Nil) {
+		return
+	}
 	out, err := h.Repo.Create(r.Context(), in)
 	if err != nil {
 		http.Error(w, "internal error", 500)
@@ -224,6 +227,9 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
+	if h.recusaCNPJRepetido(w, r, in.CNPJ, id) {
+		return
+	}
 	out, err := h.Repo.Update(r.Context(), id, in)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -285,4 +291,22 @@ func avisarHubDoCliente(h *hub.Client, c *catalog.Client) {
 				zap.String("client_id", id), zap.Error(err))
 		}
 	}()
+}
+
+// recusaCNPJRepetido escreve o 409 e devolve true quando outro cliente já tem
+// estes 14 dígitos. Giga e FSJ em 2026-10-22 nasceram assim.
+func (h *ClientsHandler) recusaCNPJRepetido(w http.ResponseWriter, r *http.Request, cnpj *string, exceto uuid.UUID) bool {
+	outro, err := h.Repo.OutroComMesmoCNPJ(r.Context(), cnpj, exceto)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return true
+	}
+	if outro == nil {
+		return false
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":     "cnpj_duplicado",
+		"existente": map[string]any{"id": outro.ID.String(), "nome": outro.Name},
+	})
+	return true
 }
