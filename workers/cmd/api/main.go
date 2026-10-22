@@ -609,7 +609,7 @@ func main() {
 		// 2026-09-18 §4.3) — o quarto sentido da ponte, e o unico em que o
 		// pedido nasce no navegador. Mesma chave das linhas acima, e por isso
 		// tambem sem variavel de ambiente nova.
-		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
+		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey), Ligacoes: catalog.NewLigacoes(pool), Campanhas: campaigns},
 		// Fecha a janela de 8h em que um usuario desativado seguia usando o
 		// sistema com o token que ja tinha — vale tanto para o `user.deactivate`
 		// do hub quanto para o botao de bloqueio do /admin/monitoring, cujo

@@ -2,12 +2,18 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
+	"radiocheck/internal/auth"
+	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
 )
 
@@ -42,6 +48,12 @@ lá, ela exigiria do navegador exatamente a chave que existe para esconder.
 */
 type HubCodesHandler struct {
 	Hub *hub.Client
+	// Ligacoes nil = conferência sem o estado da ligação (instalação sem
+	// banco nos testes antigos). Em produção é sempre preenchido (main.go).
+	Ligacoes *catalog.Ligacoes
+	// Campanhas reemite, logo depois de ligar, o que estava na fila do job de
+	// 15 minutos. nil = espera o job.
+	Campanhas *catalog.Campaigns
 }
 
 // Get responde o que a §4.3 da spec precisa para as três caras da tela: 200 (✓
@@ -93,7 +105,7 @@ func (h *HubCodesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	   hub e não servem para nada aqui — mandá-los seria pôr identificador de
 	   outro sistema dentro do navegador sem motivo, e convidar a próxima pessoa
 	   a construir sobre um id que este repositório não controla. */
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		// A forma CANÔNICA do que foi consultado. Vai junto para a tela poder
 		// mostrar o que vai ser GRAVADO: quem digita escreve `eh7k4m2x` e a
 		// coluna guarda `EH-7K4M2X` (§10). Sem isto, a tela mostra uma string e
@@ -109,5 +121,147 @@ func (h *HubCodesHandler) Get(w http.ResponseWriter, r *http.Request) {
 			// ligado a este E-monitor, que é estado normal e não é erro.
 			"idNaPlataforma": doHub.Cliente.IDNaPlataforma,
 		},
-	})
+	}
+	/* O estado da ligação (spec 2026-10-22 §3.1). Calculado AQUI e não na tela:
+	   a barreira do salvar usa a mesma função, e o id do cliente do hub — que
+	   a regra precisa — não desce para o navegador. */
+	if lig := h.ligacaoPara(r.Context(), r.URL.Query().Get("client_id"), doHub); lig != nil {
+		resp["ligacao"] = lig
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *HubCodesHandler) ligacaoPara(ctx context.Context, clientID string, doHub *hub.CampanhaDoHub) *catalog.Ligacao {
+	if h.Ligacoes == nil {
+		return nil
+	}
+	id, err := uuid.Parse(clientID)
+	if err != nil {
+		return nil
+	}
+	f, err := h.Ligacoes.Fatos(ctx, id, doHub.Cliente.ID, doHub.Cliente.IDNaPlataforma)
+	if err != nil {
+		return nil
+	}
+	l := catalog.EstadoDaLigacao(*f, doHub.Cliente.ID, doHub.Cliente.Nome)
+	return &l
+}
+
+/*
+Ligar é o botão "Ligar os dois clientes" (spec 2026-10-22 §4.1.2).
+
+⚠️ Confere o código DE NOVO no hub em vez de confiar na tela: o cliente do hub
+é o dono do código, e só o hub sabe quem é.
+
+⚠️ O lado local é gravado ANTES de chamar o hub, e isso é proposital: se o hub
+cair no meio, apertar de novo pula a transação (já ligado) e refaz só a chamada.
+
+⚠️ Janela aceita: entre o `Fatos` e o `LigarCliente`, o cliente daqui para quem
+o hub aponta (`ApontadoPeloHub`) pode ganhar uma campanha — ele não é travado
+aqui. Aceito porque a janela é um clique de botão, e quem segura o id do lado
+do hub é barrado pela própria checagem `id_em_uso` do hub (409).
+*/
+func (h *HubCodesHandler) Ligar(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ClientID uuid.UUID `json:"client_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.ClientID == uuid.Nil {
+		http.Error(w, "client_id é obrigatório", http.StatusBadRequest)
+		return
+	}
+	if h.Ligacoes == nil {
+		http.Error(w, "ligação indisponível", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	doHub, err := h.Hub.ConferirCodigo(ctx, chi.URLParam(r, "code"))
+	if err != nil {
+		var e *hub.Error
+		if errors.As(err, &e) {
+			http.Error(w, e.Message, e.Status)
+			return
+		}
+		http.Error(w, "não deu para conferir o código agora", http.StatusServiceUnavailable)
+		return
+	}
+	H, nome := doHub.Cliente.ID, doHub.Cliente.Nome
+
+	f, err := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "cliente não encontrado", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	estado := catalog.EstadoDaLigacao(*f, H, nome)
+	switch estado.Estado {
+	case catalog.EstadoLigado:
+		writeJSON(w, http.StatusOK, map[string]any{"ligacao": estado})
+		return
+	case catalog.EstadoBloqueado:
+		writeJSON(w, http.StatusConflict, map[string]any{"ligacao": estado})
+		return
+	}
+
+	var ator *uuid.UUID
+	if c, ok := auth.ClaimsFromContext(r.Context()); ok {
+		ator = &c.UserID
+	}
+	if _, err := h.Ligacoes.LigarLocal(ctx, in.ClientID, H, ator); err != nil {
+		if errors.Is(err, catalog.ErrDetentorEmUso) || errors.Is(err, catalog.ErrEscolhidoDeOutro) ||
+			errors.Is(err, catalog.ErrLigacaoConcorrente) {
+			// Alguém mudou o banco entre o Fatos e a transação: relê e conta.
+			if f2, ferr := h.Ligacoes.Fatos(ctx, in.ClientID, H, doHub.Cliente.IDNaPlataforma); ferr == nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ligacao": catalog.EstadoDaLigacao(*f2, H, nome)})
+				return
+			}
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if !f.HubApontaEscolhido {
+		if _, err := h.Hub.LigarCliente(ctx, doHub.Codigo, in.ClientID.String()); err != nil {
+			var e *hub.Error
+			if errors.As(err, &e) && e.Status == http.StatusConflict {
+				writeJSON(w, http.StatusConflict, map[string]any{"ligacao": catalog.Ligacao{Estado: catalog.EstadoBloqueado, Mensagem: e.Message}})
+				return
+			}
+			zap.L().Warn("ligar: o hub não confirmou", zap.String("cliente", in.ClientID.String()), zap.Error(err))
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ligacao": catalog.Ligacao{
+				Estado:   catalog.EstadoFaltaLigar,
+				Mensagem: "O E-monitor já está ligado; falta o hub confirmar. Aperte de novo em instantes.",
+			}})
+			return
+		}
+	}
+
+	h.reemitirPendentes(in.ClientID)
+	writeJSON(w, http.StatusOK, map[string]any{"ligacao": catalog.Ligacao{Estado: catalog.EstadoLigado}})
+}
+
+/*
+reemitirPendentes manda já o que estava esperando o job de 15 minutos — as
+campanhas deste cliente com código e sem confirmação do hub. Sem isto, a pessoa
+liga, vê verde e a campanha só chega no próximo ciclo.
+*/
+func (h *HubCodesHandler) reemitirPendentes(cliente uuid.UUID) {
+	if h.Campanhas == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pend, err := h.Campanhas.PendentesDeHub(ctx, 500)
+	if err != nil {
+		return
+	}
+	for i := range pend {
+		if pend[i].ClientID == cliente {
+			avisarHubDaCampanha(h.Hub, h.Campanhas, &pend[i])
+		}
+	}
 }
