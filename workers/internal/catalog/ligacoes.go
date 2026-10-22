@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -148,4 +149,76 @@ func (l *Ligacoes) Fatos(ctx context.Context, escolhido uuid.UUID, hubClientID, 
 		}
 	}
 	return f, nil
+}
+
+/*
+LigarLocal grava `hub_id` = dono do código no cliente escolhido, tirando-o
+antes de um duplicado VAZIO que o tenha. Devolve `mudou=false` quando já estava
+ligado (idempotente: o botão pode ser apertado de novo depois de uma queda do
+hub no meio).
+
+⚠️ A ORDEM dos dois UPDATEs é obrigatória: `clients_hub_id_key` é único, então
+gravar no escolhido antes de soltar o duplicado estoura o índice.
+
+⚠️ `FOR UPDATE` nas duas linhas: dois cliques simultâneos se enfileiram, e o
+segundo encontra o escolhido já ligado.
+*/
+func (l *Ligacoes) LigarLocal(ctx context.Context, escolhido uuid.UUID, hubClientID string, ator *uuid.UUID) (bool, error) {
+	if hubClientID == "" {
+		return false, errors.New("hubClientID vazio")
+	}
+	tx, err := l.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var atual *string
+	if err := tx.QueryRow(ctx, `SELECT hub_id FROM clients WHERE id = $1 FOR UPDATE`, escolhido).Scan(&atual); err != nil {
+		return false, err
+	}
+	if atual != nil && *atual == hubClientID {
+		return false, nil
+	}
+	if atual != nil && *atual != "" {
+		return false, ErrEscolhidoDeOutro
+	}
+
+	var detentor *uuid.UUID
+	var d uuid.UUID
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM clients WHERE hub_id = $1 AND id <> $2 FOR UPDATE`, hubClientID, escolhido).Scan(&d)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return false, err
+	default:
+		vazio, err := clienteVazio(ctx, tx, d)
+		if err != nil {
+			return false, err
+		}
+		if !vazio {
+			return false, ErrDetentorEmUso
+		}
+		if _, err := tx.Exec(ctx, `UPDATE clients SET hub_id = NULL, updated_at = NOW() WHERE id = $1`, d); err != nil {
+			return false, err
+		}
+		detentor = &d
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE clients SET hub_id = $1, updated_at = NOW() WHERE id = $2`, hubClientID, escolhido); err != nil {
+		return false, err
+	}
+
+	meta, _ := json.Marshal(map[string]any{"hub_id": hubClientID, "de": detentor})
+	tipo := "user"
+	if ator == nil {
+		tipo = "system"
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_log (actor_id, actor_type, action, resource, resource_id, metadata)
+		VALUES ($1, $2, 'client.hub_link', 'client', $3, $4)`, ator, tipo, escolhido, meta); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
