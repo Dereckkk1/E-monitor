@@ -1,0 +1,107 @@
+package catalog
+
+import (
+	"context"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
+)
+
+// Usa `hubClientsPool` de hubclients_test.go: PULA sem TEST_DATABASE_URL.
+
+func novoCliente(t *testing.T, ctx context.Context, pool *pgxpool.Pool, nome string, hubID *string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO clients (name, hub_id) VALUES ($1, $2) RETURNING id`, nome, hubID).Scan(&id))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM campaigns WHERE client_id = $1`, id)
+		_, _ = pool.Exec(ctx, `DELETE FROM clients WHERE id = $1`, id)
+	})
+	return id
+}
+
+func comCampanha(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cliente uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations)
+		 VALUES ($1, 'pendurada', '2026-01-01', '2026-01-31', '{}')`, cliente)
+	require.NoError(t, err)
+}
+
+func ptr(s string) *string { return &s }
+
+func TestClienteVazio_SemNadaPendurado(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	id := novoCliente(t, ctx, pool, "Vazio "+uuid.NewString()[:6], nil)
+	vazio, err := NewLigacoes(pool).ClienteVazio(ctx, id)
+	require.NoError(t, err)
+	require.True(t, vazio)
+}
+
+func TestClienteVazio_ComCampanha(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	id := novoCliente(t, ctx, pool, "Com campanha "+uuid.NewString()[:6], nil)
+	comCampanha(t, ctx, pool, id)
+	vazio, err := NewLigacoes(pool).ClienteVazio(ctx, id)
+	require.NoError(t, err)
+	require.False(t, vazio)
+}
+
+// Prova que a descoberta das FKs é dinâmica: uma tabela que nenhuma lista
+// escrita à mão conheceria também conta.
+func TestClienteVazio_TabelaNovaComFK(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS teste_fk_ligacao (id serial PRIMARY KEY, cliente uuid REFERENCES clients(id))`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS teste_fk_ligacao`) })
+	id := novoCliente(t, ctx, pool, "FK nova "+uuid.NewString()[:6], nil)
+	_, err = pool.Exec(ctx, `INSERT INTO teste_fk_ligacao (cliente) VALUES ($1)`, id)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM teste_fk_ligacao WHERE cliente = $1`, id) })
+
+	vazio, err := NewLigacoes(pool).ClienteVazio(ctx, id)
+	require.NoError(t, err)
+	require.False(t, vazio)
+}
+
+func TestFatos_DetentorDuplicadoVazio(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	hubID := "hub-" + uuid.NewString()
+	escolhido := novoCliente(t, ctx, pool, "GIGA MAIS FIBRA", nil)
+	novoCliente(t, ctx, pool, "Giga + Internet", ptr(hubID))
+
+	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, hubID, escolhido.String())
+	require.NoError(t, err)
+	require.Equal(t, "GIGA MAIS FIBRA", f.Escolhido.Nome)
+	require.NotNil(t, f.Detentor)
+	require.Equal(t, "Giga + Internet", f.Detentor.Nome)
+	require.True(t, f.DetentorVazio)
+	require.True(t, f.HubApontaEscolhido)
+}
+
+func TestFatos_HubApontaParaOutroEmUso(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	escolhido := novoCliente(t, ctx, pool, "Rôgga", nil)
+	outro := novoCliente(t, ctx, pool, "Pilecco", nil)
+	comCampanha(t, ctx, pool, outro)
+
+	f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-"+uuid.NewString(), outro.String())
+	require.NoError(t, err)
+	require.NotNil(t, f.ApontadoPeloHub)
+	require.Equal(t, outro, f.ApontadoPeloHub.ID)
+	require.False(t, f.ApontadoVazio)
+}
+
+func TestFatos_HubSemPonteOuComLixoOuInexistente(t *testing.T) {
+	ctx, pool := hubClientsPool(t)
+	escolhido := novoCliente(t, ctx, pool, "Rôgga", nil)
+	for _, id := range []string{"", "lixo", uuid.NewString()} {
+		f, err := NewLigacoes(pool).Fatos(ctx, escolhido, "hub-x", id)
+		require.NoError(t, err)
+		require.True(t, f.HubSemPonte, "id %q", id)
+		require.Nil(t, f.ApontadoPeloHub)
+	}
+}
