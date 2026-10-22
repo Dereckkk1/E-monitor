@@ -85,3 +85,8 @@ func TestEstado_BloqueioVenceDuplicado(t *testing.T) {
 	}
 	require.Equal(t, EstadoBloqueado, EstadoDaLigacao(f, hubDono, "X").Estado)
 }
+
+func TestEstado_HubClientIDVazio_FaltaLigar(t *testing.T) {
+	l := EstadoDaLigacao(FatosDaLigacao{Escolhido: escolhido("qualquer")}, "", "")
+	require.Equal(t, EstadoFaltaLigar, l.Estado)
+}

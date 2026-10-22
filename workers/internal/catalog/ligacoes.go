@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,6 +26,8 @@ func NewLigacoes(pool *pgxpool.Pool) *Ligacoes { return &Ligacoes{pool: pool} }
 var (
 	ErrDetentorEmUso    = errors.New("o cliente que tem a ligação tem cadastros pendurados")
 	ErrEscolhidoDeOutro = errors.New("o cliente escolhido já está ligado a outro cliente do hub")
+	// ErrLigacaoConcorrente: outra ligação para o mesmo código do hub venceu a corrida.
+	ErrLigacaoConcorrente = errors.New("outra ligação para o mesmo código do hub foi gravada ao mesmo tempo")
 )
 
 // consulta é o que o pool e a transação têm em comum: `ClienteVazio` roda nos dois.
@@ -50,7 +53,8 @@ func clienteVazio(ctx context.Context, q consulta, id uuid.UUID) (bool, error) {
 		SELECT c.conrelid::regclass::text, a.attname
 		  FROM pg_constraint c
 		  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
-		 WHERE c.contype = 'f' AND c.confrelid = 'clients'::regclass`)
+		 WHERE c.contype = 'f' AND c.confrelid = 'clients'::regclass
+		   AND c.conparentid = 0 AND array_length(c.conkey, 1) = 1`)
 	if err != nil {
 		return false, err
 	}
@@ -104,6 +108,9 @@ Fatos junta o que o banco daqui sabe com o que o hub respondeu na conferência:
 gravado (texto livre do lado de lá — pode ser vazio ou lixo).
 
 Devolve `pgx.ErrNoRows` se o escolhido não existe.
+
+Lê SEM snapshot compartilhado de propósito: é consultivo, e `LigarLocal`
+reconfere o duplicado dentro da transação.
 */
 func (l *Ligacoes) Fatos(ctx context.Context, escolhido uuid.UUID, hubClientID, idNaPlataforma string) (*FatosDaLigacao, error) {
 	c, err := resumoDoCliente(ctx, l.pool, `id = $1`, escolhido)
@@ -162,6 +169,11 @@ gravar no escolhido antes de soltar o duplicado estoura o índice.
 
 ⚠️ `FOR UPDATE` nas duas linhas: dois cliques simultâneos se enfileiram, e o
 segundo encontra o escolhido já ligado.
+
+⚠️ É `FOR UPDATE` (e NÃO `FOR NO KEY UPDATE`) no duplicado de propósito: só ele
+conflita com o `FOR KEY SHARE` que um INSERT com FK para o cliente toma, então
+ninguém pendura cadastro no detentor entre a checagem de "vazio" e o UPDATE.
+Não "otimize".
 */
 func (l *Ligacoes) LigarLocal(ctx context.Context, escolhido uuid.UUID, hubClientID string, ator *uuid.UUID) (bool, error) {
 	if hubClientID == "" {
@@ -207,6 +219,10 @@ func (l *Ligacoes) LigarLocal(ctx context.Context, escolhido uuid.UUID, hubClien
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE clients SET hub_id = $1, updated_at = NOW() WHERE id = $2`, hubClientID, escolhido); err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == "23505" && pe.ConstraintName == "clients_hub_id_key" {
+			return false, ErrLigacaoConcorrente
+		}
 		return false, err
 	}
 

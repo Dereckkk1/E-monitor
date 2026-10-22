@@ -55,6 +55,10 @@ type Ligacao struct {
 // EstadoDaLigacao: bloqueio vence duplicado, duplicado vence falta.
 func EstadoDaLigacao(f FatosDaLigacao, hubClientID, nomeNoHub string) Ligacao {
 	c := f.Escolhido
+	if hubClientID == "" {
+		return Ligacao{EstadoFaltaLigar, fmt.Sprintf(
+			"%s ainda não está ligado a %s do hub. Sem isso a campanha não chega lá.", c.Nome, nomeNoHub)}
+	}
 	if c.HubID != "" && c.HubID != hubClientID {
 		return Ligacao{EstadoBloqueado, fmt.Sprintf(
 			"%s já está ligado a outro cliente do hub. Confira se escolheu o cliente certo.", c.Nome)}
