@@ -392,6 +392,7 @@ func (c *Clients) OutroComMesmoCNPJ(ctx context.Context, cnpj *string, exceto uu
 	out, err := scanClient(c.pool.QueryRow(ctx, `
 		SELECT `+clientColumns+` FROM clients
 		 WHERE regexp_replace(COALESCE(cnpj, ''), '\D', '', 'g') = $1 AND id <> $2
+		 ORDER BY is_active DESC, created_at
 		 LIMIT 1`, string(digitos), exceto))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

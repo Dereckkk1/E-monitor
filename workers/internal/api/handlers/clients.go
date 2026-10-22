@@ -227,7 +227,18 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
-	if h.recusaCNPJRepetido(w, r, in.CNPJ, id) {
+	/* O CNPJ só é conferido quando os DÍGITOS mudam: duplicata que já existe
+	   (A e B com os mesmos 14 dígitos) não pode travar a edição de B. */
+	atual, err := h.Repo.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", 404)
+		} else {
+			http.Error(w, "internal error", 500)
+		}
+		return
+	}
+	if digitosDoCNPJ(atual.CNPJ) != digitosDoCNPJ(in.CNPJ) && h.recusaCNPJRepetido(w, r, in.CNPJ, id) {
 		return
 	}
 	out, err := h.Repo.Update(r.Context(), id, in)
@@ -309,4 +320,18 @@ func (h *ClientsHandler) recusaCNPJRepetido(w http.ResponseWriter, r *http.Reque
 		"existente": map[string]any{"id": outro.ID.String(), "nome": outro.Name},
 	})
 	return true
+}
+
+// digitosDoCNPJ devolve só os dígitos do CNPJ ("" quando nil).
+func digitosDoCNPJ(cnpj *string) string {
+	if cnpj == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range *cnpj {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

@@ -105,3 +105,24 @@ func TestUpdateClienteParaCNPJDeOutroDa409MasOProprioPassa(t *testing.T) {
 	require.Equal(t, http.StatusConflict, put(mascara(cnpjA)))
 	require.Equal(t, http.StatusOK, put(mascara(cnpjB)), "salvar o próprio CNPJ com máscara não é repetição")
 }
+
+// Duplicata que já existe (A e B com os mesmos 14 dígitos) não pode travar a
+// edição de B: o CNPJ só é conferido quando os dígitos MUDAM.
+func TestUpdateClienteJaDuplicadoEditaSemMudarOCNPJ(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	cnpj, terceiro := cnpjDeTeste(), cnpjDeTeste()
+	clienteComCNPJ(t, ctx, pool, "A", cnpj)
+	b := clienteComCNPJ(t, ctx, pool, "B", cnpj)
+	clienteComCNPJ(t, ctx, pool, "C", terceiro)
+	h := &ClientsHandler{Repo: catalog.NewClients(pool)}
+
+	put := func(nome, c string) int {
+		body, _ := json.Marshal(map[string]any{"name": nome, "cnpj": c})
+		req := comParamDeRota(httptest.NewRequest(http.MethodPut, "/clients/"+b.String(), bytes.NewReader(body)), "id", b.String())
+		rec := httptest.NewRecorder()
+		h.Update(rec, req)
+		return rec.Code
+	}
+	require.Equal(t, http.StatusOK, put("B renomeado", mascara(cnpj)), "mesmos dígitos: não confere")
+	require.Equal(t, http.StatusConflict, put("B renomeado", mascara(terceiro)), "mudar para o CNPJ de um terceiro continua 409")
+}

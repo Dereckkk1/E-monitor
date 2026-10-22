@@ -231,6 +231,10 @@ func (h *CampaignsHandler) conferirCodigoOuRecusar(
 					http.Error(w, l.Mensagem, http.StatusUnprocessableEntity)
 					return "", false
 				}
+			} else {
+				// Deliberado, como o hub fora do ar: o banco falhar não trava o salvar.
+				zap.L().Warn("barreira da ligação não conferiu; seguindo",
+					zap.Error(ferr), zap.String("hub_code", canonico))
 			}
 		} else if !clienteDoHubConfere(doHub.Cliente.IDNaPlataforma, clientID) {
 			http.Error(w, fmt.Sprintf(
