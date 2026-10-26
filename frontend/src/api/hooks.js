@@ -1506,10 +1506,14 @@ export function useUpdateSuggestion() {
   })
 }
 
+// Comentário: texto e/ou anexos JÁ SUBIDOS (ids de useStageSuggestionAttachment).
+// `clientKey` torna o reenvio inofensivo (o hub não duplica a fala).
 export function useAddSuggestionComment() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, body }) => api.post(`/suggestions/${id}/comments`, { body }).then(r => r.data),
+    mutationFn: ({ id, body, attachmentIds, clientKey }) => api.post(`/suggestions/${id}/comments`, {
+      body, attachment_ids: attachmentIds?.length ? attachmentIds : undefined, client_key: clientKey,
+    }).then(r => r.data),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
       qc.invalidateQueries({ queryKey: ['suggestions'] })
@@ -1531,6 +1535,22 @@ export function useUploadSuggestionAttachment() {
     },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
+    },
+  })
+}
+
+// Sobe a imagem "sem dono" e devolve { id }. A criação ou o comentário a amarram
+// por attachment_ids — subir ANTES é o que impede o reenvio de duplicar a
+// sugestão quando o upload falha no meio (a fila mora no hub, ver
+// docs/features/suggestions-board.md).
+export function useStageSuggestionAttachment() {
+  return useMutation({
+    mutationFn: (file) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return api.post('/suggestions/attachments', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data)
     },
   })
 }
