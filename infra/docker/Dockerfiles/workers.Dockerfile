@@ -16,6 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-twin-discriminative ./cmd
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/redisambiguate-twins ./cmd/redisambiguate-twins
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-recategorize ./cmd/backfill-recategorize
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-anatel ./cmd/backfill-anatel
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/import-suggestions-hub ./cmd/import-suggestions-hub
 
 FROM alpine:3.19
 # tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
@@ -36,5 +37,6 @@ COPY --from=builder /out/backfill-twin-discriminative  /usr/local/bin/backfill-t
 COPY --from=builder /out/redisambiguate-twins  /usr/local/bin/redisambiguate-twins
 COPY --from=builder /out/backfill-recategorize  /usr/local/bin/backfill-recategorize
 COPY --from=builder /out/backfill-anatel  /usr/local/bin/backfill-anatel
+COPY --from=builder /out/import-suggestions-hub  /usr/local/bin/import-suggestions-hub
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]
