@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -105,4 +106,78 @@ func TestPorta_200SemOCampoEsperadoEErro(t *testing.T) {
 func TestPorta_SemConfiguracaoNaoSaiDeCasa(t *testing.T) {
 	_, err := New("", "").SugestoesNaoLidas(context.Background(), autorAna)
 	require.ErrorIs(t, err, ErrNotConfigured)
+}
+
+func TestListarSugestoes_JuntaAsPaginas(t *testing.T) {
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Query().Get("pagina")
+		n, _ := strconv.Atoi(p) // número no JSON, como o hub manda
+		jsonDe(w, 200, map[string]any{
+			"itens":   []map[string]any{{"id": "id-" + p, "numero": 1, "origem": "hub", "tipo": "ideia", "status": "nova"}},
+			"pagina":  n, "paginas": 2, "total": 2, "naoLidas": 0,
+		})
+	})
+	l, err := New(h.srv.URL, "k").ListarSugestoes(context.Background(), autorAna, "concluida")
+
+	require.NoError(t, err)
+	require.Len(t, l, 2)
+	require.Equal(t, "id-1", l[0].ID)
+	require.Equal(t, "id-2", l[1].ID)
+	require.Equal(t, "concluida", h.pedidos[0].URL.Query().Get("status"))
+	require.Equal(t, "/api/platform/sugestoes", h.pedidos[0].URL.Path)
+}
+
+func TestCriarSugestao_MandaOCorpoDoContrato(t *testing.T) {
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) {
+		jsonDe(w, 201, map[string]any{"sugestao": map[string]any{"id": "6650aaaaaaaaaaaaaaaaaaaa", "numero": 42, "origem": "e-monitor"}})
+	})
+	tela := "Campanhas"
+	s, err := New(h.srv.URL, "k").CriarSugestao(context.Background(), autorAna, NovaSugestaoHub{
+		ChaveEnvio: "chave-123456", Tipo: "ideia", Titulo: "T", Descricao: "D",
+		TelaAlvo: &tela, UrgenciaAutor: "alta", AnexoIDs: []string{"a1"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 42, s.Numero)
+	require.Equal(t, http.MethodPost, h.pedidos[0].Method)
+	require.JSONEq(t, `{"chaveEnvio":"chave-123456","tipo":"ideia","titulo":"T","descricao":"D",
+		"telaAlvo":"Campanhas","urgenciaAutor":"alta","anexoIds":["a1"]}`, h.corpos[0])
+}
+
+func TestDetalheSugestao_NaoDecodificaNotas(t *testing.T) {
+	// Se o hub um dia vazar `notas`, este lado não tem onde guardá-las.
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) {
+		jsonDe(w, 200, map[string]any{"sugestao": map[string]any{"id": "x1", "notas": "segredo do gestor"}})
+	})
+	s, err := New(h.srv.URL, "k").DetalheSugestao(context.Background(), autorAna, "x1")
+	require.NoError(t, err)
+	b, _ := json.Marshal(s)
+	require.NotContains(t, string(b), "segredo")
+}
+
+func TestDetalheSugestao_IdComBarraNaoVazaDoCaminho(t *testing.T) {
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) { jsonDe(w, 404, map[string]any{}) })
+	_, err := New(h.srv.URL, "k").DetalheSugestao(context.Background(), autorAna, "../importar")
+	e, _ := AsError(err)
+	require.Equal(t, 404, e.Status)
+	require.Equal(t, "/api/platform/sugestoes/..%2Fimportar", h.pedidos[0].URL.RawPath)
+}
+
+func TestComentarSugestao_E_Lida(t *testing.T) {
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/platform/sugestoes/x1/lida" {
+			jsonDe(w, 200, map[string]any{"naoLidas": 0})
+			return
+		}
+		jsonDe(w, 201, map[string]any{"sugestao": map[string]any{"id": "x1"}})
+	})
+	c := New(h.srv.URL, "k")
+	_, err := c.ComentarSugestao(context.Background(), autorAna, "x1", NovoComentarioHub{ChaveEnvio: "chave-abcdefgh", Corpo: "oi"})
+	require.NoError(t, err)
+	require.Equal(t, "/api/platform/sugestoes/x1/comentarios", h.pedidos[0].URL.Path)
+	require.JSONEq(t, `{"chaveEnvio":"chave-abcdefgh","corpo":"oi"}`, h.corpos[0])
+
+	n, err := c.MarcarSugestaoLida(context.Background(), autorAna, "x1")
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
 }
