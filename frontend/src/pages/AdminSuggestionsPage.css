@@ -79,6 +79,7 @@ select.sug-select {
 .sug-status--em_progresso { background: #fef3c7; color: #b45309; }
 .sug-status--concluida    { background: #dcfce7; color: #15803d; }
 .sug-status--recusada     { background: #f1f5f9; color: #64748b; }
+.sug-status--retirada     { background: #f1f5f9; color: #94a3b8; }
 /* type */
 .sug-type--bug      { background: #fee2e2; color: #b91c1c; }
 .sug-type--melhoria { background: #dbeafe; color: #1d4ed8; }
@@ -96,6 +97,7 @@ select.sug-select {
 /* effort + awaiting */
 .sug-pill--effort  { background: var(--c-surface-2); color: var(--c-text-2); }
 .sug-pill--awaiting { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+.sug-pill--origin { background: #f0f9ff; color: #0369a1; border-color: #bae6fd; }
 .sug-ref { font-family: var(--font-heading); font-size: 12px; font-weight: 600; color: var(--c-text-3); }
 
 /* ── Author cards ───────────────────────────────────────────── */
@@ -351,3 +353,14 @@ select.sug-select {
   .sug-th--ref, .sug-td--ref, .sug-th--author, .sug-td--author, .sug-th--prio, .sug-td--prio, .sug-th--time, .sug-td--time { display: none; }
   .sug-modal-grid { grid-template-columns: 1fr; }
 }
+
+/* anexos que não são imagem (vindos do hub) */
+.sug-att-file, .sug-att-link { display: inline-flex; align-items: center; max-width: 220px; padding: 6px 10px;
+  border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface);
+  color: var(--c-text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.sug-att-link { text-decoration: underline; }
+
+/* aviso da pessoa gestora: a fila mora no hub */
+.sug-hubnotice { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 560px;
+  margin: 48px auto; padding: 28px; border: 1px solid var(--c-border); border-radius: var(--radius-lg);
+  background: var(--c-surface); }

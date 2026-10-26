@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { useAddSuggestionComment, useUploadSuggestionAttachment } from '../../api/hooks'
-import AttachmentImage from './AttachmentImage'
+import { useRef, useState } from 'react'
+import { useAddSuggestionComment, useStageSuggestionAttachment } from '../../api/hooks'
+import AttachmentItem from './AttachmentItem'
 import ClipboardPasteZone from './ClipboardPasteZone'
 import { timeAgo, initialOf } from './utils'
 
@@ -11,8 +11,10 @@ export default function SuggestionThread({ suggestionId, requesterId, comments =
   const [files, setFiles] = useState([])
   const [error, setError] = useState('')
   const addM = useAddSuggestionComment()
-  const uploadM = useUploadSuggestionAttachment()
-  const busy = addM.isPending || uploadM.isPending
+  const stageM = useStageSuggestionAttachment()
+  const busy = addM.isPending || stageM.isPending
+  const [clientKey, setClientKey] = useState(() => crypto.randomUUID())
+  const staged = useRef(new Map())
 
   async function submit(e) {
     e.preventDefault()
@@ -20,13 +22,17 @@ export default function SuggestionThread({ suggestionId, requesterId, comments =
     if (!body.trim() && !files.length) return
     setError('')
     try {
-      const c = await addM.mutateAsync({ id: suggestionId, body: body.trim() })
+      const ids = []
       for (const f of files) {
-        await uploadM.mutateAsync({ id: suggestionId, file: f, commentId: c.id })
+        if (!staged.current.has(f)) staged.current.set(f, (await stageM.mutateAsync(f)).id)
+        ids.push(staged.current.get(f))
       }
+      await addM.mutateAsync({ id: suggestionId, body: body.trim(), attachmentIds: ids, clientKey })
       setBody(''); setFiles([])
-    } catch {
-      setError('Não consegui enviar. Tenta de novo.')
+      staged.current = new Map()
+      setClientKey(crypto.randomUUID()) // a próxima fala é outro envio
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Não consegui enviar. Tenta de novo.')
     }
   }
 
@@ -49,17 +55,14 @@ export default function SuggestionThread({ suggestionId, requesterId, comments =
               <div className="sug-msg-body">
                 <div className="sug-msg-meta">
                   <span className="sug-msg-name">{name}</span>
-                  {!fromRequester && <span className="sug-msg-tag">dev</span>}
+                  {(c.from_dev ?? !fromRequester) && <span className="sug-msg-tag">dev</span>}
                   <span className="sug-msg-time">{timeAgo(c.created_at)}</span>
                 </div>
                 {c.body && <div className="sug-msg-text">{c.body}</div>}
                 {!!atts.length && (
                   <div className="sug-msg-atts">
-                    {atts.map((a, i) => (
-                      <button key={a.id} type="button" className="sug-att-thumb"
-                              onClick={() => onOpenImage?.(a)}>
-                        <AttachmentImage att={a} />
-                      </button>
+                    {atts.map((a) => (
+                      <AttachmentItem key={a.id} att={a} onOpenImage={onOpenImage} />
                     ))}
                   </div>
                 )}

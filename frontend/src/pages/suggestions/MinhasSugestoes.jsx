@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useSuggestions } from '../../api/hooks'
-import { StatusPill, TypePill, ReqPriorityPill } from './SuggestionPills'
+import { StatusPill, TypePill, ReqPriorityPill, OriginPill } from './SuggestionPills'
 import SuggestionCreateModal from './SuggestionCreateModal'
 import SuggestionDetail from './SuggestionDetail'
 import EmptyState from './EmptyState'
@@ -60,6 +60,7 @@ export default function MinhasSugestoes() {
                 <span className="sug-ref">#{s.ref_num}</span>
                 <TypePill value={s.type} size="sm" />
                 <StatusPill value={s.status} size="sm" />
+                <OriginPill value={s.origin} />
                 {s.awaiting_author && <span className="sug-pill sug-pill--awaiting sug-pill--sm">Sua vez</span>}
               </div>
               <div className="sug-card-title">{s.title}</div>
