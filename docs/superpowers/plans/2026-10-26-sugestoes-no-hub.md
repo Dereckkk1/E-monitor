@@ -380,6 +380,8 @@ func (c *Client) porta(ctx context.Context, metodo, caminho string, a Autor, cor
 	if saida == nil {
 		return nil
 	}
+	// O teto de leitura é o da RESPOSTA (1 MiB): o corpo de ida do /importar pode
+	// ter até 2 MB do lado do hub e não passa por aqui.
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(saida); err != nil {
 		return &Error{Status: http.StatusBadGateway, Message: "resposta ilegível da Central de Clientes"}
 	}
@@ -2561,6 +2563,9 @@ import AttachmentImage from './AttachmentImage'
 // Um anexo da sugestão, como o hub o guarda: imagem (miniatura + lightbox),
 // outro arquivo (baixa pelo proxy) ou link. Os de antes não traziam `kind`:
 // valem como arquivo.
+// ⚠️ A "miniatura" é a imagem INTEIRA pelo proxy de bytes, como sempre foi. Não
+// peça `?thumb=1`: o que sobe por aqui não tem WebP (o hub degrada para
+// `temThumb: false`) e o pedido de miniatura dá 404.
 export const isImage = (a) => (a?.kind ?? 'arquivo') === 'arquivo' && (a?.content_type || '').startsWith('image/')
 
 function hostOf(u) {
@@ -3070,6 +3075,9 @@ func TestSuggestions_ExportAll_TrazTudoQueAImportacaoPrecisa(t *testing.T) {
 	require.Len(t, achada.Attachments, 1)
 	require.Equal(t, c.ID, *achada.Attachments[0].CommentID)
 	require.Equal(t, "suggestions/x/a.png", achada.Attachments[0].StorageKey)
+	// Quem ENVIOU o anexo: a importação não pode atribuí-lo a outra pessoa.
+	require.Equal(t, *achada.CreatedByEmail, *achada.Attachments[0].UploaderEmail)
+	require.False(t, achada.Attachments[0].CreatedAt.IsZero())
 }
 ```
 
@@ -3112,12 +3120,17 @@ type SuggestionCommentExport struct {
 	AuthorName  *string
 }
 
+// UploaderEmail/UploaderName: quem ENVIOU (nil se a pessoa foi apagada). A
+// importação usa isso para nunca atribuir o anexo a outra pessoa.
 type SuggestionAttachmentExport struct {
-	ID          uuid.UUID
-	CommentID   *uuid.UUID
-	StorageKey  string
-	ContentType string
-	SizeBytes   int64
+	ID            uuid.UUID
+	CommentID     *uuid.UUID
+	StorageKey    string
+	ContentType   string
+	SizeBytes     int64
+	CreatedAt     time.Time
+	UploaderEmail *string
+	UploaderName  *string
 }
 
 func (s *Suggestions) ExportAll(ctx context.Context) ([]SuggestionExport, error) {
@@ -3171,8 +3184,10 @@ func (s *Suggestions) ExportAll(ctx context.Context) ([]SuggestionExport, error)
 	}
 
 	arows, err := s.pool.Query(ctx, `
-		SELECT a.id, a.suggestion_id, a.comment_id, a.storage_key, a.content_type, a.size_bytes
+		SELECT a.id, a.suggestion_id, a.comment_id, a.storage_key, a.content_type, a.size_bytes,
+		       a.created_at, u.email, u.name
 		FROM suggestion_attachments a
+		LEFT JOIN users u ON u.id = a.uploaded_by
 		ORDER BY a.created_at ASC, a.id ASC`)
 	if err != nil {
 		return nil, err
@@ -3181,7 +3196,8 @@ func (s *Suggestions) ExportAll(ctx context.Context) ([]SuggestionExport, error)
 	for arows.Next() {
 		var a SuggestionAttachmentExport
 		var sid uuid.UUID
-		if err := arows.Scan(&a.ID, &sid, &a.CommentID, &a.StorageKey, &a.ContentType, &a.SizeBytes); err != nil {
+		if err := arows.Scan(&a.ID, &sid, &a.CommentID, &a.StorageKey, &a.ContentType, &a.SizeBytes,
+			&a.CreatedAt, &a.UploaderEmail, &a.UploaderName); err != nil {
 			return nil, err
 		}
 		if i, ok := pos[sid]; ok {
@@ -3213,6 +3229,8 @@ git commit -F "$TEMP/msg-t12.txt" -- workers/internal/catalog/suggestions_export
 - Create: `workers/cmd/import-suggestions-hub/importa.go`
 - Create: `workers/cmd/import-suggestions-hub/importa_test.go`
 - Create: `workers/cmd/import-suggestions-hub/main.go`
+- Create: `workers/cmd/import-suggestions-hub/estado.go`
+- Create: `workers/cmd/import-suggestions-hub/estado_test.go`
 - Modify: `infra/docker/Dockerfiles/workers.Dockerfile`
 
 - [ ] **Step 1: Teste que falha (sem banco, sem rede)**
@@ -3279,8 +3297,8 @@ func TestImportaUma(t *testing.T) {
 		Comments: []catalog.SuggestionCommentExport{{ID: cID, Body: "fala do dev", CreatedAt: quando,
 			AuthorEmail: s("tatico3@hubradios.com"), AuthorName: s("Dereck")}},
 		Attachments: []catalog.SuggestionAttachmentExport{
-			{ID: uuid.New(), StorageKey: "suggestions/a/raiz.png", ContentType: "image/png"},
-			{ID: uuid.New(), CommentID: &cID, StorageKey: "suggestions/a/fala.png", ContentType: "image/png"},
+			{ID: uuid.New(), StorageKey: "suggestions/a/raiz.png", ContentType: "image/png", UploaderEmail: s("ANA@t.local")},
+			{ID: uuid.New(), CommentID: &cID, StorageKey: "suggestions/a/fala.png", ContentType: "image/png", UploaderEmail: s("tatico3@hubradios.com")},
 		},
 	}
 	p := &portaFalsa{}
@@ -3289,9 +3307,9 @@ func TestImportaUma(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 99, r.Numero)
 	require.Equal(t, "ana@t.local", p.autor.Email)
-	// O anexo da raiz sobe como o AUTOR; o da fala, como quem falou (o hub só
-	// amarra anexo de quem o enviou).
-	require.Equal(t, "ana@t.local", p.subidas[0].autor.Email)
+	// Cada anexo sobe com os headers de QUEM O ENVIOU (o hub só amarra anexo de
+	// quem o enviou, e atribuir a outra pessoa falsificaria o registro).
+	require.Equal(t, "ANA@t.local", p.subidas[0].autor.Email)
 	require.Equal(t, "raiz.png", p.subidas[0].nome)
 	require.Equal(t, "tatico3@hubradios.com", p.subidas[1].autor.Email)
 	imp := p.importada
@@ -3301,11 +3319,52 @@ func TestImportaUma(t *testing.T) {
 	require.Equal(t, "privado", *imp.Notas)
 	require.Equal(t, "feito", *imp.Resposta)
 	require.Equal(t, []string{"an1"}, imp.AnexoIDs)
+	require.Len(t, imp.Comentarios, 1)
 	require.Equal(t, []string{"an2"}, imp.Comentarios[0].AnexoIDs)
 	require.Equal(t, cID.String(), imp.Comentarios[0].IDOriginal)
 	require.Equal(t, "Dereck", imp.Comentarios[0].Autor.Nome)
 	require.Len(t, []rune(imp.Titulo), 180)
 	require.True(t, strings.HasSuffix(imp.Titulo, "…"))
+}
+
+// O dev anexou um print direto na sugestão de outra pessoa: NÃO vai para o topo
+// em nome do autor. Vira uma fala sintética, sem texto, de quem enviou.
+func TestImportaUma_AnexoDeOutraPessoaNaRaizViraFalaSintetica(t *testing.T) {
+	aID := uuid.New()
+	quando := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
+	p := &portaFalsa{}
+	_, err := importaUma(context.Background(), p, objetosFalsos{"k": []byte("1")}, catalog.SuggestionExport{
+		Suggestion: catalog.Suggestion{ID: uuid.New(), Type: "bug", Status: "nova", CreatedAt: quando.Add(-time.Hour),
+			CreatedByEmail: s("ana@t.local"), CreatedByName: s("Ana")},
+		Attachments: []catalog.SuggestionAttachmentExport{{ID: aID, StorageKey: "k", ContentType: "image/png",
+			CreatedAt: quando, UploaderEmail: s("tatico3@hubradios.com"), UploaderName: s("Dereck")}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "tatico3@hubradios.com", p.subidas[0].autor.Email)
+	require.Empty(t, p.importada.AnexoIDs)
+	require.Len(t, p.importada.Comentarios, 1)
+	f := p.importada.Comentarios[0]
+	require.Equal(t, "anexo-"+aID.String(), f.IDOriginal)
+	require.Equal(t, "tatico3@hubradios.com", f.Autor.Email)
+	require.Equal(t, "", f.Corpo)
+	require.Equal(t, quando, f.CreatedAt)
+	require.Equal(t, []string{"an1"}, f.AnexoIDs)
+}
+
+func TestImportaUma_FalasSaemEmOrdemDeData(t *testing.T) {
+	cID := uuid.New()
+	t0 := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	p := &portaFalsa{}
+	_, err := importaUma(context.Background(), p, objetosFalsos{"k": []byte("1")}, catalog.SuggestionExport{
+		Suggestion: catalog.Suggestion{ID: uuid.New(), Type: "bug", Status: "nova", CreatedByEmail: s("ana@t.local")},
+		Comments:   []catalog.SuggestionCommentExport{{ID: cID, Body: "depois", CreatedAt: t0.Add(2 * time.Hour), AuthorEmail: s("ana@t.local")}},
+		Attachments: []catalog.SuggestionAttachmentExport{{ID: uuid.New(), StorageKey: "k", ContentType: "image/png",
+			CreatedAt: t0.Add(time.Hour), UploaderEmail: s("tatico3@hubradios.com")}},
+	})
+	require.NoError(t, err)
+	require.Len(t, p.importada.Comentarios, 2)
+	require.Equal(t, "", p.importada.Comentarios[0].Corpo) // a sintética, 1h
+	require.Equal(t, "depois", p.importada.Comentarios[1].Corpo)
 }
 
 func TestImportaUma_AutorApagadoViraMarcador(t *testing.T) {
@@ -3314,16 +3373,17 @@ func TestImportaUma_AutorApagadoViraMarcador(t *testing.T) {
 		Suggestion: catalog.Suggestion{ID: uuid.New(), Type: "bug", Status: "nova"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, autorRemovidoEmail, p.autor.Email)
-	require.Equal(t, autorRemovidoNome, p.autor.Nome)
+	require.Equal(t, "autor-removido@e-monitor.invalid", p.autor.Email)
+	require.Equal(t, "Pessoa removida", p.autor.Nome)
 }
 
 func TestImportaUma_AnexoDeFalaInexistenteVaiParaARaiz(t *testing.T) {
 	fantasma := uuid.New()
 	p := &portaFalsa{}
 	_, err := importaUma(context.Background(), p, objetosFalsos{"k": []byte("1")}, catalog.SuggestionExport{
-		Suggestion:  catalog.Suggestion{ID: uuid.New(), Type: "bug", Status: "nova", CreatedByEmail: s("ana@t.local")},
-		Attachments: []catalog.SuggestionAttachmentExport{{ID: uuid.New(), CommentID: &fantasma, StorageKey: "k", ContentType: "image/png"}},
+		Suggestion: catalog.Suggestion{ID: uuid.New(), Type: "bug", Status: "nova", CreatedByEmail: s("ana@t.local")},
+		Attachments: []catalog.SuggestionAttachmentExport{{ID: uuid.New(), CommentID: &fantasma, StorageKey: "k",
+			ContentType: "image/png", UploaderEmail: s("ana@t.local")}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"an1"}, p.importada.AnexoIDs)
@@ -3345,6 +3405,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -3355,9 +3416,13 @@ import (
 
 // Quem escreveu e foi apagado daqui (`created_by` NULL) entra no hub com um
 // autor marcador: a porta exige um e-mail, e "ninguém" não é e-mail.
+//
+// ⚠️ `.invalid`, nunca um domínio real: o hub suprime todo aviso para e-mail
+// `.invalid` (hub 21713a74). Com `@e-monitor.online`, a resposta do gestor
+// sairia por e-mail para uma caixa que alguém pode ter.
 const (
-	autorRemovidoEmail = "autor-removido@e-monitor.online"
-	autorRemovidoNome  = "Pessoa removida (E-monitor)"
+	autorRemovidoEmail = "autor-removido@e-monitor.invalid"
+	autorRemovidoNome  = "Pessoa removida"
 )
 
 // Os tetos do hub (`LIMITES` do vocabulário de lá). Mais longo que isso o hub
@@ -3416,9 +3481,25 @@ func lerObjeto(ctx context.Context, o leitorDeObjetos, key string) ([]byte, erro
 	return dados, nil
 }
 
-// importaUma sobe os anexos (cada um em nome de quem o hub vai exigir) e manda a
-// sugestão. Idempotente do lado do hub; os anexos de uma reimportação que dá
-// `ja-importada` ficam "sem dono" lá e a limpeza do hub os recolhe.
+func mesmaPessoa(a, b hub.Autor) bool {
+	return strings.EqualFold(strings.TrimSpace(a.Email), strings.TrimSpace(b.Email))
+}
+
+/*
+importaUma sobe os anexos e manda a sugestão.
+
+⚠️ Todo anexo sobe com os headers de QUEM O ENVIOU (`uploaded_by`), nunca de
+outra pessoa: atribuir o print do dev ao autor falsificaria o registro. O
+anexo vai para onde aquela pessoa é dona — o topo, se foi o autor da sugestão;
+a fala, se foi quem falou. Quando não é dono de nada ali (o dev anexou direto na
+sugestão de alguém), o anexo vira uma FALA SINTÉTICA sem texto, daquela pessoa,
+na data do anexo, com `idOriginal` estável `anexo-<id>` (o hub aceita fala vazia
+com anexo, e a reimportação não a duplica).
+
+Idempotente do lado do hub. Os anexos de uma reimportação que dá `ja-importada`
+ficam "sem dono" lá até o `limpaUploadsOrfaos` (24 h); o arquivo de estado do
+`main.go` evita subi-los à toa.
+*/
 func importaUma(ctx context.Context, porta portaDoHub, objetos leitorDeObjetos, s catalog.SuggestionExport) (*hub.RespostaImportar, error) {
 	autor := autorDe(s.CreatedByEmail, s.CreatedByName)
 	autorDaFala := map[uuid.UUID]hub.Autor{}
@@ -3428,29 +3509,42 @@ func importaUma(ctx context.Context, porta portaDoHub, objetos leitorDeObjetos, 
 
 	raiz := []string{}
 	porFala := map[uuid.UUID][]string{}
+	var sinteticas []hub.ComentarioImportado
 	for _, a := range s.Attachments {
-		quem, daFala := autor, false
-		if a.CommentID != nil {
-			if q, ok := autorDaFala[*a.CommentID]; ok {
-				quem, daFala = q, true
-			}
-		}
+		quemEnviou := autorDe(a.UploaderEmail, a.UploaderName)
 		dados, err := lerObjeto(ctx, objetos, a.StorageKey)
 		if err != nil {
 			return nil, fmt.Errorf("anexo %s (%s): %w", a.ID, a.StorageKey, err)
 		}
-		id, err := porta.SubirAnexoSugestao(ctx, quem, path.Base(a.StorageKey), a.ContentType, dados)
+		id, err := porta.SubirAnexoSugestao(ctx, quemEnviou, path.Base(a.StorageKey), a.ContentType, dados)
 		if err != nil {
 			return nil, fmt.Errorf("anexo %s: %w", a.ID, err)
 		}
-		if daFala {
-			porFala[*a.CommentID] = append(porFala[*a.CommentID], id)
-		} else {
+		if a.CommentID != nil {
+			if dono, ok := autorDaFala[*a.CommentID]; ok && mesmaPessoa(dono, quemEnviou) {
+				porFala[*a.CommentID] = append(porFala[*a.CommentID], id)
+				continue
+			}
+		} else if mesmaPessoa(autor, quemEnviou) {
 			raiz = append(raiz, id)
+			continue
 		}
+		// Fala inexistente, ou anexo de quem não é dono do lugar: fala sintética.
+		// Um anexo cuja fala sumiu mas que é do autor vai para o topo.
+		if a.CommentID != nil && mesmaPessoa(autor, quemEnviou) {
+			if _, existe := autorDaFala[*a.CommentID]; !existe {
+				raiz = append(raiz, id)
+				continue
+			}
+		}
+		sinteticas = append(sinteticas, hub.ComentarioImportado{
+			IDOriginal: "anexo-" + a.ID.String(),
+			Autor:      hub.AutorJSON{Email: quemEnviou.Email, Nome: quemEnviou.Nome},
+			Corpo:      "", CreatedAt: a.CreatedAt, AnexoIDs: []string{id},
+		})
 	}
 
-	falas := make([]hub.ComentarioImportado, 0, len(s.Comments))
+	falas := make([]hub.ComentarioImportado, 0, len(s.Comments)+len(sinteticas))
 	for _, c := range s.Comments {
 		q := autorDaFala[c.ID]
 		ids := porFala[c.ID]
@@ -3462,6 +3556,10 @@ func importaUma(ctx context.Context, porta portaDoHub, objetos leitorDeObjetos, 
 			Corpo: corta(c.Body, limiteTexto), CreatedAt: c.CreatedAt, AnexoIDs: ids,
 		})
 	}
+	falas = append(falas, sinteticas...)
+	// A conversa do hub é lida em ordem de data: a sintética entra onde o anexo
+	// foi feito, não no fim.
+	sort.SliceStable(falas, func(i, j int) bool { return falas[i].CreatedAt.Before(falas[j].CreatedAt) })
 
 	return porta.ImportarSugestao(ctx, autor, hub.SugestaoImportada{
 		IDOriginal: s.ID.String(), NumeroOriginal: int(s.RefNum),
@@ -3482,8 +3580,14 @@ func importaUma(ctx context.Context, porta portaDoHub, objetos leitorDeObjetos, 
 // (bytes do MinIO) e manda cada uma para POST /api/platform/sugestoes/importar.
 //
 // Idempotente: o hub reconhece a sugestão pelo id daqui e responde `ja-importada`.
-// Rodar de novo não duplica — mas sobe os anexos outra vez, e eles ficam "sem
-// dono" no hub até a limpeza de lá. Para repetir UMA que falhou, use --only.
+// Para não subir bytes à toa numa segunda rodada, o CLI guarda um arquivo de
+// estado local (id daqui → id do hub, fora do git) e PULA o que já foi. `--only`
+// força uma sugestão mesmo marcada. Sem o arquivo (container recriado), a
+// reimportação continua segura: o hub dá `ja-importada`, e os anexos subidos à
+// toa somem em 24 h pelo `limpaUploadsOrfaos` de lá.
+//
+// Uma sugestão cujo corpo passe de 2 MB (só texto: os bytes vão pelo GCS) leva
+// 413 `payload_too_large` do hub: entra como falha no relatório e o CLI segue.
 //
 // Roda DEPOIS de a tela já ler do hub (o deploy deste branch): antes disso, o
 // que alguém criasse no meio ficaria órfão no Postgres.
@@ -3515,8 +3619,15 @@ import (
 
 func main() {
 	dryRun := flag.Bool("dry-run", false, "só lista o que seria importado; não sobe nada")
-	only := flag.String("only", "", "importa só esta sugestão (uuid)")
+	only := flag.String("only", "", "importa só esta sugestão (uuid), mesmo já marcada no estado")
+	caminhoEstado := flag.String("estado", "/tmp/import-suggestions-hub.estado.json",
+		"arquivo local id-daqui → id-do-hub; o que está nele é pulado")
 	flag.Parse()
+
+	est, err := carregaEstado(*caminhoEstado)
+	if err != nil {
+		log.Fatalf("estado: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -3545,10 +3656,14 @@ func main() {
 		log.Fatalf("leitura: %v", err)
 	}
 
-	var importadas, jaExistiam, seriam int
+	var importadas, jaExistiam, seriam, puladas int
 	var falhas []string
 	for _, s := range lista {
 		if *only != "" && s.ID.String() != *only {
+			continue
+		}
+		if *only == "" && est.ja(s.ID.String()) {
+			puladas++
 			continue
 		}
 		if *dryRun {
@@ -3558,18 +3673,25 @@ func main() {
 			continue
 		}
 		r, err := importaUma(ctx, hc, store, s)
-		switch {
-		case err != nil:
+		if err != nil {
+			// Inclui o 413 de corpo acima de 2 MB: registra e segue.
 			falhas = append(falhas, fmt.Sprintf("#%d %s: %v", s.RefNum, s.ID, err))
-		case r.Acao == "importada":
+			continue
+		}
+		if r.Acao == "importada" {
 			importadas++
 			fmt.Printf("importada #%d → #%d do hub\n", s.RefNum, r.Numero)
-		default:
+		} else {
 			jaExistiam++
+		}
+		if err := est.marca(s.ID.String(), r.SugestaoID); err != nil {
+			// A importação valeu; só a próxima rodada não vai saber pular esta.
+			log.Printf("estado: não gravei %s: %v", s.ID, err)
 		}
 	}
 
-	fmt.Printf("\nlidas: %d · importadas: %d · já existiam: %d · falharam: %d", len(lista), importadas, jaExistiam, len(falhas))
+	fmt.Printf("\nlidas: %d · importadas: %d · já existiam: %d · puladas (estado local): %d · falharam: %d",
+		len(lista), importadas, jaExistiam, puladas, len(falhas))
 	if *dryRun {
 		fmt.Printf(" · seriam importadas: %d (dry-run)", seriam)
 	}
@@ -3584,6 +3706,100 @@ func main() {
 ```
 
 > Confira a ordem dos argumentos de `storage.New` contra a assinatura real em `workers/internal/storage/` (`New(ctx, endpoint, publicEndpoint, bucket, region, accessKey, secretKey)`) e contra a chamada em `cmd/api/main.go:114`. Se as duas divergirem, vale a de `main.go`, que está em produção.
+
+- [ ] **Step 4b: O arquivo de estado (`estado.go` + `estado_test.go`)**
+
+`workers/cmd/import-suggestions-hub/estado_test.go`:
+
+```go
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestEstado_SobreviveEntreRodadas(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "estado.json")
+
+	e, err := carregaEstado(caminho)
+	require.NoError(t, err, "arquivo inexistente é estado vazio, não erro")
+	require.False(t, e.ja("u1"))
+
+	require.NoError(t, e.marca("u1", "6650aaaaaaaaaaaaaaaaaaaa"))
+
+	deNovo, err := carregaEstado(caminho)
+	require.NoError(t, err)
+	require.True(t, deNovo.ja("u1"))
+	require.False(t, deNovo.ja("u2"))
+}
+
+func TestEstado_ArquivoCorrompidoEErro(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "estado.json")
+	require.NoError(t, os.WriteFile(caminho, []byte("{nao é json"), 0o600))
+	_, err := carregaEstado(caminho)
+	require.Error(t, err, "estado ilegível não pode virar 'nada importado' e reimportar tudo")
+}
+```
+
+`workers/cmd/import-suggestions-hub/estado.go`:
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
+)
+
+// estado é o registro local do que já foi importado: id daqui → id do hub. Fica
+// FORA do git (padrão: /tmp do container). Serve para não subir bytes de novo;
+// a garantia de não duplicar é do hub (`ja-importada`), não deste arquivo.
+type estado struct {
+	caminho    string
+	Importadas map[string]string `json:"importadas"`
+}
+
+func carregaEstado(caminho string) (*estado, error) {
+	e := &estado{caminho: caminho, Importadas: map[string]string{}}
+	b, err := os.ReadFile(caminho)
+	if errors.Is(err, fs.ErrNotExist) {
+		return e, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, e); err != nil {
+		return nil, err
+	}
+	if e.Importadas == nil {
+		e.Importadas = map[string]string{}
+	}
+	return e, nil
+}
+
+func (e *estado) ja(id string) bool { _, ok := e.Importadas[id]; return ok }
+
+// marca grava a cada sugestão, por arquivo temporário + rename: um Ctrl+C no
+// meio não deixa um JSON pela metade (que o próximo carregaEstado recusaria).
+func (e *estado) marca(id, sugestaoID string) error {
+	e.Importadas[id] = sugestaoID
+	b, err := json.MarshalIndent(e, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := e.caminho + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, e.caminho)
+}
+```
 
 - [ ] **Step 5: Dockerfile**
 
@@ -3602,13 +3818,17 @@ COPY --from=builder /out/import-suggestions-hub  /usr/local/bin/import-suggestio
 - [ ] **Step 6: Rodar e ver passar**
 
 Run: `cd /c/tmp/emonitor-sugestoes-hub/workers && go test ./cmd/import-suggestions-hub/ -v && go build ./cmd/import-suggestions-hub/ && go vet ./cmd/import-suggestions-hub/`
-Expected: `--- PASS` nos 3 testes; build e vet sem saída. Apague o binário que o `go build` deixou: `rm -f import-suggestions-hub import-suggestions-hub.exe`.
+Expected: `--- PASS` nos 7 testes (5 de `importa`, 2 de `estado`); build e vet sem saída. Apague o binário que o `go build` deixou: `rm -f import-suggestions-hub import-suggestions-hub.exe`.
+
+- [ ] **Step 6b: Mutação da atribuição**
+
+Com cópia em `$TEMP`, troque `porta.SubirAnexoSugestao(ctx, quemEnviou,` por `porta.SubirAnexoSugestao(ctx, autor,`. Esperado: `TestImportaUma_AnexoDeOutraPessoaNaRaizViraFalaSintetica` FALHA, porque o print do dev subiria em nome da Ana. Restaure da cópia e confira o `git diff --stat`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 cd /c/tmp/emonitor-sugestoes-hub
-F="workers/cmd/import-suggestions-hub/importa.go workers/cmd/import-suggestions-hub/importa_test.go workers/cmd/import-suggestions-hub/main.go infra/docker/Dockerfiles/workers.Dockerfile"
+F="workers/cmd/import-suggestions-hub/importa.go workers/cmd/import-suggestions-hub/importa_test.go workers/cmd/import-suggestions-hub/main.go workers/cmd/import-suggestions-hub/estado.go workers/cmd/import-suggestions-hub/estado_test.go infra/docker/Dockerfiles/workers.Dockerfile"
 printf '%s\n' "feat(sugestoes): CLI que importa o historico do Postgres para o hub" "" "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" > "$TEMP/msg-t13.txt"
 git add -- $F
 git commit -F "$TEMP/msg-t13.txt" -- $F
@@ -3702,7 +3922,11 @@ No frontmatter, `ultima-verificacao: 2026-10-26`. Somar a `codigo-relacionado:` 
 > - **Sem HUB_URL/HUB_PLATFORM_KEY** toda rota responde 503 — de propósito.
 > - **Status novo:** `retirada`. **Selo de origem:** "via Hub" / "via Plura".
 > - **Histórico:** `import-suggestions-hub` (CLI no container da API) leva tudo
->   do Postgres + MinIO para o hub, uma vez. Ver o cabeçalho de
+>   do Postgres + MinIO para o hub, uma vez. Todo anexo sobe em nome de quem o
+>   ENVIOU; o print que o dev pôs na sugestão de alguém vira uma fala sem texto
+>   dele (`anexo-<id>`). Autor apagado vira `autor-removido@e-monitor.invalid`
+>   (o hub não manda aviso para `.invalid`). Um arquivo de estado local faz a
+>   2ª rodada pular o que já foi. Ver o cabeçalho de
 >   `workers/cmd/import-suggestions-hub/main.go`.
 ```
 
@@ -3730,17 +3954,17 @@ Expected: os commits desta branch, um por task.
 
 ## Self-review (feito)
 
-- **Cobertura do spec:** §4.1 handler troca de fonte e tradução (Tasks 1, 5, 7, 8); §4.2 `retirada`, selo, face do gestor sem apagar a `CentralDeComando` (Task 10); §4.3 anexos em três passos no servidor, proxy com 302 seguido no servidor, a rota antiga `/{id}/attachments` vira fala com a imagem (Tasks 3, 8); §4.4 badge com cache de 30 s (Tasks 6, 8); §5 importação com relatório, idempotente, anexos em nome de quem enviou (Tasks 12, 13); §6 falhas: hub fora do ar → 503 e o rascunho fica (Tasks 7, 11), reenvio com a mesma chave (Task 11), 401 → frase de suporte (Task 1), 404 em vez de 403 (o hub decide; o handler repassa), 200 sem o campo ≠ sucesso (Tasks 1, 4); §7 testes do adaptador em Go e a tela em Playwright (Tasks 1-11).
+- **Cobertura do spec:** §4.1 handler troca de fonte e tradução (Tasks 1, 5, 7, 8); §4.2 `retirada`, selo, face do gestor sem apagar a `CentralDeComando` (Task 10); §4.3 anexos em três passos no servidor, proxy com 302 seguido no servidor, a rota antiga `/{id}/attachments` vira fala com a imagem (Tasks 3, 8); §4.4 badge com cache de 30 s (Tasks 6, 8); §5 importação com relatório, idempotente, cada anexo em nome de quem o enviou (fala sintética quando não é dono do lugar), estado local para pular o já importado, 413 registrado sem parar (Tasks 12, 13); §6 falhas: hub fora do ar → 503 e o rascunho fica (Tasks 7, 11), reenvio com a mesma chave (Task 11), 401 → frase de suporte (Task 1), 404 em vez de 403 (o hub decide; o handler repassa), 200 sem o campo ≠ sucesso (Tasks 1, 4); §7 testes do adaptador em Go e a tela em Playwright (Tasks 1-11).
 - **Placeholders:** nenhum TBD. Os dois pontos que dependem do ambiente são conferências com comando exato: a ordem dos argumentos de `storage.New` (Task 13) e o prefixo das partições (Task 14).
 - **Consistência de nomes:** `SubirAnexoSugestao`, `AbrirAnexoSugestao`, `ImportarSugestao`, `SugestoesNaoLidas`, `MarcarSugestaoLida`, `ListarSugestoes`, `DetalheSugestao`, `CriarSugestao` e `ComentarSugestao` são usados com a mesma assinatura nas Tasks 1-4, 7, 8 e 13. `detalheDoHub`/`linhaDoHub` na Task 5 = uso nas Tasks 7-8. `SuggestionExport.CreatedByEmail/CreatedByName` (campos embutidos de `catalog.Suggestion`) = uso na Task 13. `useStageSuggestionAttachment` na Task 10 = uso no modal e na thread.
 - **Desvio consciente do spec:** o §4.3 fala da plataforma "receber o arquivo como hoje" e comentar com `anexoIds`. A tela daqui passou a subir ANTES (stage + `attachment_ids`), e a rota de antes continua, traduzida como o §4.3 descreve. Assim a imagem fica na descrição ou na mesma fala do texto, em vez de virar uma fala a mais, e o reenvio não duplica. O contrato do hub não muda.
 
-## Perguntas para o plano do hub
+## Respondidas pelo plano do hub (commit 61f59eaf)
 
-1. **Anexo da raiz enviado por outra pessoa.** No E-monitor, o dev às vezes anexou print direto na sugestão de alguém (`comment_id` NULL, `uploaded_by` = dev). Como o hub só amarra anexo de quem o enviou (`estaoLivres(ids, autorId)`), a importação sobe esses arquivos **em nome do autor da sugestão**. O hub aceita essa atribuição? A alternativa seria o `/importar` aceitar anexo de outra pessoa na raiz.
-2. **Autor marcador.** Sugestões cujo autor foi apagado aqui chegam com `X-Hub-Autor-Email: autor-removido@e-monitor.online`, que vira um `AutorExterno` no hub. Está ok, ou o hub prefere um campo explícito ("autor desconhecido")?
-3. **Anexos órfãos numa reimportação.** O CLI sobe os anexos antes de saber se a sugestão já existe; num `ja-importada` eles ficam "sem dono". A limpeza do hub (`jobs/limpaAnexosDeSugestao`) recolhe anexo `ready` sem dono depois de quanto tempo? Se não recolhe `ready`, vale o `/importar` responder `ja-importada` num `HEAD`/`GET` prévio, para o CLI pular antes de subir.
-4. **`sua_vez` na timeline.** O front daqui lê `to_value === 'true'` para escolher a frase. Confirmar que o hub grava `de`/`para` desse evento como as strings `"true"`/`"false"` (o `registraEvento` faz `String(v)`; parece que sim).
-5. **`numeroOriginal` no detalhe.** O plano lê `sugestao.numeroOriginal` no topo do detalhe da porta (o §3.3 diz "com `origem` e `numeroOriginal`"). Confirmar o nome e o nível (topo, não dentro de `origemRef`).
-6. **Miniatura.** O `upload-url` devolve `thumbUploadUrl` para imagem; este lado não gera WebP e não sobe miniatura. Pelo `confirmarUpload` atual, o hub degrada (remove a `thumbKey`). Confirmar que a porta de plataforma faz o mesmo e que a tela do hub mostra a imagem cheia quando falta miniatura.
-7. **Teto do `/importar`.** Uma sugestão com muitas falas longas pode passar do `json({ limit })` da porta. Qual é o limite do corpo nessa rota? O CLI daqui não parte uma sugestão em várias chamadas.
+1. **Anexo da raiz enviado por outra pessoa:** não sobe em nome do autor, porque isso falsificaria quem enviou. Vira uma fala sintética sem texto, de quem enviou: `idOriginal` `anexo-<attachment_id>`, `corpo: ''`, `createdAt` = data do anexo, e o anexo subido com os headers dessa pessoa. O hub aceita fala vazia com anexo. Só os anexos do próprio autor ficam nos `anexoIds` do topo. Aplicado nas Tasks 12 (`UploaderEmail`/`UploaderName`/`CreatedAt` no export) e 13 (`importaUma`, com dois testes novos e mutação).
+2. **Autor apagado:** `autor-removido@e-monitor.invalid`, nome "Pessoa removida". O hub suprime aviso para todo e-mail `.invalid` (hub `21713a74`); `@e-monitor.online` mandaria e-mail de verdade. Aplicado na Task 13.
+3. **Órfãos numa reimportação:** o `limpaUploadsOrfaos` do hub recolhe anexo `ready` sem dono depois de 24 h pelo `updatedAt`. Para não subir bytes à toa, o CLI guarda um arquivo de estado local fora do git (`--estado`, padrão `/tmp/import-suggestions-hub.estado.json`) e pula o que já foi importado; `--only` força. Aplicado na Task 13 (`estado.go`).
+4. **`sua_vez`:** confirmado: `de`/`para` são as strings `"true"`/`"false"`. A frase da Task 10 fica como está.
+5. **`numeroOriginal`:** fica no topo do detalhe (`sugestao.numeroOriginal`, number|null); `origemRef` não sai na resposta. Os tipos da Task 1 já leem assim.
+6. **Miniatura:** o confirm sem WebP degrada para `temThumb: false`, e a Central do hub mostra a imagem inteira (plano do hub, Task 10, Step 6b). Aqui a imagem vem pelo proxy de bytes, como hoje, e nunca com `?thumb=1`, que dá 404 sem miniatura. Nota no `AttachmentItem.jsx` (Task 10).
+7. **Teto do `/importar`:** 2 MB (o resto da porta, 256 KB). Uma sugestão por chamada, sem partir. Se passar, o hub responde 413 `payload_too_large`, que o `erroDaPorta` repassa com a mensagem; o CLI registra no relatório e segue. Aplicado na Task 13 (`main.go`).
