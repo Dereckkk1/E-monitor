@@ -315,3 +315,71 @@ func (c *Client) MarcarSugestaoLida(ctx context.Context, a Autor, id string) (in
 func (c *Client) SugestoesNaoLidas(ctx context.Context, a Autor) (int, error) {
 	return c.naoLidasDe(ctx, http.MethodGet, "/nao-lidas", a)
 }
+
+// ── Importação única (spec do hub §5) ──────────────────────────────────────
+
+type AutorJSON struct {
+	Email string `json:"email"`
+	Nome  string `json:"nome"`
+}
+
+type ComentarioImportado struct {
+	IDOriginal string    `json:"idOriginal"`
+	Autor      AutorJSON `json:"autor"`
+	Corpo      string    `json:"corpo"`
+	CreatedAt  time.Time `json:"createdAt"`
+	AnexoIDs   []string  `json:"anexoIds"`
+}
+
+// SugestaoImportada é o corpo de `POST /importar`. É o ÚNICO tipo daqui com
+// `Notas`: a nota privada do E-monitor vai para a nota privada do hub.
+type SugestaoImportada struct {
+	IDOriginal     string                `json:"idOriginal"`
+	NumeroOriginal int                   `json:"numeroOriginal"`
+	Tipo           string                `json:"tipo"`
+	Titulo         string                `json:"titulo"`
+	Descricao      string                `json:"descricao"`
+	TelaAlvo       *string               `json:"telaAlvo"`
+	UrgenciaAutor  string                `json:"urgenciaAutor"`
+	Status         string                `json:"status"`
+	Prioridade     *string               `json:"prioridade"`
+	Esforco        *string               `json:"esforco"`
+	Resposta       *string               `json:"resposta"`
+	Notas          *string               `json:"notas"`
+	SuaVez         bool                  `json:"suaVez"`
+	ResolvidaEm    *time.Time            `json:"resolvidaEm"`
+	CreatedAt      time.Time             `json:"createdAt"`
+	AnexoIDs       []string              `json:"anexoIds"`
+	Comentarios    []ComentarioImportado `json:"comentarios"`
+}
+
+type RespostaImportar struct {
+	Acao       string `json:"acao"`
+	SugestaoID string `json:"sugestaoId"`
+	Numero     int    `json:"numero"`
+}
+
+// ImportarSugestao manda UMA sugestão. `a` é o autor da sugestão; o de cada
+// comentário vai no corpo. Só `importada` e `ja-importada` são sucesso.
+func (c *Client) ImportarSugestao(ctx context.Context, a Autor, s SugestaoImportada) (*RespostaImportar, error) {
+	if s.AnexoIDs == nil {
+		s.AnexoIDs = []string{}
+	}
+	if s.Comentarios == nil {
+		s.Comentarios = []ComentarioImportado{}
+	}
+	for i := range s.Comentarios {
+		if s.Comentarios[i].AnexoIDs == nil {
+			s.Comentarios[i].AnexoIDs = []string{}
+		}
+	}
+	var r RespostaImportar
+	if err := c.porta(ctx, http.MethodPost, "/importar", a, s, &r); err != nil {
+		return nil, err
+	}
+	if r.Acao != "importada" && r.Acao != "ja-importada" {
+		return nil, &Error{Status: http.StatusBadGateway,
+			Message: fmt.Sprintf("a Central de Clientes respondeu acao %q na importação", r.Acao)}
+	}
+	return &r, nil
+}

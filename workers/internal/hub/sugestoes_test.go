@@ -113,8 +113,8 @@ func TestListarSugestoes_JuntaAsPaginas(t *testing.T) {
 		p := r.URL.Query().Get("pagina")
 		n, _ := strconv.Atoi(p) // número no JSON, como o hub manda
 		jsonDe(w, 200, map[string]any{
-			"itens":   []map[string]any{{"id": "id-" + p, "numero": 1, "origem": "hub", "tipo": "ideia", "status": "nova"}},
-			"pagina":  n, "paginas": 2, "total": 2, "naoLidas": 0,
+			"itens":  []map[string]any{{"id": "id-" + p, "numero": 1, "origem": "hub", "tipo": "ideia", "status": "nova"}},
+			"pagina": n, "paginas": 2, "total": 2, "naoLidas": 0,
 		})
 	})
 	l, err := New(h.srv.URL, "k").ListarSugestoes(context.Background(), autorAna, "concluida")
@@ -180,4 +180,24 @@ func TestComentarSugestao_E_Lida(t *testing.T) {
 	n, err := c.MarcarSugestaoLida(context.Background(), autorAna, "x1")
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
+}
+
+func TestImportarSugestao_SoAceitaAsDuasAcoes(t *testing.T) {
+	acao := "importada"
+	h := novoHubFalso(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/platform/sugestoes/importar", r.URL.Path)
+		jsonDe(w, 200, map[string]any{"acao": acao, "sugestaoId": "s1", "numero": 77})
+	})
+	c := New(h.srv.URL, "k")
+	r, err := c.ImportarSugestao(context.Background(), autorAna, SugestaoImportada{IDOriginal: "u1", NumeroOriginal: 17})
+	require.NoError(t, err)
+	require.Equal(t, 77, r.Numero)
+	require.Contains(t, h.corpos[0], `"idOriginal":"u1"`)
+	require.Contains(t, h.corpos[0], `"anexoIds":[]`)
+	require.Contains(t, h.corpos[0], `"comentarios":[]`)
+
+	acao = "ignorado" // 200 com ação desconhecida NÃO é sucesso
+	_, err = c.ImportarSugestao(context.Background(), autorAna, SugestaoImportada{IDOriginal: "u2"})
+	e, _ := AsError(err)
+	require.Equal(t, http.StatusBadGateway, e.Status)
 }
