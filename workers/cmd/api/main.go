@@ -585,6 +585,10 @@ func main() {
 			zap.Duration("intervalo", hubnotify.Intervalo), zap.Int("por_ciclo", hubnotify.PorCiclo))
 	}
 
+	if !hub.New(cfg.HubURL, cfg.HubPlatformKey).Configured() {
+		logger.Warn("sugestões: HUB_URL/HUB_PLATFORM_KEY ausentes — /suggestions responde 503 até configurar")
+	}
+
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
 		Clients:      &handlers.ClientsHandler{Repo: clients, Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
@@ -676,12 +680,12 @@ func main() {
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
 		ManagementOverview:    &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: sup},
 		Assertiveness:         handlers.NewAssertivenessHandler(assertivenessRepo),
-		Suggestions: &handlers.SuggestionsHandler{
-			Repo:     catalog.NewSuggestions(pool),
-			Users:    usersRepo,
-			Storage:  s3Client,
-			DevEmail: cfg.SuggestionsDevEmail,
-		},
+		// A fila de sugestões mora no hub (spec do hub 2026-10-26). Sem
+		// HUB_URL/HUB_PLATFORM_KEY o handler responde 503 em toda rota — de
+		// propósito: voltar a gravar no Postgres em silêncio faria a fila ter
+		// duas fontes de novo. `cfg.SuggestionsDevEmail` continua sendo lido
+		// (o handler antigo, fora do router, e o front ainda o espelham).
+		SuggestionsHub:  handlers.NewSuggestionsHubHandler(hub.New(cfg.HubURL, cfg.HubPlatformKey), usersRepo),
 		ClientTargetPmm: &handlers.ClientTargetPmmHandler{Repo: catalog.NewClientStationPMM(pool)},
 	}
 

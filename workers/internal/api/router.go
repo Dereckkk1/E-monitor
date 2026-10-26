@@ -62,6 +62,10 @@ type Deps struct {
 	ManagementOverview    *handlers.ManagementOverviewHandler
 	Assertiveness         *handlers.AssertivenessHandler
 	Suggestions           *handlers.SuggestionsHandler
+	// SuggestionsHub: a fila de sugestões mora no hub desde 2026-10-26 (spec do
+	// hub 2026-10-26). É quem o router usa; `Suggestions` (Postgres) ficou no
+	// código e não é mais roteado.
+	SuggestionsHub *handlers.SuggestionsHubHandler
 	// HubSSO: entrada pela Central de Clientes (RFC-001 §8.1). nil quando a
 	// integracao nao esta configurada — a rota simplesmente nao e registrada.
 	HubSSO                *handlers.HubSSOHandler
@@ -727,25 +731,27 @@ func NewRouter(d Deps) http.Handler {
 					})
 				}
 
-				// Central de Sugestões — admin/operator entram; a distinção
-				// dev × autor é imposta DENTRO do handler (isDev via email).
-				// Rotas registradas método-a-método (sem r.Route) pela mesma
-				// razão de /materials acima. As estáticas (/summary,
-				// /unread-count, /attachments/{aid}/url) vêm ANTES de /{id}
-				// pra chi resolver por especificidade sem surpresa. Doc:
-				// docs/features/suggestions-board.md.
-				if d.Suggestions != nil {
-					r.Post("/suggestions", d.Suggestions.Create)
-					r.Get("/suggestions", d.Suggestions.List)
-					r.Get("/suggestions/summary", d.Suggestions.Summary) // handler barra não-dev
-					r.Get("/suggestions/unread-count", d.Suggestions.UnreadCount)
-					r.Get("/suggestions/attachments/{aid}/url", d.Suggestions.AttachmentURL)
-					r.Get("/suggestions/attachments/{aid}", d.Suggestions.ProxyAttachment) // proxy dos bytes (JWT) — browser não alcança presigned localhost:9000
-					r.Get("/suggestions/{id}", d.Suggestions.Get)
-					r.Patch("/suggestions/{id}", d.Suggestions.Patch) // handler barra não-dev
-					r.Post("/suggestions/{id}/comments", d.Suggestions.AddComment)
-					r.Post("/suggestions/{id}/attachments", d.Suggestions.UploadAttachment)
-					r.Post("/suggestions/{id}/read", d.Suggestions.MarkRead)
+				// Central de Sugestões — admin/operator entram. Desde 2026-10-26 a
+				// fila MORA no hub: o handler fala com a porta
+				// /api/platform/sugestoes e devolve o JSON de sempre. Rotas
+				// método a método (sem r.Route), pela mesma razão de /materials
+				// acima; as estáticas vêm ANTES de /{id} — inclusive o
+				// POST /suggestions/attachments, que é o upload "sem dono".
+				// O SuggestionsHandler de antes (Postgres) não é mais roteado.
+				// Doc: docs/features/suggestions-board.md.
+				if d.SuggestionsHub != nil {
+					r.Post("/suggestions", d.SuggestionsHub.Create)
+					r.Get("/suggestions", d.SuggestionsHub.List)
+					r.Get("/suggestions/summary", d.SuggestionsHub.Gone)
+					r.Get("/suggestions/unread-count", d.SuggestionsHub.UnreadCount)
+					r.Post("/suggestions/attachments", d.SuggestionsHub.StageAttachment)
+					r.Get("/suggestions/attachments/{aid}/url", d.SuggestionsHub.Gone)
+					r.Get("/suggestions/attachments/{aid}", d.SuggestionsHub.ProxyAttachment) // bytes pela API — o navegador nunca recebe URL de bucket
+					r.Get("/suggestions/{id}", d.SuggestionsHub.Get)
+					r.Patch("/suggestions/{id}", d.SuggestionsHub.Gone) // triagem é no hub
+					r.Post("/suggestions/{id}/comments", d.SuggestionsHub.AddComment)
+					r.Post("/suggestions/{id}/attachments", d.SuggestionsHub.UploadAttachment)
+					r.Post("/suggestions/{id}/read", d.SuggestionsHub.MarkRead)
 				}
 			}) // end admin/operator group
 
