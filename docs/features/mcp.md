@@ -220,6 +220,13 @@ todos os tokens daquele cliente para o usuário.
 - **Access tokens antigos não são revogados na rotação** (valem até os 30 dias deles ou até a
   conexão ser revogada) e **`mcp_tokens` nunca é podada** (follow-up).
 - **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro").
+- **O consentimento sempre pede login.** A aba aberta pelo assistente começa deslogada (JWT em
+  `sessionStorage`, por aba): `/login` volta para `/autorizar-ia?pedido=...`. O login pelo SSO do hub
+  (`/sso`) perde o `?pedido=` (`HubSsoPage` sempre vai para `/`); o admin entra com e-mail e senha
+  ou reinicia a conexão.
+- **Limitação conhecida:** o anti-frame de `/autorizar-ia` (`_headers`) depende de o Cloudflare Pages
+  aplicá-lo à resposta de fallback da SPA. Verifique após o deploy:
+  `curl -sI "https://e-monitor.online/autorizar-ia?pedido=x" | grep -i frame`.
 - **Dev local:** defina `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
   `NOTIFICATIONS_BASE_URL=http://localhost:5174` (origem do portal usada no redirect do
   consentimento). Sem a segunda, o `/authorize` redireciona para o frontend de prod.

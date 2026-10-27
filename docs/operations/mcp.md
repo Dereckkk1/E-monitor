@@ -82,6 +82,14 @@ No "Custom MCP Server" do Gemini:
 Cliente confidencial que **não chegar ao `/token` em 7 dias é apagado** (a faxina roda a cada novo
 registro público); refaça o cadastro e a configuração no console. Depois do primeiro token ele fica.
 
+## Login na aba de consentimento
+
+A aba que o claude.ai, o Claude Code ou o Gemini abre para o consentimento **sempre começa deslogada**:
+o JWT do portal fica em `sessionStorage`, que é por aba. Então toda conexão pede o login do E-monitor
+em `/login`, que volta para `/autorizar-ia?pedido=...` depois de entrar. Quem costuma entrar pelo SSO
+do hub (`/sso`) perde o `?pedido=` (a `HubSsoPage` sempre vai para `/`): nessa aba, entre com
+**e-mail e senha**, ou faça login e **reinicie a conexão** no assistente. O pedido vale 10 min.
+
 ## Revogar
 
 - **Uma conexão:** Minha conta -> Integração com IA -> Desconectar (numa conexão OAuth derruba
@@ -141,6 +149,7 @@ já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 | `invalid_client_metadata` ("registra-cliente-mcp na VM") | tentaram registrar cliente confidencial pelo registro aberto: use o CLI |
 | Gemini emite código mas nunca chama `/token` | COOP no `/authorize` (deve ser `unsafe-none`); ou `client_secret` errado (`invalid_client`) |
 | `/autorizar-ia` diz "pedido vencido" | passaram mais de 10 min entre conectar e autorizar |
+| Depois do login SSO do hub a aba cai em `/` e não pede autorização | o SSO descarta o `?pedido=`: entre com e-mail e senha na aba de consentimento, ou reinicie a conexão (ver "Login na aba de consentimento") |
 | Tudo parou de autenticar depois de girar o `JWT_SECRET` | esperado: os hashes mudam; todos reconectam e o Gemini precisa de cliente novo |
 | Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:5174` no `.env` |
 
@@ -160,7 +169,7 @@ curl -s https://api.e-monitor.online/.well-known/oauth-authorization-server
 ```
 
 Esperado: `401` com `WWW-Authenticate: Bearer realm="emonitor-mcp", resource_metadata=..., scope="emonitor:all"`
-(não 404, não 403). O Cloudflare Tunnel precisa expor `/mcp`, `/mcp/oauth/*` e `/.well-known/*` no host
+(não 404, não 403). Confira também o anti-frame do consentimento: `curl -sI "https://e-monitor.online/autorizar-ia?pedido=x" | grep -i frame` deve mostrar `X-Frame-Options: DENY` e `frame-ancestors 'none'`. A regra de `frontend/public/_headers` depende de o Cloudflare Pages aplicá-la à resposta de fallback da SPA; se não aparecer, o clickjacking do botão Autorizar está aberto. O Cloudflare Tunnel precisa expor `/mcp`, `/mcp/oauth/*` e `/.well-known/*` no host
 público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo CLI em `cmd/*` exige as
 duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão.
 
