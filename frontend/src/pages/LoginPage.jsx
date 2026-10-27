@@ -4,7 +4,8 @@ import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
+  // E-mail OU nome de usuário: o backend decide pelo `@` qual dos dois é.
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -31,7 +32,10 @@ export default function LoginPage() {
     setError(null)
     setSubmitting(true)
     try {
-      const { data } = await api.post('/auth/login', { email, password })
+      // A chave segue sendo `email` porque é o contrato que o backend já em
+      // prod entende — o front sobe antes do back (CF Pages publica a cada
+      // push), e com essa chave o login por e-mail nunca quebra no meio.
+      const { data } = await api.post('/auth/login', { email: identifier.trim(), password })
       login(data.token, data.user)
       navigate(nextDestination(), { replace: true })
     } catch (err) {
@@ -96,18 +100,24 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} noValidate className="login-form">
             <label className="login-field">
-              <span>E-mail</span>
+              <span>E-mail ou usuário</span>
               <div className="login-input-wrap">
-                <span className="login-field-icon-left" aria-hidden="true"><EnvelopeIcon /></span>
+                <span className="login-field-icon-left" aria-hidden="true"><UserIcon /></span>
+                {/* type="text" e não "email": o navegador barraria um username
+                    sem @ na validação nativa. autoComplete="username" é o que
+                    os gerenciadores de senha esperam para o par login+senha. */}
                 <input
-                  type="email"
-                  autoComplete="email"
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   autoFocus
                   required
-                  value={email}
-                  onChange={(e) => { setEmail(e.target.value); setError(null) }}
+                  value={identifier}
+                  onChange={(e) => { setIdentifier(e.target.value); setError(null) }}
                   disabled={submitting}
-                  placeholder="seu@email.com"
+                  placeholder="seu@email.com ou usuário"
                   className="login-iconed"
                 />
               </div>
@@ -149,7 +159,7 @@ export default function LoginPage() {
             <button
               type="submit"
               className="login-submit"
-              disabled={submitting || !email || !password}
+              disabled={submitting || !identifier.trim() || !password}
             >
               {submitting
                 ? <><span className="login-spinner" aria-hidden="true" />Entrando…</>
@@ -166,11 +176,11 @@ export default function LoginPage() {
   )
 }
 
-function EnvelopeIcon() {
+function UserIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <path d="m2 7 10 7 10-7" />
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
     </svg>
   )
 }

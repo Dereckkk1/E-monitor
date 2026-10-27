@@ -367,3 +367,35 @@ func (c *Clients) UpdateWebhookConfig(ctx context.Context, id uuid.UUID, in Upda
 	}
 	return c.GetWebhookConfig(ctx, id)
 }
+
+/*
+OutroComMesmoCNPJ acha OUTRO cliente com o mesmo CNPJ comparando só os dígitos
+(spec do hub 2026-10-22 §3.2). `nil, nil` quando não há, ou quando o CNPJ
+informado não tem 14 dígitos (vazio ou incompleto não se compara).
+
+⚠️ Por consulta e não por índice único: as duplicatas que já existem fariam a
+migration falhar, e limpá-las é decisão humana.
+*/
+func (c *Clients) OutroComMesmoCNPJ(ctx context.Context, cnpj *string, exceto uuid.UUID) (*Client, error) {
+	if cnpj == nil {
+		return nil, nil
+	}
+	digitos := make([]rune, 0, 14)
+	for _, r := range *cnpj {
+		if r >= '0' && r <= '9' {
+			digitos = append(digitos, r)
+		}
+	}
+	if len(digitos) != 14 {
+		return nil, nil
+	}
+	out, err := scanClient(c.pool.QueryRow(ctx, `
+		SELECT `+clientColumns+` FROM clients
+		 WHERE regexp_replace(COALESCE(cnpj, ''), '\D', '', 'g') = $1 AND id <> $2
+		 ORDER BY is_active DESC, created_at
+		 LIMIT 1`, string(digitos), exceto))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return out, err
+}

@@ -52,7 +52,7 @@ func TestPromoteScheduledLifecycle_RecoversStuckConcluida(t *testing.T) {
 	// programada whose start arrived → must still activate (existing behavior)
 	dueProg := seedCampaignRaw(t, ctx, pool, cli.ID, "programada", today.AddDate(0, 0, -1), today.AddDate(0, 0, 20))
 
-	activated, _, err := repo.PromoteScheduledLifecycle(ctx)
+	activated, _, _, err := repo.PromoteScheduledLifecycle(ctx)
 	require.NoError(t, err)
 
 	statusOf := func(id uuid.UUID) string {
@@ -68,4 +68,44 @@ func TestPromoteScheduledLifecycle_RecoversStuckConcluida(t *testing.T) {
 	require.Contains(t, activated, stuckActive, "recovered-to-ativa must be in activated so the scheduler starts workers")
 	require.Contains(t, activated, dueProg)
 	require.NotContains(t, activated, stuckFuture, "recovered-to-programada needs no worker start")
+}
+
+// TestPromoteScheduledLifecycle_DemotesFutureAtiva: a campaign in 'ativa' whose
+// start_date is still in the future must go back to 'programada', and its id
+// must come back in `demoted` so the scheduler stops its workers. Reproduces
+// the "FSJ - Pedido Jack" prod incident (2026-10-01): 239 stations monitored a
+// day early because the campaign was activated and THEN had its start_date
+// pushed to tomorrow — UpdateBasic doesn't touch status and nothing demoted it.
+func TestPromoteScheduledLifecycle_DemotesFutureAtiva(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewCampaigns(pool)
+
+	cli, err := NewClients(pool).Create(ctx, CreateClientInput{Name: "lc-demote-" + uuid.NewString()})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM campaigns WHERE client_id=$1`, cli.ID)
+		pool.Exec(ctx, `DELETE FROM clients WHERE id=$1`, cli.ID)
+	})
+
+	today := time.Now()
+	// ativa but starts in the future → must demote to programada
+	early := seedCampaignRaw(t, ctx, pool, cli.ID, "ativa", today.AddDate(0, 0, 5), today.AddDate(0, 0, 20))
+	// ativa and already started → must STAY ativa
+	running := seedCampaignRaw(t, ctx, pool, cli.ID, "ativa", today.AddDate(0, 0, -3), today.AddDate(0, 0, 20))
+
+	activated, ended, demoted, err := repo.PromoteScheduledLifecycle(ctx)
+	require.NoError(t, err)
+
+	statusOf := func(id uuid.UUID) string {
+		var s string
+		require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM campaigns WHERE id=$1`, id).Scan(&s))
+		return s
+	}
+	require.Equal(t, "programada", statusOf(early), "ativa with future start_date → programada")
+	require.Equal(t, "ativa", statusOf(running), "ativa already started must stay ativa")
+
+	require.Contains(t, demoted, early, "demoted id must be returned so the scheduler stops its workers")
+	require.NotContains(t, demoted, running)
+	require.NotContains(t, activated, early, "a demoted campaign must not be re-activated in the same tick")
+	require.NotContains(t, ended, early)
 }

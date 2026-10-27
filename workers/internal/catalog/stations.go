@@ -506,6 +506,37 @@ func (s *Stations) UpdateMonitoringStatus(ctx context.Context, id uuid.UUID, sta
 	return err
 }
 
+// SyncMonitoringStatus acerta stations.monitoring_status contra as campanhas
+// 'ativa': 'active' sem nenhuma campanha ativa cobrindo vira 'paused', e
+// 'paused' coberta por campanha ativa vira 'active'. 'calibrating'/'error'
+// são estados manuais e não são tocados. Retorna quantas linhas foram para
+// cada lado. Chamado pelo reconciler da frota.
+//
+// A coluna não governa worker nenhum (quem governa é a campanha), mas é o
+// denominador do "Streams ao ar" e do "Atenção agora": marcação velha aparece
+// lá como "drift do reconciler" falso. Foi o que aconteceu em 2026-10-02 (80
+// emissoras 'active' sem campanha, sobra do alívio manual da FSJ).
+func (s *Stations) SyncMonitoringStatus(ctx context.Context) (paused, activated int64, err error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE stations s SET monitoring_status = 'paused'
+		 WHERE s.monitoring_status = 'active'
+		   AND NOT EXISTS (SELECT 1 FROM campaigns c
+		                    WHERE c.status = 'ativa' AND s.id = ANY(c.target_stations))`)
+	if err != nil {
+		return 0, 0, err
+	}
+	paused = tag.RowsAffected()
+	tag, err = s.pool.Exec(ctx, `
+		UPDATE stations s SET monitoring_status = 'active'
+		 WHERE s.monitoring_status = 'paused'
+		   AND EXISTS (SELECT 1 FROM campaigns c
+		                WHERE c.status = 'ativa' AND s.id = ANY(c.target_stations))`)
+	if err != nil {
+		return paused, 0, err
+	}
+	return paused, tag.RowsAffected(), nil
+}
+
 func (s *Stations) UpdateHealthCheck(ctx context.Context, id uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE stations SET last_health_check = now() WHERE id = $1`, id)

@@ -62,12 +62,20 @@ type Deps struct {
 	ManagementOverview    *handlers.ManagementOverviewHandler
 	Assertiveness         *handlers.AssertivenessHandler
 	Suggestions           *handlers.SuggestionsHandler
+	// SuggestionsHub: a fila de sugestões mora no hub desde 2026-10-26 (spec do
+	// hub 2026-10-26). É quem o router usa; `Suggestions` (Postgres) ficou no
+	// código e não é mais roteado.
+	SuggestionsHub *handlers.SuggestionsHubHandler
 	// HubSSO: entrada pela Central de Clientes (RFC-001 §8.1). nil quando a
 	// integracao nao esta configurada — a rota simplesmente nao e registrada.
 	HubSSO                *handlers.HubSSOHandler
 	// HubSync: mutacoes de identidade empurradas pelo hub (RFC-001 §9.2) — o
 	// sentido oposto do HubSSO. nil quando a integracao nao esta configurada.
 	HubSync               *handlers.HubSyncHandler
+	// HubCodes: a conferencia do codigo da campanha para a TELA (spec do hub
+	// 2026-09-18 §4.3). O front daqui pergunta ao proprio backend, e e ele que
+	// fala com o hub — a chave da plataforma nao desce para o navegador.
+	HubCodes              *handlers.HubCodesHandler
 	// HubClient/HubClients: a porta de LEITURA do hub (Central consolidada,
 	// spec 2026-09-02 §5.3) — o sentido oposto do HubSync, que ESCREVE. São
 	// interfaces, e nao os tipos concretos, para o teste de rota montar o
@@ -489,6 +497,31 @@ func NewRouter(d Deps) http.Handler {
 				// Sobrescreve o CPM derivado nas telas de exibição.
 				r.Put("/campaigns/{id}/fixed-cpm", d.Campaigns.UpdateFixedCPM)
 				r.Delete("/campaigns/{id}", d.Campaigns.Delete)
+				/* A conferência do código do hub para a TELA (spec do hub
+				   2026-09-18 §4.3). Fica no bloco de ESCRITA de campanha, e não
+				   no subgrupo A: quem precisa dela é quem cadastra campanha, e
+				   esse é exatamente o par de papéis do `POST /campaigns` deste
+				   mesmo bloco.
+
+				   ⚠️ E ela NÃO pode ir para o subgrupo viewer. A resposta diz o
+				   nome da campanha e o nome do cliente de qualquer código que se
+				   adivinhe — é um oráculo sobre o hub inteiro, e viewer é papel
+				   de cliente externo.
+
+				   ⚠️ Nem sob `/v1/internal/hub`: aquele sub-router é guardado
+				   por `RequireHubKeyScoped`, a porta por onde o HUB entra aqui
+				   com a chave da plataforma. Esta rota é o contrário — o front
+				   daqui, com JWT de pessoa, pedindo ao próprio backend que
+				   pergunte ao hub, justamente para a chave não descer para o
+				   navegador. */
+				if d.HubCodes != nil {
+					r.Get("/hub-codes/{code}", d.HubCodes.Get)
+					// O botão "Ligar os dois clientes" (spec 2026-10-22). Mesmo
+					// bloco de escrita de campanha: quem cadastra campanha é quem
+					// precisa ligar (decisão 2).
+					r.Post("/hub-codes/{code}/ligar", d.HubCodes.Ligar)
+				}
+
 				r.Group(func(r chi.Router) {
 					r.Use(auth.RequireRole("admin"))
 					r.Post("/campaigns/{id}/cancel", d.Campaigns.Cancel)
@@ -698,25 +731,27 @@ func NewRouter(d Deps) http.Handler {
 					})
 				}
 
-				// Central de Sugestões — admin/operator entram; a distinção
-				// dev × autor é imposta DENTRO do handler (isDev via email).
-				// Rotas registradas método-a-método (sem r.Route) pela mesma
-				// razão de /materials acima. As estáticas (/summary,
-				// /unread-count, /attachments/{aid}/url) vêm ANTES de /{id}
-				// pra chi resolver por especificidade sem surpresa. Doc:
-				// docs/features/suggestions-board.md.
-				if d.Suggestions != nil {
-					r.Post("/suggestions", d.Suggestions.Create)
-					r.Get("/suggestions", d.Suggestions.List)
-					r.Get("/suggestions/summary", d.Suggestions.Summary) // handler barra não-dev
-					r.Get("/suggestions/unread-count", d.Suggestions.UnreadCount)
-					r.Get("/suggestions/attachments/{aid}/url", d.Suggestions.AttachmentURL)
-					r.Get("/suggestions/attachments/{aid}", d.Suggestions.ProxyAttachment) // proxy dos bytes (JWT) — browser não alcança presigned localhost:9000
-					r.Get("/suggestions/{id}", d.Suggestions.Get)
-					r.Patch("/suggestions/{id}", d.Suggestions.Patch) // handler barra não-dev
-					r.Post("/suggestions/{id}/comments", d.Suggestions.AddComment)
-					r.Post("/suggestions/{id}/attachments", d.Suggestions.UploadAttachment)
-					r.Post("/suggestions/{id}/read", d.Suggestions.MarkRead)
+				// Central de Sugestões — admin/operator entram. Desde 2026-10-26 a
+				// fila MORA no hub: o handler fala com a porta
+				// /api/platform/sugestoes e devolve o JSON de sempre. Rotas
+				// método a método (sem r.Route), pela mesma razão de /materials
+				// acima; as estáticas vêm ANTES de /{id} — inclusive o
+				// POST /suggestions/attachments, que é o upload "sem dono".
+				// O SuggestionsHandler de antes (Postgres) não é mais roteado.
+				// Doc: docs/features/suggestions-board.md.
+				if d.SuggestionsHub != nil {
+					r.Post("/suggestions", d.SuggestionsHub.Create)
+					r.Get("/suggestions", d.SuggestionsHub.List)
+					r.Get("/suggestions/summary", d.SuggestionsHub.Gone)
+					r.Get("/suggestions/unread-count", d.SuggestionsHub.UnreadCount)
+					r.Post("/suggestions/attachments", d.SuggestionsHub.StageAttachment)
+					r.Get("/suggestions/attachments/{aid}/url", d.SuggestionsHub.Gone)
+					r.Get("/suggestions/attachments/{aid}", d.SuggestionsHub.ProxyAttachment) // bytes pela API — o navegador nunca recebe URL de bucket
+					r.Get("/suggestions/{id}", d.SuggestionsHub.Get)
+					r.Patch("/suggestions/{id}", d.SuggestionsHub.Gone) // triagem é no hub
+					r.Post("/suggestions/{id}/comments", d.SuggestionsHub.AddComment)
+					r.Post("/suggestions/{id}/attachments", d.SuggestionsHub.UploadAttachment)
+					r.Post("/suggestions/{id}/read", d.SuggestionsHub.MarkRead)
 				}
 			}) // end admin/operator group
 

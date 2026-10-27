@@ -1,7 +1,7 @@
 // Pills de status / tipo / prioridade / esforço. Semânticos e reutilizados
 // por lista, board, cards e detalhe. As cores moram no CSS (classes
 // sug-pill--<value>) pra manter o JSX limpo e o tema consistente.
-import { STATUS, TYPE, REQ_PRIORITY, DEV_PRIORITY, EFFORT } from './constants'
+import { STATUS, TYPE, REQ_PRIORITY, DEV_PRIORITY, EFFORT, ORIGIN } from './constants'
 import { TypeIcon } from './icons'
 
 export function StatusPill({ value, size }) {
@@ -53,4 +53,11 @@ export function EffortPill({ value }) {
   const meta = EFFORT[value]
   if (!meta) return null
   return <span className={`sug-pill sug-pill--effort sug-effort--${value}`}>{meta.label}</span>
+}
+
+// Selo de origem: só quando a sugestão veio de outra plataforma.
+export function OriginPill({ value }) {
+  const meta = ORIGIN[value]
+  if (!meta) return null
+  return <span className="sug-pill sug-pill--origin sug-pill--sm" title="Veio de outra plataforma">{meta.label}</span>
 }

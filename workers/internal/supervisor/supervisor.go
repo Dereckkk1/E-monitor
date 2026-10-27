@@ -1130,6 +1130,11 @@ func (s *Supervisor) StartLifecycle(ctx context.Context) {
 		// worker-stop side of Pause; do it inline.
 		s.StopWorkersForCampaign(campaignID)
 	}
+	sched.OnDemoted = func(_ context.Context, campaignID uuid.UUID) {
+		// The scheduler moved the campaign back to 'programada' (start_date is
+		// still in the future) — stop the workers it was holding up early.
+		s.StopWorkersForCampaign(campaignID)
+	}
 
 	s.lifecycle = sched
 	go func() {

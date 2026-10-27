@@ -1,10 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-04
+ultima-verificacao: 2026-10-27
 codigo-relacionado:
   - migrations/0027_user_management.up.sql
   - migrations/0037_stations_offline_email.up.sql
   - migrations/0061_user_post_sale_emails.up.sql
+  - migrations/0070_users_username.up.sql
+  - workers/internal/users/username.go
   - workers/internal/users/users.go
   - workers/internal/auth/scope.go
   - workers/internal/auth/jwt.go
@@ -16,6 +18,8 @@ codigo-relacionado:
   - frontend/src/components/RequireRole.jsx
   - frontend/src/components/UserFormModal.jsx
   - frontend/src/components/ResetPasswordModal.jsx
+  - frontend/src/pages/LoginPage.jsx
+  - frontend/src/pages/WelcomePage.jsx
 ---
 
 # Gerenciamento de usuários
@@ -68,6 +72,41 @@ Quem consome: `users.ActiveInternal` (alertas) e `postsale.InternalRecipients`
 (pós-venda). Ambas exigem, além da flag, `role IN ('admin','operator')`,
 `is_active` e `deleted_at IS NULL`.
 
+## Nome de usuário (login alternativo)
+
+Desde 2026-10-27 uma conta pode ter um `username` além do e-mail, e entra com
+**qualquer um dos dois** no mesmo campo do `/login` ("E-mail ou usuário").
+
+- **Opcional.** Nasce `NULL`; contas antigas seguem entrando só pelo e-mail.
+- **Só o admin define.** Campo "Nome de usuário" no formulário de criar/editar
+  do `/admin/users`. Ao contrário do e-mail, é **mutável**: o PATCH aceita
+  `username` (valor = define/troca, `""` = remove, ausente = não mexe). O
+  `PATCH /auth/me` **não** aceita — trocar o próprio login não é
+  autoatendimento (decisão do dono). O `/account` só mostra.
+- **Formato:** 3–32 caracteres de `a-z 0-9 . _ -`. Sem acento, sem espaço e
+  **sem `@`**. A aplicação normaliza (trim + minúsculas) em
+  `users.NormalizeUsername`; o CHECK `users_username_format` (0070) é a última
+  barreira, então nada não-normalizado entra no banco. Os dois precisam andar
+  juntos — e o `USERNAME_RE` do `UserFormModal.jsx` também.
+- **Único entre não-deletados** (`users_username_active`, parcial — mesma regra
+  do e-mail): excluir uma conta libera o username.
+- **Como o login decide:** o identificador com `@` vai pra `GetByEmail`, sem
+  `@` vai pra `GetByUsername`. Como username não tem `@`, nunca há duas contas
+  candidatas pro mesmo texto. Username inexistente ou fora do formato → 401
+  `invalid credentials`, igual a e-mail inexistente (sem oráculo).
+- **O body do login continua `{ "email": ..., "password": ... }`.** A chave
+  `email` carrega o identificador (e-mail ou username). Não foi renomeada de
+  propósito: o frontend sobe sozinho a cada push (CF Pages) e o backend só com
+  `deploy.sh`, então manter a chave deixa o login por e-mail funcionando em
+  qualquer ordem de deploy.
+- **Erros do `/admin/users`:** `400 invalid_username`, `409 username_taken`
+  (o 23505 é desambiguado pelo nome do índice; sem isso viraria `email_taken`).
+- **Boas-vindas:** a página pública `/boasvindas/:token` mostra "Ou usuário"
+  nas credenciais quando a conta tem um — lido do cadastro atual, então um
+  username dado depois do convite também aparece.
+- **SSO do hub:** contas criadas pelo hub nascem sem username; o admin pode
+  dar um aqui (é dado local, o hub não toca).
+
 ## Filtragem por client_id (server-side)
 
 O JWT carrega claim `client_id`. Middleware `auth.ClientScopeFromContext`
@@ -85,10 +124,10 @@ retorna **403** `forbidden_client_scope`.
 
 | Método | Path | Descrição |
 |--------|------|-----------|
-| GET    | `/admin/users` | Lista paginada. Query: `q`, `role={admin\|client}`, `client_id`, `status={active\|inactive\|deleted\|all}`, `page`, `page_size`. |
+| GET    | `/admin/users` | Lista paginada. Query: `q` (nome, e-mail ou username), `role={admin\|client}`, `client_id`, `status={active\|inactive\|deleted\|all}`, `page`, `page_size`. |
 | GET    | `/admin/users/:id` | Detalhe. |
 | POST   | `/admin/users` | Cria. |
-| PATCH  | `/admin/users/:id` | Edita (rejeita `email`). |
+| PATCH  | `/admin/users/:id` | Edita (rejeita `email`; aceita `username`, `""` remove). |
 | POST   | `/admin/users/:id/password` | Reset de senha. |
 | DELETE | `/admin/users/:id` | Soft delete. Bloqueia self. |
 
@@ -115,7 +154,7 @@ middleware de autorização e no `isAdmin` do frontend.
 
 1. Admin abre `/admin/users`, clica "+ Novo usuário".
 2. Preenche: tipo (Admin / Cliente), [se Cliente] dropdown de cliente,
-   nome, email, telefone, senha (ou "Gerar" → 16 chars cripto-seguros),
+   nome, email, [opcional] nome de usuário, telefone, senha (ou "Gerar" → 16 chars cripto-seguros),
    [se Admin] as preferências de email acima.
 3. Submit → POST cria. Admin comunica a senha por fora (WhatsApp, etc.).
 4. Cliente faz login → atualiza `last_login_at`. Em `/account`, troca a

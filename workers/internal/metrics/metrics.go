@@ -170,11 +170,23 @@ var (
 
 	// WorkerReconcileRuns counts every reconciler pass per outcome.
 	// 'unchanged' = list matched DB; 'restarted' = list differed and worker
-	// was rebuilt; 'error' = the lookup failed (previous state preserved).
+	// was rebuilt; 'stopped' = no 'ativa' campaign covers the station any more,
+	// so the worker was stopped; 'error' = the lookup failed (previous state
+	// preserved).
 	WorkerReconcileRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "radiocheck_worker_reconcile_runs_total",
 		Help: "Outcome of the per-station commercial reconciler ticks.",
 	}, []string{"station_id", "outcome"})
+
+	// FleetReconcileActions counts what the fleet reconciler did (see
+	// supervisor/fleet_reconcile.go): 'started' / 'start_failed' = worker of a
+	// station covered by an active campaign that was missing for 2 passes;
+	// 'status_paused' / 'status_activated' = stations.monitoring_status rows
+	// corrected. Anything non-zero means something upstream left drift behind.
+	FleetReconcileActions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "radiocheck_fleet_reconcile_actions_total",
+		Help: "Corrections applied by the supervisor fleet reconciler, by action.",
+	}, []string{"action"})
 
 	// WorkerConnectBackoff is the current circuit-breaker backoff (seconds) the
 	// supervisor is waiting before respawning a worker that has never connected
@@ -345,7 +357,7 @@ func init() {
 		WebhookDeliveriesTotal, WebhookDeliveryDuration, WebhookQueueSize, WebhookDLQSize,
 		CampaignsByStatus, CampaignTransitions,
 		StationThreshold, StationThresholdRefreshes,
-		WorkerCommercials, WorkerReconcileRuns, WorkerConnectBackoff,
+		WorkerCommercials, WorkerReconcileRuns, WorkerConnectBackoff, FleetReconcileActions,
 		CalibrationRunsTotal, CalibrationLastSuccessTimestamp, CalibrationDurationSeconds,
 		MatchDisambiguation, MatchShortSingleWindow,
 		AuditAttempts, AuditScore, AuditCoverage, AuditDuration,

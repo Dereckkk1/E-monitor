@@ -134,7 +134,7 @@ func (h *HubSSOHandler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, ExpiresAt: expiresAt,
 		User: loginUser{
-			ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name,
+			ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, Name: u.Name,
 			ClientID: u.ClientID, ClientIDs: u.ClientIDs,
 		},
 	})

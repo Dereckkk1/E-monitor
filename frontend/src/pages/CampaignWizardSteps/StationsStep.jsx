@@ -237,6 +237,11 @@ export default function StationsStep({ campaignId, allStations, currentSelection
             // input vazio removeria a última emissora sem nenhum feedback visual.
             // Remoção só pelo X de cada card.
             backspaceRemovesValue={false}
+            // Multi do react-select nasce clearable: o "×" no fim do campo apaga
+            // a SELECAO INTEIRA, nao o texto da busca. Com os chips escondidos
+            // ele parece "limpar busca" — foi o que zerou as 251 emissoras da
+            // 3a4a7fa6 em 2026-10-08. Remover tudo continua no "Limpar tudo".
+            isClearable={false}
             noOptionsMessage={() => debouncedInput ? 'Nenhuma emissora encontrada' : 'Comece a digitar pra buscar'}
             loadingMessage={() => 'Buscando…'}
           />

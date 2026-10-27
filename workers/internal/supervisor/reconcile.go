@@ -157,6 +157,18 @@ func (s *Supervisor) reconcileOnce(ctx context.Context, stationID uuid.UUID, sta
 		return false
 	}
 
+	// No 'ativa' campaign covers this station any more (campaign demoted back
+	// to 'programada', or left 'ativa' without the stop path running). Stop the
+	// worker instead of rebuilding it: the rebuild would come back with an
+	// empty commercial list, and from then on "empty == empty" reads as
+	// unchanged — ffmpeg pulling the stream forever for nobody (incident
+	// 2026-10-01, "FSJ - Pedido Jack": 239 stations monitored a day early).
+	// A station with an active campaign but no ready material yet still has
+	// activeIDs and keeps its worker.
+	if len(activeIDs) == 0 {
+		return s.stopOrphanWorker(ctx, stationID, stationLabel)
+	}
+
 	coms, err := s.commercials.ListReadyByCampaignsForStation(queryCtx, activeIDs, stationID)
 	if err != nil {
 		metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "error").Inc()
@@ -231,5 +243,46 @@ func (s *Supervisor) reconcileOnce(ctx context.Context, stationID uuid.UUID, sta
 				zap.Error(err))
 		}
 	}()
+	return true
+}
+
+// stopOrphanWorker stops the worker of a station that no 'ativa' campaign
+// covers any more. Returns true when it stopped the worker (the reconciler
+// must exit), false when there was nothing of ours to stop.
+//
+// ctx is the worker's own context (runWorkerReconciler passes workerCtx). If
+// it is already cancelled, the entry now in the map belongs to a NEWER worker
+// — startStationWorker cancels the old one before installing its replacement,
+// e.g. a Start() that just activated a campaign — and is not ours to stop.
+func (s *Supervisor) stopOrphanWorker(ctx context.Context, stationID uuid.UUID, stationLabel string) bool {
+	s.mu.Lock()
+	entry, ok := s.workers[stationID]
+	if !ok || entry == nil || ctx.Err() != nil {
+		s.mu.Unlock()
+		return false
+	}
+	entry.cancel()
+	delete(s.workers, stationID)
+	delete(s.connectFailures, stationID)
+	s.evidence.Unregister(stationID)
+	if entry.worker != nil {
+		metrics.WorkerActive.Dec()
+	}
+	metrics.WorkerCommercials.DeleteLabelValues(stationLabel)
+	metrics.WorkerConnectBackoff.DeleteLabelValues(stationLabel)
+	s.mu.Unlock()
+
+	metrics.WorkerReconcileRuns.WithLabelValues(stationLabel, "stopped").Inc()
+	s.log.Warn("supervisor.reconcile: no active campaign covers station — worker stopped",
+		zap.String("station_id", stationLabel))
+
+	// ctx died with entry.cancel() above — the status write needs its own.
+	statusCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.stations.UpdateMonitoringStatus(statusCtx, stationID, "paused"); err != nil {
+		s.log.Warn("supervisor.reconcile: update station monitoring_status failed",
+			zap.String("station_id", stationLabel),
+			zap.Error(err))
+	}
 	return true
 }

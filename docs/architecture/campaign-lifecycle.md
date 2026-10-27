@@ -1,11 +1,13 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-29
+ultima-verificacao: 2026-10-02
 codigo-relacionado:
   - workers/internal/supervisor/lifecycle_scheduler.go
   - workers/internal/catalog/campaigns.go
   - workers/internal/api/handlers/campaigns.go
   - workers/internal/supervisor/station_changes.go
+  - workers/internal/supervisor/reconcile.go
+  - workers/internal/supervisor/fleet_reconcile.go
   - migrations/0011_campaign_lifecycle.up.sql
   - migrations/0044_campaign_cancelled_at.up.sql
   - workers/internal/metrics/metrics.go
@@ -28,6 +30,14 @@ codigo-relacionado:
 
 **Regra dura:** workers só rodam para campanhas em `ativa`. Os outros três
 estados são equivalentes para o supervisor (worker desligado).
+
+**E `ativa` só existe dentro do período.** Uma campanha `ativa` com
+`start_date` no futuro é estado inválido: o scheduler a devolve para
+`programada` e para os workers (passo DEMOTE, abaixo). O reconciler de cada
+worker também para o worker de qualquer emissora que nenhuma campanha `ativa`
+cubra mais, e o reconciler da frota sobe o worker que falta e mantém
+`stations.monitoring_status` coerente com as campanhas `ativa`
+([worker-commercial-reconciler](../operations/worker-commercial-reconciler.md#reconciler-da-frota-2026-10-02)).
 
 > Nuance pós-2026-05-08: o índice em memória de fingerprints (separado dos
 > workers) carrega hashes de `programada` E `ativa`. Isso elimina a janela
@@ -61,6 +71,8 @@ campanha cancelada por engano, criar uma nova.
                   ▼
             ativa / programada
 
+ativa  ── start_date > today (DEMOTE — ex.: início adiado depois de ativar) ──►  programada
+
 programada / ativa  ── operador chama POST /cancel ──►  cancelada
 ```
 
@@ -82,6 +94,37 @@ Campanhas legitimamente concluídas (`end_date < today`) **não** são tocadas.
 > para sempre (não havia caminho de volta), e seus workers nunca subiam. O fix
 > de dado foi `UPDATE ... SET status='ativa'`; o fix de código é o RECOVERY
 > acima. Cobertura: `TestPromoteScheduledLifecycle_RecoversStuckConcluida`.
+
+### Demote `ativa → programada` (2026-10-01)
+
+O espelho do RECOVERY. Uma campanha pode estar `ativa` antes do `start_date`
+por dois caminhos:
+
+- foi ativada (início ≤ hoje) e **depois** o operador empurrou o `start_date`
+  para o futuro — `UpdateBasic` não toca no status;
+- alguém chamou `PUT /campaigns/{id}/start` — `Supervisor.Start` grava `ativa`
+  sem olhar datas (o frontend não usa mais esse endpoint).
+
+A cada tick, `PromoteScheduledLifecycle` devolve para `programada` toda
+campanha `ativa` com `start_date > today` (TZ SP) e retorna os ids em
+`demoted`. O scheduler chama `OnDemoted` → `Supervisor.StopWorkersForCampaign`,
+que para os workers das emissoras que nenhuma outra campanha ativa cobre. No
+dia do início a transição normal `programada → ativa` sobe tudo de novo. O
+passo roda **antes** de `programada → ativa`, cujo filtro de data não pega as
+linhas recém-rebaixadas. Não publica evento NATS (nada fora do supervisor
+reage a isso).
+
+> **Incidente 2026-10-01** (`FSJ - Pedido Jack`, 239 emissoras): a campanha
+> estava `ativa` com início em 02/10 e todas as emissoras rodaram worker um dia
+> antes, estourando a CPU da VM. Havia um segundo furo que impedia o alívio
+> via SQL: tirar a campanha de `ativa` não parava o worker — o reconciler o
+> recriava com lista de comerciais vazia e, dali em diante, "vazio == vazio"
+> era lido como "nada mudou", com o ffmpeg puxando o stream para ninguém.
+> Fix de dado: `UPDATE ... SET status='programada'` + restart da API. Fix de
+> código: DEMOTE acima + reconciler parando worker órfão. Cobertura:
+> `TestPromoteScheduledLifecycle_DemotesFutureAtiva`,
+> `TestLifecycleTick_DemotesFutureAtivaAndStopsWorkers`,
+> `TestReconcileOnce_StopsWorkerWithoutActiveCampaign`.
 
 ## Componentes
 
@@ -106,24 +149,36 @@ a cada `DefaultSchedulerInterval = 60s`.
 
 A cada tick:
 
-1. Em uma única transação executa os dois UPDATEs (ver §SQL abaixo) e captura
-   os IDs em `RETURNING`.
-2. Para cada ID em `activated`:
+1. Em uma única transação executa os UPDATEs (RECOVERY, DEMOTE e os dois do
+   §SQL abaixo) e captura os IDs em `RETURNING`.
+2. Para cada ID em `demoted`:
+   - Incrementa `radiocheck_campaign_lifecycle_transitions_total{from="ativa",to="programada"}`.
+   - Loga `lifecycle: campaign demoted` em nível WARN (estado que não devia
+     existir — vale investigar quem ativou).
+   - Invoca `OnDemoted` → `Supervisor.StopWorkersForCampaign(id)`.
+3. Para cada ID em `activated`:
    - Incrementa `radiocheck_campaign_lifecycle_transitions_total{from="programada",to="ativa"}`.
    - Publica `campaign.activated` em NATS.
    - Invoca o callback in-process `Supervisor.Start(id)` (reusa o caminho
      manual e idempotente — a 2ª chamada de `UpdateStatus("ativa")` é no-op).
-3. Para cada ID em `ended`:
+4. Para cada ID em `ended`:
    - Incrementa `radiocheck_campaign_lifecycle_transitions_total{from="ativa",to="concluida"}`.
    - Publica `campaign.ended` em NATS.
    - Invoca `Supervisor.stopWorkersForCampaign(id)` (apenas a metade que
      desliga workers — o status já foi movido para `concluida`).
-4. Atualiza o gauge `radiocheck_campaigns_by_status{status=...}` com o snapshot
+5. Atualiza o gauge `radiocheck_campaigns_by_status{status=...}` com o snapshot
    atual (mesmo sem transições, para não ficar stale).
 
 #### SQL principal
 
 ```sql
+-- ativa → programada (DEMOTE)
+UPDATE campaigns
+   SET status = 'programada', updated_at = now()
+ WHERE status = 'ativa'
+   AND start_date > (now() AT TIME ZONE 'America/Sao_Paulo')::date
+RETURNING id;
+
 -- programada → ativa
 UPDATE campaigns
    SET status = 'ativa', updated_at = now()
@@ -139,7 +194,7 @@ UPDATE campaigns
 RETURNING id;
 ```
 
-Ambos rodam em uma única transação (`PromoteScheduledLifecycle` em
+Todos rodam em uma única transação (`PromoteScheduledLifecycle` em
 `internal/catalog/campaigns.go`).
 
 #### Eventos NATS
