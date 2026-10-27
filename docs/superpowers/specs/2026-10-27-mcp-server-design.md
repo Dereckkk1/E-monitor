@@ -43,7 +43,8 @@ a categorização). Nenhum MCP chama outro — o modelo passa de um para outro c
 | D6 | Nível **sobe com os argumentos**: escrita que atinge **dia já veiculado** vira `critico` | Quase toda escrita do E-monitor mexe em categoria → cobrança. A regra pura jogaria tudo em `critico`; a escalada mantém `confirma` para o futuro e põe humano no meio quando muda número que o cliente já viu/foi faturado |
 | D7 | Relatórios: **dados estruturados + deep-link autenticado** para o portal (não URL assinada) | Contrato §3.6 proíbe URL assinada (credencial ao portador, fica gravada no histórico do chat). PDFs são gerados no navegador (`jsPDF`/`html2canvas`), então o MCP não os gera: devolve o link da tela já filtrada |
 | D8 | Token de confirmação de **uso único** via `INSERT` com chave única no Postgres | Contrato §6 nota 1; replay duplicaria criação |
-| D9 | Rate limit no **Redis** já existente (240/min por hash de token) | Contrato §3.1; Redis já está no compose |
+| D9 | Rate limit **em memória** (240/min por hash de token), reusando `auth.LoginRateLimiter` | Contrato §3.1. A API Go não tem cliente Redis (o `redis` do compose não é usado por ela) e roda num processo só; o limiter em memória já protege o `/auth/login` |
+| D10 | `DisableLocalhostProtection: true` no handler do SDK | Em prod o `cloudflared` fala com a API por `http://localhost:8080`; a proteção anti-DNS-rebinding do SDK daria 403 a todo pedido com `Host: api.e-monitor.online`. Todo pedido ao `/mcp` exige bearer, então rebinding não ganha nada |
 
 ## 3. Arquitetura
 
@@ -54,8 +55,8 @@ claude.ai / Claude Code / Gemini Enterprise
   API Go (chi) ──► /.well-known/oauth-protected-resource/mcp
               ──► /.well-known/oauth-authorization-server
               ──► /mcp/oauth/{register,authorize,token}   (CORS aberto, sem JWT)
-              ──► /v1/mcp/oauth/grant                     (JWT do portal, CORS de origem única)
-              ──► /v1/mcp/tokens, /v1/mcp/pendentes        (JWT admin)
+              ──► /v1/internal/mcp/oauth/{pedido,grant}    (JWT admin do portal)
+              ──► /v1/internal/mcp/tokens[, /pendentes]    (JWT admin)
               ──► POST /mcp  ─► mcpauth (token → user admin ativo) ─► ratelimit ─► McpServer novo por pedido
                                                                          │
                                                          tools ──► mesmos services/catalog das rotas HTTP
@@ -72,7 +73,7 @@ Pacote novo: `workers/internal/mcp/`
 | `server.go` | monta o `McpServer` por pedido, instruções, registro na ordem fixa |
 | `toolkit.go` | envelope de lista, `ressalvas`, erro `"<msg> [<código>]"`, deep-link builder |
 | `auth.go` | resolve bearer → token (pessoal ou OAuth) → usuário admin ativo; 401 com `WWW-Authenticate` |
-| `ratelimit.go` | 240/min por hash (Redis); falhas de auth por IP (60/15min); DCR 20/h por IP |
+| `auth.go` (rate limit) | 240/min por hash (em memória, `auth.LoginRateLimiter`); falhas de auth por IP (60/15min); DCR 20/h por IP |
 | `tokens/` | emissão/hash/revogação de tokens pessoais e OAuth (tabela única) |
 | `oauth/` | metadata, DCR (público + confidencial), authorize, grant, token, refresh com rotação |
 | `write/` | `Escrita{Nome, Nivel, EscalarPara, Preview, Executar}`, motor de níveis, token de confirmação, pendentes, varredor |
@@ -122,15 +123,18 @@ compartilhada (`in_slot + bonus`), `categorizer.Settle`, o tratamento de `cancel
   `unsafe-none` só nessa rota** (lição hub `b77b344e`: o COOP padrão separava o pop-up do Gemini
   do `window.opener`).
 - `/autorizar-ia` (frontend, exige login, **não** entra em `PUBLIC_ROUTES`) mostra quem pede e
-  envia a decisão para `POST /v1/mcp/oauth/grant` com o JWT normal (o JWT do E-monitor vive no
+  envia a decisão para `POST /v1/internal/mcp/oauth/grant` com o JWT normal (o JWT do E-monitor vive no
   navegador, não em cookie — por isso não há CSRF a tratar e o consentimento não pode ser HTML
   servido pela API). Anti-frame (`X-Frame-Options: DENY` / `frame-ancestors 'none'`) em
   `/autorizar-ia` e `/pendentes`.
 - Código de autorização: 10 min, uso único, morto se houve troca de senha depois da emissão.
 - 401 de `/mcp`: `WWW-Authenticate: Bearer realm="emonitor-mcp", [error="invalid_token",]
   resource_metadata="…", scope="emonitor:all"` (sem `error=` quando não veio credencial).
-- CORS aberto (`*`, sem credenciais, expondo `WWW-Authenticate`, `Mcp-Protocol-Version`,
-  `Mcp-Session-Id`) **por rota** em `/mcp`, `/mcp/oauth/*` e `/.well-known/*`. Nunca no `grant`.
+- CORS: a API do E-monitor já é `Access-Control-Allow-Origin: *` globalmente e autentica só por
+  header (JWT/bearer, nunca cookie), então não há CSRF a proteger e o `grant` pode ficar sob o
+  CORS global sem o defeito nº 5 da Plura (que era cookie + CORS aberto). O middleware global
+  ganha `Mcp-Protocol-Version`, `Mcp-Session-Id` e `Last-Event-ID` em `Allow-Headers` e expõe
+  `WWW-Authenticate`, `Mcp-Session-Id`, `Mcp-Protocol-Version` e `Retry-After`.
 
 ### 4.3 Rate limit
 
@@ -288,7 +292,7 @@ armadilha, "nunca invente ids, pergunte". Escritas terminam com `Nível: <nível
 
 | Fatia | Entrega | Pronto quando |
 |---|---|---|
-| **0 — Fundação** | spike do go-sdk; migrations (tokens, oauth_clients, oauth_codes, confirmacoes_usadas, acoes_pendentes); `/mcp` com auth + rate limit + 1 tool `ping`; OAuth completo (público + confidencial); `/autorizar-ia`; tela de tokens; `revoga-mcp`; auditoria; instruções | os 3 clientes (claude.ai, Claude Code, Gemini Enterprise) conectam e chamam `ping` em **dev e prod**; suíte OAuth (vetor PKCE RFC 7636, open redirect, reuso de code, refresh como access, rotação, confidencial com secret errado) verde |
+| **0 — Fundação** | go-sdk v1.8.0 (já suporta a spec 2026-07-28, `Stateless`, `JSONResponse`; pede go 1.25); migrations (tokens, oauth_clients, oauth_codes — `mcp_confirmacoes_usadas` nasce na Fatia 3 e `mcp_acoes_pendentes` na 4); `/mcp` com auth + rate limit + 1 tool `ping`; OAuth completo (público + confidencial); `/autorizar-ia`; tela de tokens; `revoga-mcp`; auditoria; instruções | os 3 clientes (claude.ai, Claude Code, Gemini Enterprise) conectam e chamam `ping` em **dev e prod**; suíte OAuth (vetor PKCE RFC 7636, open redirect, reuso de code, refresh como access, rotação, confidencial com secret errado) verde |
 | **1 — Leitura** | ~30 tools de §6 Fatia 1 + teste de inventário | cada tool tem teste de paridade "tool × handler HTTP devolvem o mesmo número" contra o banco de dev (restore de prod) |
 | **2 — Relatórios** | tools de §6 Fatia 2; telas lendo filtro da URL; avaliação | 10 perguntas de avaliação (padrão mcp-builder: só leitura, várias chamadas, resposta única verificável, estável) com ≥ 9/10 |
 | **3 — Escrita livre/confirma** | motor de níveis, token de confirmação, auditoria, tools de §6 Fatia 3 | teste do motor (token errado, args mudados, reuso, vencido) + paridade de efeito tool × rota HTTP |
