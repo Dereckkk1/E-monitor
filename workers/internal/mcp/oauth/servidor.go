@@ -67,3 +67,5 @@ func erroOAuth(w http.ResponseWriter, status int, codigo, descricao string) {
 func erroPortal(w http.ResponseWriter, status int, msg string) {
 	escreverJSON(w, status, map[string]string{"error": msg})
 }
+
+func zapErr(err error) zap.Field { return zap.Error(err) }
