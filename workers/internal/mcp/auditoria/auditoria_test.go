@@ -31,3 +31,18 @@ func TestRegistrar_GravaComOrigemMCP(t *testing.T) {
 	require.Equal(t, "mcp", origem)
 	require.Equal(t, "notebook", nome)
 }
+
+func TestRegistrar_OrigemNaoSobrescrevivel(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.x", "mcp_token", nil,
+		map[string]any{"origem": "manual"}))
+
+	var origem string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT metadata->>'origem' FROM audit_log WHERE actor_id = $1`, ator).Scan(&origem))
+	require.Equal(t, "mcp", origem)
+}

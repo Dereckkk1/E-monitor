@@ -316,22 +316,13 @@ func (r *Repo) SetClients(ctx context.Context, userID uuid.UUID, ids []uuid.UUID
 
 // SetPassword troca o hash de senha.
 func (r *Repo) SetPassword(ctx context.Context, id uuid.UUID, newHash string) error {
-	// Trocar ou redefinir a senha corta o MCP no mesmo statement: tokens
-	// pessoais, conexões OAuth e códigos ainda não trocados (spec do MCP
-	// 2026-10-27 §4.1). Desativar/rebaixar não precisa disto — o MCP relê
-	// role e is_active a cada pedido.
-	var n int
-	err := r.pool.QueryRow(ctx,
-		`WITH u AS (UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2 RETURNING id),
-		      t AS (UPDATE mcp_tokens SET revoked_at = NOW()
-		             WHERE user_id IN (SELECT id FROM u) AND revoked_at IS NULL),
-		      c AS (DELETE FROM mcp_oauth_codes WHERE user_id IN (SELECT id FROM u))
-		 SELECT COUNT(*) FROM u`,
-		newHash, id).Scan(&n)
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+		newHash, id)
 	if err != nil {
 		return err
 	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
 	return nil
