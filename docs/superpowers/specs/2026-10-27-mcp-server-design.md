@@ -107,7 +107,10 @@ compartilhada (`in_slot + bonus`), `categorizer.Settle`, o tratamento de `cancel
   que esteja no meio da transação no mesmo milissegundo da troca de senha pode sobreviver a ela
   (corrida entre snapshots; fechar exigiria ordenar locks entre as duas transações).
 - CLI `revoga-mcp` (`--listar`, `--email X [--aplicar]`, `--todos [--aplicar]`), dry-run sem
-  `--aplicar`, uma linha de auditoria por item. **Duas linhas no `workers.Dockerfile`** (regra 6.7).
+  `--aplicar` (o dry-run conta exatamente o que o `--aplicar` revoga; `--todos` também apaga os
+  códigos OAuth pendentes), uma linha de auditoria por pessoa, com `actor_type 'cli'` e o alvo em
+  `metadata`. CLI `registra-cliente-mcp` cadastra o cliente confidencial (§4.2). **Duas linhas no
+  `workers.Dockerfile` para cada CLI** (regra 6.7).
 - O token do MCP **só abre `/mcp`**. `auth.RequireJWT` continua recusando-o (prefixo diferente
   do JWT; teste garante).
 - Tela "Integração com IA" em `/account`: criar (mostra uma vez), listar, revogar.
@@ -117,18 +120,24 @@ compartilhada (`in_slot + bonus`), `categorizer.Settle`, o tratamento de `cancel
 - Descoberta: RFC 9728 (`/.well-known/oauth-protected-resource/mcp`) e RFC 8414
   (`/.well-known/oauth-authorization-server`); issuer pelo host público (`MCP_ORIGEM_PUBLICA`),
   `iss` no redirect (RFC 9207).
-- DCR aberto (RFC 7591), 20/h por IP (`CF-Connecting-IP`, IPv6 por /64 — os cabeçalhos que o
-  `middleware.RealIP` lê são forjáveis atrás do Cloudflare) e no máximo 500 clientes que nunca
-  pegaram token. `client_id` sozinho não dá acesso a nada.
-- **Destinos permitidos (decisão do Dereck, 2026-10-27):** o registro só aceita `redirect_uri`
-  https cujo host esteja em `MCP_REDIRECT_HOSTS` (padrão `claude.ai`, `claude.com`,
-  `vertexaisearch.cloud.google.com`), mais loopback http para o Claude Code. Fecha o phishing de
-  consentimento: sem isso, qualquer um registra um "Claude" com destino próprio (ou homógrafo
-  `сlaude.ai`) e um admin que clique em Autorizar entrega 30 dias de acesso total. Host não-ASCII
-  é recusado e `client_name` perde caracteres de controle/formatação (U+202E). Cliente novo (outro
-  assistente) = acrescentar o host na variável, sem deploy de código.
+- DCR aberto (RFC 7591) **só para cliente público**, 20/h por IP (`CF-Connecting-IP`, IPv6 por
+  /64 — os cabeçalhos que o `middleware.RealIP` lê são forjáveis atrás do Cloudflare). No máximo
+  500 clientes que nunca pegaram token: lotou, sai o pendente público mais antigo (recusar o novo
+  deixaria um atacante bloquear toda conexão nova lotando o teto). `client_id` sozinho não dá
+  acesso a nada.
+- **Destinos permitidos (decisão do Dereck, 2026-10-27):** o registro aberto só aceita
+  `redirect_uri` https **igual a um callback** de `MCP_REDIRECT_URIS` (padrão
+  `https://claude.ai/api/mcp/auth_callback` e `https://claude.com/api/mcp/auth_callback`; sem porta,
+  caminho ou query diferentes), mais loopback http em qualquer porta para o Claude Code. Fecha o
+  phishing de consentimento: sem isso, qualquer um registra um "Claude" com destino próprio (ou
+  homógrafo `сlaude.ai`) e um admin que clique em Autorizar entrega 30 dias de acesso total. Host
+  não-ASCII é recusado, esquema e host são guardados em minúsculas e `client_name` perde
+  caracteres de controle/formatação (U+202E). Cliente novo (outro assistente) = acrescentar o
+  callback na variável, sem deploy de código.
 - **Cliente público**: PKCE S256 obrigatório (challenge base64url de 43 chars).
-- **Cliente confidencial (Gemini Enterprise)**: `token_endpoint_auth_method` = `client_secret_post`
+- **Cliente confidencial (Gemini Enterprise)**: **nunca pelo registro aberto** — o admin cadastra
+  na VM com o CLI `registra-cliente-mcp --nome … --redirect …` (sem lista de destinos: quem decide
+  é o admin). `token_endpoint_auth_method` = `client_secret_post`
   ou `client_secret_basic`; secret `emonitor_mcs_…` devolvido uma vez, só hash guardado; pode omitir
   PKCE, mas PKCE parcial é recusado; secret exigido em **toda** ida ao `/token` (code e refresh),
   verificado **antes** de consumir o code. Redirect do Gemini:
