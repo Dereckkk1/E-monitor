@@ -1,6 +1,20 @@
 -- MCP do E-monitor — fundação (spec docs/superpowers/specs/2026-10-27-mcp-server-design.md §4).
--- Só CREATE TABLE: nenhuma linha existente é tocada, então o shadow_migration_test
--- do deploy.sh não tem o que colidir (regra 4.8).
+-- Cria 3 tabelas novas, uma função e um trigger em `users`. Nenhuma linha
+-- existente é tocada, então o shadow_migration_test do deploy.sh não tem o que
+-- colidir (regra 4.8).
+--
+-- SAFETY (convenção 0062/0068 — migrations que tocam `users`):
+-- lock_timeout/statement_timeout: CREATE TRIGGER em `users` pede um lock que
+-- conflita com DML na tabela. No deploy a API ANTIGA continua servindo login
+-- (segurando ROW EXCLUSIVE em users via last_login_at) enquanto o `migrate`
+-- roda; sem timeout o CREATE TRIGGER entra na fila FIFO de locks e prende atrás
+-- de si toda escrita em `users`. Com o timeout, a migration falha rápido (e o
+-- deploy pode ser repetido) em vez de virar outage ao vivo.
+
+BEGIN;
+
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
 
 -- Cliente OAuth registrado por DCR (RFC 7591). client_secret_hash NULL = cliente
 -- público (PKCE obrigatório); preenchido = confidencial (Gemini Enterprise).
@@ -49,7 +63,9 @@ CREATE TABLE mcp_oauth_codes (
 -- sync do hub, bloqueio do /admin/monitoring) e para que reativar alguém não
 -- ressuscite tokens antigos.
 CREATE FUNCTION mcp_revogar_credenciais_do_usuario() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
 BEGIN
     UPDATE mcp_tokens SET revoked_at = NOW() WHERE user_id = NEW.id AND revoked_at IS NULL;
     DELETE FROM mcp_oauth_codes WHERE user_id = NEW.id;
@@ -65,3 +81,5 @@ CREATE TRIGGER users_revoga_mcp
        OR (OLD.role = 'admin' AND NEW.role IS DISTINCT FROM 'admin')
        OR (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL))
     EXECUTE FUNCTION mcp_revogar_credenciais_do_usuario();
+
+COMMIT;

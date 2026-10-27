@@ -254,8 +254,9 @@ func TestStore_ListarConexoesUmaLinhaPorConexao(t *testing.T) {
 		VALUES ('emc_l', 'L', ARRAY['https://l.test/cb'])`)
 	require.NoError(t, err)
 	cid := "emc_l"
+	var maisNovo *tokens.Token
 	for i := 0; i < 2; i++ {
-		_, _, err = st.Emitir(ctx, tokens.Novo{UserID: dono, Tipo: tokens.TipoOAuthRefresh, Nome: "L", ClientID: &cid, Validade: time.Hour})
+		_, maisNovo, err = st.Emitir(ctx, tokens.Novo{UserID: dono, Tipo: tokens.TipoOAuthRefresh, Nome: "L", ClientID: &cid, Validade: time.Hour})
 		require.NoError(t, err)
 		_, _, err = st.Emitir(ctx, tokens.Novo{UserID: dono, Tipo: tokens.TipoPessoal, Nome: "p", Validade: time.Hour})
 		require.NoError(t, err)
@@ -264,6 +265,14 @@ func TestStore_ListarConexoesUmaLinhaPorConexao(t *testing.T) {
 	conexoes, err := st.ListarConexoes(ctx, dono)
 	require.NoError(t, err)
 	require.Len(t, conexoes, 3, "2 pessoais + 1 conexão OAuth (os 2 refresh do mesmo client colapsam)")
+	var oauth []tokens.Token
+	for _, c := range conexoes {
+		if c.ClientID != nil {
+			oauth = append(oauth, c)
+		}
+	}
+	require.Len(t, oauth, 1)
+	require.Equal(t, maisNovo.ID, oauth[0].ID, "a linha da conexão é o refresh mais novo")
 	for i := 1; i < len(conexoes); i++ {
 		require.False(t, conexoes[i].CreatedAt.After(conexoes[i-1].CreatedAt), "created_at DESC")
 	}
