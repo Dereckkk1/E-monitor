@@ -12,13 +12,18 @@ import (
 	"radiocheck/internal/mcp/tokens"
 )
 
-var ErrClienteDesconhecido = errors.New("mcp: cliente OAuth desconhecido")
+var (
+	ErrClienteDesconhecido = errors.New("mcp: cliente OAuth desconhecido")
+	ErrMuitosPendentes     = errors.New("mcp: teto de clientes OAuth pendentes atingido")
+)
 
 type Cliente struct {
 	ClientID     string
 	Nome         string
 	RedirectURIs []string
 	Confidencial bool
+	// Ativado: já chegou ao /token alguma vez (first_token_at preenchido).
+	Ativado bool
 }
 
 type Clientes struct {
@@ -29,8 +34,10 @@ type Clientes struct {
 // Registrar cria o cliente (RFC 7591). Devolve o client_secret em claro só
 // para confidencial, e só agora. Faz a faxina de quem nunca chegou ao
 // /token: 1 dia para público, 7 para confidencial (o Gemini é configurado à
-// mão e pode demorar).
-func (c *Clientes) Registrar(ctx context.Context, nome string, uris []string, confidencial bool) (*Cliente, string, error) {
+// mão e pode demorar). Com maxPendentes clientes nessa situação, recusa com
+// ErrMuitosPendentes; o teto vai no próprio INSERT (um comando), então sob
+// concorrência ele é aproximado — basta para conter o crescimento.
+func (c *Clientes) Registrar(ctx context.Context, nome string, uris []string, confidencial bool, maxPendentes int) (*Cliente, string, error) {
 	if _, err := c.db.Exec(ctx,
 		`DELETE FROM mcp_oauth_clients
 		  WHERE first_token_at IS NULL
@@ -48,11 +55,16 @@ func (c *Clientes) Registrar(ctx context.Context, nome string, uris []string, co
 		h := tokens.Hash(c.segredo, segredo)
 		hash = &h
 	}
-	_, err := c.db.Exec(ctx,
+	tag, err := c.db.Exec(ctx,
 		`INSERT INTO mcp_oauth_clients (client_id, client_secret_hash, nome, redirect_uris)
-		 VALUES ($1, $2, $3, $4)`, cli.ClientID, hash, nome, uris)
+		 SELECT $1::text, $2::text, $3::text, $4::text[]
+		  WHERE (SELECT COUNT(*) FROM mcp_oauth_clients WHERE first_token_at IS NULL) < $5::int`,
+		cli.ClientID, hash, nome, uris, maxPendentes)
 	if err != nil {
 		return nil, "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, "", ErrMuitosPendentes
 	}
 	return cli, segredo, nil
 }
@@ -61,8 +73,9 @@ func (c *Clientes) Buscar(ctx context.Context, clientID string) (*Cliente, error
 	cli := Cliente{ClientID: clientID}
 	var hash *string
 	err := c.db.QueryRow(ctx,
-		`SELECT nome, redirect_uris, client_secret_hash FROM mcp_oauth_clients WHERE client_id = $1`,
-		clientID).Scan(&cli.Nome, &cli.RedirectURIs, &hash)
+		`SELECT nome, redirect_uris, client_secret_hash, first_token_at IS NOT NULL
+		   FROM mcp_oauth_clients WHERE client_id = $1`,
+		clientID).Scan(&cli.Nome, &cli.RedirectURIs, &hash, &cli.Ativado)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrClienteDesconhecido
 	}

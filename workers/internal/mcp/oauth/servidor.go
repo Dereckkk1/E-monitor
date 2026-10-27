@@ -27,22 +27,30 @@ type Servidor struct {
 	Origem    string // origem pública da API, ex. https://api.e-monitor.online
 	Portal    string // origem do frontend, ex. https://e-monitor.online
 	Registros *auth.LoginRateLimiter
-	Log       *zap.Logger
-	agora     func() time.Time
+	// MaxClientesPendentes é o teto de clientes registrados que nunca chegaram
+	// ao /token. O DCR é aberto e o rate limit é por IP; quem tem muitos IPs
+	// ainda encheria a tabela sem este teto.
+	MaxClientesPendentes int
+	Log                  *zap.Logger
+	agora                func() time.Time
 }
 
+// NovoServidor monta o authorization server. Quem chama garante que segredo
+// (o JWT_SECRET) tem pelo menos 32 bytes — o NovoModulo confere isso antes;
+// aqui ele assina o pedido e salga os hashes, e não há segunda checagem.
 func NovoServidor(pool *pgxpool.Pool, store *tokens.Store, segredo []byte, origem, portal string, log *zap.Logger) *Servidor {
 	return &Servidor{
-		Pool:      pool,
-		Tokens:    store,
-		Clientes:  &Clientes{db: pool, segredo: segredo},
-		Codigos:   &Codigos{db: pool, segredo: segredo},
-		Segredo:   segredo,
-		Origem:    origem,
-		Portal:    portal,
-		Registros: auth.NewLoginRateLimiter(20, time.Hour), // contrato §5: 20 DCR/h por IP
-		Log:       log,
-		agora:     time.Now,
+		Pool:                 pool,
+		Tokens:               store,
+		Clientes:             &Clientes{db: pool, segredo: segredo},
+		Codigos:              &Codigos{db: pool, segredo: segredo},
+		Segredo:              segredo,
+		Origem:               origem,
+		Portal:               portal,
+		Registros:            auth.NewLoginRateLimiter(20, time.Hour), // contrato §5: 20 DCR/h por IP
+		MaxClientesPendentes: 500,
+		Log:                  log,
+		agora:                time.Now,
 	}
 }
 

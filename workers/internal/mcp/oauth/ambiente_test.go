@@ -89,12 +89,31 @@ func (a *ambiente) fazer(req *http.Request) (int, map[string]any) {
 
 // token faz POST form no /token; basic, se não vazio, é [id, segredo].
 func (a *ambiente) token(form url.Values, basic ...string) (int, map[string]any) {
+	return a.fazer(a.pedidoToken(form, basic...))
+}
+
+// pedidoToken monta o POST do /token (para quem precisa ler cabeçalhos).
+func (a *ambiente) pedidoToken(form url.Values, basic ...string) *http.Request {
 	req, _ := http.NewRequest(http.MethodPost, a.http.URL+"/mcp/oauth/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if len(basic) == 2 {
 		req.SetBasicAuth(url.QueryEscape(basic[0]), url.QueryEscape(basic[1]))
 	}
-	return a.fazer(req)
+	return req
+}
+
+// ativar faz de conta que o cliente já chegou ao /token (first_token_at):
+// só então o /authorize devolve erro por redirect.
+func (a *ambiente) ativar(clientID string) {
+	_, err := a.pool.Exec(a.ctx, `UPDATE mcp_oauth_clients SET first_token_at = NOW() WHERE client_id = $1`, clientID)
+	require.NoError(a.t, err)
+}
+
+// contar devolve um COUNT(*) qualquer.
+func (a *ambiente) contar(sql string, args ...any) int {
+	var n int
+	require.NoError(a.t, a.pool.QueryRow(a.ctx, sql, args...).Scan(&n))
+	return n
 }
 
 // autorizar chama o /authorize sem seguir o redirect.

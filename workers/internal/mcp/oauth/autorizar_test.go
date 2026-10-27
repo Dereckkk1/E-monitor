@@ -51,6 +51,7 @@ func TestAutorizar_RecusasComRedirect(t *testing.T) {
 	a := novoAmbiente(t)
 	_, reg := a.registrar(map[string]any{"client_name": "Claude", "redirect_uris": []string{redirectClaude}})
 	id := reg["client_id"].(string)
+	a.ativar(id) // cliente novo não recebe erro por redirect (ver TestAutorizar_ClienteNovoNaoRecebeErroPorRedirect)
 	casos := map[string]func(url.Values){
 		"invalid_request/sem PKCE":         func(p url.Values) { p.Del("code_challenge"); p.Del("code_challenge_method") },
 		"invalid_request/PKCE pela metade": func(p url.Values) { p.Del("code_challenge_method") },
@@ -105,4 +106,93 @@ func TestConceder_GravaAuditoria(t *testing.T) {
 		`SELECT COUNT(*) FROM audit_log WHERE actor_id = $1 AND action = 'mcp.oauth.autorizado' AND metadata->>'origem' = 'mcp'`,
 		a.admin).Scan(&n))
 	require.Equal(t, 1, n)
+}
+
+// RFC 9700 §4.11.2: o DCR é aberto, então um cliente que nunca chegou ao
+// /token pode ser de qualquer um — redirecionar o erro dele faria do
+// /authorize um open redirect com a nossa origem na frente.
+func TestAutorizar_ClienteNovoNaoRecebeErroPorRedirect(t *testing.T) {
+	a := novoAmbiente(t)
+	for _, corpo := range []map[string]any{
+		{"client_name": "pub", "redirect_uris": []string{redirectClaude}},
+		{"client_name": "conf", "token_endpoint_auth_method": "client_secret_post", "redirect_uris": []string{redirectClaude}},
+	} {
+		st, reg := a.registrar(corpo)
+		require.Equal(t, http.StatusCreated, st)
+		p := paramsAutorizar(reg["client_id"].(string))
+		p.Set("response_type", "x")
+		res := a.autorizar(p)
+		require.Equal(t, http.StatusBadRequest, res.StatusCode, corpo["client_name"])
+		require.Empty(t, res.Header.Get("Location"), corpo["client_name"])
+
+		a.ativar(reg["client_id"].(string))
+		res = a.autorizar(p)
+		require.Equal(t, http.StatusFound, res.StatusCode, "depois do primeiro token o erro volta por redirect")
+	}
+}
+
+func TestAutorizar_LoopbackComOutraPorta(t *testing.T) {
+	a := novoAmbiente(t)
+	_, reg := a.registrar(map[string]any{"client_name": "Claude Code", "redirect_uris": []string{"http://localhost:33418/callback"}})
+	id := reg["client_id"].(string)
+	p := paramsAutorizar(id)
+	p.Set("redirect_uri", "http://localhost:5555/callback")
+	res := a.autorizar(p)
+	require.Equal(t, http.StatusFound, res.StatusCode)
+	loc, _ := url.Parse(res.Header.Get("Location"))
+	require.Equal(t, "portal.teste", loc.Host)
+
+	st, out := a.postJSON("/v1/internal/mcp/oauth/grant", a.jwt, map[string]any{"pedido": loc.Query().Get("pedido"), "aprovar": true})
+	require.Equal(t, http.StatusOK, st)
+	volta, _ := url.Parse(out["redirect"].(string))
+	require.Equal(t, "localhost:5555", volta.Host, "o pedido leva o redirect que foi pedido")
+	code := volta.Query().Get("code")
+
+	// O /token compara exato com o redirect do código, não com o registrado.
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {id}, "code": {code},
+		"redirect_uri": {"http://localhost:5555/callback"}, "code_verifier": {verifierRFC}}
+	st, tok := a.token(form)
+	require.Equal(t, http.StatusOK, st, tok)
+
+	p.Set("redirect_uri", "http://127.0.0.1:5555/callback")
+	res = a.autorizar(p)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode, "outro host de loopback não casa")
+}
+
+func TestAutorizar_ResourceNormalizado(t *testing.T) {
+	a := novoAmbiente(t)
+	_, reg := a.registrar(map[string]any{"client_name": "Claude", "redirect_uris": []string{redirectClaude}})
+	id := reg["client_id"].(string)
+	a.ativar(id)
+	for rec, ok := range map[string]bool{
+		"https://api.teste/mcp":   true,
+		"HTTPS://API.TESTE/mcp/":  true,
+		"https://api.teste/mcp//": false,
+		"https://api.teste/MCP":   false,
+		"https://api.teste":       false,
+	} {
+		p := paramsAutorizar(id)
+		p.Set("resource", rec)
+		res := a.autorizar(p)
+		require.Equal(t, http.StatusFound, res.StatusCode, rec)
+		loc, _ := url.Parse(res.Header.Get("Location"))
+		if ok {
+			require.Equal(t, "portal.teste", loc.Host, rec)
+		} else {
+			require.Equal(t, "invalid_target", loc.Query().Get("error"), rec)
+		}
+	}
+}
+
+func TestConceder_SucessoLevaIssEState(t *testing.T) {
+	a := novoAmbiente(t)
+	_, reg := a.registrar(map[string]any{"client_name": "Claude", "redirect_uris": []string{redirectClaude}})
+	res := a.autorizar(paramsAutorizar(reg["client_id"].(string)))
+	loc, _ := url.Parse(res.Header.Get("Location"))
+	st, out := a.postJSON("/v1/internal/mcp/oauth/grant", a.jwt, map[string]any{"pedido": loc.Query().Get("pedido"), "aprovar": true})
+	require.Equal(t, http.StatusOK, st)
+	volta, _ := url.Parse(out["redirect"].(string))
+	require.Equal(t, "https://api.teste", volta.Query().Get("iss"), "RFC 9207")
+	require.Equal(t, "st-1", volta.Query().Get("state"))
+	require.NotEmpty(t, volta.Query().Get("code"))
 }
