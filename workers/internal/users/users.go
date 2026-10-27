@@ -20,8 +20,12 @@ import (
 
 // User é a projeção completa de uma linha em users.
 type User struct {
-	ID           uuid.UUID  `json:"id"`
-	Email        string     `json:"email"`
+	ID    uuid.UUID `json:"id"`
+	Email string    `json:"email"`
+	// Username é a segunda forma de login (a primeira é o e-mail). Opcional e
+	// só o admin define; nil = a conta entra só pelo e-mail. Sempre minúsculo
+	// (ver NormalizeUsername).
+	Username     *string    `json:"username"`
 	PasswordHash string     `json:"-"`
 	Role         string     `json:"role"`
 	ClientID     *uuid.UUID `json:"client_id,omitempty"`
@@ -57,7 +61,7 @@ func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 // userColumns é a projeção de leitura. O array_agg correlacionado traz a
 // carteira sem N+1. Exige que a tabela apareça como `users` (sem alias) na
 // query — é o caso de todos os SELECTs deste arquivo.
-const userColumns = `id, email, password_hash, role, client_id, name, phone,
+const userColumns = `id, email, username, password_hash, role, client_id, name, phone,
                      is_active, receive_alert_emails, receive_post_sale_emails,
                      deleted_at, last_login_at, created_at, updated_at,
                      COALESCE((SELECT array_agg(uc.client_id ORDER BY uc.created_at, uc.client_id)
@@ -65,7 +69,7 @@ const userColumns = `id, email, password_hash, role, client_id, name, phone,
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.ClientID,
+	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash, &u.Role, &u.ClientID,
 		&u.Name, &u.Phone, &u.IsActive, &u.ReceiveAlertEmails, &u.ReceivePostSaleEmails,
 		&u.DeletedAt, &u.LastLoginAt,
 		&u.CreatedAt, &u.UpdatedAt, &u.ClientIDs)
@@ -78,7 +82,9 @@ func scanUser(row pgx.Row) (*User, error) {
 // CreateInput agrupa os campos pra inserir um usuário.
 // PasswordHash já deve vir bcrypted; o repo não hashifica.
 type CreateInput struct {
-	Email        string
+	Email string
+	// Username já normalizado (NormalizeUsername). nil = sem username.
+	Username     *string
 	PasswordHash string
 	Role         string // 'admin', 'operator' ou 'viewer'
 	ClientID     *uuid.UUID
@@ -102,12 +108,13 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*User, error) {
 	var id uuid.UUID
 	if err := r.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, role, client_id, name, phone,
-		                    receive_alert_emails, receive_post_sale_emails, hub_id)
+		                    receive_alert_emails, receive_post_sale_emails, hub_id,
+		                    username)
 		 VALUES (LOWER($1), $2, $3, $4, $5, $6,
-		         COALESCE($7, TRUE), COALESCE($8, FALSE), $9)
+		         COALESCE($7, TRUE), COALESCE($8, FALSE), $9, $10)
 		 RETURNING id`,
 		in.Email, in.PasswordHash, in.Role, in.ClientID, in.Name, in.Phone,
-		in.ReceiveAlertEmails, in.ReceivePostSaleEmails, in.HubID,
+		in.ReceiveAlertEmails, in.ReceivePostSaleEmails, in.HubID, in.Username,
 	).Scan(&id); err != nil {
 		return nil, err
 	}
@@ -128,6 +135,17 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (*User, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT `+userColumns+` FROM users
 		 WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL`, email)
+	return scanUser(row)
+}
+
+// GetByUsername busca por username entre não-deletados, com a mesma
+// normalização do cadastro: "  Joao.Silva " acha "joao.silva". Valor fora do
+// formato não é erro, só não acha ninguém (pgx.ErrNoRows) — o login não pode
+// distinguir "formato inválido" de "não existe", senão vira oráculo.
+func (r *Repo) GetByUsername(ctx context.Context, username string) (*User, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users
+		 WHERE username = LOWER(BTRIM($1)) AND deleted_at IS NULL`, username)
 	return scanUser(row)
 }
 
@@ -173,6 +191,9 @@ type UpdateInput struct {
 	ReceiveAlertEmails *bool
 	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda.
 	ReceivePostSaleEmails *bool
+	// Username: nil = não mudar; "" = remover (a conta volta a entrar só pelo
+	// e-mail); qualquer outro valor já deve vir normalizado (NormalizeUsername).
+	Username *string
 }
 
 // Update aplica as alterações de UpdateInput e retorna o usuário atualizado.
@@ -207,6 +228,13 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	}
 	if in.ReceivePostSaleEmails != nil {
 		push("receive_post_sale_emails", *in.ReceivePostSaleEmails)
+	}
+	if in.Username != nil {
+		if *in.Username == "" {
+			sets = append(sets, "username = NULL")
+		} else {
+			push("username", *in.Username)
+		}
 	}
 
 	args = append(args, id)
@@ -409,9 +437,10 @@ func (r *Repo) List(ctx context.Context, in ListInput) ([]User, int, error) {
 		like := "%" + strings.ToLower(in.Q) + "%"
 		where = append(where,
 			"(LOWER(name) LIKE $"+strconv.Itoa(idx)+
-				" OR LOWER(email) LIKE $"+strconv.Itoa(idx+1)+")")
-		args = append(args, like, like)
-		idx += 2
+				" OR LOWER(email) LIKE $"+strconv.Itoa(idx+1)+
+				" OR username LIKE $"+strconv.Itoa(idx+2)+")")
+		args = append(args, like, like, like)
+		idx += 3
 	}
 
 	whereSQL := strings.Join(where, " AND ")

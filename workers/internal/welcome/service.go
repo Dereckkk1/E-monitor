@@ -180,6 +180,7 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 	return &Resolved{
 		Name:          row.Name,
 		Email:         row.Email,
+		Username:      row.Username,
 		Password:      password,
 		Role:          apiRole(row.Role),
 		ClientName:    row.ClientName,
