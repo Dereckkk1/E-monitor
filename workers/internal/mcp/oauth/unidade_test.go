@@ -1,6 +1,8 @@
 package oauth
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -34,6 +36,10 @@ func TestRedirectValido(t *testing.T) {
 		"javascript:alert(1)":                                    false,
 		"https:///sem-host":                                      false,
 		"":                                                       false,
+		"https://evil@claude.ai":                                 false, // userinfo engana quem lê a URL
+		"https://evil@claude.ai/cb":                              false,
+		"http://localhost.evil.com/cb":                           false,
+		"http://[::1]:9000/cb":                                   true,
 	}
 	for uri, esperado := range casos {
 		require.Equal(t, esperado, redirectValido(uri), uri)
@@ -46,6 +52,62 @@ func TestComParametros_PreservaQueryEIgnoraVazios(t *testing.T) {
 	require.Equal(t, "1", u.Query().Get("a"))
 	require.Equal(t, "c", u.Query().Get("code"))
 	require.False(t, u.Query().Has("state"))
+}
+
+// OAuth 2.1 §4.1.2: a query registrada é mantida como veio; só acrescentamos.
+func TestComParametros_QueryRegistradaIntacta(t *testing.T) {
+	out := comParametros("https://x.test/cb?a=b%7e1", map[string]string{"code": "C", "state": "s t"})
+	require.Equal(t, "https://x.test/cb?a=b%7e1&code=C&state=s+t", out)
+	require.Equal(t, "https://x.test/cb?code=C", comParametros("https://x.test/cb", map[string]string{"code": "C"}))
+	require.Equal(t, "https://x.test/cb?z=1", comParametros("https://x.test/cb?z=1", map[string]string{"code": ""}))
+}
+
+func TestRedirectRegistrado(t *testing.T) {
+	registrados := []string{redirectClaude, "http://localhost:33418/callback?x=1", "http://127.0.0.1/cb", "http://[::1]:9000/cb"}
+	casos := map[string]bool{
+		redirectClaude:                                true,
+		"http://localhost:33418/callback?x=1":         true,
+		"http://localhost:5555/callback?x=1":          true, // RFC 8252 §7.3: porta livre em loopback
+		"http://localhost/callback?x=1":               true,
+		"http://127.0.0.1:61000/cb":                   true,
+		"http://[::1]:1234/cb":                        true,
+		"http://localhost:5555/callback":              false, // query diferente
+		"http://localhost:5555/callback?x=1#f":        false,
+		"http://localhost:5555/outro?x=1":             false,
+		"http://127.0.0.1:5555/callback?x=1":          false, // host diferente do registrado
+		"http://evil@localhost:5555/callback?x=1":     false,
+		"https://localhost:5555/callback?x=1":         false, // só http loopback ganha a porta livre
+		"https://claude.ai:444/api/mcp/auth_callback": false, // https: comparação exata
+		"https://claude.ai/api/mcp/auth_callback/":    false,
+		"": false,
+	}
+	for pedido, esperado := range casos {
+		require.Equal(t, esperado, redirectRegistrado(registrados, pedido), pedido)
+	}
+}
+
+func TestIPDe(t *testing.T) {
+	req := func(remote string, cabecalhos map[string]string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = remote
+		for k, v := range cabecalhos {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	// CF-Connecting-IP vence o que veio em RemoteAddr (que o RealIP pode ter
+	// trocado por um X-Real-IP forjado).
+	require.Equal(t, "203.0.113.7", IPDe(req("10.0.0.9:1234", map[string]string{"CF-Connecting-IP": "203.0.113.7", "X-Real-IP": "10.0.0.9"})))
+	require.Equal(t, "10.0.0.9", IPDe(req("10.0.0.9:1234", nil)), "sem Cloudflare: host de RemoteAddr")
+	require.Equal(t, "10.0.0.9", IPDe(req("10.0.0.9", nil)), "RemoteAddr sem porta")
+	// IPv6: a chave é o /64.
+	a := IPDe(req("[2001:db8:1:2:aaaa::1]:443", nil))
+	b := IPDe(req("[2001:db8:1:2:bbbb::9]:443", nil))
+	c := IPDe(req("[2001:db8:1:3::1]:443", nil))
+	require.Equal(t, a, b, "mesmo /64, mesma chave")
+	require.NotEqual(t, a, c, "outro /64, outra chave")
+	require.Equal(t, "2001:db8:1:2::/64", IPDe(req("1.1.1.1:1", map[string]string{"CF-Connecting-IP": "2001:db8:1:2::ffff"})))
+	require.Equal(t, "192.0.2.1", IPDe(req("[::ffff:192.0.2.1]:80", nil)), "IPv4 mapeado continua IPv4")
 }
 
 func TestPedido_AssinaturaEVencimento(t *testing.T) {

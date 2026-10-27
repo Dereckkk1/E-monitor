@@ -45,7 +45,13 @@ func (s *Servidor) Token(w http.ResponseWriter, r *http.Request) {
 // segredo em TODA ida ao /token, conferido antes de qualquer consumo.
 func (s *Servidor) autenticarCliente(w http.ResponseWriter, r *http.Request) (*Cliente, bool) {
 	id, segredo := r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
-	if bid, bsec, ok := r.BasicAuth(); ok {
+	bid, bsec, usouBasic := r.BasicAuth()
+	if usouBasic {
+		// RFC 6749 §2.3: um único método de autenticação por pedido.
+		if segredo != "" {
+			erroOAuth(w, http.StatusBadRequest, "invalid_request", "use Basic ou client_secret no corpo, não os dois")
+			return nil, false
+		}
 		bid, _ = url.QueryUnescape(bid)
 		bsec, _ = url.QueryUnescape(bsec)
 		if id != "" && id != bid {
@@ -54,9 +60,16 @@ func (s *Servidor) autenticarCliente(w http.ResponseWriter, r *http.Request) (*C
 		}
 		id, segredo = bid, bsec
 	}
+	// RFC 6749 §5.2: 401 a quem se autenticou por Basic leva o desafio Basic.
+	recusarCliente := func(descricao string) {
+		if usouBasic {
+			w.Header().Set("WWW-Authenticate", `Basic realm="emonitor-mcp"`)
+		}
+		erroOAuth(w, http.StatusUnauthorized, "invalid_client", descricao)
+	}
 	cli, err := s.Clientes.Buscar(r.Context(), id)
 	if errors.Is(err, ErrClienteDesconhecido) {
-		erroOAuth(w, http.StatusUnauthorized, "invalid_client", "cliente desconhecido")
+		recusarCliente("cliente desconhecido")
 		return nil, false
 	}
 	if err != nil {
@@ -72,7 +85,7 @@ func (s *Servidor) autenticarCliente(w http.ResponseWriter, r *http.Request) (*C
 			return nil, false
 		}
 		if !ok {
-			erroOAuth(w, http.StatusUnauthorized, "invalid_client", "client_secret ausente ou errado")
+			recusarCliente("client_secret ausente ou errado")
 			return nil, false
 		}
 	}
@@ -99,18 +112,27 @@ func (s *Servidor) trocarCodigo(w http.ResponseWriter, r *http.Request, cli *Cli
 	}
 	// Daqui para baixo, toda recusa QUEIMA o código (commit do consumo).
 	recusar := func(descricao string) {
-		_ = tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			// O código pode ter sobrevivido; ainda vence em 10 minutos.
+			s.Log.Warn("mcp oauth: queimar código recusado", zapErr(err))
+		}
 		erroOAuth(w, http.StatusBadRequest, "invalid_grant", descricao)
 	}
 	if cod.ClientID != cli.ClientID || cod.RedirectURI != r.PostForm.Get("redirect_uri") {
 		recusar("o código não pertence a este cliente ou redirect_uri")
 		return
 	}
+	verifier := r.PostForm.Get("code_verifier")
 	if cod.Desafio != nil {
-		if !conferirPKCE(r.PostForm.Get("code_verifier"), *cod.Desafio) {
+		if !conferirPKCE(verifier, *cod.Desafio) {
 			recusar("code_verifier não confere")
 			return
 		}
+	} else if verifier != "" {
+		// RFC 9700 §2.1.1: verifier sem challenge é tentativa de downgrade —
+		// alguém tirou o code_challenge do /authorize no caminho.
+		recusar("code_verifier sem code_challenge")
+		return
 	} else if !cli.Confidencial {
 		recusar("código sem PKCE para cliente público")
 		return
@@ -151,7 +173,9 @@ func (s *Servidor) renovar(w http.ResponseWriter, r *http.Request, cli *Cliente)
 	}
 	if _, err := st.DonoAdminAtivo(ctx, velho.UserID); err != nil {
 		if errors.Is(err, tokens.ErrNaoEncontrado) {
-			_ = tx.Commit(ctx) // rebaixado/desativado: o refresh morre
+			if err := tx.Commit(ctx); err != nil { // rebaixado/desativado: o refresh morre
+				s.Log.Warn("mcp oauth: revogar refresh de dono inativo", zapErr(err))
+			}
 			erroOAuth(w, http.StatusBadRequest, "invalid_grant", "o dono já não é administrador ativo")
 			return
 		}
