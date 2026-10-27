@@ -1,5 +1,5 @@
-// Package auditoria grava no audit_log (migration 0009, sem escritor até o
-// MCP) as ações feitas pelo MCP ou sobre ele, marcadas com origem "mcp" —
+// Package auditoria grava no audit_log (migration 0009) as ações feitas pelo
+// MCP ou sobre ele, marcadas com origem "mcp" —
 // é assim que uma escrita da IA se distingue de uma feita à mão (contrato §5).
 package auditoria
 
