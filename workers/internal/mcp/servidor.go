@@ -1,10 +1,11 @@
 package mcp
 
 import (
+	"log/slog"
 	"net/http"
+	"os"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.uber.org/zap"
 )
 
 // ToolsEsperadas trava o conjunto e a ORDEM das tools: clientes guardam o
@@ -16,22 +17,35 @@ var ToolsEsperadas = []string{
 
 type ConfigServidor struct {
 	Versao string
-	Log    *zap.Logger
 }
+
+// cacheEsquemas guarda a inferência de JSON Schema das tools entre pedidos.
+// O Server é reconstruído a cada pedido — e duas vezes: o SDK chama o
+// getServer uma vez para ler as versões de protocolo e outra para servir —,
+// então sem cache cada AddTool refaria a reflexão dos tipos a todo pedido.
+var cacheEsquemas = sdk.NewSchemaCache()
+
+// logSDK é o log do go-sdk (servidor e transporte). Vai para stderr, que é o
+// log do container; só Warn+ para o tráfego normal não inundar o log.
+var logSDK = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 // novoServidor monta um Server por pedido (stateless): o principal entra por
 // closure em cada tool, sem estado entre pedidos.
 func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "emonitor", Version: cfg.Versao},
-		&sdk.ServerOptions{Instructions: Instrucoes})
+		&sdk.ServerOptions{Instructions: Instrucoes, SchemaCache: cacheEsquemas, Logger: logSDK})
 	registrarSistema(s, p)
 	return s
 }
 
 // NovoHandlerMCP serve Streamable HTTP sem sessão e com resposta JSON
 // (spec D2). Espera o Principal no contexto (ver Autenticador.Middleware).
+//
+// Falha fechada: sem Principal no contexto o pedido é recusado ANTES de
+// chegar ao SDK. Uma mudança no router que esqueça o Autenticador.Middleware
+// não pode servir dado nenhum — e assim nenhuma tool precisa checar nil.
 func NovoHandlerMCP(cfg ConfigServidor) http.Handler {
-	return sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
+	sdkHandler := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
 		p, _ := PrincipalDe(r.Context())
 		return novoServidor(cfg, p)
 	}, &sdk.StreamableHTTPOptions{
@@ -43,6 +57,14 @@ func NovoHandlerMCP(cfg ConfigServidor) http.Handler {
 		// então rebinding não ganha nada. Coberto por
 		// TestServidor_HostPublicoPorLoopbackNaoLeva403.
 		DisableLocalhostProtection: true,
+		Logger:                     logSDK,
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := PrincipalDe(r.Context()); !ok {
+			http.Error(w, "MCP sem autenticação montada", http.StatusInternalServerError)
+			return
+		}
+		sdkHandler.ServeHTTP(w, r)
 	})
 }
 

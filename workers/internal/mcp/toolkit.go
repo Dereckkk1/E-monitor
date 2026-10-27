@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -13,6 +14,11 @@ func resultado(v any) (*sdk.CallToolResult, any, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mcp: serializar resultado: %w", err)
+	}
+	// structuredContent tem de ser objeto JSON (spec MCP): lista, string ou
+	// número aqui é bug de quem escreveu a tool.
+	if len(b) == 0 || b[0] != '{' {
+		return nil, nil, errors.New("mcp: resultado precisa ser objeto JSON")
 	}
 	return &sdk.CallToolResult{
 		Content:           []sdk.Content{&sdk.TextContent{Text: string(b)}},

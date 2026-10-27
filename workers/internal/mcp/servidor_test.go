@@ -180,3 +180,61 @@ func TestInventario(t *testing.T) {
 	}
 	require.Equal(t, ToolsEsperadas, nomes)
 }
+
+// I-1: um router que esqueça o Autenticador.Middleware não pode servir dado.
+// O handler recusa antes do SDK: 500, e a tool nunca é alcançada (se fosse,
+// devolveria 200 com isError "sem_identidade").
+func TestServidor_SemPrincipalRecusaAntesDoSDK(t *testing.T) {
+	srv := httptest.NewServer(SoPost(NovoHandlerMCP(ConfigServidor{Versao: "teste"})))
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequest(http.MethodPost, srv.URL,
+		strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"quem_sou_eu","arguments":{}}}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", "2025-06-18")
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+	corpo, _ := io.ReadAll(res.Body)
+	require.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	require.Contains(t, string(corpo), "MCP sem autenticação montada")
+	require.NotContains(t, string(corpo), "sem_identidade", "a tool não pode ter sido alcançada")
+}
+
+func TestServidor_QuemSouEuNaSpec20260728(t *testing.T) {
+	srv := servidorDeTeste(t)
+	r := rpcComCabecalhos(t, srv, "", "2026-07-28",
+		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"_meta":{`+
+			`"io.modelcontextprotocol/protocolVersion":"2026-07-28",`+
+			`"io.modelcontextprotocol/clientInfo":{"name":"teste","version":"1"},`+
+			`"io.modelcontextprotocol/clientCapabilities":{}},`+
+			`"name":"quem_sou_eu","arguments":{}}}`,
+		map[string]string{"Mcp-Method": "tools/call", "Mcp-Name": "quem_sou_eu"})
+	require.Equal(t, http.StatusOK, r.Status)
+	require.Nil(t, r.Error)
+	sc := r.Result["structuredContent"].(map[string]any)
+	require.Equal(t, "dereck@teste.local", sc["usuario"].(map[string]any)["email"])
+}
+
+func TestServidor_NotificacaoDa202(t *testing.T) {
+	srv := servidorDeTeste(t)
+	r := rpc(t, srv, "", "2025-06-18", `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	require.Equal(t, http.StatusAccepted, r.Status)
+}
+
+// M-3: structuredContent tem de ser objeto JSON.
+func TestResultado_ExigeObjeto(t *testing.T) {
+	_, _, err := resultado([]string{"a"})
+	require.ErrorContains(t, err, "mcp: resultado precisa ser objeto JSON")
+	_, _, err = resultado("texto")
+	require.Error(t, err)
+	res, _, err := resultado(map[string]any{"ok": true})
+	require.NoError(t, err)
+	require.NotNil(t, res.StructuredContent)
+}
+
+func TestInstrucoes_TemGlossario(t *testing.T) {
+	require.Contains(t, Instrucoes, "Glossário: veiculação = uma tocada detectada")
+	require.Contains(t, Instrucoes, "Impactos = PMM × (in_slot + bonus).")
+}
