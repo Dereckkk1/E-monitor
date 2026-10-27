@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -67,6 +68,19 @@ func (h *TokensHTTP) Criar(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.ValidadeDias < 1 || c.ValidadeDias > 365 {
 		erroJSON(w, http.StatusBadRequest, "validade de 1 a 365 dias")
+		return
+	}
+	// O JWT do portal carrega o role por até 8h, então o RequireRole("admin")
+	// deixa passar quem foi rebaixado depois de logar. Emitir um token pessoal
+	// para essa pessoa o deixaria dormente no banco e ele ressuscitaria se ela
+	// voltasse a ser admin: confere o dono no banco, como o oauth/conceder.go.
+	if _, err := h.Tokens.DonoAdminAtivo(r.Context(), claims.UserID); err != nil {
+		if errors.Is(err, tokens.ErrNaoEncontrado) {
+			erroJSON(w, http.StatusForbidden, "só administrador ativo pode criar credencial do MCP")
+			return
+		}
+		h.Log.Error("mcp: conferir admin ativo", zap.Error(err))
+		erroJSON(w, http.StatusInternalServerError, "erro interno")
 		return
 	}
 	claro, tok, err := h.Tokens.Emitir(r.Context(), tokens.Novo{

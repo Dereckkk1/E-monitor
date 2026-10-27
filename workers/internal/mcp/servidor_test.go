@@ -160,6 +160,20 @@ func TestServidor_CorpoAcimaDe1MB(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, res.StatusCode)
 }
 
+// Lote JSON-RPC: o SDK o aceita no protocolo 2025-03-26 (o default quando o
+// cliente não manda Mcp-Protocol-Version) e um pedido levaria centenas de
+// tools/call por 1 da cota de 240/min.
+func TestServidor_RecusaLoteJSONRPC(t *testing.T) {
+	srv := servidorDeTeste(t)
+	lote := `[{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}},{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}]`
+	for _, versao := range []string{"", "2025-03-26"} {
+		r := rpc(t, srv, "", versao, "  \n\t"+lote)
+		require.Equal(t, http.StatusBadRequest, r.Status, "versão %q", versao)
+	}
+	ok := rpc(t, srv, "", "2025-06-18", `{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}`)
+	require.Equal(t, http.StatusOK, ok.Status)
+}
+
 // Inventário: o conjunto de tools é travado e toda tool declara anotações.
 func TestInventario(t *testing.T) {
 	ctx := context.Background()
