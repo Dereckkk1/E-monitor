@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useMcpConexoes, useCriarTokenMcp, useRevogarMcp } from '../../api/hooks'
+import { useConfirm } from '../ConfirmModal'
 
 // "Integração com IA" — credenciais do MCP do E-monitor (spec 2026-10-27 §4.1).
 // Só admin: o MCP não aceita outro papel.
@@ -20,16 +21,34 @@ export default function McpIntegrationSection({ numeral }) {
   const [nome, setNome] = useState('')
   const [validade, setValidade] = useState(90)
   const [gerado, setGerado] = useState(null)
+  const [copia, setCopia] = useState('idle') // idle | ok | erro
+  const timerCopia = useRef(null)
+  const confirm = useConfirm()
+
+  useEffect(() => () => clearTimeout(timerCopia.current), [])
+
+  const copiar = async () => {
+    clearTimeout(timerCopia.current)
+    try {
+      await navigator.clipboard.writeText(gerado)
+      setCopia('ok')
+      timerCopia.current = setTimeout(() => setCopia('idle'), 2000)
+    } catch {
+      setCopia('erro')
+    }
+  }
 
   const gerar = (e) => {
     e.preventDefault()
     criar.mutate({ nome, validade_dias: Number(validade) }, {
-      onSuccess: (d) => { setGerado(d.token); setNome('') },
+      onSuccess: (d) => { setGerado(d.token); setCopia('idle'); criar.reset(); setNome('') },
     })
   }
 
-  const desconectar = (c) => {
-    if (!window.confirm(`Desconectar "${c.nome}"? O assistente perde o acesso na hora.`)) return
+  const desconectar = async (c) => {
+    // useConfirm devolve a Promise do modal do projeto: sem o await ela é sempre
+    // truthy e o token seria revogado mesmo em "Cancelar".
+    if (!(await confirm(`Desconectar "${c.nome}"? O assistente perde o acesso na hora.`))) return
     revogar.mutate(c.id)
   }
 
@@ -59,7 +78,7 @@ export default function McpIntegrationSection({ numeral }) {
         </label>
         <label className="field">
           <span>Validade (dias)</span>
-          <input type="number" min={1} max={365} value={validade} onChange={e => setValidade(e.target.value)} />
+          <input type="number" min={1} max={365} value={validade} required onChange={e => setValidade(e.target.value)} />
         </label>
         <button className="btn btn-primary" type="submit" disabled={criar.isPending}>Gerar token</button>
       </form>
@@ -68,10 +87,16 @@ export default function McpIntegrationSection({ numeral }) {
         <div className="account-mcp-gerado" role="status">
           <code>{gerado}</code>
           <p>Copie agora: este token não será mostrado de novo. Use como <code>Authorization: Bearer …</code>.</p>
-          <button className="btn btn-secondary btn-sm" type="button" onClick={() => navigator.clipboard?.writeText(gerado)}>Copiar</button>
+          <div className="account-mcp-gerado-acoes">
+            <button className="btn btn-secondary btn-sm" type="button" onClick={copiar}>{copia === 'ok' ? 'Copiado' : 'Copiar'}</button>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={() => setGerado(null)}>Já copiei</button>
+          </div>
+          {copia === 'erro' && <p className="account-mcp-erro" role="alert">Não deu para copiar — selecione e copie à mão</p>}
         </div>
       )}
 
+      {conexoesQ.isLoading && <p className="account-mcp-meta">Carregando…</p>}
+      {conexoesQ.isError && <p className="account-mcp-erro" role="alert">{erroDe(conexoesQ.error)}</p>}
       <ul className="account-mcp-lista">
         {(conexoesQ.data ?? []).map(c => (
           <li key={c.id} className="account-mcp-item">
@@ -81,7 +106,7 @@ export default function McpIntegrationSection({ numeral }) {
                 {c.tipo === 'pessoal' ? 'Token pessoal' : 'Conector OAuth'} · criado {data(c.criado_em)} · último uso {data(c.ultimo_uso)} · expira {data(c.expira_em)}
               </span>
             </div>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={() => desconectar(c)} aria-label={`Desconectar ${c.nome}`}>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={() => desconectar(c)} disabled={revogar.isPending && revogar.variables === c.id} aria-label={`Desconectar ${c.nome}`}>
               Desconectar
             </button>
           </li>

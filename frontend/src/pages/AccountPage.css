@@ -803,3 +803,4 @@
 .account-mcp-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--c-border); }
 .account-mcp-meta { display: block; font-size: 0.8125rem; color: var(--c-text-3); }
 .account-mcp-erro { color: var(--c-danger); margin: 8px 0; }
+.account-mcp-gerado-acoes { display: flex; gap: 8px; }
