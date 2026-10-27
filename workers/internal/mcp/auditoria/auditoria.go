@@ -16,14 +16,33 @@ type Execer interface {
 }
 
 func Registrar(ctx context.Context, db Execer, ator uuid.UUID, acao, recurso string, recursoID *uuid.UUID, meta map[string]any) error {
-	m := make(map[string]any, len(meta)+1)
-	for k, v := range meta {
-		m[k] = v
-	}
+	m := copiar(meta)
 	m["origem"] = "mcp" // depois da cópia: quem chama não sobrescreve
 	_, err := db.Exec(ctx,
 		`INSERT INTO audit_log (actor_id, actor_type, action, resource, resource_id, metadata)
 		 VALUES ($1, 'user', $2, $3, $4, $5)`,
 		ator, acao, recurso, recursoID, m)
 	return err
+}
+
+// RegistrarSistema grava uma ação feita por um CLI na VM, sem usuário do
+// portal: actor_id NULL, actor_type 'cli', e metadata.pelo diz qual comando
+// foi. pelo e origem são gravados depois da cópia: o meta não os sobrescreve.
+func RegistrarSistema(ctx context.Context, db Execer, pelo, acao, recurso string, recursoID *uuid.UUID, meta map[string]any) error {
+	m := copiar(meta)
+	m["pelo"] = pelo
+	m["origem"] = "mcp"
+	_, err := db.Exec(ctx,
+		`INSERT INTO audit_log (actor_id, actor_type, action, resource, resource_id, metadata)
+		 VALUES (NULL, 'cli', $1, $2, $3, $4)`,
+		acao, recurso, recursoID, m)
+	return err
+}
+
+func copiar(meta map[string]any) map[string]any {
+	m := make(map[string]any, len(meta)+2)
+	for k, v := range meta {
+		m[k] = v
+	}
+	return m
 }
