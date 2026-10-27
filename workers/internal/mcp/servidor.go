@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -79,6 +82,26 @@ func SoPost(next http.Handler) http.Handler {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		// Recusa lote JSON-RPC (corpo que começa com '['). O go-sdk aceita
+		// lotes no protocolo 2025-03-26 — o default quando o cliente não manda
+		// Mcp-Protocol-Version —, o que deixaria UM pedido carregar centenas de
+		// tools/call contra a cota de 240/min, que é por pedido. O corpo já é
+		// limitado a 1 MiB, então lê inteiro e o devolve ao SDK.
+		corpo, err := io.ReadAll(r.Body)
+		if err != nil {
+			var grande *http.MaxBytesError
+			if errors.As(err, &grande) {
+				http.Error(w, "corpo acima de 1 MiB", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "corpo ilegível", http.StatusBadRequest)
+			return
+		}
+		if bytes.HasPrefix(bytes.TrimLeft(corpo, " \t\r\n"), []byte("[")) {
+			http.Error(w, "lotes JSON-RPC não são aceitos: um pedido por vez (a cota de 240/min é por pedido)", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(corpo))
 		next.ServeHTTP(w, r)
 	})
 }

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -137,3 +139,39 @@ func TestEmail_InexistenteAvisaSemFalhar(t *testing.T) {
 }
 
 func bytesUpper(s string) string { return string(bytes.ToUpper([]byte(s))) }
+
+// A revogação já commitou quando a auditoria é escrita: falhar nela não pode
+// abortar o lote (as próximas pessoas ficariam com credencial viva), só virar
+// aviso + exit 1 no fim, com o resumo ainda impresso.
+func TestAplicar_FalhaDeAuditoriaNaoAbortaOLote(t *testing.T) {
+	pool, a, _ := cenario(t)
+	ctx := t.Context()
+	// Segunda pessoa com credencial viva, para provar que o lote continua.
+	d := mcptest.Usuario(t, ctx, pool, "admin", true)
+	_, err := pool.Exec(ctx, `INSERT INTO mcp_tokens (user_id, tipo, token_hash, nome, expires_at)
+		VALUES ($1, 'pessoal', 'h9', 'outro', NOW() + INTERVAL '1 day')`, d)
+	require.NoError(t, err)
+
+	var out, avisos bytes.Buffer
+	o := opcoes{todos: true, aplicar: true, auditar: func(context.Context, uuid.UUID, string, int64) error {
+		return errors.New("audit_log fora do ar")
+	}}
+	err = executar(ctx, pool, o, &out, &avisos)
+	require.Error(t, err, "exit 1 no fim")
+
+	var r struct {
+		Aplicado        bool     `json:"aplicado"`
+		Credenciais     int      `json:"credenciais"`
+		AuditoriaFalhou []string `json:"auditoria_falhou"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r), "o resumo sai mesmo assim: %s", out.String())
+	require.True(t, r.Aplicado)
+	require.Equal(t, 3, r.Credenciais, "as duas de A e a de D foram revogadas")
+	require.ElementsMatch(t, []string{emailDe(t, pool, a), emailDe(t, pool, d)}, r.AuditoriaFalhou)
+	require.Contains(t, avisos.String(), "revoga-mcp: aviso: auditoria falhou para "+emailDe(t, pool, a))
+
+	var vivas int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM mcp_tokens WHERE revoked_at IS NULL AND expires_at > NOW()`).Scan(&vivas))
+	require.Zero(t, vivas)
+}

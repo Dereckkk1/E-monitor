@@ -71,3 +71,32 @@ func TestTokensHTTP_CriarListarRevogar(t *testing.T) {
 		`SELECT COUNT(*) FROM audit_log WHERE actor_id = $1 AND action IN ('mcp.token.criado','mcp.token.revogado')`, admin).Scan(&auditados))
 	require.Equal(t, 2, auditados)
 }
+
+// O JWT do portal leva o role por até 8h: um admin rebaixado depois de logar
+// ainda passa no RequireRole("admin"). Criar não pode confiar nele — o token
+// pessoal ressuscitaria se a pessoa voltasse a ser admin.
+func TestTokensHTTP_CriarRecusaAdminRebaixado(t *testing.T) {
+	t.Setenv("JWT_SECRET", mcptest.SegredoTeste)
+	ctx, pool := mcptest.DB(t)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	jwt, err := auth.IssueToken(admin, "admin")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE users SET role = 'operator' WHERE id = $1`, admin)
+	require.NoError(t, err)
+
+	h := &TokensHTTP{Tokens: tokens.NovoStore(pool, []byte(mcptest.SegredoTeste)), DB: pool, Log: zap.NewNop()}
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireJWT, auth.RequireRole("admin"))
+		r.Post("/mcp/tokens", h.Criar)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tokens", strings.NewReader(`{"nome":"x","validade_dias":30}`))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM mcp_tokens WHERE user_id = $1`, admin).Scan(&n))
+	require.Zero(t, n, "nenhuma credencial pode ter sido gravada")
+}

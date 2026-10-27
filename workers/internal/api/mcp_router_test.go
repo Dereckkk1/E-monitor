@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/auth"
 	"radiocheck/internal/mcp"
 )
 
@@ -59,4 +61,28 @@ func TestRouterMCP_PostSemBearerDa401DoContrato(t *testing.T) {
 	www := rec.Header().Get("WWW-Authenticate")
 	require.Contains(t, www, `realm="emonitor-mcp"`)
 	require.Contains(t, www, `resource_metadata="https://api.teste/.well-known/oauth-protected-resource/mcp"`)
+}
+
+// As duas autenticações não se misturam (spec): o JWT do portal não abre o
+// /mcp e o token do MCP não abre o /v1/internal. Nenhum caminho toca o banco.
+func TestRouterMCP_JWTDoPortalNaoAbreOMCP(t *testing.T) {
+	t.Setenv("JWT_SECRET", "segredo-jwt-de-teste-com-mais-de-32-bytes!!")
+	jwt, err := auth.IssueToken(uuid.New(), "admin")
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec := httptest.NewRecorder()
+	mcpRouter(t).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.Contains(t, rec.Header().Get("WWW-Authenticate"), `error="invalid_token"`)
+}
+
+func TestRouterMCP_TokenDoMCPNaoAbreOInternal(t *testing.T) {
+	t.Setenv("JWT_SECRET", "segredo-jwt-de-teste-com-mais-de-32-bytes!!")
+	req := httptest.NewRequest(http.MethodGet, "/v1/internal/mcp/tokens", nil)
+	req.Header.Set("Authorization", "Bearer emonitor_mcp_"+strings.Repeat("a1b2c3d4", 8))
+	rec := httptest.NewRecorder()
+	mcpRouter(t).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }

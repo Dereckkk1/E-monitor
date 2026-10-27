@@ -1,9 +1,12 @@
 // revoga-mcp revoga credenciais do MCP do E-monitor em massa (spec
 // 2026-10-27 §4.1). Sem --aplicar é dry-run. Uso em prod (regra 4.2):
 //
-//	docker compose ... exec api revoga-mcp --dsn "$DATABASE_URL" --listar
-//	docker compose ... exec api revoga-mcp --dsn "$DATABASE_URL" --email pessoa@x --aplicar
-//	docker compose ... exec api revoga-mcp --dsn "$DATABASE_URL" --todos --aplicar
+//	$DC exec api revoga-mcp --listar
+//	$DC exec api revoga-mcp --email pessoa@x --aplicar
+//	$DC exec api revoga-mcp --todos --aplicar
+//
+// ($DC = docker compose com os dois arquivos de compose e o --env-file, regra
+// 4.7; --dsn assume o DATABASE_URL do container.)
 //
 // Imprime UMA linha JSON por execução, nunca um hash nem um token.
 //
@@ -18,8 +21,12 @@
 // Auditoria: uma linha por pessoa com credencial revogada, sem ator (é o
 // operador na VM): actor_type 'cli', metadata.pelo = "revoga-mcp".
 //
+// Se a auditoria de uma pessoa falhar DEPOIS de revogar, o lote não aborta
+// (as próximas ficariam com credencial viva): aviso no stderr, o email entra em
+// "auditoria_falhou" no resumo e o exit é 1 no fim.
+//
 // Saída: 0 ok (inclusive --email sem ninguém, com aviso no stderr); 2 uso
-// errado; 1 erro de banco.
+// errado; 1 erro de banco ou auditoria que falhou.
 package main
 
 import (
@@ -47,6 +54,10 @@ type opcoes struct {
 	email   string
 	todos   bool
 	aplicar bool
+
+	// auditar grava a auditoria de uma pessoa revogada; nil usa o
+	// audit_log. Existe para o teste simular a falha.
+	auditar func(ctx context.Context, id uuid.UUID, email string, n int64) error
 }
 
 func validar(o opcoes) error {
@@ -205,6 +216,14 @@ func executar(ctx context.Context, pool *pgxpool.Pool, o opcoes, saida, avisos i
 		}
 		codigos = int(tag.RowsAffected())
 	}
+	auditar := o.auditar
+	if auditar == nil {
+		auditar = func(ctx context.Context, id uuid.UUID, email string, n int64) error {
+			return auditoria.RegistrarSistema(ctx, pool, "revoga-mcp", "mcp.token.revogado", "mcp_token", nil,
+				map[string]any{"alvo_user_id": id, "alvo_email": email, "quantidade": n})
+		}
+	}
+	auditoriaFalhou := []string{}
 	st := tokens.NovoStore(pool, nil)
 	for _, a := range alvos {
 		n, err := st.RevogarTodos(ctx, a.id)
@@ -215,10 +234,22 @@ func executar(ctx context.Context, pool *pgxpool.Pool, o opcoes, saida, avisos i
 		if n == 0 {
 			continue
 		}
-		if err := auditoria.RegistrarSistema(ctx, pool, "revoga-mcp", "mcp.token.revogado", "mcp_token", nil,
-			map[string]any{"alvo_user_id": a.id, "alvo_email": a.email, "quantidade": n}); err != nil {
-			return err
+		if err := auditar(ctx, a.id, a.email, n); err != nil {
+			// A revogação já commitou: abortar aqui deixaria as próximas
+			// pessoas com credencial viva. Avisa, segue e falha no fim.
+			fmt.Fprintf(avisos, "revoga-mcp: aviso: auditoria falhou para %s: %v\n", a.email, err)
+			auditoriaFalhou = append(auditoriaFalhou, a.email)
 		}
 	}
-	return out.Encode(map[string]any{"aplicado": true, "pessoas": pessoas, "credenciais": revogadas, "codigos_apagados": codigos})
+	resumo := map[string]any{"aplicado": true, "pessoas": pessoas, "credenciais": revogadas, "codigos_apagados": codigos}
+	if len(auditoriaFalhou) > 0 {
+		resumo["auditoria_falhou"] = auditoriaFalhou
+	}
+	if err := out.Encode(resumo); err != nil {
+		return err
+	}
+	if len(auditoriaFalhou) > 0 {
+		return fmt.Errorf("revoga-mcp: a auditoria falhou para %d pessoa(s); as credenciais FORAM revogadas", len(auditoriaFalhou))
+	}
+	return nil
 }
