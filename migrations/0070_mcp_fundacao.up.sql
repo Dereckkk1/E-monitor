@@ -8,8 +8,11 @@
 -- conflita com DML na tabela. No deploy a API ANTIGA continua servindo login
 -- (segurando ROW EXCLUSIVE em users via last_login_at) enquanto o `migrate`
 -- roda; sem timeout o CREATE TRIGGER entra na fila FIFO de locks e prende atrás
--- de si toda escrita em `users`. Com o timeout, a migration falha rápido (e o
--- deploy pode ser repetido) em vez de virar outage ao vivo.
+-- de si toda escrita em `users`. Com o timeout, a migration falha rápido em vez
+-- de virar outage ao vivo. RECUPERAÇÃO: ao estourar o lock_timeout a migration
+-- falha e o golang-migrate deixa a versão 70 `dirty`; o deploy NÃO se repete
+-- sozinho. Rode `UPDATE schema_migrations SET version=69, dirty=false` e faça o
+-- redeploy (mesma convenção de 0062/0068).
 
 BEGIN;
 

@@ -46,9 +46,11 @@ fecharem.
 
 - `POST https://api.e-monitor.online/mcp` — Streamable HTTP **sem sessão**, resposta JSON
   (go-sdk v1.8.0). `GET`/`DELETE` -> 405 (`Allow: POST`, antes da autenticação: GET sem bearer dá
-  405, não 401). Corpo até 1 MB. Protocolos aceitos: `2025-06-18`, `2025-11-25` e `2026-07-28`
-  (esta última exige `_meta` no corpo e os cabeçalhos `Mcp-Method`/`Mcp-Name`; o CORS global já os
-  permite).
+  405, não 401). Corpo até 1 MB. Protocolos aceitos pelo go-sdk v1.8.0: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` e
+  `2026-07-28` (esta última exige `_meta` no corpo e os cabeçalhos `Mcp-Method`/`Mcp-Name`; o CORS
+  global já os permite). **Lotes JSON-RPC (corpo que começa com `[`) são recusados com 400**: o SDK
+  os aceitaria no protocolo `2025-03-26` (o padrão quando o cliente não manda `Mcp-Protocol-Version`)
+  e um pedido levaria centenas de `tools/call` contra a cota de 240/min, que é por pedido.
 - Um `Server` do SDK é montado **por pedido**; o principal (dono da credencial) entra por closure
   em cada tool.
 - **Falha fechada**: se o middleware de autenticação não estiver montado, o handler responde 500
@@ -219,6 +221,11 @@ todos os tokens daquele cliente para o usuário.
   follow-up; hoje o reuso só recebe `invalid_grant`.
 - **Access tokens antigos não são revogados na rotação** (valem até os 30 dias deles ou até a
   conexão ser revogada) e **`mcp_tokens` nunca é podada** (follow-up).
+- **O limite de falhas por IP troca 401 por 429, mas não poupa consultas ao banco**: de propósito,
+  uma credencial válida nunca é barrada por IP, então cada pedido ainda é conferido no banco.
+- **`revoga-mcp --listar` e `/account` contam diferente**: o CLI imprime uma linha por token
+  pessoal e **por refresh token vivo** do OAuth; `/account` mostra **uma linha por cliente OAuth**
+  (conexão), agrupando os tokens dele.
 - **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro").
 - **O consentimento sempre pede login.** A aba aberta pelo assistente começa deslogada (JWT em
   `sessionStorage`, por aba): `/login` volta para `/autorizar-ia?pedido=...`. O login pelo SSO do hub
@@ -228,7 +235,7 @@ todos os tokens daquele cliente para o usuário.
   aplicá-lo à resposta de fallback da SPA. Verifique após o deploy:
   `curl -sI "https://e-monitor.online/autorizar-ia?pedido=x" | grep -i frame`.
 - **Dev local:** defina `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
-  `NOTIFICATIONS_BASE_URL=http://localhost:5174` (origem do portal usada no redirect do
+  `NOTIFICATIONS_BASE_URL=http://localhost:3000` (origem do portal usada no redirect do
   consentimento). Sem a segunda, o `/authorize` redireciona para o frontend de prod.
 
 ### Recomendações ao dono (NÃO feitas)
@@ -238,6 +245,11 @@ todos os tokens daquele cliente para o usuário.
 2. **O limiter de `/auth/login`, que já existia, é contornável atrás do Cloudflare**:
    `middleware.RealIP` confia em `True-Client-IP`/`X-Real-IP`/`X-Forwarded-For`, que o cliente
    escreve à vontade. O MCP não depende disso (usa `CF-Connecting-IP`), mas o login sim.
+3. **As imagens `minio/minio` e `minio/mc` não podem mais ser baixadas do Docker Hub** ("pull access
+   denied"): uma máquina nova, ou uma VM que perca o cache de imagens, falha no `docker compose up`.
+   Infra, fora do escopo do MCP.
+4. **O compose base ainda monta `migrations/` em `docker-entrypoint-initdb.d`** (regra 4.6 do
+   `CLAUDE.md` / F-111), o que quebra um banco local novo (os `.down.sql` rodam antes dos `.up.sql`).
 
 ## Fora de escopo da Fatia 0
 

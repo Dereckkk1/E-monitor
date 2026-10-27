@@ -25,8 +25,13 @@ funciona (credenciais, OAuth, limites, auditoria): [features/mcp.md](../features
 | `MCP_REDIRECT_URIS` | claude.ai e claude.com | callbacks https **exatos** aceitos no registro aberto (vírgula); loopback http vale sempre |
 | `NOTIFICATIONS_BASE_URL` | `https://e-monitor.online` | origem do portal onde fica `/autorizar-ia` |
 
-Mudou variável: `build` não basta, recrie a API com `up -d --force-recreate --no-deps api`
-(regras 4.1/4.2 do `CLAUDE.md`).
+Mudou variável: `build` não basta, recrie a API (regras 4.1/4.2 do `CLAUDE.md`). Todo comando na VM
+usa os dois arquivos de compose (regra 4.7); defina uma vez e use `$DC` nos exemplos deste doc:
+
+```bash
+DC="docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env"
+$DC up -d --force-recreate --no-deps api
+```
 
 ## Conectar
 
@@ -52,11 +57,10 @@ Teste: peça "chame a tool quem_sou_eu do emonitor".
 O Gemini não faz registro dinâmico e o registro aberto **recusa cliente confidencial**. Quem cadastra
 é o admin, **na VM**, com o CLI `registra-cliente-mcp` (binário da imagem: depois de um deploy, só
 vale após o recreate da `api`, regra 4.2). Ele lê o `JWT_SECRET` do ambiente do container (o mesmo da
-API) e `--dsn` assume `DATABASE_URL` do container se omitido.
+API) e `--dsn` assume `DATABASE_URL` do container se omitido (os dois CLIs fazem isso: não passe `--dsn`).
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml \
-  --env-file infra/docker/.env exec api registra-cliente-mcp --dsn "$DATABASE_URL" \
+$DC exec api registra-cliente-mcp \
   --nome "Gemini Enterprise" \
   --redirect https://vertexaisearch.cloud.google.com/oauth-redirect
 ```
@@ -100,16 +104,16 @@ do hub (`/sso`) perde o `?pedido=` (a `HubSsoPage` sempre vai para `/`): nessa a
 
 ```bash
 DC="docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env"
-$DC exec api revoga-mcp --dsn "$DATABASE_URL" --listar
-$DC exec api revoga-mcp --dsn "$DATABASE_URL" --email pessoa@emidiastec.com.br            # dry-run
-$DC exec api revoga-mcp --dsn "$DATABASE_URL" --email pessoa@emidiastec.com.br --aplicar
-$DC exec api revoga-mcp --dsn "$DATABASE_URL" --todos                                     # dry-run
-$DC exec api revoga-mcp --dsn "$DATABASE_URL" --todos --aplicar
+$DC exec api revoga-mcp --listar
+$DC exec api revoga-mcp --email pessoa@emidiastec.com.br            # dry-run
+$DC exec api revoga-mcp --email pessoa@emidiastec.com.br --aplicar
+$DC exec api revoga-mcp --todos                                     # dry-run
+$DC exec api revoga-mcp --todos --aplicar
 ```
 
 | Flag | Efeito |
 |---|---|
-| `--listar` | lista credenciais vivas (tokens pessoais e uma por conexão OAuth); só lê, não combina com `--aplicar` |
+| `--listar` | lista as credenciais vivas: cada token pessoal e **cada refresh token vivo** do OAuth (uma linha por refresh); `/account`, em contraste, mostra **uma linha por cliente OAuth**. Só lê, não combina com `--aplicar` |
 | `--email X` | todas as credenciais dessa pessoa |
 | `--todos` | de todo mundo; **também apaga todos os códigos OAuth pendentes** |
 | `--aplicar` | sem ele é dry-run |
@@ -118,8 +122,10 @@ Use exatamente um de `--listar`/`--email`/`--todos`. A saída é **uma linha JSO
 (`aplicado`, `pessoas`, `credenciais`, `codigos_apagados`) e nunca contém token nem hash. O dry-run
 conta **exatamente o que o `--aplicar` revoga**, incluindo os access tokens OAuth; por isso
 `credenciais` pode ser **maior** que as linhas do `--listar`. Uma linha de auditoria por pessoa
-(`mcp.token.revogado`, `actor_type 'cli'`, `metadata.pelo = "revoga-mcp"`). Saída: `0` ok (também
-`--email` sem ninguém, com aviso no stderr); `2` uso errado; `1` erro de banco.
+(`mcp.token.revogado`, `actor_type 'cli'`, `metadata.pelo = "revoga-mcp"`). Se a auditoria de
+uma pessoa falhar depois da revogação, o lote continua: aviso no stderr, o email entra em
+`auditoria_falhou` no resumo e o exit é `1` no fim. Saída: `0` ok (também
+`--email` sem ninguém, com aviso no stderr); `2` uso errado; `1` erro de banco ou auditoria que falhou.
 
 ## Auditoria (consulta)
 
@@ -151,10 +157,10 @@ já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 | `/autorizar-ia` diz "pedido vencido" | passaram mais de 10 min entre conectar e autorizar |
 | Depois do login SSO do hub a aba cai em `/` e não pede autorização | o SSO descarta o `?pedido=`: entre com e-mail e senha na aba de consentimento, ou reinicie a conexão (ver "Login na aba de consentimento") |
 | Tudo parou de autenticar depois de girar o `JWT_SECRET` | esperado: os hashes mudam; todos reconectam e o Gemini precisa de cliente novo |
-| Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:5174` no `.env` |
+| Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:3000` no `.env` |
 
 Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
-`NOTIFICATIONS_BASE_URL=http://localhost:5174`. A API local leva minutos para escutar (carrega o
+`NOTIFICATIONS_BASE_URL=http://localhost:3000`. A API local leva minutos para escutar (carrega o
 índice antes); health 000 logo após o recreate não é crash.
 
 ## Deploy
@@ -178,9 +184,16 @@ duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cli
 - **Girar o `JWT_SECRET` invalida todas as credenciais, `client_secret` e códigos do MCP.**
 - Access tokens antigos **não** são revogados na rotação do refresh; `mcp_tokens` nunca é podada
   (follow-ups). Reuso de refresh só recebe `invalid_grant` (a detecção estilo hub é follow-up).
+- O limite de falhas por IP troca 401 por 429, mas não reduz consultas ao banco (de propósito: uma
+  credencial válida nunca é barrada por IP).
+- Protocolos aceitos (go-sdk v1.8.0): `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`,
+  `2026-07-28`. Lotes JSON-RPC são recusados com 400.
 - Limitação aceita: uma renovação de token em voo no mesmo milissegundo da troca de senha pode
   sobreviver a ela.
 - **Recomendações ao dono (não feitas):** (1) publicar a porta da API só em `127.0.0.1` no compose de
   prod — hoje um acesso direto à 8080 forja o `CF-Connecting-IP` e foge dos limites por IP;
   (2) o limiter de `/auth/login` é contornável atrás do Cloudflare porque `middleware.RealIP` confia
-  em cabeçalhos forjáveis (problema anterior ao MCP).
+  em cabeçalhos forjáveis (problema anterior ao MCP); (3) as imagens `minio/minio` e `minio/mc` não
+  podem mais ser baixadas do Docker Hub ("pull access denied"): máquina nova ou VM que perca o cache
+  de imagens falha no `docker compose up`; (4) o compose base ainda monta `migrations/` em
+  `docker-entrypoint-initdb.d` (regra 4.6 / F-111), o que quebra um banco local novo.

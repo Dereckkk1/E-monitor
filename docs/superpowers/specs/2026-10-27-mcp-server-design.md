@@ -343,7 +343,7 @@ Cada fatia vira um plano próprio (`docs/superpowers/plans/`). Ordem fixa: 0 →
   tools (o teste de inventário roda o registro).
 - O Cloudflare Tunnel precisa expor `/mcp`, `/mcp/oauth/*` e `/.well-known/*` no host público da
   API; o WAF não pode bloquear o egress do claude.ai/Google.
-- Variáveis novas: `MCP_ORIGEM_PUBLICA`, `PORTAL_ORIGEM` (deep-links e `aprovarEm`).
+- Variáveis novas: `MCP_ORIGEM_PUBLICA`, `NOTIFICATIONS_BASE_URL` (origem do portal, para deep-links e `aprovarEm`; é compartilhada com os links dos emails, e uma variável dedicada é um possível follow-up).
 
 ## 9. Testes
 
