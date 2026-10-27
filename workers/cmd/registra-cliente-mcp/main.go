@@ -27,7 +27,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/db"
@@ -95,10 +94,10 @@ func main() {
 	if err != nil {
 		falhar("registrar cliente", err)
 	}
-	// Quem age é o operador na VM, sem usuário do portal: ator uuid.Nil, e o
-	// "pelo" diz de onde veio.
-	if err := auditoria.Registrar(ctx, tx, uuid.Nil, "mcp.oauth.cliente_confidencial_criado", "mcp_oauth_client", nil,
-		map[string]any{"pelo": "registra-cliente-mcp", "client_id": cli.ClientID, "cliente": cli.Nome}); err != nil {
+	// Quem age é o operador na VM, sem usuário do portal: ator NULL, tipo
+	// 'cli', e o "pelo" diz de onde veio.
+	if err := auditoria.RegistrarSistema(ctx, tx, "registra-cliente-mcp", "mcp.oauth.cliente_confidencial_criado", "mcp_oauth_client", nil,
+		map[string]any{"client_id": cli.ClientID, "cliente": cli.Nome}); err != nil {
 		falhar("auditoria", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

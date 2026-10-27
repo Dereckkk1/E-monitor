@@ -10,8 +10,10 @@ import (
 	"go.uber.org/zap"
 
 	"radiocheck/internal/auth"
+	"radiocheck/internal/mcp/auditoria"
 	"radiocheck/internal/mcp/oauth"
 	"radiocheck/internal/mcp/tokens"
+	"radiocheck/internal/reqmetrics"
 )
 
 const realm = "emonitor-mcp"
@@ -28,16 +30,24 @@ type Autenticador struct {
 	// FalhasPorIP conta SÓ falhas: um token válido nunca é barrado por IP
 	// (egress do claude.ai e NAT do escritório são compartilhados).
 	FalhasPorIP *auth.LoginRateLimiter
-	Log         *zap.Logger
+	// DB grava no audit_log a recusa de um token que existe mas cujo dono
+	// deixou de ser admin ativo.
+	DB auditoria.Execer
+	// AuditoriaRecusa: no máximo 1 linha de "mcp.token.recusado" por token a
+	// cada 10 minutos — um cliente insistindo não inunda o audit_log.
+	AuditoriaRecusa *auth.LoginRateLimiter
+	Log             *zap.Logger
 }
 
-func NovoAutenticador(st *tokens.Store, urlMetadados string, log *zap.Logger) *Autenticador {
+func NovoAutenticador(st *tokens.Store, db auditoria.Execer, urlMetadados string, log *zap.Logger) *Autenticador {
 	return &Autenticador{
-		Tokens:       st,
-		URLMetadados: urlMetadados,
-		PorToken:     auth.NewLoginRateLimiter(240, time.Minute),
-		FalhasPorIP:  auth.NewLoginRateLimiter(60, 15*time.Minute),
-		Log:          log,
+		Tokens:          st,
+		URLMetadados:    urlMetadados,
+		PorToken:        auth.NewLoginRateLimiter(240, time.Minute),
+		FalhasPorIP:     auth.NewLoginRateLimiter(60, 15*time.Minute),
+		DB:              db,
+		AuditoriaRecusa: auth.NewLoginRateLimiter(1, 10*time.Minute),
+		Log:             log,
 	}
 }
 
@@ -55,6 +65,13 @@ func (a *Autenticador) resolver(r *http.Request, bearer string) (*Principal, err
 	}
 	dono, err := a.Tokens.DonoAdminAtivo(ctx, tok.UserID)
 	if errors.Is(err, tokens.ErrNaoEncontrado) {
+		// A credencial existe e está viva, mas o dono não é (mais) admin
+		// ativo: deixa rastro, sem atrasar nem mudar o 401 se a escrita falhar.
+		if a.AuditoriaRecusa.Allow(tok.ID.String()) {
+			if err := auditoria.Registrar(ctx, a.DB, tok.UserID, "mcp.token.recusado", "mcp_token", &tok.ID, nil); err != nil {
+				a.Log.Warn("mcp: auditoria token recusado", zap.Error(err))
+			}
+		}
 		return nil, errRecusada
 	}
 	if err != nil {
@@ -94,6 +111,10 @@ func (a *Autenticador) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "erro interno", http.StatusInternalServerError)
 			return
 		}
+		// O /admin/monitoring atribui o tráfego do MCP ao admin. Sem isso, o
+		// egress do claude.ai apareceria como IP anônimo — e um operador que
+		// o banisse derrubaria o MCP de todo mundo.
+		reqmetrics.SetUserID(r.Context(), p.UserID)
 		next.ServeHTTP(w, r.WithContext(ComPrincipal(r.Context(), p)))
 	})
 }
