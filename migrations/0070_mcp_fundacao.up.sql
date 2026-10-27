@@ -42,3 +42,26 @@ CREATE TABLE mcp_oauth_codes (
     expires_at     TIMESTAMPTZ NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Revogação automática (spec §4.1): trocar/redefinir senha, desativar, rebaixar de
+-- admin ou apagar o usuário mata toda credencial do MCP e todo código OAuth pendente.
+-- Trigger, e não código no repo, para cobrir TODO caminho que mexe em users (tela,
+-- sync do hub, bloqueio do /admin/monitoring) e para que reativar alguém não
+-- ressuscite tokens antigos.
+CREATE FUNCTION mcp_revogar_credenciais_do_usuario() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE mcp_tokens SET revoked_at = NOW() WHERE user_id = NEW.id AND revoked_at IS NULL;
+    DELETE FROM mcp_oauth_codes WHERE user_id = NEW.id;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER users_revoga_mcp
+    AFTER UPDATE OF password_hash, is_active, role, deleted_at ON users
+    FOR EACH ROW
+    WHEN (NEW.password_hash IS DISTINCT FROM OLD.password_hash
+       OR (OLD.is_active AND NOT NEW.is_active)
+       OR (OLD.role = 'admin' AND NEW.role IS DISTINCT FROM 'admin')
+       OR (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL))
+    EXECUTE FUNCTION mcp_revogar_credenciais_do_usuario();

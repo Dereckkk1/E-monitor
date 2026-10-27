@@ -1,5 +1,10 @@
 // Package mcptest prepara o banco para os testes de integração do MCP.
 // Só é importado por arquivos _test.go.
+//
+// Todo pacote que usa DB() faz TRUNCATE nas mesmas tabelas do mesmo
+// TEST_DATABASE_URL, então os testes têm de rodar com `go test -p 1`.
+// O audit_log NÃO é truncado (não tem FK para users): testes que o leem
+// limpam a tabela por conta própria.
 package mcptest
 
 import (

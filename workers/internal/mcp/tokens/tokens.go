@@ -163,10 +163,13 @@ func (s *Store) Tocar(ctx context.Context, id uuid.UUID) error {
 // pessoais e uma linha por conexão OAuth (o refresh vivo dela).
 func (s *Store) ListarConexoes(ctx context.Context, userID uuid.UUID) ([]Token, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT `+colunas+` FROM mcp_tokens
-		  WHERE user_id = $1 AND tipo IN ('pessoal', 'oauth_refresh')
-		    AND revoked_at IS NULL AND expires_at > NOW()
-		  ORDER BY created_at DESC`, userID)
+		`SELECT `+colunas+` FROM (
+		   SELECT DISTINCT ON (COALESCE(client_id, id::text)) `+colunas+` FROM mcp_tokens
+		    WHERE user_id = $1 AND tipo IN ('pessoal', 'oauth_refresh')
+		      AND revoked_at IS NULL AND expires_at > NOW()
+		    ORDER BY COALESCE(client_id, id::text), created_at DESC
+		 ) conexoes
+		 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -198,14 +201,17 @@ func (s *Store) Revogar(ctx context.Context, id, userID uuid.UUID) (bool, error)
 	return tag.RowsAffected() > 0, nil
 }
 
-// RevogarTodos mata toda credencial viva do usuário e os códigos pendentes.
+// RevogarTodos revoga toda credencial não revogada do usuário e apaga os
+// códigos pendentes. O retorno conta só as que ainda estavam vivas (não
+// vencidas) — as vencidas são revogadas mas não entram na conta.
 func (s *Store) RevogarTodos(ctx context.Context, userID uuid.UUID) (int64, error) {
 	var n int64
 	err := s.db.QueryRow(ctx,
 		`WITH t AS (UPDATE mcp_tokens SET revoked_at = NOW()
-		             WHERE user_id = $1 AND revoked_at IS NULL RETURNING 1),
+		             WHERE user_id = $1 AND revoked_at IS NULL
+		             RETURNING (expires_at > NOW()) AS vivo),
 		      c AS (DELETE FROM mcp_oauth_codes WHERE user_id = $1)
-		 SELECT COUNT(*) FROM t`, userID).Scan(&n)
+		 SELECT COUNT(*) FILTER (WHERE vivo) FROM t`, userID).Scan(&n)
 	return n, err
 }
 
