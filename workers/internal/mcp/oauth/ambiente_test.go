@@ -42,6 +42,8 @@ func novoAmbiente(t *testing.T) *ambiente {
 	require.NoError(t, err)
 	segredo := []byte(mcptest.SegredoTeste)
 	srv := NovoServidor(pool, tokens.NovoStore(pool, segredo), segredo, "https://api.teste", "https://portal.teste", zap.NewNop())
+	// Fixo, para o teste não depender de MCP_REDIRECT_HOSTS no shell de quem roda.
+	srv.HostsPermitidos = []string{"claude.ai", "vertexaisearch.cloud.google.com"}
 
 	r := chi.NewRouter()
 	r.Get("/.well-known/oauth-protected-resource/mcp", srv.MetadadosRecurso)

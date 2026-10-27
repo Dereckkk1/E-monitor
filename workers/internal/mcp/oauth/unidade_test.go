@@ -44,6 +44,26 @@ func TestRedirectValido(t *testing.T) {
 	for uri, esperado := range casos {
 		require.Equal(t, esperado, redirectValido(uri), uri)
 	}
+	// Homógrafos: host com qualquer byte não-ASCII é recusado, cru ou em %.
+	require.False(t, redirectValido("https://сlaude.ai/cb"), "c cirílico")
+	require.False(t, redirectValido("https://%D1%81laude.ai/cb"), "c cirílico em %")
+	require.True(t, redirectValido("https://xn--laude-3ve.ai/cb"), "punycode é ASCII: quem barra é a lista de hosts")
+}
+
+func TestNovoServidor_HostsPermitidos(t *testing.T) {
+	t.Setenv("MCP_REDIRECT_HOSTS", "")
+	require.Equal(t, []string{"claude.ai", "claude.com", "vertexaisearch.cloud.google.com"},
+		NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos, "vazio = padrão")
+	t.Setenv("MCP_REDIRECT_HOSTS", " , ")
+	require.Len(t, NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos, 3, "só vírgulas = padrão")
+	t.Setenv("MCP_REDIRECT_HOSTS", "a.test, B.TEST ,")
+	require.Equal(t, []string{"a.test", "b.test"}, NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos)
+}
+
+func TestLimparNome(t *testing.T) {
+	require.Equal(t, "Claude", limparNome("‮Cla​ude\x07"))
+	require.Equal(t, "Gemini Enterprise", limparNome("Gemini Enterprise"))
+	require.Equal(t, "Ação", limparNome("Ação"))
 }
 
 func TestComParametros_PreservaQueryEIgnoraVazios(t *testing.T) {

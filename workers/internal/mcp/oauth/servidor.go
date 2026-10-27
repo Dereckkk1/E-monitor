@@ -3,6 +3,9 @@ package oauth
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,8 +34,11 @@ type Servidor struct {
 	// ao /token. O DCR é aberto e o rate limit é por IP; quem tem muitos IPs
 	// ainda encheria a tabela sem este teto.
 	MaxClientesPendentes int
-	Log                  *zap.Logger
-	agora                func() time.Time
+	// HostsPermitidos: únicos hosts https aceitos como redirect_uri no DCR
+	// (comparação exata, sem subdomínio). Loopback http vale sempre.
+	HostsPermitidos []string
+	Log             *zap.Logger
+	agora           func() time.Time
 }
 
 // NovoServidor monta o authorization server. Quem chama garante que segredo
@@ -49,9 +55,36 @@ func NovoServidor(pool *pgxpool.Pool, store *tokens.Store, segredo []byte, orige
 		Portal:               portal,
 		Registros:            auth.NewLoginRateLimiter(20, time.Hour), // contrato §5: 20 DCR/h por IP
 		MaxClientesPendentes: 500,
+		HostsPermitidos:      hostsDoAmbiente(),
 		Log:                  log,
 		agora:                time.Now,
 	}
+}
+
+// hostsPadrao são os destinos de redirect aceitos no DCR quando
+// MCP_REDIRECT_HOSTS não está definido. O DCR é aberto; sem esta lista,
+// qualquer um registraria um cliente com nome bonito e redirect próprio e
+// mandaria o link do /authorize para um admin (phishing de consentimento).
+var hostsPadrao = []string{
+	"claude.ai",                       // callback do conector do Claude (web, desktop e mobile)
+	"claude.com",                      // o mesmo callback no domínio novo da Anthropic
+	"vertexaisearch.cloud.google.com", // callback do Gemini Enterprise
+	// Claude Code usa http em loopback, aceito sempre, fora desta lista.
+}
+
+// hostsDoAmbiente lê MCP_REDIRECT_HOSTS (separado por vírgula; espaços e
+// maiúsculas não importam). Vazio, ou só vírgulas, cai no padrão.
+func hostsDoAmbiente() []string {
+	var hosts []string
+	for _, h := range strings.Split(os.Getenv("MCP_REDIRECT_HOSTS"), ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	if len(hosts) == 0 {
+		return slices.Clone(hostsPadrao)
+	}
+	return hosts
 }
 
 func (s *Servidor) URLRecurso() string { return s.Origem + "/mcp" }

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
+	"unicode"
 
 	"go.uber.org/zap"
 )
@@ -51,6 +54,13 @@ func (s *Servidor) Registrar(w http.ResponseWriter, r *http.Request) {
 			erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri precisa ser https (http só em loopback) e sem fragmento: "+u)
 			return
 		}
+		if host, ok := s.destinoPermitido(u); !ok {
+			erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", fmt.Sprintf(
+				"o host %q não está entre os destinos permitidos (%s; http em localhost/127.0.0.1/::1 vale sempre). "+
+					"Para liberar outro, o operador do E-monitor inclui o host em MCP_REDIRECT_HOSTS.",
+				host, strings.Join(s.HostsPermitidos, ", ")))
+			return
+		}
 	}
 	metodo := c.TokenEndpointAuthMethod
 	confidencial := false
@@ -63,7 +73,7 @@ func (s *Servidor) Registrar(w http.ResponseWriter, r *http.Request) {
 		erroOAuth(w, http.StatusBadRequest, "invalid_client_metadata", "token_endpoint_auth_method não suportado: "+metodo)
 		return
 	}
-	nome := strings.TrimSpace(c.ClientName)
+	nome := strings.TrimSpace(limparNome(c.ClientName))
 	if nome == "" {
 		nome = "Assistente sem nome"
 	}
@@ -96,4 +106,32 @@ func (s *Servidor) Registrar(w http.ResponseWriter, r *http.Request) {
 		resp["client_secret_expires_at"] = 0
 	}
 	escreverJSON(w, http.StatusCreated, resp)
+}
+
+// destinoPermitido aplica a lista de hosts a um redirect_uri que já passou no
+// redirectValido: https só com host EXATAMENTE na lista (sem curinga de
+// subdomínio); http ali já é loopback e vale sempre. Devolve o host para a
+// mensagem de erro.
+func (s *Servidor) destinoPermitido(bruto string) (string, bool) {
+	u, err := url.Parse(bruto)
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if u.Scheme == "http" {
+		return host, ehLoopback(host)
+	}
+	return host, u.Scheme == "https" && slices.Contains(s.HostsPermitidos, host)
+}
+
+// limparNome tira caracteres de controle e de formatação (Unicode Cc e Cf —
+// U+202E inverte o texto na tela de consentimento, U+200B some) do
+// client_name, que o admin lê antes de autorizar.
+func limparNome(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cc, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, s)
 }
