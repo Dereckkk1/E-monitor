@@ -31,6 +31,7 @@ import (
 	"radiocheck/internal/fingerprintqueue"
 	"radiocheck/internal/index"
 	"radiocheck/internal/mailer"
+	"radiocheck/internal/mcp"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/postsale"
 	"radiocheck/internal/projrecon"
@@ -687,6 +688,16 @@ func main() {
 		// (o handler antigo, fora do router, e o front ainda o espelham).
 		SuggestionsHub:  handlers.NewSuggestionsHubHandler(hub.New(cfg.HubURL, cfg.HubPlatformKey), usersRepo),
 		ClientTargetPmm: &handlers.ClientTargetPmmHandler{Repo: catalog.NewClientStationPMM(pool)},
+		// MCP do E-monitor (spec 2026-10-27). Segredo = o mesmo JWT_SECRET do
+		// portal: salga os hashes das credenciais e assina o pedido OAuth.
+		MCP: mcp.NovoModulo(mcp.DepsModulo{
+			Pool:    pool,
+			Segredo: []byte(os.Getenv("JWT_SECRET")),
+			Origem:  cfg.MCPOrigemPublica,
+			Portal:  cfg.NotificationsBaseURL,
+			Versao:  "fatia-0",
+			Log:     logger,
+		}),
 	}
 
 	srv := &http.Server{

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/auth"
+	"radiocheck/internal/mcp"
 	"radiocheck/internal/reqmetrics"
 )
 
@@ -88,6 +89,9 @@ type Deps struct {
 	// rota usam, por nao terem banco.
 	Ativos                *auth.VerificadorAtivo
 	ClientTargetPmm       *handlers.ClientTargetPmmHandler
+	// MCP do E-monitor (spec 2026-10-27). Nil = MCP não montado (testes ou
+	// JWT_SECRET inválido).
+	MCP *mcp.Modulo
 
 	// Reqmetrics writer and block-list. Quando ambos são nil, o router não
 	// instala telemetria nem enforcement — útil em testes que não querem
@@ -148,6 +152,12 @@ func NewRouter(d Deps) http.Handler {
 
 	// Prometheus metrics — public, no auth required (§15.1).
 	r.Handle("/metrics", promhttp.Handler())
+
+	// MCP do E-monitor: /mcp, descoberta OAuth e /mcp/oauth/* — fora do
+	// /v1/internal porque não usam o JWT do portal (têm autenticação própria).
+	if d.MCP != nil {
+		d.MCP.MontarPublico(r)
+	}
 
 	// Per-IP throttle for the public login endpoint — brute force /
 	// credential stuffing defence (audit 2026-07-21 H-04). 10 attempts per
@@ -755,6 +765,14 @@ func NewRouter(d Deps) http.Handler {
 				}
 			}) // end admin/operator group
 
+			// ── MCP: credenciais e consentimento OAuth (admin-only) ──────────
+			if d.MCP != nil {
+				r.Group(func(r chi.Router) {
+					r.Use(auth.RequireRole("admin"))
+					d.MCP.MontarAdmin(r)
+				})
+			}
+
 			// ── Subgrupo C — admin-only: user management CRUD ────────────────
 			// New endpoints for managing platform users. Nil-guarded so the
 			// handler can be omitted in test harnesses without panicking.
@@ -860,7 +878,8 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name, Last-Event-ID")
+		w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version, Retry-After")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
