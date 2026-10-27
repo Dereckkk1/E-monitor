@@ -17,6 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/redisambiguate-twins ./cmd/redisam
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-recategorize ./cmd/backfill-recategorize
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/backfill-anatel ./cmd/backfill-anatel
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/import-suggestions-hub ./cmd/import-suggestions-hub
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/revoga-mcp ./cmd/revoga-mcp
 
 FROM alpine:3.19
 # tzdata: necessário para o evidence tiering job carregar America/Sao_Paulo
@@ -38,5 +39,6 @@ COPY --from=builder /out/redisambiguate-twins  /usr/local/bin/redisambiguate-twi
 COPY --from=builder /out/backfill-recategorize  /usr/local/bin/backfill-recategorize
 COPY --from=builder /out/backfill-anatel  /usr/local/bin/backfill-anatel
 COPY --from=builder /out/import-suggestions-hub  /usr/local/bin/import-suggestions-hub
+COPY --from=builder /out/revoga-mcp  /usr/local/bin/revoga-mcp
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]
