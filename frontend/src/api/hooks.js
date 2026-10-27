@@ -1717,3 +1717,44 @@ export function useRevokePostSaleRecipient() {
     onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] }),
   })
 }
+
+// ─── MCP do E-monitor (spec docs/superpowers/specs/2026-10-27-mcp-server-design.md §4) ───
+
+export function useMcpConexoes({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'conexoes'],
+    queryFn: () => api.get('/mcp/tokens').then(r => r.data.items),
+    enabled,
+  })
+}
+
+export function useCriarTokenMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => api.post('/mcp/tokens', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
+  })
+}
+
+export function useRevogarMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.delete(`/mcp/tokens/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
+  })
+}
+
+export function usePedidoAutorizacaoMcp(pedido) {
+  return useQuery({
+    queryKey: ['mcp', 'pedido', pedido],
+    queryFn: () => api.get('/mcp/oauth/pedido', { params: { p: pedido } }).then(r => r.data),
+    enabled: !!pedido,
+    retry: false,
+  })
+}
+
+export function useConcederMcp() {
+  return useMutation({
+    mutationFn: (body) => api.post('/mcp/oauth/grant', body).then(r => r.data),
+  })
+}
