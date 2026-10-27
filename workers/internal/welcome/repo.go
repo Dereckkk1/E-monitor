@@ -34,8 +34,11 @@ type Invite struct {
 // Resolved é o que o endpoint público devolve: os dados que a página de
 // boas-vindas precisa renderizar. A senha aqui já vem decifrada.
 type Resolved struct {
-	Name          string `json:"name"`
-	Email         string `json:"email"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	// Username vem do cadastro ATUAL (não do momento do convite): se o admin
+	// der um username depois, a página já mostra a segunda forma de entrar.
+	Username      string `json:"username,omitempty"`
 	Password      string `json:"password"`
 	Role          string `json:"role"` // "admin" | "client"
 	ClientName    string `json:"client_name,omitempty"`
@@ -152,6 +155,7 @@ type ResolvedRow struct {
 	PasswordEnc   []byte
 	Name          string
 	Email         string
+	Username      string // "" = conta sem username
 	Role          string // vocabulário do banco ('viewer' | 'admin' | 'operator')
 	ClientName    string
 	ClientLogoURL string
@@ -180,7 +184,7 @@ func (r *Repo) Resolve(ctx context.Context, token string) (*ResolvedRow, error) 
 	var clientName, clientLogo *string
 	var walletJSON []byte
 	err := r.pool.QueryRow(ctx,
-		`SELECT i.id, i.initial_password_enc, u.name, u.email, u.role, c.name, c.logo_url,
+		`SELECT i.id, i.initial_password_enc, u.name, u.email, COALESCE(u.username, ''), u.role, c.name, c.logo_url,
 		        COALESCE((
 		          SELECT json_agg(json_build_object('name', wc.name, 'logo_url', wc.logo_url)
 		                          ORDER BY uc.created_at, uc.client_id)
@@ -195,7 +199,7 @@ func (r *Repo) Resolve(ctx context.Context, token string) (*ResolvedRow, error) 
 		    AND i.revoked_at IS NULL
 		    AND i.initial_password_enc IS NOT NULL
 		    AND u.deleted_at IS NULL`, token,
-	).Scan(&row.InviteID, &row.PasswordEnc, &row.Name, &row.Email, &row.Role,
+	).Scan(&row.InviteID, &row.PasswordEnc, &row.Name, &row.Email, &row.Username, &row.Role,
 		&clientName, &clientLogo, &walletJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

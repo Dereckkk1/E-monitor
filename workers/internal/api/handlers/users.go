@@ -169,7 +169,9 @@ func (h *UsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 // ── Create ───────────────────────────────────────────────────────────────
 
 type createUserPayload struct {
-	Email    string     `json:"email"`
+	Email string `json:"email"`
+	// Username é opcional: ausente ou vazio = a conta entra só pelo e-mail.
+	Username *string    `json:"username,omitempty"`
 	Password string     `json:"password"`
 	Name     string     `json:"name"`
 	Phone    *string    `json:"phone,omitempty"`
@@ -216,7 +218,11 @@ func writeUserPGError(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	switch pgErr.Code {
-	case "23505": // unique_violation (email)
+	case "23505": // unique_violation — e-mail OU username já em uso
+		if pgErr.ConstraintName == "users_username_active" {
+			http.Error(w, "username_taken", http.StatusConflict)
+			return true
+		}
 		http.Error(w, "email_taken", http.StatusConflict)
 	case "23514": // check_violation (users_client_role_consistency)
 		http.Error(w, "role_client_inconsistent", http.StatusBadRequest)
@@ -247,6 +253,17 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid_role", http.StatusBadRequest)
 		return
 	}
+	var username *string
+	if p.Username != nil {
+		norm, err := users.NormalizeUsername(*p.Username)
+		if err != nil {
+			http.Error(w, "invalid_username", http.StatusBadRequest)
+			return
+		}
+		if norm != "" {
+			username = &norm
+		}
+	}
 	// Normaliza carteira: client_ids vence, client_id é o fallback legado.
 	wallet := p.ClientIDs
 	if len(wallet) == 0 && p.ClientID != nil {
@@ -274,6 +291,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := h.repo.Create(r.Context(), users.CreateInput{
 		Email:                 p.Email,
+		Username:              username,
 		PasswordHash:          string(hash),
 		Role:                  dbRole,
 		ClientID:              primary,
@@ -377,8 +395,12 @@ type updateUserPayload struct {
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
 	ReceiveAlertEmails *bool `json:"receive_alert_emails,omitempty"`
 	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda (admins).
-	ReceivePostSaleEmails *bool   `json:"receive_post_sale_emails,omitempty"`
-	Email                 *string `json:"email,omitempty"` // só pra detectar e rejeitar
+	ReceivePostSaleEmails *bool `json:"receive_post_sale_emails,omitempty"`
+	// Username: ausente = não mexe; "" = remove; valor = define/troca. Ao
+	// contrário do e-mail, é mutável — mas só por aqui (admin), nunca pelo
+	// /me: trocar o próprio login não é autoatendimento (decisão do dono).
+	Username *string `json:"username,omitempty"`
+	Email    *string `json:"email,omitempty"` // só pra detectar e rejeitar
 }
 
 func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
@@ -419,6 +441,14 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		IsActive:              p.IsActive,
 		ReceiveAlertEmails:    p.ReceiveAlertEmails,
 		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
+	}
+	if p.Username != nil {
+		norm, err := users.NormalizeUsername(*p.Username)
+		if err != nil {
+			http.Error(w, "invalid_username", http.StatusBadRequest)
+			return
+		}
+		in.Username = &norm // "" = remover, que é o que o Update entende
 	}
 	if p.Role != nil {
 		dbRole, ok := roleAlias(*p.Role)
