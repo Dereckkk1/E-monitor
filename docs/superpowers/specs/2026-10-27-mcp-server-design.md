@@ -95,10 +95,17 @@ compartilhada (`in_slot + bonus`), `categorizer.Settle`, o tratamento de `cancel
 - Token pessoal `emonitor_mcp_` + 64 hex; guardado só como `SHA-256(JWT_SECRET:token)`; mostrado
   uma vez; 90 dias padrão, 365 máximo; nome livre; `last_used_at`.
 - Tokens OAuth na **mesma tabela** (`tipo`: `pessoal` | `oauth_access` | `oauth_refresh`).
-  Access 30 dias; refresh `emonitor_mcr_` 90 dias, rotação atômica com janela de corrida de 30 s
-  (como o hub); refresh nunca autentica `/mcp`.
+  Access 30 dias; refresh `emonitor_mcr_` 90 dias, rotação atômica: o refresh usado uma vez não
+  serve de novo (`invalid_grant`), e a conexão continua com o par novo — como a Plura. A detecção
+  de reuso do hub (reuso depois de 30 s derruba a conexão inteira, por suspeita de roubo) fica
+  como follow-up; refresh nunca autentica `/mcp`.
 - Toda chamada relê o usuário: `role = admin` **e** ativo. Senão 401.
-- Revogação automática ao: trocar senha, reset de senha, desativar usuário, rebaixar de admin.
+- Revogação automática ao: trocar senha, reset de senha, desativar usuário, rebaixar de admin,
+  apagar (soft delete). Implementada como **trigger em `users`** (migration 0070), não no repo:
+  cobre todo caminho que mexe no usuário (tela, sync do hub, bloqueio do `/admin/monitoring`) e
+  impede que reativar alguém ressuscite tokens antigos. Limitação aceita: uma renovação de token
+  que esteja no meio da transação no mesmo milissegundo da troca de senha pode sobreviver a ela
+  (corrida entre snapshots; fechar exigiria ordenar locks entre as duas transações).
 - CLI `revoga-mcp` (`--listar`, `--email X [--aplicar]`, `--todos [--aplicar]`), dry-run sem
   `--aplicar`, uma linha de auditoria por item. **Duas linhas no `workers.Dockerfile`** (regra 6.7).
 - O token do MCP **só abre `/mcp`**. `auth.RequireJWT` continua recusando-o (prefixo diferente
