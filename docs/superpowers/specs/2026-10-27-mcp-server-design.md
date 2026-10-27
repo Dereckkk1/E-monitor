@@ -117,15 +117,27 @@ compartilhada (`in_slot + bonus`), `categorizer.Settle`, o tratamento de `cancel
 - Descoberta: RFC 9728 (`/.well-known/oauth-protected-resource/mcp`) e RFC 8414
   (`/.well-known/oauth-authorization-server`); issuer pelo host público (`MCP_ORIGEM_PUBLICA`),
   `iss` no redirect (RFC 9207).
-- DCR aberto (RFC 7591), 20/h por IP. `client_id` sozinho não dá acesso a nada.
+- DCR aberto (RFC 7591), 20/h por IP (`CF-Connecting-IP`, IPv6 por /64 — os cabeçalhos que o
+  `middleware.RealIP` lê são forjáveis atrás do Cloudflare) e no máximo 500 clientes que nunca
+  pegaram token. `client_id` sozinho não dá acesso a nada.
+- **Destinos permitidos (decisão do Dereck, 2026-10-27):** o registro só aceita `redirect_uri`
+  https cujo host esteja em `MCP_REDIRECT_HOSTS` (padrão `claude.ai`, `claude.com`,
+  `vertexaisearch.cloud.google.com`), mais loopback http para o Claude Code. Fecha o phishing de
+  consentimento: sem isso, qualquer um registra um "Claude" com destino próprio (ou homógrafo
+  `сlaude.ai`) e um admin que clique em Autorizar entrega 30 dias de acesso total. Host não-ASCII
+  é recusado e `client_name` perde caracteres de controle/formatação (U+202E). Cliente novo (outro
+  assistente) = acrescentar o host na variável, sem deploy de código.
 - **Cliente público**: PKCE S256 obrigatório (challenge base64url de 43 chars).
 - **Cliente confidencial (Gemini Enterprise)**: `token_endpoint_auth_method` = `client_secret_post`
   ou `client_secret_basic`; secret `emonitor_mcs_…` devolvido uma vez, só hash guardado; pode omitir
   PKCE, mas PKCE parcial é recusado; secret exigido em **toda** ida ao `/token` (code e refresh),
   verificado **antes** de consumir o code. Redirect do Gemini:
   `https://vertexaisearch.cloud.google.com/oauth-redirect`.
-- `redirect_uri` por igualdade exata, https (http só loopback), sem fragmento; erro só volta ao
-  redirect depois de ele ser confiável.
+- `redirect_uri` por igualdade exata, https (http só loopback), sem fragmento nem userinfo; em
+  loopback a porta é ignorada no `/authorize` (RFC 8252 §7.3 — o Claude Code abre porta efêmera);
+  erro só volta ao redirect depois de ele ser confiável e de o cliente já ter pegado um token
+  (RFC 9700 §4.11.2 — senão é página 400). PKCE downgrade recusado: `code_verifier` sem
+  `code_challenge` guardado dá `invalid_grant`.
 - `/mcp/oauth/authorize` valida e faz 302 para o frontend `/autorizar-ia?pedido=…`. **COOP
   `unsafe-none` só nessa rota** (lição hub `b77b344e`: o COOP padrão separava o pop-up do Gemini
   do `window.opener`).
