@@ -1,0 +1,33 @@
+package auditoria_test
+
+import (
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
+	"radiocheck/internal/mcp/auditoria"
+	"radiocheck/internal/mcp/mcptest"
+)
+
+func TestRegistrar_GravaComOrigemMCP(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	alvo := uuid.New()
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.token.criado", "mcp_token", &alvo,
+		map[string]any{"nome": "notebook"}))
+
+	var acao, recurso, origem, nome string
+	var recursoID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT action, resource, resource_id, metadata->>'origem', metadata->>'nome'
+		   FROM audit_log WHERE actor_id = $1`, ator).Scan(&acao, &recurso, &recursoID, &origem, &nome))
+	require.Equal(t, "mcp.token.criado", acao)
+	require.Equal(t, "mcp_token", recurso)
+	require.Equal(t, alvo, recursoID)
+	require.Equal(t, "mcp", origem)
+	require.Equal(t, "notebook", nome)
+}
