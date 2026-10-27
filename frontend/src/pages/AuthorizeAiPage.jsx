@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { usePedidoAutorizacaoMcp, useConcederMcp } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
@@ -10,16 +11,32 @@ function mensagemDe(err) {
   return err?.response?.data?.error ?? 'Não foi possível concluir. Volte ao assistente e conecte de novo.'
 }
 
+// O redirect vem da API (já validado lá contra o cadastro do cliente), mas a
+// tela não navega para esquemas perigosos (javascript:, data:) se algo falhar.
+function destinoSeguro(redirect) {
+  try {
+    const u = new URL(redirect)
+    if (u.protocol === 'https:') return true
+    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+  } catch {
+    return false
+  }
+}
+
 export default function AuthorizeAiPage() {
   const [params] = useSearchParams()
   const pedido = params.get('pedido') ?? ''
   const { user } = useAuth()
   const pedidoQ = usePedidoAutorizacaoMcp(pedido)
   const conceder = useConcederMcp()
+  const [redirectInvalido, setRedirectInvalido] = useState(false)
 
   const decidir = (aprovar) =>
     conceder.mutate({ pedido, aprovar }, {
-      onSuccess: (data) => window.location.assign(data.redirect),
+      onSuccess: (data) => {
+        if (!destinoSeguro(data?.redirect)) { setRedirectInvalido(true); return }
+        window.location.assign(data.redirect)
+      },
     })
 
   let corpo
@@ -33,17 +50,18 @@ export default function AuthorizeAiPage() {
     const { cliente, destino } = pedidoQ.data
     corpo = (
       <>
-        <h1 className="aia-titulo">{cliente} quer acessar o E-monitor</h1>
+        <h1 className="aia-titulo">Um assistente quer acessar o E-monitor</h1>
+        <p className="aia-texto aia-destino">Ele se apresenta como <strong>{cliente}</strong> e vai voltar para <strong>{destino}</strong>.</p>
         <p className="aia-texto">
           Vai agir como <strong>{user?.name ?? 'você'}</strong>, com acesso de administrador: ler campanhas,
           veiculações, materiais e emissoras, gerar relatórios e, quando você confirmar, editar.
         </p>
-        <p className="aia-texto aia-destino">Depois de decidir, você volta para <strong>{destino}</strong>.</p>
         <p className="aia-texto aia-alerta">Só autorize se foi você que acabou de clicar em "Conectar" no assistente. Se alguém te mandou este link, recuse.</p>
         {conceder.isError && <p className="aia-msg aia-msg--erro" role="alert">{mensagemDe(conceder.error)}</p>}
+        {redirectInvalido && <p className="aia-msg aia-msg--erro" role="alert">{mensagemDe(null)}</p>}
         <div className="aia-acoes">
-          <button className="btn btn-secondary" disabled={conceder.isPending} onClick={() => decidir(false)}>Recusar</button>
-          <button className="btn btn-primary" disabled={conceder.isPending} onClick={() => decidir(true)}>Autorizar</button>
+          <button className="btn btn-secondary" disabled={conceder.isPending || conceder.isSuccess} onClick={() => decidir(false)}>Recusar</button>
+          <button className="btn btn-primary" disabled={conceder.isPending || conceder.isSuccess} onClick={() => decidir(true)}>Autorizar</button>
         </div>
         <p className="aia-rodape">Você pode desconectar quando quiser em Minha conta → Integração com IA.</p>
       </>
