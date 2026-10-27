@@ -9,8 +9,10 @@ import (
 	"strings"
 )
 
-// redirectValido: https, ou http só em loopback (Claude Code), sem fragmento e
-// sem userinfo (https://evil@claude.ai engana quem lê a URL na tela).
+// redirectValido: https, ou http só em loopback (Claude Code), sem fragmento,
+// sem userinfo (https://evil@claude.ai engana quem lê a URL na tela) e com host
+// só ASCII (homógrafo: "сlaude.ai" com c cirílico; o url.Parse já desfez os %
+// do host, então a checagem pega também a forma codificada).
 func redirectValido(bruto string) bool {
 	if strings.Contains(bruto, "#") {
 		return false
@@ -18,6 +20,11 @@ func redirectValido(bruto string) bool {
 	u, err := url.Parse(bruto)
 	if err != nil || u.Host == "" || u.User != nil {
 		return false
+	}
+	for i := 0; i < len(u.Host); i++ {
+		if u.Host[i] > 0x7f {
+			return false
+		}
 	}
 	switch u.Scheme {
 	case "https":

@@ -12,8 +12,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/auth"
+	"radiocheck/internal/mcp/mcptest"
 )
 
 func TestMetadados(t *testing.T) {
@@ -60,6 +62,73 @@ func TestRegistro_Recusas(t *testing.T) {
 	st, e = a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{redirectClaude}, "token_endpoint_auth_method": "private_key_jwt"})
 	require.Equal(t, http.StatusBadRequest, st)
 	require.Equal(t, "invalid_client_metadata", e["error"], "método desconhecido é recusado, não rebaixado")
+}
+
+// Phishing de consentimento: o DCR é aberto, mas o código só pode voltar para
+// os assistentes que a gente conhece (ou para loopback, do Claude Code).
+func TestRegistro_SoDestinosPermitidos(t *testing.T) {
+	a := novoAmbiente(t)
+	recusados := []string{
+		"https://evil.example/cb",
+		"https://сlaude.ai/cb", // c cirílico
+		"https://sub.claude.ai/cb",
+		"https://claude.ai.evil.example/cb",
+	}
+	for _, uri := range recusados {
+		st, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{uri}})
+		require.Equal(t, http.StatusBadRequest, st, uri)
+		require.Equal(t, "invalid_redirect_uri", e["error"], uri)
+	}
+	_, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{"https://evil.example/cb"}})
+	require.Contains(t, e["error_description"], "MCP_REDIRECT_HOSTS")
+	require.Contains(t, e["error_description"], "claude.ai")
+
+	// Um destino ruim no meio derruba o registro inteiro.
+	st, _ := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{redirectClaude, "https://evil.example/cb"}})
+	require.Equal(t, http.StatusBadRequest, st)
+
+	aceitos := []string{
+		redirectClaude,
+		"https://CLAUDE.AI/api/mcp/auth_callback",
+		"https://vertexaisearch.cloud.google.com/oauth-redirect",
+		"http://localhost:4321/callback",
+		"http://127.0.0.1:1/cb",
+		"http://[::1]:65000/cb",
+	}
+	for _, uri := range aceitos {
+		st, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{uri}})
+		require.Equal(t, http.StatusCreated, st, "%s: %v", uri, e)
+	}
+}
+
+func TestRegistro_HostsDoAmbiente(t *testing.T) {
+	a := novoAmbiente(t)
+	t.Setenv("MCP_REDIRECT_HOSTS", "a.test, B.TEST")
+	srv := NovoServidor(a.pool, a.srv.Tokens, []byte(mcptest.SegredoTeste), "https://api.teste", "https://portal.teste", zap.NewNop())
+	registrar := func(uri string) int {
+		req := httptest.NewRequest(http.MethodPost, "/mcp/oauth/register",
+			strings.NewReader(`{"client_name":"x","redirect_uris":["`+uri+`"]}`))
+		rec := httptest.NewRecorder()
+		srv.Registrar(rec, req)
+		return rec.Code
+	}
+	require.Equal(t, http.StatusCreated, registrar("https://b.test/cb"))
+	require.Equal(t, http.StatusCreated, registrar("https://a.test/cb"))
+	require.Equal(t, http.StatusBadRequest, registrar(redirectClaude), "a lista do ambiente substitui a padrão")
+	require.Equal(t, http.StatusCreated, registrar("http://localhost:9/cb"), "loopback vale sempre")
+}
+
+func TestRegistro_NomeSemCaracteresDeControle(t *testing.T) {
+	a := novoAmbiente(t)
+	st, reg := a.registrar(map[string]any{"client_name": "Cla‮ude​", "redirect_uris": []string{redirectClaude}})
+	require.Equal(t, http.StatusCreated, st)
+	require.Equal(t, "Claude", reg["client_name"])
+	var nome string
+	require.NoError(t, a.pool.QueryRow(a.ctx, `SELECT nome FROM mcp_oauth_clients WHERE client_id = $1`, reg["client_id"]).Scan(&nome))
+	require.Equal(t, "Claude", nome)
+
+	_, reg = a.registrar(map[string]any{"client_name": "‮​", "redirect_uris": []string{redirectClaude}})
+	require.Equal(t, "Assistente sem nome", reg["client_name"], "só controle vira nome vazio")
 }
 
 func TestRegistro_LimitePorIP(t *testing.T) {
