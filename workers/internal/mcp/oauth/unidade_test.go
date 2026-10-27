@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Vetor oficial do RFC 7636, apêndice B.
@@ -50,18 +52,49 @@ func TestRedirectValido(t *testing.T) {
 	require.True(t, redirectValido("https://xn--laude-3ve.ai/cb"), "punycode é ASCII: quem barra é a lista de hosts")
 }
 
-func TestNovoServidor_HostsPermitidos(t *testing.T) {
-	t.Setenv("MCP_REDIRECT_HOSTS", "")
-	require.Equal(t, []string{"claude.ai", "claude.com", "vertexaisearch.cloud.google.com"},
-		NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos, "vazio = padrão")
-	t.Setenv("MCP_REDIRECT_HOSTS", " , ")
-	require.Len(t, NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos, 3, "só vírgulas = padrão")
-	t.Setenv("MCP_REDIRECT_HOSTS", "a.test, B.TEST ,")
-	require.Equal(t, []string{"a.test", "b.test"}, NovoServidor(nil, nil, nil, "", "", nil).HostsPermitidos)
+func TestNovoServidor_RedirectsPermitidos(t *testing.T) {
+	nop := zap.NewNop()
+	t.Setenv("MCP_REDIRECT_URIS", "")
+	require.Equal(t, []string{"https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"},
+		NovoServidor(nil, nil, nil, "", "", nop).RedirectsPermitidos, "vazio = padrão")
+	t.Setenv("MCP_REDIRECT_URIS", " , ")
+	require.Len(t, NovoServidor(nil, nil, nil, "", "", nop).RedirectsPermitidos, 2, "só vírgulas = padrão")
+	t.Setenv("MCP_REDIRECT_URIS", " https://a.test/cb , HTTPS://B.TEST/Cb?x=1 ,")
+	require.Equal(t, []string{"https://a.test/cb", "https://b.test/Cb?x=1"},
+		NovoServidor(nil, nil, nil, "", "", nop).RedirectsPermitidos, "scheme e host em minúsculas; path e query intactos")
+
+	// Entrada que não é URL https válida cai fora, com aviso (falha fechada).
+	core, logs := observer.New(zap.WarnLevel)
+	t.Setenv("MCP_REDIRECT_URIS", "http://x.test/cb,nao-e-url,https://u@x.test/cb,https://x.test/cb#f,https://ok.test/cb")
+	require.Equal(t, []string{"https://ok.test/cb"}, NovoServidor(nil, nil, nil, "", "", zap.New(core)).RedirectsPermitidos)
+	require.Equal(t, 4, logs.Len())
+	t.Setenv("MCP_REDIRECT_URIS", "http://x.test/cb")
+	require.Empty(t, NovoServidor(nil, nil, nil, "", "", nop).RedirectsPermitidos, "tudo inválido = nada permitido, não o padrão")
 }
 
+func TestNormalizarOrigem(t *testing.T) {
+	casos := map[string]string{
+		"HTTPS://CLAUDE.AI/api/MCP/auth_callback?Q=A": "https://claude.ai/api/MCP/auth_callback?Q=A",
+		"http://LOCALHOST:8080/Cb":                    "http://localhost:8080/Cb",
+		"https://claude.ai":                           "https://claude.ai",
+		"https://Claude.AI?x=Y":                       "https://claude.ai?x=Y",
+		"https://claude.ai/a%2Fb":                     "https://claude.ai/a%2Fb",
+		"sem-esquema":                                 "sem-esquema",
+	}
+	for entrada, esperado := range casos {
+		require.Equal(t, esperado, normalizarOrigem(entrada), entrada)
+	}
+}
+
+// Caracteres invisíveis montados por código, para o fonte não carregar bidi
+// cru (Trojan Source).
+var (
+	rlo  = string(rune(0x202e)) // RIGHT-TO-LEFT OVERRIDE (Cf)
+	zwsp = string(rune(0x200b)) // ZERO WIDTH SPACE (Cf)
+)
+
 func TestLimparNome(t *testing.T) {
-	require.Equal(t, "Claude", limparNome("‮Cla​ude\x07"))
+	require.Equal(t, "Claude", limparNome(rlo+"Cla"+zwsp+"ude\x07"))
 	require.Equal(t, "Gemini Enterprise", limparNome("Gemini Enterprise"))
 	require.Equal(t, "Ação", limparNome("Ação"))
 }
@@ -128,6 +161,9 @@ func TestIPDe(t *testing.T) {
 	require.NotEqual(t, a, c, "outro /64, outra chave")
 	require.Equal(t, "2001:db8:1:2::/64", IPDe(req("1.1.1.1:1", map[string]string{"CF-Connecting-IP": "2001:db8:1:2::ffff"})))
 	require.Equal(t, "192.0.2.1", IPDe(req("[::ffff:192.0.2.1]:80", nil)), "IPv4 mapeado continua IPv4")
+	// CF-Connecting-IP que não é um IP (lixo, lista) não vira chave: cai no RemoteAddr.
+	require.Equal(t, "10.0.0.9", IPDe(req("10.0.0.9:1", map[string]string{"CF-Connecting-IP": "lixo-xxxxxxxx"})))
+	require.Equal(t, "10.0.0.9", IPDe(req("10.0.0.9:1", map[string]string{"CF-Connecting-IP": " 1.2.3.4 , 5.6.7.8"})))
 }
 
 func TestPedido_AssinaturaEVencimento(t *testing.T) {

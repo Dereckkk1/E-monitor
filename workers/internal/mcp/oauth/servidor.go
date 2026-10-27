@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -30,15 +31,17 @@ type Servidor struct {
 	Origem    string // origem pública da API, ex. https://api.e-monitor.online
 	Portal    string // origem do frontend, ex. https://e-monitor.online
 	Registros *auth.LoginRateLimiter
-	// MaxClientesPendentes é o teto de clientes registrados que nunca chegaram
-	// ao /token. O DCR é aberto e o rate limit é por IP; quem tem muitos IPs
-	// ainda encheria a tabela sem este teto.
+	// MaxClientesPendentes é o teto de clientes públicos registrados que nunca
+	// chegaram ao /token. O DCR é aberto e o rate limit é por IP; quem tem
+	// muitos IPs ainda encheria a tabela. Cheio, o pendente público mais
+	// antigo é despejado (ver Clientes.Registrar).
 	MaxClientesPendentes int
-	// HostsPermitidos: únicos hosts https aceitos como redirect_uri no DCR
-	// (comparação exata, sem subdomínio). Loopback http vale sempre.
-	HostsPermitidos []string
-	Log             *zap.Logger
-	agora           func() time.Time
+	// RedirectsPermitidos: callbacks https aceitos no DCR, comparados EXATOS
+	// (scheme e host em minúsculas; path, query e porta como estão). Loopback
+	// http vale sempre, em qualquer porta.
+	RedirectsPermitidos []string
+	Log                 *zap.Logger
+	agora               func() time.Time
 }
 
 // NovoServidor monta o authorization server. Quem chama garante que segredo
@@ -48,43 +51,55 @@ func NovoServidor(pool *pgxpool.Pool, store *tokens.Store, segredo []byte, orige
 	return &Servidor{
 		Pool:                 pool,
 		Tokens:               store,
-		Clientes:             &Clientes{db: pool, segredo: segredo},
+		Clientes:             NovosClientes(pool, segredo),
 		Codigos:              &Codigos{db: pool, segredo: segredo},
 		Segredo:              segredo,
 		Origem:               origem,
 		Portal:               portal,
 		Registros:            auth.NewLoginRateLimiter(20, time.Hour), // contrato §5: 20 DCR/h por IP
 		MaxClientesPendentes: 500,
-		HostsPermitidos:      hostsDoAmbiente(),
+		RedirectsPermitidos:  redirectsDoAmbiente(log),
 		Log:                  log,
 		agora:                time.Now,
 	}
 }
 
-// hostsPadrao são os destinos de redirect aceitos no DCR quando
-// MCP_REDIRECT_HOSTS não está definido. O DCR é aberto; sem esta lista,
-// qualquer um registraria um cliente com nome bonito e redirect próprio e
-// mandaria o link do /authorize para um admin (phishing de consentimento).
-var hostsPadrao = []string{
-	"claude.ai",                       // callback do conector do Claude (web, desktop e mobile)
-	"claude.com",                      // o mesmo callback no domínio novo da Anthropic
-	"vertexaisearch.cloud.google.com", // callback do Gemini Enterprise
+// redirectsPadrao são os callbacks aceitos no DCR quando MCP_REDIRECT_URIS
+// não está definido. O DCR é aberto; sem esta lista, qualquer um registraria
+// um cliente com nome bonito e redirect próprio e mandaria o link do
+// /authorize para um admin (phishing de consentimento). Callback exato, e não
+// host: o path e a query também ficam fora do alcance de quem registra.
+var redirectsPadrao = []string{
+	"https://claude.ai/api/mcp/auth_callback",  // conector do Claude (web, desktop e mobile)
+	"https://claude.com/api/mcp/auth_callback", // o mesmo callback no domínio novo da Anthropic
 	// Claude Code usa http em loopback, aceito sempre, fora desta lista.
+	// Gemini Enterprise é confidencial e não passa pelo DCR: registra-cliente-mcp.
 }
 
-// hostsDoAmbiente lê MCP_REDIRECT_HOSTS (separado por vírgula; espaços e
-// maiúsculas não importam). Vazio, ou só vírgulas, cai no padrão.
-func hostsDoAmbiente() []string {
-	var hosts []string
-	for _, h := range strings.Split(os.Getenv("MCP_REDIRECT_HOSTS"), ",") {
-		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
-			hosts = append(hosts, h)
+// redirectsDoAmbiente lê MCP_REDIRECT_URIS (separado por vírgula). Vazio, ou
+// só vírgulas, cai no padrão. Entrada que não seja URL https válida (com
+// host, sem userinfo nem fragmento) cai fora com aviso — se todas caírem, a
+// lista fica vazia (só loopback), e não volta ao padrão: falha fechada.
+func redirectsDoAmbiente(log *zap.Logger) []string {
+	var entradas []string
+	for _, e := range strings.Split(os.Getenv("MCP_REDIRECT_URIS"), ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			entradas = append(entradas, e)
 		}
 	}
-	if len(hosts) == 0 {
-		return slices.Clone(hostsPadrao)
+	if len(entradas) == 0 {
+		return slices.Clone(redirectsPadrao)
 	}
-	return hosts
+	validas := []string{}
+	for _, e := range entradas {
+		n := normalizarOrigem(e)
+		if u, err := url.Parse(n); err != nil || u.Scheme != "https" || !redirectValido(n) {
+			log.Warn("mcp oauth: MCP_REDIRECT_URIS ignora entrada que não é URL https válida", zap.String("entrada", e))
+			continue
+		}
+		validas = append(validas, n)
+	}
+	return validas
 }
 
 func (s *Servidor) URLRecurso() string { return s.Origem + "/mcp" }

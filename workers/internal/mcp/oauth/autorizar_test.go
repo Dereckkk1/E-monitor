@@ -113,21 +113,19 @@ func TestConceder_GravaAuditoria(t *testing.T) {
 // /authorize um open redirect com a nossa origem na frente.
 func TestAutorizar_ClienteNovoNaoRecebeErroPorRedirect(t *testing.T) {
 	a := novoAmbiente(t)
-	for _, corpo := range []map[string]any{
-		{"client_name": "pub", "redirect_uris": []string{redirectClaude}},
-		{"client_name": "conf", "token_endpoint_auth_method": "client_secret_post", "redirect_uris": []string{redirectClaude}},
-	} {
-		st, reg := a.registrar(corpo)
-		require.Equal(t, http.StatusCreated, st)
-		p := paramsAutorizar(reg["client_id"].(string))
+	st, reg := a.registrar(map[string]any{"client_name": "pub", "redirect_uris": []string{redirectClaude}})
+	require.Equal(t, http.StatusCreated, st)
+	conf, _ := a.confidencial("conf", redirectClaude)
+	for nome, id := range map[string]string{"público": reg["client_id"].(string), "confidencial": conf} {
+		p := paramsAutorizar(id)
 		p.Set("response_type", "x")
 		res := a.autorizar(p)
-		require.Equal(t, http.StatusBadRequest, res.StatusCode, corpo["client_name"])
-		require.Empty(t, res.Header.Get("Location"), corpo["client_name"])
+		require.Equal(t, http.StatusBadRequest, res.StatusCode, nome)
+		require.Empty(t, res.Header.Get("Location"), nome)
 
-		a.ativar(reg["client_id"].(string))
+		a.ativar(id)
 		res = a.autorizar(p)
-		require.Equal(t, http.StatusFound, res.StatusCode, "depois do primeiro token o erro volta por redirect")
+		require.Equal(t, http.StatusFound, res.StatusCode, "%s: depois do primeiro token o erro volta por redirect", nome)
 	}
 }
 
@@ -165,11 +163,15 @@ func TestAutorizar_ResourceNormalizado(t *testing.T) {
 	id := reg["client_id"].(string)
 	a.ativar(id)
 	for rec, ok := range map[string]bool{
-		"https://api.teste/mcp":   true,
-		"HTTPS://API.TESTE/mcp/":  true,
-		"https://api.teste/mcp//": false,
-		"https://api.teste/MCP":   false,
-		"https://api.teste":       false,
+		"https://api.teste/mcp":      true,
+		"HTTPS://API.TESTE/mcp/":     true,
+		"https://api.teste:443/mcp":  true, // porta padrão explícita
+		"HTTPS://API.TESTE:443/mcp/": true,
+		"https://api.teste:8443/mcp": false,
+		"http://api.teste:443/mcp":   false,
+		"https://api.teste/mcp//":    false,
+		"https://api.teste/MCP":      false,
+		"https://api.teste":          false,
 	} {
 		p := paramsAutorizar(id)
 		p.Set("resource", rec)

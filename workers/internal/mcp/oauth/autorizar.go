@@ -80,9 +80,10 @@ func (s *Servidor) Autorizar(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.Portal+"/autorizar-ia?pedido="+url.QueryEscape(pedido), http.StatusFound)
 }
 
-// normalizarRecurso põe scheme e host em minúsculas e tira UMA barra final do
-// path (RFC 3986 §6.2.2.1 / RFC 8707): clientes mandam https://API.x/mcp/ e é
-// o mesmo recurso. O path continua sensível a maiúsculas.
+// normalizarRecurso põe scheme e host em minúsculas, tira a porta 443
+// explícita de https e UMA barra final do path (RFC 3986 §6.2.2 / RFC 8707):
+// clientes mandam https://API.x:443/mcp/ e é o mesmo recurso. O path continua
+// sensível a maiúsculas.
 func normalizarRecurso(bruto string) string {
 	u, err := url.Parse(bruto)
 	if err != nil {
@@ -90,6 +91,9 @@ func normalizarRecurso(bruto string) string {
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
+	if u.Scheme == "https" {
+		u.Host = strings.TrimSuffix(u.Host, ":443")
+	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	u.RawPath = strings.TrimSuffix(u.RawPath, "/")
 	return u.String()

@@ -39,6 +39,26 @@ func ehLoopback(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
+// normalizarOrigem põe em minúsculas o scheme e o host (com a porta) de uma
+// URL absoluta e devolve o resto byte a byte — path e query são sensíveis a
+// maiúsculas e não passam por re-codificação. Sem "://", ou com userinfo
+// (que o redirectValido recusa depois), devolve a entrada como veio.
+func normalizarOrigem(bruto string) string {
+	esquema, resto, ok := strings.Cut(bruto, "://")
+	if !ok {
+		return bruto
+	}
+	fim := strings.IndexAny(resto, "/?#")
+	if fim < 0 {
+		fim = len(resto)
+	}
+	autoridade := resto[:fim]
+	if strings.Contains(autoridade, "@") {
+		return bruto
+	}
+	return strings.ToLower(esquema) + "://" + strings.ToLower(autoridade) + resto[fim:]
+}
+
 // redirectRegistrado diz se o redirect_uri pedido no /authorize casa com um
 // registrado: igual, ou — RFC 8252 §7.3 / OAuth 2.1 §8.4.2 — os dois http em
 // loopback com o mesmo host, path e query, em qualquer porta (o Claude Code
@@ -98,23 +118,22 @@ func comParametros(base string, params map[string]string) string {
 // confiar no RemoteAddr: o middleware.RealIP do chi (router.go) o troca pelo
 // True-Client-IP/X-Real-IP/X-Forwarded-For, que o cliente escreve à vontade e
 // o Cloudflare repassa — com um X-Real-IP novo a cada pedido, o limite de
-// registros por IP não valeria nada. Sem o header (dev, teste, chamada direta
-// ao túnel) cai no host de RemoteAddr.
+// registros por IP não valeria nada. Sem o header, ou com algo nele que não é
+// um IP (dev, teste, chamada direta à origem), cai no host de RemoteAddr — um
+// valor arbitrário no header não pode virar chave.
 //
 // IPv6 vira o prefixo /64: um cliente comum recebe um /64 inteiro e pode girar
 // os 64 bits de baixo sem custo nenhum.
 func IPDe(r *http.Request) string {
-	bruto := strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))
-	if bruto == "" {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
+	addr, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("CF-Connecting-IP")))
+	if err != nil {
+		host, _, errHost := net.SplitHostPort(r.RemoteAddr)
+		if errHost != nil {
 			host = r.RemoteAddr
 		}
-		bruto = host
-	}
-	addr, err := netip.ParseAddr(bruto)
-	if err != nil {
-		return bruto
+		if addr, err = netip.ParseAddr(host); err != nil {
+			return host
+		}
 	}
 	addr = addr.Unmap().WithZone("")
 	if addr.Is6() {

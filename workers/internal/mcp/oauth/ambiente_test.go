@@ -22,7 +22,18 @@ import (
 	"radiocheck/internal/mcp/tokens"
 )
 
-const redirectClaude = "https://claude.ai/api/mcp/auth_callback"
+const (
+	redirectClaude    = "https://claude.ai/api/mcp/auth_callback"
+	redirectClaudeCom = "https://claude.com/api/mcp/auth_callback"
+)
+
+// confidencial cadastra um cliente confidencial pelo caminho do admin (o DCR
+// aberto só aceita público) e devolve id e segredo.
+func (a *ambiente) confidencial(nome string, uris ...string) (string, string) {
+	cli, segredo, err := a.srv.Clientes.RegistrarConfidencial(a.ctx, nome, uris)
+	require.NoError(a.t, err)
+	return cli.ClientID, segredo
+}
 
 type ambiente struct {
 	t     *testing.T
@@ -42,8 +53,8 @@ func novoAmbiente(t *testing.T) *ambiente {
 	require.NoError(t, err)
 	segredo := []byte(mcptest.SegredoTeste)
 	srv := NovoServidor(pool, tokens.NovoStore(pool, segredo), segredo, "https://api.teste", "https://portal.teste", zap.NewNop())
-	// Fixo, para o teste não depender de MCP_REDIRECT_HOSTS no shell de quem roda.
-	srv.HostsPermitidos = []string{"claude.ai", "vertexaisearch.cloud.google.com"}
+	// Fixo, para o teste não depender de MCP_REDIRECT_URIS no shell de quem roda.
+	srv.RedirectsPermitidos = []string{redirectClaude, redirectClaudeCom}
 
 	r := chi.NewRouter()
 	r.Get("/.well-known/oauth-protected-resource/mcp", srv.MetadadosRecurso)
