@@ -268,8 +268,9 @@ services:
       # MCP do E-monitor (spec 2026-10-27 §4.2): origem pública da API — vira o
       # issuer OAuth e o resource. Em dev local, defina http://localhost:8080 no .env.
       MCP_ORIGEM_PUBLICA: ${MCP_ORIGEM_PUBLICA:-https://api.e-monitor.online}
-      # Hosts aceitos como redirect do OAuth do MCP (vazio = claude.ai, claude.com, vertexaisearch.cloud.google.com).
-      MCP_REDIRECT_HOSTS: ${MCP_REDIRECT_HOSTS:-}
+      # Callbacks exatos aceitos como redirect no registro OAuth do MCP, separados por
+      # vírgula (vazio = callbacks do claude.ai e claude.com). Loopback vale sempre.
+      MCP_REDIRECT_URIS: ${MCP_REDIRECT_URIS:-}
       NOTIFICATIONS_SEND_HOUR: ${NOTIFICATIONS_SEND_HOUR:-8}
       NOTIFICATIONS_INTERVAL: ${NOTIFICATIONS_INTERVAL:-}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}

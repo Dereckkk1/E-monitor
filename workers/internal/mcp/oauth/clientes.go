@@ -6,6 +6,8 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -14,8 +16,11 @@ import (
 
 var (
 	ErrClienteDesconhecido = errors.New("mcp: cliente OAuth desconhecido")
-	ErrMuitosPendentes     = errors.New("mcp: teto de clientes OAuth pendentes atingido")
+	ErrRedirectInvalido    = errors.New("mcp: redirect_uri inválido (https, ou http só em loopback; sem fragmento, userinfo nem host não-ASCII)")
 )
+
+// despejoMaximo limita quantos pendentes um único registro pode despejar.
+const despejoMaximo = 10
 
 type Cliente struct {
 	ClientID     string
@@ -31,40 +36,76 @@ type Clientes struct {
 	segredo []byte
 }
 
-// Registrar cria o cliente (RFC 7591). Devolve o client_secret em claro só
-// para confidencial, e só agora. Faz a faxina de quem nunca chegou ao
-// /token: 1 dia para público, 7 para confidencial (o Gemini é configurado à
-// mão e pode demorar). Com maxPendentes clientes nessa situação, recusa com
-// ErrMuitosPendentes; o teto vai no próprio INSERT (um comando), então sob
-// concorrência ele é aproximado — basta para conter o crescimento.
-func (c *Clientes) Registrar(ctx context.Context, nome string, uris []string, confidencial bool, maxPendentes int) (*Cliente, string, error) {
+// NovosClientes: db é o pool (ou uma tx); segredo é o JWT_SECRET, que salga o
+// hash do client_secret.
+func NovosClientes(db tokens.DB, segredo []byte) *Clientes {
+	return &Clientes{db: db, segredo: segredo}
+}
+
+func novoClientID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return "emc_" + hex.EncodeToString(b)
+}
+
+// Registrar cria um cliente PÚBLICO pelo DCR (RFC 7591) — confidencial só por
+// RegistrarConfidencial. Faz a faxina de quem nunca chegou ao /token (1 dia
+// para público, 7 para confidencial) e, com maxPendentes ou mais clientes
+// pendentes, despeja os públicos pendentes mais antigos — no máximo
+// despejoMaximo por chamada — antes de inserir: o DCR aberto não pode ficar
+// travado por quem encheu a fila. Confidencial (do admin) e quem já obteve
+// token nunca são despejados. Devolve quantos foram despejados.
+func (c *Clientes) Registrar(ctx context.Context, nome string, uris []string, maxPendentes int) (*Cliente, int64, error) {
 	if _, err := c.db.Exec(ctx,
 		`DELETE FROM mcp_oauth_clients
 		  WHERE first_token_at IS NULL
 		    AND created_at < NOW() - CASE WHEN client_secret_hash IS NULL
 		                                  THEN INTERVAL '1 day' ELSE INTERVAL '7 days' END`); err != nil {
-		return nil, "", err
+		return nil, 0, err
 	}
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	cli := &Cliente{ClientID: "emc_" + hex.EncodeToString(b), Nome: nome, RedirectURIs: uris, Confidencial: confidencial}
-	var segredo string
-	var hash *string
-	if confidencial {
-		segredo = tokens.Gerar(tokens.PrefixoSegredo)
-		h := tokens.Hash(c.segredo, segredo)
-		hash = &h
-	}
-	tag, err := c.db.Exec(ctx,
-		`INSERT INTO mcp_oauth_clients (client_id, client_secret_hash, nome, redirect_uris)
-		 SELECT $1::text, $2::text, $3::text, $4::text[]
-		  WHERE (SELECT COUNT(*) FROM mcp_oauth_clients WHERE first_token_at IS NULL) < $5::int`,
-		cli.ClientID, hash, nome, uris, maxPendentes)
+	despejo, err := c.db.Exec(ctx,
+		`DELETE FROM mcp_oauth_clients WHERE id IN (
+		   SELECT id FROM mcp_oauth_clients
+		    WHERE first_token_at IS NULL AND client_secret_hash IS NULL
+		    ORDER BY created_at, id
+		    LIMIT LEAST($2::int, GREATEST(0,
+		          (SELECT COUNT(*) FROM mcp_oauth_clients WHERE first_token_at IS NULL) - $1::int + 1)))`,
+		maxPendentes, despejoMaximo)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, "", ErrMuitosPendentes
+	cli := &Cliente{ClientID: novoClientID(), Nome: nome, RedirectURIs: uris}
+	if _, err := c.db.Exec(ctx,
+		`INSERT INTO mcp_oauth_clients (client_id, nome, redirect_uris) VALUES ($1, $2, $3)`,
+		cli.ClientID, nome, uris); err != nil {
+		return nil, 0, err
+	}
+	return cli, despejo.RowsAffected(), nil
+}
+
+// RegistrarConfidencial cria um cliente confidencial (ex.: Gemini Enterprise,
+// que não faz PKCE). É o caminho do administrador (cmd/registra-cliente-mcp):
+// fora do teto de pendentes e sem a lista de destinos do DCR — quem decide o
+// destino é o admin —, mas cada URI ainda passa no redirectValido. Devolve o
+// client_secret em claro: a única vez em que ele existe.
+func (c *Clientes) RegistrarConfidencial(ctx context.Context, nome string, uris []string) (*Cliente, string, error) {
+	if len(uris) == 0 {
+		return nil, "", fmt.Errorf("%w: informe ao menos um", ErrRedirectInvalido)
+	}
+	normais := make([]string, len(uris))
+	for i, u := range uris {
+		n := normalizarOrigem(strings.TrimSpace(u))
+		if !redirectValido(n) {
+			return nil, "", fmt.Errorf("%w: %s", ErrRedirectInvalido, u)
+		}
+		normais[i] = n
+	}
+	segredo := tokens.Gerar(tokens.PrefixoSegredo)
+	cli := &Cliente{ClientID: novoClientID(), Nome: nomeCliente(nome), RedirectURIs: normais, Confidencial: true}
+	if _, err := c.db.Exec(ctx,
+		`INSERT INTO mcp_oauth_clients (client_id, client_secret_hash, nome, redirect_uris) VALUES ($1, $2, $3, $4)`,
+		cli.ClientID, tokens.Hash(c.segredo, segredo), cli.Nome, normais); err != nil {
+		return nil, "", err
 	}
 	return cli, segredo, nil
 }

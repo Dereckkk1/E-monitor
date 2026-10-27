@@ -77,8 +77,8 @@ func TestToken_DonoRebaixadoNaoRecebe(t *testing.T) {
 func TestToken_ClienteConfidencialDoGemini(t *testing.T) {
 	a := novoAmbiente(t)
 	const redirectGemini = "https://vertexaisearch.cloud.google.com/oauth-redirect"
-	_, reg := a.registrar(map[string]any{"client_name": "Gemini Enterprise", "token_endpoint_auth_method": "client_secret_post", "redirect_uris": []string{redirectGemini}})
-	clientID, segredo := reg["client_id"].(string), reg["client_secret"].(string)
+	// Confidencial é cadastrado pelo admin (registra-cliente-mcp), não pelo DCR.
+	clientID, segredo := a.confidencial("Gemini Enterprise", redirectGemini)
 
 	// Sem PKCE: o Gemini não faz.
 	res := a.autorizar(url.Values{"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirectGemini}, "state": {"g"}})
@@ -183,8 +183,7 @@ const redirectGeminiTeste = "https://vertexaisearch.cloud.google.com/oauth-redir
 // codigoConfidencial registra um confidencial (Basic) e devolve id, segredo e
 // uma função que faz authorize+grant com params extras e devolve o código.
 func (a *ambiente) codigoConfidencial() (string, string, func(url.Values) string) {
-	_, reg := a.registrar(map[string]any{"client_name": "G", "token_endpoint_auth_method": "client_secret_basic", "redirect_uris": []string{redirectGeminiTeste}})
-	id, sec := reg["client_id"].(string), reg["client_secret"].(string)
+	id, sec := a.confidencial("G", redirectGeminiTeste)
 	return id, sec, func(extra url.Values) string {
 		p := url.Values{"response_type": {"code"}, "client_id": {id}, "redirect_uri": {redirectGeminiTeste}}
 		for k, v := range extra {

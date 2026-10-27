@@ -33,20 +33,45 @@ func TestMetadados(t *testing.T) {
 	require.Contains(t, as["token_endpoint_auth_methods_supported"], "client_secret_post")
 }
 
-func TestRegistro_PublicoEConfidencial(t *testing.T) {
+func TestRegistro_Publico(t *testing.T) {
 	a := novoAmbiente(t)
 	st, pub := a.registrar(map[string]any{"client_name": "Claude", "redirect_uris": []string{redirectClaude}})
 	require.Equal(t, http.StatusCreated, st)
 	require.True(t, strings.HasPrefix(pub["client_id"].(string), "emc_"))
 	require.Equal(t, "none", pub["token_endpoint_auth_method"])
 	require.NotContains(t, pub, "client_secret")
+}
 
-	st, conf := a.registrar(map[string]any{
-		"client_name": "Gemini Enterprise", "token_endpoint_auth_method": "client_secret_post",
-		"redirect_uris": []string{"https://vertexaisearch.cloud.google.com/oauth-redirect"},
-	})
-	require.Equal(t, http.StatusCreated, st)
-	require.True(t, strings.HasPrefix(conf["client_secret"].(string), "emonitor_mcs_"))
+// R1: confidencial ficava 7 dias pendente e enchia o teto; agora só o admin
+// cadastra (registra-cliente-mcp), sem passar pelo DCR aberto.
+func TestRegistro_ConfidencialSoPeloAdmin(t *testing.T) {
+	a := novoAmbiente(t)
+	for _, metodo := range []string{"client_secret_post", "client_secret_basic"} {
+		st, e := a.registrar(map[string]any{"client_name": "G", "token_endpoint_auth_method": metodo, "redirect_uris": []string{redirectClaude}})
+		require.Equal(t, http.StatusBadRequest, st, metodo)
+		require.Equal(t, "invalid_client_metadata", e["error"], metodo)
+		require.Contains(t, e["error_description"], "registra-cliente-mcp", metodo)
+	}
+	require.Zero(t, a.contar(`SELECT COUNT(*) FROM mcp_oauth_clients`))
+
+	// Caminho do admin: sem lista de destinos, mas com redirectValido.
+	cli, segredo, err := a.srv.Clientes.RegistrarConfidencial(a.ctx, "Gemini Enterprise",
+		[]string{"HTTPS://VERTEXAISEARCH.cloud.google.com/oauth-redirect"})
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(segredo, "emonitor_mcs_"))
+	require.Equal(t, []string{"https://vertexaisearch.cloud.google.com/oauth-redirect"}, cli.RedirectURIs)
+	lido, err := a.srv.Clientes.Buscar(a.ctx, cli.ClientID)
+	require.NoError(t, err)
+	require.True(t, lido.Confidencial)
+	require.False(t, lido.Ativado)
+	ok, err := a.srv.Clientes.ConferirSegredo(a.ctx, cli.ClientID, segredo)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	for _, ruim := range [][]string{nil, {"http://evil.example/cb"}, {"https://u@x.test/cb"}, {"https://сlaude.ai/cb"}} {
+		_, _, err := a.srv.Clientes.RegistrarConfidencial(a.ctx, "x", ruim)
+		require.ErrorIs(t, err, ErrRedirectInvalido, "%v", ruim)
+	}
 }
 
 func TestRegistro_Recusas(t *testing.T) {
@@ -65,14 +90,22 @@ func TestRegistro_Recusas(t *testing.T) {
 }
 
 // Phishing de consentimento: o DCR é aberto, mas o código só pode voltar para
-// os assistentes que a gente conhece (ou para loopback, do Claude Code).
+// os callbacks exatos dos assistentes que a gente conhece (ou para loopback,
+// do Claude Code).
 func TestRegistro_SoDestinosPermitidos(t *testing.T) {
 	a := novoAmbiente(t)
 	recusados := []string{
 		"https://evil.example/cb",
 		"https://сlaude.ai/cb", // c cirílico
-		"https://sub.claude.ai/cb",
-		"https://claude.ai.evil.example/cb",
+		"https://sub.claude.ai/api/mcp/auth_callback",
+		"https://claude.ai.evil.example/api/mcp/auth_callback",
+		"https://claude.ai:444/cb",
+		"https://claude.ai:443/api/mcp/auth_callback", // porta só se a entrada tiver
+		"https://claude.ai/other",
+		"https://claude.ai/api/mcp/auth_callback?next=x",
+		"https://claude.ai/api/mcp/auth_callback/",
+		"https://claude.ai/API/mcp/auth_callback",                // path é exato
+		"https://vertexaisearch.cloud.google.com/oauth-redirect", // Gemini vem pelo admin
 	}
 	for _, uri := range recusados {
 		st, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{uri}})
@@ -80,8 +113,8 @@ func TestRegistro_SoDestinosPermitidos(t *testing.T) {
 		require.Equal(t, "invalid_redirect_uri", e["error"], uri)
 	}
 	_, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{"https://evil.example/cb"}})
-	require.Contains(t, e["error_description"], "MCP_REDIRECT_HOSTS")
-	require.Contains(t, e["error_description"], "claude.ai")
+	require.Contains(t, e["error_description"], "MCP_REDIRECT_URIS")
+	require.Contains(t, e["error_description"], redirectClaude)
 
 	// Um destino ruim no meio derruba o registro inteiro.
 	st, _ := a.registrar(map[string]any{"client_name": "x", "redirect_uris": []string{redirectClaude, "https://evil.example/cb"}})
@@ -89,8 +122,8 @@ func TestRegistro_SoDestinosPermitidos(t *testing.T) {
 
 	aceitos := []string{
 		redirectClaude,
-		"https://CLAUDE.AI/api/mcp/auth_callback",
-		"https://vertexaisearch.cloud.google.com/oauth-redirect",
+		redirectClaudeCom,
+		"HTTPS://CLAUDE.AI/api/mcp/auth_callback",
 		"http://localhost:4321/callback",
 		"http://127.0.0.1:1/cb",
 		"http://[::1]:65000/cb",
@@ -101,9 +134,9 @@ func TestRegistro_SoDestinosPermitidos(t *testing.T) {
 	}
 }
 
-func TestRegistro_HostsDoAmbiente(t *testing.T) {
+func TestRegistro_RedirectsDoAmbiente(t *testing.T) {
 	a := novoAmbiente(t)
-	t.Setenv("MCP_REDIRECT_HOSTS", "a.test, B.TEST")
+	t.Setenv("MCP_REDIRECT_URIS", "https://a.test/cb, HTTPS://B.TEST/cb")
 	srv := NovoServidor(a.pool, a.srv.Tokens, []byte(mcptest.SegredoTeste), "https://api.teste", "https://portal.teste", zap.NewNop())
 	registrar := func(uri string) int {
 		req := httptest.NewRequest(http.MethodPost, "/mcp/oauth/register",
@@ -113,21 +146,39 @@ func TestRegistro_HostsDoAmbiente(t *testing.T) {
 		return rec.Code
 	}
 	require.Equal(t, http.StatusCreated, registrar("https://b.test/cb"))
-	require.Equal(t, http.StatusCreated, registrar("https://a.test/cb"))
+	require.Equal(t, http.StatusCreated, registrar("https://A.TEST/cb"))
+	require.Equal(t, http.StatusBadRequest, registrar("https://a.test/outro"), "path exato")
 	require.Equal(t, http.StatusBadRequest, registrar(redirectClaude), "a lista do ambiente substitui a padrão")
 	require.Equal(t, http.StatusCreated, registrar("http://localhost:9/cb"), "loopback vale sempre")
 }
 
+// R6: scheme e host vão para o banco em minúsculas; path e query, intactos.
+func TestRegistro_GuardaOrigemEmMinusculas(t *testing.T) {
+	a := novoAmbiente(t)
+	st, reg := a.registrar(map[string]any{"client_name": "x",
+		"redirect_uris": []string{"HTTPS://CLAUDE.AI/api/mcp/auth_callback", "http://LOCALHOST:7/Call?X=1"}})
+	require.Equal(t, http.StatusCreated, st, reg)
+	esperado := []any{redirectClaude, "http://localhost:7/Call?X=1"}
+	require.Equal(t, esperado, reg["redirect_uris"])
+	var guardados []string
+	require.NoError(t, a.pool.QueryRow(a.ctx, `SELECT redirect_uris FROM mcp_oauth_clients WHERE client_id = $1`, reg["client_id"]).Scan(&guardados))
+	require.Equal(t, []string{redirectClaude, "http://localhost:7/Call?X=1"}, guardados)
+
+	// O /authorize com o redirect em minúsculas casa.
+	res := a.autorizar(paramsAutorizar(reg["client_id"].(string)))
+	require.Equal(t, http.StatusFound, res.StatusCode)
+}
+
 func TestRegistro_NomeSemCaracteresDeControle(t *testing.T) {
 	a := novoAmbiente(t)
-	st, reg := a.registrar(map[string]any{"client_name": "Cla‮ude​", "redirect_uris": []string{redirectClaude}})
+	st, reg := a.registrar(map[string]any{"client_name": "Cla" + rlo + "ude" + zwsp, "redirect_uris": []string{redirectClaude}})
 	require.Equal(t, http.StatusCreated, st)
 	require.Equal(t, "Claude", reg["client_name"])
 	var nome string
 	require.NoError(t, a.pool.QueryRow(a.ctx, `SELECT nome FROM mcp_oauth_clients WHERE client_id = $1`, reg["client_id"]).Scan(&nome))
 	require.Equal(t, "Claude", nome)
 
-	_, reg = a.registrar(map[string]any{"client_name": "‮​", "redirect_uris": []string{redirectClaude}})
+	_, reg = a.registrar(map[string]any{"client_name": rlo + zwsp, "redirect_uris": []string{redirectClaude}})
 	require.Equal(t, "Assistente sem nome", reg["client_name"], "só controle vira nome vazio")
 }
 
@@ -170,31 +221,42 @@ func TestRegistro_LimiteNaoBurladoPorXRealIP(t *testing.T) {
 	require.Equal(t, 2, aceitos, "X-Real-IP rotativo não fura o limite")
 }
 
-func TestRegistro_TetoDeClientesPendentes(t *testing.T) {
+// R1: com o teto cheio, sai o pendente PÚBLICO mais antigo — nunca um
+// confidencial (do admin) nem quem já chegou ao /token — e o registro segue.
+func TestRegistro_TetoDespejaOPendenteMaisAntigo(t *testing.T) {
 	a := novoAmbiente(t)
 	a.srv.MaxClientesPendentes = 2
+	pendentes := `SELECT COUNT(*) FROM mcp_oauth_clients WHERE first_token_at IS NULL`
+	existe := func(id string) bool {
+		return a.contar(`SELECT COUNT(*) FROM mcp_oauth_clients WHERE client_id = $1`, id) == 1
+	}
 	corpo := map[string]any{"client_name": "x", "redirect_uris": []string{redirectClaude}}
 	ids := []string{}
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		st, reg := a.registrar(corpo)
 		require.Equal(t, http.StatusCreated, st)
 		ids = append(ids, reg["client_id"].(string))
 	}
-	st, e := a.registrar(corpo)
-	require.Equal(t, http.StatusServiceUnavailable, st)
-	require.Equal(t, "temporarily_unavailable", e["error"])
-	require.Equal(t, 2, a.contar(`SELECT COUNT(*) FROM mcp_oauth_clients`))
+	require.Equal(t, 2, a.contar(pendentes))
+	require.False(t, existe(ids[0]), "o mais antigo saiu")
+	require.True(t, existe(ids[1]) && existe(ids[2]))
 
-	a.ativar(ids[0]) // quem já chegou ao /token não conta no teto
-	st, _ = a.registrar(corpo)
+	a.ativar(ids[1])                                                                              // ativado não conta nem sai
+	conf, _ := a.confidencial("Gemini", "https://vertexaisearch.cloud.google.com/oauth-redirect") // admin: fora do teto
+	st, reg := a.registrar(corpo)
 	require.Equal(t, http.StatusCreated, st)
+	require.True(t, existe(ids[1]), "ativado fica")
+	require.True(t, existe(conf), "confidencial do admin nunca é despejado")
+	require.False(t, existe(ids[2]), "o público pendente mais antigo saiu")
+	require.True(t, existe(reg["client_id"].(string)))
+	require.Equal(t, 2, a.contar(pendentes))
 }
 
 func TestRegistro_TetoDeRedirectURIs(t *testing.T) {
 	a := novoAmbiente(t)
 	seis := []string{}
 	for i := 0; i < 6; i++ {
-		seis = append(seis, fmt.Sprintf("%s?n=%d", redirectClaude, i))
+		seis = append(seis, fmt.Sprintf("http://localhost:%d/cb", 9000+i))
 	}
 	st, e := a.registrar(map[string]any{"client_name": "x", "redirect_uris": seis})
 	require.Equal(t, http.StatusBadRequest, st)

@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,9 +25,11 @@ type corpoRegistro struct {
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 }
 
-// Registrar — RFC 7591, aberto: um client_id sozinho não dá acesso a nada;
-// quem concede é o admin no /autorizar-ia. Confidencial (client_secret_post
-// ou _basic) é o caminho do Gemini Enterprise, que não faz PKCE.
+// Registrar — RFC 7591, aberto e só para cliente PÚBLICO: um client_id
+// sozinho não dá acesso a nada; quem concede é o admin no /autorizar-ia.
+// Confidencial (Gemini Enterprise, que não faz PKCE) é cadastrado pelo
+// administrador com registra-cliente-mcp: aberto, ele ficava 7 dias pendente e
+// enchia o teto de pendentes, travando toda conexão nova.
 func (s *Servidor) Registrar(w http.ResponseWriter, r *http.Request) {
 	if !s.Registros.Allow(IPDe(r)) {
 		w.Header().Set("Retry-After", "3600")
@@ -41,87 +42,88 @@ func (s *Servidor) Registrar(w http.ResponseWriter, r *http.Request) {
 		erroOAuth(w, http.StatusBadRequest, "invalid_client_metadata", "corpo JSON inválido")
 		return
 	}
+	switch c.TokenEndpointAuthMethod {
+	case "", "none":
+	case "client_secret_post", "client_secret_basic":
+		erroOAuth(w, http.StatusBadRequest, "invalid_client_metadata",
+			"cliente confidencial é cadastrado pelo administrador: registra-cliente-mcp na VM")
+		return
+	default:
+		erroOAuth(w, http.StatusBadRequest, "invalid_client_metadata", "token_endpoint_auth_method não suportado: "+c.TokenEndpointAuthMethod)
+		return
+	}
 	if len(c.RedirectURIs) == 0 || len(c.RedirectURIs) > maxRedirectURIs {
 		erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", fmt.Sprintf("informe de 1 a %d redirect_uris", maxRedirectURIs))
 		return
 	}
-	for _, u := range c.RedirectURIs {
+	uris := make([]string, len(c.RedirectURIs))
+	for i, u := range c.RedirectURIs {
 		if len(u) > maxTamanhoRedirect {
 			erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", fmt.Sprintf("redirect_uri com mais de %d bytes", maxTamanhoRedirect))
 			return
 		}
-		if !redirectValido(u) {
+		// Scheme e host em minúsculas antes de validar e de guardar; path e
+		// query ficam como vieram.
+		n := normalizarOrigem(u)
+		if !redirectValido(n) {
 			erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri precisa ser https (http só em loopback) e sem fragmento: "+u)
 			return
 		}
-		if host, ok := s.destinoPermitido(u); !ok {
+		if !s.destinoPermitido(n) {
 			erroOAuth(w, http.StatusBadRequest, "invalid_redirect_uri", fmt.Sprintf(
-				"o host %q não está entre os destinos permitidos (%s; http em localhost/127.0.0.1/::1 vale sempre). "+
-					"Para liberar outro, o operador do E-monitor inclui o host em MCP_REDIRECT_HOSTS.",
-				host, strings.Join(s.HostsPermitidos, ", ")))
+				"redirect_uri fora dos callbacks permitidos (%s; http em localhost/127.0.0.1/::1 vale sempre). "+
+					"Para liberar outro, o operador do E-monitor inclui o callback exato em MCP_REDIRECT_URIS.",
+				strings.Join(s.RedirectsPermitidos, ", ")))
 			return
 		}
+		uris[i] = n
 	}
-	metodo := c.TokenEndpointAuthMethod
-	confidencial := false
-	switch metodo {
-	case "", "none":
-		metodo = "none"
-	case "client_secret_post", "client_secret_basic":
-		confidencial = true
-	default:
-		erroOAuth(w, http.StatusBadRequest, "invalid_client_metadata", "token_endpoint_auth_method não suportado: "+metodo)
+	cli, despejados, err := s.Clientes.Registrar(r.Context(), nomeCliente(c.ClientName), uris, s.MaxClientesPendentes)
+	if err != nil {
+		s.Log.Error("mcp oauth: registrar cliente", zapErr(err))
+		erroOAuth(w, http.StatusInternalServerError, "server_error", "falha ao registrar")
 		return
 	}
-	nome := strings.TrimSpace(limparNome(c.ClientName))
+	if despejados > 0 {
+		s.Log.Warn("mcp oauth: teto de clientes pendentes cheio; os públicos pendentes mais antigos foram despejados",
+			zap.Int64("despejados", despejados), zap.Int("teto", s.MaxClientesPendentes))
+	}
+	escreverJSON(w, http.StatusCreated, map[string]any{
+		"client_id":                  cli.ClientID,
+		"client_name":                cli.Nome,
+		"redirect_uris":              cli.RedirectURIs,
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none",
+		"client_id_issued_at":        s.agora().Unix(),
+	})
+}
+
+// destinoPermitido aplica a lista de callbacks a um redirect_uri já
+// normalizado e aprovado no redirectValido: http ali já é loopback e vale
+// sempre; https só se for EXATAMENTE um de RedirectsPermitidos.
+func (s *Servidor) destinoPermitido(normal string) bool {
+	u, err := url.Parse(normal)
+	if err != nil {
+		return false
+	}
+	if u.Scheme == "http" {
+		return ehLoopback(u.Hostname())
+	}
+	return u.Scheme == "https" && slices.Contains(s.RedirectsPermitidos, normal)
+}
+
+// nomeCliente prepara o client_name para a tela de consentimento: sem
+// caracteres de controle/formatação, sem espaços nas pontas, até 100 runas.
+func nomeCliente(bruto string) string {
+	nome := strings.TrimSpace(limparNome(bruto))
 	if nome == "" {
 		nome = "Assistente sem nome"
 	}
 	if r := []rune(nome); len(r) > 100 {
 		nome = string(r[:100])
 	}
-	cli, segredo, err := s.Clientes.Registrar(r.Context(), nome, c.RedirectURIs, confidencial, s.MaxClientesPendentes)
-	if errors.Is(err, ErrMuitosPendentes) {
-		s.Log.Warn("mcp oauth: teto de clientes pendentes atingido, registro recusado",
-			zap.Int("teto", s.MaxClientesPendentes))
-		erroOAuth(w, http.StatusServiceUnavailable, "temporarily_unavailable", "registro indisponível no momento; tente mais tarde")
-		return
-	}
-	if err != nil {
-		s.Log.Error("mcp oauth: registrar cliente", zapErr(err))
-		erroOAuth(w, http.StatusInternalServerError, "server_error", "falha ao registrar")
-		return
-	}
-	resp := map[string]any{
-		"client_id":                  cli.ClientID,
-		"client_name":                cli.Nome,
-		"redirect_uris":              cli.RedirectURIs,
-		"grant_types":                []string{"authorization_code", "refresh_token"},
-		"response_types":             []string{"code"},
-		"token_endpoint_auth_method": metodo,
-		"client_id_issued_at":        s.agora().Unix(),
-	}
-	if confidencial {
-		resp["client_secret"] = segredo
-		resp["client_secret_expires_at"] = 0
-	}
-	escreverJSON(w, http.StatusCreated, resp)
-}
-
-// destinoPermitido aplica a lista de hosts a um redirect_uri que já passou no
-// redirectValido: https só com host EXATAMENTE na lista (sem curinga de
-// subdomínio); http ali já é loopback e vale sempre. Devolve o host para a
-// mensagem de erro.
-func (s *Servidor) destinoPermitido(bruto string) (string, bool) {
-	u, err := url.Parse(bruto)
-	if err != nil {
-		return "", false
-	}
-	host := strings.ToLower(u.Hostname())
-	if u.Scheme == "http" {
-		return host, ehLoopback(host)
-	}
-	return host, u.Scheme == "https" && slices.Contains(s.HostsPermitidos, host)
+	return nome
 }
 
 // limparNome tira caracteres de controle e de formatação (Unicode Cc e Cf —
