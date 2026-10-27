@@ -265,6 +265,11 @@ services:
       # aqui pra não quebrar ambientes que não setam essas vars.
       NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-false}
       NOTIFICATIONS_BASE_URL: ${NOTIFICATIONS_BASE_URL:-https://e-monitor.online}
+      # MCP do E-monitor (spec 2026-10-27 §4.2): origem pública da API — vira o
+      # issuer OAuth e o resource. Em dev local, defina http://localhost:8080 no .env.
+      MCP_ORIGEM_PUBLICA: ${MCP_ORIGEM_PUBLICA:-https://api.e-monitor.online}
+      # Hosts aceitos como redirect do OAuth do MCP (vazio = claude.ai, claude.com, vertexaisearch.cloud.google.com).
+      MCP_REDIRECT_HOSTS: ${MCP_REDIRECT_HOSTS:-}
       NOTIFICATIONS_SEND_HOUR: ${NOTIFICATIONS_SEND_HOUR:-8}
       NOTIFICATIONS_INTERVAL: ${NOTIFICATIONS_INTERVAL:-}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}

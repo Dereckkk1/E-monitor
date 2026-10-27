@@ -35,8 +35,11 @@ type Config struct {
 	EvidencePruneDryRun   bool // EVIDENCE_PRUNE_DRY_RUN ("true" só simula)
 
 	// ── Notificações por email (emails diários de alerta de campanha) ──
-	NotificationsEnabled  bool   // NOTIFICATIONS_ENABLED ("true" liga o job)
-	NotificationsBaseURL  string // NOTIFICATIONS_BASE_URL (base dos links/CTA)
+	NotificationsEnabled bool   // NOTIFICATIONS_ENABLED ("true" liga o job)
+	NotificationsBaseURL string // NOTIFICATIONS_BASE_URL (base dos links/CTA)
+	// MCPOrigemPublica é a origem pública da API onde o MCP é servido
+	// (issuer OAuth, resource e resource_metadata). Spec do MCP 2026-10-27 §4.2.
+	MCPOrigemPublica      string // MCP_ORIGEM_PUBLICA
 	NotificationsSendHour int    // NOTIFICATIONS_SEND_HOUR (hora local BRT de corte)
 	SMTPHost              string // SMTP_HOST
 	SMTPPort              int    // SMTP_PORT
@@ -125,6 +128,10 @@ func Load() (*Config, error) {
 	cfg.NotificationsBaseURL = os.Getenv("NOTIFICATIONS_BASE_URL")
 	if cfg.NotificationsBaseURL == "" {
 		cfg.NotificationsBaseURL = "https://e-monitor.online"
+	}
+	cfg.MCPOrigemPublica = strings.TrimRight(os.Getenv("MCP_ORIGEM_PUBLICA"), "/")
+	if cfg.MCPOrigemPublica == "" {
+		cfg.MCPOrigemPublica = "https://api.e-monitor.online"
 	}
 	cfg.NotificationsSendHour = 8
 	if v := os.Getenv("NOTIFICATIONS_SEND_HOUR"); v != "" {
