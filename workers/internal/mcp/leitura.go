@@ -107,11 +107,16 @@ func nomesMateriais(ctx context.Context, L *Leitura, cliente uuid.UUID) (map[uui
 	if err != nil {
 		return nil, err
 	}
+	return titulosDe(ms), nil
+}
+
+// titulosDe: id → título de uma lista de materiais já lida.
+func titulosDe(ms []catalog.Material) map[uuid.UUID]string {
 	out := make(map[uuid.UUID]string, len(ms))
 	for _, m := range ms {
 		out[m.ID] = m.Title
 	}
-	return out, nil
+	return out
 }
 
 // todasCampanhas: id → campanha (todas, inclusive canceladas; são centenas).

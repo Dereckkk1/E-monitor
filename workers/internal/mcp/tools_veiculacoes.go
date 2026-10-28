@@ -273,7 +273,7 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			aprovada, err := L.Veiculacoes.Approved(ctx, id)
+			aprovada, err := L.Veiculacoes.Approved(ctx, id, d.DetectedAt)
 			if err != nil {
 				return nil, err
 			}

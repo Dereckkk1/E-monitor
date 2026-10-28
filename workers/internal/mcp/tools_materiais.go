@@ -103,9 +103,13 @@ func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			titulos, err := nomesMateriais(ctx, L, c.ID)
-			if err != nil {
-				return nil, err
+			// Os títulos dos "parecido com" vêm do cliente inteiro; sem busca a
+			// própria lista já é isso e não há segunda leitura.
+			titulos := titulosDe(mats)
+			if in.Busca != "" {
+				if titulos, err = nomesMateriais(ctx, L, c.ID); err != nil {
+					return nil, err
+				}
 			}
 			tipos, err := nomesTipos(ctx, L)
 			if err != nil {
@@ -148,9 +152,14 @@ func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			camps, err := todasCampanhas(ctx, L)
+			// Um material é de um cliente só: as campanhas dele bastam.
+			doCliente, err := L.Campanhas.ListFiltered(ctx, nil, []uuid.UUID{m.ClientID})
 			if err != nil {
 				return nil, err
+			}
+			camps := make(map[uuid.UUID]catalog.Campaign, len(doCliente))
+			for _, c := range doCliente {
+				camps[c.ID] = c
 			}
 			out := saidaObterMaterial{
 				Material: materialDe(*m, tipos, titulos), Cliente: refDe(m.ClientID, clientes[m.ClientID]),
