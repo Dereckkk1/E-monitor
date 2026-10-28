@@ -19,6 +19,7 @@ import (
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
 	"financeiro_campanhas",
+	"grade_campanha",
 	"listar_campanhas",
 	"listar_clientes",
 	"listar_materiais_campanha",
@@ -27,6 +28,7 @@ var ToolsEsperadas = []string{
 	"listar_regras_distribuicao",
 	"obter_campanha",
 	"obter_cliente",
+	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
 }
@@ -77,6 +79,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarClientes(s, cfg)
 	registrarCampanhas(s, cfg)
 	registrarCampanhasDetalhe(s, cfg)
+	registrarGrade(s, cfg)
 	return s
 }
 
