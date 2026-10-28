@@ -14,6 +14,11 @@ func TestCPMDaCampanha(t *testing.T) {
 		{"dinâmico com bonificação", CampaignFinancials{TotalInvested: 200, TotalBonusValue: 100, TotalAudience: 3000}, cpmPtr(100.0)},
 		{"fixo vence", CampaignFinancials{TotalInvested: 200, TotalAudience: 3000, FixedCPM: &fixo}, &fixo},
 		{"sem impactos e sem fixo = não se aplica", CampaignFinancials{TotalInvested: 200}, nil},
+		// Espelha CampaignsPage.jsx: sem entregue (investido + bonificação) não há CPM, nem o fixo.
+		{"impactos mas numerador zero = nil", CampaignFinancials{TotalAudience: 3000}, nil},
+		{"fixo com numerador zero = nil", CampaignFinancials{TotalAudience: 3000, FixedCPM: &fixo}, nil},
+		{"fixo com numerador positivo e sem impactos = fixo", CampaignFinancials{TotalInvested: 10, FixedCPM: &fixo}, &fixo},
+		{"numerador positivo, sem impactos, sem fixo = nil", CampaignFinancials{TotalInvested: 10, TotalBonusValue: 5}, nil},
 	}
 	for _, c := range cases {
 		got := CPMDaCampanha(c.f)
