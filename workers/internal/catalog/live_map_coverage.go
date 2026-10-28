@@ -31,6 +31,24 @@ type LiveCoverageResult struct {
 	Cities []CoverageCity `json:"cities"`
 }
 
+// CoverageTotals resume a cobertura: municípios distintos (cada um conta uma
+// vez, mesmo alcançado por várias emissoras) e pares emissora × município
+// (uma linha de Cities cada).
+type CoverageTotals struct {
+	DistinctCities   int
+	StationCityPairs int
+}
+
+// Totals conta a cobertura a partir do resultado de Coverage. Pura: a tela não
+// mostra estes números, mas o MCP sim, e a conta mora aqui, não na tool.
+func (r LiveCoverageResult) Totals() CoverageTotals {
+	distintas := make(map[int]struct{}, len(r.Cities))
+	for _, c := range r.Cities {
+		distintas[c.IBGECode] = struct{}{}
+	}
+	return CoverageTotals{DistinctCities: len(distintas), StationCityPairs: len(r.Cities)}
+}
+
 // Coverage devolve os municípios ao alcance das emissoras-alvo das campanhas
 // pedidas. Endpoint SEPARADO do Get de propósito: o /live-map faz polling de
 // 20s e esta lista é estática, então misturá-la ali seria retransmitir dezenas

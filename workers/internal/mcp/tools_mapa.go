@@ -77,12 +77,11 @@ func registrarMapa(s *sdk.Server, cfg ConfigServidor) {
 				return nil, err
 			}
 			porEmissora := map[uuid.UUID][]catalog.CoverageCity{}
-			distintas := map[int]bool{}
 			for _, c := range cob.Cities { // já vem por emissora e distância
 				porEmissora[c.StationID] = append(porEmissora[c.StationID], c)
-				distintas[c.IBGECode] = true
 			}
-			o := mapaDTO{CidadesDistintas: len(distintas), ParesEmissoraCidade: len(cob.Cities)}
+			tot := cob.Totals()
+			o := mapaDTO{CidadesDistintas: tot.DistinctCities, ParesEmissoraCidade: tot.StationCityPairs}
 			o.lista = mapear(paginar(mapa.Stations, in.Paginacao.comTeto(tetoPaginaMapa)), func(s catalog.LiveStation) emissoraMapa {
 				cs, n := cortar(porEmissora[s.ID], tetoPorItem)
 				e := emissoraMapa{Emissora: refDe(s.ID, s.Name), Cidade: s.City, UF: s.State, Banda: s.Band, Dial: s.FrequencyMHz,
