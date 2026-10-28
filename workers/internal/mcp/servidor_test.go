@@ -248,7 +248,50 @@ func TestResultado_ExigeObjeto(t *testing.T) {
 	require.NotNil(t, res.StructuredContent)
 }
 
-func TestInstrucoes_TemGlossario(t *testing.T) {
+func TestInstrucoes_TemGlossarioListasEPontes(t *testing.T) {
 	require.Contains(t, Instrucoes, "Glossário: veiculação = uma tocada detectada")
 	require.Contains(t, Instrucoes, "Impactos = PMM × (in_slot + bonus).")
+	require.Contains(t, Instrucoes, "Listas devolvem items e page")
+	require.Contains(t, Instrucoes, "obter_cliente devolve hub_id")
+	require.Contains(t, Instrucoes, "obter_campanha aceita campanha_id ou codigo")
+}
+
+// Toda tool que pede id obrigatório diz "nunca invente" (contrato §3.2), na
+// descrição da tool ou na do parâmetro.
+func TestInventario_IdObrigatorioMandaNaoInventar(t *testing.T) {
+	ctx := context.Background()
+	ct, st := sdk.NewInMemoryTransports()
+	_, err := novoServidor(ConfigServidor{Versao: "teste"}, principalTeste).Connect(ctx, st, nil)
+	require.NoError(t, err)
+	cs, err := sdk.NewClient(&sdk.Implementation{Name: "inventario", Version: "1"}, nil).Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer cs.Close()
+	res, err := cs.ListTools(ctx, nil)
+	require.NoError(t, err)
+	for _, tl := range res.Tools {
+		bruto, err := json.Marshal(tl.InputSchema)
+		require.NoError(t, err)
+		var sch struct {
+			Required   []string `json:"required"`
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(bruto, &sch))
+		for _, campo := range sch.Required {
+			if !strings.HasSuffix(campo, "_id") && !strings.HasSuffix(campo, "_ids") {
+				continue
+			}
+			texto := strings.ToLower(tl.Description + " " + sch.Properties[campo].Description)
+			require.Contains(t, texto, "invente", "%s.%s: diga ao modelo para nunca inventar o id", tl.Name, campo)
+		}
+	}
+}
+
+// Desempenho (handoff): o SDK monta o Server duas vezes por pedido.
+func BenchmarkNovoServidor(b *testing.B) {
+	cfg := ConfigServidor{Versao: "bench"}
+	for b.Loop() {
+		novoServidor(cfg, principalTeste)
+	}
 }
