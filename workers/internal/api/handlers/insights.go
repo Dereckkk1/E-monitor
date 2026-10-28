@@ -191,8 +191,7 @@ var spLocation = func() *time.Location {
 // (meia-noite UTC daquele dia calendário). Usado pra acumular o consolidado
 // por mês em /insights e /campaigns.
 func todaySaoPaulo() time.Time {
-	n := time.Now().In(spLocation)
-	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+	return catalog.TodaySaoPaulo()
 }
 
 func parseDateOr(s string, def time.Time) time.Time {
