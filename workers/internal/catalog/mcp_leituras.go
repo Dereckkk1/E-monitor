@@ -49,7 +49,7 @@ func (c *Campaigns) ListByHubCode(ctx context.Context, code string) ([]Campaign,
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Campaign
+	out := []Campaign{}
 	for rows.Next() {
 		var camp Campaign
 		if err := rows.Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
@@ -153,7 +153,10 @@ type DetectionAttribution struct {
 
 // Attributions lista as projeções de uma tocada, por nome de campanha.
 // Get devolve só a canônica (detections.campaign_id).
-func (d *Detections) Attributions(ctx context.Context, id uuid.UUID) ([]DetectionAttribution, error) {
+//
+// detectedAt é o detected_at da tocada: detection_campaigns é particionada por
+// ele, e passá-lo deixa o Postgres podar as partições em vez de varrer todas.
+func (d *Detections) Attributions(ctx context.Context, id uuid.UUID, detectedAt time.Time) ([]DetectionAttribution, error) {
 	rows, err := d.pool.Query(ctx, `
 		SELECT dc.campaign_id, COALESCE(cmp.name, ''), dc.commercial_id,
 		       COALESCE(m.title, c.title, ''), dc.category
@@ -161,8 +164,8 @@ func (d *Detections) Attributions(ctx context.Context, id uuid.UUID) ([]Detectio
 		LEFT JOIN campaigns cmp ON cmp.id = dc.campaign_id
 		LEFT JOIN materials m   ON m.id = dc.commercial_id
 		LEFT JOIN commercials c ON c.id = dc.commercial_id
-		WHERE dc.detection_id = $1
-		ORDER BY cmp.name, dc.campaign_id`, id)
+		WHERE dc.detection_id = $1 AND dc.detected_at = $2
+		ORDER BY cmp.name, dc.campaign_id`, id, detectedAt)
 	if err != nil {
 		return nil, err
 	}

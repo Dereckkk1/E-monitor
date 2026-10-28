@@ -214,7 +214,15 @@ type pgxQuerier interface {
 // spLoc é o fuso das datas de negócio. O "dia" de uma célula (campanha, tipo,
 // emissora, dia) é sempre o dia calendário local em São Paulo — é assim que o
 // categorizer, a view daily_play_summary e o recat SQL enxergam a grade.
-var spLoc, _ = time.LoadLocation("America/Sao_Paulo")
+var spLoc = func() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		// Sem tzdata: UTC-3 fixo (o Brasil não observa horário de verão desde 2019),
+		// o mesmo fallback do handlers/insights.go. nil aqui daria panic em time.In.
+		return time.FixedZone("BRT", -3*3600)
+	}
+	return loc
+}()
 
 // settleCellDay FECHA a célula-dia (campanha, tipo de material, emissora, dia
 // local SP) da tocada descrita por `in`: carrega TODAS as tocadas aprovadas
