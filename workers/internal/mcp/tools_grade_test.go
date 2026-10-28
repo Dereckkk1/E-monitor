@@ -1,8 +1,8 @@
 package mcp
 
 import (
-	"strings"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
