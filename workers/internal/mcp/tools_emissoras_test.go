@@ -45,6 +45,16 @@ func TestBuscarEmissoras_ContratadaPor(t *testing.T) {
 	out := chamarTool(t, cfgTeste(pool), "buscar_emissoras", map[string]any{"contratada_por": cli.String()})
 	require.Equal(t, []string{dentro.String()}, ids(t, itens(t, out), "id"))
 	require.Equal(t, true, itens(t, out)[0]["contrato"].(map[string]any)["no_ar"])
+
+	// programada no futuro: não está no ar e "comeca_em" é a DATA de calendário
+	// (um instante UTC viraria o dia anterior em America/Sao_Paulo).
+	futura := mcptest.Emissora(t, ctx, pool, "Futura", 0)
+	prog := mcptest.Campanha(t, ctx, pool, cli, "Camp futura", "2030-03-15", "2030-04-15", futura)
+	mcptest.EstadoCampanha(t, ctx, pool, prog, "programada")
+	out = chamarTool(t, cfgTeste(pool), "buscar_emissoras", map[string]any{"contratada_por": cli.String(), "busca": "futura"})
+	ct := itens(t, out)[0]["contrato"].(map[string]any)
+	require.Equal(t, false, ct["no_ar"])
+	require.Equal(t, "2030-03-15", ct["comeca_em"])
 }
 
 func TestObterEmissora_AnatelCidadesECampanhas(t *testing.T) {

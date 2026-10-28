@@ -200,6 +200,16 @@ var fusoSP = func() *time.Location {
 // dia formata uma data de calendário (DATE do Postgres chega como meia-noite UTC).
 func dia(t time.Time) string { return t.Format("2006-01-02") }
 
+// diaOpc: dia() para uma data de calendário opcional. NÃO use instanteOpc nelas:
+// a meia-noite UTC do DATE viraria o dia anterior em America/Sao_Paulo.
+func diaOpc(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := dia(*t)
+	return &s
+}
+
 // instante formata um timestamptz em ISO 8601 UTC (contrato §3.3).
 func instante(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 

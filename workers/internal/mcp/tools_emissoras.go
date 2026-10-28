@@ -40,7 +40,7 @@ func emissoraDe(s catalog.Station) emissoraDTO {
 		Cidade: s.City, UF: s.State, PMM: s.PMM, Latitude: s.Latitude, Longitude: s.Longitude,
 	}
 	if s.Contract != nil {
-		d.Contrato = &contratoDTO{Campanhas: s.Contract.Campaigns, NoAr: s.Contract.OnAir, ComecaEm: instanteOpc(s.Contract.StartsAt)}
+		d.Contrato = &contratoDTO{Campanhas: s.Contract.Campaigns, NoAr: s.Contract.OnAir, ComecaEm: diaOpc(s.Contract.StartsAt)}
 	}
 	return d
 }

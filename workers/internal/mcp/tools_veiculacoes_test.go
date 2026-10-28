@@ -118,3 +118,20 @@ func TestVeiculacoesPorMaterial_ParidadeComATela(t *testing.T) {
 	require.Equal(t, tela.Data[0].MaterialID.String(), l[0]["material"].(map[string]any)["id"])
 	require.EqualValues(t, tela.Data[0].Count, l[0]["veiculacoes"])
 }
+
+func TestListarVeiculacoes_PeriodoValidado(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 0)
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-01-01", "2026-12-31", est)
+	cfg := cfgTeste(pool)
+
+	// de > ate
+	require.Contains(t, chamarToolErro(t, cfg, "listar_veiculacoes", map[string]any{"de": "2026-10-12", "ate": "2026-10-11"}), "[entrada_invalida]")
+	require.Contains(t, chamarToolErro(t, cfg, "listar_veiculacoes",
+		map[string]any{"campanha_ids": []string{camp.String()}, "de": "2026-10-12", "ate": "2026-10-11"}), "[entrada_invalida]")
+	// sem campanha_ids o período é limitado a 93 dias; com campanha_ids não
+	require.Contains(t, chamarToolErro(t, cfg, "listar_veiculacoes", map[string]any{"de": "2026-01-01", "ate": "2026-12-31"}), "[entrada_invalida]")
+	chamarTool(t, cfg, "listar_veiculacoes", map[string]any{"de": "2026-07-01", "ate": "2026-10-01"})
+	chamarTool(t, cfg, "listar_veiculacoes", map[string]any{"campanha_ids": []string{camp.String()}, "de": "2026-01-01", "ate": "2026-12-31"})
+}

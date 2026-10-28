@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"net/url"
 	"regexp"
 	"slices"
 
@@ -58,26 +59,40 @@ type saidaNotificacoes struct {
 	NaoLidas int `json:"nao_lidas"`
 }
 
+// tetoSininho: o LIMIT 50 de Notifications.List.
+const tetoSininho = 50
+
 var statusDeEntrega = []string{"", "pending", "delivered", "failed", "dead"}
 
-// queryDeURL casa a query string de uma URL dentro de um texto de erro.
-var queryDeURL = regexp.MustCompile(`\?[^\s"']*`)
+// urlsNoTexto casa URLs http(s) dentro de um texto de erro.
+var urlsNoTexto = regexp.MustCompile(`https?://[^\s"']+`)
 
-// semQueryString corta a query das URLs num last_error: o webhook/worker grava
-// o err.Error() do http.Client, que imprime a URL inteira do cliente — e um
-// ?token= ali é credencial do sistema dele.
-func semQueryString(s *string) *string {
+// soEsquemaEHost reduz a URL a esquema+host: o segredo de um webhook mora na
+// query (?token=) OU no path (Slack, Discord e Zapier põem o segredo no path),
+// então nenhum dos dois sai. URL que não parseia vira "…".
+func soEsquemaEHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "…"
+	}
+	return u.Scheme + "://" + u.Host + "/…"
+}
+
+// semCredencialDeURL aplica soEsquemaEHost a toda URL de um last_error: o
+// webhook/worker grava o err.Error() do http.Client, que imprime a URL inteira
+// do cliente.
+func semCredencialDeURL(s *string) *string {
 	if s == nil {
 		return nil
 	}
-	r := queryDeURL.ReplaceAllString(*s, "?…")
+	r := urlsNoTexto.ReplaceAllStringFunc(*s, soEsquemaEHost)
 	return &r
 }
 
 func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaLeitura(s, cfg, "obter_webhook_cliente",
-		"Diz se o cliente tem webhook configurado: URL, se está ativo, eventos e se há segredo. O segredo nunca sai (nem parte "+
-			"dele); trocar é no portal. Nunca invente o cliente_id.",
+		"Diz se o cliente tem webhook configurado: URL (só esquema e host, o resto pode ter credencial), se está ativo, "+
+			"eventos e se há segredo. O segredo nunca sai (nem parte dele); trocar é no portal. Nunca invente o cliente_id.",
 		func(ctx context.Context, L *Leitura, in entradaCliente) (*sdk.CallToolResult, error) {
 			c, rec, err := lerCliente(ctx, L, in.ClienteID)
 			if rec != nil || err != nil {
@@ -88,10 +103,12 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 				return nil, err
 			}
 			out := saidaWebhook{Cliente: refDe(c.ID, c.Name), Eventos: []string{},
-				Ressalvas: []string{"O segredo do webhook nunca sai pelo MCP; configurar, trocar o segredo ou testar é no portal."}}
+				Ressalvas: []string{
+					"A URL vem só como esquema+host: o caminho e a query podem carregar a credencial do webhook. A URL completa e o segredo estão no portal, onde também se configura, troca o segredo e testa.",
+					"O segredo do webhook nunca sai pelo MCP."}}
 			if wc != nil {
-				url := wc.URL
-				out.Configurado, out.URL, out.Ativo, out.Eventos, out.TemSegredo = true, &url, wc.Enabled, wc.Events, wc.Secret != ""
+				host := soEsquemaEHost(wc.URL)
+				out.Configurado, out.URL, out.Ativo, out.Eventos, out.TemSegredo = true, &host, wc.Enabled, wc.Events, wc.Secret != ""
 			}
 			return ok(out)
 		})
@@ -122,7 +139,7 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 			for i, e := range ents {
 				linhas[i] = entregaDTO{
 					ID: e.ID.String(), Evento: e.EventType, Status: e.Status, Tentativas: e.AttemptCount,
-					CodigoResposta: e.ResponseCode, UltimoErro: semQueryString(e.LastError), ProximaTentativaEm: instante(e.NextAttemptAt),
+					CodigoResposta: e.ResponseCode, UltimoErro: semCredencialDeURL(e.LastError), ProximaTentativaEm: instante(e.NextAttemptAt),
 					EntregueEm: instanteOpc(e.DeliveredAt), CriadoEm: instante(e.CreatedAt),
 				}
 			}
@@ -149,7 +166,8 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 
 	ferramentaLeitura(s, cfg, "minhas_notificacoes",
 		"Devolve as notificações do sininho de quem está conectado: campanhas com déficit nos últimos 7 dias (até ontem), "+
-			"com cliente, dia e se já foi lida, mais o total de não lidas. Canceladas não entram. Não recebe argumentos.",
+			"com cliente, dia e se já foi lida, mais a contagem de não lidas. O sininho tem teto de 50 itens: se vier a ressalva, há mais. "+
+			"Canceladas não entram. Não recebe argumentos.",
 		func(ctx context.Context, L *Leitura, _ struct{}) (*sdk.CallToolResult, error) {
 			if p == nil {
 				return recusa("sem identidade: o pedido não passou pela autenticação do MCP", "sem_identidade")
@@ -165,6 +183,10 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 					Dia: n.OccurredOn, LidaEm: instanteOpc(n.ReadAt),
 				}
 			}
-			return ok(saidaNotificacoes{lista: listaInteira(linhas), NaoLidas: res.UnreadCount})
+			out := saidaNotificacoes{lista: listaInteira(linhas), NaoLidas: res.UnreadCount}
+			if len(res.Items) == tetoSininho {
+				out.Ressalvas = []string{"O sininho mostra as 50 notificações mais recentes; pode haver mais, e nao_lidas conta só estas."}
+			}
+			return ok(out)
 		})
 }
