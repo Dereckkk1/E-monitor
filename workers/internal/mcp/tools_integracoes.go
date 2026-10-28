@@ -64,8 +64,9 @@ const tetoSininho = 50
 
 var statusDeEntrega = []string{"", "pending", "delivered", "failed", "dead"}
 
-// urlsNoTexto casa URLs http(s) dentro de um texto de erro.
-var urlsNoTexto = regexp.MustCompile(`https?://[^\s"']+`)
+// urlsNoTexto casa URLs http(s) dentro de um texto livre ou de erro, sem
+// diferenciar maiúsculas ("HTTPS://" também é URL para o navegador).
+var urlsNoTexto = regexp.MustCompile(`(?i)https?://[^\s"']+`)
 
 // soEsquemaEHost reduz a URL a esquema+host: o segredo de um webhook mora na
 // query (?token=) OU no path (Slack, Discord e Zapier põem o segredo no path),
