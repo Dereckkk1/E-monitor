@@ -306,9 +306,9 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 		})
 
 	ferramentaLeitura(s, cfg, "resumo_diario_falhas",
-		"Devolve o resumo diário de falhas de ontem (o mesmo cálculo do aviso que o admin vê ao abrir o portal, com "+
-			"\"ontem\" em America/Sao_Paulo): quantas campanhas "+
-			"e emissoras falharam e, por campanha, quantas emissoras. Não marca nada como visto. Para o detalhe use "+
+		"Devolve o resumo diário de falhas de ontem em America/Sao_Paulo (o mesmo cálculo do aviso que o admin vê ao "+
+			"abrir o portal; o aviso usa o fuso do servidor e, entre 21h e 24h de SP, pode estar mostrando o dia corrente): "+
+			"quantas campanhas e emissoras falharam e, por campanha, quantas emissoras. Não marca nada como visto. Para o detalhe use "+
 			"falhas_campanhas (modo dia) ou falhas_emissoras. Lista paginada de campanhas.",
 		func(ctx context.Context, L *Leitura, in struct{ Paginacao }) (*sdk.CallToolResult, error) {
 			d, rec := lerDiaFalha("", L.agora())
