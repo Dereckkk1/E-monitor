@@ -18,7 +18,10 @@ import (
 // Toda fatia que acrescentar tool atualiza esta lista no mesmo commit.
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
+	"financeiro_campanhas",
+	"listar_campanhas",
 	"listar_clientes",
+	"obter_campanha",
 	"obter_cliente",
 	"pmm_target_cliente",
 	"quem_sou_eu",
@@ -68,6 +71,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 		&sdk.ServerOptions{Instructions: Instrucoes, SchemaCache: cacheEsquemas, Logger: logSDK})
 	registrarSistema(s, p)
 	registrarClientes(s, cfg)
+	registrarCampanhas(s, cfg)
 	return s
 }
 
