@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -158,6 +159,8 @@ func TestListarMateriaisCampanha_ParidadeComATela(t *testing.T) {
 	require.Equal(t, "Spot A", l[0]["material"].(map[string]any)["nome"])
 	require.Equal(t, tipo.String(), l[0]["tipo"].(map[string]any)["id"])
 	require.Equal(t, est.String(), l[0]["emissoras"].([]any)[0].(map[string]any)["id"])
+	require.EqualValues(t, 1, l[0]["emissoras_total"])
+	require.Empty(t, out["ressalvas"], "nada cortado, sem ressalva")
 
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "listar_materiais_campanha",
 		map[string]any{"campanha_id": uuid.NewString()}), "[nao_encontrado]")
@@ -177,6 +180,8 @@ func TestListarRegrasDistribuicao_ParidadeComATela(t *testing.T) {
 	require.Equal(t, []any{"seg", "ter", "qua", "qui", "sex"}, l[0]["dias_da_semana"])
 	require.Equal(t, map[string]any{"inicio": "06:00", "fim": "12:00"}, l[0]["faixa"])
 	require.Empty(t, l[0]["materiais"], "vazio = todos os materiais do tipo")
+	require.EqualValues(t, 1, l[0]["emissoras_total"])
+	require.Len(t, out["ressalvas"], 1, "só a ressalva das regras")
 }
 
 func TestListarOverrides_ParidadeComATela(t *testing.T) {
@@ -229,4 +234,53 @@ func TestFinanceiroCampanhas_OrdemDaEntradaSemRepetir(t *testing.T) {
 	}
 	require.Equal(t, []string{b.String(), a.String()}, ordem, "ordem da entrada, sem repetir")
 	require.Contains(t, out["ressalvas"], "sem campanha no E-monitor para: "+fantasma.String())
+}
+
+// Campanha grande: a paginação limita itens, não as emissoras dentro de cada
+// um; sem o teto, 3 materiais × 300 emissoras estouram o limite de saída do
+// cliente MCP.
+func TestListas_EmissorasPorItemComTeto(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	// 300 emissoras passam do limite do guard do dbtest: o próximo teste recusaria rodar.
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `TRUNCATE stations RESTART IDENTITY CASCADE`) })
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	ests := make([]uuid.UUID, 300)
+	for i := range ests {
+		ests[i] = mcptest.Emissora(t, ctx, pool, fmt.Sprintf("Rádio Grande %03d", i), 0)
+	}
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Grande", "2026-10-01", "2026-10-31", ests...)
+	for i := 0; i < 3; i++ {
+		mat := mcptest.Material(t, ctx, pool, cli, tipo, fmt.Sprintf("Spot %d", i))
+		mcptest.Vincular(t, ctx, pool, camp, mat, ests...)
+	}
+	for i := 0; i < 2; i++ {
+		_, err := catalog.NewDistributionRules(pool).Create(ctx, catalog.CreateDistributionRuleInput{
+			CampaignID: camp, TypeID: tipo, StationIDs: ests, MaterialIDs: []uuid.UUID{},
+			Name: fmt.Sprintf("Regra %d", i), StartDate: mcptest.Dia("2026-10-01"), EndDate: mcptest.Dia("2026-10-31"),
+			WeekdayMask: 62, TimeStart: "06:00", TimeEnd: "12:00", PlaysPerDay: 1,
+		})
+		require.NoError(t, err)
+	}
+
+	cfg := cfgTeste(pool)
+	for _, tool := range []string{"listar_materiais_campanha", "listar_regras_distribuicao"} {
+		texto, erro := chamarNoServidor(t, novoServidor(cfg, principalTeste), tool, map[string]any{"campanha_id": camp.String()})
+		require.False(t, erro, texto)
+		require.Less(t, len(texto), 30_000, "%s: resposta grande demais", tool)
+		var out map[string]any
+		require.NoError(t, json.Unmarshal([]byte(texto), &out))
+		l := itens(t, out)
+		require.NotEmpty(t, l)
+		for _, it := range l {
+			require.Len(t, it["emissoras"], tetoEmissorasPorItem)
+			require.EqualValues(t, 300, it["emissoras_total"])
+			require.NotEmpty(t, it["emissoras"].([]any)[0].(map[string]any)["nome"], "nome resolvido nos refs mantidos")
+		}
+		require.Contains(t, fmt.Sprint(out["ressalvas"]), "cortadas em 20 por item")
+	}
+
+	// obter_campanha segue completa.
+	out := chamarTool(t, cfg, "obter_campanha", map[string]any{"campanha_id": camp.String()})
+	require.Len(t, out["emissoras"], 300)
 }
