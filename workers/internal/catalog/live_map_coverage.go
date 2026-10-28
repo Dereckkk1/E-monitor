@@ -63,7 +63,8 @@ func (m *LiveMap) Coverage(ctx context.Context, campaignIDs []uuid.UUID, scopes 
 		       c.distance_km, c.is_home, c.latitude, c.longitude
 		FROM station_coverage_cities c
 		JOIN mon_stations ms ON ms.station_id = c.station_id
-		ORDER BY c.station_id, c.distance_km`, ids)
+		-- ibge_code desempata a distância: o MCP corta as N mais próximas.
+		ORDER BY c.station_id, c.distance_km, c.ibge_code`, ids)
 	if err != nil {
 		return res, err
 	}

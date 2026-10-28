@@ -1647,7 +1647,9 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		      FROM unnest($4::text[]) AS tok
 		  ))
 		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
-		ORDER BY cnt DESC, c.title ASC`,
+		-- d.commercial_id só desempata: c.title é nulo para materiais, e o MCP
+		-- pagina/corta esta lista (a ordem não pode trocar entre duas chamadas).
+		ORDER BY cnt DESC, c.title ASC, d.commercial_id`,
 		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.ClientIDs)
 	if err != nil {
 		return nil, err
@@ -1907,7 +1909,8 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		  AND d.evidence_status <> 'audit_rejected'
 		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		         s.pmm, cst.pmm_target
-		ORDER BY cnt DESC, s.name ASC`,
+		-- d.station_id só desempata (o MCP pagina esta lista).
+		ORDER BY cnt DESC, s.name ASC, d.station_id`,
 		f.CampaignIDs, f.StartDate, f.EndDate)
 	if err != nil {
 		return nil, err

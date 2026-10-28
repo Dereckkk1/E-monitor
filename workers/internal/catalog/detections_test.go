@@ -695,3 +695,50 @@ func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 		t.Errorf("total = %d, want 1 (ignored excluded)", res.Total)
 	}
 }
+
+// Empate de contagem: o id desempata (o MCP pagina e corta estas listas; sem
+// desempate a ordem podia trocar entre duas chamadas). c.title é nulo para
+// material, então sem o id o empate entre materiais não tinha ordem nenhuma.
+func TestDetections_AggregateByMaterial_EmpateDesempataPorID(t *testing.T) {
+	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Empate-A")
+	dets := NewDetections(pool)
+	cliente := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
+	ids := []uuid.UUID{matID}
+	for _, titulo := range []string{"Empate-B", "Empate-C"} {
+		m, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
+			ClientID: cliente, Title: titulo, DurationSeconds: 30,
+			MasterStoragePath: "/tmp", MasterSHA256: "empate-" + uuid.NewString(),
+		})
+		if err != nil {
+			t.Fatalf("seed %s: %v", titulo, err)
+		}
+		t.Cleanup(func() {
+			pool.Exec(ctx, "DELETE FROM detections WHERE commercial_id = $1", m.ID)
+			pool.Exec(ctx, "DELETE FROM materials WHERE id = $1", m.ID)
+		})
+		ids = append(ids, m.ID)
+	}
+	for i, id := range ids {
+		if _, err := dets.Create(ctx, CreateDetectionInput{
+			StationID: statID, CommercialID: id, CampaignID: campID,
+			DetectedAt:         time.Now().Add(-time.Duration(i) * time.Minute),
+			MatchStartOffsetMs: 0, MatchEndOffsetMs: 30000,
+			Confidence: 0.9, HashCount: 50, TemporalCoverage: 0.8,
+		}); err != nil {
+			t.Fatalf("seed detection %d: %v", i, err)
+		}
+	}
+
+	res, err := dets.AggregateByMaterial(ctx, AggregateFilter{CampaignIDs: []uuid.UUID{campID}})
+	if err != nil {
+		t.Fatalf("AggregateByMaterial: %v", err)
+	}
+	if len(res.Data) != 3 {
+		t.Fatalf("linhas = %d, want 3", len(res.Data))
+	}
+	for i := 1; i < len(res.Data); i++ {
+		if res.Data[i-1].MaterialID.String() > res.Data[i].MaterialID.String() {
+			t.Errorf("empate fora da ordem de id: %v antes de %v", res.Data[i-1].MaterialID, res.Data[i].MaterialID)
+		}
+	}
+}
