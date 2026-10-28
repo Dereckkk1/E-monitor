@@ -303,13 +303,27 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 				out.MetaVemDe = "ajuste_do_dia"
 				out.Ressalvas = append(out.Ressalvas, "Há ajuste do dia: a meta e a faixa dele substituem as regras listadas em faixas.")
 				if out.AjusteDoDia.InsercoesEsperadas == 0 {
-					out.Ressalvas = append(out.Ressalvas, "O ajuste zera a meta: toda tocada deste dia é bonus, nunca out_slot.")
+					out.Ressalvas = append(out.Ressalvas, "O ajuste zera a meta: toda tocada deste dia é bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
 				}
 			case len(out.Faixas) > 0:
 				out.MetaVemDe = "regras"
 			default:
 				out.MetaVemDe = "sem_meta"
-				out.Ressalvas = append(out.Ressalvas, "Nenhuma regra nem ajuste vale neste dia: a meta é 0 e as tocadas entram como bonus.")
+				out.Ressalvas = append(out.Ressalvas, "Nenhuma regra nem ajuste vale neste dia: a meta é 0 e as tocadas entram como bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
+			}
+
+			if c.Status == "cancelada" {
+				out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
+				canc, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
+				if err != nil {
+					return nil, err
+				}
+				if em, achou := canc[c.ID]; achou && dia(d) > dia(em.In(fusoSP)) {
+					out.Ressalvas = append(out.Ressalvas, "Dia depois do cancelamento: não há obrigação; as faixas abaixo não geram meta.")
+				}
+			}
+			if out.Saldo == nil {
+				out.Ressalvas = append(out.Ressalvas, "A grade não tem linha para esta célula neste dia (sem meta e sem veiculação contada).")
 			}
 
 			// Veiculações do dia: o recorte do DayDetailModal (conjunto aprovado).
