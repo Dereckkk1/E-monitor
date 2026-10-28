@@ -18,6 +18,7 @@ import (
 // Toda fatia que acrescentar tool atualiza esta lista no mesmo commit.
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
+	"assertividade",
 	"buscar_emissoras",
 	"financeiro_campanhas",
 	"grade_campanha",
@@ -46,6 +47,7 @@ var ToolsEsperadas = []string{
 	"pmm_target_cliente",
 	"quem_sou_eu",
 	"veiculacoes_por_material",
+	"visao_gerencial",
 }
 
 type ConfigServidor struct {
@@ -101,6 +103,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarUsuarios(s, cfg)
 	registrarIntegracoes(s, cfg, p)
 	registrarInsights(s, cfg)
+	registrarGerencial(s, cfg)
 	return s
 }
 
