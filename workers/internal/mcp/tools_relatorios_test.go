@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,6 +216,7 @@ func TestExportarVeiculacoes_LinhasBatemComOCSV(t *testing.T) {
 	require.EqualValues(t, dados, out["linhas"])
 	require.EqualValues(t, 4, out["linhas"], "sem a retratada e sem a de fora da vigência")
 	require.Equal(t, "4", totalRodape)
+	require.Equal(t, []any{}, out["ressalvas"], "ressalvas sempre presente, mesmo vazia")
 	l := out["links"].(map[string]any)
 	require.Contains(t, l["como_baixar"], "CSV Detalhado")
 	require.NotContains(t, l["tela"], ".csv")
@@ -228,4 +231,100 @@ func TestRelatoriosCampanha_Recusas(t *testing.T) {
 		require.Contains(t, chamarToolErro(t, cfg, tool, map[string]any{"campanha_id": camp.String(), "de": "2026-10-20", "ate": "2026-10-10"}),
 			"[entrada_invalida]", tool)
 	}
+}
+
+func TestRelatorioDataHora_PaginasECancelada(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	mat := mcptest.Material(t, ctx, pool, cli, tipo, "Spot A")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", est)
+	mcptest.EstadoCampanha(t, ctx, pool, camp, "cancelada")
+	for h := 8; h < 13; h++ {
+		mcptest.Veiculacao(t, ctx, pool, camp, mat, est, "in_slot", mcptest.Quando("2026-10-10", fmt.Sprintf("%02d:00", h)))
+	}
+	hd := &handlers.DetectionsHandler{Repo: catalog.NewDetections(pool)}
+	var tela catalog.ListPagedResult
+	require.NoError(t, json.Unmarshal(chamarHandler(t, hd.List, "/detections?page=1&page_size=100&campaigns="+camp.String()+
+		"&"+periodoRFC("2026-10-01", "2026-10-31"), nil, admin), &tela))
+	require.Equal(t, 5, tela.Total)
+
+	cfg := cfgTeste(pool)
+	var vistos []string
+	for offset := 0; offset < 5; offset += 2 {
+		out := chamarTool(t, cfg, "relatorio_data_hora", map[string]any{"cliente_id": cli.String(), "campanha_ids": []string{camp.String()},
+			"de": "2026-10-01", "ate": "2026-10-31", "limit": 2, "offset": offset})
+		p := pag(t, out)
+		require.EqualValues(t, 5, p["total"])
+		require.Equal(t, offset+2 < 5, p["has_more"])
+		vistos = append(vistos, ids(t, itens(t, out), "id")...)
+		require.Contains(t, out["ressalvas"], ressalvaCanceladaRelatorio, "cancelada: mantida e marcada")
+	}
+	esperados := make([]string, len(tela.Data))
+	for i, d := range tela.Data {
+		esperados[i] = d.ID.String()
+	}
+	require.Equal(t, esperados, vistos, "as páginas juntas são a lista da tela, sem repetir nem pular")
+}
+
+// tamanhoDoResultado: os bytes do JSON que o cliente MCP recebe.
+func tamanhoDoResultado(t *testing.T, out map[string]any) int {
+	t.Helper()
+	b, err := json.Marshal(out)
+	require.NoError(t, err)
+	return len(b)
+}
+
+// Pior caso de uma página do relatorio_data_hora: limit=100 com nomes longos.
+// O cliente MCP corta a saída em ~25k tokens; o alvo é ficar abaixo de ~75 KB.
+func TestRelatorioDataHora_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente Com Um Nome Bem Comprido De Agência E Anunciante Ltda")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot Comercial De Trinta Segundos")
+	mat := mcptest.Material(t, ctx, pool, cli, tipo, strings.Repeat("Material Com Título Longo ", 3))
+	var ests []uuid.UUID
+	for i := range 10 {
+		e := mcptest.Emissora(t, ctx, pool, fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %02d FM", i), 12345.67)
+		_, err := pool.Exec(ctx, `UPDATE stations SET city = 'São José Do Rio Preto Da Serra', state = 'SP', frequency_mhz = 107.9 WHERE id = $1`, e)
+		require.NoError(t, err)
+		ests = append(ests, e)
+	}
+	camp := mcptest.Campanha(t, ctx, pool, cli, strings.Repeat("Campanha De Fim De Ano ", 3), "2026-10-01", "2026-10-31", ests...)
+	for _, e := range ests {
+		mcptest.Preco(t, ctx, pool, camp, e, tipo, 1234.56)
+		mcptest.PMMTarget(t, ctx, pool, cli, e, 54321)
+	}
+	for i := range tetoPaginaDataHora + 5 {
+		mcptest.Veiculacao(t, ctx, pool, camp, mat, ests[i%len(ests)], "in_slot",
+			mcptest.Quando(fmt.Sprintf("2026-10-%02d", 1+i%28), fmt.Sprintf("%02d:%02d", 6+i%16, i%60)))
+	}
+	out := chamarTool(t, cfgTeste(pool), "relatorio_data_hora", map[string]any{"cliente_id": cli.String(), "campanha_ids": []string{camp.String()},
+		"de": "2026-10-01", "ate": "2026-10-31", "limit": 100})
+	require.Len(t, itens(t, out), tetoPaginaDataHora)
+	require.EqualValues(t, tetoPaginaDataHora, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
+	require.Equal(t, true, pag(t, out)["has_more"])
+	n := tamanhoDoResultado(t, out)
+	t.Logf("relatorio_data_hora: %d linhas = %d bytes", tetoPaginaDataHora, n)
+	require.Less(t, n, 75_000)
+}
+
+// por_material não é paginada: acima de 50 sai cortada, com o total real.
+func TestResumoRelatorioCampanha_PorMaterialCortado(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", est)
+	for i := range tetoMateriaisResumo + 1 {
+		m := mcptest.Material(t, ctx, pool, cli, tipo, fmt.Sprintf("Spot %02d", i))
+		mcptest.Veiculacao(t, ctx, pool, camp, m, est, "in_slot", mcptest.Quando("2026-10-10", fmt.Sprintf("%02d:%02d", 6+i/60, i%60)))
+	}
+	out := chamarTool(t, cfgTeste(pool), "resumo_relatorio_campanha", map[string]any{"campanha_id": camp.String()})
+	require.Len(t, out["por_material"], tetoMateriaisResumo)
+	require.EqualValues(t, tetoMateriaisResumo+1, out["por_material_total"])
+	require.EqualValues(t, tetoMateriaisResumo+1, out["totais"].(map[string]any)["materiais"])
+	require.Contains(t, out["ressalvas"], fmt.Sprintf("por_material cortado em %d de %d materiais (por_material_total traz o número real)",
+		tetoMateriaisResumo, tetoMateriaisResumo+1))
 }

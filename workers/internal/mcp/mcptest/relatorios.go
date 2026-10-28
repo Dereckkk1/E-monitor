@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"radiocheck/internal/catalog"
 	"radiocheck/internal/postsale"
 )
 
@@ -18,6 +19,15 @@ func PMMTarget(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cliente, e
 	t.Helper()
 	_, err := pool.Exec(ctx, `INSERT INTO client_station_pmm (client_id, station_id, pmm_target) VALUES ($1, $2, $3)`,
 		cliente, emissora, pmm)
+	require.NoError(t, err)
+}
+
+// PrecoConsolidado grava o preço consolidado (pacote mensal) de uma emissora.
+func PrecoConsolidado(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campanha, emissora uuid.UUID, mensal float64) {
+	t.Helper()
+	_, err := catalog.NewPricing(pool).Upsert(ctx, catalog.UpsertInput{
+		CampaignID: campanha, StationID: emissora, Mode: catalog.PricingModeConsolidated, ConsolidatedValue: &mensal,
+	})
 	require.NoError(t, err)
 }
 

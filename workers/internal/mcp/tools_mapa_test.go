@@ -86,3 +86,32 @@ func TestMapaCoberturaCampanha_Recusas(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfg, "mapa_cobertura_campanha", map[string]any{"campanha_ids": []string{uuid.NewString()}}), "[nao_encontrado]")
 	require.Contains(t, chamarToolErro(t, cfg, "mapa_cobertura_campanha", map[string]any{"campanha_ids": []string{camp.String()}}), "cancelada")
 }
+
+// Pior caso de uma página do mapa: o teto (25 emissoras) × 20 cidades, com
+// nomes longos. limit acima do teto é rebaixado; o JSON tem de caber no
+// cliente MCP (~25k tokens; alvo < 60 KB).
+func TestMapaCoberturaCampanha_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	var ests []uuid.UUID
+	for i := range tetoPaginaMapa + 1 {
+		e := mcptest.Emissora(t, ctx, pool, fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %02d FM", i), 1000)
+		var cidades []mcptest.CidadeAlcance
+		for j := range tetoPorItem {
+			cidades = append(cidades, mcptest.CidadeAlcance{IBGE: 100000 + i*100 + j,
+				Nome: fmt.Sprintf("São José Do Rio Preto Da Serra Do Mar %02d", j), Km: float64(j) + 0.123456})
+		}
+		mcptest.Cobertura(t, ctx, pool, e, "E1", 123.456, 185.184, cidades...)
+		ests = append(ests, e)
+	}
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", ests...)
+
+	out := chamarTool(t, cfgTeste(pool), "mapa_cobertura_campanha", map[string]any{"campanha_ids": []string{camp.String()}, "limit": 100})
+	require.Len(t, itens(t, out), tetoPaginaMapa)
+	require.EqualValues(t, tetoPaginaMapa, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
+	require.EqualValues(t, tetoPaginaMapa+1, pag(t, out)["total"])
+	require.Equal(t, true, pag(t, out)["has_more"])
+	n := tamanhoDoResultado(t, out)
+	t.Logf("mapa_cobertura_campanha: %d emissoras × %d cidades = %d bytes", tetoPaginaMapa, tetoPorItem, n)
+	require.Less(t, n, 60_000)
+}

@@ -28,13 +28,6 @@ type periodoDTO struct {
 	Granularidade string `json:"granularidade"`
 }
 
-type campanhaInsights struct {
-	Campanha ref    `json:"campanha"`
-	Inicio   string `json:"inicio"`
-	Fim      string `json:"fim"`
-	Estado   string `json:"estado"`
-}
-
 // pontoInsights: um ponto da série do gráfico. bonus é a categoria bonus da
 // tocada (BucketRow.Extras conta só ela — catalog/insights.go aggregateBuckets).
 type pontoInsights struct {
@@ -47,9 +40,14 @@ type pontoInsights struct {
 	Bonus      int    `json:"bonus"`
 }
 
+type bonificacaoDTO struct {
+	Valor     float64 `json:"valor"`
+	Insercoes int64   `json:"insercoes"`
+}
+
 type insightsDTO struct {
 	Periodo            periodoDTO         `json:"periodo"`
-	Campanhas          []campanhaInsights `json:"campanhas"`
+	Campanhas          []campanhaResumida `json:"campanhas"`
 	Impactos           int64              `json:"impactos"`
 	ImpactosTarget     *int64             `json:"impactos_target"`
 	EmissorasComTarget int                `json:"emissoras_com_target"`
@@ -63,19 +61,17 @@ type insightsDTO struct {
 	} `json:"por_categoria"`
 	Emissoras       int `json:"emissoras"`
 	EmissorasComPMM int `json:"emissoras_com_pmm"`
-	Investido       struct {
-		Contratado float64 `json:"contratado"`
-		Executado  float64 `json:"executado"`
-	} `json:"investido"`
-	Bonificacao struct {
-		Valor     float64 `json:"valor"`
-		Insercoes int64   `json:"insercoes"`
-	} `json:"bonificacao"`
-	CPM                  *float64 `json:"cpm"`
-	CPMTarget            *float64 `json:"cpm_target"`
-	Consolidado          bool     `json:"consolidado"`
-	RateadoPorMaterial   bool     `json:"rateado_por_material"`
-	ParticipacaoMaterial *float64 `json:"participacao_material"`
+	// Investido: o card "Investido" da tela (KPIs.Investido.Executado). O
+	// Contratado do payload não aparece em card nenhum e não sai.
+	Investido float64 `json:"investido"`
+	// Bonificacao: null quando a tela esconde o card (showBonificacaoDe em
+	// frontend/src/utils/insightsCards.js).
+	Bonificacao          *bonificacaoDTO `json:"bonificacao"`
+	CPM                  *float64        `json:"cpm"`
+	CPMTarget            *float64        `json:"cpm_target"`
+	Consolidado          bool            `json:"consolidado"`
+	RateadoPorMaterial   bool            `json:"rateado_por_material"`
+	ParticipacaoMaterial *float64        `json:"participacao_material"`
 	Genero               struct {
 		M int64 `json:"m"`
 		F int64 `json:"f"`
@@ -95,64 +91,35 @@ type insightsDTO struct {
 	Ressalvas []string        `json:"ressalvas"`
 }
 
-const ressalvaInsights = "Impactos = PMM × (in_slot + bonus); out_slot não vale nada e out_date está fora do período. veiculacoes soma as 4 categorias. CPM null = sem impactos no período (não é zero); cpm_target é sempre o dinâmico, mesmo com CPM fixo. impactos_target null = nenhuma emissora com PMM no target do cliente. Demografia só soma emissoras com PMM. Na série, bonus é a contagem da categoria bonus e deficit = programado − in_slot (out_slot não abate)."
+const ressalvaInsights = "Impactos = PMM × (in_slot + bonus); out_slot não vale nada e out_date está fora do período. veiculacoes soma as 4 categorias. CPM = (investido + bonificação) ÷ impactos × 1000 (ou o CPM fixo da campanha); null = sem impactos no período (não é zero); cpm_target é sempre o dinâmico, mesmo com CPM fixo. impactos_target null = nenhuma emissora com PMM no target do cliente. Demografia só soma emissoras com PMM. Na série, bonus é a contagem da categoria bonus e deficit = programado − in_slot (out_slot não abate)."
 
-const ressalvaConsolidado = "Há emissora com preço consolidado: investido.contratado é o valor do contrato, acumulado por mês iniciado até hoje (America/Sao_Paulo), não proporcional à janela."
+const ressalvaConsolidado = "Há emissora com preço consolidado (modo fornecedor): investido = o pacote mensal das consolidadas, acumulado por mês iniciado até hoje (America/Sao_Paulo) e NÃO proporcional à janela escolhida, mais o in_slot das emissoras por inserção a preço de tabela."
 
-const ressalvaRateio = "Com filtro de material, investido, bonificação, CPM e o programado da série são RATEIO pela participação do material nas veiculações (o contrato não separa valor por material); impactos, veiculações e demografia são exatos."
+const ressalvaBonificacaoMista = "Seleção mista: bonificacao precifica só as emissoras por inserção. O bônus das consolidadas está em por_categoria.bonus e em impactos, sem valor (o pacote não tem preço por inserção)."
+
+const ressalvaBonificacaoSemPreco = "bonificacao null: há emissora consolidada e nenhuma bonificação precificável nas emissoras por inserção. O pacote consolidado não tem preço por inserção, então o bônus dele fica sem valor; null NÃO quer dizer que não houve bônus (veja por_categoria.bonus)."
+
+const ressalvaRateio = "Com filtro de material, investido, bonificação, CPM e o programado da série são RATEIO pela participação do material nas veiculações (participacao_material; o contrato não separa valor por material); impactos, veiculações e demografia são exatos."
 
 const ressalvaMudancaDeRegra = "Os números caíram em 2026-08-17 por mudança de regra (o executado deixou de somar out_slot e acabou a dupla contagem do excedente): relatório anterior a essa data não bate com este, e é o antigo que estava errado."
 
 // mudancaDeRegra: o dia em que a categorização por cota entrou (docs/features/insights-dashboard.md).
 var mudancaDeRegra = time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
 
-// lerIDs valida até teto uuids e tira repetidos (mantendo a ordem): o
-// repositório conta as campanhas achadas contra as pedidas, e um id repetido
-// viraria um falso "não são do cliente".
-func lerIDs(ss []string, teto int) ([]uuid.UUID, bool) {
-	if len(ss) > teto {
-		return nil, false
+// mostraBonificacao: a regra da tela (showBonificacaoDe, insightsCards.js).
+// Fora do modo fornecedor o card aparece sempre (zero é "não houve bônus"); com
+// consolidada, só quando há parcela por inserção — ali o zero é "sem preço".
+func mostraBonificacao(p *catalog.InsightsPayload) bool {
+	if !p.Consolidated {
+		return true
 	}
-	out := make([]uuid.UUID, 0, len(ss))
-	for _, s := range ss {
-		id, err := uuid.Parse(s)
-		if err != nil {
-			return nil, false
-		}
-		if !slices.Contains(out, id) {
-			out = append(out, id)
-		}
-	}
-	return out, true
-}
-
-// lerDias lê de/ate (AAAA-MM-DD) com padrão; campo inválido volta no 3º valor.
-func lerDias(de, ate string, padraoDe, padraoAte time.Time) (time.Time, time.Time, string) {
-	ini, fim := padraoDe, padraoAte
-	if de != "" {
-		d, ok := lerDia(de)
-		if !ok {
-			return ini, fim, "de"
-		}
-		ini = d
-	}
-	if ate != "" {
-		d, ok := lerDia(ate)
-		if !ok {
-			return ini, fim, "ate"
-		}
-		fim = d
-	}
-	if fim.Before(ini) {
-		return ini, fim, campoPeriodo
-	}
-	return ini, fim, ""
+	return p.KPIs.Bonificacao.Valor > 0 || p.KPIs.Bonificacao.Count > 0
 }
 
 func registrarInsights(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "insights_campanha",
-		"Devolve o painel /insights de UM cliente: impactos (e no target), veiculações por categoria, investido "+
-			"(contratado e executado), bonificação, CPM, demografia e a série por dia (ou por mês acima de 31 dias), "+
+		"Devolve o painel /insights de UM cliente: impactos (e no target), veiculações por categoria, investido, "+
+			"bonificação, CPM, demografia e a série por dia (ou por mês acima de 31 dias), "+
 			"mais o link da tela já filtrada. Pede cliente_id e 1 a 50 campanhas dele; período padrão = mês corrente. "+
 			"A armadilha: com material_ids, os valores em R$ viram rateio. Nunca some nem recalcule: os números vêm prontos.",
 		func(ctx context.Context, L *Leitura, in entradaInsights) (*sdk.CallToolResult, error) {
@@ -160,26 +127,28 @@ func registrarInsights(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return recusaEntrada("cliente_id")
 			}
-			camps, okC := lerIDs(in.CampanhaIDs, 50)
-			if !okC || len(camps) == 0 {
-				return recusa("campanha_ids precisa de 1 a 50 ids válidos", "entrada_invalida")
+			camps, rec := lerIDsObrigatorios("campanha_ids", in.CampanhaIDs, 50)
+			if rec != nil {
+				return rec, nil
 			}
-			emissoras, okE := lerIDs(in.EmissoraIDs, 200)
-			if !okE {
-				return recusaEntrada("emissora_ids")
+			emissoras, rec := lerIDs("emissora_ids", in.EmissoraIDs, 200)
+			if rec != nil {
+				return rec, nil
 			}
-			materiais, okM := lerIDs(in.MaterialIDs, 200)
-			if !okM {
-				return recusaEntrada("material_ids")
+			materiais, rec := lerIDs("material_ids", in.MaterialIDs, 200)
+			if rec != nil {
+				return rec, nil
 			}
-			pIni, pFim := mesCorrenteSP(L.agora())
-			de, ate, campo := lerDias(in.De, in.Ate, pIni, pFim)
-			if campo != "" {
-				return recusaCampoDoPeriodo(campo)
+			agora := L.agora()
+			pIni, pFim := mesCorrenteSP(agora)
+			de, ate, rec := lerDias(in.De, in.Ate, pIni, pFim)
+			if rec != nil {
+				return rec, nil
 			}
 			pay, err := L.Insights.Compute(ctx, catalog.InsightsParams{
 				ClientID: cliente, CampaignIDs: camps, From: de, To: ate,
-				StationIDs: emissoras, MaterialIDs: materiais, Today: catalog.TodaySaoPaulo(),
+				// hojeSP = catalog.TodaySaoPaulo (meia-noite UTC do dia de SP), no relógio injetável.
+				StationIDs: emissoras, MaterialIDs: materiais, Today: hojeSP(agora),
 			})
 			if err != nil {
 				// O mesmo teste do handler: o repo marca campanha de outro cliente com "cross-client".
@@ -204,6 +173,11 @@ func registrarInsights(s *sdk.Server, cfg ConfigServidor) {
 			out.Ressalvas = []string{ressalvaInsights}
 			if pay.Consolidated {
 				out.Ressalvas = append(out.Ressalvas, ressalvaConsolidado)
+				if out.Bonificacao == nil {
+					out.Ressalvas = append(out.Ressalvas, ressalvaBonificacaoSemPreco)
+				} else {
+					out.Ressalvas = append(out.Ressalvas, ressalvaBonificacaoMista)
+				}
 			}
 			if pay.MaterialProrated {
 				out.Ressalvas = append(out.Ressalvas, ressalvaRateio)
@@ -212,7 +186,7 @@ func registrarInsights(s *sdk.Server, cfg ConfigServidor) {
 				out.Ressalvas = append(out.Ressalvas, ressalvaMudancaDeRegra)
 			}
 			if slices.ContainsFunc(pay.Campaigns, func(c catalog.CampaignBrief) bool { return c.Status == "cancelada" }) {
-				out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
+				out.Ressalvas = append(out.Ressalvas, ressalvaCanceladaRelatorio)
 			}
 			return ok(out)
 		})
@@ -222,9 +196,9 @@ func insightsDe(p *catalog.InsightsPayload) insightsDTO {
 	k := p.KPIs
 	var o insightsDTO
 	o.Periodo = periodoDTO{De: p.Period.From, Ate: p.Period.To, Granularidade: map[string]string{"day": "dia", "month": "mes"}[p.Period.Granularity]}
-	o.Campanhas = make([]campanhaInsights, len(p.Campaigns))
+	o.Campanhas = make([]campanhaResumida, len(p.Campaigns))
 	for i, c := range p.Campaigns {
-		o.Campanhas[i] = campanhaInsights{Campanha: refDe(c.ID, c.Name), Inicio: c.StartDate, Fim: c.EndDate, Estado: c.Status}
+		o.Campanhas[i] = campanhaResumida{Campanha: refDe(c.ID, c.Name), Inicio: c.StartDate, Fim: c.EndDate, Estado: c.Status}
 	}
 	o.Impactos = k.Impactos
 	o.EmissorasComTarget = k.StationsWithTarget
@@ -240,10 +214,10 @@ func insightsDe(p *catalog.InsightsPayload) insightsDTO {
 	o.PorCategoria.OutDate = p.VeiculacoesBreakdown.OutDate
 	o.Emissoras = k.StationsCount
 	o.EmissorasComPMM = k.StationsWithPMM
-	o.Investido.Contratado = k.Investido.Contratado
-	o.Investido.Executado = k.Investido.Executado
-	o.Bonificacao.Valor = k.Bonificacao.Valor
-	o.Bonificacao.Insercoes = k.Bonificacao.Count
+	o.Investido = k.Investido.Executado
+	if mostraBonificacao(p) {
+		o.Bonificacao = &bonificacaoDTO{Valor: k.Bonificacao.Valor, Insercoes: k.Bonificacao.Count}
+	}
 	if k.Impactos > 0 {
 		v := k.CPM
 		o.CPM = &v
