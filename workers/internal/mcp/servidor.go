@@ -16,7 +16,11 @@ import (
 // ToolsEsperadas trava o conjunto e a ORDEM das tools: clientes guardam o
 // tools/list em cache, então nada entra ou sai por acidente (contrato §3).
 // Toda fatia que acrescentar tool atualiza esta lista no mesmo commit.
+// A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
+	"listar_clientes",
+	"obter_cliente",
+	"pmm_target_cliente",
 	"quem_sou_eu",
 }
 
@@ -63,6 +67,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "emonitor", Version: cfg.Versao},
 		&sdk.ServerOptions{Instructions: Instrucoes, SchemaCache: cacheEsquemas, Logger: logSDK})
 	registrarSistema(s, p)
+	registrarClientes(s, cfg)
 	return s
 }
 
