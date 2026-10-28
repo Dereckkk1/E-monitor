@@ -110,10 +110,13 @@ var mudancaDeRegra = time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
 // Fora do modo fornecedor o card aparece sempre (zero é "não houve bônus"); com
 // consolidada, só quando há parcela por inserção — ali o zero é "sem preço".
 func mostraBonificacao(p *catalog.InsightsPayload) bool {
-	if !p.Consolidated {
-		return true
-	}
-	return p.KPIs.Bonificacao.Valor > 0 || p.KPIs.Bonificacao.Count > 0
+	return mostraBonificacaoDe(p.Consolidated, p.KPIs.Bonificacao.Valor, p.KPIs.Bonificacao.Count)
+}
+
+// mostraBonificacaoDe: o núcleo da regra, sobre os três valores que decidem
+// (o showBonificacaoDe do frontend, que o pós-venda também usa).
+func mostraBonificacaoDe(consolidado bool, valor float64, insercoes int64) bool {
+	return !consolidado || valor > 0 || insercoes > 0
 }
 
 func registrarInsights(s *sdk.Server, cfg ConfigServidor) {

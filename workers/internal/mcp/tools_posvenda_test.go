@@ -286,19 +286,26 @@ func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
 	}
 }
 
-// Pior caso de listar_pos_vendas: uma página de 100 com nomes longos.
+// Pior caso de listar_pos_vendas: a página máxima com títulos acima do teto
+// (saem cortados em tetoTitulo) e nome de cliente longo (alvo < 60 KB).
 func TestListarPosVendas_PiorCasoCabe(t *testing.T) {
 	ctx, pool := mcptest.DBCatalogo(t)
-	cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
+	cli := mcptest.Cliente(t, ctx, pool, strings.Repeat("Agência De Publicidade E Propaganda ", 4)+"Do Interior Ltda")
 	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30")
-	for i := range limiteTeto + 1 {
-		mcptest.PosVenda(t, ctx, pool, cli, camp, fmt.Sprintf("Fechamento De Setembro Com Título Bem Comprido %03d", i), "2026-09-01", "2026-09-30", false, nil)
+	for i := range tetoPaginaPosVendas + 1 {
+		mcptest.PosVenda(t, ctx, pool, cli, camp, fmt.Sprintf("%03d ", i)+strings.Repeat("Fechamento De Setembro Com Título ", 10),
+			"2026-09-01", "2026-09-30", false, nil)
 	}
 	out := chamarTool(t, cfgTeste(pool), "listar_pos_vendas", map[string]any{"limit": 100})
-	require.Len(t, itens(t, out), limiteTeto)
+	require.Len(t, itens(t, out), tetoPaginaPosVendas)
+	require.EqualValues(t, tetoPaginaPosVendas, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
 	require.Equal(t, true, pag(t, out)["has_more"])
+	titulo := itens(t, out)[0]["titulo"].(string)
+	require.True(t, strings.HasSuffix(titulo, "…"))
+	require.LessOrEqual(t, bytesJSON(t, titulo), tetoTitulo)
+	require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
 	n := tamanhoDoResultado(t, out)
-	t.Logf("listar_pos_vendas: %d itens = %d bytes", limiteTeto, n)
+	t.Logf("listar_pos_vendas: %d itens com título no teto = %d bytes", tetoPaginaPosVendas, n)
 	require.Less(t, n, 60_000)
 }
 
@@ -500,4 +507,45 @@ func TestCortarTexto(t *testing.T) {
 	require.LessOrEqual(t, bytesJSON(t, s), 20)
 	s, _ = cortarTexto("<<<", 2)
 	require.Equal(t, "", s, "nem o … cabe")
+}
+
+// Números do pós-venda seguem a regra de exibição do /insights (que os gerou):
+// bloco 100% consolidado sem parcela por inserção → bonificação null (a página
+// do cliente esconde o card); sem impactos → CPM null; target sem impactos →
+// cpm_target null. Bloco consolidado COM parcela por inserção mostra o bônus.
+func TestObterPosVenda_RegraDeExibicaoDosNumeros(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	c1 := mcptest.Campanha(t, ctx, pool, cli, "Consolidada", "2026-09-01", "2026-09-30")
+	c2 := mcptest.Campanha(t, ctx, pool, cli, "Mista", "2026-09-01", "2026-09-30")
+	repo := postsale.NewRepo(pool)
+	rep, err := repo.CreateDraft(ctx, postsale.CreateDraftInput{ClientID: cli, Title: "F"})
+	require.NoError(t, err)
+	require.NoError(t, repo.ReplaceBlocks(ctx, rep.ID, []postsale.BlockRow{
+		{CampaignID: c1, From: mcptest.Dia("2026-09-01"), To: mcptest.Dia("2026-09-30"), Position: 0},
+		{CampaignID: c2, From: mcptest.Dia("2026-09-01"), To: mcptest.Dia("2026-09-30"), Position: 1},
+	}))
+	b, err := json.Marshal(postsale.Payload{Version: postsale.PayloadVersion, Campaigns: []postsale.CampaignBlock{
+		{CampaignID: c1, KPIs: postsale.BlockKPIs{ValorEntregue: 5000, Consolidated: true, StationsWithTarget: 1, StationsCount: 2}},
+		{CampaignID: c2, KPIs: postsale.BlockKPIs{ValorEntregue: 9000, Impactos: 1000, CPM: 9.5, Consolidated: true,
+			Bonificacao: 0, BonificacaoCount: 3, StationsWithTarget: 1, ImpactosTarget: 400, CPMTarget: 22.5}},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkSent(ctx, rep.ID, b))
+
+	o := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String()})
+	xs := itens(t, o)
+	consolidada := xs[0]["numeros"].(map[string]any)
+	require.Nil(t, consolidada["bonificacao"], "100% consolidado: a tela esconde o card")
+	require.Nil(t, consolidada["bonificacao_insercoes"])
+	require.Nil(t, consolidada["cpm"], "sem impactos o CPM não se aplica")
+	require.EqualValues(t, 0, consolidada["impactos_target"], "há emissora com target: o zero é zero")
+	require.Nil(t, consolidada["cpm_target"], "sem impactos no target o CPM no target não se aplica")
+	mista := xs[1]["numeros"].(map[string]any)
+	require.EqualValues(t, 0, mista["bonificacao"], "consolidada com parcela por inserção: o card aparece (zero em R$, 3 inserções)")
+	require.EqualValues(t, 3, mista["bonificacao_insercoes"])
+	require.EqualValues(t, 9.5, mista["cpm"])
+	require.EqualValues(t, 22.5, mista["cpm_target"])
+	require.Contains(t, o["ressalvas"], ressalvaBonificacaoOculta)
+	require.Contains(t, o["ressalvas"], ressalvaCPMSemImpactos)
 }
