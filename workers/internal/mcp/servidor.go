@@ -22,6 +22,8 @@ var ToolsEsperadas = []string{
 	"buscar_emissoras",
 	"exportar_consolidado",
 	"exportar_veiculacoes",
+	"falhas_emissoras",
+	"falhas_por_dia",
 	"financeiro_campanhas",
 	"grade_campanha",
 	"insights_campanha",
@@ -50,6 +52,7 @@ var ToolsEsperadas = []string{
 	"pmm_target_cliente",
 	"quem_sou_eu",
 	"relatorio_data_hora",
+	"resumo_diario_falhas",
 	"resumo_relatorio_campanha",
 	"veiculacoes_por_material",
 	"visao_gerencial",
@@ -112,6 +115,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarRelatorios(s, cfg)
 	registrarRelatoriosCampanha(s, cfg)
 	registrarMapa(s, cfg)
+	registrarFalhas(s, cfg)
 	return s
 }
 

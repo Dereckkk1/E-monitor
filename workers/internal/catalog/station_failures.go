@@ -161,7 +161,8 @@ FROM stations s
 LEFT JOIN down_aggr d   ON d.station_id = s.id
 LEFT JOIN deficit_aggr df ON df.station_id = s.id
 WHERE df.station_id IS NOT NULL
-ORDER BY COALESCE(d.down_sec, 0) DESC, COALESCE(df.aff_camp, 0) DESC, s.name ASC`,
+-- s.id só desempata (o MCP pagina esta lista).
+ORDER BY COALESCE(d.down_sec, 0) DESC, COALESCE(df.aff_camp, 0) DESC, s.name ASC, s.id`,
 		dayStr, minDownSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("query 1 stations: %w", err)
@@ -258,7 +259,8 @@ WHERE dps.deficit > 0
   AND dps.station_id = ANY($2::uuid[])
   AND c.status <> 'cancelada'
 GROUP BY dps.station_id, dps.campaign_id, c.name, cl.name
-ORDER BY dps.station_id, deficit DESC`,
+-- dps.campaign_id só desempata (o MCP corta as campanhas de cada emissora).
+ORDER BY dps.station_id, deficit DESC, dps.campaign_id`,
 		dayStr, stationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("query 3 deficits: %w", err)
