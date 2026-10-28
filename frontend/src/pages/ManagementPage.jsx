@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import BrazilMap from '../components/BrazilMap'
@@ -6,6 +7,7 @@ import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
 import { useClients, useCampaignsPaged, useManagementOverview, useAssertiveness } from '../api/hooks'
 import FlowEmptyState from '../components/FlowEmptyState'
 import { safeLogoUrl } from '../utils/logoUrl'
+import { lerId, lerIds, lerOpcao, lerPeriodo, temFiltro } from '../utils/filtrosDaUrl'
 import './LiveMapPage.css'
 import './ManagementPage.css'
 
@@ -125,9 +127,11 @@ function ManagementGhost() {
 }
 
 export default function ManagementPage() {
-  const [clientId, setClientId] = useState(null)
-  const [campaignIds, setCampaignIds] = useState([])
-  const [status, setStatus] = useState(null)
+  // Link de outra tela ou do MCP (links.tela): a tela abre já filtrada.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [clientId, setClientId] = useState(() => lerId(searchParams, 'client_id'))
+  const [campaignIds, setCampaignIds] = useState(() => lerIds(searchParams, 'campaigns'))
+  const [status, setStatus] = useState(() => lerOpcao(searchParams, 'status', STATUS_OPTS.map(o => o.value)))
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
@@ -155,8 +159,14 @@ export default function ManagementPage() {
     const p = (n) => String(n).padStart(2, '0')
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
   }, [])
-  const [from, setFrom] = useState(defaultFrom)
-  const [to, setTo] = useState(defaultTo)
+  const [from, setFrom] = useState(() => lerPeriodo(searchParams)?.from ?? defaultFrom)
+  const [to, setTo] = useState(() => lerPeriodo(searchParams)?.to ?? defaultTo)
+  // Lido uma vez: tira da URL para ela não contradizer o filtro que a pessoa mudar depois.
+  useEffect(() => {
+    if (temFiltro(searchParams, ['client_id', 'campaigns', 'status', 'from', 'to'])) {
+      setSearchParams({}, { replace: true })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const isDefaultRange = from === defaultFrom && to === defaultTo
   const resetRange = () => { setFrom(defaultFrom); setTo(defaultTo) }
 

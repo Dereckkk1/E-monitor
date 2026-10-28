@@ -327,18 +327,31 @@ function DailyEmptyState({ phrase }) {
   )
 }
 
-export default function FailuresDailyView({ minDownSeconds = 60, onPickDay }) {
+// periodoInicial: { from, to } vindo da URL (link do MCP). Só vale se couber
+// no intervalo do input manual (hoje − 90 dias até hoje); se bater com um
+// preset, o botão dele já aparece marcado.
+function estadoInicial(today, periodoInicial) {
+  const presets = buildPresets(today)
+  const minimo = iso(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 90))
+  const p = periodoInicial
+  if (p && p.from >= minimo && p.to <= iso(today)) {
+    const igual = presets.find(x => x.from === p.from && x.to === p.to)
+    return { presetId: igual ? igual.id : 'custom', range: { from: p.from, to: p.to } }
+  }
+  const mes = presets.find(x => x.id === 'this-month')
+  return { presetId: 'this-month', range: { from: mes.from, to: mes.to } }
+}
+
+export default function FailuresDailyView({ minDownSeconds = 60, onPickDay, periodoInicial = null }) {
   const today = useMemo(() => {
     const n = new Date()
     return new Date(n.getFullYear(), n.getMonth(), n.getDate())
   }, [])
   const presets = useMemo(() => buildPresets(today), [today])
 
-  const [presetId, setPresetId] = useState('this-month')
-  const [range, setRange] = useState(() => {
-    const p = buildPresets(today).find(x => x.id === 'this-month')
-    return { from: p.from, to: p.to }
-  })
+  // Lido só na montagem: depois o período é o que a pessoa escolher.
+  const [presetId, setPresetId] = useState(() => estadoInicial(today, periodoInicial).presetId)
+  const [range, setRange] = useState(() => estadoInicial(today, periodoInicial).range)
   const [metricId, setMetricId] = useState('stations')
   const [showTable, setShowTable] = useState(false)
   const reducedMotion = usePrefersReducedMotion()
