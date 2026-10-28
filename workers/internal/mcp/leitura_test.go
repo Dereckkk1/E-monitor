@@ -119,5 +119,22 @@ func TestFixturesDeRelatorio(t *testing.T) {
 	require.Equal(t, "sent", r.Status)
 	dest, err := L.PosVenda.Recipients(ctx, enviado)
 	require.NoError(t, err)
-	require.Len(t, dest, 2)
+	require.Len(t, dest, 2) // ORDER BY email: a@ (1ª pessoa) e b@
+	require.Equal(t, "sent", dest[0].EmailStatus)
+	require.Equal(t, "sent", dest[1].EmailStatus, "enviado = email enviado para todos")
+	require.NotNil(t, dest[0].OpenedAt, "só a 1ª pessoa abriu")
+	require.Nil(t, dest[1].OpenedAt)
+	require.Zero(t, dest[1].OpenCount)
+}
+
+// TestDBCatalogo_ZeraQuedas: stream_health_events não tem FK para stations,
+// então o DBCatalogo a trunca explicitamente (senão as quedas vazam entre testes).
+func TestDBCatalogo_ZeraQuedas(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	est := mcptest.Emissora(t, ctx, pool, "Rádio Queda", 0)
+	mcptest.Queda(t, ctx, pool, est, mcptest.Quando("2026-09-10", "08:00"), 600)
+	ctx, pool = mcptest.DBCatalogo(t)
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM stream_health_events`).Scan(&n))
+	require.Zero(t, n)
 }

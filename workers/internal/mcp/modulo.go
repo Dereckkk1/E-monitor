@@ -23,7 +23,10 @@ type DepsModulo struct {
 }
 
 type Modulo struct {
-	mcp    http.Handler
+	mcp http.Handler
+	// cfg é a configuração com que o handler MCP foi montado (lida pelos testes
+	// da ligação DepsModulo → Leitura).
+	cfg    ConfigServidor
 	oauth  *oauth.Servidor
 	tokens *TokensHTTP
 }
@@ -43,6 +46,7 @@ func NovoModulo(d DepsModulo) *Modulo {
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L, Log: d.Log}
 	return &Modulo{
 		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
+		cfg:    cfg,
 		oauth:  o,
 		tokens: &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
 	}

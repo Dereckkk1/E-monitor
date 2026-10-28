@@ -15,10 +15,12 @@ import (
 // DBCatalogo é o DB() que também zera as emissoras: os testes de tool semeiam
 // catálogo e o guard do dbtest recusa banco com mais de 50 emissoras.
 // TRUNCATE de clients (no DB) já leva campanhas, materiais e veiculações.
+// stream_health_events não tem FK para stations (o CASCADE não a alcança):
+// entra no TRUNCATE para as quedas não se acumularem entre testes.
 func DBCatalogo(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	ctx, pool := DB(t)
-	_, err := pool.Exec(ctx, `TRUNCATE stations RESTART IDENTITY CASCADE`)
+	_, err := pool.Exec(ctx, `TRUNCATE stations, stream_health_events RESTART IDENTITY CASCADE`)
 	require.NoError(t, err)
 	return ctx, pool
 }
