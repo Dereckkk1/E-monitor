@@ -267,3 +267,20 @@ func TestSettle_CarveOutOfPeriod_StaysOutDate_EvenWithZeroedOverride(t *testing.
 		t.Errorf("carve-out fora do período: got %q, want out_date", got[0])
 	}
 }
+
+func TestRuleCoversDay_Exportada(t *testing.T) {
+	r := Rule{
+		StartDate:   time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC),
+		WeekdayMask: 62, // seg a sex
+	}
+	if !RuleCoversDay(r, time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)) { // terça
+		t.Fatal("terça dentro da vigência tem de valer")
+	}
+	if RuleCoversDay(r, time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)) { // domingo
+		t.Fatal("domingo fora da máscara não vale")
+	}
+	if RuleCoversDay(r, time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)) { // segunda depois do fim
+		t.Fatal("depois do fim não vale")
+	}
+}
