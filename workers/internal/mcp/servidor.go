@@ -29,11 +29,13 @@ var ToolsEsperadas = []string{
 	"listar_precos_campanha",
 	"listar_regras_distribuicao",
 	"listar_tipos_material",
+	"listar_usuarios",
 	"listar_veiculacoes",
 	"obter_campanha",
 	"obter_cliente",
 	"obter_emissora",
 	"obter_material",
+	"obter_usuario",
 	"obter_veiculacao",
 	"plano_do_dia",
 	"pmm_target_cliente",
@@ -91,6 +93,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarMateriais(s, cfg)
 	registrarEmissoras(s, cfg)
 	registrarVeiculacoes(s, cfg)
+	registrarUsuarios(s, cfg)
 	return s
 }
 
