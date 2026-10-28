@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/api/handlers"
@@ -83,6 +84,22 @@ func TestObterCliente(t *testing.T) {
 	u := out["usuarios"].([]any)[0].(map[string]any)
 	require.Equal(t, "cliente", u["papel"], "viewer aparece como cliente, o vocabulário da tela")
 	require.Equal(t, "ativo", u["situacao"])
+
+	// Usuário de agência: cliente primário é outro, o vínculo com este vem só de user_clients.
+	outro := mcptest.Cliente(t, ctx, pool, "Outro Cliente")
+	var agenciaID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, role, name, is_active, client_id)
+		VALUES ('agencia@mcp.teste', 'x', 'viewer', 'Pessoa da Agência', true, $1) RETURNING id`, outro).Scan(&agenciaID))
+	_, err = pool.Exec(ctx, `INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2)`, agenciaID, cli)
+	require.NoError(t, err)
+	comAgencia := chamarTool(t, cfgTeste(pool), "obter_cliente", map[string]any{"cliente_id": cli.String()})
+	var nomes []string
+	for _, p := range comAgencia["usuarios"].([]any) {
+		nomes = append(nomes, p.(map[string]any)["nome"].(string))
+	}
+	require.Contains(t, nomes, "Pessoa da Agência", "vinculada só por user_clients")
+	require.Contains(t, nomes, "Pessoa do Cliente")
 
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "obter_cliente", map[string]any{"cliente_id": "nao-e-uuid"}), "[entrada_invalida]")
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "obter_cliente",

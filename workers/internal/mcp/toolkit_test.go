@@ -102,14 +102,12 @@ func TestFerramentaLeitura_PanicVira_Interno(t *testing.T) {
 	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
 	ferramentaLeitura(s, ConfigServidor{Leitura: &Leitura{}}, "panica", "teste",
 		func(context.Context, *Leitura, struct{}) (*sdk.CallToolResult, error) {
-			var m map[string]int
-			m["x"] = 1
-			return nil, nil
+			panic("panico de teste")
 		})
 	texto, erro := chamarNoServidor(t, s, "panica", map[string]any{})
 	require.True(t, erro)
 	require.Contains(t, texto, "[interno]")
-	require.NotContains(t, texto, "nil map")
+	require.NotContains(t, texto, "panico de teste")
 }
 
 func TestFerramentaLeitura_ResultadoNilVira_Interno(t *testing.T) {

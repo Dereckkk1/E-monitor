@@ -243,7 +243,7 @@ func recusaEntrada(campo string) (*sdk.CallToolResult, error) {
 }
 
 func naoEncontrado(oQue string) (*sdk.CallToolResult, error) {
-	return recusa(oQue+" não encontrado no E-monitor", "nao_encontrado")
+	return recusa(fmt.Sprintf("%s: não existe no E-monitor", oQue), "nao_encontrado")
 }
 
 // falhaInterna loga o erro e devolve uma falha genérica: o SDK repassaria
