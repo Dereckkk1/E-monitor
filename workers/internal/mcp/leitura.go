@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -70,6 +72,8 @@ func nomesClientes(ctx context.Context, L *Leitura) (map[uuid.UUID]string, error
 // no máximo 500 por chamada — o teto do handler).
 func nomesEmissoras(ctx context.Context, L *Leitura, ids []uuid.UUID) (map[uuid.UUID]string, error) {
 	out := make(map[uuid.UUID]string, len(ids))
+	// A grade passa um id por linha: sem dedupe viram dezenas de lotes iguais.
+	ids = slices.Compact(slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }))
 	for len(ids) > 0 {
 		n := min(500, len(ids))
 		res, err := L.Emissoras.List(ctx, catalog.ListInput{IDs: ids[:n]})
