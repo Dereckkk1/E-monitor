@@ -1,0 +1,59 @@
+<!--
+  Avaliação mcp-builder do MCP do E-monitor (Fatia 2, Task 15 do plano
+  docs/superpowers/plans/2026-10-28-mcp-fatia-2-relatorios.md).
+  Cenário: avaliacao.Semear (semear.go). As respostas são provadas pelas tools
+  em TestAvaliacao_Gabarito (../avaliacao_test.go). Contas do gabarito:
+   1. 800 (PMM no target da Atlântica) × (10 in_slot + 2 bonus); a Serra não tem PMM no target.
+   2. Aurora Agora (a única ativa): Atlântica e Serra em SP, Vale em MG.
+   3. Preço por inserção do Spot 30s na Atlântica dentro da Aurora Setembro.
+   4. 2 dias × 2 tocadas do Promo na Serra.
+   5. São Paulo, Guarulhos, Osasco, Jundiaí, Campinas, Valinhos, Hortolândia,
+      Uberaba (Jundiaí está no alcance de duas emissoras e conta uma vez).
+   6. Dia D (hoje − 3): Serra 1 "não tocou" (a outra tocou fora do horário), Vale 2.
+   7. Só o dia D tem falha (Serra e Vale); só a Serra teve queda de stream (a Vale é lacuna silenciosa).
+   8. 380 ÷ (380 + 20) no último mês fechado.
+   9. Ana e Bruno abriram; Carla não.
+  10. O segundo mcp.token.criado gravado (o primeiro tem created_at 2 h antes).
+-->
+<evaluation>
+  <qa_pair>
+    <question>Quantos impactos no público-alvo do cliente a campanha "Aurora Setembro" da Aurora Alimentos entregou em setembro de 2026? Responda só o número inteiro.</question>
+    <answer>9600</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Em quantos estados (UF) ficam as emissoras monitoradas pelas campanhas ATIVAS da Aurora Alimentos neste ano? Responda só o número.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Qual é o valor unitário de tabela, em reais, de uma inserção do spot de 30s na Rádio Atlântica FM dentro da campanha "Aurora Setembro"? Responda só o número, sem "R$".</question>
+    <answer>200</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>No relatório da campanha "Aurora Setembro", quantas veiculações teve o material "Aurora Promo 30s"? Responda só o número.</question>
+    <answer>4</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Quantos municípios distintos ficam no alcance das emissoras da campanha "Aurora Agora"? Responda só o número.</question>
+    <answer>8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Na campanha "Aurora Agora", quantas inserções programadas até ontem faltaram porque a emissora simplesmente não tocou (sem contar as que tocaram fora do horário)? Responda só o número.</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Considere os últimos 30 dias até hoje. No dia em que mais emissoras estiveram em falha, qual emissora teve queda de stream (ficou fora do ar)? Responda só o nome da emissora.</question>
+    <answer>Rádio Serra FM</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Qual foi o percentual de assertividade da detecção da Aurora Alimentos no último mês fechado? Responda só o número com uma casa decimal, usando ponto (ex.: 87.5).</question>
+    <answer>95.0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Qual destinatário do pós-venda "Fechamento Aurora Setembro" ainda não abriu o documento? Responda só o nome da pessoa.</question>
+    <answer>Carla</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Qual é o nome do token MCP criado mais recentemente, segundo a auditoria do MCP? Responda só o nome.</question>
+    <answer>Notebook do escritório</answer>
+  </qa_pair>
+</evaluation>

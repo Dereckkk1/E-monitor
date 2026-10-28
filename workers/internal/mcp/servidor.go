@@ -128,6 +128,11 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	return s
 }
 
+// NovoServidorLocal expõe o servidor (sem HTTP nem autenticação) ao CLI de
+// avaliação (internal/mcp/avaliacao/cli), que roda em desenvolvimento contra
+// um banco semeado. Nunca é montado numa rota.
+func NovoServidorLocal(cfg ConfigServidor, p *Principal) *sdk.Server { return novoServidor(cfg, p) }
+
 // NovoHandlerMCP serve Streamable HTTP sem sessão e com resposta JSON
 // (spec D2). Espera o Principal no contexto (ver Autenticador.Middleware).
 //
