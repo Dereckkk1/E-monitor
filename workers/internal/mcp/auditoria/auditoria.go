@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,13 +95,42 @@ func (r *Repo) Listar(ctx context.Context, f Filtro) ([]Evento, string, error) {
 	return Listar(ctx, r.db, f)
 }
 
-// escaparLike torna o prefixo literal no LIKE (o escape padrão é a barra invertida).
+// escaparLike torna o prefixo literal no LIKE (com ESCAPE '\' explícito no SQL).
 var escaparLike = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// chaveSecreta: chave de metadata cujo valor nunca sai de Listar, em qualquer
+// nível (hoje nenhum escritor grava segredo; é a defesa para o próximo).
+var chaveSecreta = regexp.MustCompile(`(?i)secret|token|senha|password`)
+
+// omitirSegredos troca por "[omitido]" o valor de toda chave que parece segredo,
+// descendo em objetos e listas aninhados.
+func omitirSegredos(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			if chaveSecreta.MatchString(k) {
+				x[k] = "[omitido]"
+				continue
+			}
+			omitirSegredos(val)
+		}
+	case []any:
+		for _, val := range x {
+			omitirSegredos(val)
+		}
+	}
+}
 
 // Listar devolve os eventos gravados pelo MCP (metadata.origem = 'mcp'), do
 // mais recente para o mais antigo, por cursor (created_at, id). proximo vazio
 // = fim. O id (uuid) só desempata instantes iguais; o cursor guarda os dois,
-// então um empate nunca repete nem pula linha entre páginas.
+// então um empate nunca repete nem pula linha entre páginas. Os detalhes saem
+// sem a chave "origem" e com os valores de chave de segredo omitidos.
+//
+// Risco conhecido (M-6), não tratado: created_at é o now() do INÍCIO da
+// transação que gravou. Uma transação longa que confirme depois de alguém ter
+// paginado além do instante dela fica com created_at anterior ao cursor, e
+// esse leitor não a vê. Hoje toda gravação no audit_log é um INSERT curto.
 func Listar(ctx context.Context, db Consultor, f Filtro) (eventos []Evento, proximo string, err error) {
 	if f.Limite <= 0 {
 		return nil, "", errors.New("auditoria: Listar exige Limite > 0")
@@ -119,7 +149,7 @@ func Listar(ctx context.Context, db Consultor, f Filtro) (eventos []Evento, prox
 		FROM audit_log a
 		LEFT JOIN users u ON u.id = a.actor_id
 		WHERE a.metadata->>'origem' = 'mcp'
-		  AND ($1::text = '' OR a.action LIKE $1::text || '%')
+		  AND ($1::text = '' OR a.action LIKE $1::text || '%' ESCAPE '\')
 		  AND ($2::uuid IS NULL OR a.actor_id = $2::uuid)
 		  AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
 		ORDER BY a.created_at DESC, a.id DESC
@@ -139,6 +169,7 @@ func Listar(ctx context.Context, db Consultor, f Filtro) (eventos []Evento, prox
 				return nil, "", fmt.Errorf("auditoria: metadata do evento %s: %w", e.ID, err)
 			}
 			delete(e.Detalhes, "origem")
+			omitirSegredos(e.Detalhes)
 		}
 		eventos = append(eventos, e)
 	}

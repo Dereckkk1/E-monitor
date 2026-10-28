@@ -66,9 +66,9 @@ func TestAuditoriaMCP_CursorETotalNulo(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfg, "auditoria_mcp", map[string]any{"usuario_id": "x"}), "[entrada_invalida]")
 }
 
-// Pior caso de uma página: o teto de eventos com metadata maior do que qualquer
-// ação grava hoje (os campos de revoga-mcp e de registra-cliente-mcp juntos) e
-// ator com nome/email longos (alvo < 60 KB).
+// Pior caso de uma página: o teto de eventos, cada um com detalhes logo
+// abaixo do teto de bytes (acima ele seria resumido), e ator com nome/email
+// longos (alvo < 60 KB).
 func TestAuditoriaMCP_PiorCasoCabe(t *testing.T) {
 	ctx, pool := mcptest.DBCatalogo(t)
 	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
@@ -80,13 +80,45 @@ func TestAuditoriaMCP_PiorCasoCabe(t *testing.T) {
 	for i := range tetoPaginaAuditoria + 1 {
 		require.NoError(t, auditoria.Registrar(ctx, pool, admin, "mcp.oauth.cliente_confidencial_criado", "mcp_oauth_client", nil,
 			map[string]any{"client_id": uuid.NewString(), "cliente": fmt.Sprintf("Integração Do Hub De Clientes Da Agência %03d", i),
-				"alvo_user_id": uuid.NewString(), "alvo_email": strings.Repeat("b", 40) + "@cliente.com.br", "quantidade": i}))
+				"alvo_user_id": uuid.NewString(), "alvo_email": strings.Repeat("b", 40) + "@cliente.com.br", "quantidade": i,
+				"observacao": strings.Repeat("ç", 800)})) // ~1,6 KB em UTF-8: o evento inteiro fica logo abaixo de 2 KB
 	}
 	out := chamarTool(t, cfgTeste(pool), "auditoria_mcp", map[string]any{"limit": 100})
 	require.Len(t, itens(t, out), tetoPaginaAuditoria)
 	require.EqualValues(t, tetoPaginaAuditoria, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
 	require.Equal(t, true, pag(t, out)["has_more"])
+	require.NotContains(t, out, "ressalvas", "nenhum evento passou do teto: os detalhes saem inteiros")
 	n := tamanhoDoResultado(t, out)
-	t.Logf("auditoria_mcp: %d eventos = %d bytes", tetoPaginaAuditoria, n)
+	t.Logf("auditoria_mcp: %d eventos com detalhes perto de 2 KB = %d bytes", tetoPaginaAuditoria, n)
 	require.Less(t, n, 60_000)
+}
+
+// Detalhes acima de 2 KB saem resumidos (com ressalva); segredo nunca sai.
+func TestAuditoriaMCP_DetalhesGrandesESegredos(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	require.NoError(t, auditoria.Registrar(ctx, pool, admin, "mcp.grande", "mcp_token", nil,
+		map[string]any{"texto": strings.Repeat("x", 3000), "nome": "laptop"}))
+	require.NoError(t, auditoria.Registrar(ctx, pool, admin, "mcp.pequeno", "mcp_token", nil,
+		map[string]any{"nome": "laptop", "token": "SEGREDO-TOKEN"}))
+	cfg := cfgTeste(pool)
+
+	texto := textoTool(t, cfg, "auditoria_mcp", map[string]any{})
+	require.NotContains(t, texto, "SEGREDO-TOKEN")
+	require.NotContains(t, texto, strings.Repeat("x", 100))
+	out := chamarTool(t, cfg, "auditoria_mcp", map[string]any{})
+	porAcao := map[string]map[string]any{}
+	for _, e := range itens(t, out) {
+		porAcao[e["acao"].(string)] = e["detalhes"].(map[string]any)
+	}
+	require.Equal(t, map[string]any{"nome": "laptop", "token": "[omitido]"}, porAcao["mcp.pequeno"])
+	require.Len(t, porAcao["mcp.grande"], 1)
+	require.Contains(t, porAcao["mcp.grande"]["_resumo"], "chaves: nome, texto")
+	require.Equal(t, []any{ressalvaDetalhesResumidos}, out["ressalvas"])
+
+	// Sem evento grande, sem a ressalva.
+	so := chamarTool(t, cfg, "auditoria_mcp", map[string]any{"acao": "mcp.pequeno"})
+	require.NotContains(t, so, "ressalvas")
 }

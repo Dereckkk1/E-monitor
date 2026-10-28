@@ -160,3 +160,44 @@ func TestListar_EmpateDeInstanteNaoRepeteNemPula(t *testing.T) {
 	require.Len(t, vistos, 5)
 	require.True(t, slices.IsSortedFunc(vistos, func(a, b string) int { return strings.Compare(b, a) }), "id DESC no empate: %v", vistos)
 }
+
+// O prefixo é literal: % e \ não viram curinga nem escape (ESCAPE '\' no SQL).
+func TestListar_PrefixoLiteral(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.token.criado", "mcp_token", nil, nil))
+	repo := auditoria.NovoRepo(pool)
+	for _, prefixo := range []string{"%", `mcp\`, `mcp\%`, "mcp_token", "_"} {
+		f, _, err := repo.Listar(ctx, auditoria.Filtro{Limite: 10, AcaoPrefixo: prefixo})
+		require.NoError(t, err, prefixo)
+		require.Empty(t, f, "prefixo %q é literal", prefixo)
+	}
+	f, _, err := repo.Listar(ctx, auditoria.Filtro{Limite: 10, AcaoPrefixo: "mcp."})
+	require.NoError(t, err)
+	require.Len(t, f, 1)
+}
+
+// Chave que parece segredo (em qualquer nível) sai com o valor omitido.
+func TestListar_OmiteChavesDeSegredo(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.x", "mcp_token", nil, map[string]any{
+		"nome": "laptop", "token_claro": "SEGREDO-1", "Client_Secret": "SEGREDO-2", "SENHA": "SEGREDO-3",
+		"aninhado": map[string]any{"password": "SEGREDO-4", "ok": 1},
+		"lista":    []any{map[string]any{"refresh_token": "SEGREDO-5"}},
+	}))
+	evs, _, err := auditoria.NovoRepo(pool).Listar(ctx, auditoria.Filtro{Limite: 10})
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	d := evs[0].Detalhes
+	require.Equal(t, "laptop", d["nome"])
+	for _, k := range []string{"token_claro", "Client_Secret", "SENHA"} {
+		require.Equal(t, "[omitido]", d[k], k)
+	}
+	require.Equal(t, map[string]any{"password": "[omitido]", "ok": float64(1)}, d["aninhado"])
+	require.Equal(t, []any{map[string]any{"refresh_token": "[omitido]"}}, d["lista"])
+}
