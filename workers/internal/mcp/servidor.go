@@ -22,7 +22,9 @@ var ToolsEsperadas = []string{
 	"financeiro_campanhas",
 	"grade_campanha",
 	"listar_campanhas",
+	"listar_chaves_api",
 	"listar_clientes",
+	"listar_entregas_webhook",
 	"listar_materiais",
 	"listar_materiais_campanha",
 	"listar_overrides",
@@ -31,12 +33,14 @@ var ToolsEsperadas = []string{
 	"listar_tipos_material",
 	"listar_usuarios",
 	"listar_veiculacoes",
+	"minhas_notificacoes",
 	"obter_campanha",
 	"obter_cliente",
 	"obter_emissora",
 	"obter_material",
 	"obter_usuario",
 	"obter_veiculacao",
+	"obter_webhook_cliente",
 	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
@@ -94,6 +98,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarEmissoras(s, cfg)
 	registrarVeiculacoes(s, cfg)
 	registrarUsuarios(s, cfg)
+	registrarIntegracoes(s, cfg, p)
 	return s
 }
 
