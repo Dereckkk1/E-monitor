@@ -36,8 +36,9 @@ func NovoModulo(d DepsModulo) *Modulo {
 	st := tokens.NovoStore(d.Pool, d.Segredo)
 	o := oauth.NovoServidor(d.Pool, st, d.Segredo, d.Origem, d.Portal, d.Log)
 	a := NovoAutenticador(st, d.Pool, o.URLMetadadosRecurso(), d.Log)
+	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: NovaLeitura(d.Pool), Log: d.Log}
 	return &Modulo{
-		mcp:    SoPost(a.Middleware(NovoHandlerMCP(ConfigServidor{Versao: d.Versao}))),
+		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		oauth:  o,
 		tokens: &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
 	}
