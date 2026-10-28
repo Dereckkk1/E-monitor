@@ -1,0 +1,63 @@
+package handlers_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
+	"radiocheck/internal/api/handlers"
+	"radiocheck/internal/auth"
+	"radiocheck/internal/catalog"
+	"radiocheck/internal/mcp/mcptest"
+)
+
+// TestReportsSummary_TotaisTravados fixa os totais do GET
+// /reports/campaigns/{id}/summary — trava do refactor que levou a conta para
+// catalog.TotaisDoResumo (o MCP chama a mesma função).
+func TestReportsSummary_TotaisTravados(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	e1 := mcptest.Emissora(t, ctx, pool, "Rádio Um", 1000.4)
+	e2 := mcptest.Emissora(t, ctx, pool, "Rádio Dois", 0) // sem PMM: fora dos impactos
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	mat := mcptest.Material(t, ctx, pool, cli, tipo, "Spot A")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", e1, e2)
+	mcptest.PMMTarget(t, ctx, pool, cli, e1, 300)
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", mcptest.Quando("2026-10-10", "08:00"))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "bonus", mcptest.Quando("2026-10-10", "09:00"))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "out_slot", mcptest.Quando("2026-10-10", "23:00"))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e2, "in_slot", mcptest.Quando("2026-10-11", "08:00"))
+
+	h := &handlers.ReportsHandler{Detections: catalog.NewDetections(pool), CampaignRepo: catalog.NewCampaigns(pool), Pool: pool}
+	var r handlers.SummaryResponse
+	require.NoError(t, json.Unmarshal(chamarHandlerAdmin(t, h.Summary, "/x", map[string]string{"id": camp.String()}, admin), &r))
+	require.Equal(t, 4, r.Totals.Detections)
+	require.Equal(t, 1, r.Totals.DistinctMaterials)
+	require.Equal(t, 2, r.Totals.DistinctStations)
+	require.EqualValues(t, 2001, r.Totals.Impactos, "round(1000,4 × 2 [in_slot+bonus]) — out_slot não conta")
+	require.EqualValues(t, 600, r.Totals.ImpactosTarget)
+	require.Equal(t, 1, r.Totals.StationsWithTarget)
+}
+
+// chamarHandlerAdmin chama um handler HTTP com claims de admin e parâmetros de rota.
+func chamarHandlerAdmin(t *testing.T, h http.HandlerFunc, alvo string, rota map[string]string, admin uuid.UUID) []byte {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, alvo, nil)
+	rctx := chi.NewRouteContext()
+	for k, v := range rota {
+		rctx.URLParams.Add(k, v)
+	}
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	ctx = auth.WithClaims(ctx, &auth.Claims{UserID: admin, Role: "admin"})
+	rec := httptest.NewRecorder()
+	h(rec, req.WithContext(ctx))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	return rec.Body.Bytes()
+}

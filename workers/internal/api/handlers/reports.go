@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -254,30 +253,15 @@ func (h *ReportsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	resp.Client.TargetLabel = client.TargetLabel
 	resp.Period.From = f.StartDate
 	resp.Period.To = f.EndDate
-	resp.Totals.Detections = byMaterial.TotalDetections
-	resp.Totals.DistinctMaterials = byMaterial.DistinctMaterials
-	resp.Totals.DistinctStations = len(byStation)
-	// Impactos derivados de byStation (uma linha por emissora), não de
-	// byMaterialStation — senão a mesma emissora entraria uma vez por material.
-	//
-	// math.Round, não truncamento: a coluna "Impactos" da tabela do PDF é
-	// calculada no frontend com Math.round(pmm × impact_count)
-	// (utils/pdfReport.js). Truncar aqui faria o KPI do topo ficar ABAIXO da
-	// soma da própria coluna no mesmo documento — stations.pmm é
-	// numeric(10,2), então o produto é fracionário e a diferença chega a 1 por
-	// emissora.
-	//
-	// ImpactCount (in_slot + bonus), não Count: é a base canônica de impactos
-	// do produto inteiro, a mesma de /campaigns e /insights.
-	for _, s := range byStation {
-		if s.StationPMM != nil {
-			resp.Totals.Impactos += int64(math.Round(*s.StationPMM * float64(s.ImpactCount)))
-		}
-		if s.StationPMMTarget != nil {
-			resp.Totals.ImpactosTarget += int64(*s.StationPMMTarget * s.ImpactCount)
-			resp.Totals.StationsWithTarget++
-		}
-	}
+	// A conta (base in_slot + bonus, math.Round por emissora) mora no catalog:
+	// o MCP (resumo_relatorio_campanha) chama a mesma função.
+	tot := catalog.TotaisDoResumo(byMaterial, byStation)
+	resp.Totals.Detections = tot.Detections
+	resp.Totals.DistinctMaterials = tot.DistinctMaterials
+	resp.Totals.DistinctStations = tot.DistinctStations
+	resp.Totals.Impactos = tot.Impactos
+	resp.Totals.ImpactosTarget = tot.ImpactosTarget
+	resp.Totals.StationsWithTarget = tot.StationsWithTarget
 	resp.ByMaterial = byMaterial.Data
 	resp.ByStation = byStation
 	resp.ByMaterialStation = byMatSta
