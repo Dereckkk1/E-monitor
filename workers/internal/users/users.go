@@ -424,7 +424,7 @@ func (r *Repo) List(ctx context.Context, in ListInput) ([]User, int, error) {
 
 	args = append(args, in.PageSize, (in.Page-1)*in.PageSize)
 	q := `SELECT ` + userColumns + ` FROM users WHERE ` + whereSQL +
-		` ORDER BY created_at DESC LIMIT $` + strconv.Itoa(idx) +
+		` ORDER BY created_at DESC, id LIMIT $` + strconv.Itoa(idx) +
 		` OFFSET $` + strconv.Itoa(idx+1)
 	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {

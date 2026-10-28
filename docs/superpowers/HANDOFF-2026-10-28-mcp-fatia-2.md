@@ -62,7 +62,7 @@ O QUE FAZER
 
 ## Estado em 2026-10-28
 
-**Branch `feat/mcp-server`**: 67 commits sobre `origin/master` (contados com
+**Branch `feat/mcp-server`**: 70 commits sobre `origin/master` (contados com
 `git rev-list --count origin/master..HEAD` ao escrever este handoff, já incluindo o commit dele; o
 hash do topo é o deste commit — `git log -1 --format=%h`; o anterior é `fefb9df`). Nada pushado,
 nada mergeado, nada deployado.
@@ -162,8 +162,11 @@ erro). Texto completo no plano.
 - **`ListPaged` de veiculações não usa o `ApprovedDetectionsFilter` literal** (equivalente na prática);
   o `Detections.Approved` usa o literal.
 - **`COUNT(*) OVER ()` dá total 0 além do fim da lista**: o `buscarJanela` já trata.
-- **Paginação instável sem desempate:** `clients`, `campaigns`, `stations` e `detections` ganharam
-  `id` como último critério do `ORDER BY`; faça o mesmo em qualquer lista nova.
+- **Paginação instável sem desempate:** `clients`, `campaigns`, `stations`, `detections`, `users` e as
+  entregas de webhook ganharam `id` como último critério do `ORDER BY`; faça o mesmo em qualquer lista nova.
+- **Lista aninhada precisa de teto, não só a página:** `listar_materiais_campanha` e
+  `listar_regras_distribuicao` cortam `emissoras` em 20 por item (`emissoras_total` + ressalva); o limite
+  de saída do cliente MCP é ~25k tokens e `paginar` só limita itens. Faça o mesmo em qualquer item com lista interna.
 - **URL de webhook pode carregar segredo no caminho ou na query** (Slack/Discord/Zapier): só sai
   esquema+host (`https://host/...`), também em `ultimo_erro`. Vale para qualquer campo de URL do cliente.
 - **CPM:** `catalog.CPMDaCampanha` espelha `/campaigns`: nenhum CPM (nem o fixo) quando investido +

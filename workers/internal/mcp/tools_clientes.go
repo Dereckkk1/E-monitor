@@ -135,7 +135,7 @@ func registrarClientes(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "obter_cliente",
 		"Devolve o cadastro de um cliente (com hub_id, a ponte para o hub), quantas campanhas, materiais e usuários estão "+
 			"vinculados a ele e as pessoas da carteira (papel e situação). Um usuário de agência pode ter vários clientes: ele "+
-			"aparece em cada um. Nunca invente o cliente_id: pegue de listar_clientes ou pergunte.",
+			"aparece em cada um. usuarios inclui também pessoas inativas e apagadas, cada uma com a situacao: não leia a lista como só os usuários ativos. Nunca invente o cliente_id: pegue de listar_clientes ou pergunte.",
 		func(ctx context.Context, L *Leitura, in entradaCliente) (*sdk.CallToolResult, error) {
 			c, rec, err := lerCliente(ctx, L, in.ClienteID)
 			if rec != nil || err != nil {

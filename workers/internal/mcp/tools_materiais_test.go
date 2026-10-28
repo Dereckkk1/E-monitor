@@ -65,6 +65,12 @@ func TestObterMaterial_SimilaridadeECampanhas(t *testing.T) {
 	require.Equal(t, camp.String(), out["campanhas"].([]any)[0].(map[string]any)["campanha"].(map[string]any)["id"])
 	require.NotEmpty(t, out["ressalvas"], "≥ 50% e não reconhecido: avisa")
 
+	// Checagem ainda não pronta: o score não vale, sem aviso (igual ao wizard).
+	_, err = pool.Exec(ctx, `UPDATE materials SET similarity_check_status = 'pending' WHERE id = $1`, copia)
+	require.NoError(t, err)
+	pend := chamarTool(t, cfgTeste(pool), "obter_material", map[string]any{"material_id": copia.String()})
+	require.Empty(t, pend["ressalvas"], "score 0.8 com status pending não avisa")
+
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "obter_material",
 		map[string]any{"material_id": uuid.NewString()}), "[nao_encontrado]")
 }

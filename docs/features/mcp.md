@@ -92,7 +92,7 @@ Listas: `{items, page: {total, limit, offset, returned, has_more}}`, `limit` pad
 | `minhas_notificacoes` | sininho de quem está conectado (teto de 50 itens, dito na ressalva) | `GET /admin/notifications` |
 
 **O que nunca sai** (whitelist nos DTOs): `stream_url` e saúde do stream, `master_storage_path`/`master_sha256`,
-`evidence_key`, segredo do webhook (nem o prefixo), `key_hash`, token e link de boas-vindas (o link mostra a
+`evidence_key`, segredo do webhook (nem o prefixo), `key_hash` (só o prefixo de 8 hex que a tela já mostra, como `identificador`), token e link de boas-vindas (o link mostra a
 senha inicial), e o caminho e a query da URL de webhook (podem carregar segredo, como em Slack/Discord/Zapier:
 só saem esquema e host, `https://host/...`; vale também para `ultimo_erro` das entregas). Áudio: só o link
 `/detections/:id` do portal.
@@ -101,9 +101,15 @@ só saem esquema e host, `https://host/...`; vale também para `ultimo_erro` das
 
 - Toda tool de leitura roda em `ferramentaLeitura`: um `panic` vira `[interno]` (não derruba a API), `offset`
   acima de 100000 vira `[entrada_invalida]` e resultado nulo vira erro interno.
-- Erros: `[entrada_invalida]`, `[nao_encontrado]` ("<x>: não existe no E-monitor"), `[ambiguo]`, `[interno]`
+- Erros: `[entrada_invalida]`, `[nao_encontrado]` ("<x>: não existe no E-monitor"), `[ambiguo]`, `[interno]` e
+  `[sem_identidade]` (deve ser inalcançável: a autenticação sempre põe o principal no contexto)
   (o erro Go real só vai para o log, nunca ao modelo).
-- Paginação estável: as listas de clientes, campanhas, emissoras e veiculações desempatam o `ORDER BY` por `id`.
+- Paginação estável: as listas de clientes, campanhas, emissoras, veiculações, usuários e entregas de webhook
+  desempatam o `ORDER BY` por `id`.
+- Teto de emissoras por item: `listar_materiais_campanha` e `listar_regras_distribuicao` devolvem no máximo 20
+  refs em `emissoras` por item, com `emissoras_total` (número real) e uma ressalva quando algo foi cortado. A
+  paginação limita itens, não as emissoras dentro deles (campanha de 239 emissoras estourava o limite de saída).
+  `obter_campanha` lista todas as emissoras-alvo.
 - `listar_veiculacoes` sem campanhas exige período de no máximo 93 dias; `de > ate` é recusado.
 - `financeiro_campanhas`: o CPM vem de `catalog.CPMDaCampanha`, que espelha `/campaigns`: sem CPM nenhum (nem o
   fixo) quando investido + bonificação = 0.

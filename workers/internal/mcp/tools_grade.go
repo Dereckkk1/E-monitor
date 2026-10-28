@@ -312,6 +312,7 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 				out.Ressalvas = append(out.Ressalvas, "Nenhuma regra nem ajuste vale neste dia: a meta é 0 e as tocadas entram como bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
 			}
 
+			depoisDoCancelamento := false
 			if c.Status == "cancelada" {
 				out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
 				canc, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
@@ -319,10 +320,12 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 					return nil, err
 				}
 				if em, achou := canc[c.ID]; achou && dia(d) > dia(em.In(fusoSP)) {
+					depoisDoCancelamento = true
 					out.Ressalvas = append(out.Ressalvas, "Dia depois do cancelamento: não há obrigação; as faixas abaixo não geram meta.")
 				}
 			}
-			if out.Saldo == nil {
+			// Depois do cancelamento a ressalva acima já explica a ausência da linha.
+			if out.Saldo == nil && !depoisDoCancelamento {
 				out.Ressalvas = append(out.Ressalvas, "A grade não tem linha para esta célula neste dia (sem meta e sem veiculação contada).")
 			}
 
