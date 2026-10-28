@@ -1,8 +1,12 @@
 package mcp
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,4 +153,231 @@ func registrarRelatorios(s *sdk.Server, cfg ConfigServidor) {
 			d1, _ := lerDia(in.Ate)
 			return ok(listaDataHora{lista: l, Links: links{Tela: cfg.linkDataHora(cliente, camps, d0, d1, in.Busca)}})
 		})
+}
+
+type entradaRelatorioCampanha struct {
+	CampanhaID string `json:"campanha_id" jsonschema:"Id (uuid) da campanha, de listar_campanhas ou obter_campanha. Nunca invente: pergunte."`
+	De         string `json:"de,omitempty" jsonschema:"Primeiro dia (AAAA-MM-DD, America/Sao_Paulo). Padrão: início da campanha."`
+	Ate        string `json:"ate,omitempty" jsonschema:"Último dia (AAAA-MM-DD). Padrão: fim da campanha."`
+}
+
+type entradaResumoRelatorio struct {
+	entradaRelatorioCampanha
+	Paginacao
+}
+
+type materialResumo struct {
+	Material    ref      `json:"material"`
+	IDCurto     *int32   `json:"id_curto"`
+	Tipo        *string  `json:"tipo"`
+	DuracaoSeg  *float64 `json:"duracao_seg"`
+	Veiculacoes int      `json:"veiculacoes"`
+}
+
+type emissoraResumo struct {
+	Emissora       ref      `json:"emissora"`
+	Cidade         *string  `json:"cidade"`
+	UF             *string  `json:"uf"`
+	Banda          *string  `json:"banda"`
+	Dial           *float64 `json:"dial"`
+	PMM            *float64 `json:"pmm"`
+	PMMTarget      *int     `json:"pmm_target"`
+	Veiculacoes    int      `json:"veiculacoes"`
+	BaseDeImpactos int      `json:"base_de_impactos"`
+	Impactos       *int64   `json:"impactos"`
+}
+
+type resumoDTO struct {
+	Campanha     campanhaInsights `json:"campanha"`
+	Cliente      ref              `json:"cliente"`
+	RotuloTarget *string          `json:"rotulo_target"`
+	Periodo      struct {
+		De  string `json:"de"`
+		Ate string `json:"ate"`
+	} `json:"periodo"`
+	Totais struct {
+		Veiculacoes        int    `json:"veiculacoes"`
+		Materiais          int    `json:"materiais"`
+		Emissoras          int    `json:"emissoras"`
+		Impactos           int64  `json:"impactos"`
+		ImpactosTarget     *int64 `json:"impactos_target"`
+		EmissorasComTarget int    `json:"emissoras_com_target"`
+	} `json:"totais"`
+	PorMaterial      []materialResumo `json:"por_material"`
+	PorMaterialTotal int              `json:"por_material_total"`
+	lista[emissoraResumo]
+	Links links `json:"links"`
+}
+
+const ressalvaResumo = "É o relatório da campanha (o mesmo do PDF): items é a lista por emissora, paginada. veiculacoes conta todas as categorias aprovadas; impactos = round(PMM × base_de_impactos), base_de_impactos = in_slot + bonus. impactos null = emissora sem PMM; impactos_target null = nenhuma emissora com PMM no target do cliente. Sem valor em R$: para dinheiro use financeiro_campanhas ou insights_campanha."
+
+// tetoMateriaisResumo: por_material não é paginada (a lista principal é a de
+// emissoras); acima disso sai cortada com o total real.
+const tetoMateriaisResumo = 50
+
+// periodoDaCampanha: de/ate da entrada, ou a vigência da campanha; devolve os
+// instantes de SP (o recorte das consultas, como a tela manda) e os dias (o eco e o link).
+func periodoDaCampanha(c *catalog.Campaign, de, ate string) (ini, fim *time.Time, d0, d1 time.Time, campo string) {
+	d0, d1, campo = lerDias(de, ate, c.StartDate, c.EndDate)
+	if campo != "" {
+		return nil, nil, d0, d1, campo
+	}
+	i, _ := limitesDoDiaSP(d0)
+	_, f := limitesDoDiaSP(d1)
+	return &i, &f, d0, d1, ""
+}
+
+func campanhaResumo(c *catalog.Campaign) campanhaInsights {
+	return campanhaInsights{Campanha: refDe(c.ID, c.Name), Inicio: dia(c.StartDate), Fim: dia(c.EndDate), Estado: c.Status}
+}
+
+func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
+	ferramentaLeitura(s, cfg, "resumo_relatorio_campanha",
+		"Devolve o relatório de UMA campanha (o mesmo que vira PDF no portal): totais de veiculações, materiais, emissoras, "+
+			"impactos e impactos no target, a contagem por material e a lista por emissora (paginada, com PMM e impactos), "+
+			"mais o link da tela. Período padrão = vigência da campanha. Para baixar o CSV use exportar_consolidado.",
+		func(ctx context.Context, L *Leitura, in entradaResumoRelatorio) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
+			if campo != "" {
+				return recusaCampoDoPeriodo(campo)
+			}
+			cli, err := L.Clientes.Get(ctx, c.ClientID)
+			if err != nil {
+				return nil, err
+			}
+			f := catalog.AggregateFilter{CampaignIDs: []uuid.UUID{c.ID}, StartDate: ini, EndDate: fim}
+			porMat, err := L.Veiculacoes.AggregateByMaterial(ctx, f)
+			if err != nil {
+				return nil, err
+			}
+			porEst, err := L.Veiculacoes.AggregateByStation(ctx, f)
+			if err != nil {
+				return nil, err
+			}
+			tot := catalog.TotaisDoResumo(porMat, porEst)
+			var o resumoDTO
+			o.Campanha = campanhaResumo(c)
+			o.Cliente = refDe(cli.ID, cli.Name)
+			o.RotuloTarget = cli.TargetLabel
+			o.Periodo.De, o.Periodo.Ate = dia(d0), dia(d1)
+			o.Totais.Veiculacoes, o.Totais.Materiais, o.Totais.Emissoras = tot.Detections, tot.DistinctMaterials, tot.DistinctStations
+			o.Totais.Impactos, o.Totais.EmissorasComTarget = tot.Impactos, tot.StationsWithTarget
+			if tot.StationsWithTarget > 0 {
+				v := tot.ImpactosTarget
+				o.Totais.ImpactosTarget = &v
+			}
+			// A ordem da tela (mais veiculações primeiro, depois o nome), com o id
+			// no fim: empate não pode trocar de página entre duas chamadas.
+			slices.SortStableFunc(porMat.Data, func(a, b catalog.MaterialAggregateRow) int {
+				return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.MaterialTitle, b.MaterialTitle),
+					bytes.Compare(a.MaterialID[:], b.MaterialID[:]))
+			})
+			slices.SortStableFunc(porEst, func(a, b catalog.StationAggregateRow) int {
+				return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.StationName, b.StationName),
+					bytes.Compare(a.StationID[:], b.StationID[:]))
+			})
+			mats, n := cortar(porMat.Data, tetoMateriaisResumo)
+			o.PorMaterialTotal = n
+			o.PorMaterial = make([]materialResumo, len(mats))
+			for i, m := range mats {
+				o.PorMaterial[i] = materialResumo{Material: refDe(m.MaterialID, m.MaterialTitle), IDCurto: m.MaterialShortID,
+					Tipo: m.MaterialTypeName, DuracaoSeg: m.MaterialDurationSec, Veiculacoes: m.Count}
+			}
+			o.lista = mapear(paginar(porEst, in.Paginacao), func(s catalog.StationAggregateRow) emissoraResumo {
+				return emissoraResumo{Emissora: refDe(s.StationID, s.StationName), Cidade: s.StationCity, UF: s.StationState,
+					Banda: s.StationBand, Dial: s.StationFrequencyMHz, PMM: s.StationPMM, PMMTarget: s.StationPMMTarget,
+					Veiculacoes: s.Count, BaseDeImpactos: s.ImpactCount, Impactos: catalog.ImpactosDaEmissora(s)}
+			})
+			o.Ressalvas = []string{ressalvaResumo}
+			if n > tetoMateriaisResumo {
+				o.Ressalvas = append(o.Ressalvas, fmt.Sprintf("por_material cortado em %d de %d materiais (por_material_total traz o número real)", tetoMateriaisResumo, n))
+			}
+			if c.Status == "cancelada" {
+				o.Ressalvas = append(o.Ressalvas, ressalvaCancelada)
+			}
+			o.Links = links{Tela: cfg.linkDataHora(c.ClientID, []uuid.UUID{c.ID}, d0, d1, ""),
+				ComoBaixar: "Na tela, botão Relatórios → PDF (o mesmo conteúdo) ou CSV Consolidado."}
+			return ok(o)
+		})
+
+	ferramentaLeitura(s, cfg, "exportar_consolidado",
+		"Prepara o download do CSV Consolidado de UMA campanha (uma linha por material × emissora, com categorias, PMM e "+
+			"impactos): devolve quantas linhas o arquivo vai ter, o período e o link da tela onde baixar. O arquivo não vem "+
+			"no resultado nem por link direto: o portal exige o login da pessoa. Período padrão = vigência da campanha.",
+		func(ctx context.Context, L *Leitura, in entradaRelatorioCampanha) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
+			if campo != "" {
+				return recusaCampoDoPeriodo(campo)
+			}
+			// As mesmas linhas que o handler escreve (reportcsv.WriteConsolidated: uma por linha, sem rodapé).
+			rows, err := L.Veiculacoes.AggregateByMaterialStation(ctx, catalog.AggregateFilter{CampaignIDs: []uuid.UUID{c.ID}, StartDate: ini, EndDate: fim})
+			if err != nil {
+				return nil, err
+			}
+			return ok(exportacaoDe(c, d0, d1, len(rows), cfg.linkDataHora(c.ClientID, []uuid.UUID{c.ID}, d0, d1, ""),
+				"Na tela, botão Relatórios → CSV Consolidado (sai com o período da tela)."))
+		})
+
+	ferramentaLeitura(s, cfg, "exportar_veiculacoes",
+		"Prepara o download do CSV Detalhado de UMA campanha (uma linha por veiculação: data, hora, rádio, peça, status, "+
+			"PMM e preço): devolve quantas linhas o arquivo vai ter, o período e o link da tela onde baixar. O arquivo não vem "+
+			"no resultado nem por link direto. Período padrão = vigência da campanha. Para ler as linhas aqui, use relatorio_data_hora.",
+		func(ctx context.Context, L *Leitura, in entradaRelatorioCampanha) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
+			if campo != "" {
+				return recusaCampoDoPeriodo(campo)
+			}
+			n, err := contarExportacao(ctx, L, c.ID, ini, fim)
+			if err != nil {
+				return nil, err
+			}
+			return ok(exportacaoDe(c, d0, d1, n, cfg.linkDataHora(c.ClientID, []uuid.UUID{c.ID}, d0, d1, ""),
+				"Na tela, botão Relatórios → CSV Detalhado (só admin; sai com o período da tela). Depois das linhas, o arquivo traz o rodapé de totais do fornecedor."))
+		})
+}
+
+type exportacaoDTO struct {
+	Campanha campanhaInsights `json:"campanha"`
+	Periodo  struct {
+		De  string `json:"de"`
+		Ate string `json:"ate"`
+	} `json:"periodo"`
+	Linhas    int      `json:"linhas"`
+	Links     links    `json:"links"`
+	Ressalvas []string `json:"ressalvas,omitempty"`
+}
+
+func exportacaoDe(c *catalog.Campaign, d0, d1 time.Time, linhas int, tela *string, comoBaixar string) exportacaoDTO {
+	o := exportacaoDTO{Campanha: campanhaResumo(c), Linhas: linhas, Links: links{Tela: tela, ComoBaixar: comoBaixar}}
+	o.Periodo.De, o.Periodo.Ate = dia(d0), dia(d1)
+	if c.Status == "cancelada" {
+		o.Ressalvas = []string{ressalvaCancelada}
+	}
+	return o
+}
+
+// contarExportacao: o nº de linhas de dados do CSV Detalhado. IterateForExport
+// (o que o /detections/export escreve) e ListPaged têm o MESMO WHERE (ignorada,
+// retratada e audit_rejected fora; uma linha por atribuição) e os JOINs de preço
+// do export são 1:1 (chave primária por campanha × emissora [× tipo]), então o
+// total do ListPaged é o nº de linhas — provado por
+// TestExportarVeiculacoes_LinhasBatemComOCSV.
+func contarExportacao(ctx context.Context, L *Leitura, campanha uuid.UUID, ini, fim *time.Time) (int, error) {
+	res, err := L.Veiculacoes.ListPaged(ctx, catalog.ListPagedFilter{CampaignIDs: []uuid.UUID{campanha}, StartDate: ini, EndDate: fim, Page: 1, PageSize: 1})
+	if err != nil {
+		return 0, err
+	}
+	return res.Total, nil
 }

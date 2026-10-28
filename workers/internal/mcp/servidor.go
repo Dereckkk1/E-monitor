@@ -20,6 +20,8 @@ import (
 var ToolsEsperadas = []string{
 	"assertividade",
 	"buscar_emissoras",
+	"exportar_consolidado",
+	"exportar_veiculacoes",
 	"financeiro_campanhas",
 	"grade_campanha",
 	"insights_campanha",
@@ -47,6 +49,7 @@ var ToolsEsperadas = []string{
 	"pmm_target_cliente",
 	"quem_sou_eu",
 	"relatorio_data_hora",
+	"resumo_relatorio_campanha",
 	"veiculacoes_por_material",
 	"visao_gerencial",
 }
@@ -106,6 +109,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarInsights(s, cfg)
 	registrarGerencial(s, cfg)
 	registrarRelatorios(s, cfg)
+	registrarRelatoriosCampanha(s, cfg)
 	return s
 }
 
