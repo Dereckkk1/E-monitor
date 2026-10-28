@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.uber.org/zap"
 )
 
 // ToolsEsperadas trava o conjunto e a ORDEM das tools: clientes guardam o
@@ -20,6 +22,29 @@ var ToolsEsperadas = []string{
 
 type ConfigServidor struct {
 	Versao string
+	// Portal: origem do portal (NOTIFICATIONS_BASE_URL) para os links de tela.
+	Portal string
+	// Leitura: os repositórios das tools de leitura. nil no teste de
+	// inventário, que só lista as tools (a chamada falha fechada).
+	Leitura *Leitura
+	Log     *zap.Logger
+}
+
+func (c ConfigServidor) log() *zap.Logger {
+	if c.Log == nil {
+		return zap.NewNop()
+	}
+	return c.Log
+}
+
+// link devolve a URL de uma tela do portal, ou nil se a origem não estiver
+// configurada (null = não se aplica).
+func (c ConfigServidor) link(caminho string) *string {
+	if c.Portal == "" {
+		return nil
+	}
+	u := strings.TrimRight(c.Portal, "/") + caminho
+	return &u
 }
 
 // cacheEsquemas guarda a inferência de JSON Schema das tools entre pedidos.
