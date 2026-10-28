@@ -336,7 +336,9 @@ type materialDaCampanha struct {
 	Material    ref    `json:"material"`
 	Tipo        *ref   `json:"tipo"`
 	Emissoras   []ref  `json:"emissoras"`
-	VinculadoEm string `json:"vinculado_em"`
+	// EmissorasTotal é o número real; Emissoras traz no máximo tetoEmissorasPorItem.
+	EmissorasTotal int    `json:"emissoras_total"`
+	VinculadoEm    string `json:"vinculado_em"`
 }
 
 type regraDTO struct {
@@ -344,6 +346,7 @@ type regraDTO struct {
 	Nome            string       `json:"nome"`
 	Tipo            ref          `json:"tipo"`
 	Emissoras       []ref        `json:"emissoras"`
+	EmissorasTotal  int          `json:"emissoras_total"`
 	Materiais       []ref        `json:"materiais"`
 	Inicio          string       `json:"inicio"`
 	Fim             string       `json:"fim"`
@@ -395,6 +398,18 @@ func modoDoPreco(m string) string {
 	return "consolidado"
 }
 
+// tetoEmissorasPorItem: a paginação limita itens, não as emissoras dentro de
+// cada um; uma campanha de 239 emissoras com 10 materiais passava de 60k tokens
+// numa página só. obter_campanha lista todas as emissoras-alvo.
+const tetoEmissorasPorItem = 20
+
+const ressalvaEmissorasCortadas = "Listas de emissoras cortadas em 20 por item (emissoras_total traz o número real); obter_campanha lista todas as emissoras-alvo da campanha."
+
+// cortarIDs devolve até teto ids (na ordem) e o total real.
+func cortarIDs(ids []uuid.UUID, teto int) ([]uuid.UUID, int) {
+	return ids[:min(len(ids), teto)], len(ids)
+}
+
 const ressalvaRegras = "materiais vazio = a regra vale para todos os materiais do tipo; com materiais, é um recorte só para eles. A meta de uma célula (emissora × tipo × dia) é a soma das regras que valem naquele dia; um ajuste do dia (listar_overrides) substitui as regras da célula."
 
 const ressalvaAjustes = "O ajuste do dia substitui as regras daquela célula: insercoes_esperadas vira a meta e a faixa dele é a única válida. insercoes_esperadas = 0 → toda tocada do dia vira bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela)."
@@ -426,11 +441,14 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			var todasEmissoras []uuid.UUID
-			for _, v := range vinculos {
-				todasEmissoras = append(todasEmissoras, v.TargetStations...)
+			var mantidas []uuid.UUID
+			cortes := make([][]uuid.UUID, len(vinculos))
+			totais := make([]int, len(vinculos))
+			for i, v := range vinculos {
+				cortes[i], totais[i] = cortarIDs(v.TargetStations, tetoEmissorasPorItem)
+				mantidas = append(mantidas, cortes[i]...)
 			}
-			emissoras, err := nomesEmissoras(ctx, L, todasEmissoras)
+			emissoras, err := nomesEmissoras(ctx, L, mantidas)
 			if err != nil {
 				return nil, err
 			}
@@ -438,15 +456,22 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			for i, v := range vinculos {
 				m := porID[v.MaterialID]
 				linhas[i] = materialDaCampanha{
-					Material: refDe(v.MaterialID, m.Title), Emissoras: refs(v.TargetStations, emissoras),
-					VinculadoEm: instante(v.AddedAt),
+					Material: refDe(v.MaterialID, m.Title), Emissoras: refs(cortes[i], emissoras),
+					EmissorasTotal: totais[i], VinculadoEm: instante(v.AddedAt),
 				}
 				if m.TypeID != nil {
 					r := refDe(*m.TypeID, tipos[*m.TypeID])
 					linhas[i].Tipo = &r
 				}
 			}
-			return ok(paginar(linhas, in.Paginacao))
+			l := paginar(linhas, in.Paginacao)
+			for _, it := range l.Items {
+				if it.EmissorasTotal > len(it.Emissoras) {
+					l.Ressalvas = []string{ressalvaEmissorasCortadas}
+					break
+				}
+			}
+			return ok(l)
 		})
 
 	ferramentaLeitura(s, cfg, "listar_regras_distribuicao",
@@ -470,11 +495,14 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			var todasEmissoras []uuid.UUID
-			for _, r := range regras {
-				todasEmissoras = append(todasEmissoras, r.StationIDs...)
+			var mantidas []uuid.UUID
+			cortes := make([][]uuid.UUID, len(regras))
+			totais := make([]int, len(regras))
+			for i, r := range regras {
+				cortes[i], totais[i] = cortarIDs(r.StationIDs, tetoEmissorasPorItem)
+				mantidas = append(mantidas, cortes[i]...)
 			}
-			emissoras, err := nomesEmissoras(ctx, L, todasEmissoras)
+			emissoras, err := nomesEmissoras(ctx, L, mantidas)
 			if err != nil {
 				return nil, err
 			}
@@ -482,13 +510,19 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			for i, r := range regras {
 				linhas[i] = regraDTO{
 					ID: r.ID.String(), Nome: r.Name, Tipo: refDe(r.TypeID, tipos[r.TypeID]),
-					Emissoras: refs(r.StationIDs, emissoras), Materiais: refs(r.MaterialIDs, mats),
+					Emissoras: refs(cortes[i], emissoras), EmissorasTotal: totais[i], Materiais: refs(r.MaterialIDs, mats),
 					Inicio: dia(r.StartDate), Fim: dia(r.EndDate), DiasDaSemana: diasDaMascara(r.WeekdayMask),
 					Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd}, InsercoesPorDia: r.PlaysPerDay,
 				}
 			}
 			l := paginar(linhas, in.Paginacao)
 			l.Ressalvas = []string{ressalvaRegras}
+			for _, it := range l.Items {
+				if it.EmissorasTotal > len(it.Emissoras) {
+					l.Ressalvas = append(l.Ressalvas, ressalvaEmissorasCortadas)
+					break
+				}
+			}
 			return ok(l)
 		})
 
