@@ -297,7 +297,7 @@ func (c *Clients) ListPaged(ctx context.Context, q string, page, pageSize int, i
 	rows, err := c.pool.Query(ctx, `
 		SELECT `+clientColumns+`
 		FROM clients`+where+`
-		ORDER BY name
+		ORDER BY name, id
 		LIMIT $2 OFFSET $3`, q, pageSize, offset)
 	if err != nil {
 		return nil, 0, err
