@@ -69,6 +69,8 @@ func TestFalhasEmissoras_ParidadeComATela(t *testing.T) {
 			require.EqualValues(t, c.Expected, cc["esperado"])
 			require.EqualValues(t, c.Delivered, cc["entregue"])
 			require.EqualValues(t, c.Deficit, cc["deficit"])
+			require.Equal(t, map[string]any{"id": c.ClientID.String(), "nome": c.ClientName}, cc["cliente"])
+			require.NotEqual(t, uuid.Nil, c.ClientID, "o catalog traz o id do cliente")
 		}
 	}
 	um := xs[0]
@@ -251,6 +253,8 @@ func TestResumoDiarioFalhas_ParidadeComATela(t *testing.T) {
 	require.Equal(t, camp.String(), c["campanha"].(map[string]any)["id"])
 	require.EqualValues(t, tela["campaigns"].([]any)[0].(map[string]any)["stations_failed"], c["emissoras_com_falha"])
 	require.NotContains(t, out, "seen", "estado de UI por pessoa não sai")
+	require.Equal(t, cli.String(), c["cliente"].(map[string]any)["id"])
+	require.Contains(t, out["ressalvas"].([]any)[0], "pares campanha × emissora")
 	require.Contains(t, out["links"].(map[string]any)["tela"], "view=by_campaign")
 
 	// Não marca visto: a chave do digest continua não lida para o admin.
@@ -299,6 +303,8 @@ func TestFalhasCampanhas_ParidadeComATela(t *testing.T) {
 	c := itens(t, out)[0]
 	require.Equal(t, camp.String(), c["campanha"].(map[string]any)["id"])
 	require.Equal(t, "ativa", c["estado"])
+	require.Equal(t, map[string]any{"id": tela.Campaigns[0].Campaign.ClientID.String(), "nome": "Cliente"}, c["cliente"])
+	require.Contains(t, out["ressalvas"], ressalvaParesEmissora)
 	require.EqualValues(t, len(tela.Campaigns[0].Stations), c["emissoras_total"])
 	for i, s := range tela.Campaigns[0].Stations {
 		e := c["emissoras"].([]any)[i].(map[string]any)
@@ -371,7 +377,7 @@ func TestObterFalhasCampanha_ParidadeComATela(t *testing.T) {
 	require.Equal(t, []any{d}, porID[e1.String()]["dias_de_falha"])
 	require.Equal(t, "ativa", out["campanha"].(map[string]any)["estado"])
 	require.Equal(t, d, out["campanha"].(map[string]any)["inicio"])
-	require.Equal(t, "Cliente", out["cliente"])
+	require.Equal(t, map[string]any{"id": tela.Campaign.ClientID.String(), "nome": "Cliente"}, out["cliente"])
 	require.Equal(t, "https://portal.teste/admin/station-failures?campaign="+camp.String()+"&view=by_campaign", out["links"].(map[string]any)["tela"])
 	require.Contains(t, out["links"].(map[string]any)["como_baixar"], "PDF de cobrança")
 
@@ -410,7 +416,7 @@ func TestFalhasCampanhas_PiorCasoCabe(t *testing.T) {
 	x := itens(t, out)[0]
 	require.Len(t, x["emissoras"], tetoPorItem)
 	require.EqualValues(t, tetoPorItem+1, x["emissoras_total"])
-	require.Contains(t, out["ressalvas"].([]any)[1], fmt.Sprintf("as %d primeiras", tetoPorItem))
+	require.Contains(t, out["ressalvas"].([]any)[2], fmt.Sprintf("as %d primeiras", tetoPorItem))
 	n := tamanhoDoResultado(t, out)
 	t.Logf("falhas_campanhas (dia): %d campanhas × %d emissoras = %d bytes", tetoPaginaFalhasDia, tetoPorItem, n)
 	require.Less(t, n, 60_000)
