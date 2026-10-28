@@ -111,7 +111,8 @@ func buildTokenSearch(q string, startN int) tokenSearch {
 }
 
 // stationOrderBy é o desempate estável de qualquer listagem de emissoras:
-// monitoradas primeiro, depois audiência, depois nome.
+// monitoradas primeiro, depois audiência, depois nome e, por fim, o id
+// (nome repetido não pode embaralhar a paginação).
 const stationOrderBy = `
 	  CASE monitoring_status
 	    WHEN 'active'      THEN 0
@@ -120,7 +121,8 @@ const stationOrderBy = `
 	    ELSE 3
 	  END,
 	  pmm DESC NULLS LAST,
-	  name`
+	  name,
+	  id`
 
 // ─── Suggest (autocomplete do campo de busca) ───────────────────────────────
 

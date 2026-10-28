@@ -1348,7 +1348,7 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		      )
 		      FROM unnest($4::text[]) AS tok
 		  ))
-		ORDER BY d.detected_at ` + order + `
+		ORDER BY d.detected_at ` + order + `, d.id, d.campaign_id
 		LIMIT $5 OFFSET $6`
 
 	offset := (f.Page - 1) * f.PageSize
