@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-10-27
+ultima-verificacao: 2026-10-28
 codigo-relacionado:
   - workers/internal/mcp/modulo.go
   - workers/internal/mcp/autenticacao.go
@@ -162,6 +162,21 @@ já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 `NOTIFICATIONS_BASE_URL=http://localhost:3000`. A API local leva minutos para escutar (carrega o
 índice antes); health 000 logo após o recreate não é crash.
+
+## Testar as tools localmente
+
+- Um banco por agente no container `rc-mcp-test-pg` (porta 55440):
+  `docker exec rc-mcp-test-pg psql -U radiocheck -d postgres -c "CREATE DATABASE radiocheck_mcp_test_<x> TEMPLATE radiocheck_mcp_test_d2;"`.
+- `export TEST_DATABASE_URL=postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_test_<x>?sslmode=disable`
+  e `go test -p 1 ./internal/mcp/...` (rode `internal/mcp` ANTES de `internal/catalog`: a suíte do catalog deixa
+  clientes no banco e o guard do `dbtest` passa a derrubar testes do MCP). Sem `TEST_DATABASE_URL` exportada os
+  testes de banco PULAM e parecem verdes.
+- Os testes de tool usam `mcptest.DBCatalogo` (trunca usuários, clientes e emissoras) e as fixtures de
+  `internal/mcp/mcptest/catalogo.go`. Cada tool que espelha tela tem um teste `..._ParidadeComATela` que chama
+  o handler HTTP com claims de admin e compara os números.
+- Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, chame pelo Claude Code
+  `financeiro_campanhas` e `grade_campanha` de 2 campanhas ativas e compare com `/campaigns` e `/detections`
+  no portal. Divergência = bug: não siga para a Fatia 2.
 
 ## Deploy
 

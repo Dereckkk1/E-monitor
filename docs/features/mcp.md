@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-10-27
+ultima-verificacao: 2026-10-28
 codigo-relacionado:
   - workers/internal/mcp/
   - workers/internal/mcp/oauth/
@@ -12,6 +12,17 @@ codigo-relacionado:
   - frontend/src/pages/AuthorizeAiPage.jsx
   - frontend/src/components/account/McpIntegrationSection.jsx
   - frontend/public/_headers
+  - workers/internal/mcp/leitura.go
+  - workers/internal/mcp/tools_clientes.go
+  - workers/internal/mcp/tools_campanhas.go
+  - workers/internal/mcp/tools_grade.go
+  - workers/internal/mcp/tools_materiais.go
+  - workers/internal/mcp/tools_emissoras.go
+  - workers/internal/mcp/tools_veiculacoes.go
+  - workers/internal/mcp/tools_usuarios.go
+  - workers/internal/mcp/tools_integracoes.go
+  - workers/internal/catalog/mcp_leituras.go
+  - workers/internal/catalog/clients_integracoes.go
 ---
 
 # MCP do E-monitor
@@ -27,20 +38,84 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | Fatia | O quê | Estado |
 |---|---|---|
 | 0 | Porta: `/mcp`, OAuth 2.1, tokens, `quem_sou_eu` | implementada (branch `feat/mcp-server`; deploy e conexão dos 3 clientes em prod pendentes) |
-| 1-5 | Leitura, relatórios, escrita, crítico/pendentes, ecossistema | planejadas |
+| 1 | Leitura: 26 tools (clientes, campanhas, grade, plano do dia, materiais, emissoras, veiculações, usuários, integrações, notificações) | implementada (branch `feat/mcp-server`, não deployada) |
+| 2-5 | Relatórios, escrita, crítico/pendentes, ecossistema | planejadas |
 
-Tools hoje: **só `quem_sou_eu`**. O `status` deste doc vira `implementado` quando as fatias 1-5
+Tools hoje: as 27 da seção "Tools". O `status` deste doc vira `implementado` quando as fatias 2-5
 fecharem.
 
 ## Regra de ouro: o MCP faz parte do pronto
 
 - **Toda feature nova ganha tool** (ou decide por escrito que não ganha).
 - **Tool nova entra em `ToolsEsperadas`** ([`servidor.go`](../../workers/internal/mcp/servidor.go))
-  **no mesmo commit.** O teste de inventário trava o conjunto e a **ordem** (clientes guardam o
-  `tools/list` em cache, então nada entra ou sai por acidente).
+  **no mesmo commit.** O teste de inventário trava o **conjunto** (clientes guardam o
+  `tools/list` em cache, então nada entra ou sai por acidente). A lista está em ordem alfabética
+  porque é a ordem em que o go-sdk devolve o `tools/list`; não é uma escolha nossa.
 - **Tool nunca reimplementa regra de negócio**: chama a MESMA função que o handler HTTP chama
   (`catalog.ApprovedDetectionsFilter`, base financeira `in_slot + bonus`, `categorizer.Settle`,
   tratamento de `cancelada`). Tela e MCP não podem discordar de número.
+
+## Tools (27)
+
+Todas de leitura (`readOnlyHint`). Cada uma chama a MESMA função que a tela; a coluna "Fonte" diz qual.
+Listas: `{items, page: {total, limit, offset, returned, has_more}}`, `limit` padrão 25 e teto 100,
+`offset` até 100000 (acima disso `[entrada_invalida]`).
+
+| Tool | Devolve | Fonte |
+|---|---|---|
+| `quem_sou_eu` | dono da credencial | — |
+| `listar_clientes` | clientes com `hub_id` | `GET /clients` (paginado) -> `Clients.ListPaged` |
+| `obter_cliente` | cadastro, vínculos, carteira | `Clients.Get`, `CountDependents`, `users.Repo.List{ClientID}` |
+| `pmm_target_cliente` | PMM e PMM no target por emissora | `GET /clients/{id}/target-pmm` |
+| `listar_campanhas` | campanhas (canceladas fora por padrão) | `GET /campaigns` -> `Campaigns.ListPaged` |
+| `obter_campanha` | campanha por id ou código do hub | `Campaigns.Get` / `ListByHubCode` |
+| `financeiro_campanhas` | investido, bonificação, impactos, CPM | `GET /campaigns/financials` + `CPMDaCampanha` |
+| `listar_materiais_campanha` | materiais da campanha | `GET /campaigns/{id}/materials` |
+| `listar_regras_distribuicao` | regras | `GET /campaigns/{id}/distribution-rules` |
+| `listar_overrides` | ajustes do dia | `GET /campaigns/{id}/distribution-overrides` |
+| `listar_precos_campanha` | preços por emissora | `GET /campaigns/{id}/pricing` |
+| `grade_campanha` | grade emissora x tipo x dia + totais | `GET /campaigns/{id}/daily-summary` |
+| `plano_do_dia` | saldo, meta, faixas e tocadas de UMA célula | grade + regras (`categorizer.RuleCoversDay`) + ajuste + `GET /detections` |
+| `listar_materiais` | materiais de um cliente | `GET /clients/{id}/materials` |
+| `obter_material` | material, similaridade, campanhas | `GET /materials/{id}` + `CampaignMaterials.ListByMaterial` |
+| `listar_tipos_material` | tipos | `GET /material-types` |
+| `buscar_emissoras` | emissoras (busca da tela) | `GET /stations` |
+| `obter_emissora` | ficha, Anatel, cidades no alcance, campanhas | `GET /stations/{id}` + `Stations.Anatel`/`CoverageCities` |
+| `listar_veiculacoes` | veiculações com total real | `GET /detections?page=` -> `Detections.ListPaged` |
+| `obter_veiculacao` | veiculação, atribuições, aprovação | `GET /detections/{id}` + `Attributions` + `Approved` |
+| `veiculacoes_por_material` | contagem por material | `GET /detections/aggregate-by-material` |
+| `listar_usuarios` | usuários com estado do convite | `GET /admin/users` |
+| `obter_usuario` | usuário | `GET /admin/users/{id}` |
+| `obter_webhook_cliente` | configuração (sem segredo, URL só esquema+host) | `GET /clients/{id}/webhook` |
+| `listar_entregas_webhook` | entregas | `GET /clients/{id}/webhook-deliveries` |
+| `listar_chaves_api` | chaves (só metadados) | `GET /clients/{id}/api-keys` |
+| `minhas_notificacoes` | sininho de quem está conectado (teto de 50 itens, dito na ressalva) | `GET /admin/notifications` |
+
+**O que nunca sai** (whitelist nos DTOs): `stream_url` e saúde do stream, `master_storage_path`/`master_sha256`,
+`evidence_key`, segredo do webhook (nem o prefixo), `key_hash`, token e link de boas-vindas (o link mostra a
+senha inicial), e o caminho e a query da URL de webhook (podem carregar segredo, como em Slack/Discord/Zapier:
+só saem esquema e host, `https://host/...`; vale também para `ultimo_erro` das entregas). Áudio: só o link
+`/detections/:id` do portal.
+
+**Comportamento comum**
+
+- Toda tool de leitura roda em `ferramentaLeitura`: um `panic` vira `[interno]` (não derruba a API), `offset`
+  acima de 100000 vira `[entrada_invalida]` e resultado nulo vira erro interno.
+- Erros: `[entrada_invalida]`, `[nao_encontrado]` ("<x>: não existe no E-monitor"), `[ambiguo]`, `[interno]`
+  (o erro Go real só vai para o log, nunca ao modelo).
+- Paginação estável: as listas de clientes, campanhas, emissoras e veiculações desempatam o `ORDER BY` por `id`.
+- `listar_veiculacoes` sem campanhas exige período de no máximo 93 dias; `de > ate` é recusado.
+- `financeiro_campanhas`: o CPM vem de `catalog.CPMDaCampanha`, que espelha `/campaigns`: sem CPM nenhum (nem o
+  fixo) quando investido + bonificação = 0.
+- `plano_do_dia` em campanha cancelada acrescenta ressalvas (cancelada; dia posterior ao cancelamento não tem
+  obrigação); a ressalva "meta 0 -> bonus" lembra a exceção `out_date`.
+- `obter_veiculacao`: `manual.por` é uma referência com o nome do usuário; avisa quando a campanha canônica não
+  tem projeção; `aprovada` vem de `Detections.Approved` (usa `catalog.ApprovedDetectionsFilter`).
+- `obter_emissora`: `perfil.perfil_audiencia` é um DTO em português; `perfil.site` cai no site do Audiency.
+
+**Decisões da Fatia 1** (plano `docs/superpowers/plans/2026-10-27-mcp-fatia-1-leitura.md`): `plano_do_dia`
+devolve os ingredientes autoritativos e **não** o "progresso por faixa" do `DayDetailModal` (heurística só de
+tela, em JS); o CPM de `/campaigns` virou `catalog.CPMDaCampanha` (antes só existia no navegador).
 
 ## Como funciona
 

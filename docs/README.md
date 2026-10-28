@@ -107,7 +107,7 @@ docs/
 | [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
-| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: só a Fatia 0 (tool `quem_sou_eu`)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP |
+| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 e 1 (27 tools de leitura)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP |
 
 ## `operations/` — operar o sistema em prod
 
