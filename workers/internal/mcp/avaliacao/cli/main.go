@@ -1,10 +1,15 @@
+//go:build avaliacao
+
 // Command cli roda a avaliação do MCP em desenvolvimento. NÃO vai para a
-// imagem de prod (não é um cmd/*, e fica fora do workers.Dockerfile de
-// propósito — decisão F2-9 do plano da Fatia 2):
+// imagem de prod: não é um cmd/*, fica fora do workers.Dockerfile (decisão
+// F2-9 do plano da Fatia 2) e só compila com a tag "avaliacao":
 //
-//	DATABASE_URL=… go run ./internal/mcp/avaliacao/cli semear
-//	DATABASE_URL=… go run ./internal/mcp/avaliacao/cli tools
-//	DATABASE_URL=… go run ./internal/mcp/avaliacao/cli chamar <tool> '<json>'
+//	AVALIACAO_DATABASE_URL=… go run -tags avaliacao ./internal/mcp/avaliacao/cli semear
+//	AVALIACAO_DATABASE_URL=… go run -tags avaliacao ./internal/mcp/avaliacao/cli tools
+//	AVALIACAO_DATABASE_URL=… go run -tags avaliacao ./internal/mcp/avaliacao/cli chamar <tool> '<json>'
+//
+// A variável é própria de propósito: DATABASE_URL é o nome da de prod, e o
+// banco de dev é um restore de prod. A semente ainda recusa banco não vazio.
 //
 // tools e chamar falam com o servidor MCP real (as mesmas tools do /mcp),
 // em memória, com o admin da semente como principal.
@@ -25,7 +30,10 @@ import (
 	"radiocheck/internal/mcp/avaliacao"
 )
 
-const uso = "uso: cli semear | tools | chamar <tool> '<json>'  (com DATABASE_URL)"
+const (
+	variavel = "AVALIACAO_DATABASE_URL"
+	uso      = "uso: go run -tags avaliacao ./internal/mcp/avaliacao/cli semear | tools | chamar <tool> '<json>'  (com " + variavel + ")"
+)
 
 func main() {
 	if err := rodar(os.Args[1:]); err != nil {
@@ -38,9 +46,9 @@ func rodar(args []string) error {
 	if len(args) == 0 {
 		return errors.New(uso)
 	}
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := os.Getenv(variavel)
 	if dsn == "" {
-		return errors.New("DATABASE_URL vazio — " + uso)
+		return errors.New(variavel + " vazio — aponte para o banco da avaliação (recriado do template), nunca para o de prod. " + uso)
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -53,10 +61,12 @@ func rodar(args []string) error {
 		return err
 	}
 	var p mcp.Principal
-	if err := pool.QueryRow(ctx, `SELECT id, email, name FROM users WHERE email = $1`, avaliacao.EmailAdmin).
-		Scan(&p.UserID, &p.Email, &p.Nome); err != nil {
+	var semeadoEm time.Time
+	if err := pool.QueryRow(ctx, `SELECT id, email, name, created_at FROM users WHERE email = $1`, avaliacao.EmailAdmin).
+		Scan(&p.UserID, &p.Email, &p.Nome, &semeadoEm); err != nil {
 		return fmt.Errorf("rode 'semear' antes: %w", err)
 	}
+	avisarSementeVelha(semeadoEm, time.Now())
 	srv := mcp.NovoServidorLocal(mcp.ConfigServidor{Versao: "avaliacao", Portal: "https://e-monitor.online", Leitura: mcp.NovaLeitura(pool)}, &p)
 	ct, st := sdk.NewInMemoryTransports()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {
@@ -111,4 +121,17 @@ func rodar(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("comando desconhecido %q — %s", args[0], uso)
+}
+
+// avisarSementeVelha: as respostas do gabarito dependem do dia da semente
+// (janelas móveis: ontem, últimos 30 dias; o último mês fechado). Semente de
+// outro dia ainda costuma bater; de outro mês, a assertividade muda.
+func avisarSementeVelha(semeadoEm, agora time.Time) {
+	s, h := semeadoEm.In(avaliacao.SP), agora.In(avaliacao.SP)
+	switch {
+	case s.Year() != h.Year() || s.Month() != h.Month():
+		fmt.Fprintf(os.Stderr, "AVISO: a semente é de %s (outro mês): o gabarito já não vale; recrie o banco e rode semear de novo.\n", s.Format("2006-01-02"))
+	case s.YearDay() != h.YearDay():
+		fmt.Fprintf(os.Stderr, "AVISO: a semente é de %s (outro dia): as janelas móveis andaram; recrie o banco e rode semear de novo antes de avaliar.\n", s.Format("2006-01-02"))
+	}
 }

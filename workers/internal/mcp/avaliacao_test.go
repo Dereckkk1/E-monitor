@@ -13,6 +13,19 @@ import (
 	"radiocheck/internal/mcp/mcptest"
 )
 
+// A semente recusa banco que não esteja vazio — e recusa ANTES de escrever:
+// rodada por engano contra uma cópia de prod, não pode deixar nada para trás.
+func TestAvaliacao_SemearRecusaBancoComCliente(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	mcptest.Cliente(t, ctx, pool, "Cliente de verdade")
+	_, err := avaliacao.Semear(ctx, pool, time.Now())
+	require.ErrorIs(t, err, avaliacao.ErrBancoNaoVazio)
+	var clientes, usuarios int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM clients), (SELECT count(*) FROM users)`).Scan(&clientes, &usuarios))
+	require.Equal(t, 1, clientes, "a semente não pode ter gravado cliente")
+	require.Equal(t, 0, usuarios, "a semente não pode ter gravado o admin")
+}
+
 type perguntasXML struct {
 	Pares []struct {
 		Pergunta string `xml:"question"`
@@ -28,9 +41,13 @@ func TestAvaliacao_Gabarito(t *testing.T) {
 	ctx, pool := mcptest.DBCatalogo(t)
 	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
 	require.NoError(t, err)
-	_, err = avaliacao.Semear(ctx, pool, time.Now())
+	// Um relógio só para a semente e para as tools: a janela móvel (ontem,
+	// últimos 30 dias, mês fechado) não pode virar no meio do teste.
+	relogio := time.Now()
+	_, err = avaliacao.Semear(ctx, pool, relogio)
 	require.NoError(t, err)
 	cfg := cfgTeste(pool)
+	cfg.Leitura.Agora = func() time.Time { return relogio }
 	raw, err := os.ReadFile("avaliacao/perguntas.xml")
 	require.NoError(t, err)
 	var px perguntasXML
