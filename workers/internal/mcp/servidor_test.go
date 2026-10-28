@@ -261,7 +261,7 @@ func TestInstrucoes_Relatorios(t *testing.T) {
 	require.Contains(t, Instrucoes, "links.tela")
 	require.Contains(t, Instrucoes, "nunca invente um link de download")
 	require.Contains(t, Instrucoes, "não tocou")
-	require.Contains(t, Instrucoes, "volume")
+	require.Contains(t, Instrucoes, "Assertividade: apresente o percentual sempre com o volume.")
 }
 
 // A lista é a do tools/list do SDK (ordem alfabética) e tem as 44 tools das
