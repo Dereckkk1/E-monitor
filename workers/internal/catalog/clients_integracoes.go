@@ -33,7 +33,7 @@ func (c *Clients) ListWebhookDeliveries(ctx context.Context, clientID uuid.UUID,
 		FROM webhook_deliveries
 		WHERE client_id = $1
 		  AND ($2 = '' OR status = $2)
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id
 		LIMIT $3 OFFSET $4`, clientID, status, limit, offset)
 	if err != nil {
 		return nil, 0, err

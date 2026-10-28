@@ -158,7 +158,7 @@ func TestPlanoDoDia_CampanhaCanceladaEDiaSemLinha(t *testing.T) {
 	require.Contains(t, juntas, "cancelada", "ressalva de campanha cancelada")
 	require.Contains(t, juntas, "Dia depois do cancelamento")
 	require.Nil(t, out["saldo"])
-	require.Contains(t, juntas, "A grade não tem linha para esta célula")
+	require.NotContains(t, juntas, "A grade não tem linha para esta célula", "o cancelamento já explica")
 
 	// Antes do cancelamento a ressalva de dia posterior não vale.
 	args["data"] = "2026-10-05"
@@ -166,4 +166,15 @@ func TestPlanoDoDia_CampanhaCanceladaEDiaSemLinha(t *testing.T) {
 	for _, r := range antes["ressalvas"].([]any) {
 		require.NotContains(t, r.(string), "Dia depois do cancelamento")
 	}
+
+	// Campanha ativa, dia sem linha na grade (fora da vigência): a ressalva genérica vale.
+	_, err = pool.Exec(ctx, `UPDATE campaigns SET status = 'ativa', cancelled_at = NULL WHERE id = $1`, camp)
+	require.NoError(t, err)
+	args["data"] = "2026-11-15"
+	semLinha := chamarTool(t, cfgTeste(pool), "plano_do_dia", args)
+	var textoSemLinha []string
+	for _, r := range semLinha["ressalvas"].([]any) {
+		textoSemLinha = append(textoSemLinha, r.(string))
+	}
+	require.Contains(t, strings.Join(textoSemLinha, " "), "A grade não tem linha para esta célula")
 }

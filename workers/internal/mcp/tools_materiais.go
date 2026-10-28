@@ -171,7 +171,8 @@ func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 					Campanha: refDe(v.CampaignID, c.Name), Estado: c.Status, Emissoras: len(v.TargetStations),
 				})
 			}
-			if m.SimilarityScore != nil && *m.SimilarityScore >= similarity.WarnThreshold && m.SimilarityAckdAt == nil {
+			// Mesma condição do aviso do wizard (MaterialsStep.jsx): só com a checagem pronta.
+			if m.SimilarityCheckStatus == "ready" && m.SimilarityScore != nil && *m.SimilarityScore >= similarity.WarnThreshold && m.SimilarityAckdAt == nil {
 				parecido := ""
 				if m.MostSimilarMaterialID != nil {
 					parecido = titulos[*m.MostSimilarMaterialID]

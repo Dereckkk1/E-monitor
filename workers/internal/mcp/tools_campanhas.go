@@ -333,9 +333,9 @@ type faixaHoraria struct {
 }
 
 type materialDaCampanha struct {
-	Material    ref    `json:"material"`
-	Tipo        *ref   `json:"tipo"`
-	Emissoras   []ref  `json:"emissoras"`
+	Material  ref   `json:"material"`
+	Tipo      *ref  `json:"tipo"`
+	Emissoras []ref `json:"emissoras"`
 	// EmissorasTotal é o número real; Emissoras traz no máximo tetoEmissorasPorItem.
 	EmissorasTotal int    `json:"emissoras_total"`
 	VinculadoEm    string `json:"vinculado_em"`
