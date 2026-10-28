@@ -122,3 +122,47 @@ func TestFerramentaLeitura_ResultadoNilVira_Interno(t *testing.T) {
 	require.True(t, erro)
 	require.Contains(t, texto, "[interno]")
 }
+
+type entradaPaginada struct {
+	Paginacao
+}
+
+func TestFerramentaLeitura_OffsetAcimaDoTetoERecusado(t *testing.T) {
+	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
+	ferramentaLeitura(s, ConfigServidor{Leitura: &Leitura{}}, "lista", "teste",
+		func(context.Context, *Leitura, entradaPaginada) (*sdk.CallToolResult, error) {
+			return ok(map[string]any{"ok": true})
+		})
+	texto, erro := chamarNoServidor(t, s, "lista", map[string]any{"offset": offsetTeto + 1})
+	require.True(t, erro)
+	require.Contains(t, texto, "[entrada_invalida]")
+
+	_, erro = chamarNoServidor(t, s, "lista", map[string]any{"offset": offsetTeto})
+	require.False(t, erro, "offset igual ao teto é aceito")
+}
+
+func TestNovaLista_HasMoreRespeitaOTeto(t *testing.T) {
+	itens := make([]int, 25)
+	require.True(t, novaLista(itens, 200_000, 25, offsetTeto-10).Page.HasMore)
+	require.False(t, novaLista(itens, 200_000, 25, offsetTeto).Page.HasMore,
+		"além do teto o modelo não consegue pedir a próxima página")
+}
+
+func TestBuscarJanela_IgualAPaginar(t *testing.T) {
+	for n := 0; n <= 7; n++ {
+		xs := make([]int, n)
+		for i := range xs {
+			xs[i] = i + 1
+		}
+		for l := 1; l <= 5; l++ {
+			for o := 0; o <= 12; o++ {
+				p := Paginacao{Limit: l, Offset: o}
+				got, err := buscarJanela(p, fontePaginada(xs))
+				require.NoError(t, err)
+				want := paginar(xs, p)
+				require.Equal(t, want.Items, got.Items, "n=%d l=%d o=%d", n, l, o)
+				require.Equal(t, want.Page, got.Page, "n=%d l=%d o=%d", n, l, o)
+			}
+		}
+	}
+}
