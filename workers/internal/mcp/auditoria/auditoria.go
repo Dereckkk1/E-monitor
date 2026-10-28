@@ -1,12 +1,20 @@
 // Package auditoria grava no audit_log (migration 0009) as ações feitas pelo
 // MCP ou sobre ele, marcadas com origem "mcp" —
-// é assim que uma escrita da IA se distingue de uma feita à mão (contrato §5).
+// é assim que uma escrita da IA se distingue de uma feita à mão (contrato §5) —
+// e as lê de volta (Listar, para a tool auditoria_mcp).
 package auditoria
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -45,4 +53,118 @@ func copiar(meta map[string]any) map[string]any {
 		m[k] = v
 	}
 	return m
+}
+
+// ── Leitura (auditoria_mcp) ─────────────────────────────────────────────
+
+// Consultor é o que Listar precisa: *pgxpool.Pool e pgx.Tx servem.
+type Consultor interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// ErrCursorInvalido: o cursor não veio de um Listar anterior.
+var ErrCursorInvalido = errors.New("auditoria: cursor inválido")
+
+type Filtro struct {
+	AcaoPrefixo string     // "" = todas; "mcp.token" casa mcp.token.* (literal: % e _ não são curinga)
+	AtorID      *uuid.UUID // nil = todos
+	Cursor      string     // "" = do mais recente
+	Limite      int        // > 0 (quem chama aplica o teto)
+}
+
+type Evento struct {
+	ID        uuid.UUID
+	Quando    time.Time
+	AtorID    *uuid.UUID
+	AtorNome  *string
+	AtorEmail *string
+	TipoAtor  string
+	Acao      string
+	Recurso   string
+	RecursoID *uuid.UUID
+	Detalhes  map[string]any // metadata sem a chave "origem"
+}
+
+// Repo amarra Listar a uma conexão (a Leitura do MCP guarda um).
+type Repo struct{ db Consultor }
+
+func NovoRepo(db Consultor) *Repo { return &Repo{db: db} }
+
+func (r *Repo) Listar(ctx context.Context, f Filtro) ([]Evento, string, error) {
+	return Listar(ctx, r.db, f)
+}
+
+// escaparLike torna o prefixo literal no LIKE (o escape padrão é a barra invertida).
+var escaparLike = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// Listar devolve os eventos gravados pelo MCP (metadata.origem = 'mcp'), do
+// mais recente para o mais antigo, por cursor (created_at, id). proximo vazio
+// = fim. O id (uuid) só desempata instantes iguais; o cursor guarda os dois,
+// então um empate nunca repete nem pula linha entre páginas.
+func Listar(ctx context.Context, db Consultor, f Filtro) (eventos []Evento, proximo string, err error) {
+	if f.Limite <= 0 {
+		return nil, "", errors.New("auditoria: Listar exige Limite > 0")
+	}
+	var antesDe *time.Time
+	var antesID *uuid.UUID
+	if f.Cursor != "" {
+		t, id, ok := lerCursor(f.Cursor)
+		if !ok {
+			return nil, "", ErrCursorInvalido
+		}
+		antesDe, antesID = &t, &id
+	}
+	rows, err := db.Query(ctx, `
+		SELECT a.id, a.created_at, a.actor_id, u.name, u.email, a.actor_type, a.action, a.resource, a.resource_id, a.metadata
+		FROM audit_log a
+		LEFT JOIN users u ON u.id = a.actor_id
+		WHERE a.metadata->>'origem' = 'mcp'
+		  AND ($1::text = '' OR a.action LIKE $1::text || '%')
+		  AND ($2::uuid IS NULL OR a.actor_id = $2::uuid)
+		  AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $5`, escaparLike.Replace(f.AcaoPrefixo), f.AtorID, antesDe, antesID, f.Limite+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("auditoria: listar: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e Evento
+		var meta []byte
+		if err := rows.Scan(&e.ID, &e.Quando, &e.AtorID, &e.AtorNome, &e.AtorEmail, &e.TipoAtor, &e.Acao, &e.Recurso, &e.RecursoID, &meta); err != nil {
+			return nil, "", err
+		}
+		if len(meta) > 0 {
+			if err := json.Unmarshal(meta, &e.Detalhes); err != nil {
+				return nil, "", fmt.Errorf("auditoria: metadata do evento %s: %w", e.ID, err)
+			}
+			delete(e.Detalhes, "origem")
+		}
+		eventos = append(eventos, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	if len(eventos) > f.Limite {
+		eventos = eventos[:f.Limite]
+		u := eventos[len(eventos)-1]
+		proximo = base64.RawURLEncoding.EncodeToString([]byte(u.Quando.UTC().Format(time.RFC3339Nano) + "|" + u.ID.String()))
+	}
+	return eventos, proximo, nil
+}
+
+// lerCursor desfaz o cursor opaco de Listar. O Postgres guarda microssegundos
+// e o RFC3339Nano os preserva: o < da tupla compara exato.
+func lerCursor(s string) (time.Time, uuid.UUID, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return time.Time{}, uuid.Nil, false
+	}
+	partes := strings.SplitN(string(b), "|", 2)
+	if len(partes) != 2 {
+		return time.Time{}, uuid.Nil, false
+	}
+	t, err1 := time.Parse(time.RFC3339Nano, partes[0])
+	id, err2 := uuid.Parse(partes[1])
+	return t, id, err1 == nil && err2 == nil
 }

@@ -73,6 +73,7 @@ func TestNovaLeitura_RepositoriosDeRelatorio(t *testing.T) {
 	require.NotNil(t, L.FalhasCampanhas)
 	require.NotNil(t, L.FalhasPorDia)
 	require.NotNil(t, L.PosVenda)
+	require.NotNil(t, L.Auditoria)
 	require.Nil(t, L.Workers, "sem supervisor: emissoras_ao_vivo sai null")
 	fixo := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	L.Agora = func() time.Time { return fixo }
