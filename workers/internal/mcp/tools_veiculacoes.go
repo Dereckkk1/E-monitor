@@ -168,14 +168,31 @@ func lerPeriodoSP(de, ate string) (*time.Time, *time.Time, string) {
 		_, f := limitesDoDiaSP(d)
 		fim = &f
 	}
+	if ini != nil && fim != nil && fim.Before(*ini) {
+		return nil, nil, campoPeriodo
+	}
 	return ini, fim, ""
+}
+
+// campoPeriodo: sentinela de lerPeriodoSP para "de depois de ate".
+const campoPeriodo = "periodo"
+
+// tetoPeriodoSemCampanha: sem campanha_ids o período é a única barreira ao
+// varrer todas as tocadas (o mesmo teto de grade_campanha).
+const tetoPeriodoSemCampanha = 93 * 24 * time.Hour
+
+func recusaCampoDoPeriodo(campo string) (*sdk.CallToolResult, error) {
+	if campo == campoPeriodo {
+		return recusa("período inválido: ate tem de ser >= de", "entrada_invalida")
+	}
+	return recusaEntrada(campo)
 }
 
 func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_veiculacoes",
 		"Lista veiculações (tocadas) como o relatório Data e Hora: quando, emissora, material, tipo, campanha, cliente e "+
 			"categoria (in_slot, bonus, out_slot, out_date). Filtros: campanha_ids, emissora_id, material_id, categorias, "+
-			"de/ate (dias de America/Sao_Paulo), busca. Pede campanhas ou período. A armadilha: só conta o conjunto aprovado, "+
+			"de/ate (dias de America/Sao_Paulo), busca. Pede campanhas ou período (sem campanhas, até 93 dias). A armadilha: só conta o conjunto aprovado, "+
 			"e uma tocada com várias campanhas aparece uma vez por campanha. Lista paginada com total real.",
 		func(ctx context.Context, L *Leitura, in entradaListarVeiculacoes) (*sdk.CallToolResult, error) {
 			camps, okC := lerCampanhas(in.CampanhaIDs)
@@ -184,10 +201,13 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 			}
 			ini, fim, campoRuim := lerPeriodoSP(in.De, in.Ate)
 			if campoRuim != "" {
-				return recusaEntrada(campoRuim)
+				return recusaCampoDoPeriodo(campoRuim)
 			}
 			if len(camps) == 0 && (ini == nil || fim == nil) {
 				return recusa("passe campanha_ids ou o período completo (de e ate)", "entrada_invalida")
+			}
+			if len(camps) == 0 && fim.Sub(*ini) > tetoPeriodoSemCampanha {
+				return recusa("sem campanha_ids o período vai até 93 dias: estreite de/ate ou passe campanha_ids", "entrada_invalida")
 			}
 			f := catalog.ListPagedFilter{CampaignIDs: camps, StartDate: ini, EndDate: fim, Q: in.Busca}
 			if in.MaisAntigasPrimeiro {
@@ -301,7 +321,7 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 			}
 			ini, fim, campoRuim := lerPeriodoSP(in.De, in.Ate)
 			if campoRuim != "" {
-				return recusaEntrada(campoRuim)
+				return recusaCampoDoPeriodo(campoRuim)
 			}
 			res, err := L.Veiculacoes.AggregateByMaterial(ctx, catalog.AggregateFilter{
 				CampaignIDs: camps, StartDate: ini, EndDate: fim, Q: in.Busca,
