@@ -46,6 +46,7 @@ var ToolsEsperadas = []string{
 	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
+	"relatorio_data_hora",
 	"veiculacoes_por_material",
 	"visao_gerencial",
 }
@@ -104,6 +105,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarIntegracoes(s, cfg, p)
 	registrarInsights(s, cfg)
 	registrarGerencial(s, cfg)
+	registrarRelatorios(s, cfg)
 	return s
 }
 
