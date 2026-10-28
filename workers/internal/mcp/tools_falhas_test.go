@@ -190,8 +190,9 @@ func TestFalhasPorDia_PadraoERecusas(t *testing.T) {
 	cfg := cfgTeste(pool)
 	hoje := time.Now().Format("2006-01-02")
 	out := chamarTool(t, cfg, "falhas_por_dia", map[string]any{})
-	require.Equal(t, time.Now().AddDate(0, 0, -29).Format("2006-01-02"), out["de"])
-	require.Equal(t, hoje, out["ate"])
+	// O padrão é em America/Sao_Paulo (F2-5), não no fuso do processo.
+	require.Equal(t, dia(hojeSP(time.Now()).AddDate(0, 0, -29)), out["de"])
+	require.Equal(t, dia(hojeSP(time.Now())), out["ate"])
 	require.Len(t, itens(t, out), 30)
 	require.Nil(t, out["resumo"].(map[string]any)["dia_do_pico"], "sem falha: pico null, não \"\"")
 	require.EqualValues(t, 0, out["resumo"].(map[string]any)["dias_com_falha"])
@@ -204,9 +205,11 @@ func TestFalhasPorDia_PadraoERecusas(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"min_queda_seg": 5}), "[entrada_invalida]")
 }
 
-// O digest lê "ontem"; a campanha cobre anteontem, ontem e hoje para que o
-// teste não dependa de qual "ontem" (processo × SP) prevalece — em qualquer um
-// deles há 1 campanha com 2 emissoras falhando.
+// O handler do digest não aceita data: lê "ontem" no fuso do processo
+// (yesterdayLocal), e a tool lê ontem em America/Sao_Paulo. Para a paridade
+// valer em qualquer fuso e hora, o relógio da tool (L.Agora) é posto no meio-dia
+// SP do dia seguinte ao "ontem" do handler: os dois leem o MESMO dia. A campanha
+// cobre anteontem, ontem e hoje, então esse dia sempre tem falha.
 func TestResumoDiarioFalhas_ParidadeComATela(t *testing.T) {
 	ctx, pool := mcptest.DBCatalogo(t)
 	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
@@ -224,7 +227,13 @@ func TestResumoDiarioFalhas_ParidadeComATela(t *testing.T) {
 	var tela map[string]any
 	require.NoError(t, json.Unmarshal(chamarHandler(t, h.Get, "/x", nil, admin), &tela))
 
-	out := chamarTool(t, cfgTeste(pool), "resumo_diario_falhas", map[string]any{})
+	ontemHandler := time.Now().AddDate(0, 0, -1) // o mesmo cálculo do yesterdayLocal
+	L := NovaLeitura(pool)
+	L.Agora = func() time.Time {
+		return time.Date(ontemHandler.Year(), ontemHandler.Month(), ontemHandler.Day()+1, 12, 0, 0, 0, fusoSP)
+	}
+	out := chamarTool(t, ConfigServidor{Versao: "teste", Portal: "https://portal.teste", Leitura: L}, "resumo_diario_falhas", map[string]any{})
+	require.Equal(t, ontemHandler.Format("2006-01-02"), tela["date"], "o handler leu o ontem do processo")
 	require.Equal(t, tela["date"], out["data"])
 	require.EqualValues(t, tela["summary"].(map[string]any)["campaigns"], out["campanhas_com_falha"])
 	require.EqualValues(t, 1, out["campanhas_com_falha"])
@@ -398,8 +407,27 @@ func TestFalhasCampanhas_PiorCasoCabe(t *testing.T) {
 	t.Logf("falhas_campanhas (dia): %d campanhas × %d emissoras = %d bytes", tetoPaginaFalhasDia, tetoPorItem, n)
 	require.Less(t, n, 60_000)
 
-	outH := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"modo": "historico", "limit": 100})
-	t.Logf("falhas_campanhas (historico): %d campanhas = %d bytes", len(itens(t, outH)), tamanhoDoResultado(t, outH))
+}
+
+// Pior caso de uma página do modo histórico: a página máxima (100 campanhas)
+// com nomes longos (alvo < 60 KB).
+func TestFalhasCampanhas_HistoricoPiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	d := time.Now().AddDate(0, 0, -2).Format("2006-01-02")
+	est := emissorasLongas(t, ctx, pool, 1)[0]
+	for j := range limiteTeto + 1 {
+		camp := mcptest.Campanha(t, ctx, pool, cli, fmt.Sprintf("Campanha De Verão Institucional Com Nome Bem Comprido %03d", j), d, d, est)
+		mcptest.EstadoCampanha(t, ctx, pool, camp, "ativa")
+		mcptest.Regra(t, ctx, pool, camp, tipo, est, d, d, 127, "06:00", "22:00", 12)
+	}
+	out := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"modo": "historico", "limit": 100})
+	require.Len(t, itens(t, out), limiteTeto)
+	require.EqualValues(t, limiteTeto+1, pag(t, out)["total"])
+	n := tamanhoDoResultado(t, out)
+	t.Logf("falhas_campanhas (historico): %d campanhas = %d bytes", limiteTeto, n)
+	require.Less(t, n, 60_000)
 }
 
 // Pior caso de uma página do detalhe: o teto de emissoras × tetoPorItem dias
