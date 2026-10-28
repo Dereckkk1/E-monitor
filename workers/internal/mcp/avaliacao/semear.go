@@ -35,7 +35,8 @@ const EmailAdmin = "avaliacao@e-monitor.local"
 // ErrBancoNaoVazio: a semente recusa banco com cliente, emissora, campanha ou
 // usuário — o cenário só vale num banco recriado do template.
 var ErrBancoNaoVazio = errors.New("avaliacao: o banco não está vazio (tem clientes, emissoras, campanhas ou usuários); " +
-	"a semente só roda num banco recriado do template: DROP DATABASE + CREATE DATABASE ... TEMPLATE radiocheck_mcp_test_d2")
+	"a semente só roda num banco recriado do template (DROP DATABASE + CREATE DATABASE ... TEMPLATE radiocheck_mcp_test_d2) " +
+	"e, se o template trouxer usuários de teste, depois de TRUNCATE users CASCADE NESSE banco — nunca num banco de prod ou cópia dele")
 
 // SP é o fuso das datas de calendário da semente (e do aviso do CLI).
 var SP = func() *time.Location {
