@@ -201,3 +201,29 @@ func TestListar_OmiteChavesDeSegredo(t *testing.T) {
 	require.Equal(t, map[string]any{"password": "[omitido]", "ok": float64(1)}, d["aninhado"])
 	require.Equal(t, []any{map[string]any{"refresh_token": "[omitido]"}}, d["lista"])
 }
+
+// As chaves de credencial além de secret/token/senha/password também saem
+// omitidas — inclusive as inofensivas que casam por substring (token_id), de
+// propósito.
+func TestListar_OmiteChavesDeCredencial(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	omitidas := []string{"segredo_app", "chave_pix", "credencial", "Credentials", "api_key", "api-key", "apikey", "ApiKey",
+		"Authorization", "bearer", "cookie", "set_cookie", "jwt", "private_key", "code_verifier", "session_id", "token_id"}
+	meta := map[string]any{"nome": "laptop", "client_id": "abc", "cliente": "Hub"}
+	for _, k := range omitidas {
+		meta[k] = "VALOR-" + k
+	}
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.x", "mcp_token", nil, meta))
+	evs, _, err := auditoria.NovoRepo(pool).Listar(ctx, auditoria.Filtro{Limite: 10})
+	require.NoError(t, err)
+	d := evs[0].Detalhes
+	for _, k := range omitidas {
+		require.Equal(t, "[omitido]", d[k], k)
+	}
+	require.Equal(t, "laptop", d["nome"])
+	require.Equal(t, "abc", d["client_id"], "client_id é identificador público do cliente OAuth")
+	require.Equal(t, "Hub", d["cliente"])
+}

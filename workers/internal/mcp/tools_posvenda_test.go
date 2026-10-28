@@ -214,55 +214,76 @@ func TestDestinatariosPosVenda_PreviaParidadeComATela(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "destinatarios_pos_venda", map[string]any{"cliente_id": uuid.NewString()}), "[nao_encontrado]")
 }
 
-// Pior caso de obter_pos_venda: o teto de campanhas × tetoPorItem linhas de
-// checking com nota longa (alvo < 60 KB).
-func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
-	ctx, pool := mcptest.DBCatalogo(t)
-	cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
-	repo := postsale.NewRepo(pool)
-	rep, err := repo.CreateDraft(ctx, postsale.CreateDraftInput{ClientID: cli, Title: "Fechamento De Setembro Com Título Bem Comprido"})
+// bytesJSON: quantos bytes o texto ocupa como string JSON (sem as aspas).
+func bytesJSON(t *testing.T, s string) int {
+	t.Helper()
+	b, err := json.Marshal(s)
 	require.NoError(t, err)
-	nota := strings.Repeat("Compensou com inserções extras no fim de semana. ", 210) // ~10 KB: o teto corta
-	var blocos []postsale.BlockRow
-	var cbs []postsale.CampaignBlock
-	for i := range tetoBlocosPosVenda + 1 {
-		camp := mcptest.Campanha(t, ctx, pool, cli, fmt.Sprintf("Campanha De Verão Institucional Com Nome Bem Comprido %02d", i), "2026-09-01", "2026-09-30")
-		blocos = append(blocos, postsale.BlockRow{CampaignID: camp, From: mcptest.Dia("2026-09-01"), To: mcptest.Dia("2026-09-30"), Position: i})
-		var rows []postsale.StationRow
-		for j := range tetoPorItem + 1 {
-			rows = append(rows, postsale.StationRow{StationID: uuid.New(), Name: fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %02d FM", j),
-				Programmed: 1234, Identified: 1200, Deficit: 34, Extras: 12, Kind: postsale.KindCompensation, Note: nota})
-		}
-		lbl := "Classes AB 25-49"
-		cbs = append(cbs, postsale.CampaignBlock{CampaignID: camp, CheckingRows: rows, ConformingCount: 123,
-			KPIs: postsale.BlockKPIs{ValorEntregue: 123456.78, Impactos: 12345678, CPM: 12.34, Bonificacao: 2345.67, BonificacaoCount: 123,
-				StationsCount: 45, ImpactosTarget: 1234567, CPMTarget: 123.45, StationsWithTarget: 40, TargetLabel: &lbl}})
-	}
-	require.NoError(t, repo.ReplaceBlocks(ctx, rep.ID, blocos))
-	b, err := json.Marshal(postsale.Payload{Version: postsale.PayloadVersion, Campaigns: cbs})
-	require.NoError(t, err)
-	require.NoError(t, repo.MarkSent(ctx, rep.ID, b))
-	_, err = pool.Exec(ctx, `UPDATE post_sale_reports SET intro_message = $2 WHERE id = $1`, rep.ID, strings.Repeat("Olá! Segue o fechamento. ", 820)) // ~20 KB: o teto corta
-	require.NoError(t, err)
+	return len(b) - 2
+}
 
-	out := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "limit": 100})
-	require.Len(t, itens(t, out), tetoBlocosPosVenda)
-	require.EqualValues(t, tetoBlocosPosVenda, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
-	require.EqualValues(t, tetoBlocosPosVenda+1, pag(t, out)["total"])
-	require.Equal(t, true, pag(t, out)["has_more"])
-	b0 := itens(t, out)[0]
-	require.Len(t, b0["checking"], tetoPorItem)
-	require.EqualValues(t, tetoPorItem+1, b0["checking_total"])
-	require.Contains(t, out["ressalvas"], fmt.Sprintf("checking de cada campanha: as %d primeiras linhas (checking_total traz o real).", tetoPorItem))
-	// A página seguinte traz a campanha que sobrou, na ordem da tela (position).
-	p2 := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "offset": tetoBlocosPosVenda})
-	require.Equal(t, blocos[tetoBlocosPosVenda].CampaignID.String(), itens(t, p2)[0]["campanha"].(map[string]any)["id"])
-	require.Equal(t, tetoNota, utf8.RuneCountInString(b0["checking"].([]any)[0].(map[string]any)["nota"].(string)))
-	require.Equal(t, tetoMensagem, utf8.RuneCountInString(out["mensagem"].(string)))
-	require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
-	n := tamanhoDoResultado(t, out)
-	t.Logf("obter_pos_venda: %d campanhas × %d linhas de checking (nota de 10 KB, mensagem de 20 KB) = %d bytes", tetoBlocosPosVenda, tetoPorItem, n)
-	require.Less(t, n, 60_000)
+// Pior caso de obter_pos_venda: o teto de campanhas × tetoPorItem linhas de
+// checking, com nota de ~10 KB e mensagem de ~20 KB. O orçamento é em bytes:
+// "<" vira < (6 bytes) no JSON e um emoji ocupa 4, então os três
+// alfabetos são medidos (alvo < 60 KB).
+func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
+	for _, c := range []struct{ nome, nota, mensagem string }{
+		{"texto", strings.Repeat("Compensou com inserções extras no fim de semana. ", 210), strings.Repeat("Olá! Segue o fechamento. ", 820)},
+		{"menor-que", strings.Repeat("<", 10_000), strings.Repeat("<", 20_000)},
+		{"emoji", strings.Repeat("📻", 2_500), strings.Repeat("📻", 5_000)},
+	} {
+		t.Run(c.nome, func(t *testing.T) {
+			ctx, pool := mcptest.DBCatalogo(t)
+			cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
+			repo := postsale.NewRepo(pool)
+			rep, err := repo.CreateDraft(ctx, postsale.CreateDraftInput{ClientID: cli, Title: "Fechamento De Setembro Com Título Bem Comprido"})
+			require.NoError(t, err)
+			var blocos []postsale.BlockRow
+			var cbs []postsale.CampaignBlock
+			for i := range tetoBlocosPosVenda + 1 {
+				camp := mcptest.Campanha(t, ctx, pool, cli, fmt.Sprintf("Campanha De Verão Institucional Com Nome Bem Comprido %02d", i), "2026-09-01", "2026-09-30")
+				blocos = append(blocos, postsale.BlockRow{CampaignID: camp, From: mcptest.Dia("2026-09-01"), To: mcptest.Dia("2026-09-30"), Position: i})
+				var rows []postsale.StationRow
+				for j := range tetoPorItem + 1 {
+					rows = append(rows, postsale.StationRow{StationID: uuid.New(), Name: fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %02d FM", j),
+						Programmed: 1234, Identified: 1200, Deficit: 34, Extras: 12, Kind: postsale.KindCompensation, Note: c.nota})
+				}
+				lbl := "Classes AB 25-49"
+				cbs = append(cbs, postsale.CampaignBlock{CampaignID: camp, CheckingRows: rows, ConformingCount: 123,
+					KPIs: postsale.BlockKPIs{ValorEntregue: 123456.78, Impactos: 12345678, CPM: 12.34, Bonificacao: 2345.67, BonificacaoCount: 123,
+						StationsCount: 45, ImpactosTarget: 1234567, CPMTarget: 123.45, StationsWithTarget: 40, TargetLabel: &lbl}})
+			}
+			require.NoError(t, repo.ReplaceBlocks(ctx, rep.ID, blocos))
+			b, err := json.Marshal(postsale.Payload{Version: postsale.PayloadVersion, Campaigns: cbs})
+			require.NoError(t, err)
+			require.NoError(t, repo.MarkSent(ctx, rep.ID, b))
+			_, err = pool.Exec(ctx, `UPDATE post_sale_reports SET intro_message = $2 WHERE id = $1`, rep.ID, c.mensagem)
+			require.NoError(t, err)
+
+			out := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "limit": 100})
+			require.Len(t, itens(t, out), tetoBlocosPosVenda)
+			require.EqualValues(t, tetoBlocosPosVenda, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
+			require.EqualValues(t, tetoBlocosPosVenda+1, pag(t, out)["total"])
+			require.Equal(t, true, pag(t, out)["has_more"])
+			b0 := itens(t, out)[0]
+			require.Len(t, b0["checking"], tetoPorItem)
+			require.EqualValues(t, tetoPorItem+1, b0["checking_total"])
+			require.Contains(t, out["ressalvas"], fmt.Sprintf("checking de cada campanha: as %d primeiras linhas (checking_total traz o real).", tetoPorItem))
+			// A página seguinte traz a campanha que sobrou, na ordem da tela (position).
+			p2 := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "offset": tetoBlocosPosVenda})
+			require.Equal(t, blocos[tetoBlocosPosVenda].CampaignID.String(), itens(t, p2)[0]["campanha"].(map[string]any)["id"])
+			nota := b0["checking"].([]any)[0].(map[string]any)["nota"].(string)
+			require.True(t, strings.HasSuffix(nota, "…"))
+			require.LessOrEqual(t, utf8.RuneCountInString(nota), tetoNota)
+			require.LessOrEqual(t, bytesJSON(t, nota), tetoNota, "o teto também é em bytes do JSON")
+			require.LessOrEqual(t, bytesJSON(t, out["mensagem"].(string)), tetoMensagem)
+			require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
+			n := tamanhoDoResultado(t, out)
+			t.Logf("obter_pos_venda (%s): %d campanhas × %d linhas de checking (nota de ~10 KB, mensagem de ~20 KB) = %d bytes",
+				c.nome, tetoBlocosPosVenda, tetoPorItem, n)
+			require.Less(t, n, 60_000)
+		})
+	}
 }
 
 // Pior caso de listar_pos_vendas: uma página de 100 com nomes longos.
@@ -387,9 +408,96 @@ func TestDestinatariosPosVenda_PiorCasoCabe(t *testing.T) {
 	out := chamarTool(t, cfgTeste(pool), "destinatarios_pos_venda", map[string]any{"pos_venda_id": id.String(), "limit": 100})
 	require.Len(t, itens(t, out), tetoPaginaDestinatarios)
 	require.EqualValues(t, tetoPaginaDestinatarios, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
-	require.Equal(t, tetoErroEmail, utf8.RuneCountInString(itens(t, out)[0]["erro_email"].(string)))
+	erro := itens(t, out)[0]["erro_email"].(string)
+	require.True(t, strings.HasSuffix(erro, "…"))
+	require.LessOrEqual(t, bytesJSON(t, erro), tetoErroEmail)
 	require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
 	n := tamanhoDoResultado(t, out)
 	t.Logf("destinatarios_pos_venda: %d destinatários com erro de email longo = %d bytes", tetoPaginaDestinatarios, n)
 	require.Less(t, n, 60_000)
+}
+
+// O anexo citado SEM esquema (host+caminho, com www., com //) e o link público
+// de OUTRO pós-venda também não passam; texto que só parece URL fica intacto.
+func TestPosVenda_URLSemEsquemaETokenAlheio(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio X", 1000)
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30", est)
+	alheio, err := postsale.NewToken() // 43 caracteres base64url, de outro pós-venda
+	require.NoError(t, err)
+	require.Len(t, alheio, 43)
+	nota := "link antigo e-monitor.online/pos-venda/" + alheio + " e solto pos-venda/" + alheio
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "Fechamento pos-venda/"+alheio, "2026-09-01", "2026-09-30", true,
+		&postsale.Payload{Version: postsale.PayloadVersion, Campaigns: []postsale.CampaignBlock{{CampaignID: camp,
+			CheckingRows: []postsale.StationRow{{StationID: est, Name: "Rádio X", Deficit: 1, Kind: postsale.KindCompensation, Note: nota}}}}},
+		postsale.RecipientInput{Email: "a@cliente.com", Name: "Ana"})
+	mensagem := "acesse drive.google.com/drive/folders/1AbCSEGREDO, www.drive.google.com/drive/folders/1AbCSEGREDO, " +
+		"//drive.google.com/drive/folders/1AbCSEGREDO ou Drive.Google.com/drive/folders/1AbCSEGREDO. " +
+		"Valor R$ 1.500/mês desde 01/10, e.g./S.A./Ltda./SP."
+	_, err = pool.Exec(ctx, `UPDATE post_sale_reports SET attachments_url = 'https://drive.google.com/drive/folders/1AbCSEGREDO',
+		intro_message = $2 WHERE id = $1`, id, mensagem)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE post_sale_report_recipients SET email_status = 'failed',
+		email_error = 'falhou: e-monitor.online/pos-venda/' || $2 WHERE report_id = $1`, id, alheio)
+	require.NoError(t, err)
+
+	cfg := cfgTeste(pool)
+	for _, nome := range []string{"obter_pos_venda", "listar_pos_vendas", "destinatarios_pos_venda"} {
+		args := map[string]any{"pos_venda_id": id.String()}
+		if nome == "listar_pos_vendas" {
+			args = map[string]any{}
+		}
+		texto := textoTool(t, cfg, nome, args)
+		require.NotContains(t, texto, "1AbCSEGREDO", nome)
+		require.NotContains(t, texto, alheio, nome)
+	}
+	o := chamarTool(t, cfg, "obter_pos_venda", map[string]any{"pos_venda_id": id.String()})
+	require.Equal(t, "acesse drive.google.com/…, www.drive.google.com/…, //drive.google.com/… ou Drive.Google.com/…. "+
+		"Valor R$ 1.500/mês desde 01/10, e.g./S.A./Ltda./SP.", o["mensagem"], "o que só parece URL fica intacto")
+	require.Equal(t, "Fechamento pos-venda/[omitido]", o["titulo"])
+	require.Equal(t, "link antigo e-monitor.online/… e solto pos-venda/[omitido]",
+		itens(t, o)[0]["checking"].([]any)[0].(map[string]any)["nota"])
+	l := chamarTool(t, cfg, "listar_pos_vendas", map[string]any{})
+	require.Equal(t, "Fechamento pos-venda/[omitido]", itens(t, l)[0]["titulo"], "a lista também apaga token alheio")
+}
+
+// attachments_url que não é URL http(s) não entra no Replacer: "Drive" no
+// texto continua "Drive".
+func TestPosVenda_AnexoQueNaoEURL(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30")
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "Fechamento no Drive", "2026-09-01", "2026-09-30", false, nil)
+	_, err := pool.Exec(ctx, `UPDATE post_sale_reports SET attachments_url = 'Drive', intro_message = 'Os arquivos estão no Drive.' WHERE id = $1`, id)
+	require.NoError(t, err)
+	o := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": id.String()})
+	require.Equal(t, "Os arquivos estão no Drive.", o["mensagem"])
+	require.Equal(t, "Fechamento no Drive", o["titulo"])
+	require.Equal(t, "…", o["anexo"], "o anexo que não parseia sai como …, nunca o valor")
+}
+
+func TestCortarTexto(t *testing.T) {
+	for _, teto := range []int{0, -1} {
+		s, cortou := cortarTexto("abc", teto)
+		require.Equal(t, "", s, "teto %d não dá panic", teto)
+		require.True(t, cortou)
+	}
+	s, cortou := cortarTexto("", 0)
+	require.Equal(t, "", s)
+	require.False(t, cortou)
+	s, cortou = cortarTexto("abc", 3)
+	require.Equal(t, "abc", s)
+	require.False(t, cortou)
+	s, cortou = cortarTexto("abcdef", 5)
+	require.Equal(t, "ab…", s, "5 bytes: 2 letras + … (3 bytes)")
+	require.True(t, cortou)
+	s, _ = cortarTexto(strings.Repeat("<", 100), 20)
+	require.Equal(t, "<<…", s, "cada < custa 6 bytes no JSON")
+	require.LessOrEqual(t, bytesJSON(t, s), 20)
+	s, _ = cortarTexto(strings.Repeat("📻", 100), 20)
+	require.Equal(t, "📻📻📻📻…", s)
+	require.LessOrEqual(t, bytesJSON(t, s), 20)
+	s, _ = cortarTexto("<<<", 2)
+	require.Equal(t, "", s, "nem o … cabe")
 }

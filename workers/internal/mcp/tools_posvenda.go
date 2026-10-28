@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -35,8 +36,9 @@ const (
 	// TestDestinatariosPosVenda_PiorCasoCabe.
 	tetoPaginaDestinatarios = 50
 
-	// Tetos (em caracteres) dos textos livres do pós-venda: as colunas são TEXT
-	// sem limite, e uma nota ou mensagem colada inteira estouraria o resultado.
+	// Tetos dos textos livres do pós-venda, em caracteres E em bytes do JSON
+	// (cortarTexto): as colunas são TEXT sem limite, e uma nota ou mensagem
+	// colada inteira estouraria o resultado.
 	tetoNota      = 200
 	tetoMensagem  = 1000
 	tetoErroEmail = 300
@@ -53,20 +55,84 @@ const ressalvaTextoCortado = "Algum texto livre (título, mensagem, nota do chec
 
 // ── Texto livre: sem segredo e com teto ─────────────────────────────────
 
-// cortarTexto corta s em no máximo teto caracteres (runas), com "…" no fim.
+// custoJSON: quantos bytes a runa ocupa no JSON que o MCP devolve. O
+// json.Marshal escapa <, > e & como < (6 bytes), controles e U+2028/9
+// também; aspas e barra viram 2. O resultado passa por json.Marshal também
+// no SDK (o RawMessage é recompactado com escape de HTML), então desligar o
+// escape no nosso encoder não economizaria nada no fio.
+func custoJSON(r rune) int {
+	switch {
+	case r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || r < 0x20:
+		return 6
+	case r == '"' || r == '\\':
+		return 2
+	case r == utf8.RuneError:
+		return 6 // byte inválido vira �
+	}
+	return utf8.RuneLen(r)
+}
+
+// cortarTexto corta s para caber em teto caracteres E em teto bytes no JSON
+// (o orçamento de saída é em bytes: 200 emojis ou 200 "<" custariam 800 ou
+// 1.200 bytes), com "…" no fim. teto <= 0 com texto não vazio devolve "".
 func cortarTexto(s string, teto int) (string, bool) {
-	if utf8.RuneCountInString(s) <= teto {
+	if s == "" {
 		return s, false
 	}
-	r := []rune(s)
-	return string(r[:teto-1]) + "…", true
+	if teto <= 0 {
+		return "", true
+	}
+	const reticencias = "…" // 3 bytes, 1 runa
+	runas, bytes, corte := 0, 0, -1
+	for i, r := range s {
+		c := custoJSON(r)
+		// Guarda a última posição em que ainda cabe o "…" depois.
+		if runas+1 <= teto && bytes+3 <= teto {
+			corte = i
+		}
+		runas++
+		bytes += c
+		if runas > teto || bytes > teto {
+			if corte < 0 {
+				return "", true
+			}
+			return s[:corte] + reticencias, true
+		}
+	}
+	return s, false
+}
+
+// Padrões de segredo no texto livre, aplicados depois do Replacer, nesta ordem:
+//   - URL com esquema (urlsNoTexto, sem diferenciar maiúsculas) → esquema+host;
+//   - domínio seguido de caminho sem esquema ("drive.google.com/drive/…",
+//     "www.x.com/…", "//x.com/…") → host. O TLD só com letras evita casar
+//     "R$ 1.500/mês"; "01/10" não tem ponto; a pontuação final da frase não
+//     entra no caminho (não some do texto);
+//   - pos-venda/<token> solto: o link público de QUALQUER pós-venda (o token
+//     tem 43 caracteres base64url — postsale.NewToken).
+var (
+	tokenPosVendaNoTexto = regexp.MustCompile(`pos-venda/[A-Za-z0-9_-]{43}`)
+	dominioComCaminho    = regexp.MustCompile(`(?i)\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/(?:[^\s"']*[^\s"'.,;:!?)])?`)
+)
+
+// semSegredoNoTexto reduz a domínio toda URL (com ou sem esquema) e apaga o
+// token de qualquer link público de pós-venda. O token vai por último: um link
+// com domínio já virou "host/…"; sobra o "pos-venda/<token>" solto.
+func semSegredoNoTexto(s string) string {
+	s = urlsNoTexto.ReplaceAllStringFunc(s, soEsquemaEHost)
+	s = dominioComCaminho.ReplaceAllStringFunc(s, func(m string) string {
+		host, _, _ := strings.Cut(m, "/")
+		return host + "/…"
+	})
+	return tokenPosVendaNoTexto.ReplaceAllString(s, "pos-venda/[omitido]")
 }
 
 // higienizador limpa o texto livre do pós-venda (título, mensagem, nota,
-// erro de email): troca o attachments_url literal pelo domínio, apaga o token
-// de cada destinatário e reduz toda URL a esquema+host (F2-7). Limpa ANTES de
-// cortar: cortar primeiro poderia partir uma URL e deixar o pedaço com o
-// segredo escapar do regex. cortou registra se algum texto foi cortado.
+// erro de email): troca o attachments_url literal pelo domínio (também as
+// formas sem esquema e com/sem www.), apaga o token de cada destinatário e
+// reduz toda URL a domínio (F2-7). Limpa ANTES de cortar: cortar primeiro
+// poderia partir uma URL e deixar o pedaço com o segredo escapar do regex.
+// cortou registra se algum texto foi cortado.
 type higienizador struct {
 	trocas *strings.Replacer
 	cortou bool
@@ -74,8 +140,17 @@ type higienizador struct {
 
 func novoHigienizador(anexo string, tokens []string) *higienizador {
 	var pares []string
-	if anexo != "" {
-		pares = append(pares, anexo, soEsquemaEHost(anexo))
+	// Só um anexo http(s) com host entra (como o safeExternalURL do snapshot):
+	// um attachments_url "Drive" trocaria toda palavra "Drive" do texto.
+	if u, err := url.Parse(strings.TrimSpace(anexo)); err == nil && u.Host != "" &&
+		(strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) {
+		dominio := soEsquemaEHost(anexo)
+		semWWW := strings.TrimPrefix(strings.ToLower(u.Host), "www.")
+		caminho := u.RequestURI()
+		// Mais longas primeiro: o Replacer compara na ordem dos argumentos.
+		pares = append(pares, strings.TrimSpace(anexo), dominio,
+			"www."+semWWW+caminho, "www."+semWWW+"/…",
+			semWWW+caminho, semWWW+"/…")
 	}
 	for _, t := range tokens {
 		if t != "" { // "" no Replacer casaria em toda posição
@@ -86,7 +161,7 @@ func novoHigienizador(anexo string, tokens []string) *higienizador {
 }
 
 func (h *higienizador) texto(s string, teto int) string {
-	s = *semCredencialDeURL(new(h.trocas.Replace(s)))
+	s = semSegredoNoTexto(h.trocas.Replace(s))
 	s, cortou := cortarTexto(s, teto)
 	h.cortou = h.cortou || cortou
 	return s
