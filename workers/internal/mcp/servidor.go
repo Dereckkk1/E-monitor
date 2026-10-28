@@ -21,6 +21,7 @@ var ToolsEsperadas = []string{
 	"buscar_emissoras",
 	"financeiro_campanhas",
 	"grade_campanha",
+	"insights_campanha",
 	"listar_campanhas",
 	"listar_chaves_api",
 	"listar_clientes",
@@ -99,6 +100,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarVeiculacoes(s, cfg)
 	registrarUsuarios(s, cfg)
 	registrarIntegracoes(s, cfg, p)
+	registrarInsights(s, cfg)
 	return s
 }
 
