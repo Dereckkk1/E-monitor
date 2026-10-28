@@ -36,17 +36,21 @@ export default function InsightsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState(() => {
     // Link de outra tela ou do MCP (links.tela): a tela abre já filtrada.
-    // A agência só aceita da URL um cliente da própria carteira.
+    // A agência só aceita da URL um cliente da própria carteira. Quem escolhe
+    // o cliente e não ficou com um válido da URL descarta também campanhas,
+    // emissoras e materiais dela: são recortes DAQUELE cliente.
     const periodo = lerPeriodo(searchParams)
     const clienteDaUrl = lerId(searchParams, 'client_id')
     const clienteValido = clienteDaUrl && (isAdmin || clientIds.includes(clienteDaUrl)) ? clienteDaUrl : null
+    const clientId = canPickClient ? clienteValido : (user?.client_id ?? null)
+    const recortes = clientId != null
     return {
-      clientId: canPickClient ? clienteValido : (user?.client_id ?? null),
-      campaignIds: lerIds(searchParams, 'campaigns'),
+      clientId,
+      campaignIds: recortes ? lerIds(searchParams, 'campaigns') : [],
       from: periodo?.from ?? firstOfMonthISO(),
       to: periodo?.to ?? lastOfMonthISO(),
-      stationIds: lerIds(searchParams, 'stations'),
-      materialIds: lerIds(searchParams, 'materials'),
+      stationIds: recortes ? lerIds(searchParams, 'stations') : [],
+      materialIds: recortes ? lerIds(searchParams, 'materials') : [],
     }
   })
   // Lido uma vez: tira da URL para ela não contradizer o filtro que a pessoa mudar depois.

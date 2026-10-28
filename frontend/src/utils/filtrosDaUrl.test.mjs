@@ -1,7 +1,10 @@
 // Filtros que as tools do MCP põem na URL das telas (links.tela).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { lerId, lerIds, lerPeriodo, lerOpcao, lerInteiro, temFiltro } from './filtrosDaUrl.js'
+import {
+  lerId, lerIds, lerPeriodo, lerOpcao, lerInteiro, temFiltro,
+  campanhasForaDaPagina, juntarCampanhas, clienteUnico,
+} from './filtrosDaUrl.js'
 
 const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'
@@ -44,4 +47,29 @@ test('temFiltro: chave presente, mesmo vazia (a URL tem de ser limpa)', () => {
   assert.equal(temFiltro(sp('from=2026-10-01'), ['client_id', 'from']), true)
   assert.equal(temFiltro(sp('client_id='), ['client_id', 'from']), true)
   assert.equal(temFiltro(sp('x=1'), ['client_id', 'from']), false)
+})
+
+test('ids saem em minúsculas (a API devolve assim e as telas comparam por igualdade)', () => {
+  const MAIUSCULO = 'AAAAAAAA-1111-4111-8111-BBBBBBBBBBBB'
+  assert.equal(lerId(sp(`client_id=${MAIUSCULO}`), 'client_id'), MAIUSCULO.toLowerCase())
+  assert.deepEqual(lerIds(sp(`campaigns=${MAIUSCULO},${MAIUSCULO.toLowerCase()}`), 'campaigns'), [MAIUSCULO.toLowerCase()])
+})
+
+test('campanhas selecionadas fora da página do seletor', () => {
+  const pagina = [{ id: A, client_id: 'c1' }]
+  assert.deepEqual(campanhasForaDaPagina(undefined, [A, B]), [], 'página carregando: nada a buscar')
+  assert.deepEqual(campanhasForaDaPagina(pagina, [A, B]), [B])
+  assert.deepEqual(campanhasForaDaPagina(pagina, []), [])
+  assert.equal(juntarCampanhas(pagina, []), pagina, 'sem extra devolve a própria página')
+  assert.equal(juntarCampanhas(pagina, [null]), pagina, 'não encontrada não entra')
+  assert.deepEqual(juntarCampanhas(pagina, [{ id: B, client_id: 'c1' }, { id: A, client_id: 'c1' }]).map(c => c.id), [A, B])
+  assert.deepEqual(juntarCampanhas(undefined, [{ id: B }]).map(c => c.id), [B])
+})
+
+test('clienteUnico: só quando todas as campanhas são de um cliente', () => {
+  const cs = [{ id: A, client_id: 'c1' }, { id: B, client_id: 'c1' }]
+  assert.equal(clienteUnico(cs, [A, B]), 'c1')
+  assert.equal(clienteUnico([{ id: A, client_id: 'c1' }, { id: B, client_id: 'c2' }], [A, B]), null)
+  assert.equal(clienteUnico(cs.slice(0, 1), [A, B]), null, 'faltou uma: não deduz')
+  assert.equal(clienteUnico(cs, []), null)
 })
