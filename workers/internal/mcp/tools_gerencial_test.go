@@ -29,11 +29,14 @@ func TestVisaoGerencial_ParidadeComATela(t *testing.T) {
 	mcptest.Vincular(t, ctx, pool, camp, mat)
 	mcptest.Vincular(t, ctx, pool, camp, mcptest.Material(t, ctx, pool, cli, tipo, "Spot B"))
 	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", mcptest.Quando("2026-10-10", "08:00"))
-	// "Hoje" no relógio real: o SQL do catalog compara com now() (não há relógio
-	// injetável lá). Só fica errado se o teste cruzar a meia-noite de SP entre o
-	// INSERT e o SELECT. O período termina antes de hoje para esta não entrar
-	// em veiculacoes_no_periodo.
-	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", time.Now())
+	// "Hoje" no relógio do BANCO: o SQL do catalog compara com now() do Postgres
+	// (não há relógio injetável lá), e o relógio do Go pode divergir dele. Só
+	// fica errado se o teste cruzar a meia-noite de SP entre o INSERT e o
+	// SELECT. O período termina antes de hoje para esta não entrar em
+	// veiculacoes_no_periodo.
+	var agoraDoBanco time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT now()`).Scan(&agoraDoBanco))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", agoraDoBanco)
 	// O supervisor tem worker ativo em e1, inativo em e2 e ativo numa emissora fora do recorte.
 	workers := &workersFalsos{st: []supervisor.WorkerStatus{
 		{StationID: e1.String(), Active: true}, {StationID: e2.String(), Active: false}, {StationID: "fora", Active: true}}}
@@ -73,6 +76,14 @@ func TestVisaoGerencial_ParidadeComATela(t *testing.T) {
 	require.EqualValues(t, 1, k["campanhas"], "só a Outra cruza a janela")
 	require.EqualValues(t, 1, k["materiais_monitorados"])
 	require.EqualValues(t, 0, k["veiculacoes_hoje"], "a tocada de hoje é da Camp, que não cruza a janela")
+
+	// Filtro explícito de canceladas: os KPIs são o histórico delas.
+	mcptest.EstadoCampanha(t, ctx, pool, camp, "cancelada")
+	out = chamarTool(t, cfg, "visao_gerencial", map[string]any{"cliente_id": cli.String(), "estado": "cancelada", "de": "2026-01-01", "ate": "2026-10-27"})
+	require.EqualValues(t, 1, out["kpis"].(map[string]any)["campanhas"])
+	require.Contains(t, out["ressalvas"], ressalvaCanceladasFiltradas)
+	require.NotContains(t, out["ressalvas"], ressalvaCanceladaRelatorio)
+	mcptest.EstadoCampanha(t, ctx, pool, camp, "ativa")
 
 	// Sem supervisor (CLI, testes): null, nunca 0.
 	semW := chamarTool(t, cfgTeste(pool), "visao_gerencial", map[string]any{"cliente_id": cli.String()})

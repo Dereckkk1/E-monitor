@@ -251,3 +251,33 @@ func TestInsightsCampanha_Recusas(t *testing.T) {
 	require.Contains(t, msg, "no máximo 50")
 	require.NotContains(t, msg, "inválido")
 }
+
+// Janela maior que a vigência: a tocada fora da vigência (out_date) aparece na
+// série e no breakdown, e a série bate com a tela também nessa categoria.
+func TestInsightsCampanha_SerieComOutDate(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	mat := mcptest.Material(t, ctx, pool, cli, tipo, "Spot A")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-15", est)
+	mcptest.Regra(t, ctx, pool, camp, tipo, est, "2026-10-01", "2026-10-15", 127, "06:00", "22:00", 1)
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, est, "in_slot", mcptest.Quando("2026-10-10", "08:00"))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, est, "out_date", mcptest.Quando("2026-10-20", "08:00"))
+
+	h := handlers.NewInsightsHandler(catalog.NewInsights(pool))
+	tela := insightsDaTela(t, h, admin, cli, "campaigns="+camp.String()+"&from=2026-10-01&to=2026-10-31")
+	out := chamarTool(t, cfgTeste(pool), "insights_campanha", map[string]any{
+		"cliente_id": cli.String(), "campanha_ids": []string{camp.String()}, "de": "2026-10-01", "ate": "2026-10-31"})
+	conferirInsights(t, tela, out)
+	require.EqualValues(t, 1, out["por_categoria"].(map[string]any)["out_date"])
+	comOutDate := 0
+	for _, p := range out["serie"].([]any) {
+		if p.(map[string]any)["out_date"].(float64) > 0 {
+			comOutDate++
+		}
+	}
+	require.Equal(t, 1, comOutDate, "a série tem o ponto do dia 20 com out_date")
+	require.EqualValues(t, 1000, out["impactos"], "out_date não é impacto")
+}

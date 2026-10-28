@@ -93,7 +93,7 @@ type insightsDTO struct {
 
 const ressalvaInsights = "Impactos = PMM × (in_slot + bonus); out_slot não vale nada e out_date está fora do período. veiculacoes soma as 4 categorias. CPM = (investido + bonificação) ÷ impactos × 1000 (ou o CPM fixo da campanha); null = sem impactos no período (não é zero); cpm_target é sempre o dinâmico, mesmo com CPM fixo. impactos_target null = nenhuma emissora com PMM no target do cliente. Demografia só soma emissoras com PMM. Na série, bonus é a contagem da categoria bonus e deficit = programado − in_slot (out_slot não abate)."
 
-const ressalvaConsolidado = "Há emissora com preço consolidado (modo fornecedor): investido = o pacote mensal das consolidadas, acumulado por mês iniciado até hoje (America/Sao_Paulo) e NÃO proporcional à janela escolhida, mais o in_slot das emissoras por inserção a preço de tabela."
+const ressalvaConsolidado = "Há emissora com preço consolidado (modo fornecedor): investido soma, por emissora consolidada, um pacote mensal INTEIRO para cada mês de calendário da vigência que cruza a janela [de, ate] e já começou até hoje (America/Sao_Paulo) — mês parcial conta inteiro, não é proporcional aos dias —, mais o in_slot das emissoras por inserção a preço de tabela."
 
 const ressalvaBonificacaoMista = "Seleção mista: bonificacao precifica só as emissoras por inserção. O bônus das consolidadas está em por_categoria.bonus e em impactos, sem valor (o pacote não tem preço por inserção)."
 

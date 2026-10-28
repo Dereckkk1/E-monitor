@@ -1,12 +1,10 @@
 package mcp
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -366,13 +364,8 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 					linhas[i].Tipo = &t
 				}
 			}
-			// O repositório desempata mal (título NULL empata): ordem total para a paginação não repetir nem pular linha.
-			slices.SortStableFunc(linhas, func(a, b linhaPorMaterial) int {
-				if c := cmp.Compare(b.Veiculacoes, a.Veiculacoes); c != 0 {
-					return c
-				}
-				return strings.Compare(a.Material.ID, b.Material.ID)
-			})
+			// A ordem é a do repositório (contagem, título, id): o id desempata no
+			// SQL, então a paginação não repete nem pula linha.
 			out := saidaPorMaterial{lista: paginar(linhas, in.Paginacao),
 				TotalVeiculacoes: res.TotalDetections, MateriaisDistintos: res.DistinctMaterials}
 			out.Ressalvas = []string{ressalvaVeiculacoes}
