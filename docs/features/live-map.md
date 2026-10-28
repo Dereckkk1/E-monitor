@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-20
+ultima-verificacao: 2026-10-28
 codigo-relacionado:
   - workers/internal/catalog/live_map.go
   - workers/internal/catalog/live_map_coverage.go
@@ -13,6 +13,7 @@ codigo-relacionado:
   - frontend/src/pages/LiveMapPage.css
   - frontend/src/api/hooks.js
   - frontend/src/assets/br-states.json
+  - frontend/src/utils/filtrosDaUrl.js
 ---
 
 # Mapa ao Vivo (/live-map)
@@ -405,6 +406,26 @@ cache) com `enabled` só quando há campanha, `refetchInterval` de 20s e `placeh
 último payload bom durante o refetch — o mapa não "pisca"). O pulso é animação
 CSS contínua, independente do refresh. `prefers-reduced-motion` desliga as
 animações.
+
+## Abrir já filtrado pela URL
+
+Desde 2026-10-28 (MCP Fatia 2), `/live-map` lê no primeiro render `client_id` e `campaigns` (csv), os
+filtros que `mapa_cobertura_campanha` põe em `links.tela` (a tool só manda `client_id` quando todas as
+campanhas são de um cliente). Validação em `frontend/src/utils/filtrosDaUrl.js`; depois a tela limpa a URL.
+
+- O `client_id` da URL só vale para o admin ou se for da carteira (agência); quem não escolhe cliente
+  fica com o dele.
+- As campanhas da URL são conferidas uma vez, quando a lista chega, **antes** de o mapa consultá-las (o
+  polling de 20s não roda sobre campanha que a tela não mostra): admin sem cliente deduz o cliente quando
+  todas são de um só, senão descarta as campanhas; e fica só o que o seletor mostra (do cliente, não
+  cancelada).
+- Campanha que não está na página 1/200 do seletor (uma concluída antiga, por exemplo) é buscada à parte
+  (`useCampaignsWithSelected` em `api/hooks.js`, via `/campaigns?id=`, no escopo de quem está logado) e entra
+  nas opções — antes, a tela filtrava por ela com o seletor vazio.
+
+Limitações: a URL é limpa logo no primeiro render, antes de qualquer resposta da API — numa aba com sessão
+vencida, o 401 leva ao login e o filtro do link se perde (abra o link de novo depois de entrar). Valor
+vazio ou malformado é ignorado em silêncio (vira "sem filtro"); os ids saem em minúsculas.
 
 ## Limitações
 

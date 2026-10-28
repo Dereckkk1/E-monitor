@@ -107,7 +107,7 @@ docs/
 | [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
-| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 e 1 (27 tools de leitura)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP |
+| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0, 1 e 2 (44 tools de leitura, 17 delas de relatório com deep-link para a tela filtrada; avaliação mcp-builder 10/10)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP |
 
 ## `operations/` — operar o sistema em prod
 
@@ -128,7 +128,7 @@ docs/
 | [backup-and-retention.md](operations/backup-and-retention.md) | ⚠️ doc parcialmente desatualizado — descreve pg_basebackup, código usa pg_dump |
 | [data-durability.md](operations/data-durability.md) | Modelo de ameaças + 5 camadas de defesa (bind mount, R2, snapshot GCP, alerta, drill) |
 | [vendor-reconciliation.md](operations/vendor-reconciliation.md) | Método de comparação com o fornecedor externo: regimes do algoritmo, dedup 30/60s, audit_rejected, workflow por discrepância |
-| [mcp.md](operations/mcp.md) | Conectar claude.ai / Claude Code / Gemini Enterprise ao MCP, cadastrar cliente confidencial (`registra-cliente-mcp`), revogar (`revoga-mcp`), variáveis `MCP_*`, diagnóstico |
+| [mcp.md](operations/mcp.md) | Conectar claude.ai / Claude Code / Gemini Enterprise ao MCP, cadastrar cliente confidencial (`registra-cliente-mcp`), revogar (`revoga-mcp`), variáveis `MCP_*`, diagnóstico, avaliação mcp-builder (semente + CLI `-tags avaliacao`), conferência de relatórios no deploy |
 
 ## `incidents/` — postmortems
 

@@ -23,6 +23,20 @@ codigo-relacionado:
   - workers/internal/mcp/tools_integracoes.go
   - workers/internal/catalog/mcp_leituras.go
   - workers/internal/catalog/clients_integracoes.go
+  - workers/internal/mcp/toolkit_relatorios.go
+  - workers/internal/mcp/tools_insights.go
+  - workers/internal/mcp/tools_gerencial.go
+  - workers/internal/mcp/tools_relatorios.go
+  - workers/internal/mcp/tools_mapa.go
+  - workers/internal/mcp/tools_falhas.go
+  - workers/internal/mcp/tools_posvenda.go
+  - workers/internal/mcp/tools_auditoria.go
+  - workers/internal/mcp/avaliacao/
+  - workers/internal/catalog/resumo_relatorio.go
+  - workers/internal/catalog/preco_tabela.go
+  - workers/internal/supervisor/contar_ativas.go
+  - frontend/src/utils/filtrosDaUrl.js
+  - frontend/src/api/hooks.js
 ---
 
 # MCP do E-monitor
@@ -39,10 +53,11 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 |---|---|---|
 | 0 | Porta: `/mcp`, OAuth 2.1, tokens, `quem_sou_eu` | implementada (branch `feat/mcp-server`; deploy e conexão dos 3 clientes em prod pendentes) |
 | 1 | Leitura: 26 tools (clientes, campanhas, grade, plano do dia, materiais, emissoras, veiculações, usuários, integrações, notificações) | implementada (branch `feat/mcp-server`, não deployada) |
-| 2-5 | Relatórios, escrita, crítico/pendentes, ecossistema | planejadas |
+| 2 | Relatórios: 17 tools (insights, visão gerencial, assertividade, data e hora, resumo e exportações de campanha, mapa de cobertura, 5 de falhas, 3 de pós-venda, auditoria do MCP) + telas que abrem filtradas pela URL + avaliação 10/10 | implementada (branch `feat/mcp-server`, não deployada) |
+| 3-5 | Escrita, crítico/pendentes, ecossistema | planejadas |
 
-Tools hoje: as 27 da seção "Tools". O `status` deste doc vira `implementado` quando as fatias 2-5
-fecharem.
+Tools hoje: as 44 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2). O `status` deste doc vira
+`implementado` quando as fatias 3-5 fecharem.
 
 ## Regra de ouro: o MCP faz parte do pronto
 
@@ -55,7 +70,9 @@ fecharem.
   (`catalog.ApprovedDetectionsFilter`, base financeira `in_slot + bonus`, `categorizer.Settle`,
   tratamento de `cancelada`). Tela e MCP não podem discordar de número.
 
-## Tools (27)
+## Tools (44)
+
+### Fatias 0 e 1 (27)
 
 Todas de leitura (`readOnlyHint`). Cada uma chama a MESMA função que a tela; a coluna "Fonte" diz qual.
 Listas: `{items, page: {total, limit, offset, returned, has_more}}`, `limit` padrão 25 e teto 100,
@@ -91,7 +108,85 @@ Listas: `{items, page: {total, limit, offset, returned, has_more}}`, `limit` pad
 | `listar_chaves_api` | chaves (só metadados) | `GET /clients/{id}/api-keys` |
 | `minhas_notificacoes` | sininho de quem está conectado (teto de 50 itens, dito na ressalva) | `GET /admin/notifications` |
 
-**O que nunca sai** (whitelist nos DTOs): `stream_url` e saúde do stream, `master_storage_path`/`master_sha256`,
+### Fatia 2 — relatórios (17)
+
+Mesma regra: cada tool chama a função que a tela chama, com teste de paridade contra o handler HTTP. Toda tool de
+relatório devolve `links: {tela, como_baixar?}` (ver "Relatórios: deep-link e downloads").
+
+| Tool | Devolve | Fonte | Link (`links.tela`) |
+|---|---|---|---|
+| `insights_campanha` | impactos (e no target), por categoria, investido/bonificação, CPM, demografia, série | `catalog.Insights.Compute` (`/insights`) | `/insights?client_id&campaigns&from&to[&stations][&materials]` |
+| `visao_gerencial` | KPIs da operação (sem a lista de emissoras do mapa nem o feed); `emissoras_ao_vivo` null fora da API | `catalog.ManagementOverview.Get` + `supervisor.ContarAtivas` | `/management?[client_id][&campaigns][&status]&from&to` |
+| `assertividade` | último mês fechado e o anterior, variação em p.p., manuais desculpadas | `assertiveness.Repo.Get` | `/management?[client_id][&campaigns]` |
+| `relatorio_data_hora` | veiculações de UM cliente com PMM, PMM no target e valor de tabela | `Detections.ListPaged` + `Pricing.ListByCampaign` + `catalog.PrecoDeTabela` | `/reports/airtime?client_id&competence&campaigns&from&to[&q]` |
+| `resumo_relatorio_campanha` | totais, por material (até 50), por emissora (paginada) | `Detections.AggregateByMaterial`/`AggregateByStation` + `catalog.TotaisDoResumo`/`ImpactosDaEmissora` | `/reports/airtime?…` + `como_baixar` |
+| `exportar_consolidado` | nº de linhas do CSV Consolidado + onde baixar | `Detections.AggregateByMaterialStation` | `/reports/airtime?…` + `como_baixar` |
+| `exportar_veiculacoes` | nº de linhas do CSV Detalhado + onde baixar | `Detections.ListPaged` (o total) | `/reports/airtime?…` + `como_baixar` |
+| `mapa_cobertura_campanha` | emissoras com classe e raios Anatel, cidades (20 por emissora), municípios distintos | `LiveMap.Get` + `LiveMap.Coverage` | `/live-map?campaigns[&client_id]` (client_id só quando todas são de um cliente) |
+| `falhas_emissoras` | emissoras com falha no dia (déficit TOTAL, sem o split) | `StationFailures.ListForDate` | `/admin/station-failures?view=by_station&date&min_down` |
+| `falhas_campanhas` | modo dia (split "não tocou" × "fora do horário") ou histórico | `CampaignFailures.ListForDate` / `ListHistorical` | `…?view=by_campaign&date` / `…?view=by_campaign&sub=historical` |
+| `obter_falhas_campanha` | o drill-in de UMA campanha (por emissora, com o split) | `CampaignFailures.Get` | `…?view=by_campaign&campaign=<id>` + `como_baixar` (PDF de cobrança) |
+| `falhas_por_dia` | série diária + dias com falha, pico e média | `FailuresDaily.ListDaily` | `…?view=by_day&from&to&min_down` |
+| `resumo_diario_falhas` | o digest de ontem (sem `seen`; nunca marca visto) | `CampaignFailures.ListForDate` | `…?view=by_campaign&date` |
+| `listar_pos_vendas` | pós-vendas + contagens por estado | `postsale.Repo.List` | `/admin/pos-venda` (e `/admin/pos-venda/<id>` por item) |
+| `obter_pos_venda` | números congelados, checking (20 por campanha), resumo de destinatários | `Repo.Get` + `Repo.Payload` | `/admin/pos-venda/<id>` |
+| `destinatarios_pos_venda` | quem recebeu (sem token) ou quem receberia hoje | `Repo.Get`, `ActiveClientUsers`, `InternalRecipients` | — |
+| `auditoria_mcp` | eventos gravados pelo MCP, por cursor (`page.total: null`) | `auditoria.Listar` (`metadata->>'origem' = 'mcp'`) | — |
+
+**Tetos de página reais** (o `limit` do schema genérico diz "máximo 100", mas estas tools cortam antes; o teto
+está na descrição de cada uma e em `page.limit`): `mapa_cobertura_campanha` 25, `relatorio_data_hora` 50,
+`falhas_emissoras` 8, `falhas_campanhas` (modo dia) 8, `obter_falhas_campanha` 50, `obter_pos_venda` 5
+campanhas por página, `destinatarios_pos_venda` 50, `auditoria_mcp` 20. Listas DENTRO de um item (quedas,
+campanhas, emissoras, cidades, linhas de checking, dias de falha) saem cortadas em 20, com o `*_total` real e
+uma ressalva. O alvo é cada resposta abaixo de 60 KB (o cliente MCP corta a saída em ~25k tokens), travado por
+teste nas tools de lista larga.
+
+## Relatórios: deep-link e downloads
+
+- **Nenhum link direto de arquivo** (decisão F2-1). As rotas de CSV/PDF do portal só aceitam
+  `Authorization: Bearer` (o frontend baixa por `fetch` + blob): um link direto daria 401 no navegador, e um
+  link com credencial seria URL assinada, que o contrato proíbe. As tools devolvem `links.tela` (a tela já
+  filtrada) e, quando há arquivo, `links.como_baixar` com o botão a apertar. `exportar_consolidado` e
+  `exportar_veiculacoes` dizem quantas linhas o arquivo vai ter (provado por teste contra o CSV real).
+- **As telas leem os filtros da URL** (F2-2), com os nomes da API, só no primeiro render; depois limpam a URL
+  e seguem com o próprio estado. A validação mora em `frontend/src/utils/filtrosDaUrl.js`: valor vazio ou
+  malformado vira "sem filtro" (nunca um pedido que a API recusa) e os ids saem em minúsculas.
+
+| Tela | Parâmetros lidos | Doc |
+|---|---|---|
+| `/insights` | `client_id`, `campaigns`, `from`, `to`, `stations`, `materials` | [insights-dashboard](insights-dashboard.md#abrir-já-filtrado-pela-url) |
+| `/management` | `client_id`, `campaigns`, `status`, `from`, `to` | [management-overview](management-overview.md#abrir-já-filtrado-pela-url) |
+| `/live-map` | `client_id`, `campaigns` | [live-map](live-map.md#abrir-já-filtrado-pela-url) |
+| `/admin/station-failures` | `view`, `date`, `campaign` (já lia) + `sub=historical`, `min_down` e `from`/`to` (aba "Por dia") | [admin-station-failures](admin-station-failures.md#abrir-já-filtrado-pela-url) |
+| `/reports/airtime` | `client_id`, `competence`, `campaigns`, `from`, `to`, `q` (já lia tudo; não mudou) | [airtime-report](airtime-report.md) |
+
+  Todo parâmetro que uma tool põe em `links.tela` é lido pela tela (conferido em 2026-10-28).
+- **Campanha fora da página do seletor.** Os seletores de campanha carregam a página 1 de `/campaigns` (200,
+  ativas primeiro). Um link para uma campanha concluída antiga traz um id que não está nela: as telas buscam
+  essas campanhas à parte (`useCampaignsWithSelected`, via `/campaigns?id=`, que respeita o escopo de quem está
+  logado) e as juntam às opções. Sem isso a tela filtrava por elas com o seletor vazio.
+
+## O que nunca sai (Fatia 2)
+
+Além da lista da Fatia 1 (abaixo):
+
+- **Pós-venda:** o `token` de cada destinatário (é a credencial do link público `/pos-venda/:token`, sem
+  expiração) e o link público em si — nem como campo, nem dentro de texto livre (título, mensagem, nota do
+  checking, erro de email). Toda URL do texto livre, com ou sem esquema (`drive.google.com/…`, `www.x.com/…`,
+  `//x.com/…`), vira só o domínio, e um `pos-venda/<token>` solto é apagado. Nenhuma chave S3. O
+  `attachments_url` sai só como domínio. Rascunho não tem números (`numeros: null`).
+- **URL de anexo e de webhook:** só o domínio (o caminho e a query podem carregar segredo).
+- **Auditoria:** o valor de toda chave de `detalhes` que pareça segredo (`secret`, `token`, `senha`, `chave`,
+  `api_key`, `authorization`, `cookie`, `jwt`…) sai como `"[omitido]"`, inclusive em objetos aninhados;
+  detalhes acima de 2 KB saem resumidos, com ressalva.
+
+## Avaliação (mcp-builder)
+
+Rodada de 2026-10-28: **10/10** (as 10 respostas iguais ao gabarito, sem erro de tool e sem id inventado), por
+um avaliador às cegas que só usou o CLI. Cenário, perguntas, gabarito e como rodar:
+[operations/mcp.md](../operations/mcp.md#avaliação-mcp-builder).
+
+**O que nunca sai (Fatia 1)** (whitelist nos DTOs): `stream_url` e saúde do stream, `master_storage_path`/`master_sha256`,
 `evidence_key`, segredo do webhook (nem o prefixo), `key_hash` (só o prefixo de 8 hex que a tela já mostra, como `identificador`), token e link de boas-vindas (o link mostra a
 senha inicial), e o caminho e a query da URL de webhook (podem carregar segredo, como em Slack/Discord/Zapier:
 só saem esquema e host, `https://host/...`; vale também para `ultimo_erro` das entregas). Áudio: só o link
@@ -307,7 +402,20 @@ todos os tokens daquele cliente para o usuário.
 - **`revoga-mcp --listar` e `/account` contam diferente**: o CLI imprime uma linha por token
   pessoal e **por refresh token vivo** do OAuth; `/account` mostra **uma linha por cliente OAuth**
   (conexão), agrupando os tokens dele.
-- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro").
+- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro"); `TestToolsEsperadas_OrdemAlfabeticaE44`
+  trava a ordem e o número (44): quem acrescentar tool atualiza o número junto.
+- **Campo obrigatório ausente volta sem `[codigo]`.** A recusa vem do próprio SDK, na validação do schema
+  (`validating "arguments": ... required: missing properties: [...]`), antes de a tool rodar. Decisão: fica
+  assim — o `required` do schema já orienta o modelo, e reimplementar a validação só para pôr o código não
+  compensa.
+- **Fuso das falhas:** `station_failures` lê o dia em `time.Local` (UTC no container) e `failures_daily` em
+  America/Sao_Paulo. As tools espelham a tela (o mesmo número que cada aba mostra); unificar é follow-up.
+- **`Paginacao.limit` do schema diz "máximo 100"**, mas várias tools de relatório têm teto menor (ver "Tetos de
+  página reais"); o teto real está na descrição de cada tool e em `page.limit`.
+- **A tela limpa a URL antes de saber se a sessão vale.** Numa aba com sessão vencida, o 401 leva ao login e o
+  filtro do link se perde: abra o link de novo depois de entrar.
+- **Período fora da janela na aba "Por dia".** `/admin/station-failures?view=by_day&from&to` só aceita de
+  hoje − 90 dias até hoje (o limite do seletor); fora disso a aba volta para "Este mês" sem avisar.
 - **O consentimento sempre pede login.** A aba aberta pelo assistente começa deslogada (JWT em
   `sessionStorage`, por aba): `/login` volta para `/autorizar-ia?pedido=...`. O login pelo SSO do hub
   (`/sso`) perde o `?pedido=` (`HubSsoPage` sempre vai para `/`); o admin entra com e-mail e senha

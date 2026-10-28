@@ -9,6 +9,10 @@ codigo-relacionado:
   - workers/cmd/registra-cliente-mcp/main.go
   - infra/docker/docker-compose.yml
   - infra/docker/Dockerfiles/workers.Dockerfile
+  - workers/internal/mcp/avaliacao/semear.go
+  - workers/internal/mcp/avaliacao/cli/main.go
+  - workers/internal/mcp/avaliacao/perguntas.xml
+  - workers/internal/mcp/avaliacao_test.go
 ---
 
 # MCP do E-monitor — operação
@@ -174,9 +178,62 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 - Os testes de tool usam `mcptest.DBCatalogo` (trunca usuários, clientes e emissoras) e as fixtures de
   `internal/mcp/mcptest/catalogo.go`. Cada tool que espelha tela tem um teste `..._ParidadeComATela` que chama
   o handler HTTP com claims de admin e compara os números.
-- Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, chame pelo Claude Code
-  `financeiro_campanhas` e `grade_campanha` de 2 campanhas ativas e compare com `/campaigns` e `/detections`
-  no portal. Divergência = bug: não siga para a Fatia 2.
+- Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, siga o roteiro "Conferência com dado
+  real". Divergência = bug: não siga para a fatia seguinte.
+
+## Avaliação (mcp-builder)
+
+Prova de que um modelo responde perguntas reais só com as tools (spec §7: ≥ 9/10). Sem chave da API da
+Anthropic nesta máquina, a rodada é: uma semente determinística, um teste que prova o gabarito chamando as tools
+e um avaliador às cegas que só usa um CLI de desenvolvimento.
+
+- **Arquivos:** `workers/internal/mcp/avaliacao/semear.go` (o cenário: clientes Aurora Alimentos e Brisa
+  Seguros, 3 emissoras, as campanhas "Aurora Setembro", "Aurora Agora" e "Brisa Outubro", queda, assertividade,
+  pós-venda enviado, dois eventos de auditoria), `perguntas.xml` (as 10 perguntas, com as contas do gabarito num
+  comentário — **não entregue o arquivo ao avaliador**), `cli/main.go` (o CLI) e
+  `workers/internal/mcp/avaliacao_test.go` (`TestAvaliacao_Gabarito`, que acha os ids pelos nomes e prova cada
+  resposta; roda no `go test ./internal/mcp/...` normal, sem tag).
+- **As datas da campanha ativa são relativas a hoje** (America/Sao_Paulo): as tools de falha e a assertividade
+  têm janela móvel. Semente de outro dia ainda costuma bater; de outro mês, a assertividade muda. O CLI avisa no
+  stderr (`AVISO: a semente é de …`). Semeie no dia da rodada.
+- **A semente só roda em banco vazio** (sem cliente, emissora, campanha nem usuário; `ErrBancoNaoVazio`) e numa
+  transação só. O CLI lê a variável própria `AVALIACAO_DATABASE_URL` — **nunca** `DATABASE_URL`, que é o nome da
+  de prod — e só compila com a tag `avaliacao` (o binário de prod não inclui nem o CLI nem `NovoServidorLocal`;
+  o CLI também não está no `workers.Dockerfile`, de propósito).
+
+Preparar (na raiz `workers/`):
+
+```bash
+docker exec rc-mcp-test-pg psql -U radiocheck -d postgres \
+  -c "DROP DATABASE IF EXISTS radiocheck_mcp_avaliacao;" \
+  -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d2;"
+# o template radiocheck_mcp_test_d2 hoje traz 4 usuários de teste: limpe-os NESSE banco
+docker exec rc-mcp-test-pg psql -U radiocheck -d radiocheck_mcp_avaliacao -c "TRUNCATE users CASCADE;"
+export AVALIACAO_DATABASE_URL="postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_avaliacao?sslmode=disable"
+go run -tags avaliacao ./internal/mcp/avaliacao/cli semear
+go run -tags avaliacao ./internal/mcp/avaliacao/cli tools | head -5     # começa por "## assertividade"
+go run -tags avaliacao ./internal/mcp/avaliacao/cli chamar listar_clientes '{"busca":"aurora"}'
+```
+
+`tools` lista as 44 tools (nome, descrição, schema de entrada) e termina com as instruções do servidor;
+`chamar <tool> '<json>'` chama a tool no servidor MCP real, em memória, com o admin da semente como principal
+(erro sai como `ERRO: …`). Rodar `semear` duas vezes recusa (banco não vazio).
+
+**Despachar o avaliador:** um subagente novo, sem o gabarito e sem acesso declarado ao código, recebe os dois
+comandos (`tools` e `chamar`, com `AVALIACAO_DATABASE_URL` e `-tags avaliacao`), a ordem de não rodar `semear`
+nem ler arquivos do repositório, e as 10 `<question>` do XML numeradas; devolve `N. <resposta>` por linha e um
+parágrafo por pergunta com as tools que chamou e os tropeços. Nota = respostas iguais ao `<answer>` (após trim;
+`95` = `95.0`). Abaixo de 9/10, o defeito costuma ser descrição de tool ou nome de campo: conserte a tool (com
+teste), rode o gabarito de novo e repita com um avaliador NOVO.
+
+**Última rodada — 2026-10-28: 10/10.** As 10 respostas iguais ao gabarito, sem erro de tool e sem id inventado.
+Tropeços relatados pelo avaliador (nenhum custou ponto):
+
+- `assertividade` devolve o percentual como número (`95`), e a pergunta pedia uma casa decimal: o avaliador
+  formatou `95.0` por conta própria;
+- em `auditoria_mcp`, o nome do token só está dentro de `detalhes.nome` (não há campo de topo);
+- as perguntas de assertividade e de auditoria se resolvem com 1–2 chamadas (as outras exigem achar ids pelos
+  nomes e cruzar duas ou três tools).
 
 ## Deploy
 
@@ -192,7 +249,24 @@ curl -s https://api.e-monitor.online/.well-known/oauth-authorization-server
 Esperado: `401` com `WWW-Authenticate: Bearer realm="emonitor-mcp", resource_metadata=..., scope="emonitor:all"`
 (não 404, não 403). Confira também o anti-frame do consentimento: `curl -sI "https://e-monitor.online/autorizar-ia?pedido=x" | grep -i frame` deve mostrar `X-Frame-Options: DENY` e `frame-ancestors 'none'`. A regra de `frontend/public/_headers` depende de o Cloudflare Pages aplicá-la à resposta de fallback da SPA; se não aparecer, o clickjacking do botão Autorizar está aberto. O Cloudflare Tunnel precisa expor `/mcp`, `/mcp/oauth/*` e `/.well-known/*` no host
 público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo CLI em `cmd/*` exige as
-duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão.
+duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão. O CLI da
+avaliação (`internal/mcp/avaliacao/cli`) **não** entra na imagem, de propósito.
+
+### Conferência com dado real (depois do `deploy.sh`)
+
+Pelo Claude Code conectado ao MCP de prod, em **2 campanhas ativas** (de preferência uma por inserção e uma
+consolidada):
+
+1. Fatia 1: `financeiro_campanhas` × `/campaigns` e `grade_campanha` × `/detections`.
+2. Fatia 2 — dois relatórios:
+   - `insights_campanha` (cliente, campanha, mês corrente) × `/insights` com o mesmo filtro: impactos,
+     impactos no target, veiculações por categoria, investido, bonificação e CPM têm de bater;
+   - `obter_falhas_campanha` × o drawer da campanha em `/admin/station-failures` (aba Por campanha):
+     déficit, "não tocou", "fora do horário" e os dias de falha por emissora.
+3. Abra o `links.tela` de cada um: a tela tem de abrir já filtrada no mesmo recorte (é o frontend da
+   Fatia 2; ele sobe sozinho no push para `master`, então confira depois que o CF Pages publicar).
+
+Divergência de número = bug: não siga adiante.
 
 ## Armadilhas
 
