@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"strings"
 	"encoding/json"
 	"testing"
 
@@ -26,6 +27,7 @@ func TestGradeCampanha_ParidadeComATela(t *testing.T) {
 	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "out_slot", mcptest.Quando("2026-10-10", "23:00"))
 	mcptest.Veiculacao(t, ctx, pool, camp, mat, e2, "in_slot", mcptest.Quando("2026-10-11", "09:00"))
 	mcptest.Veiculacao(t, ctx, pool, camp, mat, e2, "bonus", mcptest.Quando("2026-10-11", "10:00"))
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "out_date", mcptest.Quando("2026-10-10", "09:00"))
 
 	h := &handlers.DetectionsHandler{SummaryRepo: catalog.NewDailySummary(pool), CampaignRepo: catalog.NewCampaigns(pool)}
 	var tela []catalog.DailySummaryRow
@@ -48,6 +50,7 @@ func TestGradeCampanha_ParidadeComATela(t *testing.T) {
 		require.EqualValues(t, r.Deficit, c["deficit"])
 		require.EqualValues(t, r.Bonus, c["bonus"])
 		require.EqualValues(t, r.OutSlot, c["out_slot"])
+		require.EqualValues(t, r.OutDate, c["out_date"])
 		somaInSlot += int(r.InSlot)
 		somaEsperado += int(r.Expected)
 	}
@@ -61,6 +64,15 @@ func TestGradeCampanha_ParidadeComATela(t *testing.T) {
 	for _, c := range itens(t, so) {
 		require.Equal(t, e2.String(), c["emissora"].(map[string]any)["id"])
 	}
+	var esperadoE2, inSlotE2 float64
+	for _, c := range itens(t, so) {
+		esperadoE2 += c["esperado"].(float64)
+		inSlotE2 += c["in_slot"].(float64)
+	}
+	totE2 := so["totais"].(map[string]any)
+	require.EqualValues(t, esperadoE2, totE2["esperado"], "totais refletem só a emissora filtrada")
+	require.EqualValues(t, inSlotE2, totE2["in_slot"])
+	require.Less(t, esperadoE2, float64(somaEsperado))
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "grade_campanha",
 		map[string]any{"campanha_id": camp.String(), "de": "2026-01-01", "ate": "2026-12-31"}), "[entrada_invalida]")
 }
@@ -123,4 +135,35 @@ func TestPlanoDoDia_FaixasSaldoEVeiculacoes(t *testing.T) {
 	require.Equal(t, "ajuste_do_dia", comAjuste["meta_vem_de"])
 	require.EqualValues(t, 0, comAjuste["ajuste_do_dia"].(map[string]any)["insercoes_esperadas"])
 	require.GreaterOrEqual(t, len(comAjuste["ressalvas"].([]any)), 3)
+}
+
+func TestPlanoDoDia_CampanhaCanceladaEDiaSemLinha(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", est)
+	mcptest.Regra(t, ctx, pool, camp, tipo, est, "2026-10-01", "2026-10-31", 127, "06:00", "22:00", 2)
+	_, err := pool.Exec(ctx, `UPDATE campaigns SET status = 'cancelada', cancelled_at = $2 WHERE id = $1`,
+		camp, mcptest.Quando("2026-10-10", "12:00"))
+	require.NoError(t, err)
+
+	args := map[string]any{"campanha_id": camp.String(), "emissora_id": est.String(), "tipo_id": tipo.String(), "data": "2026-10-20"}
+	out := chamarTool(t, cfgTeste(pool), "plano_do_dia", args)
+	var texto []string
+	for _, r := range out["ressalvas"].([]any) {
+		texto = append(texto, r.(string))
+	}
+	juntas := strings.Join(texto, "\n")
+	require.Contains(t, juntas, "cancelada", "ressalva de campanha cancelada")
+	require.Contains(t, juntas, "Dia depois do cancelamento")
+	require.Nil(t, out["saldo"])
+	require.Contains(t, juntas, "A grade não tem linha para esta célula")
+
+	// Antes do cancelamento a ressalva de dia posterior não vale.
+	args["data"] = "2026-10-05"
+	antes := chamarTool(t, cfgTeste(pool), "plano_do_dia", args)
+	for _, r := range antes["ressalvas"].([]any) {
+		require.NotContains(t, r.(string), "Dia depois do cancelamento")
+	}
 }

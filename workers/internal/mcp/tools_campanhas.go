@@ -381,7 +381,7 @@ func modoDoPreco(m string) string {
 
 const ressalvaRegras = "materiais vazio = a regra vale para todos os materiais do tipo; com materiais, é um recorte só para eles. A meta de uma célula (emissora × tipo × dia) é a soma das regras que valem naquele dia; um ajuste do dia (listar_overrides) substitui as regras da célula."
 
-const ressalvaAjustes = "O ajuste do dia substitui as regras daquela célula: insercoes_esperadas vira a meta e a faixa dele é a única válida. insercoes_esperadas = 0 → toda tocada do dia vira bonus (nunca out_slot)."
+const ressalvaAjustes = "O ajuste do dia substitui as regras daquela célula: insercoes_esperadas vira a meta e a faixa dele é a única válida. insercoes_esperadas = 0 → toda tocada do dia vira bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela)."
 
 const ressalvaPrecos = "Só emissoras com linha aqui entram no investido. Consolidado = valor do contrato da emissora, acumulado por mês iniciado; por inserção = valor unitário × in_slot (e × bonus na bonificação)."
 
@@ -478,7 +478,7 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 
 	ferramentaLeitura(s, cfg, "listar_overrides",
 		"Lista os ajustes do dia (overrides) de uma campanha num período: para cada célula (emissora × tipo × dia), a meta e a "+
-			"faixa que substituem as regras naquele dia. A armadilha: meta 0 faz toda tocada do dia virar bônus. "+
+			"faixa que substituem as regras naquele dia. A armadilha: meta 0 faz a tocada do dia virar bônus (exceto out_date, fora da vigência). "+
 			"Pede de/ate (AAAA-MM-DD, até 366 dias). Nunca invente o campanha_id. Lista paginada.",
 		func(ctx context.Context, L *Leitura, in entradaOverrides) (*sdk.CallToolResult, error) {
 			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
