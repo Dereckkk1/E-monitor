@@ -173,45 +173,8 @@ func (h *WebhooksHandler) ListDeliveries(w http.ResponseWriter, r *http.Request)
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 
-	q := `
-		SELECT id, event_type, status, attempt_count, response_code, last_error,
-		       next_attempt_at, delivered_at, created_at, updated_at
-		FROM webhook_deliveries
-		WHERE client_id = $1
-		  AND ($2 = '' OR status = $2)
-		ORDER BY created_at DESC
-		LIMIT $3`
-	rows, err := h.DB.Query(r.Context(), q, id, status, limit)
+	out, _, err := h.Clients.ListWebhookDeliveries(r.Context(), id, status, limit, 0)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	type item struct {
-		ID            uuid.UUID  `json:"id"`
-		EventType     string     `json:"event_type"`
-		Status        string     `json:"status"`
-		AttemptCount  int        `json:"attempt_count"`
-		ResponseCode  *int       `json:"response_code,omitempty"`
-		LastError     *string    `json:"last_error,omitempty"`
-		NextAttemptAt time.Time  `json:"next_attempt_at"`
-		DeliveredAt   *time.Time `json:"delivered_at,omitempty"`
-		CreatedAt     time.Time  `json:"created_at"`
-		UpdatedAt     time.Time  `json:"updated_at"`
-	}
-	out := make([]item, 0)
-	for rows.Next() {
-		var it item
-		if err := rows.Scan(&it.ID, &it.EventType, &it.Status, &it.AttemptCount,
-			&it.ResponseCode, &it.LastError, &it.NextAttemptAt, &it.DeliveredAt,
-			&it.CreatedAt, &it.UpdatedAt); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		out = append(out, it)
-	}
-	if err := rows.Err(); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
