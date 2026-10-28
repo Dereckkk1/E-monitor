@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,14 +23,19 @@ const (
 	tetoFaixaFalhas = 92
 	minQuedaPadrao  = 60
 	// tetoPaginaFalhasEmissoras: cada emissora leva até tetoPorItem quedas e
-	// tetoPorItem campanhas; com o teto global (100) uma página passava de
-	// 600 KB. Medido em TestFalhasEmissoras_PiorCasoCabe.
-	tetoPaginaFalhasEmissoras = 8
+	// tetoPorItem campanhas (cada uma com o cliente como ref); com o teto global
+	// (100) uma página passava de 600 KB, e com 8 chegou a 61 KB. Medido em
+	// TestFalhasEmissoras_PiorCasoCabe.
+	tetoPaginaFalhasEmissoras = 7
 )
 
 var ressalvaFalhaSemSplit = fmt.Sprintf("Esta visão mostra o déficit TOTAL do dia (esperado − in_slot). A separação \"não tocou\" × \"fora do horário\" só existe em falhas_campanhas e obter_falhas_campanha: confira lá antes de cobrar uma emissora por ausência. "+
 	"Só entra emissora com déficit em campanha não cancelada; queda sem déficit fica de fora. Tempos em segundos; uma queda ainda aberta cresce até ela fechar. "+
 	"quedas e campanhas de cada emissora: as %d primeiras (quedas_total e campanhas_total trazem o número real).", tetoPorItem)
+
+// ressalvaParesEmissora: o resumo do modo dia (e do aviso diário) soma o
+// número de emissoras de cada campanha (campaign_failures.go, totalStations).
+const ressalvaParesEmissora = "emissoras (no resumo) soma pares campanha × emissora, não emissoras distintas: a mesma emissora falhando em duas campanhas conta duas vezes. Para emissoras distintas no dia, use falhas_emissoras."
 
 const ressalvaFalhasPorDia = "Série com todos os dias da faixa (zerados quando não houve falha). campanhas soma pares emissora × campanha, não campanhas distintas. Compare médias por dia, nunca somas de blocos com nº de dias diferente. segundos_fora_do_ar em segundos (a tela plota minutos). A série tem um degrau em 2026-08-17 (out_slot deixou de fechar a obrigação)."
 
@@ -46,7 +52,7 @@ type quedaDTO struct {
 
 type campanhaComFalha struct {
 	Campanha ref      `json:"campanha"`
-	Cliente  string   `json:"cliente"`
+	Cliente  ref      `json:"cliente"`
 	Esperado int      `json:"esperado"`
 	Entregue int      `json:"entregue"`
 	Deficit  int      `json:"deficit"`
@@ -112,9 +118,9 @@ type falhasPorDiaDTO struct {
 }
 
 type campanhaDigest struct {
-	Campanha          ref    `json:"campanha"`
-	Cliente           string `json:"cliente"`
-	EmissorasComFalha int    `json:"emissoras_com_falha"`
+	Campanha          ref `json:"campanha"`
+	Cliente           ref `json:"cliente"`
+	EmissorasComFalha int `json:"emissoras_com_falha"`
 }
 
 // resumoDiarioDTO: o aviso diário do admin, sem o "seen" (estado de UI por
@@ -210,7 +216,7 @@ func emissoraComFalhaDe(sf catalog.StationFailure) emissoraComFalha {
 		if motivos == nil {
 			motivos = []string{}
 		}
-		e.Campanhas[i] = campanhaComFalha{Campanha: refDe(c.CampaignID, c.CampaignName), Cliente: c.ClientName,
+		e.Campanhas[i] = campanhaComFalha{Campanha: refDe(c.CampaignID, c.CampaignName), Cliente: refDe(c.ClientID, c.ClientName),
 			Esperado: c.Expected, Entregue: c.Delivered, Deficit: c.Deficit, Motivos: motivos}
 	}
 	return e
@@ -221,7 +227,7 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 		"Lista as emissoras que falharam num dia (/admin/station-failures, aba Por emissora): tempo fora do ar, quedas e, "+
 			"por campanha afetada, esperado, entregue, déficit e o motivo (stream-down ou silent-gap), mais o link da tela. "+
 			"Padrão: ontem. A armadilha: o déficit aqui é o total — o split \"não tocou\" × \"fora do horário\" está em "+
-			"falhas_campanhas. Lista paginada (até 8 emissoras por página).",
+			"falhas_campanhas. Lista paginada (até 7 emissoras por página).",
 		func(ctx context.Context, L *Leitura, in entradaFalhasEmissoras) (*sdk.CallToolResult, error) {
 			d, rec := lerDiaFalha(in.Data, L.agora())
 			if rec != nil {
@@ -315,12 +321,14 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 			}
 			// O mesmo mapeamento do digestFromDaily (admin_daily_failures_digest.go),
 			// na ordem da tela (mais emissoras com falha primeiro).
-			return ok(resumoDiarioDTO{Data: res.Date, CampanhasComFalha: res.Summary.Campaigns, EmissorasComFalha: res.Summary.Stations,
+			o := resumoDiarioDTO{Data: res.Date, CampanhasComFalha: res.Summary.Campaigns, EmissorasComFalha: res.Summary.Stations,
 				lista: mapear(paginar(res.Campaigns, in.Paginacao), func(c catalog.CampaignDailyFailure) campanhaDigest {
-					return campanhaDigest{Campanha: refDe(c.Campaign.ID, c.Campaign.Name), Cliente: c.Campaign.ClientName,
+					return campanhaDigest{Campanha: refDe(c.Campaign.ID, c.Campaign.Name), Cliente: refDe(c.Campaign.ClientID, c.Campaign.ClientName),
 						EmissorasComFalha: len(c.Stations)}
 				}),
-				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "date": res.Date})}})
+				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "date": res.Date})}}
+			o.Ressalvas = []string{strings.Replace(ressalvaParesEmissora, "emissoras (no resumo)", "emissoras_com_falha", 1)}
+			return ok(o)
 		})
 }
 
@@ -372,7 +380,7 @@ func emissoraDeficitDe(s catalog.CampaignFailureStation) emissoraDeficit {
 
 type campanhaFalhaDia struct {
 	Campanha       ref               `json:"campanha"`
-	Cliente        string            `json:"cliente"`
+	Cliente        ref               `json:"cliente"`
 	Estado         string            `json:"estado"`
 	Emissoras      []emissoraDeficit `json:"emissoras"`
 	EmissorasTotal int               `json:"emissoras_total"`
@@ -380,7 +388,7 @@ type campanhaFalhaDia struct {
 
 type campanhaFalhaHistorico struct {
 	Campanha             ref    `json:"campanha"`
-	Cliente              string `json:"cliente"`
+	Cliente              ref    `json:"cliente"`
 	Estado               string `json:"estado"`
 	EmissorasComFalha    int    `json:"emissoras_com_falha"`
 	DiasDeFalha          int    `json:"dias_de_falha"`
@@ -425,7 +433,7 @@ type falhasCampanhasHistoricoDTO struct {
 
 type falhasCampanhaDTO struct {
 	Campanha campanhaResumida    `json:"campanha"`
-	Cliente  string              `json:"cliente"`
+	Cliente  ref                 `json:"cliente"`
 	Resumo   resumoFalhasDetalhe `json:"resumo"`
 	lista[emissoraDeficit]
 	Links links `json:"links"`
@@ -456,7 +464,7 @@ func registrarFalhasCampanhas(s *sdk.Server, cfg ConfigServidor) {
 				}
 				o := falhasCampanhasHistoricoDTO{Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "sub": "historical"})}}
 				o.lista = mapear(pg, func(r catalog.CampaignHistoricalRow) campanhaFalhaHistorico {
-					return campanhaFalhaHistorico{Campanha: refDe(r.Campaign.ID, r.Campaign.Name), Cliente: r.Campaign.ClientName,
+					return campanhaFalhaHistorico{Campanha: refDe(r.Campaign.ID, r.Campaign.Name), Cliente: refDe(r.Campaign.ClientID, r.Campaign.ClientName),
 						Estado: r.Campaign.Status, EmissorasComFalha: r.StationsWithFailure, DiasDeFalha: r.TotalFailureDays,
 						Deficit: r.TotalDeficit, DeficitNaoTocou: r.TotalDeficitAbsent, DeficitForaDoHorario: r.TotalDeficitOffSlot,
 						TotalmenteBonificada: r.IsFullyBonified}
@@ -480,14 +488,14 @@ func registrarFalhasCampanhas(s *sdk.Server, cfg ConfigServidor) {
 				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "date": res.Date})}}
 			o.lista = mapear(paginar(res.Campaigns, in.Paginacao.comTeto(tetoPaginaFalhasDia)), func(c catalog.CampaignDailyFailure) campanhaFalhaDia {
 				es, n := cortar(c.Stations, tetoPorItem)
-				x := campanhaFalhaDia{Campanha: refDe(c.Campaign.ID, c.Campaign.Name), Cliente: c.Campaign.ClientName,
+				x := campanhaFalhaDia{Campanha: refDe(c.Campaign.ID, c.Campaign.Name), Cliente: refDe(c.Campaign.ClientID, c.Campaign.ClientName),
 					Estado: c.Campaign.Status, EmissorasTotal: n, Emissoras: make([]emissoraDeficit, len(es))}
 				for i, e := range es {
 					x.Emissoras[i] = emissoraDeficitDe(e)
 				}
 				return x
 			})
-			o.Ressalvas = []string{ressalvaSplit, fmt.Sprintf("Modo dia: entram só as emissoras que falharam no dia, mas os números delas "+
+			o.Ressalvas = []string{ressalvaSplit, ressalvaParesEmissora, fmt.Sprintf("Modo dia: entram só as emissoras que falharam no dia, mas os números delas "+
 				"somam a vigência inteira até ontem. emissoras de cada campanha: as %d primeiras (emissoras_total traz o real; "+
 				"obter_falhas_campanha lista todas).", tetoPorItem)}
 			return ok(o)
@@ -514,7 +522,7 @@ func registrarFalhasCampanhas(s *sdk.Server, cfg ConfigServidor) {
 			c := res.Campaign
 			o := falhasCampanhaDTO{
 				Campanha: campanhaResumida{Campanha: refDe(c.ID, c.Name), Inicio: c.StartDate, Fim: c.EndDate, Estado: c.Status},
-				Cliente:  c.ClientName,
+				Cliente:  refDe(c.ClientID, c.ClientName),
 				Resumo: resumoFalhasDetalhe{Emissoras: sm.StationsWithFailure, DiasDeFalha: sm.TotalFailureDays, deficitSplit: deficitSplit{
 					Deficit: sm.TotalDeficit, DeficitNaoTocou: sm.TotalDeficitAbsent, DeficitForaDoHorario: sm.TotalDeficitOffSlot}},
 				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "campaign": id.String()}),
