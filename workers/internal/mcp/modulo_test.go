@@ -13,6 +13,7 @@ import (
 
 	"radiocheck/internal/mcp/mcptest"
 	"radiocheck/internal/mcp/tokens"
+	"radiocheck/internal/supervisor"
 )
 
 func TestModulo_TokenPessoalChamaQuemSouEu(t *testing.T) {
@@ -55,4 +56,24 @@ func TestModulo_TokenPessoalChamaQuemSouEu(t *testing.T) {
 
 func TestModulo_SegredoCurtoNaoMonta(t *testing.T) {
 	require.Nil(t, NovoModulo(DepsModulo{Segredo: []byte("curto"), Log: zap.NewNop()}))
+}
+
+// workersFalsos faz as vezes do supervisor da API.
+type workersFalsos struct{ st []supervisor.WorkerStatus }
+
+func (w *workersFalsos) WorkerStatuses() []supervisor.WorkerStatus { return w.st }
+
+// TestModulo_RepassaWorkersParaLeitura: o supervisor de DepsModulo chega à
+// Leitura das tools ("monitorando agora" da visao_gerencial); sem ele, nil.
+func TestModulo_RepassaWorkersParaLeitura(t *testing.T) {
+	falso := &workersFalsos{st: []supervisor.WorkerStatus{{StationID: "x", Active: true}}}
+	m := NovoModulo(DepsModulo{Segredo: []byte(mcptest.SegredoTeste), Portal: "https://portal.teste", Log: zap.NewNop(), Workers: falso})
+	require.NotNil(t, m)
+	require.NotNil(t, m.cfg.Leitura)
+	require.Equal(t, ListaWorkers(falso), m.cfg.Leitura.Workers, "DepsModulo.Workers tem de chegar à Leitura")
+	require.Equal(t, "https://portal.teste", m.cfg.Portal)
+
+	sem := NovoModulo(DepsModulo{Segredo: []byte(mcptest.SegredoTeste), Log: zap.NewNop()})
+	require.NotNil(t, sem)
+	require.Nil(t, sem.cfg.Leitura.Workers, "sem supervisor: emissoras_ao_vivo sai null")
 }

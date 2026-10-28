@@ -22,9 +22,10 @@ func PMMTarget(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cliente, e
 }
 
 // Queda grava um evento de stream fora do ar (o que as telas de falha cruzam).
-// stream_health_events não tem FK para stations: o TRUNCATE do DBCatalogo não
-// a limpa, mas as emissoras de cada teste são novas (uuid), então eventos de
-// testes anteriores ficam órfãos e as telas (que cruzam com stations) os ignoram.
+// stream_health_events não tem FK para stations, então o CASCADE não a limpa:
+// o DBCatalogo a trunca explicitamente — sem isso as quedas de um teste
+// vazariam para o seguinte (as telas de falha agregam os eventos sem exigir
+// que a emissora exista).
 func Queda(t *testing.T, ctx context.Context, pool *pgxpool.Pool, emissora uuid.UUID, inicio time.Time, duracaoSeg int) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `INSERT INTO stream_health_events (station_id, event_type, event_at, duration_seconds)
@@ -67,10 +68,14 @@ func Assertividade(t *testing.T, ctx context.Context, pool *pgxpool.Pool, dia ti
 }
 
 // PosVenda cria um pós-venda com um bloco da campanha e os destinatários; enviado
-// = true congela o payload (MarkSent) e marca a 1ª pessoa como "abriu".
+// = true congela o payload (MarkSent, payload obrigatório), marca TODOS os
+// destinatários como email enviado e só a 1ª pessoa como "abriu".
 func PosVenda(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cliente, campanha uuid.UUID, titulo, de, ate string,
 	enviado bool, payload *postsale.Payload, pessoas ...postsale.RecipientInput) uuid.UUID {
 	t.Helper()
+	if enviado {
+		require.NotNil(t, payload, "pós-venda enviado tem payload congelado")
+	}
 	repo := postsale.NewRepo(pool)
 	rep, err := repo.CreateDraft(ctx, postsale.CreateDraftInput{ClientID: cliente, Title: titulo})
 	require.NoError(t, err)
@@ -84,7 +89,9 @@ func PosVenda(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cliente, ca
 		dest, err := repo.CreateRecipients(ctx, rep.ID, pessoas)
 		require.NoError(t, err)
 		if enviado {
-			_, err = pool.Exec(ctx, `UPDATE post_sale_report_recipients SET opened_at = now(), open_count = 2, email_status = 'sent' WHERE id = $1`, dest[0].ID)
+			_, err = pool.Exec(ctx, `UPDATE post_sale_report_recipients SET email_status = 'sent' WHERE report_id = $1`, rep.ID)
+			require.NoError(t, err)
+			_, err = pool.Exec(ctx, `UPDATE post_sale_report_recipients SET opened_at = now(), open_count = 2 WHERE id = $1`, dest[0].ID)
 			require.NoError(t, err)
 		}
 	}

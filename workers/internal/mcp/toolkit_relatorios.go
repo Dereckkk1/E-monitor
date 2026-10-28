@@ -17,11 +17,21 @@ type links struct {
 }
 
 // linkTela: a rota do portal com os filtros na query (nil sem portal configurado).
+// Valores vazios são descartados: "?campaigns=" não é filtro, e a tela leria
+// a chave presente como uma seleção vazia.
 func (c ConfigServidor) linkTela(caminho string, q url.Values) *string {
-	if len(q) == 0 {
+	limpa := url.Values{}
+	for k, vs := range q {
+		for _, v := range vs {
+			if v != "" {
+				limpa.Add(k, v)
+			}
+		}
+	}
+	if len(limpa) == 0 {
 		return c.link(caminho)
 	}
-	return c.link(caminho + "?" + q.Encode())
+	return c.link(caminho + "?" + limpa.Encode())
 }
 
 // csvIDs: o formato das listas de id na query das telas ("a,b,c").
@@ -39,15 +49,13 @@ func csvIDs(ids []uuid.UUID) string {
 // principal (lição do commit 2414725).
 const tetoPorItem = tetoEmissorasPorItem
 
-// cortar devolve no máximo n itens e o total real; nunca nil (sai [] no JSON).
+// cortar devolve no máximo n itens (n < 0 vale 0) e o total real; nunca nil
+// (sai [] no JSON).
 func cortar[T any](xs []T, n int) ([]T, int) {
 	if xs == nil {
 		xs = []T{}
 	}
-	if len(xs) > n {
-		return xs[:n], len(xs)
-	}
-	return xs, len(xs)
+	return xs[:min(len(xs), max(n, 0))], len(xs)
 }
 
 // ── Lista por cursor (contrato §3.3: coleção que só cresce) ────────────────
