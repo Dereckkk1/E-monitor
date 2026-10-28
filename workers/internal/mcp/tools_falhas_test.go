@@ -262,3 +262,241 @@ func TestFalhasEmissoras_EmpateDesempataPorID(t *testing.T) {
 	got := ids(t, itens(t, out), "emissora")
 	require.True(t, slices.IsSortedFunc(got, strings.Compare), "empate desempata pelo id: %v", got)
 }
+
+func TestFalhasCampanhas_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, _, _, d := cenarioFalha(t)
+	h := &handlers.CampaignFailuresHandler{Repo: catalog.NewCampaignFailures(pool)}
+	var tela catalog.DailyResult
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.GetList, "/x?date="+d, nil, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"data": d})
+	require.Equal(t, d, out["data"])
+	r := out["resumo"].(map[string]any)
+	require.EqualValues(t, tela.Summary.Campaigns, r["campanhas"])
+	require.EqualValues(t, tela.Summary.Stations, r["emissoras"])
+	require.EqualValues(t, tela.Summary.TotalDeficit, r["deficit"])
+	require.EqualValues(t, tela.Summary.TotalDeficitAbsent, r["deficit_nao_tocou"])
+	require.EqualValues(t, tela.Summary.TotalDeficitOffSlot, r["deficit_fora_do_horario"])
+	require.EqualValues(t, []any{4.0, 3.0, 1.0}, []any{r["deficit"], r["deficit_nao_tocou"], r["deficit_fora_do_horario"]},
+		"Rádio Um: 1 fora do horário + 1 não tocou; Rádio Dois: 2 não tocou")
+	c := itens(t, out)[0]
+	require.Equal(t, camp.String(), c["campanha"].(map[string]any)["id"])
+	require.Equal(t, "ativa", c["estado"])
+	require.EqualValues(t, len(tela.Campaigns[0].Stations), c["emissoras_total"])
+	for i, s := range tela.Campaigns[0].Stations {
+		e := c["emissoras"].([]any)[i].(map[string]any)
+		require.Equal(t, s.Station.ID.String(), e["emissora"].(map[string]any)["id"], "ordem da tela")
+		require.EqualValues(t, s.Programmed, e["programado"])
+		require.EqualValues(t, s.Identified, e["identificado"])
+		require.EqualValues(t, s.Deficit, e["deficit"])
+		require.EqualValues(t, s.DeficitAbsent, e["deficit_nao_tocou"])
+		require.EqualValues(t, s.DeficitOffSlot, e["deficit_fora_do_horario"])
+		require.EqualValues(t, s.Extras, e["extras"])
+		require.EqualValues(t, s.IsBonified, e["bonificada"])
+		require.NotContains(t, e, "dias_de_falha", "o modo dia não traz os dias")
+	}
+	require.Contains(t, out["links"].(map[string]any)["tela"], "view=by_campaign")
+
+	var hist catalog.HistoricalResult
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.GetList, "/x?mode=historical&page=1&page_size=50", nil, admin), &hist))
+	outH := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"modo": "historico"})
+	require.EqualValues(t, hist.Total, pag(t, outH)["total"])
+	require.EqualValues(t, 1, pag(t, outH)["total"])
+	h0 := itens(t, outH)[0]
+	require.Equal(t, hist.Campaigns[0].Campaign.ID.String(), h0["campanha"].(map[string]any)["id"])
+	require.EqualValues(t, hist.Campaigns[0].StationsWithFailure, h0["emissoras_com_falha"])
+	require.EqualValues(t, hist.Campaigns[0].TotalFailureDays, h0["dias_de_falha"])
+	require.EqualValues(t, hist.Campaigns[0].TotalDeficit, h0["deficit"])
+	require.EqualValues(t, hist.Campaigns[0].TotalDeficitAbsent, h0["deficit_nao_tocou"])
+	require.EqualValues(t, 3, h0["deficit_nao_tocou"])
+	require.EqualValues(t, hist.Campaigns[0].TotalDeficitOffSlot, h0["deficit_fora_do_horario"])
+	require.EqualValues(t, hist.Campaigns[0].IsFullyBonified, h0["totalmente_bonificada"])
+	require.Contains(t, outH["links"].(map[string]any)["tela"], "sub=historical")
+
+	cfg := cfgTeste(pool)
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_campanhas", map[string]any{"modo": "historico", "data": d}), "[entrada_invalida]")
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_campanhas", map[string]any{"modo": "semana"}), "[entrada_invalida]")
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_campanhas", map[string]any{"data": time.Now().AddDate(0, 0, 1).Format("2006-01-02")}), "futuro")
+}
+
+func TestObterFalhasCampanha_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, e1, e2, d := cenarioFalha(t)
+	h := &handlers.CampaignFailuresHandler{Repo: catalog.NewCampaignFailures(pool)}
+	var tela catalog.DetailResult
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.GetByID, "/x", map[string]string{"id": camp.String()}, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "obter_falhas_campanha", map[string]any{"campanha_id": camp.String()})
+	r := out["resumo"].(map[string]any)
+	require.EqualValues(t, tela.Summary.StationsWithFailure, r["emissoras"])
+	require.EqualValues(t, tela.Summary.TotalDeficit, r["deficit"])
+	require.EqualValues(t, tela.Summary.TotalDeficitAbsent, r["deficit_nao_tocou"])
+	require.EqualValues(t, tela.Summary.TotalDeficitOffSlot, r["deficit_fora_do_horario"])
+	require.EqualValues(t, tela.Summary.TotalFailureDays, r["dias_de_falha"])
+	require.EqualValues(t, 2, r["dias_de_falha"])
+	xs := itens(t, out)
+	require.Len(t, xs, len(tela.Stations))
+	for i, s := range tela.Stations {
+		require.Equal(t, s.Station.ID.String(), xs[i]["emissora"].(map[string]any)["id"], "ordem da tela")
+		require.EqualValues(t, s.Deficit, xs[i]["deficit"])
+		require.EqualValues(t, s.DeficitAbsent, xs[i]["deficit_nao_tocou"])
+		require.EqualValues(t, s.DeficitOffSlot, xs[i]["deficit_fora_do_horario"])
+		require.EqualValues(t, s.Extras, xs[i]["extras"])
+		require.EqualValues(t, len(s.FailureDays), xs[i]["dias_de_falha_total"])
+	}
+	porID := map[string]map[string]any{}
+	for _, x := range xs {
+		porID[x["emissora"].(map[string]any)["id"].(string)] = x
+	}
+	require.EqualValues(t, 1, porID[e1.String()]["deficit_fora_do_horario"], "tocou 1 vez fora da faixa")
+	require.EqualValues(t, 1, porID[e1.String()]["deficit_nao_tocou"])
+	require.EqualValues(t, 1, porID[e1.String()]["extras"], "o out_slot conta como extra")
+	require.EqualValues(t, 2, porID[e2.String()]["deficit_nao_tocou"])
+	require.Equal(t, []any{d}, porID[e1.String()]["dias_de_falha"])
+	require.Equal(t, "ativa", out["campanha"].(map[string]any)["estado"])
+	require.Equal(t, d, out["campanha"].(map[string]any)["inicio"])
+	require.Equal(t, "Cliente", out["cliente"])
+	require.Equal(t, "https://portal.teste/admin/station-failures?campaign="+camp.String()+"&view=by_campaign", out["links"].(map[string]any)["tela"])
+	require.Contains(t, out["links"].(map[string]any)["como_baixar"], "PDF de cobrança")
+
+	cfg := cfgTeste(pool)
+	require.Contains(t, chamarToolErro(t, cfg, "obter_falhas_campanha", map[string]any{"campanha_id": uuid.NewString()}), "[nao_encontrado]")
+	require.Contains(t, chamarToolErro(t, cfg, "obter_falhas_campanha", map[string]any{"campanha_id": "x"}), "[entrada_invalida]")
+	ctx := context.Background()
+	mcptest.EstadoCampanha(t, ctx, pool, camp, "cancelada")
+	require.Contains(t, chamarToolErro(t, cfg, "obter_falhas_campanha", map[string]any{"campanha_id": camp.String()}), "cancelada")
+}
+
+// Pior caso de uma página do modo dia: o teto de campanhas × tetoPorItem
+// emissoras, com nomes longos (alvo < 60 KB).
+func TestFalhasCampanhas_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	d := time.Now().AddDate(0, 0, -2).Format("2006-01-02")
+	ests := emissorasLongas(t, ctx, pool, tetoPorItem+1)
+	regras := catalog.NewDistributionRules(pool)
+	for j := range tetoPaginaFalhasDia + 1 {
+		camp := mcptest.Campanha(t, ctx, pool, cli, fmt.Sprintf("Campanha De Verão Institucional Com Nome Bem Comprido %02d", j), d, d, ests...)
+		mcptest.EstadoCampanha(t, ctx, pool, camp, "ativa")
+		_, err := regras.Create(ctx, catalog.CreateDistributionRuleInput{
+			CampaignID: camp, TypeID: tipo, StationIDs: ests, MaterialIDs: []uuid.UUID{},
+			Name: "Regra", StartDate: mcptest.Dia(d), EndDate: mcptest.Dia(d), WeekdayMask: 127,
+			TimeStart: "06:00", TimeEnd: "22:00", PlaysPerDay: 12,
+		})
+		require.NoError(t, err)
+	}
+
+	out := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"data": d, "limit": 100})
+	require.Len(t, itens(t, out), tetoPaginaFalhasDia)
+	require.EqualValues(t, tetoPaginaFalhasDia, pag(t, out)["limit"])
+	require.EqualValues(t, tetoPaginaFalhasDia+1, pag(t, out)["total"])
+	x := itens(t, out)[0]
+	require.Len(t, x["emissoras"], tetoPorItem)
+	require.EqualValues(t, tetoPorItem+1, x["emissoras_total"])
+	require.Contains(t, out["ressalvas"].([]any)[1], fmt.Sprintf("as %d primeiras", tetoPorItem))
+	n := tamanhoDoResultado(t, out)
+	t.Logf("falhas_campanhas (dia): %d campanhas × %d emissoras = %d bytes", tetoPaginaFalhasDia, tetoPorItem, n)
+	require.Less(t, n, 60_000)
+
+	outH := chamarTool(t, cfgTeste(pool), "falhas_campanhas", map[string]any{"modo": "historico", "limit": 100})
+	t.Logf("falhas_campanhas (historico): %d campanhas = %d bytes", len(itens(t, outH)), tamanhoDoResultado(t, outH))
+}
+
+// Pior caso de uma página do detalhe: o teto de emissoras × tetoPorItem dias
+// de falha. Passa de 50 emissoras (o guard do próximo teste recusaria):
+// o Cleanup as apaga.
+func TestObterFalhasCampanha_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `TRUNCATE stations, clients RESTART IDENTITY CASCADE`)
+	})
+	cli := mcptest.Cliente(t, ctx, pool, "Agência De Publicidade E Propaganda Do Interior Ltda")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	ini := time.Now().AddDate(0, 0, -(tetoPorItem + 3)).Format("2006-01-02")
+	fim := time.Now().AddDate(0, 0, -2).Format("2006-01-02")
+	ests := emissorasLongas(t, ctx, pool, tetoPaginaFalhasCampanha+1)
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Campanha De Verão Institucional Com Nome Bem Comprido", ini, fim, ests...)
+	mcptest.EstadoCampanha(t, ctx, pool, camp, "ativa")
+	_, err := catalog.NewDistributionRules(pool).Create(ctx, catalog.CreateDistributionRuleInput{
+		CampaignID: camp, TypeID: tipo, StationIDs: ests, MaterialIDs: []uuid.UUID{},
+		Name: "Regra", StartDate: mcptest.Dia(ini), EndDate: mcptest.Dia(fim), WeekdayMask: 127,
+		TimeStart: "06:00", TimeEnd: "22:00", PlaysPerDay: 12,
+	})
+	require.NoError(t, err)
+
+	out := chamarTool(t, cfgTeste(pool), "obter_falhas_campanha", map[string]any{"campanha_id": camp.String(), "limit": 100})
+	require.Len(t, itens(t, out), tetoPaginaFalhasCampanha)
+	require.EqualValues(t, tetoPaginaFalhasCampanha, pag(t, out)["limit"])
+	require.EqualValues(t, tetoPaginaFalhasCampanha+1, pag(t, out)["total"])
+	x := itens(t, out)[0]
+	require.Len(t, x["dias_de_falha"], tetoPorItem)
+	require.EqualValues(t, tetoPorItem+2, x["dias_de_falha_total"])
+	n := tamanhoDoResultado(t, out)
+	t.Logf("obter_falhas_campanha: %d emissoras × %d dias = %d bytes", tetoPaginaFalhasCampanha, tetoPorItem, n)
+	require.Less(t, n, 60_000)
+}
+
+// emissorasLongas cria n emissoras com nome, dial e cidade longos (pior caso de bytes).
+func emissorasLongas(t *testing.T, ctx context.Context, pool *pgxpool.Pool, n int) []uuid.UUID {
+	t.Helper()
+	var ests []uuid.UUID
+	for i := range n {
+		e := mcptest.Emissora(t, ctx, pool, fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %02d FM", i), 1000)
+		_, err := pool.Exec(ctx, `UPDATE stations SET frequency_mhz = 102.7, city = 'São José Do Rio Preto Da Serra' WHERE id = $1`, e)
+		require.NoError(t, err)
+		ests = append(ests, e)
+	}
+	return ests
+}
+
+// Empates no histórico (mesmas contagens, mesmo nome) e no detalhe (mesmos
+// dias de falha, mesmo nome) saem na ordem do id: o MCP pagina as duas listas.
+func TestFalhasCampanhas_EmpateDesempataPorID(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	d := time.Now().AddDate(0, 0, -2).Format("2006-01-02")
+	var ests []uuid.UUID
+	for range 5 {
+		ests = append(ests, mcptest.Emissora(t, ctx, pool, "Rádio Igual", 1000))
+	}
+	var camps []uuid.UUID
+	for i := range 5 {
+		es := ests[i : i+1]
+		if i == 0 {
+			es = ests // a primeira campanha tem as 5 emissoras empatadas no detalhe
+		}
+		c := mcptest.Campanha(t, ctx, pool, cli, "Camp Igual", d, d, es...)
+		mcptest.EstadoCampanha(t, ctx, pool, c, "ativa")
+		for _, e := range es {
+			mcptest.Regra(t, ctx, pool, c, tipo, e, d, d, 127, "06:00", "22:00", 2)
+		}
+		camps = append(camps, c)
+	}
+	cfg := cfgTeste(pool)
+	det := chamarTool(t, cfg, "obter_falhas_campanha", map[string]any{"campanha_id": camps[0].String()})
+	got := ids(t, itens(t, det), "emissora")
+	require.Len(t, got, 5)
+	require.True(t, slices.IsSortedFunc(got, strings.Compare), "detalhe: empate desempata pelo id: %v", got)
+
+	dia := chamarTool(t, cfg, "falhas_campanhas", map[string]any{"data": d})
+	var noDia []string
+	for _, e := range itens(t, dia)[0]["emissoras"].([]any) {
+		noDia = append(noDia, e.(map[string]any)["emissora"].(map[string]any)["id"].(string))
+	}
+	require.Len(t, noDia, 5)
+	require.True(t, slices.IsSortedFunc(noDia, strings.Compare), "modo dia: empate desempata pelo id: %v", noDia)
+
+	// As 4 campanhas de 1 emissora empatam entre si no histórico.
+	hist := itens(t, chamarTool(t, cfg, "falhas_campanhas", map[string]any{"modo": "historico"}))
+	require.Len(t, hist, 5)
+	got = ids(t, hist[1:], "campanha")
+	require.True(t, slices.IsSortedFunc(got, strings.Compare), "histórico: empate desempata pelo id: %v", got)
+	// E a paginação por offset não repete nem pula ninguém.
+	var paginado []string
+	for off := 0; off < 5; off += 2 {
+		p := chamarTool(t, cfg, "falhas_campanhas", map[string]any{"modo": "historico", "limit": 2, "offset": off})
+		paginado = append(paginado, ids(t, itens(t, p), "campanha")...)
+	}
+	require.Equal(t, ids(t, hist, "campanha"), paginado)
+}
