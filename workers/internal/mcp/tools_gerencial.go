@@ -42,7 +42,7 @@ type gerencialDTO struct {
 	Ressalvas       []string `json:"ressalvas"`
 }
 
-const ressalvaGerencial = "Os filtros escolhem QUAIS campanhas entram; o período limita só veiculacoes_no_periodo e a sobreposição das campanhas. Sem estado, canceladas ficam fora. veiculacoes_hoje é o dia corrente, independe do período. emissoras_ao_vivo = monitoradas com worker ativo agora (null = não medido neste ambiente). A lista de emissoras do mapa e o feed ao vivo não vêm aqui: use mapa_cobertura_campanha e listar_veiculacoes."
+const ressalvaGerencial = "Os filtros (cliente, campanhas, estado e período) escolhem QUAIS campanhas entram: o período escolhe as campanhas cuja vigência cruza a janela e recorta veiculacoes_no_periodo; veiculacoes_hoje conta o dia de hoje (America/Sao_Paulo), mas só dessas campanhas. emissoras_monitoradas, estados e materiais_monitorados são das campanhas escolhidas. Sem estado, canceladas ficam fora. emissoras_ao_vivo = monitoradas com worker ativo agora (null = não medido neste ambiente). A lista de emissoras do mapa e o feed ao vivo não vêm aqui: use mapa_cobertura_campanha e listar_veiculacoes."
 
 type entradaAssertividade struct {
 	ClienteID   string   `json:"cliente_id,omitempty" jsonschema:"Só este cliente (de listar_clientes). Vazio = a plataforma inteira."`
@@ -85,10 +85,9 @@ func lerEscopo(clienteID string, campanhaIDs []string) (*uuid.UUID, []uuid.UUID,
 		}
 		cliente = &id
 	}
-	camps, okC := lerIDs(campanhaIDs, 200)
-	if !okC {
-		r, _ := recusa("campanha_ids: até 200 ids válidos", "entrada_invalida")
-		return nil, nil, r
+	camps, rec := lerIDs("campanha_ids", campanhaIDs, 200)
+	if rec != nil {
+		return nil, nil, rec
 	}
 	return cliente, camps, nil
 }
@@ -108,7 +107,8 @@ func registrarGerencial(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "visao_gerencial",
 		"Devolve os KPIs da Visão Gerencial (/management) da operação inteira ou de um recorte: emissoras monitoradas e "+
 			"ao vivo agora, estados, materiais, campanhas, veiculações no período e hoje, e o link da tela. Todos os filtros "+
-			"são opcionais; período padrão = 1º de janeiro até hoje. A armadilha: o período só recorta as veiculações, não as campanhas.",
+			"são opcionais; período padrão = 1º de janeiro até hoje. A armadilha: o período escolhe as campanhas que cruzam a janela "+
+			"e recorta veiculacoes_no_periodo; veiculacoes_hoje conta hoje, mas só dessas campanhas.",
 		func(ctx context.Context, L *Leitura, in entradaGerencial) (*sdk.CallToolResult, error) {
 			cliente, camps, rec := lerEscopo(in.ClienteID, in.CampanhaIDs)
 			if rec != nil {
@@ -118,9 +118,9 @@ func registrarGerencial(s *sdk.Server, cfg ConfigServidor) {
 				return recusa(fmt.Sprintf("estado desconhecido %q: use programada, ativa, concluida ou cancelada", in.Estado), "entrada_invalida")
 			}
 			hoje := hojeSP(L.agora())
-			de, ate, campo := lerDias(in.De, in.Ate, time.Date(hoje.Year(), 1, 1, 0, 0, 0, 0, time.UTC), hoje)
-			if campo != "" {
-				return recusaCampoDoPeriodo(campo)
+			de, ate, rec := lerDias(in.De, in.Ate, time.Date(hoje.Year(), 1, 1, 0, 0, 0, 0, time.UTC), hoje)
+			if rec != nil {
+				return rec, nil
 			}
 			res, err := L.Gerencial.Get(ctx, catalog.ManagementParams{ClientID: cliente, CampaignIDs: camps, Status: in.Estado, From: de, To: ate})
 			if err != nil {
@@ -149,7 +149,7 @@ func registrarGerencial(s *sdk.Server, cfg ConfigServidor) {
 			o.Links = links{Tela: cfg.linkTela("/management", q)}
 			o.Ressalvas = []string{ressalvaGerencial}
 			if in.Estado == "cancelada" {
-				o.Ressalvas = append(o.Ressalvas, ressalvaCancelada)
+				o.Ressalvas = append(o.Ressalvas, ressalvaCanceladaRelatorio)
 			}
 			return ok(o)
 		})

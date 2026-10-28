@@ -27,35 +27,52 @@ func TestVisaoGerencial_ParidadeComATela(t *testing.T) {
 	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", e1, e2)
 	mcptest.EstadoCampanha(t, ctx, pool, camp, "ativa")
 	mcptest.Vincular(t, ctx, pool, camp, mat)
+	mcptest.Vincular(t, ctx, pool, camp, mcptest.Material(t, ctx, pool, cli, tipo, "Spot B"))
 	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", mcptest.Quando("2026-10-10", "08:00"))
+	// "Hoje" no relógio real: o SQL do catalog compara com now() (não há relógio
+	// injetável lá). Só fica errado se o teste cruzar a meia-noite de SP entre o
+	// INSERT e o SELECT. O período termina antes de hoje para esta não entrar
+	// em veiculacoes_no_periodo.
+	mcptest.Veiculacao(t, ctx, pool, camp, mat, e1, "in_slot", time.Now())
 	// O supervisor tem worker ativo em e1, inativo em e2 e ativo numa emissora fora do recorte.
 	workers := &workersFalsos{st: []supervisor.WorkerStatus{
 		{StationID: e1.String(), Active: true}, {StationID: e2.String(), Active: false}, {StationID: "fora", Active: true}}}
 
 	h := &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: workers}
 	var tela catalog.ManagementResult
-	require.NoError(t, json.Unmarshal(chamarHandler(t, h.Get, "/management-overview?client_id="+cli.String()+"&from=2026-01-01&to=2026-10-28", nil, admin), &tela))
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.Get, "/management-overview?client_id="+cli.String()+"&from=2026-01-01&to=2026-10-27", nil, admin), &tela))
 
 	cfg := cfgTeste(pool)
 	cfg.Leitura.Workers = workers
-	out := chamarTool(t, cfg, "visao_gerencial", map[string]any{"cliente_id": cli.String(), "de": "2026-01-01", "ate": "2026-10-28"})
+	out := chamarTool(t, cfg, "visao_gerencial", map[string]any{"cliente_id": cli.String(), "de": "2026-01-01", "ate": "2026-10-27"})
 	k := out["kpis"].(map[string]any)
 	require.EqualValues(t, tela.KPIs.StationsMonitored, k["emissoras_monitoradas"])
 	require.EqualValues(t, tela.KPIs.StationsLive, k["emissoras_ao_vivo"])
 	require.EqualValues(t, 1, k["emissoras_ao_vivo"])
 	require.EqualValues(t, tela.KPIs.StatesCount, k["estados"])
+	require.EqualValues(t, 1, k["estados"], "só a Rádio Um tem UF")
 	require.EqualValues(t, tela.KPIs.MaterialsMonitored, k["materiais_monitorados"])
+	require.EqualValues(t, 2, k["materiais_monitorados"], "Spot A e Spot B, sem repetir")
 	require.EqualValues(t, tela.KPIs.CampaignsCount, k["campanhas"])
 	require.EqualValues(t, 2, k["campanhas"])
 	require.EqualValues(t, tela.KPIs.AiringsTotal, k["veiculacoes_no_periodo"])
 	require.EqualValues(t, 1, k["veiculacoes_no_periodo"])
 	require.EqualValues(t, tela.KPIs.AiringsToday, k["veiculacoes_hoje"])
+	require.EqualValues(t, 1, k["veiculacoes_hoje"])
 	require.EqualValues(t, len(tela.Stations), out["emissoras_no_mapa"])
-	require.Equal(t, map[string]any{"de": "2026-01-01", "ate": "2026-10-28"}, out["periodo"])
-	require.Equal(t, "https://portal.teste/management?client_id="+cli.String()+"&from=2026-01-01&to=2026-10-28",
+	require.Equal(t, map[string]any{"de": "2026-01-01", "ate": "2026-10-27"}, out["periodo"])
+	require.Equal(t, "https://portal.teste/management?client_id="+cli.String()+"&from=2026-01-01&to=2026-10-27",
 		out["links"].(map[string]any)["tela"])
 	_, temLista := out["stations"]
 	require.False(t, temLista, "a lista do mapa e o feed não saem")
+
+	// O período escolhe as campanhas: em outubro a "Outra" (setembro) sai, e
+	// veiculacoes_hoje também só conta as campanhas escolhidas.
+	out = chamarTool(t, cfg, "visao_gerencial", map[string]any{"cliente_id": cli.String(), "de": "2026-08-01", "ate": "2026-09-30"})
+	k = out["kpis"].(map[string]any)
+	require.EqualValues(t, 1, k["campanhas"], "só a Outra cruza a janela")
+	require.EqualValues(t, 1, k["materiais_monitorados"])
+	require.EqualValues(t, 0, k["veiculacoes_hoje"], "a tocada de hoje é da Camp, que não cruza a janela")
 
 	// Sem supervisor (CLI, testes): null, nunca 0.
 	semW := chamarTool(t, cfgTeste(pool), "visao_gerencial", map[string]any{"cliente_id": cli.String()})

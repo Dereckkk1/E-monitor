@@ -1,13 +1,10 @@
 package mcp
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/url"
-	"slices"
 
 	"github.com/google/uuid"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +16,11 @@ type entradaMapa struct {
 	CampanhaIDs []string `json:"campanha_ids" jsonschema:"De 1 a 200 campanhas (de listar_campanhas). Canceladas não entram: o mapa é tela ao vivo. Nunca invente: pergunte."`
 	Paginacao
 }
+
+// tetoPaginaMapa: cada emissora leva até tetoPorItem cidades; com o teto
+// global (100) uma página passava de 150 KB, acima do que o cliente MCP aceita
+// (~25k tokens). Medido em TestMapaCoberturaCampanha_PiorCasoCabe.
+const tetoPaginaMapa = 25
 
 type cidadeDTO struct {
 	Nome        string  `json:"nome"`
@@ -56,11 +58,11 @@ func registrarMapa(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "mapa_cobertura_campanha",
 		"Devolve a cobertura das campanhas como o Mapa ao Vivo (/live-map): por emissora, a classe Anatel, o contorno "+
 			"protegido e o alcance (transbordo) em km e as cidades no alcance; no topo, quantos municípios distintos a "+
-			"campanha alcança; e o link da tela. Pede 1 a 200 campanha_ids. Lista paginada de emissoras.",
+			"campanha alcança; e o link da tela. Pede 1 a 200 campanha_ids. Lista paginada de emissoras (até 25 por página).",
 		func(ctx context.Context, L *Leitura, in entradaMapa) (*sdk.CallToolResult, error) {
-			camps, okC := lerIDs(in.CampanhaIDs, 200)
-			if !okC || len(camps) == 0 {
-				return recusa("campanha_ids precisa de 1 a 200 ids válidos", "entrada_invalida")
+			camps, rec := lerIDsObrigatorios("campanha_ids", in.CampanhaIDs, 200)
+			if rec != nil {
+				return rec, nil
 			}
 			// As duas chamadas que a tela /live-map faz, com o padrão dela (sem canceladas).
 			mapa, err := L.MapaAoVivo.Get(ctx, camps, nil, catalog.LiveMapOpts{})
@@ -80,12 +82,8 @@ func registrarMapa(s *sdk.Server, cfg ConfigServidor) {
 				porEmissora[c.StationID] = append(porEmissora[c.StationID], c)
 				distintas[c.IBGECode] = true
 			}
-			// A ordem da tela (por nome), com o id no fim: empate não troca de página.
-			slices.SortStableFunc(mapa.Stations, func(a, b catalog.LiveStation) int {
-				return cmp.Or(cmp.Compare(a.Name, b.Name), bytes.Compare(a.ID[:], b.ID[:]))
-			})
 			o := mapaDTO{CidadesDistintas: len(distintas), ParesEmissoraCidade: len(cob.Cities)}
-			o.lista = mapear(paginar(mapa.Stations, in.Paginacao), func(s catalog.LiveStation) emissoraMapa {
+			o.lista = mapear(paginar(mapa.Stations, in.Paginacao.comTeto(tetoPaginaMapa)), func(s catalog.LiveStation) emissoraMapa {
 				cs, n := cortar(porEmissora[s.ID], tetoPorItem)
 				e := emissoraMapa{Emissora: refDe(s.ID, s.Name), Cidade: s.City, UF: s.State, Banda: s.Band, Dial: s.FrequencyMHz,
 					ClasseAnatel: s.AnatelClass, ContornoProtegidoKm: s.AnatelCoverageKm, AlcanceKm: s.AnatelReachKm,
@@ -95,29 +93,33 @@ func registrarMapa(s *sdk.Server, cfg ConfigServidor) {
 				}
 				return e
 			})
+			q, err := queryMapa(ctx, L, camps)
+			if err != nil {
+				return nil, err
+			}
 			o.Ressalvas = []string{ressalvaMapa}
-			o.Links = links{Tela: cfg.linkTela("/live-map", queryMapa(ctx, L, camps))}
+			o.Links = links{Tela: cfg.linkTela("/live-map", q)}
 			return ok(o)
 		})
 }
 
 // queryMapa: a tela pede o cliente antes das campanhas; o link só leva
 // client_id quando todas as campanhas são do mesmo cliente.
-func queryMapa(ctx context.Context, L *Leitura, camps []uuid.UUID) url.Values {
+func queryMapa(ctx context.Context, L *Leitura, camps []uuid.UUID) (url.Values, error) {
 	q := url.Values{}
 	q.Set("campaigns", csvIDs(camps))
 	todas, err := todasCampanhas(ctx, L)
 	if err != nil {
-		return q
+		return nil, err
 	}
 	var cliente uuid.UUID
 	for i, id := range camps {
 		c, achou := todas[id]
 		if !achou || (i > 0 && c.ClientID != cliente) {
-			return q
+			return q, nil
 		}
 		cliente = c.ClientID
 	}
 	q.Set("client_id", cliente.String())
-	return q
+	return q, nil
 }

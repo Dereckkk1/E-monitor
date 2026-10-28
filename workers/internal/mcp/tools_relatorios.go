@@ -1,12 +1,9 @@
 package mcp
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"fmt"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -94,15 +91,15 @@ func registrarRelatorios(s *sdk.Server, cfg ConfigServidor) {
 		"Lista as veiculações como o Relatório Data e Hora (/reports/airtime) de UM cliente: quando, emissora (cidade, UF, "+
 			"banda, dial), material, duração, campanha, categoria, PMM, PMM no target e o valor unitário de tabela, mais o link "+
 			"da tela filtrada. Pede cliente_id, 1 a 50 campanhas dele e o período completo (de e ate). Para o total por material "+
-			"use veiculacoes_por_material. Lista paginada com total real.",
+			"use veiculacoes_por_material. Lista paginada (até 50 por página) com total real.",
 		func(ctx context.Context, L *Leitura, in entradaDataHora) (*sdk.CallToolResult, error) {
 			cliente, err := uuid.Parse(in.ClienteID)
 			if err != nil {
 				return recusaEntrada("cliente_id")
 			}
-			camps, okC := lerIDs(in.CampanhaIDs, 50)
-			if !okC || len(camps) == 0 {
-				return recusa("campanha_ids precisa de 1 a 50 ids válidos", "entrada_invalida")
+			camps, rec := lerIDsObrigatorios("campanha_ids", in.CampanhaIDs, 50)
+			if rec != nil {
+				return rec, nil
 			}
 			if in.De == "" || in.Ate == "" {
 				return recusa("o relatório Data e Hora pede o período completo: passe de e ate (AAAA-MM-DD)", "entrada_invalida")
@@ -111,23 +108,15 @@ func registrarRelatorios(s *sdk.Server, cfg ConfigServidor) {
 			if campo != "" {
 				return recusaCampoDoPeriodo(campo)
 			}
-			if _, rec, err := campanhasDoCliente(ctx, L, cliente, camps); rec != nil || err != nil {
+			doCliente, rec, err := campanhasDoCliente(ctx, L, cliente, camps)
+			if rec != nil || err != nil {
 				return rec, err
-			}
-			// Os preços por campanha, como a tela indexa: (campanha, emissora).
-			precos := map[uuid.UUID][]catalog.StationPricing{}
-			for _, c := range camps {
-				ps, err := L.Precos.ListByCampaign(ctx, c)
-				if err != nil {
-					return nil, err
-				}
-				precos[c] = ps
 			}
 			f := catalog.ListPagedFilter{CampaignIDs: camps, StartDate: ini, EndDate: fim, Q: in.Busca}
 			if in.MaisAntigasPrimeiro {
 				f.Sort = "detected_at_asc"
 			}
-			pg, err := buscarJanela(in.Paginacao, func(page, size int) ([]catalog.DetectionEnriched, int, error) {
+			pg, err := buscarJanela(in.Paginacao.comTeto(tetoPaginaDataHora), func(page, size int) ([]catalog.DetectionEnriched, int, error) {
 				f.Page, f.PageSize = page, size
 				res, err := L.Veiculacoes.ListPaged(ctx, f)
 				if err != nil {
@@ -137,6 +126,19 @@ func registrarRelatorios(s *sdk.Server, cfg ConfigServidor) {
 			})
 			if err != nil {
 				return nil, err
+			}
+			// Os preços como a tela indexa, (campanha, emissora), só das
+			// campanhas que aparecem nesta página.
+			precos := map[uuid.UUID][]catalog.StationPricing{}
+			for _, d := range pg.Items {
+				if _, lido := precos[d.CampaignID]; lido {
+					continue
+				}
+				ps, err := L.Precos.ListByCampaign(ctx, d.CampaignID)
+				if err != nil {
+					return nil, err
+				}
+				precos[d.CampaignID] = ps
 			}
 			l := mapear(pg, func(d catalog.DetectionEnriched) linhaDataHora {
 				v, modo := catalog.PrecoDeTabela(precos[d.CampaignID], d.CampaignID, d.StationID, d.TypeID)
@@ -149,6 +151,12 @@ func registrarRelatorios(s *sdk.Server, cfg ConfigServidor) {
 				return linha
 			})
 			l.Ressalvas = []string{ressalvaVeiculacoes, ressalvaPrecoTabela}
+			for _, c := range doCliente {
+				if c.Status == "cancelada" {
+					l.Ressalvas = append(l.Ressalvas, ressalvaCanceladaRelatorio)
+					break
+				}
+			}
 			d0, _ := lerDia(in.De)
 			d1, _ := lerDia(in.Ate)
 			return ok(listaDataHora{lista: l, Links: links{Tela: cfg.linkDataHora(cliente, camps, d0, d1, in.Busca)}})
@@ -188,7 +196,7 @@ type emissoraResumo struct {
 }
 
 type resumoDTO struct {
-	Campanha     campanhaInsights `json:"campanha"`
+	Campanha     campanhaResumida `json:"campanha"`
 	Cliente      ref              `json:"cliente"`
 	RotuloTarget *string          `json:"rotulo_target"`
 	Periodo      struct {
@@ -211,24 +219,27 @@ type resumoDTO struct {
 
 const ressalvaResumo = "É o relatório da campanha (o mesmo do PDF): items é a lista por emissora, paginada. veiculacoes conta todas as categorias aprovadas; impactos = round(PMM × base_de_impactos), base_de_impactos = in_slot + bonus. impactos null = emissora sem PMM; impactos_target null = nenhuma emissora com PMM no target do cliente. Sem valor em R$: para dinheiro use financeiro_campanhas ou insights_campanha."
 
+// tetoPaginaDataHora: o teto de página do relatorio_data_hora. Cada linha tem
+// ~25 campos (~900 bytes com nomes longos): com o teto global (100) a página
+// media 90 KB, acima do que o cliente MCP aceita (~25k tokens). Medido em
+// TestRelatorioDataHora_PiorCasoCabe.
+const tetoPaginaDataHora = 50
+
 // tetoMateriaisResumo: por_material não é paginada (a lista principal é a de
 // emissoras); acima disso sai cortada com o total real.
 const tetoMateriaisResumo = 50
 
 // periodoDaCampanha: de/ate da entrada, ou a vigência da campanha; devolve os
 // instantes de SP (o recorte das consultas, como a tela manda) e os dias (o eco e o link).
-func periodoDaCampanha(c *catalog.Campaign, de, ate string) (ini, fim *time.Time, d0, d1 time.Time, campo string) {
-	d0, d1, campo = lerDias(de, ate, c.StartDate, c.EndDate)
-	if campo != "" {
-		return nil, nil, d0, d1, campo
+// rec != nil é a recusa pronta.
+func periodoDaCampanha(c *catalog.Campaign, de, ate string) (ini, fim *time.Time, d0, d1 time.Time, rec *sdk.CallToolResult) {
+	d0, d1, rec = lerDias(de, ate, c.StartDate, c.EndDate)
+	if rec != nil {
+		return nil, nil, d0, d1, rec
 	}
 	i, _ := limitesDoDiaSP(d0)
 	_, f := limitesDoDiaSP(d1)
-	return &i, &f, d0, d1, ""
-}
-
-func campanhaResumo(c *catalog.Campaign) campanhaInsights {
-	return campanhaInsights{Campanha: refDe(c.ID, c.Name), Inicio: dia(c.StartDate), Fim: dia(c.EndDate), Estado: c.Status}
+	return &i, &f, d0, d1, nil
 }
 
 func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
@@ -241,9 +252,9 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 			if rec != nil || err != nil {
 				return rec, err
 			}
-			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
-			if campo != "" {
-				return recusaCampoDoPeriodo(campo)
+			ini, fim, d0, d1, rec := periodoDaCampanha(c, in.De, in.Ate)
+			if rec != nil {
+				return rec, nil
 			}
 			cli, err := L.Clientes.Get(ctx, c.ClientID)
 			if err != nil {
@@ -260,7 +271,7 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 			}
 			tot := catalog.TotaisDoResumo(porMat, porEst)
 			var o resumoDTO
-			o.Campanha = campanhaResumo(c)
+			o.Campanha = campanhaResumidaDe(c)
 			o.Cliente = refDe(cli.ID, cli.Name)
 			o.RotuloTarget = cli.TargetLabel
 			o.Periodo.De, o.Periodo.Ate = dia(d0), dia(d1)
@@ -270,16 +281,6 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 				v := tot.ImpactosTarget
 				o.Totais.ImpactosTarget = &v
 			}
-			// A ordem da tela (mais veiculações primeiro, depois o nome), com o id
-			// no fim: empate não pode trocar de página entre duas chamadas.
-			slices.SortStableFunc(porMat.Data, func(a, b catalog.MaterialAggregateRow) int {
-				return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.MaterialTitle, b.MaterialTitle),
-					bytes.Compare(a.MaterialID[:], b.MaterialID[:]))
-			})
-			slices.SortStableFunc(porEst, func(a, b catalog.StationAggregateRow) int {
-				return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.StationName, b.StationName),
-					bytes.Compare(a.StationID[:], b.StationID[:]))
-			})
 			mats, n := cortar(porMat.Data, tetoMateriaisResumo)
 			o.PorMaterialTotal = n
 			o.PorMaterial = make([]materialResumo, len(mats))
@@ -297,7 +298,7 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 				o.Ressalvas = append(o.Ressalvas, fmt.Sprintf("por_material cortado em %d de %d materiais (por_material_total traz o número real)", tetoMateriaisResumo, n))
 			}
 			if c.Status == "cancelada" {
-				o.Ressalvas = append(o.Ressalvas, ressalvaCancelada)
+				o.Ressalvas = append(o.Ressalvas, ressalvaCanceladaRelatorio)
 			}
 			o.Links = links{Tela: cfg.linkDataHora(c.ClientID, []uuid.UUID{c.ID}, d0, d1, ""),
 				ComoBaixar: "Na tela, botão Relatórios → PDF (o mesmo conteúdo) ou CSV Consolidado."}
@@ -313,9 +314,9 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 			if rec != nil || err != nil {
 				return rec, err
 			}
-			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
-			if campo != "" {
-				return recusaCampoDoPeriodo(campo)
+			ini, fim, d0, d1, rec := periodoDaCampanha(c, in.De, in.Ate)
+			if rec != nil {
+				return rec, nil
 			}
 			// As mesmas linhas que o handler escreve (reportcsv.WriteConsolidated: uma por linha, sem rodapé).
 			rows, err := L.Veiculacoes.AggregateByMaterialStation(ctx, catalog.AggregateFilter{CampaignIDs: []uuid.UUID{c.ID}, StartDate: ini, EndDate: fim})
@@ -335,9 +336,9 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 			if rec != nil || err != nil {
 				return rec, err
 			}
-			ini, fim, d0, d1, campo := periodoDaCampanha(c, in.De, in.Ate)
-			if campo != "" {
-				return recusaCampoDoPeriodo(campo)
+			ini, fim, d0, d1, rec := periodoDaCampanha(c, in.De, in.Ate)
+			if rec != nil {
+				return rec, nil
 			}
 			n, err := contarExportacao(ctx, L, c.ID, ini, fim)
 			if err != nil {
@@ -349,21 +350,22 @@ func registrarRelatoriosCampanha(s *sdk.Server, cfg ConfigServidor) {
 }
 
 type exportacaoDTO struct {
-	Campanha campanhaInsights `json:"campanha"`
+	Campanha campanhaResumida `json:"campanha"`
 	Periodo  struct {
 		De  string `json:"de"`
 		Ate string `json:"ate"`
 	} `json:"periodo"`
 	Linhas    int      `json:"linhas"`
 	Links     links    `json:"links"`
-	Ressalvas []string `json:"ressalvas,omitempty"`
+	Ressalvas []string `json:"ressalvas"`
 }
 
 func exportacaoDe(c *catalog.Campaign, d0, d1 time.Time, linhas int, tela *string, comoBaixar string) exportacaoDTO {
-	o := exportacaoDTO{Campanha: campanhaResumo(c), Linhas: linhas, Links: links{Tela: tela, ComoBaixar: comoBaixar}}
+	o := exportacaoDTO{Campanha: campanhaResumidaDe(c), Linhas: linhas, Links: links{Tela: tela, ComoBaixar: comoBaixar}}
 	o.Periodo.De, o.Periodo.Ate = dia(d0), dia(d1)
+	o.Ressalvas = []string{}
 	if c.Status == "cancelada" {
-		o.Ressalvas = []string{ressalvaCancelada}
+		o.Ressalvas = append(o.Ressalvas, ressalvaCanceladaRelatorio)
 	}
 	return o
 }

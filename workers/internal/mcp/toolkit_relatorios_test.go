@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,4 +87,59 @@ func TestDatasDeSP(t *testing.T) {
 	agora = time.Date(2027, 1, 1, 3, 0, 0, 0, time.UTC)
 	require.Equal(t, "2027-01-01", dia(hojeSP(agora)))
 	require.Equal(t, "2026-12-31", dia(ontemSP(agora)))
+}
+
+// textoDe extrai a mensagem de uma recusa pronta.
+func textoDe(t *testing.T, r *sdk.CallToolResult) string {
+	t.Helper()
+	require.NotNil(t, r)
+	require.True(t, r.IsError)
+	return r.Content[0].(*sdk.TextContent).Text
+}
+
+func TestLerIDs_TetoRepetidosEInvalidos(t *testing.T) {
+	a, b := uuid.NewString(), uuid.NewString()
+	ids, rec := lerIDs("campanha_ids", []string{a, b, a}, 3)
+	require.Nil(t, rec)
+	require.Equal(t, []string{a, b}, []string{ids[0].String(), ids[1].String()}, "sem repetidos, na ordem")
+
+	_, rec = lerIDs("campanha_ids", []string{a, b, uuid.NewString()}, 2)
+	msg := textoDe(t, rec)
+	require.Contains(t, msg, "no máximo 2 ids")
+	require.Contains(t, msg, "vieram 3")
+	require.Contains(t, msg, "[entrada_invalida]")
+
+	_, rec = lerIDs("emissora_ids", []string{"x"}, 2)
+	require.Contains(t, textoDe(t, rec), "emissora_ids inválido")
+
+	vazio, rec := lerIDs("emissora_ids", nil, 2)
+	require.Nil(t, rec)
+	require.NotNil(t, vazio, "vazio sai [] (o repositório lê nil como NULL)")
+	_, rec = lerIDsObrigatorios("campanha_ids", nil, 50)
+	require.Contains(t, textoDe(t, rec), "1 a 50")
+}
+
+func TestLerDias_PadraoQueInverteAJanelaDizOPadrao(t *testing.T) {
+	ini, fim := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	de, ate, rec := lerDias("", "2026-10-10", ini, fim)
+	require.Nil(t, rec)
+	require.Equal(t, "2026-10-01", dia(de))
+	require.Equal(t, "2026-10-10", dia(ate))
+
+	_, _, rec = lerDias("2026-11-05", "", ini, fim)
+	require.Contains(t, textoDe(t, rec), "ate não veio e o padrão dele é 2026-10-31")
+	_, _, rec = lerDias("", "2026-09-05", ini, fim)
+	require.Contains(t, textoDe(t, rec), "de não veio e o padrão dele é 2026-10-01")
+	_, _, rec = lerDias("2026-10-20", "2026-10-10", ini, fim)
+	require.Contains(t, textoDe(t, rec), "ate tem de ser >= de")
+	_, _, rec = lerDias("ontem", "", ini, fim)
+	require.Contains(t, textoDe(t, rec), "de inválido")
+}
+
+func TestPaginacao_ComTeto(t *testing.T) {
+	require.Equal(t, 25, Paginacao{}.comTeto(25).Limit)
+	require.Equal(t, 10, Paginacao{}.comTeto(10).Limit, "padrão maior que o teto cai no teto")
+	require.Equal(t, 25, Paginacao{Limit: 100}.comTeto(25).Limit)
+	require.Equal(t, 7, Paginacao{Limit: 7, Offset: 3}.comTeto(25).Limit)
+	require.Equal(t, 3, Paginacao{Limit: 7, Offset: 3}.comTeto(25).Offset)
 }
