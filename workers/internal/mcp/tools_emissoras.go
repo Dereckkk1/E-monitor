@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -45,16 +46,59 @@ func emissoraDe(s catalog.Station) emissoraDTO {
 	return d
 }
 
+// perfilAudienciaDTO traduz catalog.AudienceProfile (chaves em inglês no
+// metadata) para o vocabulário do MCP. Percentuais de 0 a 100, como na fonte;
+// bloco que a emissora não tem vem null (não zero).
+type perfilAudienciaDTO struct {
+	Genero        *generoDTO        `json:"genero"`
+	FaixasEtarias *faixasEtariasDTO `json:"faixas_etarias"`
+	ClasseSocial  *classeSocialDTO  `json:"classe_social"`
+}
+
+type generoDTO struct {
+	Masculino float64 `json:"masculino"`
+	Feminino  float64 `json:"feminino"`
+}
+
+type faixasEtariasDTO struct {
+	De18a24  float64 `json:"de_18_a_24"`
+	De25a49  float64 `json:"de_25_a_49"`
+	De50Mais float64 `json:"de_50_mais"`
+}
+
+type classeSocialDTO struct {
+	AB float64 `json:"ab"`
+	C  float64 `json:"c"`
+	DE float64 `json:"de"`
+}
+
+func perfilAudienciaDe(p *catalog.AudienceProfile) *perfilAudienciaDTO {
+	if p == nil {
+		return nil
+	}
+	d := &perfilAudienciaDTO{}
+	if p.Gender != nil {
+		d.Genero = &generoDTO{Masculino: p.Gender.Male, Feminino: p.Gender.Female}
+	}
+	if p.AgeRanges != nil {
+		d.FaixasEtarias = &faixasEtariasDTO{De18a24: p.AgeRanges.Range18To24, De25a49: p.AgeRanges.Range25To49, De50Mais: p.AgeRanges.Range50Plus}
+	}
+	if p.SocialClass != nil {
+		d.ClasseSocial = &classeSocialDTO{AB: p.SocialClass.ClasseAB, C: p.SocialClass.ClasseC, DE: p.SocialClass.ClasseDE}
+	}
+	return d
+}
+
 type perfilEmissora struct {
-	Categorias      []string                 `json:"categorias"`
-	PerfilAudiencia *catalog.AudienceProfile `json:"perfil_audiencia"`
-	PopulacaoTotal  *int64                   `json:"populacao_total"`
-	Site            *string                  `json:"site"`
-	AnoFundacao     *int                     `json:"ano_fundacao"`
-	RazaoSocial     *string                  `json:"razao_social"`
-	NomeFantasia    *string                  `json:"nome_fantasia"`
-	CNPJ            *string                  `json:"cnpj"`
-	EmailComercial  *string                  `json:"email_comercial"`
+	Categorias      []string            `json:"categorias"`
+	PerfilAudiencia *perfilAudienciaDTO `json:"perfil_audiencia"`
+	PopulacaoTotal  *int64              `json:"populacao_total"`
+	Site            *string             `json:"site"`
+	AnoFundacao     *int                `json:"ano_fundacao"`
+	RazaoSocial     *string             `json:"razao_social"`
+	NomeFantasia    *string             `json:"nome_fantasia"`
+	CNPJ            *string             `json:"cnpj"`
+	EmailComercial  *string             `json:"email_comercial"`
 }
 
 type anatelDTO struct {
@@ -102,7 +146,7 @@ type entradaBuscarEmissoras struct {
 	Banda         string `json:"banda,omitempty" jsonschema:"FM ou AM."`
 	UF            string `json:"uf,omitempty" jsonschema:"Sigla do estado (ex.: SP)."`
 	Cidade        string `json:"cidade,omitempty" jsonschema:"Nome exato da cidade (ignora acento)."`
-	ContratadaPor string `json:"contratada_por,omitempty" jsonschema:"Id de cliente: só as emissoras de campanhas ativas ou programadas dele, com o resumo do contrato."`
+	ContratadaPor string `json:"contratada_por,omitempty" jsonschema:"Id de cliente (de listar_clientes): só as emissoras de campanhas ativas ou programadas dele, com o resumo do contrato. Nunca invente: use o id de outra tool."`
 	Paginacao
 }
 
@@ -123,15 +167,15 @@ func registrarEmissoras(s *sdk.Server, cfg ConfigServidor) {
 		func(ctx context.Context, L *Leitura, in entradaBuscarEmissoras) (*sdk.CallToolResult, error) {
 			var contratadas []uuid.UUID
 			if in.ContratadaPor != "" {
-				id, err := uuid.Parse(in.ContratadaPor)
-				if err != nil {
-					return recusaEntrada("contratada_por")
+				c, rec, err := lerCliente(ctx, L, in.ContratadaPor)
+				if rec != nil || err != nil {
+					return rec, err
 				}
-				contratadas = []uuid.UUID{id}
+				contratadas = []uuid.UUID{c.ID}
 			}
 			pg, err := buscarJanela(in.Paginacao, func(page, size int) ([]catalog.Station, int, error) {
 				res, err := L.Emissoras.List(ctx, catalog.ListInput{
-					Q: in.Busca, Band: in.Banda, State: in.UF, City: in.Cidade, ContractedBy: contratadas,
+					Q: in.Busca, Band: strings.ToUpper(strings.TrimSpace(in.Banda)), State: strings.ToUpper(strings.TrimSpace(in.UF)), City: in.Cidade, ContractedBy: contratadas,
 					Page: page, Limit: size,
 				})
 				return res.Data, int(res.Total), err
@@ -185,9 +229,15 @@ func registrarEmissoras(s *sdk.Server, cfg ConfigServidor) {
 				Ressalvas:        []string{ressalvaAnatel},
 			}
 			if mt := st.Meta; mt != nil {
+				// website está NULL em quase toda emissora; o endereço real ficou
+				// em audiency_site (ver catalog.StationMeta).
+				site := mt.Website
+				if site == nil || *site == "" {
+					site = mt.AudiencySite
+				}
 				out.Perfil = &perfilEmissora{
-					Categorias: mt.Categories, PerfilAudiencia: mt.AudienceProfile, PopulacaoTotal: mt.TotalPopulation,
-					Site: mt.Website, AnoFundacao: mt.FoundationYear, RazaoSocial: mt.CompanyName,
+					Categorias: mt.Categories, PerfilAudiencia: perfilAudienciaDe(mt.AudienceProfile), PopulacaoTotal: mt.TotalPopulation,
+					Site: site, AnoFundacao: mt.FoundationYear, RazaoSocial: mt.CompanyName,
 					NomeFantasia: mt.FantasyName, CNPJ: mt.CNPJ, EmailComercial: mt.CommercialEmail,
 				}
 			}

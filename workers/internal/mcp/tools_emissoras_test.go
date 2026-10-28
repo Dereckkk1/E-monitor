@@ -93,3 +93,48 @@ func TestObterEmissora_AnatelCidadesECampanhas(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "obter_emissora",
 		map[string]any{"emissora_id": uuid.NewString()}), "[nao_encontrado]")
 }
+
+func TestBuscarEmissoras_EntradaNormalizada(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	mcptest.Emissora(t, ctx, pool, "Rádio Normalizada", 0)
+	out := chamarTool(t, cfgTeste(pool), "buscar_emissoras", map[string]any{"banda": " fm ", "busca": "normalizada"})
+	require.EqualValues(t, 1, pag(t, out)["total"], "banda em minúsculas e com espaço é normalizada")
+	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "buscar_emissoras",
+		map[string]any{"contratada_por": uuid.NewString()}), "[nao_encontrado]")
+}
+
+func TestObterEmissora_PerfilEmPortugues(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	est := mcptest.Emissora(t, ctx, pool, "Rádio Perfil", 0)
+	_, err := pool.Exec(ctx, `UPDATE stations SET metadata = $2::jsonb WHERE id = $1`, est, `{
+		"categories": ["Sertanejo"],
+		"audiency_site": "https://audiency.example/radio",
+		"audience_profile": {
+			"gender": {"male": 40.5, "female": 59.5},
+			"socialClass": {"classeAB": 20, "classeC": 50, "classeDE": 30},
+			"ageRanges": {"range18to24": 15, "range25to49": 55, "range50plus": 30}
+		}}`)
+	require.NoError(t, err)
+
+	out := chamarTool(t, cfgTeste(pool), "obter_emissora", map[string]any{"emissora_id": est.String()})
+	p := out["perfil"].(map[string]any)
+	require.Equal(t, "https://audiency.example/radio", p["site"], "sem website, cai no audiency_site")
+	a := p["perfil_audiencia"].(map[string]any)
+	require.EqualValues(t, 40.5, a["genero"].(map[string]any)["masculino"])
+	require.EqualValues(t, 59.5, a["genero"].(map[string]any)["feminino"])
+	require.EqualValues(t, 55, a["faixas_etarias"].(map[string]any)["de_25_a_49"])
+	require.EqualValues(t, 50, a["classe_social"].(map[string]any)["c"])
+
+	_, err = pool.Exec(ctx, `UPDATE stations SET metadata = metadata || '{"website":"https://site.example"}'::jsonb WHERE id = $1`, est)
+	require.NoError(t, err)
+	out = chamarTool(t, cfgTeste(pool), "obter_emissora", map[string]any{"emissora_id": est.String()})
+	require.Equal(t, "https://site.example", out["perfil"].(map[string]any)["site"], "website tem precedência")
+
+	// só parte do perfil: o resto é null, não zero
+	_, err = pool.Exec(ctx, `UPDATE stations SET metadata = '{"audience_profile":{"gender":{"male":10,"female":90}}}'::jsonb WHERE id = $1`, est)
+	require.NoError(t, err)
+	out = chamarTool(t, cfgTeste(pool), "obter_emissora", map[string]any{"emissora_id": est.String()})
+	a = out["perfil"].(map[string]any)["perfil_audiencia"].(map[string]any)
+	require.Nil(t, a["faixas_etarias"])
+	require.Nil(t, a["classe_social"])
+}

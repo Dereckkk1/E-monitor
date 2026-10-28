@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,8 +50,8 @@ func veiculacaoDe(d catalog.DetectionEnriched) veiculacaoDTO {
 
 type entradaListarVeiculacoes struct {
 	CampanhaIDs         []string `json:"campanha_ids,omitempty" jsonschema:"Até 50 campanhas (ids de listar_campanhas). Passe campanhas ou o período de/ate."`
-	EmissoraID          string   `json:"emissora_id,omitempty" jsonschema:"Só desta emissora."`
-	MaterialID          string   `json:"material_id,omitempty" jsonschema:"Só deste material."`
+	EmissoraID          string   `json:"emissora_id,omitempty" jsonschema:"Só desta emissora (id de buscar_emissoras). Nunca invente: use o id de outra tool."`
+	MaterialID          string   `json:"material_id,omitempty" jsonschema:"Só deste material (id de listar_materiais). Nunca invente: use o id de outra tool."`
 	Categorias          []string `json:"categorias,omitempty" jsonschema:"in_slot, bonus, out_slot, out_date. Vazio = todas."`
 	De                  string   `json:"de,omitempty" jsonschema:"Primeiro dia (AAAA-MM-DD, America/Sao_Paulo)."`
 	Ate                 string   `json:"ate,omitempty" jsonschema:"Último dia (AAAA-MM-DD, America/Sao_Paulo)."`
@@ -75,7 +77,7 @@ type evidenciaDTO struct {
 
 type manualDTO struct {
 	Em   string  `json:"em"`
-	Por  *string `json:"por"`
+	Por  *ref    `json:"por"`
 	Nota *string `json:"nota"`
 }
 
@@ -131,7 +133,7 @@ const tetoCampanhasPorConsulta = 50
 
 var categoriasValidas = []string{categorizer.CatInSlot, categorizer.CatBonus, categorizer.CatOutSlot, categorizer.CatOutDate}
 
-const ressalvaVeiculacoes = "Só veiculações aprovadas (fora as retratadas, ignoradas e rejeitadas pelo audit). Uma tocada atribuída a N campanhas aparece N vezes, uma por campanha, cada uma com a própria categoria."
+const ressalvaVeiculacoes = "Só veiculações aprovadas (fora as retratadas, ignoradas, rejeitadas pelo audit e ambíguas). Uma tocada atribuída a N campanhas aparece N vezes, uma por campanha, cada uma com a própria categoria."
 
 // lerCampanhas valida 0..teto ids; vazio devolve nil (sem filtro).
 func lerCampanhas(ss []string) ([]uuid.UUID, bool) {
@@ -286,26 +288,47 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 				IgnoradaEm: instanteOpc(d.IgnoredAt), RetratadaEm: instanteOpc(d.RetractedAt), Roteiro: d.CommercialScript,
 				Links: linksVeiculacao{Ouvir: cfg.link("/detections/" + d.ID.String())},
 			}
+			canonicaProjetada := false
 			for _, a := range atribs {
 				if a.CampaignID == d.CampaignID {
 					out.Campanha.Nome = a.CampaignName
+					canonicaProjetada = true
 				}
 				out.Atribuicoes = append(out.Atribuicoes, atribuicaoDTO{
 					Campanha: refDe(a.CampaignID, a.CampaignName), Material: refDe(a.CommercialID, a.CommercialName),
 					Categoria: categoriaDe(a.Category),
 				})
 			}
+			if !canonicaProjetada {
+				camp, err := L.Campanhas.Get(ctx, d.CampaignID)
+				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return nil, err
+				}
+				if camp != nil {
+					out.Campanha.Nome = camp.Name
+				}
+				out.Ressalvas = append(out.Ressalvas,
+					"A campanha canônica desta veiculação não tem projeção em detection_campaigns: a grade e os relatórios não a contam para essa campanha.")
+			}
 			if d.ManualAt != nil {
 				m := &manualDTO{Em: instante(*d.ManualAt), Nota: d.ManualNote}
 				if d.ManualBy != nil {
-					s := d.ManualBy.String()
-					m.Por = &s
+					por := ref{ID: d.ManualBy.String()}
+					u, err := L.Usuarios.Get(ctx, *d.ManualBy)
+					if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+						return nil, err
+					}
+					if u != nil {
+						por.Nome = u.Name
+					}
+					m.Por = &por
 				}
 				out.Manual = m
 			}
 			if !aprovada {
 				out.Ressalvas = append(out.Ressalvas,
-					"Esta veiculação está FORA do conjunto aprovado (ignorada, retratada ou rejeitada pelo audit): não conta em nenhuma tela nem relatório.")
+					"Esta veiculação está FORA do conjunto aprovado (ignorada, retratada, rejeitada pelo audit ou ambígua): não conta em nenhuma tela nem relatório; "+
+						"a categoria mostrada pode estar desatualizada (tocadas fora do conjunto aprovado não são recategorizadas).")
 			}
 			return ok(out)
 		})
@@ -343,6 +366,13 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 					linhas[i].Tipo = &t
 				}
 			}
+			// O repositório desempata mal (título NULL empata): ordem total para a paginação não repetir nem pular linha.
+			slices.SortStableFunc(linhas, func(a, b linhaPorMaterial) int {
+				if c := cmp.Compare(b.Veiculacoes, a.Veiculacoes); c != 0 {
+					return c
+				}
+				return strings.Compare(a.Material.ID, b.Material.ID)
+			})
 			out := saidaPorMaterial{lista: paginar(linhas, in.Paginacao),
 				TotalVeiculacoes: res.TotalDetections, MateriaisDistintos: res.DistinctMaterials}
 			out.Ressalvas = []string{ressalvaVeiculacoes}

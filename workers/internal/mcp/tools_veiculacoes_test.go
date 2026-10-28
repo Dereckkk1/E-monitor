@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -134,4 +135,61 @@ func TestListarVeiculacoes_PeriodoValidado(t *testing.T) {
 	require.Contains(t, chamarToolErro(t, cfg, "listar_veiculacoes", map[string]any{"de": "2026-01-01", "ate": "2026-12-31"}), "[entrada_invalida]")
 	chamarTool(t, cfg, "listar_veiculacoes", map[string]any{"de": "2026-07-01", "ate": "2026-10-01"})
 	chamarTool(t, cfg, "listar_veiculacoes", map[string]any{"campanha_ids": []string{camp.String()}, "de": "2026-01-01", "ate": "2026-12-31"})
+}
+
+func TestObterVeiculacao_ManualCanonicaSemProjecaoEDesatualizada(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	autor := mcptest.Usuario(t, ctx, pool, "admin", true)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	mat := mcptest.Material(t, ctx, pool, cli, tipo, "Spot A")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Campanha Canônica", "2026-10-01", "2026-10-31", est)
+	det := mcptest.Veiculacao(t, ctx, pool, camp, mat, est, "in_slot", mcptest.Quando("2026-10-10", "08:00"))
+	_, err := pool.Exec(ctx, `UPDATE detections SET manual_at = now(), manual_by = $2, manual_note = 'lançada à mão' WHERE id = $1`, det, autor)
+	require.NoError(t, err)
+
+	out := chamarTool(t, cfgTeste(pool), "obter_veiculacao", map[string]any{"veiculacao_id": det.String()})
+	por := out["manual"].(map[string]any)["por"].(map[string]any)
+	require.Equal(t, autor.String(), por["id"])
+	require.Equal(t, "Pessoa de Teste", por["nome"])
+	require.Empty(t, out["ressalvas"])
+
+	// sem projeção da campanha canônica: o nome vem da campanha e a ressalva avisa
+	_, err = pool.Exec(ctx, `DELETE FROM detection_campaigns WHERE detection_id = $1`, det)
+	require.NoError(t, err)
+	out = chamarTool(t, cfgTeste(pool), "obter_veiculacao", map[string]any{"veiculacao_id": det.String()})
+	require.Equal(t, "Campanha Canônica", out["campanha"].(map[string]any)["nome"])
+	require.Contains(t, out["ressalvas"].([]any)[0], "não tem projeção em detection_campaigns")
+
+	// fora do conjunto aprovado: a categoria pode estar desatualizada
+	_, err = pool.Exec(ctx, `UPDATE detections SET retracted_at = now() WHERE id = $1`, det)
+	require.NoError(t, err)
+	out = chamarTool(t, cfgTeste(pool), "obter_veiculacao", map[string]any{"veiculacao_id": det.String()})
+	require.Contains(t, fmt.Sprint(out["ressalvas"]), "desatualizada")
+}
+
+func TestVeiculacoesPorMaterial_OrdemEstavel(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio", 1000)
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", est)
+	for i, titulo := range []string{"A", "B", "C", "D"} {
+		m := mcptest.Material(t, ctx, pool, cli, tipo, titulo)
+		for j := 0; j <= i%2; j++ { // contagens 1,2,1,2: empates em ambos
+			mcptest.Veiculacao(t, ctx, pool, camp, m, est, "in_slot", mcptest.Quando("2026-10-10", fmt.Sprintf("0%d:00", i+1+j*4)))
+		}
+	}
+	out := chamarTool(t, cfgTeste(pool), "veiculacoes_por_material", map[string]any{"campanha_ids": []string{camp.String()}})
+	l := itens(t, out)
+	require.Len(t, l, 4)
+	for i := 1; i < len(l); i++ {
+		a, b := l[i-1], l[i]
+		ca, cb := a["veiculacoes"].(float64), b["veiculacoes"].(float64)
+		require.GreaterOrEqual(t, ca, cb)
+		if ca == cb {
+			require.Less(t, a["material"].(map[string]any)["id"], b["material"].(map[string]any)["id"], "empate desempata por id")
+		}
+	}
 }
