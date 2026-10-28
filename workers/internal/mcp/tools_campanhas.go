@@ -298,3 +298,270 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 			return ok(l)
 		})
 }
+
+type entradaCampanhaPaginada struct {
+	CampanhaID string `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas ou obter_campanha. Nunca invente: pergunte."`
+	Paginacao
+}
+
+type entradaOverrides struct {
+	CampanhaID string `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas ou obter_campanha. Nunca invente: pergunte."`
+	De         string `json:"de" jsonschema:"Primeiro dia (AAAA-MM-DD)."`
+	Ate        string `json:"ate" jsonschema:"Último dia (AAAA-MM-DD), até 366 dias depois de de."`
+	Paginacao
+}
+
+type faixaHoraria struct {
+	Inicio string `json:"inicio"`
+	Fim    string `json:"fim"`
+}
+
+type materialDaCampanha struct {
+	Material    ref    `json:"material"`
+	Tipo        *ref   `json:"tipo"`
+	Emissoras   []ref  `json:"emissoras"`
+	VinculadoEm string `json:"vinculado_em"`
+}
+
+type regraDTO struct {
+	ID              string       `json:"id"`
+	Nome            string       `json:"nome"`
+	Tipo            ref          `json:"tipo"`
+	Emissoras       []ref        `json:"emissoras"`
+	Materiais       []ref        `json:"materiais"`
+	Inicio          string       `json:"inicio"`
+	Fim             string       `json:"fim"`
+	DiasDaSemana    []string     `json:"dias_da_semana"`
+	Faixa           faixaHoraria `json:"faixa"`
+	InsercoesPorDia int16        `json:"insercoes_por_dia"`
+}
+
+type ajusteDTO struct {
+	Data               string       `json:"data"`
+	Tipo               ref          `json:"tipo"`
+	Emissora           ref          `json:"emissora"`
+	InsercoesEsperadas int16        `json:"insercoes_esperadas"`
+	Faixa              faixaHoraria `json:"faixa"`
+	Motivo             *string      `json:"motivo"`
+	CriadoEm           string       `json:"criado_em"`
+}
+
+type precoPorTipo struct {
+	Tipo          ref     `json:"tipo"`
+	ValorUnitario float64 `json:"valor_unitario"`
+}
+
+type precoDTO struct {
+	Emissora         ref            `json:"emissora"`
+	Modo             string         `json:"modo"`
+	ValorConsolidado *float64       `json:"valor_consolidado"`
+	PorTipo          []precoPorTipo `json:"por_tipo"`
+}
+
+var nomesDosDias = [7]string{"dom", "seg", "ter", "qua", "qui", "sex", "sab"}
+
+// diasDaMascara: bit 0 = domingo … bit 6 = sábado (migration 0019).
+func diasDaMascara(m int16) []string {
+	out := []string{}
+	for i, n := range nomesDosDias {
+		if m&(1<<i) != 0 {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// modoDoPreco: vocabulário da tela.
+func modoDoPreco(m string) string {
+	if m == catalog.PricingModePerInsertion {
+		return "por_insercao"
+	}
+	return "consolidado"
+}
+
+const ressalvaRegras = "materiais vazio = a regra vale para todos os materiais do tipo; com materiais, é um recorte só para eles. A meta de uma célula (emissora × tipo × dia) é a soma das regras que valem naquele dia; um ajuste do dia (listar_overrides) substitui as regras da célula."
+
+const ressalvaAjustes = "O ajuste do dia substitui as regras daquela célula: insercoes_esperadas vira a meta e a faixa dele é a única válida. insercoes_esperadas = 0 → toda tocada do dia vira bonus (nunca out_slot)."
+
+const ressalvaPrecos = "Só emissoras com linha aqui entram no investido. Consolidado = valor do contrato da emissora, acumulado por mês iniciado; por inserção = valor unitário × in_slot (e × bonus na bonificação)."
+
+func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
+	ferramentaLeitura(s, cfg, "listar_materiais_campanha",
+		"Lista os materiais (áudios) vinculados a uma campanha, com o tipo e as emissoras em que cada um pode tocar. "+
+			"Use antes de interpretar a grade (que é por tipo, não por material). Nunca invente o campanha_id. Lista paginada.",
+		func(ctx context.Context, L *Leitura, in entradaCampanhaPaginada) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			vinculos, err := L.MateriaisCampanha.ListByCampaign(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
+			mats, err := L.Materiais.ListByClient(ctx, c.ClientID, "")
+			if err != nil {
+				return nil, err
+			}
+			porID := make(map[uuid.UUID]catalog.Material, len(mats))
+			for _, m := range mats {
+				porID[m.ID] = m
+			}
+			tipos, err := nomesTipos(ctx, L)
+			if err != nil {
+				return nil, err
+			}
+			var todasEmissoras []uuid.UUID
+			for _, v := range vinculos {
+				todasEmissoras = append(todasEmissoras, v.TargetStations...)
+			}
+			emissoras, err := nomesEmissoras(ctx, L, todasEmissoras)
+			if err != nil {
+				return nil, err
+			}
+			linhas := make([]materialDaCampanha, len(vinculos))
+			for i, v := range vinculos {
+				m := porID[v.MaterialID]
+				linhas[i] = materialDaCampanha{
+					Material: refDe(v.MaterialID, m.Title), Emissoras: refs(v.TargetStations, emissoras),
+					VinculadoEm: instante(v.AddedAt),
+				}
+				if m.TypeID != nil {
+					r := refDe(*m.TypeID, tipos[*m.TypeID])
+					linhas[i].Tipo = &r
+				}
+			}
+			return ok(paginar(linhas, in.Paginacao))
+		})
+
+	ferramentaLeitura(s, cfg, "listar_regras_distribuicao",
+		"Lista as regras de distribuição de uma campanha: tipo de material, emissoras, materiais (vazio = todos do tipo), "+
+			"vigência, dias da semana, faixa horária e inserções por dia. É a programação que gera a meta da grade. "+
+			"Nunca invente o campanha_id. Lista paginada.",
+		func(ctx context.Context, L *Leitura, in entradaCampanhaPaginada) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			regras, err := L.Regras.ListByCampaign(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
+			tipos, err := nomesTipos(ctx, L)
+			if err != nil {
+				return nil, err
+			}
+			mats, err := nomesMateriais(ctx, L, c.ClientID)
+			if err != nil {
+				return nil, err
+			}
+			var todasEmissoras []uuid.UUID
+			for _, r := range regras {
+				todasEmissoras = append(todasEmissoras, r.StationIDs...)
+			}
+			emissoras, err := nomesEmissoras(ctx, L, todasEmissoras)
+			if err != nil {
+				return nil, err
+			}
+			linhas := make([]regraDTO, len(regras))
+			for i, r := range regras {
+				linhas[i] = regraDTO{
+					ID: r.ID.String(), Nome: r.Name, Tipo: refDe(r.TypeID, tipos[r.TypeID]),
+					Emissoras: refs(r.StationIDs, emissoras), Materiais: refs(r.MaterialIDs, mats),
+					Inicio: dia(r.StartDate), Fim: dia(r.EndDate), DiasDaSemana: diasDaMascara(r.WeekdayMask),
+					Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd}, InsercoesPorDia: r.PlaysPerDay,
+				}
+			}
+			l := paginar(linhas, in.Paginacao)
+			l.Ressalvas = []string{ressalvaRegras}
+			return ok(l)
+		})
+
+	ferramentaLeitura(s, cfg, "listar_overrides",
+		"Lista os ajustes do dia (overrides) de uma campanha num período: para cada célula (emissora × tipo × dia), a meta e a "+
+			"faixa que substituem as regras naquele dia. A armadilha: meta 0 faz toda tocada do dia virar bônus. "+
+			"Pede de/ate (AAAA-MM-DD, até 366 dias). Nunca invente o campanha_id. Lista paginada.",
+		func(ctx context.Context, L *Leitura, in entradaOverrides) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			de, okDe := lerDia(in.De)
+			ate, okAte := lerDia(in.Ate)
+			if !okDe {
+				return recusaEntrada("de")
+			}
+			if !okAte {
+				return recusaEntrada("ate")
+			}
+			if ate.Before(de) || ate.Sub(de) > 366*24*time.Hour {
+				return recusa("período inválido: ate tem de ser >= de e no máximo 366 dias depois", "entrada_invalida")
+			}
+			ajustes, err := L.Ajustes.ListByCampaignAndDateRange(ctx, c.ID, de, ate)
+			if err != nil {
+				return nil, err
+			}
+			tipos, err := nomesTipos(ctx, L)
+			if err != nil {
+				return nil, err
+			}
+			var ests []uuid.UUID
+			for _, a := range ajustes {
+				ests = append(ests, a.StationID)
+			}
+			emissoras, err := nomesEmissoras(ctx, L, ests)
+			if err != nil {
+				return nil, err
+			}
+			linhas := make([]ajusteDTO, len(ajustes))
+			for i, a := range ajustes {
+				linhas[i] = ajusteDTO{
+					Data: dia(a.ForDate), Tipo: refDe(a.TypeID, tipos[a.TypeID]),
+					Emissora: refDe(a.StationID, emissoras[a.StationID]), InsercoesEsperadas: a.PlaysExpected,
+					Faixa: faixaHoraria{Inicio: a.TimeStart, Fim: a.TimeEnd}, Motivo: a.Reason, CriadoEm: instante(a.CreatedAt),
+				}
+			}
+			l := paginar(linhas, in.Paginacao)
+			l.Ressalvas = []string{ressalvaAjustes}
+			return ok(l)
+		})
+
+	ferramentaLeitura(s, cfg, "listar_precos_campanha",
+		"Lista os preços de uma campanha por emissora: modo (consolidado ou por_insercao), valor consolidado ou valor unitário por "+
+			"tipo de material. Só emissora com preço entra no investido. Valores em reais. Nunca invente o campanha_id. Lista paginada.",
+		func(ctx context.Context, L *Leitura, in entradaCampanhaPaginada) (*sdk.CallToolResult, error) {
+			c, rec, err := lerCampanha(ctx, L, in.CampanhaID)
+			if rec != nil || err != nil {
+				return rec, err
+			}
+			precos, err := L.Precos.ListByCampaign(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
+			tipos, err := nomesTipos(ctx, L)
+			if err != nil {
+				return nil, err
+			}
+			ests := make([]uuid.UUID, len(precos))
+			for i, p := range precos {
+				ests[i] = p.StationID
+			}
+			emissoras, err := nomesEmissoras(ctx, L, ests)
+			if err != nil {
+				return nil, err
+			}
+			linhas := make([]precoDTO, len(precos))
+			for i, p := range precos {
+				pt := make([]precoPorTipo, len(p.PerType))
+				for j, tp := range p.PerType {
+					pt[j] = precoPorTipo{Tipo: refDe(tp.TypeID, tipos[tp.TypeID]), ValorUnitario: tp.UnitValue}
+				}
+				linhas[i] = precoDTO{
+					Emissora: refDe(p.StationID, emissoras[p.StationID]), Modo: modoDoPreco(p.Mode),
+					ValorConsolidado: p.ConsolidatedValue, PorTipo: pt,
+				}
+			}
+			l := paginar(linhas, in.Paginacao)
+			l.Ressalvas = []string{ressalvaPrecos}
+			return ok(l)
+		})
+}
