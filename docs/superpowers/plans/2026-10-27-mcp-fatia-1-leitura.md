@@ -4692,7 +4692,7 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			atribs, err := L.Veiculacoes.Attributions(ctx, id)
+			atribs, err := L.Veiculacoes.Attributions(ctx, id, d.DetectedAt) // detected_at poda as partições
 			if err != nil {
 				return nil, err
 			}
@@ -5155,6 +5155,15 @@ func TestListarEntregasWebhook_ParidadeComATela(t *testing.T) {
 
 	texto, _ := chamarNoServidor(t, novoServidor(cfgTeste(pool), principalTeste), "listar_entregas_webhook", map[string]any{"cliente_id": cli.String()})
 	require.NotContains(t, texto, "payload-nao-sai")
+
+	// last_error guarda o err.Error() do http.Client, que imprime a URL inteira
+	// do cliente — inclusive um ?token= na query. A tool corta a query.
+	_, err := pool.Exec(ctx, `UPDATE webhook_deliveries SET last_error = $1 WHERE client_id = $2`,
+		`Post "https://cliente.example/hook?token=TOKEN-DO-CLIENTE&x=1": dial tcp: timeout`, cli)
+	require.NoError(t, err)
+	texto, _ = chamarNoServidor(t, novoServidor(cfgTeste(pool), principalTeste), "listar_entregas_webhook", map[string]any{"cliente_id": cli.String()})
+	require.NotContains(t, texto, "TOKEN-DO-CLIENTE")
+	require.Contains(t, texto, "https://cliente.example/hook?…")
 }
 
 func TestListarChavesAPI_ParidadeComATela(t *testing.T) {
@@ -5215,6 +5224,7 @@ package mcp
 
 import (
 	"context"
+	"regexp"
 	"slices"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -5272,6 +5282,20 @@ type saidaNotificacoes struct {
 
 var statusDeEntrega = []string{"", "pending", "delivered", "failed", "dead"}
 
+// queryDeURL casa a query string de uma URL dentro de um texto de erro.
+var queryDeURL = regexp.MustCompile(`\?[^\s"']*`)
+
+// semQueryString corta a query das URLs num last_error: o webhook/worker grava
+// o err.Error() do http.Client, que imprime a URL inteira do cliente — e um
+// ?token= ali é credencial do sistema dele.
+func semQueryString(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	r := queryDeURL.ReplaceAllString(*s, "?…")
+	return &r
+}
+
 func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaLeitura(s, cfg, "obter_webhook_cliente",
 		"Diz se o cliente tem webhook configurado: URL, se está ativo, eventos e se há segredo. O segredo nunca sai (nem parte "+
@@ -5320,7 +5344,7 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 			for i, e := range ents {
 				linhas[i] = entregaDTO{
 					ID: e.ID.String(), Evento: e.EventType, Status: e.Status, Tentativas: e.AttemptCount,
-					CodigoResposta: e.ResponseCode, UltimoErro: e.LastError, ProximaTentativaEm: instante(e.NextAttemptAt),
+					CodigoResposta: e.ResponseCode, UltimoErro: semQueryString(e.LastError), ProximaTentativaEm: instante(e.NextAttemptAt),
 					EntregueEm: instanteOpc(e.DeliveredAt), CriadoEm: instante(e.CreatedAt),
 				}
 			}
