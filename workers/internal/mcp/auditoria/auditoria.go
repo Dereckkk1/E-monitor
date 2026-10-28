@@ -168,6 +168,9 @@ func Listar(ctx context.Context, db Consultor, f Filtro) (eventos []Evento, prox
 		if err := rows.Scan(&e.ID, &e.Quando, &e.AtorID, &e.AtorNome, &e.AtorEmail, &e.TipoAtor, &e.Acao, &e.Recurso, &e.RecursoID, &meta); err != nil {
 			return nil, "", err
 		}
+		// metadata aqui é sempre objeto: o filtro metadata->>'origem' devolve
+		// NULL para array/escalar/null, que nem é selecionado (teste
+		// TestListar_MetadataNaoObjetoNaoDerrubaAPagina).
 		if len(meta) > 0 {
 			if err := json.Unmarshal(meta, &e.Detalhes); err != nil {
 				return nil, "", fmt.Errorf("auditoria: metadata do evento %s: %w", e.ID, err)

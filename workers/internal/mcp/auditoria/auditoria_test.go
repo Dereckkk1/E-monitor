@@ -227,3 +227,23 @@ func TestListar_OmiteChavesDeCredencial(t *testing.T) {
 	require.Equal(t, "abc", d["client_id"], "client_id é identificador público do cliente OAuth")
 	require.Equal(t, "Hub", d["cliente"])
 }
+
+// metadata que não é objeto (array, escalar, null) nunca chega ao Unmarshal:
+// o filtro metadata->>'origem' = 'mcp' devolve NULL para não-objeto, então a
+// linha nem é selecionada e a página não cai.
+func TestListar_MetadataNaoObjetoNaoDerrubaAPagina(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	require.NoError(t, auditoria.Registrar(ctx, pool, ator, "mcp.ok", "mcp_token", nil, nil))
+	for _, meta := range []string{`[{"origem":"mcp"}]`, `"mcp"`, `42`, `null`} {
+		_, err = pool.Exec(ctx, `INSERT INTO audit_log (actor_type, action, resource, metadata) VALUES ('user', 'mcp.estranho', 'x', $1::jsonb)`, meta)
+		require.NoError(t, err)
+	}
+	evs, prox, err := auditoria.NovoRepo(pool).Listar(ctx, auditoria.Filtro{Limite: 10})
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	require.Equal(t, "mcp.ok", evs[0].Acao)
+	require.Empty(t, prox)
+}
