@@ -20,7 +20,7 @@ type entradaGrade struct {
 	CampanhaID string `json:"campanha_id" jsonschema:"Id (uuid) da campanha. Nunca invente: pergunte."`
 	De         string `json:"de" jsonschema:"Primeiro dia (AAAA-MM-DD, dia de America/Sao_Paulo)."`
 	Ate        string `json:"ate" jsonschema:"Último dia (AAAA-MM-DD), no máximo 93 dias depois de de."`
-	EmissoraID string `json:"emissora_id,omitempty" jsonschema:"Só as células desta emissora (opcional)."`
+	EmissoraID string `json:"emissora_id,omitempty" jsonschema:"Só as células desta emissora (id de buscar_emissoras; opcional). Nunca invente: use o id de outra tool."`
 	Paginacao
 }
 
