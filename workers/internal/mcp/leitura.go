@@ -11,6 +11,7 @@ import (
 
 	"radiocheck/internal/assertiveness"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/mcp/auditoria"
 	"radiocheck/internal/postsale"
 	"radiocheck/internal/supervisor"
 	"radiocheck/internal/users"
@@ -45,8 +46,8 @@ type Leitura struct {
 	FalhasCampanhas   *catalog.CampaignFailures
 	FalhasPorDia      *catalog.FailuresDaily
 	PosVenda          *postsale.Repo
-	// Pool: leitura do audit_log pelo auditoria_mcp (o pacote auditoria não tem repositório).
-	Pool *pgxpool.Pool
+	// Auditoria: o que o MCP gravou no audit_log (auditoria_mcp).
+	Auditoria *auditoria.Repo
 	// Workers: o supervisor da API, para "monitorando agora". nil fora da API
 	// (CLI de avaliação, testes): o número sai null, nunca 0.
 	Workers ListaWorkers
@@ -91,7 +92,7 @@ func NovaLeitura(pool *pgxpool.Pool) *Leitura {
 		FalhasCampanhas:   catalog.NewCampaignFailures(pool),
 		FalhasPorDia:      catalog.NewFailuresDaily(pool),
 		PosVenda:          postsale.NewRepo(pool),
-		Pool:              pool,
+		Auditoria:         auditoria.NovoRepo(pool),
 	}
 }
 

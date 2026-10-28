@@ -1,6 +1,9 @@
 package auditoria_test
 
 import (
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -71,4 +74,89 @@ func TestRegistrarSistema_SemAtorComPeloEOrigemForcados(t *testing.T) {
 	require.Equal(t, "revoga-mcp", pelo, "pelo não é sobrescrevível pelo meta")
 	require.Equal(t, "mcp", origem)
 	require.Equal(t, "3", quantidade)
+}
+
+func TestListar_SoMCPMaisRecentePrimeiroComCursor(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	outro := mcptest.Usuario(t, ctx, pool, "admin", true)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, auditoria.Registrar(ctx, pool, ator, fmt.Sprintf("mcp.token.criado.%d", i), "mcp_token", nil, map[string]any{"n": i}))
+		// created_at explícito e crescente: instantes iguais fariam a ordem depender do uuid.
+		_, err = pool.Exec(ctx, `UPDATE audit_log SET created_at = now() - make_interval(secs => $2) WHERE action = $1`,
+			fmt.Sprintf("mcp.token.criado.%d", i), 10-i)
+		require.NoError(t, err)
+	}
+	require.NoError(t, auditoria.Registrar(ctx, pool, outro, "mcp.oauth.autorizado", "mcp_oauth_client", nil, nil))
+	_, err = pool.Exec(ctx, `UPDATE audit_log SET created_at = now() - interval '1 hour' WHERE action = 'mcp.oauth.autorizado'`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO audit_log (actor_type, action, resource) VALUES ('system', 'client.hub_link', 'client')`) // sem origem mcp
+	require.NoError(t, err)
+	repo := auditoria.NovoRepo(pool)
+
+	p1, prox, err := repo.Listar(ctx, auditoria.Filtro{Limite: 2})
+	require.NoError(t, err)
+	require.Len(t, p1, 2)
+	require.Equal(t, "mcp.token.criado.2", p1[0].Acao)
+	require.Equal(t, "mcp.token.criado.1", p1[1].Acao)
+	require.Equal(t, map[string]any{"n": float64(2)}, p1[0].Detalhes, "origem sai dos detalhes")
+	require.Equal(t, ator, *p1[0].AtorID)
+	require.Equal(t, "Pessoa de Teste", *p1[0].AtorNome)
+	require.NotEmpty(t, prox)
+	p2, prox2, err := repo.Listar(ctx, auditoria.Filtro{Limite: 2, Cursor: prox})
+	require.NoError(t, err)
+	require.Len(t, p2, 2)
+	require.Equal(t, "mcp.token.criado.0", p2[0].Acao)
+	require.Equal(t, "mcp.oauth.autorizado", p2[1].Acao)
+	require.Empty(t, prox2, "fim: client.hub_link não é do MCP")
+
+	for _, lixo := range []string{"lixo", "bm9wZQ", "MjAyNi0xMC0yOFQwMDowMDowMFp8eA"} { // não-base64, sem "|", uuid inválido
+		_, _, err = repo.Listar(ctx, auditoria.Filtro{Limite: 2, Cursor: lixo})
+		require.ErrorIs(t, err, auditoria.ErrCursorInvalido, lixo)
+	}
+	f, _, err := repo.Listar(ctx, auditoria.Filtro{Limite: 10, AcaoPrefixo: "mcp.token.criado.1"})
+	require.NoError(t, err)
+	require.Len(t, f, 1)
+	f, _, err = repo.Listar(ctx, auditoria.Filtro{Limite: 10, AcaoPrefixo: "mcp.token"})
+	require.NoError(t, err)
+	require.Len(t, f, 3)
+	f, _, err = repo.Listar(ctx, auditoria.Filtro{Limite: 10, AcaoPrefixo: "mcp_token"}) // _ é literal, não curinga
+	require.NoError(t, err)
+	require.Empty(t, f)
+	f, _, err = repo.Listar(ctx, auditoria.Filtro{Limite: 10, AtorID: &outro})
+	require.NoError(t, err)
+	require.Len(t, f, 1)
+	require.Equal(t, "mcp.oauth.autorizado", f[0].Acao)
+	require.Nil(t, f[0].Detalhes["origem"])
+}
+
+// Empate de instante: o id desempata, e o cursor não repete nem pula ninguém.
+func TestListar_EmpateDeInstanteNaoRepeteNemPula(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	ator := mcptest.Usuario(t, ctx, pool, "admin", true)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, auditoria.Registrar(ctx, pool, ator, fmt.Sprintf("mcp.x.%d", i), "mcp_token", nil, nil))
+	}
+	_, err = pool.Exec(ctx, `UPDATE audit_log SET created_at = '2026-10-28T12:00:00.123456Z'`)
+	require.NoError(t, err)
+	repo := auditoria.NovoRepo(pool)
+	var vistos []string
+	cursor := ""
+	for range 10 {
+		p, prox, err := repo.Listar(ctx, auditoria.Filtro{Limite: 2, Cursor: cursor})
+		require.NoError(t, err)
+		for _, e := range p {
+			vistos = append(vistos, e.ID.String())
+		}
+		if prox == "" {
+			break
+		}
+		cursor = prox
+	}
+	require.Len(t, vistos, 5)
+	require.True(t, slices.IsSortedFunc(vistos, func(a, b string) int { return strings.Compare(b, a) }), "id DESC no empate: %v", vistos)
 }

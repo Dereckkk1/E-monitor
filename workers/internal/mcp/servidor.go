@@ -19,6 +19,7 @@ import (
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
 	"assertividade",
+	"auditoria_mcp",
 	"buscar_emissoras",
 	"destinatarios_pos_venda",
 	"exportar_consolidado",
@@ -123,6 +124,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarFalhas(s, cfg)
 	registrarFalhasCampanhas(s, cfg)
 	registrarPosVenda(s, cfg)
+	registrarAuditoria(s, cfg)
 	return s
 }
 
