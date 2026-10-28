@@ -37,6 +37,7 @@ var ToolsEsperadas = []string{
 	"listar_tipos_material",
 	"listar_usuarios",
 	"listar_veiculacoes",
+	"mapa_cobertura_campanha",
 	"minhas_notificacoes",
 	"obter_campanha",
 	"obter_cliente",
@@ -110,6 +111,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarGerencial(s, cfg)
 	registrarRelatorios(s, cfg)
 	registrarRelatoriosCampanha(s, cfg)
+	registrarMapa(s, cfg)
 	return s
 }
 
