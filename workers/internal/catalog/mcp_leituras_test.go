@@ -182,16 +182,20 @@ func TestDetections_Approved(t *testing.T) {
 	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
 	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-10-10")
 	var det uuid.UUID
-	require.NoError(t, pool.QueryRow(ctx, `SELECT id FROM detections WHERE campaign_id = $1`, camp).Scan(&det))
+	var quando time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT id, detected_at FROM detections WHERE campaign_id = $1`, camp).Scan(&det, &quando))
 	repo := NewDetections(pool)
 
-	ok, err := repo.Approved(ctx, det)
+	ok, err := repo.Approved(ctx, det, quando)
 	require.NoError(t, err)
 	require.True(t, ok)
+	ok, err = repo.Approved(ctx, det, quando.Add(time.Hour))
+	require.NoError(t, err)
+	require.False(t, ok, "detected_at é a chave de poda: outro instante não casa")
 
 	_, err = pool.Exec(ctx, `UPDATE detections SET ignored_at = now() WHERE id = $1`, det)
 	require.NoError(t, err)
-	ok, err = repo.Approved(ctx, det)
+	ok, err = repo.Approved(ctx, det, quando)
 	require.NoError(t, err)
 	require.False(t, ok, "ignorada sai do conjunto aprovado")
 }

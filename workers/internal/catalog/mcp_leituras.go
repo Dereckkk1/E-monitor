@@ -183,9 +183,13 @@ func (d *Detections) Attributions(ctx context.Context, id uuid.UUID, detectedAt 
 
 // Approved diz se a tocada está no conjunto aprovado — o que conta em toda
 // tela (ApprovedDetectionsFilter). Get devolve a tocada mesmo fora dele.
-func (d *Detections) Approved(ctx context.Context, id uuid.UUID) (bool, error) {
+//
+// detectedAt é o detected_at da tocada: detections é particionada por ele, e
+// passá-lo deixa o Postgres podar as partições (como em Attributions).
+func (d *Detections) Approved(ctx context.Context, id uuid.UUID, detectedAt time.Time) (bool, error) {
 	var ok bool
 	err := d.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM detections d WHERE d.id = $1 AND `+ApprovedDetectionsFilter+`)`, id).Scan(&ok)
+		`SELECT EXISTS (SELECT 1 FROM detections d WHERE d.id = $1 AND d.detected_at = $2 AND `+ApprovedDetectionsFilter+`)`,
+		id, detectedAt).Scan(&ok)
 	return ok, err
 }
