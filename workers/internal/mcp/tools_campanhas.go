@@ -162,12 +162,20 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			nomes, err := nomesClientes(ctx, L)
+			var idsClientes []uuid.UUID
+			for _, c := range pg.Items {
+				idsClientes = append(idsClientes, c.ClientID)
+			}
+			cls, err := L.Clientes.ListByIDs(ctx, idsClientes)
 			if err != nil {
 				return nil, err
 			}
+			nomes := make(map[uuid.UUID]string, len(cls))
+			for _, cl := range cls {
+				nomes[cl.ID] = cl.Name
+			}
 			out := mapear(pg, func(c catalog.Campaign) campanhaDTO { return campanhaDe(c, nomes, canceladas) })
-			if len(canceladas) > 0 {
+			if slices.ContainsFunc(pg.Items, func(c catalog.Campaign) bool { return c.Status == "cancelada" }) {
 				out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
 			}
 			if total > tetoCampanhas {
@@ -220,10 +228,11 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 				return nil, err
 			}
 			c.MaterialCount = len(vinculos)
-			nomes, err := nomesClientes(ctx, L)
+			cliente, err := L.Clientes.Get(ctx, c.ClientID)
 			if err != nil {
 				return nil, err
 			}
+			nomes := map[uuid.UUID]string{cliente.ID: cliente.Name}
 			canceladas, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
 			if err != nil {
 				return nil, err
@@ -267,12 +276,25 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			achou := map[uuid.UUID]bool{}
-			cancelada := false
-			linhas := make([]linhaFinanceira, 0, len(fins))
+			porID := make(map[uuid.UUID]catalog.CampaignFinancials, len(fins))
 			for _, f := range fins {
+				porID[f.CampaignID] = f
+			}
+			cancelada := false
+			var faltam []string
+			vistos := map[uuid.UUID]bool{}
+			linhas := make([]linhaFinanceira, 0, len(fins))
+			for _, id := range ids { // ordem da entrada, sem repetir
+				if vistos[id] {
+					continue
+				}
+				vistos[id] = true
+				f, achou := porID[id]
+				if !achou {
+					faltam = append(faltam, id.String())
+					continue
+				}
 				c := camps[f.CampaignID]
-				achou[f.CampaignID] = true
 				cancelada = cancelada || c.Status == "cancelada"
 				linhas = append(linhas, linhaFinanceira{
 					Campanha: refDe(f.CampaignID, c.Name), Estado: c.Status,
@@ -283,12 +305,6 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 			}
 			l := listaInteira(linhas)
 			l.Ressalvas = []string{ressalvaBaseFinanceira}
-			var faltam []string
-			for _, id := range ids {
-				if !achou[id] {
-					faltam = append(faltam, id.String())
-				}
-			}
 			if len(faltam) > 0 {
 				l.Ressalvas = append(l.Ressalvas, "sem campanha no E-monitor para: "+strings.Join(faltam, ", "))
 			}

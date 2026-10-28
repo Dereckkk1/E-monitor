@@ -3,6 +3,7 @@ package mcp
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/mcp/mcptest"
@@ -45,4 +46,17 @@ func TestFixturesDeCatalogo(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.EqualValues(t, 2, rows[0].Expected)
 	require.EqualValues(t, 1, rows[0].InSlot)
+}
+
+func TestNomesEmissoras_IdsRepetidosNaoQuebram(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	e1 := mcptest.Emissora(t, ctx, pool, "Rádio Um", 0)
+	e2 := mcptest.Emissora(t, ctx, pool, "Rádio Dois", 0)
+	var ids []uuid.UUID
+	for i := 0; i < 600; i++ {
+		ids = append(ids, e1, e2)
+	}
+	nomes, err := nomesEmissoras(ctx, NovaLeitura(pool), ids)
+	require.NoError(t, err)
+	require.Equal(t, map[uuid.UUID]string{e1: "Rádio Um", e2: "Rádio Dois"}, nomes)
 }

@@ -172,6 +172,9 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 				return nil, err
 			}
 			var ests []uuid.UUID
+			if soEmissora != nil {
+				rows = slices.DeleteFunc(rows, func(r catalog.DailySummaryRow) bool { return r.StationID != *soEmissora })
+			}
 			for _, r := range rows {
 				ests = append(ests, r.StationID)
 			}
@@ -186,9 +189,6 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 			var tot totaisGrade
 			celulas := make([]celulaGrade, 0, len(rows))
 			for _, r := range rows {
-				if soEmissora != nil && r.StationID != *soEmissora {
-					continue
-				}
 				tot.Esperado += int64(r.Expected)
 				tot.InSlot += int64(r.InSlot)
 				tot.Deficit += int64(r.Deficit)

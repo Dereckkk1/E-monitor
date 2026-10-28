@@ -213,3 +213,20 @@ func TestListarPrecosCampanha_ParidadeComATela(t *testing.T) {
 	require.Equal(t, tipo.String(), pt["tipo"].(map[string]any)["id"])
 	require.EqualValues(t, tela[0].PerType[0].UnitValue, pt["valor_unitario"])
 }
+
+func TestFinanceiroCampanhas_OrdemDaEntradaSemRepetir(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	a := mcptest.Campanha(t, ctx, pool, cli, "Camp A", "2026-10-01", "2026-10-31")
+	b := mcptest.Campanha(t, ctx, pool, cli, "Camp B", "2026-10-01", "2026-10-31")
+	fantasma := uuid.New()
+
+	out := chamarTool(t, cfgTeste(pool), "financeiro_campanhas",
+		map[string]any{"campanha_ids": []string{b.String(), a.String(), b.String(), fantasma.String()}})
+	var ordem []string
+	for _, l := range itens(t, out) {
+		ordem = append(ordem, l["campanha"].(map[string]any)["id"].(string))
+	}
+	require.Equal(t, []string{b.String(), a.String()}, ordem, "ordem da entrada, sem repetir")
+	require.Contains(t, out["ressalvas"], "sem campanha no E-monitor para: "+fantasma.String())
+}
