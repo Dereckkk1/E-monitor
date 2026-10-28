@@ -22,12 +22,15 @@ var ToolsEsperadas = []string{
 	"grade_campanha",
 	"listar_campanhas",
 	"listar_clientes",
+	"listar_materiais",
 	"listar_materiais_campanha",
 	"listar_overrides",
 	"listar_precos_campanha",
 	"listar_regras_distribuicao",
+	"listar_tipos_material",
 	"obter_campanha",
 	"obter_cliente",
+	"obter_material",
 	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
@@ -80,6 +83,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarCampanhas(s, cfg)
 	registrarCampanhasDetalhe(s, cfg)
 	registrarGrade(s, cfg)
+	registrarMateriais(s, cfg)
 	return s
 }
 
