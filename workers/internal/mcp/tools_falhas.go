@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/catalog"
@@ -315,5 +317,210 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 						EmissorasComFalha: len(c.Stations)}
 				}),
 				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "date": res.Date})}})
+		})
+}
+
+// tetoPaginaFalhasDia: cada campanha do modo dia leva até tetoPorItem
+// emissoras. tetoPaginaFalhasCampanha: cada emissora do detalhe leva até
+// tetoPorItem dias de falha. Medidos em TestFalhasCampanhas_PiorCasoCabe e
+// TestObterFalhasCampanha_PiorCasoCabe.
+const (
+	tetoPaginaFalhasDia      = 8
+	tetoPaginaFalhasCampanha = 50
+)
+
+const ressalvaSplit = "deficit = esperado − in_slot (out_slot não fecha a obrigação). deficit_nao_tocou = a emissora não tocou; " +
+	"deficit_fora_do_horario = tocou, mas fora da faixa — só o primeiro é ausência cobrável. extras = out_slot + out_date + bonus; " +
+	"bonificada = os extras cobrem o déficit (provisório enquanto a campanha está ativa). Horizonte: dias já encerrados (antes de " +
+	"hoje em America/Sao_Paulo). Campanha cancelada não entra (sai da cobrança)."
+
+type entradaFalhasCampanhas struct {
+	Modo string `json:"modo,omitempty" jsonschema:"dia (padrão): as campanhas com emissora falhando no dia; historico: todas as campanhas com falha na vigência."`
+	Data string `json:"data,omitempty" jsonschema:"Só no modo dia: AAAA-MM-DD, até 90 dias atrás. Padrão: ontem (America/Sao_Paulo)."`
+	Paginacao
+}
+
+type emissoraDeficit struct {
+	Emissora             ref      `json:"emissora"`
+	Dial                 *string  `json:"dial"`
+	Cidade               *string  `json:"cidade"`
+	Programado           int      `json:"programado"`
+	Identificado         int      `json:"identificado"`
+	Deficit              int      `json:"deficit"`
+	DeficitNaoTocou      int      `json:"deficit_nao_tocou"`
+	DeficitForaDoHorario int      `json:"deficit_fora_do_horario"`
+	Extras               int      `json:"extras"`
+	Bonificada           bool     `json:"bonificada"`
+	DiasDeFalha          []string `json:"dias_de_falha,omitempty"`
+	DiasDeFalhaTotal     *int     `json:"dias_de_falha_total,omitempty"`
+}
+
+func emissoraDeficitDe(s catalog.CampaignFailureStation) emissoraDeficit {
+	e := emissoraDeficit{Emissora: refDe(s.Station.ID, s.Station.Name), Dial: textoOpc(s.Station.Dial), Cidade: textoOpc(s.Station.City),
+		Programado: s.Programmed, Identificado: s.Identified, Deficit: s.Deficit, DeficitNaoTocou: s.DeficitAbsent,
+		DeficitForaDoHorario: s.DeficitOffSlot, Extras: s.Extras, Bonificada: s.IsBonified}
+	if s.FailureDays != nil { // só o detalhe traz os dias
+		ds, n := cortar(s.FailureDays, tetoPorItem)
+		e.DiasDeFalha, e.DiasDeFalhaTotal = ds, &n
+	}
+	return e
+}
+
+type campanhaFalhaDia struct {
+	Campanha       ref               `json:"campanha"`
+	Cliente        string            `json:"cliente"`
+	Estado         string            `json:"estado"`
+	Emissoras      []emissoraDeficit `json:"emissoras"`
+	EmissorasTotal int               `json:"emissoras_total"`
+}
+
+type campanhaFalhaHistorico struct {
+	Campanha             ref    `json:"campanha"`
+	Cliente              string `json:"cliente"`
+	Estado               string `json:"estado"`
+	EmissorasComFalha    int    `json:"emissoras_com_falha"`
+	DiasDeFalha          int    `json:"dias_de_falha"`
+	Deficit              int    `json:"deficit"`
+	DeficitNaoTocou      int    `json:"deficit_nao_tocou"`
+	DeficitForaDoHorario int    `json:"deficit_fora_do_horario"`
+	TotalmenteBonificada bool   `json:"totalmente_bonificada"`
+}
+
+// deficitSplit: o déficit e a sua divisão, comum ao modo dia e ao detalhe.
+// Embutido, sai plano no JSON.
+type deficitSplit struct {
+	Deficit              int `json:"deficit"`
+	DeficitNaoTocou      int `json:"deficit_nao_tocou"`
+	DeficitForaDoHorario int `json:"deficit_fora_do_horario"`
+}
+
+// Sem omitempty nas contagens: 0 campanhas com falha é zero, não ausência.
+type resumoFalhasDia struct {
+	Campanhas int `json:"campanhas"`
+	Emissoras int `json:"emissoras"`
+	deficitSplit
+}
+
+type resumoFalhasDetalhe struct {
+	Emissoras   int `json:"emissoras"`
+	DiasDeFalha int `json:"dias_de_falha"`
+	deficitSplit
+}
+
+type falhasCampanhasDiaDTO struct {
+	Data   string          `json:"data"`
+	Resumo resumoFalhasDia `json:"resumo"`
+	lista[campanhaFalhaDia]
+	Links links `json:"links"`
+}
+
+type falhasCampanhasHistoricoDTO struct {
+	lista[campanhaFalhaHistorico]
+	Links links `json:"links"`
+}
+
+type falhasCampanhaDTO struct {
+	Campanha campanhaResumida    `json:"campanha"`
+	Cliente  string              `json:"cliente"`
+	Resumo   resumoFalhasDetalhe `json:"resumo"`
+	lista[emissoraDeficit]
+	Links links `json:"links"`
+}
+
+func registrarFalhasCampanhas(s *sdk.Server, cfg ConfigServidor) {
+	ferramentaLeitura(s, cfg, "falhas_campanhas",
+		"Lista as campanhas com falha (/admin/station-failures, aba Por campanha). Modo dia (padrão: ontem): as campanhas "+
+			"com emissora falhando no dia, cada uma com as emissoras e o déficit partido em \"não tocou\" × \"fora do horário\" "+
+			"(números da vigência até ontem; até 8 campanhas por página). Modo historico: uma linha por campanha com falha. "+
+			"Para o detalhe de uma, obter_falhas_campanha. Lista paginada.",
+		func(ctx context.Context, L *Leitura, in entradaFalhasCampanhas) (*sdk.CallToolResult, error) {
+			switch in.Modo {
+			case "", "dia":
+			case "historico":
+				if in.Data != "" {
+					return recusa("data só vale no modo dia", "entrada_invalida")
+				}
+				pg, err := buscarJanela(in.Paginacao, func(page, size int) ([]catalog.CampaignHistoricalRow, int, error) {
+					res, err := L.FalhasCampanhas.ListHistorical(ctx, page, size)
+					if err != nil {
+						return nil, 0, err
+					}
+					return res.Campaigns, res.Total, nil
+				})
+				if err != nil {
+					return nil, err
+				}
+				o := falhasCampanhasHistoricoDTO{Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "sub": "historical"})}}
+				o.lista = mapear(pg, func(r catalog.CampaignHistoricalRow) campanhaFalhaHistorico {
+					return campanhaFalhaHistorico{Campanha: refDe(r.Campaign.ID, r.Campaign.Name), Cliente: r.Campaign.ClientName,
+						Estado: r.Campaign.Status, EmissorasComFalha: r.StationsWithFailure, DiasDeFalha: r.TotalFailureDays,
+						Deficit: r.TotalDeficit, DeficitNaoTocou: r.TotalDeficitAbsent, DeficitForaDoHorario: r.TotalDeficitOffSlot,
+						TotalmenteBonificada: r.IsFullyBonified}
+				})
+				o.Ressalvas = []string{ressalvaSplit}
+				return ok(o)
+			default:
+				return recusa(fmt.Sprintf("modo desconhecido %q: use dia ou historico", in.Modo), "entrada_invalida")
+			}
+			d, rec := lerDiaFalha(in.Data, L.agora())
+			if rec != nil {
+				return rec, nil
+			}
+			res, err := L.FalhasCampanhas.ListForDate(ctx, d)
+			if err != nil {
+				return nil, err
+			}
+			sm := res.Summary
+			o := falhasCampanhasDiaDTO{Data: res.Date, Resumo: resumoFalhasDia{Campanhas: sm.Campaigns, Emissoras: sm.Stations,
+				deficitSplit: deficitSplit{Deficit: sm.TotalDeficit, DeficitNaoTocou: sm.TotalDeficitAbsent, DeficitForaDoHorario: sm.TotalDeficitOffSlot}},
+				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "date": res.Date})}}
+			o.lista = mapear(paginar(res.Campaigns, in.Paginacao.comTeto(tetoPaginaFalhasDia)), func(c catalog.CampaignDailyFailure) campanhaFalhaDia {
+				es, n := cortar(c.Stations, tetoPorItem)
+				x := campanhaFalhaDia{Campanha: refDe(c.Campaign.ID, c.Campaign.Name), Cliente: c.Campaign.ClientName,
+					Estado: c.Campaign.Status, EmissorasTotal: n, Emissoras: make([]emissoraDeficit, len(es))}
+				for i, e := range es {
+					x.Emissoras[i] = emissoraDeficitDe(e)
+				}
+				return x
+			})
+			o.Ressalvas = []string{ressalvaSplit, fmt.Sprintf("Modo dia: entram só as emissoras que falharam no dia, mas os números delas "+
+				"somam a vigência inteira até ontem. emissoras de cada campanha: as %d primeiras (emissoras_total traz o real; "+
+				"obter_falhas_campanha lista todas).", tetoPorItem)}
+			return ok(o)
+		})
+
+	ferramentaLeitura(s, cfg, "obter_falhas_campanha",
+		"Devolve as falhas de UMA campanha na vigência até ontem (o drill-in de /admin/station-failures): por emissora, "+
+			"programado, identificado, déficit partido em \"não tocou\" × \"fora do horário\", extras, se está bonificada e "+
+			"os dias de falha; e o link que abre o detalhe na tela (de onde sai o PDF de cobrança). Lista paginada de "+
+			"emissoras (até 50 por página).",
+		func(ctx context.Context, L *Leitura, in entradaCampanhaPaginada) (*sdk.CallToolResult, error) {
+			id, err := uuid.Parse(in.CampanhaID)
+			if err != nil {
+				return recusaEntrada("campanha_id")
+			}
+			res, err := L.FalhasCampanhas.Get(ctx, id)
+			if errors.Is(err, catalog.ErrCampaignNotFound) {
+				return naoEncontrado("campanha (inexistente ou cancelada — cancelada não entra em falhas)")
+			}
+			if err != nil {
+				return nil, err
+			}
+			sm := res.Summary
+			c := res.Campaign
+			o := falhasCampanhaDTO{
+				Campanha: campanhaResumida{Campanha: refDe(c.ID, c.Name), Inicio: c.StartDate, Fim: c.EndDate, Estado: c.Status},
+				Cliente:  c.ClientName,
+				Resumo: resumoFalhasDetalhe{Emissoras: sm.StationsWithFailure, DiasDeFalha: sm.TotalFailureDays, deficitSplit: deficitSplit{
+					Deficit: sm.TotalDeficit, DeficitNaoTocou: sm.TotalDeficitAbsent, DeficitForaDoHorario: sm.TotalDeficitOffSlot}},
+				Links: links{Tela: linkFalhas(cfg, map[string]string{"view": "by_campaign", "campaign": id.String()}),
+					ComoBaixar: "Na tela, o detalhe da campanha abre sozinho; o PDF de cobrança é o botão \"Baixar PDF de cobrança\" dele."},
+			}
+			o.lista = mapear(paginar(res.Stations, in.Paginacao.comTeto(tetoPaginaFalhasCampanha)), emissoraDeficitDe)
+			o.Ressalvas = []string{ressalvaSplit, fmt.Sprintf("dias_de_falha de cada emissora: os %d primeiros (dias_de_falha_total traz o real).", tetoPorItem)}
+			if c.Status == "ativa" {
+				o.Ressalvas = append(o.Ressalvas, "Campanha ativa: os números ainda mudam (o déficit pode ser compensado até o fim da vigência).")
+			}
+			return ok(o)
 		})
 }

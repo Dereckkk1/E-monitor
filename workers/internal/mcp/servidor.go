@@ -22,6 +22,7 @@ var ToolsEsperadas = []string{
 	"buscar_emissoras",
 	"exportar_consolidado",
 	"exportar_veiculacoes",
+	"falhas_campanhas",
 	"falhas_emissoras",
 	"falhas_por_dia",
 	"financeiro_campanhas",
@@ -44,6 +45,7 @@ var ToolsEsperadas = []string{
 	"obter_campanha",
 	"obter_cliente",
 	"obter_emissora",
+	"obter_falhas_campanha",
 	"obter_material",
 	"obter_usuario",
 	"obter_veiculacao",
@@ -116,6 +118,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarRelatoriosCampanha(s, cfg)
 	registrarMapa(s, cfg)
 	registrarFalhas(s, cfg)
+	registrarFalhasCampanhas(s, cfg)
 	return s
 }
 

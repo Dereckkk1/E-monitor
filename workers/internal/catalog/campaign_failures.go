@@ -282,7 +282,9 @@ FROM daily_play_summary_for($1::date, $1::date, $2::uuid[]) dps
 JOIN stations s ON s.id = dps.station_id
 WHERE dps.deficit > 0
 GROUP BY dps.campaign_id, dps.station_id, s.name, s.band, s.frequency_mhz, s.city, s.logo_url
-ORDER BY dps.campaign_id`, dayStr, campIDs)
+-- dps.station_id: a ordenação em Go (sortStationsByDeficit) é estável, então
+-- o empate de déficit e nome fica decidido aqui (o MCP corta esta lista).
+ORDER BY dps.campaign_id, dps.station_id`, dayStr, campIDs)
 	if err != nil {
 		return nil, fmt.Errorf("q2 stations: %w", err)
 	}
@@ -464,7 +466,8 @@ FROM agg a
 JOIN campaigns c ON c.id = a.campaign_id
 LEFT JOIN clients cl ON cl.id = c.client_id
 WHERE c.status != 'cancelada'
-ORDER BY a.stations_with_failure DESC, a.total_deficit DESC, c.name ASC
+-- c.id só desempata (página por LIMIT/OFFSET: sem ele um empate troca de página).
+ORDER BY a.stations_with_failure DESC, a.total_deficit DESC, c.name ASC, c.id
 LIMIT $1 OFFSET $2`, pageSize, offset)
 	if err != nil {
 		return nil, fmt.Errorf("q1 historical: %w", err)
@@ -592,7 +595,8 @@ WHERE dps.campaign_id = $1
   AND ` + failureHorizonClause + `
 GROUP BY dps.station_id, s.name, s.band, s.frequency_mhz, s.city, s.logo_url
 HAVING COUNT(*) FILTER (WHERE dps.deficit > 0) > 0
-ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC`, id)
+-- dps.station_id só desempata (o MCP pagina esta lista).
+ORDER BY COUNT(*) FILTER (WHERE dps.deficit > 0) DESC, s.name ASC, dps.station_id`, id)
 	if err != nil {
 		return nil, fmt.Errorf("query stations: %w", err)
 	}
