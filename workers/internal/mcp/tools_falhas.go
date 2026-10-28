@@ -249,14 +249,17 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "falhas_por_dia",
 		"Devolve a série diária de falhas (/admin/station-failures, aba Por dia): por dia, emissoras com falha, pares "+
 			"emissora × campanha, déficit, tempo fora do ar e quedas; no resumo, dias com falha, o pico e a média de "+
-			"emissoras por dia. Padrão: últimos 30 dias; faixa de até 92 dias, no máximo 90 dias para trás.",
+			"emissoras por dia. Padrão: últimos 30 dias até hoje (America/Sao_Paulo); faixa de até 92 dias, no máximo 90 dias "+
+			"para trás.",
 		func(ctx context.Context, L *Leitura, in entradaFalhasPorDia) (*sdk.CallToolResult, error) {
 			minQ, rec := lerMinQueda(in.MinQuedaSeg)
 			if rec != nil {
 				return rec, nil
 			}
+			// Padrão em America/Sao_Paulo (F2-5); os limites (futuro, 90 dias, 92
+			// dias de faixa) seguem o "hoje" do handler (time.Local do processo).
 			hoje := hojeLocal(L.agora())
-			hojeCal := time.Date(hoje.Year(), hoje.Month(), hoje.Day(), 0, 0, 0, 0, time.UTC)
+			hojeCal := hojeSP(L.agora())
 			de, ate, rec := lerDias(in.De, in.Ate, hojeCal.AddDate(0, 0, -29), hojeCal)
 			if rec != nil {
 				return rec, nil
@@ -297,7 +300,8 @@ func registrarFalhas(s *sdk.Server, cfg ConfigServidor) {
 		})
 
 	ferramentaLeitura(s, cfg, "resumo_diario_falhas",
-		"Devolve o resumo diário de falhas de ontem (o mesmo do aviso que o admin vê ao abrir o portal): quantas campanhas "+
+		"Devolve o resumo diário de falhas de ontem (o mesmo cálculo do aviso que o admin vê ao abrir o portal, com "+
+			"\"ontem\" em America/Sao_Paulo): quantas campanhas "+
 			"e emissoras falharam e, por campanha, quantas emissoras. Não marca nada como visto. Para o detalhe use "+
 			"falhas_campanhas (modo dia) ou falhas_emissoras. Lista paginada de campanhas.",
 		func(ctx context.Context, L *Leitura, in struct{ Paginacao }) (*sdk.CallToolResult, error) {
