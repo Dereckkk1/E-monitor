@@ -20,6 +20,7 @@ import (
 var ToolsEsperadas = []string{
 	"assertividade",
 	"buscar_emissoras",
+	"destinatarios_pos_venda",
 	"exportar_consolidado",
 	"exportar_veiculacoes",
 	"falhas_campanhas",
@@ -35,6 +36,7 @@ var ToolsEsperadas = []string{
 	"listar_materiais",
 	"listar_materiais_campanha",
 	"listar_overrides",
+	"listar_pos_vendas",
 	"listar_precos_campanha",
 	"listar_regras_distribuicao",
 	"listar_tipos_material",
@@ -47,6 +49,7 @@ var ToolsEsperadas = []string{
 	"obter_emissora",
 	"obter_falhas_campanha",
 	"obter_material",
+	"obter_pos_venda",
 	"obter_usuario",
 	"obter_veiculacao",
 	"obter_webhook_cliente",
@@ -119,6 +122,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarMapa(s, cfg)
 	registrarFalhas(s, cfg)
 	registrarFalhasCampanhas(s, cfg)
+	registrarPosVenda(s, cfg)
 	return s
 }
 
