@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -221,7 +222,7 @@ func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
 	repo := postsale.NewRepo(pool)
 	rep, err := repo.CreateDraft(ctx, postsale.CreateDraftInput{ClientID: cli, Title: "Fechamento De Setembro Com Título Bem Comprido"})
 	require.NoError(t, err)
-	nota := strings.Repeat("Compensou com inserções extras no fim de semana. ", 4)
+	nota := strings.Repeat("Compensou com inserções extras no fim de semana. ", 210) // ~10 KB: o teto corta
 	var blocos []postsale.BlockRow
 	var cbs []postsale.CampaignBlock
 	for i := range tetoBlocosPosVenda + 1 {
@@ -241,7 +242,7 @@ func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
 	b, err := json.Marshal(postsale.Payload{Version: postsale.PayloadVersion, Campaigns: cbs})
 	require.NoError(t, err)
 	require.NoError(t, repo.MarkSent(ctx, rep.ID, b))
-	_, err = pool.Exec(ctx, `UPDATE post_sale_reports SET intro_message = $2 WHERE id = $1`, rep.ID, strings.Repeat("Olá! Segue o fechamento. ", 20))
+	_, err = pool.Exec(ctx, `UPDATE post_sale_reports SET intro_message = $2 WHERE id = $1`, rep.ID, strings.Repeat("Olá! Segue o fechamento. ", 820)) // ~20 KB: o teto corta
 	require.NoError(t, err)
 
 	out := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "limit": 100})
@@ -256,8 +257,11 @@ func TestObterPosVenda_PiorCasoCabe(t *testing.T) {
 	// A página seguinte traz a campanha que sobrou, na ordem da tela (position).
 	p2 := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": rep.ID.String(), "offset": tetoBlocosPosVenda})
 	require.Equal(t, blocos[tetoBlocosPosVenda].CampaignID.String(), itens(t, p2)[0]["campanha"].(map[string]any)["id"])
+	require.Equal(t, tetoNota, utf8.RuneCountInString(b0["checking"].([]any)[0].(map[string]any)["nota"].(string)))
+	require.Equal(t, tetoMensagem, utf8.RuneCountInString(out["mensagem"].(string)))
+	require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
 	n := tamanhoDoResultado(t, out)
-	t.Logf("obter_pos_venda: %d campanhas × %d linhas de checking = %d bytes", tetoBlocosPosVenda, tetoPorItem, n)
+	t.Logf("obter_pos_venda: %d campanhas × %d linhas de checking (nota de 10 KB, mensagem de 20 KB) = %d bytes", tetoBlocosPosVenda, tetoPorItem, n)
 	require.Less(t, n, 60_000)
 }
 
@@ -274,5 +278,118 @@ func TestListarPosVendas_PiorCasoCabe(t *testing.T) {
 	require.Equal(t, true, pag(t, out)["has_more"])
 	n := tamanhoDoResultado(t, out)
 	t.Logf("listar_pos_vendas: %d itens = %d bytes", limiteTeto, n)
+	require.Less(t, n, 60_000)
+}
+
+// Texto livre (título, mensagem, nota, erro de email) não vaza URL nem token:
+// o admin pode colar o link do Drive na mensagem, e o erro de SMTP pode trazer
+// o link público do cliente. Nenhuma das 3 tools deixa o segredo passar.
+func TestPosVenda_TextoLivreSemSegredo(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est := mcptest.Emissora(t, ctx, pool, "Rádio X", 1000)
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30", est)
+	const anexo = "https://drive.google.com/d/SEGREDO-ANEXO/view"
+	const colado = "https://drive.google.com/d/SEGREDO2/view"
+	nota := "veja " + colado + " e também " + anexo
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "Fechamento "+colado, "2026-09-01", "2026-09-30", true,
+		&postsale.Payload{Version: postsale.PayloadVersion, Campaigns: []postsale.CampaignBlock{{CampaignID: camp,
+			CheckingRows: []postsale.StationRow{{StationID: est, Name: "Rádio X", Deficit: 1, Kind: postsale.KindCompensation, Note: nota},
+				{StationID: uuid.New(), Name: "Rádio Y", Kind: postsale.KindAbove}}}}},
+		postsale.RecipientInput{Email: "a@cliente.com", Name: "Ana"})
+	_, err := pool.Exec(ctx, `UPDATE post_sale_reports SET attachments_url = $2, intro_message = $3 WHERE id = $1`,
+		id, anexo, "Segue o link "+colado+" e o anexo "+anexo)
+	require.NoError(t, err)
+	var token string
+	require.NoError(t, pool.QueryRow(ctx, `UPDATE post_sale_report_recipients
+		SET email_status = 'failed', email_error = '550 rejected HTTPS://portal.teste/pos-venda/' || token || ' (token ' || token || ')'
+		WHERE report_id = $1 RETURNING token`, id).Scan(&token))
+
+	cfg := cfgTeste(pool)
+	textos := map[string]string{
+		"obter_pos_venda":         textoTool(t, cfg, "obter_pos_venda", map[string]any{"pos_venda_id": id.String()}),
+		"listar_pos_vendas":       textoTool(t, cfg, "listar_pos_vendas", map[string]any{}),
+		"destinatarios_pos_venda": textoTool(t, cfg, "destinatarios_pos_venda", map[string]any{"pos_venda_id": id.String()}),
+	}
+	for nome, texto := range textos {
+		require.NotContains(t, texto, "SEGREDO2", nome)
+		require.NotContains(t, texto, "SEGREDO-ANEXO", nome)
+		require.NotContains(t, texto, token, nome)
+		require.NotContains(t, texto, "pos-venda/"+token[:8], nome)
+		require.NotContains(t, strings.ToLower(texto), "portal.teste/pos-venda", nome)
+	}
+	var o map[string]any
+	require.NoError(t, json.Unmarshal([]byte(textos["obter_pos_venda"]), &o))
+	require.Equal(t, "Segue o link https://drive.google.com/… e o anexo https://drive.google.com/…", o["mensagem"])
+	require.Equal(t, "Fechamento https://drive.google.com/…", o["titulo"])
+	ck := itens(t, o)[0]["checking"].([]any)
+	require.Equal(t, "veja https://drive.google.com/… e também https://drive.google.com/…", ck[0].(map[string]any)["nota"])
+	require.Nil(t, ck[1].(map[string]any)["nota"], "sem nota: null, não \"\"")
+	var d map[string]any
+	require.NoError(t, json.Unmarshal([]byte(textos["destinatarios_pos_venda"]), &d))
+	require.Equal(t, "550 rejected https://portal.teste/… (token [omitido])", itens(t, d)[0]["erro_email"])
+}
+
+// Rascunho: destinatarios_pos_venda explica a lista vazia; obter_pos_venda não
+// fala de checking cortado (não há checking).
+func TestPosVenda_RascunhoExplica(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30")
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "Rascunho", "2026-09-01", "2026-09-30", false, nil)
+	cfg := cfgTeste(pool)
+	d := chamarTool(t, cfg, "destinatarios_pos_venda", map[string]any{"pos_venda_id": id.String()})
+	require.Empty(t, itens(t, d))
+	require.Len(t, d["ressalvas"], 1)
+	require.Contains(t, d["ressalvas"].([]any)[0], "cliente_id")
+	require.Contains(t, d["ressalvas"].([]any)[0], cli.String())
+	o := chamarTool(t, cfg, "obter_pos_venda", map[string]any{"pos_venda_id": id.String()})
+	for _, r := range o["ressalvas"].([]any) {
+		require.NotContains(t, r, "checking de cada campanha", "rascunho não tem checking para cortar")
+	}
+	require.Contains(t, o["ressalvas"], ressalvaRascunho)
+	// A busca chega aparada no repositório, como no handler.
+	require.EqualValues(t, 1, pag(t, chamarTool(t, cfg, "listar_pos_vendas", map[string]any{"busca": "  Rascunho  "}))["total"])
+}
+
+// "sent" legado com payload_json NULL: números null + ressalva, não erro interno.
+func TestObterPosVenda_EnviadoSemPayload(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30")
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "F", "2026-09-01", "2026-09-30", true,
+		&postsale.Payload{Version: postsale.PayloadVersion, Campaigns: []postsale.CampaignBlock{{CampaignID: camp}}})
+	_, err := pool.Exec(ctx, `UPDATE post_sale_reports SET payload_json = NULL WHERE id = $1`, id)
+	require.NoError(t, err)
+	o := chamarTool(t, cfgTeste(pool), "obter_pos_venda", map[string]any{"pos_venda_id": id.String()})
+	require.Equal(t, "enviado", o["estado"])
+	require.Nil(t, itens(t, o)[0]["numeros"])
+	require.Nil(t, itens(t, o)[0]["checking"])
+	require.Contains(t, o["ressalvas"], ressalvaEnviadoSemPayload)
+}
+
+// Pior caso de destinatarios_pos_venda: a página máxima com erro de email
+// longo (o teto o corta) e nome/email longos (alvo < 60 KB).
+func TestDestinatariosPosVenda_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	camp := mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-09-01", "2026-09-30")
+	var pessoas []postsale.RecipientInput
+	for i := range limiteTeto + 1 {
+		pessoas = append(pessoas, postsale.RecipientInput{Email: fmt.Sprintf("%s%03d@agencia-de-publicidade-do-interior.com.br", strings.Repeat("contato.comercial", 2), i),
+			Name: "Maria Aparecida Dos Santos Oliveira Ferreira Da Silva"})
+	}
+	id := mcptest.PosVenda(t, ctx, pool, cli, camp, "F", "2026-09-01", "2026-09-30", true,
+		&postsale.Payload{Version: postsale.PayloadVersion}, pessoas...)
+	_, err := pool.Exec(ctx, `UPDATE post_sale_report_recipients SET email_status = 'failed', email_error = $2,
+		opened_at = now(), revoked_at = now() WHERE report_id = $1`, id, strings.Repeat("550 5.7.1 mensagem recusada pelo servidor ", 300))
+	require.NoError(t, err)
+	out := chamarTool(t, cfgTeste(pool), "destinatarios_pos_venda", map[string]any{"pos_venda_id": id.String(), "limit": 100})
+	require.Len(t, itens(t, out), tetoPaginaDestinatarios)
+	require.EqualValues(t, tetoPaginaDestinatarios, pag(t, out)["limit"], "limit acima do teto é rebaixado e ecoado")
+	require.Equal(t, tetoErroEmail, utf8.RuneCountInString(itens(t, out)[0]["erro_email"].(string)))
+	require.Contains(t, out["ressalvas"], ressalvaTextoCortado)
+	n := tamanhoDoResultado(t, out)
+	t.Logf("destinatarios_pos_venda: %d destinatários com erro de email longo = %d bytes", tetoPaginaDestinatarios, n)
 	require.Less(t, n, 60_000)
 }

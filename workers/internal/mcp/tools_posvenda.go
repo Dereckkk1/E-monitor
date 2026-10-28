@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,11 +30,85 @@ const (
 	tetoBlocosPosVenda = 5
 	// tetoPrevia: cada grupo da prévia de destinatários (são dois).
 	tetoPrevia = 100
+	// tetoPaginaDestinatarios: com 100 por página e o erro de email no teto o
+	// pior caso chegava a 58,5 KB, colado no limite; medido em
+	// TestDestinatariosPosVenda_PiorCasoCabe.
+	tetoPaginaDestinatarios = 50
+
+	// Tetos (em caracteres) dos textos livres do pós-venda: as colunas são TEXT
+	// sem limite, e uma nota ou mensagem colada inteira estouraria o resultado.
+	tetoNota      = 200
+	tetoMensagem  = 1000
+	tetoErroEmail = 300
+	tetoTitulo    = 200
 )
 
-const ressalvaPosVenda = "O pós-venda enviado é um documento CONGELADO: os números são os do dia do envio e não mudam se a campanha for recategorizada depois — divergir de insights_campanha é esperado. O link que o cliente abre e o token dele nunca saem daqui; o anexo sai só como domínio."
+const ressalvaPosVenda = "O pós-venda enviado é um documento CONGELADO: os números são os do dia do envio e não mudam se a campanha for recategorizada depois — divergir de insights_campanha é esperado. O link que o cliente abre e o token dele nunca saem daqui; o anexo e qualquer URL dentro de um texto livre saem só como domínio."
 
-const ressalvaRascunho = "Rascunho: nada está congelado ainda, então numeros, checking e emissoras_conformes vêm null (a prévia da tela recalcula tudo ao vivo; os números só existem a partir do envio)."
+const ressalvaRascunho = "Rascunho: nada está congelado ainda, então números, checking e emissoras conformes vêm null (a prévia da tela recalcula tudo ao vivo; os números só existem a partir do envio)."
+
+const ressalvaEnviadoSemPayload = "Pós-venda enviado sem o documento congelado gravado (envio anterior ao congelamento): números, checking e emissoras conformes vêm null; confira na tela."
+
+const ressalvaTextoCortado = "Algum texto livre (título, mensagem, nota do checking ou erro de email) veio cortado aqui e termina em …; o texto completo está na tela."
+
+// ── Texto livre: sem segredo e com teto ─────────────────────────────────
+
+// cortarTexto corta s em no máximo teto caracteres (runas), com "…" no fim.
+func cortarTexto(s string, teto int) (string, bool) {
+	if utf8.RuneCountInString(s) <= teto {
+		return s, false
+	}
+	r := []rune(s)
+	return string(r[:teto-1]) + "…", true
+}
+
+// higienizador limpa o texto livre do pós-venda (título, mensagem, nota,
+// erro de email): troca o attachments_url literal pelo domínio, apaga o token
+// de cada destinatário e reduz toda URL a esquema+host (F2-7). Limpa ANTES de
+// cortar: cortar primeiro poderia partir uma URL e deixar o pedaço com o
+// segredo escapar do regex. cortou registra se algum texto foi cortado.
+type higienizador struct {
+	trocas *strings.Replacer
+	cortou bool
+}
+
+func novoHigienizador(anexo string, tokens []string) *higienizador {
+	var pares []string
+	if anexo != "" {
+		pares = append(pares, anexo, soEsquemaEHost(anexo))
+	}
+	for _, t := range tokens {
+		if t != "" { // "" no Replacer casaria em toda posição
+			pares = append(pares, t, "[omitido]")
+		}
+	}
+	return &higienizador{trocas: strings.NewReplacer(pares...)}
+}
+
+func (h *higienizador) texto(s string, teto int) string {
+	s = *semCredencialDeURL(new(h.trocas.Replace(s)))
+	s, cortou := cortarTexto(s, teto)
+	h.cortou = h.cortou || cortou
+	return s
+}
+
+// opc: texto() para um campo opcional; vazio ou nil vira null.
+func (h *higienizador) opc(s *string, teto int) *string {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return new(h.texto(*s, teto))
+}
+
+func tokensDe(rs []postsale.Recipient) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.Token
+	}
+	return out
+}
+
+// ── Entradas e DTOs ────────────────────────────────────────────────────
 
 type entradaListarPosVendas struct {
 	Busca       string `json:"busca,omitempty" jsonschema:"Casa no título ou no nome do cliente."`
@@ -75,6 +151,12 @@ type entradaPosVenda struct {
 	Paginacao
 }
 
+type entradaDestinatariosPosVenda struct {
+	PosVendaID string `json:"pos_venda_id,omitempty" jsonschema:"Id do pós-venda (de listar_pos_vendas). Nunca invente: pergunte."`
+	ClienteID  string `json:"cliente_id,omitempty" jsonschema:"Id do cliente (de listar_clientes), para a prévia de quem receberia. Nunca invente: pergunte."`
+	Paginacao
+}
+
 type numerosPosVenda struct {
 	ValorEntregue        float64 `json:"valor_entregue"`
 	Impactos             int64   `json:"impactos"`
@@ -93,14 +175,14 @@ type numerosPosVenda struct {
 }
 
 type checkingDTO struct {
-	Emissora     ref    `json:"emissora"`
-	Programado   int    `json:"programado"`
-	Identificado int    `json:"identificado"`
-	Deficit      int    `json:"deficit"`
-	Extras       int    `json:"extras"`
-	Situacao     string `json:"situacao"`
-	Compensada   bool   `json:"compensada"`
-	Nota         string `json:"nota,omitempty"`
+	Emissora     ref     `json:"emissora"`
+	Programado   int     `json:"programado"`
+	Identificado int     `json:"identificado"`
+	Deficit      int     `json:"deficit"`
+	Extras       int     `json:"extras"`
+	Situacao     string  `json:"situacao"`
+	Compensada   bool    `json:"compensada"`
+	Nota         *string `json:"nota"` // null quando o admin não escreveu
 }
 
 type blocoPosVenda struct {
@@ -146,19 +228,37 @@ type destinatarioDTO struct {
 	RevogadoEm  *string `json:"revogado_em"`
 }
 
-// destinatarioDe é whitelist: o Token (a credencial do link público
-// /pos-venda/:token, sem expiração) NUNCA entra.
-func destinatarioDe(r postsale.Recipient) destinatarioDTO {
-	return destinatarioDTO{Nome: r.Name, Email: r.Email, StatusEmail: r.EmailStatus, ErroEmail: semCredencialDeURL(r.EmailError),
-		AbertoEm: instanteOpc(r.OpenedAt), Aberturas: r.OpenCount, RevogadoEm: instanteOpc(r.RevokedAt)}
+type pessoaDTO struct {
+	Nome  string `json:"nome"`
+	Email string `json:"email"`
 }
 
-func checkingDe(rows []postsale.StationRow) ([]checkingDTO, int) {
+// previaDestinatariosDTO: quem receberia um pós-venda novo do cliente hoje.
+type previaDestinatariosDTO struct {
+	Cliente       []pessoaDTO `json:"cliente"`
+	ClienteTotal  int         `json:"cliente_total"`
+	Internos      []pessoaDTO `json:"internos"`
+	InternosTotal int         `json:"internos_total"`
+	Ressalvas     []string    `json:"ressalvas"`
+}
+
+// destinatarioDe é whitelist: o Token (a credencial do link público
+// /pos-venda/:token, sem expiração) NUNCA entra — nem como campo, nem dentro
+// do erro de email (o higienizador o apaga).
+func destinatarioDe(h *higienizador) func(postsale.Recipient) destinatarioDTO {
+	return func(r postsale.Recipient) destinatarioDTO {
+		return destinatarioDTO{Nome: r.Name, Email: r.Email, StatusEmail: r.EmailStatus, ErroEmail: h.opc(r.EmailError, tetoErroEmail),
+			AbertoEm: instanteOpc(r.OpenedAt), Aberturas: r.OpenCount, RevogadoEm: instanteOpc(r.RevokedAt)}
+	}
+}
+
+func checkingDe(h *higienizador, rows []postsale.StationRow) ([]checkingDTO, int) {
 	rs, n := cortar(rows, tetoPorItem)
 	out := make([]checkingDTO, len(rs))
 	for i, r := range rs {
+		nota := r.Note
 		out[i] = checkingDTO{Emissora: refDe(r.StationID, r.Name), Programado: r.Programmed, Identificado: r.Identified,
-			Deficit: r.Deficit, Extras: r.Extras, Situacao: string(r.Kind), Compensada: r.Compensated, Nota: r.Note}
+			Deficit: r.Deficit, Extras: r.Extras, Situacao: string(r.Kind), Compensada: r.Compensated, Nota: h.opc(&nota, tetoNota)}
 	}
 	return out, n
 }
@@ -175,6 +275,7 @@ func numerosDe(k postsale.BlockKPIs) *numerosPosVenda {
 }
 
 // congeladosDe lê o payload de um pós-venda enviado: campanha → bloco congelado.
+// ErrNotFound volta como está (quem chama distingue "sumiu" de "sem payload").
 func congeladosDe(ctx context.Context, L *Leitura, id uuid.UUID) (map[uuid.UUID]postsale.CampaignBlock, error) {
 	raw, err := L.PosVenda.Payload(ctx, id)
 	if err != nil {
@@ -191,11 +292,11 @@ func congeladosDe(ctx context.Context, L *Leitura, id uuid.UUID) (map[uuid.UUID]
 	return out, nil
 }
 
-func pessoasDe(xs []postsale.RecipientInput) ([]map[string]string, int) {
+func pessoasDe(xs []postsale.RecipientInput) ([]pessoaDTO, int) {
 	cs, n := cortar(xs, tetoPrevia)
-	out := make([]map[string]string, len(cs))
+	out := make([]pessoaDTO, len(cs))
 	for i, x := range cs {
-		out[i] = map[string]string{"nome": x.Name, "email": x.Email}
+		out[i] = pessoaDTO{Nome: x.Name, Email: x.Email}
 	}
 	return out, n
 }
@@ -206,7 +307,7 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 			"destinatários e de quem abriu, período e o link da tela de cada um; mais as contagens por estado. Filtros: busca, "+
 			"cliente_id, competencia (AAAA-MM), estado. Lista paginada.",
 		func(ctx context.Context, L *Leitura, in entradaListarPosVendas) (*sdk.CallToolResult, error) {
-			f := postsale.ListFilter{Q: in.Busca}
+			f := postsale.ListFilter{Q: strings.TrimSpace(in.Busca)} // como o handler
 			if in.Competencia != "" {
 				if !competenciaRe.MatchString(in.Competencia) {
 					return recusa("competencia tem de ser AAAA-MM", "entrada_invalida")
@@ -240,14 +341,18 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
+			h := novoHigienizador("", nil) // a lista não traz anexo nem tokens; o regex de URL basta
 			o := listaPosVendasDTO{Contagens: contagensPosVenda{Todos: contagens.All, Enviados: contagens.Sent, Rascunhos: contagens.Draft},
 				Links: links{Tela: cfg.link("/admin/pos-venda")}}
 			o.lista = mapear(pg, func(it postsale.ListItem) posVendaItem {
-				return posVendaItem{ID: it.ID.String(), Titulo: it.Title, Cliente: refDe(it.ClientID, it.ClientName),
+				return posVendaItem{ID: it.ID.String(), Titulo: h.texto(it.Title, tetoTitulo), Cliente: refDe(it.ClientID, it.ClientName),
 					Estado: nomeEstadoPosVenda[it.Status], EnviadoEm: instanteOpc(it.SentAt), CriadoEm: instante(it.CreatedAt),
 					Campanhas: it.Campaigns, Destinatarios: it.Recipients, Abriram: it.Opened,
 					PeriodoDe: diaOpc(it.PeriodFrom), PeriodoAte: diaOpc(it.PeriodTo), Tela: cfg.link("/admin/pos-venda/" + it.ID.String())}
 			})
+			if h.cortou {
+				o.Ressalvas = append(o.Ressalvas, ressalvaTextoCortado)
+			}
 			return ok(o)
 		})
 
@@ -269,14 +374,26 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				return nil, err
 			}
 			enviado := rep.Status == "sent"
+			semPayload := false
 			var congelados map[uuid.UUID]postsale.CampaignBlock
 			if enviado {
-				if congelados, err = congeladosDe(ctx, L, id); err != nil {
+				congelados, err = congeladosDe(ctx, L, id)
+				if errors.Is(err, postsale.ErrNotFound) {
+					// Payload só dá ErrNotFound se o relatório sumiu entre as duas
+					// leituras ou se é um "sent" com payload_json NULL (legado).
+					if _, err := L.PosVenda.Get(ctx, id); errors.Is(err, postsale.ErrNotFound) {
+						return naoEncontrado("pós-venda")
+					} else if err != nil {
+						return nil, err
+					}
+					semPayload, congelados = true, nil
+				} else if err != nil {
 					return nil, err
 				}
 			}
+			h := novoHigienizador(rep.AttachmentsURL, tokensDe(rep.Recipients))
 			blocos := paginar(rep.Blocks, in.Paginacao.comTeto(tetoBlocosPosVenda))
-			cancelada := false
+			cancelada, comChecking := false, false
 			l, err := mapearErr(blocos, func(b postsale.BlockRow) (blocoPosVenda, error) {
 				c, err := L.Campanhas.Get(ctx, b.CampaignID) // o estado de hoje (a cancelada sai da cobrança)
 				if err != nil {
@@ -285,14 +402,16 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				cancelada = cancelada || c.Status == "cancelada"
 				bl := blocoPosVenda{Campanha: refDe(b.CampaignID, b.CampaignName), Estado: c.Status,
 					PeriodoDe: dia(b.From), PeriodoAte: dia(b.To)}
-				// Rascunho: nada congelado (numeros/checking null). Enviado sem o bloco
-				// no payload não acontece pelo publish; se acontecer, também null.
+				// Rascunho (ou enviado sem payload): nada congelado, números e
+				// checking null. Enviado sem o bloco no payload não acontece pelo
+				// publish; se acontecer, também null.
 				if cb, achou := congelados[b.CampaignID]; achou {
 					bl.Numeros = numerosDe(cb.KPIs)
 					var n int
-					bl.Checking, n = checkingDe(cb.CheckingRows)
+					bl.Checking, n = checkingDe(h, cb.CheckingRows)
 					conformes := cb.ConformingCount
 					bl.CheckingTotal, bl.EmissorasConformes = &n, &conformes
+					comChecking = true
 				}
 				return bl, nil
 			})
@@ -313,32 +432,37 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 			}
 			var anexo *string
 			if rep.AttachmentsURL != "" {
-				a := soEsquemaEHost(rep.AttachmentsURL)
-				anexo = &a
+				anexo = new(soEsquemaEHost(rep.AttachmentsURL))
 			}
-			ress := []string{ressalvaPosVenda, fmt.Sprintf("checking de cada campanha: as %d primeiras linhas (checking_total traz o real).", tetoPorItem)}
-			if !enviado {
-				ress = append(ress, ressalvaRascunho)
+			o := posVendaDTO{ID: rep.ID.String(), Titulo: h.texto(rep.Title, tetoTitulo), Cliente: refDe(rep.ClientID, rep.ClientName),
+				Estado: nomeEstadoPosVenda[rep.Status], EnviadoEm: instanteOpc(rep.SentAt), CriadoEm: instante(rep.CreatedAt),
+				Mensagem: h.texto(rep.IntroMessage, tetoMensagem), Anexo: anexo, Destinatarios: dest, lista: l,
+				Links: links{Tela: cfg.link("/admin/pos-venda/" + rep.ID.String())}}
+			o.Ressalvas = []string{ressalvaPosVenda}
+			if comChecking {
+				o.Ressalvas = append(o.Ressalvas, fmt.Sprintf("checking de cada campanha: as %d primeiras linhas (checking_total traz o real).", tetoPorItem))
+			}
+			switch {
+			case !enviado:
+				o.Ressalvas = append(o.Ressalvas, ressalvaRascunho)
+			case semPayload:
+				o.Ressalvas = append(o.Ressalvas, ressalvaEnviadoSemPayload)
 			}
 			if cancelada {
-				ress = append(ress, ressalvaCanceladaRelatorio)
+				o.Ressalvas = append(o.Ressalvas, ressalvaCanceladaRelatorio)
 			}
-			l.Ressalvas = ress
-			return ok(posVendaDTO{ID: rep.ID.String(), Titulo: rep.Title, Cliente: refDe(rep.ClientID, rep.ClientName),
-				Estado: nomeEstadoPosVenda[rep.Status], EnviadoEm: instanteOpc(rep.SentAt), CriadoEm: instante(rep.CreatedAt),
-				Mensagem: rep.IntroMessage, Anexo: anexo, Destinatarios: dest, lista: l,
-				Links: links{Tela: cfg.link("/admin/pos-venda/" + rep.ID.String())}})
+			if h.cortou {
+				o.Ressalvas = append(o.Ressalvas, ressalvaTextoCortado)
+			}
+			return ok(o)
 		})
 
 	ferramentaLeitura(s, cfg, "destinatarios_pos_venda",
 		"Com pos_venda_id: lista quem recebeu aquele pós-venda (nome, email, status do email, quando abriu, quantas vezes, "+
 			"se o link foi revogado). Com cliente_id: quem RECEBERIA um pós-venda novo desse cliente hoje (usuários ativos do "+
-			"cliente + admins internos que pediram cópia). Passe exatamente um dos dois.",
-		func(ctx context.Context, L *Leitura, in struct {
-			PosVendaID string `json:"pos_venda_id,omitempty" jsonschema:"Id do pós-venda (de listar_pos_vendas). Nunca invente: pergunte."`
-			ClienteID  string `json:"cliente_id,omitempty" jsonschema:"Id do cliente (de listar_clientes), para a prévia de quem receberia. Nunca invente: pergunte."`
-			Paginacao
-		}) (*sdk.CallToolResult, error) {
+			"cliente + admins internos que pediram cópia). Passe exatamente um dos dois. A lista por pos_venda_id é paginada "+
+			"(até 50 por página).",
+		func(ctx context.Context, L *Leitura, in entradaDestinatariosPosVenda) (*sdk.CallToolResult, error) {
 			if (in.PosVendaID == "") == (in.ClienteID == "") {
 				return recusa("passe pos_venda_id OU cliente_id (exatamente um dos dois)", "entrada_invalida")
 			}
@@ -354,7 +478,16 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				if err != nil {
 					return nil, err
 				}
-				return ok(mapear(paginar(rep.Recipients, in.Paginacao), destinatarioDe))
+				h := novoHigienizador(rep.AttachmentsURL, tokensDe(rep.Recipients))
+				l := mapear(paginar(rep.Recipients, in.Paginacao.comTeto(tetoPaginaDestinatarios)), destinatarioDe(h))
+				if rep.Status == "draft" {
+					l.Ressalvas = append(l.Ressalvas, "Rascunho: os destinatários só são gravados no envio, então a lista vem vazia. "+
+						"Para ver quem receberia, chame destinatarios_pos_venda com o cliente_id do pós-venda ("+rep.ClientID.String()+").")
+				}
+				if h.cortou {
+					l.Ressalvas = append(l.Ressalvas, ressalvaTextoCortado)
+				}
+				return ok(l)
 			}
 			if _, rec, err := lerCliente(ctx, L, in.ClienteID); rec != nil || err != nil {
 				return rec, err
@@ -368,11 +501,11 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			cs, nc := pessoasDe(doCliente)
-			is, ni := pessoasDe(internos)
-			return ok(map[string]any{"cliente": cs, "cliente_total": nc, "internos": is, "internos_total": ni,
-				"ressalvas": []string{"É uma prévia: quem receberia se o pós-venda fosse enviado hoje. internos = admins com cópia de todos os pós-vendas ligada. " +
-					fmt.Sprintf("Cada grupo traz até %d pessoas (*_total traz o real).", tetoPrevia)}})
+			o := previaDestinatariosDTO{Ressalvas: []string{"É uma prévia: quem receberia se o pós-venda fosse enviado hoje. internos = admins com cópia de todos os pós-vendas ligada. " +
+				fmt.Sprintf("Cada grupo traz até %d pessoas (*_total traz o real).", tetoPrevia)}}
+			o.Cliente, o.ClienteTotal = pessoasDe(doCliente)
+			o.Internos, o.InternosTotal = pessoasDe(internos)
+			return ok(o)
 		})
 }
 
