@@ -322,7 +322,7 @@ func (c *Campaigns) ListPaged(ctx context.Context, q, competence string, clientI
 		    ELSE 5
 		END,
 		CASE WHEN c.status = 'programada' THEN c.start_date ELSE NULL END ASC NULLS LAST,
-		c.start_date DESC
+		c.start_date DESC, c.id
 		LIMIT $7 OFFSET $8`,
 		q, competence, monthStart, monthEnd, clientIDs, campaignID, pageSize, offset,
 	)
@@ -369,7 +369,7 @@ func (c *Campaigns) ListFiltered(ctx context.Context, statuses []string, clientI
 		    WHEN status = 'programada' THEN start_date
 		    ELSE NULL
 		END ASC NULLS LAST,
-		start_date DESC
+		start_date DESC, id
 	`
 	if len(statuses) == 0 {
 		statuses = nil // nil vira NULL no pgx = "sem filtro de status"
