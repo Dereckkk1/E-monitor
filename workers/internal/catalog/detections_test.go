@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -703,8 +705,10 @@ func TestDetections_AggregateByMaterial_EmpateDesempataPorID(t *testing.T) {
 	ctx, pool, campID, matID, statID := seedAirtimeFixture(t, "Empate-A")
 	dets := NewDetections(pool)
 	cliente := uuid.MustParse(mustClientIDFromCampaign(t, pool, campID))
+	// 10 materiais com 1 tocada cada (empate em cnt e em c.title, nulo).
 	ids := []uuid.UUID{matID}
-	for _, titulo := range []string{"Empate-B", "Empate-C"} {
+	for i := range 9 {
+		titulo := fmt.Sprintf("Empate-%d", i)
 		m, err := NewMaterials(pool).Create(ctx, CreateMaterialInput{
 			ClientID: cliente, Title: titulo, DurationSeconds: 30,
 			MasterStoragePath: "/tmp", MasterSHA256: "empate-" + uuid.NewString(),
@@ -729,12 +733,27 @@ func TestDetections_AggregateByMaterial_EmpateDesempataPorID(t *testing.T) {
 		}
 	}
 
-	res, err := dets.AggregateByMaterial(ctx, AggregateFilter{CampaignIDs: []uuid.UUID{campID}})
+	// Com o plano padrão o GROUP BY ordena por commercial_id antes do ORDER BY,
+	// e o empate já sairia em ordem de id SEM o desempate (provado: o teste
+	// passava com o desempate revertido). Com enable_sort=off o planner agrega
+	// por hash, a ordem de entrada do ORDER BY deixa de ser a do id, e só o
+	// desempate explícito garante a ordem — o teste falha sem ele.
+	cfg, err := pgxpool.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["enable_sort"] = "off"
+	hashPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pool com enable_sort=off: %v", err)
+	}
+	t.Cleanup(hashPool.Close)
+	res, err := NewDetections(hashPool).AggregateByMaterial(ctx, AggregateFilter{CampaignIDs: []uuid.UUID{campID}})
 	if err != nil {
 		t.Fatalf("AggregateByMaterial: %v", err)
 	}
-	if len(res.Data) != 3 {
-		t.Fatalf("linhas = %d, want 3", len(res.Data))
+	if len(res.Data) != 10 {
+		t.Fatalf("linhas = %d, want 10", len(res.Data))
 	}
 	for i := 1; i < len(res.Data); i++ {
 		if res.Data[i-1].MaterialID.String() > res.Data[i].MaterialID.String() {

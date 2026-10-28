@@ -278,7 +278,7 @@ func tamanhoDoResultado(t *testing.T, out map[string]any) int {
 }
 
 // Pior caso de uma página do relatorio_data_hora: limit=100 com nomes longos.
-// O cliente MCP corta a saída em ~25k tokens; o alvo é ficar abaixo de ~75 KB.
+// O cliente MCP corta a saída em ~25k tokens; o alvo de toda tool é ficar abaixo de 60 KB.
 func TestRelatorioDataHora_PiorCasoCabe(t *testing.T) {
 	ctx, pool := mcptest.DBCatalogo(t)
 	cli := mcptest.Cliente(t, ctx, pool, "Cliente Com Um Nome Bem Comprido De Agência E Anunciante Ltda")
@@ -307,7 +307,7 @@ func TestRelatorioDataHora_PiorCasoCabe(t *testing.T) {
 	require.Equal(t, true, pag(t, out)["has_more"])
 	n := tamanhoDoResultado(t, out)
 	t.Logf("relatorio_data_hora: %d linhas = %d bytes", tetoPaginaDataHora, n)
-	require.Less(t, n, 75_000)
+	require.Less(t, n, 60_000)
 }
 
 // por_material não é paginada: acima de 50 sai cortada, com o total real.
@@ -327,4 +327,40 @@ func TestResumoRelatorioCampanha_PorMaterialCortado(t *testing.T) {
 	require.EqualValues(t, tetoMateriaisResumo+1, out["totais"].(map[string]any)["materiais"])
 	require.Contains(t, out["ressalvas"], fmt.Sprintf("por_material cortado em %d de %d materiais (por_material_total traz o número real)",
 		tetoMateriaisResumo, tetoMateriaisResumo+1))
+}
+
+// Pior caso do resumo_relatorio_campanha: 100 emissoras numa página e 50
+// materiais, nomes longos. Alvo de toda tool: < 60 KB.
+func TestResumoRelatorioCampanha_PiorCasoCabe(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	// 100 emissoras passam do limite do guard do dbtest (50): sem zerar no fim,
+	// o próximo teste do pacote recusaria o banco.
+	t.Cleanup(func() {
+		_, err := pool.Exec(context.Background(), `TRUNCATE stations, stream_health_events RESTART IDENTITY CASCADE`)
+		require.NoError(t, err)
+	})
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente Com Um Nome Bem Comprido De Agência E Anunciante Ltda")
+	tipo := mcptest.TipoMaterial(t, ctx, pool, "Spot Comercial De Trinta Segundos")
+	var mats []uuid.UUID
+	for i := range tetoMateriaisResumo {
+		mats = append(mats, mcptest.Material(t, ctx, pool, cli, tipo, fmt.Sprintf("%s %02d", strings.Repeat("Material Com Título Longo ", 3), i)))
+	}
+	var ests []uuid.UUID
+	for i := range limiteTeto {
+		e := mcptest.Emissora(t, ctx, pool, fmt.Sprintf("Rádio Comunitária E Educativa Do Interior Paulista %03d FM", i), 12345.67)
+		_, err := pool.Exec(ctx, `UPDATE stations SET city = 'São José Do Rio Preto Da Serra', state = 'SP', frequency_mhz = 107.9 WHERE id = $1`, e)
+		require.NoError(t, err)
+		ests = append(ests, e)
+	}
+	camp := mcptest.Campanha(t, ctx, pool, cli, strings.Repeat("Campanha De Fim De Ano ", 3), "2026-10-01", "2026-10-31", ests...)
+	for i, e := range ests {
+		mcptest.PMMTarget(t, ctx, pool, cli, e, 54321)
+		mcptest.Veiculacao(t, ctx, pool, camp, mats[i%len(mats)], e, "in_slot",
+			mcptest.Quando(fmt.Sprintf("2026-10-%02d", 1+i%28), fmt.Sprintf("%02d:%02d", 6+i%16, i%60)))
+	}
+	out := chamarTool(t, cfgTeste(pool), "resumo_relatorio_campanha", map[string]any{"campanha_id": camp.String(), "limit": 100})
+	require.Len(t, out["por_material"], tetoMateriaisResumo)
+	n := tamanhoDoResultado(t, out)
+	t.Logf("resumo_relatorio_campanha: %d emissoras + %d materiais = %d bytes", len(itens(t, out)), tetoMateriaisResumo, n)
+	require.Less(t, n, 60_000)
 }

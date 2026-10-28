@@ -44,6 +44,11 @@ type gerencialDTO struct {
 
 const ressalvaGerencial = "Os filtros (cliente, campanhas, estado e período) escolhem QUAIS campanhas entram: o período escolhe as campanhas cuja vigência cruza a janela e recorta veiculacoes_no_periodo; veiculacoes_hoje conta o dia de hoje (America/Sao_Paulo), mas só dessas campanhas. emissoras_monitoradas, estados e materiais_monitorados são das campanhas escolhidas. Sem estado, canceladas ficam fora. emissoras_ao_vivo = monitoradas com worker ativo agora (null = não medido neste ambiente). A lista de emissoras do mapa e o feed ao vivo não vêm aqui: use mapa_cobertura_campanha e listar_veiculacoes."
 
+// ressalvaCanceladasFiltradas: com estado=cancelada a tool devolve justamente
+// os KPIs das canceladas, então a ressalva de relatório ("fora dos KPIs
+// operacionais") contradiria o resultado.
+const ressalvaCanceladasFiltradas = "Filtro explícito de canceladas (estado=cancelada): os KPIs aqui são o histórico dessas campanhas; fora deste filtro elas não entram na Visão Gerencial, e não entram em cobrança."
+
 type entradaAssertividade struct {
 	ClienteID   string   `json:"cliente_id,omitempty" jsonschema:"Só este cliente (de listar_clientes). Vazio = a plataforma inteira."`
 	CampanhaIDs []string `json:"campanha_ids,omitempty" jsonschema:"Só estas campanhas (até 200)."`
@@ -149,7 +154,7 @@ func registrarGerencial(s *sdk.Server, cfg ConfigServidor) {
 			o.Links = links{Tela: cfg.linkTela("/management", q)}
 			o.Ressalvas = []string{ressalvaGerencial}
 			if in.Estado == "cancelada" {
-				o.Ressalvas = append(o.Ressalvas, ressalvaCanceladaRelatorio)
+				o.Ressalvas = append(o.Ressalvas, ressalvaCanceladasFiltradas)
 			}
 			return ok(o)
 		})
