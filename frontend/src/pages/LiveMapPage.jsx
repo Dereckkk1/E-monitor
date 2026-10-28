@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import { useAuth } from '../contexts/AuthContext'
 import { useClients, useCampaignsPaged, useLiveMap, useLiveMapCoverage } from '../api/hooks'
 import { safeLogoUrl } from '../utils/logoUrl'
+import { lerId, lerIds, temFiltro } from '../utils/filtrosDaUrl'
 import BrazilMap from '../components/BrazilMap'
 import CoverageMap from '../components/CoverageMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
@@ -125,10 +126,17 @@ function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
 /* ── Página ──────────────────────────────────────────────────────── */
 export default function LiveMapPage() {
   const { isAdmin, user } = useAuth()
-  const [pickedClientId, setPickedClientId] = useState(null)
+  // Link de outra tela ou do MCP (links.tela): a tela abre já filtrada. Para
+  // quem não escolhe cliente, o client_id da URL é ignorado (vale a carteira).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [pickedClientId, setPickedClientId] = useState(() => lerId(searchParams, 'client_id'))
   // Seleção múltipla, igual /insights: o mapa passa a mostrar a UNIÃO das
   // emissoras e o feed mistura as veiculações das campanhas escolhidas.
-  const [campaignIds, setCampaignIds] = useState([])
+  const [campaignIds, setCampaignIds] = useState(() => lerIds(searchParams, 'campaigns'))
+  // Lido uma vez: tira da URL para ela não contradizer o filtro que a pessoa mudar depois.
+  useEffect(() => {
+    if (temFiltro(searchParams, ['client_id', 'campaigns'])) setSearchParams({}, { replace: true })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // Single-player coordination: só uma row toca por vez.
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
