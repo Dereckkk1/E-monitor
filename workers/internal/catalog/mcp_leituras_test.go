@@ -108,7 +108,7 @@ func TestDetections_Attributions(t *testing.T) {
 		VALUES ($1, $2, $3, $4, 'bonus')`, det, quando, b, mat)
 	require.NoError(t, err)
 
-	got, err := NewDetections(pool).Attributions(ctx, det)
+	got, err := NewDetections(pool).Attributions(ctx, det, quando)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	cats := map[uuid.UUID]string{got[0].CampaignID: got[0].Category, got[1].CampaignID: got[1].Category}
@@ -125,7 +125,7 @@ func TestDetections_ListPaged_FiltrosDoMCP(t *testing.T) {
 	_, mat2 := insSeedTypeAndMaterial(t, ctx, pool, cli, "f-mat2")
 	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
 	insSeedDetection(t, ctx, pool, camp, mat1, st1, "in_slot", "2026-10-10")
-	insSeedDetection(t, ctx, pool, camp, mat1, st2, "orphan", "2026-10-11")
+	insSeedDetection(t, ctx, pool, camp, mat1, st2, "bonus", "2026-10-11")
 	insSeedDetection(t, ctx, pool, camp, mat2, st1, "out_slot", "2026-10-12")
 	repo := NewDetections(pool)
 	base := ListPagedFilter{CampaignIDs: []uuid.UUID{camp}, Page: 1, PageSize: 50}
@@ -143,7 +143,7 @@ func TestDetections_ListPaged_FiltrosDoMCP(t *testing.T) {
 	require.Equal(t, 2, r.Total)
 
 	f = base
-	f.Categories = []string{"bonus", "orphan"}
+	f.Categories = []string{"bonus"}
 	r, err = repo.ListPaged(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Total)
@@ -151,4 +151,25 @@ func TestDetections_ListPaged_FiltrosDoMCP(t *testing.T) {
 	r, err = repo.ListPaged(ctx, base)
 	require.NoError(t, err)
 	require.Equal(t, 3, r.Total, "sem os filtros novos, nada muda para a tela")
+
+	// O filtro de categoria lê a PROJEÇÃO (detection_attributions): uma tocada
+	// canônica in_slot na campanha A com projeção bonus na campanha B aparece
+	// só como a linha de B quando se pede "bonus".
+	a2 := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	b2 := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	insSeedDetection(t, ctx, pool, a2, mat1, st1, "in_slot", "2026-10-13")
+	var det uuid.UUID
+	var quando time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id, detected_at FROM detections WHERE campaign_id = $1`, a2).Scan(&det, &quando))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, 'bonus')`, det, quando, b2, mat1)
+	require.NoError(t, err)
+	r, err = repo.ListPaged(ctx, ListPagedFilter{
+		CampaignIDs: []uuid.UUID{a2, b2}, Categories: []string{"bonus"}, Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Total)
+	require.Len(t, r.Data, 1)
+	require.Equal(t, b2, r.Data[0].CampaignID)
 }
