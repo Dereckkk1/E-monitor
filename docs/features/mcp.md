@@ -122,23 +122,24 @@ relatório devolve `links: {tela, como_baixar?}` (ver "Relatórios: deep-link e 
 | `resumo_relatorio_campanha` | totais, por material (até 50), por emissora (paginada) | `Detections.AggregateByMaterial`/`AggregateByStation` + `catalog.TotaisDoResumo`/`ImpactosDaEmissora` | `/reports/airtime?…` + `como_baixar` |
 | `exportar_consolidado` | nº de linhas do CSV Consolidado + onde baixar | `Detections.AggregateByMaterialStation` | `/reports/airtime?…` + `como_baixar` |
 | `exportar_veiculacoes` | nº de linhas do CSV Detalhado + onde baixar | `Detections.ListPaged` (o total) | `/reports/airtime?…` + `como_baixar` |
-| `mapa_cobertura_campanha` | emissoras com classe e raios Anatel, cidades (20 por emissora), municípios distintos | `LiveMap.Get` + `LiveMap.Coverage` | `/live-map?campaigns[&client_id]` (client_id só quando todas são de um cliente) |
+| `mapa_cobertura_campanha` | emissoras com classe e raios Anatel, cidades (20 por emissora), municípios distintos | `LiveMap.Get` + `LiveMap.Coverage` + `LiveCoverageResult.Totals` | `/live-map?campaigns[&client_id]` (client_id só quando todas são de um cliente) |
 | `falhas_emissoras` | emissoras com falha no dia (déficit TOTAL, sem o split) | `StationFailures.ListForDate` | `/admin/station-failures?view=by_station&date&min_down` |
 | `falhas_campanhas` | modo dia (split "não tocou" × "fora do horário") ou histórico | `CampaignFailures.ListForDate` / `ListHistorical` | `…?view=by_campaign&date` / `…?view=by_campaign&sub=historical` |
 | `obter_falhas_campanha` | o drill-in de UMA campanha (por emissora, com o split) | `CampaignFailures.Get` | `…?view=by_campaign&campaign=<id>` + `como_baixar` (PDF de cobrança) |
 | `falhas_por_dia` | série diária + dias com falha, pico e média | `FailuresDaily.ListDaily` | `…?view=by_day&from&to&min_down` |
-| `resumo_diario_falhas` | o digest de ontem (sem `seen`; nunca marca visto) | `CampaignFailures.ListForDate` | `…?view=by_campaign&date` |
+| `resumo_diario_falhas` | o digest de ontem em SP (sem `seen`; nunca marca visto; ver "Fuso das falhas") | `CampaignFailures.ListForDate` | `…?view=by_campaign&date` |
 | `listar_pos_vendas` | pós-vendas + contagens por estado | `postsale.Repo.List` | `/admin/pos-venda` (e `/admin/pos-venda/<id>` por item) |
-| `obter_pos_venda` | números congelados, checking (20 por campanha), resumo de destinatários | `Repo.Get` + `Repo.Payload` | `/admin/pos-venda/<id>` |
+| `obter_pos_venda` | números congelados (com a regra de exibição do `/insights`: `bonificacao` null em bloco 100% consolidado, `cpm`/`cpm_target` null sem impactos), checking (20 por campanha), resumo de destinatários | `Repo.Get` + `Repo.Payload` | `/admin/pos-venda/<id>` |
 | `destinatarios_pos_venda` | quem recebeu (sem token) ou quem receberia hoje | `Repo.Get`, `ActiveClientUsers`, `InternalRecipients` | — |
 | `auditoria_mcp` | eventos gravados pelo MCP, por cursor (`page.total: null`) | `auditoria.Listar` (`metadata->>'origem' = 'mcp'`) | — |
 
 **Tetos de página reais** (o `limit` do schema genérico diz "máximo 100", mas estas tools cortam antes; o teto
 está na descrição de cada uma e em `page.limit`): `mapa_cobertura_campanha` 25, `relatorio_data_hora` 50,
-`falhas_emissoras` 8, `falhas_campanhas` (modo dia) 8, `obter_falhas_campanha` 50, `obter_pos_venda` 5
-campanhas por página, `destinatarios_pos_venda` 50, `auditoria_mcp` 20. Listas DENTRO de um item (quedas,
+`falhas_emissoras` 7, `falhas_campanhas` (modo dia) 8, `obter_falhas_campanha` 50, `obter_pos_venda` 5
+campanhas por página, `listar_pos_vendas` 50, `destinatarios_pos_venda` 50, `auditoria_mcp` 20. Listas DENTRO de um item (quedas,
 campanhas, emissoras, cidades, linhas de checking, dias de falha) saem cortadas em 20, com o `*_total` real e
-uma ressalva. O alvo é cada resposta abaixo de 60 KB (o cliente MCP corta a saída em ~25k tokens), travado por
+uma ressalva. Nas tools de falha o `cliente` sai como `ref {id, nome}`, como no resto do MCP (o
+`StationFailures` passou a trazer `client_id` só para isso). O alvo é cada resposta abaixo de 60 KB (o cliente MCP corta a saída em ~25k tokens), travado por
 teste nas tools de lista larga.
 
 ## Relatórios: deep-link e downloads
@@ -410,6 +411,37 @@ todos os tokens daquele cliente para o usuário.
   compensa.
 - **Fuso das falhas:** `station_failures` lê o dia em `time.Local` (UTC no container) e `failures_daily` em
   America/Sao_Paulo. As tools espelham a tela (o mesmo número que cada aba mostra); unificar é follow-up.
+- **O aviso diário do portal e `resumo_diario_falhas` podem ler dias diferentes.** O modal do digest
+  (`GET /admin/daily-failures-digest`) usa `yesterdayLocal()` = `time.Now()` − 1 dia no fuso do processo (UTC no
+  container): entre 21h e 24h de SP ele mostra como "ontem" o dia CORRENTE de SP, ainda incompleto. A tool usa o
+  ontem de America/Sao_Paulo (F2-5) e diz isso na descrição; o cálculo é o mesmo (`CampaignFailures.ListForDate`),
+  só o dia muda. **Follow-up do handler:** calcular o ontem em America/Sao_Paulo (a chave de "visto" do modal muda
+  junto).
+- **`visao_gerencial` paga consultas que descarta.** `ManagementOverview.Get` sempre roda `queryStations` (a lista
+  do mapa) e `queryRecentDetections` (o feed), e a tool não devolve nenhuma das duas (F2-3). **Follow-up de custo:**
+  uma opção no `Get` para pular as duas quando quem chama só quer os KPIs.
+- **`insights_campanha` não tem limite de período** (o handler `/insights` também não): um período de anos é aceito
+  e custa o que custa na tela. E o `links.tela` leva as emissoras e os materiais filtrados na query: com dezenas de
+  ids (36 caracteres cada), a URL pode passar de ~16 KB, acima do que alguns proxies e navegadores aceitam; nesse
+  caso abra a tela e refaça o filtro à mão.
+
+### Divergências do plano e da spec (registradas)
+
+O plano (`docs/superpowers/plans/2026-10-28-mcp-fatia-2-relatorios.md`) e a spec não são editados à mão; o que
+mudou na implementação, e por quê:
+
+- **Avaliação:** a semente é código Go (`workers/internal/mcp/avaliacao/semear.go`, numa transação, só em banco
+  vazio), não o `semente.sql` do plano: as datas relativas e os ids cruzados ficam testáveis e o gabarito acha os
+  ids pelos nomes.
+- **Deep-link:** a spec §4.5 fala em `links: {tela, baixar?}` com rotas como `/detections`; o código usa
+  `{tela, como_baixar}` (o texto do botão a apertar, nunca uma URL de arquivo — F2-1) e os downloads apontam para
+  `/reports/airtime`, de onde saem o CSV detalhado e o consolidado (F2-2).
+- **Tetos de página menores que o plano** (ver "Tetos de página reais"): cada um medido por um teste de pior caso
+  com o alvo de 60 KB.
+- **`Leitura.Pool` virou `Leitura.Auditoria`** (um `auditoria.Repo`): nenhuma tool lê o pool cru.
+- **Formatos:** `investido` é número (o card "Investido" da tela); `bonificacao` pode ser `null` (a tela esconde o
+  card em seleção 100% consolidada, onde o zero é ausência de preço) — no `insights_campanha` e no
+  `obter_pos_venda`.
 - **`Paginacao.limit` do schema diz "máximo 100"**, mas várias tools de relatório têm teto menor (ver "Tetos de
   página reais"); o teto real está na descrição de cada tool e em `page.limit`.
 - **A tela limpa a URL antes de saber se a sessão vale.** Numa aba com sessão vencida, o 401 leva ao login e o

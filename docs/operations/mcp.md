@@ -180,6 +180,12 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
   o handler HTTP com claims de admin e compara os números.
 - Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, siga o roteiro "Conferência com dado
   real". Divergência = bug: não siga para a fatia seguinte.
+- **O template envelhece.** Os testes e a semente da avaliação usam datas relativas a hoje, e `detections`,
+  `detection_campaigns` e `stream_health_events` são particionadas por mês: a migration 0048 cria as partições
+  de 18 meses à frente **na hora do `migrate`** (`ensure_month_partitions(18)`), e no banco de teste ninguém roda a
+  manutenção. Um template nunca re-migrado começa a falhar quando o mês corrente passa do horizonte (insert sem
+  partição). Sintoma: `no partition of relation "detections" found for row`. Conserto: rode
+  `SELECT ensure_month_partitions(18);` no template (ou recrie-o com `migrate up`) e crie os bancos de novo.
 
 ## Avaliação (mcp-builder)
 
