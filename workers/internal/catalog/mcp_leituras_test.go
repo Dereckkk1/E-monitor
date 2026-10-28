@@ -173,3 +173,25 @@ func TestDetections_ListPaged_FiltrosDoMCP(t *testing.T) {
 	require.Len(t, r.Data, 1)
 	require.Equal(t, b2, r.Data[0].CampaignID)
 }
+
+func TestDetections_Approved(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli := insSeedClient(t, ctx, pool, "Aprov "+uuid.NewString()[:6])
+	st := insSeedStationNoProfile(t, ctx, pool, "Aprov "+uuid.NewString()[:6])
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, cli, "aprov")
+	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	insSeedDetection(t, ctx, pool, camp, mat, st, "in_slot", "2026-10-10")
+	var det uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT id FROM detections WHERE campaign_id = $1`, camp).Scan(&det))
+	repo := NewDetections(pool)
+
+	ok, err := repo.Approved(ctx, det)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_, err = pool.Exec(ctx, `UPDATE detections SET ignored_at = now() WHERE id = $1`, det)
+	require.NoError(t, err)
+	ok, err = repo.Approved(ctx, det)
+	require.NoError(t, err)
+	require.False(t, ok, "ignorada sai do conjunto aprovado")
+}
