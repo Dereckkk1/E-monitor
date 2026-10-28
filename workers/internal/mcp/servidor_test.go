@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -254,6 +255,20 @@ func TestInstrucoes_TemGlossarioListasEPontes(t *testing.T) {
 	require.Contains(t, Instrucoes, "Listas devolvem items e page")
 	require.Contains(t, Instrucoes, "obter_cliente devolve hub_id")
 	require.Contains(t, Instrucoes, "obter_campanha aceita campanha_id ou codigo")
+}
+
+func TestInstrucoes_Relatorios(t *testing.T) {
+	require.Contains(t, Instrucoes, "links.tela")
+	require.Contains(t, Instrucoes, "nunca invente um link de download")
+	require.Contains(t, Instrucoes, "não tocou")
+	require.Contains(t, Instrucoes, "volume")
+}
+
+// A lista é a do tools/list do SDK (ordem alfabética) e tem as 44 tools das
+// Fatias 1 e 2: quem acrescentar tool atualiza o número junto.
+func TestToolsEsperadas_OrdemAlfabeticaE44(t *testing.T) {
+	require.True(t, slices.IsSorted(ToolsEsperadas))
+	require.Len(t, ToolsEsperadas, 44)
 }
 
 // Toda tool que pede id obrigatório diz "nunca invente" (contrato §3.2), na
