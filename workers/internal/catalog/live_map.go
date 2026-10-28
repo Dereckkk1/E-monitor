@@ -241,7 +241,8 @@ func (m *LiveMap) queryStations(ctx context.Context, campaignIDs []uuid.UUID) ([
 		FROM stations s
 		JOIN mon_stations ms ON ms.station_id = s.id
 		WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
-		ORDER BY s.name`, campaignIDs)
+		-- s.id só desempata (o MCP pagina esta lista).
+		ORDER BY s.name, s.id`, campaignIDs)
 	if err != nil {
 		return nil, err
 	}
