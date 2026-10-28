@@ -1,6 +1,8 @@
+import { useMemo } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
+import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
 
 // Stations
 export function useStations({ enabled = true, ...params } = {}) {
@@ -243,6 +245,33 @@ export function useCampaignsPaged({ q = '', competence = '', id = '', page = 1, 
     // search input's focus) doesn't flicker out on every keystroke.
     placeholderData: (prev) => prev,
   })
+}
+
+// Opções dos seletores de campanha (/insights, /management, /live-map): a 1ª
+// página de /campaigns (200, ativas primeiro) MAIS as campanhas selecionadas
+// que ficaram fora dela — o caso de um link (de outra tela ou do MCP) para uma
+// campanha concluída antiga. Sem isso a tela filtrava por ela com o seletor
+// vazio. Cada uma vem de /campaigns?id=, que devolve a mesma linha da lista e
+// respeita o escopo de quem está logado (campanha alheia simplesmente não vem).
+export function useCampaignsWithSelected(selectedIds = []) {
+  const pageQ = useCampaignsPaged({ page: 1, pageSize: 200 })
+  const page = pageQ.data?.data
+  const missing = campanhasForaDaPagina(page, selectedIds)
+  const extras = useQueries({
+    queries: missing.map(id => ({
+      queryKey: ['campaigns', 'row', id],
+      queryFn: () => api.get('/campaigns', { params: { id, page: 1, page_size: 1 } })
+        .then(r => r.data?.data?.[0] ?? null),
+      staleTime: 60_000,
+    })),
+  })
+  // Chave estável dos extras: useQueries devolve um array novo a cada render.
+  const extrasKey = extras.map(q => `${q.data?.id ?? ''}@${q.dataUpdatedAt}`).join(',')
+  const campaigns = useMemo(
+    () => juntarCampanhas(page, extras.map(q => q.data)),
+    [page, extrasKey], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  return { campaigns, isPending: pageQ.isPending || extras.some(q => q.isPending) }
 }
 
 // Admin — emissoras que falharam num dado dia (default ontem). Cruza

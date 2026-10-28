@@ -4,7 +4,7 @@ import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import BrazilMap from '../components/BrazilMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
-import { useClients, useCampaignsPaged, useManagementOverview, useAssertiveness } from '../api/hooks'
+import { useClients, useCampaignsWithSelected, useManagementOverview, useAssertiveness } from '../api/hooks'
 import FlowEmptyState from '../components/FlowEmptyState'
 import { safeLogoUrl } from '../utils/logoUrl'
 import { lerId, lerIds, lerOpcao, lerPeriodo, temFiltro } from '../utils/filtrosDaUrl'
@@ -176,8 +176,9 @@ export default function ManagementPage() {
     [clientsQ.data],
   )
 
-  const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
-  const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
+  // As selecionadas fora da página 1/200 (link para campanha antiga) entram junto.
+  const campaignsQ = useCampaignsWithSelected(campaignIds)
+  const allCampaigns = campaignsQ.campaigns
   const campOpts = useMemo(() => {
     const rows = clientId ? allCampaigns.filter(c => c.client_id === clientId) : allCampaigns
     return rows.map(c => ({ value: c.id, label: c.name }))
