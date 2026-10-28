@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/google/uuid"
@@ -253,14 +254,24 @@ func falhaInterna(log *zap.Logger, tool string, err error) (*sdk.CallToolResult,
 func ferramentaLeitura[In any](s *sdk.Server, cfg ConfigServidor, nome, descricao string,
 	fn func(ctx context.Context, L *Leitura, in In) (*sdk.CallToolResult, error)) {
 	sdk.AddTool(s, &sdk.Tool{Name: nome, Description: descricao, Annotations: anotacoesLeitura()},
-		func(ctx context.Context, _ *sdk.CallToolRequest, in In) (*sdk.CallToolResult, any, error) {
+		func(ctx context.Context, _ *sdk.CallToolRequest, in In) (res *sdk.CallToolResult, out any, err error) {
+			// O SDK roda cada request numa goroutine sem recover: um panic aqui
+			// derrubaria o processo inteiro da API (supervisor de workers incluso).
+			defer func() {
+				if r := recover(); r != nil {
+					res, out, err = falhaInterna(cfg.log(), nome, fmt.Errorf("panic: %v\n%s", r, debug.Stack()))
+				}
+			}()
 			if cfg.Leitura == nil {
 				return falhaInterna(cfg.log(), nome, fmt.Errorf("mcp: Leitura não configurada"))
 			}
-			res, err := fn(ctx, cfg.Leitura, in)
-			if err != nil {
-				return falhaInterna(cfg.log(), nome, err)
+			r, e := fn(ctx, cfg.Leitura, in)
+			if e != nil {
+				return falhaInterna(cfg.log(), nome, e)
 			}
-			return res, nil, nil
+			if r == nil {
+				return falhaInterna(cfg.log(), nome, errors.New("tool devolveu resultado nil"))
+			}
+			return r, nil, nil
 		})
 }
