@@ -21,6 +21,10 @@ var ToolsEsperadas = []string{
 	"financeiro_campanhas",
 	"listar_campanhas",
 	"listar_clientes",
+	"listar_materiais_campanha",
+	"listar_overrides",
+	"listar_precos_campanha",
+	"listar_regras_distribuicao",
 	"obter_campanha",
 	"obter_cliente",
 	"pmm_target_cliente",
@@ -72,6 +76,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarSistema(s, p)
 	registrarClientes(s, cfg)
 	registrarCampanhas(s, cfg)
+	registrarCampanhasDetalhe(s, cfg)
 	return s
 }
 

@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"testing"
 
 	"github.com/google/uuid"
@@ -124,4 +126,90 @@ func TestFinanceiroCampanhas_ParidadeComATela(t *testing.T) {
 	require.NotEmpty(t, out["ressalvas"])
 
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "financeiro_campanhas", map[string]any{"campanha_ids": []string{}}), "[entrada_invalida]")
+}
+
+// cenarioCampanha monta uma campanha com material, regra (seg a sex), ajuste e preço.
+func cenarioCampanha(t *testing.T) (ctx context.Context, pool *pgxpool.Pool, admin, camp, est, tipo, mat uuid.UUID) {
+	t.Helper()
+	ctx, pool = mcptest.DBCatalogo(t)
+	admin = mcptest.Usuario(t, ctx, pool, "admin", true)
+	cli := mcptest.Cliente(t, ctx, pool, "Cliente")
+	est = mcptest.Emissora(t, ctx, pool, "Rádio Um", 1000)
+	tipo = mcptest.TipoMaterial(t, ctx, pool, "Spot")
+	mat = mcptest.Material(t, ctx, pool, cli, tipo, "Spot A")
+	camp = mcptest.Campanha(t, ctx, pool, cli, "Camp", "2026-10-01", "2026-10-31", est)
+	mcptest.Vincular(t, ctx, pool, camp, mat, est)
+	mcptest.Regra(t, ctx, pool, camp, tipo, est, "2026-10-01", "2026-10-31", 62, "06:00", "12:00", 2)
+	mcptest.Ajuste(t, ctx, pool, camp, tipo, est, "2026-10-15", 0, "00:00", "23:59")
+	mcptest.Preco(t, ctx, pool, camp, est, tipo, 150)
+	return
+}
+
+func TestListarMateriaisCampanha_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, est, tipo, mat := cenarioCampanha(t)
+	h := &handlers.CampaignMaterialsHandler{Repo: catalog.NewCampaignMaterials(pool), CampaignRepo: catalog.NewCampaigns(pool)}
+	var tela []catalog.CampaignMaterial
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.ListByCampaign, "/x", map[string]string{"campaignID": camp.String()}, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "listar_materiais_campanha", map[string]any{"campanha_id": camp.String()})
+	l := itens(t, out)
+	require.Len(t, l, len(tela))
+	require.Equal(t, mat.String(), l[0]["material"].(map[string]any)["id"])
+	require.Equal(t, "Spot A", l[0]["material"].(map[string]any)["nome"])
+	require.Equal(t, tipo.String(), l[0]["tipo"].(map[string]any)["id"])
+	require.Equal(t, est.String(), l[0]["emissoras"].([]any)[0].(map[string]any)["id"])
+
+	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "listar_materiais_campanha",
+		map[string]any{"campanha_id": uuid.NewString()}), "[nao_encontrado]")
+}
+
+func TestListarRegrasDistribuicao_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, _, _, _ := cenarioCampanha(t)
+	h := &handlers.DistributionRulesHandler{Repo: catalog.NewDistributionRules(pool), CampaignRepo: catalog.NewCampaigns(pool)}
+	var tela []catalog.DistributionRule
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.ListByCampaign, "/x", map[string]string{"campaignID": camp.String()}, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "listar_regras_distribuicao", map[string]any{"campanha_id": camp.String()})
+	l := itens(t, out)
+	require.Len(t, l, len(tela))
+	require.Equal(t, tela[0].ID.String(), l[0]["id"])
+	require.EqualValues(t, tela[0].PlaysPerDay, l[0]["insercoes_por_dia"])
+	require.Equal(t, []any{"seg", "ter", "qua", "qui", "sex"}, l[0]["dias_da_semana"])
+	require.Equal(t, map[string]any{"inicio": "06:00", "fim": "12:00"}, l[0]["faixa"])
+	require.Empty(t, l[0]["materiais"], "vazio = todos os materiais do tipo")
+}
+
+func TestListarOverrides_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, _, _, _ := cenarioCampanha(t)
+	h := &handlers.DistributionOverridesHandler{Repo: catalog.NewDistributionOverrides(pool), Recat: catalog.NewDistributionRules(pool)}
+	var tela []catalog.DistributionOverride
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.ListByDateRange, "/x?from=2026-10-01&to=2026-10-31",
+		map[string]string{"campaignID": camp.String()}, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "listar_overrides",
+		map[string]any{"campanha_id": camp.String(), "de": "2026-10-01", "ate": "2026-10-31"})
+	l := itens(t, out)
+	require.Len(t, l, len(tela))
+	require.Equal(t, "2026-10-15", l[0]["data"])
+	require.EqualValues(t, 0, l[0]["insercoes_esperadas"])
+	require.NotEmpty(t, out["ressalvas"])
+
+	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "listar_overrides",
+		map[string]any{"campanha_id": camp.String(), "de": "2026-10-31", "ate": "2026-10-01"}), "[entrada_invalida]")
+}
+
+func TestListarPrecosCampanha_ParidadeComATela(t *testing.T) {
+	_, pool, admin, camp, est, tipo, _ := cenarioCampanha(t)
+	h := &handlers.PricingHandler{Repo: catalog.NewPricing(pool), CampaignRepo: catalog.NewCampaigns(pool)}
+	var tela []catalog.StationPricing
+	require.NoError(t, json.Unmarshal(chamarHandler(t, h.ListByCampaign, "/x", map[string]string{"campaignID": camp.String()}, admin), &tela))
+
+	out := chamarTool(t, cfgTeste(pool), "listar_precos_campanha", map[string]any{"campanha_id": camp.String()})
+	l := itens(t, out)
+	require.Len(t, l, len(tela))
+	require.Equal(t, est.String(), l[0]["emissora"].(map[string]any)["id"])
+	require.Equal(t, "por_insercao", l[0]["modo"])
+	pt := l[0]["por_tipo"].([]any)[0].(map[string]any)
+	require.Equal(t, tipo.String(), pt["tipo"].(map[string]any)["id"])
+	require.EqualValues(t, tela[0].PerType[0].UnitValue, pt["valor_unitario"])
 }
