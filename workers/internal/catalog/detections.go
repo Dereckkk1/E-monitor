@@ -1226,6 +1226,12 @@ type ListPagedFilter struct {
 	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
 	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
 	ClientIDs []uuid.UUID
+
+	// Filtros do MCP (listar_veiculacoes, spec 2026-10-27 §6). nil/vazio =
+	// sem filtro; a tela não os manda, então nada muda para ela.
+	StationID  *uuid.UUID
+	MaterialID *uuid.UUID
+	Categories []string
 }
 
 // ListPagedResult is the wire format returned to the frontend. Total is a
@@ -1324,6 +1330,9 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND ($7::uuid[] IS NULL OR cmp.client_id = ANY($7))
+		  AND ($8::uuid IS NULL OR d.station_id = $8)
+		  AND ($9::uuid IS NULL OR d.commercial_id = $9)
+		  AND ($10::text[] IS NULL OR d.category = ANY($10))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -1343,8 +1352,13 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		LIMIT $5 OFFSET $6`
 
 	offset := (f.Page - 1) * f.PageSize
+	var cats any // nil → NULL: sem filtro de categoria
+	if len(f.Categories) > 0 {
+		cats = f.Categories
+	}
 	rows, err := d.pool.Query(ctx, sql,
-		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs)
+		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs,
+		f.StationID, f.MaterialID, cats)
 	if err != nil {
 		return nil, err
 	}

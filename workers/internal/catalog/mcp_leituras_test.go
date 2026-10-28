@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,4 +51,104 @@ func TestCampaigns_ListByHubCodeECancelledAtFor(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, canc, 1)
 	require.WithinDuration(t, time.Now(), canc[c], time.Minute)
+}
+
+func TestStations_AnatelECoverageCities(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	st := insSeedStationNoProfile(t, ctx, pool, "Anatel "+uuid.NewString()[:6])
+	repo := NewStations(pool)
+
+	vazio, err := repo.Anatel(ctx, st)
+	require.NoError(t, err)
+	require.Nil(t, vazio.Class, "sem cruzamento: tudo null, nunca zero")
+	require.Nil(t, vazio.CoverageKm)
+
+	_, err = pool.Exec(ctx, `
+		UPDATE stations SET anatel_class = 'A4', anatel_coverage_km = 24.0, anatel_reach_km = 36.0,
+		       anatel_match_tier = 'exact', anatel_plan_city = 'Goiânia', anatel_plan_state = 'GO',
+		       anatel_matched_at = now()
+		WHERE id = $1`, st)
+	require.NoError(t, err)
+	a, err := repo.Anatel(ctx, st)
+	require.NoError(t, err)
+	require.Equal(t, "A4", *a.Class)
+	require.InDelta(t, 24.0, *a.CoverageKm, 0.001)
+	require.InDelta(t, 36.0, *a.ReachKm, 0.001)
+	require.Equal(t, "exact", *a.MatchTier)
+
+	_, err = repo.Anatel(ctx, uuid.New())
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO station_coverage_cities (station_id, ibge_code, city, state, distance_km, is_home, latitude, longitude)
+		VALUES ($1, 5208707, 'Goiânia', 'GO', 0, true, -16.68, -49.25),
+		       ($1, 5201405, 'Aparecida de Goiânia', 'GO', 18.2, false, -16.82, -49.24)`, st)
+	require.NoError(t, err)
+	cs, err := repo.CoverageCities(ctx, st)
+	require.NoError(t, err)
+	require.Len(t, cs, 2)
+	require.Equal(t, "Goiânia", cs[0].City, "da mais perto para a mais longe")
+	require.True(t, cs[0].IsHome)
+}
+
+func TestDetections_Attributions(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli := insSeedClient(t, ctx, pool, "Atrib "+uuid.NewString()[:6])
+	st := insSeedStationNoProfile(t, ctx, pool, "Atrib "+uuid.NewString()[:6])
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, cli, "atrib")
+	a := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	b := insSeedCampaign(t, ctx, pool, cli, "2026-10-02", "2026-10-31")
+	insSeedDetection(t, ctx, pool, a, mat, st, "in_slot", "2026-10-10")
+	var det uuid.UUID
+	var quando time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id, detected_at FROM detections WHERE campaign_id = $1`, a).Scan(&det, &quando))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+		VALUES ($1, $2, $3, $4, 'bonus')`, det, quando, b, mat)
+	require.NoError(t, err)
+
+	got, err := NewDetections(pool).Attributions(ctx, det)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	cats := map[uuid.UUID]string{got[0].CampaignID: got[0].Category, got[1].CampaignID: got[1].Category}
+	require.Equal(t, map[uuid.UUID]string{a: "in_slot", b: "bonus"}, cats)
+	require.Equal(t, "atrib", got[0].CommercialName)
+}
+
+func TestDetections_ListPaged_FiltrosDoMCP(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli := insSeedClient(t, ctx, pool, "Filtros "+uuid.NewString()[:6])
+	st1 := insSeedStationNoProfile(t, ctx, pool, "F1 "+uuid.NewString()[:6])
+	st2 := insSeedStationNoProfile(t, ctx, pool, "F2 "+uuid.NewString()[:6])
+	_, mat1 := insSeedTypeAndMaterial(t, ctx, pool, cli, "f-mat1")
+	_, mat2 := insSeedTypeAndMaterial(t, ctx, pool, cli, "f-mat2")
+	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	insSeedDetection(t, ctx, pool, camp, mat1, st1, "in_slot", "2026-10-10")
+	insSeedDetection(t, ctx, pool, camp, mat1, st2, "orphan", "2026-10-11")
+	insSeedDetection(t, ctx, pool, camp, mat2, st1, "out_slot", "2026-10-12")
+	repo := NewDetections(pool)
+	base := ListPagedFilter{CampaignIDs: []uuid.UUID{camp}, Page: 1, PageSize: 50}
+
+	f := base
+	f.StationID = &st1
+	r, err := repo.ListPaged(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, r.Total)
+
+	f = base
+	f.MaterialID = &mat1
+	r, err = repo.ListPaged(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, r.Total)
+
+	f = base
+	f.Categories = []string{"bonus", "orphan"}
+	r, err = repo.ListPaged(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Total)
+
+	r, err = repo.ListPaged(ctx, base)
+	require.NoError(t, err)
+	require.Equal(t, 3, r.Total, "sem os filtros novos, nada muda para a tela")
 }
