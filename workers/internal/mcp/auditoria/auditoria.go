@@ -99,8 +99,12 @@ func (r *Repo) Listar(ctx context.Context, f Filtro) ([]Evento, string, error) {
 var escaparLike = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // chaveSecreta: chave de metadata cujo valor nunca sai de Listar, em qualquer
-// nível (hoje nenhum escritor grava segredo; é a defesa para o próximo).
-var chaveSecreta = regexp.MustCompile(`(?i)secret|token|senha|password`)
+// nível (hoje nenhum escritor grava segredo; é a defesa para o próximo). O
+// casamento é por substring e de propósito largo: chaves inofensivas como
+// token_id, chave_pix ou session_count também saem omitidas — perder um id é
+// barato, vazar uma credencial não.
+var chaveSecreta = regexp.MustCompile(`(?i)secret|segredo|token|senha|password|chave|credencial|credential|` +
+	`api[_-]?key|apikey|authorization|bearer|cookie|jwt|private|verifier|session`)
 
 // omitirSegredos troca por "[omitido]" o valor de toda chave que parece segredo,
 // descendo em objetos e listas aninhados.

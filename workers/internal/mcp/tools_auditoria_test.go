@@ -122,3 +122,28 @@ func TestAuditoriaMCP_DetalhesGrandesESegredos(t *testing.T) {
 	so := chamarTool(t, cfg, "auditoria_mcp", map[string]any{"acao": "mcp.pequeno"})
 	require.NotContains(t, so, "ressalvas")
 }
+
+// Valor string com URL (com ou sem esquema) sai só com o domínio, mesmo sob
+// chave inofensiva e em qualquer nível.
+func TestAuditoriaMCP_URLNosValores(t *testing.T) {
+	ctx, pool := mcptest.DBCatalogo(t)
+	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
+	require.NoError(t, err)
+	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
+	require.NoError(t, auditoria.Registrar(ctx, pool, admin, "mcp.x", "mcp_token", nil, map[string]any{
+		"redirect":   "https://cliente.com/cb?code=SEGREDO-A",
+		"aninhado":   map[string]any{"link": "drive.google.com/drive/folders/SEGREDO-B"},
+		"lista":      []any{"veja HTTPS://x.com/SEGREDO-C"},
+		"quantidade": 2,
+	}))
+	cfg := cfgTeste(pool)
+	texto := textoTool(t, cfg, "auditoria_mcp", map[string]any{})
+	for _, s := range []string{"SEGREDO-A", "SEGREDO-B", "SEGREDO-C"} {
+		require.NotContains(t, texto, s)
+	}
+	d := itens(t, chamarTool(t, cfg, "auditoria_mcp", map[string]any{}))[0]["detalhes"].(map[string]any)
+	require.Equal(t, "https://cliente.com/…", d["redirect"])
+	require.Equal(t, map[string]any{"link": "drive.google.com/…"}, d["aninhado"])
+	require.Equal(t, []any{"veja https://x.com/…"}, d["lista"])
+	require.EqualValues(t, 2, d["quantidade"])
+}

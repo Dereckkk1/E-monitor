@@ -52,10 +52,30 @@ const tetoDetalhesBytes = 2048
 const ressalvaDetalhesResumidos = "Algum evento tinha detalhes acima de 2 KB: eles saem resumidos em detalhes._resumo (tamanho e chaves); o evento completo fica no audit_log."
 
 // detalhesComTeto devolve os detalhes, ou o resumo deles quando passam do teto.
+// semURLNosValores reduz a domínio toda URL dentro dos valores string do
+// metadata (em qualquer nível): a chave pode ser inofensiva e o valor trazer
+// um link com credencial no caminho ou na query.
+func semURLNosValores(v any) any {
+	switch x := v.(type) {
+	case string:
+		return semSegredoNoTexto(x)
+	case map[string]any:
+		for k, val := range x {
+			x[k] = semURLNosValores(val)
+		}
+	case []any:
+		for i, val := range x {
+			x[i] = semURLNosValores(val)
+		}
+	}
+	return v
+}
+
 func detalhesComTeto(d map[string]any) (map[string]any, bool) {
 	if d == nil {
 		return map[string]any{}, false
 	}
+	semURLNosValores(d)
 	b, err := json.Marshal(d)
 	if err == nil && len(b) <= tetoDetalhesBytes {
 		return d, false

@@ -185,23 +185,31 @@ func TestFalhasPorDia_ParidadeComATela(t *testing.T) {
 	require.Contains(t, out["links"].(map[string]any)["tela"], "view=by_day")
 }
 
+// O relógio da tool fica no meio-dia de SP de hoje: o "hoje" em SP (padrão,
+// F2-5) e o do processo (limites do handler) são o mesmo dia em qualquer fuso
+// a até 12 h de SP, e o teste não depende da hora em que roda.
 func TestFalhasPorDia_PadraoERecusas(t *testing.T) {
 	_, pool := mcptest.DBCatalogo(t)
-	cfg := cfgTeste(pool)
-	hoje := time.Now().Format("2006-01-02")
+	agora := hojeSP(time.Now())
+	agora = time.Date(agora.Year(), agora.Month(), agora.Day(), 12, 0, 0, 0, fusoSP)
+	L := NovaLeitura(pool)
+	L.Agora = func() time.Time { return agora }
+	cfg := ConfigServidor{Versao: "teste", Portal: "https://portal.teste", Leitura: L}
+	hoje := dia(hojeSP(agora))
+	em := func(dias int) string { return dia(hojeSP(agora).AddDate(0, 0, dias)) }
+
 	out := chamarTool(t, cfg, "falhas_por_dia", map[string]any{})
-	// O padrão é em America/Sao_Paulo (F2-5), não no fuso do processo.
-	require.Equal(t, dia(hojeSP(time.Now()).AddDate(0, 0, -29)), out["de"])
-	require.Equal(t, dia(hojeSP(time.Now())), out["ate"])
+	require.Equal(t, em(-29), out["de"])
+	require.Equal(t, hoje, out["ate"])
 	require.Len(t, itens(t, out), 30)
 	require.Nil(t, out["resumo"].(map[string]any)["dia_do_pico"], "sem falha: pico null, não \"\"")
 	require.EqualValues(t, 0, out["resumo"].(map[string]any)["dias_com_falha"])
 	// Futuro é cortado em hoje, como o handler.
-	out = chamarTool(t, cfg, "falhas_por_dia", map[string]any{"de": hoje, "ate": time.Now().AddDate(0, 0, 5).Format("2006-01-02")})
+	out = chamarTool(t, cfg, "falhas_por_dia", map[string]any{"de": hoje, "ate": em(5)})
 	require.Equal(t, hoje, out["ate"])
-	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": time.Now().AddDate(0, 0, -91).Format("2006-01-02")}), "90 dias")
-	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": hoje, "ate": time.Now().AddDate(0, 0, -1).Format("2006-01-02")}), "[entrada_invalida]")
-	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": time.Now().AddDate(0, 0, 2).Format("2006-01-02")}), "[entrada_invalida]")
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": em(-91)}), "90 dias")
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": hoje, "ate": em(-1)}), "[entrada_invalida]")
+	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"de": em(2)}), "[entrada_invalida]")
 	require.Contains(t, chamarToolErro(t, cfg, "falhas_por_dia", map[string]any{"min_queda_seg": 5}), "[entrada_invalida]")
 }
 
