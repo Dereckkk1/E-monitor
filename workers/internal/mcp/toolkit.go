@@ -71,6 +71,10 @@ type Paginacao struct {
 	Offset int `json:"offset,omitempty" jsonschema:"Quantos itens pular (padrão 0). Página seguinte: offset + page.returned, enquanto page.has_more for true."`
 }
 
+// paginacao devolve a própria Paginacao; promovido a toda entrada que a
+// embute, deixa o funil das tools checar o offset sem reflexão.
+func (p Paginacao) paginacao() Paginacao { return p }
+
 func (p Paginacao) normalizar() (limit, offset int) {
 	limit = p.Limit
 	if limit <= 0 {
@@ -107,7 +111,7 @@ func novaLista[T any](items []T, total, limit, offset int) lista[T] {
 	}
 	return lista[T]{Items: items, Page: pagina{
 		Total: total, Limit: limit, Offset: offset, Returned: len(items),
-		HasMore: offset+len(items) < total,
+		HasMore: offset+len(items) < total && offset < offsetTeto,
 	}}
 }
 
@@ -146,7 +150,7 @@ func buscarJanela[T any](p Paginacao, buscar func(page, size int) ([]T, int, err
 	}
 	inicio = min(inicio, len(itens))
 	janela := itens[inicio:min(inicio+limit, len(itens))]
-	if len(janela) == 0 && offset > 0 {
+	if len(janela) == 0 && offset > 0 && total == 0 {
 		if _, total, err = buscar(1, 1); err != nil {
 			return lista[T]{}, err
 		}
@@ -264,6 +268,12 @@ func ferramentaLeitura[In any](s *sdk.Server, cfg ConfigServidor, nome, descrica
 			}()
 			if cfg.Leitura == nil {
 				return falhaInterna(cfg.log(), nome, fmt.Errorf("mcp: Leitura não configurada"))
+			}
+			// O clamp de normalizar manteria has_more=true e devolveria a mesma
+			// página para sempre: acima do teto a entrada é recusada.
+			if pp, ok := any(in).(interface{ paginacao() Paginacao }); ok && pp.paginacao().Offset > offsetTeto {
+				r, e := recusa(fmt.Sprintf("offset máximo %d: estreite a busca com filtros (período, emissora, cliente…)", offsetTeto), "entrada_invalida")
+				return r, nil, e
 			}
 			r, e := fn(ctx, cfg.Leitura, in)
 			if e != nil {
