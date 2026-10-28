@@ -213,7 +213,8 @@ Preparar (na raiz `workers/`):
 docker exec rc-mcp-test-pg psql -U radiocheck -d postgres \
   -c "DROP DATABASE IF EXISTS radiocheck_mcp_avaliacao;" \
   -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d2;"
-# o template radiocheck_mcp_test_d2 hoje traz 4 usuários de teste: limpe-os NESSE banco
+# o semear recusa banco com usuário/cliente/emissora/campanha; se algum teste já rodou contra o
+# template, ele traz usuários de sobra — limpar NESSE banco é inofensivo quando ele já vem vazio
 docker exec rc-mcp-test-pg psql -U radiocheck -d radiocheck_mcp_avaliacao -c "TRUNCATE users CASCADE;"
 export AVALIACAO_DATABASE_URL="postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_avaliacao?sslmode=disable"
 go run -tags avaliacao ./internal/mcp/avaliacao/cli semear
