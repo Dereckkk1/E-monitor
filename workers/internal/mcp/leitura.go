@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"radiocheck/internal/assertiveness"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/postsale"
+	"radiocheck/internal/supervisor"
 	"radiocheck/internal/users"
 	"radiocheck/internal/welcome"
 )
@@ -33,6 +37,33 @@ type Leitura struct {
 	Notificacoes      *catalog.Notifications
 	Usuarios          *users.Repo
 	BoasVindas        *welcome.Repo
+	Insights          *catalog.Insights
+	Gerencial         *catalog.ManagementOverview
+	Assertividade     *assertiveness.Repo
+	MapaAoVivo        *catalog.LiveMap
+	FalhasEmissoras   *catalog.StationFailures
+	FalhasCampanhas   *catalog.CampaignFailures
+	FalhasPorDia      *catalog.FailuresDaily
+	PosVenda          *postsale.Repo
+	// Pool: leitura do audit_log pelo auditoria_mcp (o pacote auditoria não tem repositório).
+	Pool *pgxpool.Pool
+	// Workers: o supervisor da API, para "monitorando agora". nil fora da API
+	// (CLI de avaliação, testes): o número sai null, nunca 0.
+	Workers ListaWorkers
+	// Agora: relógio injetável (padrões de data e janela da assertividade).
+	Agora func() time.Time
+}
+
+// ListaWorkers é o que a Visão Gerencial lê do supervisor (*supervisor.Supervisor satisfaz).
+type ListaWorkers interface {
+	WorkerStatuses() []supervisor.WorkerStatus
+}
+
+func (L *Leitura) agora() time.Time {
+	if L.Agora != nil {
+		return L.Agora()
+	}
+	return time.Now()
 }
 
 func NovaLeitura(pool *pgxpool.Pool) *Leitura {
@@ -52,6 +83,15 @@ func NovaLeitura(pool *pgxpool.Pool) *Leitura {
 		Notificacoes:      catalog.NewNotifications(pool),
 		Usuarios:          users.NewRepo(pool),
 		BoasVindas:        welcome.NewRepo(pool),
+		Insights:          catalog.NewInsights(pool),
+		Gerencial:         catalog.NewManagementOverview(pool),
+		Assertividade:     assertiveness.New(pool),
+		MapaAoVivo:        catalog.NewLiveMap(pool),
+		FalhasEmissoras:   catalog.NewStationFailures(pool),
+		FalhasCampanhas:   catalog.NewCampaignFailures(pool),
+		FalhasPorDia:      catalog.NewFailuresDaily(pool),
+		PosVenda:          postsale.NewRepo(pool),
+		Pool:              pool,
 	}
 }
 

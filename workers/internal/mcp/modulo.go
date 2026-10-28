@@ -18,6 +18,8 @@ type DepsModulo struct {
 	Portal  string // NOTIFICATIONS_BASE_URL, ex. https://e-monitor.online
 	Versao  string
 	Log     *zap.Logger
+	// Workers: o supervisor (para "monitorando agora" da visao_gerencial). Pode ser nil.
+	Workers ListaWorkers
 }
 
 type Modulo struct {
@@ -36,7 +38,9 @@ func NovoModulo(d DepsModulo) *Modulo {
 	st := tokens.NovoStore(d.Pool, d.Segredo)
 	o := oauth.NovoServidor(d.Pool, st, d.Segredo, d.Origem, d.Portal, d.Log)
 	a := NovoAutenticador(st, d.Pool, o.URLMetadadosRecurso(), d.Log)
-	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: NovaLeitura(d.Pool), Log: d.Log}
+	L := NovaLeitura(d.Pool)
+	L.Workers = d.Workers
+	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L, Log: d.Log}
 	return &Modulo{
 		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		oauth:  o,

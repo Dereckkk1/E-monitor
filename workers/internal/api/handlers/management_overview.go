@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/supervisor"
 )
 
 // ManagementOverviewRepo é a dependência mínima do handler (mockável em teste).
@@ -96,19 +97,7 @@ func (h *ManagementOverviewHandler) Get(w http.ResponseWriter, r *http.Request) 
 	// stations.health_status não é populada pelo sistema, então não dá pra
 	// contar por ela.
 	if h.Workers != nil {
-		active := make(map[string]bool)
-		for _, ws := range h.Workers.WorkerStatuses() {
-			if ws.Active {
-				active[ws.StationID] = true
-			}
-		}
-		live := 0
-		for _, id := range out.MonitoredStationIDs {
-			if active[id.String()] {
-				live++
-			}
-		}
-		out.KPIs.StationsLive = live
+		out.KPIs.StationsLive = supervisor.ContarAtivas(h.Workers.WorkerStatuses(), out.MonitoredStationIDs)
 	}
 
 	writeJSON(w, http.StatusOK, out)

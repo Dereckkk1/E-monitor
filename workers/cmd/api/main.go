@@ -697,6 +697,7 @@ func main() {
 			Portal:  cfg.NotificationsBaseURL,
 			Versao:  "fatia-0",
 			Log:     logger,
+			Workers: sup,
 		}),
 	}
 
