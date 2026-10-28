@@ -38,6 +38,7 @@
 - **Banco de teste:** um por agente, no container `rc-mcp-test-pg` (porta 55440). Rode SEMPRE `go test -p 1` com `TEST_DATABASE_URL` apontando para o SEU banco. O guard (`dbtest.GuardOrSkip`) recusa banco com mais de 50 emissoras ou 10 clientes: os helpers deste plano truncam o que semeiam.
 - **CRLF:** `gofmt -l` acusa quase tudo por causa do autocrlf. Rode `gofmt -l` só nos arquivos que você criou/tocou.
 - Handlers e repositórios citados aqui são idênticos no `master` e na `feat/mcp-server`; os números de linha do `router.go` diferem (+10 na branch).
+- **`ToolsEsperadas` é em ORDEM ALFABÉTICA** (descoberto no Lote B): o go-sdk devolve o `tools/list` ordenado por nome, então onde uma task diz "acrescente depois de X", insira o nome na posição alfabética. A ordem de chamada dos `registrarX` em `novoServidor` continua a das tasks.
 
 ## Mapa de arquivos
 
