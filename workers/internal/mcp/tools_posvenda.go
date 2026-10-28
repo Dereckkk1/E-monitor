@@ -35,6 +35,9 @@ const (
 	// pior caso chegava a 58,5 KB, colado no limite; medido em
 	// TestDestinatariosPosVenda_PiorCasoCabe.
 	tetoPaginaDestinatarios = 50
+	// tetoPaginaPosVendas: com o título no teto e nome de cliente longo a
+	// página de 100 chegava a 74,5 KB; medido em TestListarPosVendas_PiorCasoCabe.
+	tetoPaginaPosVendas = 50
 
 	// Tetos dos textos livres do pós-venda, em caracteres E em bytes do JSON
 	// (cortarTexto): as colunas são TEXT sem limite, e uma nota ou mensagem
@@ -50,6 +53,10 @@ const ressalvaPosVenda = "O pós-venda enviado é um documento CONGELADO: os nú
 const ressalvaRascunho = "Rascunho: nada está congelado ainda, então números, checking e emissoras conformes vêm null (a prévia da tela recalcula tudo ao vivo; os números só existem a partir do envio)."
 
 const ressalvaEnviadoSemPayload = "Pós-venda enviado sem o documento congelado gravado (envio anterior ao congelamento): números, checking e emissoras conformes vêm null; confira na tela."
+
+const ressalvaBonificacaoOculta = "bonificacao null = campanha 100% consolidada (pacote pela emissora): o documento não mostra o card, porque ali o zero é ausência de preço por inserção, não \"não houve bônus\"."
+
+const ressalvaCPMSemImpactos = "cpm (ou cpm_target) null = não houve impactos (ou impactos no target) no período, e o CPM não se aplica; a página do cliente mostra R$ 0,00 nesse caso."
 
 const ressalvaTextoCortado = "Algum texto livre (título, mensagem, nota do checking ou erro de email) veio cortado aqui e termina em …; o texto completo está na tela."
 
@@ -233,12 +240,15 @@ type entradaDestinatariosPosVenda struct {
 }
 
 type numerosPosVenda struct {
-	ValorEntregue        float64 `json:"valor_entregue"`
-	Impactos             int64   `json:"impactos"`
-	CPM                  float64 `json:"cpm"`
-	Bonificacao          float64 `json:"bonificacao"`
-	BonificacaoInsercoes int64   `json:"bonificacao_insercoes"`
-	Emissoras            int     `json:"emissoras"`
+	ValorEntregue float64 `json:"valor_entregue"`
+	Impactos      int64   `json:"impactos"`
+	// CPM: null sem impactos (não se aplica).
+	CPM *float64 `json:"cpm"`
+	// Bonificacao/BonificacaoInsercoes: null quando a tela esconde o card
+	// (bloco 100% consolidado sem parcela por inserção).
+	Bonificacao          *float64 `json:"bonificacao"`
+	BonificacaoInsercoes *int64   `json:"bonificacao_insercoes"`
+	Emissoras            int      `json:"emissoras"`
 	// Target: null quando nenhuma emissora tem PMM no target (ausência ≠ zero,
 	// docs/features/client-target-pmm.md).
 	ImpactosTarget     *int64   `json:"impactos_target"`
@@ -338,13 +348,27 @@ func checkingDe(h *higienizador, rows []postsale.StationRow) ([]checkingDTO, int
 	return out, n
 }
 
+// numerosDe molda os números congelados com a regra do /insights (que os
+// gerou): bonificação null quando a tela esconde o card (bloco 100%
+// consolidado: o zero ali é ausência de preço, não "não houve bônus"); CPM
+// null sem impactos e CPM no target null sem impactos no target (divisão por
+// zero — a página do cliente mostra "R$ 0,00" nesses dois casos; aqui é "não
+// se aplica", como no insights_campanha).
 func numerosDe(k postsale.BlockKPIs) *numerosPosVenda {
-	n := &numerosPosVenda{ValorEntregue: k.ValorEntregue, Impactos: k.Impactos, CPM: k.CPM, Bonificacao: k.Bonificacao,
-		BonificacaoInsercoes: k.BonificacaoCount, Emissoras: k.StationsCount, EmissorasComTarget: k.StationsWithTarget,
-		RotuloTarget: k.TargetLabel, Consolidado: k.Consolidated, AjustadoAMao: k.Overridden}
+	n := &numerosPosVenda{ValorEntregue: k.ValorEntregue, Impactos: k.Impactos, Emissoras: k.StationsCount,
+		EmissorasComTarget: k.StationsWithTarget, RotuloTarget: k.TargetLabel, Consolidado: k.Consolidated, AjustadoAMao: k.Overridden}
+	if mostraBonificacaoDe(k.Consolidated, k.Bonificacao, k.BonificacaoCount) {
+		v, c := k.Bonificacao, k.BonificacaoCount
+		n.Bonificacao, n.BonificacaoInsercoes = &v, &c
+	}
+	if k.Impactos > 0 {
+		n.CPM = new(k.CPM)
+	}
 	if k.StationsWithTarget > 0 {
-		it, ct := k.ImpactosTarget, k.CPMTarget
-		n.ImpactosTarget, n.CPMTarget = &it, &ct
+		n.ImpactosTarget = new(k.ImpactosTarget)
+		if k.ImpactosTarget > 0 {
+			n.CPMTarget = new(k.CPMTarget)
+		}
 	}
 	return n
 }
@@ -380,7 +404,7 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_pos_vendas",
 		"Lista os pós-vendas (/admin/pos-venda): título, cliente, estado (enviado/rascunho), datas, nº de campanhas, de "+
 			"destinatários e de quem abriu, período e o link da tela de cada um; mais as contagens por estado. Filtros: busca, "+
-			"cliente_id, competencia (AAAA-MM), estado. Lista paginada.",
+			"cliente_id, competencia (AAAA-MM), estado. Lista paginada (até 50 por página).",
 		func(ctx context.Context, L *Leitura, in entradaListarPosVendas) (*sdk.CallToolResult, error) {
 			f := postsale.ListFilter{Q: strings.TrimSpace(in.Busca)} // como o handler
 			if in.Competencia != "" {
@@ -404,7 +428,7 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				f.Status = st
 			}
 			var contagens postsale.ListCounts
-			pg, err := buscarJanela(in.Paginacao, func(page, size int) ([]postsale.ListItem, int, error) {
+			pg, err := buscarJanela(in.Paginacao.comTeto(tetoPaginaPosVendas), func(page, size int) ([]postsale.ListItem, int, error) {
 				f.Page, f.PerPage = page, size
 				res, err := L.PosVenda.List(ctx, f)
 				if err != nil {
@@ -435,7 +459,8 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 		"Devolve um pós-venda: cliente, estado, datas, o resumo dos destinatários e, por campanha, o período, os números "+
 			"congelados no envio (valor entregue, impactos, CPM, bonificação, target) e o checking das emissoras fora do "+
 			"plano; mais o link da tela. Rascunho vem sem números. As campanhas vêm paginadas em items (até 5 por página). "+
-			"Para a lista de destinatários, destinatarios_pos_venda.",
+			"Para a lista de destinatários, destinatarios_pos_venda. checking[].situacao: compensation = ficou devendo no "+
+			"período (compensada = os extras cobriram), above = entregou tudo e sobrou, conforming = entregou o combinado.",
 		func(ctx context.Context, L *Leitura, in entradaPosVenda) (*sdk.CallToolResult, error) {
 			id, err := uuid.Parse(in.PosVendaID)
 			if err != nil {
@@ -468,7 +493,7 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 			}
 			h := novoHigienizador(rep.AttachmentsURL, tokensDe(rep.Recipients))
 			blocos := paginar(rep.Blocks, in.Paginacao.comTeto(tetoBlocosPosVenda))
-			cancelada, comChecking := false, false
+			cancelada, comChecking, semBonificacao, semCPM := false, false, false, false
 			l, err := mapearErr(blocos, func(b postsale.BlockRow) (blocoPosVenda, error) {
 				c, err := L.Campanhas.Get(ctx, b.CampaignID) // o estado de hoje (a cancelada sai da cobrança)
 				if err != nil {
@@ -482,6 +507,8 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				// publish; se acontecer, também null.
 				if cb, achou := congelados[b.CampaignID]; achou {
 					bl.Numeros = numerosDe(cb.KPIs)
+					semBonificacao = semBonificacao || bl.Numeros.Bonificacao == nil
+					semCPM = semCPM || bl.Numeros.CPM == nil || (bl.Numeros.ImpactosTarget != nil && bl.Numeros.CPMTarget == nil)
 					var n int
 					bl.Checking, n = checkingDe(h, cb.CheckingRows)
 					conformes := cb.ConformingCount
@@ -514,6 +541,12 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 				Mensagem: h.texto(rep.IntroMessage, tetoMensagem), Anexo: anexo, Destinatarios: dest, lista: l,
 				Links: links{Tela: cfg.link("/admin/pos-venda/" + rep.ID.String())}}
 			o.Ressalvas = []string{ressalvaPosVenda}
+			if semBonificacao {
+				o.Ressalvas = append(o.Ressalvas, ressalvaBonificacaoOculta)
+			}
+			if semCPM {
+				o.Ressalvas = append(o.Ressalvas, ressalvaCPMSemImpactos)
+			}
 			if comChecking {
 				o.Ressalvas = append(o.Ressalvas, fmt.Sprintf("checking de cada campanha: as %d primeiras linhas (checking_total traz o real).", tetoPorItem))
 			}
@@ -536,7 +569,8 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 		"Com pos_venda_id: lista quem recebeu aquele pós-venda (nome, email, status do email, quando abriu, quantas vezes, "+
 			"se o link foi revogado). Com cliente_id: quem RECEBERIA um pós-venda novo desse cliente hoje (usuários ativos do "+
 			"cliente + admins internos que pediram cópia). Passe exatamente um dos dois. A lista por pos_venda_id é paginada "+
-			"(até 50 por página).",
+			"(até 50 por página). status_email: pending = ainda não enviado, sent = enviado, failed = falhou (erro_email diz "+
+			"por quê), disabled = envio de email desligado no servidor.",
 		func(ctx context.Context, L *Leitura, in entradaDestinatariosPosVenda) (*sdk.CallToolResult, error) {
 			if (in.PosVendaID == "") == (in.ClienteID == "") {
 				return recusa("passe pos_venda_id OU cliente_id (exatamente um dos dois)", "entrada_invalida")
