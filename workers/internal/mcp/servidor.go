@@ -29,13 +29,16 @@ var ToolsEsperadas = []string{
 	"listar_precos_campanha",
 	"listar_regras_distribuicao",
 	"listar_tipos_material",
+	"listar_veiculacoes",
 	"obter_campanha",
 	"obter_cliente",
 	"obter_emissora",
 	"obter_material",
+	"obter_veiculacao",
 	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
+	"veiculacoes_por_material",
 }
 
 type ConfigServidor struct {
@@ -87,6 +90,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarGrade(s, cfg)
 	registrarMateriais(s, cfg)
 	registrarEmissoras(s, cfg)
+	registrarVeiculacoes(s, cfg)
 	return s
 }
 

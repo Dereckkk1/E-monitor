@@ -180,3 +180,12 @@ func (d *Detections) Attributions(ctx context.Context, id uuid.UUID, detectedAt 
 	}
 	return out, rows.Err()
 }
+
+// Approved diz se a tocada está no conjunto aprovado — o que conta em toda
+// tela (ApprovedDetectionsFilter). Get devolve a tocada mesmo fora dele.
+func (d *Detections) Approved(ctx context.Context, id uuid.UUID) (bool, error) {
+	var ok bool
+	err := d.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM detections d WHERE d.id = $1 AND `+ApprovedDetectionsFilter+`)`, id).Scan(&ok)
+	return ok, err
+}
