@@ -25,10 +25,12 @@ var ToolsEsperadas = []string{
 	"criar_cliente",
 	"criar_tipo_material",
 	"destinatarios_pos_venda",
+	"desvincular_material",
 	"editar_campanha",
 	"editar_cliente",
 	"editar_emissora",
 	"editar_emissoras_campanha",
+	"editar_emissoras_material",
 	"editar_material",
 	"editar_pmm_target",
 	"editar_tipo_material",
@@ -73,6 +75,7 @@ var ToolsEsperadas = []string{
 	"resumo_diario_falhas",
 	"resumo_relatorio_campanha",
 	"veiculacoes_por_material",
+	"vincular_material",
 	"visao_gerencial",
 }
 
@@ -144,6 +147,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarEscritasBasicas(s, cfg, p)
 	registrarEscritasCadastros(s, cfg, p)
 	registrarEscritasCampanhas(s, cfg, p)
+	registrarEscritasVinculos(s, cfg, p)
 	return s
 }
 

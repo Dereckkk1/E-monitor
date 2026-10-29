@@ -268,7 +268,7 @@ func TestInstrucoes_Relatorios(t *testing.T) {
 // Fatias 1 e 2: quem acrescentar tool atualiza o número junto.
 func TestToolsEsperadas_OrdemAlfabeticaE44(t *testing.T) {
 	require.True(t, slices.IsSorted(ToolsEsperadas))
-	require.Len(t, ToolsEsperadas, 56)
+	require.Len(t, ToolsEsperadas, 59)
 }
 
 // Toda tool que pede id obrigatório diz "nunca invente" (contrato §3.2), na
