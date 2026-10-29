@@ -85,6 +85,10 @@ type Escrita[In any] struct {
 	Preview         func(ctx context.Context, E *Escritas, in In) (previa, error)
 	Executar        func(ctx context.Context, E *Escritas, p *Principal, in In) (feito, error)
 	Tela            func(E *Escritas, in In) *string // link da tela para o ramo crítico barrado
+	// Recurso (opcional) diz o alvo da auditoria quando a escrita NÃO chega a
+	// produzir um feito (ramo barrado, falha interna): o tipo e o id do
+	// registro que a tool mexeria. Sem ele, "mcp_escrita" sem id.
+	Recurso func(in In) (string, *uuid.UUID)
 }
 
 // CampoConfirmacao entra embutido no In de toda tool `confirma` ou escalável.
@@ -253,7 +257,8 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 
 		// 4. crítico: barrado até a Fatia 4 (F3-1). Nada é escrito nem consumido.
 		if nivel == Critico {
-			auditar(ctx, cfg, E, p, "mcp.escrita.requer_aprovacao", "mcp_escrita", nil, d.Nome, nivel, args, motivo)
+			recurso, recursoID := d.alvo(in)
+			auditar(ctx, cfg, E, p, "mcp.escrita.requer_aprovacao", recurso, recursoID, d.Nome, nivel, args, motivo)
 			var tela *string
 			if d.Tela != nil {
 				tela = d.Tela(E, in)
@@ -380,4 +385,15 @@ func cortarTextos(v any) any {
 		}
 	}
 	return v
+}
+
+// alvo é o recurso da auditoria de uma escrita sem feito (barrada ou falha):
+// o que a tool declara em Recurso, ou o genérico "mcp_escrita" sem id.
+func (d Escrita[In]) alvo(in In) (string, *uuid.UUID) {
+	if d.Recurso != nil {
+		if r, id := d.Recurso(in); r != "" {
+			return r, id
+		}
+	}
+	return "mcp_escrita", nil
 }
