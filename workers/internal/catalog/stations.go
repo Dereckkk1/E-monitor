@@ -624,3 +624,59 @@ func (s *Stations) GetCalibrationStatus(ctx context.Context, stationID uuid.UUID
 		DaysElapsed:     int(time.Since(startedAt).Hours() / 24),
 	}, nil
 }
+
+// ─── UpdateCadastro ─────────────────────────────────────────────────────────
+
+// UpdateCadastroInput são os campos do cadastro que o MCP edita. Os ponteiros
+// são GRAVADOS como vieram (nil grava NULL) — quem quer edição parcial lê a
+// emissora e remonta a entrada (acoes.EditarCadastroEmissora).
+type UpdateCadastroInput struct {
+	Name         string
+	FrequencyMHz *float64
+	City         *string
+	State        *string
+	PMM          *float64
+}
+
+// UpdateCadastro grava SÓ nome, frequência, cidade, UF e PMM (e a coordenada
+// derivada da cidade+UF). stream_url, banda, logo e metadata NÃO são tocados.
+//
+// Existe separado do Update porque o Update é PUT total: reescreve stream_url e
+// substitui o metadata pelo que o struct StationMeta consegue reserializar —
+// chave que o struct não conhece SE PERDE. A tela manda tudo de propósito; o MCP
+// nunca troca stream_url (spec §1, não-objetivos) nem apaga metadados. E fazer
+// "ler tudo e devolver tudo" pelo Update abriria uma corrida: um stream_url
+// trocado pelo wizard entre a leitura e a escrita seria desfeito.
+//
+// A coordenada segue a regra do Update: re-deriva da cidade+UF recebidas, e um
+// lookup que falha NÃO destrói a coordenada atual (COALESCE). Retorna
+// pgx.ErrNoRows se a emissora não existe.
+func (s *Stations) UpdateCadastro(ctx context.Context, id uuid.UUID, in UpdateCadastroInput) (*Station, error) {
+	var lat, lng *float64
+	if in.City != nil && in.State != nil {
+		if glat, glng, ok := s.geo.Lookup(*in.City, *in.State); ok {
+			lat, lng = &glat, &glng
+		}
+	}
+	st, err := scanStationRow(s.pool.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE stations SET
+		  name          = $2,
+		  frequency_mhz = $3,
+		  city          = $4,
+		  state         = $5,
+		  pmm           = $6,
+		  latitude      = COALESCE($7, latitude),
+		  longitude     = COALESCE($8, longitude),
+		  updated_at    = NOW()
+		WHERE id = $1
+		RETURNING %s`, stationSelectCols),
+		id, in.Name, in.FrequencyMHz, in.City, in.State, in.PMM, lat, lng,
+	).Scan)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, err
+	}
+	return &st, nil
+}

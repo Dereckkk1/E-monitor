@@ -1,4 +1,4 @@
-package handlers
+package acoes
 
 import (
 	"encoding/json"
@@ -41,7 +41,7 @@ func TestAvisarHubDoCliente_MandaOsCamposCertos(t *testing.T) {
 	defer srv.Close()
 
 	c := clienteDeTeste()
-	avisarHubDoCliente(hub.New(srv.URL, "k"), c)
+	AvisarHubDoCliente(hub.New(srv.URL, "k"), c)
 
 	select {
 	case env := <-recebido:
@@ -89,7 +89,7 @@ func TestAvisarHubDoCliente_CampoVazioNaoViaja(t *testing.T) {
 	defer srv.Close()
 
 	// Cliente com só o mínimo: todos os ponteiros nil.
-	avisarHubDoCliente(hub.New(srv.URL, "k"), &catalog.Client{ID: uuid.New(), Name: "Acme"})
+	AvisarHubDoCliente(hub.New(srv.URL, "k"), &catalog.Client{ID: uuid.New(), Name: "Acme"})
 
 	select {
 	case env := <-recebido:
@@ -128,7 +128,7 @@ func TestAvisarHubDoCliente_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
 	defer close(solta)
 
 	comecou := time.Now()
-	avisarHubDoCliente(hub.New(srv.URL, "k"), clienteDeTeste())
+	AvisarHubDoCliente(hub.New(srv.URL, "k"), clienteDeTeste())
 	demorou := time.Since(comecou)
 
 	if demorou > 500*time.Millisecond {
@@ -137,11 +137,11 @@ func TestAvisarHubDoCliente_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
 }
 
 func TestAvisarHubDoCliente_HubNilNaoPanica(t *testing.T) {
-	avisarHubDoCliente(nil, clienteDeTeste())
+	AvisarHubDoCliente(nil, clienteDeTeste())
 }
 
 func TestAvisarHubDoCliente_ClienteNilNaoPanica(t *testing.T) {
-	avisarHubDoCliente(hub.New("http://exemplo", "k"), nil)
+	AvisarHubDoCliente(hub.New("http://exemplo", "k"), nil)
 }
 
 func TestAvisarHubDoCliente_SemConfiguracaoNaoChama(t *testing.T) {
@@ -151,7 +151,7 @@ func TestAvisarHubDoCliente_SemConfiguracaoNaoChama(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	avisarHubDoCliente(hub.New("", ""), clienteDeTeste())
+	AvisarHubDoCliente(hub.New("", ""), clienteDeTeste())
 
 	select {
 	case <-chamou:
