@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-10-29
 codigo-relacionado:
   - migrations/0017_distribution_plan.up.sql
   - migrations/0018_detections_categorization.up.sql
@@ -9,6 +9,9 @@ codigo-relacionado:
   - migrations/0063_category_bonus_constraint.up.sql
   - migrations/0064_category_bonus_rename.up.sql
   - migrations/0065_quota_aware_summary.up.sql
+  - workers/internal/acoes/regras.go
+  - workers/internal/acoes/materiais.go
+  - workers/internal/acoes/recat.go
   - workers/internal/api/handlers/distribution_rules.go
   - workers/internal/api/handlers/distribution_overrides.go
   - workers/internal/api/handlers/materials.go
@@ -120,7 +123,7 @@ Validacao atualmente NAO esta implementada no backend — fica a criterio do fro
 
 ## Re-categorizacao
 
-Quando uma regra e criada/editada/excluida via API, o handler `DistributionRulesHandler` dispara `RecategorizeForRule` (ou `RecategorizeForCampaign` no caso de delete) em goroutine com timeout de 30s. Detections existentes no escopo da regra sao atualizadas conforme a nova logica.
+Quando uma regra e criada/editada/excluida via API, o handler `DistributionRulesHandler` chama `acoes.CriarRegra`/`EditarRegra`/`ApagarRegra` (`workers/internal/acoes/regras.go`, a mesma funcao que as tools de regra do MCP chamam), que disparam `RecategorizeForRule` (ou `RecategorizeForCampaign` no caso de delete) em goroutine com timeout de 30s (`acoes.PrazoRecat`; falha vai para `acoes.RegistrarFalhaRecat`). Detections existentes no escopo da regra sao atualizadas conforme a nova logica.
 
 A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_rules.go` — sem N+1 queries. Para uma campanha inteira leva milissegundos mesmo com centenas de milhares de detections.
 
@@ -139,9 +142,17 @@ A operacao roda inteira em SQL via `recategorizeScope` em `catalog/distribution_
 > nao consome vaga na cota e nao tem a categoria reescrita. Sem isso o motor SQL
 > divergiria do Go em toda celula-dia que tivesse uma.
 
+### Mudancas de comportamento das rotas (2026-10-29, extracao para `internal/acoes`)
+
+A logica de regra, override e troca de tipo saiu dos handlers para `workers/internal/acoes` (compartilhada com as tools de escrita do MCP, ver [mcp.md](../features/mcp.md#escrita-fatia-3)). Cada handler foi travado por teste antes da extracao; o que mudou de proposito, na rota:
+
+- `PUT`/`DELETE /campaigns/{id}/distribution-rules/{ruleID}` com a regra de **outra** campanha: agora **404** sem efeito (antes editava/apagava a regra alheia, 204, e recategorizava a campanha errada). `PUT` de regra **inexistente**: 404 (antes o `UPDATE` de zero linhas dava 204). `DELETE` de regra inexistente segue 204 e **nao recategoriza** mais a campanha a toa.
+- `PUT` de regra que **troca o tipo** recategoriza tambem o tipo **antigo** (`RecategorizeForCampaignType`); antes so o novo, e o `projrecon` curava o antigo em ate 48 h.
+- Falha de constraint que era 500 virou **400/404 com o motivo em portugues**: regras `POST`/`PUT` (mascara fora de 0-127, insercoes fora de 1-100, data final antes da inicial, hora final nao maior que a inicial, tipo/campanha/emissora inexistente), `PUT` de override (meta negativa, faixa invertida, tipo/emissora/campanha inexistente) e `PATCH /materials/{id}/type` com tipo inexistente (400). `PATCH` de tipo de material inexistente segue 204, agora sem recategorizar.
+
 ### Gatilho por override (create/edit/delete)
 
-Criar, editar ou apagar um override (`PUT`/`DELETE /distribution-overrides`) também dispara re-categorizacao — `DistributionOverridesHandler.Upsert`/`Delete` chamam `RecategorizeForOverride(campaignID, typeID, stationID, forDate)` em goroutine best-effort (mesmo padrao do handler de regra: sem bloquear a resposta, sem retry se falhar). O escopo e a **celula exata** (campanha + tipo + emissora + dia), via `recategorizeScope` com `stationIDs=[stationID]` e `from=to=forDate` — nao a campanha inteira.
+Criar, editar ou apagar um override (`PUT`/`DELETE /distribution-overrides`) também dispara re-categorizacao — `DistributionOverridesHandler.Upsert`/`Delete` chamam `acoes.DefinirAjuste`/`ApagarAjuste`, que rodam `RecategorizeForOverride(campaignID, typeID, stationID, forDate)` de forma **sincrona**: a recat commita ANTES da resposta (senao o refetch do frontend, no `onSuccess` do 204, pinta a categoria velha), com prazo de 30 s e o `pg_advisory_xact_lock` da celula-dia. E **best-effort**: o override ja foi gravado, entao um erro da recat e logado e contado em `RecategorizeFailures` (o reconciler cura depois) e **nao** falha o request. *(Este paragrafo dizia "em goroutine"; o handler ja era sincrono antes da extracao para `internal/acoes`, e o doc estava errado.)* O escopo e a **celula exata** (campanha + tipo + emissora + dia), via `recategorizeScope` com `stationIDs=[stationID]` e `from=to=forDate` — nao a campanha inteira.
 
 Isso fecha uma lacuna que existia antes: mudar um override só trocava o `expected` calculado (via `daily_play_summary`), mas as detections já persistidas continuavam com a categoria antiga (`detections.category`, gravada no insert contra a regra vigente na hora). Uma tocada que era `in_slot` pela regra podia silenciosamente virar `out_slot` (ou vice-versa) quando o override definia uma janela diferente, sem que ninguém recategorizasse o passado — o operador via o override novo, mas a lista de detections e a projeção `detection_campaigns` continuavam refletindo a janela antiga. Igual ao fix de regra (2026-06-17, ver acima), o SQL do tail atualiza `detections.category` **e** `detection_campaigns.category` na mesma passada.
 
@@ -149,7 +160,7 @@ Isso fecha uma lacuna que existia antes: mudar um override só trocava o `expect
 
 A categoria é casada por **tipo** (`r.type_id = material.type_id`), então mudar o `type_id` de um material também invalida a categoria gravada das detections dele — calculada no insert com o tipo antigo. Sem recategorizar, uma detection que passa a casar uma regra do tipo novo continua `bonus` e some pra "bonificação (sem meta)" no resumo diário.
 
-Por isso `PATCH /materials/{id}/type` (`MaterialsHandler.UpdateType`) dispara `RecategorizeForMaterial(materialID)` em goroutine best-effort após o `UPDATE` do `type_id`. Esse método recategoriza **todas as detections do material, em todas as campanhas** onde ele aparece (scope `d.commercial_id = $materialID`, sem filtro de campanha). Como o scope resolve `m.type_id` ao vivo (JOIN materials), rodar após o update reclassifica contra as regras do tipo atual.
+Por isso `PATCH /materials/{id}/type` (`MaterialsHandler.UpdateType` → `acoes.TrocarTipoMaterial`) dispara `RecategorizeForMaterial(materialID)` em goroutine best-effort após o `UPDATE` do `type_id`. Esse método recategoriza **todas as detections do material, em todas as campanhas** onde ele aparece (scope `d.commercial_id = $materialID`, sem filtro de campanha). Como o scope resolve `m.type_id` ao vivo (JOIN materials), rodar após o update reclassifica contra as regras do tipo atual.
 
 `RecategorizeForMaterial` e `recategorizeScope` compartilham o mesmo trecho de classificação SQL (`recatClassifiedCTE`, aplicado por `runRecat`/`applyRecat` — o antigo `recatClassifyTailSQL` deixou de existir) — fonte única pra regra de tolerância de 15 min e pro fechamento por cota, evitando divergência entre os dois caminhos. O frontend (`useUpdateMaterialTypeId`) invalida `daily-summary` + `detections` no sucesso pra UI refletir a nova categoria sem reload.
 
