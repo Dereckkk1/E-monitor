@@ -416,7 +416,7 @@ func TestEditarPMMTarget_PreviewNaoEscreveEConfirmarGrava(t *testing.T) {
 	require.Nil(t, linhas[c.e2.String()])
 	require.EqualValues(t, 300, linhas[c.e3.String()])
 	require.NotEmpty(t, out["ressalvas"])
-	b.exigeAuditoria(t, "mcp.escrita.editar_pmm_target", "client_station_pmm", &c.cli)
+	b.exigeAuditoria(t, "mcp.escrita.editar_pmm_target", "client", &c.cli)
 	require.NotContains(t, mustJSON(t, out), "stream_url")
 }
 
@@ -470,7 +470,7 @@ func TestEditarPMMTarget_Escalada(t *testing.T) {
 	require.Equal(t, map[uuid.UUID]int{exposto.e1: 1000, exposto.e2: 2000}, linhasPMM(t, b, exposto.cli), "nada foi gravado")
 	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
 	require.Len(t, l, 1)
-	require.Equal(t, "client_station_pmm", l[0].Recurso)
+	require.Equal(t, "client", l[0].Recurso)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.editar_pmm_target"))
 
 	// ...mas E2 do MESMO cliente, sem tocada e em campanha futura, não escala.
@@ -749,18 +749,24 @@ func TestEditarEmissora_Recusas(t *testing.T) {
 		args   map[string]any
 		codigo string
 	}{
-		"id inválido":          {map[string]any{"emissora_id": "x", "nome": "A"}, "[entrada_invalida]"},
-		"emissora inexistente": {map[string]any{"emissora_id": uuid.NewString(), "nome": "A"}, "[nao_encontrado]"},
-		"nenhum campo":         {map[string]any{"emissora_id": i}, "[entrada_invalida]"},
-		"nome vazio":           {map[string]any{"emissora_id": i, "nome": "  "}, "[entrada_invalida]"},
-		"dial zero":            {map[string]any{"emissora_id": i, "frequencia_mhz": 0}, "[entrada_invalida]"},
-		"dial negativo":        {map[string]any{"emissora_id": i, "frequencia_mhz": -3}, "[entrada_invalida]"},
-		"dial estourado":       {map[string]any{"emissora_id": i, "frequencia_mhz": 10000}, "[entrada_invalida]"},
-		"cidade vazia":         {map[string]any{"emissora_id": i, "cidade": ""}, "[entrada_invalida]"},
-		"UF de uma letra":      {map[string]any{"emissora_id": i, "uf": "S"}, "[entrada_invalida]"},
-		"PMM negativo":         {map[string]any{"emissora_id": i, "pmm": -1}, "[entrada_invalida]"},
-		"PMM estourado":        {map[string]any{"emissora_id": i, "pmm": 1e12}, "[entrada_invalida]"},
-		"nada muda":            {map[string]any{"emissora_id": i, "nome": "Rádio X", "frequencia_mhz": 99.9, "cidade": "São Paulo", "uf": "SP", "pmm": 100}, "[entrada_invalida]"},
+		"id inválido":                {map[string]any{"emissora_id": "x", "nome": "A"}, "[entrada_invalida]"},
+		"emissora inexistente":       {map[string]any{"emissora_id": uuid.NewString(), "nome": "A"}, "[nao_encontrado]"},
+		"nenhum campo":               {map[string]any{"emissora_id": i}, "[entrada_invalida]"},
+		"nome vazio":                 {map[string]any{"emissora_id": i, "nome": "  "}, "[entrada_invalida]"},
+		"dial zero":                  {map[string]any{"emissora_id": i, "frequencia_mhz": 0}, "[entrada_invalida]"},
+		"dial negativo":              {map[string]any{"emissora_id": i, "frequencia_mhz": -3}, "[entrada_invalida]"},
+		"dial estourado":             {map[string]any{"emissora_id": i, "frequencia_mhz": 10000}, "[entrada_invalida]"},
+		"cidade vazia":               {map[string]any{"emissora_id": i, "cidade": ""}, "[entrada_invalida]"},
+		"UF de uma letra":            {map[string]any{"emissora_id": i, "uf": "S"}, "[entrada_invalida]"},
+		"UF inexistente":             {map[string]any{"emissora_id": i, "uf": "XX"}, "[entrada_invalida]"},
+		"nome longo demais":          {map[string]any{"emissora_id": i, "nome": repete("n", 201)}, "[entrada_invalida]"},
+		"cidade longa demais":        {map[string]any{"emissora_id": i, "cidade": repete("c", 201)}, "[entrada_invalida]"},
+		"dial de FM abaixo da faixa": {map[string]any{"emissora_id": i, "frequencia_mhz": 50}, "[entrada_invalida]"},
+		"dial de FM acima da faixa":  {map[string]any{"emissora_id": i, "frequencia_mhz": 108.5}, "[entrada_invalida]"},
+		"dial em kHz numa FM":        {map[string]any{"emissora_id": i, "frequencia_mhz": 1180}, "[entrada_invalida]"},
+		"PMM negativo":               {map[string]any{"emissora_id": i, "pmm": -1}, "[entrada_invalida]"},
+		"PMM estourado":              {map[string]any{"emissora_id": i, "pmm": 1e12}, "[entrada_invalida]"},
+		"nada muda":                  {map[string]any{"emissora_id": i, "nome": "Rádio X", "frequencia_mhz": 99.9, "cidade": "São Paulo", "uf": "SP", "pmm": 100}, "[entrada_invalida]"},
 	} {
 		texto := b.chamarErro(t, "editar_emissora", caso.args)
 		require.Contains(t, texto, caso.codigo, nome)
@@ -768,4 +774,54 @@ func TestEditarEmissora_Recusas(t *testing.T) {
 	require.Equal(t, antes, lerLinhaEmissora(t, b, id))
 	require.Zero(t, b.totalAuditorias(t))
 	require.NotContains(t, propriedades(esquemaDa(t, b.cfg, "editar_emissora")), "stream_url", "o MCP nunca troca o stream")
+}
+
+// O dial confere com a banda DA EMISSORA (FM em MHz, AM em kHz): o mesmo número
+// vale para uma e não para a outra.
+func TestEditarEmissora_DialConfereComABandaDaEmissora(t *testing.T) {
+	b := novaBancadaTool(t)
+	fm := semearEmissora(t, b, "Rádio FM")
+	am := semearEmissora(t, b, "Rádio AM")
+	_, err := b.pool.Exec(b.ctx, `UPDATE stations SET band = 'AM', frequency_mhz = 1180 WHERE id = $1`, am)
+	require.NoError(t, err)
+
+	// AM: 1180 kHz (ela já está lá), 1400 passa; 99.9 (dial de FM) e 20 não.
+	b.confirmarEExecutar(t, "editar_emissora", map[string]any{"emissora_id": am.String(), "frequencia_mhz": 1400})
+	require.InDelta(t, 1400, *lerLinhaEmissora(t, b, am).Freq, 0.001)
+	for _, f := range []float64{99.9, 20, 529, 1701} {
+		texto := b.chamarErro(t, "editar_emissora", map[string]any{"emissora_id": am.String(), "frequencia_mhz": f})
+		require.Contains(t, texto, "[entrada_invalida]", "AM %v", f)
+		require.Contains(t, texto, "kHz")
+	}
+	// FM: 101.5 passa; 1400 (dial de AM) não.
+	b.confirmarEExecutar(t, "editar_emissora", map[string]any{"emissora_id": fm.String(), "frequencia_mhz": 101.5})
+	texto := b.chamarErro(t, "editar_emissora", map[string]any{"emissora_id": fm.String(), "frequencia_mhz": 1400})
+	require.Contains(t, texto, "[entrada_invalida]")
+	require.Contains(t, texto, "MHz")
+	require.InDelta(t, 101.5, *lerLinhaEmissora(t, b, fm).Freq, 0.001)
+}
+
+// O limite entre dois dias em SP não é o de UTC: às 22h e às 23h30 de SP já é o
+// dia seguinte em UTC. "Hoje" é o de SP.
+func TestEditarPMMTarget_FronteiraDoDiaEmSP(t *testing.T) {
+	b := novaBancadaTool(t)
+	for _, hora := range []string{"22:00", "23:30"} {
+		b.E.Agora = func() time.Time { return mcptest.Quando("2026-10-29", hora) }
+		require.Equal(t, 30, b.E.Agora().UTC().Day(), "%s em SP já é dia 30 em UTC", hora)
+
+		// A campanha começa "hoje em SP" (29/10): nenhum dia passado. NÃO escala.
+		hoje := semearPMM(t, b, "2026-10-29", "2026-11-30")
+		pre := b.chamar(t, "editar_pmm_target", map[string]any{"cliente_id": hoje.cli.String(), "entradas": []any{entradaPMM(hoje.e1, 1500)}})
+		require.NotEmpty(t, pre["confirmacao"], "início hoje (SP) às %s não escala", hora)
+		require.NotContains(t, pre, "nivel")
+
+		// Começou ontem em SP (28/10): já há dia passado. Escala.
+		ontem := semearPMM(t, b, "2026-10-28", "2026-11-30")
+		b.barrado(t, "editar_pmm_target", map[string]any{"cliente_id": ontem.cli.String(), "entradas": []any{entradaPMM(ontem.e1, 1500)}})
+
+		// Começa amanhã em SP (30/10), que já é "hoje" em UTC: NÃO escala.
+		amanha := semearPMM(t, b, "2026-10-30", "2026-11-30")
+		pre = b.chamar(t, "editar_pmm_target", map[string]any{"cliente_id": amanha.cli.String(), "entradas": []any{entradaPMM(amanha.e1, 1500)}})
+		require.NotEmpty(t, pre["confirmacao"], "início amanhã (SP) às %s não escala, mesmo sendo hoje em UTC", hora)
+	}
 }

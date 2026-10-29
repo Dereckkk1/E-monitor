@@ -3,11 +3,13 @@ package mcp
 // Task 12: tipos de material e editar_material.
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/acoes"
@@ -132,19 +134,44 @@ func TestCriarTipoMaterial_Recusas(t *testing.T) {
 	require.Zero(t, b.totalAuditorias(t))
 }
 
-// A corrida entre a checagem do preview e o INSERT: o Executar traduz a violação
-// de unicidade em nome_duplicado (e não em erro interno, que gastaria o token).
-func TestCriarTipoMaterial_CorridaDeNomeViraNomeDuplicado(t *testing.T) {
-	b := novaBancadaTool(t)
-	nome := "Corrida " + uuid.NewString()[:8]
-	_, err := b.pool.Exec(b.ctx, `INSERT INTO material_types (name, color) VALUES ($1, '#3b82f6')`, nome)
-	require.NoError(t, err)
-
-	_, err = escritaCriarTipoMaterial(b.cfg).Executar(b.ctx, b.E, b.p, entradaCriarTipoMaterial{Nome: nome})
-
+// A corrida entre a checagem e o INSERT: a violação de unicidade do banco vira
+// nome_duplicado (e não erro interno, que gastaria o token); qualquer outro erro passa.
+func TestTraduzirUnicidadeDeTipo(t *testing.T) {
+	err := traduzirUnicidadeDeTipo(&pgconn.PgError{Code: "23505"}, "Spot")
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, acoes.CodigoNomeDuplicado, r.Codigo)
+
+	outro := errors.New("deadlock detectado")
+	require.Equal(t, outro, traduzirUnicidadeDeTipo(outro, "Spot"), "o que não é unicidade passa como veio")
+	require.False(t, errors.As(traduzirUnicidadeDeTipo(&pgconn.PgError{Code: "40P01"}, "Spot"), &r))
+}
+
+// O Executar repete a checagem de nome do preview (é o que a aprovação na Fatia 4
+// roda, sem preview), e sem distinguir maiúsculas de minúsculas.
+func TestTipoMaterial_ExecutarRepeteAChecagemDeNome(t *testing.T) {
+	b := novaBancadaTool(t)
+	nomeA, nomeB := "A "+uuid.NewString()[:8], "B "+uuid.NewString()[:8]
+	idA := uuid.New()
+	_, err := b.pool.Exec(b.ctx, `INSERT INTO material_types (id, name, color) VALUES ($1, $2, '#3b82f6'), ($3, $4, '#3b82f6')`, idA, nomeA, uuid.New(), nomeB)
+	require.NoError(t, err)
+	antes := contaTipos(t, b)
+
+	_, err = escritaCriarTipoMaterial(b.cfg).Executar(b.ctx, b.E, b.p, entradaCriarTipoMaterial{Nome: maiusculas(nomeA)})
+	var r *acoes.Recusa
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, acoes.CodigoNomeDuplicado, r.Codigo)
+	require.Equal(t, antes, contaTipos(t, b))
+
+	_, err = escritaEditarTipoMaterial(b.cfg).Executar(b.ctx, b.E, b.p, entradaEditarTipoMaterial{TipoID: idA.String(), Nome: maiusculas(nomeB)})
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, acoes.CodigoNomeDuplicado, r.Codigo)
+	n, _, _ := linhaTipo(t, b, idA)
+	require.Equal(t, nomeA, n)
+
+	// O próprio nome em outra caixa é do próprio tipo: não é duplicata.
+	_, err = escritaEditarTipoMaterial(b.cfg).Executar(b.ctx, b.E, b.p, entradaEditarTipoMaterial{TipoID: idA.String(), Nome: maiusculas(nomeA)})
+	require.NoError(t, err)
 }
 
 func TestEditarTipoMaterial_ParcialPreviewNaoEscreveEConfirmarGrava(t *testing.T) {
@@ -399,6 +426,16 @@ func TestEditarMaterial_VizinhosQueNaoEscalam(t *testing.T) {
 	require.NotEmpty(t, pre["confirmacao"])
 	require.NotContains(t, pre, "nivel")
 
+	// (d) OUTRO material do mesmo tipo, na mesma campanha, tem tocada aprovada; o X não tem
+	// nenhuma. O recat do X só alcança as projeções do X: não escala.
+	x := semearMaterial(t, b, false)
+	y := mcptest.Material(t, b.ctx, b.pool, x.cli, x.tipoA, "Outro do mesmo tipo")
+	mcptest.Vincular(t, b.ctx, b.pool, x.camp, y, x.est)
+	mcptest.Veiculacao(t, b.ctx, b.pool, x.camp, y, x.est, "bonus", mcptest.Quando("2026-10-10", "10:00"))
+	pre = b.chamar(t, "editar_material", map[string]any{"material_id": x.mat.String(), "tipo_id": x.tipoB.String()})
+	require.NotEmpty(t, pre["confirmacao"], "a tocada é de outro material do mesmo tipo e campanha")
+	require.NotContains(t, pre, "nivel")
+
 	// (c) tocada que o recat não consideraria (retratada) não conta.
 	retr := semearMaterial(t, b, true)
 	_, err := b.pool.Exec(b.ctx, `UPDATE detections SET retracted_at = now() WHERE commercial_id = $1`, retr.mat)
@@ -455,4 +492,36 @@ func TestEditarMaterial_Recusas(t *testing.T) {
 	require.Equal(t, c.tipoA, *tipo)
 	require.Nil(t, roteiro)
 	require.Zero(t, b.totalAuditorias(t))
+}
+
+// Título e roteiro são gravados ANTES do tipo: o tipo é o que dispara o recat, e
+// uma falha dele depois de uma escrita já feita NÃO pode ser Recusa (a Recusa
+// libera o token; aqui algo foi gravado).
+func TestEditarMaterial_ExecutarGravaTituloAntesDoTipoEFalhaTardiaNaoEhRecusa(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearMaterial(t, b, false)
+	roteiro := "Roteiro novo"
+	var r *acoes.Recusa
+
+	// O tipo é inexistente (o banco recusaria pela FK). Título e roteiro já foram.
+	err := aplicarEdicaoDeMaterial(b.ctx, b.E, &edicaoDeMaterial{
+		id: c.mat, mudaTitulo: true, titulo: "Título novo", mudaRoteiro: true, roteiro: &roteiro,
+		mudaTipo: true, tipoNovo: uuid.New(),
+	})
+	require.Error(t, err)
+	require.False(t, errors.As(err, &r), "falha depois de escrita é erro interno, não Recusa: %v", err)
+	titulo, tipo, gravado := linhaMaterial(t, b, c.mat)
+	require.Equal(t, "Título novo", titulo, "o título foi gravado antes do tipo")
+	require.Equal(t, roteiro, *gravado)
+	require.Equal(t, c.tipoA, *tipo, "o tipo não mudou")
+
+	// Sem escrita antes, a mesma falha do tipo segue sendo Recusa (o token volta).
+	err = aplicarEdicaoDeMaterial(b.ctx, b.E, &edicaoDeMaterial{id: c.mat, mudaTipo: true, tipoNovo: uuid.New()})
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, acoes.CodigoEntradaInvalida, r.Codigo)
+
+	// Material que sumiu antes de qualquer escrita: nao_encontrado, Recusa.
+	err = aplicarEdicaoDeMaterial(b.ctx, b.E, &edicaoDeMaterial{id: uuid.New(), mudaTitulo: true, titulo: "x"})
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, acoes.CodigoNaoEncontrado, r.Codigo)
 }
