@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -698,4 +700,133 @@ func TestEscrita_AuditoriaMascaraSegredosDosArgsAoGravarMasNaoOTokenId(t *testin
 	require.Equal(t, "visível", args["valor"])
 	require.Equal(t, principalTeste.TokenID.String(), meta["mcp"].(map[string]any)["token_id"],
 		"a chave mcp.token_id NÃO é mascarada na gravação (só os args)")
+}
+
+// ── Confirmações concorrentes, args da auditoria e recusa na 2ª chamada ──
+
+// Várias confirmações simultâneas do MESMO token: exatamente uma executa; as
+// outras recebem "já foi usada" (sem erro, sem executar).
+func TestEscrita_ConfirmacoesConcorrentesComOMesmoTokenExecutamUmaSoVez(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	var execucoes atomic.Int32
+	d := (&sondaEscrita{}).escrita("escreve_conf", Confirma, false)
+	d.Executar = func(context.Context, *Escritas, *Principal, entradaEscritaTeste) (feito, error) {
+		execucoes.Add(1)
+		time.Sleep(50 * time.Millisecond) // dá tempo de as outras chegarem ao Consumir
+		return feito{Resultado: map[string]any{}, Recurso: "teste"}, nil
+	}
+	s := b.servidor(principalTeste, d)
+	tok := chama(t, s, "escreve_conf", map[string]any{"valor": "x"})["confirmacao"].(string)
+
+	const n = 8
+	type desfecho struct {
+		texto string
+		erro  bool
+		err   error
+	}
+	saidas := make([]desfecho, n)
+	largada := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ct, st := sdk.NewInMemoryTransports()
+			if _, err := s.Connect(b.ctx, st, nil); err != nil {
+				saidas[i].err = err
+				return
+			}
+			cs, err := sdk.NewClient(&sdk.Implementation{Name: "teste", Version: "1"}, nil).Connect(b.ctx, ct, nil)
+			if err != nil {
+				saidas[i].err = err
+				return
+			}
+			defer cs.Close()
+			<-largada
+			res, err := cs.CallTool(b.ctx, &sdk.CallToolParams{Name: "escreve_conf",
+				Arguments: map[string]any{"valor": "x", "confirmacao": tok}})
+			if err != nil {
+				saidas[i].err = err
+				return
+			}
+			saidas[i].texto, saidas[i].erro = res.Content[0].(*sdk.TextContent).Text, res.IsError
+		}()
+	}
+	close(largada)
+	wg.Wait()
+
+	executaram, usadas := 0, 0
+	for _, o := range saidas {
+		require.NoError(t, o.err)
+		require.False(t, o.erro, o.texto)
+		var out map[string]any
+		require.NoError(t, json.Unmarshal([]byte(o.texto), &out))
+		if out["executou"] == true {
+			executaram++
+		} else {
+			require.Contains(t, out["erro"], "já foi usada")
+			usadas++
+		}
+	}
+	require.Equal(t, 1, executaram)
+	require.Equal(t, n-1, usadas)
+	require.EqualValues(t, 1, execucoes.Load(), "o Executar rodou uma única vez")
+	require.Equal(t, 1, b.auditorias(t, "mcp.escrita.escreve_conf"))
+}
+
+// O token é credencial de uma etapa só: não vai para os args da auditoria.
+func TestEscrita_AuditoriaDeConfirmaNaoGuardaOTokenNosArgs(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	sonda := &sondaEscrita{}
+	s := b.servidor(principalTeste, sonda.escrita("escreve_conf", Confirma, false))
+	tok := chama(t, s, "escreve_conf", map[string]any{"valor": "x"})["confirmacao"].(string)
+	chama(t, s, "escreve_conf", map[string]any{"valor": "x", "confirmacao": tok})
+
+	var bruto string
+	var args map[string]any
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT metadata::text, metadata->'args' FROM audit_log WHERE action = 'mcp.escrita.escreve_conf'`).Scan(&bruto, &args))
+	require.Equal(t, map[string]any{"valor": "x"}, args)
+	require.NotContains(t, args, "confirmacao")
+	require.NotContains(t, bruto, tok)
+}
+
+// Entre o preview e a confirmação o mundo pode ter mudado de um jeito que faz
+// o Escalar ou o Preview recusarem (ex.: campanha cancelada nesse meio tempo).
+// A recusa vem como isError com [codigo] e o token NÃO é consumido.
+func TestEscrita_RecusaDoEscalarOuDoPreviewNaConfirmacaoNaoConsomeOToken(t *testing.T) {
+	for _, onde := range []string{"escalar", "preview"} {
+		t.Run(onde, func(t *testing.T) {
+			b := novaBancadaEscrita(t)
+			sonda := &sondaEscrita{escalada: Escalada{Nivel: Confirma, Motivo: "x"}}
+			recusar := false
+			recusa := &acoes.Recusa{Mensagem: "campanha cancelada", Codigo: "campanha_cancelada"}
+			d := sonda.escrita("escreve_esc", Livre, true)
+			escalarOriginal, previewOriginal := d.Escalar, d.Preview
+			d.Escalar = func(ctx context.Context, E *Escritas, in entradaEscritaTeste) (Escalada, error) {
+				if recusar && onde == "escalar" {
+					return Escalada{}, recusa
+				}
+				return escalarOriginal(ctx, E, in)
+			}
+			d.Preview = func(ctx context.Context, E *Escritas, in entradaEscritaTeste) (previa, error) {
+				if recusar && onde == "preview" {
+					return previa{}, recusa
+				}
+				return previewOriginal(ctx, E, in)
+			}
+			s := b.servidor(principalTeste, d)
+			tok := chama(t, s, "escreve_esc", map[string]any{"valor": "x"})["confirmacao"].(string)
+
+			recusar = true
+			texto := chamaErro(t, s, "escreve_esc", map[string]any{"valor": "x", "confirmacao": tok})
+			require.Equal(t, "campanha cancelada [campanha_cancelada]", texto)
+			require.Equal(t, 0, sonda.execucoes)
+			require.Equal(t, 0, b.confirmacoesUsadas(t), "o token não foi consumido")
+
+			recusar = false // o mundo voltou ao que era: o MESMO token vale
+			require.Equal(t, true, chama(t, s, "escreve_esc", map[string]any{"valor": "x", "confirmacao": tok})["executou"])
+			require.Equal(t, 1, sonda.execucoes)
+		})
+	}
 }
