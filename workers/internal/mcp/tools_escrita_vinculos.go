@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -133,6 +135,101 @@ func vinculoDepois(ctx context.Context, L *Leitura, camp *catalog.Campaign, mat 
 	return &saidaVinculo{Campanha: refDe(camp.ID, camp.Name), Vinculo: linha}, total > len(corte), nil
 }
 
+// ── Concorrência de atribuição e webhooks pendentes ─────────────────────
+
+// multiAtribuicaoLigada é a flag MULTI_ATTRIBUTION (a MESMA condição de
+// cmd/api/main.go: a API e o MCP rodam no mesmo processo). Muda o que um vínculo
+// concorrente significa, então o texto das ressalvas depende dela. var para o
+// teste trocar.
+var multiAtribuicaoLigada = func() bool { return os.Getenv("MULTI_ATTRIBUTION") == "true" }
+
+// ressalvaWebhookPendente: o entregador de webhooks (webhook/deliverer.go,
+// handleDetection e handleRetracted) acha o CLIENTE do evento de detecção (NATS
+// detection.confirmed / detection.retracted) pelo vínculo campaign_materials —
+// material + emissora em target_stations + campanha programada/ativa + data na
+// vigência — NO MOMENTO em que consome o evento; sem vínculo (e sem linha legada
+// em commercials) ele descarta em silêncio ("Drop quietly"). As linhas já
+// gravadas na outbox (webhook_deliveries) já têm o cliente e não dependem do
+// vínculo: o risco é só o evento ainda não processado, inclusive a retratação de
+// uma tocada anterior.
+const ressalvaWebhookPendente = "Webhook de detecção (confirmada ou retratada) desse material nessas emissoras que o entregador ainda não tenha processado " +
+	"quando o vínculo sair pode ser descartado: o entregador acha o cliente pelo vínculo no momento de processar o evento e, sem vínculo, descarta. " +
+	"Webhooks já enfileirados para entrega não são afetados."
+
+// concorrentesDoVinculo lê os vínculos de outras campanhas que disputam a
+// atribuição do material nas emissoras dadas (vazio se não há emissora).
+func concorrentesDoVinculo(ctx context.Context, E *Escritas, camp *catalog.Campaign, mat *catalog.Material, emissoras []uuid.UUID) ([]catalog.VinculoConcorrente, map[uuid.UUID]string, error) {
+	if len(emissoras) == 0 {
+		return nil, nil, nil
+	}
+	concs, err := E.Leitura.MateriaisCampanha.ListarConcorrentes(ctx, camp.ID, mat.ID, camp.StartDate, camp.EndDate, emissoras)
+	if err != nil || len(concs) == 0 {
+		return nil, nil, err
+	}
+	var ids []uuid.UUID
+	for _, c := range concs {
+		ids = append(ids, c.EmissorasComuns...)
+	}
+	nomes, err := nomesEmissoras(ctx, E.Leitura, ids)
+	return concs, nomes, err
+}
+
+func descreveConcorrente(c catalog.VinculoConcorrente, nomes map[uuid.UUID]string) (campanha, emissoras string) {
+	campanha = fmt.Sprintf("%q (%s, %s a %s)", c.CampaignName, c.Status, dia(c.StartDate), dia(c.EndDate))
+	return campanha, resumoDeEmissoras(c.EmissorasComuns, nomes)
+}
+
+// ressalvasAoVincular: o vínculo novo (ou as emissoras acrescentadas a um vínculo
+// existente, criado em meuAddedAt) entra em disputa com os vínculos de outras
+// campanhas. Atribuição (evidence/attribution.go): sem multi-atribuição, a tocada
+// vai para UMA campanha — a do vínculo mais recente (`ORDER BY cm.added_at DESC
+// LIMIT 1`) entre os do MESMO material (m.short_id); com MULTI_ATTRIBUTION, além
+// dessa canônica, o fan-out dá uma projeção a cada campanha programada/ativa que
+// tem material com o mesmo master_sha256 na emissora (resolveAllAttributions).
+// meuAddedAt nil = vínculo novo, que nasce o mais recente.
+func ressalvasAoVincular(concs []catalog.VinculoConcorrente, nomes map[uuid.UUID]string, meuAddedAt *time.Time) []string {
+	multi := multiAtribuicaoLigada()
+	var out []string
+	for _, c := range concs {
+		camp, ems := descreveConcorrente(c, nomes)
+		switch {
+		case !c.MesmoMaterial && multi:
+			out = append(out, fmt.Sprintf("A campanha %s tem OUTRO material com o MESMO áudio (%q) em: %s. Com a multi-atribuição ligada a tocada conta nas duas campanhas, cada uma pelas suas regras.", camp, c.MaterialTitle, ems))
+		case !c.MesmoMaterial:
+			out = append(out, fmt.Sprintf("A campanha %s tem OUTRO material com o MESMO áudio (%q) em: %s. Sem multi-atribuição (MULTI_ATTRIBUTION desligada) a tocada é atribuída ao material que o detector reconhece (em empate, o de menor short_id), então uma das duas campanhas pode ficar sem receber veiculação.", camp, c.MaterialTitle, ems))
+		case multi:
+			out = append(out, fmt.Sprintf("A campanha %s também tem este material em: %s. Com a multi-atribuição ligada a mesma tocada conta nas duas campanhas, cada uma pelas suas regras.", camp, ems))
+		case meuAddedAt == nil || c.AddedAt.Before(*meuAddedAt):
+			out = append(out, fmt.Sprintf("A campanha %s também tem este material em: %s. Sem multi-atribuição (MULTI_ATTRIBUTION desligada) cada tocada vai para UMA campanha só, a do vínculo mais recente: este vínculo passa a levar as tocadas futuras dessas emissoras (nas datas em comum) e %q deixa de recebê-las.", camp, ems, c.CampaignName))
+		default:
+			out = append(out, fmt.Sprintf("A campanha %s também tem este material em: %s, e o vínculo dela é mais recente. Sem multi-atribuição (MULTI_ATTRIBUTION desligada) a tocada vai para UMA campanha só, a do vínculo mais recente: essas emissoras continuam indo para %q, não para esta.", camp, ems, c.CampaignName))
+		}
+	}
+	return out
+}
+
+// ressalvasAoTirar: o vínculo (ou as emissoras tiradas dele, criado em
+// meuAddedAt) some, e outras campanhas têm o mesmo áudio nas mesmas emissoras:
+// sem multi-atribuição as tocadas que hoje vêm para esta campanha voltam para
+// elas.
+func ressalvasAoTirar(concs []catalog.VinculoConcorrente, nomes map[uuid.UUID]string, meuAddedAt time.Time) []string {
+	multi := multiAtribuicaoLigada()
+	var out []string
+	for _, c := range concs {
+		camp, ems := descreveConcorrente(c, nomes)
+		switch {
+		case multi:
+			out = append(out, fmt.Sprintf("A campanha %s segue contando as tocadas dessas emissoras (%s) pela multi-atribuição; só esta campanha deixa de contá-las.", camp, ems))
+		case !c.MesmoMaterial:
+			out = append(out, fmt.Sprintf("A campanha %s tem OUTRO material com o MESMO áudio (%q) em: %s. Ao tirar este vínculo, as tocadas futuras dessas emissoras passam a ser atribuídas por aquele material, a essa campanha.", camp, c.MaterialTitle, ems))
+		case c.AddedAt.Before(meuAddedAt):
+			out = append(out, fmt.Sprintf("A campanha %s também tem este material em: %s. Sem multi-atribuição a tocada vai para a campanha do vínculo mais recente — hoje, esta —; ao tirar, as tocadas futuras dessas emissoras voltam para %q.", camp, ems, c.CampaignName))
+		}
+		// Vínculo mais recente que este: a tocada já vai para ele, nada muda.
+	}
+	return out
+}
+
 // ── vincular_material ───────────────────────────────────────────────────
 
 type entradaVincularMaterial struct {
@@ -200,8 +297,8 @@ func escritaVincularMaterial(cfg ConfigServidor) Escrita[entradaVincularMaterial
 		Descricao: "Vincula um material (áudio) a uma campanha, nas emissoras em que ele pode tocar (omita emissora_ids para todas as da " +
 			"campanha, como a tela faz). O material precisa ser do mesmo cliente da campanha e ainda não estar vinculado (para mudar as " +
 			"emissoras de um vínculo existente use editar_emissoras_material). Numa campanha ativa o índice e os workers recarregam agora. " +
-			"As armadilhas: material sem tipo não é coberto por nenhuma regra de distribuição, e material sem fingerprint pronto não é " +
-			"detectado. Não recategoriza nada e não sobe de nível: o que já foi veiculado não muda. Campanha cancelada é recusada. " +
+			"As armadilhas: material sem tipo não é coberto por nenhuma regra de distribuição, material sem fingerprint pronto não é " +
+			"detectado, e outra campanha com o mesmo áudio nas mesmas emissoras disputa a atribuição das tocadas (o preview diz quem leva). Não recategoriza nada e não sobe de nível: o que já foi veiculado não muda. Campanha cancelada é recusada. " +
 			"Nunca invente ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaVincularMaterial) (string, *uuid.UUID) {
@@ -227,6 +324,11 @@ func escritaVincularMaterial(cfg ConfigServidor) Escrita[entradaVincularMaterial
 			if pl.mat.FingerprintStatus != "ready" {
 				pv.Ressalvas = append(pv.Ressalvas, fmt.Sprintf("O fingerprint do material não está pronto (%s): ele só será detectado depois que ficar pronto.", pl.mat.FingerprintStatus))
 			}
+			concs, nomes, err := concorrentesDoVinculo(ctx, E, pl.camp, pl.mat, pl.emissoras)
+			if err != nil {
+				return previa{}, err
+			}
+			pv.Ressalvas = append(pv.Ressalvas, ressalvasAoVincular(concs, nomes, nil)...)
 			return pv, nil
 		},
 		Executar: func(ctx context.Context, E *Escritas, _ *Principal, in entradaVincularMaterial) (feito, error) {
@@ -327,7 +429,8 @@ func escritaDesvincularMaterial(cfg ConfigServidor) Escrita[entradaDesvincularMa
 		Descricao: "Tira um material de uma campanha (remove o vínculo). Numa campanha ativa o índice e os workers recarregam agora e o material " +
 			"deixa de ser detectado nela. As veiculações já registradas continuam atribuídas à campanha — não recategoriza nada e não sobe de " +
 			"nível. As armadilhas: regras de distribuição escopadas a este material, ou do tipo dele quando era o único do tipo, ficam cobrando " +
-			"inserções que nada cumpre; e lançar veiculação manual deste material na campanha deixa de ser possível. Vínculo que não existe é " +
+			"inserções que nada cumpre; lançar veiculação manual deste material na campanha deixa de ser possível; e um webhook de detecção ainda " +
+			"não processado pode ser descartado. Vínculo que não existe é " +
 			"recusado. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaDesvincularMaterial) (string, *uuid.UUID) {
@@ -355,6 +458,12 @@ func escritaDesvincularMaterial(cfg ConfigServidor) Escrita[entradaDesvincularMa
 			if err != nil {
 				return previa{}, err
 			}
+			concs, nomes, err := concorrentesDoVinculo(ctx, E, cv.camp, cv.mat, cv.vinculo.TargetStations)
+			if err != nil {
+				return previa{}, err
+			}
+			pv.Ressalvas = append(pv.Ressalvas, ressalvasAoTirar(concs, nomes, cv.vinculo.AddedAt)...)
+			pv.Ressalvas = append(pv.Ressalvas, ressalvaWebhookPendente)
 			return pv, nil
 		},
 		Executar: func(ctx context.Context, E *Escritas, _ *Principal, in entradaDesvincularMaterial) (feito, error) {
@@ -457,7 +566,8 @@ func escritaEditarEmissorasMaterial(cfg ConfigServidor) Escrita[entradaEditarEmi
 			"ids, e só as listadas mudam (a tela troca a lista inteira; aqui nunca). É a lista que decide em que emissoras uma tocada do " +
 			"material é atribuída à campanha — emissora acrescentada à campanha NÃO entra nos vínculos sozinha, e é aqui que se inclui. " +
 			"Numa campanha ativa o índice e os workers recarregam agora. Não recategoriza nada e não sobe de nível: veiculações já registradas " +
-			"não mudam; as futuras nas emissoras removidas deixam de ser atribuídas à campanha. Não deixa o vínculo sem emissora (para tirar " +
+			"não mudam; as futuras nas emissoras removidas deixam de ser atribuídas à campanha, e outra campanha com o mesmo áudio nas mesmas " +
+			"emissoras pode passar a levá-las ou disputá-las (o preview diz). Não deixa o vínculo sem emissora (para tirar " +
 			"o material use desvincular_material). Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e espere a " +
 			"pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
@@ -489,6 +599,20 @@ func escritaEditarEmissorasMaterial(cfg ConfigServidor) Escrita[entradaEditarEmi
 				pv.Efeitos = append(pv.Efeitos,
 					"Tocadas futuras deste material nas emissoras tiradas deixam de ser atribuídas a esta campanha; veiculações já registradas continuam como estão.",
 					"Veiculação manual nessas emissoras deixa de ser possível (ela exige a emissora no vínculo).")
+				concs, nomes, err := concorrentesDoVinculo(ctx, E, pl.camp, pl.mat, pl.remover)
+				if err != nil {
+					return previa{}, err
+				}
+				pv.Ressalvas = append(pv.Ressalvas, ressalvasAoTirar(concs, nomes, pl.vinculo.AddedAt)...)
+				pv.Ressalvas = append(pv.Ressalvas, ressalvaWebhookPendente)
+			}
+			if len(pl.adicionar) > 0 {
+				concs, nomes, err := concorrentesDoVinculo(ctx, E, pl.camp, pl.mat, pl.adicionar)
+				if err != nil {
+					return previa{}, err
+				}
+				meu := pl.vinculo.AddedAt
+				pv.Ressalvas = append(pv.Ressalvas, ressalvasAoVincular(concs, nomes, &meu)...)
 			}
 			return pv, nil
 		},

@@ -633,8 +633,10 @@ func TestEditarEmissorasCampanha_Escalada(t *testing.T) {
 
 	// Remover emissora COM veiculação da campanha: barra.
 	out := b.barrado(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e1}))
-	require.Contains(t, out["motivo"], "reclassifica o histórico")
-	require.Contains(t, textoDoPreview(t, out), "histórico é reclassificado", "o preview do ramo barrado diz a verdade")
+	require.Contains(t, out["motivo"], "não são reescritos pela remoção")
+	require.Contains(t, out["motivo"], "exige aprovação humana")
+	require.Contains(t, textoDoPreview(t, out), "NÃO são recalculados pela remoção", "o preview do ramo barrado diz a verdade")
+	require.NotContains(t, textoDoPreview(t, out), "reclassificado")
 	require.Equal(t, "https://portal.teste/campaigns/"+c.camp.String()+"/edit", out["links"].(map[string]any)["tela"])
 	require.Equal(t, []uuid.UUID{c.e1, c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras, "nada foi gravado")
 	require.Empty(t, b.sup.Chamadas())
@@ -751,4 +753,134 @@ func TestCampanhaCancelada_RecusaAntesDaEscalada(t *testing.T) {
 	} {
 		require.Contains(t, b.chamarErro(t, nome, args), "[campanha_cancelada]", nome)
 	}
+}
+
+// ── Prova da remoção de emissora da campanha ────────────────────────────
+
+// A escalada de editar_emissoras_campanha (remover emissora COM veiculação → crítico) assume que tirar a
+// emissora mexe no histórico. Este teste mede a premissa. Semeia tocadas passadas aprovadas na emissora
+// removida (com regras, preço, PMM no target e um carve-out), lê pelas tools tudo o que o cliente vê do
+// passado, tira a emissora por acoes.TrocarEmissorasCampanha DIRETO (a tool a barra) e relê.
+//
+// RESULTADO (2026-10-29): grade, insights, financeiro, veiculações, planos do dia, falhas da campanha e as
+// projeções (detection_campaigns) saem IDÊNTICOS — inclusive depois de editar uma regra (recat). O que
+// muda é só a lista de emissoras-alvo (obter_campanha) e a lista de PMM no target do cliente
+// (pmm_target_cliente); no código, o mapa ao vivo, a Visão Gerencial e os alertas de queda também leem
+// campaigns.target_stations. A escalada fica como está até o dono decidir: ela protege o histórico
+// exigindo aprovação, não evita uma reescrita do passado.
+func TestEditarEmissorasCampanha_ProvaDaRemocao(t *testing.T) {
+	b := novaBancadaTool(t)
+	p := semearProva(t, b)
+	p.renomearRegra(t, b, p.e2, "Regra do E2 v1") // normaliza as categorias pelo categorizador
+	antes := p.capturar(t, b, true)
+	projAntes := projecoes(t, b)
+	require.Contains(t, antes["listar_veiculacoes"], "in_slot", "a prova não é vazia")
+	require.Contains(t, antes["grade_campanha"], `"in_slot":4`)
+
+	lerLista := func() (emissorasAlvo int, nomes string, pmmTotal int) {
+		camp := b.chamar(t, "obter_campanha", map[string]any{"campanha_id": p.camp.String()})
+		pmm := b.chamar(t, "pmm_target_cliente", map[string]any{"cliente_id": p.cli.String()})
+		return int(campanhaDoResultadoDireto(camp)["emissoras_alvo"].(float64)), mustJSON(t, camp["emissoras"]), int(pmm["page"].(map[string]any)["total"].(float64))
+	}
+	alvoAntes, nomesAntes, pmmAntes := lerLista()
+	require.Equal(t, 3, alvoAntes)
+	require.Contains(t, nomesAntes, "Rádio Prova 1")
+	require.Equal(t, 3, pmmAntes)
+
+	// A premissa da escalada continua valendo: pela tool, a remoção é barrada e nada muda.
+	out := b.barrado(t, "editar_emissoras_campanha", argsEmissorasCampanha(p.camp, nil, []uuid.UUID{p.e1}))
+	require.Contains(t, out["motivo"], "não são reescritos")
+	require.Equal(t, []uuid.UUID{p.e1, p.e2, p.e3}, lerLinhaCampanha(t, b, p.camp).Emissoras)
+
+	// Remoção DIRETA (o que a tool faria, aprovada): tira a emissora COM tocadas passadas.
+	require.NoError(t, b.E.Acoes.TrocarEmissorasCampanha(b.ctx, p.camp, []uuid.UUID{p.e2, p.e3}))
+	require.Equal(t, []uuid.UUID{p.e2, p.e3}, lerLinhaCampanha(t, b, p.camp).Emissoras)
+	exigeIgual(t, "remover E1 da campanha", antes, p.capturar(t, b, true))
+	require.Equal(t, projAntes, projecoes(t, b), "as projeções (detection_campaigns) não mudam")
+
+	// Editar uma regra DEPOIS da remoção: o recat varre o tipo da campanha e não depende da lista de emissoras.
+	p.renomearRegra(t, b, p.e2, "Regra do E2 v2")
+	exigeIgual(t, "editar regra depois da remoção (recat)", antes, p.capturar(t, b, true))
+	require.Equal(t, projAntes, projecoes(t, b), "o recat não mexeu nas categorias")
+
+	// O que MUDA: as listas que leem campaigns.target_stations.
+	alvoDepois, nomesDepois, pmmDepois := lerLista()
+	require.Equal(t, 2, alvoDepois)
+	require.NotContains(t, nomesDepois, "Rádio Prova 1")
+	require.Equal(t, 2, pmmDepois, "a emissora sai da lista de PMM no target do cliente")
+}
+
+// campanhaDoResultadoDireto: o bloco `campanha` de uma leitura obter_campanha (sem o envelope `resultado`).
+func campanhaDoResultadoDireto(out map[string]any) map[string]any {
+	return out["campanha"].(map[string]any)
+}
+
+// ── criar_campanha: o upsert do hub e a descrição ───────────────────────
+
+func TestCriarCampanha_PreviewMencionaOUpsertDoHubSempreQueOHubEstaConfigurado(t *testing.T) {
+	b := novaBancadaTool(t)
+	agoraFixa(b)
+	c := semearCampEsc(t, b, "2026-12-01", "2026-12-31", "")
+	efeitos := func(pre map[string]any) string { return mustJSON(t, pre["preview"].(map[string]any)["efeitos"]) }
+	ressalvas := func(pre map[string]any) string { return mustJSON(t, pre["preview"].(map[string]any)["ressalvas"]) }
+
+	// Sem código: acoes.CriarCampanha emite o campanha.upsert mesmo assim (o hub o ignora).
+	pre := b.preview(t, "criar_campanha", argsCriarCampanha(c.cli, nil))
+	require.Contains(t, efeitos(pre), "campanha.upsert")
+	require.Contains(t, ressalvas(pre), "IGNORA o aviso")
+
+	// Com código: o upsert segue, sem a ressalva.
+	b.hub.Conferir = func(string) (*hub.CampanhaDoHub, error) {
+		return mcptest.CampanhaDoClienteLigado("Camp hub", c.cli), nil
+	}
+	pre = b.preview(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"codigo_hub": "EH-7K4M2X"}))
+	require.Contains(t, efeitos(pre), "campanha.upsert")
+	require.NotContains(t, ressalvas(pre), "IGNORA")
+
+	// E o que o preview promete é o que acontece: a confirmação sem código emitiu o evento.
+	b.confirmarEExecutar(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"nome": "Sem código"}))
+	require.Len(t, b.hub.EventosDoTipo("campanha.upsert"), 1)
+
+	// Hub não configurado: nada de upsert.
+	b.hub.SemConfiguracao = true
+	pre = b.preview(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"nome": "Outra"}))
+	require.NotContains(t, efeitos(pre), "campanha.upsert")
+
+	d := escritaCriarCampanha(b.cfg).Descricao
+	require.Contains(t, d, "MESMO cliente")
+	require.Contains(t, d, "conferido contra o hub")
+}
+
+// ── editar_emissoras_campanha: acrescentar a uma campanha ativa ─────────
+
+func TestEditarEmissorasCampanha_AcrescentarEmAtivaAvisaQueOClienteVeAEmissora(t *testing.T) {
+	b := novaBancadaTool(t)
+	ativa := semearCampEsc(t, b, "2026-10-01", "2026-11-30", "ativa")
+	r := func(c cenarioCampEsc) string {
+		return ressalvasDoPreview(t, b.preview(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, []uuid.UUID{c.e3}, nil)))
+	}
+
+	// Ativa, sem materiais: o cliente passa a ver a emissora; nada sobre materiais.
+	texto := r(ativa)
+	require.Contains(t, texto, "o cliente passa a ver a emissora acrescentada no mapa ao vivo e nas listas de emissoras-alvo")
+	require.NotContains(t, texto, "NÃO ganham")
+
+	// Ativa, com material vinculado: junto vem o aviso dos materiais.
+	tipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot")
+	mat := mcptest.Material(t, b.ctx, b.pool, ativa.cli, tipo, "Spot")
+	mcptest.Vincular(t, b.ctx, b.pool, ativa.camp, mat, ativa.e1)
+	texto = r(ativa)
+	require.Contains(t, texto, "mapa ao vivo")
+	require.Contains(t, texto, "NÃO ganham as emissoras acrescentadas")
+	require.Contains(t, texto, "editar_emissoras_material")
+
+	// Programada: o cliente ainda não vê nada (a campanha não começou); só o aviso dos materiais, se houver.
+	prog := semearCampEsc(t, b, "2026-12-01", "2026-12-31", "")
+	require.NotContains(t, r(prog), "mapa ao vivo")
+	// Remover (em vez de acrescentar) numa ativa não fala de "passa a ver".
+	pre := b.preview(t, "editar_emissoras_campanha", argsEmissorasCampanha(ativa.camp, nil, []uuid.UUID{ativa.e2}))
+	if pre["preview"].(map[string]any)["ressalvas"] != nil {
+		require.NotContains(t, ressalvasDoPreview(t, pre), "passa a ver")
+	}
+	require.Contains(t, mustJSON(t, pre["preview"].(map[string]any)["efeitos"]), "mapa ao vivo e de cobertura")
 }
