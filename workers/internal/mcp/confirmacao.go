@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Token do nível confirma (spec §5.2; transplante de hub
@@ -77,3 +79,47 @@ func verificarConfirmacao(segredo []byte, token, tool string, args []byte, user 
 }
 
 func hashDoToken(token string) []byte { s := sha256.Sum256([]byte(token)); return s[:] }
+
+// expiraDoToken lê o prefixo "<exp_ms>" de um token na forma canônica; zero
+// se o token estiver fora da forma. Chame depois de verificarConfirmacao.
+func expiraDoToken(token string) time.Time {
+	m := formaDoToken.FindStringSubmatch(token)
+	if m == nil {
+		return time.Time{}
+	}
+	ms, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
+// Confirmacoes marca o uso único (F3-5): consome ANTES de executar; só a falha
+// de negócio libera. Erro interno não libera — a escrita pode ter gravado algo.
+type Confirmacoes struct{ DB *pgxpool.Pool }
+
+// Consumir reivindica o token: true para quem chegou primeiro, false se já foi
+// usado (ou se o token está fora da forma — nesse caso o banco nem é tocado).
+func (c *Confirmacoes) Consumir(ctx context.Context, token string, exp time.Time) (bool, error) {
+	if !formaDoToken.MatchString(token) {
+		return false, nil
+	}
+	// Poda oportunista: sem varredor nesta fatia (o da Fatia 4 assume).
+	if _, err := c.DB.Exec(ctx, `DELETE FROM mcp_confirmacoes_usadas WHERE hash IN (
+		SELECT hash FROM mcp_confirmacoes_usadas WHERE expira_em < now() - interval '1 hour' LIMIT 500)`); err != nil {
+		return false, err
+	}
+	tag, err := c.DB.Exec(ctx, `INSERT INTO mcp_confirmacoes_usadas (hash, expira_em) VALUES ($1, $2)
+		ON CONFLICT (hash) DO NOTHING`, hashDoToken(token), exp)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Liberar devolve o token (falha de negócio na execução): a pessoa pode tentar
+// a mesma confirmação de novo.
+func (c *Confirmacoes) Liberar(ctx context.Context, token string) error {
+	_, err := c.DB.Exec(ctx, `DELETE FROM mcp_confirmacoes_usadas WHERE hash = $1`, hashDoToken(token))
+	return err
+}
