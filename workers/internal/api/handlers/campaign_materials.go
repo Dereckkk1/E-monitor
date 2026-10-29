@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
@@ -29,7 +28,6 @@ type CampaignMaterialsHandler struct {
 	// matching até o próximo tick — exatamente o sintoma do incidente
 	// 2026-05-08 (workers cegos a target_stations editado).
 	Supervisor CampaignSupervisor
-	Log        *zap.Logger
 }
 
 // servico monta as ações de vínculo sobre o repositório e o supervisor deste

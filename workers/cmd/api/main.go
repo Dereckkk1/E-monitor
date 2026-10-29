@@ -567,7 +567,7 @@ func main() {
 
 	   ⚠️ So com o hub configurado: sem este portao, dev e teste ficariam
 	   batendo numa URL vazia a cada 15 minutos. E o mesmo portao que o SSO e o
-	   `acoes.AvisarHubDaCampanha` ja usam.
+	   `acoes.Servico` (aviso da campanha) ja usam.
 
 	   ⚠️ Goroutine dentro do `cmd/api`, e NAO um binario proprio em `cmd/*`:
 	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para
@@ -667,7 +667,7 @@ func main() {
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc, DistRules: distRulesRepo},
-		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup, Log: logger},
+		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup},
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo, CampaignRepo: campaigns},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo, Recat: distRulesRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo, CampaignRepo: campaigns},
