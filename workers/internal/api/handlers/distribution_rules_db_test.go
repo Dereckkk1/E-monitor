@@ -387,3 +387,18 @@ func TestOverrideHTTP_Upsert_Recusas400ComOTextoDeSempre(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "for_date must be YYYY-MM-DD")
 }
+
+// DELETE de uma regra que não existe é idempotente: 204 (a rota sempre foi
+// assim). A F3-8a só tornou 404 o DELETE de regra de OUTRA campanha.
+func TestRegraHTTP_Delete_RegraInexistenteSegueDa204(t *testing.T) {
+	c := novoCenarioRegra(t)
+	mcptest.Regra(t, c.ctx, c.pool, c.campanha, c.tipoA, c.emissora, "2026-06-01", "2026-06-30", 127, "08:00", "12:00", 1)
+	r := roteadorRegras(c.handlerRegras())
+
+	rec := chamaRegra(t, r, http.MethodDelete,
+		"/campaigns/"+c.campanha.String()+"/distribution-rules/"+uuid.NewString(), nil)
+
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	require.Empty(t, rec.Body.String())
+	require.Equal(t, 1, c.contaRegras(t), "a regra existente da campanha não foi tocada")
+}

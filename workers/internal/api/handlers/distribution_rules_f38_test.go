@@ -54,13 +54,14 @@ func TestRegraHTTP_F38a_DeleteDeRegraDeOutraCampanhaDa404ESemEfeito(t *testing.T
 	require.NoError(t, err, "a regra da outra campanha continua lá")
 }
 
-func TestRegraHTTP_F38a_RegraInexistenteDa404(t *testing.T) {
+// PUT numa regra inexistente é 404. (O DELETE do que já não existe segue 204 —
+// idempotente, como sempre: ver TestRegraHTTP_Delete_RegraInexistenteSegueDa204.)
+func TestRegraHTTP_F38a_PutDeRegraInexistenteDa404(t *testing.T) {
 	c := novoCenarioRegra(t)
 	r := roteadorRegras(c.handlerRegras())
 	alvo := "/campaigns/" + c.campanha.String() + "/distribution-rules/" + uuid.NewString()
 
 	require.Equal(t, http.StatusNotFound, chamaRegra(t, r, http.MethodPut, alvo, c.corpoRegra(c.tipoA, "08:00", "12:00", 1)).Code)
-	require.Equal(t, http.StatusNotFound, chamaRegra(t, r, http.MethodDelete, alvo, nil).Code)
 }
 
 func TestRegraHTTP_F38b_TrocaDeTipoRecategorizaOTipoAntigo(t *testing.T) {

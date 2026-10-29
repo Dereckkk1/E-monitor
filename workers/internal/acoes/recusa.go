@@ -6,6 +6,8 @@
 // reimplementa o que a tela faz.
 package acoes
 
+import "errors"
+
 // Códigos de recusa de negócio (plano da Fatia 3, F3-9). As rotas HTTP não têm
 // código (respondem texto puro); quem os define é a camada de ações, e o MCP os
 // devolve como "<mensagem> [<código>]" (contrato §3.4).
@@ -30,7 +32,21 @@ type Recusa struct {
 	// para montar a resposta sem reler a Mensagem — por exemplo, `existente`
 	// ({id, nome}) do cnpj_duplicado. Nunca entra na Mensagem nem no erro do MCP.
 	Dados map[string]any
+	// Causa é opcional e serve a quem precisa DISTINGUIR casos de um mesmo
+	// código (errors.Is): ErrAlvoInexistente marca o nao_encontrado de "o alvo
+	// já não existe" (apagar o que não existe), que a rota HTTP trata como
+	// sucesso idempotente (204) e o MCP mostra como nao_encontrado.
+	Causa error
 }
+
+// ErrAlvoInexistente marca (via Recusa.Causa) o nao_encontrado em que o registro
+// pedido simplesmente não existe — diferente de "existe, mas não é desta
+// campanha". As rotas HTTP de apagar/desvincular/trocar-tipo respondem 204 nesse
+// caso desde sempre (idempotência); as ações o devolvem como Recusa para o MCP
+// não dizer "feito" quando nada foi feito.
+var ErrAlvoInexistente = errors.New("o registro pedido não existe")
+
+func (r *Recusa) Unwrap() error { return r.Causa }
 
 func (r *Recusa) Error() string {
 	if r.Codigo == "" {

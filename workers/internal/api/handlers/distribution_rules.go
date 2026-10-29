@@ -171,6 +171,13 @@ func (h *DistributionRulesHandler) Delete(w http.ResponseWriter, r *http.Request
 	}
 	// Após o delete o escopo da regra se perde — a ação recategoriza a campanha toda.
 	if err := h.servico().ApagarRegra(r.Context(), campaignID, ruleID); err != nil {
+		// DELETE é idempotente: apagar uma regra que já não existe é 204, como a
+		// rota sempre foi (a ação devolve nao_encontrado para o MCP não dizer
+		// "feito" quando nada foi feito). A regra de OUTRA campanha segue 404.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
