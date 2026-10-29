@@ -698,6 +698,11 @@ func main() {
 			Versao:  "fatia-0",
 			Log:     logger,
 			Workers: sup,
+			// As escritas do MCP chamam o que as telas chamam (plano Fatia 3):
+			// mesmo supervisor, mesmo cliente do hub, mesma barreira da ligação.
+			Supervisor: sup,
+			Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+			Ligacoes:   catalog.NewLigacoes(pool),
 		}),
 	}
 

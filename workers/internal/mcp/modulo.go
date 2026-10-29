@@ -7,6 +7,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
+	"radiocheck/internal/catalog"
+	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/oauth"
 	"radiocheck/internal/mcp/tokens"
 )
@@ -20,6 +23,17 @@ type DepsModulo struct {
 	Log     *zap.Logger
 	// Workers: o supervisor (para "monitorando agora" da visao_gerencial). Pode ser nil.
 	Workers ListaWorkers
+	// Supervisor: o supervisor de workers que as escritas de campanha e material
+	// acionam (troca de emissoras, reload). Pode ser nil — mesma regra dos
+	// handlers: sem supervisor, a escrita só grava no banco. Passe nil de
+	// verdade, não um *supervisor.Supervisor nil dentro da interface.
+	Supervisor acoes.SupervisorDeCampanha
+	// Hub: o cliente do hub (campanha.upsert, cliente.upsert, conferência do
+	// código). Pode ser nil ou não configurado: a escrita segue sem avisar.
+	Hub *hub.Client
+	// Ligacoes: a barreira da ligação cliente↔hub na escrita do código da
+	// campanha. Pode ser nil.
+	Ligacoes *catalog.Ligacoes
 }
 
 type Modulo struct {
@@ -43,7 +57,15 @@ func NovoModulo(d DepsModulo) *Modulo {
 	a := NovoAutenticador(st, d.Pool, o.URLMetadadosRecurso(), d.Log)
 	L := NovaLeitura(d.Pool)
 	L.Workers = d.Workers
-	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L, Log: d.Log}
+	// Um *hub.Client nil dentro da interface passaria no `!= nil` das ações e
+	// daria panic: só entra se existir.
+	var aviso acoes.AvisoHub
+	if d.Hub != nil {
+		aviso = d.Hub
+	}
+	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
+	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
+		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L), Log: d.Log}
 	return &Modulo{
 		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		cfg:    cfg,
