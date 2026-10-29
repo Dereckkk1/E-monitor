@@ -72,7 +72,7 @@ func main() {
 		log.Fatalf("logger: %v", err)
 	}
 	defer logger.Sync()        //nolint:errcheck
-	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
+	zap.ReplaceGlobals(logger) // zap.L() nos helpers de acoes/handler (acoes.RegistrarFalhaRecat)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
 	// OTLP endpoint is configured so dev / CI keep working without a
@@ -567,7 +567,7 @@ func main() {
 
 	   ⚠️ So com o hub configurado: sem este portao, dev e teste ficariam
 	   batendo numa URL vazia a cada 15 minutos. E o mesmo portao que o SSO e o
-	   `avisarHubDaCampanha` ja usam.
+	   `acoes.AvisarHubDaCampanha` ja usam.
 
 	   ⚠️ Goroutine dentro do `cmd/api`, e NAO um binario proprio em `cmd/*`:
 	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para

@@ -71,7 +71,7 @@ type Emissor interface {
 type EmissorHTTP struct{ Hub *hub.Client }
 
 func (e EmissorHTTP) Emitir(ctx context.Context, c catalog.Campaign) error {
-	/* ⚠️ O MESMO método que o `avisarHubDaCampanha` dos handlers usa. Montar um
+	/* ⚠️ O MESMO método que o `acoes.AvisarHubDaCampanha` (antes, dos handlers) usa. Montar um
 	   segundo caminho de emissão faria os dois divergirem no dia em que o
 	   envelope mudasse — e o que divergiria é justamente a rede de segurança,
 	   que é a que ninguém está olhando. */

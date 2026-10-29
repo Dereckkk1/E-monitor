@@ -37,7 +37,7 @@ Spec (fonte da verdade): `hub/docs/superpowers/specs/2026-09-18-codigo-do-hub-de
 2. **A rota de repasse** (`GET /v1/internal/hub-codes/{code}`) pergunta ao hub e
    devolve só o que a tela precisa. Ela existe para a chave da plataforma **não
    descer para o navegador** — a mesma chave abre a porta de eventos do hub.
-3. **A barreira** (`conferirCodigoOuRecusar`, usada pelo `POST` e pelo `PUT`)
+3. **A barreira** (`acoes.ConferirCodigoHub`, em `workers/internal/acoes/hub.go`, usada pelo `POST` e pelo `PUT`; antes `conferirCodigoOuRecusar` no handler)
    recusa com 422 o código que não existe ou é de outro cliente. A conferência
    da tela é conveniência; esta é a barreira de verdade, porque quem chama a API
    direto pula a tela.
