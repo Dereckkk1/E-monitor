@@ -13,6 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/mcp/mcptest"
@@ -428,4 +431,78 @@ func TestEscrita_EscaladaNuncaDesceODeclarado(t *testing.T) {
 	require.Equal(t, false, out["executou"], "declarada confirma, a escalada 'livre' não a rebaixa")
 	require.NotEmpty(t, out["confirmacao"])
 	require.Equal(t, 0, sonda.execucoes)
+}
+
+// Um token com mais de 200 caracteres nunca é válido: a resposta é a de token
+// inválido, sem consumir nada (nem tocar o banco do uso único).
+func TestEscrita_ConfirmacaoComMaisDe200CaracteresEhInvalida(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	sonda := &sondaEscrita{}
+	s := b.servidor(principalTeste, sonda.escrita("escreve_conf", Confirma, false))
+
+	out := chama(t, s, "escreve_conf", map[string]any{"valor": "x", "confirmacao": strings.Repeat("a", 201)})
+	require.Equal(t, false, out["executou"])
+	require.Contains(t, out["erro"], "inválida ou expirada")
+	require.Equal(t, 0, sonda.execucoes)
+	require.Equal(t, 0, b.confirmacoesUsadas(t))
+}
+
+// entradaSemConfirmacao é o erro de programação que o registro detecta: uma
+// tool confirma cujo In esqueceu de embutir CampoConfirmacao.
+type entradaSemConfirmacao struct {
+	Valor string `json:"valor" jsonschema:"Um valor qualquer"`
+}
+
+// Sem o campo, o modelo nunca conseguiria devolver o token e giraria em
+// previews para sempre: o registro loga o erro (sem panic, regra 6.5) e a
+// chamada falha fechada, sem preview.
+func TestEscrita_ConfirmaSemCampoConfirmacaoFalhaFechadoELogaNoRegistro(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	nucleo, logs := observer.New(zapcore.ErrorLevel)
+	cfg := ConfigServidor{Versao: "teste", Escritas: b.E, Log: zap.New(nucleo)}
+
+	previews := 0
+	d := Escrita[entradaSemConfirmacao]{
+		Nome: "tool_mal_formada", Descricao: "Mal formada.", Nivel: Confirma,
+		Preview: func(context.Context, *Escritas, entradaSemConfirmacao) (previa, error) {
+			previews++
+			return previa{Resumo: "x"}, nil
+		},
+		Executar: func(context.Context, *Escritas, *Principal, entradaSemConfirmacao) (feito, error) {
+			t.Fatal("Executar não pode rodar")
+			return feito{}, nil
+		},
+	}
+	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
+	require.NotPanics(t, func() { ferramentaEscrita(s, cfg, principalTeste, d) })
+	require.Equal(t, 1, logs.FilterMessageSnippet("CampoConfirmacao").Len(), "o erro de configuração é logado no registro")
+
+	texto := chamaErro(t, s, "tool_mal_formada", map[string]any{"valor": "x"})
+	require.Contains(t, texto, "[interno]")
+	require.Equal(t, 0, previews, "nem o preview roda: o modelo não pode girar em previews")
+
+	// Escalável (livre com Escalar) também precisa do campo.
+	nucleo2, logs2 := observer.New(zapcore.ErrorLevel)
+	dl := Escrita[entradaSemConfirmacao]{
+		Nome: "livre_escalavel_mal_formada", Descricao: "x", Nivel: Livre,
+		Escalar: func(context.Context, *Escritas, entradaSemConfirmacao) (Escalada, error) { return Escalada{}, nil },
+		Executar: func(context.Context, *Escritas, *Principal, entradaSemConfirmacao) (feito, error) {
+			return feito{}, nil
+		},
+	}
+	ferramentaEscrita(sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil),
+		ConfigServidor{Escritas: b.E, Log: zap.New(nucleo2)}, principalTeste, dl)
+	require.Equal(t, 1, logs2.Len())
+
+	// Livre pura e crítica pura não pedem token: sem erro de configuração.
+	nucleo3, logs3 := observer.New(zapcore.ErrorLevel)
+	cfg3 := ConfigServidor{Escritas: b.E, Log: zap.New(nucleo3)}
+	ferramentaEscrita(sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil), cfg3, principalTeste,
+		Escrita[entradaSemConfirmacao]{Nome: "livre_pura", Descricao: "x", Nivel: Livre,
+			Executar: func(context.Context, *Escritas, *Principal, entradaSemConfirmacao) (feito, error) {
+				return feito{}, nil
+			}})
+	ferramentaEscrita(sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil), cfg3, principalTeste,
+		Escrita[entradaSemConfirmacao]{Nome: "critica_pura", Descricao: "x", Nivel: Critico})
+	require.Equal(t, 0, logs3.Len())
 }

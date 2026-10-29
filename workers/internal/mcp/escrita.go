@@ -99,6 +99,8 @@ const (
 	// avisoBarrado é o texto do ramo crítico (F3-1): a Fatia 4 troca esse ramo
 	// por criarPendente.
 	avisoBarrado = "Nada aconteceu. Esta alteração atinge veiculação já ocorrida e precisa de aprovação humana; a aprovação pelo MCP ainda não existe — faça pela tela, logado."
+	// tetoConfirmacao: comprimento máximo aceito para o campo confirmacao.
+	tetoConfirmacao = 200
 	// tetoTextoAuditoria: texto longo (roteiro) entra cortado no audit_log (F3-11).
 	tetoTextoAuditoria = 500
 )
@@ -172,6 +174,19 @@ func comoFalha(cfg ConfigServidor, tool string, err error) (*sdk.CallToolResult,
 // confirma (sem token: pede; com token: verifica, consome, executa).
 func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, d Escrita[In]) {
 	destrutiva := d.Nivel != Livre || d.Escalar != nil
+	// Erro de programação, detectado no registro: uma tool que pode pedir
+	// confirmação (confirma, ou livre com Escalar) cujo In não embute
+	// CampoConfirmacao nunca receberia o token de volta, e o modelo giraria em
+	// previews. Não há panic (regra 6.5: panic no boot derruba o deploy): loga
+	// e a tool falha fechada.
+	semCampoConfirmacao := false
+	if d.Nivel == Confirma || (d.Escalar != nil && d.Nivel < Critico) {
+		if _, ok := any(*new(In)).(interface{ confirmacao() string }); !ok {
+			semCampoConfirmacao = true
+			cfg.log().Error("mcp: tool de escrita pode pedir confirmação mas o In não embute CampoConfirmacao",
+				zap.String("tool", d.Nome))
+		}
+	}
 	sdk.AddTool(s, &sdk.Tool{
 		Name:        d.Nome,
 		Description: d.Descricao + " Nível: " + d.Nivel.String() + ".",
@@ -185,12 +200,20 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 				res, out, err = falhaInterna(cfg.log(), d.Nome, fmt.Errorf("panic: %v\n%s", r, debug.Stack()))
 			}
 		}()
+		if semCampoConfirmacao {
+			return falhaInterna(cfg.log(), d.Nome, errors.New("mcp: In sem CampoConfirmacao"))
+		}
 		E := cfg.Escritas
 		if E == nil {
 			return falhaInterna(cfg.log(), d.Nome, errors.New("mcp: Escritas não configuradas"))
 		}
 		if p == nil {
 			return falha("sem identidade: o pedido não passou pela autenticação do MCP", "sem_identidade")
+		}
+		// Token acima do teto nunca é válido (a forma canônica tem ~57
+		// caracteres): recusa antes de qualquer trabalho, sem tocar o banco.
+		if len(confirmacaoDe(in)) > tetoConfirmacao {
+			return resultado(respostaSemEfeito{Executou: false, Erro: msgInvalida})
 		}
 		args, err := argsCanonicos(in)
 		if err != nil {
