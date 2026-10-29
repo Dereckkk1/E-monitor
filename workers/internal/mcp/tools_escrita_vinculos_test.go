@@ -4,13 +4,18 @@ package mcp
 // (sem escalada: F3-4) e o teste de prova de que o passado não muda.
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/mcp/mcptest"
@@ -428,97 +433,418 @@ func TestEditarEmissorasMaterial_Recusas(t *testing.T) {
 	require.Zero(t, b.totalAuditorias(t))
 }
 
+// ── Concorrência de atribuição e webhooks (preview) ─────────────────────
+
+// comMultiAtribuicao liga a flag MULTI_ATTRIBUTION só dentro do teste.
+func comMultiAtribuicao(t *testing.T, ligada bool) {
+	t.Helper()
+	antes := multiAtribuicaoLigada
+	multiAtribuicaoLigada = func() bool { return ligada }
+	t.Cleanup(func() { multiAtribuicaoLigada = antes })
+}
+
+// fixaAddedAt grava o instante de criação de um vínculo (o desempate da atribuição é added_at DESC).
+func fixaAddedAt(t *testing.T, b *bancadaTool, camp, mat uuid.UUID, quando string) {
+	t.Helper()
+	_, err := b.pool.Exec(b.ctx, `UPDATE campaign_materials SET added_at = $3::timestamptz WHERE campaign_id = $1 AND material_id = $2`, camp, mat, quando)
+	require.NoError(t, err)
+}
+
+// ressalvasDe devolve as ressalvas do preview como um texto só.
+func ressalvasDoPreview(t *testing.T, out map[string]any) string {
+	t.Helper()
+	return mustJSON(t, out["preview"].(map[string]any)["ressalvas"])
+}
+
+// concorrenteDe cria uma campanha ativa do MESMO cliente, de vigência igual à de c, com o material
+// vinculado às emissoras dadas e o vínculo criado em `quando`.
+func concorrenteDe(t *testing.T, b *bancadaTool, c cenarioVinc, nome, estado, inicio, fim, quando string, mat uuid.UUID, emissoras ...uuid.UUID) uuid.UUID {
+	t.Helper()
+	camp := mcptest.Campanha(t, b.ctx, b.pool, c.cli, nome, inicio, fim, emissoras...)
+	mcptest.EstadoCampanha(t, b.ctx, b.pool, camp, estado)
+	mcptest.Vincular(t, b.ctx, b.pool, camp, mat, emissoras...)
+	fixaAddedAt(t, b, camp, mat, quando)
+	return camp
+}
+
+func TestVincularMaterial_RessalvaDeConcorrenciaDeAtribuicao(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearVinc(t, b, "ativa") // E1 e E2; o material ainda não está vinculado
+	concorrente := concorrenteDe(t, b, c, "Campanha Concorrente", "ativa", "2026-10-15", "2026-12-31", "2026-09-01T10:00:00Z", c.mat, c.e1)
+	_ = concorrente
+
+	// Multi-atribuição DESLIGADA: a tocada vai para UMA campanha, a do vínculo mais recente — este.
+	comMultiAtribuicao(t, false)
+	pre := b.preview(t, "vincular_material", argsVinc(c, nil))
+	r := ressalvasDoPreview(t, pre)
+	require.Contains(t, r, "Campanha Concorrente")
+	require.Contains(t, r, "UMA campanha só")
+	require.Contains(t, r, "este vínculo passa a levar as tocadas futuras")
+	require.Contains(t, r, "Rádio 1")
+	require.NotContains(t, r, "Rádio 2", "só as emissoras em comum")
+	require.Empty(t, b.sup.Chamadas(), "o preview não escreve")
+
+	// Multi-atribuição LIGADA: a tocada conta nas duas, ninguém perde.
+	comMultiAtribuicao(t, true)
+	pre = b.preview(t, "vincular_material", argsVinc(c, nil))
+	r = ressalvasDoPreview(t, pre)
+	require.Contains(t, r, "multi-atribuição ligada")
+	require.Contains(t, r, "conta nas duas campanhas")
+	require.NotContains(t, r, "deixa de recebê-las")
+}
+
+// Os vizinhos que NÃO disputam a atribuição não geram ressalva.
+func TestVincularMaterial_ConcorrenciaVizinhosQueNaoDisputam(t *testing.T) {
+	b := novaBancadaTool(t)
+	comMultiAtribuicao(t, false)
+	c := semearVinc(t, b, "ativa")
+	cli2 := mcptest.Cliente(t, b.ctx, b.pool, "Outro cliente")
+	outroMat := mcptest.Material(t, b.ctx, b.pool, c.cli, c.tipo, "Outro áudio") // sha diferente
+
+	// Cada concorrente abaixo está errado em UM aspecto:
+	concorrenteDe(t, b, c, "Cancelada", "cancelada", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e1)
+	concorrenteDe(t, b, c, "Concluída", "concluida", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e1)
+	concorrenteDe(t, b, c, "Outra emissora", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e3)
+	concorrenteDe(t, b, c, "Vigência que não cruza", "ativa", "2027-01-01", "2027-01-31", "2026-09-01T10:00:00Z", c.mat, c.e1)
+	concorrenteDe(t, b, c, "Outro áudio", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", outroMat, c.e1)
+	_ = cli2
+
+	pre := b.preview(t, "vincular_material", argsVinc(c, nil))
+	r := ressalvasDoPreview(t, pre)
+	for _, nome := range []string{"Cancelada", "Concluída", "Outra emissora", "Vigência que não cruza", "Outro áudio"} {
+		require.NotContains(t, r, nome)
+	}
+	require.NotContains(t, r, "MULTI_ATTRIBUTION")
+
+	// Programada que cruza a vigência CONTA (a atribuição aceita programada e ativa).
+	concorrenteDe(t, b, c, "Programada que cruza", "programada", "2026-11-15", "2026-12-31", "2026-09-01T10:00:00Z", c.mat, c.e2)
+	pre = b.preview(t, "vincular_material", argsVinc(c, nil))
+	require.Contains(t, ressalvasDoPreview(t, pre), "Programada que cruza")
+}
+
+// Outro material com o MESMO áudio (mesmo master_sha256) em outra campanha.
+func TestVincularMaterial_ConcorrenciaDeMaterialDuplicado(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearVinc(t, b, "ativa")
+	duplicado := mcptest.Material(t, b.ctx, b.pool, c.cli, c.tipo, "Spot duplicado")
+	_, err := b.pool.Exec(b.ctx, `UPDATE materials SET master_sha256 = 'mesmo-audio' WHERE id IN ($1, $2)`, c.mat, duplicado)
+	require.NoError(t, err)
+	concorrenteDe(t, b, c, "Campanha do duplicado", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", duplicado, c.e1)
+
+	comMultiAtribuicao(t, false)
+	pre := b.preview(t, "vincular_material", argsVinc(c, nil))
+	r := ressalvasDoPreview(t, pre)
+	require.Contains(t, r, "Campanha do duplicado")
+	require.Contains(t, r, "OUTRO material com o MESMO áudio")
+	require.Contains(t, r, "Spot duplicado")
+	require.Contains(t, r, "pode ficar sem receber veiculação")
+
+	comMultiAtribuicao(t, true)
+	pre = b.preview(t, "vincular_material", argsVinc(c, nil))
+	r = ressalvasDoPreview(t, pre)
+	require.Contains(t, r, "OUTRO material com o MESMO áudio")
+	require.Contains(t, r, "conta nas duas campanhas")
+}
+
+func TestEditarEmissorasMaterial_ConcorrenciaAoAcrescentarDependeDeQuemFoiVinculadoPorUltimo(t *testing.T) {
+	b := novaBancadaTool(t)
+	comMultiAtribuicao(t, false)
+	c := semearVinc(t, b, "ativa")
+	_, err := b.pool.Exec(b.ctx, `UPDATE campaigns SET target_stations = $2 WHERE id = $1`, c.camp, []uuid.UUID{c.e1, c.e2, c.e3})
+	require.NoError(t, err)
+	mcptest.Vincular(t, b.ctx, b.pool, c.camp, c.mat, c.e1)
+	fixaAddedAt(t, b, c.camp, c.mat, "2026-10-10T10:00:00Z")
+	// O concorrente disputa só o E2 (E1 já é do vínculo; E3 ninguém disputa).
+	concorrenteDe(t, b, c, "Mais antigo", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e2)
+	args := argsVinc(c, map[string]any{"adicionar": strsDe(c.e2)})
+
+	r := ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", args))
+	require.Contains(t, r, "Mais antigo")
+	require.Contains(t, r, "este vínculo passa a levar", "o vínculo desta campanha é mais recente: leva as tocadas")
+
+	// Concorrente MAIS RECENTE que o vínculo: continua levando.
+	fixaAddedAt(t, b, c.camp, c.mat, "2026-08-01T10:00:00Z")
+	r = ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", args))
+	require.Contains(t, r, "o vínculo dela é mais recente")
+	require.Contains(t, r, "essas emissoras continuam indo para")
+	require.NotContains(t, r, "este vínculo passa a levar")
+
+	// Só as emissoras ACRESCENTADAS entram na conta: o concorrente em E2 não aparece ao acrescentar E3.
+	r = ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", argsVinc(c, map[string]any{"adicionar": strsDe(c.e3)})))
+	require.NotContains(t, r, "Mais antigo")
+}
+
+func TestDesvincularMaterial_ConcorrenciaVoltaParaQuemTemOMaterial(t *testing.T) {
+	b := novaBancadaTool(t)
+	comMultiAtribuicao(t, false)
+	c := semearVinc(t, b, "ativa")
+	mcptest.Vincular(t, b.ctx, b.pool, c.camp, c.mat, c.e1, c.e2)
+	fixaAddedAt(t, b, c.camp, c.mat, "2026-10-10T10:00:00Z")
+	concorrenteDe(t, b, c, "Mais antiga", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e1)
+
+	// Este vínculo é o mais recente: hoje leva as tocadas; ao tirar, voltam para a mais antiga.
+	r := ressalvasDoPreview(t, b.preview(t, "desvincular_material", argsVinc(c, nil)))
+	require.Contains(t, r, "Mais antiga")
+	require.Contains(t, r, "voltam para")
+	require.Contains(t, r, "Rádio 1")
+
+	// Multi-atribuição ligada: a outra segue contando, só esta deixa de contar.
+	comMultiAtribuicao(t, true)
+	r = ressalvasDoPreview(t, b.preview(t, "desvincular_material", argsVinc(c, nil)))
+	require.Contains(t, r, "segue contando")
+	require.NotContains(t, r, "voltam para")
+
+	// Concorrente MAIS RECENTE que este vínculo: a tocada já vai para ele, nada volta.
+	comMultiAtribuicao(t, false)
+	fixaAddedAt(t, b, c.camp, c.mat, "2026-08-01T10:00:00Z")
+	r = ressalvasDoPreview(t, b.preview(t, "desvincular_material", argsVinc(c, nil)))
+	require.NotContains(t, r, "Mais antiga")
+	require.Contains(t, r, "Webhook de detecção", "o aviso do webhook não depende da concorrência")
+}
+
+func TestEditarEmissorasMaterial_ConcorrenciaAoTirarSoOlhaAsEmissorasTiradas(t *testing.T) {
+	b := novaBancadaTool(t)
+	comMultiAtribuicao(t, false)
+	c := semearVinc(t, b, "ativa")
+	mcptest.Vincular(t, b.ctx, b.pool, c.camp, c.mat, c.e1, c.e2)
+	fixaAddedAt(t, b, c.camp, c.mat, "2026-10-10T10:00:00Z")
+	concorrenteDe(t, b, c, "Mais antiga", "ativa", "2026-10-01", "2026-11-30", "2026-09-01T10:00:00Z", c.mat, c.e1)
+
+	r := ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", argsVinc(c, map[string]any{"remover": strsDe(c.e1)})))
+	require.Contains(t, r, "voltam para")
+	r = ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", argsVinc(c, map[string]any{"remover": strsDe(c.e2)})))
+	require.NotContains(t, r, "Mais antiga", "E2 não é disputada")
+}
+
+// Item do webhook: só a REMOÇÃO de emissora do vínculo (ou o desvínculo) fala do webhook pendente.
+func TestVinculos_RessalvaDeWebhookPendenteSoNaRemocao(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearVinc(t, b, "ativa")
+	mcptest.Vincular(t, b.ctx, b.pool, c.camp, c.mat, c.e1)
+
+	r := ressalvasDoPreview(t, b.preview(t, "desvincular_material", argsVinc(c, nil)))
+	require.Contains(t, r, "Webhook de detecção")
+	require.Contains(t, r, "já enfileirados para entrega não são afetados")
+	r = ressalvasDoPreview(t, b.preview(t, "editar_emissoras_material", argsVinc(c, map[string]any{"adicionar": strsDe(c.e2), "remover": strsDe(c.e1)})))
+	require.Contains(t, r, "Webhook de detecção")
+	// Só acrescentar não tira vínculo nenhum: sem ressalva de webhook.
+	pre := b.preview(t, "editar_emissoras_material", argsVinc(c, map[string]any{"adicionar": strsDe(c.e2)}))
+	if pre["preview"].(map[string]any)["ressalvas"] != nil {
+		require.NotContains(t, ressalvasDoPreview(t, pre), "Webhook")
+	}
+}
+
 // ── Teste de prova de F3-4: o passado não muda ──────────────────────────
 
-// As tools de vínculo NÃO escalam porque nada recategoriza e a atribuição é
-// decidida na entrada da tocada. Este teste PROVA a premissa: com veiculações
-// passadas aprovadas (e regras, preço e PMM para os números existirem), grade,
-// insights, financeiro, veiculações e o plano do dia saem IDÊNTICOS antes e
-// depois de editar_emissoras_material (tirando uma emissora com tocada),
-// desvincular_material e vincular_material de novo. Se um dia isto quebrar, a
-// escalada dessas tools volta (decisão do dono).
-func TestVinculos_ProvaF34_PassadoNaoMuda(t *testing.T) {
-	b := novaBancadaTool(t)
+// cenarioProva: cliente, três emissoras, campanha ativa de outubro com regras gerais, preço e PMM no
+// target, um material vinculado a todas e tocadas PASSADAS aprovadas de todas as categorias — mais um
+// CARVE-OUT: no E3 há uma regra que NOMEIA o material (faixa 09:00–09:30) e uma tocada dele fora
+// dessa faixa, que o carve-out julga out_slot (a regra geral a julgaria in_slot). Se a retirada do
+// vínculo fizesse o material perder o carve-out, essa tocada mudaria na recategorização.
+type cenarioProva struct {
+	cli, e1, e2, e3, camp, tipo, mat uuid.UUID
+	regraGeral                       map[uuid.UUID]uuid.UUID // emissora → regra geral do tipo
+}
+
+func semearProva(t *testing.T, b *bancadaTool) cenarioProva {
+	t.Helper()
 	agora := func() time.Time { return mcptest.Quando("2026-10-29", "12:00") }
 	b.E.Agora = agora
 	b.E.Leitura.Agora = agora // os relatórios leem o "hoje" deste relógio
 
-	cli := mcptest.Cliente(t, b.ctx, b.pool, "Cliente Prova")
-	e1 := mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 1", 1000)
-	e2 := mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 2", 1000)
-	e3 := mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 3", 1000)
-	camp := mcptest.Campanha(t, b.ctx, b.pool, cli, "Campanha Prova", "2026-10-01", "2026-10-31", e1, e2, e3)
-	mcptest.EstadoCampanha(t, b.ctx, b.pool, camp, "ativa")
-	tipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot Prova")
-	mat := mcptest.Material(t, b.ctx, b.pool, cli, tipo, "Spot Prova")
-	mcptest.Vincular(t, b.ctx, b.pool, camp, mat, e1, e2, e3)
-	for _, e := range []uuid.UUID{e1, e2, e3} {
-		mcptest.Regra(t, b.ctx, b.pool, camp, tipo, e, "2026-10-01", "2026-10-31", 127, "08:00", "18:00", 2)
-		mcptest.Preco(t, b.ctx, b.pool, camp, e, tipo, 100)
-		mcptest.PMMTarget(t, b.ctx, b.pool, cli, e, 500)
+	p := cenarioProva{regraGeral: map[uuid.UUID]uuid.UUID{}}
+	p.cli = mcptest.Cliente(t, b.ctx, b.pool, "Cliente Prova")
+	p.e1 = mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 1", 1000)
+	p.e2 = mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 2", 1000)
+	p.e3 = mcptest.Emissora(t, b.ctx, b.pool, "Rádio Prova 3", 1000)
+	p.camp = mcptest.Campanha(t, b.ctx, b.pool, p.cli, "Campanha Prova", "2026-10-01", "2026-10-31", p.e1, p.e2, p.e3)
+	mcptest.EstadoCampanha(t, b.ctx, b.pool, p.camp, "ativa")
+	p.tipo = mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot Prova")
+	p.mat = mcptest.Material(t, b.ctx, b.pool, p.cli, p.tipo, "Spot Prova")
+	mcptest.Vincular(t, b.ctx, b.pool, p.camp, p.mat, p.e1, p.e2, p.e3)
+	for _, e := range []uuid.UUID{p.e1, p.e2, p.e3} {
+		p.regraGeral[e] = mcptest.Regra(t, b.ctx, b.pool, p.camp, p.tipo, e, "2026-10-01", "2026-10-31", 127, "08:00", "18:00", 2)
+		mcptest.Preco(t, b.ctx, b.pool, p.camp, e, p.tipo, 100)
+		mcptest.PMMTarget(t, b.ctx, b.pool, p.cli, e, 500)
 	}
-	// Tocadas passadas, aprovadas, de todas as categorias que contam.
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e1, "in_slot", mcptest.Quando("2026-10-10", "10:00"))
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e1, "in_slot", mcptest.Quando("2026-10-10", "11:00"))
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e1, "bonus", mcptest.Quando("2026-10-10", "12:00"))
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e2, "in_slot", mcptest.Quando("2026-10-12", "10:00"))
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e2, "out_slot", mcptest.Quando("2026-10-12", "20:00"))
-	mcptest.Veiculacao(t, b.ctx, b.pool, camp, mat, e3, "in_slot", mcptest.Quando("2026-10-15", "09:00"))
+	// O carve-out do E3: regra que nomeia o material.
+	_, err := catalog.NewDistributionRules(b.pool).Create(b.ctx, catalog.CreateDistributionRuleInput{
+		CampaignID: p.camp, TypeID: p.tipo, StationIDs: []uuid.UUID{p.e3}, MaterialIDs: []uuid.UUID{p.mat}, Name: "Carve-out do E3",
+		StartDate: mcptest.Dia("2026-10-01"), EndDate: mcptest.Dia("2026-10-31"), WeekdayMask: 127,
+		TimeStart: "09:00", TimeEnd: "09:30", PlaysPerDay: 1,
+	})
+	require.NoError(t, err)
 
-	capturar := func() map[string]string {
-		leituras := map[string]map[string]any{
-			"grade_campanha":       {"campanha_id": camp.String(), "de": "2026-10-01", "ate": "2026-10-31", "limit": 100}, // 3 emissoras × 31 dias = 93 células, todas na página
-			"insights_campanha":    {"cliente_id": cli.String(), "campanha_ids": []any{camp.String()}, "de": "2026-10-01", "ate": "2026-10-31"},
-			"financeiro_campanhas": {"campanha_ids": []any{camp.String()}},
-			"listar_veiculacoes":   {"campanha_ids": []any{camp.String()}, "de": "2026-10-01", "ate": "2026-10-31", "mais_antigas_primeiro": true},
-			"plano_do_dia":         {"campanha_id": camp.String(), "emissora_id": e1.String(), "tipo_id": tipo.String(), "data": "2026-10-10"},
-		}
-		out := map[string]string{}
-		for nome, args := range leituras {
-			out[nome] = mustJSON(t, b.chamar(t, nome, args))
-		}
-		return out
-	}
-	projecoes := func() string {
-		var s string
-		require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT COALESCE(string_agg(detection_id::text || ':' || campaign_id::text || ':' || commercial_id::text || ':' || category, ',' ORDER BY detection_id), '')
-			FROM detection_campaigns`).Scan(&s))
-		return s
-	}
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e1, "in_slot", mcptest.Quando("2026-10-10", "10:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e1, "in_slot", mcptest.Quando("2026-10-10", "11:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e1, "bonus", mcptest.Quando("2026-10-10", "12:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e2, "in_slot", mcptest.Quando("2026-10-12", "10:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e2, "out_slot", mcptest.Quando("2026-10-12", "20:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e3, "in_slot", mcptest.Quando("2026-10-15", "09:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, p.camp, p.mat, p.e3, "out_slot", mcptest.Quando("2026-10-15", "14:00"))
+	return p
+}
 
-	antes := capturar()
-	projAntes := projecoes()
-	// A prova não pode ser vazia: as leituras têm número de verdade.
+// renomearRegra edita a regra geral de uma emissora SÓ no nome — pela mesma ação que a rota e a tool de
+// regras usam, com o recat rodando na hora (EmSegundoPlano = Sincrono). Recategoriza o tipo inteiro da
+// campanha, inclusive as tocadas do material (vinculado ou não).
+func (p cenarioProva) renomearRegra(t *testing.T, b *bancadaTool, emissora uuid.UUID, nome string) {
+	t.Helper()
+	require.NoError(t, b.E.Acoes.EditarRegra(b.ctx, p.camp, p.regraGeral[emissora], acoes.EntradaRegra{
+		TipoID: p.tipo, EmissoraIDs: []uuid.UUID{emissora}, MaterialIDs: []uuid.UUID{}, Nome: nome,
+		Inicio: mcptest.Dia("2026-10-01"), Fim: mcptest.Dia("2026-10-31"), MascaraDias: 127,
+		HoraInicio: "08:00", HoraFim: "18:00", InsercoesPorDia: 2,
+	}))
+}
+
+// capturar lê, pelas tools de leitura, tudo o que o cliente vê do passado. comFalhas acrescenta as
+// falhas da campanha (lidas só no teste da remoção de emissora da campanha).
+func (p cenarioProva) capturar(t *testing.T, b *bancadaTool, comFalhas bool) map[string]string {
+	t.Helper()
+	leituras := map[string]map[string]any{
+		"grade_campanha":       {"campanha_id": p.camp.String(), "de": "2026-10-01", "ate": "2026-10-31", "limit": 100}, // 3 emissoras × 31 dias = 93 células, todas na página
+		"insights_campanha":    {"cliente_id": p.cli.String(), "campanha_ids": []any{p.camp.String()}, "de": "2026-10-01", "ate": "2026-10-31"},
+		"financeiro_campanhas": {"campanha_ids": []any{p.camp.String()}},
+		"listar_veiculacoes":   {"campanha_ids": []any{p.camp.String()}, "de": "2026-10-01", "ate": "2026-10-31", "mais_antigas_primeiro": true},
+		"plano_do_dia":         {"campanha_id": p.camp.String(), "emissora_id": p.e1.String(), "tipo_id": p.tipo.String(), "data": "2026-10-10"},
+	}
+	if comFalhas {
+		leituras["obter_falhas_campanha"] = map[string]any{"campanha_id": p.camp.String()}
+	}
+	out := map[string]string{}
+	for nome, args := range leituras {
+		out[nome] = mustJSON(t, b.chamar(t, nome, args))
+	}
+	out["plano_do_dia (carve-out do E3)"] = mustJSON(t, b.chamar(t, "plano_do_dia", map[string]any{
+		"campanha_id": p.camp.String(), "emissora_id": p.e3.String(), "tipo_id": p.tipo.String(), "data": "2026-10-15"}))
+	return out
+}
+
+// projecoes: o que o grafo de atribuição guarda (tocada → campanha, material, categoria).
+func projecoes(t *testing.T, b *bancadaTool) string {
+	t.Helper()
+	var s string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT COALESCE(string_agg(detection_id::text || ':' || campaign_id::text || ':' || commercial_id::text || ':' || category, ',' ORDER BY detection_id), '')
+		FROM detection_campaigns`).Scan(&s))
+	return s
+}
+
+// exigeIgual compara duas capturas e, se diferirem, diz EXATAMENTE o que mudou.
+func exigeIgual(t *testing.T, passo string, antes, depois map[string]string) {
+	t.Helper()
+	for nome := range antes {
+		if antes[nome] == depois[nome] {
+			continue
+		}
+		var a, d any
+		require.NoError(t, json.Unmarshal([]byte(antes[nome]), &a))
+		require.NoError(t, json.Unmarshal([]byte(depois[nome]), &d))
+		var dif []string
+		caminhosDiferentes(a, d, nome, &dif)
+		t.Errorf("%s: %s mudou:\n  %s", passo, nome, strings.Join(dif, "\n  "))
+	}
+}
+
+func caminhosDiferentes(a, b any, caminho string, out *[]string) {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok {
+			*out = append(*out, caminho+": o tipo mudou")
+			return
+		}
+		chaves := map[string]bool{}
+		for k := range x {
+			chaves[k] = true
+		}
+		for k := range y {
+			chaves[k] = true
+		}
+		ordenadas := make([]string, 0, len(chaves))
+		for k := range chaves {
+			ordenadas = append(ordenadas, k)
+		}
+		sort.Strings(ordenadas)
+		for _, k := range ordenadas {
+			caminhosDiferentes(x[k], y[k], caminho+"."+k, out)
+		}
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			*out = append(*out, fmt.Sprintf("%s: %d itens -> %d itens", caminho, len(x), len(y)))
+			return
+		}
+		for i := range x {
+			caminhosDiferentes(x[i], y[i], fmt.Sprintf("%s[%d]", caminho, i), out)
+		}
+	default:
+		if mustJSONSemT(a) != mustJSONSemT(b) {
+			*out = append(*out, fmt.Sprintf("%s: %s -> %s", caminho, mustJSONSemT(a), mustJSONSemT(b)))
+		}
+	}
+}
+
+func mustJSONSemT(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// As tools de vínculo NÃO escalam porque nada recategoriza e a atribuição é decidida na entrada da
+// tocada. Este teste PROVA a premissa: com veiculações passadas aprovadas (regras, preço e PMM para os
+// números existirem, e um carve-out que nomeia o material), grade, insights, financeiro, veiculações e
+// os planos do dia saem IDÊNTICOS — e as projeções (detection_campaigns) também — antes e depois de
+// editar_emissoras_material (tirando uma emissora com tocada), de desvincular_material, de EDITAR UMA
+// REGRA com o material já desvinculado (o recat roda sobre as tocadas dele, e o carve-out segue
+// valendo) e de vincular_material de novo. Se um dia isto quebrar, a escalada dessas tools volta
+// (decisão do dono).
+func TestVinculos_ProvaF34_PassadoNaoMuda(t *testing.T) {
+	b := novaBancadaTool(t)
+	p := semearProva(t, b)
+
+	// As categorias semeadas são as que o categorizador calcula: um recat não muda nenhuma.
+	semeadas := projecoes(t, b)
+	p.renomearRegra(t, b, p.e2, "Regra do E2 v1")
+	require.Equal(t, semeadas, projecoes(t, b), "as categorias semeadas já são as do categorizador (o recat não mexe)")
+
+	antes := p.capturar(t, b, false)
+	projAntes := projecoes(t, b)
+	// A prova não pode ser vazia: as leituras têm número de verdade e o carve-out está em jogo.
 	require.Contains(t, antes["listar_veiculacoes"], "in_slot")
 	require.Contains(t, antes["grade_campanha"], `"in_slot":4`, "os totais da grade somam as 4 tocadas in_slot")
 	require.Contains(t, antes["grade_campanha"], `"has_more":false`, "a página tem todas as células")
 	require.NotContains(t, antes["insights_campanha"], `"erro"`)
 	require.Greater(t, len(antes["insights_campanha"]), 200)
+	require.Contains(t, antes["plano_do_dia (carve-out do E3)"], "out_slot", "o carve-out julga a tocada de 14:00 out_slot")
 
 	confere := func(passo string) {
 		t.Helper()
-		depois := capturar()
-		for nome := range antes {
-			require.Equal(t, antes[nome], depois[nome], "%s: %s mudou", passo, nome)
-		}
-		require.Equal(t, projAntes, projecoes(), "%s: as projeções (detection_campaigns) mudaram", passo)
+		exigeIgual(t, passo, antes, p.capturar(t, b, false))
+		require.Equal(t, projAntes, projecoes(t, b), "%s: as projeções (detection_campaigns) mudaram", passo)
 	}
+	ref := cenarioVinc{camp: p.camp, mat: p.mat}
 
 	// 1. tirar do vínculo uma emissora COM tocada passada.
-	b.confirmarEExecutar(t, "editar_emissoras_material", argsVinc(cenarioVinc{camp: camp, mat: mat}, map[string]any{"remover": strsDe(e1)}))
-	est, _ := vinculoGravado(t, b, camp, mat)
-	require.Equal(t, []uuid.UUID{e2, e3}, est)
+	b.confirmarEExecutar(t, "editar_emissoras_material", argsVinc(ref, map[string]any{"remover": strsDe(p.e1)}))
+	est, _ := vinculoGravado(t, b, p.camp, p.mat)
+	require.Equal(t, []uuid.UUID{p.e2, p.e3}, est)
 	confere("editar_emissoras_material (tirou E1, que tem tocada)")
 
 	// 2. tirar o material da campanha.
-	b.confirmarEExecutar(t, "desvincular_material", argsVinc(cenarioVinc{camp: camp, mat: mat}, nil))
-	_, existe := vinculoGravado(t, b, camp, mat)
+	b.confirmarEExecutar(t, "desvincular_material", argsVinc(ref, nil))
+	_, existe := vinculoGravado(t, b, p.camp, p.mat)
 	require.False(t, existe)
 	confere("desvincular_material")
 
-	// 3. vincular de novo, em todas as emissoras da campanha.
-	b.confirmarEExecutar(t, "vincular_material", argsVinc(cenarioVinc{camp: camp, mat: mat}, nil))
-	est, _ = vinculoGravado(t, b, camp, mat)
-	require.Equal(t, []uuid.UUID{e1, e2, e3}, est)
+	// 3. com o material DESVINCULADO, editar uma regra: o recat varre o tipo da campanha, inclusive as
+	// tocadas dele (que o recat acha pela projeção, não pelo vínculo). As categorias — e o carve-out
+	// que o nomeia — ficam como estavam.
+	p.renomearRegra(t, b, p.e2, "Regra do E2 v2")
+	confere("editar regra com o material desvinculado (recat)")
+	require.Contains(t, projecoes(t, b), ":out_slot", "a tocada do carve-out continua out_slot")
+
+	// 4. vincular de novo, em todas as emissoras da campanha.
+	b.confirmarEExecutar(t, "vincular_material", argsVinc(ref, nil))
+	est, _ = vinculoGravado(t, b, p.camp, p.mat)
+	require.Equal(t, []uuid.UUID{p.e1, p.e2, p.e3}, est)
 	confere("vincular_material")
 }
