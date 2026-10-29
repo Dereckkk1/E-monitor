@@ -366,6 +366,29 @@ type regraDTO struct {
 	InsercoesPorDia int16        `json:"insercoes_por_dia"`
 }
 
+// montarRegraDTO é o item de listar_regras_distribuicao; as tools de escrita de
+// regra devolvem a regra neste mesmo formato. emissorasCortadas são as emissoras
+// que entram na resposta (cortadas em tetoEmissorasPorItem) e total o número real.
+func montarRegraDTO(r catalog.DistributionRule, tipos map[uuid.UUID]string, emissorasCortadas []uuid.UUID,
+	total int, emissoras, materiais map[uuid.UUID]string) regraDTO {
+	return regraDTO{
+		ID: r.ID.String(), Nome: r.Name, Tipo: refDe(r.TypeID, tipos[r.TypeID]),
+		Emissoras: refs(emissorasCortadas, emissoras), EmissorasTotal: total, Materiais: refs(r.MaterialIDs, materiais),
+		Inicio: dia(r.StartDate), Fim: dia(r.EndDate), DiasDaSemana: diasDaMascara(r.WeekdayMask),
+		Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd}, InsercoesPorDia: r.PlaysPerDay,
+	}
+}
+
+// montarAjusteDTO é o item de listar_overrides; as tools de escrita de ajuste
+// do dia devolvem o ajuste neste mesmo formato.
+func montarAjusteDTO(a catalog.DistributionOverride, tipos, emissoras map[uuid.UUID]string) ajusteDTO {
+	return ajusteDTO{
+		Data: dia(a.ForDate), Tipo: refDe(a.TypeID, tipos[a.TypeID]),
+		Emissora: refDe(a.StationID, emissoras[a.StationID]), InsercoesEsperadas: a.PlaysExpected,
+		Faixa: faixaHoraria{Inicio: a.TimeStart, Fim: a.TimeEnd}, Motivo: a.Reason, CriadoEm: instante(a.CreatedAt),
+	}
+}
+
 type ajusteDTO struct {
 	Data               string       `json:"data"`
 	Tipo               ref          `json:"tipo"`
@@ -519,12 +542,7 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			}
 			linhas := make([]regraDTO, len(regras))
 			for i, r := range regras {
-				linhas[i] = regraDTO{
-					ID: r.ID.String(), Nome: r.Name, Tipo: refDe(r.TypeID, tipos[r.TypeID]),
-					Emissoras: refs(cortes[i], emissoras), EmissorasTotal: totais[i], Materiais: refs(r.MaterialIDs, mats),
-					Inicio: dia(r.StartDate), Fim: dia(r.EndDate), DiasDaSemana: diasDaMascara(r.WeekdayMask),
-					Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd}, InsercoesPorDia: r.PlaysPerDay,
-				}
+				linhas[i] = montarRegraDTO(r, tipos, cortes[i], totais[i], emissoras, mats)
 			}
 			l := paginar(linhas, in.Paginacao)
 			l.Ressalvas = []string{ressalvaRegras}
@@ -575,11 +593,7 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			}
 			linhas := make([]ajusteDTO, len(ajustes))
 			for i, a := range ajustes {
-				linhas[i] = ajusteDTO{
-					Data: dia(a.ForDate), Tipo: refDe(a.TypeID, tipos[a.TypeID]),
-					Emissora: refDe(a.StationID, emissoras[a.StationID]), InsercoesEsperadas: a.PlaysExpected,
-					Faixa: faixaHoraria{Inicio: a.TimeStart, Fim: a.TimeEnd}, Motivo: a.Reason, CriadoEm: instante(a.CreatedAt),
-				}
+				linhas[i] = montarAjusteDTO(a, tipos, emissoras)
 			}
 			l := paginar(linhas, in.Paginacao)
 			l.Ressalvas = []string{ressalvaAjustes}
