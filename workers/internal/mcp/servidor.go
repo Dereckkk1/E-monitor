@@ -2,12 +2,15 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
@@ -125,9 +128,14 @@ var cacheEsquemas = sdk.NewSchemaCache()
 // log do container; só Warn+ para o tráfego normal não inundar o log.
 var logSDK = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
+// servidoresMontados conta as montagens de Server (quantas vezes novoServidor
+// rodou): o teste de memoização confere que um pedido monta uma só.
+var servidoresMontados atomic.Int64
+
 // novoServidor monta um Server por pedido (stateless): o principal entra por
 // closure em cada tool, sem estado entre pedidos.
 func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
+	servidoresMontados.Add(1)
 	s := sdk.NewServer(&sdk.Implementation{Name: "emonitor", Version: cfg.Versao},
 		&sdk.ServerOptions{Instructions: Instrucoes, SchemaCache: cacheEsquemas, Logger: logSDK})
 	registrarSistema(s, p)
@@ -158,6 +166,20 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	return s
 }
 
+// servidorDoPedido guarda o *sdk.Server de UM pedido. O go-sdk chama o getServer
+// duas vezes por pedido stateless (uma só para ler as versões de protocolo, outra
+// para servir) e, com 64 tools, montar o Server custa ~5 ms: sem isto cada pedido
+// pagava ~10 ms de CPU só de registro. O guardador entra no contexto do pedido
+// (o SDK deriva o contexto da segunda chamada do da primeira, então os dois
+// getServer veem o mesmo ponteiro) e vive só até o pedido acabar: nada é
+// compartilhado entre pedidos nem entre principais.
+type servidorDoPedidoKey struct{}
+
+type servidorDoPedido struct {
+	uma sync.Once
+	s   *sdk.Server
+}
+
 // NovoHandlerMCP serve Streamable HTTP sem sessão e com resposta JSON
 // (spec D2). Espera o Principal no contexto (ver Autenticador.Middleware).
 //
@@ -167,6 +189,10 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 func NovoHandlerMCP(cfg ConfigServidor) http.Handler {
 	sdkHandler := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
 		p, _ := PrincipalDe(r.Context())
+		if g, ok := r.Context().Value(servidorDoPedidoKey{}).(*servidorDoPedido); ok {
+			g.uma.Do(func() { g.s = novoServidor(cfg, p) })
+			return g.s
+		}
 		return novoServidor(cfg, p)
 	}, &sdk.StreamableHTTPOptions{
 		Stateless:    true,
@@ -184,6 +210,7 @@ func NovoHandlerMCP(cfg ConfigServidor) http.Handler {
 			http.Error(w, "MCP sem autenticação montada", http.StatusInternalServerError)
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), servidorDoPedidoKey{}, &servidorDoPedido{}))
 		sdkHandler.ServeHTTP(w, r)
 	})
 }
