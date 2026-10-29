@@ -245,112 +245,125 @@ func registrarGrade(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			out := saidaPlano{
-				Campanha: refDe(c.ID, c.Name), Emissora: refDe(est.ID, est.Name), Tipo: refDe(tipo.ID, tipo.Name),
-				Data: dia(d), Faixas: []faixaDoDia{}, RegrasQueNaoValem: []regraForaDoDia{}, Veiculacoes: []tocadaDoDia{},
-				Ressalvas: []string{ressalvaPlano},
-			}
-
-			// Saldo: a mesma linha da grade (daily_play_summary_for).
-			linhas, err := L.Grade.ListByCampaign(ctx, c.ID, d, d)
+			out, err := montarPlanoDoDia(ctx, L, c, est, tipo, d)
 			if err != nil {
 				return nil, err
-			}
-			for _, r := range linhas {
-				if r.StationID == eid && r.TypeID == tid {
-					out.Saldo = &saldoDia{Esperado: r.Expected, InSlot: r.InSlot, Deficit: r.Deficit,
-						Bonus: r.Bonus, OutSlot: r.OutSlot, OutDate: r.OutDate}
-				}
-			}
-
-			// Ajuste do dia: substitui as regras.
-			ajustes, err := L.Ajustes.ListByCampaignAndDateRange(ctx, c.ID, d, d)
-			if err != nil {
-				return nil, err
-			}
-			for _, a := range ajustes {
-				if a.StationID == eid && a.TypeID == tid {
-					out.AjusteDoDia = &ajusteDoDia{InsercoesEsperadas: a.PlaysExpected,
-						Faixa: faixaHoraria{Inicio: a.TimeStart, Fim: a.TimeEnd}, Motivo: a.Reason}
-				}
-			}
-
-			// Regras da célula: valem ou não no dia pela MESMA decisão do Settle.
-			regras, err := L.Regras.ListByCampaign(ctx, c.ID)
-			if err != nil {
-				return nil, err
-			}
-			mats, err := nomesMateriais(ctx, L, c.ClientID)
-			if err != nil {
-				return nil, err
-			}
-			for _, r := range regras {
-				if r.TypeID != tid || !slices.Contains(r.StationIDs, eid) {
-					continue
-				}
-				if categorizer.RuleCoversDay(categorizer.Rule{StartDate: r.StartDate, EndDate: r.EndDate, WeekdayMask: r.WeekdayMask}, d) {
-					out.Faixas = append(out.Faixas, faixaDoDia{
-						RegraID: r.ID.String(), Nome: r.Name, Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd},
-						InsercoesPorDia: r.PlaysPerDay, Materiais: refs(r.MaterialIDs, mats),
-					})
-				} else {
-					out.RegrasQueNaoValem = append(out.RegrasQueNaoValem,
-						regraForaDoDia{RegraID: r.ID.String(), Nome: r.Name, Motivo: motivoForaDoDia(r, d)})
-				}
-			}
-			switch {
-			case out.AjusteDoDia != nil:
-				out.MetaVemDe = "ajuste_do_dia"
-				out.Ressalvas = append(out.Ressalvas, "Há ajuste do dia: a meta e a faixa dele substituem as regras listadas em faixas.")
-				if out.AjusteDoDia.InsercoesEsperadas == 0 {
-					out.Ressalvas = append(out.Ressalvas, "O ajuste zera a meta: toda tocada deste dia é bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
-				}
-			case len(out.Faixas) > 0:
-				out.MetaVemDe = "regras"
-			default:
-				out.MetaVemDe = "sem_meta"
-				out.Ressalvas = append(out.Ressalvas, "Nenhuma regra nem ajuste vale neste dia: a meta é 0 e as tocadas entram como bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
-			}
-
-			depoisDoCancelamento := false
-			if c.Status == "cancelada" {
-				out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
-				canc, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
-				if err != nil {
-					return nil, err
-				}
-				if em, achou := canc[c.ID]; achou && dia(d) > dia(em.In(fusoSP)) {
-					depoisDoCancelamento = true
-					out.Ressalvas = append(out.Ressalvas, "Dia depois do cancelamento: não há obrigação; as faixas abaixo não geram meta.")
-				}
-			}
-			// Depois do cancelamento a ressalva acima já explica a ausência da linha.
-			if out.Saldo == nil && !depoisDoCancelamento {
-				out.Ressalvas = append(out.Ressalvas, "A grade não tem linha para esta célula neste dia (sem meta e sem veiculação contada).")
-			}
-
-			// Veiculações do dia: o recorte do DayDetailModal (conjunto aprovado).
-			ini, fim := limitesDoDiaSP(d)
-			dets, err := L.Veiculacoes.List(ctx, catalog.ListFilter{
-				CampaignID: &c.ID, StationID: &eid, StartDate: &ini, EndDate: &fim, Limit: tetoTocadasDoDia,
-			})
-			if err != nil {
-				return nil, err
-			}
-			for i := len(dets) - 1; i >= 0; i-- { // List vem da mais nova para a mais velha
-				v := dets[i]
-				if v.TypeID == nil || *v.TypeID != tid {
-					continue
-				}
-				out.Veiculacoes = append(out.Veiculacoes, tocadaDoDia{
-					ID: v.ID.String(), Quando: instante(v.DetectedAt), Material: refDe(v.CommercialID, v.CommercialName),
-					Categoria: categoriaDe(v.Category), Manual: v.ManualAt != nil,
-				})
-			}
-			if len(dets) == tetoTocadasDoDia {
-				out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
-					"o dia tem mais de %d veiculações nesta emissora; a lista foi cortada (o saldo continua completo)", tetoTocadasDoDia))
 			}
 			return ok(out)
 		})
+}
+
+// montarPlanoDoDia monta o plano de UMA célula-dia (a lógica de plano_do_dia).
+// As tools de escrita de ajuste do dia a reusam para devolver a célula
+// recalculada depois da gravação.
+func montarPlanoDoDia(ctx context.Context, L *Leitura, c *catalog.Campaign, est *catalog.Station,
+	tipo *catalog.MaterialType, d time.Time) (*saidaPlano, error) {
+	eid, tid := est.ID, tipo.ID
+	out := saidaPlano{
+		Campanha: refDe(c.ID, c.Name), Emissora: refDe(est.ID, est.Name), Tipo: refDe(tipo.ID, tipo.Name),
+		Data: dia(d), Faixas: []faixaDoDia{}, RegrasQueNaoValem: []regraForaDoDia{}, Veiculacoes: []tocadaDoDia{},
+		Ressalvas: []string{ressalvaPlano},
+	}
+
+	// Saldo: a mesma linha da grade (daily_play_summary_for).
+	linhas, err := L.Grade.ListByCampaign(ctx, c.ID, d, d)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range linhas {
+		if r.StationID == eid && r.TypeID == tid {
+			out.Saldo = &saldoDia{Esperado: r.Expected, InSlot: r.InSlot, Deficit: r.Deficit,
+				Bonus: r.Bonus, OutSlot: r.OutSlot, OutDate: r.OutDate}
+		}
+	}
+
+	// Ajuste do dia: substitui as regras.
+	ajustes, err := L.Ajustes.ListByCampaignAndDateRange(ctx, c.ID, d, d)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range ajustes {
+		if a.StationID == eid && a.TypeID == tid {
+			out.AjusteDoDia = &ajusteDoDia{InsercoesEsperadas: a.PlaysExpected,
+				Faixa: faixaHoraria{Inicio: a.TimeStart, Fim: a.TimeEnd}, Motivo: a.Reason}
+		}
+	}
+
+	// Regras da célula: valem ou não no dia pela MESMA decisão do Settle.
+	regras, err := L.Regras.ListByCampaign(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	mats, err := nomesMateriais(ctx, L, c.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range regras {
+		if r.TypeID != tid || !slices.Contains(r.StationIDs, eid) {
+			continue
+		}
+		if categorizer.RuleCoversDay(categorizer.Rule{StartDate: r.StartDate, EndDate: r.EndDate, WeekdayMask: r.WeekdayMask}, d) {
+			out.Faixas = append(out.Faixas, faixaDoDia{
+				RegraID: r.ID.String(), Nome: r.Name, Faixa: faixaHoraria{Inicio: r.TimeStart, Fim: r.TimeEnd},
+				InsercoesPorDia: r.PlaysPerDay, Materiais: refs(r.MaterialIDs, mats),
+			})
+		} else {
+			out.RegrasQueNaoValem = append(out.RegrasQueNaoValem,
+				regraForaDoDia{RegraID: r.ID.String(), Nome: r.Name, Motivo: motivoForaDoDia(r, d)})
+		}
+	}
+	switch {
+	case out.AjusteDoDia != nil:
+		out.MetaVemDe = "ajuste_do_dia"
+		out.Ressalvas = append(out.Ressalvas, "Há ajuste do dia: a meta e a faixa dele substituem as regras listadas em faixas.")
+		if out.AjusteDoDia.InsercoesEsperadas == 0 {
+			out.Ressalvas = append(out.Ressalvas, "O ajuste zera a meta: toda tocada deste dia é bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
+		}
+	case len(out.Faixas) > 0:
+		out.MetaVemDe = "regras"
+	default:
+		out.MetaVemDe = "sem_meta"
+		out.Ressalvas = append(out.Ressalvas, "Nenhuma regra nem ajuste vale neste dia: a meta é 0 e as tocadas entram como bonus, nunca out_slot (exceto out_date: tocada fora da vigência da campanha, ou de material com regra própria fora do período dela).")
+	}
+
+	depoisDoCancelamento := false
+	if c.Status == "cancelada" {
+		out.Ressalvas = append(out.Ressalvas, ressalvaCancelada)
+		canc, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
+		if err != nil {
+			return nil, err
+		}
+		if em, achou := canc[c.ID]; achou && dia(d) > dia(em.In(fusoSP)) {
+			depoisDoCancelamento = true
+			out.Ressalvas = append(out.Ressalvas, "Dia depois do cancelamento: não há obrigação; as faixas abaixo não geram meta.")
+		}
+	}
+	// Depois do cancelamento a ressalva acima já explica a ausência da linha.
+	if out.Saldo == nil && !depoisDoCancelamento {
+		out.Ressalvas = append(out.Ressalvas, "A grade não tem linha para esta célula neste dia (sem meta e sem veiculação contada).")
+	}
+
+	// Veiculações do dia: o recorte do DayDetailModal (conjunto aprovado).
+	ini, fim := limitesDoDiaSP(d)
+	dets, err := L.Veiculacoes.List(ctx, catalog.ListFilter{
+		CampaignID: &c.ID, StationID: &eid, StartDate: &ini, EndDate: &fim, Limit: tetoTocadasDoDia,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := len(dets) - 1; i >= 0; i-- { // List vem da mais nova para a mais velha
+		v := dets[i]
+		if v.TypeID == nil || *v.TypeID != tid {
+			continue
+		}
+		out.Veiculacoes = append(out.Veiculacoes, tocadaDoDia{
+			ID: v.ID.String(), Quando: instante(v.DetectedAt), Material: refDe(v.CommercialID, v.CommercialName),
+			Categoria: categoriaDe(v.Category), Manual: v.ManualAt != nil,
+		})
+	}
+	if len(dets) == tetoTocadasDoDia {
+		out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
+			"o dia tem mais de %d veiculações nesta emissora; a lista foi cortada (o saldo continua completo)", tetoTocadasDoDia))
+	}
+	return &out, nil
 }

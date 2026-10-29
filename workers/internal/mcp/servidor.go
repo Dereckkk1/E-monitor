@@ -18,6 +18,7 @@ import (
 // Toda fatia que acrescentar tool atualiza esta lista no mesmo commit.
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
+	"apagar_override",
 	"apagar_regra_distribuicao",
 	"assertividade",
 	"auditoria_mcp",
@@ -26,6 +27,7 @@ var ToolsEsperadas = []string{
 	"criar_cliente",
 	"criar_regra_distribuicao",
 	"criar_tipo_material",
+	"definir_override",
 	"destinatarios_pos_venda",
 	"desvincular_material",
 	"editar_campanha",
@@ -152,6 +154,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarEscritasCampanhas(s, cfg, p)
 	registrarEscritasVinculos(s, cfg, p)
 	registrarEscritasRegras(s, cfg, p)
+	registrarEscritasAjustes(s, cfg, p)
 	return s
 }
 
