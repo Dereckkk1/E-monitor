@@ -274,5 +274,5 @@ Sem mudança no `workers.Dockerfile` (o binário já está listado — regra 6.7
   acha a divergência e `Heal` a corrige (e que `Count` volta a não reportá-la).
 - `workers/internal/projrecon/scheduler_test.go` — `RunOnce` só chama `Heal`
   quando há drift; erro de `Count` propaga sem chamar `Heal`.
-- `workers/internal/api/handlers/recat_failures_test.go` — helper
-  `recordRecatFailure` incrementa o counter só quando `err != nil`.
+- `workers/internal/acoes/recat_test.go` — helper
+  `acoes.RegistrarFalhaRecat` (antes `recordRecatFailure` nos handlers) incrementa o counter só quando `err != nil`.
