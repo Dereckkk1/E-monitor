@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -232,6 +234,63 @@ func TestServidor_QuemSouEuNaSpec20260728(t *testing.T) {
 	require.Equal(t, "dereck@teste.local", sc["usuario"].(map[string]any)["email"])
 }
 
+// O SDK pede o Server duas vezes por pedido; o handler monta um só (e cada
+// pedido o seu: nada é compartilhado entre pedidos).
+func TestServidor_MontaOServerUmaVezPorPedido(t *testing.T) {
+	srv := servidorDeTeste(t)
+	for _, versao := range []string{"2025-06-18", "2025-11-25", ""} {
+		antes := servidoresMontados.Load()
+		r := rpc(t, srv, "", versao, `{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}`)
+		require.Equal(t, http.StatusOK, r.Status, versao)
+		require.Len(t, r.Result["tools"], len(ToolsEsperadas), versao)
+		require.Equal(t, antes+1, servidoresMontados.Load(), "versão %q: um Server por pedido", versao)
+	}
+}
+
+// A memoização vive no contexto do pedido: pedidos simultâneos de principais
+// diferentes nunca veem a identidade um do outro.
+func TestServidor_MemoizacaoNaoMisturaPrincipais(t *testing.T) {
+	h := SoPost(NovoHandlerMCP(ConfigServidor{Versao: "teste"}))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := &Principal{UserID: uuid.New(), Email: r.Header.Get("X-Teste-Email"), Nome: "x", TokenID: uuid.New()}
+		h.ServeHTTP(w, r.WithContext(ComPrincipal(r.Context(), p)))
+	}))
+	t.Cleanup(srv.Close)
+
+	var wg sync.WaitGroup
+	erros := make(chan string, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			email := fmt.Sprintf("pessoa%d@teste.local", i)
+			for j := 0; j < 5; j++ {
+				req, _ := http.NewRequest(http.MethodPost, srv.URL,
+					strings.NewReader(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"quem_sou_eu","arguments":{}}}`))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Accept", "application/json, text/event-stream")
+				req.Header.Set("Mcp-Protocol-Version", "2025-06-18")
+				req.Header.Set("X-Teste-Email", email)
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					erros <- err.Error()
+					return
+				}
+				bruto, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+				if !strings.Contains(string(bruto), email) {
+					erros <- fmt.Sprintf("pedido de %s voltou com outra identidade: %s", email, bruto)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(erros)
+	for e := range erros {
+		t.Error(e)
+	}
+}
+
 func TestServidor_NotificacaoDa202(t *testing.T) {
 	srv := servidorDeTeste(t)
 	r := rpc(t, srv, "", "2025-06-18", `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
@@ -257,6 +316,16 @@ func TestInstrucoes_TemGlossarioListasEPontes(t *testing.T) {
 	require.Contains(t, Instrucoes, "obter_campanha aceita campanha_id ou codigo")
 }
 
+// Enquanto a Fatia 4 não traz o /pendentes, o crítico é barrado: a instrução
+// diz ao modelo para não prometer aprovação e mandar a pessoa para a tela.
+func TestInstrucoes_EscritaCriticoBarrado(t *testing.T) {
+	require.Contains(t, Instrucoes, "Hoje o crítico ainda não gera pedido de aprovação")
+	require.Contains(t, Instrucoes, "nivel: critico, o motivo e links.tela")
+	require.Contains(t, Instrucoes, "diga que nada foi feito e que a alteração tem de ser feita na tela, logado")
+	require.Contains(t, Instrucoes, "Escrita que mexe em veiculação já ocorrida")
+	require.Contains(t, Instrucoes, "NUNCA reenvie o token de confirmação sozinho")
+}
+
 func TestInstrucoes_Relatorios(t *testing.T) {
 	require.Contains(t, Instrucoes, "links.tela")
 	require.Contains(t, Instrucoes, "nunca invente um link de download")
@@ -264,9 +333,10 @@ func TestInstrucoes_Relatorios(t *testing.T) {
 	require.Contains(t, Instrucoes, "Assertividade: apresente o percentual sempre com o volume.")
 }
 
-// A lista é a do tools/list do SDK (ordem alfabética) e tem as 44 tools das
-// Fatias 1 e 2: quem acrescentar tool atualiza o número junto.
-func TestToolsEsperadas_OrdemAlfabeticaE44(t *testing.T) {
+// A lista é a do tools/list do SDK (ordem alfabética) e tem as 64 tools das
+// Fatias 0 a 3 (44 de leitura + 20 de escrita): quem acrescentar tool atualiza
+// o número junto.
+func TestToolsEsperadas_OrdemAlfabeticaE64(t *testing.T) {
 	require.True(t, slices.IsSorted(ToolsEsperadas))
 	require.Len(t, ToolsEsperadas, 64)
 }
@@ -303,10 +373,31 @@ func TestInventario_IdObrigatorioMandaNaoInventar(t *testing.T) {
 	}
 }
 
-// Desempenho (handoff): o SDK monta o Server duas vezes por pedido.
+// Desempenho (handoff): o custo de MONTAR o Server (64 tools). O SDK pede o
+// Server duas vezes por pedido; NovoHandlerMCP o monta uma só (ver
+// BenchmarkPedidoToolsList, que mede o pedido inteiro).
 func BenchmarkNovoServidor(b *testing.B) {
 	cfg := ConfigServidor{Versao: "bench"}
 	for b.Loop() {
 		novoServidor(cfg, principalTeste)
+	}
+}
+
+// BenchmarkPedidoToolsList mede um tools/list pelo handler real (SoPost +
+// NovoHandlerMCP + SDK), sem rede: é o custo de CPU que um pedido paga por
+// montar o Server, que o SDK pede duas vezes.
+func BenchmarkPedidoToolsList(b *testing.B) {
+	h := SoPost(NovoHandlerMCP(ConfigServidor{Versao: "bench"}))
+	corpo := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	for b.Loop() {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(corpo))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Mcp-Protocol-Version", "2025-06-18")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req.WithContext(ComPrincipal(req.Context(), principalTeste)))
+		if rec.Code != http.StatusOK {
+			b.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
 	}
 }
