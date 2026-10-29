@@ -192,38 +192,11 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.Name == "" {
-		http.Error(w, "name is required", 400)
-		return
-	}
-	if !acoes.NormalizarRotuloPublico(&in.TargetLabel) {
-		http.Error(w, "target_label must be at most 200 characters", 400)
-		return
-	}
-	/* O CNPJ só é conferido quando os DÍGITOS mudam: duplicata que já existe
-	   (A e B com os mesmos 14 dígitos) não pode travar a edição de B. */
-	atual, err := h.Repo.Get(r.Context(), id)
+	// Validação, conferência do CNPJ (só quando os dígitos mudam) e gravação
+	// moram em acoes.EditarCliente — o MCP chama a mesma função.
+	out, err := h.servico().EditarCliente(r.Context(), id, in)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
-			http.Error(w, "internal error", 500)
-		}
-		return
-	}
-	if acoes.DigitosDoCNPJ(atual.CNPJ) != acoes.DigitosDoCNPJ(in.CNPJ) {
-		if err := h.servico().ChecarCNPJ(r.Context(), in.CNPJ, id); err != nil {
-			if !escreveRecusa(w, err) {
-				http.Error(w, "internal error", 500)
-			}
-			return
-		}
-	}
-	out, err := h.Repo.Update(r.Context(), id, in)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return

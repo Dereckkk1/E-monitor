@@ -145,3 +145,85 @@ func TestCriarCliente_CNPJRepetidoNaoGravaNemAvisaOHub(t *testing.T) {
 	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM clients WHERE name = 'Repetido'`).Scan(&n))
 	require.Zero(t, n)
 }
+
+// ─────────────────────────────── EditarCliente ───────────────────────────────
+
+func (c *cenario) clienteComCNPJ(t *testing.T, nome string) (uuid.UUID, string) {
+	t.Helper()
+	cnpj := cnpjUnico()
+	cl, err := catalog.NewClients(c.pool).Create(c.ctx, catalog.CreateClientInput{Name: nome, CNPJ: &cnpj})
+	require.NoError(t, err)
+	return cl.ID, cnpj
+}
+
+func TestEditarCliente_SubstituiOsCamposEApagaORotuloEmBranco(t *testing.T) {
+	c := novoCenario(t)
+	hf := &mcptest.HubFalso{}
+	c.srv.Hub = hf
+	id, _ := c.clienteComCNPJ(t, "Antes")
+	rotulo := "  Jovens  "
+	cidade := "Uberaba"
+
+	out, err := c.srv.EditarCliente(c.ctx, id, catalog.UpdateClientInput{Name: "Depois", City: &cidade, TargetLabel: &rotulo})
+
+	require.NoError(t, err)
+	require.Equal(t, "Depois", out.Name)
+	require.Equal(t, "Jovens", *out.TargetLabel)
+	require.Nil(t, out.CNPJ, "a edição substitui os campos: o CNPJ não enviado foi limpo")
+	require.Empty(t, hf.Eventos(), "a edição de cliente NÃO avisa o hub (a rota nunca avisou)")
+}
+
+func TestEditarCliente_RecusasComOsTextosDaRotaENaoEncontrado(t *testing.T) {
+	c := novoCenario(t)
+	id, _ := c.clienteComCNPJ(t, "Existe")
+
+	_, err := c.srv.EditarCliente(c.ctx, id, catalog.UpdateClientInput{})
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
+	require.Equal(t, "name is required", r.Mensagem)
+
+	longo := strings.Repeat("a", MaxRotuloPublico+1)
+	_, err = c.srv.EditarCliente(c.ctx, id, catalog.UpdateClientInput{Name: "x", TargetLabel: &longo})
+	r = recusaDe(t, err)
+	require.Equal(t, "target_label must be at most 200 characters", r.Mensagem)
+
+	_, err = c.srv.EditarCliente(c.ctx, uuid.New(), catalog.UpdateClientInput{Name: "x"})
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+
+	var nome string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT name FROM clients WHERE id = $1`, id).Scan(&nome))
+	require.Equal(t, "Existe", nome, "as recusas não gravam")
+}
+
+// O CNPJ só é conferido quando os 14 dígitos MUDAM.
+func TestEditarCliente_CNPJSoEConferidoQuandoOsDigitosMudam(t *testing.T) {
+	c := novoCenario(t)
+	a, cnpjA := c.clienteComCNPJ(t, "A")
+	b, cnpjB := c.clienteComCNPJ(t, "B")
+
+	// Mudar para o CNPJ de outro: recusa cnpj_duplicado com o existente em Dados.
+	mascA := mascarado(cnpjA)
+	_, err := c.srv.EditarCliente(c.ctx, b, catalog.UpdateClientInput{Name: "B", CNPJ: &mascA})
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoCNPJDuplicado, r.Codigo)
+	require.Equal(t, map[string]any{"id": a.String(), "nome": "A"}, r.Dados["existente"])
+
+	// Salvar o PRÓPRIO CNPJ com máscara não é repetição.
+	mascB := mascarado(cnpjB)
+	_, err = c.srv.EditarCliente(c.ctx, b, catalog.UpdateClientInput{Name: "B", CNPJ: &mascB})
+	require.NoError(t, err)
+
+	// Duplicata que já existe (mesmos 14 dígitos de A em B, plantada direto) não
+	// trava a edição de B enquanto os dígitos não mudam.
+	_, err = c.pool.Exec(c.ctx, `UPDATE clients SET cnpj = $2 WHERE id = $1`, b, cnpjA)
+	require.NoError(t, err)
+	_, err = c.srv.EditarCliente(c.ctx, b, catalog.UpdateClientInput{Name: "B renomeado", CNPJ: &mascA})
+	require.NoError(t, err, "mesmos dígitos: não confere")
+
+	// Trocar por um CNPJ livre passa; apagar passa.
+	livre := mascarado(cnpjUnico())
+	_, err = c.srv.EditarCliente(c.ctx, b, catalog.UpdateClientInput{Name: "B", CNPJ: &livre})
+	require.NoError(t, err)
+	_, err = c.srv.EditarCliente(c.ctx, b, catalog.UpdateClientInput{Name: "B"})
+	require.NoError(t, err)
+}

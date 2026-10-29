@@ -2,12 +2,14 @@ package acoes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
@@ -94,6 +96,41 @@ func (s *Servico) CriarCliente(ctx context.Context, in catalog.CreateClientInput
 		return nil, err
 	}
 	s.avisarHubDoCliente(out)
+	return out, nil
+}
+
+// EditarCliente substitui os campos do cadastro (PUT total: quem quer edição
+// parcial lê o cliente e remonta a entrada). Valida o nome e o rótulo do
+// público-alvo e confere o CNPJ SÓ QUANDO OS 14 DÍGITOS MUDAM — duplicata que já
+// existe (A e B com os mesmos 14 dígitos) não pode travar a edição de B. `hub_id`
+// não entra (nenhuma rota o grava). NÃO avisa o hub: a edição de cliente nunca
+// avisou. nao_encontrado se o cliente não existe.
+func (s *Servico) EditarCliente(ctx context.Context, id uuid.UUID, in catalog.UpdateClientInput) (*catalog.Client, error) {
+	if in.Name == "" {
+		return nil, entradaInvalida("name is required")
+	}
+	if !NormalizarRotuloPublico(&in.TargetLabel) {
+		return nil, entradaInvalida("target_label must be at most 200 characters")
+	}
+	atual, err := s.Clientes.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, naoEncontrado("cliente não encontrado")
+		}
+		return nil, err
+	}
+	if DigitosDoCNPJ(atual.CNPJ) != DigitosDoCNPJ(in.CNPJ) {
+		if err := s.ChecarCNPJ(ctx, in.CNPJ, id); err != nil {
+			return nil, err
+		}
+	}
+	out, err := s.Clientes.Update(ctx, id, in)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, naoEncontrado("cliente não encontrado")
+		}
+		return nil, err
+	}
 	return out, nil
 }
 
