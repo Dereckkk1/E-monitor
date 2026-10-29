@@ -623,55 +623,54 @@ func TestEditarEmissorasCampanha_ParidadeComARota(t *testing.T) {
 	require.Equal(t, posicoes(t, chRota[0].Emissoras, baseRota), posicoes(t, chTool[0].Emissoras, baseTool), "o supervisor recebeu a mesma lista")
 }
 
-func TestEditarEmissorasCampanha_Escalada(t *testing.T) {
+// Decisão do dono (2026-10-29): tirar emissora COM tocadas passadas é confirma normal, sem escalada. O
+// passado fica intacto (TestEditarEmissorasCampanha_ProvaDaRemocao).
+func TestEditarEmissorasCampanha_RemoverEmissoraComTocadasPassadasEConfirmaNormal(t *testing.T) {
 	b := novaBancadaTool(t)
 	c := semearCampEsc(t, b, "2026-10-01", "2026-11-30", "ativa")
 	tipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot")
 	mat := mcptest.Material(t, b.ctx, b.pool, c.cli, tipo, "Spot")
 	mcptest.Vincular(t, b.ctx, b.pool, c.camp, mat, c.e1, c.e2)
-	tocada := mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, mat, c.e1, "in_slot", mcptest.Quando("2026-10-10", "10:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, mat, c.e1, "in_slot", mcptest.Quando("2026-10-10", "10:00"))
+	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, mat, c.e1, "bonus", mcptest.Quando("2026-10-10", "11:00"))
+	args := argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e1})
 
-	// Remover emissora COM veiculação da campanha: barra.
-	out := b.barrado(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e1}))
-	require.Contains(t, out["motivo"], "não são reescritos pela remoção")
-	require.Contains(t, out["motivo"], "exige aprovação humana")
-	require.Contains(t, textoDoPreview(t, out), "NÃO são recalculados pela remoção", "o preview do ramo barrado diz a verdade")
-	require.NotContains(t, textoDoPreview(t, out), "reclassificado")
-	require.Equal(t, "https://portal.teste/campaigns/"+c.camp.String()+"/edit", out["links"].(map[string]any)["tela"])
-	require.Equal(t, []uuid.UUID{c.e1, c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras, "nada foi gravado")
+	// Preview normal: token, sem nível crítico, e o texto lista o que muda daqui para a frente.
+	pre := b.preview(t, "editar_emissoras_campanha", args)
+	require.NotContains(t, pre, "nivel", "não escala")
+	texto := textoDoPreview(t, pre)
+	require.Contains(t, texto, "NÃO são recalculados pela remoção")
+	require.Contains(t, texto, "lista de PMM no target")
+	require.Contains(t, texto, "mapa ao vivo")
+	require.Contains(t, texto, "alertas de queda")
+	require.Contains(t, texto, "workers das emissoras acrescentadas sobem agora e os das removidas param", "campanha ativa")
+	require.NotContains(t, texto, "aprovação humana")
+	require.NotContains(t, texto, "reclassificado")
+	require.Equal(t, []uuid.UUID{c.e1, c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras, "o preview não escreve")
 	require.Empty(t, b.sup.Chamadas())
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
-	require.Len(t, l, 1)
-	require.Equal(t, "campaign", l[0].Recurso)
-	require.Zero(t, tokensUsados(t, b))
+	require.Zero(t, b.totalAuditorias(t))
 
-	// Remover junto com uma emissora sem veiculação também barra (basta uma).
-	b.barrado(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, []uuid.UUID{c.e3}, []uuid.UUID{c.e1, c.e2}))
+	// Confirmação: executa, grava, mexe no supervisor e audita (sem pedido de aprovação).
+	var projAntes string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT string_agg(detection_id::text || category, ',' ORDER BY detection_id) FROM detection_campaigns`).Scan(&projAntes))
+	out := b.confirmarEExecutar(t, "editar_emissoras_campanha", args)
+	require.Equal(t, []uuid.UUID{c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras)
+	require.Equal(t, []mcptest.ChamadaSupervisor{{Op: "UpdateStations", Campanha: c.camp, Emissoras: []uuid.UUID{c.e2}}}, b.sup.Chamadas())
+	require.EqualValues(t, 1, campanhaDoResultado(out)["emissoras_alvo"])
+	b.exigeAuditoria(t, "mcp.escrita.editar_emissoras_campanha", "campaign", &c.camp)
+	require.Empty(t, b.auditoria(t, "mcp.escrita.requer_aprovacao"))
+	var projDepois string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT string_agg(detection_id::text || category, ',' ORDER BY detection_id) FROM detection_campaigns`).Scan(&projDepois))
+	require.Equal(t, projAntes, projDepois, "as tocadas passadas seguem como estavam")
 
-	// Vizinhos que NÃO escalam:
-	//  a) remover a emissora SEM veiculação da campanha (E2);
-	pre := b.chamar(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e2}))
-	require.NotEmpty(t, pre["confirmacao"], "E2 não tem veiculação")
-	require.Contains(t, textoDoPreview(t, pre), "hoje não há número passado a mudar")
-	//  b) acrescentar nunca escala, mesmo uma emissora com veiculação de OUTRA campanha do cliente;
-	outra := mcptest.Campanha(t, b.ctx, b.pool, c.cli, "Outra campanha", "2026-10-01", "2026-11-30", c.e3)
-	mcptest.Vincular(t, b.ctx, b.pool, outra, mat, c.e3)
-	mcptest.Veiculacao(t, b.ctx, b.pool, outra, mat, c.e3, "in_slot", mcptest.Quando("2026-10-11", "10:00"))
-	pre = b.chamar(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, []uuid.UUID{c.e3}, nil))
-	require.NotEmpty(t, pre["confirmacao"], "acrescentar não escala")
-	//  c) remover de uma campanha uma emissora cuja veiculação é de OUTRA campanha;
-	mcptest.Veiculacao(t, b.ctx, b.pool, outra, mat, c.e2, "in_slot", mcptest.Quando("2026-10-12", "10:00"))
-	pre = b.chamar(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e2}))
-	require.NotEmpty(t, pre["confirmacao"], "veiculação de outra campanha não conta")
-	//  d) a única veiculação da emissora removida foi retratada (não aprovada).
-	_, err := b.pool.Exec(b.ctx, `UPDATE detections SET retracted_at = now() WHERE id = $1`, tocada)
-	require.NoError(t, err)
-	pre = b.chamar(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e1}))
-	require.NotEmpty(t, pre["confirmacao"], "tocada retratada não é veiculação aprovada")
+	// Misturar acrescentar e tirar também é confirma normal.
+	pre = b.chamar(t, "editar_emissoras_campanha", argsEmissorasCampanha(c.camp, []uuid.UUID{c.e1, c.e3}, []uuid.UUID{c.e2}))
+	require.NotEmpty(t, pre["confirmacao"])
+	require.NotContains(t, pre, "nivel")
 }
 
-// F3-2: entra uma tocada na emissora entre o preview e a confirmação.
-func TestEditarEmissorasCampanha_EscaladaNaConfirmacaoBarraENaoConsomeOToken(t *testing.T) {
+// Entra uma tocada na emissora entre o preview e a confirmação: nada muda, a confirmação executa (o token vale).
+func TestEditarEmissorasCampanha_TocadaNovaEntrePreviewEConfirmacaoNaoBloqueia(t *testing.T) {
 	b := novaBancadaTool(t)
 	c := semearCampEsc(t, b, "2026-10-01", "2026-11-30", "ativa")
 	args := argsEmissorasCampanha(c.camp, nil, []uuid.UUID{c.e1})
@@ -683,10 +682,10 @@ func TestEditarEmissorasCampanha_EscaladaNaConfirmacaoBarraENaoConsomeOToken(t *
 	args["confirmacao"] = pre["confirmacao"]
 	out := b.chamar(t, "editar_emissoras_campanha", args)
 
-	require.Equal(t, "critico", out["nivel"])
-	require.Equal(t, []uuid.UUID{c.e1, c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras)
-	require.Empty(t, b.sup.Chamadas())
-	require.Zero(t, tokensUsados(t, b))
+	require.Equal(t, true, out["executou"])
+	require.NotContains(t, out, "nivel")
+	require.Equal(t, []uuid.UUID{c.e2}, lerLinhaCampanha(t, b, c.camp).Emissoras)
+	require.Equal(t, 1, tokensUsados(t, b), "o token foi consumido pela execução")
 }
 
 func TestEditarEmissorasCampanha_EfeitosPorEstadoERessalvaDosMateriais(t *testing.T) {
@@ -757,17 +756,18 @@ func TestCampanhaCancelada_RecusaAntesDaEscalada(t *testing.T) {
 
 // ── Prova da remoção de emissora da campanha ────────────────────────────
 
-// A escalada de editar_emissoras_campanha (remover emissora COM veiculação → crítico) assume que tirar a
-// emissora mexe no histórico. Este teste mede a premissa. Semeia tocadas passadas aprovadas na emissora
-// removida (com regras, preço, PMM no target e um carve-out), lê pelas tools tudo o que o cliente vê do
-// passado, tira a emissora por acoes.TrocarEmissorasCampanha DIRETO (a tool a barra) e relê.
+// Guarda que JUSTIFICA a decisão do dono (2026-10-29) de tratar editar_emissoras_campanha como confirma
+// simples, sem escalada, mesmo ao tirar emissora COM tocadas passadas: tirar a emissora não reescreve o
+// passado. Semeia tocadas passadas aprovadas na emissora removida (com regras, preço, PMM no target e um
+// carve-out), lê pelas tools tudo o que o cliente vê do passado, tira a emissora PELA PRÓPRIA TOOL
+// (preview + confirmação) e relê. Se este teste quebrar, a remoção passou a mexer no histórico e a
+// escalada precisa voltar.
 //
 // RESULTADO (2026-10-29): grade, insights, financeiro, veiculações, planos do dia, falhas da campanha e as
 // projeções (detection_campaigns) saem IDÊNTICOS — inclusive depois de editar uma regra (recat). O que
 // muda é só a lista de emissoras-alvo (obter_campanha) e a lista de PMM no target do cliente
 // (pmm_target_cliente); no código, o mapa ao vivo, a Visão Gerencial e os alertas de queda também leem
-// campaigns.target_stations. A escalada fica como está até o dono decidir: ela protege o histórico
-// exigindo aprovação, não evita uma reescrita do passado.
+// campaigns.target_stations.
 func TestEditarEmissorasCampanha_ProvaDaRemocao(t *testing.T) {
 	b := novaBancadaTool(t)
 	p := semearProva(t, b)
@@ -787,13 +787,8 @@ func TestEditarEmissorasCampanha_ProvaDaRemocao(t *testing.T) {
 	require.Contains(t, nomesAntes, "Rádio Prova 1")
 	require.Equal(t, 3, pmmAntes)
 
-	// A premissa da escalada continua valendo: pela tool, a remoção é barrada e nada muda.
-	out := b.barrado(t, "editar_emissoras_campanha", argsEmissorasCampanha(p.camp, nil, []uuid.UUID{p.e1}))
-	require.Contains(t, out["motivo"], "não são reescritos")
-	require.Equal(t, []uuid.UUID{p.e1, p.e2, p.e3}, lerLinhaCampanha(t, b, p.camp).Emissoras)
-
-	// Remoção DIRETA (o que a tool faria, aprovada): tira a emissora COM tocadas passadas.
-	require.NoError(t, b.E.Acoes.TrocarEmissorasCampanha(b.ctx, p.camp, []uuid.UUID{p.e2, p.e3}))
+	// Remoção PELA TOOL (preview + confirmação): tira a emissora COM tocadas passadas.
+	b.confirmarEExecutar(t, "editar_emissoras_campanha", argsEmissorasCampanha(p.camp, nil, []uuid.UUID{p.e1}))
 	require.Equal(t, []uuid.UUID{p.e2, p.e3}, lerLinhaCampanha(t, b, p.camp).Emissoras)
 	exigeIgual(t, "remover E1 da campanha", antes, p.capturar(t, b, true))
 	require.Equal(t, projAntes, projecoes(t, b), "as projeções (detection_campaigns) não mudam")
