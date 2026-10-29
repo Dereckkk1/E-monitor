@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -33,6 +31,16 @@ type MaterialsHandler struct {
 	// DistRules recategoriza detections quando o tipo de um material muda
 	// (UpdateType). Nil-safe — se ausente, a recategorização é pulada.
 	DistRules *catalog.DistributionRules
+	// EmSegundoPlano roda a recategorização que não pode atrasar a resposta.
+	// nil = goroutine (produção); os testes injetam um executor que espera.
+	EmSegundoPlano func(func())
+}
+
+// servico monta as ações de material sobre o repositório deste handler.
+// DistRules nil = sem recategorização (nil-safe, como o handler sempre foi):
+// acoes.TrocarTipoMaterial confere `Regras != nil`.
+func (h *MaterialsHandler) servico() *acoes.Servico {
+	return &acoes.Servico{Materiais: h.Repo, Regras: h.DistRules, EmSegundoPlano: h.EmSegundoPlano}
 }
 
 // ListByClient returns all materials for a given client.
@@ -246,6 +254,10 @@ func discardRedundantMaster(newPath, existingPath string) error {
 
 // UpdateType sets or clears the type_id for a material.
 // Body: {"type_id": "<uuid>" | null}
+//
+// A troca e a recategorização das detections do material (em segundo plano,
+// best-effort: a category gravada foi computada no insert com o tipo antigo e
+// ficou obsoleta) moram em acoes.TrocarTipoMaterial — o MCP chama a mesma função.
 func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -259,21 +271,11 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.UpdateType(r.Context(), id, p.TypeID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := h.servico().TrocarTipoMaterial(r.Context(), id, p.TypeID); err != nil {
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
-	}
-	// O type_id mudou → a category gravada das detections desse material ficou
-	// obsoleta (foi computada no insert com o tipo antigo). Sem isto, detections
-	// que agora casam uma regra do tipo novo continuam 'bonus' e aparecem como
-	// "bonificação (sem meta)" no resumo diário. Recategoriza em background
-	// (best-effort, mesmo padrão dos handlers de distribution_rules).
-	if h.DistRules != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			acoes.RegistrarFalhaRecat("material_type_change", h.DistRules.RecategorizeForMaterial(ctx, id))
-		}()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
