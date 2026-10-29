@@ -21,11 +21,14 @@ var ToolsEsperadas = []string{
 	"assertividade",
 	"auditoria_mcp",
 	"buscar_emissoras",
+	"criar_campanha",
 	"criar_cliente",
 	"criar_tipo_material",
 	"destinatarios_pos_venda",
+	"editar_campanha",
 	"editar_cliente",
 	"editar_emissora",
+	"editar_emissoras_campanha",
 	"editar_material",
 	"editar_pmm_target",
 	"editar_tipo_material",
@@ -140,6 +143,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarAuditoria(s, cfg)
 	registrarEscritasBasicas(s, cfg, p)
 	registrarEscritasCadastros(s, cfg, p)
+	registrarEscritasCampanhas(s, cfg, p)
 	return s
 }
 
