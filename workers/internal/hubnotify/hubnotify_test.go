@@ -255,7 +255,7 @@ func TestOTetoPorCicloChegaAoRepo(t *testing.T) {
 // ───────────────────────────── o EmissorHTTP ─────────────────────────────
 
 /*
-⚠️ O payload do job tem de ser IGUAL ao do `acoes.AvisarHubDaCampanha`. Se divergirem,
+⚠️ O payload do job tem de ser IGUAL ao do `acoes.EmitirCampanhaNoHub`. Se divergirem,
 a campanha entregue pelo caminho normal e a entregue pela rede de segurança
 chegam diferentes ao hub — e a segunda é justamente a que ninguém está olhando.
 */

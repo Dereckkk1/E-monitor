@@ -134,9 +134,10 @@ func (s *Servico) EditarCliente(ctx context.Context, id uuid.UUID, in catalog.Up
 	return out, nil
 }
 
-// AvisarHubDoCliente manda `cliente.upsert` FORA do caminho da resposta.
+// avisarHubDoCliente manda `cliente.upsert` FORA do caminho da resposta (em
+// segundo plano, com Servico.EmSegundoPlano).
 //
-// # Por que goroutine, e por que context.Background
+// # Por que fora do caminho, e por que context.Background
 //
 // A criação do cliente NÃO PODE depender do hub estar de pé. E o contexto do
 // pedido morre quando a resposta é escrita: usá-lo cancelaria a emissão no exato
@@ -149,14 +150,6 @@ func (s *Servico) EditarCliente(ctx context.Context, id uuid.UUID, in catalog.Up
 // dizendo que falta alguém. Quem conserta isso é o retrato periódico do §5 do
 // desenho, que não está construído. Até lá, isto é atraso invisível, não erro
 // visível. (A edição de cliente NÃO avisa o hub — como a rota nunca avisou.)
-func AvisarHubDoCliente(h AvisoHub, c *catalog.Client) {
-	if h == nil || !h.Configured() || c == nil {
-		return
-	}
-	dados := upsertDoCliente(c)
-	go emitirClienteNoHub(h, c.ID, dados)
-}
-
 func (s *Servico) avisarHubDoCliente(c *catalog.Client) {
 	if !s.hubConfigurado() || c == nil {
 		return

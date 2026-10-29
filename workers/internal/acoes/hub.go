@@ -134,9 +134,10 @@ func clienteDoHubConfere(idNaPlataforma string, local uuid.UUID) bool {
 
 // ─────────────────────────────── avisos ao hub ───────────────────────────────
 
-// AvisarHubDaCampanha manda `campanha.upsert` FORA do caminho da resposta.
+// avisarHubDaCampanha manda `campanha.upsert` FORA do caminho da resposta (em
+// segundo plano, com Servico.EmSegundoPlano).
 //
-// # Por que goroutine, e por que context.Background
+// # Por que fora do caminho, e por que context.Background
 //
 // A criação da campanha NÃO PODE depender do hub estar de pé. E o contexto do
 // pedido morre quando a resposta é escrita: usá-lo cancelaria a emissão no exato
@@ -149,20 +150,6 @@ func clienteDoHubConfere(idNaPlataforma string, local uuid.UUID) bool {
 // nenhuma dizendo que falta alguma. Quem conserta isso é a varredura periódica
 // do hubnotify (a cada 15 min). Até lá, isto é atraso invisível, não erro
 // visível.
-//
-// É a versão "solta" (sempre goroutine) que a reemissão do botão Ligar também
-// usa; as ações passam por Servico.avisarHubDaCampanha, que respeita o
-// EmSegundoPlano injetado nos testes.
-func AvisarHubDaCampanha(h AvisoHub, repo *catalog.Campaigns, c *catalog.Campaign) {
-	if h == nil || !h.Configured() || c == nil {
-		return
-	}
-	// Os campos são copiados AQUI, síncrono, de propósito: a goroutine não pode
-	// ler `c` depois que o chamador seguiu adiante e talvez o alterou.
-	dados := UpsertDaCampanha(c)
-	go EmitirCampanhaNoHub(h, repo, c.ID, dados)
-}
-
 func (s *Servico) avisarHubDaCampanha(c *catalog.Campaign) {
 	if !s.hubConfigurado() || c == nil {
 		return
@@ -192,8 +179,8 @@ func UpsertDaCampanha(c *catalog.Campaign) hub.CampanhaUpsert {
 	}
 }
 
-// EmitirCampanhaNoHub é a emissão SÍNCRONA que AvisarHubDaCampanha roda numa
-// goroutine. Separada para quem já está fora do caminho da resposta (a
+// EmitirCampanhaNoHub é a emissão SÍNCRONA que Servico.avisarHubDaCampanha roda em
+// segundo plano. Separada para quem já está fora do caminho da resposta (a
 // reemissão do botão Ligar) emitir em sequência, sem abrir uma goroutine por
 // campanha.
 func EmitirCampanhaNoHub(h AvisoHub, repo *catalog.Campaigns, id uuid.UUID, dados hub.CampanhaUpsert) {
