@@ -35,9 +35,11 @@ func TestEditarCadastroEmissora_ParcialMantemOResto(t *testing.T) {
 	id := c.emissoraComMetadados(t)
 	streamAntes, _, _, _ := c.streamEMeta(t, id)
 
-	st, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Nome: sp("  Nome Novo FM  ")})
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Nome: sp("  Nome Novo FM  ")})
 
 	require.NoError(t, err)
+	st := res.Emissora
+	require.False(t, res.GeocodificacaoFalhou, "cidade/UF não enviadas: nada a geocodificar")
 	require.Equal(t, "Nome Novo FM", st.Name)
 	require.InDelta(t, 99.9, *st.FrequencyMHz, 0.001, "frequência não enviada: mantida")
 	require.Equal(t, "Cidade Inexistente XYZ", *st.City)
@@ -58,27 +60,46 @@ func TestEditarCadastroEmissora_MudarACidadeGeocodificaComAUFAtual(t *testing.T)
 	require.NoError(t, err)
 
 	// Só a cidade vem no pedido; a UF é a que já estava (SP).
-	st, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Cidade: sp("São Paulo")})
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Cidade: sp("São Paulo")})
 
 	require.NoError(t, err)
+	st := res.Emissora
+	require.False(t, res.GeocodificacaoFalhou)
 	require.Equal(t, "São Paulo", *st.City)
 	require.NotNil(t, st.Latitude, "a geocodificação roda quando a cidade muda")
 	require.InDelta(t, -23.55, *st.Latitude, 0.6)
 	require.InDelta(t, -46.63, *st.Longitude, 0.6)
-	// A emissora segue com stream e metadados.
 	_, _, _, meta := c.streamEMeta(t, id)
 	require.JSONEq(t, `{"categories":["jovem"],"chave_desconhecida":{"a":1}}`, meta)
+}
+
+// Cidade que o dataset não conhece: a edição vale, mas o resultado avisa que a
+// coordenada ficou velha (para a tool dizer ao usuário).
+func TestEditarCadastroEmissora_GeocodificacaoFalhaVisivel(t *testing.T) {
+	c := novoCenario(t)
+	id := c.emissoraComMetadados(t)
+	_, err := c.pool.Exec(c.ctx, `UPDATE stations SET state = 'SP', latitude = -10.5, longitude = -50.5 WHERE id = $1`, id)
+	require.NoError(t, err)
+
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Cidade: sp("Cidade Que Não Existe")})
+
+	require.NoError(t, err)
+	require.True(t, res.GeocodificacaoFalhou)
+	require.Equal(t, "Cidade Que Não Existe", *res.Emissora.City)
+	require.InDelta(t, -10.5, *res.Emissora.Latitude, 0.001, "a coordenada anterior ficou")
 }
 
 func TestEditarCadastroEmissora_AplicaOsCincoCamposENormalizaAUF(t *testing.T) {
 	c := novoCenario(t)
 	id := c.emissoraComMetadados(t)
 
-	st, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{
 		Nome: sp("Outra FM"), FrequenciaMHz: fl(104.5), Cidade: sp("Uberaba"), UF: sp(" mg "), PMM: fl(54321),
 	})
 
 	require.NoError(t, err)
+	st := res.Emissora
+	require.False(t, res.GeocodificacaoFalhou)
 	require.Equal(t, "Outra FM", st.Name)
 	require.InDelta(t, 104.5, *st.FrequencyMHz, 0.001)
 	require.Equal(t, "Uberaba", *st.City)
@@ -86,31 +107,47 @@ func TestEditarCadastroEmissora_AplicaOsCincoCamposENormalizaAUF(t *testing.T) {
 	require.InDelta(t, 54321, *st.PMM, 0.001)
 }
 
+// Parcial NO SQL: o pedido não lê a emissora antes, então o que mudou lá nesse
+// meio-tempo e não foi enviado não é revertido.
+func TestEditarCadastroEmissora_NaoReverteCampoQueMudouEEntaoNaoFoiEnviado(t *testing.T) {
+	c := novoCenario(t)
+	id := c.emissoraComMetadados(t)
+	_, err := c.pool.Exec(c.ctx, `UPDATE stations SET pmm = 555 WHERE id = $1`, id)
+	require.NoError(t, err)
+
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{Nome: sp("Só nome")})
+
+	require.NoError(t, err)
+	require.InDelta(t, 555, *res.Emissora.PMM, 0.001)
+}
+
 func TestEditarCadastroEmissora_CamposVaziosNaoApagam(t *testing.T) {
 	c := novoCenario(t)
 	id := c.emissoraComMetadados(t)
 
 	// Um pedido sem nenhum campo não muda nada (e não é erro).
-	st, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{})
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{})
 
 	require.NoError(t, err)
-	require.Equal(t, "Rádio Ação", st.Name)
-	require.InDelta(t, 99.9, *st.FrequencyMHz, 0.001)
+	require.Equal(t, "Rádio Ação", res.Emissora.Name)
+	require.InDelta(t, 99.9, *res.Emissora.FrequencyMHz, 0.001)
 }
 
 func TestEditarCadastroEmissora_Recusas(t *testing.T) {
 	c := novoCenario(t)
 	id := c.emissoraComMetadados(t)
 	for nome, in := range map[string]CadastroEmissora{
-		"nome vazio":           {Nome: sp("   ")},
-		"cidade vazia":         {Cidade: sp(" ")},
-		"UF com 3 letras":      {UF: sp("MGX")},
-		"UF com 1 letra":       {UF: sp("M")},
-		"frequência zero":      {FrequenciaMHz: fl(0)},
-		"frequência negativa":  {FrequenciaMHz: fl(-1)},
-		"frequência absurda":   {FrequenciaMHz: fl(10000)},
-		"PMM negativo":         {PMM: fl(-1)},
-		"PMM acima do numeric": {PMM: fl(1e8)},
+		"nome vazio":                     {Nome: sp("   ")},
+		"cidade vazia":                   {Cidade: sp(" ")},
+		"UF com 3 letras":                {UF: sp("MGX")},
+		"UF com 1 letra":                 {UF: sp("M")},
+		"frequência zero":                {FrequenciaMHz: fl(0)},
+		"frequência negativa":            {FrequenciaMHz: fl(-1)},
+		"frequência 10000":               {FrequenciaMHz: fl(10000)},
+		"frequência que arredonda a 10k": {FrequenciaMHz: fl(9999.995)},
+		"PMM negativo":                   {PMM: fl(-1)},
+		"PMM 1e8":                        {PMM: fl(1e8)},
+		"PMM que arredonda a 1e8":        {PMM: fl(99999999.995)},
 	} {
 		t.Run(nome, func(t *testing.T) {
 			_, err := c.srv.EditarCadastroEmissora(c.ctx, id, in)
@@ -123,8 +160,22 @@ func TestEditarCadastroEmissora_Recusas(t *testing.T) {
 	require.Equal(t, "Rádio Ação", nome)
 }
 
+// Os maiores valores que cabem nos NUMERIC passam (9999,99 e 99.999.999,99).
+func TestEditarCadastroEmissora_ValoresNoLimiteDoNumericPassam(t *testing.T) {
+	c := novoCenario(t)
+	id := c.emissoraComMetadados(t)
+
+	res, err := c.srv.EditarCadastroEmissora(c.ctx, id, CadastroEmissora{FrequenciaMHz: fl(9999.99), PMM: fl(99999999.99)})
+
+	require.NoError(t, err)
+	require.InDelta(t, 9999.99, *res.Emissora.FrequencyMHz, 0.001)
+	require.InDelta(t, 99999999.99, *res.Emissora.PMM, 0.01)
+}
+
 func TestEditarCadastroEmissora_Inexistente(t *testing.T) {
 	c := novoCenario(t)
 	_, err := c.srv.EditarCadastroEmissora(c.ctx, uuid.New(), CadastroEmissora{Nome: sp("x")})
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	_, err = c.srv.EditarCadastroEmissora(c.ctx, uuid.New(), CadastroEmissora{Cidade: sp("São Paulo")})
 	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
 }

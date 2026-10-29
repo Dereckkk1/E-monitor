@@ -627,44 +627,78 @@ func (s *Stations) GetCalibrationStatus(ctx context.Context, stationID uuid.UUID
 
 // ─── UpdateCadastro ─────────────────────────────────────────────────────────
 
-// UpdateCadastroInput são os campos do cadastro que o MCP edita. Os ponteiros
-// são GRAVADOS como vieram (nil grava NULL) — quem quer edição parcial lê a
-// emissora e remonta a entrada (acoes.EditarCadastroEmissora).
+// UpdateCadastroInput são os campos do cadastro que o MCP edita. Edição PARCIAL
+// NO SQL: nil = "não enviado" e a coluna não é tocada (COALESCE), então uma
+// mudança concorrente num campo que o pedido não enviou não é revertida.
 type UpdateCadastroInput struct {
-	Name         string
+	Name         *string
 	FrequencyMHz *float64
 	City         *string
 	State        *string
 	PMM          *float64
 }
 
-// UpdateCadastro grava SÓ nome, frequência, cidade, UF e PMM (e a coordenada
-// derivada da cidade+UF). stream_url, banda, logo e metadata NÃO são tocados.
+type linhaQuery interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// UpdateCadastro grava SÓ os campos enviados entre nome, frequência, cidade, UF
+// e PMM (e a coordenada derivada). stream_url, banda, logo e metadata NÃO são
+// tocados.
 //
 // Existe separado do Update porque o Update é PUT total: reescreve stream_url e
 // substitui o metadata pelo que o struct StationMeta consegue reserializar —
 // chave que o struct não conhece SE PERDE. A tela manda tudo de propósito; o MCP
-// nunca troca stream_url (spec §1, não-objetivos) nem apaga metadados. E fazer
-// "ler tudo e devolver tudo" pelo Update abriria uma corrida: um stream_url
-// trocado pelo wizard entre a leitura e a escrita seria desfeito.
+// nunca troca stream_url (spec §1, não-objetivos) nem apaga metadados.
 //
-// A coordenada segue a regra do Update: re-deriva da cidade+UF recebidas, e um
-// lookup que falha NÃO destrói a coordenada atual (COALESCE). Retorna
-// pgx.ErrNoRows se a emissora não existe.
-func (s *Stations) UpdateCadastro(ctx context.Context, id uuid.UUID, in UpdateCadastroInput) (*Station, error) {
+// Geocodificação: só roda quando cidade OU UF são enviadas. Se só uma veio, a
+// outra é lida da própria linha (numa transação, com FOR UPDATE, para o par não
+// mudar no meio). Devolve geocodificacaoFalhou=true quando a cidade/UF nova não
+// tem coordenada (lookup sem resposta, ou sem o par completo): a coordenada
+// ANTERIOR fica (COALESCE — um lookup que falha não destrói dado) e quem chama
+// pode avisar que ela está velha. Retorna pgx.ErrNoRows se a emissora não existe.
+func (s *Stations) UpdateCadastro(ctx context.Context, id uuid.UUID, in UpdateCadastroInput) (*Station, bool, error) {
+	var q linhaQuery = s.pool
+	var tx pgx.Tx
 	var lat, lng *float64
-	if in.City != nil && in.State != nil {
-		if glat, glng, ok := s.geo.Lookup(*in.City, *in.State); ok {
-			lat, lng = &glat, &glng
+	geocodificacaoFalhou := false
+
+	if in.City != nil || in.State != nil {
+		var err error
+		tx, err = s.pool.Begin(ctx)
+		if err != nil {
+			return nil, false, err
 		}
+		defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
+		var atualCidade, atualUF *string
+		if err := tx.QueryRow(ctx,
+			`SELECT city, state FROM stations WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&atualCidade, &atualUF); err != nil {
+			return nil, false, err // inclui pgx.ErrNoRows
+		}
+		cidade, uf := in.City, in.State
+		if cidade == nil {
+			cidade = atualCidade
+		}
+		if uf == nil {
+			uf = atualUF
+		}
+		if cidade != nil && uf != nil {
+			if glat, glng, ok := s.geo.Lookup(*cidade, *uf); ok {
+				lat, lng = &glat, &glng
+			}
+		}
+		geocodificacaoFalhou = lat == nil
+		q = tx
 	}
-	st, err := scanStationRow(s.pool.QueryRow(ctx, fmt.Sprintf(`
+
+	st, err := scanStationRow(q.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE stations SET
-		  name          = $2,
-		  frequency_mhz = $3,
-		  city          = $4,
-		  state         = $5,
-		  pmm           = $6,
+		  name          = COALESCE($2, name),
+		  frequency_mhz = COALESCE($3, frequency_mhz),
+		  city          = COALESCE($4, city),
+		  state         = COALESCE($5, state),
+		  pmm           = COALESCE($6, pmm),
 		  latitude      = COALESCE($7, latitude),
 		  longitude     = COALESCE($8, longitude),
 		  updated_at    = NOW()
@@ -673,10 +707,12 @@ func (s *Stations) UpdateCadastro(ctx context.Context, id uuid.UUID, in UpdateCa
 		id, in.Name, in.FrequencyMHz, in.City, in.State, in.PMM, lat, lng,
 	).Scan)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, pgx.ErrNoRows
-		}
-		return nil, err
+		return nil, false, err
 	}
-	return &st, nil
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+	}
+	return &st, geocodificacaoFalhou, nil
 }
