@@ -159,6 +159,70 @@ const tetoCidades = 100
 
 const ressalvaAnatel = "Anatel: contorno_protegido_km é o raio normativo da classe; alcance_km = contorno × 1,5 (transbordo) e é o raio que gera as cidades no alcance. null = indeterminado, nunca zero (AM não tem raio por classe). Classe C de FM ≠ classe C de AM."
 
+// lerEmissoraCompleta monta o que obter_emissora devolve para uma emissora já
+// lida; editar_emissora devolve o MESMO formato depois de gravar. Nunca devolve
+// stream_url (emissoraDTO é whitelist).
+func lerEmissoraCompleta(ctx context.Context, L *Leitura, st *catalog.Station) (*saidaObterEmissora, error) {
+	id := st.ID
+	an, err := L.Emissoras.Anatel(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cidades, err := L.Emissoras.CoverageCities(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	ativas, err := L.Campanhas.ListFiltered(ctx, []string{"ativa", "programada"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	clientes, err := nomesClientes(ctx, L)
+	if err != nil {
+		return nil, err
+	}
+	out := &saidaObterEmissora{
+		Emissora: emissoraDe(*st),
+		Anatel: anatelDTO{
+			Classe: an.Class, ContornoProtegidoKm: an.CoverageKm, AlcanceKm: an.ReachKm, Procedencia: an.MatchTier,
+			CidadeDoPlano: an.PlanCity, UFDoPlano: an.PlanState, CruzadoEm: instanteOpc(an.MatchedAt),
+		},
+		CidadesNoAlcance: cidadesNoAlcance{Total: len(cidades), Itens: []cidadeNoAlcance{}},
+		Campanhas:        []campanhaNaEmissora{},
+		Ressalvas:        []string{ressalvaAnatel},
+	}
+	if mt := st.Meta; mt != nil {
+		// website está NULL em quase toda emissora; o endereço real ficou
+		// em audiency_site (ver catalog.StationMeta).
+		site := mt.Website
+		if site == nil || *site == "" {
+			site = mt.AudiencySite
+		}
+		out.Perfil = &perfilEmissora{
+			Categorias: mt.Categories, PerfilAudiencia: perfilAudienciaDe(mt.AudienceProfile), PopulacaoTotal: mt.TotalPopulation,
+			Site: site, AnoFundacao: mt.FoundationYear, RazaoSocial: mt.CompanyName,
+			NomeFantasia: mt.FantasyName, CNPJ: mt.CNPJ, EmailComercial: mt.CommercialEmail,
+		}
+	}
+	for _, c := range cidades[:min(len(cidades), tetoCidades)] {
+		out.CidadesNoAlcance.Itens = append(out.CidadesNoAlcance.Itens, cidadeNoAlcance{
+			Cidade: c.City, UF: c.State, IBGE: c.IBGECode, DistanciaKm: c.DistanceKm, Sede: c.IsHome,
+		})
+	}
+	if len(cidades) > tetoCidades {
+		out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
+			"mostrando as %d cidades mais próximas de %d no alcance", tetoCidades, len(cidades)))
+	}
+	for _, c := range ativas {
+		if slices.Contains(c.TargetStations, id) {
+			out.Campanhas = append(out.Campanhas, campanhaNaEmissora{
+				Campanha: refDe(c.ID, c.Name), Cliente: refDe(c.ClientID, clientes[c.ClientID]),
+				Estado: c.Status, Inicio: dia(c.StartDate), Fim: dia(c.EndDate),
+			})
+		}
+	}
+	return out, nil
+}
+
 func registrarEmissoras(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "buscar_emissoras",
 		"Busca emissoras como a tela /stations: palavras que todas precisam casar (nome, cidade, UF, banda ou dial), mais filtros "+
@@ -202,61 +266,9 @@ func registrarEmissoras(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			an, err := L.Emissoras.Anatel(ctx, id)
+			out, err := lerEmissoraCompleta(ctx, L, st)
 			if err != nil {
 				return nil, err
-			}
-			cidades, err := L.Emissoras.CoverageCities(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			ativas, err := L.Campanhas.ListFiltered(ctx, []string{"ativa", "programada"}, nil)
-			if err != nil {
-				return nil, err
-			}
-			clientes, err := nomesClientes(ctx, L)
-			if err != nil {
-				return nil, err
-			}
-			out := saidaObterEmissora{
-				Emissora: emissoraDe(*st),
-				Anatel: anatelDTO{
-					Classe: an.Class, ContornoProtegidoKm: an.CoverageKm, AlcanceKm: an.ReachKm, Procedencia: an.MatchTier,
-					CidadeDoPlano: an.PlanCity, UFDoPlano: an.PlanState, CruzadoEm: instanteOpc(an.MatchedAt),
-				},
-				CidadesNoAlcance: cidadesNoAlcance{Total: len(cidades), Itens: []cidadeNoAlcance{}},
-				Campanhas:        []campanhaNaEmissora{},
-				Ressalvas:        []string{ressalvaAnatel},
-			}
-			if mt := st.Meta; mt != nil {
-				// website está NULL em quase toda emissora; o endereço real ficou
-				// em audiency_site (ver catalog.StationMeta).
-				site := mt.Website
-				if site == nil || *site == "" {
-					site = mt.AudiencySite
-				}
-				out.Perfil = &perfilEmissora{
-					Categorias: mt.Categories, PerfilAudiencia: perfilAudienciaDe(mt.AudienceProfile), PopulacaoTotal: mt.TotalPopulation,
-					Site: site, AnoFundacao: mt.FoundationYear, RazaoSocial: mt.CompanyName,
-					NomeFantasia: mt.FantasyName, CNPJ: mt.CNPJ, EmailComercial: mt.CommercialEmail,
-				}
-			}
-			for _, c := range cidades[:min(len(cidades), tetoCidades)] {
-				out.CidadesNoAlcance.Itens = append(out.CidadesNoAlcance.Itens, cidadeNoAlcance{
-					Cidade: c.City, UF: c.State, IBGE: c.IBGECode, DistanciaKm: c.DistanceKm, Sede: c.IsHome,
-				})
-			}
-			if len(cidades) > tetoCidades {
-				out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
-					"mostrando as %d cidades mais próximas de %d no alcance", tetoCidades, len(cidades)))
-			}
-			for _, c := range ativas {
-				if slices.Contains(c.TargetStations, id) {
-					out.Campanhas = append(out.Campanhas, campanhaNaEmissora{
-						Campanha: refDe(c.ID, c.Name), Cliente: refDe(c.ClientID, clientes[c.ClientID]),
-						Estado: c.Status, Inicio: dia(c.StartDate), Fim: dia(c.EndDate),
-					})
-				}
 			}
 			return ok(out)
 		})

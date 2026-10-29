@@ -93,6 +93,24 @@ func (d *Detections) HaVeiculacao(ctx context.Context, e EscopoVeiculacao) (bool
 	if len(e.CampanhaIDs) == 0 && e.MaterialID == nil && e.ClienteID == nil {
 		return false, errors.New("catalog: HaVeiculacao exige CampanhaIDs, MaterialID ou ClienteID")
 	}
+	return d.haVeiculacao(ctx, e)
+}
+
+// HaVeiculacaoNaEmissora diz se existe veiculação APROVADA, em QUALQUER campanha,
+// em alguma das emissoras — o alcance de uma mudança no cadastro da emissora (o
+// PMM entra nos impactos de todas as campanhas que a usam). É a única pergunta
+// por emissora sem âncora de campanha, cliente ou material: a emissora, aqui, É
+// a âncora (o filtro por station_id é seletivo e o EXISTS para no primeiro
+// achado). Mesmo recorte e mesmo filtro de aprovadas do HaVeiculacao.
+func (d *Detections) HaVeiculacaoNaEmissora(ctx context.Context, emissoraIDs []uuid.UUID) (bool, error) {
+	if len(emissoraIDs) == 0 {
+		return false, errors.New("catalog: HaVeiculacaoNaEmissora exige ao menos uma emissora")
+	}
+	return d.haVeiculacao(ctx, EscopoVeiculacao{EmissoraIDs: emissoraIDs})
+}
+
+// haVeiculacao executa a pergunta; a âncora é conferida por quem chama.
+func (d *Detections) haVeiculacao(ctx context.Context, e EscopoVeiculacao) (bool, error) {
 	campanhas, tipos, emissoras := e.CampanhaIDs, e.TipoIDs, e.EmissoraIDs
 	// cardinality() de NULL é NULL (e `= 0` descartaria a linha): slices nil
 	// viram arrays vazios.

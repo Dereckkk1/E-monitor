@@ -21,9 +21,13 @@ var ToolsEsperadas = []string{
 	"assertividade",
 	"auditoria_mcp",
 	"buscar_emissoras",
+	"criar_cliente",
 	"criar_tipo_material",
 	"destinatarios_pos_venda",
+	"editar_cliente",
+	"editar_emissora",
 	"editar_material",
+	"editar_pmm_target",
 	"editar_tipo_material",
 	"exportar_consolidado",
 	"exportar_veiculacoes",
@@ -135,6 +139,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarPosVenda(s, cfg)
 	registrarAuditoria(s, cfg)
 	registrarEscritasBasicas(s, cfg, p)
+	registrarEscritasCadastros(s, cfg, p)
 	return s
 }
 
