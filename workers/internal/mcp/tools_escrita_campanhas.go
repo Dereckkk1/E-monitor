@@ -20,10 +20,11 @@ import (
 // Escritas de campanha (Lote C, Task 14): criar, editar nome/datas/código do hub
 // e trocar as emissoras-alvo. Nenhuma é "só cadastro": a vigência decide o
 // estado que o agendador dá à campanha (e portanto se os workers sobem e o
-// cliente passa a ver), e tirar uma emissora que já tem veiculação da campanha
-// mexe numa emissora com histórico (o passado em si não é reescrito: ver
-// TestEditarEmissorasCampanha_ProvaDaRemocao). Por isso as três escalam para
-// crítico (F3-4) quando atingem o que já foi visto.
+// cliente passa a ver), então criar_campanha e editar_campanha escalam para
+// crítico (F3-4) quando atingem o que já foi visto. editar_emissoras_campanha NÃO
+// escala: tirar uma emissora com tocadas passadas não reescreve o passado
+// (TestEditarEmissorasCampanha_ProvaDaRemocao) — decisão do dono em 2026-10-29,
+// que desceu esse caso de crítico para confirma.
 
 func registrarEscritasCampanhas(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaEscrita(s, cfg, p, escritaCriarCampanha(cfg))
@@ -641,10 +642,9 @@ func planejarEmissorasDaCampanha(ctx context.Context, E *Escritas, in entradaEdi
 }
 
 // haVeiculacaoNasRemovidas: a campanha tem veiculação aprovada em alguma das
-// emissoras que sairiam? É o recorte do recat (F3-3). A remoção NÃO dispara
-// recat nem reescreve o passado (TestEditarEmissorasCampanha_ProvaDaRemocao); a
-// escalada protege o histórico exigindo aprovação humana para mexer numa
-// emissora que já tem veiculação.
+// emissoras que sairiam? Só informa o preview. A remoção NÃO dispara recat nem
+// reescreve o passado (TestEditarEmissorasCampanha_ProvaDaRemocao), por isso não
+// escala (decisão do dono, 2026-10-29).
 func haVeiculacaoNasRemovidas(ctx context.Context, E *Escritas, pl *edicaoDeEmissorasDaCampanha) (bool, error) {
 	if len(pl.remover) == 0 {
 		return false, nil
@@ -659,24 +659,10 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 			"tela troca a lista inteira; aqui nunca). Numa campanha ativa os workers sobem/param na hora. As armadilhas: (1) os materiais já " +
 			"vinculados NÃO ganham as emissoras novas — cada vínculo tem lista própria (editar_emissoras_material), e sem ela a tocada da " +
 			"emissora nova não é atribuída à campanha; (2) tirar emissora para o worker dela e a tira das listas de emissoras-alvo e de PMM no " +
-			"target, do mapa ao vivo e dos alertas de queda da campanha — os números de dias passados não são reescritos, mas, por ser " +
-			"emissora com histórico, a remoção sobe para crítico quando alguma emissora removida tem veiculação aprovada da campanha; nesse " +
-			"caso nada é feito e a resposta traz o link da tela. Acrescentar não escala. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e espere a " +
+			"target, do mapa ao vivo e dos alertas de queda da campanha; os números de dias passados (grade, insights, financeiro, " +
+			"veiculações) não são reescritos, mesmo que a emissora tenha veiculação. Nunca sobe de nível. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e espere a " +
 			"pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
-		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarEmissorasCampanha) (Escalada, error) {
-			pl, err := planejarEmissorasDaCampanha(ctx, E, in)
-			if err != nil {
-				return Escalada{}, err
-			}
-			ha, err := haVeiculacaoNasRemovidas(ctx, E, pl)
-			if err != nil || !ha {
-				return Escalada{}, err
-			}
-			return Escalada{Nivel: Critico, Motivo: "A campanha já tem veiculação aprovada em emissora que sairia. Os números de dias passados (grade, insights, " +
-				"financeiro, veiculações) não são reescritos pela remoção, mas a emissora some da lista de emissoras-alvo, do mapa ao vivo e dos " +
-				"alertas de queda da campanha e o worker dela para; por envolver emissora com histórico, a remoção exige aprovação humana."}, nil
-		},
 		Recurso: func(in entradaEditarEmissorasCampanha) (string, *uuid.UUID) {
 			return campanhaDoRecurso("campaign", in.CampanhaID)
 		},
@@ -736,10 +722,9 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 				}
 				pv.Efeitos = append(pv.Efeitos, "Ao tirar, a emissora sai da lista de emissoras-alvo da campanha, da lista de PMM no target do cliente, do mapa ao vivo e de cobertura, "+
 					"dos indicadores da Visão Gerencial e dos alertas de queda desta campanha.")
-				// O preview também é o que o ramo crítico devolve: o texto tem de dizer a verdade nos dois casos.
 				if ha {
 					pv.Efeitos = append(pv.Efeitos, "A campanha já tem veiculação aprovada em emissora que sai. As veiculações e os números de dias passados (grade, insights, "+
-						"financeiro) NÃO são recalculados pela remoção; o que muda é o descrito acima. Por envolver emissora com histórico, a remoção exige aprovação humana pela tela.")
+						"financeiro) NÃO são recalculados pela remoção; o que muda é só o descrito acima, daqui para a frente.")
 				} else {
 					pv.Efeitos = append(pv.Efeitos, "Nenhuma emissora removida tem veiculação aprovada desta campanha, então hoje não há número passado a mudar.")
 				}
