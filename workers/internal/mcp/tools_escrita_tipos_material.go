@@ -82,6 +82,16 @@ func nomeDeTipoEmUso(ctx context.Context, L *Leitura, nome string, exceto uuid.U
 	return nil
 }
 
+// traduzirUnicidadeDeTipo: a violação de unicidade do banco (a corrida entre a
+// checagem de nome e a gravação) vira nome_duplicado, recusa de negócio que libera
+// o token; qualquer outro erro passa como veio (falha interna).
+func traduzirUnicidadeDeTipo(err error, nome string) error {
+	if violacaoDeUnicidade(err) {
+		return errRecusa(acoes.CodigoNomeDuplicado, fmt.Sprintf("já existe um tipo de material chamado %q", nome))
+	}
+	return err
+}
+
 // ── criar_tipo_material ─────────────────────────────────────────────────
 
 type entradaCriarTipoMaterial struct {
@@ -140,12 +150,14 @@ func escritaCriarTipoMaterial(cfg ConfigServidor) Escrita[entradaCriarTipoMateri
 			if err != nil {
 				return feito{}, err
 			}
+			// A mesma checagem do preview: o Executar também roda sem preview (a
+			// aprovação da Fatia 4), e o índice do banco não distingue só a caixa.
+			if err := nomeDeTipoEmUso(ctx, E.Leitura, nome, uuid.Nil); err != nil {
+				return feito{}, err
+			}
 			mt, err := E.Leitura.TiposMaterial.Create(ctx, catalog.CreateMaterialTypeInput{Name: nome, Color: cor, Description: ptrTexto(descricao)})
 			if err != nil {
-				if violacaoDeUnicidade(err) {
-					return feito{}, errRecusa(acoes.CodigoNomeDuplicado, fmt.Sprintf("já existe um tipo de material chamado %q", nome))
-				}
-				return feito{}, err
+				return feito{}, traduzirUnicidadeDeTipo(err, nome)
 			}
 			return feito{Resultado: saidaTipoMaterial{Tipo: tipoMaterialDe(*mt)}, Recurso: "material_type", RecursoID: &mt.ID}, nil
 		},
@@ -259,15 +271,17 @@ func escritaEditarTipoMaterial(cfg ConfigServidor) Escrita[entradaEditarTipoMate
 			if err != nil {
 				return feito{}, err
 			}
+			if pl.novo.Name != pl.atual.Name {
+				if err := nomeDeTipoEmUso(ctx, E.Leitura, pl.novo.Name, pl.id); err != nil {
+					return feito{}, err
+				}
+			}
 			mt, err := E.Leitura.TiposMaterial.Update(ctx, pl.id, pl.novo)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return feito{}, errNaoEncontrado("tipo de material")
 				}
-				if violacaoDeUnicidade(err) {
-					return feito{}, errRecusa(acoes.CodigoNomeDuplicado, fmt.Sprintf("já existe um tipo de material chamado %q", pl.novo.Name))
-				}
-				return feito{}, err
+				return feito{}, traduzirUnicidadeDeTipo(err, pl.novo.Name)
 			}
 			return feito{Resultado: saidaTipoMaterial{Tipo: tipoMaterialDe(*mt)}, Recurso: "material_type", RecursoID: &mt.ID}, nil
 		},
@@ -394,6 +408,47 @@ func planejarEdicaoDeMaterial(ctx context.Context, L *Leitura, in entradaEditarM
 	return pl, nil
 }
 
+// aplicarEdicaoDeMaterial grava a edição: título e roteiro PRIMEIRO, o tipo por
+// último — é o tipo que dispara o recat em segundo plano, e depois dele nada mais
+// pode falhar com o token já gasto e a recategorização em curso. Uma falha depois
+// de uma escrita feita NÃO é Recusa (a Recusa libera o token, e algo já foi
+// gravado): vira erro comum, que o motor trata como falha interna e audita.
+func aplicarEdicaoDeMaterial(ctx context.Context, E *Escritas, pl *edicaoDeMaterial) error {
+	escreveu := false
+	// falhou devolve o erro como veio se nada foi gravado ainda; depois de uma
+	// escrita, achata a Recusa (sem %w, para errors.As não a achar de novo).
+	falhou := func(err error) error {
+		if escreveu {
+			return fmt.Errorf("editar_material: falha depois de gravar parte da edição: %v", err)
+		}
+		return err
+	}
+	if pl.mudaTitulo {
+		if err := E.Acoes.Materiais.UpdateTitle(ctx, pl.id, pl.titulo); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return falhou(errNaoEncontrado("material"))
+			}
+			return falhou(err)
+		}
+		escreveu = true
+	}
+	if pl.mudaRoteiro {
+		if err := E.Acoes.Materiais.UpdateScript(ctx, pl.id, pl.roteiro); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return falhou(errNaoEncontrado("material"))
+			}
+			return falhou(err)
+		}
+		escreveu = true
+	}
+	if pl.mudaTipo {
+		if err := E.Acoes.TrocarTipoMaterial(ctx, pl.id, &pl.tipoNovo); err != nil {
+			return falhou(err)
+		}
+	}
+	return nil
+}
+
 const ressalvaRecatMaterial = "A recategorização das veiculações do material roda em segundo plano e leva até 30 s."
 
 func escritaEditarMaterial(cfg ConfigServidor) Escrita[entradaEditarMaterial] {
@@ -468,27 +523,8 @@ func escritaEditarMaterial(cfg ConfigServidor) Escrita[entradaEditarMaterial] {
 			if err != nil {
 				return feito{}, err
 			}
-			// O tipo primeiro: é o que pode recusar (FK) e o que dispara o recat.
-			if pl.mudaTipo {
-				if err := E.Acoes.TrocarTipoMaterial(ctx, pl.id, &pl.tipoNovo); err != nil {
-					return feito{}, err
-				}
-			}
-			if pl.mudaTitulo {
-				if err := E.Acoes.Materiais.UpdateTitle(ctx, pl.id, pl.titulo); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return feito{}, errNaoEncontrado("material")
-					}
-					return feito{}, err
-				}
-			}
-			if pl.mudaRoteiro {
-				if err := E.Acoes.Materiais.UpdateScript(ctx, pl.id, pl.roteiro); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return feito{}, errNaoEncontrado("material")
-					}
-					return feito{}, err
-				}
+			if err := aplicarEdicaoDeMaterial(ctx, E, pl); err != nil {
+				return feito{}, err
 			}
 			saida, err := lerMaterialCompleto(ctx, E.Leitura, pl.id)
 			if err != nil {

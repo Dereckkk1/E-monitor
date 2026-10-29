@@ -39,13 +39,6 @@ const (
 	tetoTelefoneCliente = 40
 )
 
-// ufsDoBrasil: as 27 unidades da federação.
-var ufsDoBrasil = map[string]bool{
-	"AC": true, "AL": true, "AP": true, "AM": true, "BA": true, "CE": true, "DF": true, "ES": true, "GO": true,
-	"MA": true, "MT": true, "MS": true, "MG": true, "PA": true, "PB": true, "PR": true, "PE": true, "PI": true,
-	"RJ": true, "RN": true, "RS": true, "RO": true, "RR": true, "SC": true, "SP": true, "SE": true, "TO": true,
-}
-
 // campoDoCliente descreve um campo editável do cadastro: como validar/normalizar
 // o que veio, como ler o valor atual e como gravá-lo no UpdateClientInput. A
 // ordem da tabela é a ordem do preview.
@@ -110,7 +103,7 @@ var camposDoCliente = []campoDoCliente{
 	{chave: "uf",
 		valida: func(s string) (string, error) {
 			uf := strings.ToUpper(aparar(s))
-			if uf != "" && !ufsDoBrasil[uf] {
+			if uf != "" && !acoes.UFValida(uf) {
 				return "", errEntrada("UF inválida: use a sigla de 2 letras (ex.: MG)")
 			}
 			return uf, nil
@@ -617,9 +610,9 @@ func escritaEditarPMMTarget(cfg ConfigServidor) Escrita[entradaEditarPMMTarget] 
 		},
 		Recurso: func(in entradaEditarPMMTarget) (string, *uuid.UUID) {
 			if id, err := uuid.Parse(in.ClienteID); err == nil {
-				return "client_station_pmm", &id
+				return "client", &id
 			}
-			return "client_station_pmm", nil
+			return "client", nil
 		},
 		Tela: func(_ *Escritas, in entradaEditarPMMTarget) *string {
 			if id, err := uuid.Parse(in.ClienteID); err == nil {
@@ -709,7 +702,7 @@ func escritaEditarPMMTarget(cfg ConfigServidor) Escrita[entradaEditarPMMTarget] 
 				}
 				linhas = append(linhas, linhaDePMM(pl.emissoras[e.StationID], alvo))
 			}
-			f := feito{Recurso: "client_station_pmm", RecursoID: &pl.cliente.ID, Ressalvas: []string{ressalvaPMMTarget}}
+			f := feito{Recurso: "client", RecursoID: &pl.cliente.ID, Ressalvas: []string{ressalvaPMMTarget}}
 			if len(linhas) > tetoLinhasPMMNaResposta {
 				f.Ressalvas = append(f.Ressalvas, fmt.Sprintf("mostrando %d de %d emissoras alteradas", tetoLinhasPMMNaResposta, len(linhas)))
 				linhas = linhas[:tetoLinhasPMMNaResposta]
@@ -724,10 +717,10 @@ func escritaEditarPMMTarget(cfg ConfigServidor) Escrita[entradaEditarPMMTarget] 
 
 type entradaEditarEmissora struct {
 	EmissoraID    string   `json:"emissora_id" jsonschema:"Id (uuid) da emissora, vindo de buscar_emissoras. Nunca invente: pergunte."`
-	Nome          *string  `json:"nome,omitempty" jsonschema:"Novo nome da emissora (não pode ficar vazio). Omita para manter."`
-	FrequenciaMHz *float64 `json:"frequencia_mhz,omitempty" jsonschema:"Nova frequência: MHz para FM (ex.: 99.9), kHz para AM (ex.: 1180). Omita para manter."`
-	Cidade        *string  `json:"cidade,omitempty" jsonschema:"Nova cidade (não pode ficar vazia); a coordenada do mapa é refeita pela cidade+UF. Omita para manter."`
-	UF            *string  `json:"uf,omitempty" jsonschema:"Nova sigla de estado (2 letras). Omita para manter."`
+	Nome          *string  `json:"nome,omitempty" jsonschema:"Novo nome da emissora (não pode ficar vazio; até 200 caracteres). Omita para manter."`
+	FrequenciaMHz *float64 `json:"frequencia_mhz,omitempty" jsonschema:"Nova frequência na unidade da banda da emissora: MHz para FM, de 76 a 108 (ex.: 99.9); kHz para AM, de 530 a 1700 (ex.: 1180). Omita para manter."`
+	Cidade        *string  `json:"cidade,omitempty" jsonschema:"Nova cidade (não pode ficar vazia; até 200 caracteres); a coordenada do mapa é refeita pela cidade+UF. Omita para manter."`
+	UF            *string  `json:"uf,omitempty" jsonschema:"Nova sigla de estado (uma das 27 UFs, ex.: MG). Omita para manter."`
 	PMM           *float64 `json:"pmm,omitempty" jsonschema:"Novo PMM geral da emissora (audiência média por inserção, de 0 em diante). Omita para manter; não há como apagar."`
 	CampoConfirmacao
 }
@@ -756,11 +749,6 @@ func planejarEdicaoDeEmissora(ctx context.Context, L *Leitura, in entradaEditarE
 	if in.Nome == nil && in.FrequenciaMHz == nil && in.Cidade == nil && in.UF == nil && in.PMM == nil {
 		return nil, errEntrada("informe ao menos um campo a alterar (nome, frequencia_mhz, cidade, uf ou pmm)")
 	}
-	val, err := acoes.ValidarCadastroEmissora(acoes.CadastroEmissora{
-		Nome: in.Nome, FrequenciaMHz: in.FrequenciaMHz, Cidade: in.Cidade, UF: in.UF, PMM: in.PMM})
-	if err != nil {
-		return nil, err
-	}
 	st, err := L.Emissoras.Get(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errNaoEncontrado("emissora")
@@ -768,7 +756,14 @@ func planejarEdicaoDeEmissora(ctx context.Context, L *Leitura, in entradaEditarE
 	if err != nil {
 		return nil, err
 	}
-	pl := &edicaoDeEmissora{id: id, atual: st}
+	// A MESMA validação da ação, com a banda da emissora: o dial confere com a
+	// faixa dela (FM em MHz, AM em kHz), a UF é uma das 27 e nome/cidade têm teto.
+	cad := acoes.CadastroEmissora{Nome: in.Nome, FrequenciaMHz: in.FrequenciaMHz, Cidade: in.Cidade, UF: in.UF, PMM: in.PMM, Banda: st.Band}
+	val, err := acoes.ValidarCadastroEmissora(cad)
+	if err != nil {
+		return nil, err
+	}
+	pl := &edicaoDeEmissora{id: id, atual: st, enviar: acoes.CadastroEmissora{Banda: st.Band}}
 	if val.Name != nil && *val.Name != st.Name {
 		pl.mudaNome, pl.enviar.Nome = true, val.Name
 		pl.mudancas = append(pl.mudancas, mudanca{Campo: "nome", De: st.Name, Para: *val.Name})
