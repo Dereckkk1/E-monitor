@@ -321,3 +321,79 @@ func TestApagarAjuste_ApagaERevertePraRegra(t *testing.T) {
 	// Apagar de novo (não existe mais) não é erro.
 	require.NoError(t, c.srv.ApagarAjuste(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10")))
 }
+
+// ───────────────────────────── F3-8: defeitos da rota corrigidos na extração ─────────────────────────────
+
+// (a) Editar/apagar uma regra exige que ela seja DA campanha informada. Antes a
+// rota apagava/trocava a regra de outra campanha e recategorizava a errada.
+func (c *cenario) outraCampanhaComRegra(t *testing.T) (campanha, regra uuid.UUID) {
+	t.Helper()
+	campanha = mcptest.Campanha(t, c.ctx, c.pool, c.cliente, "Outra campanha", "2026-06-01", "2026-06-30", c.emissora)
+	regra = mcptest.Regra(t, c.ctx, c.pool, campanha, c.tipoA, c.emissora, "2026-06-01", "2026-06-30", 127, "08:00", "12:00", 1)
+	return campanha, regra
+}
+
+func TestEditarRegra_DeOutraCampanhaEhNaoEncontradoESemEfeito(t *testing.T) {
+	c := novoCenario(t)
+	_, regraAlheia := c.outraCampanhaComRegra(t)
+
+	err := c.srv.EditarRegra(c.ctx, c.campanha, regraAlheia, c.entradaRegra(c.tipoA, "14:00", "18:00", 9))
+
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	r, gerr := c.srv.Regras.Get(c.ctx, regraAlheia)
+	require.NoError(t, gerr)
+	require.Equal(t, "08:00", r.TimeStart, "a regra da outra campanha ficou como estava")
+	require.EqualValues(t, 1, r.PlaysPerDay)
+}
+
+func TestApagarRegra_DeOutraCampanhaEhNaoEncontradoESemEfeito(t *testing.T) {
+	c := novoCenario(t)
+	_, regraAlheia := c.outraCampanhaComRegra(t)
+
+	err := c.srv.ApagarRegra(c.ctx, c.campanha, regraAlheia)
+
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	_, gerr := c.srv.Regras.Get(c.ctx, regraAlheia)
+	require.NoError(t, gerr, "a regra da outra campanha continua lá")
+}
+
+func TestEditarEApagarRegra_Inexistente_NaoEncontrado(t *testing.T) {
+	c := novoCenario(t)
+
+	err := c.srv.EditarRegra(c.ctx, c.campanha, uuid.New(), c.entradaRegra(c.tipoA, "08:00", "12:00", 1))
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+
+	err = c.srv.ApagarRegra(c.ctx, c.campanha, uuid.New())
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+}
+
+// Recusada a ação, NENHUMA recategorização é disparada.
+func TestEditarEApagarRegra_RecusadaNaoDisparaRecat(t *testing.T) {
+	c := novoCenario(t)
+	_, regraAlheia := c.outraCampanhaComRegra(t)
+	disparos := 0
+	c.srv.EmSegundoPlano = func(f func()) { disparos++; f() }
+
+	_ = c.srv.EditarRegra(c.ctx, c.campanha, regraAlheia, c.entradaRegra(c.tipoA, "14:00", "18:00", 9))
+	_ = c.srv.ApagarRegra(c.ctx, c.campanha, regraAlheia)
+
+	require.Zero(t, disparos)
+}
+
+// (b) Trocar o TIPO da regra recategoriza também o tipo antigo: a tocada do
+// material do tipo A que a regra cobria deixa de ter regra e vira bonus. Antes
+// só o tipo novo era recalculado e a tocada ficava in_slot (cobrança errada por
+// até 48 h, até o projrecon curar).
+func TestEditarRegra_TrocaDeTipoRecategorizaOTipoAntigo(t *testing.T) {
+	c := novoCenario(t)
+	regra, err := c.srv.CriarRegra(c.ctx, c.campanha, c.entradaRegra(c.tipoA, "08:00", "12:00", 1))
+	require.NoError(t, err)
+	c.exigeCategoria(t, "in_slot")
+
+	require.NoError(t, c.srv.EditarRegra(c.ctx, c.campanha, regra.ID, c.entradaRegra(c.tipoB, "08:00", "12:00", 1)))
+
+	atual, gerr := c.srv.Regras.Get(c.ctx, regra.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, c.tipoB, atual.TypeID)
+	c.exigeCategoria(t, "bonus") // o tipo A ficou sem regra
+}

@@ -713,3 +713,19 @@ func (dr *DistributionRules) RecategorizeForOverride(ctx context.Context,
 	}
 	return tx.Commit(ctx)
 }
+
+// RecategorizeForCampaignType re-classifica as projeções de UM tipo na campanha
+// inteira (todas as emissoras, período inteiro da campanha). É o que a edição de
+// regra que TROCA o tipo usa para curar o tipo ANTIGO: o RecategorizeForRule só
+// enxerga o tipo atual da regra, e as células do tipo de onde a regra acabou de
+// sair ficavam com a categoria velha (cobrança errada até o projrecon curar, em
+// até 48 h).
+func (dr *DistributionRules) RecategorizeForCampaignType(ctx context.Context, campaignID, typeID uuid.UUID) error {
+	var start, end time.Time
+	if err := dr.pool.QueryRow(ctx,
+		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&start, &end); err != nil {
+		return err
+	}
+	return dr.recategorizeScope(ctx, campaignID, &typeID, nil, start, end)
+}
