@@ -665,3 +665,37 @@ func TestEscrita_AuditoriaDaFalhaForaDoArNaoMudaARespostaNemDerruba(t *testing.T
 	texto := chamaErro(t, s, "escreve_livre", map[string]any{"valor": "x"})
 	require.Contains(t, texto, "[interno]")
 }
+
+// entradaComSegredo tem um campo cujo nome parece segredo: a máscara é
+// aplicada AO GRAVAR (o audit_log nunca guarda o valor), não só ao ler.
+type entradaComSegredo struct {
+	CampoConfirmacao
+	Valor string `json:"valor" jsonschema:"Um valor qualquer"`
+	Senha string `json:"senha" jsonschema:"Um segredo de teste"`
+}
+
+func TestEscrita_AuditoriaMascaraSegredosDosArgsAoGravarMasNaoOTokenId(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	d := Escrita[entradaComSegredo]{
+		Nome: "escreve_segredo", Descricao: "x", Nivel: Livre,
+		Executar: func(context.Context, *Escritas, *Principal, entradaComSegredo) (feito, error) {
+			return feito{Resultado: map[string]any{}, Recurso: "teste"}, nil
+		},
+	}
+	cfg := ConfigServidor{Versao: "teste", Escritas: b.E}
+	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
+	ferramentaEscrita(s, cfg, principalTeste, d)
+
+	chama(t, s, "escreve_segredo", map[string]any{"valor": "visível", "senha": "hunter2"})
+
+	var bruto string
+	var meta map[string]any
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT metadata::text, metadata FROM audit_log WHERE action = 'mcp.escrita.escreve_segredo'`).Scan(&bruto, &meta))
+	require.NotContains(t, bruto, "hunter2", "o segredo nunca chega ao audit_log")
+	args := meta["args"].(map[string]any)
+	require.Equal(t, "[omitido]", args["senha"])
+	require.Equal(t, "visível", args["valor"])
+	require.Equal(t, principalTeste.TokenID.String(), meta["mcp"].(map[string]any)["token_id"],
+		"a chave mcp.token_id NÃO é mascarada na gravação (só os args)")
+}

@@ -353,8 +353,9 @@ func auditar(ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal,
 	meta := map[string]any{
 		"tool":  tool,
 		"nivel": nivel.String(),
-		"args":  argsParaAuditoria(args),
-		"mcp":   map[string]any{"token_id": p.TokenID.String()},
+		// Só os args são mascarados na gravação; a chave "mcp" (token_id) não.
+		"args": auditoria.OmitirSegredos(argsParaAuditoria(args)),
+		"mcp":  map[string]any{"token_id": p.TokenID.String()},
 	}
 	for k, v := range extra {
 		meta[k] = v
