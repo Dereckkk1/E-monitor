@@ -2,6 +2,7 @@ package acoes
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,15 +35,37 @@ type AvisoHub interface {
 
 var _ AvisoHub = (*hub.Client)(nil)
 
+// RepositorioAjustes é o que DefinirAjuste/ApagarAjuste pedem ao banco
+// (*catalog.DistributionOverrides satisfaz). Entra por interface porque o handler
+// HTTP dos ajustes sempre aceitou um repositório substituível nos testes.
+type RepositorioAjustes interface {
+	Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error
+	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+}
+
+// RecategorizadorDeCelula refaz a categoria de UMA célula-dia depois de mexer
+// num ajuste (*catalog.DistributionRules satisfaz).
+type RecategorizadorDeCelula interface {
+	RecategorizeForOverride(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+}
+
+var (
+	_ RepositorioAjustes      = (*catalog.DistributionOverrides)(nil)
+	_ RecategorizadorDeCelula = (*catalog.DistributionRules)(nil)
+)
+
 // Servico reúne os repositórios e os colaboradores das ações (F3-7).
 type Servico struct {
 	Campanhas         *catalog.Campaigns
 	MateriaisCampanha *catalog.CampaignMaterials
 	Materiais         *catalog.Materials
 	Regras            *catalog.DistributionRules
-	Ajustes           *catalog.DistributionOverrides
-	Clientes          *catalog.Clients
-	Emissoras         *catalog.Stations
+	Ajustes           RepositorioAjustes
+	// RecatCelula recategoriza a célula-dia dos ajustes. nil = não recategoriza
+	// (o ajuste é gravado igual — a rota sempre foi nil-safe aqui).
+	RecatCelula RecategorizadorDeCelula
+	Clientes    *catalog.Clients
+	Emissoras   *catalog.Stations
 
 	// Supervisor pode ser nil: mesma regra dos handlers — sem supervisor, a
 	// ação só grava no banco.
@@ -61,12 +84,14 @@ type Servico struct {
 
 // NovoServico monta o Servico sobre o pool, com os repositórios que as telas usam.
 func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *catalog.Ligacoes) *Servico {
+	regras := catalog.NewDistributionRules(pool)
 	return &Servico{
 		Campanhas:         catalog.NewCampaigns(pool),
 		MateriaisCampanha: catalog.NewCampaignMaterials(pool),
 		Materiais:         catalog.NewMaterials(pool),
-		Regras:            catalog.NewDistributionRules(pool),
+		Regras:            regras,
 		Ajustes:           catalog.NewDistributionOverrides(pool),
+		RecatCelula:       regras,
 		Clientes:          catalog.NewClients(pool),
 		Emissoras:         catalog.NewStations(pool),
 		Supervisor:        sup,

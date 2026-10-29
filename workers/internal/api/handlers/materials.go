@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/events"
@@ -271,7 +272,7 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			recordRecatFailure("material_type_change", h.DistRules.RecategorizeForMaterial(ctx, id))
+			acoes.RegistrarFalhaRecat("material_type_change", h.DistRules.RecategorizeForMaterial(ctx, id))
 		}()
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -26,6 +26,10 @@ type Recusa struct {
 	Mensagem string
 	// Codigo é estável e legível por máquina (ver as constantes Codigo*).
 	Codigo string
+	// Dados é opcional: o que o chamador estruturado (o handler HTTP) precisa
+	// para montar a resposta sem reler a Mensagem — por exemplo, `existente`
+	// ({id, nome}) do cnpj_duplicado. Nunca entra na Mensagem nem no erro do MCP.
+	Dados map[string]any
 }
 
 func (r *Recusa) Error() string {
