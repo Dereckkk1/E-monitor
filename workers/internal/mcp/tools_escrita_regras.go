@@ -15,6 +15,7 @@ import (
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/categorizer"
 )
 
 // Escritas das regras de distribuição (Lote C, Task 16): criar, editar e apagar.
@@ -132,8 +133,12 @@ func estadoDe(r *catalog.DistributionRule) estadoDaRegra {
 }
 
 func (e estadoDaRegra) paraEntrada() acoes.EntradaRegra {
+	emissoras := slices.Clone(e.emissoras)
+	if emissoras == nil {
+		emissoras = []uuid.UUID{} // as ações recusam nil; vazio é o que uma regra legada sem emissora tem
+	}
 	return acoes.EntradaRegra{
-		TipoID: e.tipo, EmissoraIDs: slices.Clone(e.emissoras), MaterialIDs: slices.Clone(e.materiais), Nome: e.nome,
+		TipoID: e.tipo, EmissoraIDs: emissoras, MaterialIDs: slices.Clone(e.materiais), Nome: e.nome,
 		Inicio: e.inicio, Fim: e.fim, MascaraDias: e.mascara, HoraInicio: e.horaIni, HoraFim: e.horaFim, InsercoesPorDia: e.porDia,
 	}
 }
@@ -155,7 +160,7 @@ type planoDeRegra struct {
 // emissoras e materiais. Na EDIÇÃO, o que já estava na regra e não mudou é mantido
 // mesmo que hoje esteja fora da campanha (a tela faz igual: o submit preserva o
 // escopo gravado), com uma ressalva; só o que a chamada ACRESCENTA ou muda é conferido.
-func conferirRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, atual *catalog.DistributionRule, n estadoDaRegra) (*planoDeRegra, error) {
+func conferirRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, atual *catalog.DistributionRule, n estadoDaRegra, enviou limitesEnviados) (*planoDeRegra, error) {
 	L := E.Leitura
 	tipo, err := L.TiposMaterial.Get(ctx, n.tipo)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -171,12 +176,20 @@ func conferirRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, atu
 	pl := &planoDeRegra{camp: camp, atual: atual, nova: n, tipo: tipo, tipos: tipos}
 
 	// Vigência dentro do período da campanha.
-	if n.inicio.Before(camp.StartDate) || n.fim.After(camp.EndDate) {
+	foraInicio, foraFim := n.inicio.Before(camp.StartDate), n.fim.After(camp.EndDate)
+	if foraInicio || foraFim {
 		mudou := atual == nil || dia(n.inicio) != dia(atual.StartDate) || dia(n.fim) != dia(atual.EndDate)
 		if mudou {
+			var quais []string
+			if foraInicio {
+				quais = append(quais, limiteForaDaCampanha("inicio", n.inicio, "é anterior ao início da campanha", camp.StartDate, enviou.inicio))
+			}
+			if foraFim {
+				quais = append(quais, limiteForaDaCampanha("fim", n.fim, "é posterior ao fim da campanha", camp.EndDate, enviou.fim))
+			}
 			return nil, errEntrada(fmt.Sprintf(
-				"a vigência da regra (%s a %s) sai do período da campanha (%s a %s): a regra só pode valer dentro dele (a tela restringe as datas ao período, e fora dele a grade passaria a cobrar meta em dias sem campanha); para valer fora, altere antes as datas da campanha (editar_campanha)",
-				dia(n.inicio), dia(n.fim), dia(camp.StartDate), dia(camp.EndDate)))
+				"a vigência da regra (%s a %s) sai do período da campanha (%s a %s): %s. A regra só pode valer dentro do período (a tela restringe as datas, e fora dele a grade passaria a cobrar meta em dias sem campanha); para valer fora, altere antes as datas da campanha (editar_campanha)",
+				dia(n.inicio), dia(n.fim), dia(camp.StartDate), dia(camp.EndDate), strings.Join(quais, "; ")))
 		}
 		pl.ressalvas = append(pl.ressalvas, fmt.Sprintf(
 			"A vigência desta regra (%s a %s) já ultrapassa o período da campanha (%s a %s); ficou como estava.",
@@ -210,6 +223,9 @@ func conferirRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, atu
 	}
 	if pl.emissoras, err = nomesEmissoras(ctx, L, todas); err != nil {
 		return nil, err
+	}
+	if len(n.emissoras) == 0 {
+		pl.ressalvas = append(pl.ressalvas, "A regra não tem nenhuma emissora (regra legada): ela não vale para nenhuma. Acrescente emissoras com adicionar_emissoras ou apague-a com apagar_regra_distribuicao.")
 	}
 
 	// Materiais (escopo carve-out): do tipo e vinculados à campanha.
@@ -261,6 +277,20 @@ func conferirRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, atu
 		}
 	}
 	return pl, nil
+}
+
+// limitesEnviados diz quais limites da vigência vieram NA chamada (na criação, os dois).
+// Numa edição, o limite que não veio é o valor guardado na regra.
+type limitesEnviados struct{ inicio, fim bool }
+
+// limiteForaDaCampanha nomeia o limite que está fora do período e, se a chamada não o
+// enviou, avisa que é o valor guardado na regra (não um erro de quem chamou).
+func limiteForaDaCampanha(campo string, valor time.Time, porque string, limite time.Time, enviado bool) string {
+	s := fmt.Sprintf("%s (%s) %s (%s)", campo, dia(valor), porque, dia(limite))
+	if !enviado {
+		s += fmt.Sprintf(" — é o valor que já está guardado na regra (esta chamada não enviou %s); envie %s dentro do período para corrigir", campo, campo)
+	}
+	return s
 }
 
 // nomeDaRegra: o nome, ou o id quando não tem nome.
@@ -323,15 +353,19 @@ func ressalvaDeSoma(ctx context.Context, E *Escritas, pl *planoDeRegra) (string,
 
 // ── Escalada (F3-4) ─────────────────────────────────────────────────────
 
-// vigenciaDaRegra é uma vigência para a escalada: a antiga ou a nova.
+// vigenciaDaRegra é uma vigência para a escalada, com a máscara de dias da MESMA versão
+// da regra (a antiga ou a nova): um dia que a máscara não cobre não tem meta.
 type vigenciaDaRegra struct {
 	rotulo  string
 	de, ate time.Time
+	mascara int16
 }
 
 // escalaDeRegra aplica as duas condições de F3-4: (a) a campanha tem veiculação
 // aprovada do(s) tipo(s) que o recat varre (tipos nil = todos); (b) alguma
-// vigência, recortada ao período da campanha, contém dia anterior a hoje (SP).
+// vigência, recortada ao período da campanha, contém dia anterior a hoje (SP) que
+// a máscara de dias da semana dela cobre — da regra antiga ou da nova: num dia que
+// nenhuma das duas cobre não há meta, e o déficit não pode mudar.
 func escalaDeRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, tipos []uuid.UUID, nomesDosTipos string, vigencias []vigenciaDaRegra) (Escalada, error) {
 	var motivos []string
 	hoje := hojeSP(E.agora())
@@ -347,10 +381,18 @@ func escalaDeRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, tip
 			continue // fora do período da campanha: nada a recortar
 		}
 		pde, pate, ha := diasPassadosDoPeriodo(de, ate, hoje)
-		if ha {
+		if !ha {
+			continue
+		}
+		// Basta olhar os 7 primeiros dias: a máscara se repete a cada semana.
+		for d, n := pde, 0; !d.After(pate) && n < 7; d, n = d.AddDate(0, 0, 1), n+1 {
+			if !categorizer.RuleCoversDay(categorizer.Rule{StartDate: pde, EndDate: pate, WeekdayMask: v.mascara}, d) {
+				continue
+			}
 			motivos = append(motivos, fmt.Sprintf(
-				"A vigência %s da regra (%s a %s, no período da campanha) inclui dias já passados (%s a %s; hoje é %s em America/Sao_Paulo): mudar a meta de um dia passado muda o déficit e o \"esperado\" que o cliente já viu, mesmo sem nenhuma veiculação.",
-				v.rotulo, dia(de), dia(ate), dia(pde), dia(pate), dia(hoje)))
+				"A vigência %s da regra (%s a %s, no período da campanha; dias da semana: %s) inclui dias já passados em que ela vale (%s a %s, a partir de %s; hoje é %s em America/Sao_Paulo): mudar a meta de um dia passado muda o déficit e o \"esperado\" que o cliente já viu, mesmo sem nenhuma veiculação.",
+				v.rotulo, dia(de), dia(ate), resumoDeDias(v.mascara), dia(pde), dia(pate), dia(d), dia(hoje)))
+			break
 		}
 	}
 	cid := camp.ID
@@ -369,16 +411,17 @@ func escalaDeRegra(ctx context.Context, E *Escritas, camp *catalog.Campaign, tip
 	return Escalada{Nivel: Critico, Motivo: strings.Join(motivos, " ")}, nil
 }
 
-// vigenciasParaEscalar: a antiga (se houver) e a nova, sem repetir quando iguais.
+// vigenciasParaEscalar: a antiga (se houver) e a nova, sem repetir quando iguais
+// (mesmas datas e mesma máscara).
 func vigenciasParaEscalar(atual *catalog.DistributionRule, nova estadoDaRegra) []vigenciaDaRegra {
 	out := []vigenciaDaRegra{}
 	if atual != nil {
-		out = append(out, vigenciaDaRegra{rotulo: "atual", de: atual.StartDate, ate: atual.EndDate})
-		if dia(atual.StartDate) == dia(nova.inicio) && dia(atual.EndDate) == dia(nova.fim) {
+		out = append(out, vigenciaDaRegra{rotulo: "atual", de: atual.StartDate, ate: atual.EndDate, mascara: atual.WeekdayMask})
+		if dia(atual.StartDate) == dia(nova.inicio) && dia(atual.EndDate) == dia(nova.fim) && atual.WeekdayMask == nova.mascara {
 			return out
 		}
 	}
-	return append(out, vigenciaDaRegra{rotulo: "nova", de: nova.inicio, ate: nova.fim})
+	return append(out, vigenciaDaRegra{rotulo: "nova", de: nova.inicio, ate: nova.fim, mascara: nova.mascara})
 }
 
 // ── Resultado (o item de listar_regras_distribuicao) ────────────────────
@@ -489,7 +532,7 @@ func planejarCriacaoDeRegra(ctx context.Context, E *Escritas, in entradaCriarReg
 	pl, err := conferirRegra(ctx, E, camp, nil, estadoDaRegra{
 		tipo: tid, emissoras: emissoras, materiais: materiais, nome: nome, inicio: ini, fim: fim,
 		mascara: mascara, horaIni: hIni, horaFim: hFim, porDia: int16(in.InsercoesPorDia),
-	})
+	}, limitesEnviados{inicio: true, fim: true})
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +559,7 @@ func escritaCriarRegra(cfg ConfigServidor) Escrita[entradaCriarRegra] {
 			"listar_regras_distribuicao); (2) um ajuste do dia (definir_override) substitui as regras daquela célula; (3) a criação " +
 			"recategoriza em segundo plano (até 30 s) as veiculações do tipo na campanha inteira; (4) a regra por TIPO cobre qualquer material " +
 			"do tipo, então ela só é cumprida se houver material do tipo vinculado (vincular_material). Sobe para crítico quando a campanha já " +
-			"tem veiculação aprovada do tipo OU a vigência inclui dia que já passou (em campanha em andamento, comece a vigência hoje ou depois " +
+			"tem veiculação aprovada do tipo OU a vigência inclui dia que já passou e que os dias da semana da regra cobrem (em campanha em andamento, comece a vigência hoje ou depois " +
 			"para não escalar); nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: " +
 			"pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
@@ -683,7 +726,9 @@ func planejarEdicaoDeRegra(ctx context.Context, E *Escritas, in entradaEditarReg
 	if n.emissoras, err = mesclarLista("emissoras", atual.StationIDs, in.AdicionarEmissoras, in.RemoverEmissoras, tetoEmissorasPorChamada); err != nil {
 		return nil, err
 	}
-	if len(n.emissoras) == 0 {
+	// Regra legada que JÁ não tem emissora (station_ids = {}) segue editável no resto; só
+	// se recusa quando a chamada mexe nas emissoras e a regra termina sem nenhuma.
+	if len(n.emissoras) == 0 && (len(in.AdicionarEmissoras) > 0 || len(in.RemoverEmissoras) > 0) {
 		return nil, errEntrada("a regra ficaria sem nenhuma emissora (não valeria para nenhuma); para tirá-la use apagar_regra_distribuicao")
 	}
 	switch {
@@ -704,7 +749,7 @@ func planejarEdicaoDeRegra(ctx context.Context, E *Escritas, in entradaEditarReg
 		}
 	}
 
-	pl, err := conferirRegra(ctx, E, camp, atual, n)
+	pl, err := conferirRegra(ctx, E, camp, atual, n, limitesEnviados{inicio: in.Inicio != nil, fim: in.Fim != nil})
 	if err != nil {
 		return nil, err
 	}
@@ -822,13 +867,15 @@ func escritaEditarRegra(cfg ConfigServidor) Escrita[entradaEditarRegra] {
 			"resto é preservado). Dá para mudar o tipo, o nome, a vigência (inicio/fim), os dias (dias: a lista inteira, por nome), a faixa " +
 			"horária, as inserções por dia, acrescentar/tirar emissoras (adicionar_emissoras/remover_emissoras) e o escopo por material " +
 			"(adicionar_materiais/remover_materiais/todos_os_materiais_do_tipo). Pegue o regra_id em listar_regras_distribuicao — a regra precisa " +
-			"ser desta campanha. As armadilhas: (1) a edição recategoriza em segundo plano (até 30 s) as veiculações do tipo na campanha inteira — " +
-			"e do tipo ANTIGO também, se o tipo mudou; (2) mudar a vigência, os dias, a faixa ou a meta de dias que já passaram muda o déficit e " +
-			"a cobrança que o cliente já viu; (3) tirar o último material do escopo transformaria a regra em geral (por isso é recusado: use " +
-			"todos_os_materiais_do_tipo); (4) a meta de uma célula é a soma das regras que valem no dia. Sobe para crítico quando a campanha " +
-			"já tem veiculação aprovada do(s) tipo(s) da regra (o novo e o antigo) OU a vigência (a antiga ou a nova, no período da campanha) " +
-			"inclui dia que já passou; nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente " +
-			"ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
+			"ser desta campanha. As armadilhas: (1) QUALQUER edição — até uma só do nome — regrava a regra e refaz a recategorização em segundo " +
+			"plano (até 30 s) das veiculações do tipo na campanha inteira (e do tipo ANTIGO também, se o tipo mudou), por isso escala igual: " +
+			"numa campanha com dias passados ou veiculações, renomear também sobe para crítico; (2) mudar a vigência, os dias, a faixa ou a " +
+			"meta de dias que já passaram muda o déficit e a cobrança que o cliente já viu; (3) tirar o último material do escopo transformaria " +
+			"a regra em geral (por isso é recusado: use todos_os_materiais_do_tipo); (4) a meta de uma célula é a soma das regras que valem no " +
+			"dia. Sobe para crítico quando a campanha já tem veiculação aprovada do(s) tipo(s) da regra (o novo e o antigo) OU a vigência (a " +
+			"antiga ou a nova, no período da campanha) inclui dia que já passou e que os dias da semana da regra (a antiga ou a nova) cobrem; " +
+			"nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o " +
+			"preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarRegra) (Escalada, error) {
 			pl, err := planejarEdicaoDeRegra(ctx, E, in)
@@ -953,7 +1000,7 @@ func escritaApagarRegra(cfg ConfigServidor) Escrita[entradaApagarRegra] {
 			"regra gerava some dos dias dela (o déficit deles cai; se era a única regra da célula, a meta vira 0 e toda tocada passa a ser " +
 			"bonus); (2) como a regra apagada deixa de dizer o escopo, a campanha INTEIRA (todos os tipos e emissoras) é recategorizada em " +
 			"segundo plano (até 30 s); (3) um ajuste do dia (listar_overrides) que cobria a regra continua valendo. Sobe para crítico quando a " +
-			"campanha já tem qualquer veiculação aprovada OU a vigência da regra (no período da campanha) inclui dia que já passou; nesse caso " +
+			"campanha já tem qualquer veiculação aprovada OU a vigência da regra (no período da campanha) inclui dia que já passou e que os dias da semana dela cobrem; nesse caso " +
 			"nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e " +
 			"espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
@@ -962,7 +1009,7 @@ func escritaApagarRegra(cfg ConfigServidor) Escrita[entradaApagarRegra] {
 			if err != nil {
 				return Escalada{}, err
 			}
-			return escalaDeRegra(ctx, E, pl.camp, nil, "de algum tipo", []vigenciaDaRegra{{rotulo: "atual", de: pl.regra.StartDate, ate: pl.regra.EndDate}})
+			return escalaDeRegra(ctx, E, pl.camp, nil, "de algum tipo", []vigenciaDaRegra{{rotulo: "atual", de: pl.regra.StartDate, ate: pl.regra.EndDate, mascara: pl.regra.WeekdayMask}})
 		},
 		Recurso: func(in entradaApagarRegra) (string, *uuid.UUID) { return regraDoRecurso(in.RegraID) },
 		Tela:    func(_ *Escritas, in entradaApagarRegra) *string { return linkDaCampanha(cfg, in.CampanhaID) },
