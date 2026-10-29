@@ -38,22 +38,31 @@ func (cm *CampaignMaterials) Link(ctx context.Context, campaignID, materialID uu
 	return err
 }
 
-func (cm *CampaignMaterials) Unlink(ctx context.Context, campaignID, materialID uuid.UUID) error {
-	_, err := cm.pool.Exec(ctx,
+// Unlink remove o vínculo e devolve quantas linhas apagou (0 = não existia).
+func (cm *CampaignMaterials) Unlink(ctx context.Context, campaignID, materialID uuid.UUID) (int64, error) {
+	tag, err := cm.pool.Exec(ctx,
 		`DELETE FROM campaign_materials WHERE campaign_id = $1 AND material_id = $2`,
 		campaignID, materialID)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
-func (cm *CampaignMaterials) UpdateStations(ctx context.Context, campaignID, materialID uuid.UUID, stations []uuid.UUID) error {
+// UpdateStations troca as emissoras do vínculo e devolve quantas linhas tocou
+// (0 = o vínculo não existe).
+func (cm *CampaignMaterials) UpdateStations(ctx context.Context, campaignID, materialID uuid.UUID, stations []uuid.UUID) (int64, error) {
 	if stations == nil {
 		stations = []uuid.UUID{}
 	}
-	_, err := cm.pool.Exec(ctx,
+	tag, err := cm.pool.Exec(ctx,
 		`UPDATE campaign_materials SET target_stations = $3
 		 WHERE campaign_id = $1 AND material_id = $2`,
 		campaignID, materialID, stations)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (cm *CampaignMaterials) ListByCampaign(ctx context.Context, campaignID uuid.UUID) ([]CampaignMaterial, error) {

@@ -42,22 +42,37 @@ func (s *Servico) VincularMaterial(ctx context.Context, campanhaID, materialID u
 	return nil
 }
 
+// vinculoInexistente é a recusa do no-op: o vínculo material↔campanha não existe.
+func vinculoInexistente() *Recusa {
+	return &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "vínculo do material com a campanha não encontrado", Causa: ErrAlvoInexistente}
+}
+
 // TrocarEmissorasMaterial substitui as emissoras do vínculo e recarrega a
-// campanha. Vínculo inexistente não é erro (o UPDATE não acha linha): a rota
-// sempre respondeu 204.
+// campanha. Sem vínculo (0 linhas tocadas) não há o que trocar: recusa com
+// nao_encontrado + ErrAlvoInexistente e NÃO recarrega (reload reinicia os
+// workers da campanha à toa). A rota HTTP mapeia a marca para 204, como sempre.
 func (s *Servico) TrocarEmissorasMaterial(ctx context.Context, campanhaID, materialID uuid.UUID, emissoras []uuid.UUID) error {
-	if err := s.MateriaisCampanha.UpdateStations(ctx, campanhaID, materialID, emissoras); err != nil {
+	n, err := s.MateriaisCampanha.UpdateStations(ctx, campanhaID, materialID, emissoras)
+	if err != nil {
 		return recusaDoBanco(err)
+	}
+	if n == 0 {
+		return vinculoInexistente()
 	}
 	s.recarregar(campanhaID, "update_stations")
 	return nil
 }
 
-// DesvincularMaterial remove o vínculo e recarrega a campanha. Vínculo
-// inexistente não é erro.
+// DesvincularMaterial remove o vínculo e recarrega a campanha. Sem vínculo (0
+// linhas apagadas): recusa com nao_encontrado + ErrAlvoInexistente, sem
+// recarregar; a rota HTTP mapeia a marca para 204 (idempotente).
 func (s *Servico) DesvincularMaterial(ctx context.Context, campanhaID, materialID uuid.UUID) error {
-	if err := s.MateriaisCampanha.Unlink(ctx, campanhaID, materialID); err != nil {
+	n, err := s.MateriaisCampanha.Unlink(ctx, campanhaID, materialID)
+	if err != nil {
 		return err
+	}
+	if n == 0 {
+		return vinculoInexistente()
 	}
 	s.recarregar(campanhaID, "unlink")
 	return nil
@@ -70,15 +85,20 @@ func (s *Servico) DesvincularMaterial(ctx context.Context, campanhaID, materialI
 // continuam 'bonus' ("bonificação sem meta" no resumo diário). Best-effort,
 // mesmo padrão das regras.
 //
-// Material inexistente não é erro (o UPDATE não acha linha; a rota sempre
-// respondeu 204) — quem precisa saber confere antes. Sem Regras no Servico a
+// Material inexistente (0 linhas tocadas): recusa com nao_encontrado +
+// ErrAlvoInexistente e NÃO dispara a recategorização (não há o que recategorizar);
+// a rota HTTP mapeia a marca para 204, como sempre. Sem Regras no Servico a
 // recategorização é pulada (nil-safe, como o handler sempre foi).
 //
 // LIMITE CONHECIDO (do RecategorizeForMaterial): o escopo resolve o tipo NOVO,
 // então as células do tipo ANTIGO ficam desatualizadas até o projrecon.
 func (s *Servico) TrocarTipoMaterial(ctx context.Context, materialID uuid.UUID, tipoID *uuid.UUID) error {
-	if err := s.Materiais.UpdateType(ctx, materialID, tipoID); err != nil {
+	n, err := s.Materiais.UpdateType(ctx, materialID, tipoID)
+	if err != nil {
 		return recusaDoBanco(err)
+	}
+	if n == 0 {
+		return &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "material não encontrado", Causa: ErrAlvoInexistente}
 	}
 	if s.Regras != nil {
 		s.recatEmSegundoPlano("material_type_change", func(ctx context.Context) error {
