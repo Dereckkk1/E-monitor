@@ -51,7 +51,7 @@ func (s *Servico) CriarCampanha(ctx context.Context, in CriarCampanhaEntrada) (*
 		HubCode:        canonico,
 	})
 	if err != nil {
-		return nil, err
+		return nil, recusaDoBanco(err)
 	}
 	s.avisarHubDaCampanha(out)
 	return out, nil
@@ -124,14 +124,14 @@ func (s *Servico) EditarCampanha(ctx context.Context, id uuid.UUID, in EditarCam
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, naoEncontrado("campanha não encontrada")
 		}
-		return nil, err
+		return nil, recusaDoBanco(err)
 	}
 
 	if codigoMudou {
 		// O `AtualizarHubCode` já zera o `hub_notified_at` sozinho, e tem teste
 		// para isso — não refaça essa parte aqui.
 		if err := s.Campanhas.AtualizarHubCode(ctx, id, canonico); err != nil {
-			return nil, err
+			return nil, recusaDoBanco(err)
 		}
 		out.HubCode = ptrOuNil(canonico)
 		out.HubNotifiedAt = nil

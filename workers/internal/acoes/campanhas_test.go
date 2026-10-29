@@ -339,3 +339,22 @@ func upper(s string) string {
 	}
 	return string(b)
 }
+
+// FK e CHECK do banco viram recusa com o motivo (antes: erro interno).
+func TestCriarCampanha_ClienteInexistenteEDatasInvertidasViramRecusa(t *testing.T) {
+	c := novoCenario(t)
+
+	e := c.entradaCampanha("")
+	e.ClienteID = uuid.New()
+	_, err := c.srv.CriarCampanha(c.ctx, e)
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoNaoEncontrado, r.Codigo)
+	require.Equal(t, "cliente não encontrado", r.Mensagem)
+
+	e = c.entradaCampanha("")
+	e.Inicio, e.Fim = dia("2027-02-10"), dia("2027-01-10")
+	_, err = c.srv.CriarCampanha(c.ctx, e)
+	r = recusaDe(t, err)
+	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
+	require.Equal(t, "a data final não pode ser anterior à inicial", r.Mensagem)
+}
