@@ -2,12 +2,14 @@ package acoes
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"radiocheck/internal/catalog"
 )
@@ -117,23 +119,58 @@ func (s *Servico) CriarRegra(ctx context.Context, campanhaID uuid.UUID, in Entra
 	return regra, nil
 }
 
-// EditarRegra substitui a regra e recategoriza em segundo plano.
+// regraDaCampanha lê a regra e confere que ela é DA campanha informada. Regra
+// inexistente e regra de outra campanha são a mesma coisa para quem chama:
+// nao_encontrado (a rota antiga editava/apagava a regra de outra campanha e
+// recategorizava a errada — F3-8a).
+func (s *Servico) regraDaCampanha(ctx context.Context, campanhaID, regraID uuid.UUID) (*catalog.DistributionRule, error) {
+	regra, err := s.Regras.Get(ctx, regraID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "regra de distribuição não encontrada nesta campanha"}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if regra.CampaignID != campanhaID {
+		return nil, &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "regra de distribuição não encontrada nesta campanha"}
+	}
+	return regra, nil
+}
+
+// EditarRegra substitui a regra DA campanha e recategoriza em segundo plano: o
+// tipo novo (período inteiro da campanha) e, quando a edição TROCA o tipo, também
+// o tipo antigo — senão as veiculações do tipo de onde a regra saiu ficam com a
+// categoria velha (F3-8b). nao_encontrado se a regra não é desta campanha.
 func (s *Servico) EditarRegra(ctx context.Context, campanhaID, regraID uuid.UUID, in EntradaRegra) error {
 	if err := validarRegra(in); err != nil {
+		return err
+	}
+	anterior, err := s.regraDaCampanha(ctx, campanhaID, regraID)
+	if err != nil {
 		return err
 	}
 	if err := s.Regras.Update(ctx, regraID, in.paraCatalogo(campanhaID)); err != nil {
 		return recusaDoBanco(err)
 	}
-	s.recatEmSegundoPlano("rule_update", func(ctx context.Context) error {
-		return s.Regras.RecategorizeForRule(ctx, regraID)
-	})
+	passos := []func(context.Context) error{
+		func(ctx context.Context) error { return s.Regras.RecategorizeForRule(ctx, regraID) },
+	}
+	if anterior.TypeID != in.TipoID {
+		passos = append(passos, func(ctx context.Context) error {
+			return s.Regras.RecategorizeForCampaignType(ctx, campanhaID, anterior.TypeID)
+		})
+	}
+	s.recatEmSegundoPlano("rule_update", passos...)
 	return nil
 }
 
-// ApagarRegra apaga a regra e recategoriza a campanha inteira em segundo plano
-// (depois do delete o escopo da regra se perdeu).
+// ApagarRegra apaga a regra DA campanha e recategoriza a campanha inteira em
+// segundo plano (depois do delete o escopo da regra se perdeu). nao_encontrado
+// se a regra não é desta campanha.
 func (s *Servico) ApagarRegra(ctx context.Context, campanhaID, regraID uuid.UUID) error {
+	if _, err := s.regraDaCampanha(ctx, campanhaID, regraID); err != nil {
+		return err
+	}
 	if err := s.Regras.Delete(ctx, regraID); err != nil {
 		return err
 	}
