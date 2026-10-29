@@ -89,6 +89,74 @@ type tipoMaterialDTO struct {
 	Descricao *string `json:"descricao"`
 }
 
+// avisoDeSimilaridadePendente: a mesma condição do aviso do wizard
+// (MaterialsStep.jsx): só com a checagem pronta, o score no limite e sem
+// reconhecimento. Usada por obter_material e por reconhecer_similaridade_material.
+func avisoDeSimilaridadePendente(m catalog.Material) bool {
+	return m.SimilarityCheckStatus == "ready" && m.SimilarityScore != nil &&
+		*m.SimilarityScore >= similarity.WarnThreshold && m.SimilarityAckdAt == nil
+}
+
+// tipoMaterialDe projeta o tipo de material no formato de listar_tipos_material.
+func tipoMaterialDe(t catalog.MaterialType) tipoMaterialDTO {
+	return tipoMaterialDTO{ID: t.ID.String(), Nome: t.Name, Cor: t.Color, Descricao: t.Description}
+}
+
+// lerMaterialCompleto monta o que obter_material devolve; as escritas que mexem
+// num material devolvem o MESMO formato depois de gravar. pgx.ErrNoRows quando
+// o material não existe.
+func lerMaterialCompleto(ctx context.Context, L *Leitura, id uuid.UUID) (*saidaObterMaterial, error) {
+	m, err := L.Materiais.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	titulos, err := nomesMateriais(ctx, L, m.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	tipos, err := nomesTipos(ctx, L)
+	if err != nil {
+		return nil, err
+	}
+	clientes, err := nomesClientes(ctx, L)
+	if err != nil {
+		return nil, err
+	}
+	vinculos, err := L.MateriaisCampanha.ListByMaterial(ctx, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Um material é de um cliente só: as campanhas dele bastam.
+	doCliente, err := L.Campanhas.ListFiltered(ctx, nil, []uuid.UUID{m.ClientID})
+	if err != nil {
+		return nil, err
+	}
+	camps := make(map[uuid.UUID]catalog.Campaign, len(doCliente))
+	for _, c := range doCliente {
+		camps[c.ID] = c
+	}
+	out := &saidaObterMaterial{
+		Material: materialDe(*m, tipos, titulos), Cliente: refDe(m.ClientID, clientes[m.ClientID]),
+		Roteiro: m.Script, Campanhas: make([]campanhaDoMaterial, 0, len(vinculos)),
+	}
+	for _, v := range vinculos {
+		c := camps[v.CampaignID]
+		out.Campanhas = append(out.Campanhas, campanhaDoMaterial{
+			Campanha: refDe(v.CampaignID, c.Name), Estado: c.Status, Emissoras: len(v.TargetStations),
+		})
+	}
+	if avisoDeSimilaridadePendente(*m) {
+		parecido := ""
+		if m.MostSimilarMaterialID != nil {
+			parecido = titulos[*m.MostSimilarMaterialID]
+		}
+		out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
+			"Aviso de duplicata não reconhecido: este material é %.0f%% parecido com %q. Os dois na mesma emissora em campanhas diferentes fazem a tocada ser atribuída à campanha errada.",
+			*m.SimilarityScore*100, parecido))
+	}
+	return out, nil
+}
+
 func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_materiais",
 		"Lista os materiais (áudios de comercial) de um cliente, do mais novo para o mais velho: título, tipo, duração, estado "+
@@ -129,57 +197,12 @@ func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return recusaEntrada("material_id")
 			}
-			m, err := L.Materiais.Get(ctx, id)
+			out, err := lerMaterialCompleto(ctx, L, id)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return naoEncontrado("material")
 			}
 			if err != nil {
 				return nil, err
-			}
-			titulos, err := nomesMateriais(ctx, L, m.ClientID)
-			if err != nil {
-				return nil, err
-			}
-			tipos, err := nomesTipos(ctx, L)
-			if err != nil {
-				return nil, err
-			}
-			clientes, err := nomesClientes(ctx, L)
-			if err != nil {
-				return nil, err
-			}
-			vinculos, err := L.MateriaisCampanha.ListByMaterial(ctx, m.ID)
-			if err != nil {
-				return nil, err
-			}
-			// Um material é de um cliente só: as campanhas dele bastam.
-			doCliente, err := L.Campanhas.ListFiltered(ctx, nil, []uuid.UUID{m.ClientID})
-			if err != nil {
-				return nil, err
-			}
-			camps := make(map[uuid.UUID]catalog.Campaign, len(doCliente))
-			for _, c := range doCliente {
-				camps[c.ID] = c
-			}
-			out := saidaObterMaterial{
-				Material: materialDe(*m, tipos, titulos), Cliente: refDe(m.ClientID, clientes[m.ClientID]),
-				Roteiro: m.Script, Campanhas: make([]campanhaDoMaterial, 0, len(vinculos)),
-			}
-			for _, v := range vinculos {
-				c := camps[v.CampaignID]
-				out.Campanhas = append(out.Campanhas, campanhaDoMaterial{
-					Campanha: refDe(v.CampaignID, c.Name), Estado: c.Status, Emissoras: len(v.TargetStations),
-				})
-			}
-			// Mesma condição do aviso do wizard (MaterialsStep.jsx): só com a checagem pronta.
-			if m.SimilarityCheckStatus == "ready" && m.SimilarityScore != nil && *m.SimilarityScore >= similarity.WarnThreshold && m.SimilarityAckdAt == nil {
-				parecido := ""
-				if m.MostSimilarMaterialID != nil {
-					parecido = titulos[*m.MostSimilarMaterialID]
-				}
-				out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
-					"Aviso de duplicata não reconhecido: este material é %.0f%% parecido com %q. Os dois na mesma emissora em campanhas diferentes fazem a tocada ser atribuída à campanha errada.",
-					*m.SimilarityScore*100, parecido))
 			}
 			return ok(out)
 		})
@@ -192,8 +215,6 @@ func registrarMateriais(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			return ok(mapear(paginar(ts, in), func(t catalog.MaterialType) tipoMaterialDTO {
-				return tipoMaterialDTO{ID: t.ID.String(), Nome: t.Name, Cor: t.Color, Descricao: t.Description}
-			}))
+			return ok(mapear(paginar(ts, in), tipoMaterialDe))
 		})
 }

@@ -44,6 +44,7 @@ var ToolsEsperadas = []string{
 	"listar_usuarios",
 	"listar_veiculacoes",
 	"mapa_cobertura_campanha",
+	"marcar_notificacoes_lidas",
 	"minhas_notificacoes",
 	"obter_campanha",
 	"obter_cliente",
@@ -57,6 +58,7 @@ var ToolsEsperadas = []string{
 	"plano_do_dia",
 	"pmm_target_cliente",
 	"quem_sou_eu",
+	"reconhecer_similaridade_material",
 	"relatorio_data_hora",
 	"resumo_diario_falhas",
 	"resumo_relatorio_campanha",
@@ -129,6 +131,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarFalhasCampanhas(s, cfg)
 	registrarPosVenda(s, cfg)
 	registrarAuditoria(s, cfg)
+	registrarEscritasBasicas(s, cfg, p)
 	return s
 }
 
