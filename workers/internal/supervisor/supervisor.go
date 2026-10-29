@@ -28,6 +28,13 @@ import (
 	"radiocheck/internal/segments"
 )
 
+// ErrCampaignNotFound é o sentinela de "a campanha não existe" nas operações do
+// supervisor (Start, Pause e UpdateStations). Os erros embrulham este com
+// %w mantendo a mensagem de sempre ("… campaign not found: <id>"); quem
+// precisa distinguir (acoes.TrocarEmissorasCampanha → 404) usa errors.Is em vez
+// de casar texto.
+var ErrCampaignNotFound = errors.New("campaign not found")
+
 const (
 	sampleRate = 16000
 	hopSize    = 2048
@@ -225,7 +232,7 @@ func (s *Supervisor) Start(campaignID uuid.UUID) error {
 	camp, err := s.campaigns.Get(ctx, campaignID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("supervisor: campaign not found: %s", campaignID)
+			return fmt.Errorf("supervisor: %w: %s", ErrCampaignNotFound, campaignID)
 		}
 		return fmt.Errorf("supervisor: get campaign: %w", err)
 	}
@@ -878,7 +885,7 @@ func (s *Supervisor) Pause(campaignID uuid.UUID) error {
 	camp, err := s.campaigns.Get(ctx, campaignID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("supervisor: campaign not found: %s", campaignID)
+			return fmt.Errorf("supervisor: %w: %s", ErrCampaignNotFound, campaignID)
 		}
 		return fmt.Errorf("supervisor: get campaign: %w", err)
 	}

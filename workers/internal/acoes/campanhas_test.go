@@ -2,6 +2,7 @@ package acoes
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/mcptest"
+	"radiocheck/internal/supervisor"
 )
 
 // novoCenarioCampanha: o cenário comum com hub e supervisor falsos ligados.
@@ -298,13 +300,21 @@ func TestTrocarEmissorasCampanha_ComSupervisorDelegaEleGrava(t *testing.T) {
 func TestTrocarEmissorasCampanha_ErrosDoSupervisor(t *testing.T) {
 	c, _, sf := novoCenarioCampanha(t)
 
+	// O sentinela REAL do supervisor, embrulhado como o supervisor o embrulha.
+	sf.ErroUpdateStations = fmt.Errorf("supervisor.UpdateStations: %w: x", supervisor.ErrCampaignNotFound)
+	err := c.srv.TrocarEmissorasCampanha(c.ctx, uuid.New(), nil)
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+
+	// Só o TEXTO "campaign not found" sem o sentinela não é mais "não encontrado":
+	// a decisão é por errors.Is, não por casar string.
 	sf.ErroUpdateStations = errors.New("supervisor.UpdateStations: campaign not found: x")
-	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, c.srv.TrocarEmissorasCampanha(c.ctx, uuid.New(), nil)).Codigo)
+	err = c.srv.TrocarEmissorasCampanha(c.ctx, uuid.New(), nil)
+	var r *Recusa
+	require.False(t, errors.As(err, &r))
 
 	sf.ErroUpdateStations = errors.New("nats caiu")
-	err := c.srv.TrocarEmissorasCampanha(c.ctx, uuid.New(), nil)
+	err = c.srv.TrocarEmissorasCampanha(c.ctx, uuid.New(), nil)
 	require.Error(t, err)
-	var r *Recusa
 	require.False(t, errors.As(err, &r), "erro do supervisor é falha interna, não recusa de negócio")
 }
 

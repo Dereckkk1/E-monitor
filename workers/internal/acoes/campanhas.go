@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/supervisor"
 )
 
 func naoEncontrado(msg string) *Recusa {
@@ -154,7 +155,7 @@ func (s *Servico) TrocarEmissorasCampanha(ctx context.Context, id uuid.UUID, emi
 		if err := s.Supervisor.UpdateStations(id, emissoras); err != nil {
 			zap.L().Error("campaigns.UpdateStations: supervisor failed",
 				zap.String("campaign_id", id.String()), zap.Error(err))
-			if strings.Contains(err.Error(), "campaign not found") {
+			if errors.Is(err, supervisor.ErrCampaignNotFound) {
 				return naoEncontrado("campanha não encontrada")
 			}
 			return err
