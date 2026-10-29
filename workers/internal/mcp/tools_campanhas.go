@@ -113,6 +113,39 @@ type linhaFinanceira struct {
 	CPM                *float64 `json:"cpm"`
 }
 
+// lerCampanhaCompleta monta o que obter_campanha devolve; as escritas que mexem
+// numa campanha devolvem o MESMO formato depois de gravar. Preenche
+// c.MaterialCount (o Get do repositório não o traz).
+func lerCampanhaCompleta(ctx context.Context, cfg ConfigServidor, L *Leitura, c *catalog.Campaign) (*saidaObterCampanha, error) {
+	vinculos, err := L.MateriaisCampanha.ListByCampaign(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	c.MaterialCount = len(vinculos)
+	cliente, err := L.Clientes.Get(ctx, c.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	nomes := map[uuid.UUID]string{cliente.ID: cliente.Name}
+	canceladas, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
+	if err != nil {
+		return nil, err
+	}
+	emissoras, err := nomesEmissoras(ctx, L, c.TargetStations)
+	if err != nil {
+		return nil, err
+	}
+	out := &saidaObterCampanha{
+		Campanha:  campanhaDe(*c, nomes, canceladas),
+		Emissoras: refs(c.TargetStations, emissoras),
+		Links:     linksTela{Tela: cfg.link("/campaigns/" + c.ID.String() + "/edit")},
+	}
+	if c.Status == "cancelada" {
+		out.Ressalvas = []string{ressalvaCancelada}
+	}
+	return out, nil
+}
+
 func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_campanhas",
 		"Lista as campanhas na ordem da tela /campaigns (ativas, programadas, concluídas): id, nome, cliente, estado, vigência, "+
@@ -223,31 +256,9 @@ func registrarCampanhas(s *sdk.Server, cfg ConfigServidor) {
 						cod, len(achadas), strings.Join(cands, "; ")), "ambiguo")
 				}
 			}
-			vinculos, err := L.MateriaisCampanha.ListByCampaign(ctx, c.ID)
+			out, err := lerCampanhaCompleta(ctx, cfg, L, c)
 			if err != nil {
 				return nil, err
-			}
-			c.MaterialCount = len(vinculos)
-			cliente, err := L.Clientes.Get(ctx, c.ClientID)
-			if err != nil {
-				return nil, err
-			}
-			nomes := map[uuid.UUID]string{cliente.ID: cliente.Name}
-			canceladas, err := L.Campanhas.CancelledAtFor(ctx, []uuid.UUID{c.ID})
-			if err != nil {
-				return nil, err
-			}
-			emissoras, err := nomesEmissoras(ctx, L, c.TargetStations)
-			if err != nil {
-				return nil, err
-			}
-			out := saidaObterCampanha{
-				Campanha:  campanhaDe(*c, nomes, canceladas),
-				Emissoras: refs(c.TargetStations, emissoras),
-				Links:     linksTela{Tela: cfg.link("/campaigns/" + c.ID.String() + "/edit")},
-			}
-			if c.Status == "cancelada" {
-				out.Ressalvas = []string{ressalvaCancelada}
 			}
 			return ok(out)
 		})
