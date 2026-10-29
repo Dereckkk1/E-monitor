@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestClientStationPMM_BulkUpsert cobre os três efeitos de uma única chamada:
@@ -84,5 +86,47 @@ func TestClientStationPMM_ZeroIsNotAbsent(t *testing.T) {
 	}
 	if got == nil || *got != 0 {
 		t.Errorf("target = %v, want 0", got)
+	}
+}
+
+// TestClientStationPMM_ForStations: o valor gravado por (cliente, emissora), só
+// das emissoras pedidas — inclusive as que nenhuma campanha do cliente usa, que
+// o ListForClient não enxerga. Ausência de linha = fora do mapa (não é zero).
+func TestClientStationPMM_ForStations(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClientStationPMM(pool)
+	clientID := insSeedClient(t, ctx, pool, "Cliente ForStations")
+	outroCli := insSeedClient(t, ctx, pool, "Outro ForStations")
+	stA := insSeedStationNoProfile(t, ctx, pool, "FS A")
+	stB := insSeedStationNoProfile(t, ctx, pool, "FS B")
+	stC := insSeedStationNoProfile(t, ctx, pool, "FS C")
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM client_station_pmm WHERE client_id IN ($1, $2)", clientID, outroCli)
+	})
+	v3400, v0, v7 := 3400, 0, 7
+	if _, _, err := repo.BulkUpsert(ctx, clientID, []TargetPMMEntry{{StationID: stA, PMMTarget: &v3400}, {StationID: stB, PMMTarget: &v0}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.BulkUpsert(ctx, outroCli, []TargetPMMEntry{{StationID: stC, PMMTarget: &v7}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ForStations(ctx, clientID, []uuid.UUID{stA, stB, stC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[stA] != 3400 {
+		t.Errorf("got %v, quero A=3400 e B=0 (C é de outro cliente, fora)", got)
+	}
+	if v, ok := got[stB]; !ok || v != 0 {
+		t.Errorf("zero é linha, não ausência: got[B]=%d ok=%v", v, ok)
+	}
+	if _, ok := got[stC]; ok {
+		t.Error("a linha de outro cliente não vaza")
+	}
+
+	vazio, err := repo.ForStations(ctx, clientID, nil)
+	if err != nil || len(vazio) != 0 {
+		t.Errorf("sem emissoras: %v %v", vazio, err)
 	}
 }

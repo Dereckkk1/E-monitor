@@ -321,3 +321,38 @@ func TestHaVeiculacao_ParidadeComORecatReal(t *testing.T) {
 		})
 	}
 }
+
+// HaVeiculacaoNaEmissora é a pergunta SEM âncora de campanha/cliente/material:
+// "alguma tocada aprovada, em qualquer campanha, passou por esta emissora?" — o
+// alcance de uma mudança no cadastro da emissora (o PMM entra nos impactos de
+// todas as campanhas que a usam). Mesmo recorte e mesmo filtro de aprovadas.
+func TestHaVeiculacaoNaEmissora(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	cli := insSeedClient(t, ctx, pool, "HV emissora "+uuid.NewString()[:6])
+	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	st := insSeedStationNoProfile(t, ctx, pool, "HV est A "+uuid.NewString()[:6])
+	semTocada := insSeedStationNoProfile(t, ctx, pool, "HV est B "+uuid.NewString()[:6])
+	soRetratada := insSeedStationNoProfile(t, ctx, pool, "HV est C "+uuid.NewString()[:6])
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, cli, "hv-emissora")
+	hvTocada(t, ctx, pool, camp, mat, st, hvQuando("2026-10-05", "10:00"), "")
+	hvTocada(t, ctx, pool, camp, mat, soRetratada, hvQuando("2026-10-05", "11:00"), "retracted")
+	repo := NewDetections(pool)
+
+	for nome, caso := range map[string]struct {
+		ids  []uuid.UUID
+		quer bool
+	}{
+		"emissora com tocada aprovada":  {[]uuid.UUID{st}, true},
+		"emissora sem tocada":           {[]uuid.UUID{semTocada}, false},
+		"só tocada retratada não conta": {[]uuid.UUID{soRetratada}, false},
+		"lista: basta uma":              {[]uuid.UUID{semTocada, st}, true},
+		"emissora que não existe":       {[]uuid.UUID{uuid.New()}, false},
+	} {
+		ha, err := repo.HaVeiculacaoNaEmissora(ctx, caso.ids)
+		require.NoError(t, err, nome)
+		require.Equal(t, caso.quer, ha, nome)
+	}
+
+	_, err := repo.HaVeiculacaoNaEmissora(ctx, nil)
+	require.Error(t, err, "sem emissora não há pergunta")
+}

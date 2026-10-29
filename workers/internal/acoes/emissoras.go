@@ -42,6 +42,50 @@ const (
 	tetoPMM        = 99999999.995 // NUMERIC(10,2)
 )
 
+// ValidarCadastroEmissora confere e normaliza os campos enviados (nome e cidade
+// aparados, UF em maiúsculas, limites dos NUMERIC do banco) e devolve o que a
+// gravação receberá. Está separada de EditarCadastroEmissora para a tool do MCP
+// validar no PREVIEW, sem gravar, exatamente o que a ação validará depois.
+// Devolve *Recusa{entrada_invalida}, em português.
+func ValidarCadastroEmissora(in CadastroEmissora) (catalog.UpdateCadastroInput, error) {
+	var up catalog.UpdateCadastroInput
+	if in.Nome != nil {
+		nome := strings.TrimSpace(*in.Nome)
+		if nome == "" {
+			return up, entradaInvalida("o nome da emissora não pode ficar vazio")
+		}
+		up.Name = &nome
+	}
+	if in.FrequenciaMHz != nil {
+		// A comparação em negativo também recusa NaN.
+		if f := *in.FrequenciaMHz; !(f > 0 && f < tetoFrequencia) || math.IsInf(f, 0) {
+			return up, entradaInvalida("a frequência precisa ser maior que 0 e menor que 9999,995 (MHz para FM, kHz para AM)")
+		}
+		up.FrequencyMHz = in.FrequenciaMHz
+	}
+	if in.Cidade != nil {
+		cidade := strings.TrimSpace(*in.Cidade)
+		if cidade == "" {
+			return up, entradaInvalida("a cidade não pode ficar vazia")
+		}
+		up.City = &cidade
+	}
+	if in.UF != nil {
+		uf := strings.ToUpper(strings.TrimSpace(*in.UF))
+		if len([]rune(uf)) != 2 {
+			return up, entradaInvalida("a UF precisa ter 2 letras (ex.: MG)")
+		}
+		up.State = &uf
+	}
+	if in.PMM != nil {
+		if p := *in.PMM; !(p >= 0 && p < tetoPMM) || math.IsInf(p, 0) {
+			return up, entradaInvalida("o PMM precisa estar entre 0 e 99.999.999")
+		}
+		up.PMM = in.PMM
+	}
+	return up, nil
+}
+
 // EditarCadastroEmissora edita nome, frequência, cidade, UF e PMM da emissora,
 // gravando só os campos enviados. É NOVA e só do MCP — a rota
 // `PUT /stations/{id}` segue como está (a tela manda o cadastro inteiro).
@@ -57,42 +101,10 @@ const (
 // Classe e raio da Anatel (anatel_*) NÃO são recalculados quando dial ou cidade
 // mudam: quem diz isso ao usuário é a tool.
 func (s *Servico) EditarCadastroEmissora(ctx context.Context, id uuid.UUID, in CadastroEmissora) (*ResultadoCadastroEmissora, error) {
-	var up catalog.UpdateCadastroInput
-	if in.Nome != nil {
-		nome := strings.TrimSpace(*in.Nome)
-		if nome == "" {
-			return nil, entradaInvalida("o nome da emissora não pode ficar vazio")
-		}
-		up.Name = &nome
+	up, err := ValidarCadastroEmissora(in)
+	if err != nil {
+		return nil, err
 	}
-	if in.FrequenciaMHz != nil {
-		// A comparação em negativo também recusa NaN.
-		if f := *in.FrequenciaMHz; !(f > 0 && f < tetoFrequencia) || math.IsInf(f, 0) {
-			return nil, entradaInvalida("a frequência precisa ser maior que 0 e menor que 9999,995 (MHz para FM, kHz para AM)")
-		}
-		up.FrequencyMHz = in.FrequenciaMHz
-	}
-	if in.Cidade != nil {
-		cidade := strings.TrimSpace(*in.Cidade)
-		if cidade == "" {
-			return nil, entradaInvalida("a cidade não pode ficar vazia")
-		}
-		up.City = &cidade
-	}
-	if in.UF != nil {
-		uf := strings.ToUpper(strings.TrimSpace(*in.UF))
-		if len([]rune(uf)) != 2 {
-			return nil, entradaInvalida("a UF precisa ter 2 letras (ex.: MG)")
-		}
-		up.State = &uf
-	}
-	if in.PMM != nil {
-		if p := *in.PMM; !(p >= 0 && p < tetoPMM) || math.IsInf(p, 0) {
-			return nil, entradaInvalida("o PMM precisa estar entre 0 e 99.999.999")
-		}
-		up.PMM = in.PMM
-	}
-
 	st, falhou, err := s.Emissoras.UpdateCadastro(ctx, id, up)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

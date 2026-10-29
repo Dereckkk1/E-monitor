@@ -109,6 +109,38 @@ func lerCliente(ctx context.Context, L *Leitura, s string) (*catalog.Client, *sd
 	return c, nil, nil
 }
 
+// lerClienteCompleto monta o que obter_cliente devolve para um cliente já lido;
+// as escritas que mexem num cliente devolvem o MESMO formato depois de gravar.
+func lerClienteCompleto(ctx context.Context, L *Leitura, c *catalog.Client) (*saidaObterCliente, error) {
+	hub, err := L.Clientes.HubIDs(ctx, []uuid.UUID{c.ID})
+	if err != nil {
+		return nil, err
+	}
+	dep, err := L.Clientes.CountDependents(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	pessoas, total, err := L.Usuarios.List(ctx, users.ListInput{ClientID: &c.ID, Status: "all", PageSize: tetoCarteira})
+	if err != nil {
+		return nil, err
+	}
+	out := &saidaObterCliente{
+		Cliente:  clienteDe(*c, hub),
+		Vinculos: vinculosCliente{Campanhas: dep.Campaigns, Materiais: dep.Materials, Usuarios: dep.Users},
+		Usuarios: make([]pessoaDaCarteira, 0, len(pessoas)),
+	}
+	for _, u := range pessoas {
+		out.Usuarios = append(out.Usuarios, pessoaDaCarteira{
+			ID: u.ID.String(), Nome: u.Name, Email: u.Email, Papel: papelDe(u.Role), Situacao: situacaoDe(u),
+		})
+	}
+	if total > len(pessoas) {
+		out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
+			"mostrando %d de %d usuários; listar_usuarios com cliente_id traz todos", len(pessoas), total))
+	}
+	return out, nil
+}
+
 func registrarClientes(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_clientes",
 		"Lista os clientes (anunciantes) do E-monitor em ordem de nome: id, nome, se está ativo, CNPJ, cidade/UF, contato e hub_id "+
@@ -141,31 +173,9 @@ func registrarClientes(s *sdk.Server, cfg ConfigServidor) {
 			if rec != nil || err != nil {
 				return rec, err
 			}
-			hub, err := L.Clientes.HubIDs(ctx, []uuid.UUID{c.ID})
+			out, err := lerClienteCompleto(ctx, L, c)
 			if err != nil {
 				return nil, err
-			}
-			dep, err := L.Clientes.CountDependents(ctx, c.ID)
-			if err != nil {
-				return nil, err
-			}
-			pessoas, total, err := L.Usuarios.List(ctx, users.ListInput{ClientID: &c.ID, Status: "all", PageSize: tetoCarteira})
-			if err != nil {
-				return nil, err
-			}
-			out := saidaObterCliente{
-				Cliente:  clienteDe(*c, hub),
-				Vinculos: vinculosCliente{Campanhas: dep.Campaigns, Materiais: dep.Materials, Usuarios: dep.Users},
-				Usuarios: make([]pessoaDaCarteira, 0, len(pessoas)),
-			}
-			for _, u := range pessoas {
-				out.Usuarios = append(out.Usuarios, pessoaDaCarteira{
-					ID: u.ID.String(), Nome: u.Name, Email: u.Email, Papel: papelDe(u.Role), Situacao: situacaoDe(u),
-				})
-			}
-			if total > len(pessoas) {
-				out.Ressalvas = append(out.Ressalvas, fmt.Sprintf(
-					"mostrando %d de %d usuários; listar_usuarios com cliente_id traz todos", len(pessoas), total))
 			}
 			return ok(out)
 		})

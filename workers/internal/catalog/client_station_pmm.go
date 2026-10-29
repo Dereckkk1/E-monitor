@@ -96,6 +96,33 @@ func (r *ClientStationPMM) ListForClient(ctx context.Context, clientID uuid.UUID
 	return out, rows.Err()
 }
 
+// ForStations devolve o PMM no target já gravado para (cliente, emissoras), só
+// das emissoras pedidas e SÓ das que têm linha: ausência de linha fica fora do
+// mapa (não é zero; zero é linha). Diferente do ListForClient, enxerga também as
+// emissoras que nenhuma campanha do cliente usa.
+func (r *ClientStationPMM) ForStations(ctx context.Context, clientID uuid.UUID, stationIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	out := make(map[uuid.UUID]int, len(stationIDs))
+	if len(stationIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT station_id, pmm_target FROM client_station_pmm WHERE client_id = $1 AND station_id = ANY($2)`,
+		clientID, stationIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var v int
+		if err := rows.Scan(&id, &v); err != nil {
+			return nil, err
+		}
+		out[id] = v
+	}
+	return out, rows.Err()
+}
+
 // BulkUpsert aplica o lote inteiro numa transação: entradas com valor viram
 // INSERT ... ON CONFLICT DO UPDATE, entradas com nil viram DELETE. Devolve
 // (gravadas, apagadas). Idempotente — reenviar o mesmo lote não muda nada.
