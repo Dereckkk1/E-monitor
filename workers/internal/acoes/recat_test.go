@@ -9,6 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"radiocheck/internal/metrics"
 )
@@ -70,4 +72,32 @@ func TestRecatEmSegundoPlano_FalhaDeUmPassoNaoImpedeOSeguinte(t *testing.T) {
 
 	require.EqualValues(t, 3, rodou.Load())
 	require.Equal(t, antes+2, testutil.ToFloat64(metrics.RecategorizeFailures.WithLabelValues("unit_test_passos")))
+}
+
+// O executor padrão (go f()) NÃO deixa um pânico do gatilho derrubar o
+// processo: recupera, loga com a pilha e segue. (Se o recover faltasse, o
+// pânico numa goroutine mataria o binário de teste inteiro.)
+func TestEmSegundoPlano_PadraoRecuperaDePanicELogaComPilha(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	restaura := zap.ReplaceGlobals(zap.New(core))
+	defer restaura()
+
+	s := &Servico{} // EmSegundoPlano nil = produção
+	s.emSegundoPlano(func() { panic("gatilho quebrou") })
+
+	require.Eventually(t, func() bool { return logs.Len() == 1 }, 5*time.Second, 10*time.Millisecond)
+	e := logs.All()[0]
+	require.Contains(t, e.Message, "pânico")
+	ctx := e.ContextMap()
+	require.Equal(t, "gatilho quebrou", ctx["panic"])
+	require.NotEmpty(t, ctx["stack"], "a pilha vai no log")
+
+	// E o executor segue funcionando depois do pânico.
+	feito := make(chan struct{})
+	s.emSegundoPlano(func() { close(feito) })
+	select {
+	case <-feito:
+	case <-time.After(5 * time.Second):
+		t.Fatal("o executor parou depois do pânico")
+	}
 }
