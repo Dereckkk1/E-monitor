@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"radiocheck/internal/supervisor"
 )
 
 // fakeSupervisor implements CampaignSupervisor for tests.
@@ -232,7 +235,7 @@ func TestCampaigns_UpdateStations_DelegatesToSupervisor(t *testing.T) {
 // TestCampaigns_UpdateStations_NotFoundFromSupervisor maps the supervisor's
 // "campaign not found" sentinel to a 404 response.
 func TestCampaigns_UpdateStations_NotFoundFromSupervisor(t *testing.T) {
-	sup := &fakeSupervisor{updateStationsErr: errors.New("supervisor.UpdateStations: campaign not found: x")}
+	sup := &fakeSupervisor{updateStationsErr: fmt.Errorf("supervisor.UpdateStations: %w: x", supervisor.ErrCampaignNotFound)}
 	h := &CampaignsHandler{Supervisor: sup}
 	r := chi.NewRouter()
 	r.Put("/campaigns/{id}/stations", h.UpdateStations)
