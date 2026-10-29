@@ -236,3 +236,21 @@ func TestCampanhaHTTP_UpdateStations_ErroDoSupervisorDa500(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Body.String(), "internal error")
 }
+
+// Cliente inexistente e datas invertidas eram 500 "internal error" (FK e CHECK do
+// banco); agora são 404 e 400 com o motivo — melhoria declarada da extração.
+func TestCampanhaHTTP_Create_ClienteInexistenteDa404EDatasInvertidasDa400(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	cliente := seedClienteLocal(t, ctx, pool)
+	h := &CampaignsHandler{Repo: catalog.NewCampaigns(pool)}
+
+	rec := postCampanha(t, h, campanhaNova(uuid.New(), ""))
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+
+	corpo := campanhaNova(cliente, "")
+	corpo["start_date"], corpo["end_date"] = "2027-02-28T00:00:00Z", "2026-12-01T00:00:00Z"
+	rec = postCampanha(t, h, corpo)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "a data final não pode ser anterior à inicial")
+	require.Zero(t, contaCampanhas(t, ctx, pool, cliente))
+}

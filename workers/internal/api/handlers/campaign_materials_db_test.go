@@ -134,15 +134,23 @@ func TestVinculoHTTP_FalhaDoReloadNaoFalhaARota(t *testing.T) {
 	require.Equal(t, 3, c.reloads(), "tentou recarregar nas três")
 }
 
-func TestVinculoHTTP_Link_MaterialInexistenteDa500PorCausaDaFK(t *testing.T) {
+// Material (ou campanha) inexistente: era 500 "internal error" por causa da FK e
+// agora é 404 — melhoria declarada da extração (acoes.recusaDoBanco).
+func TestVinculoHTTP_Link_MaterialOuCampanhaInexistenteDa404(t *testing.T) {
 	c := novoCenarioVinculo(t)
 
 	rec := c.chama(t, http.MethodPost, "/campaigns/"+c.campanha.String()+"/materials",
 		map[string]any{"material_id": uuid.NewString()})
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Contains(t, rec.Body.String(), "not found")
 
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, rec.Body.String(), "internal error")
+	rec = c.chama(t, http.MethodPost, "/campaigns/"+uuid.NewString()+"/materials",
+		map[string]any{"material_id": c.outro.String()})
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
 	require.Zero(t, c.reloads(), "falhou antes de gravar: não recarrega")
+	_, ok := c.vinculo(t, c.outro)
+	require.False(t, ok)
 }
 
 func TestVinculoHTTP_UpdateStations_204TrocaEmissorasERecarrega(t *testing.T) {

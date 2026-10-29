@@ -143,3 +143,21 @@ func TestTrocarTipoMaterial_MaterialInexistenteNaoEhErro(t *testing.T) {
 	c := novoCenario(t)
 	require.NoError(t, c.srv.TrocarTipoMaterial(c.ctx, uuid.New(), &c.tipoB))
 }
+
+// Material ou campanha inexistente ao vincular: recusa nao_encontrado com o
+// motivo (antes: erro interno por causa da FK).
+func TestVincularMaterial_MaterialOuCampanhaInexistenteViraNaoEncontrado(t *testing.T) {
+	c, _, sf := novoCenarioCampanha(t)
+
+	err := c.srv.VincularMaterial(c.ctx, c.campanha, uuid.New(), nil)
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoNaoEncontrado, r.Codigo)
+	require.Equal(t, "material não encontrado", r.Mensagem)
+
+	err = c.srv.VincularMaterial(c.ctx, uuid.New(), c.material, nil)
+	r = recusaDe(t, err)
+	require.Equal(t, CodigoNaoEncontrado, r.Codigo)
+	require.Equal(t, "campanha não encontrada", r.Mensagem)
+
+	require.Empty(t, sf.Chamadas(), "recusado antes de gravar: não recarrega")
+}

@@ -36,7 +36,7 @@ func (s *Servico) recarregar(campanhaID uuid.UUID, op string) {
 // tocada (evidence/attribution.go), então o passado não muda.
 func (s *Servico) VincularMaterial(ctx context.Context, campanhaID, materialID uuid.UUID, emissoras []uuid.UUID) error {
 	if err := s.MateriaisCampanha.Link(ctx, campanhaID, materialID, emissoras); err != nil {
-		return err
+		return recusaDoBanco(err)
 	}
 	s.recarregar(campanhaID, "link")
 	return nil
@@ -47,7 +47,7 @@ func (s *Servico) VincularMaterial(ctx context.Context, campanhaID, materialID u
 // sempre respondeu 204.
 func (s *Servico) TrocarEmissorasMaterial(ctx context.Context, campanhaID, materialID uuid.UUID, emissoras []uuid.UUID) error {
 	if err := s.MateriaisCampanha.UpdateStations(ctx, campanhaID, materialID, emissoras); err != nil {
-		return err
+		return recusaDoBanco(err)
 	}
 	s.recarregar(campanhaID, "update_stations")
 	return nil
