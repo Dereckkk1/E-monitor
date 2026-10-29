@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
@@ -32,7 +33,7 @@ E os dois cenários mais prováveis de lentidão são justamente os que não mel
 esperando — 401 por chave errada ou produto desmarcado, e 429 pelo balde por IP
 que esta rota divide com o job de reemissão de 15 em 15 minutos.
 */
-const prazoDeConferencia = 2 * time.Second
+const prazoDeConferencia = acoes.PrazoConferenciaHub
 
 /*
 HubCodesHandler repassa a conferência de código do front para o hub.
@@ -341,7 +342,7 @@ func (h *HubCodesHandler) reemitirPendentes(cliente uuid.UUID) {
 			return
 		}
 		for i := range pend {
-			emitirCampanhaNoHub(hb, repo, pend[i].ID, upsertDaCampanha(&pend[i]))
+			acoes.EmitirCampanhaNoHub(hb, repo, pend[i].ID, acoes.UpsertDaCampanha(&pend[i]))
 		}
 	}()
 }
