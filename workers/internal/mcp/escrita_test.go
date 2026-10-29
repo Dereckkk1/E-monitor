@@ -560,3 +560,36 @@ func TestEscrita_ExecutarTemPrazoEEstourarNaoLiberaOToken(t *testing.T) {
 	require.Contains(t, texto, "[interno]")
 	require.Equal(t, 1, b.confirmacoesUsadas(t))
 }
+
+// O ramo barrado audita o recurso que a tool declara; sem declarar, cai em
+// "mcp_escrita" sem id.
+func TestEscrita_BarradoAuditaORecursoDaTool(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	sonda := &sondaEscrita{escalada: Escalada{Nivel: Critico, Motivo: "atinge veiculação já ocorrida"}}
+	alvo := uuid.New()
+
+	com := sonda.escrita("escreve_com", Confirma, true)
+	com.Recurso = func(in entradaEscritaTeste) (string, *uuid.UUID) { return "campaign", &alvo }
+	sem := sonda.escrita("escreve_sem", Confirma, true)
+	s := b.servidor(principalTeste, com, sem)
+
+	chama(t, s, "escreve_com", map[string]any{"valor": "x"})
+	chama(t, s, "escreve_sem", map[string]any{"valor": "x"})
+
+	var recurso string
+	var recursoID *uuid.UUID
+	var meta map[string]any
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT resource, resource_id, metadata FROM audit_log
+		  WHERE action = 'mcp.escrita.requer_aprovacao' AND metadata->>'tool' = 'escreve_com'`).Scan(&recurso, &recursoID, &meta))
+	require.Equal(t, "campaign", recurso)
+	require.NotNil(t, recursoID)
+	require.Equal(t, alvo, *recursoID)
+	require.Equal(t, "atinge veiculação já ocorrida", meta["motivo"])
+
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT resource, resource_id FROM audit_log
+		  WHERE action = 'mcp.escrita.requer_aprovacao' AND metadata->>'tool' = 'escreve_sem'`).Scan(&recurso, &recursoID))
+	require.Equal(t, "mcp_escrita", recurso)
+	require.Nil(t, recursoID)
+}
