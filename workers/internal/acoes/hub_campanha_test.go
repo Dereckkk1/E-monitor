@@ -1,4 +1,4 @@
-package handlers
+package acoes
 
 import (
 	"encoding/json"
@@ -33,7 +33,7 @@ func TestAvisarHubDaCampanha_MandaOsCamposCertos(t *testing.T) {
 	defer srv.Close()
 
 	c := campanhaDeTeste()
-	avisarHubDaCampanha(hub.New(srv.URL, "k"), nil, c)
+	AvisarHubDaCampanha(hub.New(srv.URL, "k"), nil, c)
 
 	select {
 	case env := <-recebido:
@@ -76,7 +76,7 @@ func TestAvisarHubDaCampanha_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
 	defer close(solta)
 
 	comecou := time.Now()
-	avisarHubDaCampanha(hub.New(srv.URL, "k"), nil, campanhaDeTeste())
+	AvisarHubDaCampanha(hub.New(srv.URL, "k"), nil, campanhaDeTeste())
 	demorou := time.Since(comecou)
 
 	if demorou > 500*time.Millisecond {
@@ -85,11 +85,11 @@ func TestAvisarHubDaCampanha_NaoBloqueiaQuandoOHubPendura(t *testing.T) {
 }
 
 func TestAvisarHubDaCampanha_HubNilNaoPanica(t *testing.T) {
-	avisarHubDaCampanha(nil, nil, campanhaDeTeste())
+	AvisarHubDaCampanha(nil, nil, campanhaDeTeste())
 }
 
 func TestAvisarHubDaCampanha_CampanhaNilNaoPanica(t *testing.T) {
-	avisarHubDaCampanha(hub.New("http://exemplo", "k"), nil, nil)
+	AvisarHubDaCampanha(hub.New("http://exemplo", "k"), nil, nil)
 }
 
 func TestAvisarHubDaCampanha_SemConfiguracaoNaoChama(t *testing.T) {
@@ -99,7 +99,7 @@ func TestAvisarHubDaCampanha_SemConfiguracaoNaoChama(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	avisarHubDaCampanha(hub.New("", ""), nil, campanhaDeTeste())
+	AvisarHubDaCampanha(hub.New("", ""), nil, campanhaDeTeste())
 
 	select {
 	case <-chamou:
