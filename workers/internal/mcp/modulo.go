@@ -65,7 +65,7 @@ func NovoModulo(d DepsModulo) *Modulo {
 	}
 	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
-		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L), Log: d.Log}
+		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
 	return &Modulo{
 		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		cfg:    cfg,

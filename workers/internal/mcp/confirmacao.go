@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 // Token do nível confirma (spec §5.2; transplante de hub
@@ -96,7 +97,17 @@ func expiraDoToken(token string) time.Time {
 
 // Confirmacoes marca o uso único (F3-5): consome ANTES de executar; só a falha
 // de negócio libera. Erro interno não libera — a escrita pode ter gravado algo.
-type Confirmacoes struct{ DB *pgxpool.Pool }
+type Confirmacoes struct {
+	DB  *pgxpool.Pool
+	Log *zap.Logger // opcional; nil = sem log
+}
+
+func (c *Confirmacoes) log() *zap.Logger {
+	if c.Log == nil {
+		return zap.NewNop()
+	}
+	return c.Log
+}
 
 // Consumir reivindica o token: true para quem chegou primeiro, false se já foi
 // usado (ou se o token está fora da forma — nesse caso o banco nem é tocado).
@@ -104,10 +115,14 @@ func (c *Confirmacoes) Consumir(ctx context.Context, token string, exp time.Time
 	if !formaDoToken.MatchString(token) {
 		return false, nil
 	}
-	// Poda oportunista: sem varredor nesta fatia (o da Fatia 4 assume).
+	// Poda oportunista: sem varredor nesta fatia (o da Fatia 4 assume). É
+	// higiene, nunca pré-condição: SKIP LOCKED pula linha que outra transação
+	// segura (não espera), e erro da poda é logado e ignorado — a confirmação
+	// segue para o INSERT.
 	if _, err := c.DB.Exec(ctx, `DELETE FROM mcp_confirmacoes_usadas WHERE hash IN (
-		SELECT hash FROM mcp_confirmacoes_usadas WHERE expira_em < now() - interval '1 hour' LIMIT 500)`); err != nil {
-		return false, err
+		SELECT hash FROM mcp_confirmacoes_usadas WHERE expira_em < now() - interval '1 hour'
+		ORDER BY expira_em LIMIT 500 FOR UPDATE SKIP LOCKED)`); err != nil {
+		c.log().Warn("mcp: poda de mcp_confirmacoes_usadas falhou; seguindo com a confirmação", zap.Error(err))
 	}
 	tag, err := c.DB.Exec(ctx, `INSERT INTO mcp_confirmacoes_usadas (hash, expira_em) VALUES ($1, $2)
 		ON CONFLICT (hash) DO NOTHING`, hashDoToken(token), exp)

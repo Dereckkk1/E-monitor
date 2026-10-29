@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/mcp/auditoria"
@@ -36,10 +37,10 @@ func (E *Escritas) agora() time.Time {
 }
 
 // NovasEscritas monta as dependências das tools de escrita sobre o pool.
-func NovasEscritas(pool *pgxpool.Pool, segredo []byte, servico *acoes.Servico, leitura *Leitura) *Escritas {
+func NovasEscritas(pool *pgxpool.Pool, segredo []byte, servico *acoes.Servico, leitura *Leitura, log *zap.Logger) *Escritas {
 	E := &Escritas{Acoes: servico, Segredo: segredo, Leitura: leitura}
 	if pool != nil { // evita o typed-nil dentro da interface
-		E.Confirmacoes = &Confirmacoes{DB: pool}
+		E.Confirmacoes = &Confirmacoes{DB: pool, Log: log}
 		E.DB = pool
 	}
 	return E
