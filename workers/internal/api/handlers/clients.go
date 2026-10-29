@@ -1,19 +1,15 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
@@ -94,29 +90,16 @@ func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// maxTargetLabelLen é o teto defensivo do rótulo de público-alvo gravado em
-// clients.target_label. A UI sugere 60 chars; aqui só barramos o absurdo (o
-// campo é TEXT no banco, sem CHECK).
-const maxTargetLabelLen = 200
-
-// normalizeTargetLabel apara espaços e colapsa "" em nil (NULL no banco =
-// cliente sem rótulo, que é o mesmo significado de string vazia). Devolve
-// false quando o rótulo excede maxTargetLabelLen — contado em runes, pra um
-// rótulo acentuado não ser rejeitado por causa de bytes UTF-8.
-func normalizeTargetLabel(p **string) bool {
-	if *p == nil {
-		return true
+// servico monta as ações de cliente sobre o repositório e o hub deste handler. A
+// regra de criação (validação, conferência do CNPJ, gravação, aviso ao hub) mora
+// em internal/acoes: o MCP chama as mesmas funções. O hub só entra quando
+// existe (um *hub.Client nil dentro da interface passaria no `!= nil`).
+func (h *ClientsHandler) servico() *acoes.Servico {
+	s := &acoes.Servico{Clientes: h.Repo}
+	if h.Hub != nil {
+		s.Hub = h.Hub
 	}
-	s := strings.TrimSpace(**p)
-	if s == "" {
-		*p = nil
-		return true
-	}
-	if utf8.RuneCountInString(s) > maxTargetLabelLen {
-		return false
-	}
-	*p = &s
-	return true
+	return s
 }
 
 func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -125,23 +108,13 @@ func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.Name == "" {
-		http.Error(w, "name is required", 400)
-		return
-	}
-	if !normalizeTargetLabel(&in.TargetLabel) {
-		http.Error(w, "target_label must be at most 200 characters", 400)
-		return
-	}
-	if h.recusaCNPJRepetido(w, r, in.CNPJ, uuid.Nil) {
-		return
-	}
-	out, err := h.Repo.Create(r.Context(), in)
+	out, err := h.servico().CriarCliente(r.Context(), in)
 	if err != nil {
-		http.Error(w, "internal error", 500)
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", 500)
+		}
 		return
 	}
-	avisarHubDoCliente(h.Hub, out)
 	writeJSON(w, 201, out)
 }
 
@@ -223,7 +196,7 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", 400)
 		return
 	}
-	if !normalizeTargetLabel(&in.TargetLabel) {
+	if !acoes.NormalizarRotuloPublico(&in.TargetLabel) {
 		http.Error(w, "target_label must be at most 200 characters", 400)
 		return
 	}
@@ -238,8 +211,13 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if digitosDoCNPJ(atual.CNPJ) != digitosDoCNPJ(in.CNPJ) && h.recusaCNPJRepetido(w, r, in.CNPJ, id) {
-		return
+	if acoes.DigitosDoCNPJ(atual.CNPJ) != acoes.DigitosDoCNPJ(in.CNPJ) {
+		if err := h.servico().ChecarCNPJ(r.Context(), in.CNPJ, id); err != nil {
+			if !escreveRecusa(w, err) {
+				http.Error(w, "internal error", 500)
+			}
+			return
+		}
 	}
 	out, err := h.Repo.Update(r.Context(), id, in)
 	if err != nil {
@@ -251,87 +229,4 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, out)
-}
-
-// avisarHubDoCliente manda `cliente.upsert` FORA do caminho da resposta.
-//
-// # Por que goroutine, e por que context.Background
-//
-// A criação do cliente NÃO PODE depender do hub estar de pé. E o `r.Context()`
-// morre quando a resposta é escrita: usá-lo cancelaria a emissão no exato
-// instante em que ela começa — defeito intermitente e silencioso, a pior
-// combinação possível.
-//
-// # O preço desta escolha, escrito para quem for mexer
-//
-// Evento perdido é cliente que nunca chega ao hub, e não há nada em tela
-// nenhuma dizendo que falta alguém. Quem conserta isso é o retrato periódico
-// do §5 do desenho, que não está construído. Até lá, isto é atraso invisível,
-// não erro visível.
-func avisarHubDoCliente(h *hub.Client, c *catalog.Client) {
-	if h == nil || !h.Configured() || c == nil {
-		return
-	}
-	// Os campos são copiados AQUI, síncrono, de propósito: a goroutine não
-	// pode ler `c` depois que o handler seguiu adiante e talvez o alterou.
-	dados := hub.ClienteUpsert{
-		IDNaPlataforma:  c.ID.String(),
-		Nome:            c.Name,
-		CNPJ:            c.CNPJ,
-		LogoURL:         c.LogoURL,
-		ContatoNome:     c.ContactName,
-		ContatoEmail:    c.ContactEmail,
-		ContatoTelefone: c.Phone,
-		Cidade:          c.City,
-		UF:              c.State,
-	}
-	id := c.ID.String()
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := h.Emitir(ctx, "cliente.upsert", dados); err != nil {
-			// Log e mais nada: não há a quem devolver o erro, e repetir aqui
-			// seria inventar uma fila sem durabilidade.
-			//
-			// `zap.L()` e não `log.Printf`, pelo mesmo motivo que o
-			// `recat_failures.go` — o outro fire-and-forget deste pacote — já
-			// documenta: os handlers não carregam logger próprio, e o log
-			// estruturado é o que o resto da casa consulta. Só o `client_id`
-			// e o erro; o payload NÃO vai para o log.
-			zap.L().Error("hub: cliente.upsert falhou",
-				zap.String("client_id", id), zap.Error(err))
-		}
-	}()
-}
-
-// recusaCNPJRepetido escreve o 409 e devolve true quando outro cliente já tem
-// estes 14 dígitos. Giga e FSJ em 2026-10-22 nasceram assim.
-func (h *ClientsHandler) recusaCNPJRepetido(w http.ResponseWriter, r *http.Request, cnpj *string, exceto uuid.UUID) bool {
-	outro, err := h.Repo.OutroComMesmoCNPJ(r.Context(), cnpj, exceto)
-	if err != nil {
-		http.Error(w, "internal error", 500)
-		return true
-	}
-	if outro == nil {
-		return false
-	}
-	writeJSON(w, http.StatusConflict, map[string]any{
-		"error":     "cnpj_duplicado",
-		"existente": map[string]any{"id": outro.ID.String(), "nome": outro.Name},
-	})
-	return true
-}
-
-// digitosDoCNPJ devolve só os dígitos do CNPJ ("" quando nil).
-func digitosDoCNPJ(cnpj *string) string {
-	if cnpj == nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range *cnpj {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
