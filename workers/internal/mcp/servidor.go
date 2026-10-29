@@ -71,7 +71,11 @@ type ConfigServidor struct {
 	// Leitura: os repositórios das tools de leitura. nil no teste de
 	// inventário, que só lista as tools (a chamada falha fechada).
 	Leitura *Leitura
-	Log     *zap.Logger
+	// Escritas: as dependências das tools de escrita (motor de níveis, token de
+	// confirmação, auditoria). nil falha fechado: a tool de escrita devolve
+	// [interno] antes de qualquer coisa.
+	Escritas *Escritas
+	Log      *zap.Logger
 }
 
 func (c ConfigServidor) log() *zap.Logger {
