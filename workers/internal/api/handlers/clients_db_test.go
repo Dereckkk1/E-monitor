@@ -200,3 +200,22 @@ func TestClienteHTTP_Update_404Recusas400(t *testing.T) {
 	nome, _, _ := linhaDoCliente(t, ctx, pool, id)
 	require.Equal(t, "Existe", nome, "as recusas não gravam")
 }
+
+// O CNPJ só é conferido quando os 14 dígitos MUDAM: trocar por um CNPJ livre
+// passa (e grava), apagar o CNPJ (nulo/vazio) passa, e nenhum caso avisa o hub.
+func TestClienteHTTP_Update_MudarOuApagarOCNPJLivrePassa(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	id := clienteComCNPJ(t, ctx, pool, "Troca CNPJ", cnpjDeTeste())
+	h := &ClientsHandler{Repo: catalog.NewClients(pool)}
+
+	livre := cnpjDeTeste()
+	rec := putCliente(t, h, id, map[string]any{"name": "Troca CNPJ", "cnpj": mascara(livre)})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	_, _, cnpj := linhaDoCliente(t, ctx, pool, id)
+	require.Equal(t, mascara(livre), *cnpj)
+
+	rec = putCliente(t, h, id, map[string]any{"name": "Troca CNPJ", "cnpj": ""})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec = putCliente(t, h, id, map[string]any{"name": "Troca CNPJ"})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
