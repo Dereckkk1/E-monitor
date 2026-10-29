@@ -308,6 +308,38 @@ func TestDefinirEApagarAjuste_FalhaDaRecatEhRegistradaENaoFalhaAAcao(t *testing.
 	require.Equal(t, antesD+1, testutil.ToFloat64(metrics.RecategorizeFailures.WithLabelValues("override_delete")))
 }
 
+// O MCP devolve a célula recalculada, então precisa saber se a recategorização
+// síncrona falhou (a ação segue sem erro, como a rota).
+func TestDefinirEApagarAjusteComResultado_ReportaAFalhaDaRecat(t *testing.T) {
+	c := novoCenario(t)
+
+	r, err := c.srv.DefinirAjusteComResultado(c.ctx, c.entradaAjuste(2, "08:00", "12:00"))
+	require.NoError(t, err)
+	require.False(t, r.RecatFalhou, "recat ok")
+	r, err = c.srv.ApagarAjusteComResultado(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10"))
+	require.NoError(t, err)
+	require.False(t, r.RecatFalhou)
+
+	c.srv.RecatCelula = &recatQueFalha{}
+	r, err = c.srv.DefinirAjusteComResultado(c.ctx, c.entradaAjuste(2, "08:00", "12:00"))
+	require.NoError(t, err, "a falha da recat não falha a ação")
+	require.True(t, r.RecatFalhou)
+	r, err = c.srv.ApagarAjusteComResultado(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10"))
+	require.NoError(t, err)
+	require.True(t, r.RecatFalhou)
+
+	// Recusa de entrada: nada gravado, nada a reportar.
+	r, err = c.srv.DefinirAjusteComResultado(c.ctx, c.entradaAjuste(-1, "08:00", "12:00"))
+	require.Error(t, err)
+	require.False(t, r.RecatFalhou)
+
+	// Sem recategorizador não há o que falhar.
+	c.srv.RecatCelula = nil
+	r, err = c.srv.DefinirAjusteComResultado(c.ctx, c.entradaAjuste(2, "08:00", "12:00"))
+	require.NoError(t, err)
+	require.False(t, r.RecatFalhou)
+}
+
 func TestApagarAjuste_ApagaERevertePraRegra(t *testing.T) {
 	c := novoCenario(t)
 	_, err := c.srv.CriarRegra(c.ctx, c.campanha, c.entradaRegra(c.tipoA, "08:00", "12:00", 1))

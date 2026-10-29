@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -140,8 +141,67 @@ func TestDefinirOverride_PreviewNaoEscreveEConfirmarGrava(t *testing.T) {
 	require.Equal(t, lista[0], aj)
 
 	// Trocar o ajuste: a mesma célula-dia vira outro valor (upsert), sem segunda linha.
+	// motivo omitido MANTÉM o motivo atual (F3-10: omitir não apaga), e o preview não mostra o motivo.
+	pre = b.preview(t, "definir_override", argsOverride(c, "2026-12-07", 1, nil))
+	for _, m := range pre["preview"].(map[string]any)["mudancas"].([]any) {
+		require.NotEqual(t, "motivo", m.(map[string]any)["campo"], "o motivo não muda: não aparece")
+	}
 	b.confirmarEExecutar(t, "definir_override", argsOverride(c, "2026-12-07", 1, nil))
+	require.Equal(t, []string{tipo + "|Rádio 1|2026-12-07|1|08:00-12:00|Emissora trocou a grade"}, linhasDeAjuste(t, b, c.camp))
+
+	// Trocar o motivo por outro aparece de → para; "" APAGA o motivo (explícito).
+	pre = b.preview(t, "definir_override", argsOverride(c, "2026-12-07", 1, map[string]any{"motivo": "Novo motivo"}))
+	require.Contains(t, textoDoPreview(t, pre), `"campo":"motivo","de":"Emissora trocou a grade","para":"Novo motivo"`)
+	b.confirmarEExecutar(t, "definir_override", argsOverride(c, "2026-12-07", 1, map[string]any{"motivo": "Novo motivo"}))
+	require.Equal(t, []string{tipo + "|Rádio 1|2026-12-07|1|08:00-12:00|Novo motivo"}, linhasDeAjuste(t, b, c.camp))
+	pre = b.preview(t, "definir_override", argsOverride(c, "2026-12-07", 1, map[string]any{"motivo": ""}))
+	require.Contains(t, textoDoPreview(t, pre), `"campo":"motivo","de":"Novo motivo","para":null`)
+	b.confirmarEExecutar(t, "definir_override", argsOverride(c, "2026-12-07", 1, map[string]any{"motivo": ""}))
 	require.Equal(t, []string{tipo + "|Rádio 1|2026-12-07|1|08:00-12:00|"}, linhasDeAjuste(t, b, c.camp))
+	// Só o motivo mudou (mesma meta e faixa): é uma alteração, não "nada a alterar".
+	b.confirmarEExecutar(t, "definir_override", argsOverride(c, "2026-12-07", 1, map[string]any{"motivo": "De novo"}))
+	require.Equal(t, []string{tipo + "|Rádio 1|2026-12-07|1|08:00-12:00|De novo"}, linhasDeAjuste(t, b, c.camp))
+	// Ajuste NOVO sem motivo: nenhum motivo, e o preview não inventa a linha.
+	pre = b.preview(t, "definir_override", argsOverride(c, "2026-12-08", 1, nil))
+	for _, m := range pre["preview"].(map[string]any)["mudancas"].([]any) {
+		require.NotEqual(t, "motivo", m.(map[string]any)["campo"])
+	}
+}
+
+// recatQueFalhaNoMCP faz a recategorização síncrona da célula-dia falhar (as ações a
+// engolem: o ajuste já foi gravado), para provar que a resposta não afirma o contrário.
+type recatQueFalhaNoMCP struct{}
+
+func (recatQueFalhaNoMCP) RecategorizeForOverride(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
+	return errors.New("recat caiu")
+}
+
+func TestOverrides_RecatQueFalhaNaoAfirmaCategoriasRecalculadas(t *testing.T) {
+	b := novaBancadaTool(t)
+	agoraFixa(b)
+	c := semearRegra(t, b, uuid.Nil, uuid.Nil, "2026-12-01", "2026-12-31")
+	args := argsOverride(c, "2026-12-07", 3, map[string]any{"inicio_horario": "08:00", "fim_horario": "10:00"})
+
+	// Recat saudável: afirma.
+	out := b.confirmarEExecutar(t, "definir_override", args)
+	require.Contains(t, mustJSON(t, out["ressalvas"]), "já traz as categorias recalculadas")
+
+	// Recat falhando: o ajuste é gravado (a ação não falha), mas a resposta diz a verdade.
+	b.E.Acoes.RecatCelula = recatQueFalhaNoMCP{}
+	args["insercoes"] = 4
+	out = b.confirmarEExecutar(t, "definir_override", args)
+	r := mustJSON(t, out["ressalvas"])
+	require.Contains(t, r, "recategorização da célula-dia falhou")
+	require.Contains(t, r, "15 min")
+	require.NotContains(t, r, "já traz as categorias recalculadas")
+	require.Len(t, linhasDeAjuste(t, b, c.camp), 1)
+	require.Contains(t, linhasDeAjuste(t, b, c.camp)[0], "|4|", "o ajuste foi gravado mesmo assim")
+
+	out = b.confirmarEExecutar(t, "apagar_override", argsApagarOverride(c, "2026-12-07"))
+	r = mustJSON(t, out["ressalvas"])
+	require.Contains(t, r, "recategorização da célula-dia falhou")
+	require.NotContains(t, r, "já traz as categorias recalculadas")
+	require.Empty(t, linhasDeAjuste(t, b, c.camp))
 }
 
 func TestDefinirOverride_FaixaOmitidaSegueATela(t *testing.T) {

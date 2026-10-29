@@ -198,6 +198,16 @@ type EntradaAjuste struct {
 	CriadoPor                      *uuid.UUID
 }
 
+// ResultadoAjuste é o que DefinirAjusteComResultado/ApagarAjusteComResultado
+// contam além do erro: a recategorização da célula-dia é best-effort (a ação já
+// gravou), então o chamador que PRECISA saber se ela falhou — o MCP, que devolve a
+// célula recalculada — lê RecatFalhou. As rotas HTTP seguem ignorando.
+type ResultadoAjuste struct {
+	// RecatFalhou: a recategorização síncrona da célula-dia deu erro (já registrado
+	// em log e métrica); o reconciler de projeções corrige depois.
+	RecatFalhou bool
+}
+
 // DefinirAjuste grava (ou troca) o ajuste e recategoriza a célula-dia de forma
 // SÍNCRONA: a categoria já tem de estar certa quando a resposta volta (o
 // frontend refaz a leitura no onSuccess; em segundo plano ele pintaria a
@@ -205,18 +215,24 @@ type EntradaAjuste struct {
 // latência é desprezível. A recategorização é best-effort: o ajuste já foi
 // gravado, então o erro dela é registrado e NÃO falha a ação.
 func (s *Servico) DefinirAjuste(ctx context.Context, e EntradaAjuste) error {
+	_, err := s.DefinirAjusteComResultado(ctx, e)
+	return err
+}
+
+// DefinirAjusteComResultado é o DefinirAjuste que também diz se a recategorização falhou.
+func (s *Servico) DefinirAjusteComResultado(ctx context.Context, e EntradaAjuste) (ResultadoAjuste, error) {
 	if !hhmm.MatchString(e.HoraInicio) {
-		return entradaInvalida("time_start must be HH:MM (00:00-23:59)")
+		return ResultadoAjuste{}, entradaInvalida("time_start must be HH:MM (00:00-23:59)")
 	}
 	if !hhmm.MatchString(e.HoraFim) {
-		return entradaInvalida("time_end must be HH:MM (00:00-23:59)")
+		return ResultadoAjuste{}, entradaInvalida("time_end must be HH:MM (00:00-23:59)")
 	}
 	// Comparação de texto é segura porque o regex força HH:MM com zero à esquerda.
 	if e.HoraFim <= e.HoraInicio {
-		return entradaInvalida("time_end must be greater than time_start")
+		return ResultadoAjuste{}, entradaInvalida("time_end must be greater than time_start")
 	}
 	if e.Insercoes < 0 {
-		return entradaInvalida("as inserções do dia não podem ser negativas")
+		return ResultadoAjuste{}, entradaInvalida("as inserções do dia não podem ser negativas")
 	}
 	if err := s.Ajustes.Upsert(ctx, catalog.UpsertOverrideInput{
 		CampaignID: e.CampanhaID, TypeID: e.TipoID, StationID: e.EmissoraID,
@@ -224,28 +240,36 @@ func (s *Servico) DefinirAjuste(ctx context.Context, e EntradaAjuste) error {
 		TimeStart: e.HoraInicio, TimeEnd: e.HoraFim,
 		Reason: e.Motivo, CreatedBy: e.CriadoPor,
 	}); err != nil {
-		return recusaDoBanco(err)
+		return ResultadoAjuste{}, recusaDoBanco(err)
 	}
-	s.recatDaCelula("override_upsert", e.CampanhaID, e.TipoID, e.EmissoraID, e.Dia)
-	return nil
+	return ResultadoAjuste{RecatFalhou: s.recatDaCelula("override_upsert", e.CampanhaID, e.TipoID, e.EmissoraID, e.Dia)}, nil
 }
 
 // ApagarAjuste apaga o ajuste (a célula volta a ser julgada pelas regras) e
 // recategoriza a célula-dia de forma síncrona, como DefinirAjuste. Apagar um
 // ajuste que não existe não é erro (a rota sempre respondeu 204).
 func (s *Servico) ApagarAjuste(ctx context.Context, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) error {
-	if err := s.Ajustes.Delete(ctx, campanhaID, tipoID, emissoraID, dia); err != nil {
-		return err
-	}
-	s.recatDaCelula("override_delete", campanhaID, tipoID, emissoraID, dia)
-	return nil
+	_, err := s.ApagarAjusteComResultado(ctx, campanhaID, tipoID, emissoraID, dia)
+	return err
 }
 
-func (s *Servico) recatDaCelula(origem string, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) {
+// ApagarAjusteComResultado é o ApagarAjuste que também diz se a recategorização falhou.
+func (s *Servico) ApagarAjusteComResultado(ctx context.Context, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) (ResultadoAjuste, error) {
+	if err := s.Ajustes.Delete(ctx, campanhaID, tipoID, emissoraID, dia); err != nil {
+		return ResultadoAjuste{}, err
+	}
+	return ResultadoAjuste{RecatFalhou: s.recatDaCelula("override_delete", campanhaID, tipoID, emissoraID, dia)}, nil
+}
+
+// recatDaCelula recategoriza a célula-dia e devolve true se falhou. Sem
+// recategorizador configurado não há o que falhar (false).
+func (s *Servico) recatDaCelula(origem string, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) bool {
 	if s.RecatCelula == nil {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), PrazoRecat)
 	defer cancel()
-	RegistrarFalhaRecat(origem, s.RecatCelula.RecategorizeForOverride(ctx, campanhaID, tipoID, emissoraID, dia))
+	err := s.RecatCelula.RecategorizeForOverride(ctx, campanhaID, tipoID, emissoraID, dia)
+	RegistrarFalhaRecat(origem, err)
+	return err != nil
 }

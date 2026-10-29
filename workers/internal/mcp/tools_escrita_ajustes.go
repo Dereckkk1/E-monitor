@@ -230,14 +230,14 @@ type saidaApagarAjuste struct {
 // ── definir_override ────────────────────────────────────────────────────
 
 type entradaDefinirOverride struct {
-	CampanhaID    string `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas. Nunca invente: pergunte."`
-	TipoID        string `json:"tipo_id" jsonschema:"Id (uuid) do tipo de material da célula (a grade é por TIPO), vindo de grade_campanha. Nunca invente: pergunte."`
-	EmissoraID    string `json:"emissora_id" jsonschema:"Id (uuid) da emissora da célula (precisa ser da campanha), vindo de grade_campanha. Nunca invente: pergunte."`
-	Data          string `json:"data" jsonschema:"Dia da célula (AAAA-MM-DD, America/Sao_Paulo), dentro do período da campanha."`
-	Insercoes     int    `json:"insercoes" jsonschema:"A meta do dia nesta célula, de 0 a 100. ATENÇÃO: 0 não é 'nada esperado', é meta zero — toda tocada do dia vira bonus (bonificação)."`
-	InicioHorario string `json:"inicio_horario,omitempty" jsonschema:"Início da faixa do dia (HH:MM, 00:00 a 23:59). Informe junto com fim_horario, ou omita os dois para usar a faixa do ajuste atual ou da regra única do dia."`
-	FimHorario    string `json:"fim_horario,omitempty" jsonschema:"Fim da faixa do dia (HH:MM), maior que o início. Informe junto com inicio_horario, ou omita os dois."`
-	Motivo        string `json:"motivo,omitempty" jsonschema:"Por que o ajuste (texto livre, até 500 caracteres), ex.: emissora trocou a grade."`
+	CampanhaID    string  `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas. Nunca invente: pergunte."`
+	TipoID        string  `json:"tipo_id" jsonschema:"Id (uuid) do tipo de material da célula (a grade é por TIPO), vindo de grade_campanha. Nunca invente: pergunte."`
+	EmissoraID    string  `json:"emissora_id" jsonschema:"Id (uuid) da emissora da célula (precisa ser da campanha), vindo de grade_campanha. Nunca invente: pergunte."`
+	Data          string  `json:"data" jsonschema:"Dia da célula (AAAA-MM-DD, America/Sao_Paulo), dentro do período da campanha."`
+	Insercoes     int     `json:"insercoes" jsonschema:"A meta do dia nesta célula, de 0 a 100. ATENÇÃO: 0 não é 'nada esperado', é meta zero — toda tocada do dia vira bonus (bonificação)."`
+	InicioHorario string  `json:"inicio_horario,omitempty" jsonschema:"Início da faixa do dia (HH:MM, 00:00 a 23:59). Informe junto com fim_horario, ou omita os dois para usar a faixa do ajuste atual ou da regra única do dia."`
+	FimHorario    string  `json:"fim_horario,omitempty" jsonschema:"Fim da faixa do dia (HH:MM), maior que o início. Informe junto com inicio_horario, ou omita os dois."`
+	Motivo        *string `json:"motivo,omitempty" jsonschema:"Por que o ajuste (texto livre, até 500 caracteres), ex.: emissora trocou a grade. Omita para MANTER o motivo atual do ajuste (se houver); texto vazio APAGA o motivo."`
 	CampoConfirmacao
 }
 
@@ -258,15 +258,23 @@ func planejarAjuste(ctx context.Context, E *Escritas, in entradaDefinirOverride)
 	if (aparar(in.InicioHorario) == "") != (aparar(in.FimHorario) == "") {
 		return nil, errEntrada("informe inicio_horario e fim_horario juntos, ou omita os dois")
 	}
-	motivo := aparar(in.Motivo)
-	if err := limiteDeRunas("motivo", motivo, tetoMotivoDoAjuste); err != nil {
-		return nil, err
+	var pedido string
+	if in.Motivo != nil {
+		pedido = aparar(*in.Motivo)
+		if err := limiteDeRunas("motivo", pedido, tetoMotivoDoAjuste); err != nil {
+			return nil, err
+		}
 	}
 	c, err := lerCelulaDoAjuste(ctx, E, in.CampanhaID, in.TipoID, in.EmissoraID, in.Data, true)
 	if err != nil {
 		return nil, err
 	}
-	pl := &planoDeAjuste{celulaDoAjuste: c, insercoes: int16(in.Insercoes), motivo: ptrTexto(motivo)}
+	// Edição parcial (F3-10): motivo omitido mantém o do ajuste atual; "" apaga.
+	motivo := ptrTexto(pedido)
+	if in.Motivo == nil && c.atual != nil {
+		motivo = c.atual.Reason
+	}
+	pl := &planoDeAjuste{celulaDoAjuste: c, insercoes: int16(in.Insercoes), motivo: motivo}
 	if aparar(in.InicioHorario) != "" {
 		if pl.ini, pl.fim, err = faixaDaEntrada(in.InicioHorario, in.FimHorario); err != nil {
 			return nil, err
@@ -275,7 +283,7 @@ func planejarAjuste(ctx context.Context, E *Escritas, in entradaDefinirOverride)
 		return nil, err
 	}
 	if c.atual != nil && c.atual.PlaysExpected == pl.insercoes && c.atual.TimeStart == pl.ini && c.atual.TimeEnd == pl.fim &&
-		igualTexto(c.atual.Reason, motivo) {
+		igualTexto(c.atual.Reason, textoDoPtr(motivo)) {
 		return nil, errEntrada("nada a alterar: esta célula-dia já tem exatamente este ajuste")
 	}
 	pl.ressalvas = pl.avisosDoAjuste()
@@ -377,12 +385,13 @@ func escritaDefinirOverride(cfg ConfigServidor) Escrita[entradaDefinirOverride] 
 				{Campo: "meta do dia (inserções)", De: c.metaAtual(), Para: pl.insercoes},
 				{Campo: "faixa horária", De: c.faixaAtual(), Para: pl.ini + "–" + pl.fim},
 			}
-			if c.atual != nil || pl.motivo != nil {
-				var de any
-				if c.atual != nil {
-					de = textoOuNil(c.atual.Reason)
-				}
-				mud = append(mud, mudanca{Campo: "motivo", De: de, Para: textoOuNil(pl.motivo)})
+			// O motivo só aparece quando muda (omitir mantém o atual).
+			var motivoAntes *string
+			if c.atual != nil {
+				motivoAntes = c.atual.Reason
+			}
+			if textoDoPtr(motivoAntes) != textoDoPtr(pl.motivo) {
+				mud = append(mud, mudanca{Campo: "motivo", De: textoOuNil(motivoAntes), Para: textoOuNil(pl.motivo)})
 			}
 			return previa{
 				Resumo:   fmt.Sprintf("Ajuste do dia %s em %s × %s × %q: meta %d, faixa %s–%s", dia(c.dia), c.est.Name, c.tipo.Name, c.camp.Name, pl.insercoes, pl.ini, pl.fim),
@@ -400,10 +409,11 @@ func escritaDefinirOverride(cfg ConfigServidor) Escrita[entradaDefinirOverride] 
 				return feito{}, err
 			}
 			c := pl.celulaDoAjuste
-			if err := E.Acoes.DefinirAjuste(ctx, acoes.EntradaAjuste{
+			res, err := E.Acoes.DefinirAjusteComResultado(ctx, acoes.EntradaAjuste{
 				CampanhaID: c.camp.ID, TipoID: c.tipo.ID, EmissoraID: c.est.ID, Dia: c.dia, Insercoes: pl.insercoes,
 				HoraInicio: pl.ini, HoraFim: pl.fim, Motivo: pl.motivo, CriadoPor: &p.UserID,
-			}); err != nil {
+			})
+			if err != nil {
 				return feito{}, err
 			}
 			gravado, err := ajusteGravado(ctx, E.Leitura, c)
@@ -419,10 +429,20 @@ func escritaDefinirOverride(cfg ConfigServidor) Escrita[entradaDefinirOverride] 
 			return feito{
 				Resultado: saidaAjuste{Campanha: refDe(camp.ID, camp.Name), Ajuste: montarAjusteDTO(*gravado, tipos, emissoras), Plano: plano},
 				Recurso:   "distribution_override", RecursoID: &camp.ID,
-				Ressalvas: []string{"A recategorização da célula-dia roda junto da gravação: o plano do dia abaixo já traz as categorias recalculadas."},
+				Ressalvas: []string{ressalvaDaRecatDaCelula(res, "gravação", "gravado")},
 			}, nil
 		},
 	}
+}
+
+// ressalvaDaRecatDaCelula diz a verdade sobre a recategorização síncrona da célula-dia:
+// as ações a engolem quando falha (o ajuste já foi gravado), então o resultado só
+// pode afirmar que o plano traz categorias recalculadas se ela não falhou.
+func ressalvaDaRecatDaCelula(res acoes.ResultadoAjuste, gesto, feitoDo string) string {
+	if res.RecatFalhou {
+		return "O ajuste foi " + feitoDo + ", mas a recategorização da célula-dia falhou: as categorias do plano do dia abaixo podem estar desatualizadas. O reconciliador corrige em até 15 min — confira o plano depois."
+	}
+	return "A recategorização da célula-dia roda junto da " + gesto + ": o plano do dia abaixo já traz as categorias recalculadas."
 }
 
 // ajusteGravado relê o ajuste da célula-dia. Se sumiu, a escrita JÁ aconteceu: é
@@ -517,7 +537,8 @@ func escritaApagarOverride(cfg ConfigServidor) Escrita[entradaApagarOverride] {
 				return feito{}, err
 			}
 			removido := *c.atual
-			if err := E.Acoes.ApagarAjuste(ctx, c.camp.ID, c.tipo.ID, c.est.ID, c.dia); err != nil {
+			res, err := E.Acoes.ApagarAjusteComResultado(ctx, c.camp.ID, c.tipo.ID, c.est.ID, c.dia)
+			if err != nil {
 				return feito{}, err
 			}
 			plano, err := montarPlanoDoDia(ctx, E.Leitura, c.camp, c.est, c.tipo, c.dia)
@@ -530,7 +551,7 @@ func escritaApagarOverride(cfg ConfigServidor) Escrita[entradaApagarOverride] {
 				Resultado: saidaApagarAjuste{Campanha: refDe(camp.ID, camp.Name), Apagado: true,
 					AjusteRemovido: montarAjusteDTO(removido, tipos, emissoras), Plano: plano},
 				Recurso: "distribution_override", RecursoID: &camp.ID,
-				Ressalvas: []string{"A recategorização da célula-dia roda junto da remoção: o plano do dia abaixo já traz as categorias recalculadas."},
+				Ressalvas: []string{ressalvaDaRecatDaCelula(res, "remoção", "removido")},
 			}, nil
 		},
 	}
