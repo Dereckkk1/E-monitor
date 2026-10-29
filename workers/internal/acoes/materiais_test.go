@@ -73,14 +73,27 @@ func TestVinculos_FalhaDoReloadNaoFalhaAAcao(t *testing.T) {
 	require.Equal(t, 3, sf.Contagem("Reload", c.campanha))
 }
 
-func TestVinculos_DesvincularEtrocarInexistenteNaoEhErroEAindaRecarrega(t *testing.T) {
+// Sem vínculo, trocar as emissoras ou desvincular é um no-op: a ação recusa
+// (nao_encontrado, marcada com ErrAlvoInexistente) em vez de dizer "feito", e NÃO
+// recarrega a campanha (recarregar reinicia os workers dela à toa). A rota HTTP
+// mapeia a marca para 204, como sempre.
+func TestVinculos_TrocarEDesvincularSemVinculoRecusaSemRecarregar(t *testing.T) {
 	c, _, sf := novoCenarioCampanha(t)
-	inexistente := uuid.New()
+	semVinculo := mcptest.Material(t, c.ctx, c.pool, c.cliente, c.tipoA, "Sem vínculo")
 
-	require.NoError(t, c.srv.TrocarEmissorasMaterial(c.ctx, c.campanha, inexistente, nil))
-	require.NoError(t, c.srv.DesvincularMaterial(c.ctx, c.campanha, inexistente))
+	err := c.srv.TrocarEmissorasMaterial(c.ctx, c.campanha, semVinculo, []uuid.UUID{c.emissora})
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoNaoEncontrado, r.Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+	require.Contains(t, r.Mensagem, "vínculo")
 
-	require.Equal(t, 2, sf.Contagem("Reload", c.campanha))
+	err = c.srv.DesvincularMaterial(c.ctx, c.campanha, semVinculo)
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+
+	require.Empty(t, sf.Chamadas(), "nada mudou: não recarrega")
+	_, ok := c.emissorasDoVinculo(t, semVinculo)
+	require.False(t, ok, "e não criou vínculo nenhum")
 }
 
 func TestDesvincularMaterial_NaoMudaOPassado(t *testing.T) {
@@ -137,11 +150,19 @@ func TestTrocarTipoMaterial_TipoInexistenteViraRecusa(t *testing.T) {
 	require.Zero(t, disparos, "falhou antes de gravar: não recategoriza")
 }
 
-// A rota sempre respondeu 204 para material inexistente (o UPDATE não acha
-// linha); quem precisa saber confere antes.
-func TestTrocarTipoMaterial_MaterialInexistenteNaoEhErro(t *testing.T) {
+// Material inexistente: a ação recusa (nao_encontrado + ErrAlvoInexistente) e NÃO
+// dispara a recategorização (não há o que recategorizar). A rota HTTP mapeia a
+// marca para 204, como sempre.
+func TestTrocarTipoMaterial_MaterialInexistenteRecusaSemRecat(t *testing.T) {
 	c := novoCenario(t)
-	require.NoError(t, c.srv.TrocarTipoMaterial(c.ctx, uuid.New(), &c.tipoB))
+	disparos := 0
+	c.srv.EmSegundoPlano = func(f func()) { disparos++; f() }
+
+	err := c.srv.TrocarTipoMaterial(c.ctx, uuid.New(), &c.tipoB)
+
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+	require.Zero(t, disparos)
 }
 
 // Material ou campanha inexistente ao vincular: recusa nao_encontrado com o

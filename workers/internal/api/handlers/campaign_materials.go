@@ -121,6 +121,12 @@ func (h *CampaignMaterialsHandler) UpdateStations(w http.ResponseWriter, r *http
 		return
 	}
 	if err := h.servico().TrocarEmissorasMaterial(r.Context(), campaignID, materialID, p.TargetStations); err != nil {
+		// Sem vínculo é 204 (idempotente), como sempre: a ação devolve
+		// nao_encontrado para o MCP não dizer "feito" quando nada foi feito.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
@@ -141,6 +147,12 @@ func (h *CampaignMaterialsHandler) Unlink(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.servico().DesvincularMaterial(r.Context(), campaignID, materialID); err != nil {
+		// Sem vínculo é 204 (idempotente), como sempre: a ação devolve
+		// nao_encontrado para o MCP não dizer "feito" quando nada foi feito.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}

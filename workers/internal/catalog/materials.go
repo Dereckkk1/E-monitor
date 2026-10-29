@@ -179,11 +179,15 @@ func (m *Materials) ListByClient(ctx context.Context, clientID uuid.UUID, q stri
 	return out, rows.Err()
 }
 
-// UpdateType sets (or clears) the type_id for a material.
-func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.UUID) error {
-	_, err := m.pool.Exec(ctx,
+// UpdateType sets (or clears) the type_id for a material and returns how many
+// rows it touched (0 = the material does not exist).
+func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.UUID) (int64, error) {
+	tag, err := m.pool.Exec(ctx,
 		`UPDATE materials SET type_id = $2, updated_at = now() WHERE id = $1`, id, typeID)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // UpdateTitle renames a material. Title is a pure label — nada no matching,

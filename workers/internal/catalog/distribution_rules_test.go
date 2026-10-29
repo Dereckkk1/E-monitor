@@ -297,7 +297,7 @@ func TestDistributionRules_RecategorizeForMaterial(t *testing.T) {
 	}
 
 	// Operador troca o tipo do material pro tipo NOVO (que tem regra)...
-	if err := mats.UpdateType(ctx, mat.ID, &typeNew); err != nil {
+	if _, err := mats.UpdateType(ctx, mat.ID, &typeNew); err != nil {
 		t.Fatalf("update type: %v", err)
 	}
 	// ...sem recategorizar, a detection segue bonus (é o bug). Recategoriza:

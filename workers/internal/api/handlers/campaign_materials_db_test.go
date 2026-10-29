@@ -166,6 +166,7 @@ func TestVinculoHTTP_UpdateStations_204TrocaEmissorasERecarrega(t *testing.T) {
 	require.Equal(t, 1, c.reloads())
 }
 
+// Sem vínculo a rota segue 204 (idempotente); a ação recusa e não recarrega.
 func TestVinculoHTTP_UpdateStations_VinculoInexistenteTambemDa204(t *testing.T) {
 	c := novoCenarioVinculo(t)
 
@@ -173,7 +174,7 @@ func TestVinculoHTTP_UpdateStations_VinculoInexistenteTambemDa204(t *testing.T) 
 		map[string]any{"target_stations": []string{}})
 
 	require.Equal(t, http.StatusNoContent, rec.Code)
-	require.Equal(t, 1, c.reloads(), "a rota sempre recarregou, mesmo sem linha afetada")
+	require.Zero(t, c.reloads(), "não havia vínculo: nada mudou, então não recarrega (antes recarregava à toa)")
 }
 
 func TestVinculoHTTP_Unlink_204ApagaOVinculoERecarrega(t *testing.T) {

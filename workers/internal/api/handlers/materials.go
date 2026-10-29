@@ -272,6 +272,12 @@ func (h *MaterialsHandler) UpdateType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.servico().TrocarTipoMaterial(r.Context(), id, p.TypeID); err != nil {
+		// Material inexistente é 204 (a rota sempre foi assim): a ação devolve
+		// nao_encontrado, sem recategorizar, para o MCP não dizer "feito".
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
