@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -115,4 +116,68 @@ func TestExpiraDoToken(t *testing.T) {
 	exp := time.UnixMilli(1793000000123)
 	require.True(t, exp.Equal(expiraDoToken(tokenDeTeste(t, exp))))
 	require.True(t, expiraDoToken("lixo").IsZero())
+}
+
+// A poda oportunista nunca pode travar uma confirmação: uma linha vencida que
+// outra transação está segurando (ex.: o varredor da Fatia 4) é pulada
+// (FOR UPDATE SKIP LOCKED), não esperada.
+func TestConfirmacoes_PodaNaoEsperaLinhaTravada(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO mcp_confirmacoes_usadas (hash, expira_em)
+		VALUES (decode(repeat('aa', 32), 'hex'), now() - interval '2 hours'),
+		       (decode(repeat('bb', 32), 'hex'), now() - interval '3 hours')`)
+	require.NoError(t, err)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `SELECT 1 FROM mcp_confirmacoes_usadas WHERE hash = decode(repeat('aa', 32), 'hex') FOR UPDATE`)
+	require.NoError(t, err)
+
+	exp := time.Now().Add(ttlConfirmacao)
+	curto, cancela := context.WithTimeout(ctx, 8*time.Second)
+	defer cancela()
+	inicio := time.Now()
+	usou, err := (&Confirmacoes{DB: pool}).Consumir(curto, tokenDeTeste(t, exp), exp)
+	require.NoError(t, err, "a poda esperou a linha travada em vez de pulá-la")
+	require.True(t, usou)
+	require.Less(t, time.Since(inicio), 5*time.Second)
+
+	var velhaLivre bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT NOT EXISTS (SELECT 1 FROM mcp_confirmacoes_usadas WHERE hash = decode(repeat('bb', 32), 'hex'))`).Scan(&velhaLivre))
+	require.True(t, velhaLivre, "a vencida que NÃO estava travada foi podada")
+}
+
+// Se a poda falha (aqui, um trigger que recusa o DELETE), o INSERT roda do
+// mesmo jeito: a poda é higiene, nunca pré-condição da confirmação.
+func TestConfirmacoes_FalhaDaPodaNaoImpedeOConsumo(t *testing.T) {
+	ctx, pool := mcptest.DB(t)
+	_, err := pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION mcp_teste_recusa_delete() RETURNS trigger AS $$
+		BEGIN RAISE EXCEPTION 'poda recusada pelo teste'; END; $$ LANGUAGE plpgsql;
+		CREATE TRIGGER mcp_teste_recusa_delete BEFORE DELETE ON mcp_confirmacoes_usadas
+		FOR EACH ROW EXECUTE FUNCTION mcp_teste_recusa_delete()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS mcp_teste_recusa_delete ON mcp_confirmacoes_usadas;
+			DROP FUNCTION IF EXISTS mcp_teste_recusa_delete()`)
+	})
+	_, err = pool.Exec(ctx, `INSERT INTO mcp_confirmacoes_usadas (hash, expira_em)
+		VALUES (decode(repeat('aa', 32), 'hex'), now() - interval '2 hours')`)
+	require.NoError(t, err)
+
+	exp := time.Now().Add(ttlConfirmacao)
+	tok := tokenDeTeste(t, exp)
+	usou, err := (&Confirmacoes{DB: pool}).Consumir(ctx, tok, exp)
+	require.NoError(t, err, "erro da poda não pode virar erro da confirmação")
+	require.True(t, usou)
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM mcp_confirmacoes_usadas WHERE hash = $1`, hashDoToken(tok)).Scan(&n))
+	require.Equal(t, 1, n, "o token ficou marcado como usado")
 }
