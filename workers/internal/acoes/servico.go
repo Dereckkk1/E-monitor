@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
@@ -100,11 +101,23 @@ func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *
 	}
 }
 
-// emSegundoPlano roda f fora do caminho da resposta (padrão `go f()`).
+// emSegundoPlano roda f fora do caminho da resposta. Em produção
+// (EmSegundoPlano nil) é uma goroutine que RECUPERA de pânico: um gatilho que
+// quebra (recategorização, aviso ao hub) é logado com a pilha e não derruba o
+// processo da API. Não há limite de concorrência — um pico de edições dispara
+// uma goroutine por gatilho; limitá-las é follow-up.
 func (s *Servico) emSegundoPlano(f func()) {
 	if s.EmSegundoPlano != nil {
 		s.EmSegundoPlano(f)
 		return
 	}
-	go f()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				zap.L().Error("acoes: gatilho em segundo plano entrou em pânico",
+					zap.Any("panic", r), zap.Stack("stack"))
+			}
+		}()
+		f()
+	}()
 }
