@@ -19,6 +19,9 @@ import (
 func registrarEscritasBasicas(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaEscrita(s, cfg, p, escritaMarcarNotificacoesLidas())
 	ferramentaEscrita(s, cfg, p, escritaReconhecerSimilaridade())
+	ferramentaEscrita(s, cfg, p, escritaCriarTipoMaterial(cfg))
+	ferramentaEscrita(s, cfg, p, escritaEditarTipoMaterial(cfg))
+	ferramentaEscrita(s, cfg, p, escritaEditarMaterial(cfg))
 }
 
 // ── marcar_notificacoes_lidas ───────────────────────────────────────────
