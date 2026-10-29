@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-10-28
+ultima-verificacao: 2026-10-29
 codigo-relacionado:
   - workers/internal/mcp/
   - workers/internal/mcp/oauth/
@@ -9,6 +9,7 @@ codigo-relacionado:
   - workers/cmd/revoga-mcp/main.go
   - workers/cmd/registra-cliente-mcp/main.go
   - migrations/0070_mcp_fundacao.up.sql
+  - migrations/0071_mcp_confirmacoes.up.sql
   - frontend/src/pages/AuthorizeAiPage.jsx
   - frontend/src/components/account/McpIntegrationSection.jsx
   - frontend/public/_headers
@@ -37,6 +38,23 @@ codigo-relacionado:
   - workers/internal/supervisor/contar_ativas.go
   - frontend/src/utils/filtrosDaUrl.js
   - frontend/src/api/hooks.js
+  - workers/internal/mcp/escrita.go
+  - workers/internal/mcp/escritas.go
+  - workers/internal/mcp/confirmacao.go
+  - workers/internal/mcp/instrucoes.go
+  - workers/internal/mcp/tools_escrita_comum.go
+  - workers/internal/mcp/tools_escrita_basicas.go
+  - workers/internal/mcp/tools_escrita_tipos_material.go
+  - workers/internal/mcp/tools_escrita_cadastros.go
+  - workers/internal/mcp/tools_escrita_campanhas.go
+  - workers/internal/mcp/tools_escrita_vinculos.go
+  - workers/internal/mcp/tools_escrita_regras.go
+  - workers/internal/mcp/tools_escrita_ajustes.go
+  - workers/internal/mcp/mcptest/escrita.go
+  - workers/internal/acoes/
+  - workers/internal/api/handlers/acoes_http.go
+  - workers/internal/catalog/ha_veiculacao.go
+  - workers/internal/catalog/campaigns_ciclo.go
 ---
 
 # MCP do E-monitor
@@ -54,10 +72,11 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | 0 | Porta: `/mcp`, OAuth 2.1, tokens, `quem_sou_eu` | implementada (branch `feat/mcp-server`; deploy e conexão dos 3 clientes em prod pendentes) |
 | 1 | Leitura: 26 tools (clientes, campanhas, grade, plano do dia, materiais, emissoras, veiculações, usuários, integrações, notificações) | implementada (branch `feat/mcp-server`, não deployada) |
 | 2 | Relatórios: 17 tools (insights, visão gerencial, assertividade, data e hora, resumo e exportações de campanha, mapa de cobertura, 5 de falhas, 3 de pós-venda, auditoria do MCP) + telas que abrem filtradas pela URL + avaliação 10/10 | implementada (branch `feat/mcp-server`, não deployada) |
-| 3-5 | Escrita, crítico/pendentes, ecossistema | planejadas |
+| 3 | Escrita `livre` e `confirma`: 20 tools + motor de níveis (token HMAC de uso único, escalada a `critico` reavaliada a cada chamada, `critico` barrado até a Fatia 4) + camada `internal/acoes` compartilhada com as rotas HTTP | implementada (branch `feat/mcp-server`, não deployada; ver "Escrita (Fatia 3)") |
+| 4-5 | `critico` executável (`/pendentes`), ecossistema | planejadas |
 
-Tools hoje: as 44 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2). O `status` deste doc vira
-`implementado` quando as fatias 3-5 fecharem.
+Tools hoje: as 64 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3). O `status` deste doc vira
+`implementado` quando as fatias 4-5 fecharem.
 
 ## Regra de ouro: o MCP faz parte do pronto
 
@@ -68,9 +87,10 @@ Tools hoje: as 44 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2). O `s
   porque é a ordem em que o go-sdk devolve o `tools/list`; não é uma escolha nossa.
 - **Tool nunca reimplementa regra de negócio**: chama a MESMA função que o handler HTTP chama
   (`catalog.ApprovedDetectionsFilter`, base financeira `in_slot + bonus`, `categorizer.Settle`,
-  tratamento de `cancelada`). Tela e MCP não podem discordar de número.
+  tratamento de `cancelada`). Tela e MCP não podem discordar de número. Na escrita, essa função mora em
+  `internal/acoes` (ver "Escrita (Fatia 3)"): handler e tool chamam a mesma ação, com os mesmos gatilhos.
 
-## Tools (44)
+## Tools (64)
 
 ### Fatias 0 e 1 (27)
 
@@ -141,6 +161,36 @@ campanhas, emissoras, cidades, linhas de checking, dias de falha) saem cortadas 
 uma ressalva. Nas tools de falha o `cliente` sai como `ref {id, nome}`, como no resto do MCP (o
 `StationFailures` passou a trazer `client_id` só para isso). O alvo é cada resposta abaixo de 60 KB (o cliente MCP corta a saída em ~25k tokens), travado por
 teste nas tools de lista larga.
+
+### Fatia 3 — escrita (20)
+
+Cada tool chama a MESMA ação da rota HTTP (`internal/acoes`, ou o mesmo método de repositório quando a rota já era uma
+chamada só) e dispara os mesmos gatilhos. Nível, fluxo do token e respostas: [Escrita (Fatia 3)](#escrita-fatia-3). A
+descrição de toda tool termina em `Nível: livre|confirma|critico.`. **Sobe para `critico`** significa: a resposta vem barrada
+(`executou: false`, `nivel: critico`, motivo, `links.tela`) e nada é gravado; hoje o crítico só se faz pela tela.
+
+| Tool | Faz | Nível | Sobe para `critico` quando | Chama |
+|---|---|---|---|---|
+| `marcar_notificacoes_lidas` | marca lidas as notificações do próprio admin (`notificacoes[]` ≤ 200 **ou** `todas: true`) | livre | nunca | `Notifications.MarkRead` / `MarkAllReadInWindow` (por usuário) |
+| `reconhecer_similaridade_material` | dispensa o aviso de similaridade ≥ 50% de um material | livre | nunca | `Materials.Acknowledge` (material inexistente = `nao_encontrado`; a rota dá 204) |
+| `criar_tipo_material`, `editar_tipo_material` | cria/edita tipo (nome único, cor `#rrggbb`, descrição; edição parcial) | confirma | nunca | `MaterialTypes.Create` / `Update` (nome repetido = `nome_duplicado`, a rota dá 500) |
+| `editar_material` | título, roteiro (`""` limpa) e/ou tipo | confirma | muda o **tipo** e o material tem veiculação aprovada (a troca recategoriza as veiculações dele em TODAS as campanhas) | `Materials.UpdateTitle` / `UpdateScript`, `acoes.TrocarTipoMaterial` |
+| `criar_cliente` | cria cliente (CNPJ opcional e único) | confirma | nunca | `acoes.CriarCliente` (+ evento `cliente.upsert` ao hub) |
+| `editar_cliente` | edição parcial do cadastro; **sem** `hub_id` (nenhuma rota o grava) | confirma | nunca | `acoes.ChecarCNPJ` (só quando os 14 dígitos mudam) + `acoes.EditarCliente` (não avisa o hub, como a rota) |
+| `editar_pmm_target` | PMM no target por (cliente, emissora): `entradas[{emissora_id, pmm_target: int \| null}]` ≤ 500; `null` **remove** a linha (≠ 0) | confirma | o cliente tem veiculação aprovada em emissora do lote **ou** tem campanha não cancelada com alguma delas já iniciada (início < hoje SP): o valor é retroativo, sem versionamento | `ClientStationPMM.BulkUpsert` |
+| `editar_emissora` | nome, frequência, cidade, UF, PMM (nunca `stream_url`, banda, logo nem metadados) | confirma | o `pmm` muda **e** a emissora tem veiculação aprovada (`stations.pmm` entra nos impactos de todas as campanhas que a usam, inclusive dias passados) | `acoes.EditarCadastroEmissora` → `Stations.UpdateCadastro` (`COALESCE`) + geocodificação |
+| `criar_campanha` | cria campanha (nasce `programada`; emissoras e código do hub opcionais) | confirma | `inicio` ≤ hoje em SP: o agendador a ativaria em ≤ 60 s (sobe workers, o cliente passa a ver) — é um "iniciar campanha" | `acoes.CriarCampanha` (barreira do código do hub, `campanha.upsert`) |
+| `editar_campanha` | nome, `inicio`, `fim`, `codigo_hub` (`""` apaga) | confirma | (a) as novas datas mudam o estado que o agendador dá (`catalog.EstadoPeloCiclo`, a regra do `PromoteScheduledLifecycle`); (b) muda o conjunto de dias já passados do período; (c) muda o código do hub (é a ponte). Renomear e esticar o fim de campanha em andamento não escalam | `acoes.EditarCampanha` |
+| `editar_emissoras_campanha` | `adicionar[]` / `remover[]` emissoras-alvo (nunca "a lista inteira") | confirma | **nunca** — decisão do dono (Dereck, 2026-10-29), depois de `TestEditarEmissorasCampanha_ProvaDaRemocao` provar que os números passados ficam idênticos; muda só as listas, o mapa ao vivo, os alertas, o PMM no target e os workers | `acoes.TrocarEmissorasCampanha` |
+| `vincular_material`, `desvincular_material`, `editar_emissoras_material` | vínculo material↔campanha e as emissoras dele (`adicionar[]`/`remover[]`) | confirma | **nunca** (`TestVinculos_ProvaF34_PassadoNaoMuda`: atribuição é decidida na entrada da tocada). As ressalvas do preview: outra campanha com o mesmo áudio nas mesmas emissoras **disputa a atribuição** (o preview diz quem leva) e webhook de detecção ainda não entregue pode ser descartado | `acoes.VincularMaterial` / `DesvincularMaterial` / `TrocarEmissorasMaterial` (+ `Reload` se a campanha está ativa) |
+| `criar_regra_distribuicao`, `editar_regra_distribuicao` | regra por TIPO (`dias[]` em vez de bitmask, faixa HH:MM, `insercoes_por_dia` 1–100); edição parcial (emissoras e materiais por `adicionar_*`/`remover_*`) | confirma | a campanha tem veiculação aprovada do(s) tipo(s) que o recat varre (criar: o novo; editar: o novo **e** o antigo) **ou** um dia passado da vigência (∩ período da campanha) está coberto pela máscara de dias da semana da versão antiga ou da nova. **Editar só o nome escala igual**: o recat roda de novo | `acoes.CriarRegra` / `EditarRegra` (recat do tipo em segundo plano, ≤ 30 s) |
+| `apagar_regra_distribuicao` | apaga UMA regra da campanha | confirma | a campanha tem **qualquer** veiculação aprovada (apagar varre todos os tipos) **ou** um dia passado da vigência está coberto pela máscara | `acoes.ApagarRegra` (recat da campanha inteira em segundo plano) |
+| `definir_override`, `apagar_override` | ajuste do dia de UMA célula (campanha × tipo × emissora × dia): meta `insercoes` 0–100 e faixa | confirma | `data` < hoje em SP **ou** a célula-dia já tem veiculação aprovada | `acoes.DefinirAjuste` / `ApagarAjuste` (recat **síncrono** da célula-dia; o resultado traz o plano do dia recalculado) |
+
+Notas: toda tool que mexe em campanha recusa a **cancelada** com `[campanha_cancelada]` (a tela não recusa, mas o
+[tratamento de cancelada](cancelled-campaign-handling.md) a tira das telas operacionais); `insercoes: 0` num override é
+**meta zero**, não "nada esperado": toda tocada da célula-dia vira `bonus`. A resposta de cada tool traz o registro depois
+da escrita no formato da tool `obter_*`/`listar_*` correspondente.
 
 ## Relatórios: deep-link e downloads
 
@@ -219,6 +269,221 @@ só saem esquema e host, `https://host/...`; vale também para `ultimo_erro` das
 devolve os ingredientes autoritativos e **não** o "progresso por faixa" do `DayDetailModal` (heurística só de
 tela, em JS); o CPM de `/campaigns` virou `catalog.CPMDaCampanha` (antes só existia no navegador).
 
+## Escrita (Fatia 3)
+
+20 tools (2 `livre`, 18 `confirma`) que fazem o que o portal faz, pela mesma função e com os mesmos gatilhos. Desenho e
+decisões F3-1..F3-12: [plano](../superpowers/plans/2026-10-29-mcp-fatia-3-escrita.md) (com as notas de execução datadas) e
+[spec §5 e §6](../superpowers/specs/2026-10-27-mcp-server-design.md). A tabela de tools, com nível e escalada de cada uma, está em
+"Fatia 3 — escrita (20)".
+
+### O motor de níveis
+
+[`escrita.go`](../../workers/internal/mcp/escrita.go): `Escrita[In]` é **dado** (`Nome`, `Descricao`, `Nivel`, `Escalar`,
+`Preview`, `Executar`, `Tela`, `Recurso`) e `ferramentaEscrita` o registra; a Fatia 4 reaproveita o mesmo valor para
+executar a pendente aprovada. Fluxo de toda chamada, na ordem:
+
+1. **Nível efetivo.** `Escalar` consulta o banco e roda em **toda** chamada, preview e confirmação (F3-2): o token fixa os
+   argumentos, não o estado do mundo. Se entre o preview e a confirmação entrou uma tocada que faz a escrita escalar, a
+   confirmação devolve o ramo `critico` e o token **não** é consumido. O nível nunca desce do declarado.
+2. **`livre`:** executa na hora (`executou: true`).
+3. **Preview** (`confirma` e `critico`): relê o estado, valida e monta `{resumo, mudancas[{campo, de, para}], efeitos[],
+   ressalvas[]}` com nomes (não só ids). Recusa de negócio aqui (`entrada_invalida`, `nao_encontrado`…) vale antes de qualquer
+   escalada ou token.
+4. **`critico`:** barrado (ver abaixo).
+5. **`confirma` sem token:** `{executou: false, preview, confirmacao, expira_em}`. **Com token:** verifica, consome, executa.
+
+Respostas (F3-12): executada `{executou: true, resultado, ressalvas?, aviso?}`; preview acima; token inválido, vencido, de
+outro usuário, de outra tool, com argumentos mudados **ou já usado** → `{executou: false, erro: "… Peça o preview outra
+vez."}` (**não é `isError`**, contrato §3.4); recusa de negócio → `isError` `"<mensagem> [<código>]"`. Códigos: `entrada_invalida`,
+`nao_encontrado`, `cnpj_duplicado` (com o cadastro existente na mensagem), `codigo_hub`, `nome_duplicado`,
+`campanha_cancelada`, `interno`, `sem_identidade`. Se o resultado não serializar depois de escrito, a resposta é
+`{executou: true, resultado: null, aviso}` — nunca erro, senão o modelo repetiria uma escrita já feita. Um `panic` é
+recuperado (`[interno]`), sem derrubar a API.
+
+### O token de confirmação
+
+[`confirmacao.go`](../../workers/internal/mcp/confirmacao.go). Formato `"<exp_ms>.<mac43>"`: `exp_ms` em milissegundos, `mac43`
+o HMAC-SHA256 em base64 URL sem padding, calculado com o `JWT_SECRET` sobre `[tool, args canônicos, user_id, exp_ms]`, com
+**separação de domínio** (o prefixo `mcp-confirmacao.` entra antes do payload: o mesmo segredo assina outras coisas, como o
+pedido do OAuth, e um MAC de um domínio nunca vale no outro). Comparação em tempo constante. A forma é canônica de
+propósito (regex `^[1-9][0-9]{0,15}\.[A-Za-z0-9_-]{43}$`; teto de 200 caracteres no campo): sem isso `01…` e `+1…` dariam hashes
+de uso único diferentes para a mesma confirmação.
+
+- **Validade:** 10 min (`ttlConfirmacao`) + 1 min de folga (`folgaConfirmacao`): um `exp` além de agora + 11 min é recusado.
+- **Argumentos canônicos:** JSON com chaves ordenadas em todo nível, números preservados (`json.Number`), **sem** a chave
+  `confirmacao`. Ordem de chave e tipo de número não invalidam o token; qualquer argumento diferente, sim.
+- O campo `confirmacao` está no schema de toda tool `confirma` ou escalável (`CampoConfirmacao`) e **só** nelas; nunca é
+  obrigatório (o preview não tem token). Travado por `TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir`.
+
+### Uso único: consumido ANTES de executar (F3-5) — diverge da spec §5.2
+
+`mcp_confirmacoes_usadas` (migration 0071; no merge vira 0072, ver "Limitações e follow-ups"): `hash BYTEA PK` (SHA-256 do
+token), `usado_em`, `expira_em`. **Consumir** é `INSERT … ON CONFLICT DO NOTHING`: 1 linha afetada = primeiro uso.
+
+- Consome **antes** de executar. **Só a recusa de negócio libera** (`DELETE` da linha: o token volta a valer); erro interno
+  ou `panic` **não** libera, porque algo pode ter sido gravado (a pessoa pede o preview de novo).
+- **Divergência:** a spec §5.2 pedia o `INSERT` "na mesma transação da escrita" (falha de negócio → rollback → token volta).
+  Nenhuma das funções reaproveitadas aceita `pgx.Tx` (cada uma abre a sua ou usa o pool, e o recat abre a própria), e passar
+  uma transação por todas mudaria o comportamento das rotas HTTP. O custo é o risco residual descrito acima (token gasto
+  depois de erro interno). A spec foi atualizada.
+- Poda oportunista a cada `Consumir`: apaga até 500 linhas vencidas há mais de 1 h (`FOR UPDATE SKIP LOCKED`; erro da poda é
+  logado e ignorado, nunca bloqueia a confirmação). O varredor da Fatia 4 assume. Operação: [operations/mcp.md](../operations/mcp.md).
+
+### Crítico barrado até a Fatia 4 (F3-1)
+
+A spec põe o `critico` executável (e `mcp_acoes_pendentes`, `/pendentes`) na Fatia 4. Até lá, quando a escalada dá `critico` a
+tool calcula o preview e devolve, **sem `isError`**: `{executou: false, nivel: "critico", motivo, preview, aviso, links: {tela}}`,
+não escreve nada, não consome token e grava `mcp.escrita.requer_aprovacao` no `audit_log`. O `aviso` diz "Nada aconteceu. …
+faça pela tela, logado", e as `Instrucoes` mandam o modelo repetir isso (`TestInstrucoes_EscritaCriticoBarrado`). **É exatamente
+este ramo que a Fatia 4 troca por `criarPendente`** — o resto do motor não muda. O `motivo` diz qual condição escalou (pode
+haver mais de uma).
+
+### Escalada: o critério (F3-3, F3-4)
+
+"Atinge veiculação já ocorrida" = existe veiculação **aprovada** no mesmo recorte que o gatilho vai recategorizar.
+`catalog.HaVeiculacao` ([`ha_veiculacao.go`](../../workers/internal/catalog/ha_veiculacao.go)) usa o recorte do recat
+(`detection_campaigns × detections × materials`, dia em America/Sao_Paulo) e o mesmo `ApprovedDetectionsFilter`;
+`TestHaVeiculacao_ParidadeComORecatReal` prova que "false" significa que o recat desse recorte não tem tocada aprovada para
+reclassificar. `HaVeiculacaoNaEmissora` é a pergunta por emissora, sem âncora de campanha (`editar_emissora`). "Dia passado" é
+sempre **hoje em America/Sao_Paulo** (`hojeSP`), nunca `time.Local`.
+
+Regras finais, como implementadas (a tabela de tools traz a coluna "Sobe para `critico` quando"; aqui os detalhes que ela não cabe):
+
+- **`criar_campanha`:** `inicio ≤ hoje SP`.
+- **`editar_campanha`:** o estado que as datas dão muda (`programada`/`ativa`/`concluida`, via `catalog.EstadoPeloCiclo`,
+  travada contra o SQL do `PromoteScheduledLifecycle` por `TestEstadoPeloCiclo_BateComOSQL`), **ou** o conjunto de dias < hoje
+  do período muda, **ou** o código do hub muda.
+- **`editar_emissoras_campanha`: SEM escalada.** O plano (F3-4) previa `critico` ao remover emissora com veiculação. O dono
+  (Dereck) decidiu em 2026-10-29, depois de `TestEditarEmissorasCampanha_ProvaDaRemocao` provar que grade, insights, financeiro,
+  veiculações, planos do dia, falhas e `detection_campaigns` ficam **idênticos** (também depois do recat) ao tirar a emissora,
+  que a tool segue `confirma`. O que muda: `target_stations` (lista de `obter_campanha`), a lista de PMM no target, o mapa ao
+  vivo, os alertas de queda e, se a campanha está ativa, os workers.
+- **Vínculos (`vincular`/`desvincular`/`editar_emissoras_material`): SEM escalada** (`TestVinculos_ProvaF34_PassadoNaoMuda`:
+  não há recat, a atribuição é decidida na entrada da tocada). Duas ressalvas no preview: a **competição de atribuição**
+  (outra campanha com o mesmo áudio nas mesmas emissoras disputa as tocadas futuras: sem `MULTI_ATTRIBUTION`, a tocada vai para
+  UMA campanha só — a do vínculo mais recente quando é o mesmo material, ou o que o detector reconhece, e em empate o de menor
+  `short_id`, quando são materiais diferentes com o mesmo áudio; com a flag ligada, conta nas duas) e o **webhook de detecção
+  ainda não entregue** que a retirada pode descartar.
+- **`editar_material`:** só quando o **tipo** muda e o material tem veiculação aprovada (`HaVeiculacao{MaterialID}`); título e
+  roteiro nunca escalam.
+- **Regras (criar/editar/apagar):** (a) a campanha tem veiculação aprovada do(s) tipo(s) que o recat varre — criar: o novo;
+  editar: o novo **e** o antigo; apagar: **todos** (a regra apagada não diz mais o escopo, o recat varre a campanha inteira);
+  **ou** (b) a vigência, antiga e/ou nova, recortada ao período da campanha, contém dia passado que a **máscara de dias da
+  semana da própria versão** cobre (olha no máximo 7 dias: a máscara se repete por semana). A regra de datas **conhece a
+  máscara**: num dia que nem a antiga nem a nova cobrem não há meta, e o déficit não pode mudar. Mudar a meta N de um dia
+  passado muda déficit e "esperado" que o cliente já viu, mesmo sem tocada. **Editar só o nome também escala**, porque o recat
+  roda de novo. Consequência prática: editar regra de campanha em andamento quase sempre escala, então isso continua sendo
+  feito pela tela.
+- **Overrides:** `data < hoje SP` **ou** a célula-dia (campanha × tipo × emissora × dia) tem veiculação aprovada.
+- **`editar_pmm_target`:** o cliente tem veiculação aprovada nas emissoras do lote **ou** campanha não cancelada dele com
+  alguma delas e `início < hoje SP` (o total de impactos no target aparece mesmo antes da primeira tocada; o PMM é retroativo,
+  migration 0054).
+- **`editar_emissora`: escala quando o `pmm` muda e a emissora tem veiculação aprovada** (o plano previa "sem escalada"; o
+  levantamento mostrou que `stations.pmm` alimenta audiência e impactos de todas as campanhas da emissora, inclusive dias
+  passados, sem versionamento). Nome, dial, cidade e UF não escalam.
+- **Sem escalada:** `criar_cliente`, `editar_cliente`, tipos de material, `marcar_notificacoes_lidas`,
+  `reconhecer_similaridade_material`.
+
+### Execução, auditoria e resposta (F3-11)
+
+- **`Executar`** roda sob `context.WithoutCancel` com prazo de **60 s** (o `middleware.Timeout` do router): depois de consumir o
+  token, o desfecho não depende de o cliente continuar conectado.
+- **Auditoria** feita pelo motor **depois** do sucesso e fora da transação da escrita: `audit_log` com
+  `actor_id` = o admin, `actor_type 'user'`, `action = "mcp.escrita.<tool>"`, `resource`/`resource_id` do alvo e
+  `metadata = {origem: "mcp", tool, nivel, args, mcp: {token_id}}`. Falha da auditoria é logada e **não** derruba a resposta
+  (a escrita já aconteceu). Eventos próprios: `mcp.escrita.requer_aprovacao` (ramo barrado, com o `motivo`) e
+  `mcp.escrita.falha` (erro interno ou `panic` no `Executar`; só `"erro": "interno"`, nunca o texto do erro Go). Recusa de negócio
+  não grava nada (nada foi escrito).
+- **Os `args` são mascarados na gravação** (`auditoria.OmitirSegredos`: chaves que parecem segredo viram `"[omitido]"`) e todo
+  texto é cortado em 500 runas (`…[cortado]`; um roteiro de 5 mil caracteres não vai para o log). A chave `mcp` (com o
+  `token_id`) não é mascarada. **Dados de contato do cliente (e-mail, telefone, CNPJ) aparecem nos `args` de
+  `criar_cliente`/`editar_cliente`** — o `audit_log` é só para admin.
+- **A tool `auditoria_mcp` não mostra o `token_id`:** o leitor omite toda chave que case `token`. Para ligar uma escrita ao
+  token que a fez, consulte o `audit_log` direto (SQL em [operations/mcp.md](../operations/mcp.md)).
+
+### Edição parcial (F3-10)
+
+Mesmo onde a rota é `PUT` total, a tool lê o registro, aplica **só os campos enviados** e grava pelo mesmo caminho: o modelo
+erra omitindo campo, e `PUT` total transformaria omissão em apagamento. Listas de emissoras/materiais entram como
+`adicionar`/`remover` (nunca "a lista inteira": um modelo que esquece um id apagaria emissoras). Texto vazio apaga onde faz
+sentido (`codigo_hub: ""`, `roteiro: ""`). `editar_emissora` grava por `Stations.UpdateCadastro`, que só toca nome, frequência,
+cidade, UF, PMM e coordenada (`COALESCE`: campo não enviado fica): o MCP **nunca** troca `stream_url`, banda, logo nem
+metadados (spec §1, não-objetivo). `editar_cliente` não tem `hub_id`. Pedido que não muda nada é recusado
+(`entrada_invalida`: "nada a alterar").
+
+### A camada `internal/acoes`
+
+[`workers/internal/acoes/`](../../workers/internal/acoes/) concentra as escritas de negócio que antes moravam (parcialmente) nos
+handlers: `CriarCampanha`/`EditarCampanha`/`TrocarEmissorasCampanha`, `VincularMaterial`/`DesvincularMaterial`/
+`TrocarEmissorasMaterial`/`TrocarTipoMaterial`, `CriarRegra`/`EditarRegra`/`ApagarRegra`, `DefinirAjuste`/`ApagarAjuste`,
+`CriarCliente`/`EditarCliente`/`ChecarCNPJ`, `EditarCadastroEmissora` e `ConferirCodigoHub`. `acoes.Servico` reúne os
+repositórios e os colaboradores por interface (`SupervisorDeCampanha{UpdateStations, Reload}`, `AvisoHub`), o que deixa os testes
+usarem falsos que registram as chamadas (`mcptest.SupervisorFalso`, `HubFalso`). `EmSegundoPlano` (nil = goroutine **com
+recover**) é injetável para o teste esperar a recategorização. `acoes.Recusa{Mensagem, Codigo, Dados, Causa}` é a falha de
+**negócio**: o handler a traduz para o status de sempre (`handlers/acoes_http.go`) e o motor do MCP a devolve como
+`"<mensagem> [<código>]"` e libera o token. `Recusa.Causa = ErrAlvoInexistente` marca "o alvo já não existe": a rota HTTP
+responde 204 (idempotência de sempre) e o MCP mostra `nao_encontrado`. Erro do Postgres de entrada (FK, CHECK) passa por
+`recusaDoBanco`, que casa a constraint pelo nome exato e nunca vaza o nome nem o SQLSTATE na mensagem; deadlock,
+serialização, cancelamento e o que não é erro de entrada seguem erros internos.
+
+A barreira do código do hub (`conferirCodigoOuRecusar`) virou `acoes.ConferirCodigoHub`, que devolve `*Recusa{codigo_hub}` com as
+mesmas 4 mensagens do 422. Gatilhos que continuam assíncronos: a recategorização de regra e de troca de tipo
+(`context.Background` + 30 s, `acoes.RegistrarFalhaRecat`) e os avisos ao hub. O recat de override é **síncrono**.
+
+### Mudanças nas rotas HTTP
+
+Extrair as ações para `internal/acoes` foi refactor sem mudança de comportamento (cada handler foi travado por teste ANTES de
+mexer), **exceto** os pontos abaixo, que mudaram a rota para melhor (conferidos contra `git log` e testes de handler):
+
+- **Regra de outra campanha:** `PUT`/`DELETE /campaigns/{id}/distribution-rules/{ruleID}` com a regra de **outra** campanha agora
+  dão **404** e não mudam nada (antes editavam/apagavam a regra alheia com 204 e recategorizavam a campanha errada).
+- **`PUT` de regra inexistente: 404** (antes o `UPDATE` de zero linhas dava 204). **`DELETE` de regra inexistente segue 204** e
+  **deixou de recategorizar** a campanha à toa.
+- **`PUT` de regra que troca o tipo** agora recategoriza também o tipo **antigo** (antes só o novo; o `projrecon` curava em até 48 h).
+- **Falha de constraint que era 500 virou 400/404 com o motivo em português:** regras `POST`/`PUT` (máscara fora de 0–127,
+  inserções fora de 1–100, data final antes da inicial, hora final não maior que a inicial, tipo/campanha/emissora inexistente);
+  `PUT` de override (meta negativa, tipo/emissora/campanha inexistente); `PATCH /materials/{id}/type` com tipo inexistente (400);
+  `POST /campaigns` com cliente inexistente (404) ou `end_date` < `start_date` (400); `POST /campaigns/{id}/materials` com
+  material ou campanha inexistente (404). O 404 do handler continua o texto `not found`; o 400 leva o motivo.
+- **Desvincular / trocar emissoras de um vínculo que não existe** seguem **204**, mas **não chamam mais `Reload`** da campanha (antes
+  um reload à toa reiniciava os workers de campanha ativa). **`PATCH /materials/{id}/type` de material inexistente** segue 204
+  sem recategorizar.
+
+### Desempenho
+
+Com as 64 tools, `BenchmarkNovoServidor` (montar o `Server` do SDK) ficou em **~5,0 ms/op** (~3,2 MB, ~8,8 mil alocações), acima
+dos 4 ms do limite do plano (eram 2,75 ms com 44 tools). O go-sdk pede o `Server` **duas** vezes por pedido stateless (uma só
+para ler as versões de protocolo), então `NovoHandlerMCP` passou a montá-lo **uma vez por pedido** (um guardador no
+contexto do pedido; nada é compartilhado entre pedidos nem entre principais). `BenchmarkPedidoToolsList` (um `tools/list` pelo
+handler real, sem rede): **~12,5 ms → ~9,1 ms** e 24,6 mil → 15,8 mil alocações. Travado por
+`TestServidor_MontaOServerUmaVezPorPedido` (falha sem a memoização) e `TestServidor_MemoizacaoNaoMisturaPrincipais`.
+
+### Limitações e follow-ups (Fatia 3)
+
+- **`EmSegundoPlano` sem limite de concorrência:** um pico de edições de regra ou de tipo dispara uma goroutine de recat por
+  gatilho (com recover, mas sem teto). Follow-up: semáforo.
+- **`TrocarTipoMaterial` não recategoriza o tipo ANTIGO** (as células do tipo antigo perdem um membro e ficam como estavam; o
+  `projrecon` cura em até 48 h). A rota de regra foi corrigida nisso (F3-8b); a de material não.
+- **Textos em inglês nas `Recusa` que vêm das rotas:** as validações que saíram do handler guardam a mensagem antiga
+  (`name is required`, `end_date must be on or after start_date`, `time_start must be HH:MM…`), e o MCP as repete ao modelo.
+- **`CriarCampanha` (rota) não apara o nome nem valida data zero** (a rota sempre aceitou como veio; no MCP quem valida é a tool).
+- **`acoes.EditarCampanha` NÃO é transacional** (nome e datas são gravados antes de `AtualizarHubCode`). Uma `Recusa` vinda de
+  `AtualizarHubCode` depois do `UpdateBasic` **liberaria o token** com a escrita pela metade. **Inalcançável na Fatia 3**
+  (mudar o código do hub escala a `critico`, então nunca chega ao `Executar`), mas **ALCANÇÁVEL na Fatia 4**: um `editar_campanha`
+  `critico` com troca de código, executado após a aprovação. **Tem de ser corrigido na Fatia 4** (uma transação, ou a
+  `AtualizarHubCode` primeiro, ou não liberar o token quando houver escrita parcial).
+- **Bug latente em `catalog/detections.go:~604`:** o `time_end` da regra é lido com `time.Parse("15:04:05", …)` ignorando o erro
+  (`"24:00"` vira `00:00` no caminho de insert em Go, enquanto o SQL aceita `24:00`). Não é do MCP; anotado.
+- **`HaVeiculacao` para regras não filtra por dia:** a escalada da regra olha a campanha inteira, então uma campanha só com
+  tocadas `out_date` (fora do período) também escala. Mais estrita do que o necessário, nunca mais frouxa.
+- **Token gasto em erro interno depois de consumir** (F3-5): a pessoa pede o preview de novo.
+- **`token_id` não aparece na tool `auditoria_mcp`** e dados de contato/CNPJ aparecem nos `args` do `audit_log` (ver acima).
+- **Recat assíncrono:** a regra e a troca de tipo respondem antes de a recategorização acabar (até 30 s); a resposta traz a
+  ressalva. O override é síncrono.
+- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username`, então `0070_mcp_fundacao` vira `0071` e
+  `0071_mcp_confirmacoes` vira `0072` (e as referências a "migration 0070" neste doc).
+- **Trailers de commit da branch** misturam "Claude Opus 5.5" e "Claude Sonnet 5.5" (dois modelos trabalharam nela).
+
 ## Como funciona
 
 - `POST https://api.e-monitor.online/mcp` — Streamable HTTP **sem sessão**, resposta JSON
@@ -228,7 +493,8 @@ tela, em JS); o CPM de `/campaigns` virou `catalog.CPMDaCampanha` (antes só exi
   global já os permite). **Lotes JSON-RPC (corpo que começa com `[`) são recusados com 400**: o SDK
   os aceitaria no protocolo `2025-03-26` (o padrão quando o cliente não manda `Mcp-Protocol-Version`)
   e um pedido levaria centenas de `tools/call` contra a cota de 240/min, que é por pedido.
-- Um `Server` do SDK é montado **por pedido**; o principal (dono da credencial) entra por closure
+- Um `Server` do SDK é montado **por pedido** (uma vez só: o SDK o pede duas vezes e o handler guarda o
+  primeiro no contexto do pedido; ver "Desempenho"); o principal (dono da credencial) entra por closure
   em cada tool.
 - **Falha fechada**: se o middleware de autenticação não estiver montado, o handler responde 500
   `MCP sem autenticação montada` em vez de servir. Nenhuma tool precisa checar `nil`.
@@ -298,6 +564,9 @@ Toda ação sobre credenciais grava em `audit_log` com `metadata.origem = "mcp"`
 | `mcp.token.recusado` | token **existente e vivo** cujo dono já não é admin ativo; no máximo 1 por token a cada 10 min (cliente insistente não inunda o log) |
 | `mcp.oauth.autorizado` | admin clica **Autorizar** em `/autorizar-ia` |
 | `mcp.oauth.cliente_confidencial_criado` | `registra-cliente-mcp` (`actor_type 'cli'`) |
+| `mcp.escrita.<tool>` | uma tool de escrita **executou** (`metadata`: `tool`, `nivel`, `args` mascarados, `mcp.token_id`) |
+| `mcp.escrita.requer_aprovacao` | a escalada deu `critico` e a tool foi barrada (nada foi escrito; `metadata.motivo`) |
+| `mcp.escrita.falha` | erro interno ou `panic` no `Executar` (`metadata.erro = "interno"`) |
 
 Falha ao gravar a auditoria é logada (`Warn`) e **não** derruba o 401/200 da operação principal.
 
@@ -403,8 +672,11 @@ todos os tokens daquele cliente para o usuário.
 - **`revoga-mcp --listar` e `/account` contam diferente**: o CLI imprime uma linha por token
   pessoal e **por refresh token vivo** do OAuth; `/account` mostra **uma linha por cliente OAuth**
   (conexão), agrupando os tokens dele.
-- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro"); `TestToolsEsperadas_OrdemAlfabeticaE44`
-  trava a ordem e o número (44): quem acrescentar tool atualiza o número junto.
+- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro"); `TestToolsEsperadas_OrdemAlfabeticaE64`
+  trava a ordem e o número (64): quem acrescentar tool atualiza o número junto. **Tool de escrita nova também entra
+  em `escritasEsperadas`** ([`escrita_inventario_test.go`](../../workers/internal/mcp/escrita_inventario_test.go)), que
+  trava o conjunto das 20, o nível declarado, o sufixo `Nível: …` da descrição, as anotações, o campo `confirmacao` e a
+  lista de campos proibidos (`stream_url`, `hub_id`, `senha`, `token`, `password`) em qualquer profundidade do schema.
 - **Campo obrigatório ausente volta sem `[codigo]`.** A recusa vem do próprio SDK, na validação do schema
   (`validating "arguments": ... required: missing properties: [...]`), antes de a tool rodar. Decisão: fica
   assim — o `required` do schema já orienta o modelo, e reimplementar a validação só para pôr o código não
@@ -458,6 +730,19 @@ mudou na implementação, e por quê:
 - **Dev local:** defina `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
   `NOTIFICATIONS_BASE_URL=http://localhost:3000` (origem do portal usada no redirect do
   consentimento). Sem a segunda, o `/authorize` redireciona para o frontend de prod.
+- **Fatia 3 (plano `2026-10-29-mcp-fatia-3-escrita.md`; as notas datadas estão no próprio plano e na spec §5.2/§6):**
+  - **Uso único fora da transação da escrita** (F3-5): a spec §5.2 pedia o `INSERT` na mesma transação; as funções
+    reaproveitadas não aceitam `pgx.Tx`. Consome antes, libera só na recusa de negócio.
+  - **`editar_emissoras_campanha` não escala** (decisão do dono, 2026-10-29) e **`editar_emissora` escala quando o `pmm` muda
+    com veiculação aprovada** (a spec §6 dizia "—"). A regra de data das regras conhece a máscara de dias da semana.
+  - **`editar_emissora` grava por `Stations.UpdateCadastro`**, não pelo `Stations.Update` do plano (F3-10): o `Update`
+    reserializa o `metadata` e perde chave desconhecida.
+  - **Auditoria feita pelo motor, depois do sucesso**, não "dentro da função compartilhada" (spec §4.6): falha de auditoria
+    não pode derrubar uma escrita já feita. A gravação dentro da função compartilhada vale só para o `critico` executado fora
+    da tool (Fatia 4).
+  - **`confirmarEExecutar` mora no pacote `mcp`** (`escrita_ferramentas_test.go`), não em `mcptest` como o plano previa: ele
+    recebe um `ConfigServidor`, e o `mcptest` não pode importar o pacote que o importa.
+  - **`marcar_notificacoes_lidas` recebe `notificacoes[]`** (as chaves de `minhas_notificacoes`), não `chaves[]`.
 
 ### Recomendações ao dono (NÃO feitas)
 
@@ -472,8 +757,7 @@ mudou na implementação, e por quê:
 4. **O compose base ainda monta `migrations/` em `docker-entrypoint-initdb.d`** (regra 4.6 do
    `CLAUDE.md` / F-111), o que quebra um banco local novo (os `.down.sql` rodam antes dos `.up.sql`).
 
-## Fora de escopo da Fatia 0
+## Fora de escopo (até a Fatia 3)
 
-`mcp_confirmacoes_usadas` (Fatia 3) e `mcp_acoes_pendentes` + `/pendentes` (Fatia 4) ainda não
-existem; os níveis de escrita (`livre`/`confirma`/`critico`) estão nas `Instrucoes` do servidor mas
-sem nenhuma tool de escrita.
+`mcp_acoes_pendentes`, `/pendentes` e o varredor são da Fatia 4 e **ainda não existem**: `critico` não executa pela tool
+(ver "Crítico barrado até a Fatia 4"). `mcp_confirmacoes_usadas` existe desde a Fatia 3 (migration 0071).

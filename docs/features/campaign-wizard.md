@@ -102,3 +102,15 @@ Gerenciado em `/material-types`. Globais (não por cliente). Cores hex usadas pr
 - `probeDuration()` no backend retorna 30s stub — duração de áudio fica incorreta até F-88 ser resolvido
 - Validação "future-only edit" só no frontend (F-91)
 - `daily_play_summary` view não é materializada — performance pode degradar com volume (F-84)
+
+## Mudanças nas rotas de campanha (nota de 2026-10-29)
+
+A escrita de campanha e de vínculo de material saiu dos handlers para `workers/internal/acoes` (compartilhada com as tools
+de escrita do MCP, ver [mcp.md](mcp.md#escrita-fatia-3)); o que mudou na rota, de propósito:
+
+- `POST /campaigns` com cliente inexistente: **404** (antes 500); com `end_date` anterior a `start_date`: **400** com o motivo
+  (antes 500 pelo CHECK do banco). Datas continuam sem outra validação na rota (aceita como vieram).
+- `POST /campaigns/{id}/materials` com material ou campanha inexistente: **404** (antes 500).
+- `DELETE` do vínculo e `PUT …/stations` de um vínculo que **não existe** seguem **204**, mas **não chamam mais `Reload`** da
+  campanha (antes um reload à toa reiniciava os workers de uma campanha ativa).
+- `PATCH /materials/{id}/type`: tipo inexistente dá 400 com o motivo (antes 500); material inexistente segue 204, sem recategorizar.

@@ -198,6 +198,9 @@ Fatia 2 acrescenta a leitura do query string (só frontend, sem efeito colateral
   `actor_id`, ação, alvo, argumentos canônicos e `meta.mcp = {token_id, pendente_id?}`.
 - O registro é feito **dentro da função compartilhada** chamada pelo `Executar` (o `critico`
   executa fora da tool, na aprovação).
+  > **Na Fatia 3 (2026-10-29)** quem grava é o motor da tool, depois do sucesso do `Executar` e fora da transação da escrita
+  > (falha de auditoria é logada e não derruba uma escrita já feita): `mcp.escrita.<tool>`, `mcp.escrita.requer_aprovacao` e
+  > `mcp.escrita.falha`. A gravação dentro da função compartilhada fica para o `critico` executado na aprovação (Fatia 4).
 - Eventos próprios: `mcp.token.criado|revogado|recusado` (só para token que existe),
   `mcp.oauth.*`, `mcp.pendente.criada|aprovada|recusada|executada|falhou`.
 
@@ -230,10 +233,18 @@ anterior a hoje (SP)** vira `critico`.
   pendentes (toda `critico` tem executor por construção).
 - Anotação `destructiveHint = nivel != livre || podeEscalar`.
 - `confirma`: 1ª chamada devolve `{executou:false, preview, confirmacao}`; token HMAC-SHA256
-  (`JWT_SECRET`) sobre `(tool, args canônicos, user_id, exp)`, 10 min, comparação em tempo
-  constante; uso único via `INSERT INTO mcp_confirmacoes_usadas(hash)` na mesma transação da
-  escrita (falha de negócio → rollback → token volta a valer). Token inválido/vencido/usado:
+  (`JWT_SECRET`, com separação de domínio) sobre `(tool, args canônicos, user_id, exp)`, 10 min
+  (+ 1 min de folga), comparação em tempo constante; uso único via `INSERT INTO
+  mcp_confirmacoes_usadas(hash) ON CONFLICT DO NOTHING`. Token inválido/vencido/usado:
   `{executou:false, erro:"… Peça o preview outra vez."}` (não é erro).
+  > **Atualizado na execução da Fatia 3 (2026-10-29, plano F3-5).** O `INSERT` NÃO está na mesma
+  > transação da escrita: nenhuma das funções reaproveitadas das rotas aceita `pgx.Tx` (cada uma
+  > abre a sua ou usa o pool, e o recat abre a própria), e passar uma transação por todas mudaria o
+  > comportamento das rotas HTTP. O token é **consumido ANTES de executar** e **liberado
+  > (`DELETE`) só na falha de negócio** (`acoes.Recusa`); erro interno ou `panic` não libera, porque
+  > algo pode ter sido gravado (a pessoa pede o preview de novo). Poda oportunista a cada consumo
+  > (linhas vencidas há > 1 h) até o varredor da Fatia 4. A auditoria é gravada pelo motor depois do
+  > sucesso, também fora da transação da escrita.
 - `critico`: grava `mcp_acoes_pendentes` (24 h) e devolve
   `{executou:false, preview, pendenteId, expiraEm, aprovarEm:"<portal>/pendentes?id=…", aviso}`.
   Estados: `pendente → aprovada → executada | falhou`, `recusada`, `expirada`; transições por
@@ -287,18 +298,24 @@ armadilha, "nunca invente ids, pergunte". Escritas terminam com `Nível: <nível
 
 ### Fatia 3 — Escrita `livre` e `confirma`
 
+> **Escaladas finais (2026-10-29, execução da Fatia 3; plano F3-4 com as notas datadas).** A coluna da direita é o que ficou
+> implementado; "hoje" é sempre hoje em America/Sao_Paulo. "Veiculação" é a aprovada (`ApprovedDetectionsFilter`) no mesmo
+> recorte que o gatilho recategoriza (`catalog.HaVeiculacao`). Até a Fatia 4, `critico` é **barrado** (resposta com motivo e
+> link da tela, sem escrever); ver `docs/features/mcp.md` "Escrita (Fatia 3)".
+
 | Nível | Tool | Escala para `critico` quando |
 |---|---|---|
 | `livre` | `marcar_notificacoes_lidas`, `reconhecer_similaridade_material` | — |
-| `confirma` | `criar_campanha` (nasce `programada`) | — |
-| `confirma` | `editar_campanha` | período encolhe/move sobre dia já veiculado |
-| `confirma` | `editar_emissoras_campanha` | remove emissora com tocada no período |
-| `confirma` | `vincular_material`, `desvincular_material`, `editar_emissoras_material` | atinge tocada já veiculada |
-| `confirma` | `editar_material` (título, tipo, roteiro) | tipo muda em material com tocada (muda regra aplicável) |
-| `confirma` | `criar_regra_distribuicao`, `editar_regra_distribuicao`, `apagar_regra_distribuicao` | vigência inclui dia anterior a hoje |
-| `confirma` | `definir_override`, `apagar_override` | `for_date` anterior a hoje |
-| `confirma` | `criar_cliente`, `editar_cliente`, `editar_pmm_target` | mexe em `hub_id` (ponte) / PMM de campanha já veiculada |
-| `confirma` | `editar_emissora` (cadastro: nome, dial, cidade, PMM — nunca stream_url) | — |
+| `confirma` | `criar_campanha` (nasce `programada`) | `inicio` ≤ hoje (o agendador a ativa em ≤ 60 s: é um "iniciar campanha") |
+| `confirma` | `editar_campanha` | as datas mudam o estado que o agendador dá (`programada`/`ativa`/`concluida`), **ou** muda o conjunto de dias passados do período, **ou** muda o código do hub (é a ponte) |
+| `confirma` | `editar_emissoras_campanha` | **nunca** — decisão do dono (2026-10-29): `TestEditarEmissorasCampanha_ProvaDaRemocao` provou que os números passados não mudam (muda só `target_stations`, PMM no target, mapa ao vivo, alertas e workers). Era: "remove emissora com tocada no período" |
+| `confirma` | `vincular_material`, `desvincular_material`, `editar_emissoras_material` | **nunca** — não há recat e a atribuição é decidida na entrada da tocada (`TestVinculos_ProvaF34_PassadoNaoMuda`). Ressalvas no preview: competição de atribuição e webhook pendente. Era: "atinge tocada já veiculada" |
+| `confirma` | `editar_material` (título, tipo, roteiro) | o tipo muda e o material tem veiculação aprovada (a troca recategoriza todas as campanhas dele) |
+| `confirma` | `criar_regra_distribuicao`, `editar_regra_distribuicao`, `apagar_regra_distribuicao` | a campanha tem veiculação aprovada do(s) tipo(s) que o recat varre (criar/editar: o novo e o antigo; apagar: todos) **ou** a vigência (antiga/nova ∩ campanha) contém dia passado coberto pela máscara de dias da semana da versão. Editar só o nome escala igual (o recat reroda) |
+| `confirma` | `definir_override`, `apagar_override` | `for_date` < hoje **ou** a célula-dia tem veiculação aprovada |
+| `confirma` | `criar_cliente`, `editar_cliente` | — (o MCP não grava `hub_id`; a ponte é Fatia 4/5) |
+| `confirma` | `editar_pmm_target` | o cliente tem veiculação aprovada nas emissoras do lote **ou** campanha não cancelada com alguma delas e início < hoje (o PMM é retroativo, sem versionamento) |
+| `confirma` | `editar_emissora` (cadastro: nome, dial, cidade, UF, PMM — nunca stream_url) | o `pmm` muda e a emissora tem veiculação aprovada (`stations.pmm` entra nos impactos de todas as campanhas que a usam). Era: "—" |
 | `confirma` | `criar_tipo_material`, `editar_tipo_material` | — |
 
 ### Fatia 4 — Escrita `critico` (+ `/pendentes`)

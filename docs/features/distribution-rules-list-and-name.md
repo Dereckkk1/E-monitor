@@ -58,3 +58,8 @@ busca, sem cards aninhados).
 - [material-specific-distribution-rules.md](material-specific-distribution-rules.md) — carve-out por material
 - [campaign-wizard.md](campaign-wizard.md) — wizard (Step 5)
 - [broadcaster-search.md](broadcaster-search.md) — o util de busca por tokens reusado aqui
+
+> **Nota de 2026-10-29 (rota de regra, extração para `workers/internal/acoes/regras.go`).** `PUT`/`DELETE` de uma regra de
+> **outra** campanha agora dão **404** e não mudam nada (antes editavam/apagavam a regra alheia); `PUT` de regra inexistente
+> é 404; `DELETE` de regra inexistente segue 204 sem recategorizar. O `PUT` que troca o tipo da regra recategoriza também o
+> tipo antigo. Detalhes e a lista completa: [distribution-rules.md](../architecture/distribution-rules.md#mudancas-de-comportamento-das-rotas-2026-10-29-extracao-para-internalacoes).

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-10-28
+ultima-verificacao: 2026-10-29
 codigo-relacionado:
   - workers/internal/mcp/modulo.go
   - workers/internal/mcp/autenticacao.go
@@ -13,6 +13,10 @@ codigo-relacionado:
   - workers/internal/mcp/avaliacao/cli/main.go
   - workers/internal/mcp/avaliacao/perguntas.xml
   - workers/internal/mcp/avaliacao_test.go
+  - workers/internal/mcp/confirmacao.go
+  - workers/internal/mcp/escrita.go
+  - workers/internal/acoes/servico.go
+  - migrations/0071_mcp_confirmacoes.up.sql
 ---
 
 # MCP do E-monitor — operação
@@ -144,6 +148,38 @@ Eventos: `mcp.token.criado`, `mcp.token.revogado`, `mcp.token.recusado` (token e
 já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 `mcp.oauth.cliente_confidencial_criado`. Ações dos CLIs têm `actor_id` nulo e `actor_type 'cli'`.
 
+**Escritas (Fatia 3):** `mcp.escrita.<tool>` (executou), `mcp.escrita.requer_aprovacao` (escalou a `critico` e foi
+barrada, nada foi escrito) e `mcp.escrita.falha` (erro interno ou `panic` no `Executar`: **a escrita pode ter sido feita pela
+metade e o token fica gasto** — investigue). O ator é o admin dono do token (`actor_id`, `actor_type 'user'`). Quem escreveu e
+com qual credencial:
+
+```sql
+SELECT created_at, action, actor_id, resource, resource_id,
+       metadata->>'tool' AS tool, metadata->>'nivel' AS nivel,
+       metadata->'mcp'->>'token_id' AS token_id, metadata->'args' AS args, metadata->>'motivo' AS motivo
+  FROM audit_log
+ WHERE action LIKE 'mcp.escrita.%'
+ ORDER BY created_at DESC LIMIT 50;
+```
+
+A tool `auditoria_mcp` **omite** o `token_id` (o leitor oculta toda chave que case `token`): para ligar uma escrita ao token,
+use este SQL. Os `args` saem mascarados (chave que parece segredo vira `"[omitido]"`) e com texto cortado em 500 caracteres, mas
+**dados de contato e CNPJ de cliente aparecem** nos `args` de `criar_cliente`/`editar_cliente`.
+
+### Uso único das confirmações (`mcp_confirmacoes_usadas`)
+
+Guarda o SHA-256 dos tokens `confirma` já usados até a expiração (10 min). Cada confirmação nova poda, de forma oportunista,
+até 500 linhas vencidas há mais de 1 h (`FOR UPDATE SKIP LOCKED`; erro da poda é só logado). **Não há varredor até a Fatia 4**,
+então a tabela só encolhe quando alguém confirma algo; ela é minúscula (uma linha de 32 bytes por escrita). Para conferir ou
+limpar à mão (seguro: linha vencida há mais de 1 h nunca volta a valer, o token já expirou):
+
+```sql
+SELECT count(*), min(expira_em), max(expira_em) FROM mcp_confirmacoes_usadas;
+DELETE FROM mcp_confirmacoes_usadas WHERE expira_em < now() - interval '1 hour';
+```
+
+Nunca apague linha **não vencida**: reabriria o uso do token.
+
 ## Diagnóstico
 
 | Sintoma | Causa provável |
@@ -162,6 +198,10 @@ já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 | Depois do login SSO do hub a aba cai em `/` e não pede autorização | o SSO descarta o `?pedido=`: entre com e-mail e senha na aba de consentimento, ou reinicie a conexão (ver "Login na aba de consentimento") |
 | Tudo parou de autenticar depois de girar o `JWT_SECRET` | esperado: os hashes mudam; todos reconectam e o Gemini precisa de cliente novo |
 | Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:3000` no `.env` |
+| Tool de escrita devolve `executou: false` e `nivel: critico` | a escalada deu crítico (o `motivo` diz qual condição); até a Fatia 4 isso só se faz pela tela (`links.tela`). Procure `mcp.escrita.requer_aprovacao` no `audit_log` |
+| Tool de escrita devolve `executou: false` e "Confirmação inválida ou expirada" | token vencido (10 min), de outro usuário/tool, ou **os argumentos mudaram** entre o preview e a confirmação: peça o preview de novo. "Esta confirmação já foi usada" = reuso do mesmo token |
+| Tool de escrita devolve `[interno]` | erro interno ou `panic` (o texto Go só vai para o log da API; procure `mcp: ` e o nome da tool). O token **não** volta a valer; confira `mcp.escrita.falha` no `audit_log` |
+| `[campanha_cancelada]` | a tool recusa escrita em campanha cancelada (a tela não recusa) |
 
 Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 `NOTIFICATIONS_BASE_URL=http://localhost:3000`. A API local leva minutos para escutar (carrega o
@@ -175,13 +215,21 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
   Para gerar o template seguinte (`dN` = cópia do anterior + a migration nova; rede Docker `rc-mcp-test`;
   `MSYS_NO_PATHCONV=1` no Git Bash do Windows), crie `dN` com o `CREATE DATABASE` acima e rode
   `MSYS_NO_PATHCONV=1 docker run --rm --network rc-mcp-test -v "$(pwd)/migrations:/migrations:ro" migrate/migrate:v4.17.1 -path=/migrations -database "postgres://radiocheck:radiocheck@rc-mcp-test-pg:5432/radiocheck_mcp_test_dN?sslmode=disable" up`.
+- **Nunca aponte `TEST_DATABASE_URL` para o template** (`d3`): os testes inserem usuários e linhas nele. Crie um banco
+  por pacote a partir do template e descarte-o no fim (`DROP DATABASE`).
 - `export TEST_DATABASE_URL=postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_test_<x>?sslmode=disable`
-  e `go test -p 1 ./internal/mcp/...` (rode `internal/mcp` ANTES de `internal/catalog`: a suíte do catalog deixa
-  clientes no banco e o guard do `dbtest` passa a derrubar testes do MCP). Sem `TEST_DATABASE_URL` exportada os
+  e `go test -p 1 -timeout 60m ./internal/mcp/...`. O pacote `./internal/mcp` leva **10–15 min** (rode em segundo plano).
+  Rode `internal/mcp` ANTES de `internal/catalog` e **recrie o banco do template entre os pacotes**: a suíte do catalog
+  deixa clientes no banco e o guard do `dbtest` passa a derrubar testes do MCP. Sem `TEST_DATABASE_URL` exportada os
   testes de banco PULAM e parecem verdes.
 - Os testes de tool usam `mcptest.DBCatalogo` (trunca usuários, clientes e emissoras) e as fixtures de
   `internal/mcp/mcptest/catalogo.go`. Cada tool que espelha tela tem um teste `..._ParidadeComATela` que chama
   o handler HTTP com claims de admin e compara os números.
+- As tools de escrita têm, além disso: teste de **paridade de efeito** tool × rota HTTP (`chamarHandlerCorpo`: o mesmo
+  estado semeado em duas fixtures, uma pela rota e outra pela tool, comparando as linhas gravadas e as chamadas aos falsos),
+  o protocolo preview → confirmar (`confirmarEExecutar`, na bancada `escrita_ferramentas_test.go`) e os falsos
+  `mcptest.SupervisorFalso` / `HubFalso` (registram `UpdateStations`, `Reload` e os eventos ao hub). O inventário das 20
+  escritas (`escrita_inventario_test.go`) roda sem banco.
 - Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, siga o roteiro "Conferência com dado
   real". Divergência = bug: não siga para a fatia seguinte.
 - **O template envelhece.** Os testes e a semente da avaliação usam datas relativas a hoje, e `detections`,
@@ -226,7 +274,7 @@ go run -tags avaliacao ./internal/mcp/avaliacao/cli tools | head -5     # começ
 go run -tags avaliacao ./internal/mcp/avaliacao/cli chamar listar_clientes '{"busca":"aurora"}'
 ```
 
-`tools` lista as 44 tools (nome, descrição, schema de entrada) e termina com as instruções do servidor;
+`tools` lista as 64 tools (nome, descrição, schema de entrada) e termina com as instruções do servidor;
 `chamar <tool> '<json>'` chama a tool no servidor MCP real, em memória, com o admin da semente como principal
 (erro sai como `ERRO: …`). Rodar `semear` duas vezes recusa (banco não vazio).
 
@@ -263,6 +311,11 @@ público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo C
 duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão. O CLI da
 avaliação (`internal/mcp/avaliacao/cli`) **não** entra na imagem, de propósito.
 
+**Migrations antes do merge (Fatia 3):** o `master` já tem `0070_users_username`. Ao mergear o `feat/mcp-server`,
+`0070_mcp_fundacao` vira **0071** e `0071_mcp_confirmacoes` vira **0072** (renomeie os quatro arquivos `.up/.down.sql` e as
+referências nos docs). Ambas são só `CREATE TABLE` + índices (+ o trigger em `users` da primeira), mas passam pelo
+`shadow_migration_test` do `deploy.sh` como qualquer outra (regra 4.8 do `CLAUDE.md`).
+
 ### Conferência com dado real (depois do `deploy.sh`)
 
 Pelo Claude Code conectado ao MCP de prod, em **2 campanhas ativas** (de preferência uma por inserção e uma
@@ -276,8 +329,24 @@ consolidada):
      déficit, "não tocou", "fora do horário" e os dias de falha por emissora.
 3. Abra o `links.tela` de cada um: a tela tem de abrir já filtrada no mesmo recorte (é o frontend da
    Fatia 2; ele sobe sozinho no push para `master`, então confira depois que o CF Pages publicar).
+4. **Fatia 3 — escritas, numa campanha de TESTE** (de um cliente de teste, `programada`, com início no futuro; **nunca**
+   numa campanha de cliente real, e nunca com o índice de uma campanha ativa em jogo). Pelo Claude Code conectado:
+   1. `criar_campanha` (início futuro, uma emissora) **sem token**: a resposta é o preview (`executou: false`, `confirmacao`).
+      Confira em `/campaigns` que a campanha **não** existe. Repita com o token e os **mesmos** argumentos: `executou: true`;
+      a campanha aparece em `/campaigns` como `programada`.
+   2. **Reuso:** chame de novo com o mesmo token: `executou: false` ("já foi usada"), e nada duplica. **Argumentos mudados:** troque
+      o nome e reenvie o token: "inválida ou expirada".
+   3. `editar_campanha` (só o nome) → preview → confirmar; confira o nome na tela. Depois peça `inicio` = hoje: tem de voltar
+      `nivel: critico`, com `links.tela`, e **nada** muda na campanha.
+   4. `vincular_material` / `criar_regra_distribuicao` na campanha de teste, e confira na tela da campanha (etapas Materiais e
+      Distribuição) que o resultado é o mesmo de fazer pela tela; a recategorização da regra leva até 30 s.
+   5. **Paridade:** faça a mesma edição pela tela numa segunda campanha de teste idêntica e compare as linhas
+      (`campaigns`, `distribution_rules`, `campaign_materials`).
+   6. **Auditoria:** o SQL de "Auditoria (consulta)" tem de mostrar, para cada passo acima, uma linha `mcp.escrita.<tool>` com o
+      `token_id` do seu token, e uma `mcp.escrita.requer_aprovacao` para o passo do crítico. Nenhuma `mcp.escrita.falha`.
+   7. No fim, apague a campanha de teste pela tela e confira `mcp_confirmacoes_usadas` (ver "Uso único das confirmações").
 
-Divergência de número = bug: não siga adiante.
+Divergência de número ou de efeito = bug: não siga adiante.
 
 ## Armadilhas
 

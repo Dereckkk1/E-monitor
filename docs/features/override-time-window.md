@@ -138,6 +138,12 @@ Casos que costumam ser consultados:
 > disparam `RecategorizeForOverride`, que hoje **refecha a célula-dia inteira**
 > (ver [distribution-rules.md](../architecture/distribution-rules.md)).
 
+> **Nota de 2026-10-29 (extração para `workers/internal/acoes/regras.go`).** A rota passou a chamar
+> `acoes.DefinirAjuste`/`ApagarAjuste` — a mesma função das tools `definir_override`/`apagar_override` do MCP
+> ([mcp.md](mcp.md)). A recategorização continua **síncrona** (commita antes do 204). Mudou na validação do `PUT`: o que
+> antes estourava o CHECK/FK do banco e voltava **500** agora volta **400/404 com o motivo** (meta negativa, faixa
+> `time_end` ≤ `time_start`, tipo/emissora/campanha inexistente).
+
 ## Como testar manualmente
 
 1. Abre uma campanha existente em `/campaigns/<id>/edit`, vai pro
