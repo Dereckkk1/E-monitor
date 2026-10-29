@@ -593,3 +593,75 @@ func TestEscrita_BarradoAuditaORecursoDaTool(t *testing.T) {
 	require.Equal(t, "mcp_escrita", recurso)
 	require.Nil(t, recursoID)
 }
+
+// Erro interno ou panic no Executar deixam rastro: mcp.escrita.falha, sem o
+// texto do erro Go (pode trazer SQLSTATE, nome de tabela).
+func TestEscrita_FalhaInternaEPanicAuditamMcpEscritaFalhaSemOTextoDoErro(t *testing.T) {
+	alvo := uuid.New()
+	for _, caso := range []struct {
+		nome, nivel string
+		nivelTool   Nivel
+		sonda       *sondaEscrita
+	}{
+		{"livre/erro interno", "livre", Livre, &sondaEscrita{erroExec: errors.New("pq: SQLSTATE 23505 tabela secreta")}},
+		{"livre/panic", "livre", Livre, &sondaEscrita{panica: true}},
+		{"confirma/erro interno", "confirma", Confirma, &sondaEscrita{erroExec: errors.New("pq: SQLSTATE 23505 tabela secreta")}},
+		{"confirma/panic", "confirma", Confirma, &sondaEscrita{panica: true}},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			b := novaBancadaEscrita(t)
+			d := caso.sonda.escrita("escreve_falha", caso.nivelTool, false)
+			d.Recurso = func(entradaEscritaTeste) (string, *uuid.UUID) { return "campaign", &alvo }
+			s := b.servidor(principalTeste, d)
+
+			args := map[string]any{"valor": "x"}
+			if caso.nivelTool == Confirma {
+				args["confirmacao"] = chama(t, s, "escreve_falha", map[string]any{"valor": "x"})["confirmacao"]
+			}
+			texto := chamaErro(t, s, "escreve_falha", args)
+			require.Contains(t, texto, "[interno]")
+
+			require.Equal(t, 1, b.auditorias(t, "mcp.escrita.falha"))
+			require.Equal(t, 0, b.auditorias(t, "mcp.escrita.escreve_falha"), "nada foi feito: não há linha de sucesso")
+			var recurso string
+			var recursoID *uuid.UUID
+			var bruto string
+			var meta map[string]any
+			require.NoError(t, b.pool.QueryRow(b.ctx,
+				`SELECT resource, resource_id, metadata::text, metadata FROM audit_log WHERE action = 'mcp.escrita.falha'`).
+				Scan(&recurso, &recursoID, &bruto, &meta))
+			require.Equal(t, "campaign", recurso)
+			require.Equal(t, alvo, *recursoID)
+			require.Equal(t, "mcp", meta["origem"])
+			require.Equal(t, "escreve_falha", meta["tool"])
+			require.Equal(t, caso.nivel, meta["nivel"])
+			require.Equal(t, "interno", meta["erro"])
+			require.Equal(t, map[string]any{"valor": "x"}, meta["args"])
+			require.Equal(t, principalTeste.TokenID.String(), meta["mcp"].(map[string]any)["token_id"])
+			require.NotContains(t, bruto, "SQLSTATE", "o texto do erro Go nunca vai para o audit_log")
+			require.NotContains(t, bruto, "secreta")
+			require.NotContains(t, bruto, "boom")
+		})
+	}
+}
+
+// Recusa de negócio não é falha: nada foi gravado e o token volta a valer.
+// Nenhuma linha de auditoria.
+func TestEscrita_RecusaDeNegocioNaoAuditaFalha(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	sonda := &sondaEscrita{erroExec: &acoes.Recusa{Mensagem: "não pode", Codigo: "entrada_invalida"}}
+	s := b.servidor(principalTeste, sonda.escrita("escreve_livre", Livre, false))
+	chamaErro(t, s, "escreve_livre", map[string]any{"valor": "x"})
+	require.Equal(t, 0, b.auditorias(t, "mcp.escrita.falha"))
+}
+
+// A auditoria da falha também é best-effort: o erro interno chega ao modelo
+// do mesmo jeito se o audit_log estiver fora do ar.
+func TestEscrita_AuditoriaDaFalhaForaDoArNaoMudaARespostaNemDerruba(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	b.E.DB = execerQuebrado{}
+	sonda := &sondaEscrita{erroExec: errors.New("boom")}
+	s := b.servidor(principalTeste, sonda.escrita("escreve_livre", Livre, false))
+	texto := chamaErro(t, s, "escreve_livre", map[string]any{"valor": "x"})
+	require.Contains(t, texto, "[interno]")
+}
