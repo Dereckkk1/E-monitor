@@ -357,14 +357,34 @@ func TestApagarRegra_DeOutraCampanhaEhNaoEncontradoESemEfeito(t *testing.T) {
 	require.NoError(t, gerr, "a regra da outra campanha continua lá")
 }
 
-func TestEditarEApagarRegra_Inexistente_NaoEncontrado(t *testing.T) {
+// Regra inexistente: EditarRegra e ApagarRegra recusam (nao_encontrado) MARCADAS
+// com ErrAlvoInexistente — o handler HTTP mantém o PUT em 404 e o DELETE
+// idempotente (204, como sempre) e a tool do
+// MCP mostra nao_encontrado. Nenhuma recategorização é disparada nos dois casos.
+func TestEditarEApagarRegra_Inexistente_NaoEncontradoSemRecat(t *testing.T) {
 	c := novoCenario(t)
+	disparos := 0
+	c.srv.EmSegundoPlano = func(f func()) { disparos++; f() }
 
 	err := c.srv.EditarRegra(c.ctx, c.campanha, uuid.New(), c.entradaRegra(c.tipoA, "08:00", "12:00", 1))
 	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente, "a marca descreve o fato; quem decide 204 ou 404 é a rota")
 
 	err = c.srv.ApagarRegra(c.ctx, c.campanha, uuid.New())
 	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+	require.Zero(t, disparos)
+}
+
+// Regra de OUTRA campanha continua sendo 404 de verdade (F3-8a), sem a marca.
+func TestApagarRegra_DeOutraCampanhaNaoTemAMarcaDeInexistente(t *testing.T) {
+	c := novoCenario(t)
+	_, regraAlheia := c.outraCampanhaComRegra(t)
+
+	err := c.srv.ApagarRegra(c.ctx, c.campanha, regraAlheia)
+
+	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
+	require.NotErrorIs(t, err, ErrAlvoInexistente)
 }
 
 // Recusada a ação, NENHUMA recategorização é disparada.

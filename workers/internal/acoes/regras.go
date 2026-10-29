@@ -120,13 +120,14 @@ func (s *Servico) CriarRegra(ctx context.Context, campanhaID uuid.UUID, in Entra
 }
 
 // regraDaCampanha lê a regra e confere que ela é DA campanha informada. Regra
-// inexistente e regra de outra campanha são a mesma coisa para quem chama:
-// nao_encontrado (a rota antiga editava/apagava a regra de outra campanha e
-// recategorizava a errada — F3-8a).
+// inexistente e regra de outra campanha são nao_encontrado para quem chama (a
+// rota antiga editava/apagava a regra de outra campanha e recategorizava a
+// errada — F3-8a). Só a INEXISTENTE leva a marca ErrAlvoInexistente: o DELETE
+// HTTP a trata como idempotente (204), a de outra campanha segue 404.
 func (s *Servico) regraDaCampanha(ctx context.Context, campanhaID, regraID uuid.UUID) (*catalog.DistributionRule, error) {
 	regra, err := s.Regras.Get(ctx, regraID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "regra de distribuição não encontrada nesta campanha"}
+		return nil, &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "regra de distribuição não encontrada nesta campanha", Causa: ErrAlvoInexistente}
 	}
 	if err != nil {
 		return nil, err
