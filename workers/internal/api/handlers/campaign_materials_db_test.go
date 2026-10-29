@@ -276,3 +276,17 @@ func TestMaterialTipoHTTP_UpdateType_Recusas400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "invalid id")
 }
+
+// Melhoria da extração (era 500 "internal error" por causa da FK): tipo
+// inexistente é pedido inválido e a rota diz isso (400). É a ÚNICA mudança de
+// comportamento do commit que moveu a lógica para internal/acoes.
+func TestMaterialTipoHTTP_UpdateType_TipoInexistenteDa400(t *testing.T) {
+	c := novoCenarioTipo(t)
+
+	rec := c.patchTipo(t, c.material, `{"type_id":"`+uuid.NewString()+`"}`)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "tipo de material inexistente")
+	got := tipoDoMaterial(t, c.ctx, c.pool, c.material)
+	require.Equal(t, c.tipoA, *got, "recusado não grava")
+}
