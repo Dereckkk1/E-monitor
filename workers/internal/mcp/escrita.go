@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -104,6 +105,10 @@ const (
 	// tetoTextoAuditoria: texto longo (roteiro) entra cortado no audit_log (F3-11).
 	tetoTextoAuditoria = 500
 )
+
+// prazoExecucao limita o Executar (60 s, o mesmo middleware.Timeout do router).
+// var e não const só para o teste encurtá-lo.
+var prazoExecucao = 60 * time.Second
 
 // anotacoesEscrita: as dicas explícitas — os defaults do protocolo
 // (destructive=true, openWorld=true) só estão certos para o primeiro. Uma
@@ -293,7 +298,12 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 func executarEAuditar[In any](ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal, d Escrita[In],
 	in In, args []byte, nivel Nivel, tok string) (*sdk.CallToolResult, any, error) {
 
-	f, err := d.Executar(ctx, E, p, in)
+	// Depois do Consumir, o desfecho não pode depender de o cliente continuar
+	// conectado: sem o cancelamento do pedido, com prazo próprio (o mesmo
+	// middleware.Timeout do router).
+	ectx, cancela := context.WithTimeout(context.WithoutCancel(ctx), prazoExecucao)
+	defer cancela()
+	f, err := d.Executar(ectx, E, p, in)
 	if err != nil {
 		var r *acoes.Recusa
 		if tok != "" && errors.As(err, &r) {

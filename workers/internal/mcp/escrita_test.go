@@ -506,3 +506,57 @@ func TestEscrita_ConfirmaSemCampoConfirmacaoFalhaFechadoELogaNoRegistro(t *testi
 		Escrita[entradaSemConfirmacao]{Nome: "critica_pura", Descricao: "x", Nivel: Critico})
 	require.Equal(t, 0, logs3.Len())
 }
+
+// Cliente que desconecta DEPOIS de o token ser consumido não pode deixar a
+// escrita pela metade nem o token queimado: o Executar roda sem o
+// cancelamento do pedido (mas com prazo próprio).
+func TestEscrita_ExecutarNaoHerdaOCancelamentoDoPedido(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	cfg := ConfigServidor{Versao: "teste", Escritas: b.E}
+
+	var errDoCtx error
+	var temPrazo bool
+	var prazoRestante time.Duration
+	d := (&sondaEscrita{}).escrita("escreve_livre", Livre, false)
+	d.Executar = func(ctx context.Context, _ *Escritas, _ *Principal, in entradaEscritaTeste) (feito, error) {
+		errDoCtx = ctx.Err()
+		var dl time.Time
+		dl, temPrazo = ctx.Deadline()
+		prazoRestante = time.Until(dl)
+		return feito{Resultado: map[string]any{"valor": in.Valor}}, nil
+	}
+
+	pedido, desconecta := context.WithCancel(b.ctx)
+	desconecta() // o cliente já foi embora quando o Executar começa
+	in := entradaEscritaTeste{Valor: "x"}
+	args, err := argsCanonicos(in)
+	require.NoError(t, err)
+	res, _, err := executarEAuditar(pedido, cfg, b.E, principalTeste, d, in, args, Livre, "")
+	require.NoError(t, err)
+	require.False(t, res.IsError, "%v", res.Content)
+	require.NoError(t, errDoCtx, "o ctx do Executar não herda o cancelamento do pedido")
+	require.True(t, temPrazo, "mas tem prazo próprio")
+	require.LessOrEqual(t, prazoRestante, prazoExecucao)
+	require.Greater(t, prazoRestante, prazoExecucao-5*time.Second)
+	require.Equal(t, 1, b.auditorias(t, "mcp.escrita.escreve_livre"), "a auditoria também roda")
+}
+
+// O prazo do Executar existe para o pedido não ficar pendurado para sempre.
+// Estourá-lo é falha interna: não libera o token (a escrita pode ter gravado).
+func TestEscrita_ExecutarTemPrazoEEstourarNaoLiberaOToken(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	anterior := prazoExecucao
+	prazoExecucao = 100 * time.Millisecond
+	t.Cleanup(func() { prazoExecucao = anterior })
+
+	d := (&sondaEscrita{}).escrita("escreve_conf", Confirma, false)
+	d.Executar = func(ctx context.Context, _ *Escritas, _ *Principal, _ entradaEscritaTeste) (feito, error) {
+		<-ctx.Done()
+		return feito{}, ctx.Err()
+	}
+	s := b.servidor(principalTeste, d)
+	tok := chama(t, s, "escreve_conf", map[string]any{"valor": "x"})["confirmacao"].(string)
+	texto := chamaErro(t, s, "escreve_conf", map[string]any{"valor": "x", "confirmacao": tok})
+	require.Contains(t, texto, "[interno]")
+	require.Equal(t, 1, b.confirmacoesUsadas(t))
+}
