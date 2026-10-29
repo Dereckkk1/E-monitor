@@ -258,7 +258,8 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 		// 4. crítico: barrado até a Fatia 4 (F3-1). Nada é escrito nem consumido.
 		if nivel == Critico {
 			recurso, recursoID := d.alvo(in)
-			auditar(ctx, cfg, E, p, "mcp.escrita.requer_aprovacao", recurso, recursoID, d.Nome, nivel, args, motivo)
+			auditar(ctx, cfg, E, p, "mcp.escrita.requer_aprovacao", recurso, recursoID, d.Nome, nivel, args,
+				map[string]any{"motivo": motivo})
 			var tela *string
 			if d.Tela != nil {
 				tela = d.Tela(E, in)
@@ -308,21 +309,32 @@ func executarEAuditar[In any](ctx context.Context, cfg ConfigServidor, E *Escrit
 	// middleware.Timeout do router).
 	ectx, cancela := context.WithTimeout(context.WithoutCancel(ctx), prazoExecucao)
 	defer cancela()
-	f, err := d.Executar(ectx, E, p, in)
+	f, err := executarSemPanic(ectx, d, E, p, in)
 	if err != nil {
 		var r *acoes.Recusa
-		if tok != "" && errors.As(err, &r) {
-			if lerr := E.Confirmacoes.Liberar(context.WithoutCancel(ctx), tok); lerr != nil {
-				cfg.log().Error("mcp: não consegui liberar a confirmação após recusa de negócio",
-					zap.String("tool", d.Nome), zap.Error(lerr))
+		if errors.As(err, &r) {
+			// Recusa de negócio: nada foi gravado, o token volta a valer e não
+			// há o que auditar.
+			if tok != "" {
+				if lerr := E.Confirmacoes.Liberar(context.WithoutCancel(ctx), tok); lerr != nil {
+					cfg.log().Error("mcp: não consegui liberar a confirmação após recusa de negócio",
+						zap.String("tool", d.Nome), zap.Error(lerr))
+				}
 			}
+			return comoFalha(cfg, d.Nome, err)
 		}
-		return comoFalha(cfg, d.Nome, err)
+		// Falha interna ou panic: o token (se havia) NÃO volta — algo pode ter
+		// sido gravado — e fica um rastro. O texto do erro Go nunca vai para o
+		// audit_log (pode trazer SQLSTATE, nome de tabela): só "interno".
+		recurso, recursoID := d.alvo(in)
+		auditar(ctx, cfg, E, p, "mcp.escrita.falha", recurso, recursoID, d.Nome, nivel, args,
+			map[string]any{"erro": "interno"})
+		return falhaInterna(cfg.log(), d.Nome, err)
 	}
 
 	// A escrita já aconteceu: nada daqui para baixo vira erro (o modelo
 	// repetiria). A auditoria roda sem o cancelamento do pedido.
-	auditar(ctx, cfg, E, p, "mcp.escrita."+d.Nome, f.Recurso, f.RecursoID, d.Nome, nivel, args, "")
+	auditar(ctx, cfg, E, p, "mcp.escrita."+d.Nome, f.Recurso, f.RecursoID, d.Nome, nivel, args, nil)
 
 	r, o, e := resultado(respostaFeita{Executou: true, Resultado: f.Resultado, Ressalvas: f.Ressalvas})
 	if e == nil {
@@ -336,7 +348,7 @@ func executarEAuditar[In any](ctx context.Context, cfg ConfigServidor, E *Escrit
 // auditar grava a linha do audit_log (spec §4.6). Falha é logada e engolida:
 // a escrita já aconteceu e o modelo repetiria.
 func auditar(ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal, acao, recurso string,
-	recursoID *uuid.UUID, tool string, nivel Nivel, args []byte, motivo string) {
+	recursoID *uuid.UUID, tool string, nivel Nivel, args []byte, extra map[string]any) {
 
 	meta := map[string]any{
 		"tool":  tool,
@@ -344,8 +356,8 @@ func auditar(ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal,
 		"args":  argsParaAuditoria(args),
 		"mcp":   map[string]any{"token_id": p.TokenID.String()},
 	}
-	if motivo != "" {
-		meta["motivo"] = motivo
+	for k, v := range extra {
+		meta[k] = v
 	}
 	if E.DB == nil {
 		cfg.log().Error("mcp: auditoria da escrita sem banco configurado", zap.String("acao", acao))
@@ -396,4 +408,16 @@ func (d Escrita[In]) alvo(in In) (string, *uuid.UUID) {
 		}
 	}
 	return "mcp_escrita", nil
+}
+
+// executarSemPanic roda o Executar convertendo panic em erro comum: ele tem
+// de seguir o mesmo caminho da falha interna (rastro em mcp.escrita.falha, o
+// token não volta). O panic nunca é uma Recusa.
+func executarSemPanic[In any](ctx context.Context, d Escrita[In], E *Escritas, p *Principal, in In) (f feito, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return d.Executar(ctx, E, p, in)
 }
