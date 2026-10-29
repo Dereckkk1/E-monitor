@@ -106,6 +106,15 @@ var escaparLike = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 var chaveSecreta = regexp.MustCompile(`(?i)secret|segredo|token|senha|password|chave|credencial|credential|` +
 	`api[_-]?key|apikey|authorization|bearer|cookie|jwt|private|verifier|session`)
 
+// OmitirSegredos aplica a máscara de chaveSecreta a v (in-place) e devolve o
+// próprio v. Exportada para quem GRAVA: a escrita do MCP mascara os args no
+// momento da gravação, para o audit_log nunca guardar o valor (a máscara da
+// leitura, em Listar, continua valendo por cima).
+func OmitirSegredos(v any) any {
+	omitirSegredos(v)
+	return v
+}
+
 // omitirSegredos troca por "[omitido]" o valor de toda chave que parece segredo,
 // descendo em objetos e listas aninhados.
 func omitirSegredos(v any) {

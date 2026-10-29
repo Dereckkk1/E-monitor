@@ -247,3 +247,31 @@ func TestListar_MetadataNaoObjetoNaoDerrubaAPagina(t *testing.T) {
 	require.Equal(t, "mcp.ok", evs[0].Acao)
 	require.Empty(t, prox)
 }
+
+// OmitirSegredos é a mesma máscara que Listar aplica na leitura, exportada
+// para quem grava (a escrita do MCP mascara os args no momento da gravação).
+func TestOmitirSegredos_MascaraEmQualquerNivelEDevolveOMesmoValor(t *testing.T) {
+	v := map[string]any{
+		"nome":  "campanha",
+		"senha": "hunter2",
+		"aninhado": map[string]any{
+			"api_key": "k",
+			"ok":      "visível",
+			"lista":   []any{map[string]any{"Authorization": "Bearer x", "n": 1}},
+		},
+	}
+	got := auditoria.OmitirSegredos(v)
+	require.Equal(t, map[string]any{
+		"nome":  "campanha",
+		"senha": "[omitido]",
+		"aninhado": map[string]any{
+			"api_key": "[omitido]",
+			"ok":      "visível",
+			"lista":   []any{map[string]any{"Authorization": "[omitido]", "n": 1}},
+		},
+	}, got)
+
+	// Valores que não são objeto/lista passam como estão.
+	require.Equal(t, "texto", auditoria.OmitirSegredos("texto"))
+	require.Nil(t, auditoria.OmitirSegredos(nil))
+}
