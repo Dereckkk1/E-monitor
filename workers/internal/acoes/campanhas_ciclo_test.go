@@ -175,7 +175,9 @@ func TestDefinirPrecos_FalhaDoBancoNaSegundaEntradaDesfazAPrimeira(t *testing.T)
 		{StationID: outra, Mode: catalog.PricingModePerInsertion, PerType: []catalog.TypePricing{{TypeID: uuid.New(), UnitValue: 1}}},
 	})
 
-	require.Equal(t, CodigoEntradaInvalida, recusaDe(t, err).Codigo)
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
+	require.Equal(t, "tipo de material inexistente", r.Mensagem)
 	require.Zero(t, c.contaPrecos(t), "nenhuma emissora gravada")
 }
 
