@@ -72,21 +72,6 @@ func TestToDTO_FromConfig(t *testing.T) {
 	}
 }
 
-// TestValidEvent enumerates all currently-accepted event identifiers and
-// confirms unknown ones are rejected.
-func TestValidEvent(t *testing.T) {
-	for _, e := range []string{"detection.confirmed", "detection.retracted", "webhook.test", "*"} {
-		if !validEvent(e) {
-			t.Errorf("validEvent(%q) = false, want true", e)
-		}
-	}
-	for _, e := range []string{"", "DETECTION.CONFIRMED", "unknown.event", "detection.*"} {
-		if validEvent(e) {
-			t.Errorf("validEvent(%q) = true, want false", e)
-		}
-	}
-}
-
 // TestWebhooks_GetConfig_InvalidID returns 400 before touching the repo.
 func TestWebhooks_GetConfig_InvalidID(t *testing.T) {
 	h := &WebhooksHandler{}

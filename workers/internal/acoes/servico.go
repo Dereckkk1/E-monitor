@@ -11,6 +11,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
 	"radiocheck/internal/users"
+	"radiocheck/internal/webhook"
 )
 
 // SupervisorDeCampanha é o que as ações pedem ao supervisor de workers
@@ -102,6 +103,11 @@ type Servico struct {
 	// BoasVindas emite o convite de boas-vindas. nil = indisponível (a criação
 	// segue e devolve email_status "unavailable").
 	BoasVindas EmissorBoasVindas
+
+	// Webhooks é a outbox dos webhooks (TestarWebhook). nil = indisponível
+	// (ErrWebhooksIndisponivel). Passe nil de verdade, não um *webhook.Outbox nil
+	// dentro da interface.
+	Webhooks webhook.OutboxEnqueuer
 
 	// Agora é o relógio da validação "não está no futuro". nil = time.Now.
 	Agora func() time.Time

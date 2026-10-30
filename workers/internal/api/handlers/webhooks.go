@@ -6,16 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/webhook"
 )
@@ -42,6 +41,17 @@ type webhookConfigDTO struct {
 	Enabled      bool     `json:"webhook_enabled"`
 	Events       []string `json:"webhook_events"`
 	HasSecret    bool     `json:"has_secret"`
+}
+
+// servico monta as ações de webhook sobre o repositório e a outbox deste handler.
+// A outbox só entra quando existe (um *webhook.Outbox nil dentro da interface
+// passaria no `!= nil`).
+func (h *WebhooksHandler) servico() *acoes.Servico {
+	s := &acoes.Servico{Clientes: h.Clients}
+	if h.Outbox != nil {
+		s.Webhooks = h.Outbox
+	}
+	return s
 }
 
 func toDTO(cfg *catalog.WebhookConfig) webhookConfigDTO {
@@ -100,61 +110,16 @@ func (h *WebhooksHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if in.URL != nil && *in.URL != "" {
-		parsed, err := url.ParseRequestURI(*in.URL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			http.Error(w, "webhook_url must be a valid http(s) URL", http.StatusBadRequest)
-			return
-		}
-		// HTTPS is required by default. http:// is only accepted when
-		// RADIOCHECK_ENV=development AND the host is loopback (localhost,
-		// 127.0.0.1, ::1) — for local integration tests. Anything else
-		// would expose the HMAC-signed payload (incl. detection metadata)
-		// in plaintext on the wire.
-		if !webhook.AllowInsecureURL(parsed) {
-			http.Error(w,
-				"http URLs are not allowed in production; set RADIOCHECK_ENV=development for local testing",
-				http.StatusBadRequest)
-			return
-		}
-		// SSRF guard: refuse URLs that resolve to private/loopback/link-local
-		// space. In dev mode the validator is a no-op so localhost works.
-		if err := webhook.ValidateURLForSSRF(r.Context(), *in.URL); err != nil {
-			http.Error(w, "webhook_url rejected: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	if in.Secret != nil && *in.Secret != "" && len(*in.Secret) < 16 {
-		http.Error(w, "webhook_secret must be at least 16 characters", http.StatusBadRequest)
-		return
-	}
-	if in.Events != nil {
-		for _, e := range in.Events {
-			if !validEvent(e) {
-				http.Error(w, "unknown event: "+e, http.StatusBadRequest)
-				return
-			}
-		}
-	}
-
-	cfg, err := h.Clients.UpdateWebhookConfig(r.Context(), id, in)
+	// Validação (URL, SSRF, segredo, eventos) e gravação moram em
+	// acoes.EditarWebhook — o MCP chama a mesma função.
+	cfg, err := h.servico().EditarWebhook(r.Context(), id, in)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, toDTO(cfg))
-}
-
-func validEvent(e string) bool {
-	switch e {
-	case "detection.confirmed", "detection.retracted", "webhook.test", "*":
-		return true
-	}
-	return false
 }
 
 // ListDeliveries handles GET /v1/internal/clients/{id}/webhook-deliveries.
@@ -185,25 +150,16 @@ func (h *WebhooksHandler) ListDeliveries(w http.ResponseWriter, r *http.Request)
 // `webhook.test` event so the operator can validate the receiver without
 // waiting for a real detection.
 func (h *WebhooksHandler) SendTest(w http.ResponseWriter, r *http.Request) {
-	if h.Outbox == nil {
-		http.Error(w, "outbox not configured", http.StatusServiceUnavailable)
-		return
-	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	body := map[string]any{
-		"message":     "This is a test webhook from Radiocheck.",
-		"sent_at":     time.Now().UTC().Format(time.RFC3339),
-		"environment": "internal",
-	}
-	if err := h.Outbox.Enqueue(r.Context(), &webhook.Event{
-		Type:     webhook.EventWebhookTest,
-		ClientID: id,
-		Body:     body,
-	}); err != nil {
+	if err := h.servico().TestarWebhook(r.Context(), id); err != nil {
+		if errors.Is(err, acoes.ErrWebhooksIndisponivel) {
+			http.Error(w, "outbox not configured", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, "enqueue failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
