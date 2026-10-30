@@ -43,7 +43,17 @@ type Modulo struct {
 	cfg    ConfigServidor
 	oauth  *oauth.Servidor
 	tokens *TokensHTTP
+	// aprovacoes e pendentes: o executor e o store dos pedidos críticos, para as
+	// rotas de /pendentes. aprovacoes é nil se o índice das escritas falhou.
+	aprovacoes *Aprovacoes
+	pendentes  *Pendentes
 }
+
+// Aprovacoes devolve o executor das pendentes (nil se não montou).
+func (m *Modulo) Aprovacoes() *Aprovacoes { return m.aprovacoes }
+
+// Pendentes devolve o store dos pedidos críticos.
+func (m *Modulo) Pendentes() *Pendentes { return m.pendentes }
 
 // NovoModulo devolve nil (e loga) se o segredo for curto: sem segredo os
 // hashes não valem nada, e um panic no boot derrubaria o deploy (regra 6.5).
@@ -66,11 +76,19 @@ func NovoModulo(d DepsModulo) *Modulo {
 	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
 		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
+	// Índice quebrado não derruba o boot (regra 6.5): o módulo segue sem aprovações.
+	apr, err := NovasAprovacoes(cfg)
+	if err != nil {
+		d.Log.Error("mcp: índice das escritas inválido — aprovações de pendentes NÃO montadas", zap.Error(err))
+		apr = nil
+	}
 	return &Modulo{
-		mcp:    SoPost(a.Middleware(NovoHandlerMCP(cfg))),
-		cfg:    cfg,
-		oauth:  o,
-		tokens: &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
+		aprovacoes: apr,
+		pendentes:  cfg.Escritas.Pendentes,
+		mcp:        SoPost(a.Middleware(NovoHandlerMCP(cfg))),
+		cfg:        cfg,
+		oauth:      o,
+		tokens:     &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
 	}
 }
 

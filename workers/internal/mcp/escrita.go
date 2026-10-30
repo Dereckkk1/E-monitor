@@ -382,6 +382,10 @@ func executarEAuditar[In any](ctx context.Context, cfg ConfigServidor, E *Escrit
 		Aviso: "A ação foi executada, mas o resultado não pôde ser mostrado."})
 }
 
+// chaveMcpPendente: chave especial do extra de auditar, que vira meta.mcp.pendente_id
+// (e não um campo solto do meta).
+const chaveMcpPendente = "mcp_pendente_id"
+
 // auditar grava a linha do audit_log (spec §4.6). Falha é logada e engolida:
 // a escrita já aconteceu e o modelo repetiria.
 func auditar(ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal, acao, recurso string,
@@ -395,6 +399,12 @@ func auditar(ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal,
 		"mcp":  map[string]any{"token_id": p.TokenID.String()},
 	}
 	for k, v := range extra {
+		if k == chaveMcpPendente {
+			// Execução vinda de uma aprovação: o id do pedido vai junto do
+			// token_id, dentro de meta.mcp.
+			meta["mcp"].(map[string]any)["pendente_id"] = v
+			continue
+		}
 		meta[k] = v
 	}
 	if E.DB == nil {
