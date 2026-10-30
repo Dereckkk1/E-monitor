@@ -130,10 +130,19 @@ func (b *bancadaTool) pedePendente(t *testing.T, nome string, args map[string]an
 	id, err := uuid.Parse(out["pendente_id"].(string))
 	require.NoError(t, err, "pendente_id inválido: %v", out)
 	var tool, estado string
+	var gravados []byte
 	require.NoError(t, b.pool.QueryRow(b.ctx,
-		`SELECT tool, estado FROM mcp_acoes_pendentes WHERE id = $1 AND estado IN ('pendente','aprovada')`, id).Scan(&tool, &estado),
+		`SELECT tool, estado, args FROM mcp_acoes_pendentes WHERE id = $1 AND estado IN ('pendente','aprovada')`, id).Scan(&tool, &estado, &gravados),
 		"o pedido aberto %s não foi gravado", id)
 	require.Equal(t, nome, tool)
+	// Os args que foram para o JSONB têm de voltar a valer na aprovação, com o
+	// In REAL da tool: sem isso, um In que não faz o round trip só estouraria
+	// depois, na tela de /pendentes.
+	idx, err := indexarEscritas(escritasDe(b.cfg))
+	require.NoError(t, err)
+	e, ok := idx[nome]
+	require.True(t, ok, "a escrita %s não está na lista única", nome)
+	require.NoError(t, e.validarArgs(gravados), "os args gravados de %s não passam na revalidação: %s", nome, gravados)
 	return out
 }
 
