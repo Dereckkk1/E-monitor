@@ -325,3 +325,30 @@ func TestPrecoHTTP_Upsert400ParaIdEJsonInvalidos(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Equal(t, "invalid JSON\n", rec.Body.String())
 }
+
+// Referência inexistente (campanha, emissora, tipo) já foi 500 "internal error";
+// agora é recusa 4xx com o motivo, e nada é gravado.
+func TestPrecoHTTP_Upsert_ReferenciaInexistenteResponde4xx(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	c := criaCampanhaDireto(t, ctx, pool, seedClienteLocal(t, ctx, pool), "")
+	est := novaEmissora(t, ctx, pool, "PreçoFK")
+	r := roteadorCicloCampanha(nil, &PricingHandler{Repo: catalog.NewPricing(pool)})
+	porTipo := `{"mode":"per_insertion","per_type":[{"type_id":"` + uuid.NewString() + `","unit_value":5}]}`
+	consolidado := `{"mode":"consolidated","consolidated_value":10}`
+
+	rec := chamar(t, r, http.MethodPut, "/campaigns/"+uuid.NewString()+"/pricing/"+est.String(), consolidado)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	require.Equal(t, "not found\n", rec.Body.String())
+
+	rec = chamar(t, r, http.MethodPut, "/campaigns/"+c.ID.String()+"/pricing/"+uuid.NewString(), consolidado)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Equal(t, "emissora inexistente\n", rec.Body.String())
+
+	rec = chamar(t, r, http.MethodPut, "/campaigns/"+c.ID.String()+"/pricing/"+est.String(), porTipo)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Equal(t, "tipo de material inexistente\n", rec.Body.String())
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaign_station_pricing WHERE campaign_id=$1`, c.ID).Scan(&n))
+	require.Zero(t, n)
+}

@@ -55,6 +55,12 @@ var fksConhecidas = map[string]recusaConhecida{
 	"distribution_overrides_type_id_fkey": {CodigoEntradaInvalida, "tipo de material inexistente"},
 	"materials_type_id_fkey":              {CodigoEntradaInvalida, "tipo de material inexistente"},
 
+	"campaign_station_pricing_campaign_id_fkey":      {CodigoNaoEncontrado, "campanha não encontrada"},
+	"campaign_station_type_pricing_campaign_id_fkey": {CodigoNaoEncontrado, "campanha não encontrada"},
+	"campaign_station_pricing_station_id_fkey":       {CodigoEntradaInvalida, "emissora inexistente"},
+	"campaign_station_type_pricing_station_id_fkey":  {CodigoEntradaInvalida, "emissora inexistente"},
+	"campaign_station_type_pricing_type_id_fkey":     {CodigoEntradaInvalida, "tipo de material inexistente"},
+
 	"distribution_rules_campaign_id_fkey":     {CodigoNaoEncontrado, "campanha não encontrada"},
 	"distribution_overrides_campaign_id_fkey": {CodigoNaoEncontrado, "campanha não encontrada"},
 	"campaign_materials_campaign_id_fkey":     {CodigoNaoEncontrado, "campanha não encontrada"},
