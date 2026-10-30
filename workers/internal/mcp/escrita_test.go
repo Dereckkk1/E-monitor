@@ -363,7 +363,8 @@ func TestEscrita_CriticoDeclaradoGravaPendente(t *testing.T) {
 	var meta map[string]any
 	require.NoError(t, b.pool.QueryRow(b.ctx,
 		`SELECT metadata FROM audit_log WHERE action = 'mcp.pendente.criada'`).Scan(&meta))
-	require.Equal(t, id, meta["pendente_id"])
+	require.Equal(t, id, meta["mcp"].(map[string]any)["pendente_id"], "o id fica em meta.mcp")
+	require.NotContains(t, meta, "pendente_id", "nada de pendente_id solto no topo do meta")
 	require.Equal(t, 0, b.auditorias(t, "mcp.escrita.escreve_crit"))
 }
 
@@ -379,6 +380,47 @@ func TestEscrita_PendenteIgualNaoDuplica(t *testing.T) {
 	require.Equal(t, true, c["ja_existia"])
 	require.Equal(t, 1, b.pendentes(t))
 	require.Equal(t, 1, b.auditorias(t, "mcp.pendente.criada"))
+}
+
+// M5: o pedido repetido responde com o preview e o motivo GRAVADOS (os que a
+// pessoa lê em /pendentes), não com os recalculados agora.
+func TestEscrita_PendenteIgualDevolveOPreviewEOMotivoGravados(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	versao := "v1"
+	d := (&sondaEscrita{}).escrita("escreve_crit", Critico, false)
+	d.Motivo = "motivo v1"
+	d.Preview = func(_ context.Context, _ *Escritas, in entradaEscritaTeste) (previa, error) {
+		return previa{Resumo: "resumo " + versao + " " + in.Valor}, nil
+	}
+	s := b.servidor(principalTeste, d)
+	a := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	versao = "v2"
+	d2 := d
+	d2.Motivo = "motivo v2"
+	s2 := b.servidor(principalTeste, d2)
+	c := chama(t, s2, "escreve_crit", map[string]any{"valor": "x"})
+	require.Equal(t, true, c["ja_existia"])
+	require.Equal(t, a["pendente_id"], c["pendente_id"])
+	require.Equal(t, "motivo v1", c["motivo"])
+	require.Equal(t, "resumo v1 x", c["preview"].(map[string]any)["resumo"])
+	require.NotNil(t, c["aprovar_em"])
+	require.Contains(t, c["aviso"], "Nada aconteceu ainda")
+}
+
+// M5: se o pedido igual já foi aprovado (executando), não há link para aprovar.
+func TestEscrita_PendenteIgualJaAprovadoNaoOferecePraAprovar(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	d := (&sondaEscrita{}).escrita("escreve_crit", Critico, false)
+	d.Motivo = "m"
+	s := b.servidor(principalTeste, d)
+	a := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET estado = 'aprovada', aprovada_em = now(), tentativa = 1 WHERE id = $1`, a["pendente_id"])
+	require.NoError(t, err)
+	c := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	require.Equal(t, true, c["ja_existia"])
+	require.Nil(t, c["aprovar_em"])
+	require.Equal(t, "Este pedido já foi aprovado e está em execução; nada novo foi criado. Use minhas_pendentes para ver o resultado.", c["aviso"])
+	require.Empty(t, c["ressalvas"], "sem ressalva de portal: não há link a dar")
 }
 
 func TestEscrita_RecusaDoPreviewVenceOPendente(t *testing.T) {

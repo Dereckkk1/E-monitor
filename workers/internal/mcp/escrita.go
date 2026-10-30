@@ -109,6 +109,8 @@ const (
 	msgUsada    = "Esta confirmação já foi usada. Peça o preview outra vez se quiser repetir."
 	// avisoPendente é o texto do ramo crítico: o pedido foi gravado, nada executou.
 	avisoPendente = "Nada aconteceu ainda. Entregue o link aprovar_em à pessoa: só ela, logada no portal, pode aprovar; o pedido vale 24 h."
+	// avisoPendenteAprovado: o pedido igual já foi aprovado e está rodando.
+	avisoPendenteAprovado = "Este pedido já foi aprovado e está em execução; nada novo foi criado. Use minhas_pendentes para ver o resultado."
 	// tetoConfirmacao: comprimento máximo aceito para o campo confirmacao.
 	tetoConfirmacao = 200
 	// tetoTextoAuditoria: texto longo (roteiro) entra cortado no audit_log (F3-11).
@@ -186,11 +188,22 @@ func criarPendente[In any](ctx context.Context, cfg ConfigServidor, E *Escritas,
 	recurso, recursoID := d.alvo(in)
 	if !jaExistia {
 		auditar(ctx, cfg, E, p, "mcp.pendente.criada", recurso, recursoID, d.Nome, Critico, args,
-			map[string]any{"motivo": motivo, "pendente_id": pend.ID.String()})
+			map[string]any{"motivo": motivo, chaveMcpPendente: pend.ID.String()})
 	}
-	aprovar := cfg.linkTela("/pendentes", url.Values{"id": {pend.ID.String()}})
+	// Pedido já existente: a resposta mostra o que ESTÁ gravado (o que a pessoa
+	// vai ver em /pendentes), não o recalculado agora.
+	aviso := avisoPendente
+	var aprovar *string
+	if jaExistia {
+		motivo, pv = pend.Motivo, pend.Preview
+	}
+	if jaExistia && pend.Estado == "aprovada" {
+		aviso = avisoPendenteAprovado
+	} else {
+		aprovar = cfg.linkTela("/pendentes", url.Values{"id": {pend.ID.String()}})
+	}
 	var ressalvas []string
-	if aprovar == nil {
+	if aprovar == nil && !(jaExistia && pend.Estado == "aprovada") {
 		ressalvas = append(ressalvas, "O endereço do portal não está configurado: abra /pendentes no portal do E-monitor para aprovar.")
 	}
 	var tela *string
@@ -200,7 +213,7 @@ func criarPendente[In any](ctx context.Context, cfg ConfigServidor, E *Escritas,
 	return resultado(respostaPendente{
 		Executou: false, Nivel: Critico.String(), Motivo: motivo, Preview: pv,
 		PendenteID: pend.ID.String(), ExpiraEm: instante(pend.ExpiraEm), AprovarEm: aprovar,
-		JaExistia: jaExistia, Aviso: avisoPendente, Ressalvas: ressalvas, Links: linksPendente{Tela: tela},
+		JaExistia: jaExistia, Aviso: aviso, Ressalvas: ressalvas, Links: linksPendente{Tela: tela},
 	})
 }
 
