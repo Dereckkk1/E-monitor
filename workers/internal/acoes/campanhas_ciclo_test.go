@@ -200,6 +200,20 @@ func TestDefinirCPMFixo_GravaLimpaERecusa(t *testing.T) {
 	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
 }
 
+// NUMERIC(12,2) não comporta 1e10: é entrada inválida, não erro do banco.
+func TestDefinirCPMFixo_AcimaDoLimiteDaColunaEhRecusa(t *testing.T) {
+	c := novoCenario(t)
+
+	grande := 1e10
+	_, err := c.srv.DefinirCPMFixo(c.ctx, c.campanha, &grande)
+	require.Equal(t, CodigoEntradaInvalida, recusaDe(t, err).Codigo)
+
+	quaseLa := 9999999999.99
+	out, err := c.srv.DefinirCPMFixo(c.ctx, c.campanha, &quaseLa)
+	require.NoError(t, err)
+	require.NotNil(t, out.FixedCPM)
+}
+
 func TestDefinirPrecos_GravaVariasEmissorasNumaTransacao(t *testing.T) {
 	c := novoCenario(t)
 	outra := mcptest.Emissora(t, c.ctx, c.pool, "Outra preço", 0)
@@ -251,6 +265,57 @@ func TestDefinirPrecos_FalhaDoBancoNaSegundaEntradaDesfazAPrimeira(t *testing.T)
 	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
 	require.Equal(t, "tipo de material inexistente", r.Mensagem)
 	require.Zero(t, c.contaPrecos(t), "nenhuma emissora gravada")
+}
+
+func TestDefinirPrecos_LoteVazioRepetidoOuTipoRepetidoEhEntradaInvalida(t *testing.T) {
+	c := novoCenario(t)
+	valor := 10.0
+	cons := catalog.EntradaPreco{StationID: c.emissora, Mode: catalog.PricingModeConsolidated, ConsolidatedValue: &valor}
+	porTipo := func(tipos ...uuid.UUID) catalog.EntradaPreco {
+		e := catalog.EntradaPreco{StationID: c.emissora, Mode: catalog.PricingModePerInsertion}
+		for _, ty := range tipos {
+			e.PerType = append(e.PerType, catalog.TypePricing{TypeID: ty, UnitValue: 1})
+		}
+		return e
+	}
+
+	for nome, lote := range map[string][]catalog.EntradaPreco{
+		"vazio":             {},
+		"nil":               nil,
+		"emissora repetida": {cons, cons},
+		"tipo repetido":     {porTipo(c.tipoA, c.tipoA)},
+	} {
+		_, err := c.srv.DefinirPrecos(c.ctx, c.campanha, lote)
+		require.Equal(t, CodigoEntradaInvalida, recusaDe(t, err).Codigo, nome)
+	}
+	require.Zero(t, c.contaPrecos(t), "nada gravado")
+}
+
+// O resultado segue a ordem da entrada, qualquer que seja a ordem em que as
+// emissoras foram escritas (por station_id, contra deadlock).
+func TestDefinirPrecos_ResultadoNaOrdemDaEntrada(t *testing.T) {
+	c := novoCenario(t)
+	outra := mcptest.Emissora(t, c.ctx, c.pool, "Outra ordem", 0)
+	valor := 5.0
+	a := catalog.EntradaPreco{StationID: c.emissora, Mode: catalog.PricingModeConsolidated, ConsolidatedValue: &valor}
+	b := catalog.EntradaPreco{StationID: outra, Mode: catalog.PricingModePerInsertion, PerType: []catalog.TypePricing{{TypeID: c.tipoA, UnitValue: 3}, {TypeID: c.tipoB, UnitValue: 4}}}
+
+	for _, lote := range [][]catalog.EntradaPreco{{a, b}, {b, a}} {
+		out, err := c.srv.DefinirPrecos(c.ctx, c.campanha, lote)
+		require.NoError(t, err)
+		require.Len(t, out, 2)
+		require.Equal(t, lote[0].StationID, out[0].StationID)
+		require.Equal(t, lote[1].StationID, out[1].StationID)
+		for _, sp := range out {
+			if sp.StationID == outra {
+				require.Len(t, sp.PerType, 2)
+				require.Nil(t, sp.ConsolidatedValue)
+			} else {
+				require.Empty(t, sp.PerType)
+				require.NotNil(t, sp.ConsolidatedValue)
+			}
+		}
+	}
 }
 
 func (c *cenario) contaPrecos(t *testing.T) int {

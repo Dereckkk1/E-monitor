@@ -17,7 +17,28 @@ import (
 // causa (catalog.ErrPricing*) acessível por errors.Is. Referência inexistente
 // (campanha, emissora, tipo de material) volta como recusa do banco, não como
 // erro interno.
+//
+// O lote não pode ser vazio, repetir emissora nem repetir type_id dentro de um
+// PerType (o PK estouraria no meio da transação): entrada_invalida, antes de abrir
+// a transação.
 func (s *Servico) DefinirPrecos(ctx context.Context, campanha uuid.UUID, entradas []catalog.EntradaPreco) ([]catalog.StationPricing, error) {
+	if len(entradas) == 0 {
+		return nil, entradaInvalida("pelo menos uma emissora é obrigatória")
+	}
+	vistas := make(map[uuid.UUID]struct{}, len(entradas))
+	for _, e := range entradas {
+		if _, repetida := vistas[e.StationID]; repetida {
+			return nil, entradaInvalida("emissora repetida no lote de preços")
+		}
+		vistas[e.StationID] = struct{}{}
+		tipos := make(map[uuid.UUID]struct{}, len(e.PerType))
+		for _, t := range e.PerType {
+			if _, repetido := tipos[t.TypeID]; repetido {
+				return nil, entradaInvalida("tipo de material repetido no preço da emissora")
+			}
+			tipos[t.TypeID] = struct{}{}
+		}
+	}
 	for _, e := range entradas {
 		if err := catalog.ValidatePricingInput(catalog.UpsertInput{
 			CampaignID: campanha, StationID: e.StationID, Mode: e.Mode,

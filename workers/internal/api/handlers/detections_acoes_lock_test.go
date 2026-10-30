@@ -160,8 +160,9 @@ func TestCriarManualHTTP_Recusas(t *testing.T) {
 		})
 	}
 	var n int
-	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM detections`).Scan(&n))
-	require.Zero(t, n, "nenhuma recusa grava linha")
+	require.NoError(t, c.pool.QueryRow(c.ctx,
+		`SELECT count(*) FROM detections WHERE campaign_id = $1 AND station_id = $2`, c.campanha, c.emissora).Scan(&n))
+	require.Zero(t, n, "nenhuma recusa grava linha na campanha/emissora do cenário")
 }
 
 func TestCriarManualHTTP_FuturoDentroDaToleranciaPassa(t *testing.T) {
