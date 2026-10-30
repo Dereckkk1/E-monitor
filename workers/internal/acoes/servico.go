@@ -10,6 +10,7 @@ import (
 
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
+	"radiocheck/internal/users"
 )
 
 // SupervisorDeCampanha é o que as ações pedem ao supervisor de workers
@@ -96,6 +97,12 @@ type Servico struct {
 	// restaurar).
 	Veiculacoes *catalog.Detections
 
+	// Usuarios é o repositório dos usuários (CriarUsuario, EditarUsuario).
+	Usuarios *users.Repo
+	// BoasVindas emite o convite de boas-vindas. nil = indisponível (a criação
+	// segue e devolve email_status "unavailable").
+	BoasVindas EmissorBoasVindas
+
 	// Agora é o relógio da validação "não está no futuro". nil = time.Now.
 	Agora func() time.Time
 }
@@ -114,6 +121,7 @@ func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *
 		Emissoras:         catalog.NewStations(pool),
 		Precos:            catalog.NewPricing(pool),
 		Veiculacoes:       catalog.NewDetections(pool),
+		Usuarios:          users.NewRepo(pool),
 		Supervisor:        sup,
 		Hub:               h,
 		Ligacoes:          lig,
