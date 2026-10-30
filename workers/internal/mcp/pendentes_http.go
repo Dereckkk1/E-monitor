@@ -127,7 +127,6 @@ func (h *PendentesHTTP) Listar(w http.ResponseWriter, r *http.Request) {
 
 // preparar valida o admin, o id e o executor; devolve false depois de responder.
 func (h *PendentesHTTP) preparar(w http.ResponseWriter, r *http.Request) (*Principal, uuid.UUID, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<10) // o corpo é ignorado
 	if h.Aprovacoes == nil {
 		erroMensagemJSON(w, http.StatusServiceUnavailable, "indisponivel", "Aprovação de pedidos indisponível no momento.")
 		return nil, uuid.Nil, false

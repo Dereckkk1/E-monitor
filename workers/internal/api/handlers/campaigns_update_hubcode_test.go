@@ -313,7 +313,7 @@ de 2026-09-21).
 
 Sem a conferência aqui, a barreira do §4.4 vira opcional em duas requisições:
 cria-se a campanha sem código (a decisão 6 permite) e edita-se pondo o código de
-outro cliente. Pior: o `AtualizarHubCode` ZERA o `hub_notified_at`, então a
+outro cliente. Pior: o `UpdateBasic` ZERA o `hub_notified_at`, então a
 campanha entra na fila do job e passa a bater no hub de 15 em 15 minutos com o
 código do cliente errado, para sempre.
 */

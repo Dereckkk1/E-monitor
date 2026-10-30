@@ -27,7 +27,7 @@ import (
 //	          MESMOS argumentos e o token, executa (uso único, 10 min);
 //	critico   NUNCA executa pela tool. Grava um pedido pendente (24 h) e
 //	          devolve o link /pendentes; quem executa é a aprovação de uma
-//	          pessoa logada no portal (Fatia 4). O token de confirmação, se
+//	          pessoa logada no portal. O token de confirmação, se
 //	          vier, é ignorado (não é consumido).
 //
 // A escalada (Escalar) consulta o banco e roda em TODA chamada, preview e
@@ -78,7 +78,7 @@ type feito struct {
 	Ressalvas []string
 }
 
-// Escrita é DADO (spec §5.2): o mesmo valor registra a tool e, na Fatia 4,
+// Escrita é DADO (spec §5.2): o mesmo valor registra a tool e
 // executa a pendente aprovada. Recusa de negócio = *acoes.Recusa (libera o
 // token); qualquer outro erro = falha interna (não libera).
 type Escrita[In any] struct {
@@ -236,8 +236,8 @@ func comoFalha(cfg ConfigServidor, tool string, err error) (*sdk.CallToolResult,
 }
 
 // ferramentaEscrita registra uma tool de escrita. Fluxo na mesma ordem do hub
-// (aplicarNivel): nível efetivo → livre executa → preview → crítico barra →
-// confirma (sem token: pede; com token: verifica, consome, executa).
+// (aplicarNivel): nível efetivo → livre executa → preview → crítico grava o
+// pedido → confirma (sem token: pede; com token: verifica, consome, executa).
 func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, d Escrita[In]) {
 	destrutiva := d.Nivel != Livre || d.Escalar != nil
 	// Erro de programação, detectado no registro: uma tool que pode pedir

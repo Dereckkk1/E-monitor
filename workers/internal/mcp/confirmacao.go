@@ -115,7 +115,7 @@ func (c *Confirmacoes) Consumir(ctx context.Context, token string, exp time.Time
 	if !formaDoToken.MatchString(token) {
 		return false, nil
 	}
-	// Poda oportunista (o varredor da Fatia 4 também poda, a cada minuto). É
+	// Poda oportunista (o varredor também poda, a cada minuto). É
 	// higiene, nunca pré-condição: SKIP LOCKED pula linha que outra transação
 	// segura (não espera), e erro da poda é logado e ignorado — a confirmação
 	// segue para o INSERT.

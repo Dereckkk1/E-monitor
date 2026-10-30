@@ -105,23 +105,6 @@ func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campai
 	return &camp, err
 }
 
-// AtualizarHubCode troca o código da campanha e ZERA a confirmação.
-//
-// ⚠️ Zerar o `hub_notified_at` não é zelo: o código novo aponta para OUTRA
-// campanha do hub, que nunca ouviu falar desta. Sem zerar, o job de reemissão
-// acharia que já avisou, e a campanha ficaria amarrada ao lugar antigo para
-// sempre — sem nada em tela nenhuma denunciando.
-//
-// Apagar o código (string vazia) cai no mesmo caminho e pelo mesmo motivo: sem
-// código ela não entra na fila, e guardar a confirmação velha seria afirmar um
-// vínculo que não existe mais.
-func (c *Campaigns) AtualizarHubCode(ctx context.Context, id uuid.UUID, code string) error {
-	_, err := c.pool.Exec(ctx,
-		`UPDATE campaigns SET hub_code = NULLIF(btrim($2), ''), hub_notified_at = NULL, updated_at = now()
-		 WHERE id = $1`, id, code)
-	return err
-}
-
 /*
 MarcarHubNotificada registra que o hub confirmou o recebimento desta campanha —
 mas SÓ se o código gravado ainda for o que foi entregue.

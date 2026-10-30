@@ -232,13 +232,3 @@ func deref(s *string) string {
 	}
 	return *s
 }
-
-// ptrOuNil devolve nil para string vazia — é o par do `NULLIF` que o
-// `AtualizarHubCode` usa, para a resposta dizer o mesmo que a coluna passou a
-// guardar.
-func ptrOuNil(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}

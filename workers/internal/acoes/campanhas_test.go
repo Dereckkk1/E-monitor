@@ -258,13 +258,17 @@ func TestEditarCampanha_FalhaNoCodigoNaoGravaNome(t *testing.T) {
 	c, hf, _ := novoCenarioCampanha(t)
 	hf.Conferir = func(string) (*hub.CampanhaDoHub, error) { return mcptest.CampanhaDoClienteLigado("V", c.cliente), nil }
 	camp := c.campanhaComCodigo(t, "EH-7K4M2X")
+	// Nome próprio do pacote e DROP antes de criar (outro pacote ou uma rodada
+	// que morreu no meio não pode deixar um trigger de mesmo nome).
 	_, err := c.pool.Exec(c.ctx, `
-		CREATE OR REPLACE FUNCTION teste_falha_hub_code() RETURNS trigger AS $$
+		DROP TRIGGER IF EXISTS teste_acoes_falha_hub_code ON campaigns;
+		DROP FUNCTION IF EXISTS teste_acoes_falha_hub_code();
+		CREATE OR REPLACE FUNCTION teste_acoes_falha_hub_code() RETURNS trigger AS $$
 		BEGIN IF NEW.hub_code = 'EH-FALHA2' THEN RAISE EXCEPTION 'falha injetada'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
-		CREATE TRIGGER teste_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_falha_hub_code();`)
+		CREATE TRIGGER teste_acoes_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_acoes_falha_hub_code();`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = c.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_falha_hub_code()`)
+		_, _ = c.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_acoes_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_acoes_falha_hub_code()`)
 	})
 
 	_, err = c.srv.EditarCampanha(c.ctx, camp.ID, EditarCampanhaEntrada{
