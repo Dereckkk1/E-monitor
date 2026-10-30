@@ -41,6 +41,9 @@ type sondaEscrita struct {
 	erroPreview     error
 	panicaPreview   bool
 	chamadasPreview int
+	// aoPreview roda no começo do Preview (a conferência da aprovação): deixa o
+	// teste mexer na linha da pendente no meio da aprovação.
+	aoPreview func()
 }
 
 func (s *sondaEscrita) escrita(nome string, nivel Nivel, escalavel bool) Escrita[entradaEscritaTeste] {
@@ -48,6 +51,9 @@ func (s *sondaEscrita) escrita(nome string, nivel Nivel, escalavel bool) Escrita
 		Nome: nome, Descricao: "Escrita de teste.", Nivel: nivel,
 		Preview: func(_ context.Context, _ *Escritas, in entradaEscritaTeste) (previa, error) {
 			s.chamadasPreview++
+			if s.aoPreview != nil {
+				s.aoPreview()
+			}
 			if s.panicaPreview {
 				panic("boom no preview")
 			}

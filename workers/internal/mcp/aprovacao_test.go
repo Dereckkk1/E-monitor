@@ -282,29 +282,61 @@ func TestAprovacao_PreviewComErroOuPanicVoltaAPendenteSemExecutar(t *testing.T) 
 }
 
 // M10: as mensagens de args_invalidos e tool_desconhecida são fixas (o detalhe
-// do validador nunca é gravado) e não estendem o prazo do pedido.
+// do validador nunca é gravado) e não estendem o prazo do pedido. O prazo é posto
+// a 10 min do fim: se a folga de 1 h entrasse, expira_em subiria — e o teste
+// quebraria.
 func TestAprovacao_ArgsInvalidosEToolDesconhecidaTemMensagemFixaESemFolga(t *testing.T) {
 	sonda := &sondaEscrita{}
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	perto := func(id uuid.UUID) time.Time {
+		t.Helper()
+		fim := b.agora.Add(10 * time.Minute)
+		_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET expira_em = $2 WHERE id = $1`, id, fim)
+		require.NoError(t, err)
+		return b.estado(t, id).ExpiraEm
+	}
 
-	// args fora do schema; o pedido está perto de expirar: a folga de 1 h NÃO entra
+	// args fora do schema
 	pend := b.pedido(t, "t_crit", `{"valor":42}`)
-	antes := b.estado(t, pend.ID).ExpiraEm
+	antes := perto(pend.ID)
 	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
+	require.Equal(t, codigoArgsInvalidos, r.Codigo)
 	require.Equal(t, msgArgsInvalidos, r.Mensagem)
 	got := b.estado(t, pend.ID)
 	require.Equal(t, msgArgsInvalidos, *got.Erro)
-	require.True(t, got.ExpiraEm.Equal(antes), "prazo não pode mudar")
+	require.True(t, got.ExpiraEm.Equal(antes), "prazo não pode mudar: era %s, ficou %s", antes, got.ExpiraEm)
 
 	// tool que sumiu
 	outra := b.pedido(t, "nao_existe", `{"valor":"abc"}`)
+	antes = perto(outra.ID)
 	_, err = b.apr.Aprovar(b.ctx, outra.ID, b.ator())
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, "tool_desconhecida", r.Codigo)
 	require.Equal(t, msgToolDesconhecida, r.Mensagem)
-	require.Equal(t, msgToolDesconhecida, *b.estado(t, outra.ID).Erro)
+	got = b.estado(t, outra.ID)
+	require.Equal(t, msgToolDesconhecida, *got.Erro)
+	require.True(t, got.ExpiraEm.Equal(antes), "prazo não pode mudar: era %s, ficou %s", antes, got.ExpiraEm)
+}
+
+// Se a conferência falha E o pedido não volta a pendente (aqui: a linha mudou de
+// estado no meio), "tente de novo em instantes" seria mentira: devolve a execução
+// interrompida.
+func TestAprovacao_ConferenciaFalhaSemConseguirDevolverAPendenteEhExecucaoInterrompida(t *testing.T) {
+	sonda := &sondaEscrita{erroPreview: errors.New("conferência quebrou")}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	sonda.aoPreview = func() {
+		// a linha sai de aprovada/falhou: MarcarFalhaDeNegocio não acha o que atualizar
+		_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET estado = 'recusada' WHERE id = $1`, pend.ID)
+		require.NoError(t, err)
+	}
+
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+
+	require.ErrorIs(t, err, ErrExecucaoInterrompida)
+	require.NotErrorIs(t, err, ErrConferenciaFalhou)
 }
 
 // M10b: recusa de negócio comum (Preview/Executar) continua ganhando folga.

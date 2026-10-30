@@ -99,7 +99,13 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 			// Nada foi tentado: volta a pendente, para aprovar de novo.
 			a.cfg.log().Error("mcp: conferência da pendente falhou", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(conf.causa))
 			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, msgConferenciaFalhou, E.agora(), true); merr != nil || !ok {
+				// Não deu para devolver o pedido a pendente: dizer "tente de novo
+				// em instantes" mentiria (a linha segue `aprovada`, sem executor).
+				// É o mesmo desfecho de uma execução interrompida: ninguém tenta
+				// de novo sozinho, a pessoa confere.
 				a.cfg.log().Error("mcp: não consegui devolver o pedido a pendente", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
+				a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "interno"})
+				return Aprovado{}, ErrExecucaoInterrompida
 			}
 			a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "conferencia_falhou"})
 			return Aprovado{}, ErrConferenciaFalhou
@@ -114,7 +120,11 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 				a.cfg.log().Warn("mcp: args gravados não passam mais no schema", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(inv.detalhe))
 			}
 			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, r.Mensagem, E.agora(), estender); merr != nil || !ok {
+				// Sem devolver a pendente, a Recusa ("nada aconteceu, aprove de novo")
+				// seria mentira: mesmo desfecho da conferência.
 				a.cfg.log().Error("mcp: não consegui devolver o pedido a pendente", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
+				a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "interno"})
+				return Aprovado{}, ErrExecucaoInterrompida
 			}
 			a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": r.Codigo})
 			return Aprovado{}, r
