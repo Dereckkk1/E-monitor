@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"reflect"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +16,20 @@ import (
 	"radiocheck/internal/mcp/tokens"
 	"radiocheck/internal/webhook"
 )
+
+// ehNilTipado diz se v é nil ou um ponteiro/mapa/slice/func nil dentro de uma
+// interface (o nil "tipado", que passa em `v != nil`).
+func ehNilTipado(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
 
 type DepsModulo struct {
 	Pool    *pgxpool.Pool
@@ -86,7 +101,11 @@ func NovoModulo(d DepsModulo) *Modulo {
 	}
 	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
 	servico.BoasVindas = d.BoasVindas
-	servico.Webhooks = d.Webhooks
+	// Mesma armadilha do Hub: um *webhook.Outbox nil dentro da interface passa no
+	// `!= nil` do TestarWebhook e daria panic em vez de "indisponível".
+	if !ehNilTipado(d.Webhooks) {
+		servico.Webhooks = d.Webhooks
+	}
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
 		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
 	// Índice quebrado não derruba o boot (regra 6.5): o módulo segue sem aprovações.

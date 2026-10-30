@@ -29,11 +29,12 @@ const (
 	CodigoNaoReativarApagado    = "cannot_reactivate_deleted"
 )
 
-const (
-	// tamanhoMinimoSenhaUsuario espelha minPasswordLen do handler (me.go).
-	tamanhoMinimoSenhaUsuario = 12
-	custoBcryptUsuario        = 10
-)
+// TamanhoMinimoSenha é o piso de qualquer senha aceita pelo sistema (criação de
+// usuário, troca em /me, reset pelo admin). Uma constante só, usada por acoes e
+// pelos handlers.
+const TamanhoMinimoSenha = 12
+
+const custoBcryptUsuario = 10
 
 // EmissorBoasVindas emite o convite de boas-vindas do usuário recém-criado
 // (*welcome.Service, via BoasVindasDoServico). Entra por interface para os
@@ -167,7 +168,7 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	if in.Email == "" || in.Senha == "" || in.Nome == "" {
 		return nil, nil, recusaUsuario(CodigoCamposObrigatorios)
 	}
-	if len(in.Senha) < tamanhoMinimoSenhaUsuario {
+	if len(in.Senha) < TamanhoMinimoSenha {
 		return nil, nil, recusaUsuario(CodigoSenhaCurta)
 	}
 	dbRole, ok := papelDoBanco(in.Papel)

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/users"
 )
@@ -24,8 +25,9 @@ type MeHandler struct {
 }
 
 // minPasswordLen is the floor for any password change accepted by this
-// service. Mirrors the bootstrap and admin reset endpoints (Task 7).
-const minPasswordLen = 12
+// service. Mirrors the bootstrap and admin reset endpoints (Task 7). Mesmo
+// valor da criação de usuário: uma constante só, em acoes.
+const minPasswordLen = acoes.TamanhoMinimoSenha
 
 // NewMeHandler constructs a MeHandler backed by the given users repo.
 func NewMeHandler(repo *users.Repo) *MeHandler {
