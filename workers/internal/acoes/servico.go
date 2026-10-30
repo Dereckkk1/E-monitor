@@ -91,6 +91,13 @@ type Servico struct {
 	// recategorização de regra, por exemplo). nil = `go f()`. Os testes
 	// injetam um que roda na hora (ou que espera) para observar o efeito.
 	EmSegundoPlano func(func())
+
+	// Veiculacoes é o repositório das tocadas (veiculação manual, ignorar,
+	// restaurar).
+	Veiculacoes *catalog.Detections
+
+	// Agora é o relógio da validação "não está no futuro". nil = time.Now.
+	Agora func() time.Time
 }
 
 // NovoServico monta o Servico sobre o pool, com os repositórios que as telas usam.
@@ -106,6 +113,7 @@ func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *
 		Clientes:          catalog.NewClients(pool),
 		Emissoras:         catalog.NewStations(pool),
 		Precos:            catalog.NewPricing(pool),
+		Veiculacoes:       catalog.NewDetections(pool),
 		Supervisor:        sup,
 		Hub:               h,
 		Ligacoes:          lig,

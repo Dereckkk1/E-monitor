@@ -36,6 +36,8 @@ func escreveRecusa(w http.ResponseWriter, err error) bool {
 			corpo["foreign_projections"] = n
 		}
 		writeJSON(w, http.StatusConflict, corpo)
+	case acoes.CodigoMaterialNaoVinculado:
+		http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
 	case acoes.CodigoHub:
 		http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
 	default: // entrada_invalida e o que vier a ser acrescentado: o pedido é que está errado.
