@@ -86,3 +86,32 @@ func TestRouterMCP_TokenDoMCPNaoAbreOInternal(t *testing.T) {
 	mcpRouter(t).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+// As rotas de aprovação dos pedidos críticos ficam atrás de JWT + admin: sem
+// JWT é 401 e um usuário de cliente (viewer) ou operador é 403, antes de
+// qualquer handler (então sem banco).
+func TestRouterMCP_PendentesExigemAdmin(t *testing.T) {
+	t.Setenv("JWT_SECRET", "segredo-jwt-de-teste-com-mais-de-32-bytes!!")
+	r := mcpRouter(t)
+	id := uuid.NewString()
+	rotas := [][2]string{
+		{http.MethodGet, "/v1/internal/mcp/pendentes"},
+		{http.MethodPost, "/v1/internal/mcp/pendentes/" + id + "/aprovar"},
+		{http.MethodPost, "/v1/internal/mcp/pendentes/" + id + "/recusar"},
+	}
+	for _, rota := range rotas {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(rota[0], rota[1], nil))
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "sem JWT: "+rota[1])
+
+		for _, papel := range []string{"viewer", "operator"} {
+			jwt, err := auth.IssueToken(uuid.New(), papel)
+			require.NoError(t, err)
+			req := httptest.NewRequest(rota[0], rota[1], nil)
+			req.Header.Set("Authorization", "Bearer "+jwt)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusForbidden, rec.Code, papel+": "+rota[1])
+		}
+	}
+}
