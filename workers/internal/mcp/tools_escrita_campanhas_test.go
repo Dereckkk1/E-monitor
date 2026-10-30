@@ -255,13 +255,13 @@ func TestCriarCampanha_Escalada(t *testing.T) {
 
 	// Início hoje e início no passado: o agendador a ativa em ≤ 60 s — barra.
 	for nome, inicio := range map[string]string{"hoje": "2026-10-29", "passado": "2026-10-01"} {
-		out := b.barrado(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"inicio": inicio, "fim": "2026-12-31"}))
+		out := b.pedePendente(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"inicio": inicio, "fim": "2026-12-31"}))
 		require.Contains(t, out["motivo"], "ativa a campanha em até 60 s", nome)
 		require.Equal(t, "https://portal.teste/campaigns/new", out["links"].(map[string]any)["tela"], nome)
-		require.Contains(t, textoDoPreview(t, out), "ativa a campanha em até 60 s", "o preview do ramo barrado diz a verdade: "+nome)
+		require.Contains(t, textoDoPreview(t, out), "ativa a campanha em até 60 s", "o preview do pedido pendente diz a verdade: "+nome)
 	}
 	require.Equal(t, antes, contaCampanhas(t, b), "nada foi criado")
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 2)
 	require.Equal(t, "campaign", l[0].Recurso)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.criar_campanha"))
@@ -274,7 +274,7 @@ func TestCriarCampanha_Escalada(t *testing.T) {
 
 	// O "hoje" é o de São Paulo, não o do relógio do processo: 02:00 UTC do dia 30 ainda é dia 29 em SP.
 	b.E.Agora = func() time.Time { return time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC) }
-	b.barrado(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"inicio": "2026-10-29", "fim": "2026-12-31"}))
+	b.pedePendente(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"inicio": "2026-10-29", "fim": "2026-12-31"}))
 	pre = b.chamar(t, "criar_campanha", argsCriarCampanha(c.cli, map[string]any{"inicio": "2026-10-30", "fim": "2026-12-31"}))
 	require.NotEmpty(t, pre["confirmacao"], "em SP ainda é 29/10: iniciar em 30/10 não escala")
 }
@@ -456,11 +456,11 @@ func TestEditarCampanha_Escalada(t *testing.T) {
 			antes := lerLinhaCampanha(t, b, c.camp)
 			args := argsEditarCampanha(c.camp, k.edicao)
 			if k.escala {
-				out := b.barrado(t, "editar_campanha", args)
+				out := b.pedePendente(t, "editar_campanha", args)
 				require.Contains(t, out["motivo"], k.motivo)
 				require.Equal(t, "https://portal.teste/campaigns/"+c.camp.String()+"/edit", out["links"].(map[string]any)["tela"])
 				require.Equal(t, antes, lerLinhaCampanha(t, b, c.camp), "nada foi gravado")
-				l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+				l := b.auditoria(t, "mcp.pendente.criada")
 				require.Len(t, l, 1)
 				require.Equal(t, "campaign", l[0].Recurso)
 				require.Zero(t, tokensUsados(t, b))
@@ -481,12 +481,12 @@ func TestEditarCampanha_CodigoDoHubSempreEscala(t *testing.T) {
 		return mcptest.CampanhaDoClienteLigado("Camp hub", c.cli), nil
 	}
 
-	out := b.barrado(t, "editar_campanha", argsEditarCampanha(c.camp, map[string]any{"codigo_hub": "eh-7k4m2x"}))
+	out := b.pedePendente(t, "editar_campanha", argsEditarCampanha(c.camp, map[string]any{"codigo_hub": "eh-7k4m2x"}))
 	require.Contains(t, out["motivo"], "código do hub")
 	require.Contains(t, textoDoPreview(t, out), "EH-7K4M2X")
 	require.Nil(t, lerLinhaCampanha(t, b, c.camp).Codigo, "nada foi gravado")
 
-	// O ramo barrado também confere o código: de outro cliente é recusa, não barra.
+	// O pedido pendente também confere o código: de outro cliente é recusa, não barra.
 	b.hub.Conferir = func(string) (*hub.CampanhaDoHub, error) {
 		return mcptest.CampanhaDoClienteLigado("Camp de outro", uuid.New()), nil
 	}
@@ -501,7 +501,7 @@ func TestEditarCampanha_CodigoDoHubSempreEscala(t *testing.T) {
 	require.Len(t, pre["preview"].(map[string]any)["mudancas"], 1)
 
 	// Apagar o código que existe escala; e o Executar (que a Fatia 4 vai chamar) avisa o hub.
-	out = b.barrado(t, "editar_campanha", argsEditarCampanha(c.camp, map[string]any{"codigo_hub": ""}))
+	out = b.pedePendente(t, "editar_campanha", argsEditarCampanha(c.camp, map[string]any{"codigo_hub": ""}))
 	require.Contains(t, textoDoPreview(t, out), "desliga a coleta")
 	d := escritaEditarCampanha(b.cfg)
 	apagar := ""
@@ -682,7 +682,7 @@ func TestEditarEmissorasCampanha_RemoverEmissoraComTocadasPassadasEConfirmaNorma
 	require.Equal(t, []mcptest.ChamadaSupervisor{{Op: "UpdateStations", Campanha: c.camp, Emissoras: []uuid.UUID{c.e2}}}, b.sup.Chamadas())
 	require.EqualValues(t, 1, campanhaDoResultado(out)["emissoras_alvo"])
 	b.exigeAuditoria(t, "mcp.escrita.editar_emissoras_campanha", "campaign", &c.camp)
-	require.Empty(t, b.auditoria(t, "mcp.escrita.requer_aprovacao"))
+	require.Empty(t, b.auditoria(t, "mcp.pendente.criada"))
 	var projDepois string
 	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT string_agg(detection_id::text || category, ',' ORDER BY detection_id) FROM detection_campaigns`).Scan(&projDepois))
 	require.Equal(t, projAntes, projDepois, "as tocadas passadas seguem como estavam")

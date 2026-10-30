@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"runtime/debug"
 	"time"
 	"unicode/utf8"
@@ -24,8 +25,10 @@ import (
 //	livre     executa na primeira chamada;
 //	confirma  a primeira chamada devolve preview + token; a segunda, com os
 //	          MESMOS argumentos e o token, executa (uso único, 10 min);
-//	critico   NUNCA executa pela tool. Até a Fatia 4 trazer /pendentes, a
-//	          resposta é barrada com o motivo e o link da tela (F3-1).
+//	critico   NUNCA executa pela tool. Grava um pedido pendente (24 h) e
+//	          devolve o link /pendentes; quem executa é a aprovação de uma
+//	          pessoa logada no portal (Fatia 4). O token de confirmação, se
+//	          vier, é ignorado (não é consumido).
 //
 // A escalada (Escalar) consulta o banco e roda em TODA chamada, preview e
 // confirmação (F3-2): o token fixa os argumentos, não o estado do mundo.
@@ -46,7 +49,7 @@ func (n Nivel) String() string {
 }
 
 // Escalada: o nível que os ARGUMENTOS e o ESTADO pedem, e por quê (o motivo
-// vai para a resposta barrada e para a auditoria). Nunca desce do declarado.
+// vai para o pedido pendente e para a auditoria). Nunca desce do declarado.
 type Escalada struct {
 	Nivel  Nivel
 	Motivo string
@@ -76,7 +79,7 @@ type feito struct {
 }
 
 // Escrita é DADO (spec §5.2): o mesmo valor registra a tool e, na Fatia 4,
-// executará a pendente aprovada. Recusa de negócio = *acoes.Recusa (libera o
+// executa a pendente aprovada. Recusa de negócio = *acoes.Recusa (libera o
 // token); qualquer outro erro = falha interna (não libera).
 type Escrita[In any] struct {
 	Nome, Descricao string
@@ -84,9 +87,12 @@ type Escrita[In any] struct {
 	Escalar         func(ctx context.Context, E *Escritas, in In) (Escalada, error) // nil = nunca escala
 	Preview         func(ctx context.Context, E *Escritas, in In) (previa, error)
 	Executar        func(ctx context.Context, E *Escritas, p *Principal, in In) (feito, error)
-	Tela            func(E *Escritas, in In) *string // link da tela para o ramo crítico barrado
+	Tela            func(E *Escritas, in In) *string // link da tela, na resposta do pedido pendente
+	// Motivo é "por que é crítica": usado quando o nível DECLARADO é Critico
+	// (a escalada traz o próprio motivo).
+	Motivo string
 	// Recurso (opcional) diz o alvo da auditoria quando a escrita NÃO chega a
-	// produzir um feito (ramo barrado, falha interna): o tipo e o id do
+	// produzir um feito (pedido pendente, falha interna): o tipo e o id do
 	// registro que a tool mexeria. Sem ele, "mcp_escrita" sem id.
 	Recurso func(in In) (string, *uuid.UUID)
 }
@@ -101,9 +107,8 @@ func (c CampoConfirmacao) confirmacao() string { return c.Confirmacao }
 const (
 	msgInvalida = "Confirmação inválida ou expirada, ou os argumentos mudaram. Peça o preview outra vez."
 	msgUsada    = "Esta confirmação já foi usada. Peça o preview outra vez se quiser repetir."
-	// avisoBarrado é o texto do ramo crítico (F3-1): a Fatia 4 troca esse ramo
-	// por criarPendente.
-	avisoBarrado = "Nada aconteceu. Esta alteração atinge veiculação já ocorrida e precisa de aprovação humana; a aprovação pelo MCP ainda não existe — faça pela tela, logado."
+	// avisoPendente é o texto do ramo crítico: o pedido foi gravado, nada executou.
+	avisoPendente = "Nada aconteceu ainda. Entregue o link aprovar_em à pessoa: só ela, logada no portal, pode aprovar; o pedido vale 24 h."
 	// tetoConfirmacao: comprimento máximo aceito para o campo confirmacao.
 	tetoConfirmacao = 200
 	// tetoTextoAuditoria: texto longo (roteiro) entra cortado no audit_log (F3-11).
@@ -147,17 +152,56 @@ type respostaSemEfeito struct {
 	Erro     string `json:"erro"`
 }
 
-type linksBarrado struct {
+type linksPendente struct {
 	Tela *string `json:"tela"`
 }
 
-type respostaBarrada struct {
-	Executou bool         `json:"executou"`
-	Nivel    string       `json:"nivel"`
-	Motivo   string       `json:"motivo"`
-	Preview  previa       `json:"preview"`
-	Aviso    string       `json:"aviso"`
-	Links    linksBarrado `json:"links"`
+type respostaPendente struct {
+	Executou   bool          `json:"executou"`
+	Nivel      string        `json:"nivel"`
+	Motivo     string        `json:"motivo"`
+	Preview    previa        `json:"preview"`
+	PendenteID string        `json:"pendente_id"`
+	ExpiraEm   string        `json:"expira_em"`
+	AprovarEm  *string       `json:"aprovar_em"`
+	JaExistia  bool          `json:"ja_existia"`
+	Aviso      string        `json:"aviso"`
+	Ressalvas  []string      `json:"ressalvas,omitempty"`
+	Links      linksPendente `json:"links"`
+}
+
+// criarPendente grava o pedido do ramo crítico (idempotente: o mesmo pedido
+// aberto não duplica) e devolve o link de aprovação. Nada é executado.
+func criarPendente[In any](ctx context.Context, cfg ConfigServidor, E *Escritas, p *Principal, d Escrita[In],
+	in In, args []byte, motivo string, pv previa) (*sdk.CallToolResult, any, error) {
+	if E.Pendentes == nil {
+		return falhaInterna(cfg.log(), d.Nome, errors.New("mcp: Pendentes não configuradas"))
+	}
+	pend, jaExistia, err := E.Pendentes.Criar(context.WithoutCancel(ctx), NovaPendente{
+		UserID: p.UserID, TokenID: p.TokenID, Tool: d.Nome, Args: args, Motivo: motivo, Preview: pv,
+	}, E.agora())
+	if err != nil {
+		return falhaInterna(cfg.log(), d.Nome, err)
+	}
+	recurso, recursoID := d.alvo(in)
+	if !jaExistia {
+		auditar(ctx, cfg, E, p, "mcp.pendente.criada", recurso, recursoID, d.Nome, Critico, args,
+			map[string]any{"motivo": motivo, "pendente_id": pend.ID.String()})
+	}
+	aprovar := cfg.linkTela("/pendentes", url.Values{"id": {pend.ID.String()}})
+	var ressalvas []string
+	if aprovar == nil {
+		ressalvas = append(ressalvas, "O endereço do portal não está configurado: abra /pendentes no portal do E-monitor para aprovar.")
+	}
+	var tela *string
+	if d.Tela != nil {
+		tela = d.Tela(E, in)
+	}
+	return resultado(respostaPendente{
+		Executou: false, Nivel: Critico.String(), Motivo: motivo, Preview: pv,
+		PendenteID: pend.ID.String(), ExpiraEm: instante(pend.ExpiraEm), AprovarEm: aprovar,
+		JaExistia: jaExistia, Aviso: avisoPendente, Ressalvas: ressalvas, Links: linksPendente{Tela: tela},
+	})
 }
 
 // confirmacaoDe lê o token do In; "" se o In não embute CampoConfirmacao.
@@ -255,19 +299,12 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 			return comoFalha(cfg, d.Nome, err)
 		}
 
-		// 4. crítico: barrado até a Fatia 4 (F3-1). Nada é escrito nem consumido.
+		// 4. crítico: grava o pedido; quem executa é a aprovação em /pendentes (F4-5).
 		if nivel == Critico {
-			recurso, recursoID := d.alvo(in)
-			auditar(ctx, cfg, E, p, "mcp.escrita.requer_aprovacao", recurso, recursoID, d.Nome, nivel, args,
-				map[string]any{"motivo": motivo})
-			var tela *string
-			if d.Tela != nil {
-				tela = d.Tela(E, in)
+			if motivo == "" {
+				motivo = d.Motivo
 			}
-			return resultado(respostaBarrada{
-				Executou: false, Nivel: nivel.String(), Motivo: motivo, Preview: pv,
-				Aviso: avisoBarrado, Links: linksBarrado{Tela: tela},
-			})
+			return criarPendente(ctx, cfg, E, p, d, in, args, motivo, pv)
 		}
 
 		// 5. confirma.
@@ -400,7 +437,7 @@ func cortarTextos(v any) any {
 	return v
 }
 
-// alvo é o recurso da auditoria de uma escrita sem feito (barrada ou falha):
+// alvo é o recurso da auditoria de uma escrita sem feito (pendente ou falha):
 // o que a tool declara em Recurso, ou o genérico "mcp_escrita" sem id.
 func (d Escrita[In]) alvo(in In) (string, *uuid.UUID) {
 	if d.Recurso != nil {

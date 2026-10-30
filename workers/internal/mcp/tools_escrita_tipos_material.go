@@ -457,7 +457,7 @@ func escritaEditarMaterial(cfg ConfigServidor) Escrita[entradaEditarMaterial] {
 		Descricao: "Edita um material (o áudio do comercial): título, roteiro e/ou tipo — só os campos enviados mudam; roteiro vazio limpa o " +
 			"texto. Título e roteiro são só rótulo. A armadilha é o tipo: as regras de distribuição são por tipo, então trocar o tipo " +
 			"recategoriza as veiculações do material em TODAS as campanhas. Sobe para crítico quando o tipo muda e o material já tem " +
-			"veiculação aprovada; nesse caso nada é feito e a resposta traz o link da tela (a troca de tipo se faz na etapa de " +
+			"veiculação aprovada; nesse caso vira um pedido que uma pessoa aprova em /pendentes (a troca de tipo se faz na etapa de " +
 			"materiais da campanha, logado). Não troca o áudio nem o cliente do material. Nunca invente ids: pergunte. " +
 			"Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,

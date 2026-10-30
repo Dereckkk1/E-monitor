@@ -458,7 +458,7 @@ func regraDoRecurso(valor string) (string, *uuid.UUID) {
 	return "distribution_rule", nil
 }
 
-// efeitosDaRegra são os efeitos de criar/editar, no preview e no ramo barrado.
+// efeitosDaRegra são os efeitos de criar/editar, no preview e no pedido pendente.
 func efeitosDaRegra(pl *planoDeRegra, editando bool) []string {
 	n := pl.nova
 	meta := fmt.Sprintf("Nas emissoras da regra, na vigência %s a %s e nos dias %s, a meta do dia do tipo %s passa a incluir %d inserção(ões)/dia na faixa %s–%s (tolerância de 15 min em cada ponta). A meta de uma célula é a soma das regras que valem no dia; um ajuste do dia (definir_override) substitui as regras da célula.",
@@ -561,7 +561,7 @@ func escritaCriarRegra(cfg ConfigServidor) Escrita[entradaCriarRegra] {
 			"recategoriza em segundo plano (até 30 s) as veiculações do tipo na campanha inteira; (4) a regra por TIPO cobre qualquer material " +
 			"do tipo, então ela só é cumprida se houver material do tipo vinculado (vincular_material). Sobe para crítico quando a campanha já " +
 			"tem veiculação aprovada do tipo OU a vigência inclui dia que já passou e que os dias da semana da regra cobrem (em campanha em andamento, comece a vigência hoje ou depois " +
-			"para não escalar); nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: " +
+			"para não escalar); nesse caso vira um pedido que uma pessoa aprova em /pendentes. Campanha cancelada é recusada. Nunca invente ids: " +
 			"pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaCriarRegra) (Escalada, error) {
@@ -875,7 +875,7 @@ func escritaEditarRegra(cfg ConfigServidor) Escrita[entradaEditarRegra] {
 			"a regra em geral (por isso é recusado: use todos_os_materiais_do_tipo); (4) a meta de uma célula é a soma das regras que valem no " +
 			"dia. Sobe para crítico quando a campanha já tem veiculação aprovada do(s) tipo(s) da regra (o novo e o antigo) OU a vigência (a " +
 			"antiga ou a nova, no período da campanha) inclui dia que já passou e que os dias da semana da regra (a antiga ou a nova) cobrem; " +
-			"nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o " +
+			"nesse caso vira um pedido que uma pessoa aprova em /pendentes. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o " +
 			"preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarRegra) (Escalada, error) {
@@ -1002,7 +1002,7 @@ func escritaApagarRegra(cfg ConfigServidor) Escrita[entradaApagarRegra] {
 			"bonus); (2) como a regra apagada deixa de dizer o escopo, a campanha INTEIRA (todos os tipos e emissoras) é recategorizada em " +
 			"segundo plano (até 30 s); (3) um ajuste do dia (listar_overrides) que cobria a regra continua valendo. Sobe para crítico quando a " +
 			"campanha já tem qualquer veiculação aprovada OU a vigência da regra (no período da campanha) inclui dia que já passou e que os dias da semana dela cobrem; nesse caso " +
-			"nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e " +
+			"vira um pedido que uma pessoa aprova em /pendentes. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e " +
 			"espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaApagarRegra) (Escalada, error) {

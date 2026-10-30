@@ -430,13 +430,13 @@ func TestDefinirOverride_Escalada(t *testing.T) {
 	}
 
 	// Gatilho (data): um dia que já passou, mesmo sem nenhuma veiculação.
-	out := b.barrado(t, "definir_override", argsOverride(c, "2026-10-28", 2, faixa))
+	out := b.pedePendente(t, "definir_override", argsOverride(c, "2026-10-28", 2, faixa))
 	require.Contains(t, out["motivo"], "já passou")
 	require.NotContains(t, out["motivo"], "veiculação aprovada")
 	require.Equal(t, "https://portal.teste/detections?campaign_id="+c.camp.String(), out["links"].(map[string]any)["tela"])
-	require.Contains(t, textoDoPreview(t, out), "SUBSTITUI as regras", "o ramo barrado traz o preview")
+	require.Contains(t, textoDoPreview(t, out), "SUBSTITUI as regras", "o pedido pendente traz o preview")
 	require.Empty(t, linhasDeAjuste(t, b, c.camp), "nada foi gravado")
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 1)
 	require.Equal(t, "campaign", l[0].Recurso, "a linha de auditoria aponta a campanha (tipo/emissora/dia estão nos args)")
 	require.Equal(t, c.camp, *l[0].RecursoID)
@@ -445,7 +445,7 @@ func TestDefinirOverride_Escalada(t *testing.T) {
 
 	// Gatilho (veiculação): tocada aprovada NA célula-dia — hoje, para a data não escalar sozinha.
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "bonus", mcptest.Quando(hoje, "10:00"))
-	out = b.barrado(t, "definir_override", argsOverride(c, hoje, 2, faixa))
+	out = b.pedePendente(t, "definir_override", argsOverride(c, hoje, 2, faixa))
 	require.Contains(t, out["motivo"], "já tem veiculação aprovada")
 	require.NotContains(t, out["motivo"], "já passou")
 
@@ -467,7 +467,7 @@ func TestDefinirOverride_Escalada(t *testing.T) {
 
 	// Os dois motivos juntos.
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "bonus", mcptest.Quando("2026-10-27", "10:00"))
-	out = b.barrado(t, "definir_override", argsOverride(c, "2026-10-27", 2, faixa))
+	out = b.pedePendente(t, "definir_override", argsOverride(c, "2026-10-27", 2, faixa))
 	require.Contains(t, out["motivo"], "já passou")
 	require.Contains(t, out["motivo"], "já tem veiculação aprovada")
 }
@@ -518,7 +518,7 @@ func TestDefinirOverride_FronteiraDoDiaEmSP(t *testing.T) {
 
 		pre := b.chamar(t, "definir_override", argsOverride(c, "2026-10-29", 2, faixa))
 		require.NotEmpty(t, pre["confirmacao"], "hoje (SP) às %s não escala", hora)
-		b.barrado(t, "definir_override", argsOverride(c, "2026-10-28", 2, faixa))
+		b.pedePendente(t, "definir_override", argsOverride(c, "2026-10-28", 2, faixa))
 		pre = b.chamar(t, "definir_override", argsOverride(c, "2026-10-30", 2, faixa))
 		require.NotEmpty(t, pre["confirmacao"], "amanhã (SP) às %s não escala, mesmo sendo hoje em UTC", hora)
 	}
@@ -669,19 +669,19 @@ func TestApagarOverride_Escalada(t *testing.T) {
 		require.NotEmpty(t, pre["confirmacao"], d)
 	}
 	// Gatilho (data): o dia já passou.
-	out := b.barrado(t, "apagar_override", argsApagarOverride(c, "2026-10-28"))
+	out := b.pedePendente(t, "apagar_override", argsApagarOverride(c, "2026-10-28"))
 	require.Contains(t, out["motivo"], "já passou")
 	require.Equal(t, "https://portal.teste/detections?campaign_id="+c.camp.String(), out["links"].(map[string]any)["tela"])
 	require.Len(t, linhasDeAjuste(t, b, c.camp), 3, "nada foi apagado")
 	// Gatilho (veiculação na célula-dia de hoje).
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "bonus", mcptest.Quando(hoje, "09:00"))
-	out = b.barrado(t, "apagar_override", argsApagarOverride(c, hoje))
+	out = b.pedePendente(t, "apagar_override", argsApagarOverride(c, hoje))
 	require.Contains(t, out["motivo"], "já tem veiculação aprovada")
 	// O vizinho de amanhã segue confirmando.
 	pre := b.chamar(t, "apagar_override", argsApagarOverride(c, "2026-10-30"))
 	require.NotEmpty(t, pre["confirmacao"])
 	require.Zero(t, tokensUsados(t, b))
-	require.Len(t, b.auditoria(t, "mcp.escrita.requer_aprovacao"), 2)
+	require.Len(t, b.auditoria(t, "mcp.pendente.criada"), 2)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.apagar_override"))
 }
 
@@ -712,7 +712,7 @@ func TestApagarOverride_FronteiraDoDiaEmSP(t *testing.T) {
 		b.E.Agora = func() time.Time { return mcptest.Quando("2026-10-29", hora) }
 		pre := b.chamar(t, "apagar_override", argsApagarOverride(c, "2026-10-29"))
 		require.NotEmpty(t, pre["confirmacao"], "hoje (SP) às %s não escala", hora)
-		b.barrado(t, "apagar_override", argsApagarOverride(c, "2026-10-28"))
+		b.pedePendente(t, "apagar_override", argsApagarOverride(c, "2026-10-28"))
 		pre = b.chamar(t, "apagar_override", argsApagarOverride(c, "2026-10-30"))
 		require.NotEmpty(t, pre["confirmacao"], "amanhã (SP) às %s não escala, mesmo sendo hoje em UTC", hora)
 	}

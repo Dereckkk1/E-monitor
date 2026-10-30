@@ -468,13 +468,13 @@ func TestCriarRegra_Escalada(t *testing.T) {
 
 	// Gatilho 1: veiculação aprovada do MESMO tipo, mesmo com a vigência só no futuro.
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e2, "bonus", mcptest.Quando("2026-10-11", "10:00"))
-	out := b.barrado(t, "criar_regra_distribuicao", futura(nil))
+	out := b.pedePendente(t, "criar_regra_distribuicao", futura(nil))
 	require.Contains(t, out["motivo"], "veiculação aprovada do tipo")
 	require.NotContains(t, out["motivo"], "dias já passados")
 	require.Equal(t, "https://portal.teste/campaigns/"+c.camp.String()+"/edit", out["links"].(map[string]any)["tela"])
-	require.Contains(t, textoDoPreview(t, out), "Manhã", "o ramo barrado traz o preview")
+	require.Contains(t, textoDoPreview(t, out), "Manhã", "o pedido pendente traz o preview")
 	require.Empty(t, linhasDeRegra(t, b, c.camp), "nada foi criado")
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 1)
 	require.Equal(t, "distribution_rule", l[0].Recurso)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.criar_regra_distribuicao"))
@@ -487,7 +487,7 @@ func TestCriarRegra_EscaladaPelaDataSemNenhumaVeiculacao(t *testing.T) {
 	c := semearRegra(t, b, uuid.Nil, uuid.Nil, "2026-10-01", "2026-12-31")
 
 	// Vigência que começa ontem: um dia já passou. Sem tocada nenhuma, mesmo assim barra.
-	out := b.barrado(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-28", "2026-12-31", nil))
+	out := b.pedePendente(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-28", "2026-12-31", nil))
 	require.Contains(t, out["motivo"], "dias já passados")
 	require.Contains(t, out["motivo"], "2026-10-28 a 2026-10-28")
 	require.NotContains(t, out["motivo"], "veiculação aprovada")
@@ -528,7 +528,7 @@ func TestCriarRegra_FronteiraDoDiaEmSP(t *testing.T) {
 		pre := b.chamar(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-29", "2026-12-31", nil))
 		require.NotEmpty(t, pre["confirmacao"], "início hoje (SP) às %s não escala", hora)
 		// Começou ontem em SP (28/10): já há dia passado — escala.
-		b.barrado(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-28", "2026-12-31", nil))
+		b.pedePendente(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-28", "2026-12-31", nil))
 		// Começa amanhã em SP (30/10), que já é "hoje" em UTC: NÃO escala.
 		pre = b.chamar(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-30", "2026-12-31", nil))
 		require.NotEmpty(t, pre["confirmacao"], "início amanhã (SP) às %s não escala, mesmo sendo hoje em UTC", hora)
@@ -767,32 +767,32 @@ func TestEditarRegra_Escalada(t *testing.T) {
 	require.NotEmpty(t, pre["confirmacao"], "veiculação só do tipo B: editar a regra do tipo A, sem trocar o tipo, não escala")
 
 	// Gatilho (data): a vigência ATUAL inclui dias passados, mesmo sem veiculação do tipo A.
-	out := b.barrado(t, "editar_regra_distribuicao", ed(passada, map[string]any{"insercoes_por_dia": 5}))
+	out := b.pedePendente(t, "editar_regra_distribuicao", ed(passada, map[string]any{"insercoes_por_dia": 5}))
 	require.Contains(t, out["motivo"], "vigência atual")
 	require.Contains(t, out["motivo"], "dias já passados")
 	require.NotContains(t, out["motivo"], "veiculação aprovada")
 
 	// Gatilho (data): a vigência NOVA passa a incluir dias passados (a antiga era só futuro).
-	out = b.barrado(t, "editar_regra_distribuicao", ed(futura, map[string]any{"inicio": "2026-10-20"}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", ed(futura, map[string]any{"inicio": "2026-10-20"}))
 	require.Contains(t, out["motivo"], "vigência nova")
 	// ...e a antiga passada encolhida para o futuro também barra, pela ANTIGA.
-	out = b.barrado(t, "editar_regra_distribuicao", ed(passada, map[string]any{"inicio": "2026-11-15"}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", ed(passada, map[string]any{"inicio": "2026-11-15"}))
 	require.Contains(t, out["motivo"], "vigência atual")
 
 	// Troca de tipo A → B com veiculação só do tipo B (o NOVO): barra pelo tipo novo.
-	out = b.barrado(t, "editar_regra_distribuicao", ed(futura, map[string]any{"tipo_id": c.tipoB.String()}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", ed(futura, map[string]any{"tipo_id": c.tipoB.String()}))
 	require.Contains(t, out["motivo"], "veiculação aprovada")
 	require.Contains(t, out["motivo"], "do tipo ")
 
 	// Gatilho (veiculação do tipo da regra): uma tocada do tipo A barra mesmo a regra só-futura.
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e2, "bonus", mcptest.Quando("2026-10-11", "10:00"))
-	out = b.barrado(t, "editar_regra_distribuicao", ed(futura, map[string]any{"insercoes_por_dia": 5}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", ed(futura, map[string]any{"insercoes_por_dia": 5}))
 	require.Contains(t, out["motivo"], "veiculação aprovada do tipo")
 	require.Equal(t, "https://portal.teste/campaigns/"+c.camp.String()+"/edit", out["links"].(map[string]any)["tela"])
 	require.Equal(t, "Base", strings.Split(linhasDeRegra(t, b, c.camp)[0], "|")[0])
 	require.Contains(t, linhasDeRegra(t, b, c.camp)[0], "2/dia", "nada foi gravado")
 	require.Zero(t, tokensUsados(t, b))
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.NotEmpty(t, l)
 	require.Equal(t, "distribution_rule", l[len(l)-1].Recurso)
 	require.NotNil(t, l[len(l)-1].RecursoID)
@@ -808,7 +808,7 @@ func TestEditarRegra_EscaladaPeloTipoAntigoETipoNeutro(t *testing.T) {
 	r := semearRegraBase(t, b, c, "2026-11-01", "2026-12-31")
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "bonus", mcptest.Quando("2026-10-10", "10:00")) // tipo A (o antigo)
 
-	out := b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, r, map[string]any{"tipo_id": c.tipoB.String()}))
+	out := b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, r, map[string]any{"tipo_id": c.tipoB.String()}))
 	require.Contains(t, out["motivo"], "veiculação aprovada do tipo")
 	require.Contains(t, out["motivo"], "ou do tipo", "o texto cita os dois tipos")
 
@@ -848,7 +848,7 @@ func TestEditarRegra_FronteiraDoDiaEmSP(t *testing.T) {
 		pre := b.chamar(t, "editar_regra_distribuicao", argsEditarRegra(c, hoje, map[string]any{"insercoes_por_dia": 7}))
 		require.NotEmpty(t, pre["confirmacao"], "vigência começando hoje (SP) às %s não escala", hora)
 		ontem := semearRegraBase(t, b, c, "2026-10-28", "2026-12-31")
-		b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, ontem, map[string]any{"insercoes_por_dia": 7}))
+		b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, ontem, map[string]any{"insercoes_por_dia": 7}))
 		_, err := b.pool.Exec(b.ctx, `DELETE FROM distribution_rules WHERE campaign_id = $1`, c.camp)
 		require.NoError(t, err)
 	}
@@ -946,18 +946,18 @@ func TestApagarRegra_Escalada(t *testing.T) {
 	require.NotEmpty(t, pre["confirmacao"])
 
 	// Gatilho (data): a vigência inclui dias passados, sem veiculação alguma.
-	out := b.barrado(t, "apagar_regra_distribuicao", ap(passada))
+	out := b.pedePendente(t, "apagar_regra_distribuicao", ap(passada))
 	require.Contains(t, out["motivo"], "dias já passados")
 	require.NotContains(t, out["motivo"], "veiculação aprovada")
 
 	// Gatilho (veiculação): apagar recategoriza a campanha inteira — veiculação de QUALQUER
 	// tipo (aqui o B) barra, mesmo a regra só-futura do tipo A.
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.matB, c.e1, "bonus", mcptest.Quando("2026-10-10", "10:00"))
-	out = b.barrado(t, "apagar_regra_distribuicao", ap(futura))
+	out = b.pedePendente(t, "apagar_regra_distribuicao", ap(futura))
 	require.Contains(t, out["motivo"], "veiculação aprovada de algum tipo")
 	require.Len(t, linhasDeRegra(t, b, c.camp), 2, "nada foi apagado")
 	require.Zero(t, tokensUsados(t, b))
-	require.Len(t, b.auditoria(t, "mcp.escrita.requer_aprovacao"), 2)
+	require.Len(t, b.auditoria(t, "mcp.pendente.criada"), 2)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.apagar_regra_distribuicao"))
 }
 
@@ -987,7 +987,7 @@ func TestApagarRegra_FronteiraDoDiaEmSP(t *testing.T) {
 		pre := b.chamar(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": hoje.String()})
 		require.NotEmpty(t, pre["confirmacao"], "regra começando hoje (SP) às %s: nenhum dia passado", hora)
 		ontem := semearRegraBase(t, b, c, "2026-10-28", "2026-12-31")
-		b.barrado(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": ontem.String()})
+		b.pedePendente(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": ontem.String()})
 		_, err := b.pool.Exec(b.ctx, `DELETE FROM distribution_rules WHERE campaign_id = $1`, c.camp)
 		require.NoError(t, err)
 	}

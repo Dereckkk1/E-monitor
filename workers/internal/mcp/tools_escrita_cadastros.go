@@ -599,8 +599,8 @@ func escritaEditarPMMTarget(cfg ConfigServidor) Escrita[entradaEditarPMMTarget] 
 			"Só as emissoras listadas mudam. pmm_target é inteiro de 0 em diante ou null para REMOVER a linha — remover não é zerar: " +
 			"sem linha a emissora fica FORA do total de impactos no target; com 0 ela conta e soma nada. A armadilha: o valor é " +
 			"retroativo (não há versionamento) e vale para todas as campanhas do cliente. Sobe para crítico quando o cliente já tem " +
-			"veiculação nessas emissoras ou tem campanha em andamento (já iniciada) com elas; nesse caso nada é feito e a resposta " +
-			"traz o link da tela. Nunca invente ids nem valores: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
+			"veiculação nessas emissoras ou tem campanha em andamento (já iniciada) com elas; nesse caso vira um pedido que uma pessoa " +
+			"aprova em /pendentes. Nunca invente ids nem valores: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarPMMTarget) (Escalada, error) {
 			pl, err := planejarEdicaoDePMM(ctx, E, in)
@@ -808,7 +808,7 @@ func escritaEditarEmissora(cfg ConfigServidor) Escrita[entradaEditarEmissora] {
 		Descricao: "Edita o cadastro de uma emissora: só os campos enviados mudam (nome, frequencia_mhz, cidade, uf, pmm). Nunca troca " +
 			"a stream_url, a banda, o logo nem os metadados. As armadilhas: (1) o PMM geral entra nos impactos de TODAS as campanhas que " +
 			"usam a emissora, inclusive dias já veiculados (não há versionamento) — sobe para crítico quando o pmm muda e a emissora já " +
-			"tem veiculação aprovada; nesse caso nada é feito e a resposta traz o link da tela; (2) mudar dial ou cidade não recalcula a " +
+			"tem veiculação aprovada; nesse caso vira um pedido que uma pessoa aprova em /pendentes; (2) mudar dial ou cidade não recalcula a " +
 			"classe/raio da Anatel. Nunca invente o emissora_id nem os valores: pergunte. " +
 			"Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,

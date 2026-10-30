@@ -361,7 +361,7 @@ func escritaDefinirOverride(cfg ConfigServidor) Escrita[entradaDefinirOverride] 
 			"contar como bônus. Outras armadilhas: o ajuste vale só para o dia e a célula (não para a semana); a data tem de estar no período da " +
 			"campanha e a emissora na campanha. A gravação recategoriza a célula-dia AGORA (síncrona): o resultado traz o plano do dia " +
 			"recalculado. Sobe para crítico quando a data já passou (hoje é o de America/Sao_Paulo) OU a célula-dia já tem veiculação " +
-			"aprovada; nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. " +
+			"aprovada; nesse caso vira um pedido que uma pessoa aprova em /pendentes. Campanha cancelada é recusada. Nunca invente ids: pergunte. " +
 			"Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaDefinirOverride) (Escalada, error) {
@@ -488,7 +488,7 @@ func escritaApagarOverride(cfg ConfigServidor) Escrita[entradaApagarOverride] {
 			"responderia 'feito'). A armadilha: a meta e a faixa voltam ao que as regras dão — se nenhuma regra vale naquele dia, a meta vira 0 e " +
 			"toda tocada do dia passa a ser bonus. A remoção recategoriza a célula-dia AGORA (síncrona): o resultado traz o plano do dia " +
 			"recalculado. Sobe para crítico quando a data já passou (hoje é o de America/Sao_Paulo) OU a célula-dia já tem veiculação aprovada; " +
-			"nesse caso nada é feito e a resposta traz o link da tela. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o " +
+			"nesse caso vira um pedido que uma pessoa aprova em /pendentes. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o " +
 			"preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaApagarOverride) (Escalada, error) {

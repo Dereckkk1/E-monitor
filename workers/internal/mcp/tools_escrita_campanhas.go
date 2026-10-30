@@ -229,7 +229,7 @@ func escritaCriarCampanha(cfg ConfigServidor) Escrita[entradaCriarCampanha] {
 			"veiculações; monte os materiais (vincular_material) e as regras antes disso. As armadilhas: (1) campanha duplicada — procure " +
 			"antes em listar_campanhas pelo cliente e pelo nome; (2) o código do hub é conferido contra o hub: tem de existir e pertencer ao MESMO cliente " +
 			"da campanha (a criação é recusada se for de outro cliente ou não existir) — nunca o invente. Sobe para crítico quando o início é hoje ou já passou (seria ativada " +
-			"em até 60 s, como iniciar uma campanha); nesse caso nada é feito e a resposta traz o link da tela. Nunca invente ids: " +
+			"em até 60 s, como iniciar uma campanha); nesse caso vira um pedido que uma pessoa aprova em /pendentes. Nunca invente ids: " +
 			"pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(_ context.Context, E *Escritas, in entradaCriarCampanha) (Escalada, error) {
@@ -474,8 +474,8 @@ func escritaEditarCampanha(cfg ConfigServidor) Escrita[entradaEditarCampanha] {
 			"o código. Não mexe em emissoras (editar_emissoras_campanha), materiais, regras nem cliente. A armadilha: o estado da campanha " +
 			"segue as datas (o agendador roda a cada 60 s) — empurrar o início para o futuro derruba uma campanha ativa e para os workers; " +
 			"estender o fim de uma concluída a reativa. Sobe para crítico quando (a) as novas datas mudam o estado que o agendador dá à " +
-			"campanha, (b) muda o conjunto de dias já passados do período ou (c) muda o código do hub; nesse caso nada é feito e a resposta " +
-			"traz o link da tela. Renomear e esticar o fim de uma campanha em andamento não escalam. Campanha cancelada é recusada. " +
+			"campanha, (b) muda o conjunto de dias já passados do período ou (c) muda o código do hub; nesse caso vira um pedido que uma pessoa " +
+			"aprova em /pendentes. Renomear e esticar o fim de uma campanha em andamento não escalam. Campanha cancelada é recusada. " +
 			"Nunca invente ids nem o código do hub: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarCampanha) (Escalada, error) {

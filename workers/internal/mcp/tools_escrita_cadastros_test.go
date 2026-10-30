@@ -464,11 +464,11 @@ func TestEditarPMMTarget_Escalada(t *testing.T) {
 	mat := mcptest.Material(t, b.ctx, b.pool, exposto.cli, mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot"), "Spot")
 	mcptest.Vincular(t, b.ctx, b.pool, exposto.camp, mat, exposto.e1)
 	mcptest.Veiculacao(t, b.ctx, b.pool, exposto.camp, mat, exposto.e1, "in_slot", mcptest.Quando("2026-10-10", "10:00"))
-	out := b.barrado(t, "editar_pmm_target", map[string]any{"cliente_id": exposto.cli.String(), "entradas": []any{entradaPMM(exposto.e1, 1500)}})
+	out := b.pedePendente(t, "editar_pmm_target", map[string]any{"cliente_id": exposto.cli.String(), "entradas": []any{entradaPMM(exposto.e1, 1500)}})
 	require.Contains(t, out["motivo"], "veiculação")
 	require.Equal(t, "https://portal.teste/clients/"+exposto.cli.String()+"/target-pmm", out["links"].(map[string]any)["tela"])
 	require.Equal(t, map[uuid.UUID]int{exposto.e1: 1000, exposto.e2: 2000}, linhasPMM(t, b, exposto.cli), "nada foi gravado")
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 1)
 	require.Equal(t, "client", l[0].Recurso)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.editar_pmm_target"))
@@ -480,7 +480,7 @@ func TestEditarPMMTarget_Escalada(t *testing.T) {
 
 	// (2) campanha iniciada antes de hoje, sem tocada nenhuma: barra (o total no target aparece mesmo assim).
 	iniciada := semearPMM(t, b, "2026-10-01", "2026-10-31")
-	out = b.barrado(t, "editar_pmm_target", map[string]any{"cliente_id": iniciada.cli.String(), "entradas": []any{entradaPMM(iniciada.e1, 1500)}})
+	out = b.pedePendente(t, "editar_pmm_target", map[string]any{"cliente_id": iniciada.cli.String(), "entradas": []any{entradaPMM(iniciada.e1, 1500)}})
 	require.Contains(t, out["motivo"], "Camp PMM")
 	require.Equal(t, map[uuid.UUID]int{iniciada.e1: 1000, iniciada.e2: 2000}, linhasPMM(t, b, iniciada.cli))
 
@@ -683,14 +683,14 @@ func TestEditarEmissora_PMMComVeiculacaoEhBarradoENadaMuda(t *testing.T) {
 	antes := lerLinhaEmissora(t, b, c.est)
 	args := map[string]any{"emissora_id": c.est.String(), "pmm": 5000}
 
-	out := b.barrado(t, "editar_emissora", args)
+	out := b.pedePendente(t, "editar_emissora", args)
 
 	require.Contains(t, out["motivo"], "veiculação")
 	require.Contains(t, out["motivo"], "PMM")
 	require.Equal(t, "https://portal.teste/stations/"+c.est.String()+"/edit", out["links"].(map[string]any)["tela"])
 	require.Equal(t, antes, lerLinhaEmissora(t, b, c.est), "nada foi gravado")
 	require.Contains(t, out["preview"].(map[string]any)["efeitos"].([]any)[len(out["preview"].(map[string]any)["efeitos"].([]any))-1], "já tem veiculação aprovada")
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 1)
 	require.Equal(t, "station", l[0].Recurso)
 	require.Equal(t, c.est, *l[0].RecursoID)
@@ -817,7 +817,7 @@ func TestEditarPMMTarget_FronteiraDoDiaEmSP(t *testing.T) {
 
 		// Começou ontem em SP (28/10): já há dia passado. Escala.
 		ontem := semearPMM(t, b, "2026-10-28", "2026-11-30")
-		b.barrado(t, "editar_pmm_target", map[string]any{"cliente_id": ontem.cli.String(), "entradas": []any{entradaPMM(ontem.e1, 1500)}})
+		b.pedePendente(t, "editar_pmm_target", map[string]any{"cliente_id": ontem.cli.String(), "entradas": []any{entradaPMM(ontem.e1, 1500)}})
 
 		// Começa amanhã em SP (30/10), que já é "hoje" em UTC: NÃO escala.
 		amanha := semearPMM(t, b, "2026-10-30", "2026-11-30")
