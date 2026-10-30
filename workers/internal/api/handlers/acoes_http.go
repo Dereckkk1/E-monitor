@@ -36,6 +36,13 @@ func escreveRecusa(w http.ResponseWriter, err error) bool {
 			corpo["foreign_projections"] = n
 		}
 		writeJSON(w, http.StatusConflict, corpo)
+	case acoes.CodigoClienteComVinculos:
+		// Corpo genérico: a rota de apagar cliente monta o dela, com as contagens.
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "client_has_dependents"})
+	case acoes.CodigoMaterialVinculado,
+		acoes.CodigoCampanhaComLoteManual,
+		acoes.CodigoCampanhaEmPosVenda:
+		writeJSON(w, http.StatusConflict, map[string]any{"error": r.Codigo})
 	case acoes.CodigoMaterialNaoVinculado:
 		http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
 	case acoes.CodigoHub:

@@ -38,17 +38,6 @@ func NewUsersHandler(repo *users.Repo, welcomeSvc *welcome.Service) *UsersHandle
 	return &UsersHandler{repo: repo, welcomeSvc: welcomeSvc}
 }
 
-// roleAlias converte vocabulário API → DB. operator não é exposto.
-func roleAlias(in string) (string, bool) {
-	switch in {
-	case "admin":
-		return "admin", true
-	case "client":
-		return "viewer", true
-	}
-	return "", false
-}
-
 // parseRoleFilter converte vocabulário API → DB para filtros do query string.
 // Aceita também "operator" e "viewer" diretamente pra retrocompat.
 func parseRoleFilter(in string) (dbRole string, ok bool) {

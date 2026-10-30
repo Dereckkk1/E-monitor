@@ -99,7 +99,9 @@ func TestCancelarHTTP_Inexistente404EIdInvalido400(t *testing.T) {
 	require.Equal(t, "invalid id\n", rec.Body.String())
 }
 
-func TestApagarHTTP_204ApagaALinhaEPausaOsWorkers(t *testing.T) {
+// Apagar CANCELA (com cancelled_at) e derruba os workers antes de apagar a linha;
+// antes era Pause, que gravava `cancelada` sem cancelled_at.
+func TestApagarHTTP_204CancelaDerrubaOsWorkersEApagaALinha(t *testing.T) {
 	ctx, pool := poolHubCode(t)
 	c := criaCampanhaDireto(t, ctx, pool, seedClienteLocal(t, ctx, pool), "")
 	sup := &fakeSupervisor{}
@@ -111,21 +113,39 @@ func TestApagarHTTP_204ApagaALinhaEPausaOsWorkers(t *testing.T) {
 	var n int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, c.ID).Scan(&n))
 	require.Zero(t, n)
-	require.EqualValues(t, 1, sup.pauseCalls.Load())
+	require.EqualValues(t, 1, sup.stopCalls.Load())
+	require.Equal(t, c.ID, sup.lastCancelArg)
 }
 
-func TestApagarHTTP_PausaComErroSegueEApaga(t *testing.T) {
+// Campanha com comprovante manual: 409 {"error":"campanha_com_lote_manual"} e
+// NADA muda (antes: pausava, a FK abortava o delete e a rota dava 500).
+func TestApagarHTTP_ComLoteManual409SemTocarNaCampanha(t *testing.T) {
 	ctx, pool := poolHubCode(t)
 	c := criaCampanhaDireto(t, ctx, pool, seedClienteLocal(t, ctx, pool), "")
-	sup := &fakeSupervisor{pauseErr: context.DeadlineExceeded}
+	est, err := catalog.NewStations(pool).Create(ctx, catalog.CreateStationInput{
+		Name: "Lote FM " + uuid.NewString()[:6], Band: "FM", StreamURL: "http://example.com/" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO manual_proof_batches (campaign_id, station_id, proof_pdf_key, proof_pdf_size) VALUES ($1,$2,'k',1)`, c.ID, est.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM manual_proof_batches WHERE campaign_id=$1`, c.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, c.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM stations WHERE id=$1`, est.ID)
+	})
+	sup := &fakeSupervisor{}
 	r := roteadorCicloCampanha(&CampaignsHandler{Repo: catalog.NewCampaigns(pool), Supervisor: sup}, nil)
 
 	rec := chamar(t, r, http.MethodDelete, "/campaigns/"+c.ID.String(), nil)
 
-	require.Equal(t, http.StatusNoContent, rec.Code)
-	var n int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, c.ID).Scan(&n))
-	require.Zero(t, n)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	var corpo map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &corpo))
+	require.Equal(t, map[string]any{"error": "campanha_com_lote_manual"}, corpo)
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM campaigns WHERE id=$1`, c.ID).Scan(&status))
+	require.NotEqual(t, "cancelada", status)
+	require.Zero(t, sup.stopCalls.Load())
 }
 
 // Apagar o que não existe é idempotente: o repositório não acha linha e não erra, a rota responde 204.
@@ -187,7 +207,7 @@ func semeiaProjecaoAlheia(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	return a, b
 }
 
-func TestApagarHTTP_ProjecaoDeOutraCampanha409SemPausarNemApagar(t *testing.T) {
+func TestApagarHTTP_ProjecaoDeOutraCampanha409SemCancelarNemApagar(t *testing.T) {
 	ctx, pool := poolHubCode(t)
 	a, _ := semeiaProjecaoAlheia(t, ctx, pool)
 	sup := &fakeSupervisor{}
@@ -199,7 +219,7 @@ func TestApagarHTTP_ProjecaoDeOutraCampanha409SemPausarNemApagar(t *testing.T) {
 	var corpo map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &corpo))
 	require.Equal(t, map[string]any{"error": "campaign_has_foreign_projections", "foreign_projections": float64(1)}, corpo)
-	require.Zero(t, sup.pauseCalls.Load(), "recusa ANTES de pausar")
+	require.Zero(t, sup.stopCalls.Load(), "recusa ANTES de cancelar")
 	var n int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, a.ID).Scan(&n))
 	require.Equal(t, 1, n)

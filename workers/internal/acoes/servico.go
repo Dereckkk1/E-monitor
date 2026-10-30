@@ -24,9 +24,6 @@ type SupervisorDeCampanha interface {
 	// Reload manda o índice de hashes e os workers da campanha se
 	// reconfigurarem (NATS index.reload), só faz efeito se estiver ativa.
 	Reload(campaignID uuid.UUID) error
-	// Pause para os workers da campanha (apagar a campanha pausa antes de
-	// remover as linhas).
-	Pause(campaignID uuid.UUID) error
 	// StopWorkersForCampaign derruba os workers das emissoras que ficaram sem
 	// campanha ativa (depois de cancelar). Não devolve erro.
 	StopWorkersForCampaign(campaignID uuid.UUID)

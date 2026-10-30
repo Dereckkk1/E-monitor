@@ -26,7 +26,7 @@ func Sincrono(f func()) { f() }
 
 // ChamadaSupervisor é uma chamada registrada ao SupervisorFalso.
 type ChamadaSupervisor struct {
-	Op        string // "UpdateStations", "Reload", "Start", "Pause" ou "StopWorkers"
+	Op        string // "UpdateStations", "Reload", "Start" ou "StopWorkers"
 	Campanha  uuid.UUID
 	Emissoras []uuid.UUID // só em UpdateStations
 }
@@ -68,13 +68,9 @@ func (s *SupervisorFalso) Reload(id uuid.UUID) error {
 	return s.ErroReload
 }
 
-// Start, Pause e StopWorkersForCampaign completam handlers.CampaignSupervisor.
+// Start e StopWorkersForCampaign completam handlers.CampaignSupervisor.
 func (s *SupervisorFalso) Start(id uuid.UUID) error {
 	s.registra(ChamadaSupervisor{Op: "Start", Campanha: id})
-	return nil
-}
-func (s *SupervisorFalso) Pause(id uuid.UUID) error {
-	s.registra(ChamadaSupervisor{Op: "Pause", Campanha: id})
 	return nil
 }
 func (s *SupervisorFalso) StopWorkersForCampaign(id uuid.UUID) {

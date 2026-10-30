@@ -556,7 +556,6 @@ func main() {
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
 		Supervisor: sup,
-		Log:        logger,
 		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
 		Ligacoes:   catalog.NewLigacoes(pool),
 	}

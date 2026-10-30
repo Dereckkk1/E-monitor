@@ -8,9 +8,10 @@ package acoes
 
 import "errors"
 
-// Códigos de recusa de negócio (plano da Fatia 3, F3-9). As rotas HTTP não têm
-// código (respondem texto puro); quem os define é a camada de ações, e o MCP os
-// devolve como "<mensagem> [<código>]" (contrato §3.4).
+// Códigos de recusa de negócio (plano da Fatia 3, F3-9). Quem os define é a
+// camada de ações; o MCP os devolve como "<mensagem> [<código>]" (contrato
+// §3.4) e as rotas HTTP os traduzem em status (handlers.escreveRecusa), em geral
+// sem expor o código — só onde a rota já respondia JSON com ele.
 const (
 	CodigoEntradaInvalida   = "entrada_invalida"
 	CodigoNaoEncontrado     = "nao_encontrado"
@@ -34,6 +35,11 @@ const (
 	CodigoClienteComVinculos = "cliente_com_vinculos"
 	// CodigoMaterialVinculado: apagar o material esbarra num vínculo com campanha.
 	CodigoMaterialVinculado = "material_vinculado"
+	// CodigoCampanhaComLoteManual: apagar a campanha esbarra nos comprovantes de
+	// veiculação manual (manual_proof_batches) que apontam para ela.
+	CodigoCampanhaComLoteManual = "campanha_com_lote_manual"
+	// CodigoCampanhaEmPosVenda: a campanha faz parte de um relatório de pós-venda.
+	CodigoCampanhaEmPosVenda = "campanha_em_pos_venda"
 )
 
 // Recusa é a falha de NEGÓCIO de uma ação: a entrada não vale, nada foi

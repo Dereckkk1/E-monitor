@@ -969,6 +969,17 @@ func (c *Campaigns) CountForeignProjections(ctx context.Context, id uuid.UUID) (
 	return n, err
 }
 
+// DeleteBlockers diz se a campanha tem comprovantes de veiculação manual
+// (manual_proof_batches, FK sem ON DELETE) ou participa de um relatório de
+// pós-venda (post_sale_report_campaigns, FK RESTRICT). Qualquer um dos dois faz
+// o Delete abortar com 23503; a ação de apagar pergunta ANTES de gravar.
+func (c *Campaigns) DeleteBlockers(ctx context.Context, id uuid.UUID) (loteManual, posVenda bool, err error) {
+	err = c.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM manual_proof_batches WHERE campaign_id = $1),
+		       EXISTS(SELECT 1 FROM post_sale_report_campaigns WHERE campaign_id = $1)`, id).Scan(&loteManual, &posVenda)
+	return loteManual, posVenda, err
+}
+
 // StationsCoveredByActive returns every station targeted by at least one
 // 'ativa' campaign — the set that must have a worker. Used by the supervisor's
 // fleet reconciler.

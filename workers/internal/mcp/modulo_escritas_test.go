@@ -13,12 +13,11 @@ import (
 	"radiocheck/internal/mcp/mcptest"
 )
 
-// supervisorFalso faz as vezes do supervisor de workers (UpdateStations/Reload/Pause/StopWorkersForCampaign).
+// supervisorFalso faz as vezes do supervisor de workers (UpdateStations/Reload/StopWorkersForCampaign).
 type supervisorFalso struct{}
 
 func (supervisorFalso) UpdateStations(uuid.UUID, []uuid.UUID) error { return nil }
 func (supervisorFalso) Reload(uuid.UUID) error                      { return nil }
-func (supervisorFalso) Pause(uuid.UUID) error                       { return nil }
 func (supervisorFalso) StopWorkersForCampaign(uuid.UUID)            {}
 
 // TestModulo_RepassaDepsParaEscritas: Supervisor, Hub e Ligacoes de DepsModulo
