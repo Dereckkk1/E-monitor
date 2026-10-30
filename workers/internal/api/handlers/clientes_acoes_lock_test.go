@@ -3,8 +3,8 @@ package handlers
 // clientes_acoes_lock_test.go — TRAVA o que as rotas de ativar/desativar/apagar
 // cliente e apagar material fazem hoje (status, corpo, linha no banco), ANTES de
 // a lógica sair do handler para internal/acoes (Fatia 4, Task 13). Passa no
-// código antigo e no novo — exceto o caso "material vinculado", que muda de 500
-// para 409 no passo 3 da task (teste dele troca junto).
+// código antigo e no novo — exceto o caso "material vinculado", que era 500 e
+// virou 409 (fix(materiais): apagar material vinculado responde 409).
 
 import (
 	"context"
@@ -151,7 +151,7 @@ func TestMaterialApagarHTTP_Inexistente204(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestMaterialApagarHTTP_VinculadoHoje500(t *testing.T) {
+func TestMaterialApagarHTTP_Vinculado409(t *testing.T) {
 	c := novoCenarioCliente(t)
 	cli := mcptest.Cliente(t, c.ctx, c.pool, "Cliente Mat Vinc")
 	tipo := mcptest.TipoMaterial(t, c.ctx, c.pool, "Spot Mat Vinc")
@@ -161,6 +161,7 @@ func TestMaterialApagarHTTP_VinculadoHoje500(t *testing.T) {
 	mcptest.Vincular(t, c.ctx, c.pool, camp, m, em)
 
 	rec := c.chamar(http.MethodDelete, "/materials/"+m.String())
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.JSONEq(t, `{"error":"material_vinculado"}`, rec.Body.String())
 	require.True(t, c.existe(t, "materials", m))
 }
