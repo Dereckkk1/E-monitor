@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 // interface p/ permitir mock no teste sem DB.
 type OverrideRepo interface {
 	Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error
-	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) (int64, error)
 	ListByCampaignAndDateRange(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]catalog.DistributionOverride, error)
 }
 
@@ -112,6 +113,13 @@ func (h *DistributionOverridesHandler) Delete(w http.ResponseWriter, r *http.Req
 	}
 	// Mesma recategorização síncrona do Upsert (a célula reverte para a regra).
 	if err := h.servico().ApagarAjuste(r.Context(), campaignID, p.TypeID, p.StationID, date); err != nil {
+		// DELETE é idempotente: apagar um ajuste que já não existe é 204, como a rota sempre
+		// foi (a ação devolve nao_encontrado para o MCP não dizer "apagado" quando nada foi
+		// apagado, e não recategoriza à toa).
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}

@@ -591,13 +591,37 @@ func TestEditarEmissorasCampanha_PreviewNaoEscreveEConfirmarGrava(t *testing.T) 
 	require.Contains(t, texto, "Rádio 3")
 	require.Contains(t, texto, "Rádio 1")
 	require.Contains(t, texto, "os workers das emissoras acrescentadas sobem agora", "campanha ativa: efeito imediato")
+	// Revisão final: o supervisor reinicia TAMBÉM o worker de toda emissora que fica (kept+added em
+	// station_changes.go), então todas reconectam e há uma lacuna de captura — o preview tem de dizer.
+	require.Contains(t, texto, "REINICIA o worker de TODAS as emissoras que continuam na campanha")
+	require.Contains(t, texto, "pequena lacuna de captura")
+	require.Contains(t, texto, "inclusive as que outra campanha ativa também usa")
 
 	out := b.confirmarEExecutar(t, "editar_emissoras_campanha", args)
+	ress := mustJSON(t, out["ressalvas"])
+	require.Contains(t, ress, "REINICIA os das que continuam", "a ressalva da execução repete o aviso")
+	require.Contains(t, ress, "pequena lacuna de captura")
 
 	require.Equal(t, []uuid.UUID{c.e2, c.e3}, lerLinhaCampanha(t, b, c.camp).Emissoras, "as demais ficam, a nova entra no fim")
 	require.Equal(t, []mcptest.ChamadaSupervisor{{Op: "UpdateStations", Campanha: c.camp, Emissoras: []uuid.UUID{c.e2, c.e3}}}, b.sup.Chamadas())
 	require.EqualValues(t, 2, campanhaDoResultado(out)["emissoras_alvo"])
 	b.exigeAuditoria(t, "mcp.escrita.editar_emissoras_campanha", "campaign", &c.camp)
+}
+
+// Campanha que não está ativa não tem worker: nenhum reinício a avisar.
+func TestEditarEmissorasCampanha_CampanhaProgramadaNaoFalaDeReinicio(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCampEsc(t, b, "2026-12-01", "2026-12-31", "programada")
+	args := argsEmissorasCampanha(c.camp, []uuid.UUID{c.e3}, []uuid.UUID{c.e1})
+
+	pre := b.preview(t, "editar_emissoras_campanha", args)
+	texto := textoDoPreview(t, pre)
+	require.Contains(t, texto, "nenhum worker sobe nem para agora")
+	require.NotContains(t, texto, "REINICIA")
+	require.NotContains(t, texto, "lacuna de captura")
+
+	out := b.confirmarEExecutar(t, "editar_emissoras_campanha", args)
+	require.NotContains(t, mustJSON(t, out["ressalvas"]), "REINICIA")
 }
 
 func TestEditarEmissorasCampanha_ParidadeComARota(t *testing.T) {

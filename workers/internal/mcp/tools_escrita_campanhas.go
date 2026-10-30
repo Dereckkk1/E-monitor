@@ -656,7 +656,7 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 	return Escrita[entradaEditarEmissorasCampanha]{
 		Nome: "editar_emissoras_campanha",
 		Descricao: "Acrescenta e/ou tira emissoras-alvo de uma campanha: adicionar e remover são listas de ids, e só as listadas mudam (a " +
-			"tela troca a lista inteira; aqui nunca). Numa campanha ativa os workers sobem/param na hora. As armadilhas: (1) os materiais já " +
+			"tela troca a lista inteira; aqui nunca). Numa campanha ativa os workers sobem/param na hora e o supervisor REINICIA também os das emissoras que ficam (TODAS reconectam por um instante, com uma pequena lacuna de captura, inclusive as que outras campanhas ativas usam). As armadilhas: (1) os materiais já " +
 			"vinculados NÃO ganham as emissoras novas — cada vínculo tem lista própria (editar_emissoras_material), e sem ela a tocada da " +
 			"emissora nova não é atribuída à campanha; (2) tirar emissora para o worker dela e a tira das listas de emissoras-alvo e de PMM no " +
 			"target, do mapa ao vivo e dos alertas de queda da campanha; os números de dias passados (grade, insights, financeiro, " +
@@ -688,7 +688,8 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 			}
 			if pl.camp.Status == "ativa" {
 				pv.Efeitos = append(pv.Efeitos, "A campanha está ativa: ao confirmar, os workers das emissoras acrescentadas sobem agora e os das removidas param "+
-					"(menos os de emissoras que outra campanha ativa ainda usa).")
+					"(menos os de emissoras que outra campanha ativa ainda usa). ATENÇÃO: o supervisor também REINICIA o worker de TODAS as emissoras que continuam na campanha "+
+					"(para recarregar os materiais): cada uma reconecta por um instante, com uma pequena lacuna de captura, inclusive as que outra campanha ativa também usa.")
 			} else {
 				pv.Efeitos = append(pv.Efeitos, fmt.Sprintf("A campanha está %s: só a lista de emissoras muda; nenhum worker sobe nem para agora (eles sobem quando a campanha ativar).", pl.camp.Status))
 			}
@@ -749,7 +750,8 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 			}
 			f := feito{Resultado: saida, Recurso: "campaign", RecursoID: &pl.camp.ID}
 			if pl.camp.Status == "ativa" {
-				f.Ressalvas = append(f.Ressalvas, "A campanha está ativa: o supervisor sobe e para os workers da diferença agora; se algum falhar, o reconciler (30 s) corrige.")
+				f.Ressalvas = append(f.Ressalvas, "A campanha está ativa: o supervisor sobe os workers das emissoras acrescentadas, para os das removidas e REINICIA os das que continuam "+
+					"(todas reconectam por um instante, com uma pequena lacuna de captura, inclusive as compartilhadas com outras campanhas ativas); se algum falhar, o reconciler (30 s) corrige.")
 			}
 			if len(pl.adicionar) > 0 && saida.Campanha.Materiais > 0 {
 				f.Ressalvas = append(f.Ressalvas, "Os materiais vinculados não ganharam as emissoras acrescentadas: use editar_emissoras_material.")

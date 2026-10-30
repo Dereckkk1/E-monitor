@@ -69,13 +69,19 @@ func (do *DistributionOverrides) Upsert(ctx context.Context, in UpsertOverrideIn
 	return err
 }
 
+// Delete apaga o ajuste da célula-dia e devolve quantas linhas apagou (0 = a chave já não
+// existia): quem precisa distinguir "apagou" de "não havia nada" (acoes.ApagarAjuste) lê o
+// número; a rota HTTP segue idempotente.
 func (do *DistributionOverrides) Delete(ctx context.Context,
-	campaignID, typeID, stationID uuid.UUID, forDate time.Time) error {
-	_, err := do.pool.Exec(ctx,
+	campaignID, typeID, stationID uuid.UUID, forDate time.Time) (int64, error) {
+	tag, err := do.pool.Exec(ctx,
 		`DELETE FROM distribution_overrides
 		 WHERE campaign_id=$1 AND type_id=$2 AND station_id=$3 AND for_date=$4`,
 		campaignID, typeID, stationID, forDate)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (do *DistributionOverrides) ListByCampaignAndDateRange(ctx context.Context,
