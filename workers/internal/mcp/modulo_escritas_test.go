@@ -11,6 +11,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/mcptest"
+	"radiocheck/internal/webhook"
 )
 
 // supervisorFalso faz as vezes do supervisor de workers (UpdateStations/Reload/StopWorkersForCampaign).
@@ -40,6 +41,28 @@ func TestModulo_RepassaDepsParaEscritas(t *testing.T) {
 	require.Same(t, lig, E.Acoes.Ligacoes)
 	require.Equal(t, []byte(mcptest.SegredoTeste), E.Segredo)
 	require.Same(t, m.cfg.Leitura, E.Leitura, "a escrita monta previews com a MESMA Leitura das tools obter_*")
+}
+
+// BoasVindas e Webhooks de DepsModulo chegam ao Servico; um *webhook.Outbox nil
+// (typed-nil) NÃO entra — TestarWebhook diria "indisponível" em vez de dar panic.
+func TestModulo_RepassaBoasVindasEWebhooksETrataNilTipado(t *testing.T) {
+	bv := acoes.BoasVindasDoServico(nil)
+	var outbox *webhook.Outbox // nil tipado, como deliverer.Outbox() sem entregador
+	m := NovoModulo(DepsModulo{
+		Segredo: []byte(mcptest.SegredoTeste), Portal: "https://portal.teste", Log: zap.NewNop(),
+		BoasVindas: bv, Webhooks: outbox,
+	})
+	require.NotNil(t, m)
+	require.Equal(t, bv, m.cfg.Escritas.Acoes.BoasVindas)
+	require.Nil(t, m.cfg.Escritas.Acoes.Webhooks, "nil tipado não pode virar interface não-nil")
+
+	real := webhook.NewOutbox(nil, nil, zap.NewNop())
+	m = NovoModulo(DepsModulo{
+		Segredo: []byte(mcptest.SegredoTeste), Portal: "https://portal.teste", Log: zap.NewNop(),
+		Webhooks: real,
+	})
+	require.NotNil(t, m)
+	require.Equal(t, webhook.OutboxEnqueuer(real), m.cfg.Escritas.Acoes.Webhooks)
 }
 
 // Sem supervisor nem hub (dev, teste): as interfaces ficam nil — um
