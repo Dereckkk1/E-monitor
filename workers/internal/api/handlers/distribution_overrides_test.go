@@ -73,13 +73,17 @@ func TestDistributionOverridesHandler_List_BadFromDate(t *testing.T) {
 var _ OverrideRepo = (*catalog.DistributionOverrides)(nil)
 var _ OverrideRecategorizer = (*catalog.DistributionRules)(nil)
 
-type mockOverrideStore struct{}
+// mockOverrideStore: Delete apaga 1 linha, a menos que semLinha (a chave já não existe).
+type mockOverrideStore struct{ semLinha bool }
 
 func (m *mockOverrideStore) Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error {
 	return nil
 }
-func (m *mockOverrideStore) Delete(ctx context.Context, c, t, s uuid.UUID, d time.Time) error {
-	return nil
+func (m *mockOverrideStore) Delete(ctx context.Context, c, t, s uuid.UUID, d time.Time) (int64, error) {
+	if m.semLinha {
+		return 0, nil
+	}
+	return 1, nil
 }
 func (m *mockOverrideStore) ListByCampaignAndDateRange(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]catalog.DistributionOverride, error) {
 	return nil, nil
@@ -157,5 +161,29 @@ func TestDistributionOverridesHandler_Delete_FiresRecat(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Delete não disparou RecategorizeForOverride")
+	}
+}
+
+// Revisão final: apagar um ajuste que já não existe segue 204 (idempotência de sempre), mas a
+// ação o devolve como nao_encontrado + ErrAlvoInexistente e NÃO recategoriza a célula à toa.
+func TestDistributionOverridesHandler_Delete_ChaveInexistenteDa204SemRecat(t *testing.T) {
+	recat := &mockOverrideRecat{ch: make(chan recatCall, 1)}
+	h := &DistributionOverridesHandler{Repo: &mockOverrideStore{semLinha: true}, Recat: recat}
+
+	r := chi.NewRouter()
+	r.Delete("/campaigns/{campaignID}/distribution-overrides", h.Delete)
+	body := `{"type_id":"` + uuid.NewString() + `","station_id":"` + uuid.NewString() +
+		`","for_date":"2026-07-01","plays_expected":0,"time_start":"00:00","time_end":"23:59"}`
+	req := httptest.NewRequest("DELETE", "/campaigns/"+uuid.NewString()+"/distribution-overrides", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d (%s)", w.Code, w.Body.String())
+	}
+	select {
+	case c := <-recat.ch:
+		t.Fatalf("nada foi apagado, mas a recat rodou: %+v", c)
+	default:
 	}
 }

@@ -18,9 +18,15 @@ import (
 )
 
 // escritasEsperadas é o catálogo da spec §6 "Fatia 3" com o nível DECLARADO de
-// cada tool. Nenhuma tool livre escala hoje; toda `confirma` pode escalar a
-// crítico (o motivo sai na resposta barrada). Tool de escrita nova entra aqui e
-// em ToolsEsperadas no mesmo commit.
+// cada tool (não o efetivo). Nenhuma tool livre escala. Das 18 `confirma`, 10 têm
+// Escalar e podem subir a crítico (o motivo sai na resposta barrada):
+// editar_material, editar_pmm_target, editar_emissora, criar_campanha,
+// editar_campanha, criar/editar/apagar_regra_distribuicao e
+// definir/apagar_override. As outras 8 NUNCA escalam: criar/editar_tipo_material,
+// criar/editar_cliente, editar_emissoras_campanha e vincular/desvincular/
+// editar_emissoras_material. Todas as 18 levam `confirmacao` e destructiveHint
+// (a anotação é por nível declarado, não por Escalar). Tool de escrita nova entra
+// aqui e em ToolsEsperadas no mesmo commit.
 var escritasEsperadas = map[string]string{
 	"marcar_notificacoes_lidas":        "livre",
 	"reconhecer_similaridade_material": "livre",

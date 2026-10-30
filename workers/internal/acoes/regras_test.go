@@ -350,8 +350,38 @@ func TestApagarAjuste_ApagaERevertePraRegra(t *testing.T) {
 	require.NoError(t, c.srv.ApagarAjuste(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10")))
 
 	c.exigeCategoria(t, "in_slot")
-	// Apagar de novo (não existe mais) não é erro.
+}
+
+// Revisão final: apagar o que já não existe é nao_encontrado marcado com ErrAlvoInexistente
+// (a rota HTTP o mapeia para 204, como sempre; o MCP não diz "apagado" quando nada foi
+// apagado) e NÃO dispara a recategorização — não há o que recategorizar.
+func TestApagarAjuste_InexistenteEhNaoEncontradoSemRecat(t *testing.T) {
+	c := novoCenario(t)
+	recat := &recatQueFalha{}
+	c.srv.RecatCelula = recat
+
+	for nome, apagar := range map[string]func() error{
+		"ApagarAjuste": func() error {
+			return c.srv.ApagarAjuste(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10"))
+		},
+		"ApagarAjusteComResultado": func() error {
+			_, err := c.srv.ApagarAjusteComResultado(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10"))
+			return err
+		},
+	} {
+		err := apagar()
+		var r *Recusa
+		require.ErrorAs(t, err, &r, nome)
+		require.Equal(t, CodigoNaoEncontrado, r.Codigo, nome)
+		require.ErrorIs(t, err, ErrAlvoInexistente, nome)
+	}
+	require.Zero(t, recat.chamadas, "nada apagado, nada a recategorizar")
+
+	// Existindo, apaga uma vez; a segunda é nao_encontrado.
+	c.srv.RecatCelula = nil
+	require.NoError(t, c.srv.DefinirAjuste(c.ctx, c.entradaAjuste(2, "08:00", "12:00")))
 	require.NoError(t, c.srv.ApagarAjuste(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10")))
+	require.ErrorIs(t, c.srv.ApagarAjuste(c.ctx, c.campanha, c.tipoA, c.emissora, dia("2026-06-10")), ErrAlvoInexistente)
 }
 
 // ───────────────────────────── F3-8: defeitos da rota corrigidos na extração ─────────────────────────────

@@ -247,7 +247,10 @@ func (s *Servico) DefinirAjusteComResultado(ctx context.Context, e EntradaAjuste
 
 // ApagarAjuste apaga o ajuste (a célula volta a ser julgada pelas regras) e
 // recategoriza a célula-dia de forma síncrona, como DefinirAjuste. Apagar um
-// ajuste que não existe não é erro (a rota sempre respondeu 204).
+// ajuste que não existe (0 linhas apagadas) devolve nao_encontrado marcado com
+// ErrAlvoInexistente e NÃO recategoriza (não há o que recategorizar): a rota HTTP
+// mapeia a marca para 204, como sempre (idempotência), e o MCP não diz "apagado"
+// quando nada foi apagado — o mesmo padrão de DesvincularMaterial e ApagarRegra.
 func (s *Servico) ApagarAjuste(ctx context.Context, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) error {
 	_, err := s.ApagarAjusteComResultado(ctx, campanhaID, tipoID, emissoraID, dia)
 	return err
@@ -255,8 +258,12 @@ func (s *Servico) ApagarAjuste(ctx context.Context, campanhaID, tipoID, emissora
 
 // ApagarAjusteComResultado é o ApagarAjuste que também diz se a recategorização falhou.
 func (s *Servico) ApagarAjusteComResultado(ctx context.Context, campanhaID, tipoID, emissoraID uuid.UUID, dia time.Time) (ResultadoAjuste, error) {
-	if err := s.Ajustes.Delete(ctx, campanhaID, tipoID, emissoraID, dia); err != nil {
+	n, err := s.Ajustes.Delete(ctx, campanhaID, tipoID, emissoraID, dia)
+	if err != nil {
 		return ResultadoAjuste{}, err
+	}
+	if n == 0 {
+		return ResultadoAjuste{}, &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "ajuste do dia não encontrado", Causa: ErrAlvoInexistente}
 	}
 	return ResultadoAjuste{RecatFalhou: s.recatDaCelula("override_delete", campanhaID, tipoID, emissoraID, dia)}, nil
 }

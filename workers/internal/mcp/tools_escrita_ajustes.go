@@ -161,11 +161,6 @@ func (c *celulaDoAjuste) faixaAtual() any {
 	return strings.Join(faixas, " + ")
 }
 
-func (c *celulaDoAjuste) recurso() (string, *uuid.UUID) {
-	id := c.camp.ID
-	return "distribution_override", &id
-}
-
 // nomesDaCelula são os mapas de nome que o ajusteDTO usa (tipo e emissora da célula).
 func (c *celulaDoAjuste) nomes() (tipos, emissoras map[uuid.UUID]string) {
 	return map[uuid.UUID]string{c.tipo.ID: c.tipo.Name}, map[uuid.UUID]string{c.est.ID: c.est.Name}
@@ -208,8 +203,10 @@ func linkDosAjustes(cfg ConfigServidor, campanhaID string) *string {
 	return cfg.link("/detections")
 }
 
+// ajusteDoRecurso: o alvo da auditoria de um ajuste é a CAMPANHA (a tabela não tem id próprio;
+// tipo, emissora e dia já vão nos args da linha). Mesmo recurso das demais escritas de campanha.
 func ajusteDoRecurso(campanhaID string) (string, *uuid.UUID) {
-	return campanhaDoRecurso("distribution_override", campanhaID)
+	return campanhaDoRecurso("campaign", campanhaID)
 }
 
 // ── Resultado ───────────────────────────────────────────────────────────
@@ -428,7 +425,7 @@ func escritaDefinirOverride(cfg ConfigServidor) Escrita[entradaDefinirOverride] 
 			camp := c.camp
 			return feito{
 				Resultado: saidaAjuste{Campanha: refDe(camp.ID, camp.Name), Ajuste: montarAjusteDTO(*gravado, tipos, emissoras), Plano: plano},
-				Recurso:   "distribution_override", RecursoID: &camp.ID,
+				Recurso:   "campaign", RecursoID: &camp.ID,
 				Ressalvas: []string{ressalvaDaRecatDaCelula(res, "gravação", "gravado")},
 			}, nil
 		},
@@ -550,7 +547,7 @@ func escritaApagarOverride(cfg ConfigServidor) Escrita[entradaApagarOverride] {
 			return feito{
 				Resultado: saidaApagarAjuste{Campanha: refDe(camp.ID, camp.Name), Apagado: true,
 					AjusteRemovido: montarAjusteDTO(removido, tipos, emissoras), Plano: plano},
-				Recurso: "distribution_override", RecursoID: &camp.ID,
+				Recurso: "campaign", RecursoID: &camp.ID,
 				Ressalvas: []string{ressalvaDaRecatDaCelula(res, "remoção", "removido")},
 			}, nil
 		},

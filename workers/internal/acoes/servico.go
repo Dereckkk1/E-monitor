@@ -41,7 +41,9 @@ var _ AvisoHub = (*hub.Client)(nil)
 // HTTP dos ajustes sempre aceitou um repositório substituível nos testes.
 type RepositorioAjustes interface {
 	Upsert(ctx context.Context, in catalog.UpsertOverrideInput) error
-	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) error
+	// Delete devolve as linhas apagadas: 0 = a chave já não existia (ApagarAjuste a trata como
+	// nao_encontrado + ErrAlvoInexistente).
+	Delete(ctx context.Context, campaignID, typeID, stationID uuid.UUID, forDate time.Time) (int64, error)
 }
 
 // RecategorizadorDeCelula refaz a categoria de UMA célula-dia depois de mexer

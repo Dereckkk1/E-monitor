@@ -15,6 +15,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/mcp/mcptest"
@@ -132,7 +133,7 @@ func TestDefinirOverride_PreviewNaoEscreveEConfirmarGrava(t *testing.T) {
 	require.Equal(t, "ajuste_do_dia", plano["meta_vem_de"])
 	require.EqualValues(t, 5, plano["saldo"].(map[string]any)["esperado"])
 	require.Contains(t, mustJSON(t, out["ressalvas"]), "já traz as categorias recalculadas")
-	l := b.exigeAuditoria(t, "mcp.escrita.definir_override", "distribution_override", &c.camp)
+	l := b.exigeAuditoria(t, "mcp.escrita.definir_override", "campaign", &c.camp)
 	require.Equal(t, "confirma", l.Meta["nivel"])
 
 	// O ajuste devolvido é o mesmo que listar_overrides mostra.
@@ -437,7 +438,7 @@ func TestDefinirOverride_Escalada(t *testing.T) {
 	require.Empty(t, linhasDeAjuste(t, b, c.camp), "nada foi gravado")
 	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
 	require.Len(t, l, 1)
-	require.Equal(t, "distribution_override", l[0].Recurso)
+	require.Equal(t, "campaign", l[0].Recurso, "a linha de auditoria aponta a campanha (tipo/emissora/dia estão nos args)")
 	require.Equal(t, c.camp, *l[0].RecursoID)
 	require.Empty(t, b.auditoria(t, "mcp.escrita.definir_override"))
 	require.Zero(t, tokensUsados(t, b))
@@ -555,7 +556,53 @@ func TestApagarOverride_PreviewNaoEscreveEConfirmarApaga(t *testing.T) {
 	plano := planoDoResultado(out)
 	require.Equal(t, "regras", plano["meta_vem_de"], "a célula voltou às regras")
 	require.EqualValues(t, 2, plano["saldo"].(map[string]any)["esperado"])
-	b.exigeAuditoria(t, "mcp.escrita.apagar_override", "distribution_override", &c.camp)
+	b.exigeAuditoria(t, "mcp.escrita.apagar_override", "campaign", &c.camp)
+}
+
+// ajustesApagadosAntes simula o ajuste sumindo ENTRE o plano do Executar (que ainda o via) e o
+// DELETE: apaga a linha de verdade, por fora, e só então chama o repositório real.
+type ajustesApagadosAntes struct {
+	acoes.RepositorioAjustes
+	apaga func()
+}
+
+func (a ajustesApagadosAntes) Delete(ctx context.Context, c, t, s uuid.UUID, d time.Time) (int64, error) {
+	a.apaga()
+	return a.RepositorioAjustes.Delete(ctx, c, t, s, d)
+}
+
+// Revisão final: o DELETE que não apaga nenhuma linha é nao_encontrado — a tool não diz
+// "apagado: true" nem grava auditoria de uma escrita que não houve. A rota HTTP segue 204.
+func TestApagarOverride_AjusteQueSumiuEntreOPlanoEODeleteViraNaoEncontrado(t *testing.T) {
+	b := novaBancadaTool(t)
+	agoraFixa(b)
+	c := semearRegra(t, b, uuid.Nil, uuid.Nil, "2026-12-01", "2026-12-31")
+	semearRegraBase(t, b, c, "2026-12-01", "2026-12-31")
+	mcptest.Ajuste(t, b.ctx, b.pool, c.camp, c.tipoA, c.e1, "2026-12-07", 5, "13:00", "15:00")
+	args := argsApagarOverride(c, "2026-12-07")
+	b.E.Acoes.Ajustes = ajustesApagadosAntes{RepositorioAjustes: b.E.Acoes.Ajustes, apaga: func() {
+		_, err := b.pool.Exec(b.ctx, `DELETE FROM distribution_overrides WHERE campaign_id = $1`, c.camp)
+		require.NoError(t, err)
+	}}
+
+	// Executar direto (é o que a Fatia 4 chama depois da aprovação): o plano ainda vê o ajuste,
+	// o DELETE não apaga nada.
+	in := entradaDe[entradaApagarOverride](t, args)
+	f, err := escritaApagarOverride(b.cfg).Executar(b.ctx, b.E, b.p, in)
+	var r *acoes.Recusa
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, acoes.CodigoNaoEncontrado, r.Codigo)
+	require.ErrorIs(t, err, acoes.ErrAlvoInexistente)
+	require.Nil(t, f.Resultado, "nada de apagado: true")
+
+	// Pela tool (preview → confirmar): erro nao_encontrado, token liberado, sem auditoria de sucesso.
+	mcptest.Ajuste(t, b.ctx, b.pool, c.camp, c.tipoA, c.e1, "2026-12-07", 5, "13:00", "15:00")
+	pre := b.preview(t, "apagar_override", args)
+	args["confirmacao"] = pre["confirmacao"]
+	texto := b.chamarErro(t, "apagar_override", args)
+	require.Contains(t, texto, "[nao_encontrado]")
+	require.Zero(t, tokensUsados(t, b), "a recusa de negócio devolve o token")
+	require.Empty(t, b.auditoria(t, "mcp.escrita.apagar_override"))
 }
 
 func TestApagarOverride_ParidadeComARota(t *testing.T) {
