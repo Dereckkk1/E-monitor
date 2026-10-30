@@ -371,8 +371,12 @@ func (h *MaterialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// Vinculado a campanha: hoje 500 (a FK vazava como erro interno); o
-		// passo 3 da Task 13 troca por 409.
+		// Vinculado a campanha: 409 (a FK RESTRICT antes vazava como 500).
+		var rec *acoes.Recusa
+		if errors.As(err, &rec) && rec.Codigo == acoes.CodigoMaterialVinculado {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "material_vinculado"})
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
