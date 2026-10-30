@@ -25,6 +25,9 @@ const (
 	// OUTRAS campanhas. Dados["foreign_projections"] (int) traz quantas, quando
 	// a contagem prévia pegou; a defesa em profundidade do banco não traz.
 	CodigoCampanhaComProjecoes = "campanha_com_projecoes"
+	// CodigoMaterialNaoVinculado: a veiculação manual pede um material que não está
+	// vinculado à emissora nesta campanha.
+	CodigoMaterialNaoVinculado = "material_nao_vinculado"
 )
 
 // Recusa é a falha de NEGÓCIO de uma ação: a entrada não vale, nada foi
