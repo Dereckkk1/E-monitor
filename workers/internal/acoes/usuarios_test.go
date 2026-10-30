@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/mcp/mcptest"
@@ -132,18 +133,17 @@ func TestCriarUsuario_ClienteInexistente(t *testing.T) {
 	ctx, srv, a, _ := srvUsuarios(t)
 	fantasma := uuid.New()
 
-	// (a) único da carteira: o INSERT estoura o 23503.
+	// (a) único da carteira.
 	_, _, err := srv.CriarUsuario(ctx, EntradaUsuario{Email: emailUnico(), Senha: senhaBoa, Nome: "G", Papel: "client", ClienteIDs: []uuid.UUID{fantasma}})
 	exigeCodigo(t, err, CodigoClienteInexistente)
 
-	// (b) secundário: quem estoura é o SetClients — o usuário JÁ está gravado
-	// com a carteira de um elemento e a recusa é a mesma.
+	// (b) secundário: a conferência vem ANTES de gravar, então NADA fica criado
+	// (antes: o usuário parcial ficava gravado e a rota respondia 400).
 	em := emailUnico()
 	_, _, err = srv.CriarUsuario(ctx, EntradaUsuario{Email: em, Senha: senhaBoa, Nome: "G", Papel: "client", ClienteIDs: []uuid.UUID{a, fantasma}})
 	exigeCodigo(t, err, CodigoClienteInexistente)
-	parcial, err := srv.Usuarios.GetByEmail(ctx, em)
-	require.NoError(t, err, "o usuário parcial fica gravado")
-	require.Equal(t, []uuid.UUID{a}, parcial.ClientIDs)
+	_, err = srv.Usuarios.GetByEmail(ctx, em)
+	require.ErrorIs(t, err, pgx.ErrNoRows, "nenhum usuário parcial pode ficar gravado")
 }
 
 func TestCriarUsuario_BoasVindas(t *testing.T) {
