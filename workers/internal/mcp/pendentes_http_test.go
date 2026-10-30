@@ -245,3 +245,33 @@ func TestPendentesHTTP_SemExecutorDa503(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	require.Contains(t, rec.Body.String(), `"indisponivel"`)
 }
+
+// A: conferência que cai por erro inesperado = 503 conferencia_falhou, nada foi
+// feito e o pedido segue aprovável.
+func TestPendentesHTTP_ConferenciaQueCaiDa503EContinuaAprovavel(t *testing.T) {
+	sonda := &sondaEscrita{erroPreview: erroTexto("pq: relation secreta does not exist")}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	rec, m := b.fazer(http.MethodPost, "/mcp/pendentes/"+pend.ID.String()+"/aprovar", b.jwtDono)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	require.Equal(t, "conferencia_falhou", m["error"])
+	require.Equal(t, msgConferenciaFalhou, m["mensagem"])
+	require.NotContains(t, rec.Body.String(), "secreta")
+	require.Equal(t, 0, sonda.execucoes)
+	require.Equal(t, "pendente", b.estado(t, pend.ID).Estado)
+}
+
+// M7: resultado que não serializa nunca vira 200 vazio: a resposta é JSON
+// válido com resultado null e o pedido fecha executada.
+func TestPendentesHTTP_ResultadoQueNaoSerializaDa200ComNull(t *testing.T) {
+	sonda := &sondaEscrita{resultado: map[string]any{"c": make(chan int)}}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	rec, m := b.fazer(http.MethodPost, "/mcp/pendentes/"+pend.ID.String()+"/aprovar", b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotEmpty(t, rec.Body.String())
+	require.Contains(t, m, "resultado")
+	require.Nil(t, m["resultado"])
+	require.Equal(t, "executada", m["pendente"].(map[string]any)["estado"])
+	require.NotNil(t, m["pendente"].(map[string]any)["executada_em"])
+}

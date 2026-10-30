@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -23,7 +25,14 @@ type escritaRegistravel interface {
 	registrar(s *sdk.Server, cfg ConfigServidor, p *Principal)
 	// executarAprovada roda a escrita fora do /mcp (aprovação em /pendentes):
 	// revalida os args gravados, reroda o Preview e chama o Executar.
+	//
+	// Erros da etapa de conferência (decodificar + Preview) que não são
+	// *acoes.Recusa saem como *erroConferencia: nada foi tentado, o pedido
+	// pode ser aprovado de novo. O que vem do Executar é falha de execução.
 	executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage) (feito, error)
+	// validarArgs só decodifica (schema + defaults + tipos): prova que os args
+	// gravados no JSONB voltam a valer na aprovação.
+	validarArgs(args json.RawMessage) error
 }
 
 func (d Escrita[In]) nomeEscrita() string { return d.Nome }
@@ -32,22 +41,75 @@ func (d Escrita[In]) registrar(s *sdk.Server, cfg ConfigServidor, p *Principal) 
 	ferramentaEscrita(s, cfg, p, d)
 }
 
-// codigoArgsInvalidos: os args gravados não passam mais no schema (a tool mudou
-// de forma entre o pedido e a aprovação).
-const codigoArgsInvalidos = "args_invalidos"
+func (d Escrita[In]) validarArgs(args json.RawMessage) error {
+	_, err := decodificarArgs[In](args)
+	return err
+}
+
+const (
+	// codigoArgsInvalidos: os args gravados não passam mais no schema (a tool
+	// mudou de forma entre o pedido e a aprovação).
+	codigoArgsInvalidos = "args_invalidos"
+	codigoToolDesconhecida = "tool_desconhecida"
+
+	msgArgsInvalidos = "Esta ação mudou desde o pedido e os argumentos gravados não valem mais; nada foi feito. Recuse e peça de novo à IA."
+	msgToolDesconhecida = "Esta ação não existe mais neste servidor; nada foi feito. Recuse e peça de novo à IA."
+	// msgConferenciaFalhou: a conferência do estado (Preview) caiu por erro
+	// inesperado ou panic. Nada foi executado; vale tentar de novo.
+	msgConferenciaFalhou = "Não foi possível conferir o estado agora; nada foi feito. Tente aprovar de novo em instantes."
+)
+
+// erroConferencia: a etapa anterior ao Executar (decodificar os args e rodar o
+// Preview) falhou por erro inesperado ou panic — não por recusa de negócio.
+// Nada foi tentado, então o pedido volta a `pendente` (não `falhou`).
+type erroConferencia struct{ causa error }
+
+func (e *erroConferencia) Error() string { return "mcp: conferência da pendente falhou: " + e.causa.Error() }
+func (e *erroConferencia) Unwrap() error { return e.causa }
+
+// argsInvalidosErro é a Recusa fixa de args_invalidos mais o detalhe do
+// validador, que só vai para o log (nunca para o banco nem para a pessoa).
+type argsInvalidosErro struct {
+	recusa  *acoes.Recusa
+	detalhe error
+}
+
+func (e *argsInvalidosErro) Error() string { return e.recusa.Error() }
+func (e *argsInvalidosErro) Unwrap() error { return e.recusa }
 
 func (d Escrita[In]) executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage) (feito, error) {
-	in, err := decodificarArgs[In](args)
+	in, err := d.conferirAprovada(ctx, E, args)
 	if err != nil {
-		return feito{}, &acoes.Recusa{Codigo: codigoArgsInvalidos,
-			Mensagem: "Os argumentos gravados não passam mais na validação desta ação: " + err.Error()}
-	}
-	if d.Preview != nil {
-		if _, err := d.Preview(ctx, E, in); err != nil {
-			return feito{}, err
-		}
+		return feito{}, err
 	}
 	return executarSemPanic(ctx, d, E, p, in)
+}
+
+// conferirAprovada decodifica e roda o Preview, com recover: panic aqui ainda
+// é "nada foi feito".
+func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args json.RawMessage) (in In, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &erroConferencia{causa: fmt.Errorf("panic: %v\n%s", r, debug.Stack())}
+		}
+	}()
+	in, derr := decodificarArgs[In](args)
+	if derr != nil {
+		return in, &argsInvalidosErro{
+			recusa:  &acoes.Recusa{Codigo: codigoArgsInvalidos, Mensagem: msgArgsInvalidos},
+			detalhe: derr,
+		}
+	}
+	if d.Preview != nil {
+		if _, perr := d.Preview(ctx, E, in); perr != nil {
+			var rec *acoes.Recusa
+			if errors.As(perr, &rec) {
+				return in, perr
+			}
+			return in, &erroConferencia{causa: perr}
+		}
+	}
+	return in, nil
 }
 
 // escritasDe é a lista única das escritas, na ordem de registro.

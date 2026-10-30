@@ -37,12 +37,23 @@ type sondaEscrita struct {
 	erroExec  error
 	panica    bool
 	resultado any
+	// erroPreview e panicaPreview programam o Preview (a conferência da aprovação).
+	erroPreview     error
+	panicaPreview   bool
+	chamadasPreview int
 }
 
 func (s *sondaEscrita) escrita(nome string, nivel Nivel, escalavel bool) Escrita[entradaEscritaTeste] {
 	d := Escrita[entradaEscritaTeste]{
 		Nome: nome, Descricao: "Escrita de teste.", Nivel: nivel,
 		Preview: func(_ context.Context, _ *Escritas, in entradaEscritaTeste) (previa, error) {
+			s.chamadasPreview++
+			if s.panicaPreview {
+				panic("boom no preview")
+			}
+			if s.erroPreview != nil {
+				return previa{}, s.erroPreview
+			}
 			return previa{Resumo: "vai gravar " + in.Valor}, nil
 		},
 		Executar: func(_ context.Context, _ *Escritas, _ *Principal, in entradaEscritaTeste) (feito, error) {

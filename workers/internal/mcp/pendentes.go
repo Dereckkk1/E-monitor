@@ -121,22 +121,32 @@ func (s *Pendentes) Criar(ctx context.Context, n NovaPendente, agora time.Time) 
 		n.UserID, hash, agora); err != nil {
 		return Pendente{}, false, err
 	}
-	p, err := lerPendente(tx.QueryRow(ctx, `INSERT INTO mcp_acoes_pendentes
-		(user_id, token_id, tool, args, args_hash, motivo, preview, expira_em, criada_em)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (user_id, args_hash) WHERE estado IN ('pendente', 'aprovada') DO NOTHING
-		RETURNING `+colunasPendente,
-		n.UserID, tok, n.Tool, n.Args, hash, n.Motivo, pv, agora.Add(ttlPendente), agora))
-	jaExistia := false
-	if errors.Is(err, pgx.ErrNoRows) {
-		jaExistia = true
+	// Até duas voltas: se o aberto que causou o conflito saiu dos estados
+	// abertos entre o INSERT e o SELECT (recusado, executado, expirado), o
+	// SELECT não acha nada e o INSERT precisa de outra chance.
+	for volta := 0; volta < 2; volta++ {
+		p, err := lerPendente(tx.QueryRow(ctx, `INSERT INTO mcp_acoes_pendentes
+			(user_id, token_id, tool, args, args_hash, motivo, preview, expira_em, criada_em)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			ON CONFLICT (user_id, args_hash) WHERE estado IN ('pendente', 'aprovada') DO NOTHING
+			RETURNING `+colunasPendente,
+			n.UserID, tok, n.Tool, n.Args, hash, n.Motivo, pv, agora.Add(ttlPendente), agora))
+		if err == nil {
+			return p, false, tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Pendente{}, false, err
+		}
 		p, err = lerPendente(tx.QueryRow(ctx, `SELECT `+colunasPendente+` FROM mcp_acoes_pendentes
 			WHERE user_id = $1 AND args_hash = $2 AND estado IN ('pendente', 'aprovada')`, n.UserID, hash))
+		if err == nil {
+			return p, true, tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Pendente{}, false, err
+		}
 	}
-	if err != nil {
-		return Pendente{}, false, err
-	}
-	return p, jaExistia, tx.Commit(ctx)
+	return Pendente{}, false, errors.New("mcp: o pedido aberto sumiu duas vezes durante a criação")
 }
 
 // diagnostico explica por que um UPDATE condicional não pegou nenhuma linha.
@@ -164,7 +174,7 @@ func (s *Pendentes) diagnostico(ctx context.Context, id, dono uuid.UUID, agora t
 // Aprovar abre uma tentativa: pendente → aprovada, só para o dono e dentro do prazo.
 func (s *Pendentes) Aprovar(ctx context.Context, id, dono uuid.UUID, agora time.Time) (Pendente, error) {
 	p, err := lerPendente(s.DB.QueryRow(ctx, `UPDATE mcp_acoes_pendentes
-		SET estado = 'aprovada', aprovada_em = $3, tentativa = tentativa + 1
+		SET estado = 'aprovada', aprovada_em = $3, tentativa = tentativa + 1, erro = NULL
 		WHERE id = $1 AND user_id = $2 AND estado = 'pendente' AND expira_em > $3
 		RETURNING `+colunasPendente, id, dono, agora))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -185,30 +195,40 @@ func (s *Pendentes) Recusar(ctx context.Context, id, dono uuid.UUID, agora time.
 	return p, err
 }
 
-// MarcarExecutada fecha a tentativa vigente com sucesso. Aceita também `falhou`
-// da mesma tentativa (o executor terminou depois de ser dado como interrompido).
-func (s *Pendentes) MarcarExecutada(ctx context.Context, id uuid.UUID, tentativa int, resultado json.RawMessage, agora time.Time) (bool, error) {
+// MarcarExecutada fecha a tentativa vigente com sucesso e devolve a linha
+// atualizada. Aceita também `falhou` da mesma tentativa (o executor terminou
+// depois de ser dado como interrompido). false = ninguém foi atualizado.
+func (s *Pendentes) MarcarExecutada(ctx context.Context, id uuid.UUID, tentativa int, resultado json.RawMessage, agora time.Time) (Pendente, bool, error) {
 	var res any
 	if len(resultado) > 0 {
 		res = []byte(resultado)
 	}
-	tag, err := s.DB.Exec(ctx, `UPDATE mcp_acoes_pendentes
+	p, err := lerPendente(s.DB.QueryRow(ctx, `UPDATE mcp_acoes_pendentes
 		SET estado = 'executada', executada_em = $4, resultado = $3, erro = NULL
-		WHERE id = $1 AND tentativa = $2 AND estado IN ('aprovada', 'falhou')`,
-		id, tentativa, res, agora)
-	if err != nil {
-		return false, err
+		WHERE id = $1 AND tentativa = $2 AND estado IN ('aprovada', 'falhou')
+		RETURNING `+colunasPendente,
+		id, tentativa, res, agora))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Pendente{}, false, nil
 	}
-	return tag.RowsAffected() == 1, nil
+	if err != nil {
+		return Pendente{}, false, err
+	}
+	return p, true, nil
 }
 
 // MarcarFalhaDeNegocio devolve o pedido a `pendente` com o erro, para nova
-// tentativa; o prazo nunca encurta e ganha pelo menos folgaAposFalha.
-func (s *Pendentes) MarcarFalhaDeNegocio(ctx context.Context, id uuid.UUID, tentativa int, erro string, agora time.Time) (bool, error) {
+// tentativa. Aceita `aprovada` e também `falhou` da mesma tentativa (uma
+// recusa tardia depois de o varredor dar a execução por interrompida: nada
+// rodou). estenderPrazo: o prazo nunca encurta e ganha pelo menos
+// folgaAposFalha; sem ele (a ação mudou ou sumiu: não adianta insistir) o
+// prazo fica como está.
+func (s *Pendentes) MarcarFalhaDeNegocio(ctx context.Context, id uuid.UUID, tentativa int, erro string, agora time.Time, estenderPrazo bool) (bool, error) {
 	tag, err := s.DB.Exec(ctx, `UPDATE mcp_acoes_pendentes
-		SET estado = 'pendente', erro = $3, aprovada_em = NULL, expira_em = GREATEST(expira_em, $4::timestamptz)
-		WHERE id = $1 AND tentativa = $2 AND estado = 'aprovada'`,
-		id, tentativa, cortarErro(erro), agora.Add(folgaAposFalha))
+		SET estado = 'pendente', erro = $3, aprovada_em = NULL,
+		    expira_em = CASE WHEN $5 THEN GREATEST(expira_em, $4::timestamptz) ELSE expira_em END
+		WHERE id = $1 AND tentativa = $2 AND estado IN ('aprovada', 'falhou')`,
+		id, tentativa, cortarErro(erro), agora.Add(folgaAposFalha), estenderPrazo)
 	if err != nil {
 		return false, err
 	}

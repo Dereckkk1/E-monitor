@@ -155,6 +155,8 @@ func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, err error) 
 		erroMensagemJSON(w, http.StatusConflict, "pendente_"+est.Estado, textoEstadoPendente(est.Estado))
 	case errors.As(err, &rec):
 		erroMensagemJSON(w, http.StatusUnprocessableEntity, rec.Codigo, rec.Mensagem)
+	case errors.Is(err, ErrConferenciaFalhou):
+		erroMensagemJSON(w, http.StatusServiceUnavailable, "conferencia_falhou", msgConferenciaFalhou)
 	case errors.Is(err, ErrExecucaoInterrompida):
 		erroMensagemJSON(w, http.StatusInternalServerError, "interrompida", msgInterrompida)
 	default:
@@ -173,7 +175,8 @@ func (h *PendentesHTTP) Aprovar(w http.ResponseWriter, r *http.Request) {
 		h.responderErroPendente(w, err)
 		return
 	}
-	escreverJSON(w, http.StatusOK, map[string]any{"pendente": pendenteParaDTO(out.Pendente), "resultado": out.Resultado})
+	// ResultadoJSON já vem serializado (nil vira null): nada a falhar aqui.
+	escreverJSON(w, http.StatusOK, map[string]any{"pendente": pendenteParaDTO(out.Pendente), "resultado": out.ResultadoJSON})
 }
 
 func (h *PendentesHTTP) Recusar(w http.ResponseWriter, r *http.Request) {
