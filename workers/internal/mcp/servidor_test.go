@@ -316,14 +316,18 @@ func TestInstrucoes_TemGlossarioListasEPontes(t *testing.T) {
 	require.Contains(t, Instrucoes, "obter_campanha aceita campanha_id ou codigo")
 }
 
-// Enquanto a Fatia 4 não traz o /pendentes, o crítico é barrado: a instrução
-// diz ao modelo para não prometer aprovação e mandar a pessoa para a tela.
-func TestInstrucoes_EscritaCriticoBarrado(t *testing.T) {
-	require.Contains(t, Instrucoes, "Hoje o crítico ainda não gera pedido de aprovação")
-	require.Contains(t, Instrucoes, "nivel: critico, o motivo e links.tela")
-	require.Contains(t, Instrucoes, "diga que nada foi feito e que a alteração tem de ser feita na tela, logado")
+// O crítico grava um pedido que a pessoa aprova em /pendentes: a instrução diz
+// ao modelo para entregar o link, não prometer execução e conferir em
+// minhas_pendentes.
+func TestInstrucoes_EscritaCritico(t *testing.T) {
+	require.Contains(t, Instrucoes, "aprovar_em")
+	require.Contains(t, Instrucoes, "entregue o link e diga que nada aconteceu ainda")
 	require.Contains(t, Instrucoes, "Escrita que mexe em veiculação já ocorrida")
+	require.Contains(t, Instrucoes, "minhas_pendentes")
+	require.Contains(t, Instrucoes, "executada")
 	require.Contains(t, Instrucoes, "NUNCA reenvie o token de confirmação sozinho")
+	require.NotContains(t, Instrucoes, "Hoje o crítico ainda não")
+	require.NotContains(t, Instrucoes, "aprovarEm")
 }
 
 func TestInstrucoes_Relatorios(t *testing.T) {
