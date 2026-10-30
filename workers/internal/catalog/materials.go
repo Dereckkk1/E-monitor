@@ -223,10 +223,14 @@ func (m *Materials) UpdateScript(ctx context.Context, id uuid.UUID, script *stri
 	return nil
 }
 
-// Delete removes a material by ID.
-func (m *Materials) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
-	return err
+// Delete removes a material by ID and returns the rows deleted (0 = it did not
+// exist). A material still linked to a campaign fails with SQLSTATE 23503.
+func (m *Materials) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
+	tag, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // Acknowledge marks the similarity warning for the given material as resolved
