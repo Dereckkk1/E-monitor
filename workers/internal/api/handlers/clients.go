@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
@@ -124,26 +123,21 @@ func (h *ClientsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			http.Error(w, "not found", 404)
-		case errors.Is(err, catalog.ErrClientHasDependents):
+	if err := h.servico().ApagarCliente(r.Context(), id); err != nil {
+		var rec *acoes.Recusa
+		if errors.As(err, &rec) && rec.Codigo == acoes.CodigoClienteComVinculos {
 			// Hard-delete refused by a foreign key. Tell the operator exactly
 			// what's blocking so the UI can offer the reversible "deactivate"
-			// path instead of a silent 500. Counts are best-effort: if the
-			// breakdown query fails we still return 409 (the conflict is real).
-			counts, cerr := h.Repo.CountDependents(r.Context(), id)
-			if cerr != nil {
-				counts = catalog.DependentCounts{}
-			}
+			// path instead of a silent 500.
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":     "client_has_dependents",
-				"campaigns": counts.Campaigns,
-				"materials": counts.Materials,
-				"users":     counts.Users,
+				"campaigns": rec.Dados["campanhas"],
+				"materials": rec.Dados["materiais"],
+				"users":     rec.Dados["usuarios"],
 			})
-		default:
+			return
+		}
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -169,11 +163,9 @@ func (h *ClientsHandler) setActive(w http.ResponseWriter, r *http.Request, activ
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	out, err := h.Repo.SetActive(r.Context(), id, active)
+	out, err := h.servico().DefinirAtivoCliente(r.Context(), id, active)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return

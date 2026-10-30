@@ -2,8 +2,10 @@ package acoes
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 )
 
@@ -104,6 +106,27 @@ func (s *Servico) TrocarTipoMaterial(ctx context.Context, materialID uuid.UUID, 
 		s.recatEmSegundoPlano("material_type_change", func(ctx context.Context) error {
 			return s.Regras.RecategorizeForMaterial(ctx, materialID)
 		})
+	}
+	return nil
+}
+
+// ApagarMaterial apaga o material. Vinculado a alguma campanha (FK
+// campaign_materials_material_id_fkey, RESTRICT): recusa material_vinculado — o
+// vínculo precisa sair primeiro. Material que não existe: nao_encontrado +
+// ErrAlvoInexistente (a rota HTTP mapeia a marca para 204, idempotente). O
+// mapeamento da FK é PRÓPRIO daqui: em recusaDoBanco essa mesma FK significa
+// "material não encontrado" (caminho do INSERT do vínculo).
+func (s *Servico) ApagarMaterial(ctx context.Context, id uuid.UUID) error {
+	n, err := s.Materiais.Delete(ctx, id)
+	if err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" && pg.ConstraintName == "campaign_materials_material_id_fkey" {
+			return &Recusa{Codigo: CodigoMaterialVinculado, Mensagem: "material vinculado a campanha"}
+		}
+		return err
+	}
+	if n == 0 {
+		return &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "material não encontrado", Causa: ErrAlvoInexistente}
 	}
 	return nil
 }

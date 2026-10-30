@@ -28,6 +28,12 @@ const (
 	// CodigoMaterialNaoVinculado: a veiculação manual pede um material que não está
 	// vinculado à emissora nesta campanha.
 	CodigoMaterialNaoVinculado = "material_nao_vinculado"
+	// CodigoClienteComVinculos: apagar o cliente esbarra em campanhas, materiais ou
+	// usuários que ainda apontam para ele. Dados traz "campanhas", "materiais" e
+	// "usuarios" (int).
+	CodigoClienteComVinculos = "cliente_com_vinculos"
+	// CodigoMaterialVinculado: apagar o material esbarra num vínculo com campanha.
+	CodigoMaterialVinculado = "material_vinculado"
 )
 
 // Recusa é a falha de NEGÓCIO de uma ação: a entrada não vale, nada foi

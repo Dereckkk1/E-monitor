@@ -365,7 +365,14 @@ func (h *MaterialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
+	if err := h.servico().ApagarMaterial(r.Context(), id); err != nil {
+		// Material inexistente: 204, como sempre (idempotente).
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// Vinculado a campanha: hoje 500 (a FK vazava como erro interno); o
+		// passo 3 da Task 13 troca por 409.
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
