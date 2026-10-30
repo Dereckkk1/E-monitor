@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
@@ -86,27 +87,34 @@ func (h *PricingHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		p.PerType = []catalog.TypePricing{}
 	}
 
-	out, err := h.Repo.Upsert(r.Context(), catalog.UpsertInput{
-		CampaignID:        campaignID,
+	servico := &acoes.Servico{Precos: h.Repo}
+	saida, err := servico.DefinirPrecos(r.Context(), campaignID, []catalog.EntradaPreco{{
 		StationID:         stationID,
 		Mode:              p.Mode,
 		ConsolidatedValue: p.ConsolidatedValue,
 		PerType:           p.PerType,
-	})
+	}})
 	if err != nil {
-		// Erros de validação viram 422 com mensagem; o resto é 500.
+		// Erros de validação viram 422 com a mensagem do catálogo; recusa de
+		// referência inexistente segue o mapa comum; o resto é 500.
 		switch {
 		case errors.Is(err, catalog.ErrPricingInvalidMode),
 			errors.Is(err, catalog.ErrPricingConsolidatedRequiresValue),
 			errors.Is(err, catalog.ErrPricingPerInsertionRequiresTypes),
 			errors.Is(err, catalog.ErrPricingMixedFields),
 			errors.Is(err, catalog.ErrPricingNegativeValue):
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			// Recusa.Mensagem guarda o texto original do catálogo (err.Error()
+			// traria o sufixo [código] da Recusa).
+			var r *acoes.Recusa
+			errors.As(err, &r)
+			http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
+		case escreveRecusa(w, err):
 		default:
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
 	}
+	out := saida[0]
 	writeJSON(w, http.StatusOK, out)
 }
 

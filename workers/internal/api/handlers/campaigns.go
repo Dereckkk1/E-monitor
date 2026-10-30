@@ -303,15 +303,9 @@ func (h *CampaignsHandler) UpdateFixedCPM(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.FixedCPM != nil && *in.FixedCPM < 0 {
-		http.Error(w, "fixed_cpm must be >= 0", 400)
-		return
-	}
-	out, err := h.Repo.UpdateFixedCPM(r.Context(), id, in.FixedCPM)
+	out, err := h.servico().DefinirCPMFixo(r.Context(), id, in.FixedCPM)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -342,35 +336,10 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	// Guard (audit C1): recusa (409) ANTES de pausar workers se apagar esta
-	// campanha destruiria projeções fan-out de OUTRAS campanhas via CASCADE.
-	// Checar antes do Pause evita deixar uma campanha viva pausada num delete
-	// que vai falhar.
-	if n, cerr := h.Repo.CountForeignProjections(r.Context(), id); cerr == nil && n > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":               "campaign_has_foreign_projections",
-			"foreign_projections": n,
-		})
-		return
-	}
-	if h.Supervisor != nil {
-		if perr := h.Supervisor.Pause(id); perr != nil && h.Log != nil {
-			h.Log.Error("campaigns.Delete: supervisor pause failed",
-				zap.String("campaign_id", id.String()),
-				zap.Error(perr),
-			)
-		}
-	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			http.Error(w, "not found", 404)
-		case errors.Is(err, catalog.ErrCampaignHasForeignProjections):
-			// Defense-in-depth: o pre-check acima normalmente já pegou isto.
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "campaign_has_foreign_projections",
-			})
-		default:
+	// A regra (guard da audit C1: recusa 409 ANTES de pausar, pausa que falha só
+	// é logada, delete) mora em acoes.ApagarCampanha.
+	if err := h.servico().ApagarCampanha(r.Context(), id); err != nil {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -391,27 +360,12 @@ func (h *CampaignsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	changed, prev, err := h.Repo.CancelCampaign(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-			return
+	// acoes.CancelarCampanha grava a transição e, só depois, derruba os workers.
+	if _, err := h.servico().CancelarCampanha(r.Context(), id); err != nil {
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", 500)
 		}
-		http.Error(w, "internal error", 500)
 		return
-	}
-	if !changed {
-		writeJSON(w, 409, map[string]any{
-			"error":          "campaign already in terminal state",
-			"current_status": prev,
-		})
-		return
-	}
-	// Stop workers for stations that no longer have any active campaign.
-	// CancelCampaign already flipped the status, so we go straight to the
-	// worker-stop path without an extra DB round-trip via Pause().
-	if h.Supervisor != nil {
-		h.Supervisor.StopWorkersForCampaign(id)
 	}
 	w.WriteHeader(204)
 }

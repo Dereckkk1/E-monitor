@@ -169,3 +169,88 @@ func (s *Servico) TrocarEmissorasCampanha(ctx context.Context, id uuid.UUID, emi
 	}
 	return s.Campanhas.UpdateTargetStations(ctx, id, emissoras)
 }
+
+// CancelarCampanha passa a campanha de programada/ativa para cancelada (§18.2.1)
+// e derruba os workers das emissoras que ficaram sem campanha ativa. Devolve a
+// campanha já cancelada.
+//
+//   - id inexistente: nao_encontrado.
+//   - campanha já concluída/cancelada: estado_terminal, com Dados["estado_atual"].
+//
+// Os workers só caem DEPOIS de a transição gravar (o CancelCampaign já virou o
+// estado, então vai direto ao stop, sem o round-trip extra do Pause).
+func (s *Servico) CancelarCampanha(ctx context.Context, id uuid.UUID) (*catalog.Campaign, error) {
+	mudou, anterior, err := s.Campanhas.CancelCampaign(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, naoEncontrado("campanha não encontrada")
+		}
+		return nil, err
+	}
+	if !mudou {
+		return nil, &Recusa{
+			Codigo:   CodigoEstadoTerminal,
+			Mensagem: "a campanha já está em estado final (" + anterior + ") e não pode ser cancelada",
+			Dados:    map[string]any{"estado_atual": anterior},
+		}
+	}
+	if s.Supervisor != nil {
+		s.Supervisor.StopWorkersForCampaign(id)
+	}
+	return s.Campanhas.Get(ctx, id)
+}
+
+// ApagarCampanha remove a campanha e tudo que é dela (tocadas, hashes, materiais
+// legados). Recusa com campanha_com_projecoes se alguma tocada dela carrega
+// projeção de OUTRA campanha (o CASCADE varreria o histórico alheio — audit C1).
+//
+// ⚠️ A contagem vem ANTES do Pause: recusar depois deixaria uma campanha viva
+// pausada num delete que não aconteceu. O erro da contagem é ignorado (o Delete
+// repete a checagem dentro da transação). Falha ao pausar só é logada: o delete
+// segue, como a rota sempre fez. Apagar o que não existe não é erro (o
+// repositório não acha linha e não reclama): a rota responde 204.
+func (s *Servico) ApagarCampanha(ctx context.Context, id uuid.UUID) error {
+	if n, err := s.Campanhas.CountForeignProjections(ctx, id); err == nil && n > 0 {
+		return &Recusa{
+			Codigo:   CodigoCampanhaComProjecoes,
+			Mensagem: "a campanha tem tocadas que carregam veiculações de outras campanhas; apagá-la destruiria esse histórico",
+			Dados:    map[string]any{"foreign_projections": n},
+		}
+	}
+	if s.Supervisor != nil {
+		if err := s.Supervisor.Pause(id); err != nil {
+			zap.L().Error("campaigns.Delete: supervisor pause failed",
+				zap.String("campaign_id", id.String()), zap.Error(err))
+		}
+	}
+	if err := s.Campanhas.Delete(ctx, id); err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return naoEncontrado("campanha não encontrada")
+		case errors.Is(err, catalog.ErrCampaignHasForeignProjections):
+			// Defesa em profundidade: a contagem acima normalmente já pegou.
+			return &Recusa{
+				Codigo:   CodigoCampanhaComProjecoes,
+				Mensagem: "a campanha tem tocadas que carregam veiculações de outras campanhas; apagá-la destruiria esse histórico",
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// DefinirCPMFixo grava (ou, com nil, limpa) o CPM fixo da campanha: quando
+// preenchido, sobrescreve o CPM derivado em /campaigns, /insights e no dashboard.
+func (s *Servico) DefinirCPMFixo(ctx context.Context, id uuid.UUID, cpm *float64) (*catalog.Campaign, error) {
+	if cpm != nil && *cpm < 0 {
+		return nil, entradaInvalida("fixed_cpm must be >= 0")
+	}
+	out, err := s.Campanhas.UpdateFixedCPM(ctx, id, cpm)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, naoEncontrado("campanha não encontrada")
+		}
+		return nil, err
+	}
+	return out, nil
+}

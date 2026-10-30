@@ -18,6 +18,13 @@ const (
 	CodigoHub               = "codigo_hub"
 	CodigoNomeDuplicado     = "nome_duplicado"
 	CodigoCampanhaCancelada = "campanha_cancelada"
+	// CodigoEstadoTerminal: cancelar campanha que já está concluída/cancelada.
+	// Dados["estado_atual"] traz o estado.
+	CodigoEstadoTerminal = "estado_terminal"
+	// CodigoCampanhaComProjecoes: apagar a campanha destruiria projeções de
+	// OUTRAS campanhas. Dados["foreign_projections"] (int) traz quantas, quando
+	// a contagem prévia pegou; a defesa em profundidade do banco não traz.
+	CodigoCampanhaComProjecoes = "campanha_com_projecoes"
 )
 
 // Recusa é a falha de NEGÓCIO de uma ação: a entrada não vale, nada foi
