@@ -48,7 +48,7 @@ func novaBancadaTool(t *testing.T) *bancadaTool {
 	// O mcptest não trunca estas duas: cada teste parte do zero.
 	_, err := pool.Exec(ctx, `DELETE FROM audit_log`)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas`)
+	_, err = pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas, mcp_acoes_pendentes`)
 	require.NoError(t, err)
 
 	admin := mcptest.Usuario(t, ctx, pool, "admin", true)
@@ -58,10 +58,12 @@ func novaBancadaTool(t *testing.T) *bancadaTool {
 	servico.EmSegundoPlano = mcptest.Sincrono
 	leitura := NovaLeitura(pool)
 	E := NovasEscritas(pool, []byte(mcptest.SegredoTeste), servico, leitura, nil)
+	p := &Principal{UserID: admin, Email: "admin@mcp.teste", Nome: "Admin", TokenID: uuid.New()}
+	semearPrincipal(t, ctx, pool, p) // o pedido pendente tem FK para o token
 	return &bancadaTool{
 		ctx: ctx, pool: pool, E: E, sup: sup, hub: hubFalso, admin: admin,
 		cfg: ConfigServidor{Versao: "teste", Portal: "https://portal.teste", Leitura: leitura, Escritas: E},
-		p:   &Principal{UserID: admin, Email: "admin@mcp.teste", Nome: "Admin", TokenID: uuid.New()},
+		p:   p,
 	}
 }
 
@@ -117,13 +119,21 @@ func (b *bancadaTool) confirmarEExecutar(t *testing.T, nome string, args map[str
 	return out
 }
 
-// barrado chama a tool e exige o ramo crítico (F3-1): executou=false, nivel=critico.
-func (b *bancadaTool) barrado(t *testing.T, nome string, args map[string]any) map[string]any {
+// pedePendente chama a tool e exige o ramo crítico (F4-1): executou=false,
+// nivel=critico, um pedido aberto gravado para a tool e nenhum token.
+func (b *bancadaTool) pedePendente(t *testing.T, nome string, args map[string]any) map[string]any {
 	t.Helper()
 	out := b.chamar(t, nome, args)
 	require.Equal(t, false, out["executou"], "%v", out)
 	require.Equal(t, "critico", out["nivel"], "deveria escalar: %v", out)
 	require.NotContains(t, out, "confirmacao", "crítico não tem token")
+	id, err := uuid.Parse(out["pendente_id"].(string))
+	require.NoError(t, err, "pendente_id inválido: %v", out)
+	var tool, estado string
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT tool, estado FROM mcp_acoes_pendentes WHERE id = $1 AND estado IN ('pendente','aprovada')`, id).Scan(&tool, &estado),
+		"o pedido aberto %s não foi gravado", id)
+	require.Equal(t, nome, tool)
 	return out
 }
 

@@ -31,37 +31,37 @@ func TestRegras_EscaladaPelaDataSoContaDiaQueAMascaraCobre(t *testing.T) {
 	require.NotEmpty(t, pre["confirmacao"], "a vigência tem dias passados, mas nenhum que a máscara cubra")
 	require.NotContains(t, pre, "nivel")
 	// Com um sábado passado na vigência (24/10), escala.
-	out := b.barrado(t, "criar_regra_distribuicao", sab("2026-10-24"))
+	out := b.pedePendente(t, "criar_regra_distribuicao", sab("2026-10-24"))
 	require.Contains(t, out["motivo"], "a partir de 2026-10-24")
 	require.Contains(t, out["motivo"], "dias da semana: sab")
 	// Regra só de domingo a partir de segunda 26/10: o domingo passado (25/10) fica de fora.
 	pre = b.chamar(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-26", "2026-12-31", map[string]any{"dias": []any{"dom"}}))
 	require.NotEmpty(t, pre["confirmacao"])
 	// ...e a de domingo a partir do próprio domingo 25/10 escala.
-	b.barrado(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-25", "2026-12-31", map[string]any{"dias": []any{"dom"}}))
+	b.pedePendente(t, "criar_regra_distribuicao", argsCriarRegraTeste(c, "2026-10-25", "2026-12-31", map[string]any{"dias": []any{"dom"}}))
 
 	// Editar: regra de sábado desde a segunda; mexer na meta não escala...
 	rSab := seedRegra(t, b, c, c.tipoA, "2026-10-26", "2026-12-31", 64, "08:00", "12:00", 2, "Sábados", []uuid.UUID{c.e1}, nil)
 	pre = b.chamar(t, "editar_regra_distribuicao", argsEditarRegra(c, rSab, map[string]any{"insercoes_por_dia": 5}))
 	require.NotEmpty(t, pre["confirmacao"])
 	// ...trocar os dias para segunda (a NOVA máscara cobre a segunda 26/10, já passada) escala só pela nova.
-	out = b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, rSab, map[string]any{"dias": []any{"seg"}}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, rSab, map[string]any{"dias": []any{"seg"}}))
 	require.Contains(t, out["motivo"], "vigência nova")
 	require.NotContains(t, out["motivo"], "vigência atual")
 	// A regra de segunda (a ANTIGA máscara cobre a segunda passada) que passa a sábados escala só pela antiga.
 	rSeg := seedRegra(t, b, c, c.tipoA, "2026-10-26", "2026-12-31", 2, "14:00", "16:00", 1, "Segundas", []uuid.UUID{c.e1}, nil)
-	out = b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, rSeg, map[string]any{"dias": []any{"sab"}}))
+	out = b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, rSeg, map[string]any{"dias": []any{"sab"}}))
 	require.Contains(t, out["motivo"], "vigência atual")
 	require.NotContains(t, out["motivo"], "vigência nova")
 	// Uma regra de sábado que começa num sábado passado escala só por mexer na meta.
 	rSabPassado := seedRegra(t, b, c, c.tipoA, "2026-10-24", "2026-12-31", 64, "18:00", "19:00", 1, "Sábado velho", []uuid.UUID{c.e1}, nil)
-	b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, rSabPassado, map[string]any{"insercoes_por_dia": 3}))
+	b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, rSabPassado, map[string]any{"insercoes_por_dia": 3}))
 
 	// Apagar: a regra de sábado desde a segunda não escala; a que tem sábado passado, sim.
 	pre = b.chamar(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": rSab.String()})
 	require.NotEmpty(t, pre["confirmacao"])
-	b.barrado(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": rSabPassado.String()})
-	b.barrado(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": rSeg.String()})
+	b.pedePendente(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": rSabPassado.String()})
+	b.pedePendente(t, "apagar_regra_distribuicao", map[string]any{"campanha_id": c.camp.String(), "regra_id": rSeg.String()})
 	require.Zero(t, tokensUsados(t, b))
 }
 
@@ -74,7 +74,7 @@ func TestEditarRegra_SoRenomearTambemEscala(t *testing.T) {
 	require.Contains(t, descricaoDaTool(t, b.cfg, "editar_regra_distribuicao"), "QUALQUER edição — até uma só do nome")
 
 	passada := semearRegraBase(t, b, c, "2026-10-01", "2026-12-31") // seg a sex desde 01/10
-	out := b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, passada, map[string]any{"nome": "Outro nome"}))
+	out := b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, passada, map[string]any{"nome": "Outro nome"}))
 	require.Contains(t, out["motivo"], "dias já passados")
 	require.Equal(t, "Base", strings.Split(linhasDeRegra(t, b, c.camp)[0], "|")[0], "nada foi renomeado")
 
@@ -85,7 +85,7 @@ func TestEditarRegra_SoRenomearTambemEscala(t *testing.T) {
 	pre := b.chamar(t, "editar_regra_distribuicao", argsEditarRegra(c, futura, map[string]any{"nome": "Outro nome"}))
 	require.NotEmpty(t, pre["confirmacao"])
 	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "bonus", mcptest.Quando("2026-10-10", "10:00"))
-	b.barrado(t, "editar_regra_distribuicao", argsEditarRegra(c, futura, map[string]any{"nome": "Outro nome"}))
+	b.pedePendente(t, "editar_regra_distribuicao", argsEditarRegra(c, futura, map[string]any{"nome": "Outro nome"}))
 }
 
 // ── regra legada sem emissora ───────────────────────────────────────────

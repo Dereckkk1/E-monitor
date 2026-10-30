@@ -19,7 +19,7 @@ import (
 
 // escritasEsperadas é o catálogo da spec §6 "Fatia 3" com o nível DECLARADO de
 // cada tool (não o efetivo). Nenhuma tool livre escala. Das 18 `confirma`, 10 têm
-// Escalar e podem subir a crítico (o motivo sai na resposta barrada):
+// Escalar e podem subir a crítico (o motivo sai na resposta do pedido pendente):
 // editar_material, editar_pmm_target, editar_emissora, criar_campanha,
 // editar_campanha, criar/editar/apagar_regra_distribuicao e
 // definir/apagar_override. As outras 8 NUNCA escalam: criar/editar_tipo_material,
@@ -147,6 +147,20 @@ func TestInventarioEscrita_DescricaoTerminaNoNivelEAnotacoes(t *testing.T) {
 		require.NotNil(t, tl.Annotations.DestructiveHint, tl.Name)
 		require.Equal(t, nivel != "livre", *tl.Annotations.DestructiveHint,
 			"%s: destructiveHint = (nível ≠ livre ou pode escalar)", tl.Name)
+	}
+}
+
+// O crítico agora vira pedido pendente: nenhuma descrição manda "fazer pela
+// tela" nem fala em ramo "barrado".
+func TestInventarioEscrita_DescricaoNaoFalaMaisEmBarrado(t *testing.T) {
+	for _, tl := range listarToolsDoServidor(t) {
+		if _, escrita := escritasEsperadas[tl.Name]; !escrita {
+			continue
+		}
+		d := strings.ToLower(tl.Description)
+		require.NotContains(t, d, "faça pela tela", tl.Name)
+		require.NotContains(t, d, "barrad", tl.Name)
+		require.NotContains(t, d, "link da tela", tl.Name)
 	}
 }
 

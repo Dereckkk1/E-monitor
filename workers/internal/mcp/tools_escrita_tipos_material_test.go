@@ -388,7 +388,7 @@ func TestEditarMaterial_TrocaDeTipoComVeiculacaoEhBarradaENadaMuda(t *testing.T)
 	mcptest.Regra(t, b.ctx, b.pool, c.camp, c.tipoB, c.est, "2026-10-01", "2026-10-31", 127, "06:00", "22:00", 1)
 	args := map[string]any{"material_id": c.mat.String(), "tipo_id": c.tipoB.String()}
 
-	out := b.barrado(t, "editar_material", args)
+	out := b.pedePendente(t, "editar_material", args)
 
 	require.Contains(t, out["motivo"], "veiculação")
 	require.Equal(t, "https://portal.teste/materials", out["links"].(map[string]any)["tela"])
@@ -399,7 +399,7 @@ func TestEditarMaterial_TrocaDeTipoComVeiculacaoEhBarradaENadaMuda(t *testing.T)
 	require.Equal(t, c.tipoA, *tipo, "nada foi gravado")
 	require.Equal(t, []string{"bonus"}, categoriasDoMaterial(t, b, c.mat), "e nada foi recategorizado")
 	require.Empty(t, b.sup.Chamadas())
-	l := b.auditoria(t, "mcp.escrita.requer_aprovacao")
+	l := b.auditoria(t, "mcp.pendente.criada")
 	require.Len(t, l, 1)
 	require.Equal(t, "material", l[0].Recurso)
 	require.Equal(t, c.mat, *l[0].RecursoID)

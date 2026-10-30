@@ -19,6 +19,8 @@ type Escritas struct {
 	Acoes *acoes.Servico
 	// Confirmacoes marca o uso único do token do nível confirma.
 	Confirmacoes *Confirmacoes
+	// Pendentes guarda os pedidos do nível crítico (aprovados em /pendentes).
+	Pendentes *Pendentes
 	// Segredo é o JWT_SECRET: assina o token (com separação de domínio).
 	Segredo []byte
 	// Leitura monta previews e resultados no formato das tools obter_*.
@@ -41,6 +43,7 @@ func NovasEscritas(pool *pgxpool.Pool, segredo []byte, servico *acoes.Servico, l
 	E := &Escritas{Acoes: servico, Segredo: segredo, Leitura: leitura}
 	if pool != nil { // evita o typed-nil dentro da interface
 		E.Confirmacoes = &Confirmacoes{DB: pool, Log: log}
+		E.Pendentes = &Pendentes{DB: pool}
 		E.DB = pool
 	}
 	return E

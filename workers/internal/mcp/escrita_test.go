@@ -86,18 +86,41 @@ func novaBancadaEscrita(t *testing.T) *bancadaEscrita {
 	ctx, pool := mcptest.DB(t)
 	_, err := pool.Exec(ctx, `DELETE FROM audit_log`) // o mcptest não trunca o audit_log
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas`)
+	_, err = pool.Exec(ctx, `TRUNCATE mcp_confirmacoes_usadas, mcp_acoes_pendentes`)
 	require.NoError(t, err)
+	semearPrincipal(t, ctx, pool, principalTeste)
 	b := &bancadaEscrita{ctx: ctx, pool: pool, agora: time.Now()}
 	b.E = &Escritas{
-		Confirmacoes: &Confirmacoes{DB: pool}, Segredo: []byte(mcptest.SegredoTeste), DB: pool,
+		Confirmacoes: &Confirmacoes{DB: pool}, Pendentes: &Pendentes{DB: pool}, Segredo: []byte(mcptest.SegredoTeste), DB: pool,
 		Agora: func() time.Time { return b.agora },
 	}
 	return b
 }
 
+// semearPrincipal grava o usuário e o token do principal com os MESMOS ids: o
+// pedido pendente tem FK para users e mcp_tokens. Se o usuário já existe (a
+// bancada de tool cria o admin antes), só o token é gravado.
+func semearPrincipal(t *testing.T, ctx context.Context, pool *pgxpool.Pool, p *Principal) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash, role, name, is_active)
+		VALUES ($1, $2, 'x', 'admin', 'Pessoa de Teste', true) ON CONFLICT (id) DO NOTHING`,
+		p.UserID, "p-"+p.UserID.String()[:8]+"@mcp.teste")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO mcp_tokens (id, user_id, tipo, token_hash, nome, expires_at)
+		VALUES ($1, $2, 'pessoal', $3, 'n', NOW() + INTERVAL '1 day') ON CONFLICT (id) DO NOTHING`,
+		p.TokenID, p.UserID, "h-"+p.TokenID.String())
+	require.NoError(t, err)
+}
+
+func (b *bancadaEscrita) pendentes(t *testing.T) int {
+	t.Helper()
+	var n int
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT count(*) FROM mcp_acoes_pendentes`).Scan(&n))
+	return n
+}
+
 func (b *bancadaEscrita) servidor(p *Principal, ds ...Escrita[entradaEscritaTeste]) *sdk.Server {
-	cfg := ConfigServidor{Versao: "teste", Escritas: b.E}
+	cfg := ConfigServidor{Versao: "teste", Escritas: b.E, Portal: "https://portal.teste"}
 	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
 	for _, d := range ds {
 		ferramentaEscrita(s, cfg, p, d)
@@ -272,7 +295,7 @@ func TestEscrita_ErroInternoEPanicNaoLiberamOTokenENemDerrubamOProcesso(t *testi
 }
 
 // 8
-func TestEscrita_EscaladaNaSegundaChamadaBarraENaoConsomeOToken(t *testing.T) {
+func TestEscrita_EscaladaGravaPendenteENaoConsomeToken(t *testing.T) {
 	b := novaBancadaEscrita(t)
 	sonda := &sondaEscrita{escalada: Escalada{Nivel: Confirma, Motivo: "x"}}
 	s := b.servidor(principalTeste, sonda.escrita("escreve_esc", Livre, true))
@@ -287,37 +310,88 @@ func TestEscrita_EscaladaNaSegundaChamadaBarraENaoConsomeOToken(t *testing.T) {
 	require.Equal(t, false, out["executou"])
 	require.Equal(t, "critico", out["nivel"])
 	require.Equal(t, "entrou uma tocada no dia", out["motivo"])
+	require.NotEmpty(t, out["pendente_id"])
 	require.Equal(t, 0, sonda.execucoes)
 	require.Equal(t, 0, b.confirmacoesUsadas(t), "o token não foi consumido")
+	require.Equal(t, 1, b.pendentes(t))
 }
 
 // 9
-func TestEscrita_CriticoEhBarradoComMotivoEAvisoELink(t *testing.T) {
+func TestEscrita_CriticoDeclaradoGravaPendente(t *testing.T) {
 	b := novaBancadaEscrita(t)
-	sonda := &sondaEscrita{escalada: Escalada{Nivel: Critico, Motivo: "atinge veiculação já ocorrida"}}
-	s := b.servidor(principalTeste, sonda.escrita("escreve_esc", Confirma, true))
+	sonda := &sondaEscrita{}
+	d := sonda.escrita("escreve_crit", Critico, false)
+	d.Motivo = "atinge veiculação já ocorrida"
+	out := chama(t, b.servidor(principalTeste, d), "escreve_crit", map[string]any{"valor": "x"}) // sem isError
 
-	out := chama(t, s, "escreve_esc", map[string]any{"valor": "x"}) // sem isError
 	require.Equal(t, false, out["executou"])
 	require.Equal(t, "critico", out["nivel"])
 	require.Equal(t, "atinge veiculação já ocorrida", out["motivo"])
 	require.Equal(t, "vai gravar x", out["preview"].(map[string]any)["resumo"])
-	require.Contains(t, out["aviso"], "Nada aconteceu")
-	require.Contains(t, out["aviso"], "faça pela tela, logado")
+	id := out["pendente_id"].(string)
+	_, err := uuid.Parse(id)
+	require.NoError(t, err)
+	require.NotEmpty(t, out["expira_em"])
+	require.Equal(t, "https://portal.teste/pendentes?id="+id, out["aprovar_em"])
+	require.Equal(t, false, out["ja_existia"])
+	require.Contains(t, out["aviso"], "Nada aconteceu ainda")
 	require.Equal(t, "https://portal.teste/tela", out["links"].(map[string]any)["tela"])
 	require.NotContains(t, out, "confirmacao", "crítico não tem token")
 	require.Equal(t, 0, sonda.execucoes)
-	require.Equal(t, 1, b.auditorias(t, "mcp.escrita.requer_aprovacao"))
-	require.Equal(t, 0, b.auditorias(t, "mcp.escrita.escreve_esc"))
 
-	// Declarada crítica (sem escalada) também nunca executa.
-	d := sonda.escrita("escreve_crit", Critico, false)
-	d.Tela = nil
-	out = chama(t, b.servidor(principalTeste, d), "escreve_crit", map[string]any{"valor": "y"})
-	require.Equal(t, "critico", out["nivel"])
-	require.Contains(t, out, "links")
-	require.Nil(t, out["links"].(map[string]any)["tela"], "sem tela: null, não ausente")
-	require.Equal(t, 0, sonda.execucoes)
+	var args, preview map[string]any
+	var tokenID *uuid.UUID
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT args, token_id, preview FROM mcp_acoes_pendentes WHERE id = $1`, id).Scan(&args, &tokenID, &preview))
+	require.Equal(t, map[string]any{"valor": "x"}, args, "args canônicos, sem confirmacao")
+	require.NotNil(t, tokenID)
+	require.Equal(t, principalTeste.TokenID, *tokenID)
+	require.Equal(t, out["preview"], preview)
+	require.Equal(t, 1, b.pendentes(t))
+
+	var meta map[string]any
+	require.NoError(t, b.pool.QueryRow(b.ctx,
+		`SELECT metadata FROM audit_log WHERE action = 'mcp.pendente.criada'`).Scan(&meta))
+	require.Equal(t, id, meta["pendente_id"])
+	require.Equal(t, 0, b.auditorias(t, "mcp.escrita.escreve_crit"))
+}
+
+func TestEscrita_PendenteIgualNaoDuplica(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	d := (&sondaEscrita{}).escrita("escreve_crit", Critico, false)
+	d.Motivo = "m"
+	s := b.servidor(principalTeste, d)
+	a := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	c := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	require.Equal(t, a["pendente_id"], c["pendente_id"])
+	require.Equal(t, false, a["ja_existia"])
+	require.Equal(t, true, c["ja_existia"])
+	require.Equal(t, 1, b.pendentes(t))
+	require.Equal(t, 1, b.auditorias(t, "mcp.pendente.criada"))
+}
+
+func TestEscrita_RecusaDoPreviewVenceOPendente(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	d := (&sondaEscrita{}).escrita("escreve_crit", Critico, false)
+	d.Motivo = "m"
+	d.Preview = func(context.Context, *Escritas, entradaEscritaTeste) (previa, error) {
+		return previa{}, &acoes.Recusa{Codigo: "campanha_cancelada", Mensagem: "Campanha cancelada."}
+	}
+	texto := chamaErro(t, b.servidor(principalTeste, d), "escreve_crit", map[string]any{"valor": "x"})
+	require.Equal(t, "Campanha cancelada. [campanha_cancelada]", texto)
+	require.Equal(t, 0, b.pendentes(t))
+}
+
+func TestEscrita_SemPortalAprovarEmNulo(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	d := (&sondaEscrita{}).escrita("escreve_crit", Critico, false)
+	d.Motivo = "m"
+	s := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
+	ferramentaEscrita(s, ConfigServidor{Versao: "teste", Escritas: b.E, Portal: ""}, principalTeste, d)
+	out := chama(t, s, "escreve_crit", map[string]any{"valor": "x"})
+	require.Contains(t, out, "aprovar_em")
+	require.Nil(t, out["aprovar_em"])
+	require.Equal(t, []any{"O endereço do portal não está configurado: abra /pendentes no portal do E-monitor para aprovar."}, out["ressalvas"])
 }
 
 type execerQuebrado struct{}
@@ -563,9 +637,9 @@ func TestEscrita_ExecutarTemPrazoEEstourarNaoLiberaOToken(t *testing.T) {
 	require.Equal(t, 1, b.confirmacoesUsadas(t))
 }
 
-// O ramo barrado audita o recurso que a tool declara; sem declarar, cai em
+// O pedido pendente audita o recurso que a tool declara; sem declarar, cai em
 // "mcp_escrita" sem id.
-func TestEscrita_BarradoAuditaORecursoDaTool(t *testing.T) {
+func TestEscrita_PendenteAuditaORecursoDaTool(t *testing.T) {
 	b := novaBancadaEscrita(t)
 	sonda := &sondaEscrita{escalada: Escalada{Nivel: Critico, Motivo: "atinge veiculação já ocorrida"}}
 	alvo := uuid.New()
@@ -583,7 +657,7 @@ func TestEscrita_BarradoAuditaORecursoDaTool(t *testing.T) {
 	var meta map[string]any
 	require.NoError(t, b.pool.QueryRow(b.ctx,
 		`SELECT resource, resource_id, metadata FROM audit_log
-		  WHERE action = 'mcp.escrita.requer_aprovacao' AND metadata->>'tool' = 'escreve_com'`).Scan(&recurso, &recursoID, &meta))
+		  WHERE action = 'mcp.pendente.criada' AND metadata->>'tool' = 'escreve_com'`).Scan(&recurso, &recursoID, &meta))
 	require.Equal(t, "campaign", recurso)
 	require.NotNil(t, recursoID)
 	require.Equal(t, alvo, *recursoID)
@@ -591,7 +665,7 @@ func TestEscrita_BarradoAuditaORecursoDaTool(t *testing.T) {
 
 	require.NoError(t, b.pool.QueryRow(b.ctx,
 		`SELECT resource, resource_id FROM audit_log
-		  WHERE action = 'mcp.escrita.requer_aprovacao' AND metadata->>'tool' = 'escreve_sem'`).Scan(&recurso, &recursoID))
+		  WHERE action = 'mcp.pendente.criada' AND metadata->>'tool' = 'escreve_sem'`).Scan(&recurso, &recursoID))
 	require.Equal(t, "mcp_escrita", recurso)
 	require.Nil(t, recursoID)
 }
