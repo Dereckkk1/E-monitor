@@ -43,6 +43,8 @@ type Modulo struct {
 	cfg    ConfigServidor
 	oauth  *oauth.Servidor
 	tokens *TokensHTTP
+	// pendentesHTTP: as rotas de aprovação dos pedidos críticos.
+	pendentesHTTP *PendentesHTTP
 	// aprovacoes e pendentes: o executor e o store dos pedidos críticos, para as
 	// rotas de /pendentes. aprovacoes é nil se o índice das escritas falhou.
 	aprovacoes *Aprovacoes
@@ -83,12 +85,13 @@ func NovoModulo(d DepsModulo) *Modulo {
 		apr = nil
 	}
 	return &Modulo{
-		aprovacoes: apr,
-		pendentes:  cfg.Escritas.Pendentes,
-		mcp:        SoPost(a.Middleware(NovoHandlerMCP(cfg))),
-		cfg:        cfg,
-		oauth:      o,
-		tokens:     &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
+		pendentesHTTP: &PendentesHTTP{Tokens: st, Pendentes: cfg.Escritas.Pendentes, Aprovacoes: apr, Log: d.Log},
+		aprovacoes:    apr,
+		pendentes:     cfg.Escritas.Pendentes,
+		mcp:           SoPost(a.Middleware(NovoHandlerMCP(cfg))),
+		cfg:           cfg,
+		oauth:         o,
+		tokens:        &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
 	}
 }
 
@@ -110,4 +113,7 @@ func (m *Modulo) MontarAdmin(r chi.Router) {
 	r.Delete("/mcp/tokens/{id}", m.tokens.Revogar)
 	r.Get("/mcp/oauth/pedido", m.oauth.LerPedido)
 	r.Post("/mcp/oauth/grant", m.oauth.Conceder)
+	r.Get("/mcp/pendentes", m.pendentesHTTP.Listar)
+	r.Post("/mcp/pendentes/{id}/aprovar", m.pendentesHTTP.Aprovar)
+	r.Post("/mcp/pendentes/{id}/recusar", m.pendentesHTTP.Recusar)
 }
