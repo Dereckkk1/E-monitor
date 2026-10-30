@@ -49,10 +49,10 @@ func (d Escrita[In]) validarArgs(args json.RawMessage) error {
 const (
 	// codigoArgsInvalidos: os args gravados não passam mais no schema (a tool
 	// mudou de forma entre o pedido e a aprovação).
-	codigoArgsInvalidos = "args_invalidos"
+	codigoArgsInvalidos    = "args_invalidos"
 	codigoToolDesconhecida = "tool_desconhecida"
 
-	msgArgsInvalidos = "Esta ação mudou desde o pedido e os argumentos gravados não valem mais; nada foi feito. Recuse e peça de novo à IA."
+	msgArgsInvalidos    = "Esta ação mudou desde o pedido e os argumentos gravados não valem mais; nada foi feito. Recuse e peça de novo à IA."
 	msgToolDesconhecida = "Esta ação não existe mais neste servidor; nada foi feito. Recuse e peça de novo à IA."
 	// msgConferenciaFalhou: a conferência do estado (Preview) caiu por erro
 	// inesperado ou panic. Nada foi executado; vale tentar de novo.
@@ -64,7 +64,9 @@ const (
 // Nada foi tentado, então o pedido volta a `pendente` (não `falhou`).
 type erroConferencia struct{ causa error }
 
-func (e *erroConferencia) Error() string { return "mcp: conferência da pendente falhou: " + e.causa.Error() }
+func (e *erroConferencia) Error() string {
+	return "mcp: conferência da pendente falhou: " + e.causa.Error()
+}
 func (e *erroConferencia) Unwrap() error { return e.causa }
 
 // argsInvalidosErro é a Recusa fixa de args_invalidos mais o detalhe do
