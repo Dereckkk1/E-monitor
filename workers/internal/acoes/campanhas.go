@@ -3,6 +3,7 @@ package acoes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -201,40 +202,73 @@ func (s *Servico) CancelarCampanha(ctx context.Context, id uuid.UUID) (*catalog.
 }
 
 // ApagarCampanha remove a campanha e tudo que é dela (tocadas, hashes, materiais
-// legados). Recusa com campanha_com_projecoes se alguma tocada dela carrega
-// projeção de OUTRA campanha (o CASCADE varreria o histórico alheio — audit C1).
+// legados).
 //
-// ⚠️ A contagem vem ANTES do Pause: recusar depois deixaria uma campanha viva
-// pausada num delete que não aconteceu. O erro da contagem é ignorado (o Delete
-// repete a checagem dentro da transação). Falha ao pausar só é logada: o delete
-// segue, como a rota sempre fez. Apagar o que não existe não é erro (o
-// repositório não acha linha e não reclama): a rota responde 204.
+// ⚠️ Contrato Recusa (o MCP depende dele): uma *Recusa significa "NADA foi
+// gravado"; qualquer outro erro, "pode ter gravado". Por isso toda checagem de
+// negócio vem ANTES da primeira escrita, e depois dela nenhum caminho devolve
+// Recusa:
+//
+//  1. a campanha existe? Senão nao_encontrado + ErrAlvoInexistente (a rota
+//     responde 204, apagar o que não existe é idempotente);
+//  2. alguma tocada dela carrega projeção de OUTRA campanha? campanha_com_projecoes
+//     (o CASCADE varreria o histórico alheio — audit C1). Erro da contagem é
+//     erro interno: nada foi gravado, e não dá para afirmar que é seguro seguir;
+//  3. tem lote de comprovante manual? campanha_com_lote_manual (a FK
+//     manual_proof_batches→campaigns não tem ON DELETE e abortaria o delete);
+//  4. está num pós-venda? campanha_em_pos_venda (FK RESTRICT; o pós-venda é
+//     documento enviado ao cliente).
+//
+// Só então CANCELA (CancelCampaign grava `cancelled_at`, que o Pause antigo não
+// gravava) e derruba os workers, e depois apaga. Do cancelamento em diante
+// qualquer falha é erro INTERNO, inclusive ErrCampaignHasForeignProjections (uma
+// projeção que apareceu entre a checagem e o delete): a campanha já foi
+// cancelada, então devolver Recusa mentiria "nada aconteceu". Cancelar uma
+// campanha já concluída/cancelada não muda nada (changed=false) e segue.
 func (s *Servico) ApagarCampanha(ctx context.Context, id uuid.UUID) error {
-	if n, err := s.Campanhas.CountForeignProjections(ctx, id); err == nil && n > 0 {
+	if _, err := s.Campanhas.Get(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "not found", Causa: ErrAlvoInexistente}
+		}
+		return err
+	}
+	n, err := s.Campanhas.CountForeignProjections(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
 		return &Recusa{
 			Codigo:   CodigoCampanhaComProjecoes,
 			Mensagem: "a campanha tem tocadas que carregam veiculações de outras campanhas; apagá-la destruiria esse histórico",
 			Dados:    map[string]any{"foreign_projections": n},
 		}
 	}
-	if s.Supervisor != nil {
-		if err := s.Supervisor.Pause(id); err != nil {
-			zap.L().Error("campaigns.Delete: supervisor pause failed",
-				zap.String("campaign_id", id.String()), zap.Error(err))
+	temLote, emPosVenda, err := s.Campanhas.DeleteBlockers(ctx, id)
+	if err != nil {
+		return err
+	}
+	if temLote {
+		return &Recusa{
+			Codigo:   CodigoCampanhaComLoteManual,
+			Mensagem: "a campanha tem comprovantes de veiculação manual; apagá-la perderia esses comprovantes",
 		}
 	}
-	if err := s.Campanhas.Delete(ctx, id); err != nil {
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			return naoEncontrado("campanha não encontrada")
-		case errors.Is(err, catalog.ErrCampaignHasForeignProjections):
-			// Defesa em profundidade: a contagem acima normalmente já pegou.
-			return &Recusa{
-				Codigo:   CodigoCampanhaComProjecoes,
-				Mensagem: "a campanha tem tocadas que carregam veiculações de outras campanhas; apagá-la destruiria esse histórico",
-			}
+	if emPosVenda {
+		return &Recusa{
+			Codigo:   CodigoCampanhaEmPosVenda,
+			Mensagem: "a campanha faz parte de um relatório de pós-venda e não pode ser apagada",
 		}
+	}
+
+	// A partir daqui nada é Recusa.
+	if _, _, err := s.Campanhas.CancelCampaign(ctx, id); err != nil {
 		return err
+	}
+	if s.Supervisor != nil {
+		s.Supervisor.StopWorkersForCampaign(id)
+	}
+	if err := s.Campanhas.Delete(ctx, id); err != nil {
+		return fmt.Errorf("apagar campanha depois de cancelar: %w", err)
 	}
 	return nil
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
@@ -29,7 +28,6 @@ var validStatuses = map[string]struct{}{
 type CampaignsHandler struct {
 	Repo       *catalog.Campaigns
 	Supervisor CampaignSupervisor
-	Log        *zap.Logger // optional; used to surface Pause/Start/Reload failures
 	// Hub é opcional: nil ou não configurado significa "esta instalação não
 	// avisa o hub", e a criação de campanha segue igual. É o mesmo portão que
 	// o SSO já usa, e é o que faz dev e teste não baterem em produção.
@@ -43,7 +41,6 @@ type CampaignsHandler struct {
 // CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
 type CampaignSupervisor interface {
 	Start(campaignID uuid.UUID) error
-	Pause(campaignID uuid.UUID) error
 	Reload(campaignID uuid.UUID) error
 	// UpdateStations replaces target_stations on a campaign and reconciles
 	// running workers without bouncing the campaign through 'cancelada' as
@@ -336,9 +333,20 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	// A regra (guard da audit C1: recusa 409 ANTES de pausar, pausa que falha só
-	// é logada, delete) mora em acoes.ApagarCampanha.
+	// A regra (recusas ANTES de qualquer escrita, depois cancelar + apagar) mora
+	// em acoes.ApagarCampanha.
 	if err := h.servico().ApagarCampanha(r.Context(), id); err != nil {
+		// Apagar o que não existe é 204 (idempotente), como sempre.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(204)
+			return
+		}
+		// Projeção alheia que apareceu depois do cancelamento (a ação devolve erro
+		// interno, não Recusa): a rota segue dizendo 409.
+		if errors.Is(err, catalog.ErrCampaignHasForeignProjections) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "campaign_has_foreign_projections"})
+			return
+		}
 		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}

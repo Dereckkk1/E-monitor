@@ -5,6 +5,7 @@ package acoes
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -56,19 +57,36 @@ func TestCancelarCampanha_JaCanceladaEhEstadoTerminalEInexistenteNaoEncontrado(t
 	require.Equal(t, CodigoNaoEncontrado, recusaDe(t, err).Codigo)
 }
 
-func TestApagarCampanha_PausaEApaga(t *testing.T) {
+func (c *cenario) existeCampanha(t *testing.T, id uuid.UUID) bool {
+	t.Helper()
+	var n int
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, id).Scan(&n))
+	return n == 1
+}
+
+func TestApagarCampanha_CancelaDerrubaOsWorkersEApaga(t *testing.T) {
 	c, _, sf := novoCenarioCampanha(t)
 	id := c.campanhaNova(t, "Apagar")
 
 	require.NoError(t, c.srv.ApagarCampanha(c.ctx, id))
 
-	var n int
-	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, id).Scan(&n))
-	require.Zero(t, n)
-	require.Equal(t, 1, sf.Contagem("Pause", id))
+	require.False(t, c.existeCampanha(t, id))
+	require.Equal(t, 1, sf.Contagem("StopWorkers", id))
 }
 
-func TestApagarCampanha_ProjecaoDeOutraCampanhaRecusaAntesDePausar(t *testing.T) {
+func TestApagarCampanha_InexistenteEhRecusaComAlvoInexistente(t *testing.T) {
+	c, _, sf := novoCenarioCampanha(t)
+	id := uuid.New()
+
+	err := c.srv.ApagarCampanha(c.ctx, id)
+
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoNaoEncontrado, r.Codigo)
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+	require.Zero(t, sf.Contagem("StopWorkers", id))
+}
+
+func TestApagarCampanha_ProjecaoDeOutraCampanhaRecusaAntesDeCancelar(t *testing.T) {
 	c, _, sf := novoCenarioCampanha(t)
 	outra := c.campanhaNova(t, "Irmã")
 	var detID uuid.UUID
@@ -82,28 +100,82 @@ func TestApagarCampanha_ProjecaoDeOutraCampanhaRecusaAntesDePausar(t *testing.T)
 	r := recusaDe(t, err)
 	require.Equal(t, CodigoCampanhaComProjecoes, r.Codigo)
 	require.Equal(t, 1, r.Dados["foreign_projections"])
-	require.Zero(t, sf.Contagem("Pause", c.campanha), "recusa ANTES de pausar")
-	var n int
-	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, c.campanha).Scan(&n))
-	require.Equal(t, 1, n)
+	require.Zero(t, sf.Contagem("StopWorkers", c.campanha), "recusa ANTES de cancelar")
+	require.True(t, c.existeCampanha(t, c.campanha))
 }
 
-func TestApagarCampanha_ErroAoPausarSoEhLogadoEInexistenteNaoErra(t *testing.T) {
-	c, _, _ := novoCenarioCampanha(t)
-	c.srv.Supervisor = supervisorQueFalhaAoPausar{&mcptest.SupervisorFalso{}}
-	id := c.campanhaNova(t, "Apagar pausa falha")
-
-	require.NoError(t, c.srv.ApagarCampanha(c.ctx, id))
-	var n int
-	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM campaigns WHERE id=$1`, id).Scan(&n))
-	require.Zero(t, n)
-
-	require.NoError(t, c.srv.ApagarCampanha(c.ctx, uuid.New()), "apagar o que não existe é idempotente")
+// exigeIntacta: a campanha segue lá, no estado em que estava, sem chamada ao supervisor.
+func (c *cenario) exigeCampanhaIntacta(t *testing.T, id uuid.UUID, estadoAntes string, sf *mcptest.SupervisorFalso) {
+	t.Helper()
+	var estado string
+	var canceladaEm *time.Time
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT status, cancelled_at FROM campaigns WHERE id=$1`, id).Scan(&estado, &canceladaEm))
+	require.Equal(t, estadoAntes, estado)
+	require.Nil(t, canceladaEm)
+	require.Empty(t, sf.Chamadas(), "nenhuma chamada ao supervisor")
 }
 
-type supervisorQueFalhaAoPausar struct{ *mcptest.SupervisorFalso }
+func TestApagarCampanha_ComLoteManualRecusaSemMexerEmNada(t *testing.T) {
+	c, _, sf := novoCenarioCampanha(t)
+	id := c.campanhaNova(t, "Com lote")
+	var antes string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT status FROM campaigns WHERE id=$1`, id).Scan(&antes))
+	_, err := c.pool.Exec(c.ctx,
+		`INSERT INTO manual_proof_batches (campaign_id, station_id, proof_pdf_key, proof_pdf_size) VALUES ($1,$2,'k',1)`, id, c.emissora)
+	require.NoError(t, err)
 
-func (supervisorQueFalhaAoPausar) Pause(uuid.UUID) error { return errors.New("pause falhou") }
+	err = c.srv.ApagarCampanha(c.ctx, id)
+
+	require.Equal(t, CodigoCampanhaComLoteManual, recusaDe(t, err).Codigo)
+	c.exigeCampanhaIntacta(t, id, antes, sf)
+}
+
+func TestApagarCampanha_EmPosVendaRecusaSemMexerEmNada(t *testing.T) {
+	c, _, sf := novoCenarioCampanha(t)
+	id := c.campanhaNova(t, "Em pós-venda")
+	var antes string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT status FROM campaigns WHERE id=$1`, id).Scan(&antes))
+	mcptest.PosVenda(t, c.ctx, c.pool, c.cliente, id, "Fechamento", "2026-06-01", "2026-06-30", false, nil)
+
+	err := c.srv.ApagarCampanha(c.ctx, id)
+
+	require.Equal(t, CodigoCampanhaEmPosVenda, recusaDe(t, err).Codigo)
+	c.exigeCampanhaIntacta(t, id, antes, sf)
+}
+
+// supervisorQueSemeiaProjecao injeta uma projeção alheia quando os workers são
+// derrubados — isto é, DEPOIS do cancelamento e ANTES do Delete —, simulando a
+// corrida que a checagem prévia não pega.
+type supervisorQueSemeiaProjecao struct {
+	*mcptest.SupervisorFalso
+	semeia func()
+}
+
+func (s supervisorQueSemeiaProjecao) StopWorkersForCampaign(id uuid.UUID) {
+	s.SupervisorFalso.StopWorkersForCampaign(id)
+	s.semeia()
+}
+
+// Depois do cancelamento NADA pode voltar como Recusa (diria "nada aconteceu"
+// com a campanha já cancelada): é erro interno, mas ainda reconhecível por errors.Is.
+func TestApagarCampanha_ProjecaoQueApareceDepoisDoCancelamentoEhErroInternoNaoRecusa(t *testing.T) {
+	c := novoCenario(t)
+	sf := &mcptest.SupervisorFalso{}
+	outra := c.campanhaNova(t, "Irmã tardia")
+	c.srv.Supervisor = supervisorQueSemeiaProjecao{sf, func() {
+		mcptest.Projecao(t, c.ctx, c.pool, c.tocada, c.quando, outra, c.material, "bonus")
+	}}
+
+	err := c.srv.ApagarCampanha(c.ctx, c.campanha)
+
+	require.Error(t, err)
+	var r *Recusa
+	require.False(t, errors.As(err, &r), "depois do cancelamento não existe Recusa: %v", err)
+	require.ErrorIs(t, err, catalog.ErrCampaignHasForeignProjections)
+	var estado string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT status FROM campaigns WHERE id=$1`, c.campanha).Scan(&estado))
+	require.Equal(t, "cancelada", estado, "o cancelamento ficou gravado")
+}
 
 func TestDefinirCPMFixo_GravaLimpaERecusa(t *testing.T) {
 	c := novoCenario(t)
