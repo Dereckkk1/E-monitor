@@ -210,8 +210,8 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 ## Testar as tools localmente
 
 - Um banco por agente no container `rc-mcp-test-pg` (porta 55440). O template atual é o
-  `radiocheck_mcp_test_d3` (migrations até a **0071**, `mcp_confirmacoes_usadas` incluída; o `d2` parou na 0070):
-  `docker exec rc-mcp-test-pg psql -U radiocheck -d postgres -c "CREATE DATABASE radiocheck_mcp_test_<x> TEMPLATE radiocheck_mcp_test_d3;"`.
+  `radiocheck_mcp_test_d4` (migrations até a **0072**, `mcp_acoes_pendentes` incluída; o `d3` parou na 0071):
+  `docker exec rc-mcp-test-pg psql -U radiocheck -d postgres -c "CREATE DATABASE radiocheck_mcp_test_<x> TEMPLATE radiocheck_mcp_test_d4;"`.
   Para gerar o template seguinte (`dN` = cópia do anterior + a migration nova; rede Docker `rc-mcp-test`;
   `MSYS_NO_PATHCONV=1` no Git Bash do Windows), crie `dN` com o `CREATE DATABASE` acima e rode
   `MSYS_NO_PATHCONV=1 docker run --rm --network rc-mcp-test -v "$(pwd)/migrations:/migrations:ro" migrate/migrate:v4.17.1 -path=/migrations -database "postgres://radiocheck:radiocheck@rc-mcp-test-pg:5432/radiocheck_mcp_test_dN?sslmode=disable" up`.
@@ -264,7 +264,7 @@ Preparar (na raiz `workers/`):
 ```bash
 docker exec rc-mcp-test-pg psql -U radiocheck -d postgres \
   -c "DROP DATABASE IF EXISTS radiocheck_mcp_avaliacao;" \
-  -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d3;"
+  -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d4;"
 # o semear recusa banco com usuário/cliente/emissora/campanha; se algum teste já rodou contra o
 # template, ele traz usuários de sobra — limpar NESSE banco é inofensivo quando ele já vem vazio
 docker exec rc-mcp-test-pg psql -U radiocheck -d radiocheck_mcp_avaliacao -c "TRUNCATE users CASCADE;"
