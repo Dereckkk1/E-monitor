@@ -157,12 +157,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarFalhasCampanhas(s, cfg)
 	registrarPosVenda(s, cfg)
 	registrarAuditoria(s, cfg)
-	registrarEscritasBasicas(s, cfg, p)
-	registrarEscritasCadastros(s, cfg, p)
-	registrarEscritasCampanhas(s, cfg, p)
-	registrarEscritasVinculos(s, cfg, p)
-	registrarEscritasRegras(s, cfg, p)
-	registrarEscritasAjustes(s, cfg, p)
+	registrarEscritas(s, cfg, p)
 	return s
 }
 

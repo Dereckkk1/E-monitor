@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/catalog"
 )
@@ -24,10 +23,12 @@ import (
 // veiculações de dias passados saem idênticos antes e depois. Se um dia esse
 // teste quebrar, a escalada volta.
 
-func registrarEscritasVinculos(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaVincularMaterial(cfg))
-	ferramentaEscrita(s, cfg, p, escritaDesvincularMaterial(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarEmissorasMaterial(cfg))
+func escritasVinculos(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaVincularMaterial(cfg),
+		escritaDesvincularMaterial(cfg),
+		escritaEditarEmissorasMaterial(cfg),
+	}
 }
 
 // ── Contexto e helpers do vínculo ───────────────────────────────────────

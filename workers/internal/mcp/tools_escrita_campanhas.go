@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -26,10 +25,12 @@ import (
 // (TestEditarEmissorasCampanha_ProvaDaRemocao) — decisão do dono em 2026-10-29,
 // que desceu esse caso de crítico para confirma.
 
-func registrarEscritasCampanhas(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaCriarCampanha(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarCampanha(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarEmissorasCampanha(cfg))
+func escritasCampanhas(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaCriarCampanha(cfg),
+		escritaEditarCampanha(cfg),
+		escritaEditarEmissorasCampanha(cfg),
+	}
 }
 
 const (
