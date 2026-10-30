@@ -606,6 +606,8 @@ func main() {
 		Ligacoes:   catalog.NewLigacoes(pool),
 		// criar_usuario emite o mesmo convite de boas-vindas da tela /admin/users.
 		BoasVindas: acoes.BoasVindasDoServico(welcomeSvc),
+		// testar_webhook enfileira na mesma outbox da rota webhook-test.
+		Webhooks: deliverer.Outbox(),
 	})
 	// Varredor: expira pedidos vencidos, fecha aprovadas presas e poda confirmações.
 	if mcpModulo != nil {

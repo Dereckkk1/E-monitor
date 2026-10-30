@@ -13,6 +13,7 @@ import (
 	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/oauth"
 	"radiocheck/internal/mcp/tokens"
+	"radiocheck/internal/webhook"
 )
 
 type DepsModulo struct {
@@ -38,6 +39,9 @@ type DepsModulo struct {
 	// BoasVindas: o emissor do convite de boas-vindas (criar_usuario). Pode ser nil
 	// (indisponível: email_status "unavailable").
 	BoasVindas acoes.EmissorBoasVindas
+	// Webhooks: a outbox dos webhooks (testar_webhook). Pode ser nil (indisponível).
+	// Passe nil de verdade, não um *webhook.Outbox nil dentro da interface.
+	Webhooks webhook.OutboxEnqueuer
 }
 
 type Modulo struct {
@@ -82,6 +86,7 @@ func NovoModulo(d DepsModulo) *Modulo {
 	}
 	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
 	servico.BoasVindas = d.BoasVindas
+	servico.Webhooks = d.Webhooks
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
 		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
 	// Índice quebrado não derruba o boot (regra 6.5): o módulo segue sem aprovações.
