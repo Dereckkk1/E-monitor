@@ -472,6 +472,41 @@ func TestDefinirOverride_Escalada(t *testing.T) {
 	require.Contains(t, out["motivo"], "já tem veiculação aprovada")
 }
 
+// Fatia 4, ponta a ponta: o pedido crítico (dia que já passou) é aprovado pelo
+// dono em /pendentes e o Executar real grava o mesmo ajuste que o caminho
+// confirma grava numa campanha gêmea — prova que os args gravados no JSONB
+// voltam a valer com o In real e que o efeito está no banco.
+func TestDefinirOverride_PedidoAprovadoPeloDonoExecutaIgualAoCaminhoConfirma(t *testing.T) {
+	b := novaBancadaTool(t)
+	agoraFixa(b) // hoje = 2026-10-29
+	viaPedido := semearRegra(t, b, uuid.Nil, uuid.Nil, "2026-10-01", "2026-12-31")
+	viaConfirma := semearRegra(t, b, viaPedido.tipoA, viaPedido.tipoB, "2026-10-01", "2026-12-31")
+	extra := map[string]any{"inicio_horario": "08:00", "fim_horario": "10:00", "motivo": "Grade trocada"}
+
+	out := b.pedePendente(t, "definir_override", argsOverride(viaPedido, "2026-10-28", 2, extra))
+	require.Empty(t, linhasDeAjuste(t, b, viaPedido.camp), "o pedido não escreve")
+	b.confirmarEExecutar(t, "definir_override", argsOverride(viaConfirma, "2026-11-05", 2, extra))
+
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	id, err := uuid.Parse(out["pendente_id"].(string))
+	require.NoError(t, err)
+	dono := &Principal{UserID: b.admin, Email: "admin@mcp.teste", Nome: "Admin"}
+	got, err := apr.Aprovar(b.ctx, id, dono)
+	require.NoError(t, err)
+	require.Equal(t, "executada", got.Pendente.Estado)
+	require.NotNil(t, got.Pendente.ExecutadaEm)
+
+	pedido := linhasDeAjuste(t, b, viaPedido.camp)
+	require.Len(t, pedido, 1)
+	confirma := linhasDeAjuste(t, b, viaConfirma.camp)
+	require.Len(t, confirma, 1)
+	require.Equal(t, strings.Replace(confirma[0], "2026-11-05", "2026-10-28", 1), pedido[0])
+	require.Equal(t, &b.admin, criadoPorDoAjuste(t, b, viaPedido.camp), "o ator do ajuste é o dono que aprovou")
+	l := b.auditoria(t, "mcp.escrita.definir_override")
+	require.Len(t, l, 2, "uma execução pela aprovação e outra pela confirmação")
+}
+
 // F3-2: o preview é confirma (hoje, sem tocada); entra uma tocada na célula-dia antes da
 // confirmação — a confirmação barra e o token não é consumido.
 func TestDefinirOverride_EscaladaNaConfirmacaoBarraENaoConsomeOToken(t *testing.T) {
