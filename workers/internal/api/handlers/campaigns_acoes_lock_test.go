@@ -372,3 +372,23 @@ func TestPrecoHTTP_Upsert_ReferenciaInexistenteResponde4xx(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaign_station_pricing WHERE campaign_id=$1`, c.ID).Scan(&n))
 	require.Zero(t, n)
 }
+
+// type_id repetido no per_type: antes estourava o PK no meio da transação (500);
+// agora é 400 com o motivo, e nada é gravado.
+func TestPrecoHTTP_TipoRepetido400SemGravar(t *testing.T) {
+	ctx, pool := poolHubCode(t)
+	c := criaCampanhaDireto(t, ctx, pool, seedClienteLocal(t, ctx, pool), "")
+	est := novaEmissora(t, ctx, pool, "Preço dup")
+	tipo := novoTipoMaterial(t, ctx, pool)
+	r := roteadorCicloCampanha(nil, &PricingHandler{Repo: catalog.NewPricing(pool)})
+
+	rec := chamar(t, r, http.MethodPut, "/campaigns/"+c.ID.String()+"/pricing/"+est.String(), map[string]any{
+		"mode": "per_insertion", "per_type": []map[string]any{
+			{"type_id": tipo.String(), "unit_value": 20}, {"type_id": tipo.String(), "unit_value": 30}},
+	})
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM campaign_station_pricing WHERE campaign_id=$1`, c.ID).Scan(&n))
+	require.Zero(t, n)
+}

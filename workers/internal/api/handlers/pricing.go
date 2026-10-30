@@ -25,6 +25,11 @@ type PricingHandler struct {
 	CampaignRepo *catalog.Campaigns
 }
 
+// servico monta as ações de preço sobre o repositório deste handler.
+func (h *PricingHandler) servico() *acoes.Servico {
+	return &acoes.Servico{Precos: h.Repo}
+}
+
 // ListByCampaign — GET /v1/internal/campaigns/{campaignID}/pricing
 func (h *PricingHandler) ListByCampaign(w http.ResponseWriter, r *http.Request) {
 	campaignID, err := uuid.Parse(chi.URLParam(r, "campaignID"))
@@ -87,8 +92,7 @@ func (h *PricingHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		p.PerType = []catalog.TypePricing{}
 	}
 
-	servico := &acoes.Servico{Precos: h.Repo}
-	saida, err := servico.DefinirPrecos(r.Context(), campaignID, []catalog.EntradaPreco{{
+	saida, err := h.servico().DefinirPrecos(r.Context(), campaignID, []catalog.EntradaPreco{{
 		StationID:         stationID,
 		Mode:              p.Mode,
 		ConsolidatedValue: p.ConsolidatedValue,
@@ -105,9 +109,12 @@ func (h *PricingHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, catalog.ErrPricingNegativeValue):
 			// Recusa.Mensagem guarda o texto original do catálogo (err.Error()
 			// traria o sufixo [código] da Recusa).
-			var r *acoes.Recusa
-			errors.As(err, &r)
-			http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
+			var rec *acoes.Recusa
+			if errors.As(err, &rec) {
+				http.Error(w, rec.Mensagem, http.StatusUnprocessableEntity)
+			} else {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			}
 		case escreveRecusa(w, err):
 		default:
 			http.Error(w, "internal error", http.StatusInternalServerError)

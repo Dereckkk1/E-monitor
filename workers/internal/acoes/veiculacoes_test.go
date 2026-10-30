@@ -94,7 +94,22 @@ func TestCriarVeiculacaoManual_ToleranciaDeCincoMinutosUsaORelogioInjetado(t *te
 	_, err := c.srv.CriarVeiculacaoManual(c.ctx, c.entradaManual(t, agora.Add(4*time.Minute)))
 	require.NoError(t, err)
 	_, err = c.srv.CriarVeiculacaoManual(c.ctx, c.entradaManual(t, agora.Add(5*time.Minute+time.Second)))
-	require.Error(t, err)
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
+	require.Equal(t, "detected_at cannot be in the future", r.Mensagem)
+}
+
+// Data sem partição em detections (23514 "no partition of relation"): é entrada
+// inválida, não erro interno.
+func TestCriarVeiculacaoManual_DataSemParticaoEhEntradaInvalida(t *testing.T) {
+	c := novoCenario(t)
+	c.comCota(t)
+
+	_, err := c.srv.CriarVeiculacaoManual(c.ctx, c.entradaManual(t, mcptest.Quando("1999-03-10", "10:30")))
+
+	r := recusaDe(t, err)
+	require.Equal(t, CodigoEntradaInvalida, r.Codigo)
+	require.Equal(t, "detected_at fora do período suportado", r.Mensagem)
 }
 
 func TestIgnorarERestaurarVeiculacao_MexemNaCotaDoDia(t *testing.T) {

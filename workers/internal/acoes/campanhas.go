@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -177,6 +178,8 @@ func (s *Servico) TrocarEmissorasCampanha(ctx context.Context, id uuid.UUID, emi
 //
 //   - id inexistente: nao_encontrado.
 //   - campanha já concluída/cancelada: estado_terminal, com Dados["estado_atual"].
+//   - devolve nil (sem erro) se só a releitura final falhar: o cancelamento já
+//     está gravado.
 //
 // Os workers só caem DEPOIS de a transição gravar (o CancelCampaign já virou o
 // estado, então vai direto ao stop, sem o round-trip extra do Pause).
@@ -198,7 +201,17 @@ func (s *Servico) CancelarCampanha(ctx context.Context, id uuid.UUID) (*catalog.
 	if s.Supervisor != nil {
 		s.Supervisor.StopWorkersForCampaign(id)
 	}
-	return s.Campanhas.Get(ctx, id)
+	// A transição já está gravada: a releitura é só para devolver a campanha, e
+	// falhar nela NÃO pode virar erro (diria "não cancelou" de uma campanha
+	// cancelada). Quem chama tolera a campanha nil: a rota ignora o valor e a
+	// tool do MCP monta a resposta sem ela.
+	out, err := s.Campanhas.Get(ctx, id)
+	if err != nil {
+		zap.L().Warn("CancelarCampanha: campanha cancelada, mas a releitura falhou",
+			zap.String("campaign_id", id.String()), zap.Error(err))
+		return nil, nil
+	}
+	return out, nil
 }
 
 // ApagarCampanha remove a campanha e tudo que é dela (tocadas, hashes, materiais
@@ -273,18 +286,24 @@ func (s *Servico) ApagarCampanha(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// limiteCPMFixo: a coluna é NUMERIC(12,2), que não comporta 1e10 ou mais.
+const limiteCPMFixo = 1e10
+
 // DefinirCPMFixo grava (ou, com nil, limpa) o CPM fixo da campanha: quando
 // preenchido, sobrescreve o CPM derivado em /campaigns, /insights e no dashboard.
 func (s *Servico) DefinirCPMFixo(ctx context.Context, id uuid.UUID, cpm *float64) (*catalog.Campaign, error) {
 	if cpm != nil && *cpm < 0 {
 		return nil, entradaInvalida("fixed_cpm must be >= 0")
 	}
+	if cpm != nil && (math.IsNaN(*cpm) || *cpm >= limiteCPMFixo) {
+		return nil, entradaInvalida("fixed_cpm must be less than 10000000000")
+	}
 	out, err := s.Campanhas.UpdateFixedCPM(ctx, id, cpm)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, naoEncontrado("campanha não encontrada")
 		}
-		return nil, err
+		return nil, recusaDoBanco(err)
 	}
 	return out, nil
 }

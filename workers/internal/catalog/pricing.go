@@ -1,9 +1,11 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -205,13 +207,21 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 		}
 	}
 
+	// Escreve em ordem de station_id (e não na da entrada): duas chamadas
+	// concorrentes com as mesmas emissoras em ordens opostas travariam uma na
+	// outra (deadlock). A ordem de ENTRADA só vale para o resultado.
+	ordenadas := append([]EntradaPreco(nil), entradas...)
+	sort.SliceStable(ordenadas, func(i, j int) bool {
+		return bytes.Compare(ordenadas[i].StationID[:], ordenadas[j].StationID[:]) < 0
+	})
+
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("pricing.UpsertLote: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	for _, e := range entradas {
+	for _, e := range ordenadas {
 		// 1. Upsert do cabeçalho.
 		_, err = tx.Exec(ctx, `
 			INSERT INTO campaign_station_pricing
@@ -249,11 +259,62 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 		return nil, fmt.Errorf("pricing.UpsertLote: commit: %w", err)
 	}
 
+	// Relê tudo em DUAS consultas (cabeçalhos + detalhes), não N×2.
+	ids := make([]uuid.UUID, len(entradas))
+	for i, e := range entradas {
+		ids[i] = e.StationID
+	}
+	porEmissora := make(map[uuid.UUID]*StationPricing, len(entradas))
+	rows, err := p.pool.Query(ctx, `
+		SELECT campaign_id, station_id, mode, consolidated_value, created_at, updated_at
+		FROM campaign_station_pricing
+		WHERE campaign_id = $1 AND station_id = ANY($2)`, campaignID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê cabeçalhos: %w", err)
+	}
+	for rows.Next() {
+		var sp StationPricing
+		if err := rows.Scan(&sp.CampaignID, &sp.StationID, &sp.Mode, &sp.ConsolidatedValue, &sp.CreatedAt, &sp.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("pricing.UpsertLote: scan cabeçalho: %w", err)
+		}
+		sp.PerType = []TypePricing{}
+		porEmissora[sp.StationID] = &sp
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê cabeçalhos: %w", err)
+	}
+	detalhes, err := p.pool.Query(ctx, `
+		SELECT station_id, type_id, unit_value
+		FROM campaign_station_type_pricing
+		WHERE campaign_id = $1 AND station_id = ANY($2)
+		ORDER BY station_id, type_id`, campaignID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê detalhes: %w", err)
+	}
+	for detalhes.Next() {
+		var station uuid.UUID
+		var tp TypePricing
+		if err := detalhes.Scan(&station, &tp.TypeID, &tp.UnitValue); err != nil {
+			detalhes.Close()
+			return nil, fmt.Errorf("pricing.UpsertLote: scan detalhe: %w", err)
+		}
+		// Só per_insertion carrega detalhe (como o GetByCampaignStation).
+		if sp := porEmissora[station]; sp != nil && sp.Mode == PricingModePerInsertion {
+			sp.PerType = append(sp.PerType, tp)
+		}
+	}
+	detalhes.Close()
+	if err := detalhes.Err(); err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê detalhes: %w", err)
+	}
+
 	out := make([]StationPricing, 0, len(entradas))
 	for _, e := range entradas {
-		sp, err := p.GetByCampaignStation(ctx, campaignID, e.StationID)
-		if err != nil {
-			return nil, err
+		sp := porEmissora[e.StationID]
+		if sp == nil {
+			return nil, fmt.Errorf("pricing.UpsertLote: emissora %s sumiu depois do commit", e.StationID)
 		}
 		out = append(out, *sp)
 	}

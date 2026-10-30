@@ -3,10 +3,12 @@ package acoes
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"radiocheck/internal/catalog"
 )
@@ -62,6 +64,12 @@ func (s *Servico) CriarVeiculacaoManual(ctx context.Context, in EntradaManual) (
 		if errors.Is(err, catalog.ErrMaterialNotLinkedToStation) {
 			return nil, &Recusa{Codigo: CodigoMaterialNaoVinculado, Mensagem: catalog.ErrMaterialNotLinkedToStation.Error()}
 		}
+		// detections é particionada por mês: uma data sem partição estoura 23514
+		// ("no partition of relation ... found for row") — é entrada, não bug.
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23514" && strings.Contains(pg.Message, "no partition of relation") {
+			return nil, entradaInvalida("detected_at fora do período suportado")
+		}
 		return nil, err
 	}
 	return det, nil
@@ -78,7 +86,7 @@ func (s *Servico) IgnorarVeiculacao(ctx context.Context, id, ator uuid.UUID) (*c
 	if err := s.Veiculacoes.Ignore(ctx, det.ID, ator); err != nil {
 		return nil, err
 	}
-	return s.Veiculacoes.Get(ctx, id)
+	return s.veiculacaoExistente(ctx, id)
 }
 
 // RestaurarVeiculacao desfaz IgnorarVeiculacao: a tocada volta à conta e retoma
@@ -91,11 +99,13 @@ func (s *Servico) RestaurarVeiculacao(ctx context.Context, id uuid.UUID) (*catal
 	if err := s.Veiculacoes.Restore(ctx, det.ID); err != nil {
 		return nil, err
 	}
-	return s.Veiculacoes.Get(ctx, id)
+	return s.veiculacaoExistente(ctx, id)
 }
 
 // veiculacaoExistente: sem a checagem o UPDATE não acharia linha e a ação
-// "funcionaria" em silêncio. O texto é o da rota.
+// "funcionaria" em silêncio. Também serve à releitura final: se a tocada sumiu
+// no meio da operação, é nao_encontrado + ErrAlvoInexistente, não erro interno.
+// O texto é o da rota.
 func (s *Servico) veiculacaoExistente(ctx context.Context, id uuid.UUID) (*catalog.Detection, error) {
 	det, err := s.Veiculacoes.Get(ctx, id)
 	if err != nil {
