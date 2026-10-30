@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -55,26 +56,17 @@ func (h *WebhooksHandler) servico() *acoes.Servico {
 }
 
 func toDTO(cfg *catalog.WebhookConfig) webhookConfigDTO {
-	if cfg == nil {
-		return webhookConfigDTO{Events: []string{"detection.confirmed"}}
-	}
-	return webhookConfigDTO{
-		URL:          cfg.URL,
-		SecretMasked: maskSecret(cfg.Secret),
-		Enabled:      cfg.Enabled,
-		Events:       cfg.Events,
-		HasSecret:    cfg.Secret != "",
-	}
+	return dtoDaVisao(acoes.VisaoDaConfigWebhook(cfg))
 }
 
-func maskSecret(s string) string {
-	if s == "" {
-		return ""
+func dtoDaVisao(v *acoes.VisaoWebhook) webhookConfigDTO {
+	return webhookConfigDTO{
+		URL:          v.URL,
+		SecretMasked: v.SegredoMascarado,
+		Enabled:      v.Ativo,
+		Events:       v.Eventos,
+		HasSecret:    v.TemSegredo,
 	}
-	if len(s) <= 4 {
-		return "..."
-	}
-	return s[:4] + "..."
 }
 
 // GetConfig handles GET /v1/internal/clients/{id}/webhook.
@@ -119,7 +111,7 @@ func (h *WebhooksHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, toDTO(cfg))
+	writeJSON(w, http.StatusOK, dtoDaVisao(cfg))
 }
 
 // ListDeliveries handles GET /v1/internal/clients/{id}/webhook-deliveries.
@@ -150,17 +142,29 @@ func (h *WebhooksHandler) ListDeliveries(w http.ResponseWriter, r *http.Request)
 // `webhook.test` event so the operator can validate the receiver without
 // waiting for a real detection.
 func (h *WebhooksHandler) SendTest(w http.ResponseWriter, r *http.Request) {
+	// 503 vem ANTES de conferir o id, como sempre foi.
+	if h.Outbox == nil {
+		http.Error(w, "outbox not configured", http.StatusServiceUnavailable)
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	if err := h.servico().TestarWebhook(r.Context(), id); err != nil {
+	// Cliente sem URL/desabilitado/sem assinatura: nada é enfileirado e a rota
+	// segue respondendo 202 (a UI nunca distinguiu); quem trata isso como recusa
+	// é a tool do MCP, que lê Enfileirado.
+	if _, err := h.servico().TestarWebhook(r.Context(), id); err != nil {
 		if errors.Is(err, acoes.ErrWebhooksIndisponivel) {
 			http.Error(w, "outbox not configured", http.StatusServiceUnavailable)
 			return
 		}
-		http.Error(w, "enqueue failed: "+err.Error(), http.StatusInternalServerError)
+		if escreveRecusa(w, err) {
+			return
+		}
+		zap.L().Error("webhook-test: enqueue failed", zap.String("client_id", id.String()), zap.Error(err))
+		http.Error(w, "enqueue failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"queued": true})

@@ -142,3 +142,12 @@ func TestWebhookHTTP_SendTestIDInvalido400(t *testing.T) {
 	rec := c.chamar(http.MethodPost, "/clients/xyz/webhook-test", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// Cliente inexistente: 404 "not found" (antes a outbox falhava ao ler a config e
+// a rota respondia 500 "enqueue failed: ...").
+func TestWebhookHTTP_SendTestClienteInexistente404(t *testing.T) {
+	c := novoCenarioWebhook(t)
+	rec := c.chamar(http.MethodPost, "/clients/"+uuid.NewString()+"/webhook-test", "")
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Equal(t, "not found\n", rec.Body.String())
+}

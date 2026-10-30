@@ -62,10 +62,46 @@ func ValidarWebhook(ctx context.Context, in catalog.UpdateWebhookInput) error {
 	return nil
 }
 
+// VisaoWebhook é a configuração de webhook SEM o segredo em claro: o que a rota
+// e a tool podem devolver. O segredo só é gravado, nunca relido por quem edita.
+type VisaoWebhook struct {
+	URL     string
+	Ativo   bool
+	Eventos []string
+	// TemSegredo diz se há segredo gravado; SegredoMascarado são os 4 primeiros
+	// caracteres + "..." (ver MascararSegredo).
+	TemSegredo       bool
+	SegredoMascarado string
+}
+
+// MascararSegredo devolve os 4 primeiros caracteres + "..." ("..." se tiver 4 ou
+// menos; vazio se não houver segredo).
+func MascararSegredo(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 4 {
+		return "..."
+	}
+	return s[:4] + "..."
+}
+
+// VisaoDaConfigWebhook monta a visão a partir da configuração do banco. cfg nil
+// (cliente sem URL) vira a configuração vazia com a assinatura padrão.
+func VisaoDaConfigWebhook(cfg *catalog.WebhookConfig) *VisaoWebhook {
+	if cfg == nil {
+		return &VisaoWebhook{Eventos: []string{"detection.confirmed"}}
+	}
+	return &VisaoWebhook{
+		URL: cfg.URL, Ativo: cfg.Enabled, Eventos: cfg.Events,
+		TemSegredo: cfg.Secret != "", SegredoMascarado: MascararSegredo(cfg.Secret),
+	}
+}
+
 // EditarWebhook valida e grava a configuração parcial do webhook do cliente (os
-// campos nil não mudam) e devolve a configuração resultante. Cliente
-// inexistente: nao_encontrado.
-func (s *Servico) EditarWebhook(ctx context.Context, cliente uuid.UUID, in catalog.UpdateWebhookInput) (*catalog.WebhookConfig, error) {
+// campos nil não mudam) e devolve a configuração resultante, sem o segredo em
+// claro. Cliente inexistente: nao_encontrado.
+func (s *Servico) EditarWebhook(ctx context.Context, cliente uuid.UUID, in catalog.UpdateWebhookInput) (*VisaoWebhook, error) {
 	if err := ValidarWebhook(ctx, in); err != nil {
 		return nil, err
 	}
@@ -76,18 +112,42 @@ func (s *Servico) EditarWebhook(ctx context.Context, cliente uuid.UUID, in catal
 		}
 		return nil, err
 	}
-	return cfg, nil
+	return VisaoDaConfigWebhook(cfg), nil
+}
+
+// TesteWebhook é o desfecho de TestarWebhook. Enfileirado=false não é erro: o
+// cliente não vai receber nada, e Motivo diz por quê. A rota segue respondendo
+// 202 {"queued":true} (comportamento da UI); a tool do MCP o trata como recusa.
+type TesteWebhook struct {
+	Enfileirado bool
+	Motivo      string
 }
 
 // TestarWebhook enfileira um evento webhook.test para o cliente, para validar o
-// receptor sem esperar uma detecção real. A outbox não enfileira nada se o
-// cliente não tem URL, está desabilitado ou não assinou o evento (no-op, sem
-// erro). Sem outbox no Servico: ErrWebhooksIndisponivel.
-func (s *Servico) TestarWebhook(ctx context.Context, cliente uuid.UUID) error {
+// receptor sem esperar uma detecção real. Lê a configuração ANTES: cliente
+// inexistente é nao_encontrado, e cliente sem URL, desabilitado ou que não
+// assinou webhook.test (nem "*") não enfileira nada e diz o motivo. Sem outbox
+// no Servico: ErrWebhooksIndisponivel.
+func (s *Servico) TestarWebhook(ctx context.Context, cliente uuid.UUID) (TesteWebhook, error) {
 	if s.Webhooks == nil {
-		return ErrWebhooksIndisponivel
+		return TesteWebhook{}, ErrWebhooksIndisponivel
 	}
-	return s.Webhooks.Enqueue(ctx, &webhook.Event{
+	cfg, err := s.Clientes.GetWebhookConfig(ctx, cliente)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TesteWebhook{}, naoEncontrado("not found")
+		}
+		return TesteWebhook{}, err
+	}
+	switch {
+	case cfg == nil:
+		return TesteWebhook{Motivo: "o cliente não tem URL de webhook configurada"}, nil
+	case !cfg.Enabled:
+		return TesteWebhook{Motivo: "o webhook do cliente está desabilitado"}, nil
+	case !assinaEvento(cfg.Events, string(webhook.EventWebhookTest)):
+		return TesteWebhook{Motivo: "o cliente não assinou o evento webhook.test"}, nil
+	}
+	if err := s.Webhooks.Enqueue(ctx, &webhook.Event{
 		Type:     webhook.EventWebhookTest,
 		ClientID: cliente,
 		Body: map[string]any{
@@ -95,5 +155,21 @@ func (s *Servico) TestarWebhook(ctx context.Context, cliente uuid.UUID) error {
 			"sent_at":     time.Now().UTC().Format(time.RFC3339),
 			"environment": "internal",
 		},
-	})
+	}); err != nil {
+		return TesteWebhook{}, err
+	}
+	return TesteWebhook{Enfileirado: true}, nil
+}
+
+// assinaEvento espelha a regra da outbox: filtro vazio assina tudo; "*" também.
+func assinaEvento(eventos []string, tipo string) bool {
+	if len(eventos) == 0 {
+		return true
+	}
+	for _, e := range eventos {
+		if e == tipo || e == "*" {
+			return true
+		}
+	}
+	return false
 }
