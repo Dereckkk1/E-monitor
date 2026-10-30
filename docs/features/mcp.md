@@ -287,8 +287,9 @@ executar a pendente aprovada. Fluxo de toda chamada, na ordem:
    confirmação devolve o ramo `critico` e o token **não** é consumido. O nível nunca desce do declarado.
 2. **`livre`:** executa na hora (`executou: true`).
 3. **Preview** (`confirma` e `critico`): relê o estado, valida e monta `{resumo, mudancas[{campo, de, para}], efeitos[],
-   ressalvas[]}` com nomes (não só ids). Recusa de negócio aqui (`entrada_invalida`, `nao_encontrado`…) vale antes de qualquer
-   escalada ou token.
+   ressalvas[]}` com nomes (não só ids). Roda **antes do ramo crítico e antes do token**: uma recusa de negócio
+   (`entrada_invalida`, `nao_encontrado`…) vale antes de qualquer pendente, resposta barrada ou consumo de token. O `Escalar`
+   (passo 1, que também relê o estado) pode recusar pelo mesmo motivo, então a recusa pode vir de qualquer um dos dois.
 4. **`critico`:** barrado (ver abaixo).
 5. **`confirma` sem token:** `{executou: false, preview, confirmacao, expira_em}`. **Com token:** verifica, consome, executa.
 
@@ -357,7 +358,12 @@ Regras finais, como implementadas (a tabela de tools traz a coluna "Sobe para `c
   (Dereck) decidiu em 2026-10-29, depois de `TestEditarEmissorasCampanha_ProvaDaRemocao` provar que grade, insights, financeiro,
   veiculações, planos do dia, falhas e `detection_campaigns` ficam **idênticos** (também depois do recat) ao tirar a emissora,
   que a tool segue `confirma`. O que muda: `target_stations` (lista de `obter_campanha`), a lista de PMM no target, o mapa ao
-  vivo, os alertas de queda e, se a campanha está ativa, os workers.
+  vivo, os alertas de queda e, se a campanha está ativa, os workers. **Numa campanha ativa o efeito nos workers vai além da
+  diferença:** `Supervisor.UpdateStations` sobe os workers das emissoras acrescentadas, para os das removidas (as que outra
+  campanha ativa ainda usa continuam) e **reinicia também o worker de TODAS as emissoras que ficam** (`startStationWorker`
+  sobre `kept + added`, para recarregar os materiais): cada uma reconecta por um instante, com uma pequena lacuna de
+  captura, inclusive as compartilhadas com outras campanhas ativas. A rota `PUT /campaigns/{id}/stations` faz o mesmo; o
+  preview e a ressalva da tool dizem isso.
 - **Vínculos (`vincular`/`desvincular`/`editar_emissoras_material`): SEM escalada** (`TestVinculos_ProvaF34_PassadoNaoMuda`:
   não há recat, a atribuição é decidida na entrada da tocada). Duas ressalvas no preview: a **competição de atribuição**
   (outra campanha com o mesmo áudio nas mesmas emissoras disputa as tocadas futuras: sem `MULTI_ATTRIBUTION`, a tocada vai para
@@ -386,10 +392,12 @@ Regras finais, como implementadas (a tabela de tools traz a coluna "Sobe para `c
 
 ### Execução, auditoria e resposta (F3-11)
 
-- **`Executar`** roda sob `context.WithoutCancel` com prazo de **60 s** (o `middleware.Timeout` do router): depois de consumir o
-  token, o desfecho não depende de o cliente continuar conectado.
+- **`Executar`** roda sob `context.WithoutCancel` com prazo de **60 s** (o mesmo valor do `middleware.Timeout` do router):
+  depois de consumir o token, o desfecho não depende de o cliente continuar conectado. Os 60 s do `Executar` são **só dele**,
+  contados depois do `Escalar` e do `Preview` (ver "Limitações e follow-ups" sobre a escrita lenta).
 - **Auditoria** feita pelo motor **depois** do sucesso e fora da transação da escrita: `audit_log` com
-  `actor_id` = o admin, `actor_type 'user'`, `action = "mcp.escrita.<tool>"`, `resource`/`resource_id` do alvo e
+  `actor_id` = o admin, `actor_type 'user'`, `action = "mcp.escrita.<tool>"`, `resource`/`resource_id` do alvo (nos ajustes do
+  dia, `campaign` + o id da campanha: tipo, emissora e dia vão nos `args`) e
   `metadata = {origem: "mcp", tool, nivel, args, mcp: {token_id}}`. Falha da auditoria é logada e **não** derruba a resposta
   (a escrita já aconteceu). Eventos próprios: `mcp.escrita.requer_aprovacao` (ramo barrado, com o `motivo`) e
   `mcp.escrita.falha` (erro interno ou `panic` no `Executar`; só `"erro": "interno"`, nunca o texto do erro Go). Recusa de negócio
@@ -447,7 +455,9 @@ mexer), **exceto** os pontos abaixo, que mudaram a rota para melhor (conferidos 
   material ou campanha inexistente (404). O 404 do handler continua o texto `not found`; o 400 leva o motivo.
 - **Desvincular / trocar emissoras de um vínculo que não existe** seguem **204**, mas **não chamam mais `Reload`** da campanha (antes
   um reload à toa reiniciava os workers de campanha ativa). **`PATCH /materials/{id}/type` de material inexistente** segue 204
-  sem recategorizar.
+  sem recategorizar. **`DELETE …/distribution-overrides` de um ajuste que não existe** (0 linhas apagadas) também segue **204**,
+  mas **não recategoriza mais** a célula-dia à toa; a ação o devolve como `nao_encontrado` (`ErrAlvoInexistente`) e a tool
+  `apagar_override` mostra `[nao_encontrado]` em vez de `apagado: true` se o ajuste sumir entre o plano e o `DELETE`.
 
 ### Desempenho
 
@@ -467,16 +477,24 @@ handler real, sem rede): **~12,5 ms → ~9,1 ms** e 24,6 mil → 15,8 mil aloca�
 - **Textos em inglês nas `Recusa` que vêm das rotas:** as validações que saíram do handler guardam a mensagem antiga
   (`name is required`, `end_date must be on or after start_date`, `time_start must be HH:MM…`), e o MCP as repete ao modelo.
 - **`CriarCampanha` (rota) não apara o nome nem valida data zero** (a rota sempre aceitou como veio; no MCP quem valida é a tool).
-- **`acoes.EditarCampanha` NÃO é transacional** (nome e datas são gravados antes de `AtualizarHubCode`). Uma `Recusa` vinda de
-  `AtualizarHubCode` depois do `UpdateBasic` **liberaria o token** com a escrita pela metade. **Inalcançável na Fatia 3**
-  (mudar o código do hub escala a `critico`, então nunca chega ao `Executar`), mas **ALCANÇÁVEL na Fatia 4**: um `editar_campanha`
-  `critico` com troca de código, executado após a aprovação. **Tem de ser corrigido na Fatia 4** (uma transação, ou a
-  `AtualizarHubCode` primeiro, ou não liberar o token quando houver escrita parcial).
+- **`acoes.EditarCampanha` NÃO é transacional: escrita parcial com falha reportada.** Grava nome e datas (`UpdateBasic`) e só
+  depois o código do hub (`AtualizarHubCode`, um `UPDATE` simples, sem FK nem CHECK: ele nunca vira `Recusa`). Qualquer erro
+  DEPOIS do `UpdateBasic` (queda de conexão, timeout) deixa nome e datas já gravados enquanto a resposta diz `[interno]`.
+  **Inalcançável na Fatia 3:** mudar o código do hub escala a `critico`, que não executa, e sem troca de código não há segunda
+  escrita. **ALCANÇÁVEL na Fatia 4:** o `editar_campanha` crítico com troca de código roda depois da aprovação, sem token de
+  confirmação; a falha marca a pendente `falhou` e quem aprovou acredita que nada aconteceu, com nome e datas já alterados.
+  **Fix recomendado para a Fatia 4:** `UpdateBasic` e `AtualizarHubCode` na MESMA transação (ou num único `UPDATE`).
 - **Bug latente em `catalog/detections.go:~604`:** o `time_end` da regra é lido com `time.Parse("15:04:05", …)` ignorando o erro
   (`"24:00"` vira `00:00` no caminho de insert em Go, enquanto o SQL aceita `24:00`). Não é do MCP; anotado.
 - **`HaVeiculacao` para regras não filtra por dia:** a escalada da regra olha a campanha inteira, então uma campanha só com
   tocadas `out_date` (fora do período) também escala. Mais estrita do que o necessário, nunca mais frouxa.
 - **Token gasto em erro interno depois de consumir** (F3-5): a pessoa pede o preview de novo.
+- **Escrita lenta pode terminar depois de a resposta HTTP já ter falhado.** O `Executar` tem os PRÓPRIOS 60 s, contados
+  depois do `Escalar` e do `Preview`, enquanto o `middleware.Timeout` de 60 s do router corre desde o início do pedido. Uma
+  escrita lenta (ex.: o recat síncrono de um override) pode concluir DEPOIS de o cliente/proxy já ter recebido o 504. É seguro:
+  o token já foi consumido (repetir devolve "já foi usada") e o `Executar` não é cancelado. Mas o modelo só vê um erro de
+  transporte e não sabe se a escrita aconteceu: deve conferir com a tool de leitura correspondente (`listar_overrides`,
+  `obter_campanha`…) antes de pedir outro preview.
 - **`token_id` não aparece na tool `auditoria_mcp`** e dados de contato/CNPJ aparecem nos `args` do `audit_log` (ver acima).
 - **Recat assíncrono:** a regra e a troca de tipo respondem antes de a recategorização acabar (até 30 s); a resposta traz a
   ressalva. O override é síncrono.

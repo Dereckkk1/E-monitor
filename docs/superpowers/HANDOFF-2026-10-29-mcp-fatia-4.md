@@ -66,10 +66,10 @@ O QUE FAZER
 
 ## Estado em 2026-10-30
 
-**Branch `feat/mcp-server`**: **157 commits** sobre `origin/master` (`git rev-list --count origin/master..HEAD`
-= 157 já com este handoff; 156 no commit anterior; `origin/master` em `61f9aaa`, sem `git fetch` desde 2026-10-29).
-Nada pushado, mergeado nem deployado. A Fatia 3 vai de `7e3cd5c` (o plano) ao topo (`git log --oneline
-7e3cd5c..HEAD` = 51 commits com este: migration, token, motor, `HaVeiculacao`, 4 extrações para `internal/acoes`,
+**Branch `feat/mcp-server`**: **159 commits** sobre `origin/master` (`git rev-list --count origin/master..HEAD`
+= 159, já com os ajustes da revisão final e esta atualização do handoff; `origin/master` em `61f9aaa`, sem `git fetch`
+desde 2026-10-29). Nada pushado, mergeado nem deployado. A Fatia 3 vai de `7e3cd5c` (o plano) ao topo (`git log --oneline
+7e3cd5c..HEAD` = 53 commits: migration, token, motor, `HaVeiculacao`, 4 extrações para `internal/acoes`,
 20 tools em 7 tasks, correções de revisão, instruções/inventário, docs). Cada lote (A: motor; B: extrações; C: as 20
 tools) passou por revisão de aderência e de qualidade, com re-revisão das correções.
 
@@ -99,6 +99,14 @@ deste handoff são só docs; bancos recriados do template `radiocheck_mcp_test_d
   antes de ~13:00 UTC; rodou às 11:49 UTC; arquivo intocado nesta branch).
 - Avaliação da Fatia 2 ainda responde: `TestAvaliacao_Gabarito` passa com as 64 tools no servidor (as 10 respostas
   iguais ao gabarito). A releitura por subagente às cegas NÃO foi refeita (as escritas não mudam as 44 leituras).
+- **Revisão final da branch: "pronta com ressalvas", sem crítico.** Os ajustes viraram o commit `fix(mcp): ajustes da
+  revisão final da Fatia 3` (reinício dos workers em `editar_emissoras_campanha`, recurso `campaign` na auditoria dos ajustes,
+  `apagar_override` com `nao_encontrado` quando nada é apagado, comentário do inventário) mais esta correção de docs
+  (EditarCampanha = escrita parcial com falha reportada, escrita lenta pode terminar depois do 504). Reverificado depois dele:
+  `./internal/acoes/...` ok (453s), `./internal/api/handlers/ -run 'Override|Ajuste'` ok, `./internal/catalog/ -run Override`
+  ok, `./internal/mcp/ -run 'EditarEmissorasCampanha|Override|Ajuste|Inventario'` ok (217s), cross-compile linux com e sem
+  `-tags avaliacao`, `go vet ./...`, `go list -deps ./cmd/api | grep avaliacao` vazio. As suítes completas de `./internal/mcp/...`,
+  `handlers`, `supervisor`, `hubnotify` e `catalog` acima são do HEAD `388f3e5`.
 - **Boot de verdade:** a API compilada subiu contra um banco do template + NATS em container (`/v1/internal/health` 200);
   com um token pessoal real, `POST /mcp tools/list` devolveu **64 nomes**, em ordem alfabética e iguais a `ToolsEsperadas`;
   `criar_tipo_material` pelo `/mcp` fez preview → confirmação (`executou: true`, linha `mcp.escrita.criar_tipo_material` no
@@ -227,8 +235,20 @@ resultado nunca leva senha, token, link de boas-vindas nem segredo (contrato §3
 
 ## Armadilhas novas (valem para a Fatia 4)
 
-- **Prioridade da recusa:** o `Preview` roda ANTES do ramo crítico; uma recusa de negócio nele (`entrada_invalida`,
-  `nao_encontrado`) vale antes de qualquer pendente ou token. Mantenha assim.
+- **Prioridade da recusa:** o `Escalar` (que relê o estado) e o `Preview` rodam ANTES do ramo crítico e do token; uma recusa
+  de negócio em qualquer um dos dois (`entrada_invalida`, `nao_encontrado`) vale antes de qualquer pendente, resposta
+  barrada ou consumo de token. Mantenha assim.
+- **Escrita lenta pode terminar depois do 504:** o `Executar` tem os PRÓPRIOS 60 s (depois do `Escalar` e do `Preview`),
+  enquanto o `middleware.Timeout` de 60 s do router corre desde o início do pedido. Uma escrita lenta pode concluir depois de
+  o cliente já ter recebido o erro de transporte; é seguro (token consumido, `Executar` não cancelado), mas o modelo não sabe
+  se a escrita aconteceu e deve conferir por leitura antes de repetir. Na aprovação do `critico` pense no mesmo prazo.
+- **`editar_emissoras_campanha` numa campanha ativa reinicia o worker de TODAS as emissoras que ficam** (`UpdateStations`
+  chama `startStationWorker` sobre `kept + added`): lacuna curta de captura em todas, inclusive nas compartilhadas com outras
+  campanhas ativas. O preview e a ressalva dizem isso; qualquer tool crítica que chame o supervisor deve dizer o mesmo.
+- **Auditoria dos ajustes do dia:** `definir_override`/`apagar_override` gravam `resource = "campaign"` + o id da campanha
+  (tipo, emissora e dia estão nos `args`); a tabela de ajustes não tem id próprio. `apagar_override` de um ajuste que sumiu
+  entre o plano e o `DELETE` devolve `[nao_encontrado]` (`ErrAlvoInexistente`; a rota segue 204), padrão que as tools de
+  apagar da Fatia 4 devem repetir.
 - **`mcp.escrita.falha` e token gasto:** erro interno depois de consumir o token não o devolve. No `critico` o análogo é a
   pendente que fica em `aprovada` > 10 min (o varredor marca `falhou`).
 - **Auditoria fora da transação:** o motor audita depois do sucesso; falha de auditoria é logada e não derruba a resposta.
@@ -250,12 +270,15 @@ resultado nunca leva senha, token, link de boas-vindas nem segredo (contrato §3
 
 ## Pendências registradas
 
-**Obrigatória antes de qualquer `critico` que troque o código do hub (Fatia 4):** `acoes.EditarCampanha` NÃO é
-transacional (grava nome e datas e só depois chama `AtualizarHubCode`). Uma `Recusa` vinda de `AtualizarHubCode` depois do
-`UpdateBasic` **liberaria o token com a escrita pela metade**. Na Fatia 3 é inalcançável (mudar o código do hub escala a
-`critico`, que não executa), mas na Fatia 4 um `editar_campanha` crítico com troca de código, depois da aprovação, chega
-exatamente aí. Corrigir (uma transação, ou `AtualizarHubCode` primeiro, ou não tratar como recusa o que vem depois de
-escrita parcial) e travar com teste.
+**Obrigatória antes de qualquer `critico` que troque o código do hub (Fatia 4) — escrita parcial com falha reportada:**
+`acoes.EditarCampanha` NÃO é transacional: grava nome e datas (`UpdateBasic`) e só depois o código do hub
+(`AtualizarHubCode`, `catalog/campaigns.go:118`, um `UPDATE` simples, sem FK nem CHECK: ele nunca vira `Recusa`). Qualquer
+erro DEPOIS do `UpdateBasic` (queda de conexão, timeout) deixa nome e datas já gravados enquanto a resposta diz `[interno]`.
+Na Fatia 3 é inalcançável (mudar o código do hub escala a `critico`, que não executa). Na Fatia 4 é alcançável: o
+`editar_campanha` crítico com troca de código roda depois da aprovação e **sem token de confirmação**; a falha marca a
+pendente `falhou` e quem aprovou acredita que nada aconteceu, com nome e datas já alterados. **Fix recomendado:**
+`UpdateBasic` e `AtualizarHubCode` na MESMA transação (ou num único `UPDATE`), travado com teste que injeta a falha entre os
+dois passos.
 
 Follow-ups da Fatia 3 (em `docs/features/mcp.md` "Limitações e follow-ups"):
 - `EmSegundoPlano` sem limite de concorrência para os recats (um pico de edições dispara uma goroutine por gatilho).

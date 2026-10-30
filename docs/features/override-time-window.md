@@ -142,7 +142,8 @@ Casos que costumam ser consultados:
 > `acoes.DefinirAjuste`/`ApagarAjuste` — a mesma função das tools `definir_override`/`apagar_override` do MCP
 > ([mcp.md](mcp.md)). A recategorização continua **síncrona** (commita antes do 204). Mudou na validação do `PUT`: o que
 > antes estourava o CHECK/FK do banco e voltava **500** agora volta **400/404 com o motivo** (meta negativa, faixa
-> `time_end` ≤ `time_start`, tipo/emissora/campanha inexistente).
+> `time_end` ≤ `time_start`, tipo/emissora/campanha inexistente). `DELETE` de um ajuste que já não existe segue 204, mas não
+> recategoriza mais a célula à toa.
 
 ## Como testar manualmente
 
