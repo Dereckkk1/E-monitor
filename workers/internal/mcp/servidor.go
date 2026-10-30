@@ -66,6 +66,7 @@ var ToolsEsperadas = []string{
 	"mapa_cobertura_campanha",
 	"marcar_notificacoes_lidas",
 	"minhas_notificacoes",
+	"minhas_pendentes",
 	"obter_campanha",
 	"obter_cliente",
 	"obter_emissora",
@@ -157,6 +158,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarFalhasCampanhas(s, cfg)
 	registrarPosVenda(s, cfg)
 	registrarAuditoria(s, cfg)
+	registrarPendentes(s, cfg, p)
 	registrarEscritas(s, cfg, p)
 	return s
 }
