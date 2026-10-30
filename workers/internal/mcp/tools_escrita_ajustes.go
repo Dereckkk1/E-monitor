@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -31,9 +30,11 @@ import (
 // As células da grade só existem dentro do período da campanha e nas emissoras dela,
 // e a tela não mostra célula fora disso: a rota aceita, o MCP não (F3-8).
 
-func registrarEscritasAjustes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaDefinirOverride(cfg))
-	ferramentaEscrita(s, cfg, p, escritaApagarOverride(cfg))
+func escritasAjustes(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaDefinirOverride(cfg),
+		escritaApagarOverride(cfg),
+	}
 }
 
 const (

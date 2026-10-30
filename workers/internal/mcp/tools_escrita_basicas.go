@@ -8,20 +8,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Escritas básicas (Lote C, Tasks 11 e 12): as que mexem num registro só e,
 // salvo a troca de tipo de material com veiculação, não atingem o passado.
 
-// registrarEscritasBasicas registra as tools da Task 11 (livres) e, a seguir, as
+// escritasBasicas lista as tools da Task 11 (livres) e, a seguir, as
 // da Task 12.
-func registrarEscritasBasicas(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaMarcarNotificacoesLidas())
-	ferramentaEscrita(s, cfg, p, escritaReconhecerSimilaridade())
-	ferramentaEscrita(s, cfg, p, escritaCriarTipoMaterial(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarTipoMaterial(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarMaterial(cfg))
+func escritasBasicas(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaMarcarNotificacoesLidas(),
+		escritaReconhecerSimilaridade(),
+		escritaCriarTipoMaterial(cfg),
+		escritaEditarTipoMaterial(cfg),
+		escritaEditarMaterial(cfg),
+	}
 }
 
 // ── marcar_notificacoes_lidas ───────────────────────────────────────────

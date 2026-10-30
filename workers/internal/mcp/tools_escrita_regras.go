@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -41,10 +40,12 @@ import (
 // A tela não valida o que as rotas HTTP aceitam (datas fora da campanha, máscara 0,
 // 24:00): o MCP é mais estrito de propósito (F3-8).
 
-func registrarEscritasRegras(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaCriarRegra(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarRegra(cfg))
-	ferramentaEscrita(s, cfg, p, escritaApagarRegra(cfg))
+func escritasRegras(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaCriarRegra(cfg),
+		escritaEditarRegra(cfg),
+		escritaApagarRegra(cfg),
+	}
 }
 
 const (

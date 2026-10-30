@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -22,11 +21,13 @@ import (
 // de períodos já fechados, então editar_pmm_target e a troca do PMM da emissora
 // escalam para crítico quando atingem veiculação já ocorrida.
 
-func registrarEscritasCadastros(s *sdk.Server, cfg ConfigServidor, p *Principal) {
-	ferramentaEscrita(s, cfg, p, escritaCriarCliente(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarCliente(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarPMMTarget(cfg))
-	ferramentaEscrita(s, cfg, p, escritaEditarEmissora(cfg))
+func escritasCadastros(cfg ConfigServidor) []escritaRegistravel {
+	return []escritaRegistravel{
+		escritaCriarCliente(cfg),
+		escritaEditarCliente(cfg),
+		escritaEditarPMMTarget(cfg),
+		escritaEditarEmissora(cfg),
+	}
 }
 
 // ── Cliente: campos, validação e plano ──────────────────────────────────
