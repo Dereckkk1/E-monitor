@@ -118,8 +118,11 @@ func (v *Varredor) tick(ctx context.Context) {
 	for _, p := range passos {
 		sp, err := tx.Begin(ctx)
 		if err != nil {
-			// Não perde o que os passos anteriores já fizeram: segue para o
-			// próximo passo e o commit final grava o que deu certo.
+			// Se o savepoint não abre, a transação em geral já está abortada (ou a
+			// conexão caiu): os passos seguintes também falham e o Commit final
+			// vira rollback — o que os passos anteriores fizeram NÃO é garantido.
+			// Não há perda de dado: os passos são idempotentes e a próxima
+			// varredura refaz o que faltou. Segue só para logar cada passo.
 			v.log().Warn("mcp: varredor não abriu savepoint", zap.String("passo", p.nome), zap.Error(err))
 			continue
 		}
