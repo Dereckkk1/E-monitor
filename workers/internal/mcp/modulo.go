@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +50,7 @@ type Modulo struct {
 	// rotas de /pendentes. aprovacoes é nil se o índice das escritas falhou.
 	aprovacoes *Aprovacoes
 	pendentes  *Pendentes
+	varredor   *Varredor
 }
 
 // Aprovacoes devolve o executor das pendentes (nil se não montou).
@@ -56,6 +58,15 @@ func (m *Modulo) Aprovacoes() *Aprovacoes { return m.aprovacoes }
 
 // Pendentes devolve o store dos pedidos críticos.
 func (m *Modulo) Pendentes() *Pendentes { return m.pendentes }
+
+// IniciarVarredor roda o varredor dos pedidos e das confirmações até ctx cancelar.
+// Bloqueia: chame com `go`. No-op sem pool.
+func (m *Modulo) IniciarVarredor(ctx context.Context) {
+	if m == nil || m.varredor == nil || m.varredor.DB == nil {
+		return
+	}
+	m.varredor.Run(ctx)
+}
 
 // NovoModulo devolve nil (e loga) se o segredo for curto: sem segredo os
 // hashes não valem nada, e um panic no boot derrubaria o deploy (regra 6.5).
@@ -88,6 +99,7 @@ func NovoModulo(d DepsModulo) *Modulo {
 		pendentesHTTP: &PendentesHTTP{Tokens: st, Pendentes: cfg.Escritas.Pendentes, Aprovacoes: apr, Log: d.Log},
 		aprovacoes:    apr,
 		pendentes:     cfg.Escritas.Pendentes,
+		varredor:      &Varredor{DB: d.Pool, Log: d.Log},
 		mcp:           SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		cfg:           cfg,
 		oauth:         o,

@@ -590,6 +590,25 @@ func main() {
 		logger.Warn("sugestões: HUB_URL/HUB_PLATFORM_KEY ausentes — /suggestions responde 503 até configurar")
 	}
 
+	mcpModulo := mcp.NovoModulo(mcp.DepsModulo{
+		Pool:    pool,
+		Segredo: []byte(os.Getenv("JWT_SECRET")),
+		Origem:  cfg.MCPOrigemPublica,
+		Portal:  cfg.NotificationsBaseURL,
+		Versao:  "fatia-4",
+		Log:     logger,
+		Workers: sup,
+		// As escritas do MCP chamam o que as telas chamam (plano Fatia 3):
+		// mesmo supervisor, mesmo cliente do hub, mesma barreira da ligação.
+		Supervisor: sup,
+		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+		Ligacoes:   catalog.NewLigacoes(pool),
+	})
+	// Varredor: expira pedidos vencidos, fecha aprovadas presas e poda confirmações.
+	if mcpModulo != nil {
+		go mcpModulo.IniciarVarredor(ctx)
+	}
+
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
 		Clients:      &handlers.ClientsHandler{Repo: clients, Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
@@ -690,20 +709,7 @@ func main() {
 		ClientTargetPmm: &handlers.ClientTargetPmmHandler{Repo: catalog.NewClientStationPMM(pool)},
 		// MCP do E-monitor (spec 2026-10-27). Segredo = o mesmo JWT_SECRET do
 		// portal: salga os hashes das credenciais e assina o pedido OAuth.
-		MCP: mcp.NovoModulo(mcp.DepsModulo{
-			Pool:    pool,
-			Segredo: []byte(os.Getenv("JWT_SECRET")),
-			Origem:  cfg.MCPOrigemPublica,
-			Portal:  cfg.NotificationsBaseURL,
-			Versao:  "fatia-0",
-			Log:     logger,
-			Workers: sup,
-			// As escritas do MCP chamam o que as telas chamam (plano Fatia 3):
-			// mesmo supervisor, mesmo cliente do hub, mesma barreira da ligação.
-			Supervisor: sup,
-			Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
-			Ligacoes:   catalog.NewLigacoes(pool),
-		}),
+		MCP: mcpModulo,
 	}
 
 	srv := &http.Server{
