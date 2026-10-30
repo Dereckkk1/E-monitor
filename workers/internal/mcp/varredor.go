@@ -118,8 +118,10 @@ func (v *Varredor) tick(ctx context.Context) {
 	for _, p := range passos {
 		sp, err := tx.Begin(ctx)
 		if err != nil {
+			// Não perde o que os passos anteriores já fizeram: segue para o
+			// próximo passo e o commit final grava o que deu certo.
 			v.log().Warn("mcp: varredor não abriu savepoint", zap.String("passo", p.nome), zap.Error(err))
-			return
+			continue
 		}
 		n, err := p.fn(ctx, sp, agora)
 		if err != nil {
@@ -182,7 +184,8 @@ func fecharPresas(ctx context.Context, tx pgx.Tx, agora time.Time) (int, error) 
 	for _, f := range fechadas {
 		id := f.id
 		if err := auditoria.RegistrarSistema(ctx, tx, pelaVarredura, acaoPendenteFalhou, "mcp_pendente", &id,
-			map[string]any{"codigo": "presa", "tool": f.tool}); err != nil {
+			map[string]any{"codigo": "presa", "tool": f.tool,
+				"mcp": map[string]any{"pendente_id": id.String()}}); err != nil {
 			return 0, err
 		}
 	}

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
-
 )
 
 func varredorDB(t *testing.T) (context.Context, *pgxpool.Pool, *Varredor, *Pendentes, uuid.UUID) {
@@ -67,6 +66,12 @@ func TestVarredor_FechaAprovadaPresa(t *testing.T) {
 	require.Equal(t, 1, n)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='mcp.pendente.falhou' AND resource_id=$1`, recente.ID).Scan(&n))
 	require.Equal(t, 0, n)
+
+	// o id do pedido fica em meta.mcp.pendente_id, como nas demais linhas mcp.pendente.*
+	var meta map[string]any
+	require.NoError(t, pool.QueryRow(ctx, `SELECT metadata FROM audit_log WHERE action='mcp.pendente.falhou' AND resource_id=$1`, presa.ID).Scan(&meta))
+	require.Equal(t, presa.ID.String(), meta["mcp"].(map[string]any)["pendente_id"])
+	require.Equal(t, "presa", meta["codigo"])
 
 	v.tick(ctx) // idempotente: não audita de novo
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='mcp.pendente.falhou' AND resource_id=$1`, presa.ID).Scan(&n))
