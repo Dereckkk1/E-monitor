@@ -86,8 +86,8 @@ type EditarCampanhaEntrada struct {
 // código que faz o hub pôr `coletaAtiva = false` na proposta (§6.5).
 //
 // Nenhuma recategorização: o estado segue as datas pelo scheduler, e a
-// atribuição é decidida na entrada da tocada. Não é transacional (nome e datas
-// são gravados antes de AtualizarHubCode), como a rota sempre foi.
+// atribuição é decidida na entrada da tocada. Nome, datas e código vão num
+// UPDATE só (UpdateBasic com HubCode): ou grava tudo ou nada.
 func (s *Servico) EditarCampanha(ctx context.Context, id uuid.UUID, in EditarCampanhaEntrada) (*catalog.Campaign, error) {
 	if strings.TrimSpace(in.Nome) == "" {
 		return nil, entradaInvalida("name is required")
@@ -116,11 +116,17 @@ func (s *Servico) EditarCampanha(ctx context.Context, id uuid.UUID, in EditarCam
 		codigoMudou = deref(atual.HubCode) != canonico
 	}
 
-	out, err := s.Campanhas.UpdateBasic(ctx, id, catalog.UpdateBasicInput{
+	entrada := catalog.UpdateBasicInput{
 		Name:      strings.TrimSpace(in.Nome),
 		StartDate: in.Inicio,
 		EndDate:   in.Fim,
-	})
+	}
+	if codigoMudou {
+		// Trocar o código zera o hub_notified_at no mesmo UPDATE (o RETURNING
+		// já traz hub_code e hub_notified_at atualizados).
+		entrada.HubCode = &canonico
+	}
+	out, err := s.Campanhas.UpdateBasic(ctx, id, entrada)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, naoEncontrado("campanha não encontrada")
@@ -129,13 +135,6 @@ func (s *Servico) EditarCampanha(ctx context.Context, id uuid.UUID, in EditarCam
 	}
 
 	if codigoMudou {
-		// O `AtualizarHubCode` já zera o `hub_notified_at` sozinho, e tem teste
-		// para isso — não refaça essa parte aqui.
-		if err := s.Campanhas.AtualizarHubCode(ctx, id, canonico); err != nil {
-			return nil, recusaDoBanco(err)
-		}
-		out.HubCode = ptrOuNil(canonico)
-		out.HubNotifiedAt = nil
 		s.avisarHubDaCampanha(out)
 	}
 	return out, nil
