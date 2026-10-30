@@ -25,6 +25,17 @@ func escreveRecusa(w http.ResponseWriter, err error) bool {
 			"error":     acoes.CodigoCNPJDuplicado,
 			"existente": r.Dados["existente"],
 		})
+	case acoes.CodigoEstadoTerminal:
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "campaign already in terminal state",
+			"current_status": r.Dados["estado_atual"],
+		})
+	case acoes.CodigoCampanhaComProjecoes:
+		corpo := map[string]any{"error": "campaign_has_foreign_projections"}
+		if n, ok := r.Dados["foreign_projections"]; ok {
+			corpo["foreign_projections"] = n
+		}
+		writeJSON(w, http.StatusConflict, corpo)
 	case acoes.CodigoHub:
 		http.Error(w, r.Mensagem, http.StatusUnprocessableEntity)
 	default: // entrada_invalida e o que vier a ser acrescentado: o pedido é que está errado.

@@ -22,6 +22,12 @@ type SupervisorDeCampanha interface {
 	// Reload manda o índice de hashes e os workers da campanha se
 	// reconfigurarem (NATS index.reload), só faz efeito se estiver ativa.
 	Reload(campaignID uuid.UUID) error
+	// Pause para os workers da campanha (apagar a campanha pausa antes de
+	// remover as linhas).
+	Pause(campaignID uuid.UUID) error
+	// StopWorkersForCampaign derruba os workers das emissoras que ficaram sem
+	// campanha ativa (depois de cancelar). Não devolve erro.
+	StopWorkersForCampaign(campaignID uuid.UUID)
 }
 
 // AvisoHub é o subconjunto de *hub.Client que as ações de campanha e de
@@ -69,6 +75,8 @@ type Servico struct {
 	RecatCelula RecategorizadorDeCelula
 	Clientes    *catalog.Clients
 	Emissoras   *catalog.Stations
+	// Precos é o preço por emissora × campanha (DefinirPrecos).
+	Precos *catalog.Pricing
 
 	// Supervisor pode ser nil: mesma regra dos handlers — sem supervisor, a
 	// ação só grava no banco.
@@ -97,6 +105,7 @@ func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *
 		RecatCelula:       regras,
 		Clientes:          catalog.NewClients(pool),
 		Emissoras:         catalog.NewStations(pool),
+		Precos:            catalog.NewPricing(pool),
 		Supervisor:        sup,
 		Hub:               h,
 		Ligacoes:          lig,
