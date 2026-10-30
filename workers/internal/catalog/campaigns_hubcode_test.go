@@ -458,3 +458,76 @@ func TestPendentesDoClienteSoTrazAsDele(t *testing.T) {
 	require.Equal(t, cliente, rows[0].ClientID)
 	require.Equal(t, "EH-AAAAAA", *rows[0].HubCode)
 }
+
+// instalaFalhaNoHubCode põe no banco de teste um trigger que RECUSA qualquer
+// UPDATE que grave o código `codigoFalha` — a falha injetada que prova que nome,
+// datas e código andam juntos (plano Fatia 4 F4-9).
+func instalaFalhaNoHubCode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, codigoFalha string) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION teste_falha_hub_code() RETURNS trigger AS $$
+		BEGIN IF NEW.hub_code = '`+codigoFalha+`' THEN RAISE EXCEPTION 'falha injetada'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER teste_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_falha_hub_code();`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_falha_hub_code()`)
+	})
+}
+
+func TestUpdateBasic_HubCodeNoMesmoUpdate(t *testing.T) {
+	ctx, pool := hubCodePool(t)
+	repo := NewCampaigns(pool)
+	cliente := seedClienteHubCode(t, ctx, pool)
+	novoInicio := time.Date(2026, 12, 5, 0, 0, 0, 0, time.UTC)
+	novoFim := time.Date(2027, 3, 5, 0, 0, 0, 0, time.UTC)
+	ptrS := func(s string) *string { return &s }
+
+	t.Run("falha no código não grava nome nem datas", func(t *testing.T) {
+		c := campanhaCom(t, ctx, repo, cliente, "Antiga", "EH-ANTIGO")
+		instalaFalhaNoHubCode(t, ctx, pool, "EH-FALHA2")
+
+		_, err := repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{
+			Name: "novo", StartDate: novoInicio, EndDate: novoFim, HubCode: ptrS("EH-FALHA2"),
+		})
+		require.Error(t, err)
+
+		depois, err := repo.Get(ctx, c.ID)
+		require.NoError(t, err)
+		require.Equal(t, "Antiga", depois.Name)
+		require.True(t, depois.StartDate.Equal(c.StartDate))
+		require.True(t, depois.EndDate.Equal(c.EndDate))
+		require.Equal(t, "EH-ANTIGO", deref(depois.HubCode))
+	})
+
+	t.Run("sem HubCode só nome e datas, confirmação intacta", func(t *testing.T) {
+		c := campanhaCom(t, ctx, repo, cliente, "Antiga", "EH-ANTIGO")
+		require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, "EH-ANTIGO"))
+
+		out, err := repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{Name: "novo", StartDate: novoInicio, EndDate: novoFim})
+		require.NoError(t, err)
+		require.Equal(t, "novo", out.Name)
+		require.True(t, out.StartDate.Equal(novoInicio))
+		require.Equal(t, "EH-ANTIGO", deref(out.HubCode))
+		require.NotNil(t, out.HubNotifiedAt, "hub_notified_at não pode ser tocado sem HubCode")
+	})
+
+	t.Run("HubCode vazio apaga o código e zera a confirmação", func(t *testing.T) {
+		c := campanhaCom(t, ctx, repo, cliente, "Antiga", "EH-ANTIGO")
+		require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, "EH-ANTIGO"))
+
+		out, err := repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{Name: "novo", StartDate: novoInicio, EndDate: novoFim, HubCode: ptrS("")})
+		require.NoError(t, err)
+		require.Nil(t, out.HubCode)
+		require.Nil(t, out.HubNotifiedAt)
+	})
+
+	t.Run("HubCode novo grava e zera a confirmação", func(t *testing.T) {
+		c := campanhaCom(t, ctx, repo, cliente, "Antiga", "EH-ANTIGO")
+		require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, "EH-ANTIGO"))
+
+		out, err := repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{Name: "novo", StartDate: novoInicio, EndDate: novoFim, HubCode: ptrS("EH-NOVO1")})
+		require.NoError(t, err)
+		require.Equal(t, "EH-NOVO1", deref(out.HubCode))
+		require.Nil(t, out.HubNotifiedAt)
+	})
+}

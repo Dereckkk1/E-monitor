@@ -623,6 +623,10 @@ type UpdateBasicInput struct {
 	Name      string
 	StartDate time.Time
 	EndDate   time.Time
+	// HubCode nil = não mexe; não-nil grava (""/espaços = NULL) e zera
+	// hub_notified_at, no MESMO UPDATE do nome e das datas (plano Fatia 4 F4-9):
+	// uma falha ao gravar o código não deixa nome/datas escritos pela metade.
+	HubCode *string
 }
 
 // UpdateBasic edita o trio (name, start_date, end_date) de uma campanha.
@@ -638,17 +642,26 @@ func (c *Campaigns) UpdateBasic(ctx context.Context, id uuid.UUID, in UpdateBasi
 	var camp Campaign
 	err := c.pool.QueryRow(ctx, `
 		UPDATE campaigns
-		SET name = $2, start_date = $3, end_date = $4, updated_at = now()
+		SET name = $2, start_date = $3, end_date = $4, updated_at = now(),
+		    hub_code        = CASE WHEN $5::boolean THEN NULLIF(btrim($6::text), '') ELSE hub_code END,
+		    hub_notified_at = CASE WHEN $5::boolean THEN NULL ELSE hub_notified_at END
 		WHERE id = $1
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,
 		          fixed_cpm, hub_code, hub_notified_at, created_at, updated_at`,
-		id, in.Name, in.StartDate, in.EndDate,
+		id, in.Name, in.StartDate, in.EndDate, in.HubCode != nil, hubCodeOuVazio(in.HubCode),
 	).Scan(&camp.ID, &camp.ClientID, &camp.Name, &camp.StartDate, &camp.EndDate,
 		&camp.Status, &camp.TargetStations, &camp.FixedCPM, &camp.HubCode, &camp.HubNotifiedAt, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &camp, nil
+}
+
+func hubCodeOuVazio(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // UpdateFixedCPM seta (ou limpa, quando value=nil) o CPM fixo da campanha.

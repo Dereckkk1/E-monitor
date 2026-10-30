@@ -1,6 +1,7 @@
 package acoes
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -248,6 +249,35 @@ func TestEditarCampanha_CodigoRecusadoNaoGravaNemONome(t *testing.T) {
 	var nome string
 	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT name FROM campaigns WHERE id = $1`, camp.ID).Scan(&nome))
 	require.Equal(t, "Original", nome)
+	require.Empty(t, hf.Eventos())
+}
+
+// A falha ao gravar o código NÃO pode deixar nome/datas escritos: é um UPDATE
+// só (plano Fatia 4 F4-9). O trigger recusa o código canônico EH-FALHA2.
+func TestEditarCampanha_FalhaNoCodigoNaoGravaNome(t *testing.T) {
+	c, hf, _ := novoCenarioCampanha(t)
+	hf.Conferir = func(string) (*hub.CampanhaDoHub, error) { return mcptest.CampanhaDoClienteLigado("V", c.cliente), nil }
+	camp := c.campanhaComCodigo(t, "EH-7K4M2X")
+	_, err := c.pool.Exec(c.ctx, `
+		CREATE OR REPLACE FUNCTION teste_falha_hub_code() RETURNS trigger AS $$
+		BEGIN IF NEW.hub_code = 'EH-FALHA2' THEN RAISE EXCEPTION 'falha injetada'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER teste_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_falha_hub_code();`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = c.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_falha_hub_code()`)
+	})
+
+	_, err = c.srv.EditarCampanha(c.ctx, camp.ID, EditarCampanhaEntrada{
+		Nome: "Nome que não pode gravar", Inicio: dia("2027-03-01"), Fim: dia("2027-04-01"), CodigoHub: ptr("eh-falha2"),
+	})
+
+	require.Error(t, err)
+	var nome string
+	var inicio string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT name, start_date::text FROM campaigns WHERE id = $1`, camp.ID).Scan(&nome, &inicio))
+	require.Equal(t, "Original", nome)
+	require.Equal(t, "2027-01-10", inicio)
+	require.Equal(t, "EH-7K4M2X", c.hubCodeGravado(t, camp.ID))
 	require.Empty(t, hf.Eventos())
 }
 
