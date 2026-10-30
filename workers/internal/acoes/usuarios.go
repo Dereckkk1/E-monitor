@@ -3,6 +3,7 @@ package acoes
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,10 +137,32 @@ func traduzErroUsuario(err error) error {
 	return err
 }
 
+func clientesDoPrincipal(p *uuid.UUID) []uuid.UUID {
+	if p == nil {
+		return nil
+	}
+	return []uuid.UUID{*p}
+}
+
+// conferirClientesDaCarteira recusa (client_not_found) se algum cliente não
+// existe. Roda ANTES de qualquer escrita: o que o banco só pegaria no meio da
+// criação/edição deixaria o usuário gravado e a rota respondendo erro.
+func (s *Servico) conferirClientesDaCarteira(ctx context.Context, ids []uuid.UUID) error {
+	ok, err := s.Usuarios.ClientsExist(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return recusaUsuario(CodigoClienteInexistente)
+	}
+	return nil
+}
+
 // CriarUsuario valida, grava o usuário (e a carteira) e, se pedido, emite o
-// convite. Se SetClients falhar com a carteira secundária, o usuário JÁ está
-// gravado (com a carteira de um elemento): não é desfeito, o admin corrige e
-// edita. O convite nunca falha a criação: o desfecho vai em BoasVindas.
+// convite. Todo cliente da carteira é conferido ANTES de gravar (client_not_found
+// = nada criado); se mesmo assim o SetClients falhar com a carteira secundária
+// (corrida), o usuário JÁ está gravado e o erro volta como INTERNO, nunca como
+// Recusa. O convite nunca falha a criação: o desfecho vai em BoasVindas.
 func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.User, *BoasVindas, error) {
 	if in.Email == "" || in.Senha == "" || in.Nome == "" {
 		return nil, nil, recusaUsuario(CodigoCamposObrigatorios)
@@ -168,6 +191,9 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	if len(carteira) > 0 {
 		principal = &carteira[0]
 	}
+	if err := s.conferirClientesDaCarteira(ctx, carteira); err != nil {
+		return nil, nil, err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Senha), custoBcryptUsuario)
 	if err != nil {
 		return nil, nil, err
@@ -189,8 +215,9 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	// O INSERT + trigger da 0062 já deixou o principal na carteira; só os
 	// secundários exigem uma segunda escrita.
 	if len(carteira) > 1 {
+		// Daqui em diante o usuário existe: nada de Recusa.
 		if err := s.Usuarios.SetClients(ctx, u.ID, carteira); err != nil {
-			return nil, nil, traduzErroUsuario(err)
+			return nil, nil, fmt.Errorf("gravar a carteira do usuário já criado: %w", err)
 		}
 		if u, err = s.Usuarios.Get(ctx, u.ID); err != nil {
 			return nil, nil, err
@@ -283,6 +310,10 @@ func (s *Servico) EditarUsuario(ctx context.Context, id uuid.UUID, in EdicaoUsua
 		up.ClientID = &carteira[0]
 	}
 
+	if err := s.conferirClientesDaCarteira(ctx, append(append([]uuid.UUID{}, carteira...), clientesDoPrincipal(up.ClientID)...)); err != nil {
+		return nil, err
+	}
+
 	u, err := s.Usuarios.Update(ctx, id, up)
 	if err != nil {
 		return nil, traduzErroUsuario(err)
@@ -291,8 +322,9 @@ func (s *Servico) EditarUsuario(ctx context.Context, id uuid.UUID, in EdicaoUsua
 	// client_ids explícito: SetClients (ClearClient já esvaziou a carteira no
 	// Update, e chamar devolveria o acesso que a promoção tirou).
 	if len(carteira) > 0 && !up.ClearClient {
+		// O Update já gravou: daqui em diante nada de Recusa.
 		if err := s.Usuarios.SetClients(ctx, id, carteira); err != nil {
-			return nil, traduzErroUsuario(err)
+			return nil, fmt.Errorf("gravar a carteira depois de editar o usuário: %w", err)
 		}
 		if u, err = s.Usuarios.Get(ctx, id); err != nil {
 			return nil, err

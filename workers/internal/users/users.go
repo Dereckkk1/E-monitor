@@ -253,6 +253,23 @@ func (r *Repo) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*User,
 	return r.Get(ctx, updatedID)
 }
 
+// ClientsExist diz se TODOS os ids (distintos) apontam para clientes que existem.
+// Lista vazia: true. É a checagem ANTES de gravar usuário/carteira (acoes).
+func (r *Repo) ClientsExist(ctx context.Context, ids []uuid.UUID) (bool, error) {
+	distintos := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		distintos[id] = struct{}{}
+	}
+	if len(distintos) == 0 {
+		return true, nil
+	}
+	var n int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM clients WHERE id = ANY($1)`, ids).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == len(distintos), nil
+}
+
 // SetClients redefine a carteira de clientes do usuário numa transação:
 // insere os que faltam, remove os que saíram e reposiciona o cliente principal
 // (users.client_id).

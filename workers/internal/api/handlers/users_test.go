@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -283,8 +284,7 @@ func TestUsers_Create_Client_EmptyWalletRejected(t *testing.T) {
 }
 
 // Id inexistente na carteira tem que virar client_not_found 400 — inclusive
-// quando ele está numa posição SECUNDÁRIA, onde quem estoura o 23503 é o
-// SetClients e não o INSERT do usuário.
+// quando ele está numa posição SECUNDÁRIA — e sem deixar usuário gravado.
 func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	clients := catalog.NewClients(pool)
@@ -301,8 +301,7 @@ func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "client_not_found")
 
-	// (b) inválido em posição secundária → falha no SetClients. Sem tradução
-	// do 23503 isso viraria 500.
+	// (b) inválido em posição secundária.
 	body = `{"email":"ghost2@acme.com","password":"super-secret-pw-12345","name":"G",
 	         "role":"client","client_ids":["` + real.ID.String() + `","` + bogus.String() + `"]}`
 	req = httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
@@ -311,15 +310,11 @@ func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "client_not_found")
 
-	// Trade-off documentado do caso (b): o INSERT do usuário já commitou antes
-	// do SetContext falhar, então ghost2 EXISTE com a carteira de um elemento.
-	// Não é vazamento (o vínculo inválido nunca entrou — SetClients é
-	// transacional), mas o admin que corrigir o id e reenviar toma
-	// email_taken 409 e precisa editar o usuário em vez de recriar.
-	orphan, err := users.NewRepo(pool).GetByEmail(ctx, "ghost2@acme.com")
-	require.NoError(t, err, "usuário parcial fica gravado — se isso mudar, atualize o comentário")
-	require.Equal(t, []uuid.UUID{real.ID}, orphan.ClientIDs,
-		"carteira parcial tem só o principal: SetClients falhou inteiro")
+	// A conferência dos clientes vem ANTES de gravar: nada de usuário parcial
+	// (antes ghost2 ficava criado com a carteira de um elemento e reenviar dava
+	// email_taken 409).
+	_, err := users.NewRepo(pool).GetByEmail(ctx, "ghost2@acme.com")
+	require.ErrorIs(t, err, pgx.ErrNoRows, "nenhum usuário parcial pode ficar gravado")
 }
 
 // ── Patch ───────────────────────────────────────────────────────────────
