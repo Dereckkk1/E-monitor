@@ -151,7 +151,7 @@ func escritaCriarTipoMaterial(cfg ConfigServidor) Escrita[entradaCriarTipoMateri
 				return feito{}, err
 			}
 			// A mesma checagem do preview: o Executar também roda sem preview (a
-			// aprovação da Fatia 4), e o índice do banco não distingue só a caixa.
+			// aprovação de um pedido crítico), e o índice do banco não distingue só a caixa.
 			if err := nomeDeTipoEmUso(ctx, E.Leitura, nome, uuid.Nil); err != nil {
 				return feito{}, err
 			}

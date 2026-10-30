@@ -44,20 +44,11 @@ type Modulo struct {
 	cfg    ConfigServidor
 	oauth  *oauth.Servidor
 	tokens *TokensHTTP
-	// pendentesHTTP: as rotas de aprovação dos pedidos críticos.
+	// pendentesHTTP: as rotas de aprovação dos pedidos críticos (o executor
+	// Aprovacoes é nil lá dentro se o índice das escritas falhou).
 	pendentesHTTP *PendentesHTTP
-	// aprovacoes e pendentes: o executor e o store dos pedidos críticos, para as
-	// rotas de /pendentes. aprovacoes é nil se o índice das escritas falhou.
-	aprovacoes *Aprovacoes
-	pendentes  *Pendentes
-	varredor   *Varredor
+	varredor      *Varredor
 }
-
-// Aprovacoes devolve o executor das pendentes (nil se não montou).
-func (m *Modulo) Aprovacoes() *Aprovacoes { return m.aprovacoes }
-
-// Pendentes devolve o store dos pedidos críticos.
-func (m *Modulo) Pendentes() *Pendentes { return m.pendentes }
 
 // IniciarVarredor roda o varredor dos pedidos e das confirmações até ctx cancelar.
 // Bloqueia: chame com `go`. No-op sem pool.
@@ -93,12 +84,9 @@ func NovoModulo(d DepsModulo) *Modulo {
 	apr, err := NovasAprovacoes(cfg)
 	if err != nil {
 		d.Log.Error("mcp: índice das escritas inválido — aprovações de pendentes NÃO montadas", zap.Error(err))
-		apr = nil
 	}
 	return &Modulo{
 		pendentesHTTP: &PendentesHTTP{Tokens: st, Pendentes: cfg.Escritas.Pendentes, Aprovacoes: apr, Log: d.Log},
-		aprovacoes:    apr,
-		pendentes:     cfg.Escritas.Pendentes,
 		varredor:      &Varredor{DB: d.Pool, Log: d.Log},
 		mcp:           SoPost(a.Middleware(NovoHandlerMCP(cfg))),
 		cfg:           cfg,

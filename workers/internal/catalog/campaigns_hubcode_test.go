@@ -190,7 +190,7 @@ O código novo aponta para OUTRA campanha do hub, que nunca ouviu falar desta.
 Sem zerar, o job acharia que já avisou, e a campanha ficaria amarrada ao lugar
 antigo para sempre — sem nada em tela denunciando.
 */
-func TestAtualizarHubCodeZeraAConfirmacao(t *testing.T) {
+func TestUpdateBasicTrocarOHubCodeZeraAConfirmacao(t *testing.T) {
 	ctx, pool := hubCodePool(t)
 	repo := NewCampaigns(pool)
 	cliente := seedClienteHubCode(t, ctx, pool)
@@ -201,7 +201,9 @@ func TestAtualizarHubCodeZeraAConfirmacao(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, antes.HubNotifiedAt, "pré-condição: tinha de estar confirmada")
 
-	require.NoError(t, repo.AtualizarHubCode(ctx, c.ID, "EH-BBBBBB"))
+	novo := "EH-BBBBBB"
+	_, err = repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{Name: c.Name, StartDate: c.StartDate, EndDate: c.EndDate, HubCode: &novo})
+	require.NoError(t, err)
 
 	depois, err := repo.Get(ctx, c.ID)
 	require.NoError(t, err)
@@ -215,10 +217,10 @@ Apagar o código também zera: sem código ela não entra na fila (é a regra do
 que o hub conhece um vínculo que não existe mais.
 
 ⚠️ Os DOIS casos, e o de espaços é o que importa. O `btrim` do `Create` tinha
-teste; o do `AtualizarHubCode` não — e medido, tirá-lo só daqui deixava a suíte
-verde. É o caminho PIOR dos dois: `AtualizarHubCode` é o que a Task 6 chama
-quando alguém reedita o código no wizard, que é exatamente onde o "colei com
-espaço em volta" acontece.
+teste; o do `UpdateBasic` (o UPDATE único que a edição da campanha usa, e o que
+a tool editar_campanha do MCP chama) é o caminho PIOR dos dois: é onde alguém
+reedita o código no wizard, e exatamente ali acontece o "colei com espaço em
+volta".
 */
 func TestApagarOHubCodeDeixaNuloEZeraAConfirmacao(t *testing.T) {
 	ctx, pool := hubCodePool(t)
@@ -233,7 +235,8 @@ func TestApagarOHubCodeDeixaNuloEZeraAConfirmacao(t *testing.T) {
 			c := campanhaCom(t, ctx, repo, cliente, "Vai perder o código "+caso.rotulo, "EH-AAAAA"+caso.rotulo[:1])
 			require.NoError(t, repo.MarcarHubNotificada(ctx, c.ID, deref(c.HubCode)))
 
-			require.NoError(t, repo.AtualizarHubCode(ctx, c.ID, caso.novo))
+			_, err := repo.UpdateBasic(ctx, c.ID, UpdateBasicInput{Name: c.Name, StartDate: c.StartDate, EndDate: c.EndDate, HubCode: &caso.novo})
+			require.NoError(t, err)
 
 			depois, err := repo.Get(ctx, c.ID)
 			require.NoError(t, err)
@@ -464,13 +467,17 @@ func TestPendentesDoClienteSoTrazAsDele(t *testing.T) {
 // datas e código andam juntos (plano Fatia 4 F4-9).
 func instalaFalhaNoHubCode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, codigoFalha string) {
 	t.Helper()
+	// Nome próprio do pacote e DROP antes de criar: o trigger de outro pacote
+	// ou de uma rodada que morreu no meio não pode colidir com este.
 	_, err := pool.Exec(ctx, `
-		CREATE OR REPLACE FUNCTION teste_falha_hub_code() RETURNS trigger AS $$
+		DROP TRIGGER IF EXISTS teste_catalog_falha_hub_code ON campaigns;
+		DROP FUNCTION IF EXISTS teste_catalog_falha_hub_code();
+		CREATE OR REPLACE FUNCTION teste_catalog_falha_hub_code() RETURNS trigger AS $$
 		BEGIN IF NEW.hub_code = '`+codigoFalha+`' THEN RAISE EXCEPTION 'falha injetada'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
-		CREATE TRIGGER teste_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_falha_hub_code();`)
+		CREATE TRIGGER teste_catalog_falha_hub_code BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION teste_catalog_falha_hub_code();`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_falha_hub_code()`)
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS teste_catalog_falha_hub_code ON campaigns; DROP FUNCTION IF EXISTS teste_catalog_falha_hub_code()`)
 	})
 }
 
