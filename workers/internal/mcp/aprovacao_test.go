@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -248,4 +249,99 @@ func TestAprovacao_ResultadoQueNaoSerializaFechaExecutadaSemResultado(t *testing
 	got := b.estado(t, pend.ID)
 	require.Equal(t, "executada", got.Estado)
 	require.Empty(t, got.Resultado)
+}
+
+// A: erro comum ou panic na CONFERÊNCIA (Preview) não executa nada e o pedido
+// volta a pendente, aprovável de novo — não vira `falhou`.
+func TestAprovacao_PreviewComErroOuPanicVoltaAPendenteSemExecutar(t *testing.T) {
+	for nome, sonda := range map[string]*sondaEscrita{
+		"erro":  {erroPreview: errors.New("pq: relation secreta does not exist")},
+		"panic": {panicaPreview: true},
+	} {
+		t.Run(nome, func(t *testing.T) {
+			b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+			pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+
+			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			require.ErrorIs(t, err, ErrConferenciaFalhou)
+			require.Equal(t, 0, sonda.execucoes, "o Executar não pode rodar")
+			got := b.estado(t, pend.ID)
+			require.Equal(t, "pendente", got.Estado)
+			require.Equal(t, msgConferenciaFalhou, *got.Erro)
+			require.NotContains(t, *got.Erro, "secreta")
+			require.Equal(t, "conferencia_falhou", b.meta(t, "mcp.pendente.falhou")["codigo"])
+
+			// aprovável de novo, e agora executa
+			sonda.erroPreview, sonda.panicaPreview = nil, false
+			out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			require.NoError(t, err)
+			require.Equal(t, "executada", out.Pendente.Estado)
+			require.Equal(t, 1, sonda.execucoes)
+		})
+	}
+}
+
+// M10: as mensagens de args_invalidos e tool_desconhecida são fixas (o detalhe
+// do validador nunca é gravado) e não estendem o prazo do pedido.
+func TestAprovacao_ArgsInvalidosEToolDesconhecidaTemMensagemFixaESemFolga(t *testing.T) {
+	sonda := &sondaEscrita{}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+
+	// args fora do schema; o pedido está perto de expirar: a folga de 1 h NÃO entra
+	pend := b.pedido(t, "t_crit", `{"valor":42}`)
+	antes := b.estado(t, pend.ID).ExpiraEm
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	var r *acoes.Recusa
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, msgArgsInvalidos, r.Mensagem)
+	got := b.estado(t, pend.ID)
+	require.Equal(t, msgArgsInvalidos, *got.Erro)
+	require.True(t, got.ExpiraEm.Equal(antes), "prazo não pode mudar")
+
+	// tool que sumiu
+	outra := b.pedido(t, "nao_existe", `{"valor":"abc"}`)
+	_, err = b.apr.Aprovar(b.ctx, outra.ID, b.ator())
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, "tool_desconhecida", r.Codigo)
+	require.Equal(t, msgToolDesconhecida, r.Mensagem)
+	require.Equal(t, msgToolDesconhecida, *b.estado(t, outra.ID).Erro)
+}
+
+// M10b: recusa de negócio comum (Preview/Executar) continua ganhando folga.
+func TestAprovacao_RecusaDeNegocioContinuaEstendendoOPrazo(t *testing.T) {
+	sonda := &sondaEscrita{erroExec: &acoes.Recusa{Codigo: "conflito", Mensagem: "Mudou."}}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	// põe o prazo a 10 min do fim: a falha de negócio sobe para agora+1h
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET expira_em = $2 WHERE id = $1`, pend.ID, b.agora.Add(10*time.Minute))
+	require.NoError(t, err)
+	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	require.Error(t, err)
+	require.True(t, b.estado(t, pend.ID).ExpiraEm.After(b.agora.Add(30*time.Minute)))
+}
+
+// D: o Aprovado devolve a linha fechada (executada_em preenchido).
+func TestAprovacao_AprovadoTrazAExecutadaEmEOResultadoSerializado(t *testing.T) {
+	sonda := &sondaEscrita{}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	require.NoError(t, err)
+	require.Equal(t, "executada", out.Pendente.Estado)
+	require.NotNil(t, out.Pendente.ExecutadaEm)
+	require.JSONEq(t, `{"valor":"abc"}`, string(out.ResultadoJSON))
+}
+
+// M8: o cliente que some depois do UPDATE não pode deixar a linha `aprovada`
+// sem executor: o contexto cancelado não derruba nem a aprovação nem a execução.
+func TestAprovacao_ContextoCanceladoNaoEncalhaOPedido(t *testing.T) {
+	sonda := &sondaEscrita{}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	ctx, cancela := context.WithCancel(b.ctx)
+	cancela()
+	out, err := b.apr.Aprovar(ctx, pend.ID, b.ator())
+	require.NoError(t, err)
+	require.Equal(t, "executada", out.Pendente.Estado)
+	require.Equal(t, 1, sonda.execucoes)
 }

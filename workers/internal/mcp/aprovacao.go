@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -38,9 +39,20 @@ func novasAprovacoesCom(cfg ConfigServidor, lista []escritaRegistravel) (*Aprova
 }
 
 type Aprovado struct {
-	Pendente  Pendente
-	Resultado any
+	Pendente Pendente
+	// ResultadoJSON é o resultado do Executar já serializado (nil = null): a
+	// rota HTTP o escreve como está, então um resultado que não serializa nunca
+	// vira um 200 vazio.
+	ResultadoJSON json.RawMessage
 }
+
+// ErrConferenciaFalhou: a conferência do estado antes de executar caiu por erro
+// inesperado ou panic. Nada foi executado e o pedido voltou a `pendente`.
+var ErrConferenciaFalhou = errors.New("mcp: conferência do pedido falhou")
+
+// prazoGravarAprovacao limita a gravação da aprovação (o UPDATE), que roda sem
+// o cancelamento do pedido HTTP.
+const prazoGravarAprovacao = 10 * time.Second
 
 // auditarPendente grava as linhas mcp.pendente.* (recurso "mcp_pendente"). Se o
 // pedido perdeu o token (FK SET NULL), token_id sai como o UUID zero.
@@ -55,7 +67,12 @@ func (a *Aprovacoes) auditarPendente(ctx context.Context, p *Principal, acao str
 
 func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal) (Aprovado, error) {
 	E := a.cfg.Escritas
-	pend, err := E.Pendentes.Aprovar(ctx, id, ator.UserID, E.agora())
+	// A aprovação commita sem depender de o cliente continuar conectado: com o
+	// UPDATE feito e o pedido cancelado, a linha ficaria `aprovada` sem ninguém
+	// para executá-la.
+	actx, cancelaAprovar := context.WithTimeout(context.WithoutCancel(ctx), prazoGravarAprovacao)
+	pend, err := E.Pendentes.Aprovar(actx, id, ator.UserID, E.agora())
+	cancelaAprovar()
 	if err != nil {
 		return Aprovado{}, err
 	}
@@ -71,14 +88,32 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 
 	var f feito
 	if e, ok := a.indice[pend.Tool]; !ok {
-		err = &acoes.Recusa{Codigo: "tool_desconhecida", Mensagem: "A ação " + pend.Tool + " não existe mais neste servidor."}
+		a.cfg.log().Error("mcp: ação da pendente não existe mais neste servidor", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool))
+		err = &acoes.Recusa{Codigo: codigoToolDesconhecida, Mensagem: msgToolDesconhecida}
 	} else {
 		f, err = e.executarAprovada(ectx, E, p, pend.Args)
 	}
 	if err != nil {
+		var conf *erroConferencia
+		if errors.As(err, &conf) {
+			// Nada foi tentado: volta a pendente, para aprovar de novo.
+			a.cfg.log().Error("mcp: conferência da pendente falhou", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(conf.causa))
+			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, msgConferenciaFalhou, E.agora(), true); merr != nil || !ok {
+				a.cfg.log().Error("mcp: não consegui devolver o pedido a pendente", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
+			}
+			a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "conferencia_falhou"})
+			return Aprovado{}, ErrConferenciaFalhou
+		}
 		var r *acoes.Recusa
 		if errors.As(err, &r) {
-			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, r.Mensagem, E.agora()); merr != nil || !ok {
+			// args_invalidos e tool_desconhecida não se resolvem esperando: não
+			// ganham folga de prazo.
+			estender := r.Codigo != codigoArgsInvalidos && r.Codigo != codigoToolDesconhecida
+			var inv *argsInvalidosErro
+			if errors.As(err, &inv) {
+				a.cfg.log().Warn("mcp: args gravados não passam mais no schema", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(inv.detalhe))
+			}
+			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, r.Mensagem, E.agora(), estender); merr != nil || !ok {
 				a.cfg.log().Error("mcp: não consegui devolver o pedido a pendente", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
 			}
 			a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": r.Codigo})
@@ -101,12 +136,14 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 	} else {
 		bruto = b
 	}
-	if ok, merr := E.Pendentes.MarcarExecutada(fim, pend.ID, pend.Tentativa, bruto, E.agora()); merr != nil || !ok {
+	fechada, ok, merr := E.Pendentes.MarcarExecutada(fim, pend.ID, pend.Tentativa, bruto, E.agora())
+	if merr != nil || !ok {
 		a.cfg.log().Error("mcp: ação executada mas o pedido não fechou", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
+		fechada = pend
+		fechada.Estado = "executada"
 	}
 	a.auditarPendente(fim, p, "mcp.pendente.executada", pend, nil)
-	pend.Estado = "executada"
-	return Aprovado{Pendente: pend, Resultado: f.Resultado}, nil
+	return Aprovado{Pendente: fechada, ResultadoJSON: bruto}, nil
 }
 
 // Recusar fecha o pedido a pedido do dono.
