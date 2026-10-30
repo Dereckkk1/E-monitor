@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/assertiveness"
@@ -603,6 +604,8 @@ func main() {
 		Supervisor: sup,
 		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
 		Ligacoes:   catalog.NewLigacoes(pool),
+		// criar_usuario emite o mesmo convite de boas-vindas da tela /admin/users.
+		BoasVindas: acoes.BoasVindasDoServico(welcomeSvc),
 	})
 	// Varredor: expira pedidos vencidos, fecha aprovadas presas e poda confirmações.
 	if mcpModulo != nil {

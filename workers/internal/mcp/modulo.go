@@ -35,6 +35,9 @@ type DepsModulo struct {
 	// Ligacoes: a barreira da ligação cliente↔hub na escrita do código da
 	// campanha. Pode ser nil.
 	Ligacoes *catalog.Ligacoes
+	// BoasVindas: o emissor do convite de boas-vindas (criar_usuario). Pode ser nil
+	// (indisponível: email_status "unavailable").
+	BoasVindas acoes.EmissorBoasVindas
 }
 
 type Modulo struct {
@@ -78,6 +81,7 @@ func NovoModulo(d DepsModulo) *Modulo {
 		aviso = d.Hub
 	}
 	servico := acoes.NovoServico(d.Pool, d.Supervisor, aviso, d.Ligacoes)
+	servico.BoasVindas = d.BoasVindas
 	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
 		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
 	// Índice quebrado não derruba o boot (regra 6.5): o módulo segue sem aprovações.
