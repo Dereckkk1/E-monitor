@@ -148,9 +148,13 @@ Eventos: `mcp.token.criado`, `mcp.token.revogado`, `mcp.token.recusado` (token e
 já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 `mcp.oauth.cliente_confidencial_criado`. Ações dos CLIs têm `actor_id` nulo e `actor_type 'cli'`.
 
-**Escritas (Fatia 3):** `mcp.escrita.<tool>` (executou), `mcp.escrita.requer_aprovacao` (escalou a `critico` e foi
-barrada, nada foi escrito) e `mcp.escrita.falha` (erro interno ou `panic` no `Executar`: **a escrita pode ter sido feita pela
-metade e o token fica gasto** — investigue). O ator é o admin dono do token (`actor_id`, `actor_type 'user'`). Quem escreveu e
+**Escritas (Fatias 3 e 4):** `mcp.escrita.<tool>` (executou; para um pedido crítico aprovado, `nivel` é `critico` e
+`meta.mcp.pendente_id` aponta o pedido), `mcp.escrita.falha` (erro interno ou `panic` no `Executar` de uma tool `livre` ou
+`confirma`: **a escrita pode ter sido feita pela metade e o token fica gasto** — investigue) e, para o nível `critico`, as
+linhas `mcp.pendente.criada`, `.aprovada`, `.recusada`, `.executada` e `.falhou` (recurso `mcp_pendente`; o id do pedido em
+`meta.mcp.pendente_id`). `.falhou` traz `codigo`: `conferencia_falhou` (a conferência antes de executar caiu; nada foi feito e o
+pedido voltou a `pendente`), `interno` (a execução caiu no meio: o pedido fica `falhou`, **confira se a ação aconteceu**) ou
+`presa` (feito pelo varredor). O ator é o admin dono do token (`actor_id`, `actor_type 'user'`). Quem escreveu e
 com qual credencial:
 
 ```sql
@@ -166,11 +170,20 @@ A tool `auditoria_mcp` **omite** o `token_id` (o leitor oculta toda chave que ca
 use este SQL. Os `args` saem mascarados (chave que parece segredo vira `"[omitido]"`) e com texto cortado em 500 caracteres, mas
 **dados de contato e CNPJ de cliente aparecem** nos `args` de `criar_cliente`/`editar_cliente`.
 
+### Pedidos críticos e varredor (`mcp_acoes_pendentes`)
+
+Escrita `critico` nunca executa pela tool: grava um pedido (24 h) e devolve `aprovar_em` (`/pendentes?id=…`). Só um admin
+ativo, dono do pedido, aprova ou recusa no portal; a aprovação revalida os argumentos gravados, refaz o preview e executa.
+Estados: `pendente`, `aprovada` (executando), `executada`, `recusada`, `expirada`, `falhou`. Recusa de negócio ou conferência
+que cai por erro inesperado devolvem o pedido a `pendente` (nada foi feito); queda no meio da execução o deixa `falhou`.
+O varredor (a cada minuto, uma réplica por vez via advisory lock) expira o `pendente` vencido, fecha como `falhou` a `aprovada`
+presa há mais de 10 min e poda `mcp_confirmacoes_usadas`.
+
 ### Uso único das confirmações (`mcp_confirmacoes_usadas`)
 
 Guarda o SHA-256 dos tokens `confirma` já usados até a expiração (10 min). Cada confirmação nova poda, de forma oportunista,
-até 500 linhas vencidas há mais de 1 h (`FOR UPDATE SKIP LOCKED`; erro da poda é só logado). **Não há varredor até a Fatia 4**,
-então a tabela só encolhe quando alguém confirma algo; ela é minúscula (uma linha de 32 bytes por escrita). Para conferir ou
+até 500 linhas vencidas há mais de 1 h (`FOR UPDATE SKIP LOCKED`; erro da poda é só logado). O varredor
+dos pedidos críticos (abaixo) também a poda a cada minuto; ela é minúscula (uma linha de 32 bytes por escrita). Para conferir ou
 limpar à mão (seguro: linha vencida há mais de 1 h nunca volta a valer, o token já expirou):
 
 ```sql
@@ -198,7 +211,7 @@ Nunca apague linha **não vencida**: reabriria o uso do token.
 | Depois do login SSO do hub a aba cai em `/` e não pede autorização | o SSO descarta o `?pedido=`: entre com e-mail e senha na aba de consentimento, ou reinicie a conexão (ver "Login na aba de consentimento") |
 | Tudo parou de autenticar depois de girar o `JWT_SECRET` | esperado: os hashes mudam; todos reconectam e o Gemini precisa de cliente novo |
 | Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:3000` no `.env` |
-| Tool de escrita devolve `executou: false` e `nivel: critico` | a escalada deu crítico (o `motivo` diz qual condição); até a Fatia 4 isso só se faz pela tela (`links.tela`). Procure `mcp.escrita.requer_aprovacao` no `audit_log` |
+| Tool de escrita devolve `executou: false` e `nivel: critico` | a escalada deu crítico (o `motivo` diz qual condição) e a tool gravou um pedido: nada foi feito até uma pessoa aprovar em `/pendentes` (link `aprovar_em`). Procure `mcp.pendente.criada` no `audit_log` e use `minhas_pendentes` para o estado |
 | Tool de escrita devolve `executou: false` e "Confirmação inválida ou expirada" | token vencido (10 min), de outro usuário/tool, ou **os argumentos mudaram** entre o preview e a confirmação: peça o preview de novo. "Esta confirmação já foi usada" = reuso do mesmo token |
 | Tool de escrita devolve `[interno]` | erro interno ou `panic` (o texto Go só vai para o log da API; procure `mcp: ` e o nome da tool). O token **não** volta a valer; confira `mcp.escrita.falha` no `audit_log` |
 | `[campanha_cancelada]` | a tool recusa escrita em campanha cancelada (a tela não recusa) |
@@ -343,7 +356,8 @@ consolidada):
    5. **Paridade:** faça a mesma edição pela tela numa segunda campanha de teste idêntica e compare as linhas
       (`campaigns`, `distribution_rules`, `campaign_materials`).
    6. **Auditoria:** o SQL de "Auditoria (consulta)" tem de mostrar, para cada passo acima, uma linha `mcp.escrita.<tool>` com o
-      `token_id` do seu token, e uma `mcp.escrita.requer_aprovacao` para o passo do crítico. Nenhuma `mcp.escrita.falha`.
+      `token_id` do seu token; para o passo do crítico, uma `mcp.pendente.criada` e, depois de você aprovar em `/pendentes`, as
+   linhas `mcp.pendente.aprovada`, `mcp.escrita.<tool>` e `mcp.pendente.executada`. Nenhuma `mcp.escrita.falha`.
    7. No fim, apague a campanha de teste pela tela e confira `mcp_confirmacoes_usadas` (ver "Uso único das confirmações").
 
 Divergência de número ou de efeito = bug: não siga adiante.
