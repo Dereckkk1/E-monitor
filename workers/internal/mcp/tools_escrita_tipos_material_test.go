@@ -151,7 +151,9 @@ func TestTraduzirUnicidadeDeTipo(t *testing.T) {
 // roda, sem preview), e sem distinguir maiúsculas de minúsculas.
 func TestTipoMaterial_ExecutarRepeteAChecagemDeNome(t *testing.T) {
 	b := novaBancadaTool(t)
-	nomeA, nomeB := "A "+uuid.NewString()[:8], "B "+uuid.NewString()[:8]
+	// Prefixo com letra minúscula: um sufixo hex só de dígitos deixaria
+	// maiusculas(nome) == nome, e a edição viraria "nada a alterar".
+	nomeA, nomeB := "tipo a "+uuid.NewString()[:8], "tipo b "+uuid.NewString()[:8]
 	idA := uuid.New()
 	_, err := b.pool.Exec(b.ctx, `INSERT INTO material_types (id, name, color) VALUES ($1, $2, '#3b82f6'), ($3, $4, '#3b82f6')`, idA, nomeA, uuid.New(), nomeB)
 	require.NoError(t, err)
