@@ -424,6 +424,23 @@ func diasDaMascara(m int16) []string {
 	return out
 }
 
+// precosDTO monta as linhas do listar_precos_campanha; as escritas de preço
+// devolvem as linhas gravadas neste mesmo formato.
+func precosDTO(precos []catalog.StationPricing, tipos, emissoras map[uuid.UUID]string) []precoDTO {
+	linhas := make([]precoDTO, len(precos))
+	for i, p := range precos {
+		pt := make([]precoPorTipo, len(p.PerType))
+		for j, tp := range p.PerType {
+			pt[j] = precoPorTipo{Tipo: refDe(tp.TypeID, tipos[tp.TypeID]), ValorUnitario: tp.UnitValue}
+		}
+		linhas[i] = precoDTO{
+			Emissora: refDe(p.StationID, emissoras[p.StationID]), Modo: modoDoPreco(p.Mode),
+			ValorConsolidado: p.ConsolidatedValue, PorTipo: pt,
+		}
+	}
+	return linhas
+}
+
 // modoDoPreco: vocabulário da tela.
 func modoDoPreco(m string) string {
 	if m == catalog.PricingModePerInsertion {
@@ -624,18 +641,7 @@ func registrarCampanhasDetalhe(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return nil, err
 			}
-			linhas := make([]precoDTO, len(precos))
-			for i, p := range precos {
-				pt := make([]precoPorTipo, len(p.PerType))
-				for j, tp := range p.PerType {
-					pt[j] = precoPorTipo{Tipo: refDe(tp.TypeID, tipos[tp.TypeID]), ValorUnitario: tp.UnitValue}
-				}
-				linhas[i] = precoDTO{
-					Emissora: refDe(p.StationID, emissoras[p.StationID]), Modo: modoDoPreco(p.Mode),
-					ValorConsolidado: p.ConsolidatedValue, PorTipo: pt,
-				}
-			}
-			l := paginar(linhas, in.Paginacao)
+			l := paginar(precosDTO(precos, tipos, emissoras), in.Paginacao)
 			l.Ressalvas = []string{ressalvaPrecos}
 			return ok(l)
 		})

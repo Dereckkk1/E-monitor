@@ -28,6 +28,10 @@ func errNaoEncontrado(oQue string) error {
 	return &acoes.Recusa{Codigo: acoes.CodigoNaoEncontrado, Mensagem: fmt.Sprintf("%s: não existe no E-monitor", oQue)}
 }
 
+// codigoSemMudanca: o pedido não mudaria nada (o valor pedido já é o gravado).
+// As tools críticas recusam em vez de abrir um pedido de aprovação vazio.
+const codigoSemMudanca = "sem_mudanca"
+
 // errRecusa é uma recusa com código próprio (nome_duplicado, cnpj_duplicado…).
 func errRecusa(codigo, mensagem string) error {
 	return &acoes.Recusa{Codigo: codigo, Mensagem: mensagem}

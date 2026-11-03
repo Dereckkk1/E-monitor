@@ -1,6 +1,6 @@
 package mcp
 
-// escrita_inventario_test.go — o inventário das 20 tools de escrita (Fatia 3):
+// escrita_inventario_test.go — o inventário das tools de escrita (Fatias 3 e 4):
 // trava o conjunto, o nível declarado de cada uma e as regras que valem para
 // todas (descrição, anotações, campo de confirmação, campos proibidos). Sem
 // banco: só lista o tools/list do servidor real.
@@ -25,8 +25,10 @@ import (
 // definir/apagar_override. As outras 8 NUNCA escalam: criar/editar_tipo_material,
 // criar/editar_cliente, editar_emissoras_campanha e vincular/desvincular/
 // editar_emissoras_material. Todas as 18 levam `confirmacao` e destructiveHint
-// (a anotação é por nível declarado, não por Escalar). Tool de escrita nova entra
-// aqui e em ToolsEsperadas no mesmo commit.
+// (a anotação é por nível declarado, não por Escalar). As `critico` (Fatia 4)
+// são crítico desde a declaração: nunca recebem token, então NÃO levam
+// `confirmacao`; a pessoa aprova em /pendentes. Tool de escrita nova entra aqui
+// e em ToolsEsperadas no mesmo commit.
 var escritasEsperadas = map[string]string{
 	"marcar_notificacoes_lidas":        "livre",
 	"reconhecer_similaridade_material": "livre",
@@ -52,6 +54,11 @@ var escritasEsperadas = map[string]string{
 	"editar_cliente":    "confirma",
 	"editar_pmm_target": "confirma",
 	"editar_emissora":   "confirma",
+
+	"cancelar_campanha":      "critico",
+	"apagar_campanha":        "critico",
+	"editar_cpm_fixo":        "critico",
+	"editar_precos_campanha": "critico",
 }
 
 // camposProibidosNaEscrita: nenhuma tool de escrita aceita (nem expõe no schema)
@@ -123,7 +130,7 @@ func TestInventarioEscrita_ConjuntoEExatamenteOCatalogo(t *testing.T) {
 	}
 	sort.Strings(escritas)
 	sort.Strings(esperadas)
-	require.Len(t, esperadas, 20)
+	require.Len(t, esperadas, 24)
 	require.Equal(t, esperadas, escritas)
 }
 
@@ -165,8 +172,10 @@ func TestInventarioEscrita_DescricaoNaoFalaMaisEmBarrado(t *testing.T) {
 }
 
 // O campo `confirmacao` está no schema de toda tool que pode pedir confirmação
-// (confirma, ou livre escalável) e de nenhuma `livre` sem escalada: sem o campo
-// o modelo não teria como devolver o token, e numa `livre` ele seria ruído.
+// (confirma, ou livre escalável) e de nenhuma `livre` sem escalada nem `critico`
+// declarada: sem o campo o modelo não teria como devolver o token, numa `livre`
+// ele seria ruído e numa `critico` seria uma porta falsa (o crítico nunca
+// recebe token; quem executa é a aprovação em /pendentes).
 func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 	vistas := 0
 	for _, tl := range listarToolsDoServidor(t) {
@@ -183,9 +192,12 @@ func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 				tem = true
 			}
 		}
-		if nivel == "livre" {
+		switch nivel {
+		case "livre":
 			require.False(t, tem, "%s: livre sem escalada não tem `confirmacao`", tl.Name)
-		} else {
+		case "critico":
+			require.False(t, tem, "%s: critico não recebe token, então não tem `confirmacao`", tl.Name)
+		default:
 			require.True(t, tem, "%s: confirma/escalável precisa de `confirmacao` no schema", tl.Name)
 		}
 		// O campo é opcional: a 1ª chamada (o preview) não tem token.
@@ -194,7 +206,7 @@ func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 			require.NotEqual(t, "confirmacao", obrigatorio, "%s: confirmacao não é obrigatória", tl.Name)
 		}
 	}
-	require.Equal(t, 20, vistas)
+	require.Equal(t, 24, vistas)
 }
 
 // Nenhum schema de escrita carrega campo proibido, em nenhuma profundidade.
