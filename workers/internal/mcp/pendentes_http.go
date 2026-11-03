@@ -175,7 +175,8 @@ func (h *PendentesHTTP) Aprovar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ResultadoJSON já vem serializado (nil vira null): nada a falhar aqui.
-	escreverJSON(w, http.StatusOK, map[string]any{"pendente": pendenteParaDTO(out.Pendente), "resultado": out.ResultadoJSON})
+	// Aprovado.Ressalvas nunca é nil: o array vai sempre na resposta, vazio ou não.
+	escreverJSON(w, http.StatusOK, map[string]any{"pendente": pendenteParaDTO(out.Pendente), "resultado": out.ResultadoJSON, "ressalvas": out.Ressalvas})
 }
 
 func (h *PendentesHTTP) Recusar(w http.ResponseWriter, r *http.Request) {

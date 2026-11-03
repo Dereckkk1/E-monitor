@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -22,11 +23,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/mcp/mcptest"
+	"radiocheck/internal/mcp/tokens"
 )
 
 // bancadaTool é o ambiente de uma tool de escrita: o admin é um USUÁRIO REAL
@@ -289,6 +292,31 @@ func (a Aprovado) resultadoJSON(t *testing.T) map[string]any {
 	require.NoError(t, json.Unmarshal(a.ResultadoJSON, &out), string(a.ResultadoJSON))
 	return out
 }
+
+// aprovarPelaRota aprova o pedido pelo handler HTTP REAL de /pendentes (PendentesHTTP.Aprovar,
+// sobre as Aprovacoes da lista real das escritas) e devolve o corpo do 200 decodificado:
+// {pendente, resultado, ressalvas}. É o que a pessoa vê no portal.
+func (b *bancadaTool) aprovarPelaRota(t *testing.T, pendenteID string) map[string]any {
+	t.Helper()
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	h := &PendentesHTTP{Tokens: tokens.NovoStore(b.pool, []byte(mcptest.SegredoTeste)), Pendentes: b.E.Pendentes, Aprovacoes: apr, Log: zap.NewNop()}
+	corpo := chamarHandlerCorpo(t, h.Aprovar, http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar", nil, map[string]string{"id": pendenteID}, b.admin)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(corpo, &out), string(corpo))
+	return out
+}
+
+// ressalvasGravadas lê a coluna ressalvas da linha do pedido.
+func (b *bancadaTool) ressalvasGravadas(t *testing.T, pendenteID string) []string {
+	t.Helper()
+	var r []string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT ressalvas FROM mcp_acoes_pendentes WHERE id = $1`, pendenteID).Scan(&r))
+	return r
+}
+
+// textoDasRessalvas junta as ressalvas para asserções de trecho.
+func textoDasRessalvas(r []string) string { return strings.Join(r, "\n") }
 
 // estadoDaPendente lê o estado do pedido no banco (pendente, aprovada, executada…).
 func (b *bancadaTool) estadoDaPendente(t *testing.T, pendenteID string) string {

@@ -22,6 +22,8 @@ CREATE TABLE mcp_acoes_pendentes (
     executada_em TIMESTAMPTZ,
     recusada_em  TIMESTAMPTZ,
     resultado    JSONB,
+    -- Avisos da execução (feito.Ressalvas): o registro fiel do que a aprovação disse.
+    ressalvas    TEXT[]      NOT NULL DEFAULT '{}',
     erro         TEXT        CHECK (erro IS NULL OR char_length(erro) <= 2000)
 );
 CREATE INDEX mcp_acoes_pendentes_do_dono ON mcp_acoes_pendentes (user_id, criada_em DESC, id DESC);

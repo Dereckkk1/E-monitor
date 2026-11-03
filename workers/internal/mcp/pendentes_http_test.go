@@ -275,3 +275,21 @@ func TestPendentesHTTP_ResultadoQueNaoSerializaDa200ComNull(t *testing.T) {
 	require.Equal(t, "executada", m["pendente"].(map[string]any)["estado"])
 	require.NotNil(t, m["pendente"].(map[string]any)["executada_em"])
 }
+
+// A resposta do /aprovar leva as ressalvas da execução ao lado do resultado
+// (sempre um array, [] quando não há), e o dto do pedido não as repete.
+func TestPendentesHTTP_AprovarDevolveAsRessalvasDaExecucao(t *testing.T) {
+	sonda := &sondaEscrita{ressalvas: []string{"o email não saiu: a pessoa não tem a senha"}}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	rec, m := b.fazer(http.MethodPost, "/mcp/pendentes/"+pend.ID.String()+"/aprovar", b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []any{"o email não saiu: a pessoa não tem a senha"}, m["ressalvas"])
+	require.Equal(t, "executada", m["pendente"].(map[string]any)["estado"])
+
+	sonda.ressalvas = nil
+	outro := b.pedido(t, "t_crit", `{"valor":"zzz"}`)
+	rec, m = b.fazer(http.MethodPost, "/mcp/pendentes/"+outro.ID.String()+"/aprovar", b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"ressalvas":[]`, "sem ressalva é um array vazio, não null nem ausente")
+}

@@ -33,7 +33,7 @@ import (
 //
 // O que NÃO é recusa: o email que falha no SMTP. O Resend grava email_status=failed (e o
 // erro) ANTES de voltar, então a escrita aconteceu — recusa significa "nada foi gravado".
-// O resultado traz o aviso (as ressalvas do Executar não sobrevivem à aprovação).
+// O aviso do desfecho (o email que não saiu) vai nas ressalvas, que a aprovação devolve e grava.
 
 func escritasCriticasPosVenda(cfg ConfigServidor) []escritaRegistravel {
 	return []escritaRegistravel{
@@ -173,12 +173,10 @@ func reler(ctx context.Context, E *Escritas, pl *planoDeDestinatario) (*postsale
 }
 
 // saidaDestinatarioPosVenda é o resultado das duas tools: o destinatário no formato de
-// destinatarios_pos_venda (sem token) e de qual pós-venda ele é. O aviso mora no
-// resultado, não só nas ressalvas: é o que sobra depois da aprovação.
+// destinatarios_pos_venda (sem token) e de qual pós-venda ele é.
 type saidaDestinatarioPosVenda struct {
 	PosVenda     ref             `json:"pos_venda"`
 	Destinatario destinatarioDTO `json:"destinatario"`
-	Aviso        string          `json:"aviso,omitempty"`
 }
 
 // saidaDestinatarioSemLeitura é o resultado quando a escrita foi gravada mas a releitura
@@ -186,7 +184,6 @@ type saidaDestinatarioPosVenda struct {
 type saidaDestinatarioSemLeitura struct {
 	PosVenda       ref    `json:"pos_venda"`
 	DestinatarioID string `json:"destinatario_id"`
-	Aviso          string `json:"aviso"`
 }
 
 // destinatarioFeito é o feito de uma escrita de destinatário JÁ gravada. Se só a
@@ -200,7 +197,7 @@ func destinatarioFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, pl 
 	if err != nil {
 		cfg.log().Error("mcp: releitura do destinatário do pós-venda após a escrita falhou", zap.Error(err))
 		aviso := "A escrita foi gravada, mas não consegui reler o destinatário agora: confira o estado com destinatarios_pos_venda (pos_venda_id " + pl.rep.ID.String() + ")."
-		f.Resultado = saidaDestinatarioSemLeitura{PosVenda: refDe(pl.rep.ID, pl.titulo()), DestinatarioID: pl.rec.ID.String(), Aviso: aviso}
+		f.Resultado = saidaDestinatarioSemLeitura{PosVenda: refDe(pl.rep.ID, pl.titulo()), DestinatarioID: pl.rec.ID.String()}
 		f.Ressalvas = []string{aviso}
 		return f
 	}
@@ -208,7 +205,6 @@ func destinatarioFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, pl 
 	dto := destinatarioDe(h)(*rec)
 	saida := saidaDestinatarioPosVenda{PosVenda: refDe(rep.ID, h.texto(rep.Title, tetoTitulo)), Destinatario: dto}
 	if aviso := avisar(dto, rep); aviso != "" {
-		saida.Aviso = aviso
 		f.Ressalvas = append(f.Ressalvas, aviso)
 	}
 	if h.cortou {
@@ -244,9 +240,9 @@ func escritaReenviarPosVenda(cfg ConfigServidor) Escrita[entradaDestinatarioPosV
 			"dessa pessoa. Use quando ela diz que o email não chegou ou o status do email dela é failed em destinatarios_pos_venda. As armadilhas: (1) é o MESMO link — o token não " +
 			"muda, então o link que ela já tem segue valendo; reenviar não corta nada, e para cortar um link que vazou é revogar_destinatario_pos_venda, que é outra coisa; " +
 			"(2) manda email para FORA do E-monitor, a uma pessoa por vez, e cada aprovação manda mais um; (3) se o SMTP falhar o reenvio NÃO vira erro: o status dela passa a " +
-			"failed, o erro fica gravado e o resultado traz o aviso — diga que o email não saiu; e quando sai, o servidor entregou ao SMTP, não é garantia de que ela o leu. " +
+			"failed, o erro fica gravado e a aprovação traz o aviso nas ressalvas — diga que o email não saiu; e quando sai, o servidor entregou ao SMTP, não é garantia de que ela o leu. " +
 			"Pós-venda em rascunho, destinatário que não é desse pós-venda e link revogado dão nao_encontrado; sem SMTP no servidor, email_desligado. Os ids vêm de " +
-			"listar_pos_vendas (o pós-venda) e de destinatarios_pos_venda (o destinatário). O resultado é {pos_venda, destinatario, aviso?}: o destinatário no formato de " +
+			"listar_pos_vendas (o pós-venda) e de destinatarios_pos_venda (o destinatário). O resultado é {pos_venda, destinatario}: o destinatário no formato de " +
 			"destinatarios_pos_venda (sem o link nem o token). " + fraseCritica,
 		Nivel:   Critico,
 		Motivo:  "manda email para fora",
@@ -275,7 +271,7 @@ func escritaReenviarPosVenda(cfg ConfigServidor) Escrita[entradaDestinatarioPosV
 				pv.Ressalvas = append(pv.Ressalvas, "O último envio para ela falhou: "+*dto.ErroEmail)
 			}
 			pv.Ressalvas = append(pv.Ressalvas,
-				"Se o SMTP recusar o email, o reenvio NÃO vira erro: o status dela passa a failed, o erro fica gravado e o resultado traz o aviso — o pedido consta como executado.",
+				"Se o SMTP recusar o email, o reenvio NÃO vira erro: o status dela passa a failed, o erro fica gravado e a aprovação traz o aviso nas ressalvas — o pedido consta como executado.",
 				"Sucesso aqui quer dizer que o servidor entregou o email ao SMTP, não que a pessoa o recebeu ou leu.",
 				"Reenviar não corta link nenhum. Para matar um link que vazou ou foi para a pessoa errada use revogar_destinatario_pos_venda.")
 			if pl.h.cortou {
@@ -329,7 +325,7 @@ func escritaRevogarDestinatarioPosVenda(cfg ConfigServidor) Escrita[entradaDesti
 			"não há como reativar o link nem emitir outro para esta pessoa, porque o pós-venda enviado é um documento congelado que não se republica (nem a tela, nem outra tool); " +
 			"se ela ainda precisa ver o documento, não revogue. O email que ela já recebeu continua na caixa dela, só que o link dentro dele passa a dar erro. Para repetir o " +
 			"email com o MESMO link, sem cortar nada, é reenviar_pos_venda. Link já revogado dá sem_mudanca; pós-venda em rascunho e destinatário que não é desse pós-venda " +
-			"dão nao_encontrado. Os ids vêm de listar_pos_vendas (o pós-venda) e de destinatarios_pos_venda (o destinatário). O resultado é {pos_venda, destinatario, aviso?}: " +
+			"dão nao_encontrado. Os ids vêm de listar_pos_vendas (o pós-venda) e de destinatarios_pos_venda (o destinatário). O resultado é {pos_venda, destinatario}: " +
 			"o destinatário no formato de destinatarios_pos_venda, já com revogado_em. " + fraseCritica,
 		Nivel:   Critico,
 		Motivo:  "irreversível: o link morre e não há como emitir outro para esta pessoa (o documento não se republica)",

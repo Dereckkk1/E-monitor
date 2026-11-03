@@ -404,13 +404,11 @@ func quantasEntregas(n int) string { return fmt.Sprintf("%d entrega(s)", n) }
 
 // ── testar_webhook ──────────────────────────────────────────────────────
 
-// saidaTesteWebhook é o resultado de testar_webhook. O aviso mora no resultado
-// (não só nas ressalvas): é o que sobra depois da aprovação para quem lê o desfecho
-// em minhas_pendentes.
+// saidaTesteWebhook é o resultado de testar_webhook. O aviso de que a entrega é
+// assíncrona vai nas ressalvas (a aprovação as devolve e grava), não no resultado.
 type saidaTesteWebhook struct {
-	Enfileirado bool   `json:"enfileirado"`
-	Cliente     ref    `json:"cliente"`
-	Aviso       string `json:"aviso"`
+	Enfileirado bool `json:"enfileirado"`
+	Cliente     ref  `json:"cliente"`
 }
 
 const avisoDoTesteEnfileirado = "O teste foi enfileirado, mas a entrega é assíncrona: o worker a envia em instantes e o desfecho (delivered, failed, pending…) " +
@@ -504,7 +502,7 @@ func escritaTestarWebhook(cfg ConfigServidor) Escrita[entradaCliente] {
 					"o teste de webhook do cliente %q foi descartado e nada chegou ao receptor: %s", pl.cliente.Name, r.Motivo))
 			}
 			return feito{
-				Resultado: saidaTesteWebhook{Enfileirado: true, Cliente: refDe(pl.cliente.ID, pl.cliente.Name), Aviso: avisoDoTesteEnfileirado},
+				Resultado: saidaTesteWebhook{Enfileirado: true, Cliente: refDe(pl.cliente.ID, pl.cliente.Name)},
 				Recurso:   "client", RecursoID: &pl.cliente.ID,
 				Ressalvas: []string{avisoDoTesteEnfileirado},
 			}, nil
