@@ -22,7 +22,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -554,10 +553,7 @@ func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
 // repositórios e seguem funcionando — a escrita acontece, o resultado fica mínimo.
 func quebrarReleituraDeUsuario(t *testing.T, b *bancadaTool) {
 	t.Helper()
-	morto, err := pgxpool.NewWithConfig(b.ctx, b.pool.Config())
-	require.NoError(t, err)
-	morto.Close()
-	b.E.Leitura.BoasVindas = welcome.NewRepo(morto)
+	b.E.Leitura.BoasVindas = welcome.NewRepo(b.poolFechado(t))
 }
 
 // O furo que as ressalvas fecham: o aviso "a pessoa não tem a senha" (F4-11, o crítico) não

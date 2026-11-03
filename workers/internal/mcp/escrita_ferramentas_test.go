@@ -293,6 +293,16 @@ func (a Aprovado) resultadoJSON(t *testing.T) map[string]any {
 	return out
 }
 
+// poolFechado é um pool já fechado, para simular a leitura que falha DEPOIS de a escrita ter
+// gravado (cada repositório da Leitura aponta para ele; os da escrita e do motor seguem no pool vivo).
+func (b *bancadaTool) poolFechado(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	morto, err := pgxpool.NewWithConfig(b.ctx, b.pool.Config())
+	require.NoError(t, err)
+	morto.Close()
+	return morto
+}
+
 // aprovarPelaRota aprova o pedido pelo handler HTTP REAL de /pendentes (PendentesHTTP.Aprovar,
 // sobre as Aprovacoes da lista real das escritas) e devolve o corpo do 200 decodificado:
 // {pendente, resultado, ressalvas}. É o que a pessoa vê no portal.

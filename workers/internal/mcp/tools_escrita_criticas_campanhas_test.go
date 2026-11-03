@@ -984,3 +984,83 @@ func TestCriticasDeCampanha_ChamadaRepetidaNaoDuplicaOPedido(t *testing.T) {
 	estado, _ := estadoCancelamento(t, b, c.camp)
 	require.Equal(t, "ativa", estado)
 }
+
+// ── a escrita gravada nunca vira erro (campanhaFeita) ───────────────────
+
+// quebrarReleituraDeCampanha faz SÓ a releitura da campanha (lerCampanhaCompleta, que lê os
+// vínculos de material) falhar: a escrita e o planejamento seguem nos repositórios vivos.
+func quebrarReleituraDeCampanha(t *testing.T, b *bancadaTool) {
+	t.Helper()
+	b.E.Leitura.MateriaisCampanha = catalog.NewCampaignMaterials(b.poolFechado(t))
+}
+
+// O cancelamento (ou o CPM) já está gravado quando a releitura cai: o pedido fecha `executada`
+// com o resultado mínimo e a ressalva de conferir — nunca `falhou`, que mandaria a pessoa
+// aprovar de novo uma escrita que já aconteceu.
+func TestCancelarCampanha_ReleituraQueFalhaNaoDeixaOPedidoFalhar(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	out := b.pedePendente(t, "cancelar_campanha", argsCancelar(c.camp))
+	pid := out["pendente_id"].(string)
+	quebrarReleituraDeCampanha(t, b)
+
+	ap := b.aprovar(t, pid) // exige "executada"
+
+	estado, canceladaEm := estadoCancelamento(t, b, c.camp)
+	require.Equal(t, "cancelada", estado, "a escrita aconteceu")
+	require.True(t, canceladaEm)
+	require.Equal(t, 1, b.sup.Contagem("StopWorkers", c.camp))
+	require.Equal(t, map[string]any{"campanha": map[string]any{"id": c.camp.String(), "nome": "Campanha Escrita"}}, ap.resultadoJSON(t))
+	texto := textoDasRessalvas(ap.Ressalvas)
+	require.Contains(t, texto, "não consegui reler a campanha")
+	require.Contains(t, texto, "obter_campanha")
+	require.Contains(t, texto, "workers", "a ressalva da execução segue junto")
+	require.Equal(t, ap.Ressalvas, b.ressalvasGravadas(t, pid))
+	exigeAuditoriaDaAprovacao(t, b, "cancelar_campanha", c.camp, pid)
+}
+
+func TestEditarCPMFixo_ReleituraQueFalhaNaoDeixaOPedidoFalhar(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	out := b.pedePendente(t, "editar_cpm_fixo", argsCPM(c.camp, 12.5))
+	pid := out["pendente_id"].(string)
+	quebrarReleituraDeCampanha(t, b)
+
+	ap := b.aprovar(t, pid)
+
+	require.Equal(t, 12.5, *lerCPMFixo(t, b, c.camp), "a escrita aconteceu")
+	require.Equal(t, map[string]any{"campanha": map[string]any{"id": c.camp.String(), "nome": "Campanha Escrita"}}, ap.resultadoJSON(t))
+	texto := textoDasRessalvas(ap.Ressalvas)
+	require.Contains(t, texto, "não consegui reler a campanha")
+	require.Contains(t, texto, "CPM no target continua dinâmico")
+	exigeAuditoriaDaAprovacao(t, b, "editar_cpm_fixo", c.camp, pid)
+}
+
+// O CancelarCampanha devolve (nil, nil) quando só a releitura DELE falha (o cancelamento está
+// gravado): a campanha para a resposta vem de uma releitura nossa e, se esta também cai, do plano
+// marcada como cancelada — o plano em si não é alterado.
+func TestCampanhaCancelada_FallbackDoNilNil(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	antes, err := b.E.Leitura.Campanhas.Get(b.ctx, c.camp)
+	require.NoError(t, err)
+	require.Equal(t, "ativa", antes.Status)
+
+	devolvida := &catalog.Campaign{ID: c.camp, Status: "cancelada"}
+	require.Same(t, devolvida, campanhaCancelada(b.ctx, b.E.Leitura, devolvida, antes), "com a campanha do acoes não relê")
+
+	feita, err := b.E.Acoes.CancelarCampanha(b.ctx, c.camp)
+	require.NoError(t, err)
+	require.NotNil(t, feita)
+	relida := campanhaCancelada(b.ctx, b.E.Leitura, nil, antes)
+	require.Equal(t, "cancelada", relida.Status, "relida do banco")
+	require.Equal(t, c.camp, relida.ID)
+
+	morta := *b.E.Leitura
+	morta.Campanhas = catalog.NewCampaigns(b.poolFechado(t))
+	doPlano := campanhaCancelada(b.ctx, &morta, nil, antes)
+	require.Equal(t, "cancelada", doPlano.Status, "sem releitura possível, o plano marcado como cancelado")
+	require.Equal(t, antes.ID, doPlano.ID)
+	require.Equal(t, antes.Name, doPlano.Name)
+	require.Equal(t, "ativa", antes.Status, "o plano não é alterado")
+}
