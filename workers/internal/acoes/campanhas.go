@@ -248,7 +248,7 @@ type OpcoesApagarCampanha struct {
 	// veiculação, projeção, comprovante manual nem pós-venda (a rota apaga as veiculações da
 	// campanha junto com ela; o MCP não). Quem pede já recusou o histórico que existia ANTES, mas
 	// entre essa conferência e o DELETE uma veiculação pode ter sido persistida: se ela aparecer,
-	// o delete aborta com *ErroAposEscrita — a campanha já foi cancelada (os workers pararam), então
+	// o delete aborta com *ErroAposEscrita — a campanha já foi cancelada (ou já estava), então
 	// não é Recusa — e nenhuma veiculação é apagada.
 	ExigirSemHistorico bool
 }
@@ -291,7 +291,8 @@ func (s *Servico) ApagarCampanhaCom(ctx context.Context, id uuid.UUID, op Opcoes
 	}
 
 	// A partir daqui nada é Recusa.
-	if _, _, err := s.Campanhas.CancelCampaign(ctx, id); err != nil {
+	_, antes, err := s.Campanhas.CancelCampaign(ctx, id)
+	if err != nil {
 		return err
 	}
 	if s.Supervisor != nil {
@@ -303,15 +304,30 @@ func (s *Servico) ApagarCampanhaCom(ctx context.Context, id uuid.UUID, op Opcoes
 	}
 	if err := apagar(ctx, id); err != nil {
 		if errors.Is(err, catalog.ErrCampaignHasHistory) {
-			return &ErroAposEscrita{
-				Mensagem: fmt.Sprintf("A campanha %q foi cancelada (os workers pararam), mas NÃO foi apagada: apareceu veiculação, comprovante ou pós-venda nela depois do pedido, "+
-					"e apagá-la destruiria esse histórico. Nada foi destruído; a campanha segue como cancelada — confira na tela /campaigns.", camp.Name),
-				Causa: err,
-			}
+			return &ErroAposEscrita{Mensagem: mensagemDeleteAbortado(camp.Name, antes), Causa: err}
 		}
 		return fmt.Errorf("apagar campanha depois de cancelar: %w", err)
 	}
 	return nil
+}
+
+// mensagemDeleteAbortado diz à pessoa, com o que de fato aconteceu, o estado em que a campanha ficou
+// quando o delete foi abortado depois do cancelamento. `antes` é o status que ela tinha ao cancelar:
+// cancelar só muda programada/ativa; cancelada e concluida seguem como estavam.
+func mensagemDeleteAbortado(nome, antes string) string {
+	var feito, fica string
+	switch antes {
+	case "cancelada":
+		feito, fica = "já estava cancelada e continua cancelada", "cancelada"
+	case "concluida":
+		feito, fica = "estava concluída e continua concluída (não havia o que cancelar)", "concluída"
+	case "programada":
+		feito, fica = "foi cancelada (era programada: ainda não tinha worker rodando)", "cancelada"
+	default:
+		feito, fica = "foi cancelada (os workers das emissoras que só ela usava pararam; os das emissoras que outra campanha ativa também usa seguem no ar)", "cancelada"
+	}
+	return fmt.Sprintf("A campanha %q %s, mas NÃO foi apagada: apareceu veiculação, comprovante ou pós-venda nela depois do pedido, "+
+		"e apagá-la destruiria esse histórico. Nada foi destruído; a campanha segue como %s — confira na tela /campaigns.", nome, feito, fica)
 }
 
 // LimiteValorMonetario: as colunas de dinheiro (CPM fixo, preços) são NUMERIC(12,2), que não
