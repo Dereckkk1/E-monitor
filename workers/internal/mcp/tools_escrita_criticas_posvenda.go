@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/postsale"
@@ -56,7 +55,7 @@ type entradaDestinatarioPosVenda struct {
 
 // posVendaDoRecurso e linkDoPosVenda são o Recurso da auditoria e a tela dessas tools.
 func posVendaDoRecurso(valor string) (string, *uuid.UUID) {
-	return campanhaDoRecurso("post_sale_report", valor)
+	return recursoDe("post_sale_report", valor)
 }
 
 func linkDoPosVenda(cfg ConfigServidor, valor string) *string {
@@ -192,25 +191,28 @@ type saidaDestinatarioSemLeitura struct {
 // destinatário relido e do pós-venda relido.
 func destinatarioFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, pl *planoDeDestinatario,
 	avisar func(dto destinatarioDTO, rep *postsale.Report) string) feito {
-	f := feito{Recurso: "post_sale_report", RecursoID: &pl.rep.ID}
-	rep, rec, err := reler(ctx, E, pl)
-	if err != nil {
-		cfg.log().Error("mcp: releitura do destinatário do pós-venda após a escrita falhou", zap.Error(err))
-		aviso := "A escrita foi gravada, mas não consegui reler o destinatário agora: confira o estado com destinatarios_pos_venda (pos_venda_id " + pl.rep.ID.String() + ")."
-		f.Resultado = saidaDestinatarioSemLeitura{PosVenda: refDe(pl.rep.ID, pl.titulo()), DestinatarioID: pl.rec.ID.String()}
-		f.Ressalvas = []string{aviso}
-		return f
-	}
-	h := novoHigienizador(rep.AttachmentsURL, tokensDe(rep.Recipients))
-	dto := destinatarioDe(h)(*rec)
-	saida := saidaDestinatarioPosVenda{PosVenda: refDe(rep.ID, h.texto(rep.Title, tetoTitulo)), Destinatario: dto}
-	if aviso := avisar(dto, rep); aviso != "" {
-		f.Ressalvas = append(f.Ressalvas, aviso)
-	}
-	if h.cortou {
-		f.Ressalvas = append(f.Ressalvas, ressalvaTextoCortado)
-	}
-	f.Resultado = saida
+	// Os avisos do desfecho nascem da releitura (do destinatário relido e do pós-venda relido): só
+	// existem se ela deu certo — e então não há a ressalva de "não consegui reler".
+	var avisos []string
+	f := feitoRelido(cfg, alvoGravado{Recurso: "post_sale_report", ID: pl.rep.ID, Artigo: "o destinatário", Conferir: "destinatarios_pos_venda (pos_venda_id " + pl.rep.ID.String() + ")"},
+		func() (saidaDestinatarioPosVenda, error) {
+			rep, rec, err := reler(ctx, E, pl)
+			if err != nil {
+				return saidaDestinatarioPosVenda{}, err
+			}
+			h := novoHigienizador(rep.AttachmentsURL, tokensDe(rep.Recipients))
+			dto := destinatarioDe(h)(*rec)
+			saida := saidaDestinatarioPosVenda{PosVenda: refDe(rep.ID, h.texto(rep.Title, tetoTitulo)), Destinatario: dto}
+			if aviso := avisar(dto, rep); aviso != "" {
+				avisos = append(avisos, aviso)
+			}
+			if h.cortou {
+				avisos = append(avisos, ressalvaTextoCortado)
+			}
+			return saida, nil
+		},
+		saidaDestinatarioSemLeitura{PosVenda: refDe(pl.rep.ID, pl.titulo()), DestinatarioID: pl.rec.ID.String()})
+	f.Ressalvas = append(f.Ressalvas, avisos...)
 	return f
 }
 

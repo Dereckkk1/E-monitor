@@ -314,8 +314,9 @@ func (s *Servico) ApagarCampanhaCom(ctx context.Context, id uuid.UUID, op Opcoes
 	return nil
 }
 
-// limiteCPMFixo: a coluna é NUMERIC(12,2), que não comporta 1e10 ou mais.
-const limiteCPMFixo = 1e10
+// LimiteValorMonetario: as colunas de dinheiro (CPM fixo, preços) são NUMERIC(12,2), que não
+// comportam 1e10 ou mais. É o teto da validação da ação e da tool do MCP.
+const LimiteValorMonetario = 1e10
 
 // DefinirCPMFixo grava (ou, com nil, limpa) o CPM fixo da campanha: quando
 // preenchido, sobrescreve o CPM derivado em /campaigns, /insights e no dashboard.
@@ -323,7 +324,7 @@ func (s *Servico) DefinirCPMFixo(ctx context.Context, id uuid.UUID, cpm *float64
 	if cpm != nil && *cpm < 0 {
 		return nil, entradaInvalida("fixed_cpm must be >= 0")
 	}
-	if cpm != nil && (math.IsNaN(*cpm) || *cpm >= limiteCPMFixo) {
+	if cpm != nil && (math.IsNaN(*cpm) || *cpm >= LimiteValorMonetario) {
 		return nil, entradaInvalida("fixed_cpm must be less than 10000000000")
 	}
 	out, err := s.Campanhas.UpdateFixedCPM(ctx, id, cpm)

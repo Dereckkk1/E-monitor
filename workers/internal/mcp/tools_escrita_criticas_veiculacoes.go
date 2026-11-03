@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -145,27 +144,17 @@ func linkDaVeiculacao(cfg ConfigServidor, valor string) *string {
 // veiculacaoDoRecurso é o Recurso da auditoria das tools que mexem numa
 // veiculação existente.
 func veiculacaoDoRecurso(valor string) (string, *uuid.UUID) {
-	return campanhaDoRecurso("detection", valor)
+	return recursoDe("detection", valor)
 }
 
 // veiculacaoFeita é o feito de uma escrita de veiculação JÁ gravada: o resultado
-// é a veiculação como ficou, no formato de obter_veiculacao. Se só a releitura
-// falhar, a escrita NÃO vira erro (o modelo a repetiria e lançaria outra tocada):
-// devolve o id e manda conferir com obter_veiculacao.
+// é a veiculação como ficou, no formato de obter_veiculacao (feitoRelido: se só a
+// releitura falhar, a escrita NÃO vira erro — o modelo a repetiria e lançaria outra
+// tocada —, devolve o id e manda conferir).
 func veiculacaoFeita(ctx context.Context, cfg ConfigServidor, E *Escritas, id uuid.UUID, ressalvas ...string) feito {
-	f := feito{Recurso: "detection", RecursoID: &id, Ressalvas: ressalvas}
-	saida, err := montarVeiculacao(ctx, cfg, E.Leitura, id)
-	if err != nil {
-		cfg.log().Error("mcp: releitura da veiculação após a escrita falhou", zap.Error(err))
-		f.Resultado = struct {
-			ID string `json:"id"`
-		}{ID: id.String()}
-		f.Ressalvas = append(f.Ressalvas,
-			"A escrita foi gravada, mas não consegui reler a veiculação agora: confira o estado com obter_veiculacao (id "+id.String()+").")
-		return f
-	}
-	f.Resultado = saida
-	return f
+	return feitoRelido(cfg, alvoGravado{Recurso: "detection", ID: id, Artigo: "a veiculação", Conferir: "obter_veiculacao (id " + id.String() + ")"},
+		func() (saidaObterVeiculacao, error) { return montarVeiculacao(ctx, cfg, E.Leitura, id) },
+		saidaSoID{ID: id.String()}, ressalvas...)
 }
 
 // ── criar_veiculacao_manual ─────────────────────────────────────────────
@@ -451,19 +440,9 @@ func (cx *contextoDaVeiculacao) efeitosComuns() []string {
 	if len(cx.outras) > 0 {
 		ef = append(ef, fmt.Sprintf(
 			"Esta tocada também conta para %d outra(s) campanha(s) (%s): a célula-dia de cada uma é refechada junto.",
-			len(cx.outras), listaDeTextos(cx.outras)))
+			len(cx.outras), listaCortada(cx.outras)))
 	}
 	return ef
-}
-
-// listaDeTextos: "A, B, C e mais N" (corta em tetoNomesNoPreview).
-func listaDeTextos(nomes []string) string {
-	n := min(len(nomes), tetoNomesNoPreview)
-	s := strings.Join(nomes[:n], ", ")
-	if len(nomes) > n {
-		s += fmt.Sprintf(" e mais %d", len(nomes)-n)
-	}
-	return s
 }
 
 func efeitoDeSair(categoria string) string {

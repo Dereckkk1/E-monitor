@@ -303,7 +303,7 @@ func escritaVincularMaterial(cfg ConfigServidor) Escrita[entradaVincularMaterial
 			"Nunca invente ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaVincularMaterial) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign_material", in.CampanhaID)
+			return recursoDe("campaign_material", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaVincularMaterial) *string { return linkDaCampanha(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaVincularMaterial) (previa, error) {
@@ -435,7 +435,7 @@ func escritaDesvincularMaterial(cfg ConfigServidor) Escrita[entradaDesvincularMa
 			"recusado. Campanha cancelada é recusada. Nunca invente ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaDesvincularMaterial) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign_material", in.CampanhaID)
+			return recursoDe("campaign_material", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaDesvincularMaterial) *string { return linkDaCampanha(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaDesvincularMaterial) (previa, error) {
@@ -573,7 +573,7 @@ func escritaEditarEmissorasMaterial(cfg ConfigServidor) Escrita[entradaEditarEmi
 			"pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaEditarEmissorasMaterial) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign_material", in.CampanhaID)
+			return recursoDe("campaign_material", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaEditarEmissorasMaterial) *string {
 			return linkDaCampanha(cfg, in.CampanhaID)

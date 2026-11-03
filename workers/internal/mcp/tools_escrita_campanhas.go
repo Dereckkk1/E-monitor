@@ -105,9 +105,10 @@ func lerCampanhaParaEscrever(ctx context.Context, L *Leitura, valor string) (*ca
 	return c, nil
 }
 
-// campanhaDoRecurso é o Recurso da auditoria das tools que mexem numa campanha
-// existente: o tipo e o id (nil se o id da entrada não for um uuid).
-func campanhaDoRecurso(recurso, valor string) (string, *uuid.UUID) {
+// recursoDe é o Recurso da auditoria das tools que mexem num registro existente (campanha, vínculo
+// de material, usuário, cliente, material, veiculação, pós-venda): o tipo e o id (nil se o id da
+// entrada não for um uuid).
+func recursoDe(recurso, valor string) (string, *uuid.UUID) {
 	if id, err := uuid.Parse(valor); err == nil {
 		return recurso, &id
 	}
@@ -122,24 +123,34 @@ func linkDaCampanha(cfg ConfigServidor, valor string) *string {
 	return cfg.link("/campaigns")
 }
 
+// listaCortada: "A, B, C e mais N" (corta em tetoNomesNoPreview). É a única lista assim dos previews.
+func listaCortada(textos []string) string {
+	n := min(len(textos), tetoNomesNoPreview)
+	s := strings.Join(textos[:n], ", ")
+	if len(textos) > n {
+		s += fmt.Sprintf(" e mais %d", len(textos)-n)
+	}
+	return s
+}
+
+// listaDeNomes: os nomes dos ids em listaCortada (o id no lugar de quem não tem nome).
+func listaDeNomes(ids []uuid.UUID, nomes map[uuid.UUID]string) string {
+	partes := make([]string, len(ids))
+	for i, id := range ids {
+		partes[i] = nomes[id]
+		if partes[i] == "" {
+			partes[i] = id.String()
+		}
+	}
+	return listaCortada(partes)
+}
+
 // resumoDeEmissoras: "3: Rádio A, Rádio B, Rádio C" (corta em tetoNomesNoPreview).
 func resumoDeEmissoras(ids []uuid.UUID, nomes map[uuid.UUID]string) string {
 	if len(ids) == 0 {
 		return "nenhuma"
 	}
-	partes := make([]string, 0, min(len(ids), tetoNomesNoPreview))
-	for _, id := range ids[:min(len(ids), tetoNomesNoPreview)] {
-		n := nomes[id]
-		if n == "" {
-			n = id.String()
-		}
-		partes = append(partes, n)
-	}
-	s := fmt.Sprintf("%d: %s", len(ids), strings.Join(partes, ", "))
-	if len(ids) > tetoNomesNoPreview {
-		s += fmt.Sprintf(" e mais %d", len(ids)-tetoNomesNoPreview)
-	}
-	return s
+	return fmt.Sprintf("%d: %s", len(ids), listaDeNomes(ids, nomes))
 }
 
 // emissorasExistentes confere que todas as emissoras existem; a primeira que
@@ -496,7 +507,7 @@ func escritaEditarCampanha(cfg ConfigServidor) Escrita[entradaEditarCampanha] {
 			return escalaEdicaoDeCampanha(pl, hojeSP(E.agora())), nil
 		},
 		Recurso: func(in entradaEditarCampanha) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaEditarCampanha) *string { return linkDaCampanha(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaEditarCampanha) (previa, error) {
@@ -675,7 +686,7 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 			"pessoa aprovar antes de confirmar.",
 		Nivel: Confirma,
 		Recurso: func(in entradaEditarEmissorasCampanha) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaEditarEmissorasCampanha) *string {
 			return linkDaCampanha(cfg, in.CampanhaID)

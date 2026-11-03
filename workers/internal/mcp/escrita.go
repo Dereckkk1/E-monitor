@@ -78,6 +78,38 @@ type feito struct {
 	Ressalvas []string
 }
 
+// alvoGravado diz o que uma escrita JÁ gravou, para o feito montado depois dela (feitoRelido).
+type alvoGravado struct {
+	Recurso  string // o tipo no audit_log: "campaign", "user", "client", "detection", "post_sale_report"
+	ID       uuid.UUID
+	Artigo   string // com artigo, para a ressalva: "a campanha", "o usuário"
+	Conferir string // como a pessoa confere o estado: "obter_campanha (campanha_id <id>)"
+}
+
+// saidaSoID é o resultado mínimo de uma escrita gravada cuja releitura caiu: só o id.
+type saidaSoID struct {
+	ID string `json:"id"`
+}
+
+// feitoRelido é o feito de uma escrita JÁ gravada: o resultado é o recurso como ficou (o que reler
+// devolve, no formato do obter_* dele). Se só a releitura falhar, a escrita NÃO vira erro — o modelo
+// a repetiria, e o pedido aprovado ficaria `falhou` com a escrita já feita —: o resultado passa a ser
+// semLeitura (o formato mínimo: o id, e o nome quando há) e uma ressalva manda conferir o estado.
+// ressalvas são as da própria execução; a da releitura vai depois delas.
+func feitoRelido[T any](cfg ConfigServidor, a alvoGravado, reler func() (T, error), semLeitura any, ressalvas ...string) feito {
+	f := feito{Recurso: a.Recurso, RecursoID: &a.ID, Ressalvas: ressalvas}
+	saida, err := reler()
+	if err != nil {
+		cfg.log().Error("mcp: releitura após a escrita falhou", zap.String("recurso", a.Recurso), zap.String("id", a.ID.String()), zap.Error(err))
+		f.Resultado = semLeitura
+		f.Ressalvas = append(f.Ressalvas,
+			"A escrita foi gravada, mas não consegui reler "+a.Artigo+" agora: confira o estado com "+a.Conferir+".")
+		return f
+	}
+	f.Resultado = saida
+	return f
+}
+
 // Escrita é DADO (spec §5.2): o mesmo valor registra a tool e
 // executa a pendente aprovada. Recusa de negócio = *acoes.Recusa (libera o
 // token); qualquer outro erro = falha interna (não libera).

@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -72,7 +71,7 @@ const (
 func linkDosUsuarios(cfg ConfigServidor) *string { return cfg.link("/admin/users") }
 
 // usuarioDoRecurso é o Recurso da auditoria das tools que mexem num usuário existente.
-func usuarioDoRecurso(valor string) (string, *uuid.UUID) { return campanhaDoRecurso("user", valor) }
+func usuarioDoRecurso(valor string) (string, *uuid.UUID) { return recursoDe("user", valor) }
 
 // donoDoPedido é quem pede/aprova: o Principal do contexto (o motor o põe na
 // chamada e na aprovação). Sem ele a guarda de si mesmo não tem como valer: falha
@@ -291,27 +290,18 @@ func usuarioEmPortugues(err error) error {
 	return &acoes.Recusa{Codigo: r.Codigo, Mensagem: texto}
 }
 
+// saidaUsuarioSemLeitura é o resultado de uma escrita de usuário gravada cuja releitura caiu.
+type saidaUsuarioSemLeitura struct {
+	Usuario saidaSoID `json:"usuario"`
+}
+
 // usuarioFeito é o feito de uma escrita de usuário JÁ gravada: o resultado é o
-// usuário como ficou, no formato de obter_usuario. Se só a releitura falhar, a
-// escrita NÃO vira erro (o modelo a repetiria): devolve o id e manda conferir.
+// usuário como ficou, no formato de obter_usuario (feitoRelido: se só a releitura
+// falhar, devolve o id e manda conferir).
 func usuarioFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, id uuid.UUID, ressalvas ...string) feito {
-	f := feito{Recurso: "user", RecursoID: &id, Ressalvas: ressalvas}
-	saida, err := montarUsuario(ctx, E.Leitura, id)
-	if err != nil {
-		cfg.log().Error("mcp: releitura do usuário após a escrita falhou", zap.Error(err))
-		f.Resultado = struct {
-			Usuario struct {
-				ID string `json:"id"`
-			} `json:"usuario"`
-		}{Usuario: struct {
-			ID string `json:"id"`
-		}{ID: id.String()}}
-		f.Ressalvas = append(f.Ressalvas,
-			"A escrita foi gravada, mas não consegui reler o usuário agora: confira o estado com obter_usuario (id "+id.String()+").")
-		return f
-	}
-	f.Resultado = saida
-	return f
+	return feitoRelido(cfg, alvoGravado{Recurso: "user", ID: id, Artigo: "o usuário", Conferir: "obter_usuario (id " + id.String() + ")"},
+		func() (saidaObterUsuario, error) { return montarUsuario(ctx, E.Leitura, id) },
+		saidaUsuarioSemLeitura{Usuario: saidaSoID{ID: id.String()}}, ressalvas...)
 }
 
 // ── criar_usuario ───────────────────────────────────────────────────────

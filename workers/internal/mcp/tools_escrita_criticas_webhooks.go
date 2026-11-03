@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -173,21 +172,12 @@ type saidaWebhookSemLeitura struct {
 }
 
 // webhookFeito é o feito de uma escrita de webhook JÁ gravada: o resultado é a
-// configuração como ficou, no formato de obter_webhook_cliente. Se só a releitura
-// falhar, a escrita NÃO vira erro (o modelo a repetiria): devolve o cliente e manda
-// conferir.
+// configuração como ficou, no formato de obter_webhook_cliente (feitoRelido: se só
+// a releitura falhar, devolve o cliente e manda conferir).
 func webhookFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, c *catalog.Client, ressalvas ...string) feito {
-	f := feito{Recurso: "client", RecursoID: &c.ID, Ressalvas: ressalvas}
-	saida, err := montarWebhook(ctx, E.Leitura, c)
-	if err != nil {
-		cfg.log().Error("mcp: releitura do webhook após a escrita falhou", zap.Error(err))
-		f.Resultado = saidaWebhookSemLeitura{Cliente: refDe(c.ID, c.Name)}
-		f.Ressalvas = append(f.Ressalvas,
-			"A escrita foi gravada, mas não consegui reler o webhook agora: confira o estado com obter_webhook_cliente (cliente_id "+c.ID.String()+").")
-		return f
-	}
-	f.Resultado = saida
-	return f
+	return feitoRelido(cfg, alvoGravado{Recurso: "client", ID: c.ID, Artigo: "o webhook", Conferir: "obter_webhook_cliente (cliente_id " + c.ID.String() + ")"},
+		func() (saidaWebhook, error) { return montarWebhook(ctx, E.Leitura, c) },
+		saidaWebhookSemLeitura{Cliente: refDe(c.ID, c.Name)}, ressalvas...)
 }
 
 // ── editar_webhook_cliente ──────────────────────────────────────────────
