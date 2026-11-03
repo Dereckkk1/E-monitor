@@ -24,12 +24,15 @@ type escritaRegistravel interface {
 	nomeEscrita() string
 	registrar(s *sdk.Server, cfg ConfigServidor, p *Principal)
 	// executarAprovada roda a escrita fora do /mcp (aprovação em /pendentes):
-	// revalida os args gravados, reroda o Preview e chama o Executar.
+	// revalida os args gravados, reroda o Preview, compara o resumo novo com o que a pessoa
+	// viu (previaGravada) e chama o Executar.
 	//
+	// Resumo diferente é uma Recusa preview_desatualizado (*previewDesatualizadoErro, com o
+	// resumo novo): o estado mudou depois do pedido, a pessoa aprovaria algo que não viu.
 	// Erros da etapa de conferência (decodificar + Preview) que não são
 	// *acoes.Recusa saem como *erroConferencia: nada foi tentado, o pedido
 	// pode ser aprovado de novo. O que vem do Executar é falha de execução.
-	executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage) (feito, error)
+	executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage, previaGravada previa) (feito, error)
 	// validarArgs só decodifica (schema + defaults + tipos): prova que os args
 	// gravados no JSONB voltam a valer na aprovação.
 	validarArgs(args json.RawMessage) error
@@ -55,8 +58,13 @@ const (
 	codigoArgsInvalidos    = "args_invalidos"
 	codigoToolDesconhecida = "tool_desconhecida"
 
-	msgArgsInvalidos    = "Esta ação mudou desde o pedido e os argumentos gravados não valem mais; nada foi feito. Recuse e peça de novo à IA."
-	msgToolDesconhecida = "Esta ação não existe mais neste servidor; nada foi feito. Recuse e peça de novo à IA."
+	// codigoPreviewDesatualizado: o resumo recalculado na aprovação não é o que a pessoa viu
+	// ao ser pedida a aprovação (o estado mudou no meio).
+	codigoPreviewDesatualizado = "preview_desatualizado"
+
+	msgArgsInvalidos        = "Esta ação mudou desde o pedido e os argumentos gravados não valem mais; nada foi feito. Recuse e peça de novo à IA."
+	msgToolDesconhecida     = "Esta ação não existe mais neste servidor; nada foi feito. Recuse e peça de novo à IA."
+	msgPreviewDesatualizado = "O estado mudou desde o pedido; o resumo foi atualizado — confira e aprove de novo. Nada foi feito."
 	// msgConferenciaFalhou: a conferência do estado (Preview) caiu por erro
 	// inesperado ou panic. Nada foi executado; vale tentar de novo.
 	msgConferenciaFalhou = "Não foi possível conferir o estado agora; nada foi feito. Tente aprovar de novo em instantes."
@@ -82,17 +90,59 @@ type argsInvalidosErro struct {
 func (e *argsInvalidosErro) Error() string { return e.recusa.Error() }
 func (e *argsInvalidosErro) Unwrap() error { return e.recusa }
 
-func (d Escrita[In]) executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage) (feito, error) {
-	in, err := d.conferirAprovada(ctx, E, args)
+// previewDesatualizadoErro é a Recusa preview_desatualizado mais o resumo novo, que a aprovação grava
+// no lugar do antigo na mesma atualização que devolve o pedido a `pendente`: o que /pendentes
+// mostra depois é o que vale agora.
+type previewDesatualizadoErro struct {
+	recusa *acoes.Recusa
+	nova   previa
+}
+
+func (e *previewDesatualizadoErro) Error() string { return e.recusa.Error() }
+func (e *previewDesatualizadoErro) Unwrap() error { return e.recusa }
+
+// mesmaPrevia compara duas prévias na forma canônica (o JSON decodificado), de modo que a gravada
+// no JSONB (números e listas voltam como float64 e []any) e a recém-calculada se igualem quando
+// dizem a mesma coisa. Cobre o resumo inteiro: resumo, mudanças, efeitos e ressalvas.
+func mesmaPrevia(a, b previa) (bool, error) {
+	ca, err := previaCanonica(a)
+	if err != nil {
+		return false, err
+	}
+	cb, err := previaCanonica(b)
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(ca, cb), nil
+}
+
+func previaCanonica(p previa) (any, error) {
+	bruto, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	var v any
+	if err := json.Unmarshal(bruto, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func (d Escrita[In]) executarAprovada(ctx context.Context, E *Escritas, p *Principal, args json.RawMessage, previaGravada previa) (feito, error) {
+	in, err := d.conferirAprovada(ctx, E, args, previaGravada)
 	if err != nil {
 		return feito{}, err
 	}
+	// O Executar planeja DE NOVO (o mesmo planejar* que o Preview acabou de chamar), de propósito:
+	// ele nunca confia no retrato que o Preview tirou, porque entre a conferência e a escrita o
+	// estado pode mudar outra vez, e as recusas que dependem do estado têm de valer na hora de gravar.
 	return executarSemPanic(ctx, d, E, p, in)
 }
 
 // conferirAprovada decodifica e roda o Preview, com recover: panic aqui ainda
-// é "nada foi feito".
-func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args json.RawMessage) (in In, err error) {
+// é "nada foi feito". O resumo recalculado tem de ser o que a pessoa viu
+// (previaGravada): se mudou, é a Recusa preview_desatualizado, com o resumo novo.
+func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args json.RawMessage, previaGravada previa) (in In, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = &erroConferencia{causa: fmt.Errorf("panic: %v\n%s", r, debug.Stack())}
@@ -106,12 +156,23 @@ func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args jso
 		}
 	}
 	if d.Preview != nil {
-		if _, perr := d.Preview(ctx, E, in); perr != nil {
+		nova, perr := d.Preview(ctx, E, in)
+		if perr != nil {
 			var rec *acoes.Recusa
 			if errors.As(perr, &rec) {
 				return in, perr
 			}
 			return in, &erroConferencia{causa: perr}
+		}
+		igual, cerr := mesmaPrevia(previaGravada, nova)
+		if cerr != nil {
+			return in, &erroConferencia{causa: fmt.Errorf("comparar o resumo: %w", cerr)}
+		}
+		if !igual {
+			return in, &previewDesatualizadoErro{
+				recusa: &acoes.Recusa{Codigo: codigoPreviewDesatualizado, Mensagem: msgPreviewDesatualizado},
+				nova:   nova,
+			}
 		}
 	}
 	return in, nil

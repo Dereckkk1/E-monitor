@@ -1101,3 +1101,52 @@ func TestCriticasDeCampanha_SemSegredoNoResultadoNemNosArgsGravados(t *testing.T
 		})
 	}
 }
+
+// ── a veiculação que aparece depois da conferência ──────────────────────
+
+// supervisorQueSemeiaTocada persiste uma veiculação da campanha quando os workers caem — depois do
+// cancelamento e antes do DELETE —, a corrida que o Preview (rodado antes) não pega.
+type supervisorQueSemeiaTocada struct {
+	*mcptest.SupervisorFalso
+	semeia func()
+}
+
+func (s supervisorQueSemeiaTocada) StopWorkersForCampaign(id uuid.UUID) {
+	s.SupervisorFalso.StopWorkersForCampaign(id)
+	s.semeia()
+}
+
+// O pipeline (ou um lançamento manual) persiste uma veiculação entre a conferência e o DELETE: a
+// transação do delete a vê, aborta, e a veiculação SOBREVIVE (antes o DELETE FROM detections a
+// varria). A campanha já tinha sido cancelada, então o pedido fica `falhou` — não volta a pendente
+// — com o texto que diz isso, e a pessoa não é induzida a aprovar de novo.
+func TestApagarCampanha_VeiculacaoQueApareceDepoisDaConferenciaNaoEhApagada(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	out := b.pedePendente(t, "apagar_campanha", argsApagar(c.camp))
+	pid := out["pendente_id"].(string)
+	antes := contarDaCampanha(t, b, c.camp)
+	b.E.Acoes.Supervisor = supervisorQueSemeiaTocada{b.sup, func() {
+		mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "in_slot", mcptest.Quando("2026-10-20", "09:00"))
+	}}
+
+	_, err := b.tentarAprovar(t, pid)
+
+	require.ErrorIs(t, err, ErrExecucaoInterrompida)
+	texto := mensagemDaInterrupcao(err)
+	require.Contains(t, texto, "foi cancelada")
+	require.Contains(t, texto, "NÃO foi apagada")
+	require.Equal(t, "falhou", b.estadoDaPendente(t, pid), "campanha já cancelada: não há o que aprovar de novo")
+	require.Equal(t, texto, *erroDaPendente(t, b, pid))
+	var tocadas int
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT count(*) FROM detections WHERE campaign_id = $1`, c.camp).Scan(&tocadas))
+	require.Equal(t, 1, tocadas, "a veiculação persistida no meio sobreviveu")
+	require.Equal(t, antes, contarDaCampanha(t, b, c.camp), "a campanha e o que é dela seguem lá")
+	estado, canceladaEm := estadoCancelamento(t, b, c.camp)
+	require.Equal(t, "cancelada", estado)
+	require.True(t, canceladaEm)
+	require.Empty(t, b.auditoria(t, "mcp.escrita.apagar_campanha"), "nada foi apagado")
+	falhou := b.auditoria(t, "mcp.pendente.falhou")
+	require.Len(t, falhou, 1)
+	require.Equal(t, "falha_apos_escrita", falhou[0].Meta["codigo"])
+}

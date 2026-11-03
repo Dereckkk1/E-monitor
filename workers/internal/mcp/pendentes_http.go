@@ -157,7 +157,7 @@ func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, err error) 
 	case errors.Is(err, ErrConferenciaFalhou):
 		erroMensagemJSON(w, http.StatusServiceUnavailable, "conferencia_falhou", msgConferenciaFalhou)
 	case errors.Is(err, ErrExecucaoInterrompida):
-		erroMensagemJSON(w, http.StatusInternalServerError, "interrompida", msgInterrompida)
+		erroMensagemJSON(w, http.StatusInternalServerError, "interrompida", mensagemDaInterrupcao(err))
 	default:
 		h.Log.Error("mcp: pedido pendente", zap.Error(err))
 		erroMensagemJSON(w, http.StatusInternalServerError, "interno", "Erro interno.")

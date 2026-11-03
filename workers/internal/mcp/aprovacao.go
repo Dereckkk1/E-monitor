@@ -21,6 +21,23 @@ var ErrExecucaoInterrompida = errors.New("mcp: execução interrompida")
 
 const msgInterrompida = "A execução caiu no meio por um erro inesperado; confira se a ação aconteceu antes de pedir de novo."
 
+// execucaoInterrompidaErro é o ErrExecucaoInterrompida com o texto que a pessoa lê: o genérico
+// (msgInterrompida) ou o da ação, quando ela falhou DEPOIS de gravar por um motivo que a pessoa
+// precisa conhecer (*acoes.ErroAposEscrita). errors.Is(err, ErrExecucaoInterrompida) segue valendo.
+type execucaoInterrompidaErro struct{ mensagem string }
+
+func (e *execucaoInterrompidaErro) Error() string      { return ErrExecucaoInterrompida.Error() }
+func (e *execucaoInterrompidaErro) Is(alvo error) bool { return alvo == ErrExecucaoInterrompida }
+
+// mensagemDaInterrupcao é o texto de uma execução interrompida: o da ação, se ela deu um, ou o genérico.
+func mensagemDaInterrupcao(err error) string {
+	var e *execucaoInterrompidaErro
+	if errors.As(err, &e) && e.mensagem != "" {
+		return e.mensagem
+	}
+	return msgInterrompida
+}
+
 type Aprovacoes struct {
 	cfg    ConfigServidor
 	indice map[string]escritaRegistravel
@@ -107,14 +124,14 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 		a.cfg.log().Error("mcp: ação da pendente não existe mais neste servidor", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool))
 		err = &acoes.Recusa{Codigo: codigoToolDesconhecida, Mensagem: msgToolDesconhecida}
 	} else {
-		f, err = e.executarAprovada(ectx, E, p, pend.Args)
+		f, err = e.executarAprovada(ectx, E, p, pend.Args, pend.Preview)
 	}
 	if err != nil {
 		var conf *erroConferencia
 		if errors.As(err, &conf) {
 			// Nada foi tentado: volta a pendente, para aprovar de novo.
 			a.cfg.log().Error("mcp: conferência da pendente falhou", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(conf.causa))
-			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, msgConferenciaFalhou, E.agora(), true); merr != nil || !ok {
+			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, msgConferenciaFalhou, E.agora(), true, nil); merr != nil || !ok {
 				// Não deu para devolver o pedido a pendente: dizer "tente de novo
 				// em instantes" mentiria (a linha segue `aprovada`, sem executor).
 				// É o mesmo desfecho de uma execução interrompida: ninguém tenta
@@ -135,7 +152,14 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 			if errors.As(err, &inv) {
 				a.cfg.log().Warn("mcp: args gravados não passam mais no schema", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(inv.detalhe))
 			}
-			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, r.Mensagem, E.agora(), estender); merr != nil || !ok {
+			// preview_desatualizado: o resumo novo entra no lugar do antigo na mesma atualização
+			// que devolve o pedido a pendente, para /pendentes mostrar o que vale agora.
+			var novaPrevia *previa
+			var desat *previewDesatualizadoErro
+			if errors.As(err, &desat) {
+				novaPrevia = &desat.nova
+			}
+			if ok, merr := E.Pendentes.MarcarFalhaDeNegocio(fim, pend.ID, pend.Tentativa, r.Mensagem, E.agora(), estender, novaPrevia); merr != nil || !ok {
 				// Sem devolver a pendente, a Recusa ("nada aconteceu, aprove de novo")
 				// seria mentira: mesmo desfecho da conferência.
 				a.cfg.log().Error("mcp: não consegui devolver o pedido a pendente", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
@@ -146,11 +170,19 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 			return Aprovado{}, r
 		}
 		a.cfg.log().Error("mcp: execução da pendente aprovada falhou", zap.String("pendente", pend.ID.String()), zap.String("tool", pend.Tool), zap.Error(err))
-		if ok, merr := E.Pendentes.MarcarInterrompida(fim, pend.ID, pend.Tentativa, msgInterrompida); merr != nil || !ok {
+		// A ação gravou algo e falhou por um motivo que a pessoa precisa ler ("a campanha foi
+		// cancelada mas não apagada", "o usuário foi criado mas…"): o texto dela vai no lugar do
+		// genérico. O erro Go (a Causa) fica só no log.
+		msg, codigo := msgInterrompida, "interno"
+		var pos *acoes.ErroAposEscrita
+		if errors.As(err, &pos) && pos.Mensagem != "" {
+			msg, codigo = pos.Mensagem, "falha_apos_escrita"
+		}
+		if ok, merr := E.Pendentes.MarcarInterrompida(fim, pend.ID, pend.Tentativa, msg); merr != nil || !ok {
 			a.cfg.log().Error("mcp: não consegui marcar o pedido como falhou", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
 		}
-		a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "interno"})
-		return Aprovado{}, ErrExecucaoInterrompida
+		a.auditarPendente(fim, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": codigo})
+		return Aprovado{}, &execucaoInterrompidaErro{mensagem: msg}
 	}
 
 	// Escrita feita: daqui para baixo nada vira erro.
