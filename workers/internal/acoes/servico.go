@@ -108,6 +108,10 @@ type Servico struct {
 
 	// Agora é o relógio da validação "não está no futuro". nil = time.Now.
 	Agora func() time.Time
+
+	// releituraUsuario substitui a releitura do usuário que o CriarUsuario faz depois de gravar a
+	// carteira. Só os testes a preenchem (para a releitura falhar com a gravação já certa).
+	releituraUsuario func(ctx context.Context, id uuid.UUID) (*users.User, error)
 }
 
 // NovoServico monta o Servico sobre o pool, com os repositórios que as telas usam.

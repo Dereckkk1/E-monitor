@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
 	"radiocheck/internal/users"
@@ -162,8 +163,11 @@ func (s *Servico) conferirClientesDaCarteira(ctx context.Context, ids []uuid.UUI
 // CriarUsuario valida, grava o usuário (e a carteira) e, se pedido, emite o
 // convite. Todo cliente da carteira é conferido ANTES de gravar (client_not_found
 // = nada criado); se mesmo assim o SetClients falhar com a carteira secundária
-// (corrida), o usuário JÁ está gravado e o erro volta como INTERNO, nunca como
-// Recusa. O convite nunca falha a criação: o desfecho vai em BoasVindas.
+// (corrida), o usuário JÁ está gravado — com só o primeiro cliente — e o erro
+// volta como *ErroAposEscrita (nunca Recusa), cuja Mensagem diz que ele existe e
+// não recebeu o convite. O convite nunca falha a criação: o desfecho vai em
+// BoasVindas — e sai mesmo que só a releitura do usuário, depois da carteira
+// gravada, tenha falhado (ele só precisa do id, do email e do nome que já temos).
 func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.User, *BoasVindas, error) {
 	if in.Email == "" || in.Senha == "" || in.Nome == "" {
 		return nil, nil, recusaUsuario(CodigoCamposObrigatorios)
@@ -218,10 +222,23 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	if len(carteira) > 1 {
 		// Daqui em diante o usuário existe: nada de Recusa.
 		if err := s.Usuarios.SetClients(ctx, u.ID, carteira); err != nil {
-			return nil, nil, fmt.Errorf("gravar a carteira do usuário já criado: %w", err)
+			// Meio-estado: o usuário está lá com só o primeiro cliente e o convite NÃO sairá (a
+			// pessoa não tem a senha). Quem aprovou precisa saber, e conferir pela tela.
+			return nil, nil, &ErroAposEscrita{
+				Mensagem: fmt.Sprintf("O usuário %s foi criado, mas a carteira de clientes não foi gravada por inteiro (ficou só o primeiro cliente) "+
+					"e o email de boas-vindas NÃO foi enviado: a pessoa não tem a senha. Confira o usuário na tela /admin/users: ajuste a carteira "+
+					"e redefina a senha, ou apague-o e peça de novo.", u.Email),
+				Causa: fmt.Errorf("gravar a carteira do usuário já criado: %w", err),
+			}
 		}
-		if u, err = s.Usuarios.Get(ctx, u.ID); err != nil {
-			return nil, nil, err
+		if rel, err := s.releituraDoUsuario(ctx, u.ID); err != nil {
+			// A carteira está gravada; só a releitura caiu. O convite não depende dela, então
+			// segue com o usuário que a criação devolveu, com a carteira que acabamos de gravar.
+			zap.L().Warn("CriarUsuario: carteira gravada, mas a releitura do usuário falhou; o convite segue",
+				zap.String("user_id", u.ID.String()), zap.Error(err))
+			u.ClientIDs = append([]uuid.UUID(nil), carteira...)
+		} else {
+			u = rel
 		}
 	}
 
@@ -229,6 +246,15 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 		return u, nil, nil
 	}
 	return u, s.emitirBoasVindas(ctx, u, in.Senha, in.Ator), nil
+}
+
+// releituraDoUsuario relê o usuário depois de gravar a carteira. releituraUsuario é um gancho só dos
+// testes (nil = o repositório): sem ele não há como fazer a releitura falhar com a gravação certa.
+func (s *Servico) releituraDoUsuario(ctx context.Context, id uuid.UUID) (*users.User, error) {
+	if s.releituraUsuario != nil {
+		return s.releituraUsuario(ctx, id)
+	}
+	return s.Usuarios.Get(ctx, id)
 }
 
 func (s *Servico) emitirBoasVindas(ctx context.Context, u *users.User, senha string, ator *uuid.UUID) *BoasVindas {
