@@ -121,7 +121,7 @@ func escritasDe(cfg ConfigServidor) []escritaRegistravel {
 		escritasBasicas(cfg), escritasCadastros(cfg), escritasCampanhas(cfg),
 		escritasVinculos(cfg), escritasRegras(cfg), escritasAjustes(cfg),
 		escritasCriticasCampanhas(cfg), escritasCriticasVeiculacoes(cfg), escritasCriticasUsuarios(cfg),
-		escritasCriticasClientes(cfg), escritasCriticasWebhooks(cfg),
+		escritasCriticasClientes(cfg), escritasCriticasWebhooks(cfg), escritasCriticasPosVenda(cfg),
 	} {
 		todas = append(todas, familia...)
 	}

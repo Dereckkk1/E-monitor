@@ -11,6 +11,7 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/mcptest"
+	"radiocheck/internal/postsale"
 	"radiocheck/internal/webhook"
 )
 
@@ -63,6 +64,22 @@ func TestModulo_RepassaBoasVindasEWebhooksETrataNilTipado(t *testing.T) {
 	})
 	require.NotNil(t, m)
 	require.Equal(t, webhook.OutboxEnqueuer(real), m.cfg.Escritas.Acoes.Webhooks)
+}
+
+// PosVenda de DepsModulo chega às Escritas (o mesmo serviço das rotas); sem ele fica nil
+// de verdade e reenviar_pos_venda recusa com pos_venda_indisponivel.
+func TestModulo_RepassaPosVenda(t *testing.T) {
+	svc := postsale.New(postsale.Config{Repo: postsale.NewRepo(nil), Log: zap.NewNop()})
+	m := NovoModulo(DepsModulo{
+		Segredo: []byte(mcptest.SegredoTeste), Portal: "https://portal.teste", Log: zap.NewNop(),
+		PosVenda: svc,
+	})
+	require.NotNil(t, m)
+	require.Same(t, svc, m.cfg.Escritas.PosVenda)
+
+	m = NovoModulo(DepsModulo{Segredo: []byte(mcptest.SegredoTeste), Log: zap.NewNop()})
+	require.NotNil(t, m)
+	require.Nil(t, m.cfg.Escritas.PosVenda)
 }
 
 // Sem supervisor nem hub (dev, teste): as interfaces ficam nil — um
