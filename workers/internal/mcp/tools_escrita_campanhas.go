@@ -73,10 +73,9 @@ func periodoDaEntrada(inicio, fim string) (time.Time, time.Time, error) {
 	return ini, f, nil
 }
 
-// lerCampanhaParaEscrever valida o id e carrega a campanha. Campanha cancelada é
-// recusada (F3-9): ela fica só como histórico e fora das telas operacionais — a
-// tela até deixaria mexer, o MCP não.
-func lerCampanhaParaEscrever(ctx context.Context, L *Leitura, valor string) (*catalog.Campaign, error) {
+// lerCampanhaQualquerEstado valida o id e carrega a campanha, no estado em que
+// estiver (as críticas de cancelar e apagar precisam enxergar a cancelada).
+func lerCampanhaQualquerEstado(ctx context.Context, L *Leitura, valor string) (*catalog.Campaign, error) {
 	id, err := uuidDaEntrada("campanha_id", valor)
 	if err != nil {
 		return nil, err
@@ -85,6 +84,17 @@ func lerCampanhaParaEscrever(ctx context.Context, L *Leitura, valor string) (*ca
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errNaoEncontrado("campanha")
 	}
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// lerCampanhaParaEscrever valida o id e carrega a campanha. Campanha cancelada é
+// recusada (F3-9): ela fica só como histórico e fora das telas operacionais — a
+// tela até deixaria mexer, o MCP não.
+func lerCampanhaParaEscrever(ctx context.Context, L *Leitura, valor string) (*catalog.Campaign, error) {
+	c, err := lerCampanhaQualquerEstado(ctx, L, valor)
 	if err != nil {
 		return nil, err
 	}

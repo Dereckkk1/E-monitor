@@ -337,12 +337,12 @@ func TestInstrucoes_Relatorios(t *testing.T) {
 	require.Contains(t, Instrucoes, "Assertividade: apresente o percentual sempre com o volume.")
 }
 
-// A lista é a do tools/list do SDK (ordem alfabética) e tem as 65 tools das
-// Fatias 0 a 4 (45 de leitura + 20 de escrita): quem acrescentar tool atualiza
+// A lista é a do tools/list do SDK (ordem alfabética) e tem as 69 tools das
+// Fatias 0 a 4 (45 de leitura + 24 de escrita): quem acrescentar tool atualiza
 // o número junto.
-func TestToolsEsperadas_OrdemAlfabeticaE65(t *testing.T) {
+func TestToolsEsperadas_OrdemAlfabeticaE69(t *testing.T) {
 	require.True(t, slices.IsSorted(ToolsEsperadas))
-	require.Len(t, ToolsEsperadas, 65)
+	require.Len(t, ToolsEsperadas, 69)
 }
 
 // Toda tool que pede id obrigatório diz "nunca invente" (contrato §3.2), na
@@ -377,7 +377,7 @@ func TestInventario_IdObrigatorioMandaNaoInventar(t *testing.T) {
 	}
 }
 
-// Desempenho (handoff): o custo de MONTAR o Server (64 tools). O SDK pede o
+// Desempenho (handoff): o custo de MONTAR o Server (69 tools). O SDK pede o
 // Server duas vezes por pedido; NovoHandlerMCP o monta uma só (ver
 // BenchmarkPedidoToolsList, que mede o pedido inteiro).
 func BenchmarkNovoServidor(b *testing.B) {

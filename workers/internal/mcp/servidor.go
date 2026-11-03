@@ -21,11 +21,13 @@ import (
 // Toda fatia que acrescentar tool atualiza esta lista no mesmo commit.
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
+	"apagar_campanha",
 	"apagar_override",
 	"apagar_regra_distribuicao",
 	"assertividade",
 	"auditoria_mcp",
 	"buscar_emissoras",
+	"cancelar_campanha",
 	"criar_campanha",
 	"criar_cliente",
 	"criar_regra_distribuicao",
@@ -35,11 +37,13 @@ var ToolsEsperadas = []string{
 	"desvincular_material",
 	"editar_campanha",
 	"editar_cliente",
+	"editar_cpm_fixo",
 	"editar_emissora",
 	"editar_emissoras_campanha",
 	"editar_emissoras_material",
 	"editar_material",
 	"editar_pmm_target",
+	"editar_precos_campanha",
 	"editar_regra_distribuicao",
 	"editar_tipo_material",
 	"exportar_consolidado",
