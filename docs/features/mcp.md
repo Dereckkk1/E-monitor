@@ -150,7 +150,7 @@ relatório devolve `links: {tela, como_baixar?}` (ver "Relatórios: deep-link e 
 | `resumo_diario_falhas` | o digest de ontem em SP (sem `seen`; nunca marca visto; ver "Fuso das falhas") | `CampaignFailures.ListForDate` | `…?view=by_campaign&date` |
 | `listar_pos_vendas` | pós-vendas + contagens por estado | `postsale.Repo.List` | `/admin/pos-venda` (e `/admin/pos-venda/<id>` por item) |
 | `obter_pos_venda` | números congelados (com a regra de exibição do `/insights`: `bonificacao` null em bloco 100% consolidado, `cpm`/`cpm_target` null sem impactos), checking (20 por campanha), resumo de destinatários | `Repo.Get` + `Repo.Payload` | `/admin/pos-venda/<id>` |
-| `destinatarios_pos_venda` | quem recebeu (sem token) ou quem receberia hoje | `Repo.Get`, `ActiveClientUsers`, `InternalRecipients` | — |
+| `destinatarios_pos_venda` | quem recebeu (com o `id` do destinatário, sem token) ou quem receberia hoje | `Repo.Get`, `ActiveClientUsers`, `InternalRecipients` | — |
 | `auditoria_mcp` | eventos gravados pelo MCP, por cursor (`page.total: null`) | `auditoria.Listar` (`metadata->>'origem' = 'mcp'`) | — |
 
 **Tetos de página reais** (o `limit` do schema genérico diz "máximo 100", mas estas tools cortam antes; o teto
