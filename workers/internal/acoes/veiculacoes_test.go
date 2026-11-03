@@ -170,3 +170,58 @@ func TestIgnorarERestaurarVeiculacao_InexistenteEhNaoEncontrado(t *testing.T) {
 		})
 	}
 }
+
+// tocadaSomeDepoisDeIgnorada instala um gatilho que apaga a tocada logo depois do UPDATE de
+// ignored_at: a escrita dá certo e a releitura final não acha mais a linha — o caso em que "a
+// ação gravou e o que vem depois falha". O gatilho sai no fim do teste.
+func (c *cenario) tocadaSomeDepoisDeIgnorada(t *testing.T) {
+	t.Helper()
+	for _, q := range []string{
+		`CREATE OR REPLACE FUNCTION tg_teste_some_tocada() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN DELETE FROM detections WHERE id = NEW.id AND detected_at = NEW.detected_at; RETURN NULL; END $$`,
+		`CREATE TRIGGER tg_teste_some_tocada AFTER UPDATE OF ignored_at ON detections
+		 FOR EACH ROW EXECUTE FUNCTION tg_teste_some_tocada()`,
+	} {
+		_, err := c.pool.Exec(c.ctx, q)
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		c.pool.Exec(c.ctx, `DROP TRIGGER IF EXISTS tg_teste_some_tocada ON detections`)
+		c.pool.Exec(c.ctx, `DROP FUNCTION IF EXISTS tg_teste_some_tocada()`)
+	})
+}
+
+// A escrita gravou e só a releitura final falha (aqui: a tocada sumiu logo depois do UPDATE): não é
+// Recusa nem erro — o nil sem erro diz "gravado", como no CancelarCampanha — nem o nao_encontrado
+// que diria "nada aconteceu" de uma tocada que FOI ignorada/restaurada.
+func TestIgnorarERestaurarVeiculacao_ReleituraQueFalhaDepoisDeGravarNaoEhErro(t *testing.T) {
+	c := novoCenario(t)
+	ator := mcptest.Usuario(t, c.ctx, c.pool, "admin", true)
+
+	t.Run("ignorar", func(t *testing.T) {
+		det, err := c.srv.CriarVeiculacaoManual(c.ctx, c.entradaManual(t, mcptest.Quando("2026-06-11", "10:30")))
+		require.NoError(t, err)
+		c.tocadaSomeDepoisDeIgnorada(t)
+
+		out, err := c.srv.IgnorarVeiculacao(c.ctx, det.ID, ator)
+
+		require.NoError(t, err, "a tocada foi ignorada: depois de gravar não existe erro nem Recusa")
+		require.Nil(t, out)
+		var existe bool
+		require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT EXISTS(SELECT 1 FROM detections WHERE id = $1)`, det.ID).Scan(&existe))
+		require.False(t, existe, "o gatilho apagou a tocada depois do UPDATE: a releitura não a acha")
+	})
+	t.Run("restaurar", func(t *testing.T) {
+		det, err := c.srv.CriarVeiculacaoManual(c.ctx, c.entradaManual(t, mcptest.Quando("2026-06-12", "10:30")))
+		require.NoError(t, err)
+		_, err = c.srv.IgnorarVeiculacao(c.ctx, det.ID, ator)
+		require.NoError(t, err)
+		// o gatilho vai depois do ignorar: só o restaurar (o UPDATE de ignored_at para NULL) o dispara
+		c.tocadaSomeDepoisDeIgnorada(t)
+
+		out, err := c.srv.RestaurarVeiculacao(c.ctx, det.ID)
+
+		require.NoError(t, err)
+		require.Nil(t, out)
+	})
+}

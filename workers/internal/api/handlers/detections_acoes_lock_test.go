@@ -268,3 +268,37 @@ func TestIgnorarRestaurarHTTP_ReabreECedeAVagaDaCota(t *testing.T) {
 	require.Equal(t, "in_slot", c.categoria(t, primeira.ID))
 	require.Equal(t, "bonus", c.categoria(t, segunda.ID), "restaurar devolve a vaga à primeira")
 }
+
+// Se a tocada foi ignorada/restaurada e só a releitura final falha (aqui o gatilho apaga a linha
+// logo depois do UPDATE), a rota continua dizendo 200 — a escrita aconteceu — com o id no corpo, em
+// vez do 404/500 de antes.
+func TestIgnorarRestaurarHTTP_ReleituraQueFalhaDepoisDeGravarDa200ComOId(t *testing.T) {
+	c := novoCenarioVeic(t)
+	for _, tem := range []struct{ acao string }{{"ignore"}, {"restore"}} {
+		t.Run(tem.acao, func(t *testing.T) {
+			det := c.criar(t, mcptest.Quando("2026-06-10", "10:30"))
+			if tem.acao == "restore" {
+				rec := c.postar(t, "/detections/"+det.ID.String()+"/ignore", nil, false)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			}
+			for _, q := range []string{
+				`CREATE OR REPLACE FUNCTION tg_teste_some_tocada_http() RETURNS trigger LANGUAGE plpgsql AS $$
+				 BEGIN DELETE FROM detections WHERE id = NEW.id AND detected_at = NEW.detected_at; RETURN NULL; END $$`,
+				`CREATE TRIGGER tg_teste_some_tocada_http AFTER UPDATE OF ignored_at ON detections
+				 FOR EACH ROW EXECUTE FUNCTION tg_teste_some_tocada_http()`,
+			} {
+				_, err := c.pool.Exec(c.ctx, q)
+				require.NoError(t, err)
+			}
+			t.Cleanup(func() {
+				c.pool.Exec(c.ctx, `DROP TRIGGER IF EXISTS tg_teste_some_tocada_http ON detections`)
+				c.pool.Exec(c.ctx, `DROP FUNCTION IF EXISTS tg_teste_some_tocada_http()`)
+			})
+
+			rec := c.postar(t, "/detections/"+det.ID.String()+"/"+tem.acao, nil, false)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.JSONEq(t, `{"id":"`+det.ID.String()+`"}`, rec.Body.String())
+		})
+	}
+}
