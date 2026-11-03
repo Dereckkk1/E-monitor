@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
+	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -17,6 +19,11 @@ const (
 	tetoResumoPendente = 250
 	tetoErroLista      = 250
 	tetoMotivoLista    = 150
+	// tetoRessalvasLista é o orçamento (caracteres e bytes) de TODAS as ressalvas de um item, e
+	// tetoRessalvaLista o de cada uma: a lista de 50 pedidos tem de caber em ~60 KB. Só o pedido
+	// `executada` tem ressalvas (e então não tem erro), então elas ocupam o lugar do erro.
+	tetoRessalvasLista = 300
+	tetoRessalvaLista  = 250
 )
 
 // estadosDoFiltroPendente: filtro da tool → estados do store. nil = todos.
@@ -47,8 +54,28 @@ type pedidoListaDTO struct {
 	AprovadaEm  *string `json:"aprovada_em"`
 	ExecutadaEm *string `json:"executada_em"`
 	Erro        *string `json:"erro"`
+	// Ressalvas são os avisos que a execução gravou ("o email não saiu: a pessoa não tem a senha").
+	// Sempre um array; só o pedido `executada` os tem. Cortadas para a lista caber (ressalvasDaLista).
+	Ressalvas []string `json:"ressalvas"`
 	// AprovarEm só existe enquanto o pedido espera aprovação.
 	AprovarEm *string `json:"aprovar_em"`
+}
+
+// ressalvasDaLista corta as ressalvas gravadas do pedido para a lista: cada uma em tetoRessalvaLista
+// e todas somadas em tetoRessalvasLista; as que não couberem viram "e mais N". Sempre devolve um array.
+func ressalvasDaLista(rs []string) []string {
+	out := make([]string, 0, len(rs))
+	resta := tetoRessalvasLista
+	for i, r := range rs {
+		if resta <= 0 {
+			out = append(out, fmt.Sprintf("… e mais %d ressalva(s): veja o pedido em /pendentes", len(rs)-i))
+			break
+		}
+		c, _ := cortarTexto(r, min(tetoRessalvaLista, resta))
+		out = append(out, c)
+		resta -= max(utf8.RuneCountInString(c), len(c))
+	}
+	return out
 }
 
 func pendenteDe(cfg ConfigServidor, p Pendente) pedidoListaDTO {
@@ -56,6 +83,7 @@ func pendenteDe(cfg ConfigServidor, p Pendente) pedidoListaDTO {
 		ID: p.ID.String(), Tool: p.Tool, Estado: p.Estado,
 		CriadaEm: instante(p.CriadaEm), ExpiraEm: instante(p.ExpiraEm),
 		AprovadaEm: instanteOpc(p.AprovadaEm), ExecutadaEm: instanteOpc(p.ExecutadaEm),
+		Ressalvas: ressalvasDaLista(p.Ressalvas),
 	}
 	d.Motivo, _ = cortarTexto(p.Motivo, tetoMotivoLista)
 	d.Resumo, _ = cortarTexto(p.Preview.Resumo, tetoResumoPendente)

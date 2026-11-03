@@ -339,3 +339,27 @@ func TestPendentesHTTP_ErroAposEscritaDa500ComOTextoDaAcao(t *testing.T) {
 	require.Equal(t, texto, *got.Erro)
 }
 
+// As ressalvas da execução ficam gravadas e voltam por /pendentes: quem recarrega a página do pedido
+// (?id=) lê de novo o "o email não saiu…" — sem isso o aviso só existiria no momento do clique. Na
+// lista e no destaque o campo é sempre um array: [] para o pedido que ainda não executou.
+func TestPendentesHTTP_RessalvasVoltamNaListaENoDestaque(t *testing.T) {
+	sonda := &sondaEscrita{ressalvas: []string{"o email não saiu: a pessoa não tem a senha", "confira com obter_x"}}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	feito := b.pedido(t, "t_crit", `{"valor":"a"}`)
+	aberto := b.pedido(t, "t_crit", `{"valor":"b"}`)
+	rec, m := b.fazer(http.MethodPost, "/mcp/pendentes/"+feito.ID.String()+"/aprovar", b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []any{"o email não saiu: a pessoa não tem a senha", "confira com obter_x"}, m["pendente"].(map[string]any)["ressalvas"])
+
+	rec, m = b.fazer(http.MethodGet, "/mcp/pendentes?id="+feito.ID.String(), b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	d := m["destaque"].(map[string]any)
+	require.Equal(t, "executada", d["estado"])
+	require.Equal(t, []any{"o email não saiu: a pessoa não tem a senha", "confira com obter_x"}, d["ressalvas"],
+		"recarregar o pedido executado mostra as ressalvas de novo")
+	itens := m["items"].([]any)
+	require.Len(t, itens, 1, "só o aberto fica na lista")
+	require.Equal(t, aberto.ID.String(), itens[0].(map[string]any)["id"])
+	require.Equal(t, []any{}, itens[0].(map[string]any)["ressalvas"], "o pedido aberto tem ressalvas: [], não null nem ausente")
+	require.Contains(t, rec.Body.String(), `"ressalvas":[]`)
+}

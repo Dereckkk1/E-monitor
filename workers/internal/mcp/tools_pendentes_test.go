@@ -187,3 +187,67 @@ func TestMinhasPendentes_PiorCasoCabe(t *testing.T) {
 	t.Logf("minhas_pendentes: %d itens no pior caso = %d bytes", tetoListaPendente, n)
 	require.Less(t, n, 60_000)
 }
+
+// minhas_pendentes devolve as ressalvas gravadas do pedido executado: é como a IA sabe, depois de a
+// pessoa aprovar, que "o email não saiu" e a pessoa criada não tem a senha. Sempre um array.
+func TestMinhasPendentes_RessalvasDoPedidoExecutado(t *testing.T) {
+	b := pendentesTool(t)
+	feita := b.nova(t, b.eu.UserID, `{"id":1}`, t0)
+	aberta := b.nova(t, b.eu.UserID, `{"id":2}`, t0.Add(time.Minute))
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET estado = 'executada', ressalvas = $2 WHERE id = $1`,
+		feita.ID, []string{"o email não saiu (boas_vindas.status_email: failed): a pessoa não tem a senha — redefina pela tela /admin/users.", "segunda"})
+	require.NoError(t, err)
+
+	out := b.lista(t, map[string]any{"estado": "todos"})
+	porID := map[string]map[string]any{}
+	for _, it := range itens(t, out) {
+		porID[it["id"].(string)] = it
+	}
+	require.Equal(t, []any{"o email não saiu (boas_vindas.status_email: failed): a pessoa não tem a senha — redefina pela tela /admin/users.", "segunda"},
+		porID[feita.ID.String()]["ressalvas"])
+	require.Equal(t, []any{}, porID[aberta.ID.String()]["ressalvas"], "sem ressalva é [], não null")
+}
+
+// Cada ressalva e a soma delas têm teto, para a lista de 50 pedidos caber (~60 KB): o que sobra vira
+// "e mais N".
+func TestRessalvasDaLista_CortaECompleta(t *testing.T) {
+	require.Equal(t, []string{}, ressalvasDaLista(nil))
+	require.Equal(t, []string{"a", "b"}, ressalvasDaLista([]string{"a", "b"}))
+
+	longa := strings.Repeat("x", 1000)
+	cortada := ressalvasDaLista([]string{longa})
+	require.Len(t, cortada, 1)
+	require.LessOrEqual(t, len(cortada[0]), tetoRessalvaLista+3, "cada ressalva tem teto (mais o … de 3 bytes)")
+	require.True(t, strings.HasSuffix(cortada[0], "…"))
+
+	muitas := ressalvasDaLista([]string{longa, longa, longa, longa})
+	total := 0
+	for _, r := range muitas {
+		total += len(r)
+	}
+	require.Less(t, total, tetoRessalvasLista+tetoRessalvaLista, "a soma tem teto")
+	require.Contains(t, muitas[len(muitas)-1], "e mais")
+	require.Contains(t, muitas[len(muitas)-1], "ressalva(s)")
+}
+
+// Pior caso com ressalvas: 50 pedidos executados (sem erro, que só os outros estados têm), cada um
+// com várias ressalvas longas. A lista segue abaixo de 60 KB.
+func TestMinhasPendentes_PiorCasoComRessalvasCabe(t *testing.T) {
+	b := pendentesTool(t)
+	longo := strings.Repeat("ç", 2000)
+	for i := range tetoListaPendente + 1 {
+		p := NovaPendente{UserID: b.eu.UserID, Tool: strings.Repeat("t", 100), Args: fmt.Appendf(nil, `{"id":%d}`, i),
+			Motivo: longo[:len("ç")*500], Preview: previa{Resumo: longo}}
+		_, _, err := b.st.Criar(b.ctx, p, t0.Add(time.Duration(i)*time.Second))
+		require.NoError(t, err)
+	}
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET estado = 'executada', ressalvas = $1`, []string{longo, longo, longo, longo, longo})
+	require.NoError(t, err)
+
+	out := b.lista(t, map[string]any{"estado": "executada", "limit": 100})
+
+	require.Len(t, itens(t, out), tetoListaPendente)
+	n := tamanhoDoResultado(t, out)
+	t.Logf("minhas_pendentes com ressalvas: %d itens no pior caso = %d bytes", tetoListaPendente, n)
+	require.Less(t, n, 60_000)
+}
