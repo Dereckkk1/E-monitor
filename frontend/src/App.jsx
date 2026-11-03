@@ -33,6 +33,7 @@ import AdminStationFailuresPage from './pages/AdminStationFailuresPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
 import AuthorizeAiPage from './pages/AuthorizeAiPage'
+import PendentesPage from './pages/PendentesPage'
 import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
 import ManagementPage from './pages/ManagementPage'
@@ -174,6 +175,12 @@ function AppShell() {
                 wrapper devolve ao /login com a query preservada e volta para cá). */}
             <Route path="/autorizar-ia" element={
               <RequireRole roles={['admin']}><AuthorizeAiPage /></RequireRole>
+            } />
+            {/* Aprovação dos pedidos `critico` que a IA fez pelo MCP. Rota PRIVADA (fora de
+                PUBLIC_ROUTES): sem sessão volta ao /login com ?next= preservado, que é o
+                caminho do link /pendentes?id= que a IA entrega. */}
+            <Route path="/pendentes" element={
+              <RequireRole roles={['admin']}><PendentesPage /></RequireRole>
             } />
             <Route path="/dashboard"   element={<DashboardPage />} />
             <Route path="/account"     element={<AccountPage />} />

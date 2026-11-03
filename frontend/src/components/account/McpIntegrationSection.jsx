@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { useMcpConexoes, useCriarTokenMcp, useRevogarMcp } from '../../api/hooks'
+import { Link } from 'react-router-dom'
+import { useMcpConexoes, useCriarTokenMcp, useRevogarMcp, usePendentesMcp } from '../../api/hooks'
 import { useConfirm } from '../ConfirmModal'
 
 // "Integração com IA" — credenciais do MCP do E-monitor (spec 2026-10-27 §4.1).
@@ -18,6 +19,8 @@ export default function McpIntegrationSection({ numeral }) {
   const conexoesQ = useMcpConexoes()
   const criar = useCriarTokenMcp()
   const revogar = useRevogarMcp()
+  const pendentesQ = usePendentesMcp()
+  const [agora] = useState(() => Date.now())
   const [nome, setNome] = useState('')
   const [validade, setValidade] = useState(90)
   const [gerado, setGerado] = useState(null)
@@ -52,6 +55,11 @@ export default function McpIntegrationSection({ numeral }) {
     revogar.mutate(c.id)
   }
 
+  // Só os que ainda dá para aprovar: um `pendente` com o prazo vencido no relógio daqui não conta.
+  const aguardando = Array.isArray(pendentesQ.data?.items)
+    ? pendentesQ.data.items.filter(p => p.estado === 'pendente' && Date.parse(p.expira_em) > agora).length
+    : 0
+
   return (
     <section className="account-section" aria-labelledby="acc-sec-mcp">
       <header className="account-section-head">
@@ -69,6 +77,14 @@ export default function McpIntegrationSection({ numeral }) {
         No claude.ai, adicione um conector personalizado com esse endereço e autorize. No Claude Code e em
         clientes que aceitam cabeçalho, gere um token abaixo. O Gemini Enterprise é cadastrado pelo
         administrador do sistema.
+      </p>
+
+      <p className="account-mcp-texto">
+        <Link className="account-mcp-pendentes" to="/pendentes">
+          Pedidos da IA
+          {aguardando > 0 && <span className="account-mcp-contagem" aria-label={`${aguardando} aguardando`}>{aguardando}</span>}
+        </Link>
+        {' '}— as ações críticas que a IA pediu e esperam a sua aprovação.
       </p>
 
       <form className="account-mcp-form" onSubmit={gerar}>

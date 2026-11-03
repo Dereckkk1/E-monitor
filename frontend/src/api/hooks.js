@@ -1787,3 +1787,42 @@ export function useConcederMcp() {
     mutationFn: (body) => api.post('/mcp/oauth/grant', body).then(r => r.data),
   })
 }
+
+// ─── Pedidos da IA aguardando aprovação (/pendentes — spec 2026-10-27 §4.3) ───
+// A fila é de quem a lê: o pedido de outra pessoa nunca chega aqui. `id` traz
+// o pedido do link (?id=) como `destaque`, mesmo já fechado.
+
+export function usePendentesMcp(id = null, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'pendentes', id ?? null],
+    queryFn: () => api.get('/mcp/pendentes', { params: id ? { id } : undefined }).then(r => r.data),
+    enabled,
+    // Aprovar grava dinheiro: o que a pessoa lê tem de ser o que vale agora,
+    // não o cache de 30 s.
+    staleTime: 0,
+    // Um pedido aprovado e ainda rodando vira executada/falhou em segundos: relê até fechar.
+    refetchInterval: (query) => {
+      const d = query.state.data
+      return d?.items?.some(p => p.estado === 'aprovada') || d?.destaque?.estado === 'aprovada' ? 3000 : false
+    },
+  })
+}
+
+// Toda ação invalida a fila inteira, também quando falha: um 422 troca o resumo
+// gravado e um 409 mostra que o estado mudou, e a tela tem de reler antes de a
+// pessoa decidir de novo. Devolver a promessa faz a mutação esperar a releitura.
+export function useAprovarPendenteMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/mcp/pendentes/${id}/aprovar`).then(r => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
+  })
+}
+
+export function useRecusarPendenteMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
+  })
+}
