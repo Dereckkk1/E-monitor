@@ -196,9 +196,6 @@ type planoDeWebhook struct {
 	url     *string
 	ativo   *bool
 	eventos []string
-	// naFila: há entrega pendente (inclui retentativas). É só o "há": o número muda a cada
-	// minuto e, no preview, faria a aprovação ver sempre um resumo diferente do pedido.
-	naFila bool
 }
 
 func (pl *planoDeWebhook) ativoAtual() bool { return pl.atual != nil && pl.atual.Enabled }
@@ -272,11 +269,6 @@ func planejarWebhook(ctx context.Context, E *Escritas, in entradaEditarWebhook) 
 	if eventosMuda {
 		pl.eventos = pedidosEventos
 	}
-	_, naFila, err := E.Leitura.Clientes.ListWebhookDeliveries(ctx, c.ID, "pending", 1, 0)
-	if err != nil {
-		return nil, err
-	}
-	pl.naFila = naFila > 0
 	return pl, nil
 }
 
@@ -339,10 +331,10 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 						soEsquemaEHost(pl.atual.URL), *pl.url))
 				}
 				pv.Efeitos = append(pv.Efeitos, "O receptor da URL nova recebe dado de veiculação do cliente (emissora, material e horário de cada tocada).")
-				if pl.naFila {
-					pv.Efeitos = append(pv.Efeitos,
-						"Há entregas na fila de envio (inclusive retentativas) e elas saem para a URL nova: o worker lê a URL gravada no momento do envio.")
-				}
+				// Texto fixo, sem consultar a fila: o estado dela muda a cada minuto e faria a
+				// aprovação ver um resumo diferente do pedido (preview_desatualizado repetido).
+				pv.Efeitos = append(pv.Efeitos,
+					"Se houver entregas na fila de envio (inclusive retentativas), elas passam a ir para a URL nova: o envio lê a URL na hora.")
 			}
 			if pl.ativo != nil {
 				pv.Mudancas = append(pv.Mudancas, mudanca{Campo: "ativo", De: pl.ativoAtual(), Para: *pl.ativo})
@@ -350,10 +342,8 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 					pv.Efeitos = append(pv.Efeitos, "O envio é LIGADO: a partir da aprovação, os eventos que o cliente assina passam a ser enfileirados e enviados.")
 				} else {
 					pv.Efeitos = append(pv.Efeitos, "O envio é DESLIGADO: nenhuma veiculação nova é enfileirada para este cliente.")
-					if pl.naFila {
-						pv.Efeitos = append(pv.Efeitos,
-							"Há entregas na fila de envio (inclusive retentativas) e elas ainda são enviadas: desligar impede só novos enfileiramentos.")
-					}
+					pv.Efeitos = append(pv.Efeitos,
+						"Desligar não cancela as entregas que já estiverem na fila de envio (inclusive retentativas): elas ainda são enviadas.")
 				}
 			}
 			if pl.eventos != nil {

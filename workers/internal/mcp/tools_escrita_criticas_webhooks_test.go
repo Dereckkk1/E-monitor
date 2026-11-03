@@ -239,7 +239,7 @@ func TestEditarWebhook_PedidoNaoEscreveEAprovarEdita(t *testing.T) {
 	ef := mustJSON(t, pv["efeitos"])
 	require.Contains(t, ef, urlNovaDoWebhook, "o preview mostra a URL inteira: a pessoa aprova o destino")
 	require.Contains(t, ef, "dado de veiculação")
-	require.Contains(t, ef, "Há entregas na fila de envio", "o preview diz que há fila, não quantas (o número mudaria a cada minuto)")
+	require.Contains(t, ef, "Se houver entregas na fila de envio", "o texto da fila é fixo: não depende do estado dela (mudaria a cada minuto)")
 	require.Contains(t, ef, "DESLIGADO")
 	require.Contains(t, ef, "Passa a receber: webhook.test")
 	rv := mustJSON(t, pv["ressalvas"])
@@ -331,7 +331,9 @@ func TestEditarWebhook_RessalvaSemSegredoSoQuandoNaoHaSegredo(t *testing.T) {
 	require.NotContains(t, mustJSON(t, pCom["preview"].(map[string]any)["ressalvas"]), "não são assinadas")
 }
 
-func TestEditarWebhook_DesligarAvisaDasEntregasQueJaEstaoNaFila(t *testing.T) {
+// O texto sobre a fila de envio não depende do estado dela: com fila ou sem, o preview é o mesmo
+// (senão a aprovação veria preview_desatualizado toda vez que a fila mexesse).
+func TestEditarWebhook_PreviewDaFilaNaoDependeDoEstadoDela(t *testing.T) {
 	emProducao(t)
 	b := novaBancadaTool(t)
 	cli := webhookComTudo(t, b, "Cliente")
@@ -340,11 +342,11 @@ func TestEditarWebhook_DesligarAvisaDasEntregasQueJaEstaoNaFila(t *testing.T) {
 	cheio := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"ativo": false}))
 	semFila := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(vazio, map[string]any{"ativo": false}))
 
-	ef := mustJSON(t, cheio["preview"].(map[string]any)["efeitos"])
-	require.Contains(t, ef, "Há entregas na fila de envio")
-	require.NotContains(t, ef, "2 entrega", "só o \"há\": o número mudaria a cada minuto")
-	require.Contains(t, ef, "ainda são enviadas", "desligar impede só novos enfileiramentos")
-	require.NotContains(t, mustJSON(t, semFila["preview"].(map[string]any)["efeitos"]), "na fila")
+	efCheio := mustJSON(t, cheio["preview"].(map[string]any)["efeitos"])
+	efVazio := mustJSON(t, semFila["preview"].(map[string]any)["efeitos"])
+	require.Contains(t, efCheio, "Desligar não cancela as entregas que já estiverem na fila de envio")
+	require.NotContains(t, efCheio, "2 entrega", "o número da fila nunca entra no texto")
+	require.Equal(t, efCheio, efVazio, "com fila ou sem, o texto dos efeitos é o mesmo")
 }
 
 func TestEditarWebhook_ParidadeComARota(t *testing.T) {
