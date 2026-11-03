@@ -33,6 +33,9 @@ type escritaRegistravel interface {
 	// validarArgs só decodifica (schema + defaults + tipos): prova que os args
 	// gravados no JSONB voltam a valer na aprovação.
 	validarArgs(args json.RawMessage) error
+	// argsGravadosDaAuditoria devolve o que o audit_log guarda dos args gravados do pedido
+	// (Escrita.ArgsParaAuditoria): a aprovação não tem o In decodificado.
+	argsGravadosDaAuditoria(args json.RawMessage) []byte
 }
 
 func (d Escrita[In]) nomeEscrita() string { return d.Nome }

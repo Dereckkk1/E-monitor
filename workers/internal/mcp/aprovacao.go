@@ -66,7 +66,16 @@ func (a *Aprovacoes) auditarPendente(ctx context.Context, p *Principal, acao str
 		e[k] = v
 	}
 	id := pend.ID
-	auditar(ctx, a.cfg, a.cfg.Escritas, p, acao, "mcp_pendente", &id, pend.Tool, Critico, pend.Args, e)
+	auditar(ctx, a.cfg, a.cfg.Escritas, p, acao, "mcp_pendente", &id, pend.Tool, Critico, a.argsDaAuditoria(pend), e)
+}
+
+// argsDaAuditoria são os args do pedido como o audit_log os guarda (a tool pode resumir um
+// argumento sensível); tool que não existe mais grava os args como estão.
+func (a *Aprovacoes) argsDaAuditoria(pend Pendente) []byte {
+	if e, ok := a.indice[pend.Tool]; ok {
+		return e.argsGravadosDaAuditoria(pend.Args)
+	}
+	return pend.Args
 }
 
 func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal) (Aprovado, error) {
@@ -145,7 +154,7 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 	}
 
 	// Escrita feita: daqui para baixo nada vira erro.
-	auditar(fim, a.cfg, E, p, "mcp.escrita."+pend.Tool, f.Recurso, f.RecursoID, pend.Tool, Critico, pend.Args,
+	auditar(fim, a.cfg, E, p, "mcp.escrita."+pend.Tool, f.Recurso, f.RecursoID, pend.Tool, Critico, a.argsDaAuditoria(pend),
 		map[string]any{chaveMcpPendente: pend.ID.String()})
 	var bruto json.RawMessage
 	if b, merr := json.Marshal(f.Resultado); merr != nil {

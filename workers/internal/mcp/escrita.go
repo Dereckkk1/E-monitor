@@ -95,6 +95,12 @@ type Escrita[In any] struct {
 	// produzir um feito (pedido pendente, falha interna): o tipo e o id do
 	// registro que a tool mexeria. Sem ele, "mcp_escrita" sem id.
 	Recurso func(in In) (string, *uuid.UUID)
+	// ArgsParaAuditoria (opcional) devolve o que entra em meta.args do audit_log no lugar dos
+	// args canônicos, para a tool cujo argumento carrega um segredo que o log não deve guardar
+	// por inteiro (a URL do webhook). Só o audit_log muda: os args gravados no pedido seguem
+	// inteiros — são o que o Executar precisa, e só o dono os lê. Vale em toda linha que leva os
+	// args, no pedido e na aprovação.
+	ArgsParaAuditoria func(in In) any
 }
 
 // CampoConfirmacao entra embutido no In de toda tool `confirma` ou escalável.
@@ -187,7 +193,7 @@ func criarPendente[In any](ctx context.Context, cfg ConfigServidor, E *Escritas,
 	}
 	recurso, recursoID := d.alvo(in)
 	if !jaExistia {
-		auditar(ctx, cfg, E, p, "mcp.pendente.criada", recurso, recursoID, d.Nome, Critico, args,
+		auditar(ctx, cfg, E, p, "mcp.pendente.criada", recurso, recursoID, d.Nome, Critico, d.argsDaAuditoria(in, args),
 			map[string]any{"motivo": motivo, chaveMcpPendente: pend.ID.String()})
 	}
 	// Pedido já existente: a resposta mostra o que ESTÁ gravado (o que a pessoa
@@ -381,14 +387,14 @@ func executarEAuditar[In any](ctx context.Context, cfg ConfigServidor, E *Escrit
 		// sido gravado — e fica um rastro. O texto do erro Go nunca vai para o
 		// audit_log (pode trazer SQLSTATE, nome de tabela): só "interno".
 		recurso, recursoID := d.alvo(in)
-		auditar(ctx, cfg, E, p, "mcp.escrita.falha", recurso, recursoID, d.Nome, nivel, args,
+		auditar(ctx, cfg, E, p, "mcp.escrita.falha", recurso, recursoID, d.Nome, nivel, d.argsDaAuditoria(in, args),
 			map[string]any{"erro": "interno"})
 		return falhaInterna(cfg.log(), d.Nome, err)
 	}
 
 	// A escrita já aconteceu: nada daqui para baixo vira erro (o modelo
 	// repetiria). A auditoria roda sem o cancelamento do pedido.
-	auditar(ctx, cfg, E, p, "mcp.escrita."+d.Nome, f.Recurso, f.RecursoID, d.Nome, nivel, args, nil)
+	auditar(ctx, cfg, E, p, "mcp.escrita."+d.Nome, f.Recurso, f.RecursoID, d.Nome, nivel, d.argsDaAuditoria(in, args), nil)
 
 	r, o, e := resultado(respostaFeita{Executou: true, Resultado: f.Resultado, Ressalvas: f.Ressalvas})
 	if e == nil {
@@ -462,6 +468,37 @@ func cortarTextos(v any) any {
 		}
 	}
 	return v
+}
+
+// argsDaAuditoria são os args que vão para o audit_log: os canônicos, ou o que a tool declara em
+// ArgsParaAuditoria. O hook que falha ou entra em panic grava {} — nunca os args sem redação.
+func (d Escrita[In]) argsDaAuditoria(in In, args []byte) (saida []byte) {
+	if d.ArgsParaAuditoria == nil {
+		return args
+	}
+	defer func() {
+		if recover() != nil {
+			saida = []byte("{}")
+		}
+	}()
+	b, err := json.Marshal(d.ArgsParaAuditoria(in))
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// argsGravadosDaAuditoria é o argsDaAuditoria para os args JÁ gravados no pedido (a aprovação
+// não tem o In). Args que não decodificam não dá para redigir: saem {} no log.
+func (d Escrita[In]) argsGravadosDaAuditoria(args json.RawMessage) []byte {
+	if d.ArgsParaAuditoria == nil {
+		return args
+	}
+	in, err := decodificarArgs[In](args)
+	if err != nil {
+		return []byte("{}")
+	}
+	return d.argsDaAuditoria(in, args)
 }
 
 // alvo é o recurso da auditoria de uma escrita sem feito (pendente ou falha):
