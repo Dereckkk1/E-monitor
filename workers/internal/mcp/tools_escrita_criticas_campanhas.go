@@ -376,7 +376,10 @@ func escritaApagarCampanha(cfg ConfigServidor) Escrita[entradaApagarCampanha] {
 			if err != nil {
 				return feito{}, err
 			}
-			if err := E.Acoes.ApagarCampanha(ctx, pl.camp.ID); err != nil {
+			// ExigirSemHistorico: o planejarExclusao acima já recusou o histórico que existia, mas
+			// uma veiculação pode ter sido persistida entre ele e o DELETE — a transação do delete
+			// reconfere (e aborta sem apagar nada), o que a rota de apagar não faz.
+			if err := E.Acoes.ApagarCampanhaCom(ctx, pl.camp.ID, acoes.OpcoesApagarCampanha{ExigirSemHistorico: true}); err != nil {
 				if errors.Is(err, acoes.ErrAlvoInexistente) {
 					return feito{}, errNaoEncontrado("campanha")
 				}

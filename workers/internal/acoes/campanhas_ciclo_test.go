@@ -324,3 +324,80 @@ func (c *cenario) contaPrecos(t *testing.T) int {
 	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM campaign_station_pricing WHERE campaign_id=$1`, c.campanha).Scan(&n))
 	return n
 }
+
+// supervisorQueSemeiaTocada persiste uma tocada DA campanha quando os workers são derrubados —
+// depois do cancelamento e antes do DELETE —, a corrida que a conferência prévia (feita em outro
+// comando, antes de tudo) não pega: o pipeline gravando uma veiculação enquanto a campanha é apagada.
+type supervisorQueSemeiaTocada struct {
+	*mcptest.SupervisorFalso
+	semeia func()
+}
+
+func (s supervisorQueSemeiaTocada) StopWorkersForCampaign(id uuid.UUID) {
+	s.SupervisorFalso.StopWorkersForCampaign(id)
+	s.semeia()
+}
+
+func (c *cenario) tocadasDaCampanha(t *testing.T, id uuid.UUID) int {
+	t.Helper()
+	var n int
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT count(*) FROM detections WHERE campaign_id=$1`, id).Scan(&n))
+	return n
+}
+
+// Com ExigirSemHistorico (o MCP), a veiculação que aparece depois da conferência e do cancelamento
+// aborta o delete: nada é apagado, a campanha fica cancelada, e o erro é *ErroAposEscrita — nunca
+// Recusa, porque o cancelamento já está gravado —, com o texto que diz isso à pessoa.
+func TestApagarCampanhaCom_ExigirSemHistorico_TocadaQueApareceDepoisDoCancelamentoSobrevive(t *testing.T) {
+	c := novoCenario(t)
+	id := c.campanhaNova(t, "Sem histórico ainda")
+	c.srv.Supervisor = supervisorQueSemeiaTocada{&mcptest.SupervisorFalso{}, func() {
+		mcptest.Veiculacao(t, c.ctx, c.pool, id, c.material, c.emissora, "bonus", c.quando)
+	}}
+
+	err := c.srv.ApagarCampanhaCom(c.ctx, id, OpcoesApagarCampanha{ExigirSemHistorico: true})
+
+	require.Error(t, err)
+	var r *Recusa
+	require.False(t, errors.As(err, &r), "depois do cancelamento não existe Recusa: %v", err)
+	var pos *ErroAposEscrita
+	require.ErrorAs(t, err, &pos)
+	require.ErrorIs(t, err, catalog.ErrCampaignHasHistory)
+	require.Contains(t, pos.Mensagem, "Sem histórico ainda")
+	require.Contains(t, pos.Mensagem, "foi cancelada")
+	require.Contains(t, pos.Mensagem, "NÃO foi apagada")
+	require.NotContains(t, pos.Mensagem, "SQLSTATE")
+	require.True(t, c.existeCampanha(t, id), "a campanha não foi apagada")
+	require.Equal(t, 1, c.tocadasDaCampanha(t, id), "a veiculação que apareceu sobreviveu")
+	var estado string
+	require.NoError(t, c.pool.QueryRow(c.ctx, `SELECT status FROM campaigns WHERE id=$1`, id).Scan(&estado))
+	require.Equal(t, "cancelada", estado, "o cancelamento ficou gravado")
+}
+
+// A rota de apagar segue como sempre foi: apaga a campanha e as veiculações dela (é o que o
+// ExigirSemHistorico existe para NÃO fazer no MCP).
+func TestApagarCampanha_RotaContinuaApagandoAsTocadasDaCampanha(t *testing.T) {
+	c := novoCenario(t)
+	id := c.campanhaNova(t, "A rota apaga tudo")
+	c.srv.Supervisor = supervisorQueSemeiaTocada{&mcptest.SupervisorFalso{}, func() {
+		mcptest.Veiculacao(t, c.ctx, c.pool, id, c.material, c.emissora, "bonus", c.quando)
+	}}
+
+	require.NoError(t, c.srv.ApagarCampanha(c.ctx, id))
+
+	require.False(t, c.existeCampanha(t, id))
+	require.Zero(t, c.tocadasDaCampanha(t, id))
+}
+
+func TestApagarCampanhaCom_ExigirSemHistorico_SemHistoricoApagaComoSempre(t *testing.T) {
+	c, _, sf := novoCenarioCampanha(t)
+	id := c.campanhaNova(t, "Limpa")
+
+	require.NoError(t, c.srv.ApagarCampanhaCom(c.ctx, id, OpcoesApagarCampanha{ExigirSemHistorico: true}))
+
+	require.False(t, c.existeCampanha(t, id))
+	require.Equal(t, 1, sf.Contagem("StopWorkers", id))
+	// inexistente segue sendo a Recusa com ErrAlvoInexistente
+	err := c.srv.ApagarCampanhaCom(c.ctx, uuid.New(), OpcoesApagarCampanha{ExigirSemHistorico: true})
+	require.ErrorIs(t, err, ErrAlvoInexistente)
+}

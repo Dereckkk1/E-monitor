@@ -1,10 +1,13 @@
 package catalog
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,4 +127,130 @@ func TestCampaigns_Delete_AllowedWhenNoForeignProjections(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id=$1)`, camp.ID).Scan(&exists))
 	require.False(t, exists, "campanha deve ter sido deletada")
+}
+
+// seedHistoricoDeCampanha cria o histórico pedido em campanha camp (a campanha, o material e a
+// emissora já existem). Devolve a tocada, quando o histórico é uma.
+func seedHistoricoDeCampanha(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tipo string, camp, outra, cli, mat, est uuid.UUID) {
+	t.Helper()
+	quando := time.Now()
+	switch tipo {
+	case "veiculação":
+		insSeedDetection(t, ctx, pool, camp, mat, est, "in_slot", quando.Format("2006-01-02"))
+	case "projeção":
+		// Tocada de OUTRA campanha que carrega a projeção desta.
+		var det uuid.UUID
+		var detectedAt time.Time
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO detections (station_id, commercial_id, campaign_id, detected_at, match_start_offset_ms, match_end_offset_ms,
+			                        confidence, hash_count, temporal_coverage, variant_used, rate_used, category)
+			VALUES ($1, $2, $3, $4, 0, 30000, 0.95, 100, 0.85, 0, 0, 'in_slot') RETURNING id, detected_at`,
+			est, mat, outra, quando).Scan(&det, &detectedAt))
+		_, err := pool.Exec(ctx, `INSERT INTO detection_campaigns (detection_id, detected_at, campaign_id, commercial_id, category)
+			VALUES ($1, $2, $3, $4, 'bonus')`, det, detectedAt, camp, mat)
+		require.NoError(t, err)
+	case "comprovante manual":
+		_, err := pool.Exec(ctx, `INSERT INTO manual_proof_batches (campaign_id, station_id, proof_pdf_key, proof_pdf_size) VALUES ($1,$2,'k',1)`, camp, est)
+		require.NoError(t, err)
+	case "pós-venda":
+		var rep uuid.UUID
+		require.NoError(t, pool.QueryRow(ctx, `INSERT INTO post_sale_reports (client_id, title) VALUES ($1, 'Fechamento') RETURNING id`, cli).Scan(&rep))
+		_, err := pool.Exec(ctx, `INSERT INTO post_sale_report_campaigns (report_id, campaign_id, period_from, period_to) VALUES ($1,$2,'2026-10-01','2026-10-31')`, rep, camp)
+		require.NoError(t, err)
+	default:
+		t.Fatalf("histórico desconhecido: %s", tipo)
+	}
+}
+
+// DeleteSemHistorico confere o histórico DENTRO da transação do delete: com qualquer dos quatro
+// tipos o delete aborta com ErrCampaignHasHistory e NADA é apagado (nem a campanha, nem as
+// tocadas); sem histórico apaga como o Delete.
+func TestCampaigns_DeleteSemHistorico_RecusaQuemTemHistoricoEApagaQuemNao(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	campaigns := NewCampaigns(pool)
+	cli := insSeedClient(t, ctx, pool, "dsh-cli-"+uuid.NewString()[:6])
+	est := insSeedStationNoProfile(t, ctx, pool, "DSH FM "+uuid.NewString()[:6])
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, cli, "dsh-"+uuid.NewString()[:6])
+
+	for _, tipo := range []string{"veiculação", "projeção", "comprovante manual", "pós-venda"} {
+		t.Run(tipo, func(t *testing.T) {
+			camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+			outra := insSeedCampaign(t, ctx, pool, cli, "2026-11-01", "2026-11-30")
+			seedHistoricoDeCampanha(t, ctx, pool, tipo, camp, outra, cli, mat, est)
+			t.Cleanup(func() {
+				pool.Exec(ctx, `DELETE FROM post_sale_reports WHERE client_id = $1`, cli)
+				pool.Exec(ctx, `DELETE FROM manual_proof_batches WHERE campaign_id IN ($1,$2)`, camp, outra)
+				pool.Exec(ctx, `DELETE FROM detections WHERE campaign_id IN ($1,$2)`, camp, outra)
+			})
+			var antes int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM detections WHERE campaign_id IN ($1,$2)) +
+				(SELECT count(*) FROM detection_campaigns WHERE campaign_id IN ($1,$2))`, camp, outra).Scan(&antes))
+
+			err := campaigns.DeleteSemHistorico(ctx, camp)
+
+			require.ErrorIs(t, err, ErrCampaignHasHistory)
+			var existe bool
+			require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1)`, camp).Scan(&existe))
+			require.True(t, existe, "a campanha com histórico não pode ser apagada")
+			var depois int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM detections WHERE campaign_id IN ($1,$2)) +
+				(SELECT count(*) FROM detection_campaigns WHERE campaign_id IN ($1,$2))`, camp, outra).Scan(&depois))
+			require.Equal(t, antes, depois, "nenhuma veiculação foi tocada")
+		})
+	}
+
+	t.Run("sem histórico apaga", func(t *testing.T) {
+		camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+		require.NoError(t, campaigns.DeleteSemHistorico(ctx, camp))
+		var existe bool
+		require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1)`, camp).Scan(&existe))
+		require.False(t, existe)
+	})
+	t.Run("campanha que não existe", func(t *testing.T) {
+		require.ErrorIs(t, campaigns.DeleteSemHistorico(ctx, uuid.New()), pgx.ErrNoRows)
+	})
+}
+
+// A corrida que a conferência prévia não pega: uma veiculação está sendo persistida (INSERT numa
+// transação aberta, ainda sem commit) quando o delete começa. O FOR UPDATE da campanha espera esse
+// INSERT (que tomou FOR KEY SHARE pela FK), e quando ele commita o EXISTS enxerga a veiculação: o
+// delete aborta e a veiculação SOBREVIVE. Sem a trava, o DELETE FROM detections a varreria.
+func TestCampaigns_DeleteSemHistorico_EsperaAVeiculacaoEmVooEPreservaOHistorico(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	campaigns := NewCampaigns(pool)
+	cli := insSeedClient(t, ctx, pool, "dsh-voo-"+uuid.NewString()[:6])
+	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	est := insSeedStationNoProfile(t, ctx, pool, "DSH Voo FM "+uuid.NewString()[:6])
+	_, mat := insSeedTypeAndMaterial(t, ctx, pool, cli, "dsh-voo-"+uuid.NewString()[:6])
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO detections (station_id, commercial_id, campaign_id, detected_at, match_start_offset_ms, match_end_offset_ms,
+		                        confidence, hash_count, temporal_coverage, variant_used, rate_used, category)
+		VALUES ($1, $2, $3, now(), 0, 30000, 0.95, 100, 0.85, 0, 0, 'in_slot')`, est, mat, camp)
+	require.NoError(t, err)
+
+	feito := make(chan error, 1)
+	go func() { feito <- campaigns.DeleteSemHistorico(ctx, camp) }()
+	select {
+	case err := <-feito:
+		t.Fatalf("o delete não podia terminar com a veiculação em voo: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	require.NoError(t, tx.Commit(ctx))
+	select {
+	case err := <-feito:
+		require.ErrorIs(t, err, ErrCampaignHasHistory)
+	case <-time.After(10 * time.Second):
+		t.Fatal("o delete não destravou depois do commit")
+	}
+	var dets int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM detections WHERE campaign_id = $1`, camp).Scan(&dets))
+	require.Equal(t, 1, dets, "a veiculação persistida no meio sobrevive")
+	var existe bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1)`, camp).Scan(&existe))
+	require.True(t, existe)
 }
