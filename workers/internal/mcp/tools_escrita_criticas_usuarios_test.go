@@ -510,6 +510,8 @@ func TestCriarUsuario_ChamadasDistintasGeramSenhasDistintas(t *testing.T) {
 }
 
 func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
+	// Sem SMTP na VM a tool recusa antes (TestCriarUsuario_SemSMTPRecusa…): aqui é o envio que
+	// FALHA depois de a pessoa já ter sido criada.
 	casos := []struct {
 		nome          string
 		correioLigado bool
@@ -517,7 +519,6 @@ func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
 		status        string
 	}{
 		{"o envio falhou", true, fmt.Errorf("smtp: conexão recusada"), "failed"},
-		{"sem SMTP na VM", false, nil, "disabled"},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nome, func(t *testing.T) {
@@ -713,6 +714,38 @@ func TestCriarUsuario_BoasVindasIndisponivelRecusaNoPedido(t *testing.T) {
 		b.E.Acoes.BoasVindas = acoes.BoasVindasDoServico(nil)
 		require.Contains(t, b.chamarErro(t, toolCriarUsuario, args), "[boas_vindas_indisponivel]")
 		require.Equal(t, 1, contarUsuarios(t, b), "só o admin da bancada existe")
+	})
+}
+
+// Sem SMTP na VM o email de boas-vindas não sai (email_status disabled) e a pessoa criada nunca
+// receberia a senha: a tool recusa antes de criar alguém (como reenviar_pos_venda recusa com
+// email_desligado), no pedido e na aprovação. A saída é a tela, onde o link aparece para copiar.
+func TestCriarUsuario_SemSMTPRecusaNoPedidoENaAprovacao(t *testing.T) {
+	t.Run("no pedido", func(t *testing.T) {
+		b := novaBancadaTool(t)
+		c := semearClientesDeUsuario(t, b)
+		_, correio := ligarBoasVindas(t, b, false)
+		antes := contarUsuarios(t, b)
+
+		texto := b.chamarErro(t, toolCriarUsuario, argsCriarUsuario("Pessoa Nova", "nova@sem.smtp.teste", "cliente", c.cA))
+
+		require.Contains(t, texto, "[email_desligado]")
+		require.Contains(t, texto, "SMTP")
+		require.Contains(t, texto, "/admin/users", "a saída é criar pela tela")
+		require.Equal(t, antes, contarUsuarios(t, b))
+		require.Zero(t, correio.total())
+		require.Zero(t, b.totalAuditorias(t), "recusa não deixa pedido nem auditoria")
+	})
+	t.Run("na aprovação", func(t *testing.T) {
+		b := novaBancadaTool(t)
+		c := semearClientesDeUsuario(t, b)
+		ligarBoasVindas(t, b, true)
+		out := b.pedePendente(t, toolCriarUsuario, argsCriarUsuario("Pessoa Nova", "nova@sem.smtp.teste", "cliente", c.cA))
+		antes := contarUsuarios(t, b)
+		ligarBoasVindas(t, b, false) // o SMTP caiu no meio
+
+		exigeRecusaNaAprovacao(t, b, toolCriarUsuario, out["pendente_id"].(string), "email_desligado")
+		require.Equal(t, antes, contarUsuarios(t, b))
 	})
 }
 

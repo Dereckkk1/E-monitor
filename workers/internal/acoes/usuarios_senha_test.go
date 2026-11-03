@@ -1,6 +1,7 @@
 package acoes
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode"
@@ -117,6 +118,46 @@ func TestBoasVindasDisponiveis(t *testing.T) {
 		require.False(t, (&Servico{BoasVindas: &emissorIndisponivel{}}).BoasVindasDisponiveis())
 	})
 }
+
+// ── BoasVindasEmailLigado ───────────────────────────────────────────────
+
+// Convite emitido sem SMTP fica com email_status disabled: a pessoa criada pelo MCP não
+// receberia a senha. O emissor real diz se o serviço manda email de verdade.
+func TestBoasVindasEmailLigado(t *testing.T) {
+	cifra, err := welcome.NewCipher(strings.Repeat("ab", 32))
+	require.NoError(t, err)
+	t.Run("sem emissor", func(t *testing.T) {
+		require.False(t, (&Servico{}).BoasVindasEmailLigado())
+	})
+	t.Run("serviço nil dentro do adaptador", func(t *testing.T) {
+		require.False(t, (&Servico{BoasVindas: BoasVindasDoServico(nil)}).BoasVindasEmailLigado())
+	})
+	t.Run("serviço com chave mas sem SMTP", func(t *testing.T) {
+		svc := welcome.New(welcome.Config{Cipher: cifra, Log: zap.NewNop()})
+		require.True(t, (&Servico{BoasVindas: BoasVindasDoServico(svc)}).BoasVindasDisponiveis())
+		require.False(t, (&Servico{BoasVindas: BoasVindasDoServico(svc)}).BoasVindasEmailLigado())
+	})
+	t.Run("serviço com chave e SMTP", func(t *testing.T) {
+		svc := welcome.New(welcome.Config{Cipher: cifra, Mailer: mailerNulo{}, MailEnabled: true, Log: zap.NewNop()})
+		require.True(t, (&Servico{BoasVindas: BoasVindasDoServico(svc)}).BoasVindasEmailLigado())
+	})
+	t.Run("emissor que não diz (um falso de teste) vale como ligado", func(t *testing.T) {
+		require.True(t, (&Servico{BoasVindas: &emissorFalso{}}).BoasVindasEmailLigado())
+	})
+	t.Run("emissor que diz que não", func(t *testing.T) {
+		require.False(t, (&Servico{BoasVindas: &emissorSemEmail{}}).BoasVindasEmailLigado())
+	})
+}
+
+// mailerNulo satisfaz mailer.Mailer sem enviar nada.
+type mailerNulo struct{}
+
+func (mailerNulo) Send(context.Context, []string, string, string, string) error { return nil }
+
+// emissorSemEmail implementa o opcional EmailLigado() devolvendo falso.
+type emissorSemEmail struct{ emissorFalso }
+
+func (*emissorSemEmail) EmailLigado() bool { return false }
 
 // emissorIndisponivel implementa o opcional Disponivel() devolvendo falso.
 type emissorIndisponivel struct{ emissorFalso }

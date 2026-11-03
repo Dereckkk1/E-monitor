@@ -26,7 +26,9 @@ import (
 //
 // F4-11 — o segredo não passa pelo chat. criar_usuario não recebe senha: o
 // Executar pede uma aleatória ao servidor (acoes.SenhaAleatoria) e o email de
-// boas-vindas, obrigatório, é o que a entrega. A senha nasce no Executar, vive só
+// boas-vindas, obrigatório, é o que a entrega — por isso a tool recusa quando ele não
+// pode sair (sem a chave de cifra: boas_vindas_indisponivel; sem SMTP: email_desligado).
+// Falha do envio DEPOIS de criar não é recusa: vira ressalva na aprovação. A senha nasce no Executar, vive só
 // na memória até o CriarUsuario cifrá-la no convite, e nunca entra no pedido, no
 // preview, no resultado nem no audit_log.
 //
@@ -372,6 +374,14 @@ func planejarNovoUsuario(ctx context.Context, E *Escritas, in entradaCriarUsuari
 			"o email de boas-vindas não está disponível neste servidor (falta a chave WELCOME_ENC_KEY): é ele que entrega a senha à pessoa, "+
 				"então o usuário não pode ser criado por aqui. Crie pela tela /admin/users")
 	}
+	// E o email precisa SAIR: sem SMTP o convite é emitido mas o email fica disabled, e a pessoa
+	// criada não teria a senha (a rota deixa o admin copiar o link da tela; o MCP não expõe o link).
+	// Mesma recusa de reenviar_pos_venda.
+	if !E.Acoes.BoasVindasEmailLigado() {
+		return nil, errRecusa(codigoEmailDesligado,
+			"o envio de email está desligado neste servidor (sem SMTP configurado): é pelo email de boas-vindas que a pessoa recebe a senha, "+
+				"então o usuário não pode ser criado por aqui. Crie pela tela /admin/users, onde o link de acesso aparece para você mandar por fora")
+	}
 	if pl.clientes, err = clientesParaUsuario(ctx, E.Leitura); err != nil {
 		return nil, err
 	}
@@ -395,7 +405,7 @@ func escritaCriarUsuario(cfg ConfigServidor) Escrita[entradaCriarUsuario] {
 		Descricao: "Cria um usuário do E-monitor (a tela /admin/users): administrador (vê todos os clientes e as telas de operação) ou cliente (vê só a carteira " +
 			"de cliente_ids; uma agência pode ter vários clientes). A senha NÃO passa por aqui: o sistema gera uma aleatória e a entrega à pessoa pelo email de " +
 			"boas-vindas (com o link da página de acesso), que é obrigatório — nunca peça nem informe senha. Sem a chave de boas-vindas no servidor a tool recusa " +
-			"(boas_vindas_indisponivel) e a criação é pela tela. O resultado é o usuário no formato de obter_usuario, sem link nem senha; se o email não sair " +
+			"(boas_vindas_indisponivel) e sem SMTP também (email_desligado): em ambos a criação é pela tela. O resultado é o usuário no formato de obter_usuario, sem link nem senha; se o email não sair " +
 			"(boas_vindas.status_email diferente de sent) a pessoa não tem a senha e as ressalvas da aprovação avisam: redefina pela tela. Recusas: e-mail já em uso (email_taken), " +
 			"e-mail inválido, cliente sem cliente_ids (client_id_required), admin com cliente_ids (client_id_not_allowed_for_admin), cliente inexistente " +
 			"(client_not_found). Um pedido por pessoa. " + fraseCritica,
