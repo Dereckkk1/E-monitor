@@ -307,6 +307,14 @@ func TestPendentesHTTP_ResumoDesatualizadoDa422EAListaMostraOResumoNovo(t *testi
 	require.Equal(t, "preview_desatualizado", m["error"])
 	require.Equal(t, msgPreviewDesatualizado, m["mensagem"])
 	require.Equal(t, 0, sonda.execucoes)
+	// O 422 já leva o pedido relido, com o preview NOVO: quem aprova lê o que vale agora.
+	p422 := m["pendente"].(map[string]any)
+	require.Equal(t, pend.ID.String(), p422["id"])
+	require.Equal(t, "pendente", p422["estado"])
+	require.Equal(t, "vai gravar abc", p422["preview"].(map[string]any)["resumo"])
+	require.NotContains(t, p422["preview"], "efeitos", "o resumo velho (com efeito) saiu")
+	require.Equal(t, msgPreviewDesatualizado, p422["erro"])
+	require.Contains(t, p422, "ressalvas")
 
 	_, lista := b.fazer(http.MethodGet, "/mcp/pendentes?id="+pend.ID.String(), b.jwtDono)
 	d := lista["destaque"].(map[string]any)
