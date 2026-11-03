@@ -550,6 +550,49 @@ func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
 	}
 }
 
+// Agência com 2+ clientes: o usuário nasce com o primeiro e a carteira inteira vem numa segunda
+// gravação. Se ela falha, o usuário JÁ existe e o convite não sai: o pedido fica `falhou` (a pessoa
+// não deve aprovar de novo, o e-mail já está em uso) com o texto que diz o que ficou feito — não o
+// "a execução caiu" genérico, que não diria que existe um usuário sem senha para conferir.
+func TestCriarUsuario_CarteiraQueFalhaDeixaOPedidoFalhouComOTextoDoMeioEstado(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearClientesDeUsuario(t, b)
+	_, correio := ligarBoasVindas(t, b, true)
+	for _, q := range []string{
+		`CREATE OR REPLACE FUNCTION tg_teste_carteira_falha_mcp() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN RAISE EXCEPTION 'carteira de teste recusada'; END $$`,
+		fmt.Sprintf(`CREATE TRIGGER tg_teste_carteira_falha_mcp BEFORE INSERT ON user_clients
+		 FOR EACH ROW WHEN (NEW.client_id = '%s') EXECUTE FUNCTION tg_teste_carteira_falha_mcp()`, c.cB),
+	} {
+		_, err := b.pool.Exec(b.ctx, q)
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		b.pool.Exec(b.ctx, `DROP TRIGGER IF EXISTS tg_teste_carteira_falha_mcp ON user_clients`)
+		b.pool.Exec(b.ctx, `DROP FUNCTION IF EXISTS tg_teste_carteira_falha_mcp()`)
+	})
+	email := "agencia@meioestado.teste"
+	out := b.pedePendente(t, toolCriarUsuario, argsCriarUsuario("Agência", email, "cliente", c.cA, c.cB))
+	pid := out["pendente_id"].(string)
+
+	_, err := b.tentarAprovar(t, pid)
+
+	require.ErrorIs(t, err, ErrExecucaoInterrompida)
+	texto := mensagemDaInterrupcao(err)
+	require.Contains(t, texto, email)
+	require.Contains(t, texto, "foi criado")
+	require.Contains(t, texto, "NÃO foi enviado")
+	require.Contains(t, texto, "a pessoa não tem a senha")
+	require.NotContains(t, texto, "recusada", "o erro do banco não chega à pessoa")
+	require.Equal(t, "falhou", b.estadoDaPendente(t, pid))
+	require.Equal(t, texto, *erroDaPendente(t, b, pid))
+	require.NotEqual(t, msgInterrompida, texto)
+	id := idDoUsuarioPorEmail(t, b, email)
+	require.NotEqual(t, uuid.Nil, id, "o usuário existe")
+	require.Zero(t, correio.total(), "o convite não saiu")
+	require.Empty(t, b.auditoria(t, "mcp.escrita.criar_usuario"))
+}
+
 // O aviso "a pessoa não tem a senha" não pode morrer no momento do clique: quem recarrega
 // /pendentes?id= e a IA, que consulta minhas_pendentes depois, leem a mesma ressalva gravada.
 func TestCriarUsuario_AvisoDoEmailVoltaPorHTTPEPorMinhasPendentes(t *testing.T) {

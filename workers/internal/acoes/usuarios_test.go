@@ -3,10 +3,12 @@ package acoes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"radiocheck/internal/mcp/mcptest"
@@ -33,10 +35,17 @@ func (e *emissorFalso) Emitir(_ context.Context, _ *users.User, senha string, at
 
 func srvUsuarios(t *testing.T) (context.Context, *Servico, uuid.UUID, uuid.UUID) {
 	t.Helper()
+	ctx, srv, a, b, _ := srvUsuariosComPool(t)
+	return ctx, srv, a, b
+}
+
+// srvUsuariosComPool é o srvUsuarios mais o pool, para o teste que mexe no banco por fora.
+func srvUsuariosComPool(t *testing.T) (context.Context, *Servico, uuid.UUID, uuid.UUID, *pgxpool.Pool) {
+	t.Helper()
 	ctx, pool := mcptest.DBCatalogo(t)
 	a := mcptest.Cliente(t, ctx, pool, "Cliente Usuário A "+uuid.NewString()[:6])
 	b := mcptest.Cliente(t, ctx, pool, "Cliente Usuário B "+uuid.NewString()[:6])
-	return ctx, NovoServico(pool, nil, nil, nil), a, b
+	return ctx, NovoServico(pool, nil, nil, nil), a, b, pool
 }
 
 func emailUnico() string { return "u" + uuid.NewString()[:8] + "@acoes.test" }
@@ -281,4 +290,75 @@ func TestEditarUsuario_Carteira(t *testing.T) {
 		require.Nil(t, got.ClientID)
 		require.Empty(t, got.ClientIDs)
 	})
+}
+
+// Carteira com 2+ clientes: o usuário nasce com o primeiro e o SetClients grava o resto numa segunda
+// escrita. Se ele falhar, o usuário JÁ existe (só com o primeiro cliente) e o convite não sairá: o
+// erro é *ErroAposEscrita — nunca Recusa — e o texto diz isso à pessoa que aprovou.
+func TestCriarUsuario_CarteiraQueFalhaDepoisDeCriarVoltaComOTextoDoMeioEstado(t *testing.T) {
+	ctx, srv, a, b, pool := srvUsuariosComPool(t)
+	// Um gatilho recusa gravar o SEGUNDO cliente na carteira (o principal, que o gatilho da 0062
+	// insere na criação, passa): a Create dá certo e só o SetClients cai.
+	for _, q := range []string{
+		`CREATE OR REPLACE FUNCTION tg_teste_carteira_falha() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN RAISE EXCEPTION 'carteira de teste recusada'; END $$`,
+		fmt.Sprintf(`CREATE TRIGGER tg_teste_carteira_falha BEFORE INSERT ON user_clients
+		 FOR EACH ROW WHEN (NEW.client_id = '%s') EXECUTE FUNCTION tg_teste_carteira_falha()`, b),
+	} {
+		_, err := pool.Exec(ctx, q)
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DROP TRIGGER IF EXISTS tg_teste_carteira_falha ON user_clients`)
+		pool.Exec(ctx, `DROP FUNCTION IF EXISTS tg_teste_carteira_falha()`)
+	})
+	f := &emissorFalso{resposta: &BoasVindas{EmailStatus: "sent"}}
+	srv.BoasVindas = f
+	em := emailUnico()
+
+	u, bv, err := srv.CriarUsuario(ctx, EntradaUsuario{Email: em, Senha: senhaBoa, Nome: "Ag", Papel: "client",
+		ClienteIDs: []uuid.UUID{a, b}, EnviarBoasVindas: true})
+
+	require.Nil(t, u)
+	require.Nil(t, bv)
+	var r *Recusa
+	require.False(t, errors.As(err, &r), "o usuário já foi gravado: nunca Recusa (diria que nada aconteceu): %v", err)
+	var pos *ErroAposEscrita
+	require.ErrorAs(t, err, &pos)
+	require.Contains(t, pos.Mensagem, em)
+	require.Contains(t, pos.Mensagem, "foi criado")
+	require.Contains(t, pos.Mensagem, "NÃO foi enviado")
+	require.Contains(t, pos.Mensagem, "a pessoa não tem a senha")
+	require.Contains(t, pos.Mensagem, "/admin/users")
+	require.NotContains(t, pos.Mensagem, "carteira de teste recusada", "o erro do banco não vai para a pessoa")
+	require.ErrorContains(t, err, "carteira de teste recusada", "a causa técnica fica no erro, para o log")
+	require.Zero(t, f.chamadas, "sem a carteira inteira o convite não sai")
+	criado, gerr := srv.Usuarios.GetByEmail(ctx, em)
+	require.NoError(t, gerr, "o usuário existe")
+	require.Equal(t, []uuid.UUID{a}, criado.ClientIDs, "ficou só com o primeiro cliente")
+}
+
+// A carteira foi gravada e só a releitura do usuário caiu: o convite SAI mesmo assim (ele só precisa
+// do id, do email e do nome) e a criação não vira erro — antes o usuário ficava criado, sem convite, e
+// o pedido do MCP dado como falhou.
+func TestCriarUsuario_ReleituraQueFalhaDepoisDaCarteiraAindaEmiteOConvite(t *testing.T) {
+	ctx, srv, a, b := srvUsuarios(t)
+	f := &emissorFalso{resposta: &BoasVindas{EmailStatus: "sent"}}
+	srv.BoasVindas = f
+	srv.releituraUsuario = func(context.Context, uuid.UUID) (*users.User, error) { return nil, errors.New("releitura caiu") }
+	em := emailUnico()
+
+	u, bv, err := srv.CriarUsuario(ctx, EntradaUsuario{Email: em, Senha: senhaBoa, Nome: "Ag", Papel: "client",
+		ClienteIDs: []uuid.UUID{a, b}, EnviarBoasVindas: true})
+
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	require.Equal(t, em, u.Email)
+	require.ElementsMatch(t, []uuid.UUID{a, b}, u.ClientIDs, "a carteira que foi gravada")
+	require.Equal(t, 1, f.chamadas, "o convite saiu")
+	require.Equal(t, senhaBoa, f.ultimaSenh)
+	require.Equal(t, &BoasVindas{EmailStatus: "sent"}, bv)
+	gravado, gerr := srv.Usuarios.GetByEmail(ctx, em)
+	require.NoError(t, gerr)
+	require.ElementsMatch(t, []uuid.UUID{a, b}, gravado.ClientIDs)
 }
