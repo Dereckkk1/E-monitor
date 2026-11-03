@@ -113,4 +113,4 @@ desativar/reativar ainda não existe até o backend subir). Ver
   grava o pedido e o admin aprova em `/pendentes`; `apagar_cliente` só passa sem vínculos, `cliente_com_vinculos`).
   Desativar só bloqueia o **login novo**: a sessão aberta (até 8 h), as chaves de API, os webhooks e o
   monitoramento das campanhas **continuam** (o preview avisa). E o `client.upsert` do hub (`hubsync.go`) regrava
-  `is_active` e recria cliente vinculado que foi apagado aqui — as ações do E-monitor nunca avisam o hub.
+  `is_active` e recria cliente vinculado que foi apagado aqui — ativar, desativar, editar e apagar cliente no E-monitor não avisam o hub (só a criação manda `cliente.upsert`).

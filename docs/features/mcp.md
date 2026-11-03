@@ -770,7 +770,7 @@ caminhos (backend primeiro: a tela chama rotas novas).
 - **Corrida do último admin.** `ultimo_admin` conta os admins ativos no `Preview`/`planejar*`, **fora** da transação da escrita
   (`acoes.EditarUsuario`). Dois pedidos aprovados ao mesmo tempo (ou em abas diferentes) podem rebaixar ou desativar os dois últimos
   admins. Fix: advisory lock em `acoes.EditarUsuario` e recontar dentro dele.
-- **Hub.** As ações do E-monitor nunca avisam o hub, e o `client.upsert` do hub (`hubsync.go`) regrava `is_active` e **recria** cliente
+- **Hub.** Ativar, desativar, editar e apagar cliente não avisam o hub (só `acoes.CriarCliente` manda `cliente.upsert`), e o `client.upsert` do hub (`hubsync.go`) regrava `is_active` e **recria** cliente
   vinculado que foi apagado aqui. `desativar_cliente`/`apagar_cliente` de um cliente com ponte são desfeitos na próxima edição dele no
   hub (o preview avisa).
 - **Webhook.** O worker lê a URL na hora do envio e ignora `webhook_enabled`: desligar não cancela as entregas já na fila e trocar a
