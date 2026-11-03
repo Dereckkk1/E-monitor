@@ -555,7 +555,18 @@ func (h *DetectionsHandler) Ignore(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeVeiculacaoGravada(w, id, updated)
+}
+
+// writeVeiculacaoGravada responde a veiculação como ficou. A ação devolve nil (sem erro) quando a
+// escrita está gravada e só a releitura falhou: a resposta continua sendo 200 — a tocada FOI
+// ignorada/restaurada —, só com o id.
+func writeVeiculacaoGravada(w http.ResponseWriter, id uuid.UUID, det *catalog.Detection) {
+	if det == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"id": id})
+		return
+	}
+	writeJSON(w, http.StatusOK, det)
 }
 
 // Restore reverts Ignore by clearing ignored_at/ignored_by. The row counts
@@ -573,7 +584,7 @@ func (h *DetectionsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeVeiculacaoGravada(w, id, updated)
 }
 
 // Export streams detections as CSV (semicolon-separated, BOM-prefixed UTF-8

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/catalog"
 )
@@ -86,6 +87,11 @@ func (s *Servico) CriarVeiculacaoManual(ctx context.Context, in EntradaManual) (
 // IgnorarVeiculacao desconsidera a tocada (ignored_at/ignored_by): ela sai da
 // conta e a vaga que ocupava na cota do dia passa à próxima excedente.
 // Reversível por RestaurarVeiculacao.
+//
+// Devolve nil (sem erro) se só a releitura final falhar: a escrita já está
+// gravada e nenhum erro dela pode vir depois (diria "não ignorou" de uma tocada
+// ignorada). Quem chama tolera o nil: a tool do MCP monta a resposta de novo e a
+// rota responde só o id.
 func (s *Servico) IgnorarVeiculacao(ctx context.Context, id, ator uuid.UUID) (*catalog.Detection, error) {
 	det, err := s.veiculacaoExistente(ctx, id)
 	if err != nil {
@@ -94,11 +100,12 @@ func (s *Servico) IgnorarVeiculacao(ctx context.Context, id, ator uuid.UUID) (*c
 	if err := s.Veiculacoes.Ignore(ctx, det.ID, ator); err != nil {
 		return nil, err
 	}
-	return s.veiculacaoExistente(ctx, id)
+	return s.releituraDaVeiculacao(ctx, id), nil
 }
 
 // RestaurarVeiculacao desfaz IgnorarVeiculacao: a tocada volta à conta e retoma
-// o lugar cronológico dela na cota do dia (rebaixando quem ocupou a vaga).
+// o lugar cronológico dela na cota do dia (rebaixando quem ocupou a vaga). O
+// mesmo contrato do nil de IgnorarVeiculacao.
 func (s *Servico) RestaurarVeiculacao(ctx context.Context, id uuid.UUID) (*catalog.Detection, error) {
 	det, err := s.veiculacaoExistente(ctx, id)
 	if err != nil {
@@ -107,13 +114,25 @@ func (s *Servico) RestaurarVeiculacao(ctx context.Context, id uuid.UUID) (*catal
 	if err := s.Veiculacoes.Restore(ctx, det.ID); err != nil {
 		return nil, err
 	}
-	return s.veiculacaoExistente(ctx, id)
+	return s.releituraDaVeiculacao(ctx, id), nil
+}
+
+// releituraDaVeiculacao relê a tocada DEPOIS de ela ter sido gravada. Falhar aqui
+// (inclusive a tocada ter sumido no meio) não é erro nem recusa — a escrita
+// aconteceu —: loga e devolve nil, o mesmo padrão do CancelarCampanha.
+func (s *Servico) releituraDaVeiculacao(ctx context.Context, id uuid.UUID) *catalog.Detection {
+	det, err := s.Veiculacoes.Get(ctx, id)
+	if err != nil {
+		zap.L().Warn("veiculação gravada, mas a releitura falhou",
+			zap.String("detection_id", id.String()), zap.Error(err))
+		return nil
+	}
+	return det
 }
 
 // veiculacaoExistente: sem a checagem o UPDATE não acharia linha e a ação
-// "funcionaria" em silêncio. Também serve à releitura final: se a tocada sumiu
-// no meio da operação, é nao_encontrado + ErrAlvoInexistente, não erro interno.
-// O texto é o da rota.
+// "funcionaria" em silêncio. Só vale ANTES de gravar: a tocada que não existe é
+// nao_encontrado + ErrAlvoInexistente, não erro interno. O texto é o da rota.
 func (s *Servico) veiculacaoExistente(ctx context.Context, id uuid.UUID) (*catalog.Detection, error) {
 	det, err := s.Veiculacoes.Get(ctx, id)
 	if err != nil {
