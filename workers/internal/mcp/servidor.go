@@ -22,9 +22,12 @@ import (
 // A ordem é ALFABÉTICA: é a que o SDK devolve em tools/list.
 var ToolsEsperadas = []string{
 	"apagar_campanha",
+	"apagar_cliente",
+	"apagar_material",
 	"apagar_override",
 	"apagar_regra_distribuicao",
 	"assertividade",
+	"ativar_cliente",
 	"auditoria_mcp",
 	"buscar_emissoras",
 	"cancelar_campanha",
@@ -35,6 +38,7 @@ var ToolsEsperadas = []string{
 	"criar_usuario",
 	"criar_veiculacao_manual",
 	"definir_override",
+	"desativar_cliente",
 	"desativar_usuario",
 	"destinatarios_pos_venda",
 	"desvincular_material",

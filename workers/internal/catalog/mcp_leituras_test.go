@@ -349,3 +349,140 @@ func instantesUTC(ts []time.Time) []string {
 	}
 	return out
 }
+
+func TestClients_Footprint(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClients(pool)
+	cli := insSeedClient(t, ctx, pool, "Pegada "+uuid.NewString()[:6])
+	st := insSeedStationNoProfile(t, ctx, pool, "Pegada "+uuid.NewString()[:6])
+
+	vazio, err := repo.Footprint(ctx, cli)
+	require.NoError(t, err)
+	require.Equal(t, ClientFootprint{}, vazio, "cliente sem nada: tudo zerado, webhook não configurado")
+
+	// O que bloqueia o DELETE (campanha e material) e o que vai junto (CASCADE).
+	insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	insSeedTypeAndMaterial(t, ctx, pool, cli, "pegada")
+	_, err = pool.Exec(ctx, `INSERT INTO api_keys (client_id, key_hash, revoked_at) VALUES ($1, $2, NULL), ($1, $3, now())`,
+		cli, uuid.NewString()+uuid.NewString()[:28], uuid.NewString()+uuid.NewString()[:28])
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO webhook_deliveries (client_id, event_type, payload) VALUES ($1, 'detection.confirmed', '{}'), ($1, 'detection.confirmed', '{}')`, cli)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO webhook_failures (client_id, detection_id, payload, next_retry_at) VALUES ($1, $2, '{}', now())`, cli, uuid.New())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE clients SET webhook_url = 'https://cliente.teste/hook' WHERE id = $1`, cli)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO client_station_pmm (client_id, station_id, pmm_target) VALUES ($1, $2, 1000)`, cli, st)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO post_sale_reports (client_id, title, status) VALUES ($1, 'Rascunho', 'draft'), ($1, 'Enviado', 'sent')`, cli)
+	require.NoError(t, err)
+
+	got, err := repo.Footprint(ctx, cli)
+	require.NoError(t, err)
+	require.Equal(t, DependentCounts{Campaigns: 1, Materials: 1, Users: 0}, got.Dependents)
+	require.Equal(t, 2, got.APIKeys)
+	require.Equal(t, 1, got.APIKeysActive, "a chave revogada conta no total mas não nas ativas")
+	require.Equal(t, 2, got.WebhookDeliveries)
+	require.Equal(t, 1, got.WebhookFailures)
+	require.True(t, got.WebhookConfigured)
+	require.Equal(t, 1, got.PMMRows)
+	require.Equal(t, 2, got.PostSaleReports)
+	require.Equal(t, 1, got.PostSaleSent)
+
+	// Webhook em branco não conta como configurado.
+	_, err = pool.Exec(ctx, `UPDATE clients SET webhook_url = '' WHERE id = $1`, cli)
+	require.NoError(t, err)
+	got, err = repo.Footprint(ctx, cli)
+	require.NoError(t, err)
+	require.False(t, got.WebhookConfigured)
+}
+
+func TestClients_ActiveUsers(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClients(pool)
+	alvo := insSeedClient(t, ctx, pool, "Alvo "+uuid.NewString()[:6])
+	outroAtivo := insSeedClient(t, ctx, pool, "Outro ativo "+uuid.NewString()[:6])
+	outroInativo := insSeedClient(t, ctx, pool, "Outro inativo "+uuid.NewString()[:6])
+	_, err := repo.SetActive(ctx, outroInativo, false)
+	require.NoError(t, err)
+
+	novo := func(nome string, ativo bool, apagado bool, carteira ...uuid.UUID) uuid.UUID {
+		var id uuid.UUID
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO users (email, password_hash, role, name, client_id, is_active, deleted_at)
+			VALUES ($1, 'x', 'viewer', $2, $3, $4, CASE WHEN $5 THEN now() END) RETURNING id`,
+			nome+"-"+uuid.NewString()[:6]+"@teste.mcp", nome, carteira[0], ativo, apagado).Scan(&id))
+		t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id) })
+		for _, c := range carteira[1:] {
+			_, err := pool.Exec(ctx, `INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, c)
+			require.NoError(t, err)
+		}
+		return id
+	}
+	soAlvo := novo("Ana só", true, false, alvo)
+	comOutroAtivo := novo("Bia agência", true, false, alvo, outroAtivo)
+	comOutroInativo := novo("Caio agência", true, false, alvo, outroInativo)
+	novo("Davi desativado", false, false, alvo)
+	novo("Eva apagada", true, true, alvo)
+	novo("Fábio de outro cliente", true, false, outroAtivo)
+
+	got, err := repo.ActiveUsers(ctx, alvo)
+	require.NoError(t, err)
+	require.Len(t, got, 3, "desativado, apagado e de outro cliente ficam de fora")
+	porID := map[uuid.UUID]ClientUserAccess{}
+	for _, u := range got {
+		porID[u.ID] = u
+	}
+	require.False(t, porID[soAlvo].OtherActiveClient, "só tem o alvo")
+	require.True(t, porID[comOutroAtivo].OtherActiveClient, "segue entrando pelo outro cliente ativo")
+	require.False(t, porID[comOutroInativo].OtherActiveClient, "o outro cliente também está desativado")
+	require.Equal(t, "Ana só", got[0].Name, "ordenado por nome")
+
+	nenhum, err := repo.ActiveUsers(ctx, uuid.New())
+	require.NoError(t, err)
+	require.Empty(t, nenhum)
+}
+
+func TestMaterials_Footprint(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewMaterials(pool)
+	cli := insSeedClient(t, ctx, pool, "Pegada mat "+uuid.NewString()[:6])
+	st := insSeedStationNoProfile(t, ctx, pool, "Pegada mat "+uuid.NewString()[:6])
+	camp := insSeedCampaign(t, ctx, pool, cli, "2026-10-01", "2026-10-31")
+	_, alvo := insSeedTypeAndMaterial(t, ctx, pool, cli, "alvo")
+	_, outro := insSeedTypeAndMaterial(t, ctx, pool, cli, "outro")
+
+	vazio, err := repo.Footprint(ctx, alvo)
+	require.NoError(t, err)
+	require.Equal(t, MaterialFootprint{}, vazio)
+
+	// Ponteiro de similaridade e cache de gêmeos acústicos: o que o DELETE mexe.
+	_, err = pool.Exec(ctx, `UPDATE materials SET most_similar_material_id = $1 WHERE id = $2`, alvo, outro)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO material_twin_discriminative (material_id, twin_id, disc_ranges, disc_frames) VALUES ($1, $2, '{}', 0)`, alvo, outro)
+	require.NoError(t, err)
+	comRastro, err := repo.Footprint(ctx, alvo)
+	require.NoError(t, err)
+	require.Equal(t, 1, comRastro.SimilarRefs)
+	require.Equal(t, 1, comRastro.TwinRows)
+	require.False(t, comRastro.HasDetections)
+	require.False(t, comRastro.HasProjections)
+
+	// Tocada do material: a base e a projeção.
+	insSeedDetection(t, ctx, pool, camp, alvo, st, "in_slot", "2026-10-10")
+	got, err := repo.Footprint(ctx, alvo)
+	require.NoError(t, err)
+	require.True(t, got.HasDetections)
+	require.True(t, got.HasProjections)
+
+	// Só a projeção: a tocada base é de OUTRO material, a projeção desta campanha cita o alvo.
+	var det uuid.UUID
+	var quando time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT id, detected_at FROM detections WHERE commercial_id = $1`, alvo).Scan(&det, &quando))
+	_, err = pool.Exec(ctx, `UPDATE detections SET commercial_id = $1 WHERE id = $2 AND detected_at = $3`, outro, det, quando)
+	require.NoError(t, err)
+	got, err = repo.Footprint(ctx, alvo)
+	require.NoError(t, err)
+	require.False(t, got.HasDetections)
+	require.True(t, got.HasProjections, "a projeção ainda cita o material")
+}
