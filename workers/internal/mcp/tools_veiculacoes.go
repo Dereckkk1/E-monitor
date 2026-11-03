@@ -188,6 +188,77 @@ func recusaCampoDoPeriodo(campo string) (*sdk.CallToolResult, error) {
 	return recusaEntrada(campo)
 }
 
+// montarVeiculacao é a veiculação no formato de obter_veiculacao: a tool de
+// leitura e as escritas de veiculação (que devolvem a tocada como ficou) montam
+// a resposta por aqui. Veiculação inexistente volta como pgx.ErrNoRows, sem
+// embrulho: cada chamador a traduz para a recusa do seu mundo.
+func montarVeiculacao(ctx context.Context, cfg ConfigServidor, L *Leitura, id uuid.UUID) (saidaObterVeiculacao, error) {
+	d, err := L.Veiculacoes.Get(ctx, id)
+	if err != nil {
+		return saidaObterVeiculacao{}, err
+	}
+	atribs, err := L.Veiculacoes.Attributions(ctx, id, d.DetectedAt) // detected_at poda as partições
+	if err != nil {
+		return saidaObterVeiculacao{}, err
+	}
+	aprovada, err := L.Veiculacoes.Approved(ctx, id, d.DetectedAt)
+	if err != nil {
+		return saidaObterVeiculacao{}, err
+	}
+	out := saidaObterVeiculacao{
+		ID: d.ID.String(), Quando: instante(d.DetectedAt), Emissora: refDe(d.StationID, d.StationName),
+		Material: refDe(d.CommercialID, d.CommercialName), Campanha: ref{ID: d.CampaignID.String()},
+		Categoria: categoriaDe(d.Category), Aprovada: aprovada, Atribuicoes: make([]atribuicaoDTO, 0, len(atribs)),
+		Confianca: d.Confidence, CoberturaTemporal: d.TemporalCoverage, CoberturaAudit: d.AuditCoverage,
+		Hashes: d.HashCount, Evidencia: evidenciaDTO{Status: d.EvidenceStatus, TamanhoBytes: d.EvidenceSizeBytes},
+		IgnoradaEm: instanteOpc(d.IgnoredAt), RetratadaEm: instanteOpc(d.RetractedAt), Roteiro: d.CommercialScript,
+		Links: linksVeiculacao{Ouvir: cfg.link("/detections/" + d.ID.String())},
+	}
+	canonicaProjetada := false
+	for _, a := range atribs {
+		if a.CampaignID == d.CampaignID {
+			out.Campanha.Nome = a.CampaignName
+			canonicaProjetada = true
+		}
+		out.Atribuicoes = append(out.Atribuicoes, atribuicaoDTO{
+			Campanha: refDe(a.CampaignID, a.CampaignName), Material: refDe(a.CommercialID, a.CommercialName),
+			Categoria: categoriaDe(a.Category),
+		})
+	}
+	if !canonicaProjetada {
+		camp, err := L.Campanhas.Get(ctx, d.CampaignID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return saidaObterVeiculacao{}, err
+		}
+		if camp != nil {
+			out.Campanha.Nome = camp.Name
+		}
+		out.Ressalvas = append(out.Ressalvas,
+			"A campanha canônica desta veiculação não tem projeção em detection_campaigns: a grade e os relatórios não a contam para essa campanha.")
+	}
+	if d.ManualAt != nil {
+		m := &manualDTO{Em: instante(*d.ManualAt), Nota: d.ManualNote}
+		if d.ManualBy != nil {
+			por := ref{ID: d.ManualBy.String()}
+			u, err := L.Usuarios.Get(ctx, *d.ManualBy)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return saidaObterVeiculacao{}, err
+			}
+			if u != nil {
+				por.Nome = u.Name
+			}
+			m.Por = &por
+		}
+		out.Manual = m
+	}
+	if !aprovada {
+		out.Ressalvas = append(out.Ressalvas,
+			"Esta veiculação está FORA do conjunto aprovado (ignorada, retratada, rejeitada pelo audit ou ambígua): não conta em nenhuma tela nem relatório; "+
+				"a categoria mostrada pode estar desatualizada (tocadas fora do conjunto aprovado não são recategorizadas).")
+	}
+	return out, nil
+}
+
 func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 	ferramentaLeitura(s, cfg, "listar_veiculacoes",
 		"Lista veiculações (tocadas) como o relatório Data e Hora: quando, emissora, material, tipo, campanha, cliente e "+
@@ -262,71 +333,12 @@ func registrarVeiculacoes(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return recusaEntrada("veiculacao_id")
 			}
-			d, err := L.Veiculacoes.Get(ctx, id)
+			out, err := montarVeiculacao(ctx, cfg, L, id)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return naoEncontrado("veiculação")
 			}
 			if err != nil {
 				return nil, err
-			}
-			atribs, err := L.Veiculacoes.Attributions(ctx, id, d.DetectedAt) // detected_at poda as partições
-			if err != nil {
-				return nil, err
-			}
-			aprovada, err := L.Veiculacoes.Approved(ctx, id, d.DetectedAt)
-			if err != nil {
-				return nil, err
-			}
-			out := saidaObterVeiculacao{
-				ID: d.ID.String(), Quando: instante(d.DetectedAt), Emissora: refDe(d.StationID, d.StationName),
-				Material: refDe(d.CommercialID, d.CommercialName), Campanha: ref{ID: d.CampaignID.String()},
-				Categoria: categoriaDe(d.Category), Aprovada: aprovada, Atribuicoes: make([]atribuicaoDTO, 0, len(atribs)),
-				Confianca: d.Confidence, CoberturaTemporal: d.TemporalCoverage, CoberturaAudit: d.AuditCoverage,
-				Hashes: d.HashCount, Evidencia: evidenciaDTO{Status: d.EvidenceStatus, TamanhoBytes: d.EvidenceSizeBytes},
-				IgnoradaEm: instanteOpc(d.IgnoredAt), RetratadaEm: instanteOpc(d.RetractedAt), Roteiro: d.CommercialScript,
-				Links: linksVeiculacao{Ouvir: cfg.link("/detections/" + d.ID.String())},
-			}
-			canonicaProjetada := false
-			for _, a := range atribs {
-				if a.CampaignID == d.CampaignID {
-					out.Campanha.Nome = a.CampaignName
-					canonicaProjetada = true
-				}
-				out.Atribuicoes = append(out.Atribuicoes, atribuicaoDTO{
-					Campanha: refDe(a.CampaignID, a.CampaignName), Material: refDe(a.CommercialID, a.CommercialName),
-					Categoria: categoriaDe(a.Category),
-				})
-			}
-			if !canonicaProjetada {
-				camp, err := L.Campanhas.Get(ctx, d.CampaignID)
-				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-					return nil, err
-				}
-				if camp != nil {
-					out.Campanha.Nome = camp.Name
-				}
-				out.Ressalvas = append(out.Ressalvas,
-					"A campanha canônica desta veiculação não tem projeção em detection_campaigns: a grade e os relatórios não a contam para essa campanha.")
-			}
-			if d.ManualAt != nil {
-				m := &manualDTO{Em: instante(*d.ManualAt), Nota: d.ManualNote}
-				if d.ManualBy != nil {
-					por := ref{ID: d.ManualBy.String()}
-					u, err := L.Usuarios.Get(ctx, *d.ManualBy)
-					if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-						return nil, err
-					}
-					if u != nil {
-						por.Nome = u.Name
-					}
-					m.Por = &por
-				}
-				out.Manual = m
-			}
-			if !aprovada {
-				out.Ressalvas = append(out.Ressalvas,
-					"Esta veiculação está FORA do conjunto aprovado (ignorada, retratada, rejeitada pelo audit ou ambígua): não conta em nenhuma tela nem relatório; "+
-						"a categoria mostrada pode estar desatualizada (tocadas fora do conjunto aprovado não são recategorizadas).")
 			}
 			return ok(out)
 		})
