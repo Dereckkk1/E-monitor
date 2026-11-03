@@ -824,3 +824,45 @@ func TestCriticasDeVeiculacao_ResultadoSemCampoProibido(t *testing.T) {
 	}
 	require.NotContains(t, texto, "teste.mcp", "a URL do stream não aparece")
 }
+
+// Categoria 6 do contrato para as três escritas de veiculação (criar, ignorar e restaurar): o resultado
+// é o obter_veiculacao, que nomeia a emissora, e a stream_url dela — a credencial do painel de streaming
+// — não pode estar no resultado, nos args gravados, no preview, nas ressalvas nem no audit_log.
+func TestCriticasDeVeiculacao_SemSegredoNoResultadoNemNosArgsGravados(t *testing.T) {
+	for _, caso := range []struct {
+		tool string
+		// pedir devolve os args do pedido (e prepara o estado que a tool exige)
+		pedir func(t *testing.T, b *bancadaTool, c cenarioCritCamp) map[string]any
+	}{
+		{toolCriarVeiculacao, func(t *testing.T, b *bancadaTool, c cenarioCritCamp) map[string]any {
+			return argsCriarVeiculacao(c, quandoNaFaixa, "Lançada pela operação")
+		}},
+		{toolIgnorarVeiculacao, func(t *testing.T, b *bancadaTool, c cenarioCritCamp) map[string]any {
+			p1, _ := celulaDeCotaUm(t, b, c)
+			return argsVeiculacao(p1)
+		}},
+		{toolRestaurarVeiculacao, func(t *testing.T, b *bancadaTool, c cenarioCritCamp) map[string]any {
+			p1, _ := celulaDeCotaUm(t, b, c)
+			ignoraNaTela(t, b, p1)
+			return argsVeiculacao(p1)
+		}},
+	} {
+		t.Run(caso.tool, func(t *testing.T) {
+			b := novaBancadaTool(t)
+			c := semearCritCamp(t, b, "ativa", uuid.Nil)
+			proibidos := semearStreamSecreto(t, b, c.e1, c.e2)
+
+			out := b.pedePendente(t, caso.tool, caso.pedir(t, b, c))
+			pid := out["pendente_id"].(string)
+			ap := b.aprovar(t, pid)
+
+			b.exigeSemSegredoNaEscrita(t, pid, ap, out, proibidos)
+			var gravados []byte
+			require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT args FROM mcp_acoes_pendentes WHERE id = $1`, pid).Scan(&gravados))
+			for _, proibido := range camposProibidosNaEscrita {
+				require.False(t, chavesDoJSON(t, gravados)[proibido], proibido)
+			}
+			require.Contains(t, mustJSON(t, ap.resultadoJSON(t)), "Rádio 1", "o resultado nomeia a emissora (e só o nome)")
+		})
+	}
+}
