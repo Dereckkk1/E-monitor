@@ -963,3 +963,26 @@ func TestEscrita_RecusaDoEscalarOuDoPreviewNaConfirmacaoNaoConsomeOToken(t *test
 		})
 	}
 }
+
+// O mesmo contrato na chamada da tool: o Preview vê o principal pelo contexto,
+// mesmo que o contexto do pedido não o trouxesse (o servidor guarda o principal
+// no closure, não no contexto).
+func TestEscrita_PreviewVeOPrincipalNoContextoDaChamada(t *testing.T) {
+	b := novaBancadaEscrita(t)
+	sonda := &sondaEscrita{}
+	d := sonda.escrita("t_crit", Critico, false)
+	var visto *Principal
+	var tinha bool
+	d.Preview = func(ctx context.Context, _ *Escritas, _ entradaEscritaTeste) (previa, error) {
+		visto, tinha = PrincipalDe(ctx)
+		return previa{Resumo: "r"}, nil
+	}
+	s := b.servidor(principalTeste, d)
+
+	out := chama(t, s, "t_crit", map[string]any{"valor": "x"})
+
+	require.Equal(t, false, out["executou"])
+	require.True(t, tinha, "o Preview da chamada tem de ver o principal")
+	require.Equal(t, principalTeste.UserID, visto.UserID)
+	require.Equal(t, principalTeste.TokenID, visto.TokenID)
+}

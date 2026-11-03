@@ -63,6 +63,10 @@ var escritasEsperadas = map[string]string{
 	"criar_veiculacao_manual": "critico",
 	"ignorar_veiculacao":      "critico",
 	"restaurar_veiculacao":    "critico",
+
+	"criar_usuario":     "critico",
+	"editar_usuario":    "critico",
+	"desativar_usuario": "critico",
 }
 
 // camposProibidosNaEscrita: nenhuma tool de escrita aceita (nem expõe no schema)
@@ -70,7 +74,7 @@ var escritasEsperadas = map[string]string{
 // hub_id é a ponte, que só a Fatia 4/5 liga; senha/token/password são
 // credenciais, que o contrato proíbe trafegar por tool. "confirmacao" é o
 // único campo-token permitido e não casa com nenhum destes nomes.
-var camposProibidosNaEscrita = []string{"stream_url", "hub_id", "senha", "token", "password"}
+var camposProibidosNaEscrita = []string{"stream_url", "hub_id", "senha", "token", "password", "segredo", "secret"}
 
 func listarToolsDoServidor(t *testing.T) []*sdk.Tool {
 	t.Helper()
@@ -134,7 +138,7 @@ func TestInventarioEscrita_ConjuntoEExatamenteOCatalogo(t *testing.T) {
 	}
 	sort.Strings(escritas)
 	sort.Strings(esperadas)
-	require.Len(t, esperadas, 27)
+	require.Len(t, esperadas, 30)
 	require.Equal(t, esperadas, escritas)
 }
 
@@ -210,7 +214,7 @@ func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 			require.NotEqual(t, "confirmacao", obrigatorio, "%s: confirmacao não é obrigatória", tl.Name)
 		}
 	}
-	require.Equal(t, 27, vistas)
+	require.Equal(t, 30, vistas)
 }
 
 // Nenhum schema de escrita carrega campo proibido, em nenhuma profundidade.

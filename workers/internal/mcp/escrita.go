@@ -276,6 +276,10 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 		if p == nil {
 			return falha("sem identidade: o pedido não passou pela autenticação do MCP", "sem_identidade")
 		}
+		// O Preview não recebe o Principal: as recusas que dependem de QUEM pede
+		// (editar_usuario/desativar_usuario nunca a si mesmo) o leem do contexto,
+		// aqui e na aprovação (Aprovar), para valerem nos dois momentos.
+		ctx = ComPrincipal(ctx, p)
 		// Token acima do teto nunca é válido (a forma canônica tem ~57
 		// caracteres): recusa antes de qualquer trabalho, sem tocar o banco.
 		if len(confirmacaoDe(in)) > tetoConfirmacao {

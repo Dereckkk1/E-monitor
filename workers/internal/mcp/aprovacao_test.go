@@ -377,3 +377,26 @@ func TestAprovacao_ContextoCanceladoNaoEncalhaOPedido(t *testing.T) {
 	require.Equal(t, "executada", out.Pendente.Estado)
 	require.Equal(t, 1, sonda.execucoes)
 }
+
+// O Preview roda de novo na aprovação e as recusas que dependem de QUEM pede
+// (editar_usuario/desativar_usuario: nunca a si mesmo) precisam enxergar a pessoa:
+// o Preview não recebe o Principal, então ele vem no contexto (PrincipalDe). Na
+// aprovação é o dono que aprova, com o token do pedido.
+func TestAprovacao_PreviewVeOPrincipalDoDonoNoContexto(t *testing.T) {
+	sonda := &sondaEscrita{}
+	d := sonda.escrita("t_crit", Critico, false)
+	var visto *Principal
+	var tinha bool
+	d.Preview = func(ctx context.Context, _ *Escritas, _ entradaEscritaTeste) (previa, error) {
+		visto, tinha = PrincipalDe(ctx)
+		return previa{Resumo: "r"}, nil
+	}
+	b := novaBancadaAprovacao(t, d)
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	require.NoError(t, err)
+	require.True(t, tinha, "o Preview da aprovação tem de ver o principal")
+	require.Equal(t, principalTeste.UserID, visto.UserID)
+	require.Equal(t, principalTeste.TokenID, visto.TokenID, "o token do pedido, não o da sessão do portal (que não tem)")
+}

@@ -84,6 +84,9 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 
 	ectx, cancela := context.WithTimeout(context.WithoutCancel(ctx), prazoExecucao)
 	defer cancela()
+	// O Preview rerodado na conferência vê o dono e o token do pedido (PrincipalDe):
+	// é assim que a recusa "nunca a si mesmo" vale também na aprovação.
+	ectx = ComPrincipal(ectx, p)
 	fim := context.WithoutCancel(ctx)
 
 	var f feito

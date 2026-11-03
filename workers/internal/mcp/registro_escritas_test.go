@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIndexarEscritas_VinteESete(t *testing.T) {
+func TestIndexarEscritas_Trinta(t *testing.T) {
 	m, err := indexarEscritas(escritasDe(ConfigServidor{}))
 	require.NoError(t, err)
-	require.Len(t, m, 27)
+	require.Len(t, m, 30)
 }
 
 func TestIndexarEscritas_NomeRepetidoFalha(t *testing.T) {
