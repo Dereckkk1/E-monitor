@@ -180,6 +180,7 @@ func TestCancelarCampanha_PedidoNaoEscreveEAprovarCancela(t *testing.T) {
 	require.Equal(t, "cancelada", estado)
 	require.True(t, canceladaEm)
 	require.Equal(t, 1, b.sup.Contagem("StopWorkers", c.camp))
+	require.Contains(t, textoDasRessalvas(ap.Ressalvas), "Os workers de 2 emissora(s) que nenhuma outra campanha ativa usa foram parados")
 	res := ap.resultadoJSON(t)
 	camp := res["campanha"].(map[string]any)
 	require.Equal(t, "cancelada", camp["estado"])
@@ -231,6 +232,38 @@ func TestCancelarCampanha_ProgramadaNaoDerrubaWorker(t *testing.T) {
 	require.Contains(t, mustJSON(t, out["preview"].(map[string]any)["efeitos"]), "programada: ainda não monitora nada")
 	ap := b.aprovar(t, out["pendente_id"].(string))
 	require.Equal(t, "cancelada", ap.resultadoJSON(t)["campanha"].(map[string]any)["estado"])
+	texto := textoDasRessalvas(ap.Ressalvas)
+	require.Contains(t, texto, "nenhum worker precisava parar", "programada não tem worker")
+	require.NotContains(t, texto, "foram parados", "dizer que parou worker seria mentira")
+	require.Contains(t, texto, "congelado em cancelada_em")
+}
+
+// A ressalva da aprovação vem do plano, como o Preview: parou N, ou ninguém parou.
+func TestCancelarCampanha_RessalvaDizOQueFezComOsWorkers(t *testing.T) {
+	t.Run("só parte das emissoras para", func(t *testing.T) {
+		b := novaBancadaTool(t)
+		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		outra := mcptest.Campanha(t, b.ctx, b.pool, c.cli, "Outra ativa", "2026-10-01", "2026-12-31", c.e2, c.e3)
+		mcptest.EstadoCampanha(t, b.ctx, b.pool, outra, "ativa")
+		out := b.pedePendente(t, "cancelar_campanha", argsCancelar(c.camp))
+
+		ap := b.aprovar(t, out["pendente_id"].(string))
+
+		require.Contains(t, textoDasRessalvas(ap.Ressalvas), "Os workers de 1 emissora(s) que nenhuma outra campanha ativa usa foram parados")
+	})
+	t.Run("outra campanha ativa usa todas: ninguém para", func(t *testing.T) {
+		b := novaBancadaTool(t)
+		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		outra := mcptest.Campanha(t, b.ctx, b.pool, c.cli, "Outra ativa", "2026-10-01", "2026-12-31", c.e1, c.e2)
+		mcptest.EstadoCampanha(t, b.ctx, b.pool, outra, "ativa")
+		out := b.pedePendente(t, "cancelar_campanha", argsCancelar(c.camp))
+
+		ap := b.aprovar(t, out["pendente_id"].(string))
+
+		texto := textoDasRessalvas(ap.Ressalvas)
+		require.Contains(t, texto, "Nenhum worker precisava parar")
+		require.NotContains(t, texto, "foram parados")
+	})
 }
 
 func TestCancelarCampanha_ParidadeComARota(t *testing.T) {
