@@ -251,3 +251,49 @@ func chamarHandlerCorpo(t *testing.T, h http.HandlerFunc, metodo, alvo string, c
 }
 
 func ponteiroUUID(id uuid.UUID) *uuid.UUID { return &id }
+
+// donoDoPortal é quem aprova em /pendentes: o dono do pedido logado no portal
+// (sessão do portal, sem token do MCP).
+func (b *bancadaTool) donoDoPortal() *Principal {
+	return &Principal{UserID: b.admin, Email: b.p.Email, Nome: b.p.Nome}
+}
+
+// tentarAprovar aprova o pedido pendente como o dono, sobre a lista REAL das
+// escritas (escritasDe), e devolve o desfecho sem exigir sucesso: serve aos
+// testes que provam a recusa na aprovação.
+func (b *bancadaTool) tentarAprovar(t *testing.T, pendenteID string) (Aprovado, error) {
+	t.Helper()
+	id, err := uuid.Parse(pendenteID)
+	require.NoError(t, err, "pendente_id inválido: %q", pendenteID)
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	return apr.Aprovar(b.ctx, id, b.donoDoPortal())
+}
+
+// aprovar aprova o pedido pendente (pendente_id da resposta da tool) e exige que
+// a escrita execute. É o caminho de /pendentes de ponta a ponta: o executor acha
+// a escrita pelo nome, revalida os args gravados, reroda o Preview e chama o
+// Executar.
+func (b *bancadaTool) aprovar(t *testing.T, pendenteID string) Aprovado {
+	t.Helper()
+	ap, err := b.tentarAprovar(t, pendenteID)
+	require.NoError(t, err, "a aprovação deveria executar")
+	require.Equal(t, "executada", ap.Pendente.Estado)
+	return ap
+}
+
+// resultadoJSON decodifica o resultado do Executar guardado na aprovação.
+func (a Aprovado) resultadoJSON(t *testing.T) map[string]any {
+	t.Helper()
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(a.ResultadoJSON, &out), string(a.ResultadoJSON))
+	return out
+}
+
+// estadoDaPendente lê o estado do pedido no banco (pendente, aprovada, executada…).
+func (b *bancadaTool) estadoDaPendente(t *testing.T, pendenteID string) string {
+	t.Helper()
+	var estado string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT estado FROM mcp_acoes_pendentes WHERE id = $1`, pendenteID).Scan(&estado))
+	return estado
+}

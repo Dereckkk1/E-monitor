@@ -487,14 +487,7 @@ func TestDefinirOverride_PedidoAprovadoPeloDonoExecutaIgualAoCaminhoConfirma(t *
 	require.Empty(t, linhasDeAjuste(t, b, viaPedido.camp), "o pedido não escreve")
 	b.confirmarEExecutar(t, "definir_override", argsOverride(viaConfirma, "2026-11-05", 2, extra))
 
-	apr, err := NovasAprovacoes(b.cfg)
-	require.NoError(t, err)
-	id, err := uuid.Parse(out["pendente_id"].(string))
-	require.NoError(t, err)
-	dono := &Principal{UserID: b.admin, Email: "admin@mcp.teste", Nome: "Admin"}
-	got, err := apr.Aprovar(b.ctx, id, dono)
-	require.NoError(t, err)
-	require.Equal(t, "executada", got.Pendente.Estado)
+	got := b.aprovar(t, out["pendente_id"].(string))
 	require.NotNil(t, got.Pendente.ExecutadaEm)
 
 	pedido := linhasDeAjuste(t, b, viaPedido.camp)
