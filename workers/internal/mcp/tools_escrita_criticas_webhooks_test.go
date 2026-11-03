@@ -239,7 +239,7 @@ func TestEditarWebhook_PedidoNaoEscreveEAprovarEdita(t *testing.T) {
 	ef := mustJSON(t, pv["efeitos"])
 	require.Contains(t, ef, urlNovaDoWebhook, "o preview mostra a URL inteira: a pessoa aprova o destino")
 	require.Contains(t, ef, "dado de veiculação")
-	require.Contains(t, ef, "2 entrega(s) na fila")
+	require.Contains(t, ef, "Há entregas na fila de envio", "o preview diz que há fila, não quantas (o número mudaria a cada minuto)")
 	require.Contains(t, ef, "DESLIGADO")
 	require.Contains(t, ef, "Passa a receber: webhook.test")
 	rv := mustJSON(t, pv["ressalvas"])
@@ -341,7 +341,8 @@ func TestEditarWebhook_DesligarAvisaDasEntregasQueJaEstaoNaFila(t *testing.T) {
 	semFila := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(vazio, map[string]any{"ativo": false}))
 
 	ef := mustJSON(t, cheio["preview"].(map[string]any)["efeitos"])
-	require.Contains(t, ef, "2 entrega(s) na fila")
+	require.Contains(t, ef, "Há entregas na fila de envio")
+	require.NotContains(t, ef, "2 entrega", "só o \"há\": o número mudaria a cada minuto")
 	require.Contains(t, ef, "ainda são enviadas", "desligar impede só novos enfileiramentos")
 	require.NotContains(t, mustJSON(t, semFila["preview"].(map[string]any)["efeitos"]), "na fila")
 }
@@ -984,15 +985,17 @@ func TestEditarWebhook_UrlNovaNaoVaiInteiraParaOAuditLog(t *testing.T) {
 	}
 }
 
-// O hook de auditoria cobre também o texto das ressalvas do pedido: a URL por inteiro só mora no
-// pedido (que só o dono lê) e no preview que ele mesmo vê.
+// O hook de auditoria cobre também o texto das ressalvas do pedido: a URL por inteiro mora no
+// pedido (que só o dono lê e que NÃO é apagado depois de 24 h: o texto não pode prometer o contrário)
+// e no preview que ele mesmo vê.
 func TestEditarWebhook_PreviewNaoDizQueAAuditoriaGuardaAUrlInteira(t *testing.T) {
 	emProducao(t)
 	b := novaBancadaTool(t)
 	cli := webhookComTudo(t, b, "Cliente")
 	out := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"url": urlNovaDoWebhook}))
 	rv := mustJSON(t, out["preview"].(map[string]any)["ressalvas"])
-	require.Contains(t, rv, "gravada por inteiro neste pedido")
-	require.NotContains(t, rv, "e na auditoria", "a auditoria guarda só esquema+host e o hash")
-	require.Contains(t, rv, "esquema+host")
+	require.Contains(t, rv, "gravada por inteiro neste pedido, visível só para quem pediu")
+	require.NotContains(t, rv, "e na auditoria", "a auditoria guarda só esquema, host e o hash")
+	require.Contains(t, rv, "a auditoria guarda só esquema, host e um hash")
+	require.NotContains(t, rv, "24 h", "a linha do pedido não é apagada: a URL não some em 24 h")
 }

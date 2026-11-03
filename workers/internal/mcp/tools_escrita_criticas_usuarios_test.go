@@ -872,7 +872,9 @@ func TestEditarUsuario_PedidoNaoEscreveEAprovarEdita(t *testing.T) {
 
 // O resultado da carteira é a de AGORA + adicionar − remover, calculado de novo na
 // aprovação: se alguém mexeu na carteira entre o pedido e a aprovação, o que ele
-// fez fica.
+// fez fica. O resumo que a pessoa aprovou ("A, B → B, C") já não diz isso — então a
+// primeira aprovação é recusada (preview_desatualizado) com o resumo novo, e é a
+// segunda, com a carteira nova à vista, que executa o merge.
 func TestEditarUsuario_CarteiraEhMergeDoEstadoDaAprovacao(t *testing.T) {
 	b := novaBancadaTool(t)
 	c := semearClientesDeUsuario(t, b)
@@ -883,6 +885,9 @@ func TestEditarUsuario_CarteiraEhMergeDoEstadoDaAprovacao(t *testing.T) {
 	// No meio, outra pessoa troca a carteira por [A, B, D].
 	d := mcptest.Cliente(t, b.ctx, b.pool, "Delta Mídia")
 	require.NoError(t, users.NewRepo(b.pool).SetClients(b.ctx, alvo.ID, []uuid.UUID{c.cA, c.cB, d}))
+
+	novo := exigeResumoDesatualizado(t, b, toolEditarUsuario, out["pendente_id"].(string))
+	require.Contains(t, mustJSON(t, novo.Mudancas), "Delta Mídia", "o resumo novo já mostra a carteira que o outro deixou")
 
 	ap := b.aprovar(t, out["pendente_id"].(string))
 

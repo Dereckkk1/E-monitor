@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -28,10 +29,23 @@ func novaBancadaAprovacao(t *testing.T, lista ...escritaRegistravel) *bancadaApr
 	return &bancadaAprovacao{bancadaEscrita: b, apr: apr}
 }
 
+// pedido grava o pedido com o resumo que a escrita de teste (sondaEscrita) mostraria para estes
+// args — a aprovação compara o resumo recalculado com o gravado, então os dois têm de ser iguais.
 func (b *bancadaAprovacao) pedido(t *testing.T, tool, args string) Pendente {
 	t.Helper()
+	var in entradaEscritaTeste
+	resumo := "r" // args fora do schema (os testes de args_invalidos): o resumo não importa
+	if json.Unmarshal([]byte(args), &in) == nil && in.Valor != "" {
+		resumo = "vai gravar " + in.Valor
+	}
+	return b.pedidoComPrevia(t, tool, args, previa{Resumo: resumo})
+}
+
+// pedidoComPrevia grava o pedido com o resumo dado (a escrita de teste com Preview próprio).
+func (b *bancadaAprovacao) pedidoComPrevia(t *testing.T, tool, args string, pv previa) Pendente {
+	t.Helper()
 	p, _, err := b.E.Pendentes.Criar(b.ctx, NovaPendente{UserID: principalTeste.UserID, TokenID: principalTeste.TokenID,
-		Tool: tool, Args: []byte(args), Motivo: "m", Preview: previa{Resumo: "r"}}, b.agora)
+		Tool: tool, Args: []byte(args), Motivo: "m", Preview: pv}, b.agora)
 	require.NoError(t, err)
 	return p
 }
@@ -392,7 +406,7 @@ func TestAprovacao_PreviewVeOPrincipalDoDonoNoContexto(t *testing.T) {
 		return previa{Resumo: "r"}, nil
 	}
 	b := novaBancadaAprovacao(t, d)
-	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, previa{Resumo: "r"})
 
 	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
 	require.NoError(t, err)
@@ -422,4 +436,131 @@ func TestAprovacao_RessalvasDaExecucaoChegamAoAprovadoEFicamGravadas(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, out.Ressalvas, "sem ressalva a lista é vazia, não nil")
 	require.Empty(t, out.Ressalvas)
+}
+
+// ── resumo desatualizado (preview_desatualizado) ────────────────────────
+
+// O estado muda entre o pedido e a aprovação sem o Preview recusar: o resumo recalculado já não é
+// o que a pessoa viu, então a aprovação NÃO executa, devolve o pedido a pendente com o resumo NOVO
+// no lugar do antigo (e o prazo com folga) e só a aprovação seguinte — com o resumo novo à vista —
+// executa.
+func TestAprovacao_ResumoQueMudouEhRecusaPreviewDesatualizadoEAtualizaOPedido(t *testing.T) {
+	sonda := &sondaEscrita{}
+	d := sonda.escrita("t_crit", Critico, false)
+	afeta := "1 usuário"
+	d.Preview = func(_ context.Context, _ *Escritas, in entradaEscritaTeste) (previa, error) {
+		return previa{Resumo: "vai gravar " + in.Valor, Efeitos: []string{"Afeta " + afeta}}, nil
+	}
+	b := novaBancadaAprovacao(t, d)
+	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, previa{Resumo: "vai gravar abc", Efeitos: []string{"Afeta 1 usuário"}})
+	// prazo a 10 min do fim: a folga de 1 h da recusa tem de aparecer
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET expira_em = $2 WHERE id = $1`, pend.ID, b.agora.Add(10*time.Minute))
+	require.NoError(t, err)
+	afeta = "2 usuários" // o estado mudou depois do pedido
+
+	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+
+	var r *acoes.Recusa
+	require.ErrorAs(t, err, &r)
+	require.Equal(t, codigoPreviewDesatualizado, r.Codigo)
+	require.Equal(t, 0, sonda.execucoes, "nada executa com o resumo velho")
+	got := b.estado(t, pend.ID)
+	require.Equal(t, "pendente", got.Estado)
+	require.Nil(t, got.AprovadaEm)
+	require.Equal(t, msgPreviewDesatualizado, *got.Erro)
+	require.Equal(t, []string{"Afeta 2 usuários"}, got.Preview.Efeitos, "o resumo gravado passa a ser o novo")
+	require.True(t, got.ExpiraEm.After(b.agora.Add(30*time.Minute)), "a recusa ganha folga de prazo: %s", got.ExpiraEm)
+	require.Equal(t, codigoPreviewDesatualizado, b.meta(t, "mcp.pendente.falhou")["codigo"])
+
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	require.NoError(t, err, "com o resumo novo gravado, a próxima aprovação executa")
+	require.Equal(t, "executada", out.Pendente.Estado)
+	require.Equal(t, 1, sonda.execucoes)
+}
+
+// O resumo gravado passou pelo JSONB (números e listas voltam como float64 e []any): o que diz a
+// mesma coisa não pode virar preview_desatualizado, ou nenhuma aprovação passaria.
+func TestAprovacao_ResumoIgualDepoisDoJSONBNaoEhDesatualizado(t *testing.T) {
+	cheia := func(in entradaEscritaTeste) previa {
+		return previa{
+			Resumo: "vai gravar " + in.Valor,
+			Mudancas: []mudanca{
+				{Campo: "cpm", De: 12.5, Para: 1500.75},
+				{Campo: "ativo", De: false, Para: true},
+				{Campo: "eventos", De: nil, Para: []string{"detection.confirmed", "webhook.test"}},
+				{Campo: "nome", De: "A", Para: "B"},
+			},
+			Efeitos:   []string{"efeito um", "efeito dois"},
+			Ressalvas: []string{"ressalva"},
+		}
+	}
+	sonda := &sondaEscrita{}
+	d := sonda.escrita("t_crit", Critico, false)
+	d.Preview = func(_ context.Context, _ *Escritas, in entradaEscritaTeste) (previa, error) { return cheia(in), nil }
+	b := novaBancadaAprovacao(t, d)
+	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, cheia(entradaEscritaTeste{Valor: "abc"}))
+
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+
+	require.NoError(t, err)
+	require.Equal(t, "executada", out.Pendente.Estado)
+	require.Equal(t, 1, sonda.execucoes)
+}
+
+// Cada parte do resumo conta: efeito, ressalva, mudança ou o resumo em si.
+func TestAprovacao_QualquerParteDoResumoQueMudaEhDesatualizada(t *testing.T) {
+	base := previa{
+		Resumo:    "vai gravar abc",
+		Mudancas:  []mudanca{{Campo: "x", De: "a", Para: "b"}},
+		Efeitos:   []string{"efeito"},
+		Ressalvas: []string{"ressalva"},
+	}
+	for nome, muda := range map[string]func(*previa){
+		"resumo":   func(p *previa) { p.Resumo += "!" },
+		"mudança":  func(p *previa) { p.Mudancas[0].Para = "c" },
+		"efeito":   func(p *previa) { p.Efeitos = append(p.Efeitos, "outro") },
+		"ressalva": func(p *previa) { p.Ressalvas = nil },
+	} {
+		t.Run(nome, func(t *testing.T) {
+			sonda := &sondaEscrita{}
+			d := sonda.escrita("t_crit", Critico, false)
+			d.Preview = func(context.Context, *Escritas, entradaEscritaTeste) (previa, error) {
+				nova := previa{Resumo: base.Resumo, Mudancas: append([]mudanca(nil), base.Mudancas...),
+					Efeitos: append([]string(nil), base.Efeitos...), Ressalvas: append([]string(nil), base.Ressalvas...)}
+				muda(&nova)
+				return nova, nil
+			}
+			b := novaBancadaAprovacao(t, d)
+			pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, base)
+
+			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+
+			var r *acoes.Recusa
+			require.ErrorAs(t, err, &r)
+			require.Equal(t, codigoPreviewDesatualizado, r.Codigo)
+			require.Equal(t, 0, sonda.execucoes)
+		})
+	}
+}
+
+// A ação que falha DEPOIS de gravar e sabe dizer o que ficou feito (*acoes.ErroAposEscrita): o
+// pedido fica `falhou` com o TEXTO DA AÇÃO (não o genérico), o erro técnico não vai para o banco, e
+// a execução interrompida carrega esse texto para quem responde à pessoa.
+func TestAprovacao_ErroAposEscritaViraFalhouComOTextoDaAcao(t *testing.T) {
+	const texto = "O usuário x@y.teste foi criado, mas a carteira não foi gravada por inteiro: confira em /admin/users."
+	sonda := &sondaEscrita{erroExec: &acoes.ErroAposEscrita{Mensagem: texto, Causa: errors.New("pq: relation secreta does not exist")}}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+
+	require.ErrorIs(t, err, ErrExecucaoInterrompida)
+	require.Equal(t, texto, mensagemDaInterrupcao(err))
+	got := b.estado(t, pend.ID)
+	require.Equal(t, "falhou", got.Estado)
+	require.Equal(t, texto, *got.Erro)
+	require.NotContains(t, *got.Erro, "secreta")
+	require.Equal(t, "falha_apos_escrita", b.meta(t, "mcp.pendente.falhou")["codigo"])
+	// o erro interno comum segue com o texto genérico
+	require.Equal(t, msgInterrompida, mensagemDaInterrupcao(ErrExecucaoInterrompida))
 }

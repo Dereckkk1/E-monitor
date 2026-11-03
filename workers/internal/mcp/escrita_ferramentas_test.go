@@ -398,6 +398,23 @@ func (b *bancadaTool) aprovarPelaRota(t *testing.T, pendenteID string) map[strin
 	return out
 }
 
+// aprovarPelaRotaBruto aprova pelo handler HTTP REAL de /pendentes e devolve a resposta como veio
+// (qualquer status): serve às provas de recusa na aprovação.
+func (b *bancadaTool) aprovarPelaRotaBruto(t *testing.T, pendenteID string) *httptest.ResponseRecorder {
+	t.Helper()
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	h := &PendentesHTTP{Tokens: tokens.NovoStore(b.pool, []byte(mcptest.SegredoTeste)), Pendentes: b.E.Pendentes, Aprovacoes: apr, Log: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", pendenteID)
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	ctx = auth.WithClaims(ctx, &auth.Claims{UserID: b.admin, Role: "admin"})
+	rec := httptest.NewRecorder()
+	h.Aprovar(rec, req.WithContext(ctx))
+	return rec
+}
+
 // ressalvasGravadas lê a coluna ressalvas da linha do pedido.
 func (b *bancadaTool) ressalvasGravadas(t *testing.T, pendenteID string) []string {
 	t.Helper()

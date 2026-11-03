@@ -277,7 +277,7 @@ func TestPendentesHTTP_ResultadoQueNaoSerializaDa200ComNull(t *testing.T) {
 }
 
 // A resposta do /aprovar leva as ressalvas da execução ao lado do resultado
-// (sempre um array, [] quando não há), e o dto do pedido não as repete.
+// (sempre um array, [] quando não há); o dto do pedido também as traz (ver o teste de recarga).
 func TestPendentesHTTP_AprovarDevolveAsRessalvasDaExecucao(t *testing.T) {
 	sonda := &sondaEscrita{ressalvas: []string{"o email não saiu: a pessoa não tem a senha"}}
 	b := novaBancadaPendentesHTTP(t, sonda)
@@ -293,3 +293,49 @@ func TestPendentesHTTP_AprovarDevolveAsRessalvasDaExecucao(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"ressalvas":[]`, "sem ressalva é um array vazio, não null nem ausente")
 }
+
+// O estado mudou desde o pedido: 422 preview_desatualizado, nada executa, e a lista de /pendentes
+// passa a mostrar o resumo NOVO — a pessoa confere e aprova de novo.
+func TestPendentesHTTP_ResumoDesatualizadoDa422EAListaMostraOResumoNovo(t *testing.T) {
+	sonda := &sondaEscrita{}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, previa{Resumo: "vai gravar abc", Efeitos: []string{"Afeta 1 usuário"}})
+	url := "/mcp/pendentes/" + pend.ID.String() + "/aprovar"
+
+	rec, m := b.fazer(http.MethodPost, url, b.jwtDono) // o resumo de verdade ("vai gravar abc", sem efeito) difere do gravado
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Equal(t, "preview_desatualizado", m["error"])
+	require.Equal(t, msgPreviewDesatualizado, m["mensagem"])
+	require.Equal(t, 0, sonda.execucoes)
+
+	_, lista := b.fazer(http.MethodGet, "/mcp/pendentes?id="+pend.ID.String(), b.jwtDono)
+	d := lista["destaque"].(map[string]any)
+	require.Equal(t, "pendente", d["estado"])
+	require.Equal(t, msgPreviewDesatualizado, d["erro"])
+	pv := d["preview"].(map[string]any)
+	require.Equal(t, "vai gravar abc", pv["resumo"])
+	require.NotContains(t, pv, "efeitos", "o resumo gravado é o novo: sem o efeito velho")
+
+	rec, _ = b.fazer(http.MethodPost, url, b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, 1, sonda.execucoes)
+}
+
+// A ação que falhou depois de gravar leva o texto dela à pessoa (500 interrompida), não o genérico.
+func TestPendentesHTTP_ErroAposEscritaDa500ComOTextoDaAcao(t *testing.T) {
+	const texto = "A campanha foi cancelada, mas NÃO foi apagada: apareceu veiculação nela. Confira em /campaigns."
+	sonda := &sondaEscrita{erroExec: &acoes.ErroAposEscrita{Mensagem: texto, Causa: erroTexto("pq: relation secreta does not exist")}}
+	b := novaBancadaPendentesHTTP(t, sonda)
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+
+	rec, m := b.fazer(http.MethodPost, "/mcp/pendentes/"+pend.ID.String()+"/aprovar", b.jwtDono)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, "interrompida", m["error"])
+	require.Equal(t, texto, m["mensagem"])
+	require.NotContains(t, rec.Body.String(), "secreta")
+	got := b.estado(t, pend.ID)
+	require.Equal(t, "falhou", got.Estado)
+	require.Equal(t, texto, *got.Erro)
+}
+

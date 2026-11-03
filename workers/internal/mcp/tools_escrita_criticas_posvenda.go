@@ -264,8 +264,10 @@ func escritaReenviarPosVenda(cfg ConfigServidor) Escrita[entradaDestinatarioPosV
 				},
 			}
 			if pl.rec.OpenedAt != nil {
-				pv.Ressalvas = append(pv.Ressalvas, fmt.Sprintf(
-					"Essa pessoa já abriu o documento %d vez(es): o reenvio só repete o email, não muda o que ela vê (o pós-venda enviado é congelado).", pl.rec.OpenCount))
+				// Sem o número de aberturas: ele sobe a cada vez que a pessoa abre o link e,
+				// no resumo, faria a aprovação ver sempre um texto diferente do pedido.
+				pv.Ressalvas = append(pv.Ressalvas,
+					"Essa pessoa já abriu o documento: o reenvio só repete o email, não muda o que ela vê (o pós-venda enviado é congelado).")
 			}
 			if pl.rec.EmailStatus == "failed" && dto.ErroEmail != nil {
 				pv.Ressalvas = append(pv.Ressalvas, "O último envio para ela falhou: "+*dto.ErroEmail)
@@ -346,7 +348,7 @@ func escritaRevogarDestinatarioPosVenda(cfg ConfigServidor) Escrita[entradaDesti
 				},
 			}
 			if pl.rec.OpenedAt != nil {
-				pv.Efeitos = append(pv.Efeitos, fmt.Sprintf("Ela já abriu o documento %d vez(es): o histórico de aberturas fica gravado.", pl.rec.OpenCount))
+				pv.Efeitos = append(pv.Efeitos, "Ela já abriu o documento: o histórico de aberturas fica gravado.")
 			}
 			if restam := pl.ativos - 1; restam > 0 {
 				pv.Efeitos = append(pv.Efeitos, fmt.Sprintf("Os links dos outros destinatários não mudam. Restam %d link(s) ativo(s) neste pós-venda.", restam))

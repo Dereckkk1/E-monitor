@@ -34,9 +34,10 @@ import (
 // host (como obter_webhook_cliente), porque o caminho e a query dela podem carregar
 // a credencial do receptor (Slack, Discord e Zapier põem o segredo ali). A URL NOVA
 // aparece inteira no preview — é o destino que a pessoa aprova — e por isso fica
-// inteira no pedido gravado (24 h, que só o dono lê); o audit_log, que todo admin lê
-// por auditoria_mcp, guarda só esquema+host e o SHA-256 dela (ArgsParaAuditoria); o
-// preview avisa disso.
+// inteira no pedido gravado — que não é apagado depois, mas só o dono lê, e a mesma URL
+// já mora inteira em clients.webhook_url, então não há segredo novo no banco; o audit_log,
+// que todo admin lê por auditoria_mcp, guarda só esquema+host e o SHA-256 dela
+// (ArgsParaAuditoria); o preview avisa disso.
 //
 // F4-10 — o MCP é mais estrito que a rota onde a rota responde sucesso sem fazer:
 // testar_webhook que seria descartado (sem URL, desligado ou sem webhook.test nos
@@ -55,7 +56,7 @@ const (
 	codigoWebhookTesteDescartado = "webhook_teste_descartado"
 	codigoWebhookIndisponivel    = "webhook_indisponivel"
 
-	// tetoURLWebhook: o pedido fica gravado 24 h com a URL inteira.
+	// tetoURLWebhook: o pedido grava a URL inteira.
 	tetoURLWebhook = 2000
 
 	// nomesDosEventos é a lista que as mensagens de evento desconhecido mostram.
@@ -205,7 +206,9 @@ type planoDeWebhook struct {
 	url     *string
 	ativo   *bool
 	eventos []string
-	naFila  int // entregas pendentes (inclui retentativas)
+	// naFila: há entrega pendente (inclui retentativas). É só o "há": o número muda a cada
+	// minuto e, no preview, faria a aprovação ver sempre um resumo diferente do pedido.
+	naFila bool
 }
 
 func (pl *planoDeWebhook) ativoAtual() bool { return pl.atual != nil && pl.atual.Enabled }
@@ -279,10 +282,11 @@ func planejarWebhook(ctx context.Context, E *Escritas, in entradaEditarWebhook) 
 	if eventosMuda {
 		pl.eventos = pedidosEventos
 	}
-	_, pl.naFila, err = E.Leitura.Clientes.ListWebhookDeliveries(ctx, c.ID, "pending", 1, 0)
+	_, naFila, err := E.Leitura.Clientes.ListWebhookDeliveries(ctx, c.ID, "pending", 1, 0)
 	if err != nil {
 		return nil, err
 	}
+	pl.naFila = naFila > 0
 	return pl, nil
 }
 
@@ -345,10 +349,9 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 						soEsquemaEHost(pl.atual.URL), *pl.url))
 				}
 				pv.Efeitos = append(pv.Efeitos, "O receptor da URL nova recebe dado de veiculação do cliente (emissora, material e horário de cada tocada).")
-				if pl.naFila > 0 {
-					pv.Efeitos = append(pv.Efeitos, fmt.Sprintf(
-						"%s na fila de envio (inclusive retentativas) saem para a URL nova: o worker lê a URL gravada no momento do envio.",
-						quantasEntregas(pl.naFila)))
+				if pl.naFila {
+					pv.Efeitos = append(pv.Efeitos,
+						"Há entregas na fila de envio (inclusive retentativas) e elas saem para a URL nova: o worker lê a URL gravada no momento do envio.")
 				}
 			}
 			if pl.ativo != nil {
@@ -357,9 +360,9 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 					pv.Efeitos = append(pv.Efeitos, "O envio é LIGADO: a partir da aprovação, os eventos que o cliente assina passam a ser enfileirados e enviados.")
 				} else {
 					pv.Efeitos = append(pv.Efeitos, "O envio é DESLIGADO: nenhuma veiculação nova é enfileirada para este cliente.")
-					if pl.naFila > 0 {
-						pv.Efeitos = append(pv.Efeitos, fmt.Sprintf(
-							"%s na fila de envio (inclusive retentativas) ainda são enviadas: desligar impede só novos enfileiramentos.", quantasEntregas(pl.naFila)))
+					if pl.naFila {
+						pv.Efeitos = append(pv.Efeitos,
+							"Há entregas na fila de envio (inclusive retentativas) e elas ainda são enviadas: desligar impede só novos enfileiramentos.")
 					}
 				}
 			}
@@ -400,7 +403,7 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 			}
 			if pl.url != nil {
 				pv.Ressalvas = append(pv.Ressalvas,
-					"A URL fica gravada por inteiro neste pedido (24 h), que só você lê; o audit_log guarda dela só esquema+host e um hash (SHA-256). Se ela carrega um token no caminho ou na consulta (?token=), prefira configurá-la pela tela (/clients, modal Webhook).",
+					"A URL fica gravada por inteiro neste pedido, visível só para quem pediu (como já fica no cadastro do cliente); a auditoria guarda só esquema, host e um hash (SHA-256). Se ela carrega um token no caminho ou na consulta (?token=), prefira configurá-la pela tela (/clients, modal Webhook).",
 					"Esta edição não envia nada para a URL nova: para conferir o destino use testar_webhook (outra aprovação; o cliente precisa assinar webhook.test).")
 			}
 			return pv, nil
@@ -422,9 +425,6 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 		},
 	}
 }
-
-// quantasEntregas: "1 entrega(s)" / "2 entrega(s)" — o "(s)" é o mesmo dos outros previews.
-func quantasEntregas(n int) string { return fmt.Sprintf("%d entrega(s)", n) }
 
 // ── testar_webhook ──────────────────────────────────────────────────────
 

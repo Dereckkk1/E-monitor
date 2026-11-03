@@ -232,13 +232,24 @@ func (s *Pendentes) MarcarExecutada(ctx context.Context, id uuid.UUID, tentativa
 // recusa tardia depois de o varredor dar a execução por interrompida: nada
 // rodou). estenderPrazo: o prazo nunca encurta e ganha pelo menos
 // folgaAposFalha; sem ele (a ação mudou ou sumiu: não adianta insistir) o
-// prazo fica como está.
-func (s *Pendentes) MarcarFalhaDeNegocio(ctx context.Context, id uuid.UUID, tentativa int, erro string, agora time.Time, estenderPrazo bool) (bool, error) {
+// prazo fica como está. novaPrevia != nil troca o resumo gravado pelo novo NA MESMA atualização
+// (a aprovação recusada por preview_desatualizado: /pendentes passa a mostrar o que vale agora);
+// nil mantém o que está.
+func (s *Pendentes) MarcarFalhaDeNegocio(ctx context.Context, id uuid.UUID, tentativa int, erro string, agora time.Time, estenderPrazo bool, novaPrevia *previa) (bool, error) {
+	var pv any // nil = NULL: o COALESCE mantém o resumo gravado
+	if novaPrevia != nil {
+		b, err := json.Marshal(novaPrevia)
+		if err != nil {
+			return false, err
+		}
+		pv = b
+	}
 	tag, err := s.DB.Exec(ctx, `UPDATE mcp_acoes_pendentes
 		SET estado = 'pendente', erro = $3, aprovada_em = NULL,
-		    expira_em = CASE WHEN $5 THEN GREATEST(expira_em, $4::timestamptz) ELSE expira_em END
+		    expira_em = CASE WHEN $5 THEN GREATEST(expira_em, $4::timestamptz) ELSE expira_em END,
+		    preview = COALESCE($6::jsonb, preview)
 		WHERE id = $1 AND tentativa = $2 AND estado IN ('aprovada', 'falhou')`,
-		id, tentativa, cortarErro(erro), agora.Add(folgaAposFalha), estenderPrazo)
+		id, tentativa, cortarErro(erro), agora.Add(folgaAposFalha), estenderPrazo, pv)
 	if err != nil {
 		return false, err
 	}
