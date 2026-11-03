@@ -90,6 +90,25 @@ func semCredencialDeURL(s *string) *string {
 	return &r
 }
 
+// montarWebhook é o webhook do cliente no formato de obter_webhook_cliente: a tool
+// de leitura e as escritas de webhook (que devolvem a configuração como ficou)
+// montam a resposta por aqui. A URL sai só com esquema+host e o segredo nunca sai.
+func montarWebhook(ctx context.Context, L *Leitura, c *catalog.Client) (saidaWebhook, error) {
+	wc, err := L.Clientes.GetWebhookConfig(ctx, c.ID)
+	if err != nil {
+		return saidaWebhook{}, err
+	}
+	out := saidaWebhook{Cliente: refDe(c.ID, c.Name), Eventos: []string{},
+		Ressalvas: []string{
+			"A URL vem só como esquema+host: o caminho e a query podem carregar a credencial do webhook. A URL completa e o segredo estão no portal, onde também se configura, troca o segredo e testa.",
+			"O segredo do webhook nunca sai pelo MCP."}}
+	if wc != nil {
+		host := soEsquemaEHost(wc.URL)
+		out.Configurado, out.URL, out.Ativo, out.Eventos, out.TemSegredo = true, &host, wc.Enabled, wc.Events, wc.Secret != ""
+	}
+	return out, nil
+}
+
 func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaLeitura(s, cfg, "obter_webhook_cliente",
 		"Diz se o cliente tem webhook configurado: URL (só esquema e host, o resto pode ter credencial), se está ativo, "+
@@ -99,17 +118,9 @@ func registrarIntegracoes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 			if rec != nil || err != nil {
 				return rec, err
 			}
-			wc, err := L.Clientes.GetWebhookConfig(ctx, c.ID)
+			out, err := montarWebhook(ctx, L, c)
 			if err != nil {
 				return nil, err
-			}
-			out := saidaWebhook{Cliente: refDe(c.ID, c.Name), Eventos: []string{},
-				Ressalvas: []string{
-					"A URL vem só como esquema+host: o caminho e a query podem carregar a credencial do webhook. A URL completa e o segredo estão no portal, onde também se configura, troca o segredo e testa.",
-					"O segredo do webhook nunca sai pelo MCP."}}
-			if wc != nil {
-				host := soEsquemaEHost(wc.URL)
-				out.Configurado, out.URL, out.Ativo, out.Eventos, out.TemSegredo = true, &host, wc.Enabled, wc.Events, wc.Secret != ""
 			}
 			return ok(out)
 		})
