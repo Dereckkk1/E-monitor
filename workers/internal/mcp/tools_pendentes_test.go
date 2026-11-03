@@ -252,3 +252,35 @@ func TestMinhasPendentes_PiorCasoComRessalvasCabe(t *testing.T) {
 	t.Logf("minhas_pendentes com ressalvas: %d itens no pior caso = %d bytes", tetoListaPendente, n)
 	require.Less(t, n, 60_000)
 }
+
+// Ressalva cheia de <, > e &: cada um custa 6 bytes no JSON. O orçamento da soma desconta o custo no
+// JSON (não o tamanho cru), senão a promessa de ~60 KB para 50 pedidos estoura.
+func TestRessalvasDaLista_DescontaOCustoNoJSON(t *testing.T) {
+	cheia := strings.Repeat("<&", 1000)
+	custoNoJSON := 0
+	for _, r := range ressalvasDaLista([]string{cheia, cheia, cheia, cheia, cheia}) {
+		custoNoJSON += custoTexto(r)
+	}
+	require.Less(t, custoNoJSON, tetoRessalvasLista+tetoRessalvaLista+len("… e mais 5 ressalva(s): veja o pedido em /pendentes")+3,
+		"a soma (no custo do JSON) tem teto")
+}
+
+func TestMinhasPendentes_PiorCasoComRessalvasEscapadasCabe(t *testing.T) {
+	b := pendentesTool(t)
+	escapado := strings.Repeat("<&", 2000)
+	for i := range tetoListaPendente + 1 {
+		p := NovaPendente{UserID: b.eu.UserID, Tool: strings.Repeat("t", 100), Args: fmt.Appendf(nil, `{"id":%d}`, i),
+			Motivo: strings.Repeat("<", 500), Preview: previa{Resumo: escapado}}
+		_, _, err := b.st.Criar(b.ctx, p, t0.Add(time.Duration(i)*time.Second))
+		require.NoError(t, err)
+	}
+	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET estado = 'executada', ressalvas = $1`, []string{escapado, escapado, escapado, escapado, escapado})
+	require.NoError(t, err)
+
+	out := b.lista(t, map[string]any{"estado": "executada", "limit": 100})
+
+	require.Len(t, itens(t, out), tetoListaPendente)
+	n := tamanhoDoResultado(t, out)
+	t.Logf("minhas_pendentes com ressalvas escapadas: %d itens no pior caso = %d bytes", tetoListaPendente, n)
+	require.Less(t, n, 60_000)
+}
