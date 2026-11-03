@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -31,7 +34,9 @@ import (
 // host (como obter_webhook_cliente), porque o caminho e a query dela podem carregar
 // a credencial do receptor (Slack, Discord e Zapier põem o segredo ali). A URL NOVA
 // aparece inteira no preview — é o destino que a pessoa aprova — e por isso fica
-// inteira no pedido gravado (24 h) e na auditoria; o preview avisa disso.
+// inteira no pedido gravado (24 h, que só o dono lê); o audit_log, que todo admin lê
+// por auditoria_mcp, guarda só esquema+host e o SHA-256 dela (ArgsParaAuditoria); o
+// preview avisa disso.
 //
 // F4-10 — o MCP é mais estrito que a rota onde a rota responde sucesso sem fazer:
 // testar_webhook que seria descartado (sem URL, desligado ou sem webhook.test nos
@@ -50,7 +55,7 @@ const (
 	codigoWebhookTesteDescartado = "webhook_teste_descartado"
 	codigoWebhookIndisponivel    = "webhook_indisponivel"
 
-	// tetoURLWebhook: o pedido fica gravado 24 h e a URL entra na auditoria.
+	// tetoURLWebhook: o pedido fica gravado 24 h com a URL inteira.
 	tetoURLWebhook = 2000
 
 	// nomesDosEventos é a lista que as mensagens de evento desconhecido mostram.
@@ -281,6 +286,22 @@ func planejarWebhook(ctx context.Context, E *Escritas, in entradaEditarWebhook) 
 	return pl, nil
 }
 
+// argsDeWebhookParaAuditoria são os args do audit_log: os mesmos do pedido, com a url trocada por
+// esquema+host (url) e o SHA-256 do texto gravado (url_sha256), que deixa conferir de qual URL se
+// tratava sem guardá-la.
+func argsDeWebhookParaAuditoria(in entradaEditarWebhook) any {
+	bruto, _ := json.Marshal(in)
+	m := map[string]any{}
+	_ = json.Unmarshal(bruto, &m)
+	if in.URL != nil {
+		u := aparar(*in.URL)
+		soma := sha256.Sum256([]byte(u))
+		m["url"] = soEsquemaEHost(u)
+		m["url_sha256"] = hex.EncodeToString(soma[:])
+	}
+	return m
+}
+
 func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhook] {
 	return Escrita[entradaEditarWebhook]{
 		Nome: "editar_webhook_cliente",
@@ -297,6 +318,9 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 		Motivo:  "dado do cliente passa a sair para outro sistema",
 		Recurso: func(in entradaEditarWebhook) (string, *uuid.UUID) { return clienteDoRecurso(in.ClienteID) },
 		Tela:    func(*Escritas, entradaEditarWebhook) *string { return linkDosClientes(cfg) },
+		// A URL pode carregar o token do receptor (no caminho ou na query) e o audit_log é lido
+		// por todo admin (auditoria_mcp): lá ela vai resumida.
+		ArgsParaAuditoria: argsDeWebhookParaAuditoria,
 		Preview: func(ctx context.Context, E *Escritas, in entradaEditarWebhook) (previa, error) {
 			pl, err := planejarWebhook(ctx, E, in)
 			if err != nil {
@@ -376,7 +400,7 @@ func escritaEditarWebhookCliente(cfg ConfigServidor) Escrita[entradaEditarWebhoo
 			}
 			if pl.url != nil {
 				pv.Ressalvas = append(pv.Ressalvas,
-					"A URL fica gravada por inteiro neste pedido (24 h) e na auditoria. Se ela carrega um token no caminho ou na consulta (?token=), prefira configurá-la pela tela (/clients, modal Webhook).",
+					"A URL fica gravada por inteiro neste pedido (24 h), que só você lê; o audit_log guarda dela só esquema+host e um hash (SHA-256). Se ela carrega um token no caminho ou na consulta (?token=), prefira configurá-la pela tela (/clients, modal Webhook).",
 					"Esta edição não envia nada para a URL nova: para conferir o destino use testar_webhook (outra aprovação; o cliente precisa assinar webhook.test).")
 			}
 			return pv, nil

@@ -988,3 +988,22 @@ func TestEscrita_PreviewVeOPrincipalNoContextoDaChamada(t *testing.T) {
 	require.Equal(t, principalTeste.UserID, visto.UserID)
 	require.Equal(t, principalTeste.TokenID, visto.TokenID)
 }
+
+// ArgsParaAuditoria troca o que o audit_log guarda dos args; hook que quebra, ou args gravados
+// que não decodificam, saem {} — nunca os args sem redação.
+func TestEscrita_ArgsParaAuditoria(t *testing.T) {
+	d := (&sondaEscrita{}).escrita("t_aud", Critico, false)
+	args := []byte(`{"valor":"segredo-inteiro"}`)
+	require.JSONEq(t, string(args), string(d.argsDaAuditoria(entradaEscritaTeste{Valor: "segredo-inteiro"}, args)), "sem hook: os args canônicos")
+	require.JSONEq(t, string(args), string(d.argsGravadosDaAuditoria(args)))
+
+	d.ArgsParaAuditoria = func(in entradaEscritaTeste) any { return map[string]any{"valor": "resumo", "tamanho": len(in.Valor)} }
+	require.JSONEq(t, `{"valor":"resumo","tamanho":15}`, string(d.argsDaAuditoria(entradaEscritaTeste{Valor: "segredo-inteiro"}, args)))
+	require.JSONEq(t, `{"valor":"resumo","tamanho":15}`, string(d.argsGravadosDaAuditoria(args)), "da aprovação, a partir dos args gravados")
+	require.JSONEq(t, `{}`, string(d.argsGravadosDaAuditoria([]byte(`{"valor":1}`))), "args que não decodificam não saem sem redação")
+
+	d.ArgsParaAuditoria = func(entradaEscritaTeste) any { panic("boom") }
+	require.JSONEq(t, `{}`, string(d.argsDaAuditoria(entradaEscritaTeste{}, args)))
+	d.ArgsParaAuditoria = func(entradaEscritaTeste) any { return make(chan int) }
+	require.JSONEq(t, `{}`, string(d.argsDaAuditoria(entradaEscritaTeste{}, args)))
+}

@@ -16,6 +16,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/mcp/mcptest"
@@ -405,7 +408,7 @@ func TestEditarWebhook_SegredoNuncaVaza(t *testing.T) {
 	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT args FROM mcp_acoes_pendentes WHERE id = $1`, pid).Scan(&gravados))
 	require.ElementsMatch(t, []string{"cliente_id", "url", "ativo"}, keysDe(gravados))
 	audit := b.auditoria(t, "mcp.escrita."+toolEditarWebhookCliente)[0].Meta["args"].(map[string]any)
-	require.ElementsMatch(t, []string{"cliente_id", "url", "ativo"}, keysDe(audit))
+	require.ElementsMatch(t, []string{"cliente_id", "url", "url_sha256", "ativo"}, keysDe(audit), "a URL vai resumida no audit_log: esquema+host e o hash")
 	// O segredo continua exatamente o que era: a tool não o toca nem o relê.
 	require.Equal(t, urlNovaDoWebhook+"|"+segredoDoWebhook+"|false|detection.confirmed", linhaDoWebhook(t, b, cli))
 }
@@ -922,4 +925,74 @@ func TestCriticasDeWebhook_AprovarDuasVezesNaoExecutaDuasVezes(t *testing.T) {
 	require.Error(t, err, "o pedido já foi executado")
 	require.Len(t, outbox.chamadas(), 1)
 	require.Len(t, b.auditoria(t, "mcp.escrita."+toolTestarWebhook), 1)
+}
+
+// A URL do webhook pode carregar a credencial do receptor (Slack, Discord e Zapier põem o token
+// no caminho ou na query). Ela fica INTEIRA nos args do pedido — é o que o Executar grava, e só o
+// dono a vê —, mas o audit_log, que todo admin lê por auditoria_mcp, guarda só esquema+host e o
+// SHA-256 dela: em TODA linha que leva os args (pedido criado, aprovado, executado, falhou, recusado).
+func TestEditarWebhook_UrlNovaNaoVaiInteiraParaOAuditLog(t *testing.T) {
+	emProducao(t)
+	b := novaBancadaTool(t)
+	cli := webhookComTudo(t, b, "Cliente")
+	const urlComSegredo = "https://8.8.8.8/services/T0/B0/NOVOCAMINHOSECRETO?token=NOVOTOKENNAQUERY"
+	hash := sha256.Sum256([]byte(urlComSegredo))
+	hashHex := hex.EncodeToString(hash[:])
+
+	out := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"url": urlComSegredo}))
+	pid := out["pendente_id"].(string)
+	// O pedido guarda a URL inteira: sem ela o Executar não teria o que gravar.
+	var gravada string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT args->>'url' FROM mcp_acoes_pendentes WHERE id = $1`, pid).Scan(&gravada))
+	require.Equal(t, urlComSegredo, gravada)
+	b.aprovar(t, pid)
+	require.Equal(t, urlComSegredo+"|"+segredoDoWebhook+"|true|detection.confirmed", linhaDoWebhook(t, b, cli), "o Executar gravou a URL inteira")
+
+	// recusado pelo dono
+	out2 := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"url": urlComSegredo + "&v=2"}))
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	_, err = apr.Recusar(b.ctx, uuid.MustParse(out2["pendente_id"].(string)), b.donoDoPortal())
+	require.NoError(t, err)
+
+	// falhou: a configuração já está como o pedido quando ele é aprovado (sem_mudanca)
+	urlC := urlComSegredo + "&v=3"
+	out3 := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"url": urlC}))
+	_, err = b.pool.Exec(b.ctx, `UPDATE clients SET webhook_url = $2 WHERE id = $1`, cli, urlC)
+	require.NoError(t, err)
+	_, err = b.tentarAprovar(t, out3["pendente_id"].(string))
+	var rec *acoes.Recusa
+	require.ErrorAs(t, err, &rec)
+
+	for _, acao := range []string{"mcp.pendente.criada", "mcp.pendente.aprovada", "mcp.escrita." + toolEditarWebhookCliente,
+		"mcp.pendente.executada", "mcp.pendente.recusada", "mcp.pendente.falhou"} {
+		linhas := b.auditoria(t, acao)
+		require.NotEmpty(t, linhas, acao)
+		for _, l := range linhas {
+			args := l.Meta["args"].(map[string]any)
+			require.Equal(t, "https://8.8.8.8/…", args["url"], acao+": só esquema+host")
+			require.Len(t, args["url_sha256"], 64, acao)
+			require.Contains(t, args, "cliente_id", acao+": o resto dos args segue como veio")
+		}
+	}
+	exec := b.auditoria(t, "mcp.escrita."+toolEditarWebhookCliente)[0].Meta["args"].(map[string]any)
+	require.Equal(t, hashHex, exec["url_sha256"], "o hash é o do texto da URL gravada")
+
+	tudo := todoOAudit(t, b)
+	for _, s := range []string{"NOVOCAMINHOSECRETO", "NOVOTOKENNAQUERY", urlComSegredo, "/services/T0"} {
+		require.NotContains(t, tudo, s, "a URL nova inteira não pode estar no audit_log")
+	}
+}
+
+// O hook de auditoria cobre também o texto das ressalvas do pedido: a URL por inteiro só mora no
+// pedido (que só o dono lê) e no preview que ele mesmo vê.
+func TestEditarWebhook_PreviewNaoDizQueAAuditoriaGuardaAUrlInteira(t *testing.T) {
+	emProducao(t)
+	b := novaBancadaTool(t)
+	cli := webhookComTudo(t, b, "Cliente")
+	out := b.pedePendente(t, toolEditarWebhookCliente, argsEditarWebhook(cli, map[string]any{"url": urlNovaDoWebhook}))
+	rv := mustJSON(t, out["preview"].(map[string]any)["ressalvas"])
+	require.Contains(t, rv, "gravada por inteiro neste pedido")
+	require.NotContains(t, rv, "e na auditoria", "a auditoria guarda só esquema+host e o hash")
+	require.Contains(t, rv, "esquema+host")
 }
