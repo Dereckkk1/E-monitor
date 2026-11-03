@@ -73,6 +73,26 @@ type emissorComDisponibilidade interface{ Disponivel() bool }
 // pessoa não tem como recebê-la.
 func (e emissorDoServico) Disponivel() bool { return e.svc != nil && e.svc.Enabled() }
 
+// emissorComEmail é o opcional que o emissor real implementa: se o serviço manda email de
+// verdade (SMTP configurado).
+type emissorComEmail interface{ EmailLigado() bool }
+
+// EmailLigado diz se o convite sai por email de verdade. O serviço sem SMTP ainda emite o convite
+// (o link vale e a tela o mostra ao admin), mas o email fica 'disabled'.
+func (e emissorDoServico) EmailLigado() bool { return e.svc != nil && e.svc.MailEnabled() }
+
+// BoasVindasEmailLigado diz se o email de boas-vindas sai de verdade agora: é o que entrega a senha
+// de quem o MCP cria. Sem emissor, não; emissor que não diz (um falso de teste) vale como ligado.
+func (s *Servico) BoasVindasEmailLigado() bool {
+	if s.BoasVindas == nil {
+		return false
+	}
+	if d, ok := s.BoasVindas.(emissorComEmail); ok {
+		return d.EmailLigado()
+	}
+	return true
+}
+
 // BoasVindasDisponiveis diz se criar um usuário e entregar a senha pelo email de
 // boas-vindas é possível agora. É a condição de criar_usuario (F4-11): sem
 // emissor, ou com o serviço desabilitado, o MCP recusa antes de criar alguém cuja
