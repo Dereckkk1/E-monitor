@@ -401,3 +401,58 @@ func TestApagarCampanhaCom_ExigirSemHistorico_SemHistoricoApagaComoSempre(t *tes
 	err := c.srv.ApagarCampanhaCom(c.ctx, uuid.New(), OpcoesApagarCampanha{ExigirSemHistorico: true})
 	require.ErrorIs(t, err, ErrAlvoInexistente)
 }
+
+// A mensagem do delete abortado conta o que de fato aconteceu com a campanha, conforme o estado que
+// ela tinha antes de cancelar: não afirma que workers pararam quando não havia (programada), nem que
+// ela "foi cancelada" quando já estava (ou estava concluída).
+func TestMensagemDeleteAbortado_ConformeOEstadoAnterior(t *testing.T) {
+	casos := []struct {
+		antes     string
+		contem    []string
+		naoContem []string
+	}{
+		{"programada", []string{"foi cancelada", "ainda não tinha worker", "segue como cancelada"}, []string{"pararam"}},
+		{"ativa", []string{"foi cancelada", "só ela usava pararam", "outra campanha ativa também usa seguem no ar", "segue como cancelada"}, nil},
+		{"cancelada", []string{"já estava cancelada e continua cancelada", "segue como cancelada"}, []string{"foi cancelada", "worker", "pararam"}},
+		{"concluida", []string{"continua concluída", "segue como concluída"}, []string{"foi cancelada", "worker", "pararam", "segue como cancelada"}},
+	}
+	for _, tc := range casos {
+		t.Run(tc.antes, func(t *testing.T) {
+			m := mensagemDeleteAbortado("Camp X", tc.antes)
+			require.Contains(t, m, `"Camp X"`)
+			require.Contains(t, m, "NÃO foi apagada")
+			for _, c := range tc.contem {
+				require.Contains(t, m, c)
+			}
+			for _, c := range tc.naoContem {
+				require.NotContains(t, m, c)
+			}
+		})
+	}
+}
+
+// Ponta a ponta: o texto devolvido pelo delete abortado segue o estado que a campanha tinha.
+func TestApagarCampanhaCom_DeleteAbortado_MensagemSegueOEstadoAnterior(t *testing.T) {
+	for _, estado := range []string{"ativa", "cancelada"} {
+		t.Run(estado, func(t *testing.T) {
+			c := novoCenario(t)
+			id := c.campanhaNova(t, "Estado "+estado)
+			mcptest.EstadoCampanha(t, c.ctx, c.pool, id, estado)
+			c.srv.Supervisor = supervisorQueSemeiaTocada{&mcptest.SupervisorFalso{}, func() {
+				mcptest.Veiculacao(t, c.ctx, c.pool, id, c.material, c.emissora, "bonus", c.quando)
+			}}
+
+			err := c.srv.ApagarCampanhaCom(c.ctx, id, OpcoesApagarCampanha{ExigirSemHistorico: true})
+
+			var pos *ErroAposEscrita
+			require.ErrorAs(t, err, &pos)
+			if estado == "cancelada" {
+				require.Contains(t, pos.Mensagem, "já estava cancelada e continua cancelada")
+				require.NotContains(t, pos.Mensagem, "pararam")
+			} else {
+				require.Contains(t, pos.Mensagem, "foi cancelada")
+				require.Contains(t, pos.Mensagem, "outra campanha ativa também usa")
+			}
+		})
+	}
+}
