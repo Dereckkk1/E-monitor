@@ -40,6 +40,8 @@ function pedido(over = {}) {
       ressalvas: ['A campanha já tem veiculações registradas.'],
     },
     estado: 'pendente',
+    // a versão do pedido: quem aprova a devolve, e o servidor só aprova se ainda for a vigente
+    tentativa: 0,
     criada_em: '2026-11-03T15:00:00Z',
     expira_em: '2099-03-10T15:30:00Z',
     aprovada_em: null,
@@ -80,7 +82,7 @@ async function sessao(page, usuario = ADMIN) {
  * devolvem [status, corpo]. Conta as chamadas para provar que a tela recarrega.
  */
 async function servidor(page, { lista, aprovar, recusar }) {
-  const chamadas = { lista: [], aprovar: 0, recusar: 0 }
+  const chamadas = { lista: [], aprovar: 0, recusar: 0, corpos: [] }
   await page.route(LISTA, r => {
     const url = new URL(r.request().url())
     chamadas.lista.push(url.searchParams.get('id'))
@@ -88,6 +90,7 @@ async function servidor(page, { lista, aprovar, recusar }) {
   })
   await page.route(APROVAR, r => {
     chamadas.aprovar++
+    chamadas.corpos.push(r.request().postDataJSON())
     const [status, corpo] = aprovar()
     return json(r, status, corpo)
   })
@@ -190,6 +193,8 @@ test('aprovar chama a API, avisa "Ação executada", recarrega e mostra o desfec
   await expect(page.getByText('Ação executada', { exact: true })).toBeVisible()
   expect(chamadas.aprovar).toBe(1)
   expect(chamadas.recusar).toBe(0)
+  // O POST carrega a versão (tentativa) do pedido que o cartão mostrava
+  expect(chamadas.corpos).toEqual([{ tentativa: 0 }])
   // A lista recarregou: o cartão virou o desfecho (fechado, sem botões) e as ressalvas seguem na tela.
   const fechado = page.getByRole('article').filter({ hasText: 'FSJ - Pedido Jack' })
   await expect(fechado.getByText('Já foi executada.')).toBeVisible()
@@ -220,7 +225,7 @@ test('recusa de negócio (422): a mensagem do servidor aparece e o pedido segue 
   const msg = 'A campanha já foi cancelada por outra pessoa.'
   const chamadas = await servidor(page, {
     lista: () => ({ items: [pedido({ erro: msg })], destaque: null }),
-    aprovar: () => [422, { error: 'campanha_cancelada', mensagem: msg }],
+    aprovar: () => [422, { error: 'campanha_cancelada', mensagem: msg, pendente: pedido({ tentativa: 1, erro: msg }) }],
     recusar: semAcao,
   })
   await page.goto('/pendentes')
@@ -237,11 +242,11 @@ test('preview_desatualizado (422): mostra a mensagem, recarrega e o cartão traz
   await sessao(page)
   const msg = 'O estado mudou desde o pedido; releia o resumo e aprove de novo.'
   const velho = pedido({ preview: { resumo: 'Cancelar a campanha "FSJ" (12 dias de veiculação)', mudancas: [], efeitos: [], ressalvas: [] } })
-  const novo = pedido({ erro: msg, preview: { resumo: 'Cancelar a campanha "FSJ" (13 dias de veiculação)', mudancas: [{ campo: 'dias_veiculados', de: 12, para: 13 }], efeitos: [], ressalvas: [] } })
+  const novo = pedido({ tentativa: 1, erro: msg, preview: { resumo: 'Cancelar a campanha "FSJ" (13 dias de veiculação)', mudancas: [{ campo: 'dias_veiculados', de: 12, para: 13 }], efeitos: [], ressalvas: [] } })
   let desatualizou = false
   const chamadas = await servidor(page, {
     lista: () => ({ items: [desatualizou ? novo : velho], destaque: null }),
-    aprovar: () => { desatualizou = true; return [422, { error: 'preview_desatualizado', mensagem: msg }] },
+    aprovar: () => { desatualizou = true; return [422, { error: 'preview_desatualizado', mensagem: msg, pendente: novo }] },
     recusar: semAcao,
   })
   await page.goto('/pendentes')
@@ -331,7 +336,7 @@ test('pedido pendente com o prazo vencido no relógio do navegador vira "expirad
   await servidor(page, { lista: () => ({ items: [pedido({ expira_em: '2020-01-01T12:00:00Z' })], destaque: null }), aprovar: semAcao, recusar: semAcao })
   await page.goto('/pendentes')
   const a = page.getByRole('article')
-  await expect(a.getByText('Expirou sem aprovação (24 h). Peça de novo à IA.')).toBeVisible()
+  await expect(a.getByText('Expirou sem aprovação. Peça de novo à IA.')).toBeVisible()
   await expect(a.getByRole('button')).toHaveCount(0)
 })
 
@@ -393,4 +398,221 @@ test('em Minha conta, "Pedidos da IA" mostra quantos esperam e leva à fila', as
   await link.click()
   await expect(page).toHaveURL(/\/pendentes$/)
   await expect(page.getByRole('heading', { name: 'Pedidos da IA' })).toBeVisible()
+})
+
+test('aprovar manda a tentativa do cartão que está na tela (a do pedido que a pessoa leu)', async ({ page }) => {
+  await sessao(page)
+  const chamadas = await servidor(page, {
+    lista: () => ({ items: [pedido({ tentativa: 3 }), pedido({ id: ID_B, tentativa: 5, tool: 'editar_regra_distribuicao' })], destaque: null }),
+    aprovar: () => [200, { pendente: pedido({ estado: 'executada' }), resultado: null, ressalvas: [] }],
+    recusar: semAcao,
+  })
+  await page.goto('/pendentes')
+  await page.getByRole('article').nth(1).getByRole('button', { name: /Aprovar/ }).click()
+  await expect(page.getByText('Ação executada', { exact: true })).toBeVisible()
+  expect(chamadas.corpos).toEqual([{ tentativa: 5 }])
+})
+
+test('422 com `pendente`: o cartão troca na hora, mesmo que a releitura da lista falhe, e o próximo clique manda a versão nova', async ({ page }) => {
+  await sessao(page)
+  const msg = 'O estado mudou desde o pedido; releia o resumo e aprove de novo.'
+  const velho = pedido({ tentativa: 0, preview: { resumo: 'Cancelar a campanha "FSJ" (12 dias de veiculação)', mudancas: [], efeitos: [], ressalvas: [] } })
+  const novo = pedido({ tentativa: 1, erro: msg, preview: { resumo: 'Cancelar a campanha "FSJ" (13 dias de veiculação)', mudancas: [{ campo: 'dias_veiculados', de: 12, para: 13 }], efeitos: [], ressalvas: [] } })
+  let aprovou = false
+  await page.route(LISTA, r => aprovou ? json(r, 500, { error: 'interno', mensagem: 'Erro interno.' }) : json(r, 200, { items: [velho], destaque: null }))
+  const corpos = []
+  let resposta = [422, { error: 'preview_desatualizado', mensagem: msg, pendente: novo }]
+  await page.route(APROVAR, r => { aprovou = true; corpos.push(r.request().postDataJSON()); return json(r, resposta[0], resposta[1]) })
+
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await expect(a.getByText('12 dias de veiculação')).toBeVisible()
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+
+  // O 422 já trouxe o pedido novo: a tela o mostra sem depender da releitura (que está falhando)
+  await expect(a.getByText('13 dias de veiculação')).toBeVisible()
+  await expect(a.getByText('12 dias de veiculação')).toHaveCount(0)
+  await expect(a.getByRole('alert')).toContainText(msg)
+  await expect(page.getByText('Não foi possível atualizar a lista')).toBeVisible()
+
+  // Quem aprova agora aprova o resumo novo: o corpo leva a tentativa 1, não a 0
+  resposta = [200, { pendente: pedido({ estado: 'executada', tentativa: 2 }), resultado: null, ressalvas: [] }]
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+  await expect(page.getByText('Ação executada', { exact: true })).toBeVisible()
+  expect(corpos).toEqual([{ tentativa: 0 }, { tentativa: 1 }])
+})
+
+test('409 pendente_mudou: a aba com o resumo velho não aprova; avisa, relê e mostra o resumo novo', async ({ page }) => {
+  await sessao(page)
+  const msg = 'O pedido mudou desde que você abriu; releia antes de aprovar.'
+  const velho = pedido({ tentativa: 0, preview: { resumo: 'Cancelar a campanha "FSJ" (12 dias de veiculação)', mudancas: [], efeitos: [], ressalvas: [] } })
+  const novo = pedido({ tentativa: 1, erro: 'O estado mudou desde o pedido; releia o resumo e aprove de novo.', preview: { resumo: 'Cancelar a campanha "FSJ" (13 dias de veiculação)', mudancas: [], efeitos: [], ressalvas: [] } })
+  let mudou = false
+  const chamadas = await servidor(page, {
+    lista: (url) => {
+      const pedidoAgora = mudou ? novo : velho
+      return { items: [pedidoAgora], destaque: url.searchParams.get('id') === ID_A ? pedidoAgora : null }
+    },
+    // a outra aba aprovou e gravou o resumo novo (tentativa 1) antes deste clique
+    aprovar: () => { mudou = true; return [409, { error: 'pendente_mudou', mensagem: msg }] },
+    recusar: semAcao,
+  })
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await expect(a.getByText('12 dias de veiculação')).toBeVisible()
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+
+  await expect(a.getByRole('alert')).toContainText('O pedido mudou: releia antes de aprovar')
+  await expect(a.getByRole('alert')).toContainText(msg)
+  await expect(a.getByText('13 dias de veiculação')).toBeVisible()
+  await expect(a.getByText('12 dias de veiculação')).toHaveCount(0)
+  await expect(a.getByRole('button', { name: /Aprovar/ })).toBeEnabled()
+  expect(chamadas.corpos).toEqual([{ tentativa: 0 }])
+})
+
+test('409 troca ?id= sem piscar o esqueleto: a tela anterior fica até a nova chegar', async ({ page }) => {
+  await sessao(page)
+  let fechou = false
+  await page.route(LISTA, async r => {
+    const url = new URL(r.request().url())
+    if (url.searchParams.get('id')) await new Promise(res => setTimeout(res, 700)) // a releitura do link demora
+    return json(r, 200, fechou
+      ? { items: [], destaque: url.searchParams.get('id') === ID_A ? pedido({ estado: 'executada' }) : null }
+      : { items: [pedido()], destaque: null })
+  })
+  await page.route(APROVAR, r => { fechou = true; return json(r, 409, { error: 'pendente_executada', mensagem: 'Este pedido já foi executado.' }) })
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await expect(a).toHaveCount(1)
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+
+  // Enquanto a releitura do link não chega: nada de "Carregando…" nem de "Não encontramos o pedido deste link"
+  await expect(page.getByText('Este pedido já foi executado.')).toBeVisible()
+  await expect(page.getByText('Carregando…')).toHaveCount(0)
+  await expect(page.getByText('Não encontramos o pedido deste link')).toHaveCount(0)
+  await expect(a).toHaveCount(1)
+  await expect(a.getByText('Já foi executada.')).toBeVisible()
+  await expect(page.getByText('Não encontramos o pedido deste link')).toHaveCount(0)
+})
+
+test('aprovar sem resposta (a rede caiu): não diz "Não foi feito"; diz que não sabe e relê a fila', async ({ page }) => {
+  await sessao(page)
+  const chamadas = { lista: 0 }
+  await page.route(LISTA, r => { chamadas.lista++; return json(r, 200, { items: [pedido()], destaque: null }) })
+  await page.route(APROVAR, r => r.abort('failed'))
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await expect(a).toHaveCount(1)
+  const antes = chamadas.lista
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+
+  await expect(a.getByRole('alert')).toContainText('Não sabemos se foi feito')
+  await expect(a.getByRole('alert')).toContainText('Recarregue a página')
+  await expect(a.getByRole('alert')).not.toContainText('Não foi feito')
+  // a fila foi relida para mostrar o estado real
+  await expect.poll(() => chamadas.lista).toBeGreaterThan(antes)
+})
+
+test('aprovar e o Cloudflare responde 524 em HTML: também é "não sabemos se foi feito"', async ({ page }) => {
+  await sessao(page)
+  await page.route(LISTA, r => json(r, 200, { items: [pedido()], destaque: null }))
+  await page.route(APROVAR, r => r.fulfill({ status: 524, contentType: 'text/html', body: '<html><body>A timeout occurred</body></html>' }))
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+  await expect(a.getByRole('alert')).toContainText('Não sabemos se foi feito')
+  await expect(a.getByRole('alert')).not.toContainText('Não foi feito')
+})
+
+test('503 conferencia_falhou é "nada foi feito": o rótulo segue "Não foi feito"', async ({ page }) => {
+  await sessao(page)
+  await servidor(page, {
+    lista: () => ({ items: [pedido()], destaque: null }),
+    aprovar: () => [503, { error: 'conferencia_falhou', mensagem: 'Não consegui conferir o pedido agora; nada foi feito. Tente de novo em instantes.' }],
+    recusar: semAcao,
+  })
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  await a.getByRole('button', { name: /Aprovar/ }).click()
+  await expect(a.getByRole('alert')).toContainText('Não foi feito')
+  await expect(a.getByRole('alert')).toContainText('nada foi feito')
+  await expect(a.getByRole('alert')).not.toContainText('Não sabemos')
+})
+
+test('pedido expirado porque a conexão de IA foi revogada mostra o motivo', async ({ page }) => {
+  await sessao(page)
+  const motivo = 'A conexão de IA que fez este pedido foi revogada; peça de novo por uma conexão válida.'
+  await servidor(page, {
+    lista: () => ({ items: [], destaque: pedido({ estado: 'expirada', erro: motivo }) }),
+    aprovar: semAcao,
+    recusar: semAcao,
+  })
+  await page.goto(`/pendentes?id=${ID_A}`)
+  const a = page.getByRole('article')
+  await expect(a.getByText(motivo)).toBeVisible()
+  await expect(a.getByRole('button')).toHaveCount(0)
+})
+
+test('voltar para a aba relê a fila (só esta tela relê no foco): o resumo mudou enquanto ela ficou aberta', async ({ page }) => {
+  await sessao(page)
+  let mudou = false
+  const chamadas = await servidor(page, {
+    lista: () => ({ items: [mudou ? pedido({ tentativa: 1, preview: { resumo: 'Resumo NOVO', mudancas: [], efeitos: [], ressalvas: [] } }) : pedido()], destaque: null }),
+    aprovar: semAcao,
+    recusar: semAcao,
+  })
+  await page.goto('/pendentes')
+  await expect(page.getByText('Cancelar a campanha "FSJ - Pedido Jack"')).toBeVisible()
+  const antes = chamadas.lista.length
+  mudou = true
+  // a aba volta a ficar visível: o TanStack escuta o visibilitychange na window (o evento sobe do document)
+  await page.evaluate(() => {
+    const def = (v) => Object.defineProperty(document, 'visibilityState', { value: v, configurable: true })
+    def('hidden'); document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))
+    def('visible'); document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))
+  })
+  await expect(page.getByText('Resumo NOVO')).toBeVisible()
+  expect(chamadas.lista.length).toBeGreaterThan(antes)
+})
+
+test('texto do modelo com controle de direção: cada valor é isolado (dir="auto" + unicode-bidi: isolate)', async ({ page }) => {
+  await sessao(page)
+  const rlo = '‮'
+  const hostil = pedido({
+    preview: {
+      resumo: `Trocar ${rlo}001 R$`,
+      mudancas: [{ campo: 'valor', de: `10${rlo}`, para: `${rlo}100` }],
+      efeitos: [`Afeta ${rlo}2 usuários`],
+      ressalvas: [],
+    },
+  })
+  await servidor(page, { lista: () => ({ items: [hostil], destaque: null }), aprovar: semAcao, recusar: semAcao })
+  await page.goto('/pendentes')
+  const a = page.getByRole('article')
+  for (const sel of ['.pen-resumo', '.pen-de', '.pen-para', '.pen-itens li']) {
+    const el = a.locator(sel).first()
+    await expect(el).toHaveAttribute('dir', 'auto')
+    expect(await el.evaluate(n => getComputedStyle(n).unicodeBidi)).toMatch(/isolate/)
+  }
+})
+
+test('o aviso (toast) usa uma região viva que já existia antes do primeiro aviso', async ({ page }) => {
+  await sessao(page)
+  await servidor(page, {
+    lista: () => ({ items: [pedido()], destaque: null }),
+    aprovar: () => [200, { pendente: pedido({ estado: 'executada' }), resultado: null, ressalvas: [] }],
+    recusar: semAcao,
+  })
+  await page.goto('/pendentes')
+  const regiao = page.locator('.pen-toast-region')
+  await expect(page.getByRole('article')).toHaveCount(1)
+  // montada e vazia ANTES de qualquer aviso
+  await expect(regiao).toHaveAttribute('aria-live', 'polite')
+  await expect(regiao).toBeEmpty()
+  const handle = await regiao.elementHandle()
+  await page.getByRole('button', { name: /Aprovar/ }).click()
+  await expect(regiao.getByText('Ação executada')).toBeVisible()
+  // o MESMO elemento recebeu o conteúdo (não foi remontado)
+  expect(await handle.evaluate(n => n.isConnected)).toBe(true)
+  expect(await page.locator('.pen-toast-region').count()).toBe(1)
 })

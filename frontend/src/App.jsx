@@ -177,8 +177,9 @@ function AppShell() {
               <RequireRole roles={['admin']}><AuthorizeAiPage /></RequireRole>
             } />
             {/* Aprovação dos pedidos `critico` que a IA fez pelo MCP. Rota PRIVADA (fora de
-                PUBLIC_ROUTES): sem sessão volta ao /login com ?next= preservado, que é o
-                caminho do link /pendentes?id= que a IA entrega. */}
+                PUBLIC_ROUTES): sem sessão, o RequireAuth manda ao /login guardando o destino em
+                `state.from` (a URL inteira, com o ?id=), e o LoginPage devolve para cá depois de
+                entrar — é o caminho do link /pendentes?id= que a IA entrega. */}
             <Route path="/pendentes" element={
               <RequireRole roles={['admin']}><PendentesPage /></RequireRole>
             } />

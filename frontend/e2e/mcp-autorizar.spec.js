@@ -79,3 +79,18 @@ test('sem pedido na URL', async ({ page }) => {
   await page.goto('/autorizar-ia')
   await expect(page.getByText(/Nenhum pedido de autorização/)).toBeVisible()
 })
+
+test('dentro de um iframe: pede para abrir numa aba própria e não chama a API nem mostra Autorizar/Recusar', async ({ page }) => {
+  await sessaoAdmin(page)
+  const chamadas = { pedido: 0, grant: 0 }
+  await page.route(PEDIDO, r => { chamadas.pedido++; return json(r, 200, { cliente: 'Claude', destino: 'claude.ai', expira_em: '2030-01-01T00:00:00Z' }) })
+  await page.route(GRANT, r => { chamadas.grant++; return json(r, 200, { redirect: 'https://claude.ai/cb?code=x' }) })
+  await page.route('**/moldura-de-teste', r => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><iframe src="/autorizar-ia?pedido=PEDIDO-ASSINADO" style="width:900px;height:600px"></iframe>' }))
+  await page.goto('/moldura-de-teste')
+  const quadro = page.frameLocator('iframe')
+  await expect(quadro.getByText('Abra numa aba própria')).toBeVisible()
+  // O resto do app (menu lateral) também está no quadro; o que não pode estar é a decisão.
+  await expect(quadro.getByRole('button', { name: /Autorizar|Recusar/ })).toHaveCount(0)
+  await expect(quadro.getByRole('heading', { name: 'Um assistente quer acessar o E-monitor' })).toHaveCount(0)
+  expect(chamadas).toEqual({ pedido: 0, grant: 0 })
+})

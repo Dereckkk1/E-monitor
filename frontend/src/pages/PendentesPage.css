@@ -252,6 +252,17 @@
   }
 }
 
+/* Texto que pode ter vindo do que o modelo digitou: cada valor é um isolate bidi, para um caractere
+   de direção (U+202E…) dentro dele não reordenar o que vem em volta, e o `dir="auto"` do JSX deixa a
+   direção seguir o próprio texto. O servidor também os tira do resumo; esta é a segunda camada. */
+.pen-resumo,
+.pen-mudanca dt,
+.pen-de,
+.pen-para,
+.pen-itens li {
+  unicode-bidi: isolate;
+}
+
 /* ─── Efeitos e avisos ────────────────────────────────────── */
 
 .pen-itens {

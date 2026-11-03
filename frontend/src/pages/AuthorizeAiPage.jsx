@@ -2,11 +2,14 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { usePedidoAutorizacaoMcp, useConcederMcp } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
+import { emoldurada } from '../utils/emoldurada'
 import './AuthorizeAiPage.css'
 
 // Consentimento OAuth do MCP (spec 2026-10-27 §4.2). O /mcp/oauth/authorize
 // da API valida o pedido e manda o navegador para cá com ?pedido=<assinado>;
 // a decisão volta à API com o JWT do portal e a API devolve para onde ir.
+// Um clique aqui concede acesso de administrador a um assistente: por isso o antiframe
+// (`public/_headers` em /autorizar-ia* e `emoldurada()` abaixo, a segunda camada), igual a /pendentes.
 function mensagemDe(err) {
   return err?.response?.data?.error ?? 'Não foi possível concluir. Volte ao assistente e conecte de novo.'
 }
@@ -27,7 +30,9 @@ export default function AuthorizeAiPage() {
   const [params] = useSearchParams()
   const pedido = params.get('pedido') ?? ''
   const { user } = useAuth()
-  const pedidoQ = usePedidoAutorizacaoMcp(pedido)
+  const [moldura] = useState(emoldurada)
+  // Emoldurada, nem o pedido é lido: a página não faz chamada nenhuma.
+  const pedidoQ = usePedidoAutorizacaoMcp(pedido, { enabled: !moldura })
   const conceder = useConcederMcp()
   const [redirectInvalido, setRedirectInvalido] = useState(false)
 
@@ -38,6 +43,17 @@ export default function AuthorizeAiPage() {
         window.location.assign(data.redirect)
       },
     })
+
+  if (moldura) {
+    return (
+      <div className="aia-page">
+        <section className="aia-card">
+          <h1 className="aia-titulo">Abra numa aba própria</h1>
+          <p className="aia-texto">Esta página não abre dentro de outra página.</p>
+        </section>
+      </div>
+    )
+  }
 
   let corpo
   if (!pedido) {
