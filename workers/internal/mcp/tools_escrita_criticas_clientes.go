@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -48,9 +47,9 @@ const codigoMaterialComHistorico = "material_com_historico"
 func linkDosClientes(cfg ConfigServidor) *string { return cfg.link("/clients") }
 
 // clienteDoRecurso e materialDoRecurso são o Recurso da auditoria dessas tools.
-func clienteDoRecurso(valor string) (string, *uuid.UUID) { return campanhaDoRecurso("client", valor) }
+func clienteDoRecurso(valor string) (string, *uuid.UUID) { return recursoDe("client", valor) }
 func materialDoRecurso(valor string) (string, *uuid.UUID) {
-	return campanhaDoRecurso("material", valor)
+	return recursoDe("material", valor)
 }
 
 // quantos: "1 campanha" / "2 campanhas".
@@ -98,17 +97,13 @@ func hubDoCliente(ctx context.Context, L *Leitura, id uuid.UUID) (string, error)
 	return m[id], nil
 }
 
-// nomesDeUsuarios: "A, B, C e mais N" (corta em tetoNomesNoPreview).
+// nomesDeUsuarios: os nomes dos usuários em listaCortada.
 func nomesDeUsuarios(us []catalog.ClientUserAccess) string {
-	partes := make([]string, 0, min(len(us), tetoNomesNoPreview))
-	for _, u := range us[:min(len(us), tetoNomesNoPreview)] {
-		partes = append(partes, u.Name)
+	partes := make([]string, len(us))
+	for i, u := range us {
+		partes[i] = u.Name
 	}
-	s := strings.Join(partes, ", ")
-	if len(us) > tetoNomesNoPreview {
-		s += fmt.Sprintf(" e mais %d", len(us)-tetoNomesNoPreview)
-	}
-	return s
+	return listaCortada(partes)
 }
 
 // separarPorAcesso divide os usuários ativos do cliente entre os que só têm ELE
@@ -134,27 +129,18 @@ func ressalvaDoHub(hubID, naoAvisado, consequencia string) string {
 
 const consequenciaDoAtivoNoHub = "se o cadastro dele for editado lá, o evento client.upsert regrava o ativo/inativo do hub por cima do que for feito aqui, e %s pode ser desfeit%s sozinh%s."
 
+// saidaClienteSemLeitura é o resultado de uma escrita de cliente gravada cuja releitura caiu.
+type saidaClienteSemLeitura struct {
+	Cliente saidaSoID `json:"cliente"`
+}
+
 // clienteFeito é o feito de uma escrita de cliente JÁ gravada: o resultado é o
-// cliente como ficou, no formato de obter_cliente. Se só a releitura falhar, a
-// escrita NÃO vira erro (o modelo a repetiria): devolve o id e manda conferir.
+// cliente como ficou, no formato de obter_cliente (feitoRelido: se só a releitura
+// falhar, devolve o id e manda conferir).
 func clienteFeito(ctx context.Context, cfg ConfigServidor, E *Escritas, c *catalog.Client, ressalvas ...string) feito {
-	f := feito{Recurso: "client", RecursoID: &c.ID, Ressalvas: ressalvas}
-	saida, err := lerClienteCompleto(ctx, E.Leitura, c)
-	if err != nil {
-		cfg.log().Error("mcp: releitura do cliente após a escrita falhou", zap.Error(err))
-		f.Resultado = struct {
-			Cliente struct {
-				ID string `json:"id"`
-			} `json:"cliente"`
-		}{Cliente: struct {
-			ID string `json:"id"`
-		}{ID: c.ID.String()}}
-		f.Ressalvas = append(f.Ressalvas,
-			"A escrita foi gravada, mas não consegui reler o cliente agora: confira o estado com obter_cliente (id "+c.ID.String()+").")
-		return f
-	}
-	f.Resultado = saida
-	return f
+	return feitoRelido(cfg, alvoGravado{Recurso: "client", ID: c.ID, Artigo: "o cliente", Conferir: "obter_cliente (id " + c.ID.String() + ")"},
+		func() (*saidaObterCliente, error) { return lerClienteCompleto(ctx, E.Leitura, c) },
+		saidaClienteSemLeitura{Cliente: saidaSoID{ID: c.ID.String()}}, ressalvas...)
 }
 
 // saidaApagado é o resultado das duas tools de apagar: quem foi apagado.
@@ -478,21 +464,17 @@ func planejarExclusaoMaterial(ctx context.Context, E *Escritas, in entradaMateri
 		for _, c := range camps {
 			porID[c.ID] = c
 		}
-		partes := make([]string, 0, min(len(vinculos), tetoNomesNoPreview))
-		for _, v := range vinculos[:min(len(vinculos), tetoNomesNoPreview)] {
+		partes := make([]string, len(vinculos))
+		for i, v := range vinculos {
 			if c, ok := porID[v.CampaignID]; ok {
-				partes = append(partes, fmt.Sprintf("%s (%s)", c.Name, c.Status))
+				partes[i] = fmt.Sprintf("%s (%s)", c.Name, c.Status)
 			} else {
-				partes = append(partes, v.CampaignID.String())
+				partes[i] = v.CampaignID.String()
 			}
-		}
-		lista := strings.Join(partes, ", ")
-		if len(vinculos) > tetoNomesNoPreview {
-			lista += fmt.Sprintf(" e mais %d", len(vinculos)-tetoNomesNoPreview)
 		}
 		return nil, errRecusa(acoes.CodigoMaterialVinculado, fmt.Sprintf(
 			"o material %q está vinculado a %s: %s. Desvincule-o de cada uma (desvincular_material) antes de pedir para apagar",
-			m.Title, quantos(len(vinculos), "campanha", "campanhas"), lista))
+			m.Title, quantos(len(vinculos), "campanha", "campanhas"), listaCortada(partes)))
 	}
 	cliente, err := nomeDoCliente(ctx, E, m.ClientID)
 	if err != nil {

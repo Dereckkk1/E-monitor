@@ -207,7 +207,7 @@ func linkDosAjustes(cfg ConfigServidor, campanhaID string) *string {
 // ajusteDoRecurso: o alvo da auditoria de um ajuste é a CAMPANHA (a tabela não tem id próprio;
 // tipo, emissora e dia já vão nos args da linha). Mesmo recurso das demais escritas de campanha.
 func ajusteDoRecurso(campanhaID string) (string, *uuid.UUID) {
-	return campanhaDoRecurso("campaign", campanhaID)
+	return recursoDe("campaign", campanhaID)
 }
 
 // ── Resultado ───────────────────────────────────────────────────────────

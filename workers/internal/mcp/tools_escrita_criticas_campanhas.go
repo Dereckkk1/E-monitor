@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -40,9 +39,8 @@ const (
 	// campanha de produção tem 239).
 	tetoPrecosPorChamada = 300
 
-	// limiteValorMonetario: as colunas de dinheiro são NUMERIC(12,2), que não
-	// comportam 1e10 ou mais.
-	limiteValorMonetario = 1e10
+	// tetoMudancasDePrecoNoPreview: quantas mudanças de preço o preview lista (o resto vira "mostrando N de M").
+	tetoMudancasDePrecoNoPreview = 100
 
 	// fraseCritica fecha a descrição das tools críticas: o contrato §3.5 (entregar
 	// o link, não prometer execução) e a regra de nunca inventar id.
@@ -81,31 +79,14 @@ func valorMonetario(campo string, v float64) error {
 	if v < 0 {
 		return errEntrada(fmt.Sprintf("%s não pode ser negativo (recebi %v)", campo, v))
 	}
-	if v >= limiteValorMonetario {
-		return errEntrada(fmt.Sprintf("%s precisa ser menor que %s", campo, reais(limiteValorMonetario)))
+	if v >= acoes.LimiteValorMonetario {
+		return errEntrada(fmt.Sprintf("%s precisa ser menor que %s", campo, reais(acoes.LimiteValorMonetario)))
 	}
 	// A forma mais curta que volta ao mesmo número: 12.34 → "12.34"; 0.1+0.2 → 17 casas.
 	if _, casas, tem := strings.Cut(strconv.FormatFloat(v, 'f', -1, 64), "."); tem && len(casas) > 2 {
 		return errEntrada(fmt.Sprintf("%s aceita no máximo 2 casas decimais (centavos): recebi %s", campo, strconv.FormatFloat(v, 'f', -1, 64)))
 	}
 	return nil
-}
-
-// listaDeNomes: "A, B, C e mais N" (corta em tetoNomesNoPreview).
-func listaDeNomes(ids []uuid.UUID, nomes map[uuid.UUID]string) string {
-	partes := make([]string, 0, min(len(ids), tetoNomesNoPreview))
-	for _, id := range ids[:min(len(ids), tetoNomesNoPreview)] {
-		n := nomes[id]
-		if n == "" {
-			n = id.String()
-		}
-		partes = append(partes, n)
-	}
-	s := strings.Join(partes, ", ")
-	if len(ids) > tetoNomesNoPreview {
-		s += fmt.Sprintf(" e mais %d", len(ids)-tetoNomesNoPreview)
-	}
-	return s
 }
 
 // nomeDoCliente: o nome do dono da campanha, para o resumo do pedido.
@@ -124,20 +105,17 @@ type saidaCampanhaSemLeitura struct {
 }
 
 // campanhaFeita é o feito de uma escrita de campanha JÁ gravada: o resultado é a campanha como
-// ficou, no formato de obter_campanha. Se só a releitura falhar, a escrita NÃO vira erro (o
-// pedido ficaria `falhou` com a campanha já alterada): devolve o id e o nome e manda conferir.
+// ficou, no formato de obter_campanha (feitoRelido: se só a releitura falhar, devolve o id e o nome
+// e manda conferir).
 func campanhaFeita(ctx context.Context, cfg ConfigServidor, E *Escritas, c *catalog.Campaign, ressalvas ...string) feito {
-	f := feito{Recurso: "campaign", RecursoID: &c.ID, Ressalvas: ressalvas}
-	saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-	if err != nil {
-		cfg.log().Error("mcp: releitura da campanha após a escrita falhou", zap.Error(err))
-		f.Resultado = saidaCampanhaSemLeitura{Campanha: refDe(c.ID, c.Name)}
-		f.Ressalvas = append(f.Ressalvas,
-			"A escrita foi gravada, mas não consegui reler a campanha agora: confira o estado com obter_campanha (campanha_id "+c.ID.String()+").")
-		return f
-	}
-	f.Resultado = saida
-	return f
+	return campanhaFeitaDe(cfg, c, func() (*saidaObterCampanha, error) { return lerCampanhaCompleta(ctx, cfg, E.Leitura, c) }, ressalvas...)
+}
+
+// campanhaFeitaDe é o campanhaFeita com a releitura por conta de quem chama (a que precisa buscar a
+// campanha de novo antes de montar o resultado).
+func campanhaFeitaDe(cfg ConfigServidor, c *catalog.Campaign, reler func() (*saidaObterCampanha, error), ressalvas ...string) feito {
+	return feitoRelido(cfg, alvoGravado{Recurso: "campaign", ID: c.ID, Artigo: "a campanha", Conferir: "obter_campanha (campanha_id " + c.ID.String() + ")"},
+		reler, saidaCampanhaSemLeitura{Campanha: refDe(c.ID, c.Name)}, ressalvas...)
 }
 
 // ── cancelar_campanha ───────────────────────────────────────────────────
@@ -230,7 +208,7 @@ func escritaCancelarCampanha(cfg ConfigServidor) Escrita[entradaCancelarCampanha
 		Nivel:  Critico,
 		Motivo: "congela o déficit e tira a campanha das telas operacionais e da cobrança",
 		Recurso: func(in entradaCancelarCampanha) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaCancelarCampanha) *string {
 			return linkDaCampanhaNaLista(cfg, in.CampanhaID)
@@ -359,7 +337,7 @@ func escritaApagarCampanha(cfg ConfigServidor) Escrita[entradaApagarCampanha] {
 		Nivel:  Critico,
 		Motivo: "irreversível: apaga a campanha e tudo que é dela (vínculos de material, regras, ajustes do dia e preços)",
 		Recurso: func(in entradaApagarCampanha) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaApagarCampanha) *string { return linkDaCampanhaNaLista(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaApagarCampanha) (previa, error) {
@@ -461,7 +439,7 @@ func escritaEditarCPMFixo(cfg ConfigServidor) Escrita[entradaEditarCPMFixo] {
 		Nivel:  Critico,
 		Motivo: "muda o CPM que o cliente vê",
 		Recurso: func(in entradaEditarCPMFixo) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaEditarCPMFixo) *string { return linkDaCampanha(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaEditarCPMFixo) (previa, error) {
@@ -756,7 +734,7 @@ func escritaEditarPrecosCampanha(cfg ConfigServidor) Escrita[entradaEditarPrecos
 		Nivel:  Critico,
 		Motivo: "dinheiro: muda o investido, a bonificação e o CPM que o cliente vê",
 		Recurso: func(in entradaEditarPrecosCampanha) (string, *uuid.UUID) {
-			return campanhaDoRecurso("campaign", in.CampanhaID)
+			return recursoDe("campaign", in.CampanhaID)
 		},
 		Tela: func(_ *Escritas, in entradaEditarPrecosCampanha) *string { return linkDaCampanha(cfg, in.CampanhaID) },
 		Preview: func(ctx context.Context, E *Escritas, in entradaEditarPrecosCampanha) (previa, error) {
@@ -783,9 +761,9 @@ func escritaEditarPrecosCampanha(cfg ConfigServidor) Escrita[entradaEditarPrecos
 				},
 				Ressalvas: []string{"O pós-venda já enviado não muda (o documento é congelado)."},
 			}
-			if len(mud) > tetoLinhasPMMNaResposta {
-				pv.Ressalvas = append(pv.Ressalvas, fmt.Sprintf("mostrando %d de %d mudanças", tetoLinhasPMMNaResposta, len(mud)))
-				mud = mud[:tetoLinhasPMMNaResposta]
+			if len(mud) > tetoMudancasDePrecoNoPreview {
+				pv.Ressalvas = append(pv.Ressalvas, fmt.Sprintf("mostrando %d de %d mudanças", tetoMudancasDePrecoNoPreview, len(mud)))
+				mud = mud[:tetoMudancasDePrecoNoPreview]
 			}
 			pv.Mudancas = mud
 			if pl.semEfeito > 0 {
