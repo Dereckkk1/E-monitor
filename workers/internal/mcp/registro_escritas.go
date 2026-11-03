@@ -164,6 +164,7 @@ func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args jso
 			}
 			return in, &erroConferencia{causa: perr}
 		}
+		nova = limparPrevia(nova) // o gravado foi limpo na criação: compara limpo com limpo
 		igual, cerr := mesmaPrevia(previaGravada, nova)
 		if cerr != nil {
 			return in, &erroConferencia{causa: fmt.Errorf("comparar o resumo: %w", cerr)}

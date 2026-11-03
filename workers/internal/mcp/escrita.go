@@ -217,6 +217,7 @@ func criarPendente[In any](ctx context.Context, cfg ConfigServidor, E *Escritas,
 	if E.Pendentes == nil {
 		return falhaInterna(cfg.log(), d.Nome, errors.New("mcp: Pendentes não configuradas"))
 	}
+	motivo = semBidi(motivo)
 	pend, jaExistia, err := E.Pendentes.Criar(context.WithoutCancel(ctx), NovaPendente{
 		UserID: p.UserID, TokenID: p.TokenID, Tool: d.Nome, Args: args, Motivo: motivo, Preview: pv,
 	}, E.agora())
@@ -353,6 +354,7 @@ func ferramentaEscrita[In any](s *sdk.Server, cfg ConfigServidor, p *Principal, 
 		if err != nil {
 			return comoFalha(cfg, d.Nome, err)
 		}
+		pv = limparPrevia(pv) // sem controles de direção no texto que a pessoa vai ler
 
 		// 4. crítico: grava o pedido; quem executa é a aprovação em /pendentes (F4-5).
 		if nivel == Critico {
