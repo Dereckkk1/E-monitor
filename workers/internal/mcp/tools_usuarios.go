@@ -149,21 +149,33 @@ func registrarUsuarios(s *sdk.Server, cfg ConfigServidor) {
 			if err != nil {
 				return recusaEntrada("usuario_id")
 			}
-			u, err := L.Usuarios.Get(ctx, id)
+			saida, err := montarUsuario(ctx, L, id)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return naoEncontrado("usuário")
 			}
 			if err != nil {
 				return nil, err
 			}
-			convites, err := L.BoasVindas.Latest(ctx, []uuid.UUID{id})
-			if err != nil {
-				return nil, err
-			}
-			clientes, err := nomesClientes(ctx, L)
-			if err != nil {
-				return nil, err
-			}
-			return ok(saidaObterUsuario{Usuario: usuarioDe(*u, clientes, convites)})
+			return ok(saida)
 		})
+}
+
+// montarUsuario é o usuário no formato de obter_usuario. As tools de escrita de
+// usuário (criar/editar/desativar) devolvem exatamente isto. pgx.ErrNoRows =
+// o usuário não existe. O link e a senha das boas-vindas nunca entram: o DTO só
+// tem o estado do convite.
+func montarUsuario(ctx context.Context, L *Leitura, id uuid.UUID) (saidaObterUsuario, error) {
+	u, err := L.Usuarios.Get(ctx, id)
+	if err != nil {
+		return saidaObterUsuario{}, err
+	}
+	convites, err := L.BoasVindas.Latest(ctx, []uuid.UUID{id})
+	if err != nil {
+		return saidaObterUsuario{}, err
+	}
+	clientes, err := nomesClientes(ctx, L)
+	if err != nil {
+		return saidaObterUsuario{}, err
+	}
+	return saidaObterUsuario{Usuario: usuarioDe(*u, clientes, convites)}, nil
 }
