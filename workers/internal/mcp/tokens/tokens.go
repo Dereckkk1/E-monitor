@@ -185,24 +185,40 @@ func (s *Store) ListarConexoes(ctx context.Context, userID uuid.UUID) ([]Token, 
 	return out, rows.Err()
 }
 
+// TextoPedidoRevogado é o `erro` gravado nos pedidos críticos (mcp_acoes_pendentes) que expiram
+// porque a conexão de IA que os fez foi revogada. A função SQL mcp_revogar_credenciais_do_usuario
+// (migration 0072) grava o mesmo texto; um teste confere que os dois batem.
+const TextoPedidoRevogado = "A conexão de IA que fez este pedido foi revogada; peça de novo por uma conexão válida."
+
 // Revogar mata a credencial `id` se ela for de `userID`. Numa conexão OAuth
 // (client_id preenchido) derruba todos os tokens daquele cliente do usuário.
+// Na mesma instrução, os pedidos críticos ainda `pendente` feitos por qualquer
+// token dessa conexão (inclusive os já vencidos ou rotacionados: o access
+// token da chamada dura uma hora, o pedido 24) viram `expirada` — o que uma IA
+// desconectada pediu não pode mais ser aprovado.
 func (s *Store) Revogar(ctx context.Context, id, userID uuid.UUID) (bool, error) {
-	tag, err := s.db.Exec(ctx,
-		`UPDATE mcp_tokens t SET revoked_at = NOW()
-		   FROM mcp_tokens alvo
-		  WHERE alvo.id = $1 AND alvo.user_id = $2
-		    AND t.user_id = alvo.user_id AND t.revoked_at IS NULL
-		    AND (t.id = alvo.id OR (alvo.client_id IS NOT NULL AND t.client_id = alvo.client_id))`,
-		id, userID)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
+	var n int64
+	err := s.db.QueryRow(ctx,
+		`WITH conexao AS (
+		   SELECT t.id FROM mcp_tokens alvo
+		     JOIN mcp_tokens t ON t.user_id = alvo.user_id
+		      AND (t.id = alvo.id OR (alvo.client_id IS NOT NULL AND t.client_id = alvo.client_id))
+		    WHERE alvo.id = $1 AND alvo.user_id = $2
+		 ), rev AS (
+		   UPDATE mcp_tokens SET revoked_at = NOW()
+		    WHERE id IN (SELECT id FROM conexao) AND revoked_at IS NULL RETURNING id
+		 ), exp AS (
+		   UPDATE mcp_acoes_pendentes SET estado = 'expirada', erro = $3
+		    WHERE user_id = $2 AND estado = 'pendente' AND token_id IN (SELECT id FROM conexao)
+		 )
+		 SELECT COUNT(*) FROM rev`,
+		id, userID, TextoPedidoRevogado).Scan(&n)
+	return n > 0, err
 }
 
 // RevogarTodos revoga toda credencial não revogada do usuário e apaga os
-// códigos pendentes. O retorno conta só as que ainda estavam vivas (não
+// códigos pendentes; os pedidos críticos ainda `pendente` dele expiram junto
+// (ver Revogar). O retorno conta só as que ainda estavam vivas (não
 // vencidas) — as vencidas são revogadas mas não entram na conta.
 func (s *Store) RevogarTodos(ctx context.Context, userID uuid.UUID) (int64, error) {
 	var n int64
@@ -210,8 +226,10 @@ func (s *Store) RevogarTodos(ctx context.Context, userID uuid.UUID) (int64, erro
 		`WITH t AS (UPDATE mcp_tokens SET revoked_at = NOW()
 		             WHERE user_id = $1 AND revoked_at IS NULL
 		             RETURNING (expires_at > NOW()) AS vivo),
-		      c AS (DELETE FROM mcp_oauth_codes WHERE user_id = $1)
-		 SELECT COUNT(*) FILTER (WHERE vivo) FROM t`, userID).Scan(&n)
+		      c AS (DELETE FROM mcp_oauth_codes WHERE user_id = $1),
+		      p AS (UPDATE mcp_acoes_pendentes SET estado = 'expirada', erro = $2
+		             WHERE user_id = $1 AND estado = 'pendente')
+		 SELECT COUNT(*) FILTER (WHERE vivo) FROM t`, userID, TextoPedidoRevogado).Scan(&n)
 	return n, err
 }
 

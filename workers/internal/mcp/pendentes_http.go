@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -23,21 +26,29 @@ type PendentesHTTP struct {
 	Log        *zap.Logger
 }
 
-const tetoListaPendentesHTTP = 50
+const (
+	tetoListaPendentesHTTP = 50
+	prazoReler422          = 5 * time.Second
+	// tetoCorpoAprovar: o corpo é {"tentativa": N}.
+	tetoCorpoAprovar = 1 << 10
+)
 
 // pendenteDTO é a vitrine do pedido: nunca args, resultado, token nem usuário.
 type pendenteDTO struct {
-	ID          uuid.UUID `json:"id"`
-	Tool        string    `json:"tool"`
-	Motivo      string    `json:"motivo"`
-	Preview     previa    `json:"preview"`
-	Estado      string    `json:"estado"`
-	CriadaEm    string    `json:"criada_em"`
-	ExpiraEm    string    `json:"expira_em"`
-	AprovadaEm  *string   `json:"aprovada_em"`
-	ExecutadaEm *string   `json:"executada_em"`
-	RecusadaEm  *string   `json:"recusada_em"`
-	Erro        *string   `json:"erro"`
+	ID      uuid.UUID `json:"id"`
+	Tool    string    `json:"tool"`
+	Motivo  string    `json:"motivo"`
+	Preview previa    `json:"preview"`
+	Estado  string    `json:"estado"`
+	// Tentativa é a versão do pedido (conta as aprovações): quem aprova a devolve no corpo, e a
+	// aprovação só vale se for a vigente. É o que impede de aprovar um resumo que a pessoa nunca leu.
+	Tentativa   int     `json:"tentativa"`
+	CriadaEm    string  `json:"criada_em"`
+	ExpiraEm    string  `json:"expira_em"`
+	AprovadaEm  *string `json:"aprovada_em"`
+	ExecutadaEm *string `json:"executada_em"`
+	RecusadaEm  *string `json:"recusada_em"`
+	Erro        *string `json:"erro"`
 	// Ressalvas são os avisos da execução ("o email não saiu: a pessoa não tem a senha"), gravados
 	// ao fechar o pedido: quem recarrega /pendentes?id= os lê de novo. Sempre um array.
 	Ressalvas []string `json:"ressalvas"`
@@ -53,7 +64,7 @@ func ressalvasOuVazio(rs []string) []string {
 
 func pendenteParaDTO(p Pendente) pendenteDTO {
 	return pendenteDTO{
-		ID: p.ID, Tool: p.Tool, Motivo: p.Motivo, Preview: p.Preview, Estado: p.Estado,
+		ID: p.ID, Tool: p.Tool, Motivo: p.Motivo, Preview: p.Preview, Estado: p.Estado, Tentativa: p.Tentativa,
 		CriadaEm: instante(p.CriadaEm), ExpiraEm: instante(p.ExpiraEm),
 		AprovadaEm: instanteOpc(p.AprovadaEm), ExecutadaEm: instanteOpc(p.ExecutadaEm),
 		RecusadaEm: instanteOpc(p.RecusadaEm), Erro: p.Erro, Ressalvas: ressalvasOuVazio(p.Ressalvas),
@@ -80,7 +91,7 @@ func textoEstadoPendente(estado string) string {
 	case "falhou":
 		return "Este pedido foi interrompido; confira se a ação aconteceu."
 	case "expirada":
-		return "Este pedido expirou (24 h). Peça de novo à IA."
+		return "Este pedido expirou. Peça de novo à IA."
 	}
 	return "Este pedido já está " + estado + "."
 }
@@ -165,11 +176,27 @@ func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, r *http.Req
 	switch {
 	case errors.Is(err, ErrPendenteNaoAchada):
 		naoEncontradoPendente(w)
+	case errors.Is(err, ErrPendenteMudou):
+		// O resumo (ou o estado) mudou desde que a tela abriu: ela relê antes de a pessoa decidir de novo.
+		erroMensagemJSON(w, http.StatusConflict, "pendente_mudou", msgPendenteMudou)
+	case errors.Is(err, ErrCredencialRevogada):
+		// O pedido acabou de virar `expirada` (a conexão que o fez foi revogada): é o mesmo 409 de um
+		// pedido que já estava expirado, com o motivo no texto.
+		erroMensagemJSON(w, http.StatusConflict, "pendente_expirada", msgCredencialRevogada)
 	case errors.As(err, &est):
-		erroMensagemJSON(w, http.StatusConflict, "pendente_"+est.Estado, textoEstadoPendente(est.Estado))
+		texto := est.Motivo
+		if texto == "" {
+			texto = textoEstadoPendente(est.Estado)
+		}
+		erroMensagemJSON(w, http.StatusConflict, "pendente_"+est.Estado, texto)
 	case errors.As(err, &rec):
 		corpo := map[string]any{"error": rec.Codigo, "mensagem": rec.Mensagem}
-		if got, gerr := h.Pendentes.Obter(r.Context(), id, userID); gerr == nil {
+		// A releitura não herda o cancelamento do pedido: o 422 pode estar saindo depois de o
+		// cliente (ou o middleware de timeout) ter desistido, e é ela que leva o resumo novo.
+		rctx, cancela := context.WithTimeout(context.WithoutCancel(r.Context()), prazoReler422)
+		got, gerr := h.Pendentes.Obter(rctx, id, userID)
+		cancela()
+		if gerr == nil {
 			corpo["pendente"] = pendenteParaDTO(got)
 		} else {
 			h.Log.Warn("mcp: reler pendente para o 422", zap.Error(gerr))
@@ -185,12 +212,24 @@ func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// corpoAprovar é o que a tela manda ao aprovar: a versão (tentativa) do pedido que a pessoa está lendo.
+type corpoAprovar struct {
+	Tentativa *int `json:"tentativa"`
+}
+
 func (h *PendentesHTTP) Aprovar(w http.ResponseWriter, r *http.Request) {
 	ator, id, ok := h.preparar(w, r)
 	if !ok {
 		return
 	}
-	out, err := h.Aprovacoes.Aprovar(r.Context(), id, ator)
+	// Sem a versão não há como saber o que a pessoa leu: 400, e não "aprova a vigente". O único
+	// cliente é a tela /pendentes, que sempre a manda.
+	var c corpoAprovar
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, tetoCorpoAprovar)).Decode(&c); err != nil || c.Tentativa == nil || *c.Tentativa < 0 {
+		erroMensagemJSON(w, http.StatusBadRequest, "entrada_invalida", "Falta a versão do pedido (tentativa): recarregue a página e aprove de novo.")
+		return
+	}
+	out, err := h.Aprovacoes.Aprovar(r.Context(), id, ator, *c.Tentativa)
 	if err != nil {
 		h.responderErroPendente(w, r, id, ator.UserID, err)
 		return

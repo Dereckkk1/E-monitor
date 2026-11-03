@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,8 +52,21 @@ func novaBancadaPendentesHTTP(t *testing.T, sonda *sondaEscrita) *bancadaPendent
 	return &bancadaPendentesHTTP{bancadaAprovacao: b, r: r, jwtDono: dono, outro: outro, jwtOutro: jo, sonda: sonda}
 }
 
+// fazer chama a rota. Em /aprovar o corpo é o que a tela manda: a tentativa VIGENTE do pedido no banco
+// (0 se o id não existe); fazerCorpo manda outra coisa (versão velha, sem corpo...).
 func (b *bancadaPendentesHTTP) fazer(metodo, caminho, jwt string) (*httptest.ResponseRecorder, map[string]any) {
-	req := httptest.NewRequest(metodo, caminho, strings.NewReader(`{"lixo":true}`))
+	corpo := `{"lixo":true}`
+	if strings.HasSuffix(caminho, "/aprovar") {
+		var n int
+		partes := strings.Split(caminho, "/")
+		_ = b.pool.QueryRow(b.ctx, `SELECT tentativa FROM mcp_acoes_pendentes WHERE id::text = $1`, partes[len(partes)-2]).Scan(&n)
+		corpo = fmt.Sprintf(`{"tentativa":%d}`, n)
+	}
+	return b.fazerCorpo(metodo, caminho, jwt, corpo)
+}
+
+func (b *bancadaPendentesHTTP) fazerCorpo(metodo, caminho, jwt, corpo string) (*httptest.ResponseRecorder, map[string]any) {
+	req := httptest.NewRequest(metodo, caminho, strings.NewReader(corpo))
 	if jwt != "" {
 		req.Header.Set("Authorization", "Bearer "+jwt)
 	}
@@ -75,7 +89,7 @@ func (b *bancadaPendentesHTTP) pedidoDe(t *testing.T, dono uuid.UUID, args strin
 	return p
 }
 
-var chavesProibidasPendente = []string{"args", "resultado", "token_id", "user_id", "tentativa"}
+var chavesProibidasPendente = []string{"args", "resultado", "token_id", "user_id"}
 
 type erroTexto string
 
@@ -86,7 +100,7 @@ func TestPendentesHTTP_ListaSoOsAbertosDoDono(t *testing.T) {
 	b := novaBancadaPendentesHTTP(t, &sondaEscrita{})
 	aberto := b.pedido(t, "t_crit", `{"valor":"a"}`)
 	feito := b.pedido(t, "t_crit", `{"valor":"b"}`)
-	_, err := b.apr.Aprovar(b.ctx, feito.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, feito.ID, b.ator(), feito.Tentativa)
 	require.NoError(t, err)
 	alheio := b.pedidoDe(t, b.outro, `{"valor":"c"}`)
 
@@ -110,7 +124,7 @@ func TestPendentesHTTP_ListaSoOsAbertosDoDono(t *testing.T) {
 func TestPendentesHTTP_DestaqueSoDoDono(t *testing.T) {
 	b := novaBancadaPendentesHTTP(t, &sondaEscrita{})
 	feito := b.pedido(t, "t_crit", `{"valor":"b"}`)
-	_, err := b.apr.Aprovar(b.ctx, feito.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, feito.ID, b.ator(), feito.Tentativa)
 	require.NoError(t, err)
 	alheio := b.pedidoDe(t, b.outro, `{"valor":"c"}`)
 
@@ -210,7 +224,7 @@ func TestPendentesHTTP_RecusarEExpirada(t *testing.T) {
 		rec, m = b.fazer(http.MethodPost, "/mcp/pendentes/"+velho.ID.String()+"/"+acao, b.jwtDono)
 		require.Equal(t, http.StatusConflict, rec.Code, acao)
 		require.Equal(t, "pendente_expirada", m["error"])
-		require.Equal(t, "Este pedido expirou (24 h). Peça de novo à IA.", m["mensagem"])
+		require.Equal(t, "Este pedido expirou. Peça de novo à IA.", m["mensagem"])
 	}
 }
 
@@ -229,7 +243,11 @@ func TestPendentesHTTP_AdminRebaixadoDa403(t *testing.T) {
 		require.Equal(t, http.StatusForbidden, rec.Code, c[1])
 	}
 	require.Equal(t, 0, b.sonda.execucoes)
-	require.Equal(t, "pendente", b.estado(t, pend.ID).Estado)
+	// Rebaixar o dono revoga as credenciais dele (trigger de users), e com elas os pedidos que a IA fez
+	// por elas: o pedido deixa de ser aprovável mesmo que ele volte a ser admin.
+	got := b.estado(t, pend.ID)
+	require.Equal(t, "expirada", got.Estado)
+	require.Equal(t, msgCredencialRevogada, *got.Erro)
 }
 
 func TestPendentesHTTP_SemExecutorDa503(t *testing.T) {

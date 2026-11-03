@@ -83,7 +83,7 @@ func TestAprovacao_ExecutaUmaVezComOPrincipalDoDonoETokenDoPedido(t *testing.T) 
 	b := novaBancadaAprovacao(t, d)
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	require.Equal(t, 1, sonda.execucoes)
 	require.Equal(t, "executada", out.Pendente.Estado)
@@ -115,7 +115,7 @@ func TestAprovacao_PreviewRecusaNaAprovacaoNaoExecutaEVoltaAPendente(t *testing.
 	b := novaBancadaAprovacao(t, d)
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, "nao_achada", r.Codigo)
@@ -132,7 +132,7 @@ func TestAprovacao_ExecutarRecusaVoltaAPendente(t *testing.T) {
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, 1, sonda.execucoes)
@@ -153,7 +153,7 @@ func TestAprovacao_ErroInternoEPanicViramFalhouComMensagemGenerica(t *testing.T)
 			b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 			pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 			require.ErrorIs(t, err, ErrExecucaoInterrompida)
 			got := b.estado(t, pend.ID)
 			require.Equal(t, "falhou", got.Estado)
@@ -168,7 +168,7 @@ func TestAprovacao_ToolQueNaoExisteMaisVoltaAPendente(t *testing.T) {
 	b := novaBancadaAprovacao(t, (&sondaEscrita{}).escrita("outra", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, "tool_desconhecida", r.Codigo)
@@ -183,7 +183,7 @@ func TestAprovacao_ArgsGravadosForaDoSchemaViramArgsInvalidos(t *testing.T) {
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":42}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, "args_invalidos", r.Codigo)
@@ -197,7 +197,7 @@ func TestAprovacao_OutroAdminNaoAchaOPedido(t *testing.T) {
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, &Principal{UserID: uuid.New()})
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, &Principal{UserID: uuid.New()}, pend.Tentativa)
 	require.ErrorIs(t, err, ErrPendenteNaoAchada)
 	require.Equal(t, 0, sonda.execucoes)
 	require.Equal(t, "pendente", b.estado(t, pend.ID).Estado)
@@ -224,7 +224,7 @@ func TestAprovacao_AprovacoesConcorrentesExecutamUmaVez(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, erros[i] = b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			_, erros[i] = b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 		}()
 	}
 	wg.Wait()
@@ -258,7 +258,7 @@ func TestAprovacao_ResultadoQueNaoSerializaFechaExecutadaSemResultado(t *testing
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	got := b.estado(t, pend.ID)
 	require.Equal(t, "executada", got.Estado)
@@ -276,7 +276,7 @@ func TestAprovacao_PreviewComErroOuPanicVoltaAPendenteSemExecutar(t *testing.T) 
 			b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 			pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 			require.ErrorIs(t, err, ErrConferenciaFalhou)
 			require.Equal(t, 0, sonda.execucoes, "o Executar não pode rodar")
 			got := b.estado(t, pend.ID)
@@ -287,7 +287,7 @@ func TestAprovacao_PreviewComErroOuPanicVoltaAPendenteSemExecutar(t *testing.T) 
 
 			// aprovável de novo, e agora executa
 			sonda.erroPreview, sonda.panicaPreview = nil, false
-			out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), got.Tentativa)
 			require.NoError(t, err)
 			require.Equal(t, "executada", out.Pendente.Estado)
 			require.Equal(t, 1, sonda.execucoes)
@@ -313,7 +313,7 @@ func TestAprovacao_ArgsInvalidosEToolDesconhecidaTemMensagemFixaESemFolga(t *tes
 	// args fora do schema
 	pend := b.pedido(t, "t_crit", `{"valor":42}`)
 	antes := perto(pend.ID)
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, codigoArgsInvalidos, r.Codigo)
@@ -325,7 +325,7 @@ func TestAprovacao_ArgsInvalidosEToolDesconhecidaTemMensagemFixaESemFolga(t *tes
 	// tool que sumiu
 	outra := b.pedido(t, "nao_existe", `{"valor":"abc"}`)
 	antes = perto(outra.ID)
-	_, err = b.apr.Aprovar(b.ctx, outra.ID, b.ator())
+	_, err = b.apr.Aprovar(b.ctx, outra.ID, b.ator(), outra.Tentativa)
 	require.ErrorAs(t, err, &r)
 	require.Equal(t, "tool_desconhecida", r.Codigo)
 	require.Equal(t, msgToolDesconhecida, r.Mensagem)
@@ -347,7 +347,7 @@ func TestAprovacao_ConferenciaFalhaSemConseguirDevolverAPendenteEhExecucaoInterr
 		require.NoError(t, err)
 	}
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 
 	require.ErrorIs(t, err, ErrExecucaoInterrompida)
 	require.NotErrorIs(t, err, ErrConferenciaFalhou)
@@ -361,7 +361,7 @@ func TestAprovacao_RecusaDeNegocioContinuaEstendendoOPrazo(t *testing.T) {
 	// põe o prazo a 10 min do fim: a falha de negócio sobe para agora+1h
 	_, err := b.pool.Exec(b.ctx, `UPDATE mcp_acoes_pendentes SET expira_em = $2 WHERE id = $1`, pend.ID, b.agora.Add(10*time.Minute))
 	require.NoError(t, err)
-	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.Error(t, err)
 	require.True(t, b.estado(t, pend.ID).ExpiraEm.After(b.agora.Add(30*time.Minute)))
 }
@@ -371,7 +371,7 @@ func TestAprovacao_AprovadoTrazAExecutadaEmEOResultadoSerializado(t *testing.T) 
 	sonda := &sondaEscrita{}
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
-	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	require.Equal(t, "executada", out.Pendente.Estado)
 	require.NotNil(t, out.Pendente.ExecutadaEm)
@@ -386,7 +386,7 @@ func TestAprovacao_ContextoCanceladoNaoEncalhaOPedido(t *testing.T) {
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 	ctx, cancela := context.WithCancel(b.ctx)
 	cancela()
-	out, err := b.apr.Aprovar(ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	require.Equal(t, "executada", out.Pendente.Estado)
 	require.Equal(t, 1, sonda.execucoes)
@@ -408,7 +408,7 @@ func TestAprovacao_PreviewVeOPrincipalDoDonoNoContexto(t *testing.T) {
 	b := novaBancadaAprovacao(t, d)
 	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, previa{Resumo: "r"})
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	require.True(t, tinha, "o Preview da aprovação tem de ver o principal")
 	require.Equal(t, principalTeste.UserID, visto.UserID)
@@ -424,7 +424,7 @@ func TestAprovacao_RessalvasDaExecucaoChegamAoAprovadoEFicamGravadas(t *testing.
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 	require.Empty(t, pend.Ressalvas, "o pedido recém-criado não tem ressalva")
 
-	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 	require.NoError(t, err)
 	require.Equal(t, []string{"o email não saiu", "confira com obter_x"}, out.Ressalvas)
 	require.Equal(t, out.Ressalvas, out.Pendente.Ressalvas, "a linha devolvida é a gravada")
@@ -432,7 +432,8 @@ func TestAprovacao_RessalvasDaExecucaoChegamAoAprovadoEFicamGravadas(t *testing.
 
 	limpa := &sondaEscrita{}
 	b2 := novaBancadaAprovacao(t, limpa.escrita("t_crit", Critico, false))
-	out, err = b2.apr.Aprovar(b2.ctx, b2.pedido(t, "t_crit", `{"valor":"abc"}`).ID, b2.ator())
+	limpo := b2.pedido(t, "t_crit", `{"valor":"abc"}`)
+	out, err = b2.apr.Aprovar(b2.ctx, limpo.ID, b2.ator(), limpo.Tentativa)
 	require.NoError(t, err)
 	require.NotNil(t, out.Ressalvas, "sem ressalva a lista é vazia, não nil")
 	require.Empty(t, out.Ressalvas)
@@ -458,7 +459,7 @@ func TestAprovacao_ResumoQueMudouEhRecusaPreviewDesatualizadoEAtualizaOPedido(t 
 	require.NoError(t, err)
 	afeta = "2 usuários" // o estado mudou depois do pedido
 
-	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err = b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 
 	var r *acoes.Recusa
 	require.ErrorAs(t, err, &r)
@@ -472,7 +473,7 @@ func TestAprovacao_ResumoQueMudouEhRecusaPreviewDesatualizadoEAtualizaOPedido(t 
 	require.True(t, got.ExpiraEm.After(b.agora.Add(30*time.Minute)), "a recusa ganha folga de prazo: %s", got.ExpiraEm)
 	require.Equal(t, codigoPreviewDesatualizado, b.meta(t, "mcp.pendente.falhou")["codigo"])
 
-	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), got.Tentativa)
 	require.NoError(t, err, "com o resumo novo gravado, a próxima aprovação executa")
 	require.Equal(t, "executada", out.Pendente.Estado)
 	require.Equal(t, 1, sonda.execucoes)
@@ -500,7 +501,7 @@ func TestAprovacao_ResumoIgualDepoisDoJSONBNaoEhDesatualizado(t *testing.T) {
 	b := novaBancadaAprovacao(t, d)
 	pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, cheia(entradaEscritaTeste{Valor: "abc"}))
 
-	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 
 	require.NoError(t, err)
 	require.Equal(t, "executada", out.Pendente.Estado)
@@ -533,7 +534,7 @@ func TestAprovacao_QualquerParteDoResumoQueMudaEhDesatualizada(t *testing.T) {
 			b := novaBancadaAprovacao(t, d)
 			pend := b.pedidoComPrevia(t, "t_crit", `{"valor":"abc"}`, base)
 
-			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+			_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 
 			var r *acoes.Recusa
 			require.ErrorAs(t, err, &r)
@@ -552,7 +553,7 @@ func TestAprovacao_ErroAposEscritaViraFalhouComOTextoDaAcao(t *testing.T) {
 	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
 	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
 
-	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	_, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator(), pend.Tentativa)
 
 	require.ErrorIs(t, err, ErrExecucaoInterrompida)
 	require.Equal(t, texto, mensagemDaInterrupcao(err))
