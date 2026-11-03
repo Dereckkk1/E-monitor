@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -29,6 +30,7 @@ import (
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/mcp/mcptest"
+	"radiocheck/internal/mcp/tokens"
 	"radiocheck/internal/users"
 	"radiocheck/internal/welcome"
 )
@@ -546,6 +548,33 @@ func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
 			require.NotContains(t, todoOAudit(t, b), "smtp")
 		})
 	}
+}
+
+// O aviso "a pessoa não tem a senha" não pode morrer no momento do clique: quem recarrega
+// /pendentes?id= e a IA, que consulta minhas_pendentes depois, leem a mesma ressalva gravada.
+func TestCriarUsuario_AvisoDoEmailVoltaPorHTTPEPorMinhasPendentes(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearClientesDeUsuario(t, b)
+	_, correio := ligarBoasVindas(t, b, true)
+	correio.erro = fmt.Errorf("smtp: conexão recusada")
+	out := b.pedePendente(t, toolCriarUsuario, argsCriarUsuario("Sem Email", "sem.email@volta.teste", "cliente", c.cA))
+	pid := out["pendente_id"].(string)
+	ap := b.aprovar(t, pid)
+	require.Contains(t, textoDasRessalvas(ap.Ressalvas), "a pessoa não tem a senha")
+
+	apr, err := NovasAprovacoes(b.cfg)
+	require.NoError(t, err)
+	h := &PendentesHTTP{Tokens: tokens.NovoStore(b.pool, []byte(mcptest.SegredoTeste)), Pendentes: b.E.Pendentes, Aprovacoes: apr, Log: zap.NewNop()}
+	corpo := chamarHandlerCorpo(t, h.Listar, http.MethodGet, "/mcp/pendentes?id="+pid, nil, nil, b.admin)
+	var lista map[string]any
+	require.NoError(t, json.Unmarshal(corpo, &lista), string(corpo))
+	doHTTP := lista["destaque"].(map[string]any)["ressalvas"].([]any)
+	require.Contains(t, mustJSON(t, doHTTP), "a pessoa não tem a senha", "a página do pedido mostra o aviso de novo")
+
+	pelaIA := itens(t, b.chamar(t, "minhas_pendentes", map[string]any{"estado": "executada"}))
+	require.Len(t, pelaIA, 1)
+	require.Contains(t, mustJSON(t, pelaIA[0]["ressalvas"]), "a pessoa não tem a senha", "a IA lê o aviso em minhas_pendentes")
+	require.Contains(t, mustJSON(t, pelaIA[0]["ressalvas"]), "redefina pela tela")
 }
 
 // quebrarReleituraDeUsuario faz SÓ a releitura do usuário (montarUsuario) falhar: a

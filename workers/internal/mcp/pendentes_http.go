@@ -38,6 +38,17 @@ type pendenteDTO struct {
 	ExecutadaEm *string   `json:"executada_em"`
 	RecusadaEm  *string   `json:"recusada_em"`
 	Erro        *string   `json:"erro"`
+	// Ressalvas são os avisos da execução ("o email não saiu: a pessoa não tem a senha"), gravados
+	// ao fechar o pedido: quem recarrega /pendentes?id= os lê de novo. Sempre um array.
+	Ressalvas []string `json:"ressalvas"`
+}
+
+// ressalvasOuVazio garante o array (nunca null) no JSON.
+func ressalvasOuVazio(rs []string) []string {
+	if rs == nil {
+		return []string{}
+	}
+	return rs
 }
 
 func pendenteParaDTO(p Pendente) pendenteDTO {
@@ -45,7 +56,7 @@ func pendenteParaDTO(p Pendente) pendenteDTO {
 		ID: p.ID, Tool: p.Tool, Motivo: p.Motivo, Preview: p.Preview, Estado: p.Estado,
 		CriadaEm: instante(p.CriadaEm), ExpiraEm: instante(p.ExpiraEm),
 		AprovadaEm: instanteOpc(p.AprovadaEm), ExecutadaEm: instanteOpc(p.ExecutadaEm),
-		RecusadaEm: instanteOpc(p.RecusadaEm), Erro: p.Erro,
+		RecusadaEm: instanteOpc(p.RecusadaEm), Erro: p.Erro, Ressalvas: ressalvasOuVazio(p.Ressalvas),
 	}
 }
 
