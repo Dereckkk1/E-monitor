@@ -732,6 +732,12 @@ func TestIgnorarERestaurarVeiculacao_ForaDoConjuntoPorOutroMotivo(t *testing.T) 
 			rs := mustJSON(t, out["preview"].(map[string]any)["ressalvas"])
 			require.Contains(t, rs, "já está fora do conjunto aprovado ("+caso.rotulo)
 			require.Contains(t, rs, "ignorar não muda nenhum número agora")
+			// Mesmo sem refechar nada, o preview diz de que célula-dia se trata (como o ramo normal).
+			require.Contains(t, rs, "Célula-dia: campanha")
+			require.Contains(t, rs, "Campanha Escrita")
+			require.Contains(t, rs, "Rádio 1")
+			require.Contains(t, rs, "Spot")
+			require.Contains(t, rs, "20/10/2026")
 
 			ignoraNaTela(t, b, p2)
 			out = b.pedePendente(t, toolRestaurarVeiculacao, argsVeiculacao(p2))

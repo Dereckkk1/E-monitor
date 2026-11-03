@@ -527,8 +527,8 @@ func escritaIgnorarVeiculacao(cfg ConfigServidor) Escrita[entradaVeiculacao] {
 			}
 			if !cx.aprovada {
 				pv.Ressalvas = append(pv.Ressalvas, fmt.Sprintf(
-					"Esta veiculação já está fora do conjunto aprovado (%s): ignorar não muda nenhum número agora; fica registrado que foi ignorada (e, se um dia ela voltar ao conjunto, não contará).",
-					cx.foraPorOutroMotivo))
+					"Esta veiculação já está fora do conjunto aprovado (%s): ignorar não muda nenhum número agora; fica registrado que foi ignorada (e, se um dia ela voltar ao conjunto, não contará). Célula-dia: %s.",
+					cx.foraPorOutroMotivo, cx.celula()))
 				return pv, nil
 			}
 			pv.Efeitos = append(pv.Efeitos,
