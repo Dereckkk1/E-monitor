@@ -546,7 +546,8 @@ guarda o schema resolvido por tipo (`schemasDeEntrada`), para a aprovação. Rem
 - **Token gasto em erro interno depois de consumir** (F3-5): a pessoa pede o preview de novo.
 - **Escrita lenta pode terminar depois de a resposta HTTP já ter falhado.** O `Executar` tem os PRÓPRIOS 60 s, contados
   depois do `Escalar` e do `Preview`, enquanto o `middleware.Timeout` de 60 s do router corre desde o início do pedido. Uma
-  escrita lenta (ex.: o recat síncrono de um override) pode concluir DEPOIS de o cliente/proxy já ter recebido o 504. É seguro:
+  escrita lenta (ex.: o recat síncrono de um override) pode concluir DEPOIS de o cliente/proxy já ter desistido (o `middleware.Timeout`
+  do chi só cancela o contexto e escreve 504 se o handler voltar sem ter escrito; quem corta antes é o Cloudflare, com 524). É seguro:
   o token já foi consumido (repetir devolve "já foi usada") e o `Executar` não é cancelado. Mas o modelo só vê um erro de
   transporte e não sabe se a escrita aconteceu: deve conferir com a tool de leitura correspondente (`listar_overrides`,
   `obter_campanha`…) antes de pedir outro preview.
@@ -605,6 +606,21 @@ faria a pessoa aprovar duas vezes o mesmo `criar_veiculacao_manual` (duas tocada
 - **Exceção ou `panic` no `Executar`** → `falhou`, **final**: algo pode ter sido gravado, uma pessoa confere. Se a ação soube dizer o
   que ficou feito (`*acoes.ErroAposEscrita`), o `erro` leva o texto dela no lugar do genérico (ver abaixo).
 - Prazo de 24 h. `pendente` vencido vira `expirada` pelo varredor, ou na hora em que alguém tenta aprovar ou recusar.
+- **Revogar a conexão de IA expira os pedidos dela.** O pedido guarda o `token_id` da chamada que o criou; o que precisa estar vivo
+  é a **conexão**: um token pessoal vale por si, e numa conexão OAuth o token da chamada é o access token (dura 1 h, o pedido 24 h),
+  então vale enquanto o usuário tiver algum token vivo do mesmo `client_id`. Dois caminhos (os dois escrevem em `erro` o texto
+  `msgCredencialRevogada` — «A conexão de IA que fez este pedido foi revogada; peça de novo por uma conexão válida.» — e levam o
+  pedido a `expirada`):
+  - *Proativo*: `Store.Revogar` (o «Desconectar» de Minha conta, token pessoal ou conexão OAuth inteira) expira os `pendente` de **qualquer
+    token da conexão**, mesmo vencido ou trocado no refresh; `Store.RevogarTodos` (e o CLI `revoga-mcp`) e a função do trigger
+    `users_revoga_mcp` (senha trocada/redefinida, desativação, rebaixamento, apagar — a função é recriada no fim da `0072`) expiram
+    **todos** os `pendente` do usuário. A `aprovada` não é tocada: uma pessoa já clicou e a execução está rodando.
+  - *Na aprovação* (rede de segurança: revogação que não passou pelo caminho acima, `token_id` virado `NULL`, token vencido):
+    `Pendentes.Aprovar` só pega a linha se a conexão está viva; senão fecha o pedido como `expirada`, responde 409 `pendente_expirada`
+    com o motivo no `mensagem`, audita `mcp.pendente.falhou` com `codigo: credencial_revogada` e **nada executa**. A tentativa seguinte
+    cai no 409 normal de estado, com o mesmo motivo.
+
+  `minhas_pendentes` mostra o motivo no `erro` do pedido `expirada`, então o modelo sabe que precisa pedir de novo por uma conexão válida.
 - O pedido não é podado: a linha (e os `args`, inclusive a URL inteira de um webhook) fica gravada.
 
 ### Aprovação (F4-6)
@@ -614,7 +630,7 @@ Rotas no grupo admin do MCP (`/v1/internal`, JWT + `RequireRole("admin")`):
 | Rota | Faz |
 |---|---|
 | `GET /mcp/pendentes[?id=<uuid>]` | `{items, destaque}`: as abertas (`pendente` + `aprovada`, 50 mais novas) e, com `?id=`, o pedido do link em qualquer estado (`null` se for de outra pessoa ou malformado: mesmo 200, a lista não serve de oráculo) |
-| `POST /mcp/pendentes/{id}/aprovar` | executa |
+| `POST /mcp/pendentes/{id}/aprovar` | executa. **Corpo obrigatório `{"tentativa": N}`**: a versão do pedido que a tela mostrou (ver abaixo); sem ela, 400 `entrada_invalida` |
 | `POST /mcp/pendentes/{id}/recusar` | recusa |
 
 **Só quem pediu aprova.** Todo SQL filtra `user_id` = o JWT; "não existe", "não é seu" e id malformado respondem igual (404
@@ -622,6 +638,7 @@ Rotas no grupo admin do MCP (`/v1/internal`, JWT + `RequireRole("admin")`):
 síncrona no pedido HTTP; o `Principal` é o dono, com o `token_id` gravado no pedido. O que `Aprovacoes.Aprovar` faz, na ordem:
 
 1. `UPDATE pendente → aprovada` (`tentativa + 1`), com 10 s próprios, sem o cancelamento do pedido HTTP; audita `mcp.pendente.aprovada`.
+   O `UPDATE` só pega a linha **se** `tentativa` = a do corpo **e** a conexão que fez o pedido está viva (ver «Estados»).
 2. Acha a escrita pelo nome (sumiu → `tool_desconhecida`) e **revalida os args gravados pelo mesmo JSON schema que o SDK infere**
    (`jsonschema.ForType` + `Resolve`, `ApplyDefaults`, `Validate`, decodificando com `DisallowUnknownFields`; falha → `args_invalidos`).
 3. **Reroda o `Preview`** (com o dono no contexto, `ComPrincipal`, para as guardas "nunca a si mesmo" valerem também aqui), que relê o
@@ -631,15 +648,26 @@ síncrona no pedido HTTP; o `Principal` é o dono, com o `token_id` gravado no p
    **determinístico** (nada de horário de relógio, ordem de mapa ou contagem de fila no texto).
 4. Chama o `Executar` sob `WithoutCancel` + 60 s. O `Escalar` **não** reroda (já é crítico).
 5. Sucesso: audita `mcp.escrita.<tool>`, serializa o resultado, fecha com `MarcarExecutada` (gravando as **ressalvas** da execução) e
-   audita `.executada`. Daqui para baixo nada vira erro: se só o fechamento falha, a resposta ainda é 200.
+   audita `.executada`. Daqui para baixo nada vira erro: se só o fechamento falha, a resposta ainda é 200. Um erro do banco ao fechar
+   ganha **uma** segunda tentativa (contexto novo, 250 ms depois) antes de desistir; sem sucesso a linha fica `aprovada` até o
+   varredor, e a pessoa ainda lê o desfecho verdadeiro (a ação rodou).
+
+**A `tentativa` é a versão do que a pessoa leu.** Todo resumo gravado novo (`preview_desatualizado`, passo 3) vem depois de uma
+aprovação que incrementou a `tentativa`; então a aprovação com `tentativa` velha é uma aprovação de um resumo que a pessoa nunca viu
+(a aba B ainda mostrando o resumo velho depois de a aba A receber o `preview_desatualizado`) e é recusada: 409 `pendente_mudou`
+(«O pedido mudou desde que você abriu; releia antes de aprovar.»), nada executa, a `tentativa` não é gasta. Toda recusa de negócio
+incrementa a versão, então uma aba desatualizada por uma recusa que **não** mudou o resumo (`erro` novo) também toma o 409 — custa um
+recarregamento. O DTO do pedido (lista, `destaque`, 200 e 422) expõe `tentativa`; o 422 traz o pedido relido, já com a versão nova.
 
 Respostas da aprovação:
 
 | Status | Corpo | Quando |
 |---|---|---|
 | 200 | `{pendente, resultado, ressalvas}` | executou. `ressalvas` são os avisos da execução (sempre array, `[]` sem avisos; também ficam na linha do pedido): "o email não saiu, a pessoa não tem a senha", "gravei mas não consegui reler…" |
-| 409 | `{error: "pendente_<estado>", mensagem}` | o pedido já não está `pendente` (outra aba, prazo) |
-| 422 | `{error: <código>, mensagem, pendente}` | recusa de negócio: nada foi feito e o pedido voltou a `pendente`. `pendente` é o mesmo DTO do `GET`, relido depois da recusa (um `preview_desatualizado` já traz o `preview` novo); aditivo e ausente se a releitura falhar |
+| 400 | `{error: "entrada_invalida", mensagem}` | o corpo não traz `tentativa` (inteiro ≥ 0) |
+| 409 | `{error: "pendente_<estado>", mensagem}` | o pedido já não está `pendente` (outra aba, prazo). `pendente_expirada` também quando a **conexão de IA foi revogada** (o `mensagem` diz isso e o pedido acabou de ser fechado como `expirada`) |
+| 409 | `{error: "pendente_mudou", mensagem}` | `tentativa` do corpo ≠ a vigente: o pedido (resumo) mudou desde que a tela o abriu. Nada executou |
+| 422 | `{error: <código>, mensagem, pendente}` | recusa de negócio: nada foi feito e o pedido voltou a `pendente`. `pendente` é o mesmo DTO do `GET`, relido depois da recusa (um `preview_desatualizado` já traz o `preview` novo, com a `tentativa` nova); aditivo e ausente se a releitura falhar. A releitura usa `WithoutCancel` + 5 s: o 422 pode sair depois de o pedido HTTP ter sido cancelado |
 | 503 | `{error: "conferencia_falhou"}` | a conferência caiu por erro inesperado; nada foi feito e o pedido voltou a `pendente`: aprove de novo em instantes |
 | 500 | `{error: "interrompida", mensagem}` | virou `falhou`. A `mensagem` é a da ação quando ela sabe dizer o que ficou feito (`*acoes.ErroAposEscrita`: "a campanha foi cancelada, mas NÃO foi apagada: apareceu veiculação…"; "o usuário foi criado, mas a carteira não foi gravada por inteiro e o email NÃO saiu"), senão o genérico "confira se a ação aconteceu antes de pedir de novo" |
 | 503 | `{error: "indisponivel"}` | o índice das escritas falhou no boot (o módulo sobe sem aprovações; regra 6.5) |
@@ -655,7 +683,8 @@ função de `acoes` a gravaria também nas escritas da tela. Linhas: `mcp.penden
 `.aprovada`, `.recusada`, `.executada`, `.falhou` (recurso `mcp_pendente`, id = o do pedido) e `mcp.escrita.<tool>` com
 `nivel = critico`; todas levam `meta.mcp = {token_id, pendente_id}`. O ator é o admin dono (`actor_type 'user'`). `.falhou` leva `codigo`:
 o da recusa (`preview_desatualizado`, `args_invalidos`, `campanha_cancelada`…: o pedido voltou a `pendente`), `conferencia_falhou`,
-`interno`, `falha_apos_escrita` (a ação explicou o meio-estado) ou `presa` (varredor). `pendente_id` aparece em `auditoria_mcp` (a
+`interno`, `falha_apos_escrita` (a ação explicou o meio-estado), `credencial_revogada` (a aprovação foi recusada porque a conexão de IA do
+pedido foi revogada; o pedido virou `expirada`) ou `presa` (varredor). `pendente_id` aparece em `auditoria_mcp` (a
 chave não casa `chaveSecreta`); `token_id` segue oculto.
 
 **`Escrita.ArgsParaAuditoria`** é o gancho para a tool cujo argumento carrega um segredo que o log não guarda por inteiro. Hoje só
@@ -745,22 +774,33 @@ essas três mudaram o comportamento da rota; as demais extrações são refactor
 ### A tela `/pendentes` (F4-15)
 
 [`PendentesPage.jsx`](../../frontend/src/pages/PendentesPage.jsx), dentro do `AppShell`, `RequireRole admin`, **fora de `PUBLIC_ROUTES`** (sem
-sessão volta ao `/login` com `?next=` preservado — é o caminho do link que a IA entrega). Lista as abertas e, com `?id=`, destaca o
+sessão, o `RequireAuth` manda ao `/login` guardando o destino em `state.from` — caminho **e** query, então o `?id=` volta — e o `LoginPage` devolve para cá depois de entrar: é o caminho do link que a IA entrega). Lista as abertas e, com `?id=`, destaca o
 pedido em qualquer estado. Cada cartão mostra a ferramenta, o resumo, o motivo ("Por que precisa da sua aprovação"), as mudanças
 **de → para**, os efeitos ("O que acontece"), as ressalvas do preview ("Atenção"), o prazo em horário de São Paulo e os botões
-**Recusar** / **Aprovar e executar** (desabilitados enquanto age). Estados: `pendente` = "Aguardando você" (um `pendente` vencido pelo
+**Recusar** / **Aprovar e executar** (desabilitados enquanto age). **Aprovar manda a `tentativa` do cartão** que está na tela. Estados: `pendente` = "Aguardando você" (um `pendente` vencido pelo
 relógio do navegador já aparece como `expirada`, sem botões); `aprovada` = "Executando…" (passando de 10 min o pedido é marcado
 interrompido); `executada` ("Já foi executada."); `falhou` = "A execução foi interrompida", com o texto do servidor ou "confira se a ação
-aconteceu e, se não, peça de novo à IA"; `recusada`; `expirada`. Depois de decidir, o cartão fica na tela com o desfecho e as
+aconteceu e, se não, peça de novo à IA"; `recusada`; `expirada` («Expirou sem aprovação.», ou o motivo — a conexão de IA foi revogada — quando o servidor o gravou). Depois de decidir, o cartão fica na tela com o desfecho e as
 **ressalvas da execução**. Um 422 mostra a mensagem do servidor no cartão e o pedido segue com os botões (`preview_desatualizado` mostra
-"O pedido mudou: releia antes de aprovar" e já traz o resumo novo); 409 puxa o estado real pelo `?id=`; 500 `interrompida` vira cartão
-`falhou`.
+"O pedido mudou: releia antes de aprovar"); o `pendente` que o 422 traz **entra no cache na hora** (`setQueriesData`), então o cartão
+já mostra o resumo e a `tentativa` novos mesmo que a releitura da fila falhe em seguida. 409 puxa o estado real pelo `?id=`
+(`pendente_mudou` tem o mesmo rótulo do `preview_desatualizado`); 500 `interrompida` vira cartão `falhou`.
+
+**Quando o resultado é incerto.** Sem resposta (a rede caiu) ou 5xx sem corpo nosso (o Cloudflare responde **524** em HTML se o
+Executar demora), a aprovação pode ter chegado e executado: a tela diz «Não sabemos se foi feito — recarregue a página para ver o estado»
+e relê a fila; «Não foi feito» fica para o que o servidor garante que não aconteceu (422, 503 `conferencia_falhou`/`indisponivel`).
+
+Outros cuidados da tela: **só esta fila relê ao voltar para a aba** (`refetchOnWindowFocus: true` no `usePendentesMcp`; o resto do app
+segue sem), porque quem volta a uma aba aberta há tempo pode ver um resumo que mudou; `placeholderData: keepPreviousData` (o 409 troca
+`?id=` sem piscar o esqueleto); a região viva do aviso (`aria-live`) fica sempre montada; e os textos que podem vir do modelo
+(resumo, campo, de/para, efeitos, ressalvas) levam `dir="auto"` + `unicode-bidi: isolate`, além de o servidor tirar os controles de
+direção do resumo (`limparPrevia`: U+202A–202E, U+2066–2069, LRM/RLM/ALM) antes de gravá-lo e de compará-lo na aprovação.
 
 O texto do preview vem do servidor e é só **texto** (React escapa; nada de `dangerouslySetInnerHTML`): o que estiver escrito ali
 descreve a ação, não manda em nada. **Anti-clickjacking** (um clique aqui grava dinheiro): `frontend/public/_headers`
 (`X-Frame-Options: DENY` + `frame-ancestors 'none'` em `/pendentes` e `/pendentes/*`) **mais** uma guarda de moldura em JS
 (`utils/emoldurada.js`: dentro de um iframe a página pede "Abra numa aba própria", não mostra botões nem chama a API). A rota
-`/autorizar-ia` só tem a camada `_headers`. Em Minha conta → "Integração com IA" há o link **Pedidos da IA** com a contagem dos que
+`/autorizar-ia` tem as duas camadas também (`_headers` + a guarda de moldura em JS; emoldurada, nem o pedido de autorização é lido). Em Minha conta → "Integração com IA" há o link **Pedidos da IA** com a contagem dos que
 esperam. **Não há item na barra lateral**: a página é alcançada pelo link da IA ou por Minha conta. Teste Playwright com API falsa em
 `frontend/e2e/mcp-pendentes.spec.js`. Tela nova = regra 5 do `CLAUDE.md` (o lockfile não pode ser podado) e deploy em dois
 caminhos (backend primeiro: a tela chama rotas novas).
@@ -781,9 +821,12 @@ caminhos (backend primeiro: a tela chama rotas novas).
   `/pendentes?id=`.
 - **Sem item na barra lateral** para `/pendentes`.
 - **`tools/list` ~11,9 ms** com 83 tools: memoizar os schemas inferidos por processo antes de acrescentar tools (ver "Desempenho").
-- **A aprovação é síncrona** e o `middleware.Timeout` do router (60 s) corre desde o início do pedido, enquanto o `Executar` tem os
-  próprios 60 s: uma execução lenta pode terminar depois de a tela já ter recebido o erro. O pedido fecha como `executada` mesmo assim
-  (a aprovação roda sob `WithoutCancel`); recarregar `/pendentes?id=` mostra o desfecho.
+- **A aprovação é síncrona e uma execução lenta chega tarde à tela.** O `middleware.Timeout(60s)` do chi **não interrompe** o
+  handler: ele só cancela o `r.Context()` aos 60 s e, quando o handler **volta**, tenta `WriteHeader(504)`, que não vale se o handler já
+  escreveu. A aprovação roda sob `WithoutCancel`, então segue até o fim e escreve a resposta **verdadeira** (200/422/500) — tarde. Quem
+  corta antes é o proxy: o Cloudflare devolve **524** em HTML por volta dos 100 s, e a tela, que não sabe se executou, diz «Não sabemos se
+  foi feito» e relê a fila (ver «A tela `/pendentes`»). O pedido fecha como `executada` de qualquer forma; recarregar `/pendentes?id=`
+  mostra o desfecho.
 - **O pedido não é podado**: os `args` ficam no banco para sempre (inclusive a URL inteira do webhook).
 
 ## Como funciona

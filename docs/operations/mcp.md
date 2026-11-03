@@ -115,6 +115,12 @@ do hub (`/sso`) perde o `?pedido=` (a `HubSsoPage` sempre vai para `/`): nessa a
   todos os tokens daquele assistente para a pessoa; o assistente perde o acesso na hora).
 - **Automático:** trocar/redefinir senha, desativar, tirar de admin ou apagar o usuário revoga tudo
   (trigger em `users`). Reativar **não** ressuscita.
+- **Os pedidos de aprovação (`/pendentes`) acompanham a revogação.** Qualquer um dos caminhos acima (e o `revoga-mcp`)
+  leva os pedidos `pendente` daquela conexão (ou, na revogação do usuário, todos os dele) a `expirada`, com o `erro`
+  «A conexão de IA que fez este pedido foi revogada; peça de novo por uma conexão válida.». Um pedido `aprovada`
+  (execução em andamento) não é tocado. Se algum escapar (revogação feita direto no banco), a tela recusa na hora de
+  aprovar: 409 `pendente_expirada` com esse mesmo texto, e a auditoria registra `mcp.pendente.falhou` com
+  `codigo: credencial_revogada`. Ver [mcp.md §Estados](../features/mcp.md).
 - **Em massa**, na VM (regra 4.2: recreate antes, senão roda o binário velho):
 
 ```bash
@@ -412,6 +418,14 @@ no commit `d2b3fb4`, quando a aprovação passou a gravar os avisos da execuçã
 lá), mas **todo banco de dev/teste que aplicou a versão antiga não tem a coluna** e o `migrate` não a reaplica: o sintoma é
 `column "ressalvas" does not exist` nos testes de `internal/mcp` e na API local. Recrie o banco (`DROP SCHEMA public CASCADE` + `migrate
 up`) ou desça a 0072 (`migrate ... down 1`) e suba de novo; o template de teste `radiocheck_mcp_test_d4` já foi refeito com a coluna.
+
+**Ela foi editada outra vez na revisão final da Fatia 4**: o fim do arquivo ganhou um `CREATE OR REPLACE FUNCTION
+mcp_revogar_credenciais_do_usuario()` (a função da 0070 + o `UPDATE` que expira os pedidos `pendente` do usuário revogado), e a
+`.down.sql` devolve a função da 0070 antes de derrubar a tabela. O trigger `users_revoga_mcp` não é recriado (só a função), então não
+há lock em `users`. Banco de dev/teste que já aplicou a 0072 sem isso continua com a função velha (os pedidos não expiram no
+trigger): `migrate ... down 1` + `up`. **O template `radiocheck_mcp_test_d4` foi reconstruído** (`DROP DATABASE` + `CREATE DATABASE ...
+TEMPLATE radiocheck_mcp_test_d3` + `migrate up`, receita em «Testar as tools localmente»). A renumeração acima não muda: a função nova
+fica no arquivo que cria a tabela e roda depois da que cria a função original.
 
 ### Conferência com dado real (depois do `deploy.sh`)
 
