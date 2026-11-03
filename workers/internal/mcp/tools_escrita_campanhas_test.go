@@ -3,6 +3,7 @@ package mcp
 // Task 14: criar_campanha, editar_campanha e editar_emissoras_campanha.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -902,4 +903,82 @@ func TestEditarEmissorasCampanha_AcrescentarEmAtivaAvisaQueOClienteVeAEmissora(t
 		require.NotContains(t, ressalvasDoPreview(t, pre), "passa a ver")
 	}
 	require.Contains(t, mustJSON(t, pre["preview"].(map[string]any)["efeitos"]), "mapa ao vivo e de cobertura")
+}
+
+// ── a escrita gravada nunca vira erro (feitoRelido) ─────────────────────
+
+// hubQueQuebraAoEmitir quebra a releitura da campanha DEPOIS de a escrita gravar e de o aviso ao hub
+// sair (o aviso é o último passo do acoes.CriarCampanha).
+type hubQueQuebraAoEmitir struct {
+	*mcptest.HubFalso
+	aoEmitir func()
+}
+
+func (h hubQueQuebraAoEmitir) Emitir(ctx context.Context, tipo string, dados any) error {
+	err := h.HubFalso.Emitir(ctx, tipo, dados)
+	h.aoEmitir()
+	return err
+}
+
+func (h hubQueQuebraAoEmitir) EmitirComResposta(ctx context.Context, tipo string, dados any) (*hub.RespostaEvento, error) {
+	r, err := h.HubFalso.EmitirComResposta(ctx, tipo, dados)
+	h.aoEmitir()
+	return r, err
+}
+
+// supervisorQueQuebraAoAtualizar quebra a releitura da campanha logo depois da troca de emissoras.
+type supervisorQueQuebraAoAtualizar struct {
+	*mcptest.SupervisorFalso
+	aoAtualizar func()
+}
+
+func (s supervisorQueQuebraAoAtualizar) UpdateStations(id uuid.UUID, emissoras []uuid.UUID) error {
+	err := s.SupervisorFalso.UpdateStations(id, emissoras)
+	s.aoAtualizar()
+	return err
+}
+
+// A campanha já está gravada quando a releitura (o resultado no formato do obter_campanha) cai: a
+// tool NÃO devolve erro — o modelo criaria outra campanha igual, e o token de confirmação não ficaria
+// "gasto sem efeito" —, devolve o id e o nome e uma ressalva mandando conferir. A auditoria é a da
+// escrita que aconteceu, não a de falha.
+func TestCriarCampanha_ReleituraQueFalhaDepoisDeGravarNaoEhErro(t *testing.T) {
+	b := novaBancadaTool(t)
+	agoraFixa(b)
+	c := semearCampEsc(t, b, "2026-12-01", "2026-12-31", "")
+	antes := contaCampanhas(t, b)
+	b.E.Acoes.Hub = hubQueQuebraAoEmitir{b.hub, func() { quebrarReleituraDeCampanha(t, b) }}
+	args := argsCriarCampanha(c.cli, map[string]any{"emissora_ids": strsDe(c.e1)})
+
+	out := b.confirmarEExecutar(t, "criar_campanha", args)
+
+	require.Equal(t, antes+1, contaCampanhas(t, b), "a campanha foi criada")
+	camp := out["resultado"].(map[string]any)["campanha"].(map[string]any)
+	require.Equal(t, "Campanha Nova", camp["nome"])
+	id := uuid.MustParse(camp["id"].(string))
+	require.Len(t, out["resultado"], 1, "a releitura caiu: só o id e o nome")
+	ress := mustJSON(t, out["ressalvas"])
+	require.Contains(t, ress, "não consegui reler a campanha")
+	require.Contains(t, ress, "obter_campanha")
+	require.Contains(t, ress, id.String())
+	require.Contains(t, ress, "ativada automaticamente na data de início", "a ressalva da execução segue junto")
+	b.exigeAuditoria(t, "mcp.escrita.criar_campanha", "campaign", &id)
+	require.Empty(t, b.auditoria(t, "mcp.escrita.falha"), "a escrita não falhou")
+}
+
+func TestEditarEmissorasCampanha_ReleituraQueFalhaDepoisDeGravarNaoEhErro(t *testing.T) {
+	b := novaBancadaTool(t)
+	c := semearCampEsc(t, b, "2026-10-01", "2026-11-30", "ativa")
+	b.E.Acoes.Supervisor = supervisorQueQuebraAoAtualizar{b.sup, func() { quebrarReleituraDeCampanha(t, b) }}
+	args := argsEmissorasCampanha(c.camp, []uuid.UUID{c.e3}, []uuid.UUID{c.e1})
+
+	out := b.confirmarEExecutar(t, "editar_emissoras_campanha", args)
+
+	require.Equal(t, []uuid.UUID{c.e2, c.e3}, lerLinhaCampanha(t, b, c.camp).Emissoras, "a troca foi gravada")
+	require.Equal(t, map[string]any{"campanha": map[string]any{"id": c.camp.String(), "nome": "Campanha Escrita"}}, out["resultado"])
+	ress := mustJSON(t, out["ressalvas"])
+	require.Contains(t, ress, "não consegui reler a campanha")
+	require.Contains(t, ress, "REINICIA os das que continuam", "a ressalva da execução segue junto")
+	b.exigeAuditoria(t, "mcp.escrita.editar_emissoras_campanha", "campaign", &c.camp)
+	require.Empty(t, b.auditoria(t, "mcp.escrita.falha"))
 }

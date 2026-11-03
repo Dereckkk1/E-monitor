@@ -338,11 +338,9 @@ func escritaCriarCampanha(cfg ConfigServidor) Escrita[entradaCriarCampanha] {
 			if err != nil {
 				return feito{}, err
 			}
-			saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-			if err != nil {
-				return feito{}, err
-			}
-			f := feito{Resultado: saida, Recurso: "campaign", RecursoID: &c.ID, Ressalvas: []string{ressalvaCampanhaProgramada}}
+			// A campanha já está gravada: se só a releitura falhar, a escrita não vira erro (o modelo
+			// criaria outra) — campanhaFeita devolve o id e o nome e manda conferir.
+			f := campanhaFeita(ctx, cfg, E, c, ressalvaCampanhaProgramada)
 			if hubConfigurado(E) {
 				f.Ressalvas = append(f.Ressalvas, "O aviso ao hub (campanha.upsert) segue em segundo plano; se o hub estiver fora do ar a reemissão periódica leva a campanha quando ele voltar.")
 			}
@@ -573,11 +571,8 @@ func escritaEditarCampanha(cfg ConfigServidor) Escrita[entradaEditarCampanha] {
 			if err != nil {
 				return feito{}, err
 			}
-			saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-			if err != nil {
-				return feito{}, err
-			}
-			f := feito{Resultado: saida, Recurso: "campaign", RecursoID: &c.ID}
+			// Já gravada: a releitura que falha não vira erro (campanhaFeita).
+			f := campanhaFeita(ctx, cfg, E, c)
 			if pl.mudaInicio || pl.mudaFim {
 				f.Ressalvas = append(f.Ressalvas, "O estado mostrado é o gravado: ele segue as novas datas na próxima rodada do agendador (até 60 s).")
 			}
@@ -762,20 +757,26 @@ func escritaEditarEmissorasCampanha(cfg ConfigServidor) Escrita[entradaEditarEmi
 			if err := E.Acoes.TrocarEmissorasCampanha(ctx, pl.camp.ID, pl.nova); err != nil {
 				return feito{}, err
 			}
-			c, err := E.Leitura.Campanhas.Get(ctx, pl.camp.ID)
-			if err != nil {
-				return feito{}, err
-			}
-			saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-			if err != nil {
-				return feito{}, err
-			}
-			f := feito{Resultado: saida, Recurso: "campaign", RecursoID: &pl.camp.ID}
+			// A troca já está gravada: reler a campanha (e montar o resultado) que falha não vira erro
+			// (campanhaFeitaDe); a campanha nova é buscada de novo dentro da releitura.
+			var ressalvas []string
 			if pl.camp.Status == "ativa" {
-				f.Ressalvas = append(f.Ressalvas, "A campanha está ativa: o supervisor sobe os workers das emissoras acrescentadas, para os das removidas e REINICIA os das que continuam "+
+				ressalvas = append(ressalvas, "A campanha está ativa: o supervisor sobe os workers das emissoras acrescentadas, para os das removidas e REINICIA os das que continuam "+
 					"(todas reconectam por um instante, com uma pequena lacuna de captura, inclusive as compartilhadas com outras campanhas ativas); se algum falhar, o reconciler (30 s) corrige.")
 			}
-			if len(pl.adicionar) > 0 && saida.Campanha.Materiais > 0 {
+			var materiais int
+			f := campanhaFeitaDe(cfg, pl.camp, func() (*saidaObterCampanha, error) {
+				c, err := E.Leitura.Campanhas.Get(ctx, pl.camp.ID)
+				if err != nil {
+					return nil, err
+				}
+				saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
+				if err == nil {
+					materiais = saida.Campanha.Materiais
+				}
+				return saida, err
+			}, ressalvas...)
+			if len(pl.adicionar) > 0 && materiais > 0 {
 				f.Ressalvas = append(f.Ressalvas, "Os materiais vinculados não ganharam as emissoras acrescentadas: use editar_emissoras_material.")
 			}
 			return f, nil
