@@ -101,8 +101,9 @@ func registrarPendentes(s *sdk.Server, cfg ConfigServidor, p *Principal) {
 	ferramentaLeitura(s, cfg, "minhas_pendentes",
 		"Lista os pedidos de escrita crítica que você fez e o estado de cada um (pendente, aprovada, executada, falhou, "+
 			"recusada, expirada). Use para saber se uma pessoa já aprovou antes de dizer que algo foi feito: só `executada` "+
-			"significa feito. Sem filtro, mostra só os abertos (pendente e aprovada); estado=todos traz o histórico. "+
-			"Do mais novo para o mais velho; lista paginada (máximo 50 por página).",
+			"significa feito. O pedido executado traz `ressalvas`: os avisos da execução (por exemplo, o email que não saiu e a pessoa "+
+			"que ficou sem a senha) — repita-os à pessoa. Sem filtro, mostra só os abertos (pendente e aprovada); estado=todos traz o "+
+			"histórico. Do mais novo para o mais velho; lista paginada (máximo 50 por página).",
 		func(ctx context.Context, _ *Leitura, in entradaMinhasPendentes) (*sdk.CallToolResult, error) {
 			estados, okE := estadosDoFiltroPendente[in.Estado]
 			if !okE {

@@ -157,6 +157,7 @@ func TestMinhasPendentes_SomenteLeitura(t *testing.T) {
 			achou = true
 			require.True(t, tl.Annotations.ReadOnlyHint)
 			require.Contains(t, tl.Description, "só `executada` significa feito")
+			require.Contains(t, tl.Description, "`ressalvas`", "a IA precisa saber que o pedido executado traz os avisos da execução")
 		}
 	}
 	require.True(t, achou)
