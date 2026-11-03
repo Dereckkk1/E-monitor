@@ -16,7 +16,11 @@ import './PendentesPage.css'
 // (a execução foi interrompida e pode ter acontecido); os demais só explicam.
 
 const MSG_PADRAO = 'Não foi possível concluir. Tente de novo.'
-const MSG_SEM_REDE = 'Não foi possível falar com o servidor. Confira a conexão e tente de novo.'
+// Sem resposta (a rede caiu, o Cloudflare deu 524 no meio) ou 5xx sem corpo de erro nosso: a aprovação
+// pode ter chegado e executado. "Não foi feito" seria mentira; a tela diz que não sabe e relê o estado.
+const MSG_INCERTO = 'Recarregue a página para ver o estado do pedido antes de tentar de novo.'
+// 5xx em que o servidor DIZ que nada foi feito (a conferência caiu / aprovação indisponível).
+const CODIGOS_SEM_EFEITO = new Set(['conferencia_falhou', 'indisponivel'])
 
 const ROTULO_ESTADO = {
   pendente: 'Aguardando você',
@@ -30,12 +34,14 @@ const ROTULO_ESTADO = {
 const TEXTO_FECHADO = {
   executada: 'Já foi executada.',
   recusada: 'Você recusou este pedido.',
-  expirada: 'Expirou sem aprovação (24 h). Peça de novo à IA.',
+  expirada: 'Expirou sem aprovação. Peça de novo à IA.',
 }
 
 // O que a recusa/erro da última ação significa para quem lê.
 const ROTULO_FALHA = {
   preview_desatualizado: 'O pedido mudou: releia antes de aprovar',
+  pendente_mudou: 'O pedido mudou: releia antes de aprovar',
+  incerto: 'Não sabemos se foi feito',
 }
 const rotuloDaFalha = (f) => ROTULO_FALHA[f.codigo] ?? (f.status === 409 ? 'O estado do pedido mudou' : 'Não foi feito')
 
@@ -132,11 +138,14 @@ function Desfecho({ p, estado, falha }) {
           confere se a ação aconteceu.
         </p>
       )}
-      {TEXTO_FECHADO[estado] && <p className="pen-fechado pen-fechado--ok">{TEXTO_FECHADO[estado]}</p>}
+      {/* Expirada de verdade (não só pelo relógio) pode trazer o motivo: a conexão de IA foi revogada. */}
+      {estado === 'expirada' && p.estado === 'expirada' && p.erro
+        ? <p className="pen-aviso pen-aviso--erro">{p.erro}</p>
+        : TEXTO_FECHADO[estado] && <p className="pen-fechado pen-fechado--ok">{TEXTO_FECHADO[estado]}</p>}
       {ressalvas.length > 0 && (
         <div className="pen-aviso pen-aviso--atencao">
           <p className="pen-rotulo">Ressalvas da execução</p>
-          <ul className="pen-itens">{ressalvas.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          <ul className="pen-itens">{ressalvas.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
         </div>
       )}
     </div>
@@ -159,7 +168,7 @@ function Cartao({ p, estado, destaque, agindo, falha, onAgir }) {
         <span className={`pen-estado pen-estado--${estado}`}>{ROTULO_ESTADO[estado] ?? estado}</span>
       </div>
 
-      <h2 className="pen-resumo" id={idResumo}>{pv.resumo}</h2>
+      <h2 className="pen-resumo" id={idResumo} dir="auto">{pv.resumo}</h2>
 
       {estado !== 'pendente' && <Desfecho p={p} estado={estado} falha={falha} />}
 
@@ -176,13 +185,13 @@ function Cartao({ p, estado, destaque, agindo, falha, onAgir }) {
           <dl className="pen-mudancas">
             {mudancas.map((m, i) => (
               <div className="pen-mudanca" key={`${m.campo}-${i}`}>
-                <dt>{m.campo}</dt>
+                <dt dir="auto">{m.campo}</dt>
                 <dd>
                   <span className="pen-sr">de</span>
-                  <span className="pen-de">{valor(m.de)}</span>
+                  <span className="pen-de" dir="auto">{valor(m.de)}</span>
                   <span className="pen-seta" aria-hidden="true">→</span>
                   <span className="pen-sr">para</span>
-                  <span className="pen-para">{valor(m.para)}</span>
+                  <span className="pen-para" dir="auto">{valor(m.para)}</span>
                 </dd>
               </div>
             ))}
@@ -193,14 +202,14 @@ function Cartao({ p, estado, destaque, agindo, falha, onAgir }) {
       {efeitos.length > 0 && (
         <div className="pen-bloco">
           <p className="pen-rotulo">O que acontece</p>
-          <ul className="pen-itens">{efeitos.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          <ul className="pen-itens">{efeitos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
         </div>
       )}
 
       {avisos.length > 0 && (
         <div className="pen-aviso pen-aviso--atencao">
           <p className="pen-rotulo">Atenção</p>
-          <ul className="pen-itens">{avisos.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          <ul className="pen-itens">{avisos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
         </div>
       )}
 
@@ -256,25 +265,38 @@ export default function PendentesPage() {
     setFalha(null)
     setAgindo({ id: p.id, acao })
     try {
-      const data = await (acao === 'aprovar' ? aprovar : recusar).mutateAsync(p.id)
+      // Aprovar manda a versão (tentativa) do pedido que ESTE cartão mostra: se o pedido mudou desde
+      // então (outra aba recebeu preview_desatualizado), o servidor recusa com 409 pendente_mudou.
+      const data = await (acao === 'aprovar'
+        ? aprovar.mutateAsync({ id: p.id, tentativa: p.tentativa })
+        : recusar.mutateAsync(p.id))
       // Fechado: sai da fila aberta, então o cartão fica aqui com o desfecho (e as ressalvas da execução).
       const ressalvas = (acao === 'aprovar' ? data?.ressalvas : null) ?? data?.pendente?.ressalvas ?? []
       setDesfechos(d => [{ ...p, ...data?.pendente, ressalvas }, ...d.filter(x => x.id !== p.id)])
       avisar('success', acao === 'aprovar' ? 'Ação executada' : 'Pedido recusado', ressalvas.length ? 'Com ressalvas: leia no cartão.' : null)
     } catch (err) {
       const status = err?.response?.status
-      const corpo = err?.response?.data ?? {}
-      const mensagem = corpo.mensagem ?? (err?.response ? MSG_PADRAO : MSG_SEM_REDE)
-      if (status === 500 && corpo.error === 'interrompida') {
+      // Um 524 do Cloudflare (ou um 502) chega como HTML: o corpo não é objeto e não tem `error`.
+      const corpo = err?.response?.data && typeof err.response.data === 'object' ? err.response.data : {}
+      const semResposta = !err?.response
+      const interrompida = status === 500 && corpo.error === 'interrompida'
+      const incerto = !interrompida && (semResposta || (status >= 500 && !CODIGOS_SEM_EFEITO.has(corpo.error)))
+      const mensagem = incerto ? MSG_INCERTO : (corpo.mensagem ?? (err?.response ? MSG_PADRAO : MSG_SEM_REDE))
+      if (interrompida) {
         // Virou `falhou`: final, e a ação pode ter acontecido. O texto do servidor diz o quê.
         setDesfechos(d => [{ ...p, estado: 'falhou', erro: mensagem, ressalvas: [] }, ...d.filter(x => x.id !== p.id)])
         avisar('error', 'Execução interrompida', 'Leia no cartão o que confirmar antes de pedir de novo.')
+      } else if (incerto) {
+        // Sem saber se rodou: o aviso fica no cartão e a fila é relida (a mutação já invalida a lista
+        // ao terminar, com erro ou não) — se a ação rodou, o cartão vira o desfecho dela.
+        setFalha({ id: p.id, mensagem, codigo: 'incerto', status })
+        avisar('error', 'Não sabemos se foi feito', 'Recarregue a página para ver o estado do pedido.')
       } else {
         // 422: nada aconteceu e o pedido segue pendente (com o resumo novo, se era preview_desatualizado).
         // O texto do servidor fica no cartão.
         setFalha({ id: p.id, mensagem, codigo: corpo.error, status })
-        // 409: o estado mudou por baixo (outra aba aprovou, o prazo venceu). O pedido já não está na fila
-        // aberta: pedir o do link (?id=) traz o estado REAL dele, com as ressalvas, e o mantém na tela.
+        // 409: o estado mudou por baixo (outra aba aprovou, o prazo venceu, o resumo mudou). Pedir o do
+        // link (?id=) traz o estado REAL dele, com as ressalvas, e o mantém na tela.
         if (status === 409) setParams({ id: p.id }, { replace: true })
       }
     } finally {
@@ -304,7 +326,8 @@ export default function PendentesPage() {
   entrar(dados?.destaque)
   dados?.items?.forEach(entrar)
 
-  const linkNaoAchado = !!idUrl && !!dados && !dados.destaque
+  // Com a tela anterior mantida enquanto a nova carrega (placeholder), `dados` ainda não é a do link.
+  const linkNaoAchado = !!idUrl && !!dados && !q.isPlaceholderData && !dados.destaque
   const falhaSemCartao = falha && !vistos.has(falha.id)
 
   let corpo
@@ -335,7 +358,7 @@ export default function PendentesPage() {
         )}
         {falhaSemCartao && (
           <p className="pen-aviso pen-aviso--erro" role="alert">
-            <span className="pen-rotulo">Não foi feito</span>
+            <span className="pen-rotulo">{rotuloDaFalha(falha)}</span>
             <span>{falha.mensagem}</span>
           </p>
         )}
@@ -378,9 +401,11 @@ export default function PendentesPage() {
         {corpo}
       </div>
 
-      {toast && (
-        <div className="pen-toast-region" aria-live="polite">
-          <div className={`pen-toast pen-toast--${toast.kind}`} role="status">
+      {/* A região viva fica SEMPRE montada e só o conteúdo muda: um leitor de tela só anuncia o que entra
+          numa região que já existia. */}
+      <div className="pen-toast-region" aria-live="polite" aria-atomic="true">
+        {toast && (
+          <div className={`pen-toast pen-toast--${toast.kind}`}>
             <span className="pen-toast-icone">{toast.kind === 'success' ? Icone.ok : Icone.alerta}</span>
             <div className="pen-toast-corpo">
               <p className="pen-toast-titulo">{toast.title}</p>
@@ -388,8 +413,8 @@ export default function PendentesPage() {
             </div>
             <button className="pen-toast-fechar" type="button" onClick={fechar} aria-label="Fechar">{Icone.x}</button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
 import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
@@ -1773,11 +1773,11 @@ export function useRevogarMcp() {
   })
 }
 
-export function usePedidoAutorizacaoMcp(pedido) {
+export function usePedidoAutorizacaoMcp(pedido, { enabled = true } = {}) {
   return useQuery({
     queryKey: ['mcp', 'pedido', pedido],
     queryFn: () => api.get('/mcp/oauth/pedido', { params: { p: pedido } }).then(r => r.data),
-    enabled: !!pedido,
+    enabled: !!pedido && enabled,
     retry: false,
   })
 }
@@ -1800,6 +1800,13 @@ export function usePendentesMcp(id = null, { enabled = true } = {}) {
     // Aprovar grava dinheiro: o que a pessoa lê tem de ser o que vale agora,
     // não o cache de 30 s.
     staleTime: 0,
+    // O padrão do app é não reler ao voltar para a aba (main.jsx), mas aqui é o contrário: quem
+    // volta para uma aba aberta há tempo pode estar vendo um resumo que mudou (outra aba aprovou e
+    // recebeu preview_desatualizado). Só esta fila relê no foco.
+    refetchOnWindowFocus: true,
+    // Trocar a chave (?id= depois de um 409) não pode piscar o esqueleto: mantém a tela anterior até
+    // a nova chegar.
+    placeholderData: keepPreviousData,
     // Um pedido aprovado e ainda rodando vira executada/falhou em segundos: relê até fechar.
     refetchInterval: (query) => {
       const d = query.state.data
@@ -1808,13 +1815,30 @@ export function usePendentesMcp(id = null, { enabled = true } = {}) {
   })
 }
 
+// Troca, em toda cópia da fila no cache, o pedido de mesmo id pelo `pendente` que a API devolveu.
+function trocarPedidoNoCache(qc, pendente) {
+  if (!pendente?.id) return
+  const troca = (p) => (p?.id === pendente.id ? pendente : p)
+  qc.setQueriesData({ queryKey: ['mcp', 'pendentes'] }, (old) => old && {
+    ...old,
+    items: old.items?.map(troca),
+    destaque: troca(old.destaque),
+  })
+}
+
 // Toda ação invalida a fila inteira, também quando falha: um 422 troca o resumo
 // gravado e um 409 mostra que o estado mudou, e a tela tem de reler antes de a
 // pessoa decidir de novo. Devolver a promessa faz a mutação esperar a releitura.
+//
+// Aprovar manda a `tentativa` do pedido que a pessoa está lendo: o servidor só aprova se ela ainda
+// for a vigente (senão 409 pendente_mudou). O 422 traz o `pendente` relido, com o resumo novo e a
+// tentativa nova, e ele entra no cache NA HORA — se a releitura que vem em seguida falhar, a tela
+// já mostra o que vale, e o próximo clique manda a versão certa.
 export function useAprovarPendenteMcp() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id) => api.post(`/mcp/pendentes/${id}/aprovar`).then(r => r.data),
+    mutationFn: ({ id, tentativa }) => api.post(`/mcp/pendentes/${id}/aprovar`, { tentativa }).then(r => r.data),
+    onError: (err) => trocarPedidoNoCache(qc, err?.response?.data?.pendente),
     onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
   })
 }
