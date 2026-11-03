@@ -256,3 +256,112 @@ func (d *Detections) HasPartitionFor(ctx context.Context, at time.Time) (bool, e
 		)`, at).Scan(&ok)
 	return ok, err
 }
+
+// ClientFootprint é o que está pendurado num cliente: o que BLOQUEIA apagá-lo
+// (Dependents: campanhas e materiais pelas FKs da própria tabela, usuários pela
+// carteira) e o que um DELETE levaria junto (ON DELETE CASCADE: chaves de API,
+// entregas e falhas de webhook, PMM no target e pós-vendas — mais a configuração
+// de webhook, que mora nas colunas da própria linha do cliente). Só leitura:
+// serve ao preview de quem vai apagar, que precisa dizer o que vai embora ANTES.
+type ClientFootprint struct {
+	Dependents DependentCounts
+
+	APIKeys           int  // api_keys (todas, revogadas inclusive)
+	APIKeysActive     int  // api_keys sem revoked_at
+	WebhookDeliveries int  // webhook_deliveries
+	WebhookFailures   int  // webhook_failures
+	WebhookConfigured bool // clients.webhook_url preenchida
+	PMMRows           int  // client_station_pmm
+	PostSaleReports   int  // post_sale_reports (rascunhos e enviados)
+	PostSaleSent      int  // post_sale_reports já enviados (o documento congelado)
+}
+
+// Footprint lê a ClientFootprint de um cliente. Cliente inexistente devolve tudo
+// zerado (quem chama já conferiu que ele existe).
+func (c *Clients) Footprint(ctx context.Context, id uuid.UUID) (ClientFootprint, error) {
+	dep, err := c.CountDependents(ctx, id)
+	if err != nil {
+		return ClientFootprint{}, err
+	}
+	f := ClientFootprint{Dependents: dep}
+	err = c.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM api_keys WHERE client_id = $1),
+		       (SELECT count(*) FROM api_keys WHERE client_id = $1 AND revoked_at IS NULL),
+		       (SELECT count(*) FROM webhook_deliveries WHERE client_id = $1),
+		       (SELECT count(*) FROM webhook_failures WHERE client_id = $1),
+		       COALESCE((SELECT webhook_url <> '' FROM clients WHERE id = $1), false),
+		       (SELECT count(*) FROM client_station_pmm WHERE client_id = $1),
+		       (SELECT count(*) FROM post_sale_reports WHERE client_id = $1),
+		       (SELECT count(*) FROM post_sale_reports WHERE client_id = $1 AND status = 'sent')`, id,
+	).Scan(&f.APIKeys, &f.APIKeysActive, &f.WebhookDeliveries, &f.WebhookFailures, &f.WebhookConfigured,
+		&f.PMMRows, &f.PostSaleReports, &f.PostSaleSent)
+	return f, err
+}
+
+// ClientUserAccess é um usuário ATIVO (não desativado, não apagado) da carteira de
+// um cliente. OtherActiveClient diz se ele também tem outro cliente ATIVO na
+// carteira: o login exige pelo menos um cliente ativo (auth.Login), então é isso
+// que separa quem perde o acesso quando o cliente é desativado de quem segue
+// entrando pelo outro.
+type ClientUserAccess struct {
+	ID                uuid.UUID
+	Name              string
+	Email             string
+	OtherActiveClient bool
+}
+
+// ActiveUsers lista os usuários ativos da carteira do cliente, por nome. Conta
+// pela carteira (user_clients), como CountDependents: o principal (users.client_id)
+// já está nela pelo gatilho da 0062.
+func (c *Clients) ActiveUsers(ctx context.Context, id uuid.UUID) ([]ClientUserAccess, error) {
+	rows, err := c.pool.Query(ctx, `
+		SELECT u.id, u.name, u.email,
+		       EXISTS (SELECT 1 FROM user_clients o JOIN clients oc ON oc.id = o.client_id
+		                WHERE o.user_id = u.id AND o.client_id <> $1 AND oc.is_active)
+		  FROM user_clients uc
+		  JOIN users u ON u.id = uc.user_id
+		 WHERE uc.client_id = $1 AND u.is_active AND u.deleted_at IS NULL
+		 ORDER BY u.name, u.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ClientUserAccess{}
+	for rows.Next() {
+		var u ClientUserAccess
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.OtherActiveClient); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// MaterialFootprint é o histórico de um material, que impediria apagá-lo sem
+// deixar rastro órfão, e as linhas que um DELETE mexeria. detections.commercial_id
+// e detection_campaigns.commercial_id NÃO têm FK (a coluna é polimórfica: material
+// OU comercial legado), então o banco apaga o material e deixa as tocadas apontando
+// para um id que não existe mais.
+type MaterialFootprint struct {
+	// Histórico (EXISTS: para no primeiro achado). Sem filtro de aprovação: a
+	// tocada retratada ou ignorada também é histórico.
+	HasDetections  bool // detections.commercial_id
+	HasProjections bool // detection_campaigns.commercial_id (a tocada base pode ser de outro material)
+
+	// O que um DELETE mexe: ponteiros de similaridade de outros materiais (SET NULL)
+	// e o cache de desambiguação de gêmeos acústicos (CASCADE).
+	SimilarRefs int // materials.most_similar_material_id = este
+	TwinRows    int // material_twin_discriminative (como material ou como gêmeo)
+}
+
+// Footprint lê a MaterialFootprint de um material numa consulta só.
+func (m *Materials) Footprint(ctx context.Context, id uuid.UUID) (MaterialFootprint, error) {
+	var f MaterialFootprint
+	err := m.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM detections WHERE commercial_id = $1),
+		       EXISTS(SELECT 1 FROM detection_campaigns WHERE commercial_id = $1),
+		       (SELECT count(*) FROM materials WHERE most_similar_material_id = $1),
+		       (SELECT count(*) FROM material_twin_discriminative WHERE material_id = $1 OR twin_id = $1)`, id,
+	).Scan(&f.HasDetections, &f.HasProjections, &f.SimilarRefs, &f.TwinRows)
+	return f, err
+}
