@@ -109,3 +109,8 @@ desativar/reativar ainda não existe até o backend subir). Ver
 - Relacionado a **F-85** ([roadmap/follow-ups-fase2.md](../roadmap/follow-ups-fase2.md)):
   `Delete` agora é "loud" (erro tipado), mas a padronização ampla de
   Delete/Update entre os repos do catalog segue pendente.
+- **Pelo MCP** ([mcp.md](mcp.md)): `desativar_cliente`, `ativar_cliente` e `apagar_cliente` são tools críticas (a IA
+  grava o pedido e o admin aprova em `/pendentes`; `apagar_cliente` só passa sem vínculos, `cliente_com_vinculos`).
+  Desativar só bloqueia o **login novo**: a sessão aberta (até 8 h), as chaves de API, os webhooks e o
+  monitoramento das campanhas **continuam** (o preview avisa). E o `client.upsert` do hub (`hubsync.go`) regrava
+  `is_active` e recria cliente vinculado que foi apagado aqui — as ações do E-monitor nunca avisam o hub.

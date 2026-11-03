@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-10-29
+ultima-verificacao: 2026-11-03
 codigo-relacionado:
   - workers/internal/mcp/
   - workers/internal/mcp/oauth/
@@ -55,6 +55,23 @@ codigo-relacionado:
   - workers/internal/api/handlers/acoes_http.go
   - workers/internal/catalog/ha_veiculacao.go
   - workers/internal/catalog/campaigns_ciclo.go
+  - migrations/0072_mcp_acoes_pendentes.up.sql
+  - workers/internal/mcp/pendentes.go
+  - workers/internal/mcp/registro_escritas.go
+  - workers/internal/mcp/aprovacao.go
+  - workers/internal/mcp/pendentes_http.go
+  - workers/internal/mcp/varredor.go
+  - workers/internal/mcp/tools_pendentes.go
+  - workers/internal/mcp/tools_escrita_criticas_campanhas.go
+  - workers/internal/mcp/tools_escrita_criticas_veiculacoes.go
+  - workers/internal/mcp/tools_escrita_criticas_usuarios.go
+  - workers/internal/mcp/tools_escrita_criticas_clientes.go
+  - workers/internal/mcp/tools_escrita_criticas_webhooks.go
+  - workers/internal/mcp/tools_escrita_criticas_posvenda.go
+  - frontend/src/pages/PendentesPage.jsx
+  - frontend/src/pages/PendentesPage.css
+  - frontend/src/utils/emoldurada.js
+  - frontend/e2e/mcp-pendentes.spec.js
 ---
 
 # MCP do E-monitor
@@ -72,11 +89,12 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | 0 | Porta: `/mcp`, OAuth 2.1, tokens, `quem_sou_eu` | implementada (branch `feat/mcp-server`; deploy e conexão dos 3 clientes em prod pendentes) |
 | 1 | Leitura: 26 tools (clientes, campanhas, grade, plano do dia, materiais, emissoras, veiculações, usuários, integrações, notificações) | implementada (branch `feat/mcp-server`, não deployada) |
 | 2 | Relatórios: 17 tools (insights, visão gerencial, assertividade, data e hora, resumo e exportações de campanha, mapa de cobertura, 5 de falhas, 3 de pós-venda, auditoria do MCP) + telas que abrem filtradas pela URL + avaliação 10/10 | implementada (branch `feat/mcp-server`, não deployada) |
-| 3 | Escrita `livre` e `confirma`: 20 tools + motor de níveis (token HMAC de uso único, escalada a `critico` reavaliada a cada chamada, `critico` barrado até a Fatia 4) + camada `internal/acoes` compartilhada com as rotas HTTP | implementada (branch `feat/mcp-server`, não deployada; ver "Escrita (Fatia 3)") |
-| 4-5 | `critico` executável (`/pendentes`), ecossistema | planejadas |
+| 3 | Escrita `livre` e `confirma`: 20 tools + motor de níveis (token HMAC de uso único, escalada a `critico` reavaliada a cada chamada) + camada `internal/acoes` compartilhada com as rotas HTTP | implementada (branch `feat/mcp-server`, não deployada; ver "Escrita (Fatia 3)") |
+| 4 | Escrita `critico` executável: 18 tools que viram pedido pendente (`mcp_acoes_pendentes`), a tela `/pendentes` onde o admin que pediu aprova, o varredor e `minhas_pendentes`; torna executáveis também as escaladas das 20 tools da Fatia 3 | implementada (branch `feat/mcp-server`, não deployada; ver "Crítico e /pendentes (Fatia 4)") |
+| 5 | Ecossistema: hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato), ADRs | planejada |
 
-Tools hoje: as 64 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3). O `status` deste doc vira
-`implementado` quando as fatias 4-5 fecharem.
+Tools hoje: as 83 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
+`minhas_pendentes`). O `status` deste doc vira `implementado` quando a Fatia 5 fechar.
 
 ## Regra de ouro: o MCP faz parte do pronto
 
@@ -90,7 +108,7 @@ Tools hoje: as 64 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 d
   tratamento de `cancelada`). Tela e MCP não podem discordar de número. Na escrita, essa função mora em
   `internal/acoes` (ver "Escrita (Fatia 3)"): handler e tool chamam a mesma ação, com os mesmos gatilhos.
 
-## Tools (64)
+## Tools (83)
 
 ### Fatias 0 e 1 (27)
 
@@ -166,8 +184,9 @@ teste nas tools de lista larga.
 
 Cada tool chama a MESMA ação da rota HTTP (`internal/acoes`, ou o mesmo método de repositório quando a rota já era uma
 chamada só) e dispara os mesmos gatilhos. Nível, fluxo do token e respostas: [Escrita (Fatia 3)](#escrita-fatia-3). A
-descrição de toda tool termina em `Nível: livre|confirma|critico.`. **Sobe para `critico`** significa: a resposta vem barrada
-(`executou: false`, `nivel: critico`, motivo, `links.tela`) e nada é gravado; hoje o crítico só se faz pela tela.
+descrição de toda tool termina em `Nível: livre|confirma|critico.`. **Sobe para `critico`** significa: a tool grava um pedido
+pendente e devolve `aprovar_em` (`/pendentes?id=…`); nada acontece até o admin que pediu aprovar na tela (ver "Crítico e
+/pendentes (Fatia 4)"). Na Fatia 3 o crítico era só barrado.
 
 | Tool | Faz | Nível | Sobe para `critico` quando | Chama |
 |---|---|---|---|---|
@@ -191,6 +210,41 @@ Notas: toda tool que mexe em campanha recusa a **cancelada** com `[campanha_canc
 [tratamento de cancelada](cancelled-campaign-handling.md) a tira das telas operacionais); `insercoes: 0` num override é
 **meta zero**, não "nada esperado": toda tocada da célula-dia vira `bonus`. A resposta de cada tool traz o registro depois
 da escrita no formato da tool `obter_*`/`listar_*` correspondente.
+
+### Fatia 4 — escrita crítica (18) e `minhas_pendentes`
+
+Todas as 18 são `critico` por declaração (o `Nivel` da tool): **nunca executam na chamada**. A tool roda o `Preview`, grava o
+pedido e devolve `aprovar_em`; a escrita só roda quando o admin aprova em `/pendentes` e chama a MESMA função que a tela chama
+(`internal/acoes`, ou o método do repositório quando a rota já era uma chamada só). Nenhuma tem campo `confirmacao`. O
+resultado de cada uma é o registro como ficou, no formato da tool `obter_*` correspondente. Fluxo, estados e garantias:
+[Crítico e /pendentes (Fatia 4)](#crítico-e-pendentes-fatia-4).
+
+| Tool | Entrada | Por que é crítica (`motivo`) | Recusas só do MCP (ou que a tool nomeia) | Chama |
+|---|---|---|---|---|
+| `cancelar_campanha` | `campanha_id` | congela o déficit e tira a campanha das telas operacionais e da cobrança | `estado_terminal` (só programada/ativa se cancela). Ressalva diz o que fez com os workers | `acoes.CancelarCampanha` (+ `StopWorkersForCampaign`) |
+| `apagar_campanha` | `campanha_id` | irreversível: apaga a campanha e tudo que é dela | `campanha_com_historico` (qualquer veiculação própria ou projeção, comprovante manual ou pós-venda: "cancele em vez de apagar"). A rota apaga as próprias veiculações; o MCP não | `acoes.ApagarCampanhaCom{ExigirSemHistorico}` |
+| `editar_cpm_fixo` | `campanha_id`, `cpm_fixo` (obrigatório, aceita `null` = volta ao dinâmico) | muda o CPM que o cliente vê | `campanha_cancelada`, `sem_mudanca`, `entrada_invalida` (negativo, > 2 casas, ≥ 1e10) | `acoes.DefinirCPMFixo` |
+| `editar_precos_campanha` | `campanha_id`, `precos[]` (1–300 emissoras; cada item substitui o preço da emissora) | dinheiro: muda investido, bonificação e CPM, inclusive dos dias já veiculados | `entrada_invalida` (emissora fora da campanha ou repetida, modo/valores), `nao_encontrado` (tipo de material), `campanha_cancelada`, `sem_mudanca`. Tudo ou nada numa transação | `acoes.DefinirPrecos` → `Pricing.UpsertLote` |
+| `criar_veiculacao_manual` | `campanha_id`, `emissora_id`, `material_id`, `quando` (RFC3339 COM fuso), `nota?` | entra na cobrança e pode mudar a categoria das outras veiculações do mesmo dia | `material_nao_vinculado`, instante no futuro, `campanha_cancelada`. **Sem comprovante** (o PDF só entra na criação pela tela; a descrição manda perguntar). Preview avisa possível duplicata (mesmo material × emissora × campanha a ±10 min), sem recusar | `acoes.CriarVeiculacaoManual` |
+| `ignorar_veiculacao` | `veiculacao_id` | a vaga liberada pode promover outra veiculação do mesmo dia | `ja_ignorada` | `acoes.IgnorarVeiculacao` |
+| `restaurar_veiculacao` | `veiculacao_id` | a veiculação volta a disputar a cota do dia e pode rebaixar outra | `nao_ignorada`. Não desfaz retratação nem rejeição do audit | `acoes.RestaurarVeiculacao` |
+| `criar_usuario` | `nome`, `email`, `papel`, `cliente_ids?`, `telefone?`, `recebe_alertas?`, `recebe_pos_venda?` (**sem senha**) | manda email para fora e dá acesso | `boas_vindas_indisponivel` (sem `WELCOME_ENC_KEY`), `email_desligado` (sem SMTP), `email_taken`, `client_id_required`, `client_id_not_allowed_for_admin`, `client_not_found`, e-mail inválido | `acoes.CriarUsuario` (+ `acoes.SenhaAleatoria`) |
+| `editar_usuario` | `usuario_id`, `nome?`, `telefone?`, `papel?`, `adicionar_clientes?`, `remover_clientes?`, `recebe_alertas?`, `recebe_pos_venda?` | muda acesso a dados de cliente | `proprio_usuario` (mudar o próprio papel), `ultimo_admin`, `usuario_apagado`, `sem_mudanca`, `client_id_required`, `client_id_not_allowed_for_admin`, `client_not_found`. Carteira calculada na hora da aprovação | `acoes.EditarUsuario` |
+| `desativar_usuario` | `usuario_id` | corta o acesso | `proprio_usuario`, `ultimo_admin`, `usuario_apagado`, `sem_mudanca` (já inativo) | `acoes.EditarUsuario{Ativo:false}` |
+| `desativar_cliente` | `cliente_id` | bloqueia o login dos usuários do cliente | `sem_mudanca`. Ressalvas: sessão aberta dura até 8 h; chaves de API, webhooks e monitoramento seguem | `acoes.DefinirAtivoCliente` |
+| `ativar_cliente` | `cliente_id` | o cliente volta a entrar | `sem_mudanca` | `acoes.DefinirAtivoCliente` |
+| `apagar_cliente` | `cliente_id` | irreversível: apaga o cliente e o que depende só dele (chaves de API, webhooks, PMM no target e pós-vendas) | `cliente_com_vinculos` (com as contagens: campanhas, materiais, usuários inclusive inativos e apagados) | `acoes.ApagarCliente` |
+| `apagar_material` | `material_id` | irreversível: apaga o material da biblioteca (master e hashes ficam no servidor) | `material_vinculado` (lista as campanhas), `material_com_historico` (qualquer veiculação, também retratada ou ignorada, **e** `detection_campaigns`) | `acoes.ApagarMaterial` |
+| `editar_webhook_cliente` | `cliente_id`, `url?`, `ativo?`, `eventos?[]` (ao menos um; **sem segredo**) | dado do cliente passa a sair para outro sistema | `webhook_nao_configurado` (sem URL gravada, só `url` cria a configuração), `sem_mudanca`, `entrada_invalida` (URL inválida, http fora de dev, rede interna/SSRF, URL com `usuario:senha@`, evento desconhecido). Preview mostra a URL nova inteira | `acoes.EditarWebhook` (+ `ValidarWebhook`) |
+| `testar_webhook` | `cliente_id` | manda um evento de teste para o sistema do cliente | `webhook_teste_descartado` (diz a condição: sem URL, desligado ou sem `webhook.test`/`*` nos eventos), `webhook_indisponivel` (sem a fila de entregas). Resultado `{enfileirado:true}`; entrega assíncrona | `acoes.TestarWebhook` |
+| `reenviar_pos_venda` | `pos_venda_id`, `destinatario_id` | manda email para fora | `nao_encontrado` (rascunho, destinatário de outro relatório ou revogado), `email_desligado`, `pos_venda_indisponivel`, `pos_venda_sem_documento` (enviado antes do congelamento, sem payload) | `postsale.Service.Resend` |
+| `revogar_destinatario_pos_venda` | `pos_venda_id`, `destinatario_id` | irreversível: o link morre e não há como emitir outro (o documento não se republica) | `nao_encontrado` (rascunho ou destinatário de outro relatório), `sem_mudanca` (já revogado). Ressalva especial quando era o último link ativo | `postsale.Repo.RevokeRecipient` |
+| `minhas_pendentes` (leitura) | `estado?`, paginação | — | `entrada_invalida` (estado desconhecido) | `Pendentes.Listar` (sempre do dono do token) |
+
+Notas: `destinatarios_pos_venda` e `obter_pos_venda` passaram a trazer o `id` do destinatário (não é segredo), que as duas tools de
+pós-venda pedem. Toda mensagem de erro de email passa por `semSegredoNoTexto`. `minhas_pendentes` devolve por padrão só os
+abertos (`pendente` e `aprovada`); `estado=todos` traz o histórico; o `erro` sai cortado em 250 caracteres e as `ressalvas`
+da execução em 250 cada / 300 somadas (a lista de 50 pedidos tem de caber em ~60 KB). Nunca devolve `args`, `resultado` nem `token_id`.
 
 ## Relatórios: deep-link e downloads
 
@@ -279,8 +333,8 @@ decisões F3-1..F3-12: [plano](../superpowers/plans/2026-10-29-mcp-fatia-3-escri
 ### O motor de níveis
 
 [`escrita.go`](../../workers/internal/mcp/escrita.go): `Escrita[In]` é **dado** (`Nome`, `Descricao`, `Nivel`, `Escalar`,
-`Preview`, `Executar`, `Tela`, `Recurso`) e `ferramentaEscrita` o registra; a Fatia 4 reaproveita o mesmo valor para
-executar a pendente aprovada. Fluxo de toda chamada, na ordem:
+`Preview`, `Executar`, `Tela`, `Motivo`, `Recurso`, `ArgsParaAuditoria`) e `ferramentaEscrita` o registra; a Fatia 4 reaproveita o
+mesmo valor para executar a pendente aprovada. Fluxo de toda chamada, na ordem:
 
 1. **Nível efetivo.** `Escalar` consulta o banco e roda em **toda** chamada, preview e confirmação (F3-2): o token fixa os
    argumentos, não o estado do mundo. Se entre o preview e a confirmação entrou uma tocada que faz a escrita escalar, a
@@ -288,9 +342,9 @@ executar a pendente aprovada. Fluxo de toda chamada, na ordem:
 2. **`livre`:** executa na hora (`executou: true`).
 3. **Preview** (`confirma` e `critico`): relê o estado, valida e monta `{resumo, mudancas[{campo, de, para}], efeitos[],
    ressalvas[]}` com nomes (não só ids). Roda **antes do ramo crítico e antes do token**: uma recusa de negócio
-   (`entrada_invalida`, `nao_encontrado`…) vale antes de qualquer pendente, resposta barrada ou consumo de token. O `Escalar`
+   (`entrada_invalida`, `nao_encontrado`…) vale antes de qualquer pedido pendente ou consumo de token. O `Escalar`
    (passo 1, que também relê o estado) pode recusar pelo mesmo motivo, então a recusa pode vir de qualquer um dos dois.
-4. **`critico`:** barrado (ver abaixo).
+4. **`critico`:** grava um pedido pendente e devolve o link `aprovar_em` (ver "Crítico e /pendentes (Fatia 4)"); nunca executa.
 5. **`confirma` sem token:** `{executou: false, preview, confirmacao, expira_em}`. **Com token:** verifica, consome, executa.
 
 Respostas (F3-12): executada `{executou: true, resultado, ressalvas?, aviso?}`; preview acima; token inválido, vencido, de
@@ -330,14 +384,13 @@ token), `usado_em`, `expira_em`. **Consumir** é `INSERT … ON CONFLICT DO NOTH
 - Poda oportunista a cada `Consumir`: apaga até 500 linhas vencidas há mais de 1 h (`FOR UPDATE SKIP LOCKED`; erro da poda é
   logado e ignorado, nunca bloqueia a confirmação). O varredor da Fatia 4 assume. Operação: [operations/mcp.md](../operations/mcp.md).
 
-### Crítico barrado até a Fatia 4 (F3-1)
+### Crítico na Fatia 3 (F3-1) — superado pela Fatia 4
 
-A spec põe o `critico` executável (e `mcp_acoes_pendentes`, `/pendentes`) na Fatia 4. Até lá, quando a escalada dá `critico` a
-tool calcula o preview e devolve, **sem `isError`**: `{executou: false, nivel: "critico", motivo, preview, aviso, links: {tela}}`,
-não escreve nada, não consome token e grava `mcp.escrita.requer_aprovacao` no `audit_log`. O `aviso` diz "Nada aconteceu. …
-faça pela tela, logado", e as `Instrucoes` mandam o modelo repetir isso (`TestInstrucoes_EscritaCriticoBarrado`). **É exatamente
-este ramo que a Fatia 4 troca por `criarPendente`** — o resto do motor não muda. O `motivo` diz qual condição escalou (pode
-haver mais de uma).
+Na Fatia 3 o ramo `critico` só devolvia `{executou: false, nivel: "critico", motivo, preview, aviso, links: {tela}}`, sem
+escrever, sem consumir token e gravando `mcp.escrita.requer_aprovacao` ("faça pela tela"). A Fatia 4 trocou exatamente esse
+ramo por `criarPendente`: o evento `mcp.escrita.requer_aprovacao` deixou de existir (agora é `mcp.pendente.criada`), a resposta
+passou a levar `pendente_id` e `aprovar_em`, e as `Instrucoes` mandam entregar o link. O `motivo` continua dizendo qual condição
+escalou (pode haver mais de uma). Resto do motor (nível efetivo, `Preview` antes do ramo crítico, recusas) não mudou.
 
 ### Escalada: o critério (F3-3, F3-4)
 
@@ -399,9 +452,9 @@ Regras finais, como implementadas (a tabela de tools traz a coluna "Sobe para `c
   `actor_id` = o admin, `actor_type 'user'`, `action = "mcp.escrita.<tool>"`, `resource`/`resource_id` do alvo (nos ajustes do
   dia, `campaign` + o id da campanha: tipo, emissora e dia vão nos `args`) e
   `metadata = {origem: "mcp", tool, nivel, args, mcp: {token_id}}`. Falha da auditoria é logada e **não** derruba a resposta
-  (a escrita já aconteceu). Eventos próprios: `mcp.escrita.requer_aprovacao` (ramo barrado, com o `motivo`) e
-  `mcp.escrita.falha` (erro interno ou `panic` no `Executar`; só `"erro": "interno"`, nunca o texto do erro Go). Recusa de negócio
-  não grava nada (nada foi escrito).
+  (a escrita já aconteceu). Eventos próprios: `mcp.pendente.criada` (ramo crítico, com o `motivo`; ver a Fatia 4) e
+  `mcp.escrita.falha` (erro interno ou `panic` no `Executar` de uma tool `livre` ou `confirma`; só `"erro": "interno"`, nunca o texto
+  do erro Go). Recusa de negócio não grava nada (nada foi escrito).
 - **Os `args` são mascarados na gravação** (`auditoria.OmitirSegredos`: chaves que parecem segredo viram `"[omitido]"`) e todo
   texto é cortado em 500 runas (`…[cortado]`; um roteiro de 5 mil caracteres não vai para o log). A chave `mcp` (com o
   `token_id`) não é mascarada. **Dados de contato do cliente (e-mail, telefone, CNPJ) aparecem nos `args` de
@@ -461,12 +514,16 @@ mexer), **exceto** os pontos abaixo, que mudaram a rota para melhor (conferidos 
 
 ### Desempenho
 
-Com as 64 tools, `BenchmarkNovoServidor` (montar o `Server` do SDK) ficou em **~5,0 ms/op** (~3,2 MB, ~8,8 mil alocações), acima
-dos 4 ms do limite do plano (eram 2,75 ms com 44 tools). O go-sdk pede o `Server` **duas** vezes por pedido stateless (uma só
-para ler as versões de protocolo), então `NovoHandlerMCP` passou a montá-lo **uma vez por pedido** (um guardador no
-contexto do pedido; nada é compartilhado entre pedidos nem entre principais). `BenchmarkPedidoToolsList` (um `tools/list` pelo
-handler real, sem rede): **~12,5 ms → ~9,1 ms** e 24,6 mil → 15,8 mil alocações. Travado por
-`TestServidor_MontaOServerUmaVezPorPedido` (falha sem a memoização) e `TestServidor_MemoizacaoNaoMisturaPrincipais`.
+Medido em 2026-11-03 (Ryzen 7 7435HS), com as **83 tools** da Fatia 4: `BenchmarkNovoServidor` (montar o `Server` do SDK)
+**~5,8 ms/op** (~4,1 MB, ~11 mil alocações) e `BenchmarkPedidoToolsList` (um `tools/list` pelo handler real, sem rede)
+**~11,9 ms/op** (~6,3 MB, ~19,6 mil alocações) — logo abaixo do teto de ~12 ms que o plano fixou. A progressão: 44 tools = 2,75 ms
+(`NovoServidor`); 64 tools = ~5,0 ms (~3,2 MB, ~8,8 mil alocações) e ~9,1 ms o pedido. O go-sdk pede o `Server` **duas** vezes por pedido
+stateless (uma só para ler as versões de protocolo), então `NovoHandlerMCP` monta-o **uma vez por pedido** (um guardador no
+contexto do pedido; nada é compartilhado entre pedidos nem entre principais): sem isso o `tools/list` de 64 tools custava ~12,5 ms.
+Travado por `TestServidor_MontaOServerUmaVezPorPedido` (falha sem a memoização) e `TestServidor_MemoizacaoNaoMisturaPrincipais`.
+**Próximo passo antes de acrescentar tools:** memoizar por processo os schemas de entrada que o SDK infere a cada
+`AddTool` (o custo cresce linear com o número de tools e a parte estática é a mesma em todo pedido); hoje só `decodificarArgs`
+guarda o schema resolvido por tipo (`schemasDeEntrada`), para a aprovação. Remeça os dois benchmarks e registre o antes/depois.
 
 ### Limitações e follow-ups (Fatia 3)
 
@@ -477,13 +534,11 @@ handler real, sem rede): **~12,5 ms → ~9,1 ms** e 24,6 mil → 15,8 mil aloca�
 - **Textos em inglês nas `Recusa` que vêm das rotas:** as validações que saíram do handler guardam a mensagem antiga
   (`name is required`, `end_date must be on or after start_date`, `time_start must be HH:MM…`), e o MCP as repete ao modelo.
 - **`CriarCampanha` (rota) não apara o nome nem valida data zero** (a rota sempre aceitou como veio; no MCP quem valida é a tool).
-- **`acoes.EditarCampanha` NÃO é transacional: escrita parcial com falha reportada.** Grava nome e datas (`UpdateBasic`) e só
-  depois o código do hub (`AtualizarHubCode`, um `UPDATE` simples, sem FK nem CHECK: ele nunca vira `Recusa`). Qualquer erro
-  DEPOIS do `UpdateBasic` (queda de conexão, timeout) deixa nome e datas já gravados enquanto a resposta diz `[interno]`.
-  **Inalcançável na Fatia 3:** mudar o código do hub escala a `critico`, que não executa, e sem troca de código não há segunda
-  escrita. **ALCANÇÁVEL na Fatia 4:** o `editar_campanha` crítico com troca de código roda depois da aprovação, sem token de
-  confirmação; a falha marca a pendente `falhou` e quem aprovou acredita que nada aconteceu, com nome e datas já alterados.
-  **Fix recomendado para a Fatia 4:** `UpdateBasic` e `AtualizarHubCode` na MESMA transação (ou num único `UPDATE`).
+- ~~**`acoes.EditarCampanha` NÃO é transacional**~~ — **corrigido na Fatia 4 (F4-9).** `catalog.UpdateBasicInput` ganhou
+  `HubCode *string` e `UpdateBasic` grava nome, datas e (quando pedido) `hub_code`/`hub_notified_at = NULL` num único `UPDATE`;
+  `acoes.EditarCampanha` não chama mais `AtualizarHubCode`. Um trigger de teste que dá `RAISE` quando `NEW.hub_code = 'EH-FALHA1'`
+  prova que nome e datas não mudam quando o código falha. Era a pendência obrigatória antes de o crítico poder trocar o código do
+  hub sem token de confirmação.
 - **Bug latente em `catalog/detections.go:~604`:** o `time_end` da regra é lido com `time.Parse("15:04:05", …)` ignorando o erro
   (`"24:00"` vira `00:00` no caminho de insert em Go, enquanto o SQL aceita `24:00`). Não é do MCP; anotado.
 - **`HaVeiculacao` para regras não filtra por dia:** a escalada da regra olha a campanha inteira, então uma campanha só com
@@ -498,9 +553,238 @@ handler real, sem rede): **~12,5 ms → ~9,1 ms** e 24,6 mil → 15,8 mil aloca�
 - **`token_id` não aparece na tool `auditoria_mcp`** e dados de contato/CNPJ aparecem nos `args` do `audit_log` (ver acima).
 - **Recat assíncrono:** a regra e a troca de tipo respondem antes de a recategorização acabar (até 30 s); a resposta traz a
   ressalva. O override é síncrono.
-- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username`, então `0070_mcp_fundacao` vira `0071` e
-  `0071_mcp_confirmacoes` vira `0072` (e as referências a "migration 0070" neste doc).
+- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username`, então `0070_mcp_fundacao` vira `0071`,
+  `0071_mcp_confirmacoes` vira `0072` e `0072_mcp_acoes_pendentes` (Fatia 4) vira `0073` (e as referências a "migration 0070/0071/0072"
+  neste doc). Ver também a nota sobre a 0072 editada no lugar, em [operations/mcp.md](../operations/mcp.md).
 - **Trailers de commit da branch** misturam "Claude Opus 5.5" e "Claude Sonnet 5.5" (dois modelos trabalharam nela).
+
+## Crítico e /pendentes (Fatia 4)
+
+18 tools `critico` + `minhas_pendentes` (83 no total). Desenho e decisões F4-1..F4-16:
+[plano](../superpowers/plans/2026-10-30-mcp-fatia-4-critico.md) e [spec §4.6, §5.2 e §6](../superpowers/specs/2026-10-27-mcp-server-design.md).
+A tabela de tools está em "Fatia 4 — escrita crítica (18)". O contrato é o do hub (`mcp-ecossistema.md` §3.5 e §6): o modelo pede, **uma
+pessoa autenticada executa**. É a tela `/pendentes` que dá a garantia que o protocolo MCP não dá.
+
+### O pedido (F4-5)
+
+O ramo `critico` do motor roda o `Preview` (uma recusa de negócio vale antes de qualquer pedido), grava uma linha em
+`mcp_acoes_pendentes` e responde, **sem `isError`**:
+
+```json
+{ "executou": false, "nivel": "critico", "motivo": "...", "preview": {"resumo": "...", "mudancas": [], "efeitos": [], "ressalvas": []},
+  "pendente_id": "<uuid>", "expira_em": "...", "aprovar_em": "<portal>/pendentes?id=<uuid>", "ja_existia": false,
+  "aviso": "Nada aconteceu ainda. Entregue o link aprovar_em à pessoa: só ela, logada no portal, pode aprovar; o pedido vale 24 h.",
+  "links": { "tela": "..." } }
+```
+
+Chaves em `snake_case` (a spec dizia `pendenteId`/`aprovarEm`; as `Instrucoes` dizem `aprovar_em`). O `motivo` é o da escalada
+(tools da Fatia 3 que subiram a `critico`) ou o `Motivo` fixo da própria tool. Sem `Portal` configurado, `aprovar_em` vem `null` com
+uma ressalva mandando abrir `/pendentes` no portal. Um token de confirmação que viesse junto é ignorado (não é consumido). A
+linha guarda os **args canônicos** (sem `confirmacao`), o `motivo` e o `preview`; o `token_id` de quem pediu fica nela (FK
+`ON DELETE SET NULL`). **Todo crítico tem executor por construção** (uma lista só, ver abaixo): isso torna executáveis também as
+escaladas das 20 tools da Fatia 3.
+
+### Não duplica (F4-3)
+
+`args_hash = SHA-256(tool ‖ 0x00 ‖ args canônicos)` e um índice único parcial `(user_id, args_hash) WHERE estado IN ('pendente',
+'aprovada')`. Pedir de novo o mesmo devolve **o mesmo pedido** com `ja_existia: true` e o preview/motivo **como estão gravados**
+(o que a pessoa vai ver em `/pendentes`, não o recalculado agora); antes, expira o vencido daquele hash. Se o pedido igual já foi
+aprovado e está rodando, a resposta não traz `aprovar_em` e diz que ele está em execução. Sem isso um modelo que repete a chamada
+faria a pessoa aprovar duas vezes o mesmo `criar_veiculacao_manual` (duas tocadas lançadas).
+
+### Estados (F4-2)
+
+`pendente → aprovada → executada`, com `recusada` e `expirada` finais. Transições por `UPDATE … WHERE estado = … AND tentativa = …`
+(dois cliques, um vence); `tentativa` conta as aprovações e só a vigente fecha o pedido; `MarcarExecutada` aceita `aprovada` **ou**
+`falhou` da mesma tentativa (o varredor pode ter dado como interrompida uma execução que terminou).
+
+- **Recusa de negócio na execução** (o estado mudou: campanha cancelada nesse meio-tempo, material desvinculado…) e **conferência que
+  cai por erro inesperado** voltam o pedido a `pendente`, com o texto em `erro` e prazo `GREATEST(expira_em, agora + 1 h)`: a
+  pessoa lê o porquê e recusa, ou corrige o mundo e aprova de novo. `args_invalidos` e `tool_desconhecida` (a tool mudou ou sumiu
+  entre o pedido e a aprovação) **não** ganham a folga.
+- **Exceção ou `panic` no `Executar`** → `falhou`, **final**: algo pode ter sido gravado, uma pessoa confere. Se a ação soube dizer o
+  que ficou feito (`*acoes.ErroAposEscrita`), o `erro` leva o texto dela no lugar do genérico (ver abaixo).
+- Prazo de 24 h. `pendente` vencido vira `expirada` pelo varredor, ou na hora em que alguém tenta aprovar ou recusar.
+- O pedido não é podado: a linha (e os `args`, inclusive a URL inteira de um webhook) fica gravada.
+
+### Aprovação (F4-6)
+
+Rotas no grupo admin do MCP (`/v1/internal`, JWT + `RequireRole("admin")`):
+
+| Rota | Faz |
+|---|---|
+| `GET /mcp/pendentes[?id=<uuid>]` | `{items, destaque}`: as abertas (`pendente` + `aprovada`, 50 mais novas) e, com `?id=`, o pedido do link em qualquer estado (`null` se for de outra pessoa ou malformado: mesmo 200, a lista não serve de oráculo) |
+| `POST /mcp/pendentes/{id}/aprovar` | executa |
+| `POST /mcp/pendentes/{id}/recusar` | recusa |
+
+**Só quem pediu aprova.** Todo SQL filtra `user_id` = o JWT; "não existe", "não é seu" e id malformado respondem igual (404
+`nao_encontrado`). O papel é relido do banco (`DonoAdminAtivo`): rebaixado desde o login → 403 `proibido`. A execução é
+síncrona no pedido HTTP; o `Principal` é o dono, com o `token_id` gravado no pedido. O que `Aprovacoes.Aprovar` faz, na ordem:
+
+1. `UPDATE pendente → aprovada` (`tentativa + 1`), com 10 s próprios, sem o cancelamento do pedido HTTP; audita `mcp.pendente.aprovada`.
+2. Acha a escrita pelo nome (sumiu → `tool_desconhecida`) e **revalida os args gravados pelo mesmo JSON schema que o SDK infere**
+   (`jsonschema.ForType` + `Resolve`, `ApplyDefaults`, `Validate`, decodificando com `DisallowUnknownFields`; falha → `args_invalidos`).
+3. **Reroda o `Preview`** (com o dono no contexto, `ComPrincipal`, para as guardas "nunca a si mesmo" valerem também aqui), que relê o
+   estado e recusa se o alvo sumiu. Depois **compara o resumo novo (`resumo`, `mudancas`, `efeitos`, `ressalvas`) com o que a pessoa viu**:
+   se mudou, recusa com `preview_desatualizado`, **grava o resumo novo no lugar do antigo** na mesma atualização que devolve o pedido
+   a `pendente`, e a pessoa lê o que vale agora e aprova de novo — só se aprova o que se viu. Por isso o `Preview` precisa ser
+   **determinístico** (nada de horário de relógio, ordem de mapa ou contagem de fila no texto).
+4. Chama o `Executar` sob `WithoutCancel` + 60 s. O `Escalar` **não** reroda (já é crítico).
+5. Sucesso: audita `mcp.escrita.<tool>`, serializa o resultado, fecha com `MarcarExecutada` (gravando as **ressalvas** da execução) e
+   audita `.executada`. Daqui para baixo nada vira erro: se só o fechamento falha, a resposta ainda é 200.
+
+Respostas da aprovação:
+
+| Status | Corpo | Quando |
+|---|---|---|
+| 200 | `{pendente, resultado, ressalvas}` | executou. `ressalvas` são os avisos da execução (sempre array, `[]` sem avisos; também ficam na linha do pedido): "o email não saiu, a pessoa não tem a senha", "gravei mas não consegui reler…" |
+| 409 | `{error: "pendente_<estado>", mensagem}` | o pedido já não está `pendente` (outra aba, prazo) |
+| 422 | `{error: <código>, mensagem, pendente}` | recusa de negócio: nada foi feito e o pedido voltou a `pendente`. `pendente` é o mesmo DTO do `GET`, relido depois da recusa (um `preview_desatualizado` já traz o `preview` novo); aditivo e ausente se a releitura falhar |
+| 503 | `{error: "conferencia_falhou"}` | a conferência caiu por erro inesperado; nada foi feito e o pedido voltou a `pendente`: aprove de novo em instantes |
+| 500 | `{error: "interrompida", mensagem}` | virou `falhou`. A `mensagem` é a da ação quando ela sabe dizer o que ficou feito (`*acoes.ErroAposEscrita`: "a campanha foi cancelada, mas NÃO foi apagada: apareceu veiculação…"; "o usuário foi criado, mas a carteira não foi gravada por inteiro e o email NÃO saiu"), senão o genérico "confira se a ação aconteceu antes de pedir de novo" |
+| 503 | `{error: "indisponivel"}` | o índice das escritas falhou no boot (o módulo sobe sem aprovações; regra 6.5) |
+
+O pedido que a tela recebe **não traz `args` nem `resultado`** (só ferramenta, motivo, preview, estados, datas, `erro` e `ressalvas`).
+`minhas_pendentes` devolve o mesmo, cortado para a lista caber.
+
+### Auditoria (F4-7)
+
+Quem audita é o **executor da aprovação**, depois do sucesso e fora da transação da escrita (como o motor da Fatia 3). **Diverge
+da spec §4.6** ("dentro da função compartilhada"): o executor é o ponto único por onde todo crítico passa, e gravar dentro de cada
+função de `acoes` a gravaria também nas escritas da tela. Linhas: `mcp.pendente.criada` (recurso = o alvo da tool, via `Recurso`),
+`.aprovada`, `.recusada`, `.executada`, `.falhou` (recurso `mcp_pendente`, id = o do pedido) e `mcp.escrita.<tool>` com
+`nivel = critico`; todas levam `meta.mcp = {token_id, pendente_id}`. O ator é o admin dono (`actor_type 'user'`). `.falhou` leva `codigo`:
+o da recusa (`preview_desatualizado`, `args_invalidos`, `campanha_cancelada`…: o pedido voltou a `pendente`), `conferencia_falhou`,
+`interno`, `falha_apos_escrita` (a ação explicou o meio-estado) ou `presa` (varredor). `pendente_id` aparece em `auditoria_mcp` (a
+chave não casa `chaveSecreta`); `token_id` segue oculto.
+
+**`Escrita.ArgsParaAuditoria`** é o gancho para a tool cujo argumento carrega um segredo que o log não guarda por inteiro. Hoje só
+`editar_webhook_cliente`: no `audit_log` a `url` vira **esquema + host** e entra `url_sha256` (SHA-256 do texto gravado, que deixa
+conferir de qual URL se tratava sem guardá-la). Vale em toda linha que leva os args, no pedido e na aprovação
+(`argsGravadosDaAuditoria` decodifica os args do pedido). Gancho que falha ou dá `panic` grava `{}`, **nunca** os args sem redação. Só
+o `audit_log` muda: o pedido gravado mantém a URL inteira, que é o que o `Executar` precisa e só o dono lê (a mesma URL já mora em
+`clients.webhook_url`).
+
+### Varredor (F4-8)
+
+`mcp.Varredor`, goroutine iniciada em `main.go` com o contexto do processo: uma passada na subida e outra **a cada 1 minuto**, com
+`pg_try_advisory_xact_lock` (hash FNV-64a de `radiocheck:mcp-varredor`; uma réplica varre por vez), 30 s por passada e cada passo
+num savepoint (o erro de um é logado e desfeito sem derrubar os outros):
+
+1. `pendente` com `expira_em ≤ agora` → `expirada` (até 500 por volta);
+2. `aprovada` com `aprovada_em` há mais de **10 min** → `falhou` ("A execução caiu no meio por um erro inesperado; confira se a ação
+   aconteceu…") + auditoria de sistema `mcp.pendente.falhou` com `codigo: presa` (`actor_type 'cli'`, `metadata.pelo = "varredor-mcp"`);
+3. poda `mcp_confirmacoes_usadas` vencidas há mais de 1 h (até 5 000 por volta). A poda oportunista de `Confirmacoes.Consumir` continua.
+
+### Registro único das escritas (F4-4)
+
+Cada família expõe `escritas<Familia>(cfg) []escritaRegistravel`; `escritasDe(cfg)` concatena as 12 (6 da Fatia 3, 6 críticas),
+`registrarEscritas` registra as tools e `indexarEscritas` monta o mapa nome → escrita (falha se dois nomes colidem). O **mesmo
+valor `Escrita[In]`** registra a tool e executa a pendente aprovada, sem segunda cópia da lógica. A interface `escritaRegistravel`
+esconde o tipo genérico (`registrar`, `executarAprovada`, `validarArgs`, `argsGravadosDaAuditoria`).
+
+### Segredos (F4-11)
+
+- **`criar_usuario` não recebe senha.** O servidor gera uma de 24 caracteres (`crypto/rand`, alfabeto sem `0/O/1/l/I`, sempre com maiúscula,
+  minúscula e dígito) **dentro do `Executar`**; ela vive só na memória até o `CriarUsuario` cifrá-la no convite (AES-GCM, ver
+  [welcome-onboarding](welcome-onboarding.md)) e **só o email de boas-vindas a entrega**. A boas-vindas é obrigatória: sem `WELCOME_ENC_KEY` a
+  tool recusa no preview (`boas_vindas_indisponivel`) e sem SMTP também (`email_desligado`: sem email a pessoa criada não teria a
+  senha). O resultado nunca traz link nem senha. Email que falha **depois** de criar não é recusa: vira ressalva na aprovação ("a
+  pessoa não tem a senha — redefina pela tela").
+- **`editar_webhook_cliente` não tem campo de segredo** (só `url`, `ativo`, `eventos`; o segredo continua na tela) e recusa URL com
+  credencial (`usuario:senha@`). O preview mostra a URL **antiga** só com esquema+host e a **nova** inteira (é o destino que a pessoa
+  aprova).
+- **O token do destinatário de pós-venda e o link público nunca saem**: as duas tools de pós-venda pedem o `id` do destinatário
+  (não é segredo).
+- Nenhum schema de escrita aceita `senha`, `segredo`, `token`, `password`, `secret` (inventário). O pedido guarda os args por tempo
+  indeterminado no banco; por isso nenhum deles é segredo.
+
+### Guardas de si mesmo (F4-12)
+
+`editar_usuario` recusa mudar o **próprio** papel e `desativar_usuario` recusa a si mesmo (`proprio_usuario`): o trigger da 0070
+revogaria a credencial MCP de quem pediu no meio da aprovação. Ninguém desativa ou rebaixa o **último admin ativo** (`ultimo_admin`;
+conta `role = 'admin' AND is_active AND deleted_at IS NULL`). **Só no MCP**: a rota `PATCH /admin/users` não tem essas guardas (follow-up). O
+`Preview` não recebe o `Principal` como argumento: o motor o põe no contexto (`ComPrincipal`/`PrincipalDe`) tanto na chamada quanto
+na aprovação.
+
+### O que saiu do catálogo e por quê (F4-1)
+
+A spec §6 listava 21 tools; ficaram 18 críticas + `minhas_pendentes`. Saíram:
+
+- **`pausar_campanha`**: a rota `PUT /campaigns/{id}/pause` responde 410 sempre desde 2026-05-07 ("use cancel"); "pausar" hoje é cancelar.
+- **`iniciar_campanha`**: `PUT /campaigns/{id}/start` marca `ativa` **sem pré-condição** (reativa `cancelada`/`concluida`, e o `cancelled_at`
+  fica), e o `LifecycleScheduler` rebaixa em ≤ 60 s uma campanha ativada antes do início (incidente 2026-10-01). O caminho honesto para
+  "começar antes" é `editar_campanha` com início = hoje, que já escala a `critico` e agora executa; quem ativa é o agendador.
+- **`publicar_pos_venda`**: a publicação exige as capturas PNG que o **navegador** gera e sobe (`UploadAssets`), guardadas só na memória do
+  processo; não há renderizador no servidor. `obter_pos_venda` já devolve o link da tela de publicação.
+
+Entrou **`minhas_pendentes`** (o hub tem a mesma): sem ela o modelo não sabe se o pedido foi aprovado e tende a dizer que fez.
+`testar_webhook` ficou (a spec §10 deixara em aberto), crítica, mas recusa quando o teste seria descartado.
+
+### Recusas que só o MCP faz (F4-10)
+
+O MCP é mais estrito que a rota onde a rota destrói ou responde sucesso em silêncio. Todas moram no `Preview` (que reroda na
+aprovação): `campanha_com_historico`, `material_com_historico`, `ja_ignorada`, `nao_ignorada`, `estado_terminal`, `sem_mudanca`,
+`webhook_teste_descartado`, `webhook_nao_configurado`, `webhook_indisponivel`, `email_desligado`, `pos_venda_indisponivel`,
+`pos_venda_sem_documento`, `boas_vindas_indisponivel`, `proprio_usuario`, `ultimo_admin`, `usuario_apagado` e `entrada_invalida`
+(preço de emissora fora da campanha ou repetida). Detalhes na tabela de tools. `material_com_historico` conta também
+`detection_campaigns` (a tocada base pode ser de outro material), não só `detections`.
+
+**`apagar_campanha` reconfere o histórico dentro da transação do delete** (`ExigirSemHistorico` → `DeleteSemHistorico`): entre a
+conferência do preview e o `DELETE` uma veiculação, um comprovante manual ou um pós-venda pode ter aparecido; se aparecer, o delete
+aborta com `*ErroAposEscrita` (a campanha já foi cancelada, então não é recusa) e o pedido fica `falhou` com um texto que diz o que
+aconteceu com a campanha (conforme o estado de antes: "já estava cancelada", "foi cancelada (os workers pararam)", "estava concluída e
+continua concluída…") e que nada foi destruído.
+
+**Mudanças nas rotas HTTP** (vieram das extrações para `acoes`, para melhor; cada handler foi travado por teste antes):
+`DELETE /materials/{id}` com material vinculado **500 → 409** `material_vinculado`; `PUT /campaigns/{c}/pricing/{s}` com referência
+inexistente (FK) **500 → 404/400**; `DELETE /campaigns/{id}` agora **cancela de verdade** (grava `cancelled_at`; antes o `Pause` deixava
+`cancelada` sem a data) e responde **409** `campanha_com_lote_manual`/`campanha_em_pos_venda` (antes 500, pelas FKs). Pelo menos
+essas três mudaram o comportamento da rota; as demais extrações são refactor sem mudança.
+
+### A tela `/pendentes` (F4-15)
+
+[`PendentesPage.jsx`](../../frontend/src/pages/PendentesPage.jsx), dentro do `AppShell`, `RequireRole admin`, **fora de `PUBLIC_ROUTES`** (sem
+sessão volta ao `/login` com `?next=` preservado — é o caminho do link que a IA entrega). Lista as abertas e, com `?id=`, destaca o
+pedido em qualquer estado. Cada cartão mostra a ferramenta, o resumo, o motivo ("Por que precisa da sua aprovação"), as mudanças
+**de → para**, os efeitos ("O que acontece"), as ressalvas do preview ("Atenção"), o prazo em horário de São Paulo e os botões
+**Recusar** / **Aprovar e executar** (desabilitados enquanto age). Estados: `pendente` = "Aguardando você" (um `pendente` vencido pelo
+relógio do navegador já aparece como `expirada`, sem botões); `aprovada` = "Executando…" (passando de 10 min o pedido é marcado
+interrompido); `executada` ("Já foi executada."); `falhou` = "A execução foi interrompida", com o texto do servidor ou "confira se a ação
+aconteceu e, se não, peça de novo à IA"; `recusada`; `expirada`. Depois de decidir, o cartão fica na tela com o desfecho e as
+**ressalvas da execução**. Um 422 mostra a mensagem do servidor no cartão e o pedido segue com os botões (`preview_desatualizado` mostra
+"O pedido mudou: releia antes de aprovar" e já traz o resumo novo); 409 puxa o estado real pelo `?id=`; 500 `interrompida` vira cartão
+`falhou`.
+
+O texto do preview vem do servidor e é só **texto** (React escapa; nada de `dangerouslySetInnerHTML`): o que estiver escrito ali
+descreve a ação, não manda em nada. **Anti-clickjacking** (um clique aqui grava dinheiro): `frontend/public/_headers`
+(`X-Frame-Options: DENY` + `frame-ancestors 'none'` em `/pendentes` e `/pendentes/*`) **mais** uma guarda de moldura em JS
+(`utils/emoldurada.js`: dentro de um iframe a página pede "Abra numa aba própria", não mostra botões nem chama a API). A rota
+`/autorizar-ia` só tem a camada `_headers`. Em Minha conta → "Integração com IA" há o link **Pedidos da IA** com a contagem dos que
+esperam. **Não há item na barra lateral**: a página é alcançada pelo link da IA ou por Minha conta. Teste Playwright com API falsa em
+`frontend/e2e/mcp-pendentes.spec.js`. Tela nova = regra 5 do `CLAUDE.md` (o lockfile não pode ser podado) e deploy em dois
+caminhos (backend primeiro: a tela chama rotas novas).
+
+### Limitações e follow-ups (Fatia 4)
+
+- **Corrida do último admin.** `ultimo_admin` conta os admins ativos no `Preview`/`planejar*`, **fora** da transação da escrita
+  (`acoes.EditarUsuario`). Dois pedidos aprovados ao mesmo tempo (ou em abas diferentes) podem rebaixar ou desativar os dois últimos
+  admins. Fix: advisory lock em `acoes.EditarUsuario` e recontar dentro dele.
+- **Hub.** As ações do E-monitor nunca avisam o hub, e o `client.upsert` do hub (`hubsync.go`) regrava `is_active` e **recria** cliente
+  vinculado que foi apagado aqui. `desativar_cliente`/`apagar_cliente` de um cliente com ponte são desfeitos na próxima edição dele no
+  hub (o preview avisa).
+- **Webhook.** O worker lê a URL na hora do envio e ignora `webhook_enabled`: desligar não cancela as entregas já na fila e trocar a
+  URL **redireciona** as pendentes (o preview diz isso, num texto fixo para a fila não gerar `preview_desatualizado` à toa).
+- **`editar_campanha` crítica entre a meia-noite de São Paulo.** O preview cita os dias que já passaram; pedido antes de 00:00 e
+  aprovado depois recebe **um** `preview_desatualizado` (aprovar de novo funciona).
+- **`minhas_pendentes` corta o `erro` em 250 caracteres** (e as ressalvas em 250 cada / 300 somadas); o texto inteiro está em
+  `/pendentes?id=`.
+- **Sem item na barra lateral** para `/pendentes`.
+- **`tools/list` ~11,9 ms** com 83 tools: memoizar os schemas inferidos por processo antes de acrescentar tools (ver "Desempenho").
+- **A aprovação é síncrona** e o `middleware.Timeout` do router (60 s) corre desde o início do pedido, enquanto o `Executar` tem os
+  próprios 60 s: uma execução lenta pode terminar depois de a tela já ter recebido o erro. O pedido fecha como `executada` mesmo assim
+  (a aprovação roda sob `WithoutCancel`); recarregar `/pendentes?id=` mostra o desfecho.
+- **O pedido não é podado**: os `args` ficam no banco para sempre (inclusive a URL inteira do webhook).
 
 ## Como funciona
 
@@ -582,9 +866,9 @@ Toda ação sobre credenciais grava em `audit_log` com `metadata.origem = "mcp"`
 | `mcp.token.recusado` | token **existente e vivo** cujo dono já não é admin ativo; no máximo 1 por token a cada 10 min (cliente insistente não inunda o log) |
 | `mcp.oauth.autorizado` | admin clica **Autorizar** em `/autorizar-ia` |
 | `mcp.oauth.cliente_confidencial_criado` | `registra-cliente-mcp` (`actor_type 'cli'`) |
-| `mcp.escrita.<tool>` | uma tool de escrita **executou** (`metadata`: `tool`, `nivel`, `args` mascarados, `mcp.token_id`) |
-| `mcp.escrita.requer_aprovacao` | a escalada deu `critico` e a tool foi barrada (nada foi escrito; `metadata.motivo`) |
-| `mcp.escrita.falha` | erro interno ou `panic` no `Executar` (`metadata.erro = "interno"`) |
+| `mcp.escrita.<tool>` | uma tool de escrita **executou** (`metadata`: `tool`, `nivel`, `args` mascarados, `mcp.token_id`; num crítico aprovado, também `mcp.pendente_id`) |
+| `mcp.escrita.falha` | erro interno ou `panic` no `Executar` de uma tool `livre` ou `confirma` (`metadata.erro = "interno"`) |
+| `mcp.pendente.criada` · `.aprovada` · `.recusada` · `.executada` · `.falhou` | ciclo de um pedido `critico` (ver "Crítico e /pendentes (Fatia 4)"; `meta.mcp.pendente_id` aponta o pedido) |
 
 Falha ao gravar a auditoria é logada (`Warn`) e **não** derruba o 401/200 da operação principal.
 
@@ -690,11 +974,13 @@ todos os tokens daquele cliente para o usuário.
 - **`revoga-mcp --listar` e `/account` contam diferente**: o CLI imprime uma linha por token
   pessoal e **por refresh token vivo** do OAuth; `/account` mostra **uma linha por cliente OAuth**
   (conexão), agrupando os tokens dele.
-- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro"); `TestToolsEsperadas_OrdemAlfabeticaE64`
-  trava a ordem e o número (64): quem acrescentar tool atualiza o número junto. **Tool de escrita nova também entra
+- **Tool nova exige atualizar `ToolsEsperadas`** (ver "Regra de ouro"); `TestToolsEsperadas_OrdemAlfabeticaE83`
+  trava a ordem e o número (83): quem acrescentar tool atualiza o número junto. **Tool de escrita nova também entra
   em `escritasEsperadas`** ([`escrita_inventario_test.go`](../../workers/internal/mcp/escrita_inventario_test.go)), que
-  trava o conjunto das 20, o nível declarado, o sufixo `Nível: …` da descrição, as anotações, o campo `confirmacao` e a
-  lista de campos proibidos (`stream_url`, `hub_id`, `senha`, `token`, `password`) em qualquer profundidade do schema.
+  trava o conjunto das 38 (20 da Fatia 3 + 18 críticas), o nível declarado, o sufixo `Nível: …` da descrição, as anotações, o
+  campo `confirmacao` (só onde pode pedir confirmação: nunca numa crítica declarada) e a lista de campos proibidos (`stream_url`, `hub_id`,
+  `senha`, `token`, `password`, `segredo`, `secret`) em qualquer profundidade do schema. `registro_escritas_test.go` trava que a lista única
+  (`escritasDe`) tem os mesmos 38 nomes do inventário e que `indexarEscritas` falha com nome repetido: toda escrita tem executor.
 - **Campo obrigatório ausente volta sem `[codigo]`.** A recusa vem do próprio SDK, na validação do schema
   (`validating "arguments": ... required: missing properties: [...]`), antes de a tool rodar. Decisão: fica
   assim — o `required` do schema já orienta o modelo, e reimplementar a validação só para pôr o código não
@@ -756,11 +1042,21 @@ mudou na implementação, e por quê:
   - **`editar_emissora` grava por `Stations.UpdateCadastro`**, não pelo `Stations.Update` do plano (F3-10): o `Update`
     reserializa o `metadata` e perde chave desconhecida.
   - **Auditoria feita pelo motor, depois do sucesso**, não "dentro da função compartilhada" (spec §4.6): falha de auditoria
-    não pode derrubar uma escrita já feita. A gravação dentro da função compartilhada vale só para o `critico` executado fora
-    da tool (Fatia 4).
+    não pode derrubar uma escrita já feita. Na Fatia 4 o mesmo vale para o `critico`: quem audita é o executor da aprovação
+    (`Aprovacoes.Aprovar`), o ponto único por onde todo crítico passa (ver F4-7).
   - **`confirmarEExecutar` mora no pacote `mcp`** (`escrita_ferramentas_test.go`), não em `mcptest` como o plano previa: ele
     recebe um `ConfigServidor`, e o `mcptest` não pode importar o pacote que o importa.
   - **`marcar_notificacoes_lidas` recebe `notificacoes[]`** (as chaves de `minhas_notificacoes`), não `chaves[]`.
+- **Fatia 4 (plano `2026-10-30-mcp-fatia-4-critico.md`; spec §4.6, §5.2 e §6 já trazem as notas datadas):**
+  - **Estados do hub, não os da spec:** `pendente → aprovada → executada`; recusa de negócio volta a `pendente`; só exceção vira `falhou`
+    (a spec dizia `executada | falhou`). `tentativa` conta as aprovações.
+  - **Auditoria no executor da aprovação**, não "dentro da função compartilhada" (spec §4.6), e a URL do webhook resumida a
+    esquema+host+SHA-256 (`ArgsParaAuditoria`).
+  - **Aprovação compara o resumo:** `preview_desatualizado` (não está na spec) e as `ressalvas` da execução gravadas no
+    pedido e devolvidas pela aprovação, por `/pendentes` e por `minhas_pendentes`.
+  - **Catálogo:** `iniciar_campanha`, `pausar_campanha` e `publicar_pos_venda` saíram; entrou `minhas_pendentes` (F4-1).
+  - **Chaves `snake_case`** (`pendente_id`, `aprovar_em`, `expira_em`), não as `camelCase` da spec.
+  - **`criar_usuario` sem senha** e com boas-vindas obrigatória (e `email_desligado`); `editar_webhook_cliente` sem segredo.
 
 ### Recomendações ao dono (NÃO feitas)
 
@@ -775,7 +1071,7 @@ mudou na implementação, e por quê:
 4. **O compose base ainda monta `migrations/` em `docker-entrypoint-initdb.d`** (regra 4.6 do
    `CLAUDE.md` / F-111), o que quebra um banco local novo (os `.down.sql` rodam antes dos `.up.sql`).
 
-## Fora de escopo (até a Fatia 3)
+## Fora de escopo (até a Fatia 4)
 
-`mcp_acoes_pendentes`, `/pendentes` e o varredor são da Fatia 4 e **ainda não existem**: `critico` não executa pela tool
-(ver "Crítico barrado até a Fatia 4"). `mcp_confirmacoes_usadas` existe desde a Fatia 3 (migration 0071).
+Ficam para a Fatia 5: o lado do hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato) e os ADRs. Fora do catálogo de propósito (F4-1): iniciar,
+pausar e publicar pós-venda (ver "O que saiu do catálogo e por quê"), reativar usuário, trocar senha e anexar comprovante depois.

@@ -201,6 +201,11 @@ Fatia 2 acrescenta a leitura do query string (só frontend, sem efeito colateral
   > **Na Fatia 3 (2026-10-29)** quem grava é o motor da tool, depois do sucesso do `Executar` e fora da transação da escrita
   > (falha de auditoria é logada e não derruba uma escrita já feita): `mcp.escrita.<tool>`, `mcp.escrita.requer_aprovacao` e
   > `mcp.escrita.falha`. A gravação dentro da função compartilhada fica para o `critico` executado na aprovação (Fatia 4).
+  > **Na Fatia 4 (2026-11-03)** quem grava o `critico` é o executor da aprovação (`Aprovacoes.Aprovar`), depois do sucesso e fora da
+  > transação da escrita, não "dentro da função compartilhada": o executor é o ponto único por onde todo crítico passa, e gravar dentro
+  > de cada função de `acoes` a gravaria também nas escritas da tela, que não são do MCP. `mcp.escrita.requer_aprovacao` deixou de
+  > existir (agora é `mcp.pendente.criada`); `meta.mcp = {token_id, pendente_id}` vale em toda linha do ciclo do pedido. Um gancho
+  > por tool (`ArgsParaAuditoria`) pode resumir um argumento sensível no `audit_log` (a URL do webhook vira esquema+host+SHA-256).
 - Eventos próprios: `mcp.token.criado|revogado|recusado` (só para token que existe),
   `mcp.oauth.*`, `mcp.pendente.criada|aprovada|recusada|executada|falhou`.
 
@@ -251,6 +256,15 @@ anterior a hoje (SP)** vira `critico`.
   `UPDATE … WHERE estado = …` (atômico). **Só quem pediu aprova**; "não existe" e "não é seu"
   respondem igual. Na aprovação, os argumentos são re-validados pelo mesmo schema. Varredor
   (goroutine periódica na API) expira pendentes e marca `falhou` o que ficou em `aprovada` > 10 min.
+  > **Atualizado na execução da Fatia 4 (2026-11-03, plano F4-2..F4-8).** Estados do hub: `pendente → aprovada → executada`;
+  > **recusa de negócio na execução volta a `pendente`** com o `erro` e prazo `GREATEST(expira_em, agora + 1 h)`; **só exceção/`panic`
+  > vira `falhou`** (final: algo pode ter sido gravado); `recusada` e `expirada` finais. `tentativa` conta as aprovações e só a vigente
+  > fecha o pedido. **O mesmo pedido aberto não duplica** (`args_hash` + índice único parcial; pedir de novo devolve o mesmo com
+  > `ja_existia: true`). Chaves em `snake_case`: `{executou:false, nivel:"critico", motivo, preview, pendente_id, expira_em,
+  > aprovar_em, ja_existia, aviso, links}`. Na aprovação o executor revalida os args pelo mesmo schema, **reroda o `Preview` e compara
+  > o resumo com o que a pessoa viu** (`preview_desatualizado` recusa e troca o resumo gravado pelo novo), executa e devolve/grava as
+  > `ressalvas` da execução; falha DEPOIS de gravar que a pessoa precisa entender vira `falhou` com o texto da ação. O varredor (1 min,
+  > advisory lock) também poda `mcp_confirmacoes_usadas`.
 - Edição que substitui o registro inteiro: o `Executar` relê e faz merge.
 - Invalida os mesmos caches e dispara os mesmos gatilhos (recategorização, reload de índice,
   reconciler) que a rota HTTP.
@@ -320,6 +334,13 @@ armadilha, "nunca invente ids, pergunte". Escritas terminam com `Nível: <nível
 
 ### Fatia 4 — Escrita `critico` (+ `/pendentes`)
 
+> **Catálogo final (2026-11-03, F4-1): 18 escritas `critico` + `minhas_pendentes` = 83 tools.** Saíram da tabela abaixo
+> `iniciar_campanha` (a rota reativa cancelada/concluída sem pré-condição e o agendador a rebaixa em ≤ 60 s: o caminho para começar
+> antes é `editar_campanha`), `pausar_campanha` (a rota é 410 desde 2026-05-07; "pausar" é cancelar) e `publicar_pos_venda` (exige as
+> capturas PNG que só o navegador gera). Entrou `minhas_pendentes`. `testar_webhook` ficou, crítica, e recusa quando o teste seria
+> descartado. `criar_usuario` não recebe senha (o servidor gera e a boas-vindas a entrega), `editar_webhook_cliente` não tem
+> campo de segredo, `criar_veiculacao_manual` não recebe comprovante (o PDF só entra pela tela). Detalhe: `docs/features/mcp.md`.
+
 | Tool | Por que é crítica |
 |---|---|
 | `iniciar_campanha`, `pausar_campanha` | sobe/derruba workers; cliente passa a ver |
@@ -380,4 +401,4 @@ Cada fatia vira um plano próprio (`docs/superpowers/plans/`). Ordem fixa: 0 →
   exige testes de negociação de versão próprios (decisão no spike).
 - `plano_do_dia` depende de extrair a lógica que hoje mora no handler do modal (verificar na Fatia 1).
 - Webhook: `testar_webhook` dispara POST real para o cliente — confirmar na Fatia 4 se fica
-  `critico` ou sai do catálogo.
+  `critico` ou sai do catálogo. **Resolvido (Fatia 4):** fica, `critico`, e recusa o teste que a rota descartaria em silêncio.

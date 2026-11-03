@@ -236,6 +236,14 @@ de SMTP, contagem de aberturas, feature desabilitada, `Latest` por usuário,
 escape de HTML no template, e os contratos HTTP (404 nunca 401, `Cache-Control:
 no-store`, criação sem `send_welcome`).
 
+## Pelo MCP
+
+A tool `criar_usuario` ([mcp.md](mcp.md); crítica, aprovada em `/pendentes`) emite este mesmo convite, mas **sem a
+senha passar pelo chat**: o servidor gera uma senha aleatória de 24 caracteres, a cifra no convite e a boas-vindas é a
+única entrega. Por isso ela é obrigatória pelo MCP e a tool recusa sem `WELCOME_ENC_KEY` (`boas_vindas_indisponivel`) ou
+sem SMTP (`email_desligado`). O resultado nunca traz o link nem a senha (o link mostra a senha). A rota
+`POST /admin/users` continua recebendo a senha em claro no corpo.
+
 ## Fora de escopo
 
 Reenvio de convite pela UI (crie outro usuário ou revogue e reemita via API);

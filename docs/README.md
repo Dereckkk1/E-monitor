@@ -107,7 +107,7 @@ docs/
 | [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
-| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 a 3 (64 tools: 44 de leitura, 17 delas de relatório com deep-link para a tela filtrada, e 20 de escrita `livre`/`confirma` com token HMAC de uso único e `critico` barrado até a Fatia 4; avaliação mcp-builder 10/10)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP (as escritas, em `workers/internal/acoes`) |
+| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 a 4 (83 tools: 44 de leitura, 17 delas de relatório com deep-link para a tela filtrada, 20 de escrita `livre`/`confirma` com token HMAC de uso único e 18 de escrita `critico` que viram pedido aprovado pelo próprio admin na tela `/pendentes`, mais `minhas_pendentes`; avaliação mcp-builder 10/10). Falta a Fatia 5 (ecossistema)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP (as escritas, em `workers/internal/acoes`) |
 
 ## `operations/` — operar o sistema em prod
 
@@ -128,7 +128,7 @@ docs/
 | [backup-and-retention.md](operations/backup-and-retention.md) | ⚠️ doc parcialmente desatualizado — descreve pg_basebackup, código usa pg_dump |
 | [data-durability.md](operations/data-durability.md) | Modelo de ameaças + 5 camadas de defesa (bind mount, R2, snapshot GCP, alerta, drill) |
 | [vendor-reconciliation.md](operations/vendor-reconciliation.md) | Método de comparação com o fornecedor externo: regimes do algoritmo, dedup 30/60s, audit_rejected, workflow por discrepância |
-| [mcp.md](operations/mcp.md) | Conectar claude.ai / Claude Code / Gemini Enterprise ao MCP, cadastrar cliente confidencial (`registra-cliente-mcp`), revogar (`revoga-mcp`), variáveis `MCP_*`, diagnóstico, avaliação mcp-builder (semente + CLI `-tags avaliacao`), auditoria das escritas (`mcp.escrita.*`), poda de `mcp_confirmacoes_usadas`, conferência de relatórios e de escritas no deploy |
+| [mcp.md](operations/mcp.md) | Conectar claude.ai / Claude Code / Gemini Enterprise ao MCP, cadastrar cliente confidencial (`registra-cliente-mcp`), revogar (`revoga-mcp`), variáveis `MCP_*`, diagnóstico, avaliação mcp-builder (semente + CLI `-tags avaliacao`), auditoria das escritas (`mcp.escrita.*`, `mcp.pendente.*`), pedidos críticos (`mcp_acoes_pendentes`, tela `/pendentes`, varredor, SQL de diagnóstico), poda de `mcp_confirmacoes_usadas`, renumeração das migrations no merge, conferência de relatórios, de escritas e de críticas no deploy |
 
 ## `incidents/` — postmortems
 

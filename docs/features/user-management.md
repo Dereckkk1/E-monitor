@@ -132,6 +132,10 @@ middleware de autorização e no `isAdmin` do frontend.
   deleted_at IS NULL`).
 - Senha mínima: 12 caracteres.
 - Email é imutável após criação (PATCH com `email` → 400 `email_immutable`).
+- **A rota `PATCH /admin/users/{id}` não tem guarda contra rebaixar ou desativar a si mesmo nem o último admin ativo.**
+  Pelo MCP ([mcp.md](mcp.md)) as tools críticas `criar_usuario`, `editar_usuario` e `desativar_usuario` (aprovadas em
+  `/pendentes`) recusam as duas (`proprio_usuario`, `ultimo_admin`); a contagem do último admin é feita fora da transação
+  da escrita, então duas aprovações simultâneas ainda podem passar (follow-up: advisory lock em `acoes.EditarUsuario`).
 
 ## Fora de escopo (ver follow-ups)
 

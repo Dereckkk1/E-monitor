@@ -17,6 +17,13 @@ codigo-relacionado:
   - workers/internal/mcp/escrita.go
   - workers/internal/acoes/servico.go
   - migrations/0071_mcp_confirmacoes.up.sql
+  - migrations/0072_mcp_acoes_pendentes.up.sql
+  - workers/internal/mcp/pendentes.go
+  - workers/internal/mcp/aprovacao.go
+  - workers/internal/mcp/pendentes_http.go
+  - workers/internal/mcp/varredor.go
+  - frontend/src/pages/PendentesPage.jsx
+  - frontend/public/_headers
 ---
 
 # MCP do E-monitor — operação
@@ -151,11 +158,13 @@ já não é admin ativo; <= 1 por token a cada 10 min), `mcp.oauth.autorizado`,
 **Escritas (Fatias 3 e 4):** `mcp.escrita.<tool>` (executou; para um pedido crítico aprovado, `nivel` é `critico` e
 `meta.mcp.pendente_id` aponta o pedido), `mcp.escrita.falha` (erro interno ou `panic` no `Executar` de uma tool `livre` ou
 `confirma`: **a escrita pode ter sido feita pela metade e o token fica gasto** — investigue) e, para o nível `critico`, as
-linhas `mcp.pendente.criada`, `.aprovada`, `.recusada`, `.executada` e `.falhou` (recurso `mcp_pendente`; o id do pedido em
-`meta.mcp.pendente_id`). `.falhou` traz `codigo`: `conferencia_falhou` (a conferência antes de executar caiu; nada foi feito e o
-pedido voltou a `pendente`), `interno` (a execução caiu no meio: o pedido fica `falhou`, **confira se a ação aconteceu**) ou
-`presa` (feito pelo varredor). O ator é o admin dono do token (`actor_id`, `actor_type 'user'`). Quem escreveu e
-com qual credencial:
+linhas `mcp.pendente.criada` (recurso = o alvo da tool, por exemplo `campaign`), `.aprovada`, `.recusada`, `.executada` e `.falhou`
+(recurso `mcp_pendente`; o id do pedido em `meta.mcp.pendente_id` em todas). `.falhou` traz `codigo`, e **nem todo `.falhou` é um
+pedido `falhou`**: o código da recusa de negócio (`preview_desatualizado`, `args_invalidos`, `tool_desconhecida`, `campanha_cancelada`…) e
+`conferencia_falhou` (a conferência antes de executar caiu) significam que nada foi feito e o pedido **voltou a `pendente`**; já
+`interno` (a execução caiu no meio), `falha_apos_escrita` (a ação gravou parte e explicou o que ficou feito) e `presa` (o varredor)
+deixam o pedido `falhou`: **confira se a ação aconteceu**. O ator é o admin dono do token (`actor_id`, `actor_type 'user'`); a linha
+`presa` do varredor é `actor_type 'cli'` com `metadata.pelo = "varredor-mcp"`. Quem escreveu e com qual credencial:
 
 ```sql
 SELECT created_at, action, actor_id, resource, resource_id,
@@ -190,6 +199,55 @@ não foi apagada: apareceu veiculação nela"). Os avisos da execução ficam em
 O varredor (a cada minuto, uma réplica por vez via advisory lock) expira o `pendente` vencido, fecha como `falhou` a `aprovada`
 presa há mais de 10 min e poda `mcp_confirmacoes_usadas`.
 
+**A tela `/pendentes`** (`https://e-monitor.online/pendentes`, a URL que a IA entrega em `aprovar_em`; `NOTIFICATIONS_BASE_URL` é a
+origem do link) é onde o admin que pediu aprova ou recusa. Só admin ativo entra, e só vê os pedidos **dele**. Também se chega por Minha conta ->
+Integração com IA -> "Pedidos da IA" (com a contagem dos que esperam); **não há item na barra lateral**. Não abre em iframe
+(`_headers` + guarda em JS); depois do deploy do frontend confira
+`curl -sI "https://e-monitor.online/pendentes" | grep -i frame` (deve mostrar `X-Frame-Options: DENY` e `frame-ancestors 'none'`).
+Como a página chama rotas novas (`/v1/internal/mcp/pendentes`), **o backend sobe antes do frontend** (ver "Deploy").
+
+**O varredor** (`mcp.Varredor`, `IniciarVarredor` em `main.go`): uma passada na subida da API e outra por minuto; cada passada tem 30 s
+e roda numa transação com `pg_try_advisory_xact_lock` (chave = FNV-64a de `radiocheck:mcp-varredor`; quem não pega o lock não faz nada).
+Cada passo corre num savepoint: um erro é logado (`mcp: passo do varredor falhou`) e os outros seguem. Passos: (1) `pendente` vencido -> `expirada`
+(até 500 por volta); (2) `aprovada` há mais de 10 min -> `falhou` + auditoria `mcp.pendente.falhou` com `codigo: presa`; (3) apaga
+`mcp_confirmacoes_usadas` vencidas há mais de 1 h (até 5 000 por volta). **Ele não poda `mcp_acoes_pendentes`**: o pedido é registro
+e os `args` ficam. O log traz `mcp: varredor iniciado` na subida e `mcp: varredor` (passo, linhas) quando mexeu em algo.
+
+**Diagnóstico de pedido (SELECT apenas).** Na VM use `$DC exec -T postgres psql -U <usuário> -d <banco> -c "..."`
+(usuário e banco do `.env`; o Claude não tem acesso à VM, quem roda é o dono). Os pedidos de uma pessoa, do mais novo ao
+mais velho (**sem** `args`: uma URL de webhook ou o nome de quem seria criado ficam lá):
+
+```sql
+SELECT p.id, p.tool, p.estado, p.tentativa, p.criada_em, p.expira_em, p.aprovada_em, p.executada_em, p.recusada_em,
+       left(p.erro, 160) AS erro, p.ressalvas, p.preview->>'resumo' AS resumo, p.token_id
+  FROM mcp_acoes_pendentes p
+  JOIN users u ON u.id = p.user_id
+ WHERE u.email = 'pessoa@emidiastec.com.br'
+ ORDER BY p.criada_em DESC, p.id DESC LIMIT 20;
+```
+
+Pedido preso: `aprovada` que o varredor ainda não pegou (deveria sumir em até 11 min):
+
+```sql
+SELECT id, tool, aprovada_em, now() - aprovada_em AS ha
+  FROM mcp_acoes_pendentes WHERE estado = 'aprovada' ORDER BY aprovada_em;
+```
+
+Tudo o que o sistema registrou de UM pedido (troque o uuid; é o `pendente_id` da resposta da tool):
+
+```sql
+SELECT created_at, action, actor_type, resource, resource_id, metadata->>'codigo' AS codigo, metadata->>'pelo' AS pelo
+  FROM audit_log
+ WHERE metadata->'mcp'->>'pendente_id' = '00000000-0000-0000-0000-000000000000'
+ ORDER BY created_at;
+```
+
+Leitura do resultado: `pendente` com `erro` preenchido = recusa de negócio ou conferência que caiu (nada foi feito; a pessoa lê o
+motivo em `/pendentes` e aprova de novo ou recusa); `falhou` = a execução foi interrompida e **a ação pode ter acontecido**:
+confira pela tela ou pela tool `obter_*` correspondente antes de pedir de novo (o `erro` diz o que ficou feito quando a ação soube);
+`executada` com `ressalvas` = fez, mas há aviso que a pessoa precisa ler (por exemplo "o email não saiu: a pessoa não tem a senha").
+Para ver todos os abertos agora: `SELECT estado, count(*) FROM mcp_acoes_pendentes GROUP BY 1;`.
+
 ### Uso único das confirmações (`mcp_confirmacoes_usadas`)
 
 Guarda o SHA-256 dos tokens `confirma` já usados até a expiração (10 min). Cada confirmação nova poda, de forma oportunista,
@@ -223,6 +281,14 @@ Nunca apague linha **não vencida**: reabriria o uso do token.
 | Tudo parou de autenticar depois de girar o `JWT_SECRET` | esperado: os hashes mudam; todos reconectam e o Gemini precisa de cliente novo |
 | Em dev, o consentimento abre o frontend de prod | falta `NOTIFICATIONS_BASE_URL=http://localhost:3000` no `.env` |
 | Tool de escrita devolve `executou: false` e `nivel: critico` | a escalada deu crítico (o `motivo` diz qual condição) e a tool gravou um pedido: nada foi feito até uma pessoa aprovar em `/pendentes` (link `aprovar_em`). Procure `mcp.pendente.criada` no `audit_log` e use `minhas_pendentes` para o estado |
+| `/pendentes` mostra o pedido como "Executando…" por mais de ~10 min | a execução caiu no meio (reinício da API, por exemplo): o varredor o fecha como `falhou` em até 11 min. **A ação pode ter acontecido**: confira pela tela ou pela tool `obter_*` antes de pedir de novo (SQL de diagnóstico acima) |
+| Aprovar dá "O pedido mudou: releia antes de aprovar" (422 `preview_desatualizado`) | o estado mudou entre o pedido e a aprovação (usuário novo no cliente, duplicata de veiculação, virou a meia-noite em São Paulo num `editar_campanha`). Nada foi feito; o resumo na tela já é o novo: leia e aprove de novo |
+| Aprovar dá 422 com outro código (`campanha_cancelada`, `material_vinculado`…) | recusa de negócio na hora de executar: nada foi feito e o pedido voltou a `pendente` (com 1 h de folga no prazo). A pessoa recusa ou corrige o mundo e aprova de novo |
+| Aprovar dá 409 `pendente_<estado>` ou o link diz "Não encontramos o pedido" | outra aba já decidiu, o prazo de 24 h passou, ou o link é de **outra pessoa** (só quem pediu vê e aprova; "não existe" e "não é seu" respondem igual) |
+| Aprovar dá 403 `proibido` | o usuário deixou de ser admin ativo desde o login |
+| Aprovar dá 500 `interrompida` | virou `falhou`; a mensagem diz o que confirmar (quando a ação sabe, ela mesma explica o que ficou feito) |
+| Aprovar dá 503 `conferencia_falhou` ou `indisponivel` | o primeiro: a conferência caiu por erro inesperado, nada foi feito e o pedido voltou a `pendente` (tente de novo; procure `mcp: conferência da pendente falhou` no log). O segundo: o índice das escritas falhou no boot (procure `mcp: índice das escritas inválido`) |
+| `criar_usuario` recusado com `boas_vindas_indisponivel` ou `email_desligado` | falta `WELCOME_ENC_KEY` ou SMTP no servidor: o usuário se cria pela tela `/admin/users` |
 | Tool de escrita devolve `executou: false` e "Confirmação inválida ou expirada" | token vencido (10 min), de outro usuário/tool, ou **os argumentos mudaram** entre o preview e a confirmação: peça o preview de novo. "Esta confirmação já foi usada" = reuso do mesmo token |
 | Tool de escrita devolve `[interno]` | erro interno ou `panic` (o texto Go só vai para o log da API; procure `mcp: ` e o nome da tool). O token **não** volta a valer; confira `mcp.escrita.falha` no `audit_log` |
 | `[campanha_cancelada]` | a tool recusa escrita em campanha cancelada (a tela não recusa) |
@@ -239,7 +305,7 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
   Para gerar o template seguinte (`dN` = cópia do anterior + a migration nova; rede Docker `rc-mcp-test`;
   `MSYS_NO_PATHCONV=1` no Git Bash do Windows), crie `dN` com o `CREATE DATABASE` acima e rode
   `MSYS_NO_PATHCONV=1 docker run --rm --network rc-mcp-test -v "$(pwd)/migrations:/migrations:ro" migrate/migrate:v4.17.1 -path=/migrations -database "postgres://radiocheck:radiocheck@rc-mcp-test-pg:5432/radiocheck_mcp_test_dN?sslmode=disable" up`.
-- **Nunca aponte `TEST_DATABASE_URL` para o template** (`d3`): os testes inserem usuários e linhas nele. Crie um banco
+- **Nunca aponte `TEST_DATABASE_URL` para o template** (`d4`): os testes inserem usuários e linhas nele. Crie um banco
   por pacote a partir do template e descarte-o no fim (`DROP DATABASE`).
 - `export TEST_DATABASE_URL=postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_test_<x>?sslmode=disable`
   e `go test -p 1 -timeout 60m ./internal/mcp/...`. O pacote `./internal/mcp` leva **10–15 min** (rode em segundo plano).
@@ -252,7 +318,7 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 - As tools de escrita têm, além disso: teste de **paridade de efeito** tool × rota HTTP (`chamarHandlerCorpo`: o mesmo
   estado semeado em duas fixtures, uma pela rota e outra pela tool, comparando as linhas gravadas e as chamadas aos falsos),
   o protocolo preview → confirmar (`confirmarEExecutar`, na bancada `escrita_ferramentas_test.go`) e os falsos
-  `mcptest.SupervisorFalso` / `HubFalso` (registram `UpdateStations`, `Reload` e os eventos ao hub). O inventário das 20
+  `mcptest.SupervisorFalso` / `HubFalso` (registram `UpdateStations`, `Reload` e os eventos ao hub). O inventário das 38
   escritas (`escrita_inventario_test.go`) roda sem banco.
 - Paridade contra dado real: no deploy (abaixo), depois do `deploy.sh`, siga o roteiro "Conferência com dado
   real". Divergência = bug: não siga para a fatia seguinte.
@@ -298,7 +364,7 @@ go run -tags avaliacao ./internal/mcp/avaliacao/cli tools | head -5     # começ
 go run -tags avaliacao ./internal/mcp/avaliacao/cli chamar listar_clientes '{"busca":"aurora"}'
 ```
 
-`tools` lista as 64 tools (nome, descrição, schema de entrada) e termina com as instruções do servidor;
+`tools` lista as 83 tools (nome, descrição, schema de entrada) e termina com as instruções do servidor;
 `chamar <tool> '<json>'` chama a tool no servidor MCP real, em memória, com o admin da semente como principal
 (erro sai como `ERRO: …`). Rodar `semear` duas vezes recusa (banco não vazio).
 
@@ -335,10 +401,17 @@ público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo C
 duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão. O CLI da
 avaliação (`internal/mcp/avaliacao/cli`) **não** entra na imagem, de propósito.
 
-**Migrations antes do merge (Fatia 3):** o `master` já tem `0070_users_username`. Ao mergear o `feat/mcp-server`,
-`0070_mcp_fundacao` vira **0071** e `0071_mcp_confirmacoes` vira **0072** (renomeie os quatro arquivos `.up/.down.sql` e as
-referências nos docs). Ambas são só `CREATE TABLE` + índices (+ o trigger em `users` da primeira), mas passam pelo
-`shadow_migration_test` do `deploy.sh` como qualquer outra (regra 4.8 do `CLAUDE.md`).
+**Migrations antes do merge (Fatias 3 e 4):** o `master` já tem `0070_users_username` (conferido em `origin/master` em 2026-11-03,
+sem `git fetch` desde então: reconfira antes do merge). Ao mergear o `feat/mcp-server`, renumere **nesta ordem**
+`0072_mcp_acoes_pendentes` -> **0073**, `0071_mcp_confirmacoes` -> **0072** e `0070_mcp_fundacao` -> **0071** (os seis arquivos
+`.up/.down.sql`, e as referências nos docs e nos comentários do código). As três são só `CREATE TABLE` + índices (+ o trigger em
+`users` da primeira), mas passam pelo `shadow_migration_test` do `deploy.sh` como qualquer outra (regra 4.8 do `CLAUDE.md`).
+
+**A `0072_mcp_acoes_pendentes` foi editada no lugar durante o desenvolvimento** (ganhou a coluna `ressalvas TEXT[] NOT NULL DEFAULT '{}'`
+no commit `d2b3fb4`, quando a aprovação passou a gravar os avisos da execução). Em produção isso não importa (a migration nunca rodou
+lá), mas **todo banco de dev/teste que aplicou a versão antiga não tem a coluna** e o `migrate` não a reaplica: o sintoma é
+`column "ressalvas" does not exist` nos testes de `internal/mcp` e na API local. Recrie o banco (`DROP SCHEMA public CASCADE` + `migrate
+up`) ou desça a 0072 (`migrate ... down 1`) e suba de novo; o template de teste `radiocheck_mcp_test_d4` já foi refeito com a coluna.
 
 ### Conferência com dado real (depois do `deploy.sh`)
 
@@ -361,15 +434,35 @@ consolidada):
    2. **Reuso:** chame de novo com o mesmo token: `executou: false` ("já foi usada"), e nada duplica. **Argumentos mudados:** troque
       o nome e reenvie o token: "inválida ou expirada".
    3. `editar_campanha` (só o nome) → preview → confirmar; confira o nome na tela. Depois peça `inicio` = hoje: tem de voltar
-      `nivel: critico`, com `links.tela`, e **nada** muda na campanha.
+      `nivel: critico`, com `pendente_id` e `aprovar_em`, e **nada** muda na campanha. **Não aprove esse pedido** (a campanha de
+      teste seria ativada pelo agendador em ≤ 60 s e subiria workers): recuse-o em `/pendentes`.
    4. `vincular_material` / `criar_regra_distribuicao` na campanha de teste, e confira na tela da campanha (etapas Materiais e
       Distribuição) que o resultado é o mesmo de fazer pela tela; a recategorização da regra leva até 30 s.
    5. **Paridade:** faça a mesma edição pela tela numa segunda campanha de teste idêntica e compare as linhas
       (`campaigns`, `distribution_rules`, `campaign_materials`).
    6. **Auditoria:** o SQL de "Auditoria (consulta)" tem de mostrar, para cada passo acima, uma linha `mcp.escrita.<tool>` com o
-      `token_id` do seu token; para o passo do crítico, uma `mcp.pendente.criada` e, depois de você aprovar em `/pendentes`, as
-   linhas `mcp.pendente.aprovada`, `mcp.escrita.<tool>` e `mcp.pendente.executada`. Nenhuma `mcp.escrita.falha`.
-   7. No fim, apague a campanha de teste pela tela e confira `mcp_confirmacoes_usadas` (ver "Uso único das confirmações").
+      `token_id` do seu token. Nenhuma `mcp.escrita.falha`.
+   7. Ao terminar o passo 5, apague a campanha de teste (pelo MCP, como no 5.5, ou pela tela) e confira
+      `mcp_confirmacoes_usadas` (ver "Uso único das confirmações").
+5. **Fatia 4 — escritas críticas, numa campanha de TESTE** (a mesma do passo 4 ou outra; mesmas regras: cliente de teste,
+   `programada`, início no futuro). Você precisa estar **logado no portal como o MESMO admin dono do token**. Pelo Claude Code:
+   1. `editar_cpm_fixo` (um valor qualquer, ex.: 10,00): a resposta é `executou: false`, `nivel: critico`, `pendente_id`, `aprovar_em`
+      e `ja_existia: false`; **nada muda** na campanha. `minhas_pendentes` lista o pedido como `pendente`. Peça de novo o mesmo:
+      `ja_existia: true` e o mesmo `pendente_id` (não duplica).
+   2. Abra `aprovar_em`. Sem sessão, o portal pede o login e volta para o link. O cartão tem de mostrar resumo, motivo e
+      "de → para". Logado como **outro** admin, o mesmo link diz "Não encontramos o pedido" (só quem pediu aprova).
+   3. **Aprovar e executar:** aviso "Ação executada"; o CPM fixo aparece em `/campaigns`; `minhas_pendentes` passa a `executada`
+      (com `ressalvas: []`).
+   4. **Auditoria do pedido:** o SQL "Tudo o que o sistema registrou de UM pedido" (acima) tem de listar, em ordem,
+      `mcp.pendente.criada`, `mcp.pendente.aprovada`, `mcp.escrita.editar_cpm_fixo` e `mcp.pendente.executada`, todas com o
+      mesmo `meta.mcp.pendente_id`; a linha `mcp.escrita.editar_cpm_fixo` leva também o `token_id` do seu token e `nivel = critico`.
+      Nenhuma `mcp.pendente.falhou`.
+   5. **Recusar e apagar:** peça `editar_cpm_fixo` com `cpm_fixo: null` e **recuse** na tela (`minhas_pendentes` = `recusada`, CPM
+      intacto). Termine com `cancelar_campanha` e depois `apagar_campanha` da campanha de teste, aprovando cada um: a campanha some
+      de `/campaigns`. (`apagar_campanha` só passa em campanha **sem histórico**; o teste não tem.)
+   6. **`preview_desatualizado`:** peça de novo `editar_cpm_fixo` (com um valor) e, **antes de aprovar**, mude o CPM da campanha pela
+      tela para outro valor: a aprovação responde 422 "O pedido mudou: releia antes de aprovar", o cartão já mostra o resumo novo
+      e o pedido segue `pendente` (aprove de novo, ou recuse).
 
 Divergência de número ou de efeito = bug: não siga adiante.
 
