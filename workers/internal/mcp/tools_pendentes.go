@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -61,6 +60,17 @@ type pedidoListaDTO struct {
 	AprovarEm *string `json:"aprovar_em"`
 }
 
+// custoTexto é o maior entre o número de caracteres e o custo em bytes no JSON (custoJSON): é a
+// mesma régua com que cortarTexto limita, então o orçamento subtraído bate com o que foi gasto.
+func custoTexto(s string) int {
+	bytes, runas := 0, 0
+	for _, r := range s {
+		bytes += custoJSON(r)
+		runas++
+	}
+	return max(bytes, runas)
+}
+
 // ressalvasDaLista corta as ressalvas gravadas do pedido para a lista: cada uma em tetoRessalvaLista
 // e todas somadas em tetoRessalvasLista; as que não couberem viram "e mais N". Sempre devolve um array.
 func ressalvasDaLista(rs []string) []string {
@@ -73,7 +83,7 @@ func ressalvasDaLista(rs []string) []string {
 		}
 		c, _ := cortarTexto(r, min(tetoRessalvaLista, resta))
 		out = append(out, c)
-		resta -= max(utf8.RuneCountInString(c), len(c))
+		resta -= custoTexto(c)
 	}
 	return out
 }
