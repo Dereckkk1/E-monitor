@@ -140,6 +140,7 @@ func TestPosVenda_ParidadeESemSegredos(t *testing.T) {
 	require.Len(t, ds, len(rep.Recipients))
 	for i, r := range rep.Recipients {
 		require.Equal(t, r.Email, ds[i]["email"], "ordem da tela")
+		require.Equal(t, r.ID.String(), ds[i]["id"], "o id do destinatário (não é segredo) é o que reenviar/revogar recebem")
 		require.Equal(t, r.EmailStatus, ds[i]["status_email"])
 		require.EqualValues(t, r.OpenCount, ds[i]["aberturas"])
 		require.NotContains(t, ds[i], "token")

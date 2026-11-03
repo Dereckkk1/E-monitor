@@ -304,6 +304,9 @@ type posVendaDTO struct {
 }
 
 type destinatarioDTO struct {
+	// ID é o do destinatário (não é segredo): é o que reenviar_pos_venda e
+	// revogar_destinatario_pos_venda recebem. O token, que é a credencial, nunca sai.
+	ID          string  `json:"id"`
 	Nome        string  `json:"nome"`
 	Email       string  `json:"email"`
 	StatusEmail string  `json:"status_email"`
@@ -329,10 +332,11 @@ type previaDestinatariosDTO struct {
 
 // destinatarioDe é whitelist: o Token (a credencial do link público
 // /pos-venda/:token, sem expiração) NUNCA entra — nem como campo, nem dentro
-// do erro de email (o higienizador o apaga).
+// do erro de email (o higienizador o apaga). O id do destinatário entra: não é
+// credencial (não abre nada) e é o que as escritas do pós-venda recebem.
 func destinatarioDe(h *higienizador) func(postsale.Recipient) destinatarioDTO {
 	return func(r postsale.Recipient) destinatarioDTO {
-		return destinatarioDTO{Nome: r.Name, Email: r.Email, StatusEmail: r.EmailStatus, ErroEmail: h.opc(r.EmailError, tetoErroEmail),
+		return destinatarioDTO{ID: r.ID.String(), Nome: r.Name, Email: r.Email, StatusEmail: r.EmailStatus, ErroEmail: h.opc(r.EmailError, tetoErroEmail),
 			AbertoEm: instanteOpc(r.OpenedAt), Aberturas: r.OpenCount, RevogadoEm: instanteOpc(r.RevokedAt)}
 	}
 }
@@ -566,8 +570,8 @@ func registrarPosVenda(s *sdk.Server, cfg ConfigServidor) {
 		})
 
 	ferramentaLeitura(s, cfg, "destinatarios_pos_venda",
-		"Com pos_venda_id: lista quem recebeu aquele pós-venda (nome, email, status do email, quando abriu, quantas vezes, "+
-			"se o link foi revogado). Com cliente_id: quem RECEBERIA um pós-venda novo desse cliente hoje (usuários ativos do "+
+		"Com pos_venda_id: lista quem recebeu aquele pós-venda (id, nome, email, status do email, quando abriu, quantas vezes, "+
+			"se o link foi revogado); o id é o que reenviar_pos_venda e revogar_destinatario_pos_venda pedem. Com cliente_id: quem RECEBERIA um pós-venda novo desse cliente hoje (usuários ativos do "+
 			"cliente + admins internos que pediram cópia). Passe exatamente um dos dois. A lista por pos_venda_id é paginada "+
 			"(até 50 por página). status_email: pending = ainda não enviado, sent = enviado, failed = falhou (erro_email diz "+
 			"por quê), disabled = envio de email desligado no servidor.",
