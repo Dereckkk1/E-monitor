@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/catalog"
@@ -116,7 +117,46 @@ func nomeDoCliente(ctx context.Context, E *Escritas, id uuid.UUID) (string, erro
 	return c.Name, nil
 }
 
+// saidaCampanhaSemLeitura é o resultado de uma escrita de campanha gravada cuja releitura caiu: a
+// campanha no formato mínimo do obter_campanha (campanha.id e campanha.nome).
+type saidaCampanhaSemLeitura struct {
+	Campanha ref `json:"campanha"`
+}
+
+// campanhaFeita é o feito de uma escrita de campanha JÁ gravada: o resultado é a campanha como
+// ficou, no formato de obter_campanha. Se só a releitura falhar, a escrita NÃO vira erro (o
+// pedido ficaria `falhou` com a campanha já alterada): devolve o id e o nome e manda conferir.
+func campanhaFeita(ctx context.Context, cfg ConfigServidor, E *Escritas, c *catalog.Campaign, ressalvas ...string) feito {
+	f := feito{Recurso: "campaign", RecursoID: &c.ID, Ressalvas: ressalvas}
+	saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
+	if err != nil {
+		cfg.log().Error("mcp: releitura da campanha após a escrita falhou", zap.Error(err))
+		f.Resultado = saidaCampanhaSemLeitura{Campanha: refDe(c.ID, c.Name)}
+		f.Ressalvas = append(f.Ressalvas,
+			"A escrita foi gravada, mas não consegui reler a campanha agora: confira o estado com obter_campanha (campanha_id "+c.ID.String()+").")
+		return f
+	}
+	f.Resultado = saida
+	return f
+}
+
 // ── cancelar_campanha ───────────────────────────────────────────────────
+
+// campanhaCancelada é a campanha cancelada para a resposta. O CancelarCampanha devolve nil
+// (sem erro) quando só a releitura dele falhou — o cancelamento já está gravado (o acoes
+// documenta o caso): relê aqui e, se também falhar, usa a campanha do plano marcada como
+// cancelada (uma cópia: o plano não muda).
+func campanhaCancelada(ctx context.Context, L *Leitura, c, antes *catalog.Campaign) *catalog.Campaign {
+	if c != nil {
+		return c
+	}
+	if relida, err := L.Campanhas.Get(ctx, antes.ID); err == nil {
+		return relida
+	}
+	cp := *antes
+	cp.Status = "cancelada"
+	return &cp
+}
 
 type entradaCancelarCampanha struct {
 	CampanhaID string `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas. Nunca invente: pergunte."`
@@ -239,23 +279,9 @@ func escritaCancelarCampanha(cfg ConfigServidor) Escrita[entradaCancelarCampanha
 			if err != nil {
 				return feito{}, err
 			}
-			if c == nil {
-				// O cancelamento já está gravado e só a releitura final falhou (o acoes
-				// documenta o caso): a mesma campanha, agora cancelada, relida aqui.
-				if c, err = E.Leitura.Campanhas.Get(ctx, pl.camp.ID); err != nil {
-					cp := *pl.camp
-					cp.Status = "cancelada"
-					c = &cp
-				}
-			}
-			saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-			if err != nil {
-				return feito{}, err
-			}
-			f := feito{Resultado: saida, Recurso: "campaign", RecursoID: &pl.camp.ID}
-			f.Ressalvas = append(f.Ressalvas,
-				"Os workers das emissoras que nenhuma outra campanha ativa usa foram parados; o déficit da campanha está congelado em cancelada_em.")
-			return f, nil
+			// O cancelamento já está gravado: nada daqui para baixo vira erro.
+			return campanhaFeita(ctx, cfg, E, campanhaCancelada(ctx, E.Leitura, c, pl.camp),
+				"Os workers das emissoras que nenhuma outra campanha ativa usa foram parados; o déficit da campanha está congelado em cancelada_em."), nil
 		},
 	}
 }
@@ -452,12 +478,7 @@ func escritaEditarCPMFixo(cfg ConfigServidor) Escrita[entradaEditarCPMFixo] {
 			if err != nil {
 				return feito{}, err
 			}
-			saida, err := lerCampanhaCompleta(ctx, cfg, E.Leitura, c)
-			if err != nil {
-				return feito{}, err
-			}
-			return feito{Resultado: saida, Recurso: "campaign", RecursoID: &c.ID,
-				Ressalvas: []string{"O CPM no target continua dinâmico; pós-venda já enviado não muda."}}, nil
+			return campanhaFeita(ctx, cfg, E, c, "O CPM no target continua dinâmico; pós-venda já enviado não muda."), nil
 		},
 	}
 }
