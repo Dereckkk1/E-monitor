@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"radiocheck/internal/mcp/tokens"
 )
 
 // Store de pedidos `critico` (spec §5.2, plano Fatia 4 F4-2/F4-3). Transplante
@@ -26,8 +28,28 @@ const (
 
 var ErrPendenteNaoAchada = errors.New("mcp: pedido não encontrado")
 
-// ErrEstadoPendente: o pedido existe e é do dono, mas não está em `pendente`.
-type ErrEstadoPendente struct{ Estado string }
+// ErrPendenteMudou: a aprovação veio com uma `tentativa` que já não é a do pedido. A tentativa é a
+// versão do que a pessoa leu: cada troca do resumo gravado (preview_desatualizado) vem depois de uma
+// aprovação que a incrementou, então quem aprova com a versão velha estaria aprovando um resumo que
+// nunca viu. Nada foi executado; o pedido segue `pendente`.
+var ErrPendenteMudou = errors.New("mcp: o pedido mudou desde que foi aberto")
+
+// ErrCredencialRevogada: a credencial do MCP que fez o pedido (token pessoal ou conexão OAuth) foi
+// revogada, venceu ou sumiu. O store já fechou o pedido como `expirada` (com msgCredencialRevogada
+// em `erro`): nada foi executado e ele não volta.
+var ErrCredencialRevogada = errors.New("mcp: a conexão de IA que fez o pedido foi revogada")
+
+const (
+	// msgCredencialRevogada é o `erro` gravado no pedido expirado pela revogação e o texto que a
+	// pessoa e a IA (minhas_pendentes) leem. A função mcp_revogar_credenciais_do_usuario (migration
+	// 0072) grava o mesmo texto; o teste de trigger confere que os dois batem.
+	msgCredencialRevogada = tokens.TextoPedidoRevogado
+	msgPendenteMudou      = "O pedido mudou desde que você abriu; releia antes de aprovar."
+)
+
+// ErrEstadoPendente: o pedido existe e é do dono, mas não está em `pendente`. Motivo, quando
+// preenchido, é o texto que explica por que (o `erro` de um pedido expirado pela revogação).
+type ErrEstadoPendente struct{ Estado, Motivo string }
 
 func (e ErrEstadoPendente) Error() string { return "mcp: pedido em estado " + e.Estado }
 
@@ -155,12 +177,29 @@ func (s *Pendentes) Criar(ctx context.Context, n NovaPendente, agora time.Time) 
 	return Pendente{}, false, errors.New("mcp: o pedido aberto sumiu duas vezes durante a criação")
 }
 
-// diagnostico explica por que um UPDATE condicional não pegou nenhuma linha.
-func (s *Pendentes) diagnostico(ctx context.Context, id, dono uuid.UUID, agora time.Time) error {
+// credencialViva é o predicado SQL "a credencial que fez o pedido `a` ainda vale". O pedido guarda o
+// token da CHAMADA (token_id), e o que precisa estar vivo é a conexão dele: um token pessoal vale por
+// si; uma conexão OAuth vale enquanto o usuário tem algum token vivo daquele cliente (o access token
+// da chamada venceu em uma hora, o refresh segue). token_id NULL (o token foi apagado) ou de outro
+// usuário = morta. Usa o relógio do banco, como o resto das credenciais (tokens.Store).
+func credencialViva(a string) string {
+	return `EXISTS (SELECT 1 FROM mcp_tokens origem
+		JOIN mcp_tokens c ON c.user_id = origem.user_id
+		 AND (c.id = origem.id OR (origem.client_id IS NOT NULL AND c.client_id = origem.client_id))
+		WHERE origem.id = ` + a + `.token_id AND origem.user_id = ` + a + `.user_id
+		  AND c.revoked_at IS NULL AND c.expires_at > NOW())`
+}
+
+// diagnostico explica por que um UPDATE condicional não pegou nenhuma linha. aprovacao != nil é a
+// aprovação (a Recusar passa nil): além do prazo, confere a credencial e a versão (tentativa).
+func (s *Pendentes) diagnostico(ctx context.Context, id, dono uuid.UUID, agora time.Time, aprovacao *int) error {
 	var estado string
 	var expira time.Time
-	err := s.DB.QueryRow(ctx, `SELECT estado, expira_em FROM mcp_acoes_pendentes
-		WHERE id = $1 AND user_id = $2`, id, dono).Scan(&estado, &expira)
+	var tentativa int
+	var erro *string
+	var viva bool
+	err := s.DB.QueryRow(ctx, `SELECT a.estado, a.expira_em, a.tentativa, a.erro, `+credencialViva("a")+`
+		FROM mcp_acoes_pendentes a WHERE a.id = $1 AND a.user_id = $2`, id, dono).Scan(&estado, &expira, &tentativa, &erro, &viva)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrPendenteNaoAchada
 	}
@@ -174,17 +213,35 @@ func (s *Pendentes) diagnostico(ctx context.Context, id, dono uuid.UUID, agora t
 		}
 		return ErrEstadoPendente{Estado: "expirada"}
 	}
+	if estado == "pendente" && aprovacao != nil {
+		if !viva {
+			// Fecha o pedido: ele não é mais aprovável, e a lista / minhas_pendentes passam a dizer por quê.
+			if _, err := s.DB.Exec(ctx, `UPDATE mcp_acoes_pendentes SET estado = 'expirada', erro = $2
+				WHERE id = $1 AND estado = 'pendente'`, id, msgCredencialRevogada); err != nil {
+				return err
+			}
+			return ErrCredencialRevogada
+		}
+		if tentativa != *aprovacao {
+			return ErrPendenteMudou
+		}
+	}
+	if estado == "expirada" && erro != nil {
+		return ErrEstadoPendente{Estado: estado, Motivo: *erro}
+	}
 	return ErrEstadoPendente{Estado: estado}
 }
 
-// Aprovar abre uma tentativa: pendente → aprovada, só para o dono e dentro do prazo.
-func (s *Pendentes) Aprovar(ctx context.Context, id, dono uuid.UUID, agora time.Time) (Pendente, error) {
-	p, err := lerPendente(s.DB.QueryRow(ctx, `UPDATE mcp_acoes_pendentes
-		SET estado = 'aprovada', aprovada_em = $3, tentativa = tentativa + 1, erro = NULL
-		WHERE id = $1 AND user_id = $2 AND estado = 'pendente' AND expira_em > $3
-		RETURNING `+colunasPendente, id, dono, agora))
+// Aprovar abre uma tentativa: pendente → aprovada, só para o dono, dentro do prazo, com a credencial
+// do pedido viva e se `tentativa` for a vigente (a versão que a pessoa leu; ver ErrPendenteMudou).
+func (s *Pendentes) Aprovar(ctx context.Context, id, dono uuid.UUID, tentativa int, agora time.Time) (Pendente, error) {
+	p, err := lerPendente(s.DB.QueryRow(ctx, `UPDATE mcp_acoes_pendentes a
+		SET estado = 'aprovada', aprovada_em = $3, tentativa = a.tentativa + 1, erro = NULL
+		WHERE a.id = $1 AND a.user_id = $2 AND a.estado = 'pendente' AND a.expira_em > $3 AND a.tentativa = $4
+		  AND `+credencialViva("a")+`
+		RETURNING `+colunasPendente, id, dono, agora, tentativa))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Pendente{}, s.diagnostico(ctx, id, dono, agora)
+		return Pendente{}, s.diagnostico(ctx, id, dono, agora, &tentativa)
 	}
 	return p, err
 }
@@ -196,7 +253,7 @@ func (s *Pendentes) Recusar(ctx context.Context, id, dono uuid.UUID, agora time.
 		WHERE id = $1 AND user_id = $2 AND estado = 'pendente' AND expira_em > $3
 		RETURNING `+colunasPendente, id, dono, agora))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Pendente{}, s.diagnostico(ctx, id, dono, agora)
+		return Pendente{}, s.diagnostico(ctx, id, dono, agora, nil)
 	}
 	return p, err
 }

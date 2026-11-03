@@ -41,6 +41,9 @@ func mensagemDaInterrupcao(err error) string {
 type Aprovacoes struct {
 	cfg    ConfigServidor
 	indice map[string]escritaRegistravel
+	// marcarExecutada é o fechamento do pedido depois da escrita feita; nil usa o store. Existe para
+	// o teste simular a falha da gravação (a escrita já aconteceu e o pedido não fecha).
+	marcarExecutada func(ctx context.Context, id uuid.UUID, tentativa int, resultado json.RawMessage, ressalvas []string, agora time.Time) (Pendente, bool, error)
 }
 
 func NovasAprovacoes(cfg ConfigServidor) (*Aprovacoes, error) {
@@ -75,6 +78,10 @@ var ErrConferenciaFalhou = errors.New("mcp: conferência do pedido falhou")
 // o cancelamento do pedido HTTP.
 const prazoGravarAprovacao = 10 * time.Second
 
+// esperaAntesDeRefechar é a pausa antes da segunda (e última) tentativa de fechar o pedido executado.
+// var para o teste zerá-la.
+var esperaAntesDeRefechar = 250 * time.Millisecond
+
 // auditarPendente grava as linhas mcp.pendente.* (recurso "mcp_pendente"). Se o
 // pedido perdeu o token (FK SET NULL), token_id sai como o UUID zero.
 func (a *Aprovacoes) auditarPendente(ctx context.Context, p *Principal, acao string, pend Pendente, extra map[string]any) {
@@ -95,15 +102,38 @@ func (a *Aprovacoes) argsDaAuditoria(pend Pendente) []byte {
 	return pend.Args
 }
 
-func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal) (Aprovado, error) {
+// auditarCredencialRevogada registra que a aprovação foi recusada porque a conexão de IA do pedido
+// foi revogada (o store já o fechou como `expirada`). Best-effort: sem o pedido, não há o que auditar.
+func (a *Aprovacoes) auditarCredencialRevogada(ctx context.Context, id uuid.UUID, ator *Principal) {
+	E := a.cfg.Escritas
+	rctx, cancela := context.WithTimeout(ctx, prazoGravarAprovacao)
+	defer cancela()
+	pend, err := E.Pendentes.Obter(rctx, id, ator.UserID)
+	if err != nil {
+		a.cfg.log().Warn("mcp: reler pedido expirado pela revogação", zap.String("pendente", id.String()), zap.Error(err))
+		return
+	}
+	p := &Principal{UserID: ator.UserID, Email: ator.Email, Nome: ator.Nome}
+	if pend.TokenID != nil {
+		p.TokenID = *pend.TokenID
+	}
+	a.auditarPendente(ctx, p, "mcp.pendente.falhou", pend, map[string]any{"codigo": "credencial_revogada"})
+}
+
+// Aprovar aprova a `tentativa` que a pessoa leu (a do pedido que a tela mostrou): se o pedido já
+// está em outra (o resumo mudou), devolve ErrPendenteMudou e nada roda.
+func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal, tentativa int) (Aprovado, error) {
 	E := a.cfg.Escritas
 	// A aprovação commita sem depender de o cliente continuar conectado: com o
 	// UPDATE feito e o pedido cancelado, a linha ficaria `aprovada` sem ninguém
 	// para executá-la.
 	actx, cancelaAprovar := context.WithTimeout(context.WithoutCancel(ctx), prazoGravarAprovacao)
-	pend, err := E.Pendentes.Aprovar(actx, id, ator.UserID, E.agora())
+	pend, err := E.Pendentes.Aprovar(actx, id, ator.UserID, tentativa, E.agora())
 	cancelaAprovar()
 	if err != nil {
+		if errors.Is(err, ErrCredencialRevogada) {
+			a.auditarCredencialRevogada(context.WithoutCancel(ctx), id, ator)
+		}
 		return Aprovado{}, err
 	}
 	p := &Principal{UserID: ator.UserID, Email: ator.Email, Nome: ator.Nome}
@@ -198,7 +228,7 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 	if ressalvas == nil {
 		ressalvas = []string{}
 	}
-	fechada, ok, merr := E.Pendentes.MarcarExecutada(fim, pend.ID, pend.Tentativa, bruto, ressalvas, E.agora())
+	fechada, ok, merr := a.fecharExecutada(fim, E, pend, bruto, ressalvas)
 	if merr != nil || !ok {
 		a.cfg.log().Error("mcp: ação executada mas o pedido não fechou", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
 		fechada = pend
@@ -207,6 +237,30 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 	}
 	a.auditarPendente(fim, p, "mcp.pendente.executada", pend, nil)
 	return Aprovado{Pendente: fechada, ResultadoJSON: bruto, Ressalvas: ressalvas}, nil
+}
+
+// fecharExecutada grava o desfecho `executada`. A escrita JÁ aconteceu, então um erro do banco (um
+// soluço de conexão, um timeout) ganha uma segunda tentativa com contexto novo — se ele persiste, o
+// pedido fica `aprovada` até o varredor dá-lo por interrompido, e a pessoa vê um "falhou" para uma
+// ação que rodou. !ok (a linha não está mais em aprovada/falhou desta tentativa) não se resolve
+// repetindo.
+func (a *Aprovacoes) fecharExecutada(fim context.Context, E *Escritas, pend Pendente, bruto json.RawMessage, ressalvas []string) (Pendente, bool, error) {
+	marcar := a.marcarExecutada
+	if marcar == nil {
+		marcar = E.Pendentes.MarcarExecutada
+	}
+	tentar := func(ctx context.Context) (Pendente, bool, error) {
+		cctx, cancela := context.WithTimeout(ctx, prazoGravarAprovacao)
+		defer cancela()
+		return marcar(cctx, pend.ID, pend.Tentativa, bruto, ressalvas, E.agora())
+	}
+	fechada, ok, err := tentar(fim)
+	if err == nil {
+		return fechada, ok, nil
+	}
+	a.cfg.log().Warn("mcp: fechar o pedido executado falhou; tentando de novo", zap.String("pendente", pend.ID.String()), zap.Error(err))
+	time.Sleep(esperaAntesDeRefechar)
+	return tentar(fim)
 }
 
 // Recusar fecha o pedido a pedido do dono.

@@ -271,7 +271,10 @@ func (b *bancadaTool) tentarAprovar(t *testing.T, pendenteID string) (Aprovado, 
 	require.NoError(t, err, "pendente_id inválido: %q", pendenteID)
 	apr, err := NovasAprovacoes(b.cfg)
 	require.NoError(t, err)
-	return apr.Aprovar(b.ctx, id, b.donoDoPortal())
+	// A tela manda a versão (tentativa) do pedido que mostrou; aqui é a vigente no banco.
+	var tentativa int
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT tentativa FROM mcp_acoes_pendentes WHERE id = $1`, id).Scan(&tentativa))
+	return apr.Aprovar(b.ctx, id, b.donoDoPortal(), tentativa)
 }
 
 // aprovar aprova o pedido pendente (pendente_id da resposta da tool) e exige que
@@ -384,6 +387,14 @@ func (b *bancadaTool) exigeSemSegredoNaEscrita(t *testing.T, pendenteID string, 
 	}
 }
 
+// tentativaVigente é a versão do pedido no banco: o que a tela /pendentes mandaria ao aprovar.
+func (b *bancadaTool) tentativaVigente(t *testing.T, pendenteID string) int {
+	t.Helper()
+	var n int
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT tentativa FROM mcp_acoes_pendentes WHERE id = $1`, pendenteID).Scan(&n))
+	return n
+}
+
 // aprovarPelaRota aprova o pedido pelo handler HTTP REAL de /pendentes (PendentesHTTP.Aprovar,
 // sobre as Aprovacoes da lista real das escritas) e devolve o corpo do 200 decodificado:
 // {pendente, resultado, ressalvas}. É o que a pessoa vê no portal.
@@ -392,7 +403,7 @@ func (b *bancadaTool) aprovarPelaRota(t *testing.T, pendenteID string) map[strin
 	apr, err := NovasAprovacoes(b.cfg)
 	require.NoError(t, err)
 	h := &PendentesHTTP{Tokens: tokens.NovoStore(b.pool, []byte(mcptest.SegredoTeste)), Pendentes: b.E.Pendentes, Aprovacoes: apr, Log: zap.NewNop()}
-	corpo := chamarHandlerCorpo(t, h.Aprovar, http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar", nil, map[string]string{"id": pendenteID}, b.admin)
+	corpo := chamarHandlerCorpo(t, h.Aprovar, http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar", map[string]int{"tentativa": b.tentativaVigente(t, pendenteID)}, map[string]string{"id": pendenteID}, b.admin)
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(corpo, &out), string(corpo))
 	return out
@@ -405,7 +416,8 @@ func (b *bancadaTool) aprovarPelaRotaBruto(t *testing.T, pendenteID string) *htt
 	apr, err := NovasAprovacoes(b.cfg)
 	require.NoError(t, err)
 	h := &PendentesHTTP{Tokens: tokens.NovoStore(b.pool, []byte(mcptest.SegredoTeste)), Pendentes: b.E.Pendentes, Aprovacoes: apr, Log: zap.NewNop()}
-	req := httptest.NewRequest(http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar", nil)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/pendentes/"+pendenteID+"/aprovar",
+		strings.NewReader(fmt.Sprintf(`{"tentativa":%d}`, b.tentativaVigente(t, pendenteID))))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", pendenteID)
 	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
