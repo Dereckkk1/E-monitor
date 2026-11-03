@@ -109,6 +109,11 @@ func (s *Service) Repo() *Repo      { return s.repo }
 func (s *Service) now() time.Time   { return s.nowFn() }
 func (s *Service) today() time.Time { return s.todayFn() }
 
+// MailEnabled diz se o serviço manda email de verdade. Sem SMTP o envio e o reenvio
+// só gravam o status 'disabled' (ver sendOne): quem precisa saber ANTES de reenviar
+// (a escrita do MCP) pergunta aqui em vez de regravar o status de um email que saiu.
+func (s *Service) MailEnabled() bool { return s.mailEnabled && s.mail != nil }
+
 // Link monta a URL pública do pós-venda.
 func (s *Service) Link(token string) string {
 	return s.baseURL + "/pos-venda/" + url.PathEscape(token)

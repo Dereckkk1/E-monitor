@@ -14,6 +14,7 @@ import (
 	"radiocheck/internal/hub"
 	"radiocheck/internal/mcp/oauth"
 	"radiocheck/internal/mcp/tokens"
+	"radiocheck/internal/postsale"
 	"radiocheck/internal/webhook"
 )
 
@@ -57,6 +58,9 @@ type DepsModulo struct {
 	// Webhooks: a outbox dos webhooks (testar_webhook). Pode ser nil (indisponível).
 	// Passe nil de verdade, não um *webhook.Outbox nil dentro da interface.
 	Webhooks webhook.OutboxEnqueuer
+	// PosVenda: o serviço de pós-venda das rotas (reenviar_pos_venda). Pode ser nil
+	// (indisponível). É um ponteiro concreto: nil é nil de verdade.
+	PosVenda *postsale.Service
 }
 
 type Modulo struct {
@@ -106,8 +110,9 @@ func NovoModulo(d DepsModulo) *Modulo {
 	if !ehNilTipado(d.Webhooks) {
 		servico.Webhooks = d.Webhooks
 	}
-	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L,
-		Escritas: NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log), Log: d.Log}
+	escritas := NovasEscritas(d.Pool, d.Segredo, servico, L, d.Log)
+	escritas.PosVenda = d.PosVenda
+	cfg := ConfigServidor{Versao: d.Versao, Portal: d.Portal, Leitura: L, Escritas: escritas, Log: d.Log}
 	// Índice quebrado não derruba o boot (regra 6.5): o módulo segue sem aprovações.
 	apr, err := NovasAprovacoes(cfg)
 	if err != nil {

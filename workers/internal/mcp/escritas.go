@@ -8,6 +8,7 @@ import (
 
 	"radiocheck/internal/acoes"
 	"radiocheck/internal/mcp/auditoria"
+	"radiocheck/internal/postsale"
 )
 
 // Escritas reúne o que as tools de escrita usam (plano Fatia 3, Task 4). Vive
@@ -29,6 +30,10 @@ type Escritas struct {
 	DB auditoria.Execer
 	// Agora é o relógio injetável (validade do token).
 	Agora func() time.Time
+	// PosVenda é o serviço de pós-venda (o mesmo das rotas): reenviar_pos_venda manda
+	// o email por ele. Pode ser nil — a escrita recusa com pos_venda_indisponivel.
+	// A revogação de destinatário não depende dele (usa o repositório de Leitura).
+	PosVenda *postsale.Service
 }
 
 func (E *Escritas) agora() time.Time {

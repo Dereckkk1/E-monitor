@@ -75,6 +75,9 @@ var escritasEsperadas = map[string]string{
 
 	"editar_webhook_cliente": "critico",
 	"testar_webhook":         "critico",
+
+	"reenviar_pos_venda":             "critico",
+	"revogar_destinatario_pos_venda": "critico",
 }
 
 // camposProibidosNaEscrita: nenhuma tool de escrita aceita (nem expõe no schema)
@@ -146,7 +149,7 @@ func TestInventarioEscrita_ConjuntoEExatamenteOCatalogo(t *testing.T) {
 	}
 	sort.Strings(escritas)
 	sort.Strings(esperadas)
-	require.Len(t, esperadas, 36)
+	require.Len(t, esperadas, 38)
 	require.Equal(t, esperadas, escritas)
 }
 
@@ -222,7 +225,7 @@ func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 			require.NotEqual(t, "confirmacao", obrigatorio, "%s: confirmacao não é obrigatória", tl.Name)
 		}
 	}
-	require.Equal(t, 36, vistas)
+	require.Equal(t, 38, vistas)
 }
 
 // Nenhum schema de escrita carrega campo proibido, em nenhuma profundidade.

@@ -607,6 +607,8 @@ func main() {
 		BoasVindas: acoes.BoasVindasDoServico(welcomeSvc),
 		// testar_webhook enfileira na mesma outbox da rota webhook-test.
 		Webhooks: deliverer.Outbox(),
+		// reenviar_pos_venda usa o mesmo serviço (e o mesmo correio) das rotas de pós-venda.
+		PosVenda: postSaleSvc,
 	})
 	// Varredor: expira pedidos vencidos, fecha aprovadas presas e poda confirmações.
 	if mcpModulo != nil {
