@@ -910,13 +910,52 @@ func (c *Campaigns) UpdateTargetStations(ctx context.Context, id uuid.UUID, stat
 	return err
 }
 
+// ErrCampaignHasHistory é devolvido por DeleteSemHistorico quando, DENTRO da transação do
+// delete, a campanha tem veiculação, projeção, comprovante de veiculação manual ou pós-venda:
+// apagar destruiria esse histórico. Nada foi apagado.
+var ErrCampaignHasHistory = errors.New("campaign has history (detections, projections, manual proof batches or post-sale reports)")
+
 // Delete removes a campaign and all its associated data (detections, fingerprint hashes, commercials).
 func (c *Campaigns) Delete(ctx context.Context, id uuid.UUID) error {
+	return c.delete(ctx, id, false)
+}
+
+// DeleteSemHistorico é o Delete que só segue se a campanha não tem histórico, conferido na
+// mesma transação que apaga (ErrCampaignHasHistory). A conferência de quem chama, feita antes
+// em outro comando, pode ter ficado velha: uma veiculação persistida entre ela e o DELETE FROM
+// detections seria varrida junto. Só o MCP usa; a rota de apagar segue com o Delete.
+func (c *Campaigns) DeleteSemHistorico(ctx context.Context, id uuid.UUID) error {
+	return c.delete(ctx, id, true)
+}
+
+func (c *Campaigns) delete(ctx context.Context, id uuid.UUID, exigirSemHistorico bool) error {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	if exigirSemHistorico {
+		// A linha da campanha é travada ANTES de olhar o histórico: todo INSERT que a referencia
+		// (detections, detection_campaigns, manual_proof_batches e post_sale_report_campaigns têm
+		// FK para ela) toma FOR KEY SHARE, que conflita com FOR UPDATE — quem chegar depois espera
+		// o commit e falha na FK, e quem chegou antes já commitou e o EXISTS abaixo enxerga.
+		var travada uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM campaigns WHERE id = $1 FOR UPDATE`, id).Scan(&travada); err != nil {
+			return err
+		}
+		var temHistorico bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM detections WHERE campaign_id = $1)
+			    OR EXISTS(SELECT 1 FROM detection_campaigns WHERE campaign_id = $1)
+			    OR EXISTS(SELECT 1 FROM manual_proof_batches WHERE campaign_id = $1)
+			    OR EXISTS(SELECT 1 FROM post_sale_report_campaigns WHERE campaign_id = $1)`, id).Scan(&temHistorico); err != nil {
+			return err
+		}
+		if temHistorico {
+			return ErrCampaignHasHistory
+		}
+	}
 
 	// Guard (audit C1): recusa deletar se as detecções desta campanha carregam
 	// projeções fan-out de OUTRAS campanhas — o DELETE FROM detections abaixo

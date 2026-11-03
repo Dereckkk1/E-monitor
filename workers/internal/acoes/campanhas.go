@@ -239,7 +239,24 @@ func (s *Servico) CancelarCampanha(ctx context.Context, id uuid.UUID) (*catalog.
 // cancelada, então devolver Recusa mentiria "nada aconteceu". Cancelar uma
 // campanha já concluída/cancelada não muda nada (changed=false) e segue.
 func (s *Servico) ApagarCampanha(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.Campanhas.Get(ctx, id); err != nil {
+	return s.ApagarCampanhaCom(ctx, id, OpcoesApagarCampanha{})
+}
+
+// OpcoesApagarCampanha são as exigências extras de quem apaga (o MCP; a rota apaga como sempre).
+type OpcoesApagarCampanha struct {
+	// ExigirSemHistorico: o delete só segue se, dentro da transação dele, a campanha não tem
+	// veiculação, projeção, comprovante manual nem pós-venda (a rota apaga as veiculações da
+	// campanha junto com ela; o MCP não). Quem pede já recusou o histórico que existia ANTES, mas
+	// entre essa conferência e o DELETE uma veiculação pode ter sido persistida: se ela aparecer,
+	// o delete aborta com *ErroAposEscrita — a campanha já foi cancelada (os workers pararam), então
+	// não é Recusa — e nenhuma veiculação é apagada.
+	ExigirSemHistorico bool
+}
+
+// ApagarCampanhaCom é o ApagarCampanha com as opções de quem chama.
+func (s *Servico) ApagarCampanhaCom(ctx context.Context, id uuid.UUID, op OpcoesApagarCampanha) error {
+	camp, err := s.Campanhas.Get(ctx, id)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return &Recusa{Codigo: CodigoNaoEncontrado, Mensagem: "not found", Causa: ErrAlvoInexistente}
 		}
@@ -280,7 +297,18 @@ func (s *Servico) ApagarCampanha(ctx context.Context, id uuid.UUID) error {
 	if s.Supervisor != nil {
 		s.Supervisor.StopWorkersForCampaign(id)
 	}
-	if err := s.Campanhas.Delete(ctx, id); err != nil {
+	apagar := s.Campanhas.Delete
+	if op.ExigirSemHistorico {
+		apagar = s.Campanhas.DeleteSemHistorico
+	}
+	if err := apagar(ctx, id); err != nil {
+		if errors.Is(err, catalog.ErrCampaignHasHistory) {
+			return &ErroAposEscrita{
+				Mensagem: fmt.Sprintf("A campanha %q foi cancelada (os workers pararam), mas NÃO foi apagada: apareceu veiculação, comprovante ou pós-venda nela depois do pedido, "+
+					"e apagá-la destruiria esse histórico. Nada foi destruído; a campanha segue como cancelada — confira na tela /campaigns.", camp.Name),
+				Causa: err,
+			}
+		}
 		return fmt.Errorf("apagar campanha depois de cancelar: %w", err)
 	}
 	return nil

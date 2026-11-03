@@ -61,6 +61,25 @@ type Recusa struct {
 	Causa error
 }
 
+// ErroAposEscrita é a falha de uma ação que JÁ gravou algo e não conseguiu terminar: é o oposto
+// da Recusa ("nada foi gravado") e nunca é uma. Mensagem diz à pessoa o que ficou feito e o que
+// conferir; não pode carregar SQLSTATE, nome de tabela nem segredo — o motor de aprovação do MCP
+// a grava como o erro do pedido (que fica `falhou`) e a mostra em /pendentes. Causa é o erro
+// técnico, só para o log e para errors.Is. As rotas HTTP a tratam como qualquer erro interno.
+type ErroAposEscrita struct {
+	Mensagem string
+	Causa    error
+}
+
+func (e *ErroAposEscrita) Error() string {
+	if e.Causa == nil {
+		return e.Mensagem
+	}
+	return e.Mensagem + ": " + e.Causa.Error()
+}
+
+func (e *ErroAposEscrita) Unwrap() error { return e.Causa }
+
 // ErrAlvoInexistente marca (via Recusa.Causa) o nao_encontrado em que o registro
 // pedido simplesmente não existe — diferente de "existe, mas não é desta
 // campanha". As rotas HTTP de apagar/desvincular/trocar-tipo respondem 204 nesse
