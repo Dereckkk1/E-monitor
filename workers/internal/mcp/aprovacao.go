@@ -44,6 +44,10 @@ type Aprovado struct {
 	// rota HTTP o escreve como está, então um resultado que não serializa nunca
 	// vira um 200 vazio.
 	ResultadoJSON json.RawMessage
+	// Ressalvas são os avisos da execução (feito.Ressalvas), o que a pessoa lê
+	// depois da aprovação: "o email não saiu", "gravei mas não consegui reler…".
+	// Nunca nil.
+	Ressalvas []string
 }
 
 // ErrConferenciaFalhou: a conferência do estado antes de executar caiu por erro
@@ -149,14 +153,19 @@ func (a *Aprovacoes) Aprovar(ctx context.Context, id uuid.UUID, ator *Principal)
 	} else {
 		bruto = b
 	}
-	fechada, ok, merr := E.Pendentes.MarcarExecutada(fim, pend.ID, pend.Tentativa, bruto, E.agora())
+	ressalvas := f.Ressalvas
+	if ressalvas == nil {
+		ressalvas = []string{}
+	}
+	fechada, ok, merr := E.Pendentes.MarcarExecutada(fim, pend.ID, pend.Tentativa, bruto, ressalvas, E.agora())
 	if merr != nil || !ok {
 		a.cfg.log().Error("mcp: ação executada mas o pedido não fechou", zap.String("pendente", pend.ID.String()), zap.Bool("ok", ok), zap.Error(merr))
 		fechada = pend
 		fechada.Estado = "executada"
+		fechada.Ressalvas = ressalvas
 	}
 	a.auditarPendente(fim, p, "mcp.pendente.executada", pend, nil)
-	return Aprovado{Pendente: fechada, ResultadoJSON: bruto}, nil
+	return Aprovado{Pendente: fechada, ResultadoJSON: bruto, Ressalvas: ressalvas}, nil
 }
 
 // Recusar fecha o pedido a pedido do dono.

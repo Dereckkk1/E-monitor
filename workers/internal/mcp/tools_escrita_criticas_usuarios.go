@@ -396,7 +396,7 @@ func escritaCriarUsuario(cfg ConfigServidor) Escrita[entradaCriarUsuario] {
 			"de cliente_ids; uma agência pode ter vários clientes). A senha NÃO passa por aqui: o sistema gera uma aleatória e a entrega à pessoa pelo email de " +
 			"boas-vindas (com o link da página de acesso), que é obrigatório — nunca peça nem informe senha. Sem a chave de boas-vindas no servidor a tool recusa " +
 			"(boas_vindas_indisponivel) e a criação é pela tela. O resultado é o usuário no formato de obter_usuario, sem link nem senha; se o email não sair " +
-			"(boas_vindas.status_email diferente de sent) a pessoa não tem a senha e o resultado avisa: redefina pela tela. Recusas: e-mail já em uso (email_taken), " +
+			"(boas_vindas.status_email diferente de sent) a pessoa não tem a senha e as ressalvas da aprovação avisam: redefina pela tela. Recusas: e-mail já em uso (email_taken), " +
 			"e-mail inválido, cliente sem cliente_ids (client_id_required), admin com cliente_ids (client_id_not_allowed_for_admin), cliente inexistente " +
 			"(client_not_found). Um pedido por pessoa. " + fraseCritica,
 		Nivel:   Critico,
@@ -481,22 +481,14 @@ func escritaCriarUsuario(cfg ConfigServidor) Escrita[entradaCriarUsuario] {
 			if bv != nil {
 				status = bv.EmailStatus
 			}
-			aviso := fmt.Sprintf("o email não saiu (boas_vindas.status_email: %s): a pessoa não tem a senha — redefina pela tela /admin/users.", status)
-			f.Ressalvas = append(f.Ressalvas, aviso)
-			if saida, ok := f.Resultado.(saidaObterUsuario); ok {
-				f.Resultado = saidaCriarUsuario{saidaObterUsuario: saida, Aviso: aviso}
-			}
+			// O aviso vai nas ressalvas — que a aprovação devolve e grava —, e não
+			// num campo do resultado: a releitura do usuário pode falhar e o resultado
+			// é só {usuario:{id}}, mas "a pessoa não tem a senha" precisa chegar sempre.
+			f.Ressalvas = append(f.Ressalvas, fmt.Sprintf(
+				"o email não saiu (boas_vindas.status_email: %s): a pessoa não tem a senha — redefina pela tela /admin/users.", status))
 			return f, nil
 		},
 	}
-}
-
-// saidaCriarUsuario é o obter_usuario mais, só quando o email de boas-vindas não
-// saiu, o aviso de que a pessoa ainda não tem a senha. Com o email enviado o JSON é
-// exatamente o do obter_usuario (aviso é omitempty).
-type saidaCriarUsuario struct {
-	saidaObterUsuario
-	Aviso string `json:"aviso,omitempty"`
 }
 
 // ── editar_usuario ──────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -327,7 +328,10 @@ func TestCriarUsuario_PedidoNaoEscreveEAprovarCria(t *testing.T) {
 	require.Equal(t, antes+1, contarUsuarios(t, b))
 	require.Equal(t, id.String(), res["usuario"].(map[string]any)["id"])
 	exigeIgualAoObterUsuario(t, b, id, res)
-	require.NotContains(t, res, "aviso", "o email saiu: o resultado é exatamente o do obter_usuario")
+	require.NotContains(t, res, "aviso", "o resultado é exatamente o do obter_usuario: os avisos vão nas ressalvas")
+	require.Len(t, ap.Ressalvas, 1)
+	require.Contains(t, ap.Ressalvas[0], "enviada à pessoa por email", "com o email enviado a única ressalva é a informativa")
+	require.NotContains(t, ap.Ressalvas[0], "não tem a senha")
 	u := res["usuario"].(map[string]any)
 	require.Equal(t, "cliente", u["papel"])
 	require.Equal(t, "ativo", u["situacao"])
@@ -529,14 +533,83 @@ func TestCriarUsuario_EmailNaoSaiuAvisaQueAPessoaNaoTemASenha(t *testing.T) {
 			id := idDoUsuarioPorEmail(t, b, email)
 			res := ap.resultadoJSON(t)
 			require.Equal(t, caso.status, res["usuario"].(map[string]any)["boas_vindas"].(map[string]any)["status_email"])
-			require.Contains(t, res["aviso"], "o email não saiu")
-			require.Contains(t, res["aviso"], "não tem a senha")
-			require.Contains(t, res["aviso"], "redefina pela tela")
+			require.NotContains(t, res, "aviso", "o resultado segue sendo o do obter_usuario")
+			texto := textoDasRessalvas(ap.Ressalvas)
+			require.Contains(t, texto, "o email não saiu")
+			require.Contains(t, texto, "não tem a senha")
+			require.Contains(t, texto, "redefina pela tela")
+			require.Equal(t, ap.Ressalvas, b.ressalvasGravadas(t, out["pendente_id"].(string)), "o aviso fica gravado no pedido")
 			exigeIgualAoObterUsuario(t, b, id, res)
 			require.Zero(t, correio.total())
 			require.NotContains(t, string(ap.ResultadoJSON), "smtp", "o erro do SMTP não sai")
+			require.NotContains(t, texto, "smtp")
 			require.NotContains(t, todoOAudit(t, b), "smtp")
 		})
+	}
+}
+
+// quebrarReleituraDeUsuario faz SÓ a releitura do usuário (montarUsuario) falhar: a
+// leitura dos convites vai para um pool fechado. A criação e o convite usam outros
+// repositórios e seguem funcionando — a escrita acontece, o resultado fica mínimo.
+func quebrarReleituraDeUsuario(t *testing.T, b *bancadaTool) {
+	t.Helper()
+	morto, err := pgxpool.NewWithConfig(b.ctx, b.pool.Config())
+	require.NoError(t, err)
+	morto.Close()
+	b.E.Leitura.BoasVindas = welcome.NewRepo(morto)
+}
+
+// O furo que as ressalvas fecham: o aviso "a pessoa não tem a senha" (F4-11, o crítico) não
+// pode depender de a releitura do usuário ter dado certo. Com a releitura quebrada o resultado
+// é só {usuario:{id}} — e as duas ressalvas (a do email e a de conferir) chegam ao Aprovado,
+// ao pedido gravado e à resposta HTTP do /aprovar.
+func TestCriarUsuario_AvisoDoEmailSobreviveAReleituraQueFalha(t *testing.T) {
+	for _, caso := range []struct {
+		nome       string
+		erroEmail  error
+		naRessalva []string
+		fora       string
+	}{
+		{"email falhou", fmt.Errorf("smtp: conexão recusada"), []string{"o email não saiu", "não tem a senha", "não consegui reler o usuário", "obter_usuario"}, ""},
+		{"email saiu", nil, []string{"enviada à pessoa por email", "não consegui reler o usuário"}, "não tem a senha"},
+	} {
+		for _, via := range []string{"aprovação", "rota HTTP"} {
+			t.Run(caso.nome+"/"+via, func(t *testing.T) {
+				b := novaBancadaTool(t)
+				c := semearClientesDeUsuario(t, b)
+				_, correio := ligarBoasVindas(t, b, true)
+				correio.erro = caso.erroEmail
+				quebrarReleituraDeUsuario(t, b)
+				email := "releitura@falha.teste"
+				out := b.pedePendente(t, toolCriarUsuario, argsCriarUsuario("Sem Releitura", email, "cliente", c.cA))
+				pid := out["pendente_id"].(string)
+
+				var res map[string]any
+				var ressalvas []string
+				if via == "aprovação" {
+					ap := b.aprovar(t, pid)
+					res, ressalvas = ap.resultadoJSON(t), ap.Ressalvas
+				} else {
+					corpo := b.aprovarPelaRota(t, pid)
+					res = corpo["resultado"].(map[string]any)
+					for _, r := range corpo["ressalvas"].([]any) {
+						ressalvas = append(ressalvas, r.(string))
+					}
+				}
+
+				id := idDoUsuarioPorEmail(t, b, email) // a escrita aconteceu
+				require.Equal(t, map[string]any{"usuario": map[string]any{"id": id.String()}}, res, "a releitura caiu: só o id")
+				texto := textoDasRessalvas(ressalvas)
+				for _, trecho := range caso.naRessalva {
+					require.Contains(t, texto, trecho)
+				}
+				if caso.fora != "" {
+					require.NotContains(t, texto, caso.fora)
+				}
+				require.Equal(t, ressalvas, b.ressalvasGravadas(t, pid), "o pedido grava o que a pessoa leu")
+				require.Equal(t, "executada", b.estadoDaPendente(t, pid))
+			})
+		}
 	}
 }
 

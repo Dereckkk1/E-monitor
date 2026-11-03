@@ -37,6 +37,8 @@ type sondaEscrita struct {
 	erroExec  error
 	panica    bool
 	resultado any
+	// ressalvas sai no feito do Executar (os avisos da execução).
+	ressalvas []string
 	// erroPreview e panicaPreview programam o Preview (a conferência da aprovação).
 	erroPreview     error
 	panicaPreview   bool
@@ -75,7 +77,7 @@ func (s *sondaEscrita) escrita(nome string, nivel Nivel, escalavel bool) Escrita
 			if s.resultado != nil {
 				res = s.resultado
 			}
-			return feito{Resultado: res, Recurso: "teste", RecursoID: &id}, nil
+			return feito{Resultado: res, Recurso: "teste", RecursoID: &id, Ressalvas: s.ressalvas}, nil
 		},
 		Tela: func(_ *Escritas, _ entradaEscritaTeste) *string {
 			u := "https://portal.teste/tela"

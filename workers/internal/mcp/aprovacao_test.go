@@ -400,3 +400,26 @@ func TestAprovacao_PreviewVeOPrincipalDoDonoNoContexto(t *testing.T) {
 	require.Equal(t, principalTeste.UserID, visto.UserID)
 	require.Equal(t, principalTeste.TokenID, visto.TokenID, "o token do pedido, não o da sessão do portal (que não tem)")
 }
+
+// As ressalvas do Executar (o aviso "o email não saiu", "gravei mas não consegui
+// reler…") são o que sobra para a pessoa depois da aprovação: chegam ao Aprovado e
+// ficam gravadas na linha do pedido. Sem ressalva, a lista é vazia (nunca nil).
+func TestAprovacao_RessalvasDaExecucaoChegamAoAprovadoEFicamGravadas(t *testing.T) {
+	sonda := &sondaEscrita{ressalvas: []string{"o email não saiu", "confira com obter_x"}}
+	b := novaBancadaAprovacao(t, sonda.escrita("t_crit", Critico, false))
+	pend := b.pedido(t, "t_crit", `{"valor":"abc"}`)
+	require.Empty(t, pend.Ressalvas, "o pedido recém-criado não tem ressalva")
+
+	out, err := b.apr.Aprovar(b.ctx, pend.ID, b.ator())
+	require.NoError(t, err)
+	require.Equal(t, []string{"o email não saiu", "confira com obter_x"}, out.Ressalvas)
+	require.Equal(t, out.Ressalvas, out.Pendente.Ressalvas, "a linha devolvida é a gravada")
+	require.Equal(t, []string{"o email não saiu", "confira com obter_x"}, b.estado(t, pend.ID).Ressalvas)
+
+	limpa := &sondaEscrita{}
+	b2 := novaBancadaAprovacao(t, limpa.escrita("t_crit", Critico, false))
+	out, err = b2.apr.Aprovar(b2.ctx, b2.pedido(t, "t_crit", `{"valor":"abc"}`).ID, b2.ator())
+	require.NoError(t, err)
+	require.NotNil(t, out.Ressalvas, "sem ressalva a lista é vazia, não nil")
+	require.Empty(t, out.Ressalvas)
+}

@@ -262,7 +262,8 @@ func TestReenviarPosVenda_PedidoNaoEnviaEAprovarReenvia(t *testing.T) {
 	require.Contains(t, estadoDoDestinatario(t, b, pv.bia, pv.tokenBia), "sent|-|abertos=0", "a Bia não é tocada")
 	require.True(t, linkAbre(t, b, pv.tokenAna) && linkAbre(t, b, pv.tokenBia), "o link segue abrindo: mesmo token")
 	res := ap.resultadoJSON(t)
-	require.ElementsMatch(t, []string{"pos_venda", "destinatario"}, keysDe(res), "sem aviso quando o email saiu")
+	require.ElementsMatch(t, []string{"pos_venda", "destinatario"}, keysDe(res), "o resultado é só o destinatário: o aviso mora nas ressalvas")
+	require.Empty(t, ap.Ressalvas, "sem aviso quando o email saiu")
 	require.Equal(t, map[string]any{"id": pv.rep.String(), "nome": "Fechamento de Setembro"}, res["pos_venda"])
 	lido := itemDoDestinatario(t, b, pv.rep, pv.ana)
 	require.Equal(t, lido, res["destinatario"], "o destinatário no formato (e com os valores) de destinatarios_pos_venda")
@@ -315,15 +316,19 @@ func TestReenviarPosVenda_FalhaDoEmailGravaFailedEViraAviso(t *testing.T) {
 	dest := res["destinatario"].(map[string]any)
 	require.Equal(t, "failed", dest["status_email"])
 	require.Contains(t, dest["erro_email"], "rejeitado para ana@cliente.teste")
-	require.Contains(t, res["aviso"], "NÃO saiu")
-	require.Contains(t, res["aviso"], "rejeitado para ana@cliente.teste", "o aviso traz o erro, já sem o link")
-	require.Contains(t, res["aviso"], "failed")
+	require.ElementsMatch(t, []string{"pos_venda", "destinatario"}, keysDe(res), "o aviso não é campo do resultado")
+	require.Len(t, ap.Ressalvas, 1)
+	require.Contains(t, ap.Ressalvas[0], "NÃO saiu")
+	require.Contains(t, ap.Ressalvas[0], "rejeitado para ana@cliente.teste", "o aviso traz o erro, já sem o link")
+	require.Contains(t, ap.Ressalvas[0], "failed")
+	require.Equal(t, ap.Ressalvas, ap.Pendente.Ressalvas, "o aviso fica gravado no pedido")
 	require.Equal(t, itemDoDestinatario(t, b, pv.rep, pv.ana), dest)
 	exigeAuditoriaDePosVenda(t, b, toolReenviarPosVenda, pv.rep, pid)
 	require.Equal(t, "executada", b.estadoDaPendente(t, pid))
 	// O texto do erro de email (que carregava o link e o token) passou por semSegredoNoTexto.
-	exigeSemTokenDePosVenda(t, b, pv.tokens(), out, res, itemDoDestinatario(t, b, pv.rep, pv.ana))
+	exigeSemTokenDePosVenda(t, b, pv.tokens(), out, res, itemDoDestinatario(t, b, pv.rep, pv.ana), ap.Ressalvas)
 	require.NotContains(t, mustJSON(t, res), "https://portal.teste/pos-venda", "nem o link sem o token")
+	require.NotContains(t, mustJSON(t, ap.Ressalvas), "https://portal.teste/pos-venda", "nem as ressalvas, que ficam gravadas")
 }
 
 // O erro do SMTP é texto livre e pode ser enorme: o resultado (que fica guardado no pedido) e
@@ -341,7 +346,8 @@ func TestReenviarPosVenda_ErroDeEmailLongoVemCortado(t *testing.T) {
 	erro := res["destinatario"].(map[string]any)["erro_email"].(string)
 	require.True(t, strings.HasSuffix(erro, "…"), "cortado no teto")
 	require.LessOrEqual(t, bytesJSON(t, erro), tetoErroEmail)
-	require.Contains(t, res["aviso"], erro, "o aviso traz o erro já cortado")
+	require.Len(t, ap.Ressalvas, 2, "o aviso do email e a do texto cortado")
+	require.Contains(t, ap.Ressalvas[0], erro, "o aviso traz o erro já cortado")
 	require.Less(t, len(ap.ResultadoJSON), 2000, "o resultado guardado no pedido segue pequeno")
 }
 
@@ -366,9 +372,10 @@ func TestDestinatarioFeito_NaoViraErroSeAReleituraFalha(t *testing.T) {
 	res := mapaDoJSON(t, mustJSON(t, f.Resultado))
 	require.Equal(t, pv.ana.String(), res["destinatario_id"])
 	require.Equal(t, pv.rep.String(), res["pos_venda"].(map[string]any)["id"])
-	require.Contains(t, res["aviso"], "não consegui reler o destinatário")
-	require.Contains(t, res["aviso"], "destinatarios_pos_venda")
-	require.Equal(t, []string{res["aviso"].(string)}, f.Ressalvas)
+	require.ElementsMatch(t, []string{"pos_venda", "destinatario_id"}, keysDe(res))
+	require.Len(t, f.Ressalvas, 1)
+	require.Contains(t, f.Ressalvas[0], "não consegui reler o destinatário")
+	require.Contains(t, f.Ressalvas[0], "destinatarios_pos_venda")
 }
 
 // A rota faz o mesmo com o email que falha: grava failed e responde 204. Tool e rota
@@ -709,7 +716,9 @@ func TestRevogarDestinatario_UltimoLinkAtivoAvisa(t *testing.T) {
 	pre := out["preview"].(map[string]any)
 	require.Contains(t, mustJSON(t, pre["ressalvas"]), "ÚLTIMO link ativo")
 	require.NotContains(t, mustJSON(t, pre["efeitos"]), "Restam")
-	require.Contains(t, ap.resultadoJSON(t)["aviso"], "último link ativo", "a ressalva também mora no resultado: é o que sobra depois da aprovação")
+	require.Len(t, ap.Ressalvas, 1)
+	require.Contains(t, ap.Ressalvas[0], "último link ativo", "o aviso do desfecho vai nas ressalvas da aprovação")
+	require.NotContains(t, ap.resultadoJSON(t), "aviso")
 }
 
 func TestRevogarDestinatario_RecusasNoPedido(t *testing.T) {

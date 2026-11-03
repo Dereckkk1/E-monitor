@@ -663,8 +663,11 @@ func TestTestarWebhook_PedidoNaoEnfileiraEAprovarEnfileira(t *testing.T) {
 	require.Equal(t, true, res["enfileirado"])
 	require.Equal(t, cli.String(), res["cliente"].(map[string]any)["id"])
 	require.Equal(t, "Cliente do Teste", res["cliente"].(map[string]any)["nome"])
-	require.Contains(t, res["aviso"], "assíncrona", "a ressalva da execução mora no resultado: é o que sobra depois da aprovação")
-	require.Contains(t, res["aviso"], "listar_entregas_webhook")
+	require.NotContains(t, res, "aviso", "o resultado é só {enfileirado, cliente}: o aviso mora nas ressalvas")
+	require.Len(t, ap.Ressalvas, 1)
+	require.Contains(t, ap.Ressalvas[0], "assíncrona", "a ressalva da execução é o que a aprovação devolve e grava")
+	require.Contains(t, ap.Ressalvas[0], "listar_entregas_webhook")
+	require.Equal(t, ap.Ressalvas, ap.Pendente.Ressalvas)
 	exigeAuditoriaDeRecurso(t, b, toolTestarWebhook, "client", cli, pid)
 	require.Equal(t, "executada", b.estadoDaPendente(t, pid))
 	// A entrega enfileirada aparece na leitura que o aviso manda consultar.

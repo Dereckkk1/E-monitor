@@ -47,7 +47,10 @@ type Pendente struct {
 	ExecutadaEm *time.Time
 	RecusadaEm  *time.Time
 	Resultado   json.RawMessage
-	Erro        *string
+	// Ressalvas são os avisos da execução (feito.Ressalvas), gravados ao fechar o
+	// pedido; nunca nil depois de lido.
+	Ressalvas []string
+	Erro      *string
 }
 
 type NovaPendente struct {
@@ -70,15 +73,18 @@ func hashDosArgs(tool string, args []byte) []byte {
 }
 
 const colunasPendente = `id, user_id, token_id, tool, args, motivo, preview, estado, tentativa,
-	criada_em, expira_em, aprovada_em, executada_em, recusada_em, resultado, erro`
+	criada_em, expira_em, aprovada_em, executada_em, recusada_em, resultado, ressalvas, erro`
 
 func lerPendente(row pgx.Row) (Pendente, error) {
 	var p Pendente
 	var args, preview, resultado []byte
 	if err := row.Scan(&p.ID, &p.UserID, &p.TokenID, &p.Tool, &args, &p.Motivo, &preview, &p.Estado,
 		&p.Tentativa, &p.CriadaEm, &p.ExpiraEm, &p.AprovadaEm, &p.ExecutadaEm, &p.RecusadaEm,
-		&resultado, &p.Erro); err != nil {
+		&resultado, &p.Ressalvas, &p.Erro); err != nil {
 		return Pendente{}, err
+	}
+	if p.Ressalvas == nil {
+		p.Ressalvas = []string{}
 	}
 	p.Args = args
 	if len(resultado) > 0 {
@@ -198,16 +204,20 @@ func (s *Pendentes) Recusar(ctx context.Context, id, dono uuid.UUID, agora time.
 // MarcarExecutada fecha a tentativa vigente com sucesso e devolve a linha
 // atualizada. Aceita também `falhou` da mesma tentativa (o executor terminou
 // depois de ser dado como interrompido). false = ninguém foi atualizado.
-func (s *Pendentes) MarcarExecutada(ctx context.Context, id uuid.UUID, tentativa int, resultado json.RawMessage, agora time.Time) (Pendente, bool, error) {
+// ressalvas são os avisos da execução: ficam gravados com o resultado.
+func (s *Pendentes) MarcarExecutada(ctx context.Context, id uuid.UUID, tentativa int, resultado json.RawMessage, ressalvas []string, agora time.Time) (Pendente, bool, error) {
 	var res any
 	if len(resultado) > 0 {
 		res = []byte(resultado)
 	}
+	if ressalvas == nil {
+		ressalvas = []string{}
+	}
 	p, err := lerPendente(s.DB.QueryRow(ctx, `UPDATE mcp_acoes_pendentes
-		SET estado = 'executada', executada_em = $4, resultado = $3, erro = NULL
+		SET estado = 'executada', executada_em = $4, resultado = $3, ressalvas = $5, erro = NULL
 		WHERE id = $1 AND tentativa = $2 AND estado IN ('aprovada', 'falhou')
 		RETURNING `+colunasPendente,
-		id, tentativa, res, agora))
+		id, tentativa, res, agora, ressalvas))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Pendente{}, false, nil
 	}
