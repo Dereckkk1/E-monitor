@@ -154,8 +154,12 @@ func (h *PendentesHTTP) preparar(w http.ResponseWriter, r *http.Request) (*Princ
 	return p, id, true
 }
 
-// responderErroPendente traduz os erros comuns do store e do executor.
-func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, err error) {
+// responderErroPendente traduz os erros comuns do store e do executor. Na recusa de negócio (422) o
+// corpo leva também o `pendente` como está agora — o mesmo DTO do GET, com o preview e as ressalvas
+// já atualizados (preview_desatualizado grava o resumo novo antes de responder): quem aprova lê o que
+// vale agora sem recarregar. É aditivo (`error` e `mensagem` seguem iguais) e best-effort: se a
+// releitura falhar, o 422 sai sem ele.
+func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, r *http.Request, id, userID uuid.UUID, err error) {
 	var est ErrEstadoPendente
 	var rec *acoes.Recusa
 	switch {
@@ -164,7 +168,13 @@ func (h *PendentesHTTP) responderErroPendente(w http.ResponseWriter, err error) 
 	case errors.As(err, &est):
 		erroMensagemJSON(w, http.StatusConflict, "pendente_"+est.Estado, textoEstadoPendente(est.Estado))
 	case errors.As(err, &rec):
-		erroMensagemJSON(w, http.StatusUnprocessableEntity, rec.Codigo, rec.Mensagem)
+		corpo := map[string]any{"error": rec.Codigo, "mensagem": rec.Mensagem}
+		if got, gerr := h.Pendentes.Obter(r.Context(), id, userID); gerr == nil {
+			corpo["pendente"] = pendenteParaDTO(got)
+		} else {
+			h.Log.Warn("mcp: reler pendente para o 422", zap.Error(gerr))
+		}
+		escreverJSON(w, http.StatusUnprocessableEntity, corpo)
 	case errors.Is(err, ErrConferenciaFalhou):
 		erroMensagemJSON(w, http.StatusServiceUnavailable, "conferencia_falhou", msgConferenciaFalhou)
 	case errors.Is(err, ErrExecucaoInterrompida):
@@ -182,7 +192,7 @@ func (h *PendentesHTTP) Aprovar(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.Aprovacoes.Aprovar(r.Context(), id, ator)
 	if err != nil {
-		h.responderErroPendente(w, err)
+		h.responderErroPendente(w, r, id, ator.UserID, err)
 		return
 	}
 	// ResultadoJSON já vem serializado (nil vira null): nada a falhar aqui.
@@ -197,7 +207,7 @@ func (h *PendentesHTTP) Recusar(w http.ResponseWriter, r *http.Request) {
 	}
 	pend, err := h.Aprovacoes.Recusar(r.Context(), id, ator)
 	if err != nil {
-		h.responderErroPendente(w, err)
+		h.responderErroPendente(w, r, id, ator.UserID, err)
 		return
 	}
 	escreverJSON(w, http.StatusOK, map[string]any{"pendente": pendenteParaDTO(pend)})

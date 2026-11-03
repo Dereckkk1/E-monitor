@@ -176,7 +176,12 @@ Escrita `critico` nunca executa pela tool: grava um pedido (24 h) e devolve `apr
 ativo, dono do pedido, aprova ou recusa no portal; a aprovação revalida os argumentos gravados, refaz o preview, **compara o
 resumo novo com o que a pessoa viu** e executa. Se o estado mudou desde o pedido (um usuário novo no cliente, uma chave de API
 nova, uma duplicata de veiculação), a aprovação não executa: responde 422 `preview_desatualizado`, grava o resumo novo no lugar
-do antigo e o pedido segue `pendente` — a pessoa lê o resumo atualizado e aprova de novo.
+do antigo e o pedido segue `pendente` — a pessoa lê o resumo atualizado e aprova de novo. O corpo do 422 traz, além de `error` e
+`mensagem`, o `pendente` relido (o mesmo DTO do `GET /pendentes`, já com o `preview` novo e as `ressalvas`), para a tela mostrar
+o que vale agora sem recarregar. O texto do preview de `editar_webhook_cliente` sobre a fila de envio é fixo (não consulta a fila),
+justamente para a fila de um cliente ativo não gerar `preview_desatualizado` à toa.
+Um `editar_campanha` escalado a crítico que é pedido antes da meia-noite (São Paulo) e aprovado depois dela recebe um
+`preview_desatualizado`, porque o preview cita os dias que já passaram; aprovar de novo funciona.
 Estados: `pendente`, `aprovada` (executando), `executada`, `recusada`, `expirada`, `falhou`. Recusa de negócio ou conferência
 que cai por erro inesperado devolvem o pedido a `pendente` (nada foi feito); queda no meio da execução o deixa `falhou`
 (com o texto da própria ação em `erro` quando ela sabe dizer o que ficou feito, por exemplo "a campanha foi cancelada, mas
