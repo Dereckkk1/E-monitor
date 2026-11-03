@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-10-29
+ultima-verificacao: 2026-11-03
 codigo-relacionado:
   - workers/internal/mcp/modulo.go
   - workers/internal/mcp/autenticacao.go
@@ -173,9 +173,15 @@ use este SQL. Os `args` saem mascarados (chave que parece segredo vira `"[omitid
 ### Pedidos críticos e varredor (`mcp_acoes_pendentes`)
 
 Escrita `critico` nunca executa pela tool: grava um pedido (24 h) e devolve `aprovar_em` (`/pendentes?id=…`). Só um admin
-ativo, dono do pedido, aprova ou recusa no portal; a aprovação revalida os argumentos gravados, refaz o preview e executa.
+ativo, dono do pedido, aprova ou recusa no portal; a aprovação revalida os argumentos gravados, refaz o preview, **compara o
+resumo novo com o que a pessoa viu** e executa. Se o estado mudou desde o pedido (um usuário novo no cliente, uma chave de API
+nova, uma duplicata de veiculação), a aprovação não executa: responde 422 `preview_desatualizado`, grava o resumo novo no lugar
+do antigo e o pedido segue `pendente` — a pessoa lê o resumo atualizado e aprova de novo.
 Estados: `pendente`, `aprovada` (executando), `executada`, `recusada`, `expirada`, `falhou`. Recusa de negócio ou conferência
-que cai por erro inesperado devolvem o pedido a `pendente` (nada foi feito); queda no meio da execução o deixa `falhou`.
+que cai por erro inesperado devolvem o pedido a `pendente` (nada foi feito); queda no meio da execução o deixa `falhou`
+(com o texto da própria ação em `erro` quando ela sabe dizer o que ficou feito, por exemplo "a campanha foi cancelada, mas
+não foi apagada: apareceu veiculação nela"). Os avisos da execução ficam em `ressalvas` e voltam em `/pendentes?id=` e em
+`minhas_pendentes`. A linha do pedido não é apagada pelo varredor: os `args` (inclusive a URL inteira de um webhook) ficam gravados.
 O varredor (a cada minuto, uma réplica por vez via advisory lock) expira o `pendente` vencido, fecha como `falhou` a `aprovada`
 presa há mais de 10 min e poda `mcp_confirmacoes_usadas`.
 
