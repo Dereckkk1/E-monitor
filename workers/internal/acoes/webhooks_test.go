@@ -144,3 +144,22 @@ func TestTestarWebhook_EnfileiraSoQuandoOClienteVaiReceber(t *testing.T) {
 	_, err = c.srv.TestarWebhook(c.ctx, c.cliente)
 	require.EqualError(t, err, "boom")
 }
+
+// MotivoDoTesteDescartado é a regra única do descarte do webhook.test: a tool do
+// MCP a consulta antes de pedir a aprovação e TestarWebhook a aplica.
+func TestMotivoDoTesteDescartado(t *testing.T) {
+	casos := map[string]struct {
+		cfg    *catalog.WebhookConfig
+		motivo string
+	}{
+		"sem URL":                    {nil, "o cliente não tem URL de webhook configurada"},
+		"desabilitado":               {&catalog.WebhookConfig{URL: "https://x", Enabled: false, Events: []string{"webhook.test"}}, "o webhook do cliente está desabilitado"},
+		"não assinou o evento":       {&catalog.WebhookConfig{URL: "https://x", Enabled: true, Events: []string{"detection.confirmed"}}, "o cliente não assinou o evento webhook.test"},
+		"assinou o evento":           {&catalog.WebhookConfig{URL: "https://x", Enabled: true, Events: []string{"detection.confirmed", "webhook.test"}}, ""},
+		"assinou tudo com asterisco": {&catalog.WebhookConfig{URL: "https://x", Enabled: true, Events: []string{"*"}}, ""},
+		"filtro vazio assina tudo":   {&catalog.WebhookConfig{URL: "https://x", Enabled: true, Events: []string{}}, ""},
+	}
+	for nome, c := range casos {
+		require.Equal(t, c.motivo, MotivoDoTesteDescartado(c.cfg), nome)
+	}
+}

@@ -139,13 +139,8 @@ func (s *Servico) TestarWebhook(ctx context.Context, cliente uuid.UUID) (TesteWe
 		}
 		return TesteWebhook{}, err
 	}
-	switch {
-	case cfg == nil:
-		return TesteWebhook{Motivo: "o cliente não tem URL de webhook configurada"}, nil
-	case !cfg.Enabled:
-		return TesteWebhook{Motivo: "o webhook do cliente está desabilitado"}, nil
-	case !assinaEvento(cfg.Events, string(webhook.EventWebhookTest)):
-		return TesteWebhook{Motivo: "o cliente não assinou o evento webhook.test"}, nil
+	if motivo := MotivoDoTesteDescartado(cfg); motivo != "" {
+		return TesteWebhook{Motivo: motivo}, nil
 	}
 	if err := s.Webhooks.Enqueue(ctx, &webhook.Event{
 		Type:     webhook.EventWebhookTest,
@@ -159,6 +154,24 @@ func (s *Servico) TestarWebhook(ctx context.Context, cliente uuid.UUID) (TesteWe
 		return TesteWebhook{}, err
 	}
 	return TesteWebhook{Enfileirado: true}, nil
+}
+
+// MotivoDoTesteDescartado diz por que um evento webhook.test NÃO chegaria ao
+// cliente com esta configuração ("" = chegaria). É a regra da outbox
+// (Outbox.Enqueue é no-op nestes três casos): cfg nil é o cliente sem URL,
+// depois vêm o webhook desligado e a falta de assinatura do evento. Quem decide
+// antes de enfileirar (a tool do MCP, no pedido e na aprovação) e TestarWebhook
+// usam esta mesma função.
+func MotivoDoTesteDescartado(cfg *catalog.WebhookConfig) string {
+	switch {
+	case cfg == nil:
+		return "o cliente não tem URL de webhook configurada"
+	case !cfg.Enabled:
+		return "o webhook do cliente está desabilitado"
+	case !assinaEvento(cfg.Events, string(webhook.EventWebhookTest)):
+		return "o cliente não assinou o evento webhook.test"
+	}
+	return ""
 }
 
 // assinaEvento espelha a regra da outbox: filtro vazio assina tudo; "*" também.
