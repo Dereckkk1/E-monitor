@@ -120,7 +120,7 @@ func escritasDe(cfg ConfigServidor) []escritaRegistravel {
 	for _, familia := range [][]escritaRegistravel{
 		escritasBasicas(cfg), escritasCadastros(cfg), escritasCampanhas(cfg),
 		escritasVinculos(cfg), escritasRegras(cfg), escritasAjustes(cfg),
-		escritasCriticasCampanhas(cfg),
+		escritasCriticasCampanhas(cfg), escritasCriticasVeiculacoes(cfg),
 	} {
 		todas = append(todas, familia...)
 	}

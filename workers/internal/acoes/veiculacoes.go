@@ -25,6 +25,14 @@ func (s *Servico) agora() time.Time {
 	return time.Now()
 }
 
+// NoFuturo diz se o instante passa da tolerância de relógio (toleranciaFuturo)
+// à frente do relógio do serviço: é a regra de CriarVeiculacaoManual, exposta
+// para quem confere o pedido antes (o MCP recusa na pré-visualização, com o
+// mesmo relógio e a mesma tolerância da escrita).
+func (s *Servico) NoFuturo(quando time.Time) bool {
+	return quando.After(s.agora().Add(toleranciaFuturo))
+}
+
 // EntradaManual é o que a rota e a tool mandam para criar a veiculação manual.
 type EntradaManual struct {
 	Campanha, Emissora, Material uuid.UUID
@@ -48,7 +56,7 @@ func (s *Servico) CriarVeiculacaoManual(ctx context.Context, in EntradaManual) (
 	if in.Quando.IsZero() {
 		return nil, entradaInvalida("detected_at is required")
 	}
-	if in.Quando.After(s.agora().Add(toleranciaFuturo)) {
+	if s.NoFuturo(in.Quando) {
 		return nil, entradaInvalida("detected_at cannot be in the future")
 	}
 

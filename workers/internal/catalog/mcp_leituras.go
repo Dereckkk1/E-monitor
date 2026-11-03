@@ -193,3 +193,66 @@ func (d *Detections) Approved(ctx context.Context, id uuid.UUID, detectedAt time
 		id, detectedAt).Scan(&ok)
 	return ok, err
 }
+
+// ApprovedNear lista os instantes das veiculações APROVADAS (a mesma definição
+// de ApprovedDetectionsFilter) da mesma campanha × emissora × material em torno
+// de `at`, até `window` para cada lado, da mais próxima para a mais distante e
+// no máximo `limit`. Serve ao aviso de possível duplicata de quem vai lançar
+// uma veiculação à mão.
+//
+// A campanha e o material saem da PROJEÇÃO (detection_campaigns): uma tocada
+// atribuída a várias campanhas conta para cada uma. O COALESCE cobre a tocada
+// que ainda não tem projeção (cai na campanha e no material da linha base, como
+// em affectedCells). A janela em detected_at poda as partições das duas tabelas.
+func (d *Detections) ApprovedNear(ctx context.Context, campaignID, stationID, commercialID uuid.UUID,
+	at time.Time, window time.Duration, limit int) ([]time.Time, error) {
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT d.detected_at
+		FROM detections d
+		LEFT JOIN detection_campaigns dc
+		       ON dc.detection_id = d.id
+		      AND dc.detected_at = d.detected_at
+		WHERE d.station_id = $2
+		  AND d.detected_at >= $4::timestamptz - make_interval(secs => $5::float8)
+		  AND d.detected_at <= $4::timestamptz + make_interval(secs => $5::float8)
+		  AND COALESCE(dc.campaign_id, d.campaign_id) = $1
+		  AND COALESCE(dc.commercial_id, d.commercial_id) = $3
+		  AND `+ApprovedDetectionsFilter+`
+		ORDER BY abs(extract(epoch FROM d.detected_at - $4::timestamptz)), d.detected_at, d.id
+		LIMIT $6`,
+		campaignID, stationID, commercialID, at, window.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []time.Time{}
+	for rows.Next() {
+		var t time.Time
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// HasPartitionFor diz se detections tem partição que comporte o instante. A
+// tabela é particionada por mês e as partições só existem de quando o banco foi
+// criado até alguns meses à frente: INSERT fora disso estoura 23514 ("no
+// partition of relation"). Lê os limites do catálogo do Postgres, sem escrever.
+func (d *Detections) HasPartitionFor(ctx context.Context, at time.Time) (bool, error) {
+	var ok bool
+	err := d.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		    FROM pg_inherits i
+		    JOIN pg_class c ON c.oid = i.inhrelid
+		    CROSS JOIN LATERAL (SELECT pg_get_expr(c.relpartbound, c.oid) AS limites) l
+		    CROSS JOIN LATERAL (SELECT regexp_match(l.limites, 'FROM \(''([^'']+)''\) TO \(''([^'']+)''\)') AS m) r
+		    WHERE i.inhparent = 'detections'::regclass
+		      AND (l.limites = 'DEFAULT'
+		           OR (r.m IS NOT NULL AND r.m[1]::timestamptz <= $1 AND $1 < r.m[2]::timestamptz))
+		)`, at).Scan(&ok)
+	return ok, err
+}

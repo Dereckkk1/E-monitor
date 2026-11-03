@@ -99,6 +99,24 @@ func TestCriarVeiculacaoManual_ToleranciaDeCincoMinutosUsaORelogioInjetado(t *te
 	require.Equal(t, "detected_at cannot be in the future", r.Mensagem)
 }
 
+// NoFuturo é a régua que CriarVeiculacaoManual usa e que o MCP consulta antes
+// de aceitar o pedido: o relógio do serviço mais a tolerância de 5 minutos, com a
+// borda exata ainda permitida. Não precisa de banco.
+func TestNoFuturo_ToleranciaEBordaExata(t *testing.T) {
+	agora := mcptest.Quando("2026-06-11", "10:00")
+	s := &Servico{Agora: func() time.Time { return agora }}
+
+	require.False(t, s.NoFuturo(agora.Add(-time.Hour)), "o passado nunca é futuro")
+	require.False(t, s.NoFuturo(agora.Add(5*time.Minute)), "a borda exata ainda passa")
+	require.True(t, s.NoFuturo(agora.Add(5*time.Minute+time.Nanosecond)))
+	require.True(t, s.NoFuturo(agora.Add(time.Hour)))
+
+	// Sem relógio injetado vale o relógio de verdade.
+	relogioReal := &Servico{}
+	require.False(t, relogioReal.NoFuturo(time.Now()))
+	require.True(t, relogioReal.NoFuturo(time.Now().Add(time.Hour)))
+}
+
 // Data sem partição em detections (23514 "no partition of relation"): é entrada
 // inválida, não erro interno.
 func TestCriarVeiculacaoManual_DataSemParticaoEhEntradaInvalida(t *testing.T) {
