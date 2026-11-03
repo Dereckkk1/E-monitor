@@ -280,10 +280,23 @@ func escritaCancelarCampanha(cfg ConfigServidor) Escrita[entradaCancelarCampanha
 				return feito{}, err
 			}
 			// O cancelamento já está gravado: nada daqui para baixo vira erro.
-			return campanhaFeita(ctx, cfg, E, campanhaCancelada(ctx, E.Leitura, c, pl.camp),
-				"Os workers das emissoras que nenhuma outra campanha ativa usa foram parados; o déficit da campanha está congelado em cancelada_em."), nil
+			return campanhaFeita(ctx, cfg, E, campanhaCancelada(ctx, E.Leitura, c, pl.camp), ressalvaDoCancelamento(pl)), nil
 		},
 	}
+}
+
+// ressalvaDoCancelamento diz o que o cancelamento fez com os workers, do plano (o mesmo que o Preview
+// mostrou): campanha programada e emissoras que outra campanha ativa ainda usa não derrubam worker
+// nenhum, e dizer "foram parados" nesses casos seria mentira.
+func ressalvaDoCancelamento(pl *planoDeCancelamento) string {
+	const deficit = "o déficit da campanha está congelado em cancelada_em."
+	switch {
+	case pl.camp.Status != "ativa":
+		return "A campanha estava programada: nenhum worker precisava parar; " + deficit
+	case len(pl.param) == 0:
+		return "Nenhum worker precisava parar (todas as emissoras da campanha seguem em outra campanha ativa); " + deficit
+	}
+	return fmt.Sprintf("Os workers de %d emissora(s) que nenhuma outra campanha ativa usa foram parados; %s", len(pl.param), deficit)
 }
 
 // ── apagar_campanha ─────────────────────────────────────────────────────
