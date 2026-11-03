@@ -1064,3 +1064,40 @@ func TestCampanhaCancelada_FallbackDoNilNil(t *testing.T) {
 	require.Equal(t, antes.Name, doPlano.Name)
 	require.Equal(t, "ativa", antes.Status, "o plano não é alterado")
 }
+
+// Categoria 6 do contrato: nada do que as quatro escritas devolvem ou gravam carrega segredo. O
+// resultado de cancelar_campanha e de editar_cpm_fixo embute o obter_campanha (com as emissoras) e o
+// de editar_precos_campanha nomeia emissoras: a stream_url delas, que tem a credencial do painel de
+// streaming, não pode estar no resultado, nos args gravados, no preview, nas ressalvas nem no
+// audit_log. As emissoras da campanha recebem uma stream_url inconfundível.
+func TestCriticasDeCampanha_SemSegredoNoResultadoNemNosArgsGravados(t *testing.T) {
+	for _, caso := range []struct {
+		tool string
+		args func(c cenarioCritCamp) map[string]any
+	}{
+		{"cancelar_campanha", func(c cenarioCritCamp) map[string]any { return argsCancelar(c.camp) }},
+		{"apagar_campanha", func(c cenarioCritCamp) map[string]any { return argsApagar(c.camp) }},
+		{"editar_cpm_fixo", func(c cenarioCritCamp) map[string]any { return argsCPM(c.camp, 12.5) }},
+		{"editar_precos_campanha", func(c cenarioCritCamp) map[string]any {
+			return argsPrecos(c.camp, precoConsolidado(c.e2, 1500.75))
+		}},
+	} {
+		t.Run(caso.tool, func(t *testing.T) {
+			b := novaBancadaTool(t)
+			c := semearCritCamp(t, b, "ativa", uuid.Nil)
+			proibidos := semearStreamSecreto(t, b, c.e1, c.e2)
+
+			out := b.pedePendente(t, caso.tool, caso.args(c))
+			pid := out["pendente_id"].(string)
+			ap := b.aprovar(t, pid)
+
+			b.exigeSemSegredoNaEscrita(t, pid, ap, out, proibidos)
+			// Os args gravados são os que a pessoa pediu: sem campo de segredo.
+			var gravados []byte
+			require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT args FROM mcp_acoes_pendentes WHERE id = $1`, pid).Scan(&gravados))
+			for _, proibido := range camposProibidosNaEscrita {
+				require.False(t, chavesDoJSON(t, gravados)[proibido], proibido)
+			}
+		})
+	}
+}

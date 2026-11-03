@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -301,6 +302,86 @@ func (b *bancadaTool) poolFechado(t *testing.T) *pgxpool.Pool {
 	require.NoError(t, err)
 	morto.Close()
 	return morto
+}
+
+// semearStreamSecreto grava em cada emissora uma stream_url inconfundível (o painel de streaming
+// tem a credencial na URL) e devolve os textos que NUNCA podem aparecer no que o MCP devolve ou grava.
+func semearStreamSecreto(t *testing.T, b *bancadaTool, emissoras ...uuid.UUID) []string {
+	t.Helper()
+	proibidos := []string{"SEGREDO-DO-STREAM", "painel-secreto.teste"}
+	for i, e := range emissoras {
+		url := fmt.Sprintf("http://painel-secreto.teste:8000/SEGREDO-DO-STREAM-%d?auth=ZZ%d", i, i)
+		tag, err := b.pool.Exec(b.ctx, `UPDATE stations SET stream_url = $2 WHERE id = $1`, e, url)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, tag.RowsAffected(), "a emissora semeada existe")
+		proibidos = append(proibidos, url)
+	}
+	return proibidos
+}
+
+// chavesDoJSON são todas as chaves de objeto do JSON, em qualquer nível.
+func chavesDoJSON(t *testing.T, bruto []byte) map[string]bool {
+	t.Helper()
+	var v any
+	require.NoError(t, json.Unmarshal(bruto, &v), string(bruto))
+	chaves := map[string]bool{}
+	var desce func(any)
+	desce = func(x any) {
+		switch y := x.(type) {
+		case map[string]any:
+			for k, val := range y {
+				chaves[k] = true
+				desce(val)
+			}
+		case []any:
+			for _, val := range y {
+				desce(val)
+			}
+		}
+	}
+	desce(v)
+	return chaves
+}
+
+// exigeSemSegredoNaEscrita é a categoria 6 do contrato das escritas críticas: o resultado da
+// aprovação, a resposta do pedido, a linha do pedido (args gravados, preview, resultado, ressalvas)
+// e TODA linha do audit_log não têm campo proibido (stream_url, hub_id, senha, token…) nem o texto
+// de uma stream_url semeada (proibidos). Quem chama aprova o pedido antes.
+func (b *bancadaTool) exigeSemSegredoNaEscrita(t *testing.T, pendenteID string, ap Aprovado, pedido map[string]any, proibidos []string) {
+	t.Helper()
+	var linha string
+	require.NoError(t, b.pool.QueryRow(b.ctx, `SELECT to_jsonb(p)::text FROM mcp_acoes_pendentes p WHERE id = $1`, pendenteID).Scan(&linha))
+	jsons := map[string][]byte{
+		"resultado da aprovação": ap.ResultadoJSON,
+		"resposta do pedido":     []byte(mustJSON(t, pedido)),
+		"ressalvas da aprovação": []byte(mustJSON(t, ap.Ressalvas)),
+		"linha do pedido":        []byte(linha),
+	}
+	rows, err := b.pool.Query(b.ctx, `SELECT action || ' ' || metadata::text FROM audit_log ORDER BY created_at`)
+	require.NoError(t, err)
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var l string
+		require.NoError(t, rows.Scan(&l))
+		n++
+		jsons[fmt.Sprintf("audit_log #%d", n)] = []byte(l[strings.Index(l, " ")+1:])
+		require.NotContains(t, l, "stream_url")
+	}
+	require.NoError(t, rows.Err())
+	require.NotZero(t, n, "a aprovação grava auditoria: sem linhas não há o que provar")
+	for nome, bruto := range jsons {
+		if len(bruto) == 0 || string(bruto) == "null" {
+			continue
+		}
+		chaves := chavesDoJSON(t, bruto)
+		for _, proibido := range camposProibidosNaEscrita {
+			require.False(t, chaves[proibido], "o campo %q apareceu em %s", proibido, nome)
+		}
+		for _, texto := range proibidos {
+			require.NotContains(t, string(bruto), texto, "a stream_url semeada vazou em "+nome)
+		}
+	}
 }
 
 // aprovarPelaRota aprova o pedido pelo handler HTTP REAL de /pendentes (PendentesHTTP.Aprovar,
