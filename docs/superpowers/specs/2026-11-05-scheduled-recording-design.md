@@ -129,7 +129,7 @@ que o buraco após um reinício não inclua os minutos de boot. A cada 15s:
 2. `gravando` sem gravador vivo no processo (reinício da API):
    - dentro da janela → retoma;
    - janela acabou → `processando`.
-3. `processando` → finaliza (§5.3). Falhou, tenta de novo no próximo tick.
+3. `processando` → finaliza (§5.3). Falhou, tenta de novo a cada 2 minutos.
 
 `programada` com `ends_at` já vencido (API fora do ar durante toda a janela) vira
 `falhou` com e-mail. Não há gravador vivo para ela e nunca haverá áudio.
@@ -177,16 +177,23 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
 
 1. Ordena os pedaços por horário (`segments` usa `time.Local` para interpretar o
    nome do arquivo; seguir a mesma convenção).
-2. Concatena os bytes ADTS e remuxa: `ffmpeg -i <junto> -c copy -movflags +faststart
-   <id>.m4a`. M4A abre em qualquer player e permite pular trechos. ADTS cru não dá
-   duração nem busca confiáveis.
+2. Apara cada pedaço no último frame ADTS completo, concatena e remuxa: `ffmpeg -i
+   <junto> -c copy -movflags +faststart <id>.m4a`. M4A abre em qualquer player e
+   permite pular trechos. ADTS cru não dá duração nem busca confiáveis. O aparo existe
+   porque um pedaço cortado no meio de um frame (kill -9, crash da API) faz o remux
+   parar ali, com exit 0 e arquivo curto, e o áudio dos pedaços seguintes some.
 3. Calcula `gaps` pelo intervalo real de cada pedaço (início no nome, fim no mtime),
    ignorando trechos abaixo de 30s, e `covered_seconds` pela duração
    real do `.m4a` (`ffprobe`).
-4. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
-5. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
+4. Confere o `.m4a` pela contagem de frames: tamanho maior que zero e duração de pelo
+   menos 98% de `frames × 1024 ÷ 44100`. O exit 0 do remux não prova nada. O formato
+   fixo dá 1024 amostras por frame, então a duração esperada é exata e independe do
+   relógio; comparar com tempo de relógio daria alarme falso com rádio que engasga.
+   Reprovado é falha de finalização, e os pedaços ficam.
+5. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
+6. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
 
-Sem nenhum pedaço com áudio, vira `falhou` e não sobe nada. Qualquer falha da
+Sem nenhum frame completo, vira `falhou` e não sobe nada. Qualquer falha da
 finalização grava o motivo em `last_error` e repete a cada 2 minutos: a linha fica
 em `processando` e os pedaços ficam no disco. A ordem garante que nenhuma falha
 perca áudio já capturado.
@@ -202,6 +209,7 @@ informação fica só na tela.
 | Bytes pararam de crescer por 60s no meio da gravação | Caiu, tentando reconectar |
 | Final `parcial` ou `falhou` | Resultado, com a cobertura |
 | API fora durante toda a janela | Não gravou |
+| 3ª falha seguida da finalização, uma vez só | Arquivo não fechou; áudio preservado, segue tentando |
 
 Os dois primeiros casos são um alerta só por gravação, controlado por
 `drop_alerted_at`. Em sucesso, nenhum e-mail.
@@ -284,9 +292,9 @@ autenticada, então `PUBLIC_ROUTES` não muda.
 | ffmpeg pendurado sem sair | Watchdog mata em 60s e reinicia |
 | URL trocada durante a queda | Vale na tentativa seguinte |
 | Deploy com gravação viva | Bloqueado pela guarda |
-| API reinicia mesmo assim | Retoma ao subir; buraco em `gaps`; pedaços anteriores preservados |
+| API reinicia mesmo assim | Retoma ao subir; buraco em `gaps`; pedaços anteriores preservados, com o frame cortado aparado na finalização; finalização interrompida retoma sem contar como falha |
 | API fora durante toda a janela | `falhou` ao voltar, com e-mail |
-| Bucket fora | Fica em `processando`, pedaços no disco, motivo em `last_error`, repete a cada 2 minutos |
+| Bucket fora | Fica em `processando`, pedaços no disco, motivo em `last_error`, repete a cada 2 minutos; e-mail na 3ª falha seguida |
 | Disco cheio | ffmpeg falha, buraco em `gaps`, e-mail de queda |
 | Emissora ou usuário excluído depois | Linha mantida via `station_name` / `SET NULL` |
 

@@ -108,20 +108,24 @@ type Manager struct {
 	mu         sync.Mutex
 	live       map[uuid.UUID]*liveRecorder
 	finalizing map[uuid.UUID]struct{}
+	// finalizeFailures conta as falhas seguidas de cada gravação. Fica em memória:
+	// reiniciar a API zera a contagem, e o pior caso é um aviso atrasado.
+	finalizeFailures map[uuid.UUID]int
 }
 
 // NewManager monta o Manager.
 func NewManager(cfg Config, repo Repo, media Media, objects ObjectStore, mail mailer.Mailer, log *zap.Logger) *Manager {
 	return &Manager{
-		cfg:        cfg.withDefaults(),
-		repo:       repo,
-		media:      media,
-		objects:    objects,
-		mail:       mail,
-		log:        log,
-		now:        time.Now,
-		live:       map[uuid.UUID]*liveRecorder{},
-		finalizing: map[uuid.UUID]struct{}{},
+		cfg:              cfg.withDefaults(),
+		repo:             repo,
+		media:            media,
+		objects:          objects,
+		mail:             mail,
+		log:              log,
+		now:              time.Now,
+		live:             map[uuid.UUID]*liveRecorder{},
+		finalizing:       map[uuid.UUID]struct{}{},
+		finalizeFailures: map[uuid.UUID]int{},
 	}
 }
 

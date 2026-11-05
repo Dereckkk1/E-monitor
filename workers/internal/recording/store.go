@@ -202,7 +202,7 @@ func (s *Store) MarkDropAlerted(ctx context.Context, id uuid.UUID) (bool, error)
 	return tag.RowsAffected() == 1, nil
 }
 
-// SetLastError guarda o motivo da última falha de captura.
+// SetLastError guarda o motivo da última falha, de captura ou de finalização.
 func (s *Store) SetLastError(ctx context.Context, id uuid.UUID, msg string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE recordings SET last_error = $2, updated_at = now() WHERE id = $1`, id, msg)
@@ -210,7 +210,8 @@ func (s *Store) SetLastError(ctx context.Context, id uuid.UUID, msg string) erro
 }
 
 // Complete fecha uma gravação em `processando`. Devolve ErrBusy se ela não estava
-// nesse estado.
+// nesse estado. `concluida` limpa last_error: o motivo de uma tentativa que falhou
+// antes não descreve mais a gravação.
 func (s *Store) Complete(ctx context.Context, id uuid.UUID, in CompleteInput) error {
 	gaps, err := json.Marshal(in.Gaps)
 	if err != nil {
@@ -219,7 +220,9 @@ func (s *Store) Complete(ctx context.Context, id uuid.UUID, in CompleteInput) er
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE recordings
 		SET status = $2, object_key = $3, size_bytes = $4, covered_seconds = $5,
-		    gaps = $6, finished_at = $7, expires_at = $8, updated_at = now()
+		    gaps = $6, finished_at = $7, expires_at = $8,
+		    last_error = CASE WHEN $2 = 'concluida' THEN NULL ELSE last_error END,
+		    updated_at = now()
 		WHERE id = $1 AND status = 'processando'`,
 		id, in.Status, in.ObjectKey, in.SizeBytes, in.CoveredSeconds, gaps, in.FinishedAt, in.ExpiresAt)
 	if err != nil {

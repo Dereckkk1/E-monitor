@@ -2660,7 +2660,7 @@ func TestTick_JanelaAcabouDuranteOReinicioFinaliza(t *testing.T) {
 	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
 	dir := m.dirFor(r.ID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, "audio")
+	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, validADTS(3))
 
 	m.tick(context.Background())
 
@@ -3640,7 +3640,7 @@ test('sem cobertura é null, não zero', () => {
 })
 
 test('buracos em horário de São Paulo', () => {
-  assert.deepEqual(gapLabels(rec), ['sem áudio das 20:10 às 20:40'])
+  assert.deepEqual(gapLabels(rec), ['sem áudio das 20:10:00 às 20:40:00'])
   assert.deepEqual(gapLabels({ ...rec, gaps: [] }), [])
 })
 
@@ -3693,6 +3693,8 @@ const TZ = 'America/Sao_Paulo'
 
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric' })
 const timeFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' })
+// Só para buracos: um de 40s pode caber dentro do mesmo minuto.
+const gapTimeFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 const STATUS = {
   programada: { label: 'Programada', badge: 'badge-planned' },
@@ -3730,7 +3732,7 @@ export function coveragePercent(r) {
 
 export function gapLabels(r) {
   return (r.gaps ?? []).map(g =>
-    `sem áudio das ${timeFmt.format(new Date(g.from))} às ${timeFmt.format(new Date(g.to))}`)
+    `sem áudio das ${gapTimeFmt.format(new Date(g.from))} às ${gapTimeFmt.format(new Date(g.to))}`)
 }
 
 export function expiresLabel(r) {
@@ -4321,6 +4323,9 @@ Spec: [2026-11-05-scheduled-recording-design.md](../superpowers/specs/2026-11-05
 
 - **Buraco não vira silêncio.** Depois de um buraco, o tempo do player deixa de
   bater com o relógio. A prova do que foi ao ar em qual horário é a lista `gaps`.
+- **Cada pedaço é aparado no último frame ADTS completo.** Um pedaço cortado no meio
+  de um frame (kill -9, crash da API) faria o remux parar ali com exit 0 e perder o
+  resto. Por isso o `.m4a` é conferido pela contagem de frames antes do upload.
 - **O `segments-cleanup` apaga pasta vazia.** Com o stream fora a pasta da gravação
   fica vazia e some. Por isso o gravador faz `MkdirAll` a cada tentativa.
 - **`stream_url` é relida a cada tentativa.** Corrigir a URL durante uma queda vale

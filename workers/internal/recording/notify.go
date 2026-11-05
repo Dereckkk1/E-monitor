@@ -10,7 +10,20 @@ import (
 	"go.uber.org/zap"
 )
 
-func fmtSP(t time.Time) string { return t.In(saoPaulo).Format("02/01/2006 15:04") }
+// maxReasonChars limita o motivo técnico no e-mail: stderr de ffmpeg não tem teto.
+const maxReasonChars = 300
+
+// fmtSP tem segundos porque um buraco de 40s pode caber dentro do mesmo minuto.
+func fmtSP(t time.Time) string { return t.In(saoPaulo).Format("02/01/2006 15:04:05") }
+
+// clipReason corta por caractere: cortar por byte partiria um acento.
+func clipReason(s string) string {
+	r := []rune(s)
+	if len(r) > maxReasonChars {
+		return string(r[:maxReasonChars])
+	}
+	return s
+}
 
 func windowLabel(r Recording) string {
 	return fmt.Sprintf("%s, das %s às %s", r.StartsAt.In(saoPaulo).Format("02/01/2006"),
@@ -53,7 +66,11 @@ func (m *Manager) notifyMissed(rec Recording) {
 }
 
 func (m *Manager) notifyFailed(rec Recording) {
-	m.notify(rec, "falhou", "Nenhum áudio foi capturado nesta gravação.")
+	body := "Nenhum áudio foi capturado nesta gravação."
+	if rec.LastError != nil && *rec.LastError != "" {
+		body += "\nMotivo: " + clipReason(*rec.LastError)
+	}
+	m.notify(rec, "falhou", body)
 }
 
 func (m *Manager) notifyPartial(rec Recording, covered, window time.Duration, gaps []Gap) {
@@ -67,4 +84,10 @@ func (m *Manager) notifyPartial(rec Recording, covered, window time.Duration, ga
 	}
 	m.notify(rec, fmt.Sprintf("parcial (%d%%)", pct),
 		fmt.Sprintf("A gravação terminou com buracos e cobriu %d%% da janela.\n%s", pct, strings.Join(lines, "\n")))
+}
+
+func (m *Manager) notifyFinalizeStuck(rec Recording, cause error) {
+	m.notify(rec, "arquivo não fechou",
+		"O áudio está preservado, mas não foi possível fechar o arquivo. O sistema segue tentando.\n"+
+			"Motivo: "+clipReason(cause.Error()))
 }

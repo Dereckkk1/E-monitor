@@ -243,35 +243,46 @@ func (o *fakeObjects) Delete(_ context.Context, key string) error {
 }
 
 type fakeMedia struct {
-	capture  func(ctx context.Context, url, dir string) error
-	duration time.Duration
+	capture     func(ctx context.Context, url, dir string) error
+	duration    time.Duration
+	remuxErr    error
+	durationErr error
+	emptyOutput bool      // Remux termina bem, mas deixa o arquivo vazio
+	deadline    time.Time // prazo do ctx visto pelo Remux
 }
 
 func (m *fakeMedia) Capture(ctx context.Context, url, dir string) error {
 	return m.capture(ctx, url, dir)
 }
-func (m *fakeMedia) Remux(_ context.Context, in, out string) error {
+func (m *fakeMedia) Remux(ctx context.Context, in, out string) error {
+	m.deadline, _ = ctx.Deadline()
+	if m.remuxErr != nil {
+		return m.remuxErr
+	}
 	b, err := os.ReadFile(in)
 	if err != nil {
 		return err
 	}
+	if m.emptyOutput {
+		b = nil
+	}
 	return os.WriteFile(out, b, 0o644)
 }
 func (m *fakeMedia) Duration(_ context.Context, _ string) (time.Duration, error) {
-	return m.duration, nil
+	return m.duration, m.durationErr
 }
 
-type sentMail struct{ to, subject, text string }
+type sentMail struct{ to, subject, html, text string }
 
 type fakeMailer struct {
 	mu   sync.Mutex
 	sent []sentMail
 }
 
-func (m *fakeMailer) Send(_ context.Context, to []string, subject, _, text string) error {
+func (m *fakeMailer) Send(_ context.Context, to []string, subject, htmlBody, text string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sent = append(m.sent, sentMail{to[0], subject, text})
+	m.sent = append(m.sent, sentMail{to[0], subject, htmlBody, text})
 	return nil
 }
 func (m *fakeMailer) all() []sentMail {
