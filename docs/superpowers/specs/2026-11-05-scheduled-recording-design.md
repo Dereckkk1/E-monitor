@@ -97,8 +97,8 @@ linhas `expirada` ficam como histórico.
 | `programada` | Aguardando o horário |
 | `gravando` | Dentro da janela |
 | `processando` | Janela acabou; juntando os pedaços e subindo o arquivo |
-| `concluida` | Cobertura ≥ 98% da janela, ou faltando até 45s |
-| `parcial` | Áudio com buracos além dessa tolerância |
+| `concluida` | Sem buraco de 30s ou mais |
+| `parcial` | Com buraco de 30s ou mais; a tela lista os intervalos |
 | `falhou` | Nenhum áudio capturado |
 | `cancelada` | Cancelada; se já estava gravando, o que foi gravado fica salvo |
 | `expirada` | Passou dos 15 dias; áudio apagado, linha mantida |
@@ -108,9 +108,6 @@ Transições: `programada → gravando → processando → concluida | parcial |
 `processando` e termina `cancelada`, com áudio). `expirada` vem de qualquer
 estado final com áudio. Cancelar não muda a regra da retenção: `expires_at` conta
 de `finished_at`.
-
-A tolerância de 45s existe porque só o percentual reprovaria gravação curta: em 5
-minutos, 2% são 6 segundos, menos do que o ffmpeg leva para conectar.
 
 A coluna `gaps` é necessária porque **buracos não são preenchidos com silêncio**:
 ao juntar os pedaços, o tempo do player deixa de corresponder ao relógio depois

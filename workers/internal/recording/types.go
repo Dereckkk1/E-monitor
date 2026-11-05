@@ -33,11 +33,6 @@ const (
 	MaxDuration = 6 * time.Hour
 	// Retention conta a partir do fim da gravação.
 	Retention = 15 * 24 * time.Hour
-	// minCoverage e maxMissing decidem entre concluida e parcial. Os dois
-	// existem porque só o percentual reprovaria gravação curta: em 5 minutos,
-	// 2% são 6 segundos, menos do que o ffmpeg leva para conectar.
-	minCoverage = 0.98
-	maxMissing  = 45 * time.Second
 )
 
 // Gap é um intervalo da janela sem áudio. Buraco não vira silêncio no arquivo,

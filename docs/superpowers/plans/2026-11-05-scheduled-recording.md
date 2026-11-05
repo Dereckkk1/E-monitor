@@ -2132,7 +2132,7 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) error {
 	now := m.now()
 
 	if len(pieces) == 0 {
-		status := FinalStatus(false, canceled, 0, window)
+		status := FinalStatus(false, canceled, gaps)
 		if err := m.repo.Complete(ctx, rec.ID, CompleteInput{Status: status, Gaps: gaps, FinishedAt: now}); err != nil {
 			return err
 		}
@@ -2172,7 +2172,7 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) error {
 	}
 	f.Close()
 
-	status := FinalStatus(true, canceled, covered, window)
+	status := FinalStatus(true, canceled, gaps)
 	size := info.Size()
 	secs := int(covered.Seconds())
 	expires := now.Add(Retention)
@@ -4302,8 +4302,8 @@ Spec: [2026-11-05-scheduled-recording-design.md](../superpowers/specs/2026-11-05
 | `programada` | Aguardando o horário |
 | `gravando` | Dentro da janela |
 | `processando` | Juntando e subindo o arquivo |
-| `concluida` | Cobertura ≥ 98% da janela, ou faltando até 45s |
-| `parcial` | Com buracos; a tela lista os intervalos |
+| `concluida` | Sem buraco de 30s ou mais |
+| `parcial` | Com buraco de 30s ou mais; a tela lista os intervalos |
 | `falhou` | Nenhum áudio |
 | `cancelada` | Cancelada; o que já tinha sido gravado fica |
 | `expirada` | Passou dos 15 dias; áudio apagado |
