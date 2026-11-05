@@ -39,5 +39,8 @@ func ParseWindow(day, start, end string, now time.Time) (time.Time, time.Time, e
 	if from.Before(now) {
 		from = now
 	}
+	if to.Sub(from) < MinDuration {
+		return time.Time{}, time.Time{}, &ValidationError{"a gravação precisa durar pelo menos 1 minuto"}
+	}
 	return from, to, nil
 }
