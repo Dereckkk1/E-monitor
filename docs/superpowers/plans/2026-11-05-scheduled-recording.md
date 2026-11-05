@@ -1587,6 +1587,9 @@ func (f *fakeRepo) Complete(_ context.Context, id uuid.UUID, in CompleteInput) e
 		return f.completeErr
 	}
 	r := f.rows[id]
+	if r.Status != StatusProcessando {
+		return ErrBusy
+	}
 	r.Status, r.ObjectKey, r.SizeBytes, r.CoveredSeconds = in.Status, in.ObjectKey, in.SizeBytes, in.CoveredSeconds
 	r.Gaps, r.FinishedAt, r.ExpiresAt = in.Gaps, &in.FinishedAt, in.ExpiresAt
 	r.HasAudio = in.ObjectKey != nil
