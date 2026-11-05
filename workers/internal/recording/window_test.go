@@ -61,3 +61,32 @@ func TestParseWindow_MinutoCorrenteComecaAgora(t *testing.T) {
 	require.True(t, from.Equal(now), "from = %s", from)
 	require.Equal(t, "2026-11-05T16:00:00Z", to.UTC().Format(time.RFC3339))
 }
+
+// Depois de puxar o início para agora, a janela efetiva precisa ter 1 minuto:
+// abaixo disso o ffmpeg nem conecta, e to == from violaria o CHECK da tabela.
+func TestParseWindow_JanelaEfetivaMinima(t *testing.T) {
+	const msg = "a gravação precisa durar pelo menos 1 minuto"
+	// windowNow = 12:00:00 em SP; os "agoras" abaixo ficam perto de 12:01.
+	cases := []struct {
+		name string
+		now  time.Time
+	}{
+		{"agora 12:01:00 exato, janela vazia", windowNow.Add(time.Minute)},
+		{"agora 12:00:59.9, sobram 100ms", windowNow.Add(59*time.Second + 900*time.Millisecond)},
+		{"agora 12:00:30, sobram 30s", windowNow.Add(30 * time.Second)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := ParseWindow("2026-11-05", "12:00", "12:01", c.now)
+			var ve *ValidationError
+			require.True(t, errors.As(err, &ve), "esperava ValidationError, veio %v", err)
+			require.Equal(t, msg, ve.Msg)
+		})
+	}
+}
+
+func TestParseWindow_ExatamenteUmMinutoPassa(t *testing.T) {
+	from, to, err := ParseWindow("2026-11-05", "14:00", "14:01", windowNow)
+	require.NoError(t, err)
+	require.Equal(t, time.Minute, to.Sub(from))
+}

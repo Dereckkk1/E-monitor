@@ -230,7 +230,7 @@ cortaria um download grande no meio.
 **Validação do `POST`** (dia e horas em `America/Sao_Paulo`):
 
 - Emissora existe e tem `stream_url`.
-- `ends_at > starts_at`, mesmo dia, até 6h.
+- `ends_at > starts_at`, mesmo dia, de 1 minuto a 6h, com a duração medida depois de o início ser puxado para agora.
 - `starts_at >= now() - 1min`, com a folga cobrindo o tempo de preencher o form.
   `starts_at` que passou por pouco grava a partir de agora, sem retroagir.
 - Sem sobreposição com outra gravação viva da mesma emissora, para não abrir uma

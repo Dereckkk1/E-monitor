@@ -26,6 +26,9 @@ const (
 )
 
 const (
+	// MinDuration é a janela efetiva mínima, medida depois de o início ser
+	// puxado para agora. Abaixo disso o ffmpeg nem conecta.
+	MinDuration = time.Minute
 	// MaxDuration é o teto por gravação. Espelha o CHECK da migration 0071.
 	MaxDuration = 6 * time.Hour
 	// Retention conta a partir do fim da gravação.
