@@ -32,8 +32,7 @@ documentação vai em `docs/features/`.
 | Retenção | 15 dias contados do fim da gravação, sem prorrogação | Pedido do Dereck |
 | Deploy com gravação em andamento | `deploy.sh` aborta, com bypass | A gravação roda na API; deploy corta o áudio |
 
-**Custo:** 45–56 MB/h por emissora (medido: 5 GB para 118 emissoras × 60min; 128
-kbps quando reencoda). Gravação de 6h ≈ 340 MB, pouco perto dos ~3 GB/dia de
+**Custo:** ~56 MB/h por gravação (formato fixo, AAC 128 kbps: ver §5.2). Gravação de 6h ≈ 340 MB, pouco perto dos ~3 GB/dia de
 evidência.
 
 **Risco aceito:** emissora com campanha ativa fica com 2 conexões do mesmo IP
@@ -144,15 +143,21 @@ Loop até `ends_at`, com `dir = /data/segments/_recordings/<id>/`:
 
 ```
 ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
-  -map 0:a:0 <copy se AAC, senão -c:a aac -b:a 128k> \
+  -map 0:a:0 -c:a aac -b:a 128k -ar 44100 -ac 2 \
   -f segment -segment_time 60 -segment_format adts \
   -segment_atclocktime 1 -reset_timestamps 1 -strftime 1 \
   <dir>/a<unix-da-tentativa>-%Y%m%d-%H%M%S.adts
 ```
 
-- **Reaproveita** de `ingestor`: `ProbeAudioCodec`, `pickReconnectArgs` e
-  `pickSegmentAudioArgs` (exportar os dois últimos). Corrige de graça os casos de
-  HLS e de codec não AAC que já custaram incidentes em 2026-05-15.
+- **Reaproveita** de `ingestor` só o `pickReconnectArgs` (exportado como
+  `ReconnectArgs`). Corrige de graça o caso de HLS que custou o incidente de
+  2026-05-15.
+- **Formato de áudio fixo, sempre reencodado (nunca `copy`).** Pedaços com
+  parâmetros diferentes (ex.: 22 kHz mono + 48 kHz estéreo) concatenados geram um
+  `.m4a` corrompido sem nenhum erro: 7s viraram 11,84s num experimento. Acontece
+  quando a URL é trocada durante uma queda ou a rádio reinicia o encoder. O formato
+  fixo elimina o caso e dispensa o `ProbeAudioCodec`, que abria uma conexão extra
+  com o stream a cada tentativa.
 - **`stream_url` é relida do banco a cada tentativa.** É o que dá sentido ao
   e-mail: trocar a URL durante a queda faz efeito na reconexão seguinte.
 - **Stall watchdog:** o total de bytes em `dir` é medido a cada 10s. Sem crescimento

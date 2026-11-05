@@ -4333,7 +4333,7 @@ um reinício a gravação retoma sozinha e o trecho perdido entra em `gaps`.
 
 ## Tamanho
 
-45–56 MB por hora. O limite de 6h dá ~340 MB por gravação.
+~56 MB por hora. O limite de 6h dá ~340 MB por gravação.
 
 ## Fora do escopo
 

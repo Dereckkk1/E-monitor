@@ -16,6 +16,13 @@ import (
 
 const stderrTail = 2048
 
+// audioArgs é o formato de TODO pedaço gravado, sempre reencodado, nunca copy.
+// Pedaços com parâmetros diferentes (22 kHz mono + 48 kHz estéreo, por exemplo)
+// concatenados geram um .m4a corrompido sem erro nenhum: 7s viraram 11,84s num
+// experimento. Isso acontece quando a URL é trocada durante uma queda ou a rádio
+// reinicia o encoder. Formato fixo elimina o caso (~56 MB/h por gravação).
+var audioArgs = []string{"-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2"}
+
 // tailWriter guarda só o fim do stderr: uma gravação de 6h com stream instável
 // escreveria sem limite num bytes.Buffer.
 type tailWriter struct{ buf []byte }
@@ -28,6 +35,14 @@ func (t *tailWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// cleanStderr prepara o stderr do ffmpeg para virar last_error (coluna TEXT do
+// Postgres, que rejeita UTF-8 inválido e byte NUL): o tailWriter corta por bytes e
+// pode partir um caractere, e metadados ICY costumam vir em Latin-1.
+func cleanStderr(b []byte) string {
+	s := strings.ReplaceAll(string(b), "\x00", "")
+	return strings.TrimSpace(strings.ToValidUTF8(s, ""))
+}
+
 // FFmpeg é a implementação real de Media.
 type FFmpeg struct{}
 
@@ -35,7 +50,7 @@ func piecePattern(dir string, now time.Time) string {
 	return filepath.Join(dir, fmt.Sprintf("a%d-%%Y%%m%%d-%%H%%M%%S%s", now.Unix(), pieceExt))
 }
 
-func captureArgs(streamURL, codec, pattern string) []string {
+func captureArgs(streamURL, pattern string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	args = append(args, ingestor.ReconnectArgs(streamURL)...)
 	args = append(args,
@@ -44,7 +59,7 @@ func captureArgs(streamURL, codec, pattern string) []string {
 		"-i", streamURL,
 		"-map", "0:a:0",
 	)
-	args = append(args, ingestor.SegmentAudioArgs(codec)...)
+	args = append(args, audioArgs...)
 	return append(args,
 		"-f", "segment",
 		"-segment_time", "60",
@@ -59,10 +74,7 @@ func captureArgs(streamURL, codec, pattern string) []string {
 // Capture roda até ctx acabar (fim da janela) ou o ffmpeg sair. ctx cancelado
 // não é erro: é o fim normal.
 func (FFmpeg) Capture(ctx context.Context, streamURL, dir string) error {
-	// Falha no probe vira codec "" e cai no reencode, que aceita qualquer entrada.
-	codec, _ := ingestor.ProbeAudioCodec(ctx, streamURL)
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", captureArgs(streamURL, codec, piecePattern(dir, time.Now()))...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", captureArgs(streamURL, piecePattern(dir, time.Now()))...)
 	// SIGTERM deixa o ffmpeg fechar o pedaço; WaitDelay é o Kill de garantia.
 	// No Windows o Signal falha e o Kill resolve: lá só roda em desenvolvimento.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -75,7 +87,7 @@ func (FFmpeg) Capture(ctx context.Context, streamURL, dir string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(string(stderr.buf)))
+		return fmt.Errorf("ffmpeg: %w: %s", err, cleanStderr(stderr.buf))
 	}
 	return errors.New("ffmpeg terminou antes do fim da janela")
 }
@@ -86,7 +98,7 @@ func (FFmpeg) Remux(ctx context.Context, in, out string) error {
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
 		"-f", "aac", "-i", in, "-c", "copy", "-movflags", "+faststart", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("remux: %w: %s", err, strings.TrimSpace(string(b)))
+		return fmt.Errorf("remux: %w: %s", err, cleanStderr(b))
 	}
 	return nil
 }
