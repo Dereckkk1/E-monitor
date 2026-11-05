@@ -65,6 +65,10 @@ type Config struct {
 	MinGap     time.Duration
 	PreRoll    time.Duration
 	PruneEvery time.Duration
+	// FinalizeRetry espaça as tentativas de finalização: cada uma reescreve o
+	// arquivo inteiro em disco, até 330 MB, e com o bucket fora o tick de 15s
+	// faria isso sem parar.
+	FinalizeRetry time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -82,6 +86,7 @@ func (c Config) withDefaults() Config {
 	// gravação marcada para 20:00 só teria áudio a partir de ~20:00:20.
 	def(&c.PreRoll, 20*time.Second)
 	def(&c.PruneEvery, time.Hour)
+	def(&c.FinalizeRetry, 2*time.Minute)
 	return c
 }
 

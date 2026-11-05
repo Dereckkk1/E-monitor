@@ -2,9 +2,11 @@ package recording
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -15,7 +17,8 @@ func objectKey(r Recording) string {
 
 // startFinalize roda em goroutine para um arquivo grande não atrasar o tick, e
 // com isso o início de outra gravação. Enquanto o gravador ainda fecha o último
-// pedaço (cancelamento), espera o próximo tick.
+// pedaço (cancelamento), espera o próximo tick. Depois de uma falha o id continua
+// em finalizing por FinalizeRetry, e é isso que espaça as tentativas.
 func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 	m.mu.Lock()
 	_, running := m.finalizing[rec.ID]
@@ -33,11 +36,33 @@ func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 			delete(m.finalizing, rec.ID)
 			m.mu.Unlock()
 		}()
-		if err := m.finalize(ctx, rec); err != nil {
-			m.log.Warn("recording: finalização falhou, repete no próximo tick",
-				zap.Stringer("id", rec.ID), zap.Error(err))
+		err := m.finalize(ctx, rec)
+		// ErrBusy: outro caminho já fechou a linha. Não há o que repetir, e um
+		// motivo gravado aqui ficaria numa gravação encerrada.
+		if err == nil || errors.Is(err, ErrBusy) {
+			return
+		}
+		m.log.Warn("recording: finalização falhou, vai repetir",
+			zap.Stringer("id", rec.ID), zap.Duration("em", m.cfg.FinalizeRetry), zap.Error(err))
+		m.recordFinalizeError(rec, err)
+
+		timer := time.NewTimer(m.cfg.FinalizeRetry)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
 		}
 	}()
+}
+
+// recordFinalizeError mostra o motivo na tela. Contexto próprio: ctx pode ser
+// justamente o que cancelou a finalização.
+func (m *Manager) recordFinalizeError(rec Recording, cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.repo.SetLastError(ctx, rec.ID, cause.Error()); err != nil {
+		m.log.Warn("recording: gravar motivo da falha", zap.Stringer("id", rec.ID), zap.Error(err))
+	}
 }
 
 // finalize é idempotente: a chave do objeto é fixa e os pedaços só somem depois

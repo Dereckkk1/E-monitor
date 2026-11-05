@@ -160,3 +160,131 @@ func TestFinalize_AtrasadoNaoSobrescreveNemAvisa(t *testing.T) {
 	require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
 	require.Empty(t, mail.all())
 }
+
+func (m *Manager) isFinalizing(id uuid.UUID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.finalizing[id]
+	return ok
+}
+
+// A linha fica em processando com o motivo visível, sem perder áudio.
+func TestStartFinalize_FalhaGravaMotivoEPreservaPedacos(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	objs.setPutErr(errors.New("bucket fora"))
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	seedPieces(t, m, r)
+
+	m.startFinalize(context.Background(), r)
+
+	require.Eventually(t, func() bool { return repo.snapshot(r.ID).LastError != nil },
+		2*time.Second, time.Millisecond)
+	got := repo.snapshot(r.ID)
+	require.Contains(t, *got.LastError, "bucket fora")
+	require.Equal(t, StatusProcessando, got.Status)
+	pieces, err := ListPieces(m.dirFor(r.ID))
+	require.NoError(t, err)
+	require.Len(t, pieces, 1)
+}
+
+// Sem a espera, gravação de 6h reescreveria 330 MB em disco a cada tick.
+func TestStartFinalize_NaoRepeteDuranteFinalizeRetry(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	objs.setPutErr(errors.New("bucket fora"))
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	m.cfg.FinalizeRetry = time.Hour
+	seedPieces(t, m, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.startFinalize(ctx, r)
+	require.Eventually(t, func() bool { return repo.snapshot(r.ID).LastError != nil },
+		2*time.Second, time.Millisecond)
+
+	for i := 0; i < 5; i++ {
+		m.startFinalize(ctx, r)
+	}
+	require.Never(t, func() bool { return objs.calls() > 1 }, 100*time.Millisecond, 5*time.Millisecond)
+	require.Equal(t, 1, objs.calls())
+}
+
+func TestStartFinalize_CtxEncerradoLiberaAEspera(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	objs.setPutErr(errors.New("bucket fora"))
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	m.cfg.FinalizeRetry = time.Hour
+	seedPieces(t, m, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.startFinalize(ctx, r)
+	require.Eventually(t, func() bool { return repo.snapshot(r.ID).LastError != nil },
+		2*time.Second, time.Millisecond)
+	require.True(t, m.isFinalizing(r.ID), "falhou: segura o id")
+
+	cancel()
+
+	require.Eventually(t, func() bool { return !m.isFinalizing(r.ID) }, 2*time.Second, time.Millisecond)
+}
+
+func TestStartFinalize_DepoisDoRetryConclui(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	objs.setPutErr(errors.New("bucket fora"))
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	seedPieces(t, m, r)
+
+	m.startFinalize(context.Background(), r)
+	require.Eventually(t, func() bool { return repo.snapshot(r.ID).LastError != nil },
+		2*time.Second, time.Millisecond)
+
+	objs.setPutErr(nil)
+	require.Eventually(t, func() bool {
+		m.startFinalize(context.Background(), r) // faz o papel do tick
+		return repo.snapshot(r.ID).Status == StatusConcluida
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// O status fecha antes de a pasta ser apagada: espera a goroutine terminar.
+	require.Eventually(t, func() bool { return !m.isFinalizing(r.ID) }, 2*time.Second, time.Millisecond)
+	_, err := os.Stat(m.dirFor(r.ID))
+	require.True(t, os.IsNotExist(err), "pedaços apagados depois do upload")
+}
+
+func TestStartFinalize_SucessoLiberaNaHora(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	m.cfg.FinalizeRetry = time.Hour
+	seedPieces(t, m, r)
+
+	m.startFinalize(context.Background(), r)
+
+	require.Eventually(t, func() bool { return !m.isFinalizing(r.ID) }, 2*time.Second, time.Millisecond)
+	require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
+	require.Nil(t, repo.snapshot(r.ID).LastError)
+}
+
+// ErrBusy diz que a linha já fechou: um tick atrasado não pode escrever um motivo
+// falso numa gravação encerrada, nem segurar o id.
+func TestStartFinalize_LinhaJaFechadaNaoGravaMotivo(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	m.cfg.FinalizeRetry = time.Hour
+	seedPieces(t, m, r)
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	m.startFinalize(context.Background(), r)
+
+	require.Eventually(t, func() bool { return !m.isFinalizing(r.ID) }, 2*time.Second, time.Millisecond)
+	require.Nil(t, repo.snapshot(r.ID).LastError)
+}

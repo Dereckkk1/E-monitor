@@ -120,7 +120,14 @@ func (f *fakeRepo) MarkDropAlerted(_ context.Context, id uuid.UUID) (bool, error
 	f.alerted[id] = true
 	return true, nil
 }
-func (f *fakeRepo) SetLastError(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+func (f *fakeRepo) SetLastError(_ context.Context, id uuid.UUID, msg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.rows[id]; ok {
+		r.LastError = &msg
+	}
+	return nil
+}
 func (f *fakeRepo) Complete(_ context.Context, id uuid.UUID, in CompleteInput) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -181,6 +188,7 @@ func (f *fakeRepo) MarkExpired(_ context.Context, id uuid.UUID) error {
 type fakeObjects struct {
 	mu        sync.Mutex
 	puts      map[string][]byte
+	putCalls  int
 	deleted   []string
 	putErr    error
 	deleteErr error
@@ -189,8 +197,12 @@ type fakeObjects struct {
 func newFakeObjects() *fakeObjects { return &fakeObjects{puts: map[string][]byte{}} }
 
 func (o *fakeObjects) Put(_ context.Context, key string, body io.Reader, _ string) error {
-	if o.putErr != nil {
-		return o.putErr
+	o.mu.Lock()
+	o.putCalls++
+	putErr := o.putErr
+	o.mu.Unlock()
+	if putErr != nil {
+		return putErr
 	}
 	b, err := io.ReadAll(body)
 	if err != nil {
@@ -200,6 +212,16 @@ func (o *fakeObjects) Put(_ context.Context, key string, body io.Reader, _ strin
 	defer o.mu.Unlock()
 	o.puts[key] = b
 	return nil
+}
+func (o *fakeObjects) setPutErr(err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.putErr = err
+}
+func (o *fakeObjects) calls() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.putCalls
 }
 func (o *fakeObjects) Get(_ context.Context, key string) (io.ReadCloser, string, int64, error) {
 	o.mu.Lock()
@@ -261,11 +283,12 @@ func (m *fakeMailer) all() []sentMail {
 func newTestManager(t *testing.T, repo Repo, media Media, objects ObjectStore, mail *fakeMailer) *Manager {
 	t.Helper()
 	m := NewManager(Config{
-		Root:       t.TempDir(),
-		BaseURL:    "https://e-monitor.online",
-		PollEvery:  10 * time.Millisecond,
-		StallAfter: 60 * time.Millisecond,
-		RetryDelay: 5 * time.Millisecond,
+		Root:          t.TempDir(),
+		BaseURL:       "https://e-monitor.online",
+		PollEvery:     10 * time.Millisecond,
+		StallAfter:    60 * time.Millisecond,
+		RetryDelay:    5 * time.Millisecond,
+		FinalizeRetry: 20 * time.Millisecond,
 	}, repo, media, objects, mail, zap.NewNop())
 	return m
 }
