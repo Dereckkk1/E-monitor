@@ -248,6 +248,7 @@ type fakeMedia struct {
 	remuxErr    error
 	durationErr error
 	emptyOutput bool      // Remux termina bem, mas deixa o arquivo vazio
+	blockRemux  bool      // Remux só volta quando ctx acaba
 	deadline    time.Time // prazo do ctx visto pelo Remux
 }
 
@@ -256,6 +257,10 @@ func (m *fakeMedia) Capture(ctx context.Context, url, dir string) error {
 }
 func (m *fakeMedia) Remux(ctx context.Context, in, out string) error {
 	m.deadline, _ = ctx.Deadline()
+	if m.blockRemux {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if m.remuxErr != nil {
 		return m.remuxErr
 	}
