@@ -121,6 +121,9 @@ func FinalStatus(hasAudio, canceled bool, gaps []Gap) string {
 	return StatusConcluida
 }
 
+// maxADTSFrame é o maior frame ADTS possível: o comprimento tem 13 bits.
+const maxADTSFrame = 8191
+
 // adtsHeaderSize é o menor header ADTS (sem CRC). É onde o comprimento já é legível.
 const adtsHeaderSize = 7
 
