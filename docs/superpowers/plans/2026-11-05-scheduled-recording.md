@@ -138,15 +138,15 @@ COMMIT;
 
 ```bash
 docker run -d --name rc-gravacao-pg -e POSTGRES_USER=radiocheck -e POSTGRES_PASSWORD=radiocheck \
-  -e POSTGRES_DB=radiocheck_test -p 55433:5432 POSTGRES_IMAGE
+  -e POSTGRES_DB=radiocheck_test -p 55433:5432 postgres:16-alpine
 
 MIGRATE="postgres://radiocheck:radiocheck@host.docker.internal:55433/radiocheck_test?sslmode=disable"
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/tmp/emonitor-gravacoes/migrations:/migrations" \
-  migrate/migrate -path=/migrations -database "$MIGRATE" up
+  migrate/migrate:v4.17.1 -path=/migrations -database "$MIGRATE" up
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/tmp/emonitor-gravacoes/migrations:/migrations" \
-  migrate/migrate -path=/migrations -database "$MIGRATE" down 1
+  migrate/migrate:v4.17.1 -path=/migrations -database "$MIGRATE" down 1
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/tmp/emonitor-gravacoes/migrations:/migrations" \
-  migrate/migrate -path=/migrations -database "$MIGRATE" up
+  migrate/migrate:v4.17.1 -path=/migrations -database "$MIGRATE" up
 ```
 
 Expected: a última linha é `71/u recordings`, e o `down 1` mostra `71/d recordings`.

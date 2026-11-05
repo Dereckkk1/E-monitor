@@ -71,6 +71,7 @@ CREATE TABLE recordings (
   gaps            JSONB NOT NULL DEFAULT '[]',  -- [{"from":"...","to":"..."}]
   last_error      TEXT,
   drop_alerted_at TIMESTAMPTZ,          -- e-mail de queda sai uma vez por gravação
+  canceled_at     TIMESTAMPTZ,          -- preenchido = termina `cancelada`
   finished_at     TIMESTAMPTZ,
   expires_at      TIMESTAMPTZ,          -- finished_at + 15 dias
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -96,8 +97,8 @@ linhas `expirada` ficam como histórico.
 | `programada` | Aguardando o horário |
 | `gravando` | Dentro da janela |
 | `processando` | Janela acabou; juntando os pedaços e subindo o arquivo |
-| `concluida` | Cobertura ≥ 98% da janela |
-| `parcial` | Cobertura entre 0 e 98% |
+| `concluida` | Cobertura ≥ 98% da janela, ou faltando até 45s |
+| `parcial` | Áudio com buracos além dessa tolerância |
 | `falhou` | Nenhum áudio capturado |
 | `cancelada` | Cancelada; se já estava gravando, o que foi gravado fica salvo |
 | `expirada` | Passou dos 15 dias; áudio apagado, linha mantida |
@@ -107,6 +108,9 @@ Transições: `programada → gravando → processando → concluida | parcial |
 `processando` e termina `cancelada`, com áudio). `expirada` vem de qualquer
 estado final com áudio. Cancelar não muda a regra da retenção: `expires_at` conta
 de `finished_at`.
+
+A tolerância de 45s existe porque só o percentual reprovaria gravação curta: em 5
+minutos, 2% são 6 segundos, menos do que o ffmpeg leva para conectar.
 
 A coluna `gaps` é necessária porque **buracos não são preenchidos com silêncio**:
 ao juntar os pedaços, o tempo do player deixa de corresponder ao relógio depois
@@ -123,8 +127,9 @@ Pacote novo `workers/internal/recording`, sem dependência de `supervisor`,
 Goroutine única, iniciada em `cmd/api/main.go` **antes** da carga do índice, para
 que o buraco após um reinício não inclua os minutos de boot. A cada 15s:
 
-1. `programada` com `starts_at <= now() AND ends_at > now()` → passa a `gravando` e
-   dispara o gravador.
+1. `programada` com `starts_at <= now() + 20s` e `ends_at > now()` → passa a
+   `gravando` e dispara o gravador. O pré-roll compensa o tick e a conexão do ffmpeg:
+   sem ele, gravação marcada para 20:00 só teria áudio a partir de ~20:00:20.
 2. `gravando` sem gravador vivo no processo (reinício da API):
    - dentro da janela → retoma;
    - janela acabou → `processando`.
@@ -145,7 +150,7 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
   -map 0:a:0 <copy se AAC, senão -c:a aac -b:a 128k> \
   -f segment -segment_time 60 -segment_format adts \
   -segment_atclocktime 1 -reset_timestamps 1 -strftime 1 \
-  <dir>/a<tentativa>-%Y%m%d-%H%M%S.adts
+  <dir>/a<unix-da-tentativa>-%Y%m%d-%H%M%S.adts
 ```
 
 - **Reaproveita** de `ingestor`: `ProbeAudioCodec`, `pickReconnectArgs` e
@@ -158,10 +163,11 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
   abre no primeiro pacote e cresce durante o minuto. O ffmpeg pode ficar pendurado
   sem sair (mesma classe do incidente 2026-05-15).
 - **Saiu antes da hora:** espera 5s e tenta de novo, até `ends_at`.
-- **Prefixo `a<tentativa>`:** o `strftime` alinha no relógio, então um ffmpeg
-  novo no mesmo minuto sobrescreveria o pedaço anterior.
+- **Prefixo `a<unix>`:** um ffmpeg novo no mesmo minuto não sobrescreve o pedaço
+  anterior, nem depois de um reinício da API.
 - **Extensão `.adts`:** o `segments-cleanup` só apaga `*.aac`. Usar o volume que já
-  existe evita mudar compose e override em prod.
+  existe evita mudar compose e override em prod. Ele ainda apaga **pastas vazias**,
+  então `MkdirAll` roda a cada tentativa: com o stream fora, a pasta some.
 - **Fim da janela:** SIGTERM, para o último pedaço fechar direito. Mesmo tratamento
   no shutdown da API.
 
@@ -172,8 +178,9 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
 2. Concatena os bytes ADTS e remuxa: `ffmpeg -i <junto> -c copy -movflags +faststart
    <id>.m4a`. M4A abre em qualquer player e permite pular trechos. ADTS cru não dá
    duração nem busca confiáveis.
-3. Calcula `gaps` a partir dos minutos sem pedaço e `covered_seconds` pela duração
-   real do `.m4a` (`ffprobe`). Buraco tem granularidade de 1 minuto.
+3. Calcula `gaps` pelo intervalo real de cada pedaço (início no nome, fim no mtime),
+   ignorando trechos abaixo de 30s, e `covered_seconds` pela duração
+   real do `.m4a` (`ffprobe`).
 4. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
 5. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
 
@@ -216,7 +223,9 @@ Todas sob `RequireRole("admin")`:
 | `GET` | `/v1/internal/recordings/{id}/audio` | Bytes pelo proxy da API. `404` sem áudio |
 
 Bytes pela API porque URL pré-assinada do MinIO não funciona no navegador em prod
-(ver `docs/features/evidence-presigned-urls.md`).
+(ver `docs/features/evidence-presigned-urls.md`). O handler usa
+`context.WithoutCancel` na leitura do S3: o `middleware.Timeout` de 60s do router
+cortaria um download grande no meio.
 
 **Validação do `POST`** (dia e horas em `America/Sao_Paulo`):
 
