@@ -77,8 +77,10 @@ func (s *Store) StationInfo(ctx context.Context, id uuid.UUID) (string, string, 
 	return name, url, nil
 }
 
-// Insert cria a gravação. A checagem de sobreposição fica no mesmo comando para
-// dois admins não passarem juntos por ela.
+// Insert cria a gravação. A checagem de sobreposição evita conexão extra à toa,
+// mas não é atômica em READ COMMITTED: dois admins exatamente ao mesmo tempo
+// ainda podem passar por ela, e a consequência é só uma conexão a mais com o
+// stream.
 func (s *Store) Insert(ctx context.Context, stationID uuid.UUID, stationName string, createdBy *uuid.UUID, from, to time.Time) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
@@ -112,7 +114,7 @@ func (s *Store) List(ctx context.Context, limit, offset int) ([]Recording, int, 
 		return nil, 0, fmt.Errorf("recording: contar: %w", err)
 	}
 	items, err := s.collect(ctx, `SELECT `+selectCols+fromRecordings+
-		`ORDER BY r.starts_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+		`ORDER BY r.starts_at DESC, r.id LIMIT $1 OFFSET $2`, limit, offset)
 	return items, total, err
 }
 
@@ -147,15 +149,22 @@ func (s *Store) FailMissed(ctx context.Context, now time.Time, reason string) ([
 	if err != nil {
 		return nil, fmt.Errorf("recording: fail missed: %w", err)
 	}
+	// Estas linhas já viraram `falhou`: um Get que falha não pode descartar as
+	// que deram certo, senão o e-mail delas nunca sairia. Devolve o que juntou
+	// junto com o primeiro erro.
 	out := make([]Recording, 0, len(ids))
+	var firstErr error
 	for _, id := range ids {
 		r, err := s.Get(ctx, id)
 		if err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		out = append(out, *r)
 	}
-	return out, nil
+	return out, firstErr
 }
 
 // StreamURL lê a URL atual: relida a cada tentativa, para uma correção feita
@@ -200,13 +209,14 @@ func (s *Store) SetLastError(ctx context.Context, id uuid.UUID, msg string) erro
 	return err
 }
 
-// Complete fecha uma gravação em `processando`.
+// Complete fecha uma gravação em `processando`. Devolve ErrBusy se ela não estava
+// nesse estado.
 func (s *Store) Complete(ctx context.Context, id uuid.UUID, in CompleteInput) error {
 	gaps, err := json.Marshal(in.Gaps)
 	if err != nil {
 		return fmt.Errorf("recording: gaps: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE recordings
 		SET status = $2, object_key = $3, size_bytes = $4, covered_seconds = $5,
 		    gaps = $6, finished_at = $7, expires_at = $8, updated_at = now()
@@ -214,6 +224,12 @@ func (s *Store) Complete(ctx context.Context, id uuid.UUID, in CompleteInput) er
 		id, in.Status, in.ObjectKey, in.SizeBytes, in.CoveredSeconds, gaps, in.FinishedAt, in.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("recording: concluir: %w", err)
+	}
+	// 0 linhas: a gravação não está em `processando` (outro caminho já a fechou).
+	// O chamador apaga os pedaços depois de nil, então nil tem que significar
+	// que o resultado foi mesmo registrado.
+	if tag.RowsAffected() == 0 {
+		return ErrBusy
 	}
 	return nil
 }

@@ -78,13 +78,17 @@ func TestStore_CicloCompleto(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ainda não chegou a hora.
-	n, err := s.ClaimDue(ctx, now, now)
+	_, err = s.ClaimDue(ctx, now, now)
 	require.NoError(t, err)
-	require.Zero(t, n)
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StatusProgramada, got.Status)
 
-	n, err = s.ClaimDue(ctx, now.Add(2*time.Minute), now)
+	_, err = s.ClaimDue(ctx, now.Add(2*time.Minute), now)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, n)
+	got, err = s.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StatusGravando, got.Status)
 
 	first, err := s.MarkDropAlerted(ctx, id)
 	require.NoError(t, err)
@@ -105,7 +109,7 @@ func TestStore_CicloCompleto(t *testing.T) {
 		FinishedAt: now, ExpiresAt: &exp,
 	}))
 
-	got, err := s.Get(ctx, id)
+	got, err = s.Get(ctx, id)
 	require.NoError(t, err)
 	require.Equal(t, StatusParcial, got.Status)
 	require.True(t, got.HasAudio)
@@ -135,8 +139,11 @@ func TestStore_FailMissed(t *testing.T) {
 
 	missed, err := s.FailMissed(ctx, now, "motivo")
 	require.NoError(t, err)
-	require.Len(t, missed, 1)
-	require.Equal(t, id, missed[0].ID)
+	var achou bool
+	for _, r := range missed {
+		achou = achou || r.ID == id
+	}
+	require.True(t, achou, "a linha do teste deve estar entre as fechadas")
 
 	got, err := s.Get(ctx, id)
 	require.NoError(t, err)
@@ -152,7 +159,8 @@ func TestStore_Cancelar(t *testing.T) {
 	id, err := s.Insert(ctx, st, "R", nil, now.Add(time.Hour), now.Add(2*time.Hour))
 	require.NoError(t, err)
 	require.NoError(t, s.CancelScheduled(ctx, id, now))
-	got, _ := s.Get(ctx, id)
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
 	require.Equal(t, StatusCancelada, got.Status)
 	require.ErrorIs(t, s.CancelScheduled(ctx, id, now), ErrBusy)
 
@@ -161,7 +169,8 @@ func TestStore_Cancelar(t *testing.T) {
 	_, err = s.ClaimDue(ctx, now, now)
 	require.NoError(t, err)
 	require.NoError(t, s.CancelRecording(ctx, id2, now))
-	got, _ = s.Get(ctx, id2)
+	got, err = s.Get(ctx, id2)
+	require.NoError(t, err)
 	require.Equal(t, StatusProcessando, got.Status)
 	require.NotNil(t, got.CanceledAt)
 }
@@ -187,15 +196,59 @@ func TestStore_StationInfoEStreamURL(t *testing.T) {
 func TestStore_ListPagina(t *testing.T) {
 	ctx, s, pool := newTestStore(t)
 	st := seedStation(t, ctx, pool, "http://x/s")
-	t0 := time.Now().Add(100 * time.Hour).Truncate(time.Second)
+	t0 := time.Now().Add(10 * 365 * 24 * time.Hour).Truncate(time.Second)
 	_, err := s.Insert(ctx, st, "A", nil, t0, t0.Add(time.Hour))
 	require.NoError(t, err)
-	_, err = s.Insert(ctx, st, "B", nil, t0.Add(2*time.Hour), t0.Add(3*time.Hour))
+	idB, err := s.Insert(ctx, st, "B", nil, t0.Add(2*time.Hour), t0.Add(3*time.Hour))
 	require.NoError(t, err)
 
 	items, total, err := s.List(ctx, 1, 0)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.GreaterOrEqual(t, total, 2)
-	require.Equal(t, "B", items[0].StationName, "mais recente primeiro")
+	require.Equal(t, idB, items[0].ID, "mais recente primeiro")
+}
+
+func TestStore_Complete_ForaDeProcessandoDevolveBusy(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+	id, err := s.Insert(ctx, st, "R", nil, now.Add(time.Hour), now.Add(2*time.Hour))
+	require.NoError(t, err)
+
+	key := "recordings/2026/11/y.m4a"
+	err = s.Complete(ctx, id, CompleteInput{Status: StatusConcluida, ObjectKey: &key, FinishedAt: now})
+	require.ErrorIs(t, err, ErrBusy)
+
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StatusProgramada, got.Status)
+	require.False(t, got.HasAudio)
+	require.Nil(t, got.FinishedAt)
+}
+
+func TestStore_ClaimDue_IgnoraJanelaVencida(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+	id, err := s.Insert(ctx, st, "R", nil, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	require.NoError(t, err)
+
+	_, err = s.ClaimDue(ctx, now, now)
+	require.NoError(t, err)
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StatusProgramada, got.Status, "janela já vencida não vira gravando")
+}
+
+func TestStore_Delete(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+	id, err := s.Insert(ctx, st, "R", nil, now.Add(time.Hour), now.Add(2*time.Hour))
+	require.NoError(t, err)
+
+	require.NoError(t, s.Delete(ctx, id))
+	_, err = s.Get(ctx, id)
+	require.ErrorIs(t, err, ErrNotFound)
 }
