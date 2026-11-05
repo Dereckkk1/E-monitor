@@ -116,6 +116,11 @@ type Manager struct {
 	// então o aviso sai uma vez por processo: reinício zera a contagem e pode repetir
 	// o e-mail.
 	finalizeFailures map[uuid.UUID]int
+	// draining barra gravador novo depois que WaitRecorders começou.
+	draining bool
+
+	// recorders conta os gravadores vivos, para o desligamento esperar por eles.
+	recorders sync.WaitGroup
 }
 
 // NewManager monta o Manager.
