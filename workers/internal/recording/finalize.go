@@ -128,7 +128,8 @@ func (m *Manager) closeWithoutAudio(ctx context.Context, rec Recording, canceled
 // pedaços só somem depois de o m4a passar na conferência pela contagem de frames e
 // de o Complete confirmar. Falha nesse caminho é repetida sem perder áudio. O que é
 // descartado de propósito: bytes depois do último frame completo de cada pedaço
-// (ver Concat) e pedaços sem nenhum frame completo, que encerram como sem áudio.
+// (ver Concat) e, sem nenhum frame, até maxADTSFrame bytes, que são só resto de
+// frame. Acima disso os pedaços ficam: pode ser áudio em formato não reconhecido.
 func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	dir := m.dirFor(rec.ID)
 	pieces, err := ListPieces(dir)
@@ -166,6 +167,13 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	}
 	if frames == 0 {
 		os.Remove(joined) //nolint:errcheck
+		var size int64
+		for _, p := range pieces {
+			size += p.Size
+		}
+		if size > maxADTSFrame {
+			return fmt.Errorf("recording: %d bytes nos pedaços sem nenhum frame ADTS válido", size)
+		}
 		return m.closeWithoutAudio(ctx, rec, canceled, ComputeGaps(nil, rec.StartsAt, end, m.cfg.MinGap), now)
 	}
 	err = m.media.Remux(ctx, joined, out)

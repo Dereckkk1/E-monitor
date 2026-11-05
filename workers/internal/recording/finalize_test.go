@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -505,4 +507,51 @@ func (m *Manager) finalizeFailureCount(id uuid.UUID) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.finalizeFailures[id]
+}
+
+func seedGarbage(t *testing.T, m *Manager, r Recording, size int) {
+	t.Helper()
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, strings.Repeat("x", size))
+}
+
+// Até o tamanho do maior frame possível, é só resto de um frame que não terminou.
+func TestFinalize_RestoDeFrameEhSemAudio(t *testing.T) {
+	for _, size := range []int{100, maxADTSFrame} {
+		t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+		r := processing(t0)
+		repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+		m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+		seedGarbage(t, m, r, size)
+
+		require.NoError(t, m.finalize(context.Background(), r), size)
+
+		require.Equal(t, StatusFalhou, repo.snapshot(r.ID).Status, size)
+		require.Len(t, mail.all(), 1, size)
+		_, err := os.Stat(m.dirFor(r.ID))
+		require.True(t, os.IsNotExist(err), size)
+	}
+}
+
+// Se o formato da captura mudar, áudio bom não pode ser descartado como "sem frames".
+func TestFinalize_BytesSemFrameReconhecidoPreservaPedacos(t *testing.T) {
+	for _, size := range []int{maxADTSFrame + 1, 20 * 1024} {
+		t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+		r := processing(t0)
+		repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+		m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+		seedGarbage(t, m, r, size)
+
+		err := m.finalize(context.Background(), r)
+
+		require.ErrorContains(t, err, strconv.Itoa(size)+" bytes")
+		require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status, size)
+		require.Empty(t, objs.puts, size)
+		require.Empty(t, mail.all(), size)
+		pieces, err := ListPieces(m.dirFor(r.ID))
+		require.NoError(t, err)
+		require.Len(t, pieces, 1, size)
+		requireNoTempFiles(t, m, r)
+	}
 }

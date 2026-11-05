@@ -111,7 +111,7 @@ de `finished_at`.
 A coluna `gaps` é necessária porque **buracos não são preenchidos com silêncio**:
 ao juntar os pedaços, o tempo do player deixa de corresponder ao relógio depois
 de cada buraco. Como o arquivo é prova, a tela lista os intervalos que faltam
-("sem áudio das 20:14 às 20:17").
+("sem áudio das 20:14:05 às 20:17:40").
 
 ## 5. Backend
 
@@ -193,10 +193,16 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
 5. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
 6. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
 
-Sem nenhum frame completo, vira `falhou` e não sobe nada. Qualquer falha da
+Sem nenhum frame completo e com até 8191 bytes no total (o maior frame possível, ou
+seja, só resto de frame), vira `falhou` e não sobe nada. Acima disso é falha de
+finalização e nada é apagado: se o formato da captura mudar, áudio bom não pode ser
+descartado como "sem frames". Qualquer falha da
 finalização grava o motivo em `last_error` e repete a cada 2 minutos: a linha fica
 em `processando` e os pedaços ficam no disco. A ordem garante que nenhuma falha
 perca áudio já capturado.
+
+Risco aceito: corrupção no meio de um pedaço descarta o resto dele, mas `gaps` usa o
+mtime e conta o pedaço inteiro como coberto, então a gravação pode fechar `concluida`.
 
 ### 5.4 E-mails
 
