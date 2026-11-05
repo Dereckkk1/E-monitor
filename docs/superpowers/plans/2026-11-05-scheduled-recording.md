@@ -3505,6 +3505,10 @@ Em `scripts/deploy.sh`, logo depois de `snapshot_counts()`:
 # enquanto ela reinicia, e numa entrevista ao vivo não existe segunda chance.
 # Doc: docs/features/scheduled-recording.md
 #
+# `processando` não bloqueia: a finalização é repetível, retoma sozinha depois
+# do reinício, e bloquear travaria todo deploy se uma finalização falhasse para
+# sempre.
+#
 # Tabela inexistente conta como zero, para esta guarda não travar o próprio
 # deploy que cria a tabela. psql inacessível só avisa: guarda que dá alarme falso
 # ensina a usar o bypass.
@@ -3516,7 +3520,7 @@ guard_active_recordings() {
   service_running postgres || return 0
 
   local sql rows
-  sql="SELECT station_name || ' | ' || status || ' | ' || to_char(starts_at AT TIME ZONE 'America/Sao_Paulo', 'DD/MM HH24:MI') || ' a ' || to_char(ends_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI') FROM recordings WHERE status IN ('gravando','processando') OR (status = 'programada' AND starts_at < now() + INTERVAL '10 minutes') ORDER BY starts_at"
+  sql="SELECT station_name || ' | ' || status || ' | ' || to_char(starts_at AT TIME ZONE 'America/Sao_Paulo', 'DD/MM HH24:MI') || ' a ' || to_char(ends_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI') FROM recordings WHERE status = 'gravando' OR (status = 'programada' AND starts_at < now() + INTERVAL '10 minutes') ORDER BY starts_at"
 
   local exists
   exists=$($COMPOSE exec -T postgres sh -c \
@@ -3966,6 +3970,7 @@ function RecordingRow({ rec }) {
   const coverage = coveragePercent(rec)
   const gaps = gapLabels(rec)
   const showIssue = rec.status === 'parcial' || rec.status === 'falhou'
+  const showError = ['falhou', 'processando'].includes(rec.status) && rec.last_error
   const canCancel = rec.status === 'programada' || rec.status === 'gravando'
   const canDelete = !['programada', 'gravando', 'processando'].includes(rec.status)
 
@@ -4045,7 +4050,7 @@ function RecordingRow({ rec }) {
           )}
         </td>
       </tr>
-      {(audioUrl || (showIssue && (gaps.length > 0 || rec.last_error))) && (
+      {(audioUrl || (showIssue && gaps.length > 0) || showError) && (
         <tr className="ar-detail">
           <td colSpan={6}>
             {audioUrl && (
@@ -4054,7 +4059,7 @@ function RecordingRow({ rec }) {
             {showIssue && gaps.length > 0 && (
               <ul className="ar-gaps">{gaps.map(g => <li key={g}>{g}</li>)}</ul>
             )}
-            {rec.status === 'falhou' && rec.last_error && <p className="ar-error-detail">{rec.last_error}</p>}
+            {showError && <p className="ar-error-detail">{rec.last_error}</p>}
           </td>
         </tr>
       )}
@@ -4296,8 +4301,9 @@ Spec: [2026-11-05-scheduled-recording-design.md](../superpowers/specs/2026-11-05
    `segments-cleanup` apaga `*.aac` com mais de 60min.
 3. No fim da janela, os pedaços viram um `.m4a` que sobe para
    `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
-4. Os pedaços só são apagados depois de o banco confirmar. Qualquer falha é
-   repetida no tick seguinte, sem perder áudio.
+4. Os pedaços só são apagados depois de o banco confirmar. Qualquer falha grava o
+   motivo em `last_error`, que a tela mostra, e repete a cada 2 minutos, sem perder
+   áudio.
 5. Um job de hora em hora apaga o áudio vencido e marca `expirada`.
 
 | Status | Significado |
@@ -4333,6 +4339,10 @@ A captura roda dentro da API. O `scripts/deploy.sh` aborta se houver gravação 
 andamento ou começando em menos de 10 minutos. Bypass:
 `SKIP_RECORDING_GUARD=yes`, que corta o áudio enquanto a API reinicia. Depois de
 um reinício a gravação retoma sozinha e o trecho perdido entra em `gaps`.
+
+`processando` não bloqueia o deploy: a finalização é repetível e retoma sozinha
+depois do reinício. Bloquear travaria todo deploy se uma finalização falhasse para
+sempre.
 
 ## Tamanho
 

@@ -186,9 +186,10 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
 4. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
 5. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
 
-Sem nenhum pedaço com áudio, vira `falhou` e não sobe nada. Se o upload falhar, a
-linha fica em `processando`, os pedaços ficam no disco e o próximo tick repete. A
-ordem garante que nenhuma falha perca áudio já capturado.
+Sem nenhum pedaço com áudio, vira `falhou` e não sobe nada. Qualquer falha da
+finalização grava o motivo em `last_error` e repete a cada 2 minutos: a linha fica
+em `processando` e os pedaços ficam no disco. A ordem garante que nenhuma falha
+perca áudio já capturado.
 
 ### 5.4 E-mails
 
@@ -244,9 +245,12 @@ Antes do `up -d`, função `guard_active_recordings`:
 
 ```sql
 SELECT count(*) FROM recordings
-WHERE status IN ('gravando','processando')
+WHERE status = 'gravando'
    OR (status = 'programada' AND starts_at < now() + INTERVAL '10 minutes');
 ```
+
+`processando` não bloqueia: a finalização é repetível, retoma sozinha depois do
+reinício, e bloquear travaria todo deploy se uma finalização falhasse para sempre.
 
 Acima de zero, aborta com a lista. Bypass: `SKIP_RECORDING_GUARD=yes`. Tabela
 inexistente (primeiro deploy) conta como zero, para a guarda não travar o próprio
@@ -282,7 +286,7 @@ autenticada, então `PUBLIC_ROUTES` não muda.
 | Deploy com gravação viva | Bloqueado pela guarda |
 | API reinicia mesmo assim | Retoma ao subir; buraco em `gaps`; pedaços anteriores preservados |
 | API fora durante toda a janela | `falhou` ao voltar, com e-mail |
-| Bucket fora | Fica em `processando`, pedaços no disco, repete sozinho |
+| Bucket fora | Fica em `processando`, pedaços no disco, motivo em `last_error`, repete a cada 2 minutos |
 | Disco cheio | ffmpeg falha, buraco em `gaps`, e-mail de queda |
 | Emissora ou usuário excluído depois | Linha mantida via `station_name` / `SET NULL` |
 
