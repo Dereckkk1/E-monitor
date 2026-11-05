@@ -3,7 +3,6 @@ package recording
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -122,24 +121,49 @@ func FinalStatus(hasAudio, canceled bool, gaps []Gap) string {
 	return StatusConcluida
 }
 
-// Concat grava os bytes dos pedaços em sequência. ADTS é autodelimitado, então
-// concatenar bytes produz um stream válido.
-func Concat(pieces []Piece, out string) error {
+// adtsHeaderSize é o menor header ADTS (sem CRC). É onde o comprimento já é legível.
+const adtsHeaderSize = 7
+
+// completeFrames percorre os frames ADTS a partir do início e devolve onde termina
+// o último frame completo, e quantos são. Para no primeiro frame inválido ou que
+// não caiba no restante do buffer.
+func completeFrames(b []byte) (size int, frames int64) {
+	for len(b)-size >= adtsHeaderSize {
+		h := b[size:]
+		if h[0] != 0xFF || h[1]&0xF0 != 0xF0 {
+			break
+		}
+		n := int(h[3]&0x03)<<11 | int(h[4])<<3 | int(h[5])>>5
+		if n < adtsHeaderSize || n > len(h) {
+			break
+		}
+		size += n
+		frames++
+	}
+	return size, frames
+}
+
+// Concat grava em sequência os frames completos de cada pedaço e devolve quantos
+// gravou. Concatenar os bytes crus não basta: um pedaço cortado no meio de um frame
+// (kill -9, crash da API) faz o remux parar ali, com exit 0 e arquivo curto, e todo
+// o áudio dos pedaços seguintes some. Por isso cada pedaço é aparado no último frame
+// completo. Um frame inválido encerra aquele pedaço, e o próximo segue normalmente.
+func Concat(pieces []Piece, out string) (frames int64, err error) {
 	dst, err := os.Create(out)
 	if err != nil {
-		return fmt.Errorf("recording: criar %s: %w", out, err)
+		return 0, fmt.Errorf("recording: criar %s: %w", out, err)
 	}
 	defer dst.Close()
 	for _, p := range pieces {
-		src, err := os.Open(p.Path)
+		b, err := os.ReadFile(p.Path)
 		if err != nil {
-			return fmt.Errorf("recording: abrir pedaço: %w", err)
+			return 0, fmt.Errorf("recording: ler pedaço: %w", err)
 		}
-		_, err = io.Copy(dst, src)
-		src.Close()
-		if err != nil {
-			return fmt.Errorf("recording: copiar pedaço: %w", err)
+		size, n := completeFrames(b)
+		if _, err := dst.Write(b[:size]); err != nil {
+			return 0, fmt.Errorf("recording: copiar pedaço: %w", err)
 		}
+		frames += n
 	}
-	return dst.Close()
+	return frames, dst.Close()
 }

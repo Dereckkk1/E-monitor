@@ -16,12 +16,27 @@ import (
 
 const stderrTail = 2048
 
+const (
+	// sampleRate é a taxa fixa de todo pedaço gravado (ver audioArgs).
+	sampleRate = 44100
+	// samplesPerFrame é o tamanho do frame AAC-LC.
+	samplesPerFrame = 1024
+)
+
 // audioArgs é o formato de TODO pedaço gravado, sempre reencodado, nunca copy.
 // Pedaços com parâmetros diferentes (22 kHz mono + 48 kHz estéreo, por exemplo)
 // concatenados geram um .m4a corrompido sem erro nenhum: 7s viraram 11,84s num
 // experimento. Isso acontece quando a URL é trocada durante uma queda ou a rádio
 // reinicia o encoder. Formato fixo elimina o caso (~56 MB/h por gravação).
-var audioArgs = []string{"-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2"}
+var audioArgs = []string{"-c:a", "aac", "-b:a", "128k", "-ar", strconv.Itoa(sampleRate), "-ac", "2"}
+
+// framesDuration é a duração de um número de frames. O formato fixo garante 1024
+// amostras por frame, então a duração esperada é exata e independe do relógio.
+// Comparar o arquivo com o tempo de relógio daria alarme falso com rádio que
+// engasga.
+func framesDuration(frames int64) time.Duration {
+	return time.Duration(frames*samplesPerFrame) * time.Second / sampleRate
+}
 
 // tailWriter guarda só o fim do stderr: uma gravação de 6h com stream instável
 // escreveria sem limite num bytes.Buffer.

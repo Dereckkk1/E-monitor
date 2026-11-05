@@ -227,6 +227,39 @@ func TestStore_Complete_ForaDeProcessandoDevolveBusy(t *testing.T) {
 	require.Nil(t, got.FinishedAt)
 }
 
+// Motivo de uma tentativa que falhou não pode sobrar numa gravação sem problema,
+// mas continua valendo como explicação de parcial, falhou e cancelada.
+func TestStore_Complete_LimpaLastErrorSoEmConcluida(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+
+	for i, c := range []struct {
+		status string
+		keep   bool
+	}{{StatusConcluida, false}, {StatusParcial, true}, {StatusFalhou, true}, {StatusCancelada, true}} {
+		from := now.Add(time.Duration(i+1) * 2 * time.Hour)
+		id, err := s.Insert(ctx, st, "R", nil, from, from.Add(time.Hour))
+		require.NoError(t, err)
+		_, err = s.ClaimDue(ctx, from, from)
+		require.NoError(t, err)
+		require.NoError(t, s.SetLastError(ctx, id, "bucket fora"))
+		require.NoError(t, s.MarkProcessing(ctx, id))
+
+		require.NoError(t, s.Complete(ctx, id, CompleteInput{Status: c.status, Gaps: []Gap{}, FinishedAt: now}))
+
+		got, err := s.Get(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, c.status, got.Status)
+		if c.keep {
+			require.NotNil(t, got.LastError, c.status)
+			require.Equal(t, "bucket fora", *got.LastError)
+		} else {
+			require.Nil(t, got.LastError, c.status)
+		}
+	}
+}
+
 func TestStore_ClaimDue_IgnoraJanelaVencida(t *testing.T) {
 	ctx, s, pool := newTestStore(t)
 	st := seedStation(t, ctx, pool, "http://x/s")

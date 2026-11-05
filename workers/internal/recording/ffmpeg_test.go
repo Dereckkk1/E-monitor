@@ -110,7 +110,8 @@ func TestRemux_PedacosComMesmoFormatoFixo(t *testing.T) {
 	}
 
 	joined := filepath.Join(dir, "joined.tmp")
-	require.NoError(t, Concat(pieces, joined))
+	_, err := Concat(pieces, joined)
+	require.NoError(t, err)
 	out := filepath.Join(dir, "out.m4a")
 	f := FFmpeg{}
 	require.NoError(t, f.Remux(context.Background(), joined, out))
@@ -118,4 +119,61 @@ func TestRemux_PedacosComMesmoFormatoFixo(t *testing.T) {
 	dur, err := f.Duration(context.Background(), out)
 	require.NoError(t, err)
 	require.InDelta(t, 7.0, dur.Seconds(), 0.3)
+}
+
+func TestFramesDuration(t *testing.T) {
+	require.Equal(t, time.Duration(0), framesDuration(0))
+	require.Equal(t, time.Duration(1024)*time.Second/44100, framesDuration(1))
+	require.InDelta(t, 3600.0, framesDuration(3600*44100/1024).Seconds(), 0.03)
+}
+
+// A perda que motivou completeFrames: com ffmpeg de verdade, o pedaço cortado em
+// ponto arbitrário não pode levar junto o pedaço íntegro que vem depois dele.
+func TestConcatRemux_PedacoCortadoNaoPerdeOSeguinte(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg não instalado")
+	}
+	dir := t.TempDir()
+	// Mesmo caminho da captura: formato fixo e segment muxer em ADTS.
+	gen := func(name string) []byte {
+		p := filepath.Join(dir, name)
+		args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+			"-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-map", "0:a:0"}
+		args = append(args, audioArgs...)
+		args = append(args, "-f", "segment", "-segment_time", "60", "-segment_format", "adts", p+"%d")
+		out, err := exec.Command("ffmpeg", args...).CombinedOutput()
+		require.NoError(t, err, string(out))
+		b, err := os.ReadFile(p + "0")
+		require.NoError(t, err)
+		size, frames := completeFrames(b)
+		require.Equal(t, len(b), size, "o ffmpeg tem que gerar só frames íntegros")
+		require.Positive(t, frames)
+		return b
+	}
+	whole := gen("whole.bin")
+	next := gen("next.bin")
+
+	f := FFmpeg{}
+	for _, cut := range []int{len(whole) / 7, len(whole) / 3, len(whole)/2 + 1, len(whole) - 1} {
+		size, _ := completeFrames(whole[:cut])
+		require.Less(t, size, cut, "o corte tem que cair no meio de um frame")
+
+		a := filepath.Join(dir, "a.bin")
+		require.NoError(t, os.WriteFile(a, whole[:cut], 0o644))
+		b := filepath.Join(dir, "b.bin")
+		require.NoError(t, os.WriteFile(b, next, 0o644))
+		joined := filepath.Join(dir, "joined.tmp")
+		out := filepath.Join(dir, "out.m4a")
+
+		frames, err := Concat([]Piece{{Path: a}, {Path: b}}, joined)
+		require.NoError(t, err)
+		require.NoError(t, f.Remux(context.Background(), joined, out))
+		dur, err := f.Duration(context.Background(), out)
+		require.NoError(t, err)
+
+		want := framesDuration(frames)
+		require.GreaterOrEqual(t, dur*100, want*98, "corte %d: %s para %s esperados", cut, dur, want)
+		require.LessOrEqual(t, dur*98, want*100, "corte %d: %s para %s esperados", cut, dur, want)
+		require.Greater(t, dur, 2900*time.Millisecond, "corte %d: o pedaço íntegro sumiu", cut)
+	}
 }

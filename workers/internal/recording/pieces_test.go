@@ -3,6 +3,7 @@ package recording
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,16 @@ func writePiece(t *testing.T, dir, attempt string, start, end time.Time, content
 	p := filepath.Join(dir, "a"+attempt+"-"+start.Local().Format("20060102-150405")+pieceExt)
 	require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
 	require.NoError(t, os.Chtimes(p, end, end))
+}
+
+// validADTS devolve frames ADTS íntegros (AAC-LC, 44,1 kHz, estéreo), com payload
+// pequeno: para os testes só a estrutura do frame importa.
+func validADTS(frames int) string {
+	const payload = 8
+	n := 7 + payload
+	frame := []byte{0xFF, 0xF1, 0x50, 0x80 | byte(n>>11), byte(n >> 3), byte(n<<5) | 0x1F, 0xFC}
+	frame = append(frame, make([]byte, payload)...)
+	return strings.Repeat(string(frame), frames)
 }
 
 func TestListPieces(t *testing.T) {
@@ -106,24 +117,90 @@ func TestFinalStatus(t *testing.T) {
 	}
 }
 
+func TestCompleteFrames(t *testing.T) {
+	frame := len(validADTS(1))
+	badLength := []byte(validADTS(1))
+	badLength[3], badLength[4], badLength[5] = badLength[3]&^0x03, 0, 0 // comprimento 0
+	tooLong := []byte(validADTS(1))
+	tooLong[3] |= 0x03 // comprimento maior que o que sobrou no buffer
+	noSync := []byte(validADTS(1))
+	noSync[0] = 0x00
+
+	cases := []struct {
+		name   string
+		in     []byte
+		size   int
+		frames int64
+	}{
+		{"buffer vazio", nil, 0, 0},
+		{"stream íntegro", []byte(validADTS(3)), 3 * frame, 3},
+		{"cortado no meio do header", []byte(validADTS(3))[:2*frame+4], 2 * frame, 2},
+		{"cortado no meio do payload", []byte(validADTS(3))[:2*frame+9], 2 * frame, 2},
+		{"menor que um header", []byte(validADTS(1))[:3], 0, 0},
+		{"comprimento inválido", append([]byte(validADTS(2)), badLength...), 2 * frame, 2},
+		{"comprimento maior que o restante", append([]byte(validADTS(2)), tooLong...), 2 * frame, 2},
+		{"sem sync", append([]byte(validADTS(2)), noSync...), 2 * frame, 2},
+		{"frame íntegro depois do inválido não conta", append(append([]byte(validADTS(1)), noSync...), validADTS(1)...), frame, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			size, frames := completeFrames(c.in)
+			require.Equal(t, c.size, size)
+			require.Equal(t, c.frames, frames)
+		})
+	}
+}
+
 func TestConcat(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a"+pieceExt)
 	b := filepath.Join(dir, "b"+pieceExt)
-	require.NoError(t, os.WriteFile(a, []byte("aaa"), 0o644))
-	require.NoError(t, os.WriteFile(b, []byte("bb"), 0o644))
+	require.NoError(t, os.WriteFile(a, []byte(validADTS(3)), 0o644))
+	require.NoError(t, os.WriteFile(b, []byte(validADTS(2)), 0o644))
 	out := filepath.Join(dir, "joined.tmp")
 
-	require.NoError(t, Concat([]Piece{{Path: a}, {Path: b}}, out))
+	frames, err := Concat([]Piece{{Path: a}, {Path: b}}, out)
+	require.NoError(t, err)
+	require.EqualValues(t, 5, frames)
 
 	got, err := os.ReadFile(out)
 	require.NoError(t, err)
-	require.Equal(t, "aaabb", string(got))
+	require.Equal(t, validADTS(5), string(got))
+}
+
+// Um pedaço cortado no meio de um frame (kill -9) faz o remux parar ali com exit 0
+// e descartar todos os pedaços seguintes, sem aviso.
+func TestConcat_ApagaFrameCortadoESegueParaOProximoPedaco(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a"+pieceExt)
+	b := filepath.Join(dir, "b"+pieceExt)
+	cortado := validADTS(3)
+	require.NoError(t, os.WriteFile(a, []byte(cortado[:len(cortado)-5]), 0o644))
+	require.NoError(t, os.WriteFile(b, []byte(validADTS(2)), 0o644))
+	out := filepath.Join(dir, "joined.tmp")
+
+	frames, err := Concat([]Piece{{Path: a}, {Path: b}}, out)
+	require.NoError(t, err)
+	require.EqualValues(t, 4, frames)
+
+	got, err := os.ReadFile(out)
+	require.NoError(t, err)
+	require.Equal(t, validADTS(4), string(got))
+}
+
+func TestConcat_SemFrameCompleto(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a"+pieceExt)
+	require.NoError(t, os.WriteFile(a, []byte("xx"), 0o644))
+
+	frames, err := Concat([]Piece{{Path: a}}, filepath.Join(dir, "joined.tmp"))
+	require.NoError(t, err)
+	require.Zero(t, frames)
 }
 
 func TestConcat_PedacoInexistente(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "joined.tmp")
-	err := Concat([]Piece{{Path: filepath.Join(dir, "nao-existe"+pieceExt)}}, out)
+	_, err := Concat([]Piece{{Path: filepath.Join(dir, "nao-existe"+pieceExt)}}, out)
 	require.Error(t, err)
 }

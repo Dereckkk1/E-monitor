@@ -8,7 +8,20 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+)
+
+const (
+	// finalizeTimeout é folga para juntar e subir o maior arquivo. Sem prazo, um
+	// upload pendurado prenderia o id em finalizing para sempre.
+	finalizeTimeout = 30 * time.Minute
+	// finalizeStuckAfter é a falha seguida que gera o aviso: uma falha transitória
+	// de bucket não pode virar alarme.
+	finalizeStuckAfter = 3
+	// minCoveredPercent é o piso do m4a em relação aos frames entregues ao remux.
+	// A folga é só para o arredondamento do ffprobe.
+	minCoveredPercent = 98
 )
 
 func objectKey(r Recording) string {
@@ -36,15 +49,27 @@ func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 			delete(m.finalizing, rec.ID)
 			m.mu.Unlock()
 		}()
-		err := m.finalize(ctx, rec)
+		runCtx, cancel := context.WithTimeout(ctx, finalizeTimeout)
+		defer cancel()
+		err := m.finalize(runCtx, rec)
 		// ErrBusy: outro caminho já fechou a linha. Não há o que repetir, e um
 		// motivo gravado aqui ficaria numa gravação encerrada.
 		if err == nil || errors.Is(err, ErrBusy) {
+			m.clearFinalizeFailures(rec.ID)
+			return
+		}
+		// Reinício da API: a finalização retoma sozinha no boot, não é falha. Olha
+		// ctx, não runCtx: estourar finalizeTimeout conta como falha.
+		if ctx.Err() != nil {
+			m.log.Info("recording: finalização interrompida pelo desligamento", zap.Stringer("id", rec.ID))
 			return
 		}
 		m.log.Warn("recording: finalização falhou, vai repetir",
 			zap.Stringer("id", rec.ID), zap.Duration("em", m.cfg.FinalizeRetry), zap.Error(err))
 		m.recordFinalizeError(rec, err)
+		if m.countFinalizeFailure(rec.ID) == finalizeStuckAfter {
+			m.notifyFinalizeStuck(rec, err)
+		}
 
 		timer := time.NewTimer(m.cfg.FinalizeRetry)
 		defer timer.Stop()
@@ -53,6 +78,19 @@ func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 		case <-ctx.Done():
 		}
 	}()
+}
+
+func (m *Manager) countFinalizeFailure(id uuid.UUID) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.finalizeFailures[id]++
+	return m.finalizeFailures[id]
+}
+
+func (m *Manager) clearFinalizeFailures(id uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.finalizeFailures, id)
 }
 
 // recordFinalizeError mostra o motivo na tela. Contexto próprio: ctx pode ser
@@ -65,9 +103,33 @@ func (m *Manager) recordFinalizeError(rec Recording, cause error) {
 	}
 }
 
-// finalize é idempotente: a chave do objeto é fixa e os pedaços só somem depois
-// do Complete, então qualquer falha aqui é repetida sem perder áudio.
-func (m *Manager) finalize(ctx context.Context, rec Recording) error {
+// removeDir roda depois de o resultado estar registrado: a gravação já fechou, e
+// uma pasta que sobrou só ocupa disco.
+func (m *Manager) removeDir(rec Recording) {
+	if err := os.RemoveAll(m.dirFor(rec.ID)); err != nil {
+		m.log.Warn("recording: apagar pedaços", zap.Stringer("id", rec.ID), zap.Error(err))
+	}
+}
+
+// closeWithoutAudio encerra a gravação que não tem nenhum frame para subir.
+func (m *Manager) closeWithoutAudio(ctx context.Context, rec Recording, canceled bool, gaps []Gap, now time.Time) error {
+	status := FinalStatus(false, canceled, gaps)
+	if err := m.repo.Complete(ctx, rec.ID, CompleteInput{Status: status, Gaps: gaps, FinishedAt: now}); err != nil {
+		return err
+	}
+	m.removeDir(rec)
+	if status == StatusFalhou {
+		m.notifyFailed(rec)
+	}
+	return nil
+}
+
+// finalize é idempotente: a chave do objeto é fixa e, havendo frames para subir, os
+// pedaços só somem depois de o m4a passar na conferência pela contagem de frames e
+// de o Complete confirmar. Falha nesse caminho é repetida sem perder áudio. O que é
+// descartado de propósito: bytes depois do último frame completo de cada pedaço
+// (ver Concat) e pedaços sem nenhum frame completo, que encerram como sem áudio.
+func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	dir := m.dirFor(rec.ID)
 	pieces, err := ListPieces(dir)
 	if err != nil {
@@ -84,23 +146,31 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) error {
 	now := m.now()
 
 	if len(pieces) == 0 {
-		status := FinalStatus(false, canceled, gaps)
-		if err := m.repo.Complete(ctx, rec.ID, CompleteInput{Status: status, Gaps: gaps, FinishedAt: now}); err != nil {
-			return err
-		}
-		os.RemoveAll(dir) //nolint:errcheck
-		if status == StatusFalhou {
-			m.notifyFailed(rec)
-		}
-		return nil
+		return m.closeWithoutAudio(ctx, rec, canceled, gaps, now)
 	}
 
 	joined := filepath.Join(dir, "joined.tmp")
 	out := filepath.Join(dir, "out.m4a")
-	if err := Concat(pieces, joined); err != nil {
+	// Registrado antes do defer do Close, para rodar depois dele: arquivo aberto
+	// não se apaga no Windows. Com o bucket fora, o m4a não fica ocupando disco
+	// até a próxima tentativa.
+	defer func() {
+		if err != nil {
+			os.Remove(out) //nolint:errcheck
+		}
+	}()
+	frames, err := Concat(pieces, joined)
+	if err != nil {
+		os.Remove(joined) //nolint:errcheck
 		return err
 	}
-	if err := m.media.Remux(ctx, joined, out); err != nil {
+	if frames == 0 {
+		os.Remove(joined) //nolint:errcheck
+		return m.closeWithoutAudio(ctx, rec, canceled, ComputeGaps(nil, rec.StartsAt, end, m.cfg.MinGap), now)
+	}
+	err = m.media.Remux(ctx, joined, out)
+	os.Remove(joined) //nolint:errcheck
+	if err != nil {
 		return err
 	}
 	covered, err := m.media.Duration(ctx, out)
@@ -110,6 +180,13 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) error {
 	info, err := os.Stat(out)
 	if err != nil {
 		return fmt.Errorf("recording: stat: %w", err)
+	}
+	// O remux pode parar no meio com exit 0: esta conferência é o que impede um
+	// arquivo curto de virar concluida e levar os pedaços embora.
+	expected := framesDuration(frames)
+	if info.Size() == 0 || covered*100 < expected*minCoveredPercent {
+		return fmt.Errorf("recording: m4a incompleto: %d bytes e %s de áudio, esperados %s (%d frames)",
+			info.Size(), covered.Round(time.Millisecond), expected.Round(time.Millisecond), frames)
 	}
 
 	// *os.File é seekable, o que o S3 exige para assinar o corpo.
@@ -134,7 +211,7 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) error {
 	}); err != nil {
 		return err
 	}
-	os.RemoveAll(dir) //nolint:errcheck
+	m.removeDir(rec)
 	if status == StatusParcial {
 		m.notifyPartial(rec, covered, window, gaps)
 	}
