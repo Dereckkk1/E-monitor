@@ -121,6 +121,14 @@ func pickSegmentAudioArgs(codec string) []string {
 	return []string{"-c:a", "aac", "-b:a", "128k"}
 }
 
+// ReconnectArgs e SegmentAudioArgs expõem as duas decisões acima para quem abre
+// o próprio ffmpeg (internal/recording). São as regras que já custaram
+// incidentes em 2026-05-15: não devem existir em duplicata.
+func ReconnectArgs(streamURL string) []string { return pickReconnectArgs(streamURL) }
+
+// SegmentAudioArgs: ver ReconnectArgs.
+func SegmentAudioArgs(codec string) []string { return pickSegmentAudioArgs(codec) }
+
 // FFmpegProcess wraps a running ffmpeg subprocess.
 //
 // ffmpeg is invoked with two outputs:
