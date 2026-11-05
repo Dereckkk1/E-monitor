@@ -64,7 +64,7 @@ func ListPieces(dir string) ([]Piece, error) {
 			Size:  info.Size(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
 	return out, nil
 }
 
@@ -105,18 +105,21 @@ func ComputeGaps(pieces []Piece, from, to time.Time, minGap time.Duration) []Gap
 	return gaps
 }
 
-// FinalStatus decide o status de encerramento.
-func FinalStatus(hasAudio, canceled bool, covered, window time.Duration) string {
+// FinalStatus decide o status de encerramento. A regra é binária e vem dos
+// buracos, não de um percentual: o áudio é usado como prova, então qualquer
+// intervalo sem áudio (ComputeGaps já descarta oscilação abaixo do mínimo)
+// torna a gravação parcial, por menor que seja a fração da janela.
+func FinalStatus(hasAudio, canceled bool, gaps []Gap) string {
 	if canceled {
 		return StatusCancelada
 	}
 	if !hasAudio {
 		return StatusFalhou
 	}
-	if window-covered <= maxMissing || covered.Seconds() >= window.Seconds()*minCoverage {
-		return StatusConcluida
+	if len(gaps) > 0 {
+		return StatusParcial
 	}
-	return StatusParcial
+	return StatusConcluida
 }
 
 // Concat grava os bytes dos pedaços em sequência. ADTS é autodelimitado, então

@@ -43,59 +43,65 @@ func TestListPieces_PastaInexistente(t *testing.T) {
 
 func TestComputeGaps(t *testing.T) {
 	t0 := time.Date(2026, 11, 5, 20, 0, 0, 0, time.UTC)
-	min := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Minute))) }
-	p := func(a, b float64) Piece { return Piece{Start: min(a), End: min(b), Size: 1} }
+	at := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Minute))) }
+	p := func(a, b float64) Piece { return Piece{Start: at(a), End: at(b), Size: 1} }
 
 	t.Run("sem buraco", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(0, 1), p(1, 2), p(2, 3)}, min(0), min(3), 30*time.Second)
+		got := ComputeGaps([]Piece{p(0, 1), p(1, 2), p(2, 3)}, at(0), at(3), 30*time.Second)
 		require.Empty(t, got)
 		require.NotNil(t, got, "precisa serializar como [] e não null")
 	})
 	t.Run("buraco no meio", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(0, 1), p(4, 5)}, min(0), min(5), 30*time.Second)
-		require.Equal(t, []Gap{{From: min(1), To: min(4)}}, got)
+		got := ComputeGaps([]Piece{p(0, 1), p(4, 5)}, at(0), at(5), 30*time.Second)
+		require.Equal(t, []Gap{{From: at(1), To: at(4)}}, got)
 	})
 	t.Run("ffmpeg morreu no meio do pedaco: usa o mtime, nao o minuto cheio", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(0, 0.1), p(2.5, 3)}, min(0), min(3), 30*time.Second)
-		require.Equal(t, []Gap{{From: min(0.1), To: min(2.5)}}, got)
+		got := ComputeGaps([]Piece{p(0, 0.1), p(2.5, 3)}, at(0), at(3), 30*time.Second)
+		require.Equal(t, []Gap{{From: at(0.1), To: at(2.5)}}, got)
 	})
 	t.Run("comeco e fim faltando", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(2, 3)}, min(0), min(5), 30*time.Second)
-		require.Equal(t, []Gap{{From: min(0), To: min(2)}, {From: min(3), To: min(5)}}, got)
+		got := ComputeGaps([]Piece{p(2, 3)}, at(0), at(5), 30*time.Second)
+		require.Equal(t, []Gap{{From: at(0), To: at(2)}, {From: at(3), To: at(5)}}, got)
 	})
 	t.Run("oscilacao menor que o minimo nao vira buraco", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(0, 1), p(1.2, 2)}, min(0), min(2), 30*time.Second)
+		got := ComputeGaps([]Piece{p(0, 1), p(1.2, 2)}, at(0), at(2), 30*time.Second)
 		require.Empty(t, got)
 	})
 	t.Run("sem pedaco nenhum: a janela inteira", func(t *testing.T) {
-		got := ComputeGaps(nil, min(0), min(5), 30*time.Second)
-		require.Equal(t, []Gap{{From: min(0), To: min(5)}}, got)
+		got := ComputeGaps(nil, at(0), at(5), 30*time.Second)
+		require.Equal(t, []Gap{{From: at(0), To: at(5)}}, got)
 	})
 	t.Run("pre-roll antes da janela nao gera buraco", func(t *testing.T) {
-		got := ComputeGaps([]Piece{p(-0.3, 1), p(1, 2)}, min(0), min(2), 30*time.Second)
+		got := ComputeGaps([]Piece{p(-0.3, 1), p(1, 2)}, at(0), at(2), 30*time.Second)
 		require.Empty(t, got)
 	})
+	t.Run("pedaco que comeca depois do fim: um unico buraco ate to", func(t *testing.T) {
+		got := ComputeGaps([]Piece{p(6, 7)}, at(0), at(5), 30*time.Second)
+		require.Equal(t, []Gap{{From: at(0), To: at(5)}}, got)
+	})
+	t.Run("to antes de from: vazio e nao nil", func(t *testing.T) {
+		got := ComputeGaps(nil, at(5), at(0), 30*time.Second)
+		require.Empty(t, got)
+		require.NotNil(t, got)
+	})
 }
-
 func TestFinalStatus(t *testing.T) {
-	const h = time.Hour
+	gap := []Gap{{From: time.Date(2026, 11, 5, 20, 0, 0, 0, time.UTC), To: time.Date(2026, 11, 5, 20, 7, 0, 0, time.UTC)}}
 	cases := []struct {
 		name             string
 		hasAudio, cancel bool
-		covered, window  time.Duration
+		gaps             []Gap
 		want             string
 	}{
-		{"cancelada com audio", true, true, 10 * time.Minute, h, StatusCancelada},
-		{"cancelada sem audio", false, true, 0, h, StatusCancelada},
-		{"sem audio", false, false, 0, h, StatusFalhou},
-		{"98% de 1h", true, false, 3528 * time.Second, h, StatusConcluida},
-		{"97% de 1h", true, false, 3492 * time.Second, h, StatusParcial},
-		{"gravacao curta: faltam 20s de 5min", true, false, 280 * time.Second, 5 * time.Minute, StatusConcluida},
-		{"gravacao curta: faltam 60s de 5min", true, false, 240 * time.Second, 5 * time.Minute, StatusParcial},
+		{"cancelada com audio", true, true, gap, StatusCancelada},
+		{"cancelada sem audio", false, true, nil, StatusCancelada},
+		{"sem audio", false, false, gap, StatusFalhou},
+		{"com audio sem buraco", true, false, []Gap{}, StatusConcluida},
+		{"com audio e um buraco", true, false, gap, StatusParcial},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			require.Equal(t, c.want, FinalStatus(c.hasAudio, c.cancel, c.covered, c.window))
+			require.Equal(t, c.want, FinalStatus(c.hasAudio, c.cancel, c.gaps))
 		})
 	}
 }
@@ -113,4 +119,11 @@ func TestConcat(t *testing.T) {
 	got, err := os.ReadFile(out)
 	require.NoError(t, err)
 	require.Equal(t, "aaabb", string(got))
+}
+
+func TestConcat_PedacoInexistente(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "joined.tmp")
+	err := Concat([]Piece{{Path: filepath.Join(dir, "nao-existe"+pieceExt)}}, out)
+	require.Error(t, err)
 }
