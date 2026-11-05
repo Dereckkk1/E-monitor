@@ -13,15 +13,12 @@ import (
 )
 
 const (
-	// finalizeTimeout é folga para juntar e subir o maior arquivo. Sem prazo, um
-	// upload pendurado prenderia o id em finalizing para sempre.
-	finalizeTimeout = 30 * time.Minute
 	// finalizeStuckAfter é a falha seguida que gera o aviso: uma falha transitória
 	// de bucket não pode virar alarme.
 	finalizeStuckAfter = 3
-	// minCoveredPercent é o piso do m4a em relação aos frames entregues ao remux.
-	// A folga é só para o arredondamento do ffprobe.
-	minCoveredPercent = 98
+	// maxDurationDrift é a folga do m4a em relação aos frames entregues ao remux. A
+	// razão medida contra o ffmpeg real foi 1,000000, então cobre só arredondamento.
+	maxDurationDrift = time.Second
 )
 
 func objectKey(r Recording) string {
@@ -49,7 +46,7 @@ func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 			delete(m.finalizing, rec.ID)
 			m.mu.Unlock()
 		}()
-		runCtx, cancel := context.WithTimeout(ctx, finalizeTimeout)
+		runCtx, cancel := context.WithTimeout(ctx, m.cfg.FinalizeTimeout)
 		defer cancel()
 		err := m.finalize(runCtx, rec)
 		// ErrBusy: outro caminho já fechou a linha. Não há o que repetir, e um
@@ -59,7 +56,7 @@ func (m *Manager) startFinalize(ctx context.Context, rec Recording) {
 			return
 		}
 		// Reinício da API: a finalização retoma sozinha no boot, não é falha. Olha
-		// ctx, não runCtx: estourar finalizeTimeout conta como falha.
+		// ctx, não runCtx: estourar FinalizeTimeout conta como falha.
 		if ctx.Err() != nil {
 			m.log.Info("recording: finalização interrompida pelo desligamento", zap.Stringer("id", rec.ID))
 			return
@@ -126,10 +123,10 @@ func (m *Manager) closeWithoutAudio(ctx context.Context, rec Recording, canceled
 
 // finalize é idempotente: a chave do objeto é fixa e, havendo frames para subir, os
 // pedaços só somem depois de o m4a passar na conferência pela contagem de frames e
-// de o Complete confirmar. Falha nesse caminho é repetida sem perder áudio. O que é
-// descartado de propósito: bytes depois do último frame completo de cada pedaço
-// (ver Concat) e, sem nenhum frame, até maxADTSFrame bytes, que são só resto de
-// frame. Acima disso os pedaços ficam: pode ser áudio em formato não reconhecido.
+// de o Complete confirmar. Falha nesse caminho é repetida sem perder áudio. O único
+// descarte de propósito são até maxADTSFrame bytes por pedaço depois do último frame
+// completo: é resto de frame. Acima disso o Concat falha e os pedaços ficam. Por isso
+// frames == 0 depois de um Concat sem erro significa que só havia restos.
 func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	dir := m.dirFor(rec.ID)
 	pieces, err := ListPieces(dir)
@@ -167,13 +164,6 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	}
 	if frames == 0 {
 		os.Remove(joined) //nolint:errcheck
-		var size int64
-		for _, p := range pieces {
-			size += p.Size
-		}
-		if size > maxADTSFrame {
-			return fmt.Errorf("recording: %d bytes nos pedaços sem nenhum frame ADTS válido", size)
-		}
 		return m.closeWithoutAudio(ctx, rec, canceled, ComputeGaps(nil, rec.StartsAt, end, m.cfg.MinGap), now)
 	}
 	err = m.media.Remux(ctx, joined, out)
@@ -192,7 +182,7 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	// O remux pode parar no meio com exit 0: esta conferência é o que impede um
 	// arquivo curto de virar concluida e levar os pedaços embora.
 	expected := framesDuration(frames)
-	if info.Size() == 0 || covered*100 < expected*minCoveredPercent {
+	if info.Size() == 0 || covered < expected-maxDurationDrift {
 		return fmt.Errorf("recording: m4a incompleto: %d bytes e %s de áudio, esperados %s (%d frames)",
 			info.Size(), covered.Round(time.Millisecond), expected.Round(time.Millisecond), frames)
 	}

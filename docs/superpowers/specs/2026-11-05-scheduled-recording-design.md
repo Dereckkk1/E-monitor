@@ -181,28 +181,32 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
    <junto> -c copy -movflags +faststart <id>.m4a`. M4A abre em qualquer player e
    permite pular trechos. ADTS cru não dá duração nem busca confiáveis. O aparo existe
    porque um pedaço cortado no meio de um frame (kill -9, crash da API) faz o remux
-   parar ali, com exit 0 e arquivo curto, e o áudio dos pedaços seguintes some.
+   parar ali, com exit 0 e arquivo curto, e o áudio dos pedaços seguintes some. Sobra
+   de corte é sempre menor que um frame; com mais de 8191 bytes não reconhecidos num
+   pedaço, a finalização para com erro em vez de aparar.
 3. Calcula `gaps` pelo intervalo real de cada pedaço (início no nome, fim no mtime),
    ignorando trechos abaixo de 30s, e `covered_seconds` pela duração
    real do `.m4a` (`ffprobe`).
-4. Confere o `.m4a` pela contagem de frames: tamanho maior que zero e duração de pelo
-   menos 98% de `frames × 1024 ÷ 44100`. O exit 0 do remux não prova nada. O formato
-   fixo dá 1024 amostras por frame, então a duração esperada é exata e independe do
-   relógio; comparar com tempo de relógio daria alarme falso com rádio que engasga.
-   Reprovado é falha de finalização, e os pedaços ficam.
+4. Confere o `.m4a` pela contagem de frames: tamanho maior que zero e duração no
+   máximo 1 segundo abaixo de `frames × 1024 ÷ 44100`. A tolerância é absoluta porque
+   a razão medida contra o ffmpeg real foi 1,000000: ela cobre só arredondamento, e
+   um percentual deixaria passar minutos numa gravação longa. O exit 0 do remux não
+   prova nada. O formato fixo dá 1024 amostras por frame, então a duração esperada é
+   exata e independe do relógio; comparar com tempo de relógio daria alarme falso com
+   rádio que engasga. Reprovado é falha de finalização, e os pedaços ficam.
 5. Sobe para `recordings/<ano>/<mês>/<id>.m4a` no bucket de evidência.
 6. Só depois de o upload confirmar: grava o status final e apaga os pedaços.
 
-Sem nenhum frame completo e com até 8191 bytes no total (o maior frame possível, ou
-seja, só resto de frame), vira `falhou` e não sobe nada. Acima disso é falha de
-finalização e nada é apagado: se o formato da captura mudar, áudio bom não pode ser
-descartado como "sem frames". Qualquer falha da
-finalização grava o motivo em `last_error` e repete a cada 2 minutos: a linha fica
-em `processando` e os pedaços ficam no disco. A ordem garante que nenhuma falha
-perca áudio já capturado.
+Sem nenhum frame completo depois da junção, só havia restos: vira `falhou` e não
+sobe nada. Bytes não reconhecidos acima do tamanho de um frame nunca chegam aqui: se
+o formato da captura mudar, áudio bom não pode ser descartado como "sem frames".
+Qualquer falha da finalização grava o motivo em `last_error` e repete a cada 2
+minutos: a linha fica em `processando` e os pedaços ficam no disco. A ordem garante
+que nenhuma falha perca áudio já capturado.
 
-Risco aceito: corrupção no meio de um pedaço descarta o resto dele, mas `gaps` usa o
-mtime e conta o pedaço inteiro como coberto, então a gravação pode fechar `concluida`.
+Risco aceito: só corrupção menor que um frame. No máximo 8191 bytes por pedaço (cerca
+de 0,5s) são descartados como sobra de corte, sem aparecer em `gaps`, que usa o mtime.
+Acima disso a finalização para e preserva os pedaços.
 
 ### 5.4 E-mails
 
@@ -215,7 +219,7 @@ informação fica só na tela.
 | Bytes pararam de crescer por 60s no meio da gravação | Caiu, tentando reconectar |
 | Final `parcial` ou `falhou` | Resultado, com a cobertura |
 | API fora durante toda a janela | Não gravou |
-| 3ª falha seguida da finalização, uma vez só | Arquivo não fechou; áudio preservado, segue tentando |
+| 3ª falha seguida da finalização, uma vez por processo (a contagem fica em memória: reiniciar a API zera e pode repetir o e-mail) | Arquivo não fechou; áudio preservado, segue tentando |
 
 Os dois primeiros casos são um alerta só por gravação, controlado por
 `drop_alerted_at`. Em sucesso, nenhum e-mail.

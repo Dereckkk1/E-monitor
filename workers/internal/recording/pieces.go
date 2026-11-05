@@ -150,7 +150,9 @@ func completeFrames(b []byte) (size int, frames int64) {
 // gravou. Concatenar os bytes crus não basta: um pedaço cortado no meio de um frame
 // (kill -9, crash da API) faz o remux parar ali, com exit 0 e arquivo curto, e todo
 // o áudio dos pedaços seguintes some. Por isso cada pedaço é aparado no último frame
-// completo. Um frame inválido encerra aquele pedaço, e o próximo segue normalmente.
+// completo. Sobra de corte é sempre menor que um frame: mais que maxADTSFrame bytes
+// depois do último frame é lixo no meio do pedaço ou formato não reconhecido, e pode
+// haver áudio depois dele. Aí devolve erro em vez de aparar, para os pedaços ficarem.
 func Concat(pieces []Piece, out string) (frames int64, err error) {
 	dst, err := os.Create(out)
 	if err != nil {
@@ -163,6 +165,9 @@ func Concat(pieces []Piece, out string) (frames int64, err error) {
 			return 0, fmt.Errorf("recording: ler pedaço: %w", err)
 		}
 		size, n := completeFrames(b)
+		if rest := len(b) - size; rest > maxADTSFrame {
+			return 0, fmt.Errorf("recording: pedaço %s: %d bytes não reconhecidos", filepath.Base(p.Path), rest)
+		}
 		if _, err := dst.Write(b[:size]); err != nil {
 			return 0, fmt.Errorf("recording: copiar pedaço: %w", err)
 		}

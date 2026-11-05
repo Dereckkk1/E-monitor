@@ -172,8 +172,7 @@ func TestConcatRemux_PedacoCortadoNaoPerdeOSeguinte(t *testing.T) {
 		require.NoError(t, err)
 
 		want := framesDuration(frames)
-		require.GreaterOrEqual(t, dur*100, want*98, "corte %d: %s para %s esperados", cut, dur, want)
-		require.LessOrEqual(t, dur*98, want*100, "corte %d: %s para %s esperados", cut, dur, want)
+		require.InDelta(t, want.Seconds(), dur.Seconds(), maxDurationDrift.Seconds(), "corte %d", cut)
 		require.Greater(t, dur, 2900*time.Millisecond, "corte %d: o pedaço íntegro sumiu", cut)
 	}
 }

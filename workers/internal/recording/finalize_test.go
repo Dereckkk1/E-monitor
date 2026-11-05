@@ -368,7 +368,7 @@ func TestFinalize_ConferenciaFalhaPreservaPedacos(t *testing.T) {
 			r := processing(t0)
 			repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
 			m := newTestManager(t, repo, &c.media, objs, mail)
-			seedPieces(t, m, r)
+			seedFrames(t, m, r, 100)
 
 			err := m.finalize(context.Background(), r)
 
@@ -388,24 +388,88 @@ func TestFinalize_DuracaoCurtaExplicaOsDoisValores(t *testing.T) {
 	r := processing(t0)
 	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
 	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Millisecond}, objs, mail)
-	seedPieces(t, m, r)
+	seedFrames(t, m, r, 100)
 
 	err := m.finalize(context.Background(), r)
 
 	require.ErrorContains(t, err, "10ms")
-	require.ErrorContains(t, err, framesDuration(3).Round(time.Millisecond).String())
+	require.ErrorContains(t, err, framesDuration(100).Round(time.Millisecond).String())
 }
 
-func TestFinalize_DuracaoNoLimiteDe98PorCentoPassa(t *testing.T) {
+// A folga é absoluta: em 6h, 98% deixaria passar mais de 7 minutos de áudio perdido.
+func TestFinalize_ToleranciaDeDuracaoEhAbsoluta(t *testing.T) {
+	limite := framesDuration(100) - maxDurationDrift
+	cases := []struct {
+		name     string
+		duration time.Duration
+		ok       bool
+	}{
+		{"no limite passa", limite, true},
+		{"abaixo do limite falha", limite - time.Nanosecond, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+			r := processing(t0)
+			repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+			m := newTestManager(t, repo, &fakeMedia{duration: c.duration}, objs, mail)
+			seedFrames(t, m, r, 100)
+
+			err := m.finalize(context.Background(), r)
+
+			if c.ok {
+				require.NoError(t, err)
+				require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
+				return
+			}
+			require.Error(t, err)
+			require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
+		})
+	}
+}
+
+// Estourar o prazo não é reinício: é falha, e o admin precisa ver o motivo.
+func TestStartFinalize_EstouroDoPrazoContaComoFalha(t *testing.T) {
 	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
 	r := processing(t0)
 	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
-	limite := (framesDuration(3)*98 + 99) / 100
-	m := newTestManager(t, repo, &fakeMedia{duration: limite}, objs, mail)
+	m := newTestManager(t, repo, &fakeMedia{blockRemux: true}, objs, mail)
+	m.cfg.FinalizeTimeout = 20 * time.Millisecond
 	seedPieces(t, m, r)
 
-	require.NoError(t, m.finalize(context.Background(), r))
-	require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
+	runFinalize(t, context.Background(), m, r)
+
+	got := repo.snapshot(r.ID)
+	require.NotNil(t, got.LastError)
+	require.Contains(t, *got.LastError, context.DeadlineExceeded.Error())
+	require.Equal(t, 1, m.finalizeFailureCount(r.ID))
+	require.Equal(t, StatusProcessando, got.Status)
+	pieces, err := ListPieces(m.dirFor(r.ID))
+	require.NoError(t, err)
+	require.Len(t, pieces, 1)
+}
+
+func TestFinalize_LixoNoMeioDoPedacoPreservaTudo(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writePiece(t, dir, "1", t0, t0.Add(5*time.Minute), validADTS(3))
+	writePiece(t, dir, "2", t0.Add(5*time.Minute), t0.Add(10*time.Minute),
+		validADTS(3)+strings.Repeat("x", 9000)+validADTS(3))
+
+	err := m.finalize(context.Background(), r)
+
+	// O que vem depois do lixo também não foi lido: conta como não reconhecido.
+	require.ErrorContains(t, err, strconv.Itoa(9000+len(validADTS(3)))+" bytes")
+	require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
+	require.Empty(t, objs.puts)
+	pieces, err := ListPieces(dir)
+	require.NoError(t, err)
+	require.Len(t, pieces, 2)
+	requireNoTempFiles(t, m, r)
 }
 
 func TestStartFinalize_TemPrazo(t *testing.T) {
@@ -509,6 +573,13 @@ func (m *Manager) finalizeFailureCount(id uuid.UUID) int {
 	return m.finalizeFailures[id]
 }
 
+func seedFrames(t *testing.T, m *Manager, r Recording, frames int) {
+	t.Helper()
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, validADTS(frames))
+}
+
 func seedGarbage(t *testing.T, m *Manager, r Recording, size int) {
 	t.Helper()
 	dir := m.dirFor(r.ID)
@@ -516,7 +587,8 @@ func seedGarbage(t *testing.T, m *Manager, r Recording, size int) {
 	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, strings.Repeat("x", size))
 }
 
-// Até o tamanho do maior frame possível, é só resto de um frame que não terminou.
+// Até o tamanho do maior frame possível, é só resto de um frame que não terminou:
+// o Concat não reclama e não há nenhum frame para subir.
 func TestFinalize_RestoDeFrameEhSemAudio(t *testing.T) {
 	for _, size := range []int{100, maxADTSFrame} {
 		t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
@@ -534,7 +606,8 @@ func TestFinalize_RestoDeFrameEhSemAudio(t *testing.T) {
 	}
 }
 
-// Se o formato da captura mudar, áudio bom não pode ser descartado como "sem frames".
+// Se o formato da captura mudar, áudio bom não pode ser descartado como "sem frames":
+// quem barra é o Concat, pedaço a pedaço.
 func TestFinalize_BytesSemFrameReconhecidoPreservaPedacos(t *testing.T) {
 	for _, size := range []int{maxADTSFrame + 1, 20 * 1024} {
 		t0 := time.Now().Add(-time.Hour).Truncate(time.Second)

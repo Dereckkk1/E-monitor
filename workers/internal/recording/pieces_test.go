@@ -3,6 +3,7 @@ package recording
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -186,6 +187,50 @@ func TestConcat_ApagaFrameCortadoESegueParaOProximoPedaco(t *testing.T) {
 	got, err := os.ReadFile(out)
 	require.NoError(t, err)
 	require.Equal(t, validADTS(4), string(got))
+}
+
+// Sobra de corte é sempre menor que um frame. Mais que isso é lixo no meio do
+// pedaço: aparar calado perderia o áudio depois dele.
+func TestConcat_SobraNaoReconhecida(t *testing.T) {
+	cases := []struct {
+		name  string
+		sobra int
+		ok    bool
+	}{
+		{"no limite do maior frame passa", maxADTSFrame, true},
+		{"um byte acima falha", maxADTSFrame + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			a := filepath.Join(dir, "a"+pieceExt)
+			require.NoError(t, os.WriteFile(a, []byte(validADTS(2)+strings.Repeat("x", c.sobra)), 0o644))
+
+			frames, err := Concat([]Piece{{Path: a}}, filepath.Join(dir, "joined.tmp"))
+
+			if c.ok {
+				require.NoError(t, err)
+				require.EqualValues(t, 2, frames)
+				return
+			}
+			require.Error(t, err)
+			require.Zero(t, frames)
+			require.ErrorContains(t, err, filepath.Base(a))
+			require.ErrorContains(t, err, strconv.Itoa(c.sobra)+" bytes")
+		})
+	}
+}
+
+func TestConcat_LixoNoMeioDoPedacoInterrompe(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a"+pieceExt)
+	b := filepath.Join(dir, "b"+pieceExt)
+	require.NoError(t, os.WriteFile(a, []byte(validADTS(3)), 0o644))
+	require.NoError(t, os.WriteFile(b, []byte(validADTS(3)+strings.Repeat("x", 9000)+validADTS(3)), 0o644))
+
+	_, err := Concat([]Piece{{Path: a}, {Path: b}}, filepath.Join(dir, "joined.tmp"))
+
+	require.ErrorContains(t, err, filepath.Base(b))
 }
 
 func TestConcat_SemFrameCompleto(t *testing.T) {

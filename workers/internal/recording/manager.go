@@ -69,6 +69,9 @@ type Config struct {
 	// arquivo inteiro em disco, até 330 MB, e com o bucket fora o tick de 15s
 	// faria isso sem parar.
 	FinalizeRetry time.Duration
+	// FinalizeTimeout é folga para juntar e subir o maior arquivo. Sem prazo, um
+	// upload pendurado prenderia o id em finalizing para sempre.
+	FinalizeTimeout time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -87,6 +90,7 @@ func (c Config) withDefaults() Config {
 	def(&c.PreRoll, 20*time.Second)
 	def(&c.PruneEvery, time.Hour)
 	def(&c.FinalizeRetry, 2*time.Minute)
+	def(&c.FinalizeTimeout, 30*time.Minute)
 	return c
 }
 
@@ -108,8 +112,9 @@ type Manager struct {
 	mu         sync.Mutex
 	live       map[uuid.UUID]*liveRecorder
 	finalizing map[uuid.UUID]struct{}
-	// finalizeFailures conta as falhas seguidas de cada gravação. Fica em memória:
-	// reiniciar a API zera a contagem, e o pior caso é um aviso atrasado.
+	// finalizeFailures conta as falhas seguidas de cada gravação. Fica em memória,
+	// então o aviso sai uma vez por processo: reinício zera a contagem e pode repetir
+	// o e-mail.
 	finalizeFailures map[uuid.UUID]int
 }
 
