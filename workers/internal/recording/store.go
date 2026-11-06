@@ -135,36 +135,18 @@ func (s *Store) ClaimDue(ctx context.Context, startBefore, now time.Time) (int64
 	return tag.RowsAffected(), nil
 }
 
-// FailMissed fecha o que passou inteiro sem nunca começar (API fora do ar).
+// FailMissed fecha o que passou inteiro sem nunca começar (API fora do ar). Fecha e
+// lê no mesmo comando: as linhas devolvidas são as do e-mail, e uma leitura separada
+// que falhasse deixaria `falhou` sem aviso, porque o tick seguinte não as encontra.
 func (s *Store) FailMissed(ctx context.Context, now time.Time, reason string) ([]Recording, error) {
-	rows, err := s.pool.Query(ctx, `
-		UPDATE recordings
-		SET status = 'falhou', last_error = $2, finished_at = $1, updated_at = now()
-		WHERE status = 'programada' AND ends_at <= $1
-		RETURNING id`, now, reason)
-	if err != nil {
-		return nil, fmt.Errorf("recording: fail missed: %w", err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return nil, fmt.Errorf("recording: fail missed: %w", err)
-	}
-	// Estas linhas já viraram `falhou`: um Get que falha não pode descartar as
-	// que deram certo, senão o e-mail delas nunca sairia. Devolve o que juntou
-	// junto com o primeiro erro.
-	out := make([]Recording, 0, len(ids))
-	var firstErr error
-	for _, id := range ids {
-		r, err := s.Get(ctx, id)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		out = append(out, *r)
-	}
-	return out, firstErr
+	return s.collect(ctx, `
+		WITH r AS (
+			UPDATE recordings
+			SET status = 'falhou', last_error = $2, finished_at = $1, updated_at = now()
+			WHERE status = 'programada' AND ends_at <= $1
+			RETURNING *
+		)
+		SELECT `+selectCols+` FROM r LEFT JOIN users u ON u.id = r.created_by`, now, reason)
 }
 
 // StreamURL lê a URL atual: relida a cada tentativa, para uma correção feita

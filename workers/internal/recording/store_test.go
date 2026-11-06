@@ -3,10 +3,12 @@ package recording
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -130,25 +132,99 @@ func TestStore_CicloCompleto(t *testing.T) {
 	require.False(t, got.HasAudio)
 }
 
+func seedUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (uuid.UUID, string) {
+	t.Helper()
+	email := "gravacao-" + uuid.NewString()[:8] + "@teste.local"
+	var id uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, role, name) VALUES ($1, 'x', 'admin', $1) RETURNING id`,
+		email).Scan(&id))
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id) //nolint:errcheck
+	})
+	return id, email
+}
+
 func TestStore_FailMissed(t *testing.T) {
 	ctx, s, pool := newTestStore(t)
 	st := seedStation(t, ctx, pool, "http://x/s")
+	user, email := seedUser(t, ctx, pool)
 	now := time.Now().Truncate(time.Second)
-	id, err := s.Insert(ctx, st, "R", nil, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	id, err := s.Insert(ctx, st, "R", &user, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	require.NoError(t, err)
+	orphan, err := s.Insert(ctx, st, "R", nil, now.Add(-4*time.Hour), now.Add(-3*time.Hour))
 	require.NoError(t, err)
 
 	missed, err := s.FailMissed(ctx, now, "motivo")
 	require.NoError(t, err)
-	var achou bool
+	byID := map[uuid.UUID]Recording{}
 	for _, r := range missed {
-		achou = achou || r.ID == id
+		byID[r.ID] = r
 	}
-	require.True(t, achou, "a linha do teste deve estar entre as fechadas")
+
+	// O e-mail sai destas linhas, então elas já vêm com o estado novo e com o criador.
+	r, ok := byID[id]
+	require.True(t, ok, "a linha do teste deve estar entre as fechadas")
+	require.Equal(t, StatusFalhou, r.Status)
+	require.Equal(t, email, r.CreatorEmail)
+	require.Equal(t, "R", r.StationName)
+	require.NotNil(t, r.LastError)
+	require.Equal(t, "motivo", *r.LastError)
+	require.NotNil(t, r.FinishedAt)
+	require.NotNil(t, r.Gaps)
+
+	// Sem criador a linha continua vindo: não pode ser um JOIN que a descarte.
+	sem, ok := byID[orphan]
+	require.True(t, ok, "a linha sem criador deve estar entre as fechadas")
+	require.Empty(t, sem.CreatorEmail)
 
 	got, err := s.Get(ctx, id)
 	require.NoError(t, err)
 	require.Equal(t, StatusFalhou, got.Status)
 	require.Equal(t, "motivo", *got.LastError)
+
+	again, err := s.FailMissed(ctx, now, "motivo")
+	require.NoError(t, err)
+	for _, r := range again {
+		require.NotEqual(t, id, r.ID, "linha já fechada não volta: o e-mail sairia de novo")
+	}
+}
+
+// queryCounter conta os comandos que chegam ao banco.
+type queryCounter struct{ n atomic.Int32 }
+
+func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Fechar a linha e ler os dados do e-mail têm que ser o mesmo comando. Em dois, um
+// prazo que estoura entre eles deixa `falhou` sem aviso para sempre, porque o tick
+// seguinte não encontra mais a linha.
+func TestStore_FailMissed_UmComandoSo(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+	for i := 0; i < 2; i++ {
+		from := now.Add(time.Duration(-2*i-2) * time.Hour)
+		_, err := s.Insert(ctx, st, "R", nil, from, from.Add(time.Hour))
+		require.NoError(t, err)
+	}
+
+	cfg, err := pgxpool.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	counter := &queryCounter{}
+	cfg.ConnConfig.Tracer = counter
+	traced, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(traced.Close)
+
+	missed, err := NewStore(traced).FailMissed(ctx, now, "motivo")
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(missed), 2)
+	require.EqualValues(t, 1, counter.n.Load())
 }
 
 func TestStore_Cancelar(t *testing.T) {

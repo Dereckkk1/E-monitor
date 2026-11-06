@@ -57,6 +57,7 @@ type tickRepo struct {
 	listErr             map[string]error
 	getErr              func() error
 	afterGet            func()
+	hangGet             atomic.Bool
 	hangMissed          bool
 	hangList            string
 	hangEnded           time.Time
@@ -120,6 +121,9 @@ func (r *tickRepo) ListByStatus(ctx context.Context, status string) ([]Recording
 }
 
 func (r *tickRepo) Get(ctx context.Context, id uuid.UUID) (*Recording, error) {
+	if r.hangGet.Load() {
+		return nil, hang(ctx)
+	}
 	if r.getErr != nil {
 		if err := r.getErr(); err != nil {
 			return nil, err

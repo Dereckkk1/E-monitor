@@ -561,6 +561,29 @@ func TestRecord_LinhaExcluidaNaoCaptura(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+// Neste ponto o watch ainda não subiu e o tick não religa quem está em live: sem
+// prazo, um banco pendurado seguraria a gravação para sempre.
+func TestRecord_ConferenciaDeStatusPresaAcabaNoPrazo(t *testing.T) {
+	r := recordingRow(time.Hour)
+	repo := &tickRepo{fakeRepo: newFakeRepo(r)}
+	repo.hangGet.Store(true)
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+	ctx := liveContext(t, m)
+
+	m.startRecorder(ctx, r)
+
+	require.Eventually(t, func() bool { return liveCount(m) == 0 }, 2*time.Second, time.Millisecond,
+		"o gravador ficou preso em live")
+	require.Zero(t, calls.Load())
+	require.Equal(t, StatusGravando, repo.snapshot(r.ID).Status)
+}
+
 // Sem saber o status, capturar arriscaria gravar depois de um cancelamento. O tick
 // tenta de novo, então a falha custa no máximo um intervalo.
 func TestRecord_FalhaAoConferirStatusTentaNoProximoTick(t *testing.T) {

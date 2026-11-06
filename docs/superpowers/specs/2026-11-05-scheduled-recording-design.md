@@ -136,15 +136,16 @@ que o buraco após um reinício não inclua os minutos de boot. A cada 15s:
 
 Erro de banco numa etapa fica no log e não impede as seguintes: banco instável não pode
 segurar a finalização de quem já gravou. As linhas que `FailMissed` devolve junto com
-um erro são avisadas mesmo assim, porque o próximo tick não as encontra mais. Cada
+um erro são avisadas mesmo assim, porque o próximo tick não as encontra mais. Por isso
+`FailMissed` é um comando só: fecha a linha e devolve os dados do e-mail juntos. Cada
 etapa tem prazo próprio de 10s, para banco pendurado não parar o agendador. O prazo
 vale só para as consultas: gravador e finalização nascem do contexto do processo.
 
 O gravador relê o status antes de capturar. A linha que o tick tem na mão pode estar
 velha: se o admin cancela depois da listagem, não há gravador para parar, e religar
 com a linha velha gravaria depois do cancelamento e seguraria a finalização até
-`ends_at`. Sem `gravando`, sai sem capturar. Se a leitura falhar, também sai, e o
-próximo tick tenta de novo. `Cancel` muda o status antes de parar o gravador, pelo
+`ends_at`. Sem `gravando`, sai sem capturar. Se a leitura falhar ou passar de 10s,
+também sai, e o próximo tick tenta de novo. `Cancel` muda o status antes de parar o gravador, pelo
 mesmo motivo.
 
 O Postgres é a fonte da verdade. A API tem uma instância só, então o mapa de
