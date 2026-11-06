@@ -13,14 +13,9 @@ import { useAlert, useConfirm } from '../components/ConfirmModal'
 import FlowEmptyState from '../components/FlowEmptyState'
 import StationSearch from '../components/StationSearch'
 import {
-  coveragePercent, downloadName, expiresLabel, gapLabels, statusInfo, todayInSaoPaulo, windowLabel,
+  coveragePercent, downloadName, errorMessage, expiresLabel, gapLabels, statusInfo, todayInSaoPaulo, windowLabel,
 } from '../utils/recordings'
 import './AdminRecordingsPage.css'
-
-function apiMessage(err) {
-  const data = err?.response?.data
-  return typeof data === 'string' && data.trim() ? data.trim() : 'Não foi possível concluir. Tente de novo.'
-}
 
 // Os quatro campos são obrigatórios e nenhum destrava o outro, então não há
 // --locked: enquanto vazio o passo fica --active ("falta"), preenchido vira --done.
@@ -51,7 +46,7 @@ function RecordingForm() {
     try {
       created = await create.mutateAsync({ station_id: stationId, day, start, end })
     } catch (err) {
-      setError(apiMessage(err))
+      setError(errorMessage(err))
       return
     }
     setStart('')
@@ -101,9 +96,13 @@ function RecordingForm() {
           </label>
           <input id="ar-end" className="flow-input" type="time" value={end} onChange={e => setEnd(e.target.value)} />
         </div>
-        <button type="submit" className="btn btn-primary ar-submit" disabled={!ready || create.isPending}>
-          {create.isPending ? 'Programando…' : 'Programar'}
-        </button>
+        {/* Rótulo vazio só para o botão cair na mesma altura dos controles. */}
+        <div className="flow-filter">
+          <span className="flow-filter-label" aria-hidden="true" />
+          <button type="submit" className="btn btn-primary ar-submit" disabled={!ready || create.isPending}>
+            {create.isPending ? 'Programando…' : 'Programar'}
+          </button>
+        </div>
       </div>
       <p className="ar-hint">
         Horário de Brasília. Até 6 horas, no mesmo dia. O áudio fica disponível por 15 dias.
@@ -127,7 +126,8 @@ function RecordingRow({ rec }) {
 
   const info = statusInfo(rec.status)
   const coverage = coveragePercent(rec)
-  const gaps = rec.status === 'parcial' ? gapLabels(rec) : []
+  // Buraco é prova em qualquer gravação com áudio (inclusive cancelada), não só na parcial.
+  const gaps = rec.has_audio ? gapLabels(rec) : []
   const showError = (rec.status === 'falhou' || rec.status === 'processando') && Boolean(rec.last_error)
   const canCancel = rec.status === 'programada' || rec.status === 'gravando'
   const canDelete = !['programada', 'gravando', 'processando'].includes(rec.status)
@@ -143,7 +143,7 @@ function RecordingRow({ rec }) {
       setAudioUrl(URL.createObjectURL(blob))
       setPlaying(true)
     } catch (err) {
-      await alert(apiMessage(err))
+      await alert(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -160,9 +160,10 @@ function RecordingRow({ rec }) {
       document.body.appendChild(a)
       a.click()
       a.remove()
-      URL.revokeObjectURL(url)
+      // Blob grande: revogar na hora pode abortar o download antes de ele começar.
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
     } catch (err) {
-      await alert(apiMessage(err))
+      await alert(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -174,13 +175,13 @@ function RecordingRow({ rec }) {
       ? 'Parar esta gravação agora? O que já foi gravado fica salvo.'
       : 'Cancelar esta gravação programada?')
     if (!ok) return
-    try { await cancelRec.mutateAsync(rec.id) } catch (err) { await alert(apiMessage(err)) }
+    try { await cancelRec.mutateAsync(rec.id) } catch (err) { await alert(errorMessage(err)) }
   }
 
   async function remove() {
     const ok = await confirm('Excluir esta gravação? O áudio será apagado e não dá para recuperar.')
     if (!ok) return
-    try { await deleteRec.mutateAsync(rec.id) } catch (err) { await alert(apiMessage(err)) }
+    try { await deleteRec.mutateAsync(rec.id) } catch (err) { await alert(errorMessage(err)) }
   }
 
   return (

@@ -1,9 +1,11 @@
 /* /admin/gravacoes. Prefixo ar- para não vazar. Os campos do form usam as
    classes compartilhadas (.flow-filters, .flow-input); aqui só o que é da tela. */
-.ar-form {
+/* Cada coluna começa no topo: a dica sob a emissora aumenta só a primeira
+   coluna e não empurra os rótulos das outras. */
+.flow-filters.ar-form {
   --flow-cols: minmax(260px, 1.6fr) 160px 120px 120px auto;
   margin-bottom: 8px;
-  align-items: end;
+  align-items: start;
 }
 
 .ar-field-hint {

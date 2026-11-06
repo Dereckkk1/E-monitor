@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  coveragePercent, downloadName, gapLabels, isLive, statusInfo, todayInSaoPaulo, windowLabel, expiresLabel,
+  coveragePercent, downloadName, errorMessage, gapLabels, isLive, statusInfo, todayInSaoPaulo, windowLabel, expiresLabel,
 } from './recordings.js'
 
 const rec = {
@@ -19,6 +19,30 @@ test('janela aparece em horário de São Paulo', () => {
 test('cobertura em percentual da janela', () => {
   assert.equal(coveragePercent(rec), 50)
   assert.equal(coveragePercent({ ...rec, covered_seconds: 3700 }), 100, 'pre-roll não passa de 100')
+})
+
+test('cobertura arredonda para baixo: com buraco nunca mostra 100%', () => {
+  // 3599s de 3600s = 99,97%.
+  assert.equal(coveragePercent({ ...rec, covered_seconds: 3599 }), 99)
+  assert.equal(coveragePercent({ ...rec, covered_seconds: 3600 }), 100)
+})
+
+test('cancelada: a janela termina no cancelamento, não no fim programado', () => {
+  const canceled = {
+    ...rec, status: 'cancelada', canceled_at: '2026-11-05T23:30:00Z', covered_seconds: 1800,
+  }
+  assert.equal(coveragePercent(canceled), 100, 'gravou os 30 min que eram possíveis')
+  assert.equal(coveragePercent({ ...canceled, covered_seconds: 900 }), 50)
+})
+
+test('cancelamento depois do fim da janela não encurta nada', () => {
+  assert.equal(coveragePercent({ ...rec, canceled_at: '2026-11-06T02:00:00Z' }), 50)
+})
+
+test('parada no meio e fechada como parcial usa o cancelamento também', () => {
+  // O backend considera canceled_at, seja qual for o status final.
+  const stopped = { ...rec, status: 'parcial', canceled_at: '2026-11-05T23:30:00Z', covered_seconds: 1500 }
+  assert.equal(coveragePercent(stopped), 83)
 })
 
 test('sem cobertura é null, não zero', () => {
@@ -60,4 +84,34 @@ test('expiração só existe com áudio', () => {
   assert.equal(expiresLabel({ expires_at: '2026-11-20T23:00:00Z', has_audio: true }), '20/11/2026')
   assert.equal(expiresLabel({ expires_at: null, has_audio: false }), '—')
   assert.equal(expiresLabel({ expires_at: '2026-11-20T23:00:00Z', has_audio: false }), '—')
+})
+
+const GENERIC = 'Não foi possível concluir. Tente de novo.'
+const httpErr = (status, data) => ({ response: { status, data } })
+
+test('erro 4xx com texto da API aparece como veio', () => {
+  assert.equal(errorMessage(httpErr(400, 'fim deve ser depois do início\n')), 'fim deve ser depois do início')
+  assert.equal(errorMessage(httpErr(409, 'já existe uma gravação nesse horário')), 'já existe uma gravação nesse horário')
+})
+
+test('HTML de erro do proxy nunca aparece cru', () => {
+  assert.equal(errorMessage(httpErr(502, '<html><body>Bad gateway</body></html>')), GENERIC)
+  assert.equal(errorMessage(httpErr(400, '<html>x</html>')), GENERIC, 'mesmo em 4xx')
+})
+
+test('5xx usa a mensagem genérica', () => {
+  assert.equal(errorMessage(httpErr(500, 'pq: connection refused')), GENERIC)
+})
+
+test('mensagens técnicas da API não vão para a tela', () => {
+  for (const m of ['forbidden', 'invalid json', 'invalid id', 'internal error']) {
+    assert.equal(errorMessage(httpErr(403, m)), GENERIC, m)
+  }
+  assert.equal(errorMessage(httpErr(400, 'x'.repeat(201))), GENERIC, 'texto longo demais')
+})
+
+test('sem resposta (erro de rede) usa a mensagem genérica', () => {
+  assert.equal(errorMessage(new Error('Network Error')), GENERIC)
+  assert.equal(errorMessage(undefined), GENERIC)
+  assert.equal(errorMessage(httpErr(400, { error: 'x' })), GENERIC, 'corpo que não é texto')
 })

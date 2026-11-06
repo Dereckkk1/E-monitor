@@ -239,6 +239,8 @@ function AdminNav({ onClose }) {
   // Badge de não-lidas em "Sugestões". Escopo por persona é imposto no
   // servidor (dev: novas + respostas; autor: atividade do dev nas próprias).
   const { data: suggestionsUnread } = useSuggestionsUnread()
+  // Gravações é só do role admin: o backend responde 403 ao operator.
+  const { user } = useAuth()
   return (
     <>
       <span className="sidebar-section-label">Cadastros</span>
@@ -263,7 +265,9 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/management"        icon={<IconManagement />}      onClose={onClose}>Visão Gerencial</SidebarLink>
       <SidebarLink to="/admin/monitoring"        icon={<IconAdminMonitoring />}   onClose={onClose}>Monitoramento</SidebarLink>
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
-      <SidebarLink to="/admin/gravacoes"         icon={<IconRecordings />}        onClose={onClose}>Gravações</SidebarLink>
+      {user?.role === 'admin' && (
+        <SidebarLink to="/admin/gravacoes"         icon={<IconRecordings />}        onClose={onClose}>Gravações</SidebarLink>
+      )}
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
       <SidebarLink to="/admin/suggestions"       icon={<IconSuggestions />}       onClose={onClose} badge={suggestionsUnread}>Sugestões</SidebarLink>
       <SidebarLink to="/admin/pos-venda"         icon={<IconPostSale />}          onClose={onClose}>Pós-venda</SidebarLink>
