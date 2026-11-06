@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"radiocheck/internal/observability"
 	"radiocheck/internal/postsale"
 	"radiocheck/internal/projrecon"
+	"radiocheck/internal/recording"
 	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
 	"radiocheck/internal/similarity"
@@ -116,6 +118,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("s3: %v", err)
 	}
+
+	// Programar gravação. Sobe ANTES da carga do índice, que leva minutos: depois
+	// de um reinício, cada minuto de boot seria um minuto de buraco na gravação.
+	// Enabled true: sem credenciais SMTP, mailer.New já devolve noop.
+	// Doc: docs/features/scheduled-recording.md
+	recordings := recording.NewManager(
+		recording.Config{
+			Root:    filepath.Join(cfg.SegmentsPath, "_recordings"),
+			BaseURL: cfg.NotificationsBaseURL,
+		},
+		recording.NewStore(pool),
+		recording.FFmpeg{},
+		s3Client,
+		mailer.New(mailer.Config{
+			Enabled: true,
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.MailFrom,
+		}, logger),
+		logger,
+	)
+	go recordings.Run(ctx)
 
 	stations := catalog.NewStations(pool)
 	clients := catalog.NewClients(pool)
@@ -680,6 +706,7 @@ func main() {
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
 		ManagementOverview:    &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: sup},
 		Assertiveness:         handlers.NewAssertivenessHandler(assertivenessRepo),
+		Recordings:            &handlers.RecordingsHandler{Service: recordings, Log: logger},
 		// A fila de sugestões mora no hub (spec do hub 2026-10-26). Sem
 		// HUB_URL/HUB_PLATFORM_KEY o handler responde 503 em toda rota — de
 		// propósito: voltar a gravar no Postgres em silêncio faria a fila ter
@@ -745,5 +772,16 @@ func main() {
 	// topo. Derivado do ctx, este deadline já nasceria vencido.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Os gravadores já receberam o cancelamento via ctx (recordings.Run). Esperar
+	// por eles EM PARALELO ao Shutdown: em série, os prazos somariam. Os 8s ficam
+	// acima dos 5s de WaitDelay do Capture (o SIGTERM do ffmpeg tem esse tempo para
+	// gravar até ~16s de áudio em buffer) e abaixo do stop_grace_period do compose.
+	recordersDone := make(chan struct{})
+	go func() {
+		defer close(recordersDone)
+		recordings.WaitRecorders(8 * time.Second)
+	}()
 	srv.Shutdown(shutdownCtx) //nolint:errcheck
+	<-recordersDone
 }
