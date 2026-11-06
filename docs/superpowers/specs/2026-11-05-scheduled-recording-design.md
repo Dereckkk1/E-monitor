@@ -192,6 +192,13 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
   então `MkdirAll` roda a cada tentativa: com o stream fora, a pasta some.
 - **Fim da janela:** SIGTERM, para o último pedaço fechar direito. Mesmo tratamento
   no shutdown da API.
+- **Desligamento da API:** o `ctx` de sinais cancela os gravadores, e o `main` chama
+  `WaitRecorders(8s)` em paralelo ao `srv.Shutdown` (10s), esperando os dois antes de
+  sair. Os 8s ficam acima dos 5s de `WaitDelay` do `Capture`: o ffmpeg grava em blocos
+  de ~256 KiB (~16s de áudio), e sair antes do fim do SIGTERM perderia esse buffer e
+  os e-mails em andamento. O serviço `api` do compose tem `stop_grace_period: 20s`;
+  com o padrão de 10s do Docker o SIGKILL cairia junto com o prazo do `Shutdown` e
+  cortaria o ffmpeg.
 
 ### 5.3 Finalização
 
