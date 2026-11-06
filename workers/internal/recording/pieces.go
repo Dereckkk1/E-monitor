@@ -21,9 +21,9 @@ const pieceTimeLayout = "20060102-150405"
 // novo, no mesmo minuto, sobrescreva o pedaço do anterior.
 var pieceName = regexp.MustCompile(`^a\d+-(\d{8}-\d{6})\.adts$`)
 
-// Piece é um arquivo de áudio em disco. Start vem do nome; End vem do mtime,
-// que é o último instante em que o ffmpeg escreveu nele. É o mtime que deixa o
-// cálculo de buraco exato quando o ffmpeg morre no meio de um minuto.
+// Piece é um arquivo de áudio em disco. Start vem do nome; End vem do mtime, que é
+// o último instante em que o ffmpeg escreveu nele. O mtime pode passar do áudio:
+// para medir buraco, passe os pedaços por TrimToAudio.
 type Piece struct {
 	Path  string
 	Start time.Time
@@ -78,6 +78,25 @@ func DirBytes(dir string) int64 {
 		total += p.Size
 	}
 	return total
+}
+
+// TrimToAudio limita o fim de cada pedaço ao áudio que ele tem. Quando o stream cai, o
+// ffmpeg ainda espera a reconexão antes de fechar o arquivo, e o mtime anda ~12s sem
+// áudio nenhum: medido em ar real, uma queda de 32s saía `concluida`, com um buraco de
+// 34s no arquivo. O mtime continua valendo como teto, porque o burst do servidor ao
+// conectar entrega mais áudio que o tempo de relógio do pedaço.
+func TrimToAudio(pieces []Piece) error {
+	for i := range pieces {
+		b, err := os.ReadFile(pieces[i].Path)
+		if err != nil {
+			return fmt.Errorf("recording: ler pedaço: %w", err)
+		}
+		_, frames := completeFrames(b)
+		if end := pieces[i].Start.Add(framesDuration(frames)); end.Before(pieces[i].End) {
+			pieces[i].End = end
+		}
+	}
+	return nil
 }
 
 // ComputeGaps devolve os intervalos de [from, to] sem áudio. Devolve slice não

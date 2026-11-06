@@ -23,7 +23,7 @@ func seedPieces(t *testing.T, m *Manager, r Recording) {
 	t.Helper()
 	dir := m.dirFor(r.ID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	writePiece(t, dir, "1", r.StartsAt, r.StartsAt.Add(10*time.Minute), validADTS(3))
+	writePiece(t, dir, "1", r.StartsAt, r.EndsAt, adtsFor(r.EndsAt.Sub(r.StartsAt)))
 }
 
 // requireNoTempFiles: uma gravação de 6h com o bucket fora não pode manter a
@@ -54,7 +54,7 @@ func TestFinalize_Concluida(t *testing.T) {
 
 	got := repo.snapshot(r.ID)
 	require.Equal(t, StatusConcluida, got.Status)
-	require.Equal(t, validADTS(3), string(objs.puts[*got.ObjectKey]))
+	require.Equal(t, adtsFor(10*time.Minute), string(objs.puts[*got.ObjectKey]))
 	require.Equal(t, 600, *got.CoveredSeconds)
 	require.WithinDuration(t, time.Now().Add(Retention), *got.ExpiresAt, time.Minute)
 	require.Empty(t, sentMails(m, mail), "sucesso não manda e-mail")
@@ -127,7 +127,7 @@ func TestFinalize_CanceladaGuardaAudioSemEmail(t *testing.T) {
 	m := newTestManager(t, repo, &fakeMedia{duration: 5 * time.Minute}, objs, mail)
 	dir := m.dirFor(r.ID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	writePiece(t, dir, "1", t0, cancel, validADTS(3))
+	writePiece(t, dir, "1", t0, cancel, adtsFor(5*time.Minute))
 
 	require.NoError(t, m.finalize(context.Background(), r))
 
@@ -318,15 +318,16 @@ func TestFinalize_ApagaFrameCortado(t *testing.T) {
 	m := newTestManager(t, repo, &fakeMedia{duration: 10 * time.Minute}, objs, mail)
 	dir := m.dirFor(r.ID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	cortado := validADTS(3)
-	writePiece(t, dir, "1", t0, t0.Add(5*time.Minute), cortado[:len(cortado)-5])
-	writePiece(t, dir, "2", t0.Add(5*time.Minute), t0.Add(10*time.Minute), validADTS(2))
+	inteiro := adtsFor(5 * time.Minute)
+	frame := len(validADTS(1))
+	writePiece(t, dir, "1", t0, t0.Add(5*time.Minute), inteiro[:len(inteiro)-5])
+	writePiece(t, dir, "2", t0.Add(5*time.Minute), t0.Add(10*time.Minute), inteiro)
 
 	require.NoError(t, m.finalize(context.Background(), r))
 
 	got := repo.snapshot(r.ID)
 	require.Equal(t, StatusConcluida, got.Status)
-	require.Equal(t, validADTS(4), string(objs.puts[*got.ObjectKey]))
+	require.Equal(t, inteiro[:len(inteiro)-frame]+inteiro, string(objs.puts[*got.ObjectKey]))
 }
 
 // Bytes sem nenhum frame completo não são áudio: a janela inteira vira buraco.
@@ -411,6 +412,7 @@ func TestFinalize_ToleranciaDeDuracaoEhAbsoluta(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
 			r := processing(t0)
+			r.EndsAt = t0.Add(framesDuration(100))
 			repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
 			m := newTestManager(t, repo, &fakeMedia{duration: c.duration}, objs, mail)
 			seedFrames(t, m, r, 100)
@@ -627,4 +629,55 @@ func TestFinalize_BytesSemFrameReconhecidoPreservaPedacos(t *testing.T) {
 		require.Len(t, pieces, 1, size)
 		requireNoTempFiles(t, m, r)
 	}
+}
+
+// adtsFor devolve frames que somam d de áudio: o buraco é medido pelo áudio do
+// pedaço, então um pedaço de 10 min nos testes precisa ter 10 min de frames.
+func adtsFor(d time.Duration) string {
+	return validADTS(int(d * sampleRate / samplesPerFrame / time.Second))
+}
+
+// Medido em ar real (Task 15): quando o stream cai, o ffmpeg ainda espera a reconexão
+// antes de fechar o arquivo e o mtime anda ~12s sem áudio nenhum. Queda de 32s virava
+// `concluida`, com buraco real de 34s no arquivo.
+func TestFinalize_BuracoMedidoPeloAudioNaoPeloMtime(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	r.EndsAt = t0.Add(3 * time.Minute)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 148 * time.Second}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	// 75s de áudio; o arquivo só fechou 12s depois, quando o ffmpeg desistiu.
+	writePiece(t, dir, "1", t0, t0.Add(87*time.Second), adtsFor(75*time.Second))
+	// O stream voltou aos 107s: o buraco real é de 32s, o do mtime seria de 20s.
+	writePiece(t, dir, "2", t0.Add(107*time.Second), r.EndsAt, adtsFor(73*time.Second))
+
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	got := repo.snapshot(r.ID)
+	require.Equal(t, StatusParcial, got.Status)
+	require.Len(t, got.Gaps, 1)
+	require.WithinDuration(t, t0.Add(75*time.Second), got.Gaps[0].From, time.Second)
+	require.True(t, got.Gaps[0].To.Equal(t0.Add(107*time.Second)))
+}
+
+// Áudio a mais que o relógio (burst do Icecast ao conectar) não pode empurrar o fim
+// do pedaço para depois do último byte escrito.
+func TestFinalize_BurstNaoEmpurraOFimDoPedaco(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	r.EndsAt = t0.Add(3 * time.Minute)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 170 * time.Second}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writePiece(t, dir, "1", t0, t0.Add(60*time.Second), adtsFor(70*time.Second))
+	writePiece(t, dir, "2", t0.Add(100*time.Second), r.EndsAt, adtsFor(80*time.Second))
+
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	got := repo.snapshot(r.ID)
+	require.Len(t, got.Gaps, 1)
+	require.True(t, got.Gaps[0].From.Equal(t0.Add(60*time.Second)))
 }

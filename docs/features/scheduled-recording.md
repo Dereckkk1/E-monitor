@@ -143,9 +143,13 @@ Alerta e morte são **regras separadas**:
   duração esperada é exata. Se o `ffprobe` medir menos que isso menos 1s, ou o
   arquivo tiver 0 byte, a finalização falha e repete. Comparar com o relógio daria
   alarme falso com rádio que engasga.
-- **Buraco:** `ComputeGaps` olha o intervalo entre o fim de um pedaço (mtime) e o
-  início do próximo (nome). Intervalo de **30s ou mais** (`MinGap`) é buraco;
-  abaixo disso é oscilação de rotação de arquivo.
+- **Buraco:** `ComputeGaps` olha o intervalo entre o fim de um pedaço e o início do
+  próximo (nome). O fim é o áudio do pedaço (`TrimToAudio`: início + frames), com o
+  mtime como teto: quando o stream cai, o ffmpeg espera a reconexão antes de fechar o
+  arquivo e o mtime anda ~12s sem áudio. Intervalo de **30s ou mais** (`MinGap`) é
+  buraco; abaixo disso é oscilação de rotação de arquivo. O início do pedaço seguinte
+  é o momento em que o ffmpeg abriu o arquivo: o burst do servidor traz alguns segundos
+  anteriores, então o buraco informado pode sobrar um pouco, nunca faltar.
 - **Status final pela lista de buracos, não por percentual** (`FinalStatus`):
   cancelada se houve cancelamento; `falhou` se não há áudio; `parcial` se há
   qualquer buraco; senão `concluida`. O áudio serve de prova, então um buraco de

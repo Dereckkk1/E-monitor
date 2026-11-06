@@ -133,6 +133,9 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	if err != nil {
 		return err
 	}
+	if err := TrimToAudio(pieces); err != nil {
+		return err
+	}
 
 	canceled := rec.CanceledAt != nil
 	end := rec.EndsAt
