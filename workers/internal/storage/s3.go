@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -90,6 +91,13 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, in
 		sz = *out.ContentLength
 	}
 	return out.Body, ct, sz, nil
+}
+
+// IsNotFound reports whether err from Get means the key does not exist. A missing
+// bucket is not included: that is a configuration problem, not a missing object.
+func IsNotFound(err error) bool {
+	var noKey *s3types.NoSuchKey
+	return errors.As(err, &noKey)
 }
 
 func (c *Client) Bucket() string {

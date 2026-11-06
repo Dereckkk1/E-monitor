@@ -268,10 +268,23 @@ func (s *Store) CancelRecording(ctx context.Context, id uuid.UUID, now time.Time
 	return nil
 }
 
-// Delete remove a linha.
+// Delete remove a linha, salvo gravação viva. A condição mora no DELETE porque a
+// checagem de quem chama pode estar velha: o tick reivindica entre a leitura e aqui,
+// e apagar tiraria a gravação da lista e da guarda de deploy com o gravador rodando.
 func (s *Store) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM recordings WHERE id = $1`, id)
-	return err
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM recordings
+		WHERE id = $1 AND status NOT IN ('gravando','processando')`, id)
+	if err != nil {
+		return fmt.Errorf("recording: excluir: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := s.Get(ctx, id); err != nil {
+			return err
+		}
+		return ErrBusy
+	}
+	return nil
 }
 
 // Expired lista o que já pode perder o áudio.

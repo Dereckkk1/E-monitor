@@ -23,6 +23,8 @@ type fakeRepo struct {
 	alerted map[uuid.UUID]bool
 	// completeErr força falha no Complete.
 	completeErr error
+	// insertErr força falha no Insert.
+	insertErr error
 }
 
 func newFakeRepo(rows ...Recording) *fakeRepo {
@@ -48,6 +50,9 @@ func (f *fakeRepo) StationInfo(_ context.Context, _ uuid.UUID) (string, string, 
 func (f *fakeRepo) Insert(_ context.Context, st uuid.UUID, name string, by *uuid.UUID, from, to time.Time) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.insertErr != nil {
+		return uuid.Nil, f.insertErr
+	}
 	id := uuid.New()
 	f.rows[id] = &Recording{ID: id, StationID: &st, StationName: name, CreatedBy: by, StartsAt: from, EndsAt: to, Status: StatusProgramada, Gaps: []Gap{}}
 	return id, nil
@@ -107,8 +112,8 @@ func (f *fakeRepo) StreamURL(_ context.Context, _ uuid.UUID) (string, error) {
 func (f *fakeRepo) MarkProcessing(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.rows[id].Status == StatusGravando {
-		f.rows[id].Status = StatusProcessando
+	if r, ok := f.rows[id]; ok && r.Status == StatusGravando {
+		r.Status = StatusProcessando
 	}
 	return nil
 }
@@ -135,8 +140,8 @@ func (f *fakeRepo) Complete(_ context.Context, id uuid.UUID, in CompleteInput) e
 	if f.completeErr != nil {
 		return f.completeErr
 	}
-	r := f.rows[id]
-	if r.Status != StatusProcessando {
+	r, ok := f.rows[id]
+	if !ok || r.Status != StatusProcessando {
 		return ErrBusy
 	}
 	r.Status, r.ObjectKey, r.SizeBytes, r.CoveredSeconds = in.Status, in.ObjectKey, in.SizeBytes, in.CoveredSeconds
@@ -147,24 +152,33 @@ func (f *fakeRepo) Complete(_ context.Context, id uuid.UUID, in CompleteInput) e
 func (f *fakeRepo) CancelScheduled(_ context.Context, id uuid.UUID, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.rows[id].Status != StatusProgramada {
+	r, ok := f.rows[id]
+	if !ok || r.Status != StatusProgramada {
 		return ErrBusy
 	}
-	f.rows[id].Status, f.rows[id].CanceledAt = StatusCancelada, &now
+	r.Status, r.CanceledAt = StatusCancelada, &now
 	return nil
 }
 func (f *fakeRepo) CancelRecording(_ context.Context, id uuid.UUID, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.rows[id].Status != StatusGravando {
+	r, ok := f.rows[id]
+	if !ok || r.Status != StatusGravando {
 		return ErrBusy
 	}
-	f.rows[id].Status, f.rows[id].CanceledAt = StatusProcessando, &now
+	r.Status, r.CanceledAt = StatusProcessando, &now
 	return nil
 }
 func (f *fakeRepo) Delete(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	r, ok := f.rows[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if r.Status == StatusGravando || r.Status == StatusProcessando {
+		return ErrBusy
+	}
 	delete(f.rows, id)
 	return nil
 }
@@ -182,7 +196,9 @@ func (f *fakeRepo) Expired(_ context.Context, now time.Time) ([]Recording, error
 func (f *fakeRepo) MarkExpired(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.rows[id].Status, f.rows[id].ObjectKey = StatusExpirada, nil
+	if r, ok := f.rows[id]; ok {
+		r.Status, r.ObjectKey = StatusExpirada, nil
+	}
 	return nil
 }
 
@@ -193,6 +209,7 @@ type fakeObjects struct {
 	deleted   []string
 	putErr    error
 	deleteErr error
+	getErr    error
 }
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{puts: map[string][]byte{}} }
@@ -227,6 +244,9 @@ func (o *fakeObjects) calls() int {
 func (o *fakeObjects) Get(_ context.Context, key string) (io.ReadCloser, string, int64, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.getErr != nil {
+		return nil, "", 0, o.getErr
+	}
 	b, ok := o.puts[key]
 	if !ok {
 		return nil, "", 0, errors.New("sem objeto")

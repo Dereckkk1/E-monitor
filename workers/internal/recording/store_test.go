@@ -285,3 +285,50 @@ func TestStore_Delete(t *testing.T) {
 	_, err = s.Get(ctx, id)
 	require.ErrorIs(t, err, ErrNotFound)
 }
+
+func TestStore_Delete_NaoApagaGravacaoViva(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	now := time.Now().Truncate(time.Second)
+
+	for i, status := range []string{StatusGravando, StatusProcessando} {
+		from := now.Add(time.Duration(i+1) * time.Hour)
+		id, err := s.Insert(ctx, st, "R", nil, from, from.Add(time.Minute))
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `UPDATE recordings SET status = $2 WHERE id = $1`, id, status)
+		require.NoError(t, err)
+
+		require.ErrorIs(t, s.Delete(ctx, id), ErrBusy, status)
+
+		got, err := s.Get(ctx, id)
+		require.NoError(t, err, status)
+		require.Equal(t, status, got.Status)
+	}
+}
+
+func TestStore_Delete_Inexistente(t *testing.T) {
+	ctx, s, _ := newTestStore(t)
+	require.ErrorIs(t, s.Delete(ctx, uuid.New()), ErrNotFound)
+}
+
+// requireMissingRowContract é o que o Store faz com id que não existe. Roda também
+// contra o fakeRepo: um fake que diverge esconde a corrida que deveria reproduzir.
+func requireMissingRowContract(t *testing.T, r Repo) {
+	t.Helper()
+	ctx, id, now := context.Background(), uuid.New(), time.Now()
+	require.NoError(t, r.MarkProcessing(ctx, id))
+	require.NoError(t, r.MarkExpired(ctx, id))
+	require.ErrorIs(t, r.CancelScheduled(ctx, id, now), ErrBusy)
+	require.ErrorIs(t, r.CancelRecording(ctx, id, now), ErrBusy)
+	require.ErrorIs(t, r.Complete(ctx, id, CompleteInput{Status: StatusConcluida, Gaps: []Gap{}, FinishedAt: now}), ErrBusy)
+	require.ErrorIs(t, r.Delete(ctx, id), ErrNotFound)
+}
+
+func TestStore_LinhaAusente(t *testing.T) {
+	_, s, _ := newTestStore(t)
+	requireMissingRowContract(t, s)
+}
+
+func TestFakeRepo_LinhaAusenteImitaOStore(t *testing.T) {
+	requireMissingRowContract(t, newFakeRepo())
+}

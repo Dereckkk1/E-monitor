@@ -4338,6 +4338,24 @@ Spec: [2026-11-05-scheduled-recording-design.md](../superpowers/specs/2026-11-05
   do mesmo IP durante a gravação. Risco aceito; alguns painéis já baniram o IP da
   VM em 2026-06.
 
+## Pasta órfã
+
+Um crash entre o fechamento do status e a remoção dos pedaços deixa
+`_recordings/<id>/` no disco. Nada volta para limpar, porque a gravação já fechou.
+A extensão `.adts` também tira a pasta do alcance do `segments-cleanup`.
+
+Procedimento manual: consulte a linha pelo `<id>` da pasta. Se ela estiver em estado
+final (`concluida`, `parcial`, `falhou`, `cancelada`, `expirada`) ou não existir, a
+pasta pode ser apagada à mão. Com `programada`, `gravando` ou `processando`, não
+apague: são os pedaços da gravação.
+
+## Linha presa em `processando`
+
+Os pedaços ficam no disco, nenhum áudio se perde e a finalização repete a cada 2
+minutos. A tela mostra o motivo. O caminho é investigar o `last_error`, corrigir a
+causa e deixar a próxima tentativa fechar a linha. Não apague a pasta: ela é a única
+cópia do áudio até o `Complete` confirmar.
+
 ## Deploy
 
 A captura roda dentro da API. O `scripts/deploy.sh` aborta se houver gravação em

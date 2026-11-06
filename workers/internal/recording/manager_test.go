@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -54,13 +56,29 @@ type tickRepo struct {
 	missedErr, claimErr error
 	listErr             map[string]error
 	getErr              func() error
+	afterGet            func()
+	hangMissed          bool
+	hangList            string
+	hangEnded           time.Time
+	claimDeadline       time.Time
 	afterMissed         func()
 	afterList           func(status string)
 	claims, lists       atomic.Int32
 	expiredCalls        atomic.Int32
 }
 
+// hang imita o banco pendurado: como o pgx, só solta quando o ctx acaba.
+func hang(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (r *tickRepo) FailMissed(ctx context.Context, now time.Time, reason string) ([]Recording, error) {
+	if r.hangMissed {
+		err := hang(ctx)
+		r.hangEnded = time.Now()
+		return nil, err
+	}
 	rows, err := r.fakeRepo.FailMissed(ctx, now, reason)
 	if r.afterMissed != nil {
 		r.afterMissed()
@@ -73,15 +91,25 @@ func (r *tickRepo) FailMissed(ctx context.Context, now time.Time, reason string)
 
 func (r *tickRepo) ClaimDue(ctx context.Context, startBefore, now time.Time) (int64, error) {
 	r.claims.Add(1)
+	r.claimDeadline, _ = ctx.Deadline()
 	if r.claimErr != nil {
 		return 0, r.claimErr
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	return r.fakeRepo.ClaimDue(ctx, startBefore, now)
 }
 
 func (r *tickRepo) ListByStatus(ctx context.Context, status string) ([]Recording, error) {
 	r.lists.Add(1)
+	if r.hangList == status {
+		return nil, hang(ctx)
+	}
 	if err := r.listErr[status]; err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	rows, err := r.fakeRepo.ListByStatus(ctx, status)
@@ -97,7 +125,11 @@ func (r *tickRepo) Get(ctx context.Context, id uuid.UUID) (*Recording, error) {
 			return nil, err
 		}
 	}
-	return r.fakeRepo.Get(ctx, id)
+	rec, err := r.fakeRepo.Get(ctx, id)
+	if r.afterGet != nil {
+		r.afterGet()
+	}
+	return rec, err
 }
 
 func (r *tickRepo) Expired(ctx context.Context, now time.Time) ([]Recording, error) {
@@ -361,6 +393,90 @@ func TestTick_CancelamentoDepoisDeListarNaoReligaACaptura(t *testing.T) {
 	}, time.Second, 5*time.Millisecond, "a finalização tem que fechar a linha sem esperar ends_at")
 }
 
+// Banco pendurado: a etapa acaba no prazo dela, e a seguinte ainda tem prazo inteiro.
+func TestTick_EtapaPresaNaoImpedeASeguinte(t *testing.T) {
+	now := time.Now()
+	due := Recording{ID: uuid.New(), StartsAt: now, EndsAt: now.Add(time.Hour), Status: StatusProgramada, Gaps: []Gap{}}
+	repo := &tickRepo{fakeRepo: newFakeRepo(due), hangMissed: true}
+	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+	ctx := liveContext(t, m)
+
+	tickWithin(t, m, ctx)
+
+	require.Equal(t, StatusGravando, repo.snapshot(due.ID).Status)
+	require.True(t, repo.claimDeadline.After(repo.hangEnded), "a etapa seguinte herdou o prazo estourado")
+}
+
+func TestTick_ListagemPresaAindaFinaliza(t *testing.T) {
+	now := time.Now()
+	r := Recording{ID: uuid.New(), StartsAt: now.Add(-time.Hour), EndsAt: now, Status: StatusProcessando, Gaps: []Gap{}}
+	repo := &tickRepo{fakeRepo: newFakeRepo(r), hangList: StatusGravando}
+	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+
+	tickWithin(t, m, context.Background())
+
+	require.Eventually(t, func() bool {
+		return repo.snapshot(r.ID).Status == StatusFalhou
+	}, time.Second, 5*time.Millisecond)
+}
+
+// O prazo é da consulta ao banco. Se o gravador herdasse esse ctx, morreria assim que
+// a etapa acabasse.
+func TestTick_GravadorSobreviveAoPrazoDaEtapa(t *testing.T) {
+	now := time.Now()
+	r := Recording{ID: uuid.New(), StartsAt: now, EndsAt: now.Add(time.Hour), Status: StatusGravando, Gaps: []Gap{}}
+	m := newTestManager(t, newFakeRepo(r), holdCapture(), newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+	ctx := liveContext(t, m)
+
+	m.tick(ctx)
+
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 1, liveCount(m), "o gravador morreu com o prazo da etapa")
+}
+
+func TestTick_FinalizacaoSobreviveAoPrazoDaEtapa(t *testing.T) {
+	r := processing(time.Now().Add(-time.Hour).Truncate(time.Second))
+	repo := newFakeRepo(r)
+	m := newTestManager(t, repo, &fakeMedia{blockRemux: true}, newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+	seedPieces(t, m, r)
+	running := func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, ok := m.finalizing[r.ID]
+		return ok
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		require.Eventually(t, func() bool { return !running() }, 5*time.Second, 5*time.Millisecond)
+	})
+
+	m.tick(ctx)
+
+	time.Sleep(100 * time.Millisecond)
+	require.True(t, running(), "a finalização morreu com o prazo da etapa")
+	require.Nil(t, repo.snapshot(r.ID).LastError)
+}
+
+// tickWithin falha em vez de pendurar a suíte: tick preso é justamente o defeito.
+func tickWithin(t *testing.T, m *Manager, ctx context.Context) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.tick(ctx)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("o tick ficou preso")
+	}
+}
+
 func TestPrune_ApagaObjetoAntesDeMarcar(t *testing.T) {
 	r := expiredRow()
 	repo, objs := newFakeRepo(r), newFakeObjects()
@@ -421,6 +537,29 @@ func TestPrune_PassadaLentaNaoSobrepoe(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond, "a passada seguinte tem que rodar")
 }
 
+// cancelingObjects encerra o ctx no meio da passada, como um desligamento.
+type cancelingObjects struct {
+	*fakeObjects
+	cancel context.CancelFunc
+}
+
+func (o *cancelingObjects) Delete(ctx context.Context, key string) error {
+	o.cancel()
+	return o.fakeObjects.Delete(ctx, key)
+}
+
+func TestPrune_ContextoCanceladoParaAPassada(t *testing.T) {
+	repo := newFakeRepo(expiredRow(), expiredRow(), expiredRow())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	objs := &cancelingObjects{fakeObjects: newFakeObjects(), cancel: cancel}
+	m := newTestManager(t, repo, holdCapture(), objs, &fakeMailer{})
+
+	m.prune(ctx)
+
+	require.Len(t, objs.deleted, 1)
+}
+
 func TestCreate(t *testing.T) {
 	repo := newFakeRepo()
 	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
@@ -435,6 +574,30 @@ func TestCreate(t *testing.T) {
 	var ve *ValidationError
 	require.True(t, errors.As(err, &ve))
 	require.Equal(t, "esta emissora não tem URL de stream cadastrada", ve.Msg)
+}
+
+func TestCreate_StreamSoComEspacos(t *testing.T) {
+	repo := newFakeRepo()
+	repo.url = "  \t "
+	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
+	m.now = func() time.Time { return windowNow }
+
+	_, err := m.Create(context.Background(), CreateInput{StationID: uuid.New(), Day: "2026-11-05", Start: "14:00", End: "15:00"})
+
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	require.Equal(t, "esta emissora não tem URL de stream cadastrada", ve.Msg)
+}
+
+func TestCreate_Sobreposicao(t *testing.T) {
+	repo := newFakeRepo()
+	repo.insertErr = ErrOverlap
+	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
+	m.now = func() time.Time { return windowNow }
+
+	_, err := m.Create(context.Background(), CreateInput{StationID: uuid.New(), Day: "2026-11-05", Start: "14:00", End: "15:00"})
+
+	require.ErrorIs(t, err, ErrOverlap)
 }
 
 // noStationRepo é o Store quando a emissora não existe.
@@ -509,6 +672,38 @@ func TestDelete(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestDelete_ProcessandoDevolveBusy(t *testing.T) {
+	key := "recordings/x.m4a"
+	r := Recording{ID: uuid.New(), Status: StatusProcessando, ObjectKey: &key, Gaps: []Gap{}}
+	repo, objs := newFakeRepo(r), newFakeObjects()
+	m := newTestManager(t, repo, holdCapture(), objs, &fakeMailer{})
+
+	require.ErrorIs(t, m.Delete(context.Background(), r.ID), ErrBusy)
+
+	require.Empty(t, objs.deleted)
+	require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
+}
+
+// Get vê `programada`, o tick reivindica no meio: apagar agora tiraria a gravação da
+// lista e da guarda de deploy com o gravador vivo, deixando a pasta órfã.
+func TestDelete_ReivindicadaNoMeioDevolveBusy(t *testing.T) {
+	now := time.Now()
+	r := Recording{ID: uuid.New(), StartsAt: now, EndsAt: now.Add(time.Hour), Status: StatusProgramada, Gaps: []Gap{}}
+	repo := &tickRepo{fakeRepo: newFakeRepo(r)}
+	var once sync.Once
+	repo.afterGet = func() {
+		once.Do(func() {
+			_, err := repo.fakeRepo.ClaimDue(context.Background(), now, now)
+			require.NoError(t, err)
+		})
+	}
+	m := newTestManager(t, repo, holdCapture(), newFakeObjects(), &fakeMailer{})
+
+	require.ErrorIs(t, m.Delete(context.Background(), r.ID), ErrBusy)
+
+	require.Equal(t, StatusGravando, repo.snapshot(r.ID).Status)
+}
+
 // Mesma ordem do prune: sem a linha, o objeto nunca mais seria encontrado.
 func TestDelete_FalhaNoBucketMantemALinha(t *testing.T) {
 	key := "recordings/x.m4a"
@@ -539,4 +734,32 @@ func TestAudio(t *testing.T) {
 
 	_, _, _, err = m.Audio(context.Background(), without.ID)
 	require.ErrorIs(t, err, ErrNoAudio)
+}
+
+// A linha diz que há áudio e o bucket não tem: é 404 para quem pediu, não erro
+// interno. Mesmo erro embrulhado que storage.Client.Get devolve.
+func TestAudio_ObjetoAusenteNoBucket(t *testing.T) {
+	key := "recordings/x.m4a"
+	r := Recording{ID: uuid.New(), Status: StatusConcluida, ObjectKey: &key, Gaps: []Gap{}}
+	objs := newFakeObjects()
+	objs.getErr = fmt.Errorf("storage: get %s: %w", key, &s3types.NoSuchKey{})
+	m := newTestManager(t, newFakeRepo(r), holdCapture(), objs, &fakeMailer{})
+
+	_, _, _, err := m.Audio(context.Background(), r.ID)
+
+	require.ErrorIs(t, err, ErrNoAudio)
+}
+
+// Bucket fora do ar não é áudio ausente: dizer 404 esconderia a falha.
+func TestAudio_OutroErroDoBucketNaoViraNoAudio(t *testing.T) {
+	key := "recordings/x.m4a"
+	r := Recording{ID: uuid.New(), Status: StatusConcluida, ObjectKey: &key, Gaps: []Gap{}}
+	objs := newFakeObjects()
+	objs.getErr = errors.New("bucket fora")
+	m := newTestManager(t, newFakeRepo(r), holdCapture(), objs, &fakeMailer{})
+
+	_, _, _, err := m.Audio(context.Background(), r.ID)
+
+	require.ErrorIs(t, err, objs.getErr)
+	require.NotErrorIs(t, err, ErrNoAudio)
 }

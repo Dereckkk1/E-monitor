@@ -56,15 +56,18 @@ type ObjectStore interface {
 
 // Config ajusta o Manager. Zero assume o padrão de produção.
 type Config struct {
-	Root       string // <SEGMENTS_PATH>/_recordings
-	BaseURL    string // link do e-mail
-	TickEvery  time.Duration
-	PollEvery  time.Duration // medição de bytes do watchdog
-	StallAfter time.Duration // sem bytes novos por este tempo = caiu
-	RetryDelay time.Duration
-	MinGap     time.Duration
-	PreRoll    time.Duration
-	PruneEvery time.Duration
+	Root      string // <SEGMENTS_PATH>/_recordings
+	BaseURL   string // link do e-mail
+	TickEvery time.Duration
+	// TickTimeout é o prazo de cada etapa do tick: banco pendurado não pode parar o
+	// agendador para sempre.
+	TickTimeout time.Duration
+	PollEvery   time.Duration // medição de bytes do watchdog
+	StallAfter  time.Duration // sem bytes novos por este tempo = caiu
+	RetryDelay  time.Duration
+	MinGap      time.Duration
+	PreRoll     time.Duration
+	PruneEvery  time.Duration
 	// FinalizeRetry espaça as tentativas de finalização: cada uma reescreve o
 	// arquivo inteiro em disco, até 330 MB, e com o bucket fora o tick de 15s
 	// faria isso sem parar.
@@ -81,6 +84,7 @@ func (c Config) withDefaults() Config {
 		}
 	}
 	def(&c.TickEvery, 15*time.Second)
+	def(&c.TickTimeout, 10*time.Second)
 	def(&c.PollEvery, 10*time.Second)
 	def(&c.StallAfter, 60*time.Second)
 	def(&c.RetryDelay, 5*time.Second)
@@ -191,15 +195,22 @@ func (m *Manager) pruneLoop(ctx context.Context) {
 // não pode impedir a finalização de quem já gravou.
 func (m *Manager) tick(ctx context.Context) {
 	now := m.now()
-	steps := []func(context.Context, time.Time){
-		m.failMissed, m.claimDue, m.resumeRecording, m.finalizeProcessing,
+	m.tickStep(ctx, func(stepCtx context.Context) { m.failMissed(stepCtx, now) })
+	m.tickStep(ctx, func(stepCtx context.Context) { m.claimDue(stepCtx, now) })
+	m.tickStep(ctx, func(stepCtx context.Context) { m.resumeRecording(ctx, stepCtx, now) })
+	m.tickStep(ctx, func(stepCtx context.Context) { m.finalizeProcessing(ctx, stepCtx) })
+}
+
+// tickStep dá prazo próprio a uma etapa, para o estouro de uma não consumir o da
+// seguinte. O prazo é só das consultas: gravador e finalização nascem do ctx do Run,
+// senão morreriam assim que a etapa acabasse.
+func (m *Manager) tickStep(ctx context.Context, step func(stepCtx context.Context)) {
+	if ctx.Err() != nil {
+		return
 	}
-	for _, step := range steps {
-		if ctx.Err() != nil {
-			return
-		}
-		step(ctx, now)
-	}
+	stepCtx, cancel := context.WithTimeout(ctx, m.cfg.TickTimeout)
+	defer cancel()
+	step(stepCtx)
 }
 
 // failMissed avisa também quando há erro: as linhas devolvidas junto com ele já
@@ -220,14 +231,14 @@ func (m *Manager) claimDue(ctx context.Context, now time.Time) {
 	}
 }
 
-func (m *Manager) resumeRecording(ctx context.Context, now time.Time) {
-	recording, err := m.repo.ListByStatus(ctx, StatusGravando)
+func (m *Manager) resumeRecording(runCtx, stepCtx context.Context, now time.Time) {
+	recording, err := m.repo.ListByStatus(stepCtx, StatusGravando)
 	if err != nil {
 		m.log.Warn("recording: listar gravando", zap.Error(err))
 	}
 	for _, rec := range recording {
 		if rec.EndsAt.After(now) {
-			m.startRecorder(ctx, rec)
+			m.startRecorder(runCtx, rec)
 			continue
 		}
 		// Janela acabou com a API fora. Se há gravador vivo, ele mesmo fecha.
@@ -235,20 +246,20 @@ func (m *Manager) resumeRecording(ctx context.Context, now time.Time) {
 		_, alive := m.live[rec.ID]
 		m.mu.Unlock()
 		if !alive {
-			if err := m.repo.MarkProcessing(ctx, rec.ID); err != nil {
+			if err := m.repo.MarkProcessing(stepCtx, rec.ID); err != nil {
 				m.log.Warn("recording: marcar processando", zap.Stringer("id", rec.ID), zap.Error(err))
 			}
 		}
 	}
 }
 
-func (m *Manager) finalizeProcessing(ctx context.Context, _ time.Time) {
-	processing, err := m.repo.ListByStatus(ctx, StatusProcessando)
+func (m *Manager) finalizeProcessing(runCtx, stepCtx context.Context) {
+	processing, err := m.repo.ListByStatus(stepCtx, StatusProcessando)
 	if err != nil {
 		m.log.Warn("recording: listar processando", zap.Error(err))
 	}
 	for _, rec := range processing {
-		m.startFinalize(ctx, rec)
+		m.startFinalize(runCtx, rec)
 	}
 }
 
@@ -262,6 +273,9 @@ func (m *Manager) prune(ctx context.Context) {
 		return
 	}
 	for _, rec := range expired {
+		if ctx.Err() != nil {
+			return
+		}
 		if err := m.objects.Delete(ctx, *rec.ObjectKey); err != nil {
 			m.log.Warn("recording: apagar áudio", zap.Stringer("id", rec.ID), zap.Error(err))
 			continue

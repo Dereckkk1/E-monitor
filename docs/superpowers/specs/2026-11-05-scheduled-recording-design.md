@@ -136,7 +136,9 @@ que o buraco após um reinício não inclua os minutos de boot. A cada 15s:
 
 Erro de banco numa etapa fica no log e não impede as seguintes: banco instável não pode
 segurar a finalização de quem já gravou. As linhas que `FailMissed` devolve junto com
-um erro são avisadas mesmo assim, porque o próximo tick não as encontra mais.
+um erro são avisadas mesmo assim, porque o próximo tick não as encontra mais. Cada
+etapa tem prazo próprio de 10s, para banco pendurado não parar o agendador. O prazo
+vale só para as consultas: gravador e finalização nascem do contexto do processo.
 
 O gravador relê o status antes de capturar. A linha que o tick tem na mão pode estar
 velha: se o admin cancela depois da listagem, não há gravador para parar, e religar
@@ -269,7 +271,15 @@ Todas sob `RequireRole("admin")`:
 | `GET` | `/v1/internal/recordings` | Listar, mais recentes primeiro, paginado |
 | `POST` | `/v1/internal/recordings/{id}/cancel` | Cancelar `programada` ou `gravando` |
 | `DELETE` | `/v1/internal/recordings/{id}` | Excluir: apaga objeto, depois linha. `409` se `gravando` ou `processando` |
-| `GET` | `/v1/internal/recordings/{id}/audio` | Bytes pelo proxy da API. `404` sem áudio |
+| `GET` | `/v1/internal/recordings/{id}/audio` | Bytes pelo proxy da API. `404` sem áudio, inclusive com o objeto ausente no bucket |
+
+O `DELETE` da linha é condicional (`status NOT IN ('gravando','processando')`), e não
+só checado antes: o agendador pode reivindicar uma `programada` entre a leitura e a
+exclusão, e apagar a linha tiraria a gravação da lista e da guarda de deploy com o
+gravador rodando, deixando pasta órfã. Esse caso devolve o mesmo `409`.
+
+Objeto ausente no bucket é `404`, não `500`: a linha pode ter expirado ou sido excluída
+depois da leitura. Bucket fora do ar continua `500`.
 
 Bytes pela API porque URL pré-assinada do MinIO não funciona no navegador em prod
 (ver `docs/features/evidence-presigned-urls.md`). O handler usa
