@@ -144,3 +144,130 @@ func NewManager(cfg Config, repo Repo, media Media, objects ObjectStore, mail ma
 func (m *Manager) dirFor(id uuid.UUID) string {
 	return filepath.Join(m.cfg.Root, id.String())
 }
+
+// Run bloqueia até ctx acabar.
+//
+// A retenção tem goroutine própria: apagar objetos num bucket lento não pode atrasar
+// o início de uma gravação. Por ser um laço só, ela nunca se sobrepõe a si mesma.
+func (m *Manager) Run(ctx context.Context) {
+	pruneDone := make(chan struct{})
+	go func() {
+		defer close(pruneDone)
+		m.pruneLoop(ctx)
+	}()
+	defer func() { <-pruneDone }()
+
+	t := time.NewTicker(m.cfg.TickEvery)
+	defer t.Stop()
+	m.tick(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.tick(ctx)
+		}
+	}
+}
+
+func (m *Manager) pruneLoop(ctx context.Context) {
+	t := time.NewTicker(m.cfg.PruneEvery)
+	defer t.Stop()
+	m.prune(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.prune(ctx)
+		}
+	}
+}
+
+// tick não guarda estado próprio: tudo vem do banco, e é isso que faz o reinício
+// da API se resolver sozinho, sem caminho especial de recuperação.
+//
+// Cada etapa registra o próprio erro e a seguinte roda mesmo assim: banco instável
+// não pode impedir a finalização de quem já gravou.
+func (m *Manager) tick(ctx context.Context) {
+	now := m.now()
+	steps := []func(context.Context, time.Time){
+		m.failMissed, m.claimDue, m.resumeRecording, m.finalizeProcessing,
+	}
+	for _, step := range steps {
+		if ctx.Err() != nil {
+			return
+		}
+		step(ctx, now)
+	}
+}
+
+// failMissed avisa também quando há erro: as linhas devolvidas junto com ele já
+// viraram `falhou`, e o próximo tick não as encontra mais.
+func (m *Manager) failMissed(ctx context.Context, now time.Time) {
+	missed, err := m.repo.FailMissed(ctx, now, "a plataforma ficou fora do ar durante toda a janela")
+	if err != nil {
+		m.log.Warn("recording: janelas perdidas", zap.Error(err))
+	}
+	for _, rec := range missed {
+		m.notifyMissed(rec)
+	}
+}
+
+func (m *Manager) claimDue(ctx context.Context, now time.Time) {
+	if _, err := m.repo.ClaimDue(ctx, now.Add(m.cfg.PreRoll), now); err != nil {
+		m.log.Warn("recording: iniciar gravações", zap.Error(err))
+	}
+}
+
+func (m *Manager) resumeRecording(ctx context.Context, now time.Time) {
+	recording, err := m.repo.ListByStatus(ctx, StatusGravando)
+	if err != nil {
+		m.log.Warn("recording: listar gravando", zap.Error(err))
+	}
+	for _, rec := range recording {
+		if rec.EndsAt.After(now) {
+			m.startRecorder(ctx, rec)
+			continue
+		}
+		// Janela acabou com a API fora. Se há gravador vivo, ele mesmo fecha.
+		m.mu.Lock()
+		_, alive := m.live[rec.ID]
+		m.mu.Unlock()
+		if !alive {
+			if err := m.repo.MarkProcessing(ctx, rec.ID); err != nil {
+				m.log.Warn("recording: marcar processando", zap.Stringer("id", rec.ID), zap.Error(err))
+			}
+		}
+	}
+}
+
+func (m *Manager) finalizeProcessing(ctx context.Context, _ time.Time) {
+	processing, err := m.repo.ListByStatus(ctx, StatusProcessando)
+	if err != nil {
+		m.log.Warn("recording: listar processando", zap.Error(err))
+	}
+	for _, rec := range processing {
+		m.startFinalize(ctx, rec)
+	}
+}
+
+// prune apaga o objeto primeiro e só então marca a linha, como em
+// evidence/prune.go: na ordem inversa, uma falha deixaria objeto que nunca mais
+// seria encontrado.
+func (m *Manager) prune(ctx context.Context) {
+	expired, err := m.repo.Expired(ctx, m.now())
+	if err != nil {
+		m.log.Warn("recording: listar expiradas", zap.Error(err))
+		return
+	}
+	for _, rec := range expired {
+		if err := m.objects.Delete(ctx, *rec.ObjectKey); err != nil {
+			m.log.Warn("recording: apagar áudio", zap.Stringer("id", rec.ID), zap.Error(err))
+			continue
+		}
+		if err := m.repo.MarkExpired(ctx, rec.ID); err != nil {
+			m.log.Warn("recording: marcar expirada", zap.Stringer("id", rec.ID), zap.Error(err))
+		}
+	}
+}

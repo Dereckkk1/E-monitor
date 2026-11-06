@@ -115,7 +115,24 @@ func (s *attemptSlot) restartIfOlder(minAge time.Duration) bool {
 // liveCtx cancelado (API desligando ou admin cancelando) sai sem mexer no status:
 // no desligamento a linha precisa ficar `gravando` para ser retomada no boot, e
 // no cancelamento quem mudou o status foi o próprio Cancel.
+//
+// A linha recebida pode estar velha: o admin pode ter cancelado depois de o tick
+// listar `gravando`, e o stopRecorder não teria o que parar. Capturar mesmo assim
+// gravaria depois do cancelamento e seguraria a finalização até ends_at. Por isso
+// relê o status antes de capturar, e sem resposta do banco também não captura: o
+// próximo tick tenta de novo. O gravador já está em live neste ponto, então um
+// cancelamento depois desta leitura encontra o que parar.
 func (m *Manager) record(liveCtx context.Context, rec Recording) {
+	current, err := m.repo.Get(liveCtx, rec.ID)
+	if err != nil {
+		m.log.Warn("recording: conferir status falhou; o tick tenta de novo",
+			zap.Stringer("id", rec.ID), zap.Error(err))
+		return
+	}
+	if current.Status != StatusGravando {
+		return
+	}
+
 	dir := m.dirFor(rec.ID)
 	windowCtx, cancelWindow := context.WithDeadline(liveCtx, rec.EndsAt)
 	defer cancelWindow()

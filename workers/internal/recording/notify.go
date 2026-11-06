@@ -75,9 +75,9 @@ func (m *Manager) notifyNoConnection(rec Recording) {
 }
 
 func (m *Manager) notifyDropped(rec Recording) {
-	m.notify(rec, "stream caiu",
-		"O stream parou no meio da gravação. O sistema segue tentando reconectar até o fim da janela. "+
-			"Se a URL mudou, corrija na emissora: a nova vale na próxima tentativa.")
+	m.notify(rec, "captura parou",
+		"A captura parou no meio da gravação. O sistema segue tentando até o fim da janela. "+
+			"Se a URL do stream mudou, corrija na emissora: a nova vale na próxima tentativa.")
 }
 
 func (m *Manager) notifyMissed(rec Recording) {
