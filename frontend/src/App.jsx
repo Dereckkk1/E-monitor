@@ -40,6 +40,7 @@ import PostSalePage  from './pages/PostSalePage'
 import AdminPostSalePage       from './pages/AdminPostSalePage'
 import AdminPostSaleWizardPage from './pages/AdminPostSaleWizardPage'
 import AdminPostSaleDetailPage from './pages/AdminPostSaleDetailPage'
+import AdminRecordingsPage from './pages/AdminRecordingsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useAuth } from './contexts/AuthContext'
 
@@ -159,6 +160,9 @@ function AppShell() {
             } />
             <Route path="/admin/suggestions" element={
               <RequireRole roles={['admin']}><AdminSuggestionsPage /></RequireRole>
+            } />
+            <Route path="/admin/gravacoes" element={
+              <RequireRole roles={['admin']}><AdminRecordingsPage /></RequireRole>
             } />
             <Route path="/admin/pos-venda" element={
               <RequireRole roles={['admin']}><AdminPostSalePage /></RequireRole>
