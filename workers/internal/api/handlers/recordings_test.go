@@ -1,0 +1,142 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
+	"radiocheck/internal/auth"
+	"radiocheck/internal/recording"
+)
+
+type fakeRecordings struct {
+	createErr error
+	cancelErr error
+	deleteErr error
+	audioErr  error
+	gotInput  recording.CreateInput
+	audioCtx  context.Context
+}
+
+func (f *fakeRecordings) Create(_ context.Context, in recording.CreateInput) (*recording.Recording, error) {
+	f.gotInput = in
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	return &recording.Recording{ID: uuid.New(), Status: recording.StatusProgramada, Gaps: []recording.Gap{}}, nil
+}
+func (f *fakeRecordings) List(context.Context, int, int) ([]recording.Recording, int, error) {
+	return []recording.Recording{}, 0, nil
+}
+func (f *fakeRecordings) Cancel(context.Context, uuid.UUID) error { return f.cancelErr }
+func (f *fakeRecordings) Delete(context.Context, uuid.UUID) error { return f.deleteErr }
+func (f *fakeRecordings) Audio(ctx context.Context, _ uuid.UUID) (io.ReadCloser, *recording.Recording, int64, error) {
+	f.audioCtx = ctx
+	if f.audioErr != nil {
+		return nil, nil, 0, f.audioErr
+	}
+	return io.NopCloser(strings.NewReader("audio")),
+		&recording.Recording{}, 5, nil
+}
+
+func recReq(method, target, body string, id uuid.UUID) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id.String())
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	return req.WithContext(auth.ContextWithClaims(ctx, &auth.Claims{UserID: uuid.New(), Role: "admin"}))
+}
+
+func TestRecordings_Create(t *testing.T) {
+	st := uuid.New()
+	f := &fakeRecordings{}
+	h := &RecordingsHandler{Service: f}
+	rec := httptest.NewRecorder()
+	h.Create(rec, recReq("POST", "/recordings",
+		`{"station_id":"`+st.String()+`","day":"2026-11-05","start":"14:00","end":"15:00"}`, uuid.Nil))
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Equal(t, st, f.gotInput.StationID)
+	require.Equal(t, "14:00", f.gotInput.Start)
+	require.NotNil(t, f.gotInput.CreatedBy)
+}
+
+func TestRecordings_Create_Erros(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		err  error
+		code int
+	}{
+		{"json quebrado", `nope`, nil, 400},
+		{"emissora invalida", `{"station_id":"x"}`, nil, 400},
+		{"validacao vai para a tela", `{"station_id":"` + uuid.NewString() + `"}`, &recording.ValidationError{Msg: "o início já passou"}, 400},
+		{"sobreposicao", `{"station_id":"` + uuid.NewString() + `"}`, recording.ErrOverlap, 409},
+		{"erro interno nao vaza", `{"station_id":"` + uuid.NewString() + `"}`, errors.New("pg: detalhe interno"), 500},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := &RecordingsHandler{Service: &fakeRecordings{createErr: c.err}}
+			rec := httptest.NewRecorder()
+			h.Create(rec, recReq("POST", "/recordings", c.body, uuid.Nil))
+			require.Equal(t, c.code, rec.Code)
+			require.NotContains(t, rec.Body.String(), "pg:")
+		})
+	}
+}
+
+func TestRecordings_CancelEDelete(t *testing.T) {
+	h := &RecordingsHandler{Service: &fakeRecordings{cancelErr: recording.ErrBusy, deleteErr: recording.ErrBusy}}
+	rec := httptest.NewRecorder()
+	h.Cancel(rec, recReq("POST", "/x", "", uuid.New()))
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	rec = httptest.NewRecorder()
+	h.Delete(rec, recReq("DELETE", "/x", "", uuid.New()))
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	ok := &RecordingsHandler{Service: &fakeRecordings{}}
+	rec = httptest.NewRecorder()
+	ok.Delete(rec, recReq("DELETE", "/x", "", uuid.New()))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestRecordings_Audio(t *testing.T) {
+	h := &RecordingsHandler{Service: &fakeRecordings{}}
+	rec := httptest.NewRecorder()
+	h.Audio(rec, recReq("GET", "/x", "", uuid.New()))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "audio/mp4", rec.Header().Get("Content-Type"))
+	require.Equal(t, "5", rec.Header().Get("Content-Length"))
+	require.Equal(t, "audio", rec.Body.String())
+}
+
+func TestRecordings_Audio_SemAudio(t *testing.T) {
+	h := &RecordingsHandler{Service: &fakeRecordings{audioErr: recording.ErrNoAudio}}
+	rec := httptest.NewRecorder()
+	h.Audio(rec, recReq("GET", "/x", "", uuid.New()))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// middleware.Timeout cancela r.Context() em 60s. Com ele ligado ao S3, o download
+// de um arquivo grande seria cortado no meio.
+func TestRecordings_Audio_ContextoNaoHerdaOTimeout(t *testing.T) {
+	f := &fakeRecordings{}
+	h := &RecordingsHandler{Service: f}
+	req := recReq("GET", "/x", "", uuid.New())
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+
+	h.Audio(httptest.NewRecorder(), req.WithContext(ctx))
+
+	require.NoError(t, f.audioCtx.Err())
+}
