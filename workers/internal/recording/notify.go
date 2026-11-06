@@ -99,7 +99,7 @@ func (m *Manager) notifyPartial(rec Recording, covered, window time.Duration, ga
 	}
 	pct := 0
 	if window > 0 {
-		pct = int(covered * 100 / window)
+		pct = min(int(covered*100/window), 100)
 	}
 	m.notify(rec, fmt.Sprintf("parcial (%d%%)", pct),
 		fmt.Sprintf("A gravação terminou com buracos e cobriu %d%% da janela.\n%s", pct, strings.Join(lines, "\n")))
