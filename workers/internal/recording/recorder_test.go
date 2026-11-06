@@ -53,15 +53,40 @@ type mailerFunc func() error
 
 func (f mailerFunc) Send(context.Context, []string, string, string, string) error { return f() }
 
-// slowDropRepo atrasa o MarkDropAlerted, como um banco lento.
+// slowDropRepo segura o MarkDropAlerted, como um banco lento. Respeita ctx, como o pgx.
 type slowDropRepo struct {
 	*fakeRepo
-	block func()
+	block func(ctx context.Context)
 }
 
 func (r *slowDropRepo) MarkDropAlerted(ctx context.Context, id uuid.UUID) (bool, error) {
-	r.block()
+	r.block(ctx)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	return r.fakeRepo.MarkDropAlerted(ctx, id)
+}
+
+// deletedStationRepo é o Store depois de a emissora sumir: o JOIN não acha a linha.
+type deletedStationRepo struct{ *fakeRepo }
+
+func (r *deletedStationRepo) StreamURL(context.Context, uuid.UUID) (string, error) {
+	return "", ErrNotFound
+}
+
+// recordWithin roda record com prazo: um SMTP mudo já o prendeu para sempre.
+func recordWithin(t *testing.T, m *Manager, r Recording) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.record(context.Background(), r)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("record não voltou")
+	}
 }
 
 func TestRecord_NoFimDaJanelaVaiParaProcessando(t *testing.T) {
@@ -76,7 +101,7 @@ func TestRecord_NoFimDaJanelaVaiParaProcessando(t *testing.T) {
 	m.record(context.Background(), r)
 
 	require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
-	require.Empty(t, mail.all())
+	require.Empty(t, sentMails(m, mail))
 }
 
 func TestRecord_ReconectaQuandoOFfmpegSai(t *testing.T) {
@@ -147,8 +172,8 @@ func TestRecord_WatchdogMataFfmpegPenduradoEAvisaUmaVez(t *testing.T) {
 	m.record(context.Background(), r)
 
 	require.GreaterOrEqual(t, calls.Load(), int32(2), "o watchdog precisa reiniciar a captura")
-	require.Len(t, mail.all(), 1, "um aviso por gravação, mesmo com várias quedas")
-	require.Contains(t, mail.all()[0].subject, "não conectou")
+	require.Len(t, sentMails(m, mail), 1, "um aviso por gravação, mesmo com várias quedas")
+	require.Contains(t, sentMails(m, mail)[0].subject, "não conectou")
 }
 
 func TestRecord_QuedaDepoisDeTerAudioAvisaComoQueda(t *testing.T) {
@@ -164,8 +189,8 @@ func TestRecord_QuedaDepoisDeTerAudioAvisaComoQueda(t *testing.T) {
 
 	m.record(context.Background(), r)
 
-	require.Len(t, mail.all(), 1)
-	require.Contains(t, mail.all()[0].subject, "stream caiu")
+	require.Len(t, sentMails(m, mail), 1)
+	require.Contains(t, sentMails(m, mail)[0].subject, "stream caiu")
 }
 
 // Desligamento da API: a linha fica em `gravando` para ser retomada no boot.
@@ -185,81 +210,193 @@ func TestRecord_ContextoCanceladoNaoFecha(t *testing.T) {
 	require.Equal(t, StatusGravando, repo.snapshot(r.ID).Status)
 }
 
-// Um aviso de queda em andamento quando a janela acaba não pode sobrar para depois
-// de record voltar: ele correria junto com a finalização, e o criador receberia
-// "stream caiu" depois do e-mail de fechamento.
-func TestRecord_AvisoEmAndamentoTerminaAntesDeVoltar(t *testing.T) {
-	r := recordingRow(150 * time.Millisecond)
-	repo := newFakeRepo(r)
-	sent := make(chan struct{})
-	var statusAtSend atomic.Value
+// O e-mail sai em paralelo: com SMTP mudo, record não pode ficar preso esperando,
+// senão a linha nunca sai de `gravando` e a finalização nunca começa.
+func TestRecord_SMTPMudoNaoPrendeAFinalizacao(t *testing.T) {
+	r := recordingRow(200 * time.Millisecond)
+	repo, muted := newFakeRepo(r), newMutedMailer(t)
 	m := newTestManager(t, repo, &fakeMedia{capture: hungCapture}, newFakeObjects(), &fakeMailer{})
-	m.mail = mailerFunc(func() error {
-		time.Sleep(time.Until(r.EndsAt) + 100*time.Millisecond)
-		statusAtSend.Store(repo.snapshot(r.ID).Status)
-		close(sent)
-		return nil
-	})
+	m.mail = muted
 
-	m.record(context.Background(), r)
+	recordWithin(t, m, r)
 
-	select {
-	case <-sent:
-	default:
-		t.Fatal("record voltou com o aviso em andamento")
-	}
-	require.Equal(t, StatusGravando, statusAtSend.Load(), "processando só depois do watchdog parar")
 	require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
+	require.Eventually(t, func() bool { return muted.calls.Load() == 1 }, 2*time.Second, time.Millisecond,
+		"o aviso tem que ter saído, senão o teste não provou nada")
 }
 
-// A marcação demora além do fim da janela. Ela termina antes de record voltar, e o
-// watchdog não tenta de novo com a janela encerrada.
-func TestRecord_MarcacaoDeQuedaEmAndamentoTerminaAntesDeVoltar(t *testing.T) {
+func TestRecord_SMTPMudoNaoCegaOWatchdog(t *testing.T) {
+	r := recordingRow(400 * time.Millisecond)
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(ctx context.Context, _, _ string) error {
+		calls.Add(1)
+		<-ctx.Done()
+		return nil
+	}}
+	m := newTestManager(t, newFakeRepo(r), media, newFakeObjects(), &fakeMailer{})
+	m.mail = newMutedMailer(t)
+
+	recordWithin(t, m, r)
+
+	require.Greater(t, calls.Load(), int32(2), "o watchdog segue derrubando ffmpeg travado")
+}
+
+// O banco segura o watchdog só até o fim da janela, e com a janela encerrada ele não
+// tenta de novo.
+func TestRecord_MarcacaoDeQuedaPresaAcabaComAJanela(t *testing.T) {
 	r := recordingRow(150 * time.Millisecond)
-	var started, finished atomic.Int32
-	repo := &slowDropRepo{fakeRepo: newFakeRepo(r), block: func() {
+	var started atomic.Int32
+	repo := &slowDropRepo{fakeRepo: newFakeRepo(r), block: func(ctx context.Context) {
 		started.Add(1)
-		time.Sleep(time.Until(r.EndsAt) + 100*time.Millisecond)
-		finished.Add(1)
+		<-ctx.Done()
 	}}
 	mail := &fakeMailer{}
 	m := newTestManager(t, repo, &fakeMedia{capture: hungCapture}, newFakeObjects(), mail)
 
-	m.record(context.Background(), r)
+	recordWithin(t, m, r)
 
-	require.Equal(t, int32(1), finished.Load(), "record voltou com o MarkDropAlerted em andamento")
 	require.Equal(t, int32(1), started.Load(), "o watchdog agiu depois do fim da janela")
-	require.Len(t, mail.all(), 1, "o aviso também sai antes de record voltar")
+	require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status)
+	require.Empty(t, sentMails(m, mail))
 }
 
-// SMTP lento não pode segurar a morte do ffmpeg travado: reiniciar vem antes de
-// avisar. Se a ordem inverter, a segunda tentativa só sai depois do Send.
-func TestRecord_AvisoLentoNaoAtrasaOReinicio(t *testing.T) {
-	r := recordingRow(500 * time.Millisecond)
+// Stream fora: cada ffmpeg desiste sozinho e nenhum chega à idade de morrer. O alerta
+// sai mesmo assim, e o motivo real do ffmpeg não é trocado pelo do watchdog.
+func TestRecord_StreamForaAvisaSemMatar(t *testing.T) {
+	r := recordingRow(250 * time.Millisecond)
+	repo, mail := newFakeRepo(r), &fakeMailer{}
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		return errors.New("caiu")
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), mail)
+
+	m.record(context.Background(), r)
+
+	got := sentMails(m, mail)
+	require.Len(t, got, 1)
+	require.Contains(t, got[0].subject, "não conectou")
+	require.Equal(t, "caiu", *repo.snapshot(r.ID).LastError)
+}
+
+// O stream volta quando o relógio de bytes já está vencido. O ffmpeg novo está
+// saudável, mas leva ~16s até a primeira escrita, e não pode morrer antes disso.
+func TestRecord_TentativaNovaSobreviveComBytesAtrasados(t *testing.T) {
+	r := recordingRow(700 * time.Millisecond)
+	repo, mail := newFakeRepo(r), &fakeMailer{}
+	var calls atomic.Int32
+	var killed atomic.Bool
+	media := &fakeMedia{capture: func(ctx context.Context, _, dir string) error {
+		if calls.Add(1) == 1 {
+			time.Sleep(250 * time.Millisecond)
+			return errors.New("caiu")
+		}
+		select {
+		case <-time.After(150 * time.Millisecond):
+		case <-ctx.Done():
+			killed.Store(true)
+			return nil
+		}
+		feed(ctx, dir)
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), mail)
+	m.cfg.StallAfter = 300 * time.Millisecond
+
+	m.record(context.Background(), r)
+
+	require.False(t, killed.Load(), "morreu antes de completar StallAfter de idade")
+	require.Equal(t, int32(2), calls.Load())
+	got := sentMails(m, mail)
+	require.Len(t, got, 1, "o alerta segue o relógio de bytes, não a idade")
+	require.Contains(t, got[0].subject, "não conectou")
+}
+
+// A idade só adia a morte: ffmpeg que fica pendurado continua morrendo.
+func TestRecord_TentativaPenduradaMorreAoCompletarStallAfter(t *testing.T) {
+	r := recordingRow(800 * time.Millisecond)
 	repo := newFakeRepo(r)
 	var calls atomic.Int32
-	second := make(chan struct{})
+	var secondAge atomic.Int64
 	media := &fakeMedia{capture: func(ctx context.Context, _, _ string) error {
-		if calls.Add(1) == 2 {
-			close(second)
+		n := calls.Add(1)
+		if n == 1 {
+			time.Sleep(250 * time.Millisecond)
+			return errors.New("caiu")
 		}
+		begin := time.Now()
 		<-ctx.Done()
+		if n == 2 {
+			secondAge.Store(int64(time.Since(begin)))
+		}
 		return nil
 	}}
 	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
-	var restarted atomic.Bool
-	m.mail = mailerFunc(func() error {
-		select {
-		case <-second:
-			restarted.Store(true)
-		case <-time.After(time.Until(r.EndsAt)):
-		}
-		return nil
-	})
+	m.cfg.StallAfter = 300 * time.Millisecond
 
 	m.record(context.Background(), r)
 
-	require.True(t, restarted.Load(), "a captura tem que reiniciar com o aviso ainda saindo")
+	require.GreaterOrEqual(t, calls.Load(), int32(3), "a tentativa pendurada tem que morrer")
+	require.GreaterOrEqual(t, time.Duration(secondAge.Load()), 290*time.Millisecond)
+	require.Contains(t, *repo.snapshot(r.ID).LastError, "stream sem dados há", "sem isto, `falhou` fica sem motivo")
+}
+
+// A tentativa acabou sozinha e o watchdog passa na espera até a próxima: não há o que
+// matar, e o erro real do ffmpeg não pode ser trocado por "sem dados".
+func TestRecord_EntreTentativasNaoTrocaOMotivo(t *testing.T) {
+	r := recordingRow(300 * time.Millisecond)
+	repo := newFakeRepo(r)
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		time.Sleep(150 * time.Millisecond)
+		return errors.New("caiu")
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+	m.cfg.PollEvery = 100 * time.Millisecond
+	m.cfg.StallAfter = 120 * time.Millisecond
+	m.cfg.RetryDelay = time.Hour
+
+	m.record(context.Background(), r)
+
+	require.Equal(t, "caiu", *repo.snapshot(r.ID).LastError)
+}
+
+func TestRecord_MotivoDoWatchdogUsaStallAfter(t *testing.T) {
+	require.Equal(t, "stream sem dados há 60s", stalledMessage(60*time.Second))
+}
+
+func TestRecord_SlotSoDerrubaTentativaVivaEVelha(t *testing.T) {
+	s := &attemptSlot{}
+	require.False(t, s.restartIfOlder(0), "sem tentativa")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.set(cancel)
+	require.False(t, s.restartIfOlder(time.Hour), "nova demais")
+	require.NoError(t, ctx.Err())
+	require.True(t, s.restartIfOlder(0))
+	require.Error(t, ctx.Err())
+	require.False(t, s.restartIfOlder(0), "já derrubada: não conta de novo enquanto o ffmpeg fecha")
+
+	_, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	s.set(cancel2)
+	s.clear()
+	require.False(t, s.restartIfOlder(0), "entre tentativas não há o que derrubar")
+}
+
+func TestRecord_EmissoraExcluidaDizOMotivo(t *testing.T) {
+	r := recordingRow(60 * time.Millisecond)
+	repo := &deletedStationRepo{newFakeRepo(r)}
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+
+	m.record(context.Background(), r)
+
+	require.Zero(t, calls.Load())
+	require.Equal(t, "a emissora foi excluída", *repo.snapshot(r.ID).LastError)
 }
 
 // No desligamento, o SIGTERM só adianta se o processo esperar o ffmpeg escrever o
@@ -345,4 +482,49 @@ func TestWaitRecorders_NaoNasceGravadorDepoisDeEsperar(t *testing.T) {
 	m.mu.Unlock()
 	require.Zero(t, n)
 	require.Zero(t, calls.Load())
+}
+
+// O aviso que já saiu de notify ainda precisa de tempo para chegar ao SMTP.
+func TestWaitRecorders_EsperaOEmailEmAndamento(t *testing.T) {
+	r := recordingRow(time.Hour)
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), &fakeMailer{})
+	var sent atomic.Bool
+	m.mail = mailerFunc(func() error {
+		time.Sleep(50 * time.Millisecond)
+		sent.Store(true)
+		return nil
+	})
+
+	m.notifyFailed(r)
+	m.WaitRecorders(30 * time.Second)
+
+	require.True(t, sent.Load(), "voltou antes de o e-mail sair")
+}
+
+// O mailer ignora contexto, então só o timeout tira o desligamento de um SMTP mudo.
+func TestWaitRecorders_EmailPresoNaoPassaDoTimeout(t *testing.T) {
+	r := recordingRow(time.Hour)
+	muted := newMutedMailer(t)
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), &fakeMailer{})
+	m.mail = muted
+
+	m.notifyFailed(r)
+	begin := time.Now()
+	m.WaitRecorders(50 * time.Millisecond)
+	elapsed := time.Since(begin)
+
+	require.GreaterOrEqual(t, elapsed, 50*time.Millisecond)
+	require.Less(t, elapsed, 15*time.Second)
+}
+
+// Add depois de Wait é uso inválido de WaitGroup, então o aviso é descartado.
+func TestWaitRecorders_DescartaEmailDepoisDeEsperar(t *testing.T) {
+	r := recordingRow(time.Hour)
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+
+	m.WaitRecorders(time.Second)
+	m.notifyFailed(r)
+
+	require.Empty(t, sentMails(m, mail))
 }

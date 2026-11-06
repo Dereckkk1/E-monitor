@@ -57,7 +57,7 @@ func TestFinalize_Concluida(t *testing.T) {
 	require.Equal(t, validADTS(3), string(objs.puts[*got.ObjectKey]))
 	require.Equal(t, 600, *got.CoveredSeconds)
 	require.WithinDuration(t, time.Now().Add(Retention), *got.ExpiresAt, time.Minute)
-	require.Empty(t, mail.all(), "sucesso não manda e-mail")
+	require.Empty(t, sentMails(m, mail), "sucesso não manda e-mail")
 	_, err := os.Stat(m.dirFor(r.ID))
 	require.True(t, os.IsNotExist(err), "pedaços apagados depois do upload")
 }
@@ -76,8 +76,8 @@ func TestFinalize_ParcialAvisa(t *testing.T) {
 	got := repo.snapshot(r.ID)
 	require.Equal(t, StatusParcial, got.Status)
 	require.Len(t, got.Gaps, 1)
-	require.Len(t, mail.all(), 1)
-	require.Contains(t, mail.all()[0].subject, "parcial")
+	require.Len(t, sentMails(m, mail), 1)
+	require.Contains(t, sentMails(m, mail)[0].subject, "parcial")
 }
 
 func TestFinalize_SemAudioFalhaEAvisa(t *testing.T) {
@@ -93,7 +93,7 @@ func TestFinalize_SemAudioFalhaEAvisa(t *testing.T) {
 	require.Nil(t, got.ObjectKey)
 	require.Nil(t, got.ExpiresAt)
 	require.Empty(t, objs.puts)
-	require.Len(t, mail.all(), 1)
+	require.Len(t, sentMails(m, mail), 1)
 }
 
 // A garantia central: falha no upload não pode perder áudio já capturado.
@@ -135,7 +135,7 @@ func TestFinalize_CanceladaGuardaAudioSemEmail(t *testing.T) {
 	require.Equal(t, StatusCancelada, got.Status)
 	require.NotNil(t, got.ObjectKey)
 	require.Empty(t, got.Gaps, "o que veio depois do cancelamento não é buraco")
-	require.Empty(t, mail.all())
+	require.Empty(t, sentMails(m, mail))
 }
 
 func TestObjectKey(t *testing.T) {
@@ -179,7 +179,7 @@ func TestFinalize_AtrasadoNaoSobrescreveNemAvisa(t *testing.T) {
 	require.ErrorIs(t, m.finalize(context.Background(), r), ErrBusy)
 
 	require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
-	require.Empty(t, mail.all())
+	require.Empty(t, sentMails(m, mail))
 }
 
 func (m *Manager) isFinalizing(id uuid.UUID) bool {
@@ -346,7 +346,7 @@ func TestFinalize_SemFrameCompletoFalhaEAvisa(t *testing.T) {
 	require.Equal(t, []Gap{{From: r.StartsAt, To: r.EndsAt}}, got.Gaps)
 	require.Nil(t, got.ObjectKey)
 	require.Empty(t, objs.puts)
-	require.Len(t, mail.all(), 1)
+	require.Len(t, sentMails(m, mail), 1)
 }
 
 // Nenhuma falha entre o Concat e o upload pode custar os pedaços. O arquivo curto
@@ -514,11 +514,11 @@ func TestStartFinalize_TerceiraFalhaSeguidaAvisaUmaVez(t *testing.T) {
 
 	runFinalize(t, context.Background(), m, r)
 	runFinalize(t, context.Background(), m, r)
-	require.Empty(t, mail.all(), "falha transitória não gera alarme")
+	require.Empty(t, sentMails(m, mail), "falha transitória não gera alarme")
 
 	runFinalize(t, context.Background(), m, r)
-	require.Len(t, mail.all(), 1)
-	got := mail.all()[0]
+	require.Len(t, sentMails(m, mail), 1)
+	got := sentMails(m, mail)[0]
 	require.Contains(t, got.subject, "não fechou")
 	require.Contains(t, got.text, "preservado")
 	require.Contains(t, got.text, "segue tentando")
@@ -526,7 +526,7 @@ func TestStartFinalize_TerceiraFalhaSeguidaAvisaUmaVez(t *testing.T) {
 
 	runFinalize(t, context.Background(), m, r)
 	runFinalize(t, context.Background(), m, r)
-	require.Len(t, mail.all(), 1, "uma vez só")
+	require.Len(t, sentMails(m, mail), 1, "uma vez só")
 	require.Equal(t, 5, objs.calls())
 }
 
@@ -547,7 +547,7 @@ func TestStartFinalize_SucessoZeraAContagem(t *testing.T) {
 
 	require.Equal(t, StatusConcluida, repo.snapshot(r.ID).Status)
 	require.Zero(t, m.finalizeFailureCount(r.ID))
-	require.Empty(t, mail.all())
+	require.Empty(t, sentMails(m, mail))
 }
 
 func TestStartFinalize_ErrBusyZeraAContagem(t *testing.T) {
@@ -600,7 +600,7 @@ func TestFinalize_RestoDeFrameEhSemAudio(t *testing.T) {
 		require.NoError(t, m.finalize(context.Background(), r), size)
 
 		require.Equal(t, StatusFalhou, repo.snapshot(r.ID).Status, size)
-		require.Len(t, mail.all(), 1, size)
+		require.Len(t, sentMails(m, mail), 1, size)
 		_, err := os.Stat(m.dirFor(r.ID))
 		require.True(t, os.IsNotExist(err), size)
 	}
@@ -621,7 +621,7 @@ func TestFinalize_BytesSemFrameReconhecidoPreservaPedacos(t *testing.T) {
 		require.ErrorContains(t, err, strconv.Itoa(size)+" bytes")
 		require.Equal(t, StatusProcessando, repo.snapshot(r.ID).Status, size)
 		require.Empty(t, objs.puts, size)
-		require.Empty(t, mail.all(), size)
+		require.Empty(t, sentMails(m, mail), size)
 		pieces, err := ListPieces(m.dirFor(r.ID))
 		require.NoError(t, err)
 		require.Len(t, pieces, 1, size)

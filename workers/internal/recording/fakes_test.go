@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,6 +295,33 @@ func (m *fakeMailer) all() []sentMail {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]sentMail(nil), m.sent...)
+}
+
+// sentMails lê o que saiu depois de esperar os envios em andamento: notify roda em
+// goroutine, e sem a espera um require.Empty passaria por chegar antes dela.
+func sentMails(m *Manager, mail *fakeMailer) []sentMail {
+	m.notifications.Wait()
+	return mail.all()
+}
+
+// mutedMailer imita um SMTP mudo. smtp.SendMail ignora contexto, então Send também
+// ignora: só volta quando o teste acaba.
+type mutedMailer struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func newMutedMailer(t *testing.T) *mutedMailer {
+	t.Helper()
+	m := &mutedMailer{release: make(chan struct{})}
+	t.Cleanup(func() { close(m.release) })
+	return m
+}
+
+func (m *mutedMailer) Send(context.Context, []string, string, string, string) error {
+	m.calls.Add(1)
+	<-m.release
+	return nil
 }
 
 func newTestManager(t *testing.T, repo Repo, media Media, objects ObjectStore, mail *fakeMailer) *Manager {

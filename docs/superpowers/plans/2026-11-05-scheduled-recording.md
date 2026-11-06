@@ -2678,8 +2678,8 @@ func TestTick_JanelaPerdidaFalhaEAvisa(t *testing.T) {
 	m.tick(context.Background())
 
 	require.Equal(t, StatusFalhou, repo.snapshot(r.ID).Status)
-	require.Len(t, mail.all(), 1)
-	require.Contains(t, mail.all()[0].subject, "não gravou")
+	require.Len(t, sentMails(m, mail), 1)
+	require.Contains(t, sentMails(m, mail)[0].subject, "não gravou")
 }
 
 func TestPrune_ApagaObjetoAntesDeMarcar(t *testing.T) {

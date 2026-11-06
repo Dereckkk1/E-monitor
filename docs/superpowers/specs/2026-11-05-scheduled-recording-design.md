@@ -161,9 +161,15 @@ ffmpeg -user_agent "VLC/3.0.20 LibVLC/3.0.20" <reconnect args> -i <stream_url> \
 - **`stream_url` é relida do banco a cada tentativa.** É o que dá sentido ao
   e-mail: trocar a URL durante a queda faz efeito na reconexão seguinte.
 - **Stall watchdog:** o total de bytes em `dir` é medido a cada 10s. Sem crescimento
-  por 60s, o ffmpeg é morto e reiniciado. Mede bytes, não arquivos, porque o pedaço
-  abre no primeiro pacote e cresce durante o minuto. O ffmpeg pode ficar pendurado
-  sem sair (mesma classe do incidente 2026-05-15).
+  por 60s, sai o alerta. Mede bytes, não arquivos, porque o pedaço abre no primeiro
+  pacote e cresce durante o minuto. O ffmpeg pode ficar pendurado sem sair (mesma
+  classe do incidente 2026-05-15).
+- **Idade da tentativa:** alerta e morte são regras separadas. O relógio de bytes não
+  zera entre tentativas, senão, com o stream fora, o alerta nunca sairia. Por isso ele
+  não basta para matar: quando o stream volta, ele já está vencido, e um ffmpeg
+  saudável leva ~16s até a primeira escrita. Morrer exige 60s sem bytes **e** tentativa
+  com pelo menos 60s de idade. Ao matar, grava em `last_error` "stream sem dados há
+  60s", para um ffmpeg pendurado não terminar `falhou` sem motivo.
 - **Saiu antes da hora:** espera 5s e tenta de novo, até `ends_at`.
 - **Prefixo `a<unix>`:** um ffmpeg novo no mesmo minuto não sobrescreve o pedaço
   anterior, nem depois de um reinício da API.
@@ -223,6 +229,13 @@ informação fica só na tela.
 
 Os dois primeiros casos são um alerta só por gravação, controlado por
 `drop_alerted_at`. Em sucesso, nenhum e-mail.
+
+O envio é assíncrono e não bloqueia a gravação: roda em goroutine própria, então e-mail
+lento não atrasa o watchdog, o agendador nem a finalização. O `mailer` ignora contexto
+(`smtp.SendMail` não recebe nenhum), então um SMTP mudo não tem prazo: só a goroutine
+daquele envio fica presa até o processo reiniciar. O desligamento espera os envios em
+andamento dentro do mesmo timeout dos gravadores, e aviso que surge depois disso é
+descartado com log.
 
 ### 5.5 Retenção
 
