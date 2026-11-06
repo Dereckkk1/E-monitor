@@ -59,6 +59,7 @@ type createRecordingRequest struct {
 // Create agenda uma gravação.
 func (h *RecordingsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req createRecordingRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
@@ -94,6 +95,9 @@ func (h *RecordingsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, err)
 		return
+	}
+	if items == nil {
+		items = []recording.Recording{} // o front itera items; null quebraria a tela
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
