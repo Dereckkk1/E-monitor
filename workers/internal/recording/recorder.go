@@ -123,7 +123,10 @@ func (s *attemptSlot) restartIfOlder(minAge time.Duration) bool {
 // próximo tick tenta de novo. O gravador já está em live neste ponto, então um
 // cancelamento depois desta leitura encontra o que parar.
 func (m *Manager) record(liveCtx context.Context, rec Recording) {
-	current, err := m.repo.Get(liveCtx, rec.ID)
+	// Com prazo: aqui o watch ainda não subiu, e o tick não religa quem está em live.
+	checkCtx, cancelCheck := context.WithTimeout(liveCtx, m.cfg.TickTimeout)
+	current, err := m.repo.Get(checkCtx, rec.ID)
+	cancelCheck()
 	if err != nil {
 		m.log.Warn("recording: conferir status falhou; o tick tenta de novo",
 			zap.Stringer("id", rec.ID), zap.Error(err))
