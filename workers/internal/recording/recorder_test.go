@@ -190,7 +190,7 @@ func TestRecord_QuedaDepoisDeTerAudioAvisaComoQueda(t *testing.T) {
 	m.record(context.Background(), r)
 
 	require.Len(t, sentMails(m, mail), 1)
-	require.Contains(t, sentMails(m, mail)[0].subject, "stream caiu")
+	require.Contains(t, sentMails(m, mail)[0].subject, "captura parou")
 }
 
 // Desligamento da API: a linha fica em `gravando` para ser retomada no boot.
@@ -527,4 +527,74 @@ func TestWaitRecorders_DescartaEmailDepoisDeEsperar(t *testing.T) {
 	m.notifyFailed(r)
 
 	require.Empty(t, sentMails(m, mail))
+}
+
+// A goroutine pode nascer com a linha já cancelada: a que o tick tem na mão é velha.
+func TestRecord_LinhaQueSaiuDeGravandoNaoCaptura(t *testing.T) {
+	r := recordingRow(time.Hour)
+	stored := r
+	stored.Status = StatusProcessando
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return nil
+	}}
+	m := newTestManager(t, newFakeRepo(stored), media, newFakeObjects(), &fakeMailer{})
+
+	recordWithin(t, m, r)
+
+	require.Zero(t, calls.Load())
+}
+
+// Linha excluída entre o tick e a goroutine: nada a gravar, e nada a marcar.
+func TestRecord_LinhaExcluidaNaoCaptura(t *testing.T) {
+	r := recordingRow(time.Hour)
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return nil
+	}}
+	m := newTestManager(t, newFakeRepo(), media, newFakeObjects(), &fakeMailer{})
+
+	recordWithin(t, m, r)
+
+	require.Zero(t, calls.Load())
+}
+
+// Sem saber o status, capturar arriscaria gravar depois de um cancelamento. O tick
+// tenta de novo, então a falha custa no máximo um intervalo.
+func TestRecord_FalhaAoConferirStatusTentaNoProximoTick(t *testing.T) {
+	r := recordingRow(time.Hour)
+	var broken atomic.Bool
+	broken.Store(true)
+	repo := &tickRepo{fakeRepo: newFakeRepo(r), getErr: func() error {
+		if broken.Load() {
+			return errors.New("banco fora")
+		}
+		return nil
+	}}
+	captured := make(chan struct{}, 1)
+	media := &fakeMedia{capture: func(ctx context.Context, _, _ string) error {
+		select {
+		case captured <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+	ctx := liveContext(t, m)
+
+	m.tick(ctx)
+	require.Eventually(t, func() bool { return liveCount(m) == 0 }, time.Second, time.Millisecond)
+	require.Empty(t, captured)
+	require.Equal(t, StatusGravando, repo.snapshot(r.ID).Status)
+
+	broken.Store(false)
+	m.tick(ctx)
+	select {
+	case <-captured:
+	case <-time.After(time.Second):
+		t.Fatal("o tick seguinte não retomou")
+	}
 }

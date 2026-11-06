@@ -4420,7 +4420,7 @@ Pela tela, programar 3 minutos a partir do próximo minuto. Conferir:
 - [ ] **Step 3: Stream derrubado no meio (5 minutos)**
 
 Aos 2 minutos, parar o simulador. Aguardar 2 minutos e subir de novo. Conferir:
-- E-mail "stream caiu" em ~60s, **um só**.
+- E-mail "captura parou" em ~60s, **um só**.
 - A gravação reconecta sozinha.
 - Termina `parcial`, com o intervalo certo na tela e no e-mail final.
 

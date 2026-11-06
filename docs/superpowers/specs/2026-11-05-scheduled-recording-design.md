@@ -134,6 +134,17 @@ que o buraco após um reinício não inclua os minutos de boot. A cada 15s:
 `programada` com `ends_at` já vencido (API fora do ar durante toda a janela) vira
 `falhou` com e-mail. Não há gravador vivo para ela e nunca haverá áudio.
 
+Erro de banco numa etapa fica no log e não impede as seguintes: banco instável não pode
+segurar a finalização de quem já gravou. As linhas que `FailMissed` devolve junto com
+um erro são avisadas mesmo assim, porque o próximo tick não as encontra mais.
+
+O gravador relê o status antes de capturar. A linha que o tick tem na mão pode estar
+velha: se o admin cancela depois da listagem, não há gravador para parar, e religar
+com a linha velha gravaria depois do cancelamento e seguraria a finalização até
+`ends_at`. Sem `gravando`, sai sem capturar. Se a leitura falhar, também sai, e o
+próximo tick tenta de novo. `Cancel` muda o status antes de parar o gravador, pelo
+mesmo motivo.
+
 O Postgres é a fonte da verdade. A API tem uma instância só, então o mapa de
 gravadores vivos em memória basta.
 
@@ -222,7 +233,7 @@ informação fica só na tela.
 | Quando | Assunto indica |
 |---|---|
 | Nenhum byte 60s após o início | Não conectou |
-| Bytes pararam de crescer por 60s no meio da gravação | Caiu, tentando reconectar |
+| Bytes pararam de crescer por 60s no meio da gravação | Captura parou, segue tentando. Não afirma que foi o stream: pode ser disco ou emissora excluída |
 | Final `parcial` ou `falhou` | Resultado, com a cobertura |
 | API fora durante toda a janela | Não gravou |
 | 3ª falha seguida da finalização, uma vez por processo (a contagem fica em memória: reiniciar a API zera e pode repetir o e-mail) | Arquivo não fechou; áudio preservado, segue tentando |
@@ -243,6 +254,10 @@ Job de hora em hora, no padrão de `evidence/prune.go`: seleciona
 `expires_at < now() AND object_key IS NOT NULL`, apaga o objeto e, **só se apagou**,
 marca `expirada` e zera `object_key`. Ordem invertida deixaria objeto órfão que
 nunca seria recuperado; falha de delete fica para a próxima passada.
+
+Roda em goroutine própria, com ticker próprio, uma vez na subida e depois a cada hora:
+um bucket lento não pode atrasar o início de uma gravação. Por ser um laço só, uma
+passada nunca se sobrepõe à anterior.
 
 ### 5.6 API
 

@@ -92,3 +92,20 @@ func TestNotifyNoConnection_NaoAfirmaQueFoiOStream(t *testing.T) {
 		"Se a URL do stream mudou, corrija na emissora: a nova vale na próxima tentativa.")
 	require.NotContains(t, got.text, "não respondeu")
 }
+
+// A captura pode ter parado por disco cheio ou emissora excluída: nem o assunto nem
+// o texto culpam o stream.
+func TestNotifyDropped_NaoAfirmaQueFoiOStream(t *testing.T) {
+	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c"}
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+
+	m.notifyDropped(r)
+
+	got := sentMails(m, mail)[0]
+	require.Contains(t, got.subject, "captura parou")
+	require.NotContains(t, got.subject, "caiu")
+	require.Contains(t, got.text, "A captura parou no meio da gravação. O sistema segue tentando até o fim da janela. "+
+		"Se a URL do stream mudou, corrija na emissora: a nova vale na próxima tentativa.")
+	require.NotContains(t, got.text, "O stream parou")
+}
