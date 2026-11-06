@@ -29,6 +29,21 @@ func TestNotifyPartial_EscapaHTMLEMostraHorarioDeSaoPaulo(t *testing.T) {
 	require.Contains(t, got.text, "05/11/2026, das 20:13 às 21:14", "a janela segue sem segundos")
 }
 
+// O pré-roll e o burst do servidor podem dar mais áudio que a janela. A tela limita a
+// 100%, e o e-mail precisa dizer o mesmo.
+func TestNotifyPartial_PercentualNaoPassaDe100(t *testing.T) {
+	from := time.Date(2026, 11, 5, 23, 14, 10, 0, time.UTC)
+	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c",
+		StartsAt: from.Add(-time.Minute), EndsAt: from.Add(time.Hour)}
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+
+	gap := Gap{From: from, To: from.Add(40 * time.Second)}
+	m.notifyPartial(r, 63*time.Minute, time.Hour, []Gap{gap})
+
+	require.Contains(t, sentMails(m, mail)[0].text, "cobriu 100% da janela")
+}
+
 func TestNotifyFailed_IncluiMotivoCortado(t *testing.T) {
 	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c"}
 	mail := &fakeMailer{}
