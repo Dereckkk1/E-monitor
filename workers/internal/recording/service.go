@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"radiocheck/internal/storage"
 )
 
 // Create valida e agenda.
@@ -21,7 +25,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (*Recording, error
 	if err != nil {
 		return nil, err
 	}
-	if url == "" {
+	if strings.TrimSpace(url) == "" {
 		return nil, &ValidationError{Msg: "esta emissora não tem URL de stream cadastrada"}
 	}
 	id, err := m.repo.Insert(ctx, in.StationID, name, in.CreatedBy, from, to)
@@ -74,7 +78,8 @@ func (m *Manager) Delete(ctx context.Context, id uuid.UUID) error {
 	return m.repo.Delete(ctx, id)
 }
 
-// Audio abre o arquivo. Quem chama fecha o corpo.
+// Audio abre o arquivo. Quem chama fecha o corpo. Objeto ausente no bucket também
+// é ErrNoAudio: a linha pode ter expirado ou sido excluída depois da leitura.
 func (m *Manager) Audio(ctx context.Context, id uuid.UUID) (io.ReadCloser, *Recording, int64, error) {
 	rec, err := m.repo.Get(ctx, id)
 	if err != nil {
@@ -84,6 +89,11 @@ func (m *Manager) Audio(ctx context.Context, id uuid.UUID) (io.ReadCloser, *Reco
 		return nil, nil, 0, ErrNoAudio
 	}
 	body, _, size, err := m.objects.Get(ctx, *rec.ObjectKey)
+	if storage.IsNotFound(err) {
+		m.log.Warn("recording: objeto ausente no bucket",
+			zap.Stringer("id", id), zap.String("key", *rec.ObjectKey))
+		return nil, nil, 0, ErrNoAudio
+	}
 	if err != nil {
 		return nil, nil, 0, err
 	}
