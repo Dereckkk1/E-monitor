@@ -74,6 +74,46 @@ snapshot_counts() {
     | grep -E '^[a-z_]+=[0-9]+$' || true
 }
 
+# ── guarda de gravação em andamento ──────────────────────────────────────────
+#
+# A gravação programada roda dentro da API: recriar o container corta o áudio
+# enquanto ela reinicia, e numa entrevista ao vivo não existe segunda chance.
+# Doc: docs/features/scheduled-recording.md
+#
+# `processando` não bloqueia: a finalização é repetível, retoma sozinha depois
+# do reinício, e bloquear travaria todo deploy se uma finalização falhasse para
+# sempre.
+#
+# Tabela inexistente conta como zero, para esta guarda não travar o próprio
+# deploy que cria a tabela. psql inacessível só avisa: guarda que dá alarme falso
+# ensina a usar o bypass.
+guard_active_recordings() {
+  if [ "${SKIP_RECORDING_GUARD:-no}" = "yes" ]; then
+    warn "SKIP_RECORDING_GUARD=yes — pulando a guarda de gravações."
+    return 0
+  fi
+  service_running postgres || return 0
+
+  local sql rows
+  sql="SELECT station_name || ' | ' || status || ' | ' || to_char(starts_at AT TIME ZONE 'America/Sao_Paulo', 'DD/MM HH24:MI') || ' a ' || to_char(ends_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI') FROM recordings WHERE status = 'gravando' OR (status = 'programada' AND starts_at < now() + INTERVAL '10 minutes') ORDER BY starts_at"
+
+  local exists
+  exists=$($COMPOSE exec -T postgres sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT to_regclass('"'"'public.recordings'"'"') IS NOT NULL"' 2>/dev/null) \
+    || { warn "não consegui consultar gravações em andamento — seguindo."; return 0; }
+  [ "$exists" = "t" ] || return 0
+
+  rows=$(printf '%s' "$sql" | $COMPOSE exec -T postgres sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' 2>/dev/null) \
+    || { warn "não consegui consultar gravações em andamento — seguindo."; return 0; }
+
+  if [ -n "$rows" ]; then
+    printf '%s\n' "$rows" | sed 's/^/    /' >&2
+    err "há gravação em andamento ou começando em menos de 10 minutos. Espere terminar ou cancele em /admin/gravacoes.
+     (bypass de emergência: SKIP_RECORDING_GUARD=yes — corta o áudio enquanto a API reinicia)"
+  fi
+}
+
 # ── teste de migrations em sombra ────────────────────────────────────────────
 #
 # Aplica as migrations PENDENTES a uma CÓPIA ISOLADA dos dados de prod (postgres
@@ -257,6 +297,9 @@ else
 fi
 
 # ── atualizar código ─────────────────────────────────────────────────────────
+
+# ── gravações em andamento (antes de qualquer build/up) ──────────────────────
+guard_active_recordings
 
 step "git pull"
 git -C "$REPO_ROOT" pull --ff-only
