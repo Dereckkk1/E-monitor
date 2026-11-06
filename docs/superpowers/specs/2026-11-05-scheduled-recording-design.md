@@ -2,7 +2,9 @@
 
 **Data:** 2026-11-05
 **Branch:** `feat/programar-gravacao`
-**Status:** aguardando revisão do Dereck
+**Status:** implementada
+
+> **⚠️ REGISTRO HISTÓRICO:** esta spec foi implementada e o código divergiu dela em vários pontos, por achados de revisão. Para o comportamento atual, vale [docs/features/scheduled-recording.md](../../features/scheduled-recording.md) e o código.
 
 ## 1. Por que existe
 

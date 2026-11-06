@@ -1208,12 +1208,21 @@ cd radiocheck
 ```
 
 O script faz automaticamente:
+0. Guarda de gravações: aborta se houver gravação em andamento (ver abaixo)
 1. `git pull` — puxa o código novo
 2. `docker compose build` — rebuilda as imagens alteradas
 3. `docker compose up -d` — sobe os containers
 4. Aguarda migrations completarem
 5. Health check na API
 6. Mostra status final dos containers
+
+**Gravação em andamento:** o `deploy.sh` aborta, antes do `git pull`, se houver gravação
+em andamento (`gravando`) ou começando em menos de 10 minutos (`programada`),
+porque recriar a API corta o áudio. Gravação `processando` não bloqueia: a finalização
+é repetível e retoma sozinha depois do reinício. Espere terminar ou cancele em
+`/admin/gravacoes`. Bypass de emergência: `SKIP_RECORDING_GUARD=yes ./scripts/deploy.sh`
+(corta o áudio enquanto a API reinicia; o trecho perdido entra na lista de buracos). Ver
+[scheduled-recording.md](../features/scheduled-recording.md).
 
 ### Deploy do frontend
 

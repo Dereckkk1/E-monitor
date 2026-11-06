@@ -107,6 +107,7 @@ docs/
 | [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
+| [scheduled-recording.md](features/scheduled-recording.md) | Programar gravação (`/admin/gravacoes`): admin agenda um trecho de stream de qualquer emissora e o áudio fica 15 dias. Status pela lista de buracos, finalização repetível, e-mails de falha. `deploy.sh` para se houver gravação em andamento |
 
 ## `operations/` — operar o sistema em prod
 

@@ -1,5 +1,7 @@
 # Programar gravação Implementation Plan
 
+> **⚠️ REGISTRO HISTÓRICO:** este plano foi executado e a implementação divergiu dele em vários pontos, por achados de revisão. Para o comportamento atual, vale [docs/features/scheduled-recording.md](../../features/scheduled-recording.md) e o código.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Admin escolhe emissora, dia, início e fim; o sistema grava esse trecho do stream e guarda o áudio por 15 dias.
