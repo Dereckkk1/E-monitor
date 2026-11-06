@@ -33,12 +33,23 @@ export function windowLabel(r) {
   return `${dayFmt.format(from)}, ${timeFmt.format(from)} às ${timeFmt.format(new Date(r.ends_at))}`
 }
 
-/** null = ainda não medida. Não é a mesma coisa que 0%. */
+/**
+ * null = ainda não medida. Não é a mesma coisa que 0%.
+ * Gravação parada no meio mede contra o que era possível gravar: a janela
+ * acaba no cancelamento (o backend faz o mesmo). Arredonda para baixo para
+ * que uma gravação com buraco nunca apareça como 100%.
+ */
 export function coveragePercent(r) {
   if (r.covered_seconds == null) return null
-  const window = (new Date(r.ends_at) - new Date(r.starts_at)) / 1000
+  const start = new Date(r.starts_at)
+  let end = new Date(r.ends_at)
+  if (r.canceled_at) {
+    const canceled = new Date(r.canceled_at)
+    if (canceled < end) end = canceled
+  }
+  const window = (end - start) / 1000
   if (window <= 0) return null
-  return Math.min(100, Math.round((r.covered_seconds / window) * 100))
+  return Math.min(100, Math.floor((r.covered_seconds / window) * 100))
 }
 
 export function gapLabels(r) {
@@ -65,4 +76,24 @@ export function downloadName(r) {
   const from = new Date(r.starts_at)
   const [hh, mm] = timeFmt.format(from).split(':')
   return `gravacao-${slug}-${todayInSaoPaulo(from)}-${hh}h${mm}.m4a`
+}
+
+const GENERIC_ERROR = 'Não foi possível concluir. Tente de novo.'
+const TECHNICAL_ERRORS = new Set(['forbidden', 'invalid json', 'invalid id', 'internal error'])
+
+/**
+ * Texto de erro para o admin. A API escreve mensagens em português só nos 4xx
+ * de validação; o resto (HTML de 502/504 do proxy, texto técnico em inglês,
+ * erro de rede) vira a mensagem genérica.
+ */
+export function errorMessage(err) {
+  const status = err?.response?.status
+  const data = err?.response?.data
+  if (typeof status !== 'number' || status < 400 || status >= 500) return GENERIC_ERROR
+  if (typeof data !== 'string') return GENERIC_ERROR
+  const text = data.trim()
+  if (!text || text.length > 200 || text.includes('<') || TECHNICAL_ERRORS.has(text.toLowerCase())) {
+    return GENERIC_ERROR
+  }
+  return text
 }
