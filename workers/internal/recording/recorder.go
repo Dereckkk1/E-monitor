@@ -2,6 +2,8 @@ package recording
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -47,12 +49,14 @@ func (m *Manager) stopRecorder(id uuid.UUID) {
 	<-l.done
 }
 
-// WaitRecorders espera os gravadores saírem, ou o timeout, o que vier primeiro.
-// Chamar no desligamento, depois de cancelar o ctx do Run: o ffmpeg precisa de
-// tempo depois do SIGTERM para gravar o que tem em buffer (até 16s de áudio).
+// WaitRecorders espera os gravadores saírem e os e-mails em andamento terminarem,
+// ou o timeout, o que vier primeiro. Chamar no desligamento, depois de cancelar o
+// ctx do Run: o ffmpeg precisa de tempo depois do SIGTERM para gravar o que tem em
+// buffer (até 16s de áudio).
 //
-// Depois desta chamada não nasce gravador novo: o tick pode estar no meio do laço,
-// e um Add com o contador zerado, concorrente ao Wait, é uso inválido de WaitGroup.
+// Depois desta chamada não nasce gravador novo nem e-mail novo: o tick pode estar
+// no meio do laço, e um Add com o contador zerado, concorrente ao Wait, é uso
+// inválido de WaitGroup.
 func (m *Manager) WaitRecorders(timeout time.Duration) {
 	m.mu.Lock()
 	m.draining = true
@@ -61,6 +65,7 @@ func (m *Manager) WaitRecorders(timeout time.Duration) {
 	done := make(chan struct{})
 	go func() {
 		m.recorders.Wait()
+		m.notifications.Wait()
 		close(done)
 	}()
 	t := time.NewTimer(timeout)
@@ -68,29 +73,41 @@ func (m *Manager) WaitRecorders(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-t.C:
-		m.log.Warn("recording: gravador não saiu a tempo no desligamento", zap.Duration("timeout", timeout))
+		m.log.Warn("recording: gravador ou e-mail não terminou a tempo no desligamento", zap.Duration("timeout", timeout))
 	}
 }
 
-// attemptSlot guarda o cancel da tentativa atual para o watchdog poder derrubá-la.
+// attemptSlot guarda a tentativa em curso para o watchdog poder derrubá-la.
 type attemptSlot struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	started time.Time
 }
 
 func (s *attemptSlot) set(c context.CancelFunc) {
 	s.mu.Lock()
-	s.cancel = c
+	s.cancel, s.started = c, time.Now()
 	s.mu.Unlock()
 }
 
-func (s *attemptSlot) restart() {
+// clear marca que a tentativa acabou. Entre tentativas não há nada para derrubar.
+func (s *attemptSlot) clear() {
 	s.mu.Lock()
-	c := s.cancel
+	s.cancel = nil
 	s.mu.Unlock()
-	if c != nil {
-		c()
+}
+
+// restartIfOlder derruba a tentativa em curso se ela tiver pelo menos minAge, e diz
+// se derrubou. Zera o cancel para não contar de novo enquanto o ffmpeg fecha.
+func (s *attemptSlot) restartIfOlder(minAge time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel == nil || time.Since(s.started) < minAge {
+		return false
 	}
+	s.cancel()
+	s.cancel = nil
+	return true
 }
 
 // record captura até o fim da janela, reconectando sempre que preciso.
@@ -117,9 +134,8 @@ func (m *Manager) record(liveCtx context.Context, rec Recording) {
 		case <-time.After(m.cfg.RetryDelay):
 		}
 	}
-	// Antes de marcar processando: um aviso de queda que sobrasse daqui para a
-	// frente correria junto com a finalização. Só atrasa se houver e-mail saindo,
-	// e notify limita isso a 30s.
+	// Antes de marcar processando, para o watchdog não disputar com a finalização.
+	// Não prende: o e-mail sai em goroutine própria e o banco respeita windowCtx.
 	<-watchDone
 
 	if liveCtx.Err() != nil {
@@ -134,6 +150,17 @@ func (m *Manager) record(liveCtx context.Context, rec Recording) {
 	}
 }
 
+// errStationDeleted é o que ErrNotFound de StreamURL significa para quem lê o
+// last_error: a gravação existe, e o JOIN só falha sem a emissora.
+var errStationDeleted = errors.New("a emissora foi excluída")
+
+// stalledMessage é o last_error de quem morreu pelo watchdog. Sem ele, um ffmpeg
+// pendurado terminaria em `falhou` sem motivo nenhum, porque Capture não devolve
+// erro quando é cancelado.
+func stalledMessage(after time.Duration) string {
+	return fmt.Sprintf("stream sem dados há %ds", int(after/time.Second))
+}
+
 func (m *Manager) attempt(ctx context.Context, rec Recording, dir string, slot *attemptSlot) {
 	// A cada tentativa: o sidecar segments-cleanup apaga pasta vazia, o que
 	// acontece justamente com o stream fora.
@@ -142,6 +169,9 @@ func (m *Manager) attempt(ctx context.Context, rec Recording, dir string, slot *
 		return
 	}
 	url, err := m.repo.StreamURL(ctx, rec.ID)
+	if errors.Is(err, ErrNotFound) {
+		err = errStationDeleted
+	}
 	if err != nil {
 		m.captureFailed(ctx, rec, err)
 		return
@@ -149,6 +179,7 @@ func (m *Manager) attempt(ctx context.Context, rec Recording, dir string, slot *
 	attemptCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	slot.set(cancel)
+	defer slot.clear()
 	if err := m.media.Capture(attemptCtx, url, dir); err != nil {
 		m.captureFailed(ctx, rec, err)
 	}
@@ -169,19 +200,25 @@ func (m *Manager) captureFailed(ctx context.Context, rec Recording, cause error)
 //
 // O ffmpeg grava em blocos de ~256 KiB, um a cada ~16s a 128 kbps, então o
 // StallAfter de 60s comporta o intervalo normal entre escritas.
+//
+// Alerta e morte são regras separadas. O alerta segue só o relógio de bytes, que não
+// zera entre tentativas: com o stream fora, cada ffmpeg desiste sozinho e o alerta
+// nunca sairia. A morte exige também idade de StallAfter, porque quando o stream
+// volta um ffmpeg saudável ainda leva ~16s até a primeira escrita.
 func (m *Manager) watch(ctx context.Context, rec Recording, dir string, slot *attemptSlot) {
 	t := time.NewTicker(m.cfg.PollEvery)
 	defer t.Stop()
 	last := DirBytes(dir)
 	lastGrowth := time.Now()
+	alerted := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		// Com os dois prontos o select sorteia, e o aviso pode ter demorado a janela
-		// inteira: sem isto o watchdog agiria depois de ela acabar.
+		// Com os dois prontos o select sorteia, e o banco pode ter segurado o laço até
+		// o fim da janela: sem isto o watchdog agiria depois de ela acabar.
 		if ctx.Err() != nil {
 			return
 		}
@@ -193,15 +230,21 @@ func (m *Manager) watch(ctx context.Context, rec Recording, dir string, slot *at
 		if time.Since(lastGrowth) < m.cfg.StallAfter {
 			continue
 		}
-		lastGrowth = time.Now()
-		// Reinicia antes de avisar: SMTP lento não pode segurar um ffmpeg travado.
-		slot.restart()
+		if slot.restartIfOlder(m.cfg.StallAfter) {
+			if err := m.repo.SetLastError(ctx, rec.ID, stalledMessage(m.cfg.StallAfter)); err != nil {
+				m.log.Warn("recording: guardar erro falhou", zap.Stringer("id", rec.ID), zap.Error(err))
+			}
+		}
+		if alerted {
+			continue
+		}
 
 		first, err := m.repo.MarkDropAlerted(ctx, rec.ID)
 		if err != nil {
 			m.log.Warn("recording: marcar alerta falhou", zap.Stringer("id", rec.ID), zap.Error(err))
 			continue
 		}
+		alerted = true
 		if !first {
 			continue
 		}

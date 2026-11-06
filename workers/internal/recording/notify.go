@@ -30,8 +30,13 @@ func windowLabel(r Recording) string {
 		r.StartsAt.In(saoPaulo).Format("15:04"), r.EndsAt.In(saoPaulo).Format("15:04"))
 }
 
-// notify nunca falha para quem chamou: o e-mail é aviso, e o estado real está
-// na tela. Sem criador (usuário excluído), não há para quem mandar.
+// notify nunca falha nem espera por quem chamou: o e-mail é aviso, e o estado real
+// está na tela. Sem criador (usuário excluído), não há para quem mandar.
+//
+// O envio roda em goroutine porque smtp.SendMail ignora contexto: com SMTP mudo, o
+// prazo abaixo não tem efeito, e esperar aqui prenderia o watchdog, o agendador e a
+// finalização para sempre. Nesse caso só esta goroutine fica presa até o processo
+// reiniciar.
 func (m *Manager) notify(rec Recording, subject, body string) {
 	if rec.CreatorEmail == "" {
 		return
@@ -40,19 +45,33 @@ func (m *Manager) notify(rec Recording, subject, body string) {
 		body, rec.StationName, windowLabel(rec), strings.TrimRight(m.cfg.BaseURL, "/"))
 	htmlBody := "<p>" + strings.ReplaceAll(html.EscapeString(text), "\n", "<br>") + "</p>"
 
-	// Contexto próprio: o aviso de queda não pode morrer junto com a tentativa.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	subject = fmt.Sprintf("Gravação de %s: %s", rec.StationName, subject)
-	if err := m.mail.Send(ctx, []string{rec.CreatorEmail}, subject, htmlBody, text); err != nil {
-		m.log.Warn("recording: e-mail falhou", zap.Stringer("id", rec.ID), zap.Error(err))
+
+	m.mu.Lock()
+	if m.draining {
+		m.mu.Unlock()
+		m.log.Warn("recording: e-mail descartado no desligamento",
+			zap.Stringer("id", rec.ID), zap.String("assunto", subject))
+		return
 	}
+	m.notifications.Add(1)
+	m.mu.Unlock()
+
+	go func() {
+		defer m.notifications.Done()
+		// Contexto próprio: o aviso de queda não pode morrer junto com a tentativa.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.mail.Send(ctx, []string{rec.CreatorEmail}, subject, htmlBody, text); err != nil {
+			m.log.Warn("recording: e-mail falhou", zap.Stringer("id", rec.ID), zap.Error(err))
+		}
+	}()
 }
 
 func (m *Manager) notifyNoConnection(rec Recording) {
 	m.notify(rec, "não conectou",
-		"O stream não respondeu no início da gravação. O sistema segue tentando até o fim da janela. "+
-			"Se a URL mudou, corrija na emissora: a nova vale na próxima tentativa.")
+		"A captura não começou. O sistema segue tentando até o fim da janela. "+
+			"Se a URL do stream mudou, corrija na emissora: a nova vale na próxima tentativa.")
 }
 
 func (m *Manager) notifyDropped(rec Recording) {
