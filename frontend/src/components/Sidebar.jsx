@@ -183,6 +183,16 @@ function IconSuggestions() {
   )
 }
 
+function IconRecordings() {
+  // Círculo com ponto: o "rec" de qualquer gravador.
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <circle cx="8" cy="8" r="2.4" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 function IconPostSale() {
   // Envelope com um check: o pós-venda é o email de fechamento.
   return (
@@ -253,6 +263,7 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/management"        icon={<IconManagement />}      onClose={onClose}>Visão Gerencial</SidebarLink>
       <SidebarLink to="/admin/monitoring"        icon={<IconAdminMonitoring />}   onClose={onClose}>Monitoramento</SidebarLink>
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
+      <SidebarLink to="/admin/gravacoes"         icon={<IconRecordings />}        onClose={onClose}>Gravações</SidebarLink>
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
       <SidebarLink to="/admin/suggestions"       icon={<IconSuggestions />}       onClose={onClose} badge={suggestionsUnread}>Sugestões</SidebarLink>
       <SidebarLink to="/admin/pos-venda"         icon={<IconPostSale />}          onClose={onClose}>Pós-venda</SidebarLink>

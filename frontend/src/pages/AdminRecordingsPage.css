@@ -1,0 +1,80 @@
+/* /admin/gravacoes. Prefixo ar- para não vazar. Os campos do form usam as
+   classes compartilhadas (.flow-filters, .flow-input); aqui só o que é da tela. */
+.ar-form {
+  --flow-cols: minmax(260px, 1.6fr) 160px 120px 120px auto;
+  margin-bottom: 8px;
+  align-items: end;
+}
+
+.ar-field-hint {
+  margin: 0;
+  color: var(--c-warning);
+  font-size: 12px;
+}
+
+.ar-submit {
+  height: 38px;
+  white-space: nowrap;
+}
+
+.ar-hint {
+  margin: 0 0 16px;
+  color: var(--c-text-2);
+  font-size: 13px;
+}
+
+.ar-msg {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+}
+
+.ar-msg--error {
+  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
+  color: var(--c-danger);
+}
+
+.ar-msg--warn {
+  background: color-mix(in srgb, var(--c-warning) 14%, transparent);
+  color: var(--c-text);
+}
+
+/* O shell compartilhado tem 520px de altura mínima: pensado para a tela inteira
+   vazia. Aqui ele divide a página com o form. */
+.detection-empty.ar-none {
+  min-height: 300px;
+}
+
+.ar-table-wrap {
+  overflow-x: auto;
+}
+
+.ar-station {
+  font-weight: 600;
+}
+
+.ar-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.ar-detail td {
+  padding-top: 0;
+}
+
+.ar-gaps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--c-text-2);
+  font-size: 13px;
+}
+
+.ar-error-detail {
+  margin: 8px 0 0;
+  color: var(--c-text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
