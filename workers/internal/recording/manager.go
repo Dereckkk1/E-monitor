@@ -66,12 +66,14 @@ type Config struct {
 	StallAfter  time.Duration // sem bytes novos por este tempo = caiu
 	RetryDelay  time.Duration
 	// RetryMax é o teto da espera entre tentativas, que dobra a partir de RetryDelay
-	// enquanto nenhuma tentativa grava áudio novo. Não é maior porque cada segundo
-	// de espera depois de o stream voltar é áudio perdido de uma prova.
-	RetryMax   time.Duration
-	MinGap     time.Duration
-	PreRoll    time.Duration
-	PruneEvery time.Duration
+	// depois de RetryFastTries tentativas seguidas sem áudio novo (ver retryWait).
+	// Não é maior porque cada segundo de espera depois de o stream voltar é áudio
+	// perdido de uma prova.
+	RetryMax       time.Duration
+	RetryFastTries int
+	MinGap         time.Duration
+	PreRoll        time.Duration
+	PruneEvery     time.Duration
 	// FinalizeRetry espaça as tentativas de finalização: cada uma reescreve o
 	// arquivo inteiro em disco, até 330 MB, e com o bucket fora o tick de 15s
 	// faria isso sem parar.
@@ -93,6 +95,9 @@ func (c Config) withDefaults() Config {
 	def(&c.StallAfter, 60*time.Second)
 	def(&c.RetryDelay, 5*time.Second)
 	def(&c.RetryMax, 30*time.Second)
+	if c.RetryFastTries == 0 {
+		c.RetryFastTries = 5
+	}
 	def(&c.MinGap, 30*time.Second)
 	// PreRoll cobre o atraso do tick somado à conexão do ffmpeg. Sem ele, uma
 	// gravação marcada para 20:00 só teria áudio a partir de ~20:00:20.

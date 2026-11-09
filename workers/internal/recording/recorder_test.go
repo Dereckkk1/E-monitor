@@ -623,9 +623,10 @@ func TestRecord_FalhaAoConferirStatusTentaNoProximoTick(t *testing.T) {
 }
 
 // Com o stream recusando na hora, um retry fixo de 5s dava ~720 conexões por hora do
-// mesmo IP da detecção, e é esse padrão que já levou painel a banir a VM. A espera
-// dobra a cada tentativa sem áudio, para em RetryMax e volta ao início quando a
-// tentativa gravou.
+// mesmo IP da detecção, e é esse padrão que já levou painel a banir a VM. As
+// primeiras falhas seguidas esperam pouco, porque dobrar desde a primeira transformava
+// queda curta em buraco maior. Depois a espera dobra, para em RetryMax e volta ao
+// início quando a tentativa gravou.
 func TestRecord_EsperaEntreTentativasCresceTemTetoEZeraAoGravar(t *testing.T) {
 	r := recordingRow(3 * time.Second)
 	repo := newFakeRepo(r)
@@ -649,6 +650,7 @@ func TestRecord_EsperaEntreTentativasCresceTemTetoEZeraAoGravar(t *testing.T) {
 	}}
 	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
 	m.cfg.RetryDelay, m.cfg.RetryMax = 50*time.Millisecond, 200*time.Millisecond
+	m.cfg.RetryFastTries = 2
 	m.cfg.StallAfter = time.Hour // o watchdog não entra nesta conta
 
 	m.record(context.Background(), r)
@@ -659,15 +661,25 @@ func TestRecord_EsperaEntreTentativasCresceTemTetoEZeraAoGravar(t *testing.T) {
 	wait := func(i int) time.Duration { return starts[i+1].Sub(starts[i]) }
 	// Mínimos: time.After nunca dispara antes, então não oscilam.
 	require.GreaterOrEqual(t, wait(0), 50*time.Millisecond)
-	require.GreaterOrEqual(t, wait(1), 100*time.Millisecond, "dobra")
-	require.GreaterOrEqual(t, wait(2), 200*time.Millisecond, "dobra de novo")
-	require.GreaterOrEqual(t, wait(3), 200*time.Millisecond)
-	// Teto: sem ele seria 400ms e 800ms.
-	require.Less(t, wait(3), 350*time.Millisecond, "para em RetryMax")
+	require.Less(t, wait(1), 100*time.Millisecond, "a 2ª falha seguida ainda é rápida")
+	require.GreaterOrEqual(t, wait(2), 100*time.Millisecond, "a 3ª dobra")
+	require.GreaterOrEqual(t, wait(3), 200*time.Millisecond, "dobra de novo")
+	require.GreaterOrEqual(t, wait(4), 200*time.Millisecond)
+	// Teto: sem ele seria 400ms.
 	require.Less(t, wait(4), 350*time.Millisecond, "para em RetryMax")
 	// Depois da tentativa que gravou: sem zerar seria 200ms.
 	require.Less(t, wait(5), 150*time.Millisecond, "volta a RetryDelay depois de gravar")
-	require.GreaterOrEqual(t, wait(6), 100*time.Millisecond, "e volta a dobrar")
+	require.Less(t, wait(6), 100*time.Millisecond, "e a falha seguinte volta a ser rápida")
+}
+
+func TestRetryWait(t *testing.T) {
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), &fakeMailer{})
+	m.cfg.RetryDelay, m.cfg.RetryMax, m.cfg.RetryFastTries = 5*time.Second, 30*time.Second, 5
+	want := []time.Duration{5, 5, 5, 5, 5, 5, 10, 20, 30, 30}
+	for failures, w := range want {
+		require.Equal(t, w*time.Second, m.retryWait(failures), "failures=%d", failures)
+	}
+	require.Equal(t, 30*time.Second, m.retryWait(1000), "sem estouro")
 }
 
 // urlRepo controla a resposta de StreamURL por chamada.

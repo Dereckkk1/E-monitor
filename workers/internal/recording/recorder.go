@@ -150,23 +150,21 @@ func (m *Manager) record(liveCtx context.Context, rec Recording) {
 		m.watch(windowCtx, rec, dir, slot)
 	}()
 
-	// A espera entre tentativas dobra enquanto nenhuma grava áudio novo, até
-	// RetryMax. Com o stream recusando na hora, um retry fixo de 5s dava ~720
-	// conexões por hora do mesmo IP da detecção, padrão que já levou painel a banir
-	// a VM (docs/features/connect-backoff-circuit-breaker.md). Volta a RetryDelay
-	// quando a tentativa gravou: a próxima queda é um evento novo.
-	wait := m.cfg.RetryDelay
+	// Falhas seguidas, zeradas quando a tentativa grava áudio novo: a próxima queda
+	// é um evento novo. Ver retryWait.
+	failures := 0
 	for windowCtx.Err() == nil {
 		before := DirBytes(dir)
 		m.attempt(windowCtx, rec, dir, slot)
 		if DirBytes(dir) > before {
-			wait = m.cfg.RetryDelay
+			failures = 0
+		} else {
+			failures++
 		}
 		select {
 		case <-windowCtx.Done():
-		case <-time.After(wait):
+		case <-time.After(m.retryWait(failures)):
 		}
-		wait = min(wait*2, m.cfg.RetryMax)
 	}
 	// Antes de marcar processando, para o watchdog não disputar com a finalização.
 	// Não prende: o e-mail sai em goroutine própria e o banco respeita windowCtx.
@@ -182,6 +180,22 @@ func (m *Manager) record(liveCtx context.Context, rec Recording) {
 		m.log.Warn("recording: marcar processando falhou; o tick resolve",
 			zap.Stringer("id", rec.ID), zap.Error(err))
 	}
+}
+
+// retryWait é a espera depois de `failures` tentativas seguidas sem áudio novo. As
+// RetryFastTries primeiras esperam RetryDelay: cada tentativa ainda gasta ~7s nos
+// reconectes internos do ffmpeg, então isso cobre cerca de um minuto de queda, o
+// caso comum. Dobrar desde a primeira falha custava áudio da prova: medido com
+// ffmpeg real, uma queda de 40s virava buraco de 65s. Depois disso a espera dobra
+// até RetryMax. Com o stream recusando na hora, um retry fixo de 5s dava ~720
+// conexões por hora do mesmo IP da detecção, padrão que já levou painel a banir a
+// VM (docs/features/connect-backoff-circuit-breaker.md); assim fica perto de 100.
+func (m *Manager) retryWait(failures int) time.Duration {
+	wait := m.cfg.RetryDelay
+	for i := m.cfg.RetryFastTries; i < failures && wait < m.cfg.RetryMax; i++ {
+		wait *= 2
+	}
+	return min(wait, m.cfg.RetryMax)
 }
 
 // errStationDeleted é o que ErrNotFound de StreamURL significa para quem lê o
