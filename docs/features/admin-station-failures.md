@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-10-28
+ultima-verificacao: 2026-11-09
 codigo-relacionado:
   - workers/internal/catalog/station_failures.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -104,6 +104,7 @@ Ordenação: stations por `total_down_seconds desc`, depois `affected_campaigns 
 3 queries SQL + cruzamento de janelas em Go:
 
 1. **Q1** — Stations com problema: `stream_health_events` (down ≥ minDown) UNION `daily_play_summary` (deficit > 0). Devolve totals.
+   **`total_down_seconds` é a UNIÃO dos downs do dia, cada um cortado na meia-noite seguinte** (`range_agg` de `tstzrange`), nunca a soma crua de `duration_seconds`: o histórico de `stream_health_events` tem downs sobrepostos e a soma passava de 24 h num dia (incidente 2026-11-08, Positiva 99.1 com 37,8 h). Teto: 86 400 s. A lista `incidents` continua com os eventos crus (pode ter intervalos sobrepostos em dias anteriores ao fix do watchdog).
 2. **Q2** — Incidents (down events) por station no dia. Calcula `duration_seconds` retroativamente para events abertos via `NOW() - event_at`.
 3. **Q3** — Campanhas com deficit no dia + janelas de regra `HH:MM/HH:MM` agregadas por (station, campaign). Usa subquery na lista de `distribution_rules` filtrando por weekday_mask + date range.
 
