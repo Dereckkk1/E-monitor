@@ -10,8 +10,8 @@
 -- roda; sem timeout o CREATE TRIGGER entra na fila FIFO de locks e prende atrás
 -- de si toda escrita em `users`. Com o timeout, a migration falha rápido em vez
 -- de virar outage ao vivo. RECUPERAÇÃO: ao estourar o lock_timeout a migration
--- falha e o golang-migrate deixa a versão 70 `dirty`; o deploy NÃO se repete
--- sozinho. Rode `UPDATE schema_migrations SET version=69, dirty=false` e faça o
+-- falha e o golang-migrate deixa a versão 72 `dirty`; o deploy NÃO se repete
+-- sozinho. Rode `UPDATE schema_migrations SET version=71, dirty=false` e faça o
 -- redeploy (mesma convenção de 0062/0068).
 
 BEGIN;
