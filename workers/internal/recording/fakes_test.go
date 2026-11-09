@@ -352,6 +352,7 @@ func newTestManager(t *testing.T, repo Repo, media Media, objects ObjectStore, m
 		PollEvery:     10 * time.Millisecond,
 		StallAfter:    60 * time.Millisecond,
 		RetryDelay:    5 * time.Millisecond,
+		RetryMax:      20 * time.Millisecond,
 		FinalizeRetry: 20 * time.Millisecond,
 	}, repo, media, objects, mail, zap.NewNop())
 	return m

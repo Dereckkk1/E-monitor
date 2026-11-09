@@ -147,12 +147,23 @@ func (m *Manager) record(liveCtx context.Context, rec Recording) {
 		m.watch(windowCtx, rec, dir, slot)
 	}()
 
+	// A espera entre tentativas dobra enquanto nenhuma grava áudio novo, até
+	// RetryMax. Com o stream recusando na hora, um retry fixo de 5s dava ~720
+	// conexões por hora do mesmo IP da detecção, padrão que já levou painel a banir
+	// a VM (docs/features/connect-backoff-circuit-breaker.md). Volta a RetryDelay
+	// quando a tentativa gravou: a próxima queda é um evento novo.
+	wait := m.cfg.RetryDelay
 	for windowCtx.Err() == nil {
+		before := DirBytes(dir)
 		m.attempt(windowCtx, rec, dir, slot)
+		if DirBytes(dir) > before {
+			wait = m.cfg.RetryDelay
+		}
 		select {
 		case <-windowCtx.Done():
-		case <-time.After(m.cfg.RetryDelay):
+		case <-time.After(wait):
 		}
+		wait = min(wait*2, m.cfg.RetryMax)
 	}
 	// Antes de marcar processando, para o watchdog não disputar com a finalização.
 	// Não prende: o e-mail sai em goroutine própria e o banco respeita windowCtx.
