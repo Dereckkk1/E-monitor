@@ -53,7 +53,8 @@ salto, e o JSON-RPC à mão reimplementaria a negociação de versão e a valida
   409 com lote manual ou pós-venda. A lista está em [features/mcp.md](../features/mcp.md), em "Recusas que só o MCP faz".
   Como o dono do token é sempre admin, as tools **não** aplicam o escopo de cliente das telas: **nunca** ligue o `/mcp`
   a uma conta de cliente sem revisitar este ADR.
-- **Negativas / dívida:** `tools/list` custa cerca de 12 ms com 83 tools porque o SDK infere os schemas a cada
-  `AddTool`. A memoização por processo é follow-up obrigatório antes de crescer o catálogo. O rate limit em memória
+- **Negativas / dívida:** montar um `Server` por pedido custa ~5 ms de CPU com 83 tools (`tools/list` ~13 ms), porque
+  o `AddTool` do go-sdk re-serializa cada schema. A saída é um `Server` por processo com o `Principal` vindo do contexto,
+  adiada enquanto o tráfego for pequeno (ver "Desempenho" em `features/mcp.md`). O rate limit em memória
   não sobrevive a mais de uma réplica da API: se um dia houver duas, ele precisa ir para um armazenamento
   compartilhado.

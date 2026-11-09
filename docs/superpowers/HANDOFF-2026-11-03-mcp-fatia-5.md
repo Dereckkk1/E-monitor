@@ -214,7 +214,7 @@ que falha depois deixa a campanha `cancelada` (agora com `cancelled_at`).
 13. **`/autorizar-ia` só tem a camada `_headers` contra moldura**, sem guarda em JS (`AuthorizeAiPage.jsx` não usa
     `frontend/src/utils/emoldurada.js`; `PendentesPage.jsx:244` usa). Fix: o mesmo `emoldurada()` lá.
 14. **`/pendentes` não tem item na barra lateral** (só o link da IA e Minha conta → "Integração com IA" → "Pedidos da IA").
-15. **`tools/list` ~11,9 ms** com 83 tools (teto do plano ~12 ms): memoizar os schemas inferidos por processo antes de acrescentar tools.
+15. **`tools/list` ~11,9 ms** com 83 tools (teto do plano ~12 ms). *Revisto em 2026-11-09:* a inferência já é guardada (`cacheEsquemas`); o custo é o `AddTool` do go-sdk re-serializando cada schema. A saída é um `Server` por processo (ver `docs/features/mcp.md`, "Desempenho"); adiada de propósito.
 16. **`editar_campanha` escalada a crítico atravessando a meia-noite de SP** recebe um `preview_desatualizado` (o preview cita os dias que
     já passaram). Aprovar de novo funciona; poderia ser evitado tirando a data corrente do texto.
 17. **`minhas_pendentes` corta o `erro` em 250 caracteres** (`tools_pendentes.go:19`) e as ressalvas em 250 cada / 300 somadas; o texto

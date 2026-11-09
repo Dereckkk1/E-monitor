@@ -521,9 +521,15 @@ Medido em 2026-11-03 (Ryzen 7 7435HS), com as **83 tools** da Fatia 4: `Benchmar
 stateless (uma só para ler as versões de protocolo), então `NovoHandlerMCP` monta-o **uma vez por pedido** (um guardador no
 contexto do pedido; nada é compartilhado entre pedidos nem entre principais): sem isso o `tools/list` de 64 tools custava ~12,5 ms.
 Travado por `TestServidor_MontaOServerUmaVezPorPedido` (falha sem a memoização) e `TestServidor_MemoizacaoNaoMisturaPrincipais`.
-**Próximo passo antes de acrescentar tools:** memoizar por processo os schemas de entrada que o SDK infere a cada
-`AddTool` (o custo cresce linear com o número de tools e a parte estática é a mesma em todo pedido); hoje só `decodificarArgs`
-guarda o schema resolvido por tipo (`schemasDeEntrada`), para a aprovação. Remeça os dois benchmarks e registre o antes/depois.
+**Diagnóstico de 2026-11-09 (o "memoizar os schemas" estava errado):** a inferência já é guardada por processo
+(`cacheEsquemas = sdk.NewSchemaCache()`). O perfil de CPU mostra que ~95% do `NovoServidor` é o próprio `AddTool` do go-sdk
+v1.8.0, que roda `validateParamHeaderAnnotations` em toda tool, e essa função re-serializa o schema (`remarshal`) a cada
+registro. Não dá para desligar isso por fora. A única saída é **montar o `Server` uma vez por processo** e fazer as 4 famílias
+que fecham sobre o `Principal` (`registrarSistema`, `registrarIntegracoes`, `registrarPendentes`, `registrarEscritas`) lerem-no
+do contexto (`PrincipalDe`). Isso mexe no isolamento entre usuários para economizar ~5 ms de CPU por chamada; com o tráfego
+de hoje (poucos admins, teto de 240/min por token) não compensa. Fica para quando o catálogo crescer muito ou a CPU da API
+apertar, com um teste que prove que dois principais simultâneos nunca se veem. Remedido em 2026-11-09: ~4,7 ms
+(`NovoServidor`) e ~13 ms (`tools/list`).
 
 ### Limitações e follow-ups (Fatia 3)
 
@@ -821,7 +827,7 @@ caminhos (backend primeiro: a tela chama rotas novas).
 - **`minhas_pendentes` corta o `erro` em 250 caracteres** (e as ressalvas em 250 cada / 300 somadas); o texto inteiro está em
   `/pendentes?id=`.
 - **Sem item na barra lateral** para `/pendentes`.
-- **`tools/list` ~11,9 ms** com 83 tools: memoizar os schemas inferidos por processo antes de acrescentar tools (ver "Desempenho").
+- **`tools/list` ~12-13 ms** com 83 tools: o custo é a validação do `AddTool` no go-sdk, não a inferência (já guardada). A saída é um `Server` por processo com o `Principal` vindo do contexto; adiada (ver "Desempenho").
 - **A aprovação é síncrona e uma execução lenta chega tarde à tela.** O `middleware.Timeout(60s)` do chi **não interrompe** o
   handler: ele só cancela o `r.Context()` aos 60 s e, quando o handler **volta**, tenta `WriteHeader(504)`, que não vale se o handler já
   escreveu. A aprovação roda sob `WithoutCancel`, então segue até o fim e escreve a resposta **verdadeira** (200/422/500) — tarde. Quem
