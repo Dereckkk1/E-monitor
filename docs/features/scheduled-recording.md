@@ -67,8 +67,8 @@ um minuto de buraco.
 | `programada` | Aguardando o horário |
 | `gravando` | Dentro da janela |
 | `processando` | Juntando e subindo o arquivo |
-| `concluida` | Com áudio e sem buraco de 30s ou mais |
-| `parcial` | Com áudio e com ao menos um buraco de 30s ou mais; a tela lista os intervalos |
+| `concluida` | Com áudio, sem buraco de 30s ou mais e com menos de 30s de áudio faltando no total |
+| `parcial` | Com áudio, e com um buraco de 30s ou mais ou 30s ou mais de áudio faltando no total; a tela lista os intervalos |
 | `falhou` | Nenhum áudio, ou janela inteira perdida porque a API estava fora |
 | `cancelada` | Cancelada pelo admin; o que já tinha sido gravado fica |
 | `expirada` | Passou dos 15 dias; áudio apagado |
@@ -101,9 +101,19 @@ um minuto de buraco.
 - A conexão usa `-timeout 10s`, os args de reconexão do `ingestor` e o mesmo
   user-agent da detecção.
 - Se o ffmpeg sai antes do fim da janela, vira falha de captura (`last_error`) e
-  uma nova tentativa começa depois de `RetryDelay` (5s). `stream_url` é **relida a
-  cada tentativa**: corrigir a URL durante uma queda vale na reconexão seguinte (os
-  e-mails de queda dizem isso).
+  uma nova tentativa começa depois de uma espera. A espera começa em `RetryDelay`
+  (5s) e **dobra** a cada tentativa que não gravou bytes novos, até `RetryMax`
+  (30s); volta a 5s quando a tentativa gravou. Com retry fixo de 5s, um stream que
+  recusa na hora levava ~720 conexões por hora do mesmo IP da detecção, padrão que
+  já levou painel a banir a VM ([connect-backoff-circuit-breaker.md](connect-backoff-circuit-breaker.md)).
+  O teto não é maior porque cada segundo de espera depois de o stream voltar é áudio
+  perdido de uma prova.
+- `stream_url` é **relida a cada tentativa**: corrigir a URL durante uma queda vale
+  na reconexão seguinte (os e-mails de queda dizem isso). A consulta tem o prazo do
+  tick (`TickTimeout`, 10s). Se ela falhar (banco instável), a tentativa segue com a
+  última URL conhecida e registra um aviso no log; sem URL conhecida, vira falha de
+  captura. Emissora excluída (`ErrNotFound`) para de tentar mesmo com URL
+  conhecida: `last_error = "a emissora foi excluída"`.
 - A extensão `.adts` é de propósito: o sidecar `segments-cleanup` do compose apaga
   `*.aac` com mais de 60min, e uma gravação dura até 6h. Esse mesmo sidecar apaga
   **pastas vazias** (com o stream fora, a pasta da gravação fica vazia e some). Por
@@ -147,18 +157,45 @@ Alerta e morte são **regras separadas**:
   próximo (nome). O fim é o áudio do pedaço (`TrimToAudio`: início + frames), com o
   mtime como teto: quando o stream cai, o ffmpeg espera a reconexão antes de fechar o
   arquivo e o mtime anda ~12s sem áudio. Intervalo de **30s ou mais** (`MinGap`) é
-  buraco; abaixo disso é oscilação de rotação de arquivo. O início do pedaço seguinte
-  é o momento em que o ffmpeg abriu o arquivo: o burst do servidor traz alguns segundos
-  anteriores, então o buraco informado pode sobrar um pouco, nunca faltar.
-- **Status final pela lista de buracos, não por percentual** (`FinalStatus`):
-  cancelada se houve cancelamento; `falhou` se não há áudio; `parcial` se há
-  qualquer buraco; senão `concluida`. O áudio serve de prova, então um buraco de
-  40s numa janela de 6h torna a gravação `parcial`, por menor que seja a fração.
-  O percentual que a tela e o e-mail mostram é informação, não decide nada.
+  buraco listado; abaixo disso, sozinho, é oscilação de rotação de arquivo. O início
+  do pedaço seguinte é o momento em que o ffmpeg abriu o arquivo: o burst do servidor
+  traz alguns segundos anteriores. Por isso a **duração** informada de um buraco pode
+  sobrar um pouco, nunca faltar. A **posição** é aproximada: um buraco dentro de um
+  pedaço (o servidor parou de mandar e voltou sem o ffmpeg reconectar) aparece no fim
+  do pedaço, com erro de no máximo um pedaço (1 minuto).
+- **Falta de áudio pelo total** (`AssessCoverage`). Olhar só a lista não basta: um
+  stream oscilando 25s no ar e 25s fora perdeu 45% do áudio sem nenhum intervalo de
+  30s, e saía `concluida`. Somar os intervalos entre pedaços também não serve: em HLS
+  os frames chegam em rajadas, o pedaço de um minuto pode ter menos frames que o
+  relógio e o seguinte mais, e a soma de falsos buracos de poucos segundos daria
+  `parcial` em gravação perfeita. A decisão vem do total de áudio, que não sofre com a
+  fronteira do pedaço:
+  - `áudio da janela = duração do .m4a − pré-roll`, com `pré-roll = max(0, início
+    da janela − início do primeiro pedaço)`;
+  - `faltando = janela − áudio da janela`;
+  - `não listado = faltando − soma dos buracos de 30s ou mais`.
+
+  Se `não listado` chega a 30s (`MinGap`), a gravação é `parcial` e a lista é refeita
+  com `DetailGap` = **5s**: aí já se sabe que falta áudio de verdade, e os intervalos
+  curtos entram. Abaixo de 5s não lista, porque daria falso em HLS. A **tolerância é
+  de 30s de áudio faltando não listado, no total**: um buraco único de 20s continua
+  `concluida`, e dois de 20s viram `parcial` com os dois listados. É desenho, não
+  furo: abaixo disso não dá para separar falta real de rajada.
+- **`parcial` com lista vazia é possível:** muitos furos de menos de 5s somando 30s ou
+  mais. A tela e o e-mail mostram o percentual, e o e-mail explica que faltam trechos
+  curtos.
+- **Status final** (`FinalStatus`): cancelada se houve cancelamento; `falhou` se não há
+  áudio; `parcial` se `AssessCoverage` disse que falta áudio; senão `concluida`. O
+  áudio serve de prova, então um buraco de 40s numa janela de 6h torna a gravação
+  `parcial`, por menor que seja a fração. O percentual que a tela e o e-mail mostram é
+  informação, não decide nada; em `parcial` ele para em 99%, porque a duração inclui o
+  pré-roll e o burst e passaria de 100% mesmo com buraco.
 - **Cancelada em andamento:** o fim da janela passa a ser o `canceled_at` quando ele
   vem antes do `ends_at`. Os buracos e o percentual são medidos até aí.
 - **Buraco não vira silêncio.** Depois de um buraco, o tempo do player deixa de
-  bater com o relógio. A prova do que foi ao ar em qual horário é a lista `gaps`.
+  bater com o relógio. A prova do que foi ao ar em qual horário é a lista `gaps`, com
+  as ressalvas acima: posição aproximada (até um pedaço) e falta abaixo da tolerância
+  de 30s fora da lista.
 - Sem nenhum frame aproveitável (nenhum pedaço, ou só restos de frame) a linha
   fecha sem áudio: `falhou`, ou `cancelada` se cancelada. Só `falhou` manda e-mail.
 
@@ -196,7 +233,7 @@ criador, usuário excluído, não sai nada). Assunto: `Gravação de <emissora>:
 | 60s sem bytes depois de já ter gravado | captura parou | uma vez por gravação, compartilha a marca com o anterior |
 | Janela inteira passou com a API fora (`FailMissed`) | não gravou | a linha vai a `falhou` |
 | Fechou sem nenhum áudio | falhou | traz o `last_error`, cortado em 300 caracteres |
-| Fechou `parcial` | parcial (N%) | lista cada buraco com segundos |
+| Fechou `parcial` | parcial (N%) | lista até 20 buracos com segundos e resume o resto ("e mais N trechos"); N para em 99 |
 | 3ª falha seguida de finalização | arquivo não fechou | o áudio está preservado |
 
 Não há e-mail para `concluida` nem `cancelada`.
@@ -215,24 +252,35 @@ Não há e-mail para `concluida` nem `cancelada`.
 ## Deploy
 
 A captura roda dentro da API, então recriar a API corta o áudio. O
-`scripts/deploy.sh` roda `guard_active_recordings` **antes do `git pull`** e aborta
-se existir:
+`scripts/deploy.sh` roda `guard_active_recordings` e aborta se existir, com `ends_at`
+ainda no futuro:
 
 - gravação `gravando`; ou
 - gravação `programada` com `starts_at` em menos de 10 minutos.
 
-Ele lista as linhas (emissora, status, janela) e manda esperar ou cancelar em
+Linha vencida (janela já passou, API fora do ar e ninguém fechou) não conta: ela não
+pode barrar o hotfix que religaria a API.
+
+A guarda roda **duas vezes**: antes do backup, como aviso cedo (deploy bloqueado não
+gasta backup), e de novo **logo antes do `up -d`**. A segunda é a que protege: o build
+leva minutos, uma gravação pode começar nesse meio-tempo, e até ali abortar não custa
+nada, porque nenhum container foi recriado.
+
+Ela lista as linhas (emissora, status, janela) e manda esperar ou cancelar em
 `/admin/gravacoes`. Bypass: `SKIP_RECORDING_GUARD=yes ./scripts/deploy.sh`, que corta
-o áudio enquanto a API reinicia. Depois de um reinício a gravação retoma sozinha e o
-trecho perdido entra em `gaps`.
+o áudio enquanto a API reinicia. Depois de um reinício a gravação retoma sozinha. O
+trecho perdido entra em `gaps` se tiver 30s ou mais; abaixo disso cai na tolerância
+de 30s de áudio faltando não listado (ver Fechamento).
 
 **`processando` não bloqueia.** A finalização é repetível e retoma sozinha depois do
 reinício, sem perder áudio. Bloquear travaria todo deploy se uma finalização
 falhasse para sempre.
 
 A guarda é permissiva de propósito: tabela `recordings` inexistente conta como zero
-(senão a guarda travaria o próprio deploy que cria a tabela), e `psql` inacessível só
-avisa e segue. Guarda que dá alarme falso ensina a usar o bypass.
+(senão a guarda travaria o próprio deploy que cria a tabela), e `psql` inacessível ou
+SQL com erro só avisa e segue. Guarda que dá alarme falso ensina a usar o bypass. A
+consulta usa `psql -v ON_ERROR_STOP=1`: sem ele, SQL inválido sai com código 0 e saída
+vazia, e a guarda liberaria calada em vez de avisar.
 
 ### Desligamento
 
@@ -251,7 +299,7 @@ recebe 403).
 
 | Rota | O que faz |
 |---|---|
-| `GET /recordings?limit&offset` | Lista, mais recentes primeiro. `limit` padrão 50, máximo 200 |
+| `GET /recordings?limit&offset` | Lista, mais recentes primeiro. `limit` padrão 50, máximo 200 (acima disso, 200) |
 | `POST /recordings` | Agenda: `station_id`, `day`, `start`, `end`. 400 de validação traz mensagem em português; 409 em sobreposição |
 | `POST /recordings/{id}/cancel` | `programada` vira `cancelada`; `gravando` para o ffmpeg e vai a `processando`. Outro estado: 409 |
 | `DELETE /recordings/{id}` | Apaga o objeto e depois a linha. `gravando` e `processando`: 409 (cancele antes). A condição também está no `DELETE` SQL, porque o tick pode reivindicar entre a leitura e a escrita |
@@ -279,6 +327,10 @@ recebe 403).
   502/504, erro de rede, texto técnico em inglês) vira mensagem genérica.
 - A tela consulta de novo enquanto houver gravação `programada`, `gravando` ou
   `processando`.
+- A lista de buracos de cada linha mostra no máximo 20 e resume o resto ("e mais N
+  trechos"), como o e-mail. A cobertura de uma `parcial` para em 99%.
+- O formulário avisa que o stream chega com atraso em relação ao ar e pede alguns
+  minutos de folga antes e depois do horário: não existe pós-roll.
 
 ## Pasta órfã
 
@@ -302,8 +354,61 @@ pasta: ela é a única cópia do áudio até o `Complete` confirmar.
 Motivo `m4a incompleto: ... esperados ...` quer dizer que o remux ou o `ffprobe`
 entregaram menos áudio que os frames juntados; o arquivo foi descartado e os pedaços
 mantidos. Motivo `pedaço ...: N bytes não reconhecidos` quer dizer lixo no meio de um
-pedaço: o `Concat` se recusa a aparar, e a causa precisa de olho humano antes de a
-linha fechar.
+pedaço: o `Concat` se recusa a aparar, e a linha não fecha sozinha.
+
+### Lixo no pedaço: como fechar
+
+Quem roda em prod é o Dereck. Os comandos usam o compose da VM com o override (regra
+4.7 do `CLAUDE.md`); abaixo, `$C` é
+`docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.override.yml --env-file infra/docker/.env`.
+
+1. **Ver o motivo.** Está na tela (linha `processando`) ou no banco:
+
+   ```bash
+   echo "SELECT id, station_name, last_error FROM recordings WHERE status = 'processando'" \
+     | $C exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'
+   ```
+
+   O `last_error` traz o nome do pedaço: `recording: pedaço a<unix>-<AAAAMMDD-HHMMSS>.adts: N bytes não reconhecidos`.
+2. **Achar os pedaços.** Ficam em `/data/segments/_recordings/<id>/` dentro do
+   container `api` (em prod, `/mnt/data/segments/_recordings/<id>/` no host). Só
+   entram na conta os arquivos com o nome `a<unix>-<AAAAMMDD-HHMMSS>.adts` e tamanho
+   maior que zero.
+3. **Tirar o pedaço ruim da pasta**, guardando uma cópia fora dela. Não renomeie dentro
+   da pasta: depois do `Complete` a pasta inteira é apagada, e a cópia iria junto.
+
+   ```bash
+   sudo mkdir -p /mnt/data/recordings-quarentena/<id>
+   sudo mv /mnt/data/segments/_recordings/<id>/<pedaço>.adts /mnt/data/recordings-quarentena/<id>/
+   ```
+
+   A próxima tentativa (até 2 minutos) junta o resto. O `Concat` para no **primeiro**
+   pedaço ruim: se houver outro, o `last_error` passa a citá-lo, e o passo se repete.
+   O minuto retirado vira buraco, e a gravação fecha `parcial`, com o trecho listado:
+   é o retrato honesto do arquivo entregue. O áudio bom que estava no pedaço antes e
+   depois do lixo fica na cópia, para recuperação manual se a prova precisar.
+4. **Última saída, se nada fechar:** encerrar a linha sem áudio. Copie a pasta inteira
+   para fora antes (ela vira órfã, ver Pasta órfã) e rode num psql
+   (`$C exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`) com preview,
+   primeiro com `ROLLBACK`; troque por `COMMIT` só depois de conferir que o `UPDATE`
+   pegou 1 linha:
+
+   ```sql
+   BEGIN;
+   SELECT id, station_name, status, last_error FROM recordings
+    WHERE id = '<id>' AND status = 'processando';
+   UPDATE recordings
+      SET status = 'falhou', finished_at = now(), updated_at = now(),
+          last_error = 'fechada à mão: ' || coalesce(last_error, '')
+    WHERE id = '<id>' AND status = 'processando'
+   RETURNING id, status;
+   ROLLBACK; -- COMMIT depois de conferir
+   ```
+
+   O `status = 'processando'` no `WHERE` é o que torna isso seguro com a API de pé: se
+   uma tentativa fechar a linha antes, o `UPDATE` não pega nada; se o `UPDATE` vencer,
+   o `Complete` da tentativa em curso devolve `ErrBusy` e ela desiste sem repetir.
+   Nenhum e-mail sai por esse caminho.
 
 ## Riscos aceitos
 
@@ -315,6 +420,21 @@ linha fechar.
   kill do ffmpeg ou crash da API.
 - **SMTP mudo deixa uma goroutine presa até reiniciar a API** (ver E-mails).
 - **Sobreposição não atômica** no agendamento (ver Regras da janela).
+- **Tolerância de 30s de áudio faltando não listado** (ver Fechamento). Um buraco único
+  de 20s sai `concluida`.
+- **ffmpeg com HTTP chunked pode perder o rastreio depois de um stall.** Os bytes
+  continuam crescendo, o watchdog não reage, e o áudio sai com falta: a gravação fecha
+  `parcial`, não `concluida`.
+- **Buraco dentro de um pedaço tem posição aproximada**, com erro de no máximo um
+  pedaço (1 minuto). A duração é confiável; a posição, não exata.
+- **"Gravar agora" espera até 15s** pelo próximo tick antes de conectar.
+- **Silêncio digital pode gerar alerta falso de "captura parou".** Com silêncio o
+  encoder AAC gera pouco byte, e o que ele gera só aparece em disco quando o bloco de
+  ~256 KiB enche ou o pedaço fecha: o watchdog pode passar 60s sem ver crescimento.
+- **Sem pós-roll.** A captura acaba em `ends_at`; como o stream atrasa em relação ao
+  ar, a tela pede alguns minutos de folga antes e depois do horário.
+- **Sem teto de gravações simultâneas.** Cada uma é um ffmpeg reencodando (CPU) e uma
+  conexão a mais com o stream.
 
 ## Fora do escopo
 
