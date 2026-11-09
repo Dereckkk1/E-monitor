@@ -1816,6 +1816,23 @@ export function usePendentesMcp(id = null, { enabled = true } = {}) {
   })
 }
 
+// Quantos pedidos esperam a pessoa (o badge da barra lateral). Lê a MESMA fila de /pendentes (mesma
+// chave), mas sem a pressa da tela: a lista é relida a cada 2 min e no foco. Dentro de /pendentes o
+// badge não busca nada (enabled=false) e só lê o cache: a tela já pede a fila e a ordem das chamadas
+// dela é contrato (o pedido do link vem primeiro). Um pendente com o prazo vencido no relógio não conta.
+export function useContagemPendentesMcp({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'pendentes', null],
+    queryFn: () => api.get('/mcp/pendentes').then(r => r.data),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: enabled ? 120_000 : false,
+    refetchOnWindowFocus: true,
+    retry: false,
+    select: (d) => (d?.items ?? []).filter(p => p.estado === 'pendente' && Date.parse(p.expira_em) > Date.now()).length,
+  })
+}
+
 // Troca, em toda cópia da fila no cache, o pedido de mesmo id pelo `pendente` que a API devolveu.
 function trocarPedidoNoCache(qc, pendente) {
   if (!pendente?.id) return
