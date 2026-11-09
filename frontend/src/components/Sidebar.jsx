@@ -1,6 +1,6 @@
-import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { useSuggestionsUnread } from '../api/hooks'
+import { useContagemPendentesMcp, useSuggestionsUnread } from '../api/hooks'
 
 /* ── SVG icon primitives ──────────────────────────────────────── */
 function IconStations() {
@@ -193,6 +193,17 @@ function IconRecordings() {
   )
 }
 
+function IconAiRequests() {
+  // Bandeja de entrada com um check: o pedido chega da IA e só sai com a sua aprovação.
+  return (
+    <svg className="sidebar-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 9.5h-3.2l-1 1.6H6.2l-1-1.6H2" />
+      <path d="M2 9.5 3.6 3.9A1 1 0 0 1 4.6 3.2h6.8a1 1 0 0 1 1 .7L14 9.5v2.8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V9.5Z" />
+      <path d="M6.2 6.4 7.4 7.6 9.8 5.2" />
+    </svg>
+  )
+}
+
 function IconPostSale() {
   // Envelope com um check: o pós-venda é o email de fechamento.
   return (
@@ -205,7 +216,7 @@ function IconPostSale() {
 }
 
 /* ── Nav link helper ─────────────────────────────────────────── */
-function SidebarLink({ to, icon, children, onClose, badge }) {
+function SidebarLink({ to, icon, children, onClose, badge, badgeLabel = 'não lidas' }) {
   return (
     <NavLink
       to={to}
@@ -215,7 +226,7 @@ function SidebarLink({ to, icon, children, onClose, badge }) {
       {icon}
       <span className="sidebar-link-label">{children}</span>
       {badge > 0 && (
-        <span className="sidebar-link-badge" aria-label={`${badge} não lidas`}>
+        <span className="sidebar-link-badge" aria-label={`${badge} ${badgeLabel}`}>
           {badge > 99 ? '99+' : badge}
         </span>
       )}
@@ -239,8 +250,12 @@ function AdminNav({ onClose }) {
   // Badge de não-lidas em "Sugestões". Escopo por persona é imposto no
   // servidor (dev: novas + respostas; autor: atividade do dev nas próprias).
   const { data: suggestionsUnread } = useSuggestionsUnread()
-  // Gravações é só do role admin: o backend responde 403 ao operator.
+  // Gravações e Pedidos da IA são só do role admin: o backend responde 403 ao operator (o MCP é só admin).
   const { user } = useAuth()
+  const ehAdmin = user?.role === 'admin'
+  // Badge de pedidos da IA esperando aprovação. Na própria /pendentes ele só lê o cache (ver o hook).
+  const { pathname } = useLocation()
+  const { data: pedidosAguardando } = useContagemPendentesMcp({ enabled: ehAdmin && pathname !== '/pendentes' })
   return (
     <>
       <span className="sidebar-section-label">Cadastros</span>
@@ -265,11 +280,15 @@ function AdminNav({ onClose }) {
       <SidebarLink to="/management"        icon={<IconManagement />}      onClose={onClose}>Visão Gerencial</SidebarLink>
       <SidebarLink to="/admin/monitoring"        icon={<IconAdminMonitoring />}   onClose={onClose}>Monitoramento</SidebarLink>
       <SidebarLink to="/admin/station-failures"  icon={<IconStationFailures />}   onClose={onClose}>Falhas por emissora</SidebarLink>
-      {user?.role === 'admin' && (
+      {ehAdmin && (
         <SidebarLink to="/admin/gravacoes"         icon={<IconRecordings />}        onClose={onClose}>Gravações</SidebarLink>
       )}
       <SidebarLink to="/admin/users"             icon={<IconUsers />}             onClose={onClose}>Usuários</SidebarLink>
       <SidebarLink to="/admin/suggestions"       icon={<IconSuggestions />}       onClose={onClose} badge={suggestionsUnread}>Sugestões</SidebarLink>
+      {ehAdmin && (
+        <SidebarLink to="/pendentes" icon={<IconAiRequests />} onClose={onClose}
+          badge={pedidosAguardando} badgeLabel="aguardando aprovação">Pedidos da IA</SidebarLink>
+      )}
       <SidebarLink to="/admin/pos-venda"         icon={<IconPostSale />}          onClose={onClose}>Pós-venda</SidebarLink>
 
       <span className="sidebar-section-label">Conta</span>

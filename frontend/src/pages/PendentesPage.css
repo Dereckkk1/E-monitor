@@ -5,17 +5,10 @@
    ───────────────────────────────────────────────────────────── */
 
 .pen-page {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 32px 8px 56px;
+  max-width: 1180px;
+  padding-bottom: 48px;
   font-family: var(--font-body);
   color: var(--c-text);
-}
-
-@media (max-width: 768px) {
-  .pen-page {
-    padding: 20px 4px 40px;
-  }
 }
 
 .pen-sr {
@@ -34,26 +27,73 @@
 
 .pen-header {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 24px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 4px 0 20px;
+}
+
+.pen-header-main {
+  min-width: 0;
+  flex: 1 1 380px;
 }
 
 .pen-title {
   margin: 0;
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 28px;
-  letter-spacing: -0.015em;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
   line-height: 1.15;
   color: var(--c-text);
 }
 
 .pen-subtitle {
-  margin: 0;
-  font-size: 13.5px;
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
   color: var(--c-text-2);
-  max-width: 60ch;
+  max-width: 68ch;
+}
+
+/* ─── Situação da fila: o "o que está acontecendo agora" antes dos cartões ─── */
+
+.pen-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.pen-fila-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  font-size: 12.5px;
+  color: var(--c-text-2);
+}
+
+.pen-fila-item strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-fila-item--pendente {
+  border-color: var(--c-action-border);
+  background: var(--c-action-light);
+  color: var(--c-action-hover);
+}
+
+.pen-fila-item--aprovada {
+  border-color: color-mix(in srgb, var(--c-info) 40%, transparent);
+  background: color-mix(in srgb, var(--c-info) 8%, transparent);
+  color: var(--c-info);
 }
 
 /* A área que recebe o foco depois de uma ação: o botão clicado some da tela. */
@@ -73,20 +113,51 @@
 }
 
 .pen-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 20px 22px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   background: var(--c-surface);
   box-shadow: var(--shadow-sm);
   min-width: 0;
+  overflow: hidden;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
 }
 
+.pen-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px 24px;
+}
+
+/* Segunda camada neutra: o painel é da decisão, não do conteúdo. */
+.pen-card-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px 20px;
+  border-left: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-bg) 70%, var(--c-surface));
+}
+
+@media (max-width: 900px) {
+  .pen-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pen-card-side {
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
+}
+
+/* O pedido do link (?id=) ou o que você acabou de decidir: a borda acende, como a seleção do sistema. */
 .pen-card--destaque {
-  outline: 2px solid var(--c-action);
-  outline-offset: 2px;
+  border-color: var(--c-action-border);
+  box-shadow: 0 0 0 3px var(--c-action-light), var(--shadow-sm);
 }
 
 /* Pedido que já não pede nada de você: some a ênfase, fica o registro. */
@@ -97,21 +168,59 @@
   box-shadow: none;
 }
 
+.pen-card--executada .pen-card-side,
+.pen-card--recusada .pen-card-side,
+.pen-card--expirada .pen-card-side {
+  background: transparent;
+}
+
 .pen-topo {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
 }
 
+.pen-ficha {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pen-ficha-rotulo {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+
 .pen-tool {
+  max-width: 100%;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
   color: var(--c-text-2);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+/* Quanto falta para o pedido expirar: perto do fim, ganha a cor de atenção. */
+.pen-prazo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-prazo--urgente {
+  color: color-mix(in srgb, var(--c-warning) 75%, var(--c-text));
 }
 
 .pen-estado {
@@ -154,6 +263,7 @@
 
 .pen-resumo {
   margin: 0;
+  max-width: 70ch;
   font-family: var(--font-heading);
   font-size: 19px;
   font-weight: 600;
@@ -335,8 +445,8 @@
 
 .pen-meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  flex-direction: column;
+  gap: 2px;
   margin: 0;
   font-size: 12.5px;
   color: var(--c-text-3);
@@ -344,11 +454,15 @@
 
 .pen-acoes {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  flex-direction: column;
   gap: 8px;
-  padding-top: 14px;
-  border-top: 1px solid var(--c-border);
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.pen-acoes .btn {
+  justify-content: center;
+  width: 100%;
 }
 
 .pen-fechado {
@@ -368,55 +482,18 @@
   color: var(--c-text);
 }
 
-@media (max-width: 540px) {
-  .pen-acoes .btn {
-    flex: 1 1 100%;
-    justify-content: center;
-  }
-}
-
-/* ─── Estado vazio / erro de carga ────────────────────────── */
+/* ─── Estado vazio / erro de carga (FlowEmptyState + silhueta) ─── */
 
 .pen-vazio {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 48px 24px;
-  border: 1px dashed var(--c-border);
-  border-radius: var(--radius-lg);
-  background: var(--c-surface);
-  text-align: center;
+  min-height: 440px;
 }
 
-.pen-vazio-icone {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 64px;
-  height: 64px;
-  margin-bottom: 4px;
-  border-radius: 50%;
-  background: var(--c-surface-2);
-  color: var(--c-text-3);
+.pen-lista--silhueta {
+  gap: 14px;
 }
 
-.pen-vazio-icone--erro {
-  background: color-mix(in srgb, var(--c-danger) 10%, transparent);
-  color: var(--c-danger);
-}
-
-.pen-vazio-titulo {
-  margin: 0;
-  font-size: 17px;
-}
-
-.pen-vazio-texto {
-  margin: 0 0 8px;
-  max-width: 46ch;
-  font-size: 13.5px;
-  color: var(--c-text-2);
-  line-height: 1.5;
+.pen-lista--silhueta .pen-card {
+  box-shadow: none;
 }
 
 /* ─── Esqueleto: a forma do cartão, não um spinner ────────── */
@@ -442,6 +519,34 @@
 .pen-skel--linha {
   height: 12px;
   width: 45%;
+}
+
+.pen-skel--linha-curta {
+  height: 12px;
+  width: 30%;
+}
+
+.pen-skel--bloco {
+  height: 64px;
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.pen-skel--botao {
+  height: 36px;
+  width: 100%;
+  margin-top: auto;
+  border-radius: var(--radius-md);
+}
+
+.pen-card-side .pen-skel--linha {
+  width: 70%;
+}
+
+/* Na silhueta do estado vazio nada se mexe: é fundo, não carregamento. */
+.pen-skel--parado {
+  animation: none;
+  background: var(--c-border);
 }
 
 @keyframes pen-varrer {

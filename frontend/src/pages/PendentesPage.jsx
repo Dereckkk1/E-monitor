@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { usePendentesMcp, useAprovarPendenteMcp, useRecusarPendenteMcp } from '../api/hooks'
+import FlowEmptyState from '../components/FlowEmptyState'
 import { emoldurada } from '../utils/emoldurada'
 import './PendentesPage.css'
 
@@ -64,6 +65,17 @@ function valor(v) {
   try { return JSON.stringify(v) } catch { return String(v) }
 }
 
+/** Quanto falta até o prazo, no relógio da pessoa: é o que decide a urgência do cartão. */
+function falta(iso, agora) {
+  const ms = Date.parse(iso) - agora
+  if (!(ms > 0)) return null
+  const min = Math.floor(ms / 60_000)
+  if (min < 60) return { texto: `${Math.max(min, 1)} min`, urgente: true }
+  const h = Math.floor(min / 60)
+  if (h < 48) return { texto: `${h} h`, urgente: h < 2 }
+  return { texto: `${Math.floor(h / 24)} dias`, urgente: false }
+}
+
 function useAgora(ms = 30_000) {
   const [agora, setAgora] = useState(() => Date.now())
   useEffect(() => {
@@ -89,8 +101,29 @@ function useToast() {
 const Icone = {
   ok: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>,
   alerta: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>,
+  relogio: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>,
   x: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>,
-  vazio: <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></svg>,
+  vazio: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></svg>,
+}
+
+/** A forma de um cartão, sem dados: o esqueleto do carregamento e a silhueta do estado vazio. */
+function CartaoFantasma({ animado = true }) {
+  const k = animado ? 'pen-skel' : 'pen-skel pen-skel--parado'
+  return (
+    <div className="pen-card pen-card--fantasma">
+      <div className="pen-card-main">
+        <span className={`${k} pen-skel--topo`} />
+        <span className={`${k} pen-skel--titulo`} />
+        <span className={`${k} pen-skel--linha`} />
+        <span className={`${k} pen-skel--bloco`} />
+      </div>
+      <div className="pen-card-side">
+        <span className={`${k} pen-skel--linha`} />
+        <span className={`${k} pen-skel--linha-curta`} />
+        <span className={`${k} pen-skel--botao`} />
+      </div>
+    </div>
+  )
 }
 
 function Esqueleto() {
@@ -98,17 +131,17 @@ function Esqueleto() {
     <div aria-busy="true">
       <span className="pen-sr" role="status">Carregando…</span>
       <ul className="pen-lista" aria-hidden="true">
-        {[0, 1, 2].map(i => (
-          <li key={i}>
-            <div className="pen-card">
-              <span className="pen-skel pen-skel--topo" />
-              <span className="pen-skel pen-skel--titulo" />
-              <span className="pen-skel pen-skel--linha" />
-            </div>
-          </li>
-        ))}
+        {[0, 1].map(i => <li key={i}><CartaoFantasma /></li>)}
       </ul>
     </div>
+  )
+}
+
+function Silhueta() {
+  return (
+    <ul className="pen-lista pen-lista--silhueta">
+      {[0, 1, 2].map(i => <li key={i}><CartaoFantasma animado={false} /></li>)}
+    </ul>
   )
 }
 
@@ -152,97 +185,112 @@ function Desfecho({ p, estado, falha }) {
   )
 }
 
-function Cartao({ p, estado, destaque, agindo, falha, onAgir }) {
+function Cartao({ p, estado, destaque, agindo, falha, onAgir, agora }) {
   const idResumo = `pen-resumo-${p.id}`
   const pv = p.preview ?? {}
   const mudancas = pv.mudancas ?? []
   const efeitos = pv.efeitos ?? []
   const avisos = pv.ressalvas ?? []
   const meu = agindo?.id === p.id ? agindo.acao : null
+  const prazo = estado === 'pendente' ? falta(p.expira_em, agora) : null
   const classe = `pen-card pen-card--${estado}${destaque ? ' pen-card--destaque' : ''}`
 
   return (
     <article className={classe} aria-labelledby={idResumo} aria-current={destaque ? 'true' : undefined}>
-      <div className="pen-topo">
-        <code className="pen-tool">{p.tool}</code>
-        <span className={`pen-estado pen-estado--${estado}`}>{ROTULO_ESTADO[estado] ?? estado}</span>
+      <div className="pen-card-main">
+        <div className="pen-topo">
+          <span className={`pen-estado pen-estado--${estado}`}>{ROTULO_ESTADO[estado] ?? estado}</span>
+          {prazo && (
+            <span className={`pen-prazo${prazo.urgente ? ' pen-prazo--urgente' : ''}`}>
+              {Icone.relogio}
+              <span>faltam {prazo.texto}</span>
+            </span>
+          )}
+        </div>
+
+        <h2 className="pen-resumo" id={idResumo} dir="auto">{pv.resumo}</h2>
+
+        {estado !== 'pendente' && <Desfecho p={p} estado={estado} falha={falha} />}
+
+        {p.motivo && (
+          <p className="pen-motivo">
+            <span className="pen-rotulo">Por que precisa da sua aprovação</span>
+            {p.motivo}
+          </p>
+        )}
+
+        {mudancas.length > 0 && (
+          <div className="pen-bloco">
+            <p className="pen-rotulo">O que muda</p>
+            <dl className="pen-mudancas">
+              {mudancas.map((m, i) => (
+                <div className="pen-mudanca" key={`${m.campo}-${i}`}>
+                  <dt dir="auto">{m.campo}</dt>
+                  <dd>
+                    <span className="pen-sr">de</span>
+                    <span className="pen-de" dir="auto">{valor(m.de)}</span>
+                    <span className="pen-seta" aria-hidden="true">→</span>
+                    <span className="pen-sr">para</span>
+                    <span className="pen-para" dir="auto">{valor(m.para)}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+
+        {efeitos.length > 0 && (
+          <div className="pen-bloco">
+            <p className="pen-rotulo">O que acontece</p>
+            <ul className="pen-itens">{efeitos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
+          </div>
+        )}
+
+        {avisos.length > 0 && (
+          <div className="pen-aviso pen-aviso--atencao">
+            <p className="pen-rotulo">Atenção</p>
+            <ul className="pen-itens">{avisos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
+          </div>
+        )}
       </div>
 
-      <h2 className="pen-resumo" id={idResumo} dir="auto">{pv.resumo}</h2>
-
-      {estado !== 'pendente' && <Desfecho p={p} estado={estado} falha={falha} />}
-
-      {p.motivo && (
-        <p className="pen-motivo">
-          <span className="pen-rotulo">Por que precisa da sua aprovação</span>
-          {p.motivo}
+      {/* O painel da decisão: de onde veio, até quando vale e os dois botões, sempre no mesmo lugar. */}
+      <div className="pen-card-side">
+        <div className="pen-ficha">
+          <span className="pen-ficha-rotulo">Ferramenta</span>
+          <code className="pen-tool">{p.tool}</code>
+        </div>
+        <p className="pen-meta">
+          <span>Pedido em {quando(p.criada_em)}</span>
+          {estado === 'pendente' && <span>Expira em {quando(p.expira_em)}</span>}
         </p>
-      )}
 
-      {mudancas.length > 0 && (
-        <div className="pen-bloco">
-          <p className="pen-rotulo">O que muda</p>
-          <dl className="pen-mudancas">
-            {mudancas.map((m, i) => (
-              <div className="pen-mudanca" key={`${m.campo}-${i}`}>
-                <dt dir="auto">{m.campo}</dt>
-                <dd>
-                  <span className="pen-sr">de</span>
-                  <span className="pen-de" dir="auto">{valor(m.de)}</span>
-                  <span className="pen-seta" aria-hidden="true">→</span>
-                  <span className="pen-sr">para</span>
-                  <span className="pen-para" dir="auto">{valor(m.para)}</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
-
-      {efeitos.length > 0 && (
-        <div className="pen-bloco">
-          <p className="pen-rotulo">O que acontece</p>
-          <ul className="pen-itens">{efeitos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
-        </div>
-      )}
-
-      {avisos.length > 0 && (
-        <div className="pen-aviso pen-aviso--atencao">
-          <p className="pen-rotulo">Atenção</p>
-          <ul className="pen-itens">{avisos.map((e, i) => <li key={i} dir="auto">{e}</li>)}</ul>
-        </div>
-      )}
-
-      <p className="pen-meta">
-        <span>Pedido em {quando(p.criada_em)}</span>
-        {estado === 'pendente' && <span>Expira em {quando(p.expira_em)}</span>}
-      </p>
-
-      {estado === 'pendente' && (
-        <>
-          {falha ? (
-            <p className="pen-aviso pen-aviso--erro" role="alert">
-              <span className="pen-rotulo">{rotuloDaFalha(falha)}</span>
-              <span>{falha.mensagem}</span>
-            </p>
-          ) : p.erro ? (
-            <p className="pen-aviso pen-aviso--erro" role="status">
-              <span className="pen-rotulo">A última tentativa não passou</span>
-              <span>{p.erro}</span>
-            </p>
-          ) : null}
-          <div className="pen-acoes">
-            <button className="btn btn-secondary" type="button" aria-describedby={idResumo}
-              disabled={agindo !== null} onClick={() => onAgir(p, 'recusar')}>
-              {meu === 'recusar' ? 'Recusando…' : 'Recusar'}
-            </button>
-            <button className="btn btn-primary" type="button" aria-describedby={idResumo}
-              disabled={agindo !== null} onClick={() => onAgir(p, 'aprovar')}>
-              {meu === 'aprovar' ? 'Aprovando…' : 'Aprovar e executar'}
-            </button>
-          </div>
-        </>
-      )}
+        {estado === 'pendente' && (
+          <>
+            {falha ? (
+              <p className="pen-aviso pen-aviso--erro" role="alert">
+                <span className="pen-rotulo">{rotuloDaFalha(falha)}</span>
+                <span>{falha.mensagem}</span>
+              </p>
+            ) : p.erro ? (
+              <p className="pen-aviso pen-aviso--erro" role="status">
+                <span className="pen-rotulo">A última tentativa não passou</span>
+                <span>{p.erro}</span>
+              </p>
+            ) : null}
+            <div className="pen-acoes">
+              <button className="btn btn-primary" type="button" aria-describedby={idResumo}
+                disabled={agindo !== null} onClick={() => onAgir(p, 'aprovar')}>
+                {meu === 'aprovar' ? 'Aprovando…' : 'Aprovar e executar'}
+              </button>
+              <button className="btn btn-secondary" type="button" aria-describedby={idResumo}
+                disabled={agindo !== null} onClick={() => onAgir(p, 'recusar')}>
+                {meu === 'recusar' ? 'Recusando…' : 'Recusar'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </article>
   )
 }
@@ -326,6 +374,9 @@ export default function PendentesPage() {
   entrar(dados?.destaque)
   dados?.items?.forEach(entrar)
 
+  const aguardando = cartoes.filter(p => estadoVisual(p, agora) === 'pendente').length
+  const executando = cartoes.filter(p => estadoVisual(p, agora) === 'aprovada').length
+
   // Com a tela anterior mantida enquanto a nova carrega (placeholder), `dados` ainda não é a do link.
   const linkNaoAchado = !!idUrl && !!dados && !q.isPlaceholderData && !dados.destaque
   const falhaSemCartao = falha && !vistos.has(falha.id)
@@ -335,12 +386,15 @@ export default function PendentesPage() {
     corpo = <Esqueleto />
   } else if (q.isError && !dados) {
     corpo = (
-      <div className="pen-vazio" role="status">
-        <span className="pen-vazio-icone pen-vazio-icone--erro">{Icone.alerta}</span>
-        <h2 className="pen-vazio-titulo">Os pedidos não carregaram</h2>
-        <p className="pen-vazio-texto">Tente de novo em instantes.</p>
-        <button className="btn btn-primary" type="button" disabled={q.isFetching} onClick={() => q.refetch()}>Tentar de novo</button>
-      </div>
+      <FlowEmptyState
+        className="pen-vazio"
+        tone="warn"
+        icon={Icone.alerta}
+        title="Os pedidos não carregaram"
+        description="Tente de novo em instantes."
+        actions={<button className="btn btn-primary" type="button" disabled={q.isFetching} onClick={() => q.refetch()}>Tentar de novo</button>}
+        ghost={<Silhueta />}
+      />
     )
   } else {
     corpo = (
@@ -363,13 +417,15 @@ export default function PendentesPage() {
           </p>
         )}
         {cartoes.length === 0 ? (
-          <div className="pen-vazio" role="status">
-            <span className="pen-vazio-icone">{Icone.vazio}</span>
-            <h2 className="pen-vazio-titulo">Nenhum pedido esperando você</h2>
-            <p className="pen-vazio-texto">
-              Quando a IA pedir uma ação crítica pelo MCP, o pedido aparece aqui para você aprovar ou recusar.
-            </p>
-          </div>
+          <FlowEmptyState
+            className="pen-vazio"
+            tone="mute"
+            icon={Icone.vazio}
+            title="Nenhum pedido esperando você"
+            description="Quando a IA pedir uma ação crítica (cancelar campanha, mexer em preço, desativar usuário), o pedido chega aqui mostrando o que muda. Nada roda até você aprovar."
+            actions={<Link className="btn btn-secondary" to="/account">Conectar uma IA</Link>}
+            ghost={<Silhueta />}
+          />
         ) : (
           <ul className="pen-lista">
             {cartoes.map(p => (
@@ -381,6 +437,7 @@ export default function PendentesPage() {
                   agindo={agindo}
                   falha={falha?.id === p.id ? falha : null}
                   onAgir={agir}
+                  agora={agora}
                 />
               </li>
             ))}
@@ -393,9 +450,23 @@ export default function PendentesPage() {
   return (
     <div className="pen-page">
       <header className="pen-header">
-        <h1 className="pen-title">Pedidos da IA</h1>
-        <p className="pen-subtitle">Ações que a IA pediu em seu nome e que só rodam quando você aprova.</p>
+        <div className="pen-header-main">
+          <h1 className="pen-title">Pedidos da IA</h1>
+          <p className="pen-subtitle">Ações críticas que a IA pediu em seu nome pelo MCP. Nenhuma roda até você aprovar.</p>
+        </div>
+        <Link className="btn btn-secondary" to="/account">Conexões de IA</Link>
       </header>
+
+      {(aguardando > 0 || executando > 0) && (
+        <div className="pen-fila" role="group" aria-label="Situação da fila">
+          {aguardando > 0 && (
+            <span className="pen-fila-item pen-fila-item--pendente"><strong>{aguardando}</strong> aguardando você</span>
+          )}
+          {executando > 0 && (
+            <span className="pen-fila-item pen-fila-item--aprovada"><strong>{executando}</strong> executando</span>
+          )}
+        </div>
+      )}
 
       <div ref={area} tabIndex={-1} aria-label="Pedidos" className="pen-area">
         {corpo}

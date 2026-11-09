@@ -807,7 +807,10 @@ descreve a ação, não manda em nada. **Anti-clickjacking** (um clique aqui gra
 (`X-Frame-Options: DENY` + `frame-ancestors 'none'` em `/pendentes` e `/pendentes/*`) **mais** uma guarda de moldura em JS
 (`utils/emoldurada.js`: dentro de um iframe a página pede "Abra numa aba própria", não mostra botões nem chama a API). A rota
 `/autorizar-ia` tem as duas camadas também (`_headers` + a guarda de moldura em JS; emoldurada, nem o pedido de autorização é lido). Em Minha conta → "Integração com IA" há o link **Pedidos da IA** com a contagem dos que
-esperam. **Não há item na barra lateral**: a página é alcançada pelo link da IA ou por Minha conta. Teste Playwright com API falsa em
+esperam, e desde 2026-11-09 um item **Pedidos da IA** na barra lateral (Administração, só `role=admin`) com o badge dos que aguardam
+(`useContagemPendentesMcp`: mesma chave da fila, relida a cada 2 min; dentro de `/pendentes` só lê o cache, para não mudar a ordem
+das chamadas da tela). Layout: cartão em duas colunas (o pedido | o painel da decisão com prazo e botões) e estado vazio
+`FlowEmptyState` com a silhueta de pedidos. Teste Playwright com API falsa em
 `frontend/e2e/mcp-pendentes.spec.js`. Tela nova = regra 5 do `CLAUDE.md` (o lockfile não pode ser podado) e deploy em dois
 caminhos (backend primeiro: a tela chama rotas novas).
 
@@ -825,7 +828,7 @@ caminhos (backend primeiro: a tela chama rotas novas).
   aprovado depois recebe **um** `preview_desatualizado` (aprovar de novo funciona).
 - **`minhas_pendentes` corta o `erro` em 250 caracteres** (e as ressalvas em 250 cada / 300 somadas); o texto inteiro está em
   `/pendentes?id=`.
-- **Sem item na barra lateral** para `/pendentes`.
+- ~~**Sem item na barra lateral** para `/pendentes`.~~ Resolvido em 2026-11-09 (item em Administração, com badge).
 - **`tools/list` ~12-13 ms** com 83 tools: o custo é a validação do `AddTool` no go-sdk, não a inferência (já guardada). A saída é um `Server` por processo com o `Principal` vindo do contexto; adiada (ver "Desempenho").
 - **A aprovação é síncrona e uma execução lenta chega tarde à tela.** O `middleware.Timeout(60s)` do chi **não interrompe** o
   handler: ele só cancela o `r.Context()` aos 60 s e, quando o handler **volta**, tenta `WriteHeader(504)`, que não vale se o handler já
