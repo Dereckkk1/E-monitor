@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  coveragePercent, downloadName, errorMessage, gapLabels, isLive, statusInfo, todayInSaoPaulo, windowLabel, expiresLabel,
+  coveragePercent, downloadName, errorMessage, gapLabels, isLive, recordingStation, stationSub, statusInfo, todayInSaoPaulo,
+  windowLabel, expiresLabel,
 } from './recordings.js'
 
 const rec = {
@@ -138,4 +139,18 @@ test('sem resposta (erro de rede) usa a mensagem genérica', () => {
   assert.equal(errorMessage(new Error('Network Error')), GENERIC)
   assert.equal(errorMessage(undefined), GENERIC)
   assert.equal(errorMessage(httpErr(400, { error: 'x' })), GENERIC, 'corpo que não é texto')
+})
+
+test('emissora da gravação no padrão do seletor: dial e cidade/UF', () => {
+  const st = recordingStation({
+    station_name: 'Rádio Ação', station_logo_url: 'x.png',
+    station_frequency_mhz: 99.9, station_band: 'FM', station_city: 'Joinville', station_state: 'SC',
+  })
+  assert.deepEqual(st, { name: 'Rádio Ação', logo_url: 'x.png', sub: '99,9 FM · Joinville/SC' })
+  assert.equal(stationSub({ frequency_mhz: 1170, band: 'AM', city: 'Lages', state: 'SC' }), '1170 AM · Lages/SC')
+})
+
+test('emissora excluída mostra só o nome guardado na gravação', () => {
+  const st = recordingStation({ station_name: 'Rádio Antiga', station_frequency_mhz: null, station_city: null })
+  assert.deepEqual(st, { name: 'Rádio Antiga', logo_url: null, sub: '' })
 })

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-11-06
+ultima-verificacao: 2026-11-09
 codigo-relacionado:
   - workers/internal/recording/types.go
   - workers/internal/recording/window.go
@@ -20,6 +20,7 @@ codigo-relacionado:
   - infra/docker/docker-compose.yml
   - frontend/src/pages/AdminRecordingsPage.jsx
   - frontend/src/utils/recordings.js
+  - frontend/src/utils/dial.js
   - frontend/src/components/Sidebar.jsx
 ---
 
@@ -318,6 +319,10 @@ recebe 403).
   endpoint não trata `Range`, então o front baixa o arquivo como blob para tocar ou
   salvar.
 - Objeto ausente no bucket vira 404 ("sem áudio").
+- Toda linha traz `station_frequency_mhz`, `station_band`, `station_city`,
+  `station_state` e `station_logo_url`, por `LEFT JOIN` na emissora atual, inclusive
+  na consulta própria do `FailMissed`. Ficam nulos se a emissora foi excluída;
+  `station_name` é o nome guardado na gravação e continua valendo.
 
 ## Frontend
 
@@ -335,6 +340,16 @@ recebe 403).
   trechos"), como o e-mail. A cobertura de uma `parcial` para em 99%.
 - O formulário avisa que o stream chega com atraso em relação ao ar e pede alguns
   minutos de folga antes e depois do horário: não existe pós-roll.
+- **A emissora aparece como no seletor** (`StationIdentity`: logo, nome e
+  "dial · cidade/UF", com `formatDial` de `utils/dial.js`, a mesma regra do
+  `StationSearch`): num cartão logo abaixo da busca, porque o campo só mostra o nome e
+  há emissoras com o mesmo nome em cidades diferentes; no recibo "Gravação programada"
+  que aparece depois de programar, com o horário e o aviso de stream fora; e em cada
+  linha da lista.
+- Ações da lista são ícones no padrão de `/campaigns` (`btn btn-icon btn-sm`, com
+  `title` e `aria-label`): ouvir/pausar, baixar, parar (gravando) ou cancelar
+  (programada), excluir. Não existe editar: para mudar o horário, cancele e programe
+  de novo.
 
 ## Pasta órfã
 
