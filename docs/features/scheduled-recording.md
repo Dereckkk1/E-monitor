@@ -101,13 +101,17 @@ um minuto de buraco.
 - A conexão usa `-timeout 10s`, os args de reconexão do `ingestor` e o mesmo
   user-agent da detecção.
 - Se o ffmpeg sai antes do fim da janela, vira falha de captura (`last_error`) e
-  uma nova tentativa começa depois de uma espera. A espera começa em `RetryDelay`
-  (5s) e **dobra** a cada tentativa que não gravou bytes novos, até `RetryMax`
-  (30s); volta a 5s quando a tentativa gravou. Com retry fixo de 5s, um stream que
-  recusa na hora levava ~720 conexões por hora do mesmo IP da detecção, padrão que
-  já levou painel a banir a VM ([connect-backoff-circuit-breaker.md](connect-backoff-circuit-breaker.md)).
-  O teto não é maior porque cada segundo de espera depois de o stream voltar é áudio
-  perdido de uma prova.
+  uma nova tentativa começa depois de uma espera (`retryWait`). As
+  `RetryFastTries` (5) primeiras falhas seguidas esperam `RetryDelay` (5s): com os
+  ~7s de reconexão interna do ffmpeg, isso cobre cerca de um minuto de queda, o caso
+  comum. Daí em diante a espera **dobra** até `RetryMax` (30s). Volta ao início
+  quando uma tentativa grava bytes novos. Com retry fixo de 5s, um stream que recusa
+  na hora levava ~720 conexões por hora do mesmo IP da detecção, padrão que já levou
+  painel a banir a VM ([connect-backoff-circuit-breaker.md](connect-backoff-circuit-breaker.md));
+  assim fica perto de 100. Dobrar desde a primeira falha foi testado e descartado:
+  com ffmpeg real, uma queda de 40s virava buraco de 65s. O teto não é maior pelo
+  mesmo motivo: cada segundo de espera depois de o stream voltar é áudio perdido de
+  uma prova.
 - `stream_url` é **relida a cada tentativa**: corrigir a URL durante uma queda vale
   na reconexão seguinte (os e-mails de queda dizem isso). A consulta tem o prazo do
   tick (`TickTimeout`, 10s). Se ela falhar (banco instável), a tentativa segue com a
