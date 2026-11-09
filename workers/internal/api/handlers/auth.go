@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +45,7 @@ type loginResponse struct {
 type loginUser struct {
 	ID        uuid.UUID   `json:"id"`
 	Email     string      `json:"email"`
+	Username  *string     `json:"username,omitempty"`
 	Role      string      `json:"role"`
 	Name      string      `json:"name"`
 	ClientID  *uuid.UUID  `json:"client_id,omitempty"`
@@ -51,6 +53,9 @@ type loginUser struct {
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	// O campo continua se chamando `email` por compatibilidade, mas carrega o
+	// IDENTIFICADOR: e-mail ou username. Renomear exigiria deploy casado de
+	// front e back, e o front (CF Pages) sobe sozinho a cada push.
 	var body struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -68,7 +73,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.users.GetByEmail(r.Context(), body.Email)
+	// Username não aceita `@` (CHECK da 0070), então o `@` decide sozinho qual
+	// coluna consultar — nunca há duas contas candidatas para o mesmo texto.
+	lookup := h.users.GetByUsername
+	if strings.Contains(body.Email, "@") {
+		lookup = h.users.GetByEmail
+	}
+	u, err := lookup(r.Context(), body.Email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
@@ -162,7 +173,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	_ = h.users.TouchLastLogin(r.Context(), u.ID)
 
 	resp := loginResponse{Token: tok, ExpiresAt: expiresAt, User: loginUser{
-		ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name,
+		ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, Name: u.Name,
 		ClientID: u.ClientID, ClientIDs: u.ClientIDs,
 	}}
 

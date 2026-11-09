@@ -64,7 +64,7 @@ export default function WelcomePage() {
       {/* Faixas alternadas: claro → navy (o vídeo) → claro. Sem isso o miolo
           da página vira uma laje única de quase-branco entre o hero e o rodapé,
           que é o que fazia o conteúdo parecer solto no vazio. */}
-      <StepAccess email={data.email} password={data.password} />
+      <StepAccess email={data.email} username={data.username} password={data.password} />
       <StepVideo />
       <StepExplore isClient={isClient} />
 
@@ -205,7 +205,7 @@ function Line({ children }) {
 
 /* ── Passo 1: acesso ─────────────────────────────────────────────────── */
 
-function StepAccess({ email, password }) {
+function StepAccess({ email, username, password }) {
   const [revealed, setRevealed] = useState(true)
 
   return (
@@ -247,6 +247,9 @@ function StepAccess({ email, password }) {
         </div>
 
         <CredRow label="E-mail" value={email} />
+        {/* Só aparece se o admin deu um username à conta: as duas formas
+            entram, e a pessoa escolhe a que preferir no campo de login. */}
+        {username && <CredRow label="Ou usuário" value={username} mono />}
         <CredRow label="Senha" value={password} masked={!revealed} mono />
 
         <p className="wel-creds-note">

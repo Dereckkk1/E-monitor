@@ -16,8 +16,8 @@ codigo-relacionado:
   - workers/internal/mcp/confirmacao.go
   - workers/internal/mcp/escrita.go
   - workers/internal/acoes/servico.go
-  - migrations/0071_mcp_confirmacoes.up.sql
-  - migrations/0072_mcp_acoes_pendentes.up.sql
+  - migrations/0073_mcp_confirmacoes.up.sql
+  - migrations/0074_mcp_acoes_pendentes.up.sql
   - workers/internal/mcp/pendentes.go
   - workers/internal/mcp/aprovacao.go
   - workers/internal/mcp/pendentes_http.go
@@ -306,12 +306,13 @@ Dev local: no `.env`, `MCP_ORIGEM_PUBLICA=http://localhost:8080` **e**
 ## Testar as tools localmente
 
 - Um banco por agente no container `rc-mcp-test-pg` (porta 55440). O template atual é o
-  `radiocheck_mcp_test_d4` (migrations até a **0072**, `mcp_acoes_pendentes` incluída; o `d3` parou na 0071):
-  `docker exec rc-mcp-test-pg psql -U radiocheck -d postgres -c "CREATE DATABASE radiocheck_mcp_test_<x> TEMPLATE radiocheck_mcp_test_d4;"`.
+  `radiocheck_mcp_test_d5` (numeração do master depois do merge: até a **0074**, com `0070_users_username` e `0071_recordings`;
+  foi feito do `d4` aplicando essas duas e acertando `schema_migrations` para 74. O `d4` tem a numeração antiga, até a 0072, e não serve mais):
+  `docker exec rc-mcp-test-pg psql -U radiocheck -d postgres -c "CREATE DATABASE radiocheck_mcp_test_<x> TEMPLATE radiocheck_mcp_test_d5;"`.
   Para gerar o template seguinte (`dN` = cópia do anterior + a migration nova; rede Docker `rc-mcp-test`;
   `MSYS_NO_PATHCONV=1` no Git Bash do Windows), crie `dN` com o `CREATE DATABASE` acima e rode
   `MSYS_NO_PATHCONV=1 docker run --rm --network rc-mcp-test -v "$(pwd)/migrations:/migrations:ro" migrate/migrate:v4.17.1 -path=/migrations -database "postgres://radiocheck:radiocheck@rc-mcp-test-pg:5432/radiocheck_mcp_test_dN?sslmode=disable" up`.
-- **Nunca aponte `TEST_DATABASE_URL` para o template** (`d4`): os testes inserem usuários e linhas nele. Crie um banco
+- **Nunca aponte `TEST_DATABASE_URL` para o template** (`d5`): os testes inserem usuários e linhas nele. Crie um banco
   por pacote a partir do template e descarte-o no fim (`DROP DATABASE`).
 - `export TEST_DATABASE_URL=postgres://radiocheck:radiocheck@localhost:55440/radiocheck_mcp_test_<x>?sslmode=disable`
   e `go test -p 1 -timeout 60m ./internal/mcp/...`. O pacote `./internal/mcp` leva **10–15 min** (rode em segundo plano).
@@ -360,7 +361,7 @@ Preparar (na raiz `workers/`):
 ```bash
 docker exec rc-mcp-test-pg psql -U radiocheck -d postgres \
   -c "DROP DATABASE IF EXISTS radiocheck_mcp_avaliacao;" \
-  -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d4;"
+  -c "CREATE DATABASE radiocheck_mcp_avaliacao TEMPLATE radiocheck_mcp_test_d5;"
 # o semear recusa banco com usuário/cliente/emissora/campanha; se algum teste já rodou contra o
 # template, ele traz usuários de sobra — limpar NESSE banco é inofensivo quando ele já vem vazio
 docker exec rc-mcp-test-pg psql -U radiocheck -d radiocheck_mcp_avaliacao -c "TRUNCATE users CASCADE;"
@@ -407,23 +408,22 @@ público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo C
 duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão. O CLI da
 avaliação (`internal/mcp/avaliacao/cli`) **não** entra na imagem, de propósito.
 
-**Migrations antes do merge (Fatias 3 e 4):** o `master` já tem `0070_users_username` e `0071_recordings` (gravação programada;
-conferido em `origin/master` em 2026-11-09: reconfira o maior número antes do merge). Ao mergear o `feat/mcp-server`, renumere **nesta ordem**
-`0072_mcp_acoes_pendentes` -> **0074**, `0071_mcp_confirmacoes` -> **0073** e `0070_mcp_fundacao` -> **0072** (os seis arquivos
-`.up/.down.sql`, e as referências nos docs e nos comentários do código). As três são só `CREATE TABLE` + índices (+ o trigger em
-`users` da primeira), mas passam pelo `shadow_migration_test` do `deploy.sh` como qualquer outra (regra 4.8 do `CLAUDE.md`).
+**Migrations (renumeradas no merge de 2026-11-09):** o `master` já tinha `0070_users_username` e `0071_recordings`, então as do MCP
+são `0072_mcp_fundacao`, `0073_mcp_confirmacoes` e `0074_mcp_acoes_pendentes`. As três são só `CREATE TABLE` + índices (+ o trigger
+em `users` da primeira e a função recriada no fim da última), mas passam pelo `shadow_migration_test` do `deploy.sh` como qualquer
+outra (regra 4.8 do `CLAUDE.md`). Docs datados (`docs/superpowers/`) continuam com a numeração antiga (0070 a 0072): são registro.
 
-**A `0072_mcp_acoes_pendentes` foi editada no lugar durante o desenvolvimento** (ganhou a coluna `ressalvas TEXT[] NOT NULL DEFAULT '{}'`
+**A `0074_mcp_acoes_pendentes` foi editada no lugar durante o desenvolvimento** (ganhou a coluna `ressalvas TEXT[] NOT NULL DEFAULT '{}'`
 no commit `d2b3fb4`, quando a aprovação passou a gravar os avisos da execução). Em produção isso não importa (a migration nunca rodou
 lá), mas **todo banco de dev/teste que aplicou a versão antiga não tem a coluna** e o `migrate` não a reaplica: o sintoma é
 `column "ressalvas" does not exist` nos testes de `internal/mcp` e na API local. Recrie o banco (`DROP SCHEMA public CASCADE` + `migrate
-up`) ou desça a 0072 (`migrate ... down 1`) e suba de novo; o template de teste `radiocheck_mcp_test_d4` já foi refeito com a coluna.
+up`) ou desça a 0074 (`migrate ... down 1`) e suba de novo; o template de teste `radiocheck_mcp_test_d4` já foi refeito com a coluna.
 
 **Ela foi editada outra vez na revisão final da Fatia 4**: o fim do arquivo ganhou um `CREATE OR REPLACE FUNCTION
-mcp_revogar_credenciais_do_usuario()` (a função da 0070 + o `UPDATE` que expira os pedidos `pendente` do usuário revogado), e a
-`.down.sql` devolve a função da 0070 antes de derrubar a tabela. O trigger `users_revoga_mcp` não é recriado (só a função), então não
-há lock em `users`. Banco de dev/teste que já aplicou a 0072 sem isso continua com a função velha (os pedidos não expiram no
-trigger): `migrate ... down 1` + `up`. **O template `radiocheck_mcp_test_d4` foi reconstruído** (`DROP DATABASE` + `CREATE DATABASE ...
+mcp_revogar_credenciais_do_usuario()` (a função da 0072 + o `UPDATE` que expira os pedidos `pendente` do usuário revogado), e a
+`.down.sql` devolve a função da 0072 antes de derrubar a tabela. O trigger `users_revoga_mcp` não é recriado (só a função), então não
+há lock em `users`. Banco de dev/teste que já aplicou a 0074 sem isso continua com a função velha (os pedidos não expiram no
+trigger): `migrate ... down 1` + `up`. O template `radiocheck_mcp_test_d4` foi reconstruído na época, e o `d5` herda dele (`DROP DATABASE` + `CREATE DATABASE ...
 TEMPLATE radiocheck_mcp_test_d3` + `migrate up`, receita em «Testar as tools localmente»). A renumeração acima não muda: a função nova
 fica no arquivo que cria a tabela e roda depois da que cria a função original.
 

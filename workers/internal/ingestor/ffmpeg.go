@@ -121,6 +121,11 @@ func pickSegmentAudioArgs(codec string) []string {
 	return []string{"-c:a", "aac", "-b:a", "128k"}
 }
 
+// ReconnectArgs expõe a decisão acima para quem abre o próprio ffmpeg
+// (internal/recording). É a regra que custou o incidente de 2026-05-15 (HLS com
+// -reconnect_at_eof nunca decodifica): não deve existir em duplicata.
+func ReconnectArgs(streamURL string) []string { return pickReconnectArgs(streamURL) }
+
 // FFmpegProcess wraps a running ffmpeg subprocess.
 //
 // ffmpeg is invoked with two outputs:

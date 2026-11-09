@@ -187,7 +187,7 @@ func (s *Store) ListarConexoes(ctx context.Context, userID uuid.UUID) ([]Token, 
 
 // TextoPedidoRevogado é o `erro` gravado nos pedidos críticos (mcp_acoes_pendentes) que expiram
 // porque a conexão de IA que os fez foi revogada. A função SQL mcp_revogar_credenciais_do_usuario
-// (migration 0072) grava o mesmo texto; um teste confere que os dois batem.
+// (migration 0074) grava o mesmo texto; um teste confere que os dois batem.
 const TextoPedidoRevogado = "A conexão de IA que fez este pedido foi revogada; peça de novo por uma conexão válida."
 
 // Revogar mata a credencial `id` se ela for de `userID`. Numa conexão OAuth

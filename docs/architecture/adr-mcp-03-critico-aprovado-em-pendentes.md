@@ -8,7 +8,7 @@ codigo-relacionado:
   - workers/internal/mcp/varredor.go
   - workers/internal/mcp/principal.go
   - frontend/src/pages/PendentesPage.jsx
-  - migrations/0072_mcp_acoes_pendentes.up.sql
+  - migrations/0074_mcp_acoes_pendentes.up.sql
 ---
 # ADR-MCP-03: escrita crítica vira pedido aprovado por quem pediu em `/pendentes`, e a aprovação confere o que a pessoa leu
 

@@ -8,8 +8,8 @@ codigo-relacionado:
   - workers/internal/mcp/auditoria/
   - workers/cmd/revoga-mcp/main.go
   - workers/cmd/registra-cliente-mcp/main.go
-  - migrations/0070_mcp_fundacao.up.sql
-  - migrations/0071_mcp_confirmacoes.up.sql
+  - migrations/0072_mcp_fundacao.up.sql
+  - migrations/0073_mcp_confirmacoes.up.sql
   - frontend/src/pages/AuthorizeAiPage.jsx
   - frontend/src/components/account/McpIntegrationSection.jsx
   - frontend/public/_headers
@@ -55,7 +55,7 @@ codigo-relacionado:
   - workers/internal/api/handlers/acoes_http.go
   - workers/internal/catalog/ha_veiculacao.go
   - workers/internal/catalog/campaigns_ciclo.go
-  - migrations/0072_mcp_acoes_pendentes.up.sql
+  - migrations/0074_mcp_acoes_pendentes.up.sql
   - workers/internal/mcp/pendentes.go
   - workers/internal/mcp/registro_escritas.go
   - workers/internal/mcp/aprovacao.go
@@ -372,7 +372,7 @@ de uso único diferentes para a mesma confirmação.
 
 ### Uso único: consumido ANTES de executar (F3-5) — diverge da spec §5.2
 
-`mcp_confirmacoes_usadas` (migration 0071; no merge vira 0073, ver "Limitações e follow-ups"): `hash BYTEA PK` (SHA-256 do
+`mcp_confirmacoes_usadas` (migration 0073): `hash BYTEA PK` (SHA-256 do
 token), `usado_em`, `expira_em`. **Consumir** é `INSERT … ON CONFLICT DO NOTHING`: 1 linha afetada = primeiro uso.
 
 - Consome **antes** de executar. **Só a recusa de negócio libera** (`DELETE` da linha: o token volta a valer); erro interno
@@ -560,10 +560,9 @@ apertar, com um teste que prove que dois principais simultâneos nunca se veem. 
 - **`token_id` não aparece na tool `auditoria_mcp`** e dados de contato/CNPJ aparecem nos `args` do `audit_log` (ver acima).
 - **Recat assíncrono:** a regra e a troca de tipo respondem antes de a recategorização acabar (até 30 s); a resposta traz a
   ressalva. O override é síncrono.
-- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username` e `0071_recordings` (gravação programada, conferido em
-  2026-11-09), então `0070_mcp_fundacao` vira `0072`, `0071_mcp_confirmacoes` vira `0073` e `0072_mcp_acoes_pendentes` (Fatia 4) vira
-  `0074` (e as referências a "migration 0070/0071/0072"
-  neste doc). Ver também a nota sobre a 0072 editada no lugar, em [operations/mcp.md](../operations/mcp.md).
+- **Migrations renumeradas no merge (2026-11-09):** o `master` já tinha `0070_users_username` e `0071_recordings`, então as do MCP
+  viraram `0072_mcp_fundacao`, `0073_mcp_confirmacoes` e `0074_mcp_acoes_pendentes`. Ver a nota sobre a 0074 editada no lugar em
+  [operations/mcp.md](../operations/mcp.md).
 - **Trailers de commit da branch** misturam "Claude Opus 5.5" e "Claude Sonnet 5.5" (dois modelos trabalharam nela).
 
 ## Crítico e /pendentes (Fatia 4)
@@ -620,7 +619,7 @@ faria a pessoa aprovar duas vezes o mesmo `criar_veiculacao_manual` (duas tocada
   pedido a `expirada`):
   - *Proativo*: `Store.Revogar` (o «Desconectar» de Minha conta, token pessoal ou conexão OAuth inteira) expira os `pendente` de **qualquer
     token da conexão**, mesmo vencido ou trocado no refresh; `Store.RevogarTodos` (e o CLI `revoga-mcp`) e a função do trigger
-    `users_revoga_mcp` (senha trocada/redefinida, desativação, rebaixamento, apagar — a função é recriada no fim da `0072`) expiram
+    `users_revoga_mcp` (senha trocada/redefinida, desativação, rebaixamento, apagar — a função é recriada no fim da `0074`) expiram
     **todos** os `pendente` do usuário. A `aprovada` não é tocada: uma pessoa já clicou e a execução está rodando.
   - *Na aprovação* (rede de segurança: revogação que não passou pelo caminho acima, `token_id` virado `NULL`, token vencido):
     `Pendentes.Aprovar` só pega a linha se a conexão está viva; senão fecha o pedido como `expirada`, responde 409 `pendente_expirada`
@@ -737,7 +736,7 @@ esconde o tipo genérico (`registrar`, `executarAprovada`, `validarArgs`, `argsG
 
 ### Guardas de si mesmo (F4-12)
 
-`editar_usuario` recusa mudar o **próprio** papel e `desativar_usuario` recusa a si mesmo (`proprio_usuario`): o trigger da 0070
+`editar_usuario` recusa mudar o **próprio** papel e `desativar_usuario` recusa a si mesmo (`proprio_usuario`): o trigger da 0072
 revogaria a credencial MCP de quem pediu no meio da aprovação. Ninguém desativa ou rebaixa o **último admin ativo** (`ultimo_admin`;
 conta `role = 'admin' AND is_active AND deleted_at IS NULL`). **Só no MCP**: a rota `PATCH /admin/users` não tem essas guardas (follow-up). O
 `Preview` não recebe o `Principal` como argumento: o motor o põe no contexto (`ComPrincipal`/`PrincipalDe`) tanto na chamada quanto
@@ -876,7 +875,7 @@ Só o hash `SHA-256(JWT_SECRET:token)` chega ao banco (`mcp_tokens`, `mcp_oauth_
 
 ### Revogação automática
 
-É um **trigger em `users`** (migration 0070, `users_revoga_mcp`), não código do repo: cobre toda
+É um **trigger em `users`** (migration 0072, `users_revoga_mcp`), não código do repo: cobre toda
 via que mexe no usuário (tela, sync do hub, bloqueio do `/admin/monitoring`). Revoga todo
 `mcp_tokens` vivo e apaga os `mcp_oauth_codes` pendentes quando:
 

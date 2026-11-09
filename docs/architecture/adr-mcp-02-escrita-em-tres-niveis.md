@@ -6,7 +6,7 @@ codigo-relacionado:
   - workers/internal/mcp/registro_escritas.go
   - workers/internal/mcp/instrucoes.go
   - workers/internal/acoes/recusa.go
-  - migrations/0071_mcp_confirmacoes.up.sql
+  - migrations/0073_mcp_confirmacoes.up.sql
 ---
 # ADR-MCP-02: escrita em três níveis, com o nível subindo quando a escrita atinge dia já veiculado
 

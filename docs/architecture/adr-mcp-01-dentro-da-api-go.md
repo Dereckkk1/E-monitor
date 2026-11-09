@@ -5,7 +5,7 @@ codigo-relacionado:
   - workers/internal/mcp/
   - workers/internal/acoes/
   - workers/cmd/api/main.go
-  - migrations/0070_mcp_fundacao.up.sql
+  - migrations/0072_mcp_fundacao.up.sql
 ---
 # ADR-MCP-01: servidor MCP dentro da API Go, com as tools chamando as mesmas funções das telas
 

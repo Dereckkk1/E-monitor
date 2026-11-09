@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useStationSuggest } from '../api/hooks'
 import { tokenize, highlightSegments, dialMatchesToken } from '../utils/search'
+import { formatDial } from '../utils/dial'
 import StationAvatar from './StationAvatar'
 
 // Combobox de busca de emissoras.
@@ -52,16 +53,6 @@ function XIcon() {
       <path d="M18 6 6 18M6 6l12 12" />
     </svg>
   )
-}
-
-// Dial em português: FM com vírgula decimal, AM inteiro.
-export function formatDial(freqMhz, band) {
-  if (freqMhz == null) return band ?? ''
-  const n = Number(freqMhz)
-  const txt = Number.isInteger(n)
-    ? String(n)
-    : n.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 2 })
-  return band ? `${txt} ${band}` : txt
 }
 
 function Highlighted({ text, tokens }) {

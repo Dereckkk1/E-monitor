@@ -42,7 +42,7 @@ var ErrCredencialRevogada = errors.New("mcp: a conexão de IA que fez o pedido f
 const (
 	// msgCredencialRevogada é o `erro` gravado no pedido expirado pela revogação e o texto que a
 	// pessoa e a IA (minhas_pendentes) leem. A função mcp_revogar_credenciais_do_usuario (migration
-	// 0072) grava o mesmo texto; o teste de trigger confere que os dois batem.
+	// 0074) grava o mesmo texto; o teste de trigger confere que os dois batem.
 	msgCredencialRevogada = tokens.TextoPedidoRevogado
 	msgPendenteMudou      = "O pedido mudou desde que você abriu; releia antes de aprovar."
 )

@@ -111,6 +111,7 @@ docs/
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
 | [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 a 4 (83 tools: 44 de leitura, 17 delas de relatório com deep-link para a tela filtrada, 20 de escrita `livre`/`confirma` com token HMAC de uso único e 18 de escrita `critico` que viram pedido aprovado pelo próprio admin na tela `/pendentes`, mais `minhas_pendentes`; avaliação mcp-builder 10/10). Falta a Fatia 5 (ecossistema)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP (as escritas, em `workers/internal/acoes`) |
+| [scheduled-recording.md](features/scheduled-recording.md) | Programar gravação (`/admin/gravacoes`): admin agenda um trecho de stream de qualquer emissora e o áudio fica 15 dias. Status pela lista de buracos, finalização repetível, e-mails de falha. `deploy.sh` para se houver gravação em andamento |
 
 ## `operations/` — operar o sistema em prod
 

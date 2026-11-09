@@ -158,7 +158,9 @@ func (h *UsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 // ── Create ───────────────────────────────────────────────────────────────
 
 type createUserPayload struct {
-	Email    string     `json:"email"`
+	Email string `json:"email"`
+	// Username é opcional: ausente ou vazio = a conta entra só pelo e-mail.
+	Username *string    `json:"username,omitempty"`
 	Password string     `json:"password"`
 	Name     string     `json:"name"`
 	Phone    *string    `json:"phone,omitempty"`
@@ -202,7 +204,7 @@ func escreveRecusaUsuario(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	switch r.Codigo {
-	case acoes.CodigoEmailEmUso:
+	case acoes.CodigoEmailEmUso, acoes.CodigoUsernameEmUso:
 		http.Error(w, r.Mensagem, http.StatusConflict)
 	case acoes.CodigoUsuarioNaoEncontrado:
 		http.Error(w, r.Mensagem, http.StatusNotFound)
@@ -231,6 +233,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Email:            p.Email,
 		Senha:            p.Password,
 		Nome:             p.Name,
+		Username:         p.Username,
 		Telefone:         p.Phone,
 		Papel:            p.Role,
 		ClienteID:        p.ClientID,
@@ -278,8 +281,12 @@ type updateUserPayload struct {
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
 	ReceiveAlertEmails *bool `json:"receive_alert_emails,omitempty"`
 	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda (admins).
-	ReceivePostSaleEmails *bool   `json:"receive_post_sale_emails,omitempty"`
-	Email                 *string `json:"email,omitempty"` // só pra detectar e rejeitar
+	ReceivePostSaleEmails *bool `json:"receive_post_sale_emails,omitempty"`
+	// Username: ausente = não mexe; "" = remove; valor = define/troca. Ao
+	// contrário do e-mail, é mutável — mas só por aqui (admin), nunca pelo
+	// /me: trocar o próprio login não é autoatendimento (decisão do dono).
+	Username *string `json:"username,omitempty"`
+	Email    *string `json:"email,omitempty"` // só pra detectar e rejeitar
 }
 
 func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +314,7 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		Ativo:          p.IsActive,
 		RecebeAlertas:  p.ReceiveAlertEmails,
 		RecebePosVenda: p.ReceivePostSaleEmails,
+		Username:       p.Username,
 	})
 	if err != nil {
 		if escreveRecusaUsuario(w, err) {

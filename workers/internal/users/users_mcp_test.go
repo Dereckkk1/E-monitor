@@ -12,7 +12,7 @@ import (
 	"radiocheck/internal/users"
 )
 
-// A revogação do MCP mora num trigger de users (migration 0070): trocar a senha,
+// A revogação do MCP mora num trigger de users (migration 0072): trocar a senha,
 // desativar, rebaixar de admin ou apagar o usuário corta toda credencial do MCP
 // e todo código OAuth ainda não trocado (spec 2026-10-27 §4.1).
 

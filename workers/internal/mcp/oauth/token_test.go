@@ -116,7 +116,7 @@ func TestToken_GrantDesconhecido(t *testing.T) {
 	require.Equal(t, "unsupported_grant_type", e["error"])
 }
 
-// Rebaixa ANTES de o código existir (o trigger da 0070 não tem o que apagar),
+// Rebaixa ANTES de o código existir (o trigger da 0072 não tem o que apagar),
 // para exercitar o DonoAdminAtivo do trocarCodigo.
 func TestToken_TrocarCodigoReleODono(t *testing.T) {
 	a := novoAmbiente(t)

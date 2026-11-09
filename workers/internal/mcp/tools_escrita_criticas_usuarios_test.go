@@ -8,7 +8,7 @@ package mcp
 // recusa no pedido E na aprovação, (5) a auditoria com meta.mcp.pendente_id,
 // (6) o segredo (senha gerada, link e token das boas-vindas) nunca aparece no
 // resultado, nos args gravados, no preview nem no audit_log, (7) rebaixar ou
-// desativar revoga as credenciais do MCP da pessoa (trigger da 0070).
+// desativar revoga as credenciais do MCP da pessoa (trigger da 0072).
 
 import (
 	"context"
@@ -1009,7 +1009,7 @@ func TestEditarUsuario_RebaixarAdminRevogaAsConexoesDeIA(t *testing.T) {
 	u := ap.resultadoJSON(t)["usuario"].(map[string]any)
 	require.Equal(t, "cliente", u["papel"])
 	require.Len(t, u["clientes"], 2)
-	require.Zero(t, tokensVivosDe(t, b, alvo.ID), "o trigger da 0070 revogou as credenciais")
+	require.Zero(t, tokensVivosDe(t, b, alvo.ID), "o trigger da 0072 revogou as credenciais")
 	require.Equal(t, 1, tokensVivosDe(t, b, outro.ID), "as de outro admin ficam")
 }
 
@@ -1368,7 +1368,7 @@ func TestDesativarUsuario_PedidoNaoEscreveEAprovarDesativa(t *testing.T) {
 	exigeIgualAoObterUsuario(t, b, alvo.ID, res)
 	require.Equal(t, "inativo", res["usuario"].(map[string]any)["situacao"])
 	require.Contains(t, linhaDoUsuario(t, b, alvo.ID), "ativo=false")
-	require.Zero(t, tokensVivosDe(t, b, alvo.ID), "o trigger da 0070 revogou as credenciais")
+	require.Zero(t, tokensVivosDe(t, b, alvo.ID), "o trigger da 0072 revogou as credenciais")
 	exigeAuditoriaDeUsuario(t, b, toolDesativarUsuario, alvo.ID, pid)
 	require.Equal(t, "executada", b.estadoDaPendente(t, pid))
 }
