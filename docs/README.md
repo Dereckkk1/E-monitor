@@ -53,6 +53,9 @@ docs/
 | [evidence-audit.md](architecture/evidence-audit.md) | Re-fingerprint do clipe salvo × master antes de confirmar veiculação (§9.9) |
 | [evidence-segments.md](architecture/evidence-segments.md) | ffmpeg escreve segmentos ADTS-AAC 30s; evidence extrai por timestamp |
 | [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect), barra de filtros em passos (`.flow-filters`) e shell de estado vazio (`FlowEmptyState`) |
+| [adr-mcp-01-dentro-da-api-go.md](architecture/adr-mcp-01-dentro-da-api-go.md) | ADR: MCP dentro da API Go, tools chamando as mesmas funções das telas (`internal/acoes`, `catalog`), só admin, OAuth 2.1 + token pessoal |
+| [adr-mcp-02-escrita-em-tres-niveis.md](architecture/adr-mcp-02-escrita-em-tres-niveis.md) | ADR: escrita `livre`/`confirma`/`critico`, escalada a `critico` em dia já veiculado (SP), token de confirmação HMAC de uso único no Postgres |
+| [adr-mcp-03-critico-aprovado-em-pendentes.md](architecture/adr-mcp-03-critico-aprovado-em-pendentes.md) | ADR: crítico vira pedido aprovado por quem pediu em `/pendentes`; a aprovação reroda o preview (`preview_desatualizado`), confere a `tentativa` e recusa credencial revogada |
 
 ## `features/` — feature implementada
 

@@ -91,7 +91,7 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | 2 | Relatórios: 17 tools (insights, visão gerencial, assertividade, data e hora, resumo e exportações de campanha, mapa de cobertura, 5 de falhas, 3 de pós-venda, auditoria do MCP) + telas que abrem filtradas pela URL + avaliação 10/10 | implementada (branch `feat/mcp-server`, não deployada) |
 | 3 | Escrita `livre` e `confirma`: 20 tools + motor de níveis (token HMAC de uso único, escalada a `critico` reavaliada a cada chamada) + camada `internal/acoes` compartilhada com as rotas HTTP | implementada (branch `feat/mcp-server`, não deployada; ver "Escrita (Fatia 3)") |
 | 4 | Escrita `critico` executável: 18 tools que viram pedido pendente (`mcp_acoes_pendentes`), a tela `/pendentes` onde o admin que pediu aprova, o varredor e `minhas_pendentes`; torna executáveis também as escaladas das 20 tools da Fatia 3 | implementada (branch `feat/mcp-server`, não deployada; ver "Crítico e /pendentes (Fatia 4)") |
-| 5 | Ecossistema: hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato), ADRs | planejada |
+| 5 | Ecossistema: ADRs ([01](../architecture/adr-mcp-01-dentro-da-api-go.md), [02](../architecture/adr-mcp-02-escrita-em-tres-niveis.md), [03](../architecture/adr-mcp-03-critico-aprovado-em-pendentes.md)); hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato) | ADRs feitos; o lado do hub espera o deploy do MCP (até lá, o hub diria aos modelos para usar um conector que não existe) |
 
 Tools hoje: as 83 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
 `minhas_pendentes`). O `status` deste doc vira `implementado` quando a Fatia 5 fechar.
@@ -1117,5 +1117,5 @@ mudou na implementação, e por quê:
 
 ## Fora de escopo (até a Fatia 4)
 
-Ficam para a Fatia 5: o lado do hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato) e os ADRs. Fora do catálogo de propósito (F4-1): iniciar,
+Fica para depois do deploy: o lado do hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato). As decisões de desenho estão nos ADRs `docs/architecture/adr-mcp-0{1,2,3}-*.md`. Fora do catálogo de propósito (F4-1): iniciar,
 pausar e publicar pós-venda (ver "O que saiu do catálogo e por quê"), reativar usuário, trocar senha e anexar comprovante depois.
