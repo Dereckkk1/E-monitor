@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import html2canvas from 'html2canvas'
 import RSelect from '../components/RSelect'
 import { useAuth } from '../contexts/AuthContext'
-import { useClients, useCampaignsWithSelected, useLiveMap, useLiveMapCoverage } from '../api/hooks'
+import { useClients, useCampaignsPaged, useLiveMap, useLiveMapCoverage } from '../api/hooks'
 import { safeLogoUrl } from '../utils/logoUrl'
-import { lerId, lerIds, temFiltro, clienteUnico } from '../utils/filtrosDaUrl'
 import BrazilMap from '../components/BrazilMap'
 import CoverageMap from '../components/CoverageMap'
 import { LiveAiringRow, FeedSkeleton } from '../components/LiveAiringRow'
@@ -125,26 +124,11 @@ function LiveCanvas({ feedTitle, feedCount, mapTitle, mapMeta, feed, map }) {
 
 /* ── Página ──────────────────────────────────────────────────────── */
 export default function LiveMapPage() {
-  const { isAdmin, user, clientIds } = useAuth()
-  // Link de outra tela ou do MCP (links.tela): a tela abre já filtrada. O
-  // client_id da URL só vale para o admin ou se for da carteira (agência); para
-  // quem não escolhe cliente ele é ignorado (vale a carteira).
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [pickedClientId, setPickedClientId] = useState(() => {
-    const id = lerId(searchParams, 'client_id')
-    return id && (isAdmin || clientIds.includes(id)) ? id : null
-  })
+  const { isAdmin, user } = useAuth()
+  const [pickedClientId, setPickedClientId] = useState(null)
   // Seleção múltipla, igual /insights: o mapa passa a mostrar a UNIÃO das
   // emissoras e o feed mistura as veiculações das campanhas escolhidas.
-  const [campaignIds, setCampaignIds] = useState(() => lerIds(searchParams, 'campaigns'))
-  // As campanhas da URL só passam a ser consultadas depois de conferidas
-  // contra o que o seletor mostra (efeito mais abaixo): o mapa faz polling a
-  // cada 20s, e não pode ficar consultando campanha que a tela não exibe.
-  const [conferindoUrl, setConferindoUrl] = useState(() => lerIds(searchParams, 'campaigns').length > 0)
-  // Lido uma vez: tira da URL para ela não contradizer o filtro que a pessoa mudar depois.
-  useEffect(() => {
-    if (temFiltro(searchParams, ['client_id', 'campaigns'])) setSearchParams({}, { replace: true })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const [campaignIds, setCampaignIds] = useState([])
   // Single-player coordination: só uma row toca por vez.
   const [playingId, setPlayingId] = useState(null)
   const [downloading, setDownloading] = useState(false)
@@ -169,9 +153,8 @@ export default function LiveMapPage() {
     return clientOpts[0]?.raw || null
   }, [clientOpts, canPickClient])
 
-  // As selecionadas fora da página 1/200 (link para campanha antiga) entram junto.
-  const campaignsQ = useCampaignsWithSelected(campaignIds)
-  const allCampaigns = campaignsQ.campaigns
+  const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
+  const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
   const campOpts = useMemo(() => {
     // Canceladas (terminais) não entram no seletor de mapa ao vivo — o backend
     // também as bloqueia (404) porque "ao vivo" implica campanha rodando.
@@ -184,40 +167,17 @@ export default function LiveMapPage() {
     return rows.map(c => ({ value: c.id, label: c.name }))
   }, [allCampaigns, clientId])
 
-  // Conferência das campanhas da URL, uma vez, quando a lista chega (ajuste de
-  // estado durante o render, guardado por conferindoUrl — sem efeito). Admin
-  // sem cliente (o link de campanhas de clientes diferentes não leva
-  // client_id): deduz o cliente se todas forem de um só; senão descarta as
-  // campanhas. Em qualquer caso, fica só o que o seletor mostra (do cliente,
-  // não cancelada).
-  if (conferindoUrl && !campaignsQ.isPending) {
-    const cliente = clientId ?? (isAdmin ? clienteUnico(allCampaigns, campaignIds) : null)
-    if (isAdmin && !cliente) {
-      setCampaignIds([])
-    } else {
-      if (cliente !== clientId) setPickedClientId(cliente)
-      const visiveis = new Set(allCampaigns
-        .filter(c => (!cliente || c.client_id === cliente) && c.status !== 'cancelada')
-        .map(c => c.id))
-      setCampaignIds(campaignIds.filter(id => visiveis.has(id)))
-    }
-    setConferindoUrl(false)
-  }
-
   const hasCampaigns = campaignIds.length > 0
   const multiCampaign = campaignIds.length > 1
-  // O que o mapa consulta: nada enquanto a URL é conferida ou enquanto o admin
-  // não tem cliente (a tela mostra o tutorial, não as campanhas).
-  const idsAoVivo = conferindoUrl || (isAdmin && !clientId) ? [] : campaignIds
 
-  const { data, isLoading, isError, isFetching, refetch } = useLiveMap(idsAoVivo)
+  const { data, isLoading, isError, isFetching, refetch } = useLiveMap(campaignIds)
   const stations = useMemo(() => data?.stations ?? [], [data])
   const detections = useMemo(() => data?.recent_detections ?? [], [data])
 
   // Cobertura vem de endereco proprio, sem polling: e dado estatico. Carrega
   // em paralelo e o mapa ja e util antes dela chegar (so a ficha de foco
   // depende dela).
-  const coverageQ = useLiveMapCoverage(idsAoVivo)
+  const coverageQ = useLiveMapCoverage(campaignIds)
   const coverage = useMemo(() => coverageQ.data?.cities ?? [], [coverageQ.data])
 
   // Ponte feed <-> mapa: passar o mouse numa veiculacao acende a emissora no

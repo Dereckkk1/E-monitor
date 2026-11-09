@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useMemo, useRef, useState } from 'react'
 import FiltersBar from '../components/insights/FiltersBar'
 import KpiCards from '../components/insights/KpiCards'
 import { kpiColumns } from '../utils/insightsCards'
@@ -15,7 +14,6 @@ import { IconImage, IconFilePdf } from '../components/insights/icons'
 import { useInsights } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { exportInsightsPNG, exportInsightsPDF } from '../utils/exportInsights'
-import { lerId, lerIds, lerPeriodo, temFiltro } from '../utils/filtrosDaUrl'
 import './InsightsPage.css'
 
 function firstOfMonthISO() {
@@ -33,32 +31,14 @@ export default function InsightsPage() {
   // também precisa escolher — o backend recusa a chamada sem client_id. Só o
   // Cliente de um cliente só já entra com ele preenchido, como sempre foi.
   const canPickClient = isAdmin || clientIds.length > 1
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [filters, setFilters] = useState(() => {
-    // Link de outra tela ou do MCP (links.tela): a tela abre já filtrada.
-    // A agência só aceita da URL um cliente da própria carteira. Quem escolhe
-    // o cliente e não ficou com um válido da URL descarta também campanhas,
-    // emissoras e materiais dela: são recortes DAQUELE cliente.
-    const periodo = lerPeriodo(searchParams)
-    const clienteDaUrl = lerId(searchParams, 'client_id')
-    const clienteValido = clienteDaUrl && (isAdmin || clientIds.includes(clienteDaUrl)) ? clienteDaUrl : null
-    const clientId = canPickClient ? clienteValido : (user?.client_id ?? null)
-    const recortes = clientId != null
-    return {
-      clientId,
-      campaignIds: recortes ? lerIds(searchParams, 'campaigns') : [],
-      from: periodo?.from ?? firstOfMonthISO(),
-      to: periodo?.to ?? lastOfMonthISO(),
-      stationIds: recortes ? lerIds(searchParams, 'stations') : [],
-      materialIds: recortes ? lerIds(searchParams, 'materials') : [],
-    }
+  const [filters, setFilters] = useState({
+    clientId: canPickClient ? null : (user?.client_id ?? null),
+    campaignIds: [],
+    from: firstOfMonthISO(),
+    to: lastOfMonthISO(),
+    stationIds: [],
+    materialIds: [],
   })
-  // Lido uma vez: tira da URL para ela não contradizer o filtro que a pessoa mudar depois.
-  useEffect(() => {
-    if (temFiltro(searchParams, ['client_id', 'campaigns', 'from', 'to', 'stations', 'materials'])) {
-      setSearchParams({}, { replace: true })
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data, isPending, error } = useInsights({
     clientId: filters.clientId,
