@@ -3,6 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } f
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
 import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
+import { isLive } from '../utils/recordings'
 
 // Stations
 export function useStations({ enabled = true, ...params } = {}) {
@@ -1849,4 +1850,49 @@ export function useRecusarPendenteMcp() {
     mutationFn: (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data),
     onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
   })
+}
+
+// ── Gravações programadas ────────────────────────────────────────────────
+// Só admin. Ver docs/features/scheduled-recording.md.
+const RECORDINGS_KEY = ['recordings']
+const RECORDINGS_POLL_MS = 5000
+
+export function useRecordings({ limit = 50, offset = 0 } = {}) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, limit, offset],
+    queryFn: () => api.get('/recordings', { params: { limit, offset } }).then(r => r.data),
+    // Só atualiza sozinha enquanto houver gravação que ainda pode mudar de status.
+    refetchInterval: query => (isLive(query.state.data?.items) ? RECORDINGS_POLL_MS : false),
+  })
+}
+
+export function useCreateRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: body => api.post('/recordings', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+export function useCancelRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: id => api.post(`/recordings/${id}/cancel`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+export function useDeleteRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: id => api.delete(`/recordings/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+// Imperativo: <audio> e <a download> não mandam o header Authorization, então o
+// arquivo vem como blob. Gravação longa pesa: o "Baixar" é o caminho indicado.
+export async function fetchRecordingAudio(id) {
+  const resp = await api.get(`/recordings/${id}/audio`, { responseType: 'blob' })
+  return resp.data
 }

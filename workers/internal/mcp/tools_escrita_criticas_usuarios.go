@@ -31,7 +31,7 @@ import (
 // na memória até o CriarUsuario cifrá-la no convite, e nunca entra no pedido, no
 // preview, no resultado nem no audit_log.
 //
-// F4-12 — guardas de si mesmo, só no MCP (a rota não as tem). O gatilho da 0070
+// F4-12 — guardas de si mesmo, só no MCP (a rota não as tem). O gatilho da 0072
 // revoga as conexões de IA de quem é rebaixado ou desativado: se fosse o próprio
 // dono, a credencial dele cairia no meio da aprovação. Nunca a si mesmo, e nunca o
 // último administrador ativo. O Preview não recebe o Principal: ele o lê do

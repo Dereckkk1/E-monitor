@@ -374,6 +374,16 @@
   max-width: 30ch;
 }
 
+/* Segunda linha da célula de e-mail: o nome de usuário, quando existe. */
+.au-username {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .au-cell-client .au-client-name {
   color: var(--c-text);
   font-size: 13px;

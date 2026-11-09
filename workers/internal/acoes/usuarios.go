@@ -28,6 +28,8 @@ const (
 	CodigoClienteInexistente    = "client_not_found"
 	CodigoUsuarioNaoEncontrado  = "not_found"
 	CodigoNaoReativarApagado    = "cannot_reactivate_deleted"
+	CodigoUsernameEmUso         = "username_taken"
+	CodigoUsernameInvalido      = "invalid_username"
 )
 
 // TamanhoMinimoSenha é o piso de qualquer senha aceita pelo sistema (criação de
@@ -92,7 +94,10 @@ func (e emissorDoServico) Emitir(ctx context.Context, u *users.User, senha strin
 // EntradaUsuario é o que a rota e a tool mandam para criar o usuário.
 type EntradaUsuario struct {
 	Email, Senha, Nome string
-	Telefone           *string
+	// Username é a segunda forma de login, opcional: nil ou "" = a conta entra
+	// só pelo e-mail. Chega cru; CriarUsuario normaliza (users.NormalizeUsername).
+	Username *string
+	Telefone *string
 	// Papel no vocabulário da API: "admin" | "client" (client vira viewer no banco).
 	Papel string
 	// ClienteID é o formato legado; ClienteIDs (a carteira) vence quando vêm os dois.
@@ -129,7 +134,10 @@ func traduzErroUsuario(err error) error {
 		return err
 	}
 	switch pgErr.Code {
-	case "23505":
+	case "23505": // e-mail OU username já em uso
+		if pgErr.ConstraintName == "users_username_active" {
+			return recusaUsuario(CodigoUsernameEmUso)
+		}
 		return recusaUsuario(CodigoEmailEmUso)
 	case "23514":
 		return recusaUsuario(CodigoPapelClienteInconsist)
@@ -179,6 +187,16 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	if !ok {
 		return nil, nil, recusaUsuario(CodigoPapelInvalido)
 	}
+	var username *string
+	if in.Username != nil {
+		norm, err := users.NormalizeUsername(*in.Username)
+		if err != nil {
+			return nil, nil, recusaUsuario(CodigoUsernameInvalido)
+		}
+		if norm != "" {
+			username = &norm
+		}
+	}
 	// client_ids vence, client_id é o fallback legado.
 	carteira := in.ClienteIDs
 	if len(carteira) == 0 && in.ClienteID != nil {
@@ -205,6 +223,7 @@ func (s *Servico) CriarUsuario(ctx context.Context, in EntradaUsuario) (*users.U
 	}
 	u, err := s.Usuarios.Create(ctx, users.CreateInput{
 		Email:                 in.Email,
+		Username:              username,
 		PasswordHash:          string(hash),
 		Role:                  dbRole,
 		ClientID:              principal,
@@ -277,6 +296,9 @@ type EdicaoUsuario struct {
 	ClienteIDs                    *[]uuid.UUID
 	Ativo                         *bool
 	RecebeAlertas, RecebePosVenda *bool
+	// Username: nil = não mexe; "" = remove; valor = define/troca (normalizado
+	// aqui). Só o admin muda; o /me não aceita.
+	Username *string
 }
 
 // EditarUsuario aplica a edição. O email é imutável (quem recusa é a rota, que
@@ -305,6 +327,13 @@ func (s *Servico) EditarUsuario(ctx context.Context, id uuid.UUID, in EdicaoUsua
 		IsActive:              in.Ativo,
 		ReceiveAlertEmails:    in.RecebeAlertas,
 		ReceivePostSaleEmails: in.RecebePosVenda,
+	}
+	if in.Username != nil {
+		norm, err := users.NormalizeUsername(*in.Username)
+		if err != nil {
+			return nil, recusaUsuario(CodigoUsernameInvalido)
+		}
+		up.Username = &norm // "" = remover, que é o que o Update entende
 	}
 	if in.Papel != nil {
 		dbRole, ok := papelDoBanco(*in.Papel)

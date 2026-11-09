@@ -138,7 +138,7 @@ func TestPendentes_AprovarPedidoOAuthVaiPelaConexao(t *testing.T) {
 	require.ErrorIs(t, tentarAprovarVigente(ctx, s, u, dono), ErrCredencialRevogada)
 }
 
-// O trigger de users (0070, função trocada na 0072) fecha também os pedidos `pendente` do usuário, e
+// O trigger de users (0072, função trocada na 0074) fecha também os pedidos `pendente` do usuário, e
 // o texto gravado é o mesmo que o Go usa.
 func TestTrigger_RevogacaoDoUsuarioExpiraSeusPedidosPendentes(t *testing.T) {
 	casos := []struct{ nome, sql string }{

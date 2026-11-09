@@ -1,4 +1,4 @@
--- Reversão da 0070. Remove o trigger/função em `users` e as 3 tabelas do MCP
+-- Reversão da 0072. Remove o trigger/função em `users` e as 3 tabelas do MCP
 -- (credenciais e clientes OAuth: quem estiver conectado precisa reconectar).
 --
 -- lock_timeout: mesma proteção do up — DROP TRIGGER em `users` pede lock

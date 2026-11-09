@@ -333,7 +333,7 @@ export default function AdminUsersPage() {
           <span className="au-search-icon" aria-hidden="true"><SearchIcon /></span>
           <input
             className="au-search-input"
-            placeholder="Buscar por nome ou email…"
+            placeholder="Buscar por nome, email ou usuário…"
             value={filters.q}
             onChange={e => { setFilters(f => ({ ...f, q: e.target.value })); setPage(1) }}
             aria-label="Buscar usuários"
@@ -435,10 +435,14 @@ export default function AdminUsersPage() {
                           {u.name || <span className="au-muted">sem nome</span>}
                         </span>
                         <span className="au-name-email-sub">{u.email}</span>
+                        {u.username && <span className="au-name-email-sub">usuário: {u.username}</span>}
                         {isSelf && <span className="au-self-chip">você</span>}
                       </div>
                     </td>
-                    <td className="au-cell-email" title={u.email}>{u.email}</td>
+                    <td className="au-cell-email" title={u.username ? `${u.email} · usuário: ${u.username}` : u.email}>
+                      {u.email}
+                      {u.username && <span className="au-username">usuário: {u.username}</span>}
+                    </td>
                     <td><RoleChip role={u.role} /></td>
                     <td className="au-cell-client">
                       {/* Carteira: mostra o primeiro cliente e um "+N" pro

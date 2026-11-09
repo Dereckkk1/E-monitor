@@ -74,6 +74,57 @@ snapshot_counts() {
     | grep -E '^[a-z_]+=[0-9]+$' || true
 }
 
+# ── guarda de gravação em andamento ──────────────────────────────────────────
+#
+# A gravação programada roda dentro da API: recriar o container corta o áudio
+# enquanto ela reinicia, e numa entrevista ao vivo não existe segunda chance.
+# Doc: docs/features/scheduled-recording.md
+#
+# `processando` não bloqueia: a finalização é repetível, retoma sozinha depois
+# do reinício, e bloquear travaria todo deploy se uma finalização falhasse para
+# sempre.
+#
+# Só conta linha que ainda tem janela pela frente (`ends_at > now()`): uma linha
+# vencida que ninguém fechou (API fora do ar) não pode barrar o hotfix que a
+# religaria.
+#
+# Roda duas vezes: antes do backup, como aviso cedo (deploy bloqueado não gasta
+# backup), e de novo logo antes do `up -d`. A segunda é a que protege: o build leva
+# minutos, uma gravação pode começar nesse meio-tempo, e até ali abortar não custa
+# nada, porque nenhum container foi recriado.
+#
+# Tabela inexistente conta como zero, para esta guarda não travar o próprio
+# deploy que cria a tabela. psql inacessível ou SQL com erro só avisa: guarda que
+# dá alarme falso ensina a usar o bypass. ON_ERROR_STOP faz o erro de SQL sair com
+# código diferente de zero; sem ele o psql devolve 0 e saída vazia, e a guarda
+# liberaria calada.
+guard_active_recordings() {
+  if [ "${SKIP_RECORDING_GUARD:-no}" = "yes" ]; then
+    warn "SKIP_RECORDING_GUARD=yes — pulando a guarda de gravações."
+    return 0
+  fi
+  service_running postgres || return 0
+
+  local sql rows
+  sql="SELECT station_name || ' | ' || status || ' | ' || to_char(starts_at AT TIME ZONE 'America/Sao_Paulo', 'DD/MM HH24:MI') || ' a ' || to_char(ends_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI') FROM recordings WHERE (status = 'gravando' AND ends_at > now()) OR (status = 'programada' AND starts_at < now() + INTERVAL '10 minutes' AND ends_at > now()) ORDER BY starts_at"
+
+  local exists
+  exists=$($COMPOSE exec -T postgres sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT to_regclass('"'"'public.recordings'"'"') IS NOT NULL"' 2>/dev/null) \
+    || { warn "não consegui consultar gravações em andamento — seguindo."; return 0; }
+  [ "$exists" = "t" ] || return 0
+
+  rows=$(printf '%s' "$sql" | $COMPOSE exec -T postgres sh -c \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' 2>/dev/null) \
+    || { warn "não consegui consultar gravações em andamento — seguindo."; return 0; }
+
+  if [ -n "$rows" ]; then
+    printf '%s\n' "$rows" | sed 's/^/    /' >&2
+    err "há gravação em andamento ou começando em menos de 10 minutos. Espere terminar ou cancele em /admin/gravacoes.
+     (bypass de emergência: SKIP_RECORDING_GUARD=yes — corta o áudio enquanto a API reinicia)"
+  fi
+}
+
 # ── teste de migrations em sombra ────────────────────────────────────────────
 #
 # Aplica as migrations PENDENTES a uma CÓPIA ISOLADA dos dados de prod (postgres
@@ -220,6 +271,11 @@ else
   warn "postgres não está rodando — pulando snapshot (primeira subida?)."
 fi
 
+# ── gravações em andamento (antes de qualquer build/up) ──────────────────────
+# Aviso cedo: antes do backup, para um deploy bloqueado não gastar backup. A
+# chamada que protege é a de antes do `up -d` (ver guard_active_recordings).
+guard_active_recordings
+
 # ── backup pré-deploy ───────────────────────────────────────────────────────
 
 step "executando backup pré-deploy"
@@ -281,6 +337,10 @@ if reclaimed=$(docker builder prune -f 2>&1); then
 else
   warn "builder prune falhou (ignorando): $reclaimed"
 fi
+
+# De novo, e é esta que protege: o build levou minutos, e uma gravação pode ter
+# começado nesse meio-tempo. Até aqui nenhum container foi recriado.
+guard_active_recordings
 
 step "subindo containers"
 # `up -d` (sem --force-recreate) só recria serviços com config alterada.

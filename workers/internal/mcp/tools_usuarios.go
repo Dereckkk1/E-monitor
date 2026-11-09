@@ -55,6 +55,7 @@ type usuarioDTO struct {
 	ID             string         `json:"id"`
 	Nome           string         `json:"nome"`
 	Email          string         `json:"email"`
+	NomeDeUsuario  *string        `json:"nome_de_usuario"` // segunda forma de login; null = só entra pelo e-mail
 	Papel          string         `json:"papel"`
 	Situacao       string         `json:"situacao"`
 	Clientes       []ref          `json:"clientes"`
@@ -67,7 +68,7 @@ type usuarioDTO struct {
 
 func usuarioDe(u users.User, clientes map[uuid.UUID]string, convites map[uuid.UUID]welcome.Invite) usuarioDTO {
 	d := usuarioDTO{
-		ID: u.ID.String(), Nome: u.Name, Email: u.Email, Papel: papelDe(u.Role), Situacao: situacaoDe(u),
+		ID: u.ID.String(), Nome: u.Name, Email: u.Email, NomeDeUsuario: u.Username, Papel: papelDe(u.Role), Situacao: situacaoDe(u),
 		Clientes: refs(u.ClientIDs, clientes), UltimoLogin: instanteOpc(u.LastLoginAt), CriadoEm: instante(u.CreatedAt),
 		RecebeAlertas: u.ReceiveAlertEmails, RecebePosVenda: u.ReceivePostSaleEmails,
 	}
@@ -81,7 +82,7 @@ func usuarioDe(u users.User, clientes map[uuid.UUID]string, convites map[uuid.UU
 }
 
 type entradaListarUsuarios struct {
-	Busca     string `json:"busca,omitempty" jsonschema:"Trecho do nome ou do e-mail."`
+	Busca     string `json:"busca,omitempty" jsonschema:"Trecho do nome, do e-mail ou do nome de usuário."`
 	Papel     string `json:"papel,omitempty" jsonschema:"admin, operator ou cliente."`
 	ClienteID string `json:"cliente_id,omitempty" jsonschema:"Só quem tem este cliente na carteira (inclusive vínculo secundário de agência)."`
 	Situacao  string `json:"situacao,omitempty" jsonschema:"ativos (padrão), inativos, apagados ou todos."`

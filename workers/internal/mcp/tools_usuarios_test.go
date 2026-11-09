@@ -64,6 +64,11 @@ func TestObterUsuario(t *testing.T) {
 	out := chamarTool(t, cfgTeste(pool), "obter_usuario", map[string]any{"usuario_id": op.String()})
 	require.Equal(t, "operator", out["usuario"].(map[string]any)["papel"])
 	require.Equal(t, "inativo", out["usuario"].(map[string]any)["situacao"])
+	require.Nil(t, out["usuario"].(map[string]any)["nome_de_usuario"], "sem username = null, não string vazia")
+	_, err := pool.Exec(ctx, `UPDATE users SET username = 'joao.silva' WHERE id = $1`, op)
+	require.NoError(t, err)
+	out = chamarTool(t, cfgTeste(pool), "obter_usuario", map[string]any{"usuario_id": op.String()})
+	require.Equal(t, "joao.silva", out["usuario"].(map[string]any)["nome_de_usuario"])
 	require.Contains(t, chamarToolErro(t, cfgTeste(pool), "obter_usuario",
 		map[string]any{"usuario_id": uuid.NewString()}), "[nao_encontrado]")
 }

@@ -62,6 +62,7 @@ type Deps struct {
 	LiveMap               *handlers.LiveMapHandler
 	ManagementOverview    *handlers.ManagementOverviewHandler
 	Assertiveness         *handlers.AssertivenessHandler
+	Recordings            *handlers.RecordingsHandler
 	Suggestions           *handlers.SuggestionsHandler
 	// SuggestionsHub: a fila de sugestões mora no hub desde 2026-10-26 (spec do
 	// hub 2026-10-26). É quem o router usa; `Suggestions` (Postgres) ficou no
@@ -738,6 +739,19 @@ func NewRouter(d Deps) http.Handler {
 						r.Use(auth.RequireRole("admin"))
 						r.Get("/admin/daily-failures-digest", d.DailyFailuresDigest.Get)
 						r.Post("/admin/daily-failures-digest/ack", d.DailyFailuresDigest.Ack)
+					})
+				}
+
+				// /recordings — programar gravação de um trecho de stream.
+				// Admin-only por completo. Doc: docs/features/scheduled-recording.md
+				if d.Recordings != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(auth.RequireRole("admin"))
+						r.Get("/recordings", d.Recordings.List)
+						r.Post("/recordings", d.Recordings.Create)
+						r.Post("/recordings/{id}/cancel", d.Recordings.Cancel)
+						r.Delete("/recordings/{id}", d.Recordings.Delete)
+						r.Get("/recordings/{id}/audio", d.Recordings.Audio)
 					})
 				}
 

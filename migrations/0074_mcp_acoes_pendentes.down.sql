@@ -1,4 +1,4 @@
--- Reversão da 0072. Devolve a função de revogação à versão da 0070 (sem tocar nos pedidos) ANTES de
+-- Reversão da 0074. Devolve a função de revogação à versão da 0072 (sem tocar nos pedidos) ANTES de
 -- derrubar a tabela que a versão nova referencia.
 CREATE OR REPLACE FUNCTION mcp_revogar_credenciais_do_usuario() RETURNS trigger
 LANGUAGE plpgsql

@@ -31,7 +31,7 @@ export function slugifyName(s, fallback = 'emissoras') {
 }
 
 // Dial em pt-BR: FM com vírgula decimal, AM inteiro. Mesma regra do
-// formatDial de StationSearch.jsx.
+// formatDial de utils/dial.js.
 export function fmtDial(freqMhz) {
   if (freqMhz == null) return ''
   const n = Number(freqMhz)

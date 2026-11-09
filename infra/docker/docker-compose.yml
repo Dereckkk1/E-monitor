@@ -168,6 +168,8 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfiles/workers.Dockerfile
+    # Gravações em curso: o ffmpeg precisa de ~8s após o SIGTERM; o padrão de 10s empata com o Shutdown e o SIGKILL o corta.
+    stop_grace_period: 20s
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       REDIS_URL: redis://redis:6379

@@ -34,13 +34,13 @@ CREATE UNIQUE INDEX mcp_acoes_pendentes_aberta_unica ON mcp_acoes_pendentes (use
     WHERE estado IN ('pendente', 'aprovada');
 
 -- Revogar a credencial revoga os pedidos dela (revisão final da Fatia 4). O trigger users_revoga_mcp
--- (0070) mata os tokens e os códigos OAuth do usuário quando ele troca/redefine a senha, é desativado,
+-- (0072) mata os tokens e os códigos OAuth do usuário quando ele troca/redefine a senha, é desativado,
 -- rebaixado de admin ou apagado; os pedidos `pendente` dele, porém, seguiriam aprováveis por até 24 h
 -- com a conexão de IA que os fez já morta. Agora a mesma função fecha esses pedidos como `expirada`,
 -- com o motivo em `erro` (o texto é o msgCredencialRevogada do pacote mcp; um teste confere que os dois
 -- batem). Só `pendente`: a `aprovada` já está sendo executada por uma pessoa que clicou. Substitui a
--- função da 0070 por completo (CREATE OR REPLACE não toca o trigger nem a tabela `users`: sem lock);
--- a down desta migration devolve a versão da 0070.
+-- função da 0072 por completo (CREATE OR REPLACE não toca o trigger nem a tabela `users`: sem lock);
+-- a down desta migration devolve a versão da 0072.
 CREATE OR REPLACE FUNCTION mcp_revogar_credenciais_do_usuario() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public
