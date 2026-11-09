@@ -1,8 +1,6 @@
-import { useMemo } from 'react'
-import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
-import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
 import { isLive } from '../utils/recordings'
 
 // Stations
@@ -246,33 +244,6 @@ export function useCampaignsPaged({ q = '', competence = '', id = '', page = 1, 
     // search input's focus) doesn't flicker out on every keystroke.
     placeholderData: (prev) => prev,
   })
-}
-
-// Opções dos seletores de campanha (/insights, /management, /live-map): a 1ª
-// página de /campaigns (200, ativas primeiro) MAIS as campanhas selecionadas
-// que ficaram fora dela — o caso de um link (de outra tela ou do MCP) para uma
-// campanha concluída antiga. Sem isso a tela filtrava por ela com o seletor
-// vazio. Cada uma vem de /campaigns?id=, que devolve a mesma linha da lista e
-// respeita o escopo de quem está logado (campanha alheia simplesmente não vem).
-export function useCampaignsWithSelected(selectedIds = []) {
-  const pageQ = useCampaignsPaged({ page: 1, pageSize: 200 })
-  const page = pageQ.data?.data
-  const missing = campanhasForaDaPagina(page, selectedIds)
-  const extras = useQueries({
-    queries: missing.map(id => ({
-      queryKey: ['campaigns', 'row', id],
-      queryFn: () => api.get('/campaigns', { params: { id, page: 1, page_size: 1 } })
-        .then(r => r.data?.data?.[0] ?? null),
-      staleTime: 60_000,
-    })),
-  })
-  // Chave estável dos extras: useQueries devolve um array novo a cada render.
-  const extrasKey = extras.map(q => `${q.data?.id ?? ''}@${q.dataUpdatedAt}`).join(',')
-  const campaigns = useMemo(
-    () => juntarCampanhas(page, extras.map(q => q.data)),
-    [page, extrasKey], // eslint-disable-line react-hooks/exhaustive-deps
-  )
-  return { campaigns, isPending: pageQ.isPending || extras.some(q => q.isPending) }
 }
 
 // Admin — emissoras que falharam num dado dia (default ontem). Cruza
@@ -1745,110 +1716,6 @@ export function useRevokePostSaleRecipient() {
   return useMutation({
     mutationFn: ({ recipientId }) => api.post(`/post-sale/recipients/${recipientId}/revoke`),
     onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] }),
-  })
-}
-
-// ─── MCP do E-monitor (spec docs/superpowers/specs/2026-10-27-mcp-server-design.md §4) ───
-
-export function useMcpConexoes({ enabled = true } = {}) {
-  return useQuery({
-    queryKey: ['mcp', 'conexoes'],
-    queryFn: () => api.get('/mcp/tokens').then(r => r.data.items),
-    enabled,
-  })
-}
-
-export function useCriarTokenMcp() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (body) => api.post('/mcp/tokens', body).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
-  })
-}
-
-export function useRevogarMcp() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id) => api.delete(`/mcp/tokens/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
-  })
-}
-
-export function usePedidoAutorizacaoMcp(pedido, { enabled = true } = {}) {
-  return useQuery({
-    queryKey: ['mcp', 'pedido', pedido],
-    queryFn: () => api.get('/mcp/oauth/pedido', { params: { p: pedido } }).then(r => r.data),
-    enabled: !!pedido && enabled,
-    retry: false,
-  })
-}
-
-export function useConcederMcp() {
-  return useMutation({
-    mutationFn: (body) => api.post('/mcp/oauth/grant', body).then(r => r.data),
-  })
-}
-
-// ─── Pedidos da IA aguardando aprovação (/pendentes — spec 2026-10-27 §4.3) ───
-// A fila é de quem a lê: o pedido de outra pessoa nunca chega aqui. `id` traz
-// o pedido do link (?id=) como `destaque`, mesmo já fechado.
-
-export function usePendentesMcp(id = null, { enabled = true } = {}) {
-  return useQuery({
-    queryKey: ['mcp', 'pendentes', id ?? null],
-    queryFn: () => api.get('/mcp/pendentes', { params: id ? { id } : undefined }).then(r => r.data),
-    enabled,
-    // Aprovar grava dinheiro: o que a pessoa lê tem de ser o que vale agora,
-    // não o cache de 30 s.
-    staleTime: 0,
-    // O padrão do app é não reler ao voltar para a aba (main.jsx), mas aqui é o contrário: quem
-    // volta para uma aba aberta há tempo pode estar vendo um resumo que mudou (outra aba aprovou e
-    // recebeu preview_desatualizado). Só esta fila relê no foco.
-    refetchOnWindowFocus: true,
-    // Trocar a chave (?id= depois de um 409) não pode piscar o esqueleto: mantém a tela anterior até
-    // a nova chegar.
-    placeholderData: keepPreviousData,
-    // Um pedido aprovado e ainda rodando vira executada/falhou em segundos: relê até fechar.
-    refetchInterval: (query) => {
-      const d = query.state.data
-      return d?.items?.some(p => p.estado === 'aprovada') || d?.destaque?.estado === 'aprovada' ? 3000 : false
-    },
-  })
-}
-
-// Troca, em toda cópia da fila no cache, o pedido de mesmo id pelo `pendente` que a API devolveu.
-function trocarPedidoNoCache(qc, pendente) {
-  if (!pendente?.id) return
-  const troca = (p) => (p?.id === pendente.id ? pendente : p)
-  qc.setQueriesData({ queryKey: ['mcp', 'pendentes'] }, (old) => old && {
-    ...old,
-    items: old.items?.map(troca),
-    destaque: troca(old.destaque),
-  })
-}
-
-// Toda ação invalida a fila inteira, também quando falha: um 422 troca o resumo
-// gravado e um 409 mostra que o estado mudou, e a tela tem de reler antes de a
-// pessoa decidir de novo. Devolver a promessa faz a mutação esperar a releitura.
-//
-// Aprovar manda a `tentativa` do pedido que a pessoa está lendo: o servidor só aprova se ela ainda
-// for a vigente (senão 409 pendente_mudou). O 422 traz o `pendente` relido, com o resumo novo e a
-// tentativa nova, e ele entra no cache NA HORA — se a releitura que vem em seguida falhar, a tela
-// já mostra o que vale, e o próximo clique manda a versão certa.
-export function useAprovarPendenteMcp() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, tentativa }) => api.post(`/mcp/pendentes/${id}/aprovar`, { tentativa }).then(r => r.data),
-    onError: (err) => trocarPedidoNoCache(qc, err?.response?.data?.pendente),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
-  })
-}
-
-export function useRecusarPendenteMcp() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
   })
 }
 

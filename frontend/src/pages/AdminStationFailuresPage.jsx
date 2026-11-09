@@ -8,7 +8,6 @@ import CampaignFailureRow from '../components/CampaignFailureRow'
 import CampaignFailureDrawer from '../components/CampaignFailureDrawer'
 import FailuresDailyView from '../components/FailuresDailyView'
 import DeficitSplit from '../components/DeficitSplit'
-import { lerInteiro, lerPeriodo, temFiltro } from '../utils/filtrosDaUrl'
 import './AdminStationFailuresPage.css'
 
 const MIN_DOWN_OPTIONS = [
@@ -427,36 +426,29 @@ function EmptyState({ dateIso }) {
 }
 
 export default function AdminStationFailuresPage() {
-  // Deep-link via query params (vindo do sininho de notificações e dos
-  // links.tela das tools de falha do MCP):
+  // Deep-link via query params (vindo do sininho de notificações):
   //   /admin/station-failures?view=by_campaign&date=YYYY-MM-DD&campaign=<uuid>
-  //   /admin/station-failures?view=by_campaign&sub=historical
-  //   /admin/station-failures?view=by_station&date=YYYY-MM-DD&min_down=300
-  //   /admin/station-failures?view=by_day&from=YYYY-MM-DD&to=YYYY-MM-DD&min_down=60
   // Spec: docs/superpowers/specs/2026-05-25-admin-notifications-and-failure-filter-design.md §4.4
   const [searchParams, setSearchParams] = useSearchParams()
-  const qpView     = searchParams.get('view')      // 'by_campaign' | 'by_station' | 'by_day' | null
+  const qpView     = searchParams.get('view')      // 'by_campaign' | 'by_station' | null
   const qpDate     = searchParams.get('date')      // YYYY-MM-DD | null
   const qpCampaign = searchParams.get('campaign')  // uuid | null
-  const qpSub      = searchParams.get('sub')       // 'historical' | null
-  const qpMinDown  = lerInteiro(searchParams, 'min_down', MIN_DOWN_OPTIONS.map(o => o.value))
-  const qpPeriodo  = lerPeriodo(searchParams)      // aba "Por dia"
 
   const [date, setDate] = useState(qpDate || isoYesterday())
-  const [minDown, setMinDown] = useState(qpMinDown ?? 60)
+  const [minDown, setMinDown] = useState(60)
 
   // Toggle viewMode + sub-tab + drill-in state
   const [viewMode, setViewMode] = useState(
     qpView === 'by_campaign' ? 'by_campaign' : qpView === 'by_day' ? 'by_day' : 'by_station'
   ) // 'by_station' | 'by_campaign' | 'by_day'
-  const [subTab, setSubTab] = useState(qpSub === 'historical' ? 'historical' : 'daily') // 'daily' | 'historical'
+  const [subTab, setSubTab] = useState('daily')          // 'daily' | 'historical'
   const [historyPage, setHistoryPage] = useState(1)
   const [drillCampaignId, setDrillCampaignId] = useState(qpCampaign || null)
 
   // Limpa os query params 1× no mount pra que navegações subsequentes
   // (mudar de data, fechar drawer) não fiquem referenciando a entrada antiga.
   useEffect(() => {
-    if (temFiltro(searchParams, ['view', 'date', 'campaign', 'sub', 'min_down', 'from', 'to'])) {
+    if (qpView || qpDate || qpCampaign) {
       setSearchParams({}, { replace: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -668,7 +660,6 @@ export default function AdminStationFailuresPage() {
       {isByDay && (
         <FailuresDailyView
           minDownSeconds={minDown}
-          periodoInicial={qpPeriodo}
           onPickDay={iso => {
             setDate(iso)
             setViewMode('by_station')
