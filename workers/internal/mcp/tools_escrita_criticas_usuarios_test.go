@@ -105,6 +105,22 @@ func tokensVivosDe(t *testing.T, b *bancadaTool, id uuid.UUID) int {
 	return n
 }
 
+// desativarOutrosAdminsSemTrigger deixa o alvo como o único admin ativo sem
+// disparar o users_revoga_mcp: desativar quem pediu expira o pedido dele (o
+// caminho real, testado à parte), e aqui o que se quer provar é a guarda de
+// último admin que a aprovação reconfere.
+func desativarOutrosAdminsSemTrigger(t *testing.T, b *bancadaTool, alvo uuid.UUID) {
+	t.Helper()
+	tx, err := b.pool.Begin(b.ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(b.ctx)
+	_, err = tx.Exec(b.ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = tx.Exec(b.ctx, `UPDATE users SET is_active = false WHERE role = 'admin' AND id <> $1`, alvo)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(b.ctx))
+}
+
 // linhaDoUsuario é o usuário sem id, email e datas (comparável entre fixtures
 // gêmeas): papel, cliente principal, nome, telefone, ativo, preferências, apagado
 // e a carteira inteira na ordem em que o repositório a lê.
@@ -1216,10 +1232,17 @@ func TestEditarUsuario_RecusaNaAprovacao(t *testing.T) {
 	}
 	t.Run("os outros admins foram desativados no meio: o alvo é o último", func(t *testing.T) {
 		b, _, alvo, pid := pedir(t, "admin", rebaixar)
+		desativarOutrosAdminsSemTrigger(t, b, alvo.ID)
+
+		exigeRecusaNaAprovacao(t, b, toolEditarUsuario, pid, "ultimo_admin")
+		require.Contains(t, linhaDoUsuario(t, b, alvo.ID), "admin|", "continua admin")
+	})
+	t.Run("quem pediu foi desativado no meio: o pedido expira", func(t *testing.T) {
+		b, _, alvo, pid := pedir(t, "admin", rebaixar)
 		_, err := b.pool.Exec(b.ctx, `UPDATE users SET is_active = false WHERE role = 'admin' AND id <> $1`, alvo.ID)
 		require.NoError(t, err)
 
-		exigeRecusaNaAprovacao(t, b, toolEditarUsuario, pid, "ultimo_admin")
+		require.Equal(t, "expirada", b.estadoDaPendente(t, pid))
 		require.Contains(t, linhaDoUsuario(t, b, alvo.ID), "admin|", "continua admin")
 	})
 	t.Run("o usuário foi apagado no meio", func(t *testing.T) {
@@ -1437,8 +1460,7 @@ func TestDesativarUsuario_RecusaNaAprovacao(t *testing.T) {
 	}
 	t.Run("os outros admins foram desativados no meio: o alvo é o último", func(t *testing.T) {
 		b, alvo, pid := pedir(t, "admin")
-		_, err := b.pool.Exec(b.ctx, `UPDATE users SET is_active = false WHERE role = 'admin' AND id <> $1`, alvo.ID)
-		require.NoError(t, err)
+		desativarOutrosAdminsSemTrigger(t, b, alvo.ID)
 
 		exigeRecusaNaAprovacao(t, b, toolDesativarUsuario, pid, "ultimo_admin")
 		require.Contains(t, linhaDoUsuario(t, b, alvo.ID), "ativo=true")
