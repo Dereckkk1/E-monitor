@@ -21,9 +21,14 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 const selectCols = `
 	r.id, r.station_id, r.station_name, r.created_by, COALESCE(u.email, ''),
 	r.starts_at, r.ends_at, r.status, r.object_key, r.size_bytes, r.covered_seconds,
-	r.gaps, r.last_error, r.canceled_at, r.finished_at, r.expires_at, r.created_at`
+	r.gaps, r.last_error, r.canceled_at, r.finished_at, r.expires_at, r.created_at,
+	st.frequency_mhz::float8, st.band, st.city, st.state, st.logo_url`
 
-const fromRecordings = ` FROM recordings r LEFT JOIN users u ON u.id = r.created_by `
+// recordingJoins vale para toda consulta que usa selectCols, inclusive a CTE do
+// FailMissed, que lê de `r` em vez da tabela.
+const recordingJoins = ` LEFT JOIN users u ON u.id = r.created_by LEFT JOIN stations st ON st.id = r.station_id `
+
+const fromRecordings = ` FROM recordings r` + recordingJoins
 
 func scanRecording(row pgx.Row) (*Recording, error) {
 	var (
@@ -32,7 +37,8 @@ func scanRecording(row pgx.Row) (*Recording, error) {
 	)
 	err := row.Scan(&r.ID, &r.StationID, &r.StationName, &r.CreatedBy, &r.CreatorEmail,
 		&r.StartsAt, &r.EndsAt, &r.Status, &r.ObjectKey, &r.SizeBytes, &r.CoveredSeconds,
-		&gaps, &r.LastError, &r.CanceledAt, &r.FinishedAt, &r.ExpiresAt, &r.CreatedAt)
+		&gaps, &r.LastError, &r.CanceledAt, &r.FinishedAt, &r.ExpiresAt, &r.CreatedAt,
+		&r.StationFrequencyMHz, &r.StationBand, &r.StationCity, &r.StationState, &r.StationLogoURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -146,7 +152,7 @@ func (s *Store) FailMissed(ctx context.Context, now time.Time, reason string) ([
 			WHERE status = 'programada' AND ends_at <= $1
 			RETURNING *
 		)
-		SELECT `+selectCols+` FROM r LEFT JOIN users u ON u.id = r.created_by`, now, reason)
+		SELECT `+selectCols+` FROM r`+recordingJoins, now, reason)
 }
 
 // StreamURL lê a URL atual: relida a cada tentativa, para uma correção feita
