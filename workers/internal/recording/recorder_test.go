@@ -621,3 +621,51 @@ func TestRecord_FalhaAoConferirStatusTentaNoProximoTick(t *testing.T) {
 		t.Fatal("o tick seguinte não retomou")
 	}
 }
+
+// Com o stream recusando na hora, um retry fixo de 5s dava ~720 conexões por hora do
+// mesmo IP da detecção, e é esse padrão que já levou painel a banir a VM. A espera
+// dobra a cada tentativa sem áudio, para em RetryMax e volta ao início quando a
+// tentativa gravou.
+func TestRecord_EsperaEntreTentativasCresceTemTetoEZeraAoGravar(t *testing.T) {
+	r := recordingRow(3 * time.Second)
+	repo := newFakeRepo(r)
+	var mu sync.Mutex
+	var starts []time.Time
+	media := &fakeMedia{capture: func(ctx context.Context, _, dir string) error {
+		mu.Lock()
+		starts = append(starts, time.Now())
+		n := len(starts)
+		mu.Unlock()
+		switch {
+		case n == 6:
+			// Esta tentativa gravou: a espera seguinte volta a RetryDelay.
+			writePiece(t, dir, "6", time.Now(), time.Now(), validADTS(3))
+			return errors.New("caiu depois de gravar")
+		case n <= 7:
+			return errors.New("recusou")
+		}
+		<-ctx.Done()
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+	m.cfg.RetryDelay, m.cfg.RetryMax = 50*time.Millisecond, 200*time.Millisecond
+	m.cfg.StallAfter = time.Hour // o watchdog não entra nesta conta
+
+	m.record(context.Background(), r)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(t, len(starts), 8)
+	wait := func(i int) time.Duration { return starts[i+1].Sub(starts[i]) }
+	// Mínimos: time.After nunca dispara antes, então não oscilam.
+	require.GreaterOrEqual(t, wait(0), 50*time.Millisecond)
+	require.GreaterOrEqual(t, wait(1), 100*time.Millisecond, "dobra")
+	require.GreaterOrEqual(t, wait(2), 200*time.Millisecond, "dobra de novo")
+	require.GreaterOrEqual(t, wait(3), 200*time.Millisecond)
+	// Teto: sem ele seria 400ms e 800ms.
+	require.Less(t, wait(3), 350*time.Millisecond, "para em RetryMax")
+	require.Less(t, wait(4), 350*time.Millisecond, "para em RetryMax")
+	// Depois da tentativa que gravou: sem zerar seria 200ms.
+	require.Less(t, wait(5), 150*time.Millisecond, "volta a RetryDelay depois de gravar")
+	require.GreaterOrEqual(t, wait(6), 100*time.Millisecond, "e volta a dobrar")
+}
