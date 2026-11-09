@@ -86,6 +86,45 @@ type NovaPendente struct {
 
 type Pendentes struct{ DB *pgxpool.Pool }
 
+// campanhaDosArgs devolve o campanha_id que os args do pedido citam (as escritas de campanha usam
+// todas essa chave), ou nil. Serve só para a tela agrupar os pedidos: não decide nada.
+func campanhaDosArgs(args json.RawMessage) *uuid.UUID {
+	var a struct {
+		CampanhaID string `json:"campanha_id"`
+	}
+	if json.Unmarshal(args, &a) != nil || a.CampanhaID == "" {
+		return nil
+	}
+	id, err := uuid.Parse(a.CampanhaID)
+	if err != nil {
+		return nil
+	}
+	return &id
+}
+
+// NomesDeCampanhas lê o nome atual das campanhas citadas pelos pedidos. Campanha que não existe
+// (apagada) simplesmente não volta no mapa.
+func (s *Pendentes) NomesDeCampanhas(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	nomes := make(map[uuid.UUID]string, len(ids))
+	if len(ids) == 0 {
+		return nomes, nil
+	}
+	rows, err := s.DB.Query(ctx, `SELECT id, name FROM campaigns WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var nome string
+		if err := rows.Scan(&id, &nome); err != nil {
+			return nil, err
+		}
+		nomes[id] = nome
+	}
+	return nomes, rows.Err()
+}
+
 func hashDosArgs(tool string, args []byte) []byte {
 	h := sha256.New()
 	h.Write([]byte(tool))

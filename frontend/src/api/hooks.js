@@ -1834,9 +1834,11 @@ export function useContagemPendentesMcp({ enabled = true } = {}) {
 }
 
 // Troca, em toda cópia da fila no cache, o pedido de mesmo id pelo `pendente` que a API devolveu.
-function trocarPedidoNoCache(qc, pendente) {
+// As respostas de aprovar/recusar não trazem a `campanha` (só a lista traz): mantém a que o cache tinha,
+// senão o cartão pula de grupo na tela.
+export function trocarPedidoNoCache(qc, pendente) {
   if (!pendente?.id) return
-  const troca = (p) => (p?.id === pendente.id ? pendente : p)
+  const troca = (p) => (p?.id === pendente.id ? { ...pendente, campanha: pendente.campanha ?? p.campanha ?? null } : p)
   qc.setQueriesData({ queryKey: ['mcp', 'pendentes'] }, (old) => old && {
     ...old,
     items: old.items?.map(troca),
@@ -1860,6 +1862,12 @@ export function useAprovarPendenteMcp() {
     onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
   })
 }
+
+// Chamadas cruas, uma por pedido, para a aprovação em lote: a tela as faz em sequência e relê a fila
+// UMA vez no fim (as mutações acima releem a cada chamada). Cada uma é a mesma rota do botão do cartão,
+// com as mesmas conferências no servidor.
+export const aprovarPendenteMcp = (id, tentativa) => api.post(`/mcp/pendentes/${id}/aprovar`, { tentativa }).then(r => r.data)
+export const recusarPendenteMcp = (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data)
 
 export function useRecusarPendenteMcp() {
   const qc = useQueryClient()
