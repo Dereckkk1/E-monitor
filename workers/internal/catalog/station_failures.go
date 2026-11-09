@@ -125,14 +125,25 @@ func (r *StationFailures) ListForDate(ctx context.Context, day time.Time, minDow
 	}
 
 	rows, err := r.pool.Query(ctx, `
-WITH down_aggr AS (
+WITH down_iv AS (
+  -- Tempo fora do ar = UNIÃO dos downs, cortada no fim do dia. Os 'down' de
+  -- stream_health_events se sobrepõem no histórico (incidente 2026-11-08:
+  -- Positiva com 37,8 h num dia) e um down das 23h que dura 3 h não pode
+  -- somar 3 h aqui. Mesma leitura do alerta por email (campaignalerts).
   SELECT station_id,
-         SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) AS down_sec
+         tstzrange(event_at,
+                   LEAST(COALESCE(event_at + make_interval(secs => duration_seconds), NOW()),
+                         $1::date + INTERVAL '1 day')) AS r
   FROM stream_health_events
   WHERE event_type = 'down'
     AND event_at >= $1::date AND event_at < ($1::date + INTERVAL '1 day')
+),
+down_aggr AS (
+  SELECT station_id,
+         SUM(EXTRACT(EPOCH FROM upper(u) - lower(u)))::int AS down_sec
+  FROM (SELECT station_id, unnest(range_agg(r)) AS u FROM down_iv GROUP BY station_id) merged
   GROUP BY station_id
-  HAVING SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) >= $2
+  HAVING SUM(EXTRACT(EPOCH FROM upper(u) - lower(u))) >= $2
 ),
 deficit_aggr AS (
   -- Exclude cancelled campaigns: a campaign manually ended early must not be

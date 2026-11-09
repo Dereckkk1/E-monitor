@@ -734,30 +734,7 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 				zap.Bool("never_connected", neverConnected),
 				zap.Duration("backoff", delay))
 
-			// F1: record the outage BEFORE killing the worker. A hung or
-			// IP-banned stream never reaches the worker's OnStreamDown
-			// (runPCMReader blocks on PCM that never arrives), so without this
-			// the outage showed zero down events and the station read as 100%
-			// up. Idempotent (lastDownID) and survives the respawn below because
-			// startStationWorker's startup recovery adopts the open down.
-			s.recordStreamDown(stationID)
-
-			// Kill the worker now — ffmpeg dies, so a blocked stream stops
-			// hammering the panel's firewall during the backoff window.
-			cancel()
-
-			var boCtx context.Context
-			s.mu.Lock()
-			delete(s.workers, stationID)
-			if delay > 0 {
-				// Park a backoff placeholder so Pause/Stop/preventive-restart can
-				// abort the pending respawn via its cancel (= boCancel). worker==nil
-				// ⇒ not counted active and skipped by WorkerStatuses.
-				var boCancel context.CancelFunc
-				boCtx, boCancel = context.WithCancel(context.Background())
-				s.workers[stationID] = &workerEntry{cancel: boCancel, refreshNow: make(chan struct{}, 1)}
-			}
-			s.mu.Unlock()
+			boCtx := s.retireStalledWorker(stationID, cancel, delay)
 			s.evidence.Unregister(stationID)
 			metrics.WorkerActive.Dec()
 			if delay > 0 {
@@ -784,6 +761,45 @@ func (s *Supervisor) runStallWatchdog(workerCtx context.Context, stationID uuid.
 			return
 		}
 	}
+}
+
+// retireStalledWorker records the outage, kills the stalled worker and drops
+// its entry (parking a backoff placeholder when delay > 0, whose context it
+// returns; nil otherwise).
+func (s *Supervisor) retireStalledWorker(stationID uuid.UUID, cancel context.CancelFunc, delay time.Duration) context.Context {
+	// F1: record the outage BEFORE killing the worker. A hung or
+	// IP-banned stream never reaches the worker's OnStreamDown
+	// (runPCMReader blocks on PCM that never arrives), so without this
+	// the outage showed zero down events and the station read as 100%
+	// up. Idempotent (lastDownID) and survives the respawn below because
+	// startStationWorker's startup recovery adopts the open down.
+	//
+	// SYNCHRONOUS on purpose: the idempotency check reads s.workers[stationID],
+	// which is deleted/replaced right below. Run off-goroutine (as it was), it
+	// lost the race, found no entry, and opened a 2nd down while the 1st was
+	// still open — the respawn's orphan cleanup then closed the old one "up to
+	// now", leaving overlapping downs every stall cycle (incident 2026-11-08,
+	// Positiva 99.1 at 37.8 h down in a day). Blocking the watchdog for one
+	// INSERT (10 s timeout) is fine: it is about to kill the worker anyway.
+	s.recordStreamDownSync(stationID)
+
+	// Kill the worker now — ffmpeg dies, so a blocked stream stops
+	// hammering the panel's firewall during the backoff window.
+	cancel()
+
+	var boCtx context.Context
+	s.mu.Lock()
+	delete(s.workers, stationID)
+	if delay > 0 {
+		// Park a backoff placeholder so Pause/Stop/preventive-restart can
+		// abort the pending respawn via its cancel (= boCancel). worker==nil
+		// ⇒ not counted active and skipped by WorkerStatuses.
+		var boCancel context.CancelFunc
+		boCtx, boCancel = context.WithCancel(context.Background())
+		s.workers[stationID] = &workerEntry{cancel: boCancel, refreshNow: make(chan struct{}, 1)}
+	}
+	s.mu.Unlock()
+	return boCtx
 }
 
 // runThresholdRefresher periodically re-reads station_thresholds for the
