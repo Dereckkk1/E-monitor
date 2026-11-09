@@ -66,6 +66,45 @@ func TestStore_InsertBarraSobreposicao(t *testing.T) {
 	require.NotNil(t, got.Gaps)
 }
 
+// A tela mostra a emissora como o seletor: nome, dial e cidade. Dial e cidade vêm da
+// emissora atual; o nome fica guardado na gravação, porque é o que identifica a prova
+// mesmo depois de a emissora ser excluída.
+func TestStore_TrazDialECidadeDaEmissora(t *testing.T) {
+	ctx, s, pool := newTestStore(t)
+	st := seedStation(t, ctx, pool, "http://x/s")
+	t0 := time.Now().Add(time.Hour).Truncate(time.Second)
+	id, err := s.Insert(ctx, st, "R", nil, t0, t0.Add(time.Hour))
+	require.NoError(t, err)
+
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, got.StationFrequencyMHz)
+	require.InDelta(t, 99.9, *got.StationFrequencyMHz, 0.001)
+	require.Equal(t, "FM", *got.StationBand)
+	require.Equal(t, "Teste", *got.StationCity)
+	require.Equal(t, "SC", *got.StationState)
+
+	items, _, err := s.List(ctx, 200, 0)
+	require.NoError(t, err)
+	var listed *Recording
+	for i := range items {
+		if items[i].ID == id {
+			listed = &items[i]
+		}
+	}
+	require.NotNil(t, listed, "a gravação do teste deve estar na lista")
+	require.Equal(t, "Teste", *listed.StationCity)
+
+	_, err = pool.Exec(ctx, `DELETE FROM stations WHERE id = $1`, st)
+	require.NoError(t, err)
+	got, err = s.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "R", got.StationName)
+	require.Nil(t, got.StationFrequencyMHz)
+	require.Nil(t, got.StationCity)
+	pool.Exec(ctx, `DELETE FROM recordings WHERE id = $1`, id) //nolint:errcheck
+}
+
 func TestStore_Get_NaoEncontrada(t *testing.T) {
 	ctx, s, _ := newTestStore(t)
 	_, err := s.Get(ctx, uuid.New())
@@ -168,6 +207,7 @@ func TestStore_FailMissed(t *testing.T) {
 	require.Equal(t, StatusFalhou, r.Status)
 	require.Equal(t, email, r.CreatorEmail)
 	require.Equal(t, "R", r.StationName)
+	require.NotNil(t, r.StationCity, "a consulta própria do FailMissed também traz a cidade")
 	require.NotNil(t, r.LastError)
 	require.Equal(t, "motivo", *r.LastError)
 	require.NotNil(t, r.FinishedAt)
