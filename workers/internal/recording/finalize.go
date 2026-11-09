@@ -110,7 +110,7 @@ func (m *Manager) removeDir(rec Recording) {
 
 // closeWithoutAudio encerra a gravação que não tem nenhum frame para subir.
 func (m *Manager) closeWithoutAudio(ctx context.Context, rec Recording, canceled bool, gaps []Gap, now time.Time) error {
-	status := FinalStatus(false, canceled, gaps)
+	status := FinalStatus(false, canceled, false)
 	if err := m.repo.Complete(ctx, rec.ID, CompleteInput{Status: status, Gaps: gaps, FinishedAt: now}); err != nil {
 		return err
 	}
@@ -202,7 +202,8 @@ func (m *Manager) finalize(ctx context.Context, rec Recording) (err error) {
 	}
 	f.Close()
 
-	status := FinalStatus(true, canceled, gaps)
+	gaps, partial := AssessCoverage(pieces, rec.StartsAt, end, gaps, covered, m.cfg.MinGap, DetailGap)
+	status := FinalStatus(true, canceled, partial)
 	size := info.Size()
 	secs := int(covered.Seconds())
 	expires := now.Add(Retention)

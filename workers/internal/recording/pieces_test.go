@@ -98,24 +98,129 @@ func TestComputeGaps(t *testing.T) {
 	})
 }
 func TestFinalStatus(t *testing.T) {
-	gap := []Gap{{From: time.Date(2026, 11, 5, 20, 0, 0, 0, time.UTC), To: time.Date(2026, 11, 5, 20, 7, 0, 0, time.UTC)}}
 	cases := []struct {
-		name             string
-		hasAudio, cancel bool
-		gaps             []Gap
-		want             string
+		name                      string
+		hasAudio, cancel, partial bool
+		want                      string
 	}{
-		{"cancelada com audio", true, true, gap, StatusCancelada},
-		{"cancelada sem audio", false, true, nil, StatusCancelada},
-		{"sem audio", false, false, gap, StatusFalhou},
-		{"com audio sem buraco", true, false, []Gap{}, StatusConcluida},
-		{"com audio e um buraco", true, false, gap, StatusParcial},
+		{"cancelada com audio", true, true, true, StatusCancelada},
+		{"cancelada sem audio", false, true, false, StatusCancelada},
+		{"sem audio", false, false, true, StatusFalhou},
+		{"com audio inteiro", true, false, false, StatusConcluida},
+		{"com audio faltando", true, false, true, StatusParcial},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			require.Equal(t, c.want, FinalStatus(c.hasAudio, c.cancel, c.gaps))
+			require.Equal(t, c.want, FinalStatus(c.hasAudio, c.cancel, c.partial))
 		})
 	}
+}
+
+func TestAssessCoverage(t *testing.T) {
+	t0 := time.Date(2026, 11, 5, 20, 0, 0, 0, time.UTC)
+	at := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Second))) }
+	p := func(a, b float64) Piece { return Piece{Start: at(a), End: at(b), Size: 1} }
+	secs := func(n float64) time.Duration { return time.Duration(n * float64(time.Second)) }
+	const minGap, detailGap = 30 * time.Second, 5 * time.Second
+	listed := func(pieces []Piece, to float64) []Gap { return ComputeGaps(pieces, at(0), at(to), minGap) }
+
+	t.Run("flap de 25s no ar e 25s fora vira parcial e lista os trechos", func(t *testing.T) {
+		// Pedaços medidos com ffmpeg real: nenhum intervalo chega a 30s, e sobraram
+		// 117s de áudio em 210s de janela.
+		pieces := []Piece{p(-0.2, 25.1), p(49.8, 52.9), p(52.8, 75.1), p(99.8, 112.8), p(112.8, 125),
+			p(149.8, 168.7), p(167.8, 171.8), p(172.8, 175), p(199.8, 210)}
+		require.Empty(t, listed(pieces, 210), "é este o furo: um a um, nenhum vira buraco")
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(210), listed(pieces, 210), secs(117), minGap, detailGap)
+
+		require.True(t, partial)
+		require.Equal(t, []Gap{{at(25.1), at(49.8)}, {at(75.1), at(99.8)}, {at(125), at(149.8)}, {at(175), at(199.8)}}, gaps)
+	})
+	t.Run("rajada de HLS sem faltar audio continua concluida", func(t *testing.T) {
+		// O pedaço do minuto recebe menos frames que o relógio e o seguinte mais.
+		// Somar os intervalos daria 10s por minuto de falso buraco; o total não sofre.
+		var pieces []Piece
+		for m := 0.0; m < 600; m += 120 {
+			pieces = append(pieces, p(m, m+50), p(m+60, m+120))
+		}
+		require.Empty(t, listed(pieces, 600))
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(600), minGap, detailGap)
+
+		require.False(t, partial)
+		require.Empty(t, gaps)
+		require.NotNil(t, gaps)
+	})
+	t.Run("pre-roll nao mascara o audio que falta na janela", func(t *testing.T) {
+		// 20s antes da janela + 2 furos de 20s: covered = 580 de 600, mas só 560 são
+		// da janela. Sem descontar o pré-roll faltariam 20s, e sairia `concluida`.
+		pieces := []Piece{p(-20, 280), p(300, 320), p(340, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(580), minGap, detailGap)
+
+		require.True(t, partial)
+		require.Equal(t, []Gap{{at(280), at(300)}, {at(320), at(340)}}, gaps)
+	})
+	t.Run("buraco unico de 20s cabe na tolerancia", func(t *testing.T) {
+		pieces := []Piece{p(0, 300), p(320, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(580), minGap, detailGap)
+
+		require.False(t, partial)
+		require.Empty(t, gaps)
+		require.NotNil(t, gaps)
+	})
+	t.Run("buraco de 31s mais outro de 20s lista so o de 31s", func(t *testing.T) {
+		pieces := []Piece{p(0, 100), p(131, 300), p(320, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(549), minGap, detailGap)
+
+		require.True(t, partial)
+		require.Equal(t, []Gap{{at(100), at(131)}}, gaps)
+	})
+	t.Run("nao listado exatamente no limite vira parcial", func(t *testing.T) {
+		pieces := []Piece{p(0, 300), p(315, 400), p(415, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(570), minGap, detailGap)
+
+		require.True(t, partial)
+		require.Len(t, gaps, 2)
+	})
+	t.Run("nao listado a um segundo do limite fica concluida", func(t *testing.T) {
+		pieces := []Piece{p(0, 300), p(315, 400), p(414, 600)}
+
+		_, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(571), minGap, detailGap)
+
+		require.False(t, partial)
+	})
+	t.Run("muitos furos curtos somam e deixam a lista vazia", func(t *testing.T) {
+		var pieces []Piece
+		for s := 0.0; s < 600; s += 60 {
+			pieces = append(pieces, p(s, s+56))
+		}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(560), minGap, detailGap)
+
+		require.True(t, partial, "faltam 40s")
+		require.Empty(t, gaps, "nenhum furo chega a 5s")
+		require.NotNil(t, gaps, "precisa serializar como [] e não null")
+	})
+	t.Run("audio a mais que a janela nao gera falta", func(t *testing.T) {
+		pieces := []Piece{p(0, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(640), minGap, detailGap)
+
+		require.False(t, partial)
+		require.Empty(t, gaps)
+	})
+	t.Run("buraco listado basta para ser parcial", func(t *testing.T) {
+		pieces := []Piece{p(0, 200), p(300, 600)}
+
+		gaps, partial := AssessCoverage(pieces, at(0), at(600), listed(pieces, 600), secs(500), minGap, detailGap)
+
+		require.True(t, partial)
+		require.Equal(t, []Gap{{at(200), at(300)}}, gaps)
+	})
 }
 
 func TestCompleteFrames(t *testing.T) {

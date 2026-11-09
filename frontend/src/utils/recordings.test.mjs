@@ -18,13 +18,18 @@ test('janela aparece em horário de São Paulo', () => {
 
 test('cobertura em percentual da janela', () => {
   assert.equal(coveragePercent(rec), 50)
-  assert.equal(coveragePercent({ ...rec, covered_seconds: 3700 }), 100, 'pre-roll não passa de 100')
+  assert.equal(coveragePercent({ ...rec, status: 'concluida', covered_seconds: 3700 }), 100, 'pre-roll não passa de 100')
 })
 
 test('cobertura arredonda para baixo: com buraco nunca mostra 100%', () => {
   // 3599s de 3600s = 99,97%.
   assert.equal(coveragePercent({ ...rec, covered_seconds: 3599 }), 99)
-  assert.equal(coveragePercent({ ...rec, covered_seconds: 3600 }), 100)
+  assert.equal(coveragePercent({ ...rec, status: 'concluida', covered_seconds: 3600 }), 100)
+})
+
+test('parcial nunca chega a 100%, nem com pré-roll e burst somando mais que a janela', () => {
+  assert.equal(coveragePercent({ ...rec, covered_seconds: 3600 }), 99)
+  assert.equal(coveragePercent({ ...rec, covered_seconds: 3700 }), 99)
 })
 
 test('cancelada: a janela termina no cancelamento, não no fim programado', () => {
@@ -52,6 +57,25 @@ test('sem cobertura é null, não zero', () => {
 test('buracos em horário de São Paulo', () => {
   assert.deepEqual(gapLabels(rec), ['sem áudio das 20:10:00 às 20:40:00'])
   assert.deepEqual(gapLabels({ ...rec, gaps: [] }), [])
+})
+
+test('parcial sem nenhum buraco listado não quebra a tela', () => {
+  const noList = { ...rec, gaps: [], covered_seconds: 3300 }
+  assert.deepEqual(gapLabels(noList), [])
+  assert.equal(coveragePercent(noList), 91)
+})
+
+test('lista longa de buracos mostra os 20 primeiros e resume o resto', () => {
+  const gaps = Array.from({ length: 23 }, (_, i) => ({
+    from: new Date(Date.UTC(2026, 10, 5, 23, i, 0)).toISOString(),
+    to: new Date(Date.UTC(2026, 10, 5, 23, i, 10)).toISOString(),
+  }))
+  const labels = gapLabels({ ...rec, gaps })
+  assert.equal(labels.length, 21)
+  assert.equal(labels[0], 'sem áudio das 20:00:00 às 20:00:10')
+  assert.equal(labels[19], 'sem áudio das 20:19:00 às 20:19:10')
+  assert.equal(labels[20], 'e mais 3 trechos')
+  assert.equal(gapLabels({ ...rec, gaps: gaps.slice(0, 20) }).length, 20, 'exatamente 20 não resume')
 })
 
 test('isLive pede atualização automática da lista', () => {

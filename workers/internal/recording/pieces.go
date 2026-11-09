@@ -123,18 +123,55 @@ func ComputeGaps(pieces []Piece, from, to time.Time, minGap time.Duration) []Gap
 	return gaps
 }
 
-// FinalStatus decide o status de encerramento. A regra é binária e vem dos
-// buracos, não de um percentual: o áudio é usado como prova, então qualquer
-// intervalo sem áudio (ComputeGaps já descarta oscilação abaixo do mínimo)
-// torna a gravação parcial, por menor que seja a fração da janela.
-func FinalStatus(hasAudio, canceled bool, gaps []Gap) string {
+// DetailGap é o menor intervalo listado quando já se sabe que falta áudio. Só vale
+// nesse caso (ver AssessCoverage). Mais baixo daria falso em HLS, em que os frames
+// chegam em rajadas e a fronteira do pedaço abre intervalos de poucos segundos sem
+// faltar áudio nenhum.
+const DetailGap = 5 * time.Second
+
+// AssessCoverage decide se falta áudio na janela [from, to] e devolve a lista final
+// de buracos. gaps é o ComputeGaps com minGap, e covered, a duração do arquivo.
+//
+// Olhar só a lista não basta: cada intervalo abaixo de minGap é descartado sozinho, e
+// um stream oscilando (25s no ar, 25s fora) perdeu 45% do áudio sem nenhum buraco
+// listado. Somar os intervalos também não serve: em HLS o pedaço de um minuto pode ter
+// menos frames que o relógio e o seguinte mais, e a soma de falsos buracos daria
+// parcial em gravação perfeita. Por isso a decisão vem do total de áudio, que não
+// sofre com a fronteira do pedaço.
+//
+// A tolerância é de minGap no total do que não foi listado: um buraco único de 20s
+// continua concluída. Acima disso a lista é refeita com detailGap. Ela pode continuar
+// vazia, com muitos furos abaixo de detailGap: a gravação é parcial mesmo assim, e o
+// percentual é o que mostra a falta.
+func AssessCoverage(pieces []Piece, from, to time.Time, gaps []Gap, covered, minGap, detailGap time.Duration) ([]Gap, bool) {
+	inWindow := covered
+	if len(pieces) > 0 && pieces[0].Start.Before(from) {
+		inWindow -= from.Sub(pieces[0].Start) // pré-roll: áudio de antes da janela
+	}
+	unlisted := to.Sub(from) - inWindow
+	for _, g := range gaps {
+		unlisted -= g.To.Sub(g.From)
+	}
+	if unlisted < minGap {
+		return gaps, len(gaps) > 0
+	}
+	if detailed := ComputeGaps(pieces, from, to, detailGap); len(detailed) > 0 {
+		gaps = detailed
+	}
+	return gaps, true
+}
+
+// FinalStatus decide o status de encerramento. A regra é binária e não usa o
+// percentual: o áudio é usado como prova, então faltar áudio (partial, de
+// AssessCoverage) torna a gravação parcial, por menor que seja a fração da janela.
+func FinalStatus(hasAudio, canceled, partial bool) string {
 	if canceled {
 		return StatusCancelada
 	}
 	if !hasAudio {
 		return StatusFalhou
 	}
-	if len(gaps) > 0 {
+	if partial {
 		return StatusParcial
 	}
 	return StatusConcluida
