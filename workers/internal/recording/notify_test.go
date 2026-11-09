@@ -29,9 +29,9 @@ func TestNotifyPartial_EscapaHTMLEMostraHorarioDeSaoPaulo(t *testing.T) {
 	require.Contains(t, got.text, "05/11/2026, das 20:13 às 21:14", "a janela segue sem segundos")
 }
 
-// O pré-roll e o burst do servidor podem dar mais áudio que a janela. A tela limita a
-// 100%, e o e-mail precisa dizer o mesmo.
-func TestNotifyPartial_PercentualNaoPassaDe100(t *testing.T) {
+// O pré-roll e o burst do servidor podem dar mais áudio que a janela, mesmo faltando
+// áudio dentro dela. "parcial (100%)" com buraco na mesma mensagem é contradição.
+func TestNotifyPartial_PercentualNuncaChegaA100(t *testing.T) {
 	from := time.Date(2026, 11, 5, 23, 14, 10, 0, time.UTC)
 	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c",
 		StartsAt: from.Add(-time.Minute), EndsAt: from.Add(time.Hour)}
@@ -41,7 +41,60 @@ func TestNotifyPartial_PercentualNaoPassaDe100(t *testing.T) {
 	gap := Gap{From: from, To: from.Add(40 * time.Second)}
 	m.notifyPartial(r, 63*time.Minute, time.Hour, []Gap{gap})
 
-	require.Contains(t, sentMails(m, mail)[0].text, "cobriu 100% da janela")
+	got := sentMails(m, mail)[0]
+	require.Contains(t, got.subject, "parcial (99%)")
+	require.Contains(t, got.text, "cobriu 99% da janela")
+}
+
+// Flap numa janela de 6h pode dar centenas de trechos: o e-mail lista os primeiros.
+func TestNotifyPartial_ListaLongaResume(t *testing.T) {
+	from := time.Date(2026, 11, 5, 23, 14, 10, 0, time.UTC)
+	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c",
+		StartsAt: from, EndsAt: from.Add(time.Hour)}
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+	gaps := make([]Gap, 23)
+	for i := range gaps {
+		start := from.Add(time.Duration(i) * time.Minute)
+		gaps[i] = Gap{From: start, To: start.Add(10 * time.Second)}
+	}
+
+	m.notifyPartial(r, 30*time.Minute, time.Hour, gaps)
+
+	text := sentMails(m, mail)[0].text
+	require.Equal(t, 20, strings.Count(text, "- sem áudio de "))
+	require.Contains(t, text, "- e mais 3 trechos")
+}
+
+func TestNotifyPartial_ExatamenteVinteNaoResume(t *testing.T) {
+	from := time.Date(2026, 11, 5, 23, 14, 10, 0, time.UTC)
+	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c",
+		StartsAt: from, EndsAt: from.Add(time.Hour)}
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+
+	m.notifyPartial(r, 30*time.Minute, time.Hour, make([]Gap, 20))
+
+	text := sentMails(m, mail)[0].text
+	require.Equal(t, 20, strings.Count(text, "- sem áudio de "))
+	require.NotContains(t, text, "e mais")
+}
+
+// Muitos furos abaixo de DetailGap: sem lista, mas o percentual e a explicação ficam.
+func TestNotifyPartial_SemTrechosListados(t *testing.T) {
+	from := time.Date(2026, 11, 5, 23, 14, 10, 0, time.UTC)
+	r := Recording{ID: uuid.New(), StationName: "Radio", CreatorEmail: "a@b.c",
+		StartsAt: from, EndsAt: from.Add(time.Hour)}
+	mail := &fakeMailer{}
+	m := newTestManager(t, newFakeRepo(), &fakeMedia{}, newFakeObjects(), mail)
+
+	m.notifyPartial(r, 54*time.Minute, time.Hour, []Gap{})
+
+	got := sentMails(m, mail)[0]
+	require.Contains(t, got.subject, "parcial (90%)")
+	require.Contains(t, got.text, "cobriu 90% da janela")
+	require.Contains(t, got.text, "trechos curtos")
+	require.NotContains(t, got.text, "- sem áudio de ")
 }
 
 func TestNotifyFailed_IncluiMotivoCortado(t *testing.T) {

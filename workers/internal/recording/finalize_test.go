@@ -681,3 +681,77 @@ func TestFinalize_BurstNaoEmpurraOFimDoPedaco(t *testing.T) {
 	require.Len(t, got.Gaps, 1)
 	require.True(t, got.Gaps[0].From.Equal(t0.Add(60*time.Second)))
 }
+
+// Stream oscilando: cada intervalo fica abaixo de MinGap e a lista de buracos sai
+// vazia, mas falta metade do áudio. Reproduzido com ffmpeg real: 117s em 210s saía
+// `concluida`, sem e-mail. O áudio serve de prova, então isso não pode acontecer.
+func TestFinalize_FlapSemBuracoLongoViraParcialEAvisa(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	r.EndsAt = t0.Add(4 * time.Minute)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 2 * time.Minute}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	for i := 0; i < 8; i++ {
+		start := t0.Add(time.Duration(i) * 30 * time.Second)
+		if i%2 == 0 {
+			writePiece(t, dir, strconv.Itoa(i), start, start.Add(25*time.Second), adtsFor(25*time.Second))
+			continue
+		}
+		writePiece(t, dir, strconv.Itoa(i), start, start.Add(5*time.Second), adtsFor(5*time.Second))
+	}
+
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	got := repo.snapshot(r.ID)
+	require.Equal(t, StatusParcial, got.Status)
+	require.NotEmpty(t, got.Gaps, "faltou áudio de verdade: os intervalos curtos entram na lista")
+	require.Len(t, sentMails(m, mail), 1)
+	require.Contains(t, sentMails(m, mail)[0].subject, "parcial")
+}
+
+// A decisão vem do total: pedaços com menos frames que o relógio, compensados pelo
+// pedaço seguinte, são a entrega em rajadas de HLS, não falta de áudio.
+func TestFinalize_RajadaHLSSemFaltaContinuaConcluida(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	r := processing(t0)
+	r.EndsAt = t0.Add(4 * time.Minute)
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 4 * time.Minute}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	for i, secs := range []time.Duration{50, 70, 50, 70} {
+		start := t0.Add(time.Duration(i) * time.Minute)
+		writePiece(t, dir, strconv.Itoa(i), start, start.Add(time.Minute), adtsFor(secs*time.Second))
+	}
+
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	got := repo.snapshot(r.ID)
+	require.Equal(t, StatusConcluida, got.Status)
+	require.Empty(t, got.Gaps)
+	require.Empty(t, sentMails(m, mail))
+}
+
+// Cancelada segue cancelada: o aviso de parcial é só para quem terminou sozinha.
+func TestFinalize_CanceladaComFlapNaoViraParcial(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	r := processing(t0)
+	cancel := t0.Add(4 * time.Minute)
+	r.CanceledAt = &cancel
+	repo, objs, mail := newFakeRepo(r), newFakeObjects(), &fakeMailer{}
+	m := newTestManager(t, repo, &fakeMedia{duration: 2 * time.Minute}, objs, mail)
+	dir := m.dirFor(r.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	for i := 0; i < 4; i++ {
+		start := t0.Add(time.Duration(i) * time.Minute)
+		writePiece(t, dir, strconv.Itoa(i), start, start.Add(30*time.Second), adtsFor(30*time.Second))
+	}
+
+	require.NoError(t, m.finalize(context.Background(), r))
+
+	got := repo.snapshot(r.ID)
+	require.Equal(t, StatusCancelada, got.Status)
+	require.Empty(t, sentMails(m, mail))
+}

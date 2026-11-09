@@ -13,6 +13,10 @@ import (
 // maxReasonChars limita o motivo técnico no e-mail: stderr de ffmpeg não tem teto.
 const maxReasonChars = 300
 
+// maxGapLines limita os trechos listados no e-mail: um stream oscilando por 6h pode
+// dar centenas. A tela usa o mesmo limite, e a lista inteira fica em `gaps`.
+const maxGapLines = 20
+
 // fmtSP tem segundos porque um buraco de 40s pode caber dentro do mesmo minuto.
 func fmtSP(t time.Time) string { return t.In(saoPaulo).Format("02/01/2006 15:04:05") }
 
@@ -92,17 +96,32 @@ func (m *Manager) notifyFailed(rec Recording) {
 	m.notify(rec, "falhou", body)
 }
 
-func (m *Manager) notifyPartial(rec Recording, covered, window time.Duration, gaps []Gap) {
-	lines := make([]string, 0, len(gaps))
-	for _, g := range gaps {
+// gapLines monta a lista de trechos do e-mail. Lista vazia é possível: muitos furos
+// abaixo de DetailGap somam áudio faltando sem que nenhum seja listado.
+func gapLines(gaps []Gap) []string {
+	if len(gaps) == 0 {
+		return []string{"Faltam vários trechos curtos, de menos de 5 segundos cada."}
+	}
+	shown := gaps[:min(len(gaps), maxGapLines)]
+	lines := make([]string, 0, len(shown)+1)
+	for _, g := range shown {
 		lines = append(lines, fmt.Sprintf("- sem áudio de %s até %s", fmtSP(g.From), fmtSP(g.To)))
 	}
+	if rest := len(gaps) - len(shown); rest > 0 {
+		lines = append(lines, fmt.Sprintf("- e mais %d trechos", rest))
+	}
+	return lines
+}
+
+// notifyPartial limita a 99%: covered inclui o pré-roll e o burst do servidor, e
+// sairia "parcial (100%)" com buraco na mesma mensagem.
+func (m *Manager) notifyPartial(rec Recording, covered, window time.Duration, gaps []Gap) {
 	pct := 0
 	if window > 0 {
-		pct = min(int(covered*100/window), 100)
+		pct = min(int(covered*100/window), 99)
 	}
 	m.notify(rec, fmt.Sprintf("parcial (%d%%)", pct),
-		fmt.Sprintf("A gravação terminou com buracos e cobriu %d%% da janela.\n%s", pct, strings.Join(lines, "\n")))
+		fmt.Sprintf("A gravação terminou com buracos e cobriu %d%% da janela.\n%s", pct, strings.Join(gapLines(gaps), "\n")))
 }
 
 func (m *Manager) notifyFinalizeStuck(rec Recording, cause error) {

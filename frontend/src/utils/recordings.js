@@ -36,8 +36,8 @@ export function windowLabel(r) {
 /**
  * null = ainda não medida. Não é a mesma coisa que 0%.
  * Gravação parada no meio mede contra o que era possível gravar: a janela
- * acaba no cancelamento (o backend faz o mesmo). Arredonda para baixo para
- * que uma gravação com buraco nunca apareça como 100%.
+ * acaba no cancelamento (o backend faz o mesmo). Parcial para em 99: a cobertura
+ * inclui o pré-roll e o burst do servidor, e passaria de 100% mesmo com buraco.
  */
 export function coveragePercent(r) {
   if (r.covered_seconds == null) return null
@@ -49,12 +49,18 @@ export function coveragePercent(r) {
   }
   const window = (end - start) / 1000
   if (window <= 0) return null
-  return Math.min(100, Math.floor((r.covered_seconds / window) * 100))
+  return Math.min(r.status === 'parcial' ? 99 : 100, Math.floor((r.covered_seconds / window) * 100))
 }
 
+/** Stream oscilando por 6h pode dar centenas de trechos. O e-mail usa o mesmo limite. */
+const MAX_GAP_LINES = 20
+
 export function gapLabels(r) {
-  return (r.gaps ?? []).map(g =>
+  const gaps = r.gaps ?? []
+  const labels = gaps.slice(0, MAX_GAP_LINES).map(g =>
     `sem áudio das ${gapTimeFmt.format(new Date(g.from))} às ${gapTimeFmt.format(new Date(g.to))}`)
+  const rest = gaps.length - labels.length
+  return rest > 0 ? [...labels, `e mais ${rest} trechos`] : labels
 }
 
 export function expiresLabel(r) {
