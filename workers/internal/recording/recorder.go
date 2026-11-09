@@ -82,6 +82,9 @@ type attemptSlot struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	started time.Time
+	// lastURL é a última stream_url lida do banco. Só o laço do record mexe nela,
+	// por isso fica fora da trava.
+	lastURL string
 }
 
 func (s *attemptSlot) set(c context.CancelFunc) {
@@ -199,10 +202,7 @@ func (m *Manager) attempt(ctx context.Context, rec Recording, dir string, slot *
 		m.captureFailed(ctx, rec, err)
 		return
 	}
-	url, err := m.repo.StreamURL(ctx, rec.ID)
-	if errors.Is(err, ErrNotFound) {
-		err = errStationDeleted
-	}
+	url, err := m.streamURL(ctx, rec, slot)
 	if err != nil {
 		m.captureFailed(ctx, rec, err)
 		return
@@ -214,6 +214,30 @@ func (m *Manager) attempt(ctx context.Context, rec Recording, dir string, slot *
 	if err := m.media.Capture(attemptCtx, url, dir); err != nil {
 		m.captureFailed(ctx, rec, err)
 	}
+}
+
+// streamURL relê a URL a cada tentativa, para uma correção feita durante a queda
+// valer na reconexão seguinte. A consulta tem o prazo do tick: sem ele, banco
+// pendurado prenderia a tentativa até o fim da janela. Se ela falhar, a gravação
+// segue com a última URL conhecida, porque parar de gravar por um banco instável
+// perderia áudio que o stream está entregando. Emissora excluída é diferente: aí
+// não há o que gravar.
+func (m *Manager) streamURL(ctx context.Context, rec Recording, slot *attemptSlot) (string, error) {
+	urlCtx, cancel := context.WithTimeout(ctx, m.cfg.TickTimeout)
+	url, err := m.repo.StreamURL(urlCtx, rec.ID)
+	cancel()
+	switch {
+	case err == nil:
+		slot.lastURL = url
+		return url, nil
+	case errors.Is(err, ErrNotFound):
+		return "", errStationDeleted
+	case slot.lastURL != "" && ctx.Err() == nil:
+		m.log.Warn("recording: ler stream_url falhou; segue com a última conhecida",
+			zap.Stringer("id", rec.ID), zap.Error(err))
+		return slot.lastURL, nil
+	}
+	return "", err
 }
 
 func (m *Manager) captureFailed(ctx context.Context, rec Recording, cause error) {

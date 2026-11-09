@@ -669,3 +669,92 @@ func TestRecord_EsperaEntreTentativasCresceTemTetoEZeraAoGravar(t *testing.T) {
 	require.Less(t, wait(5), 150*time.Millisecond, "volta a RetryDelay depois de gravar")
 	require.GreaterOrEqual(t, wait(6), 100*time.Millisecond, "e volta a dobrar")
 }
+
+// urlRepo controla a resposta de StreamURL por chamada.
+type urlRepo struct {
+	*fakeRepo
+	calls    atomic.Int32
+	answer   func(ctx context.Context, n int32) (string, error)
+	deadline atomic.Bool // alguma chamada veio com prazo
+}
+
+func (r *urlRepo) StreamURL(ctx context.Context, _ uuid.UUID) (string, error) {
+	if _, ok := ctx.Deadline(); ok {
+		r.deadline.Store(true)
+	}
+	return r.answer(ctx, r.calls.Add(1))
+}
+
+// Banco pendurado não pode parar a tentativa até o fim da janela: a consulta tem o
+// prazo do tick, e na falha a gravação segue com a URL que já conhecia.
+func TestRecord_StreamURLPenduradaSegueComAUltimaConhecida(t *testing.T) {
+	r := recordingRow(time.Second)
+	repo := &urlRepo{fakeRepo: newFakeRepo(r), answer: func(ctx context.Context, n int32) (string, error) {
+		if n == 1 {
+			return "http://conhecida/s", nil
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	var mu sync.Mutex
+	var urls []string
+	media := &fakeMedia{capture: func(_ context.Context, url, _ string) error {
+		mu.Lock()
+		urls = append(urls, url)
+		mu.Unlock()
+		return errors.New("caiu")
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+	m.cfg.TickTimeout = 20 * time.Millisecond
+
+	m.record(context.Background(), r)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(t, len(urls), 3, "sem prazo, a 2ª consulta prendia a gravação até o fim da janela")
+	for _, u := range urls {
+		require.Equal(t, "http://conhecida/s", u)
+	}
+	require.True(t, repo.deadline.Load())
+}
+
+// Sem URL conhecida não há o que tentar: registra o motivo e não chama o ffmpeg.
+func TestRecord_StreamURLFalhaSemURLConhecidaNaoCaptura(t *testing.T) {
+	r := recordingRow(100 * time.Millisecond)
+	repo := &urlRepo{fakeRepo: newFakeRepo(r), answer: func(context.Context, int32) (string, error) {
+		return "", errors.New("banco fora")
+	}}
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return nil
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+
+	m.record(context.Background(), r)
+
+	require.Zero(t, calls.Load())
+	require.Equal(t, "banco fora", *repo.snapshot(r.ID).LastError)
+}
+
+// Emissora excluída no meio da gravação para de tentar, mesmo com URL conhecida.
+func TestRecord_EmissoraExcluidaDepoisDeConhecidaParaDeTentar(t *testing.T) {
+	r := recordingRow(150 * time.Millisecond)
+	repo := &urlRepo{fakeRepo: newFakeRepo(r), answer: func(_ context.Context, n int32) (string, error) {
+		if n == 1 {
+			return "http://conhecida/s", nil
+		}
+		return "", ErrNotFound
+	}}
+	var calls atomic.Int32
+	media := &fakeMedia{capture: func(context.Context, string, string) error {
+		calls.Add(1)
+		return errors.New("caiu")
+	}}
+	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
+
+	m.record(context.Background(), r)
+
+	require.Equal(t, int32(1), calls.Load())
+	require.Equal(t, "a emissora foi excluída", *repo.snapshot(r.ID).LastError)
+}
