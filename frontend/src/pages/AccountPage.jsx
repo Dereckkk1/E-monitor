@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useMe, useUpdateMe, useChangeMyPassword, useClients } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
+import McpIntegrationSection from '../components/account/McpIntegrationSection'
 import './AccountPage.css'
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -569,6 +570,7 @@ export default function AccountPage() {
           </div>
         </form>
       </section>
+      {isAdmin && <McpIntegrationSection numeral="04" />}
 
         </div>{/* /.account-main */}
 
