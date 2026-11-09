@@ -407,9 +407,9 @@ público da API, e o WAF não pode bloquear o egress do claude.ai/Google. Novo C
 duas linhas no `workers.Dockerfile` (regra 6.7) — `revoga-mcp` e `registra-cliente-mcp` já estão. O CLI da
 avaliação (`internal/mcp/avaliacao/cli`) **não** entra na imagem, de propósito.
 
-**Migrations antes do merge (Fatias 3 e 4):** o `master` já tem `0070_users_username` (conferido em `origin/master` em 2026-11-03,
-sem `git fetch` desde então: reconfira antes do merge). Ao mergear o `feat/mcp-server`, renumere **nesta ordem**
-`0072_mcp_acoes_pendentes` -> **0073**, `0071_mcp_confirmacoes` -> **0072** e `0070_mcp_fundacao` -> **0071** (os seis arquivos
+**Migrations antes do merge (Fatias 3 e 4):** o `master` já tem `0070_users_username` e `0071_recordings` (gravação programada;
+conferido em `origin/master` em 2026-11-09: reconfira o maior número antes do merge). Ao mergear o `feat/mcp-server`, renumere **nesta ordem**
+`0072_mcp_acoes_pendentes` -> **0074**, `0071_mcp_confirmacoes` -> **0073** e `0070_mcp_fundacao` -> **0072** (os seis arquivos
 `.up/.down.sql`, e as referências nos docs e nos comentários do código). As três são só `CREATE TABLE` + índices (+ o trigger em
 `users` da primeira), mas passam pelo `shadow_migration_test` do `deploy.sh` como qualquer outra (regra 4.8 do `CLAUDE.md`).
 

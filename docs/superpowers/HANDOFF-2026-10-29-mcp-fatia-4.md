@@ -301,8 +301,8 @@ a tela limpa a URL antes de um 401; o seletor do `/insights` junta campanhas for
 
 Para o dono (fora do MCP — **não faça sem pedir**): limitador do `/auth/login` burlável; porta da API só em `127.0.0.1`;
 imagens `minio/minio`/`minio/mc`; mount de `migrations/` em `initdb.d` (F-111); a pasta `C:\tmp\emonitor-base-check` pode
-ser apagada. **Renumerar as migrations no merge:** o `master` tem `0070_users_username`; `0070_mcp_fundacao` vira `0071`,
-`0071_mcp_confirmacoes` vira `0072` e a da Fatia 4 (`mcp_acoes_pendentes`, hoje seria `0072`) vira `0073`. Os trailers
+ser apagada. **Renumerar as migrations no merge:** o `master` tem `0070_users_username` e `0071_recordings` (2026-11-09); `0070_mcp_fundacao` vira `0072`,
+`0071_mcp_confirmacoes` vira `0073` e a da Fatia 4 (`mcp_acoes_pendentes`) vira `0074`. Os trailers
 dos commits da branch misturam "Claude Opus 5.5" e "Claude Sonnet 5.5" (dois modelos trabalharam nela); não há o que
 corrigir.
 

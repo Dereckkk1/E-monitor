@@ -372,7 +372,7 @@ de uso único diferentes para a mesma confirmação.
 
 ### Uso único: consumido ANTES de executar (F3-5) — diverge da spec §5.2
 
-`mcp_confirmacoes_usadas` (migration 0071; no merge vira 0072, ver "Limitações e follow-ups"): `hash BYTEA PK` (SHA-256 do
+`mcp_confirmacoes_usadas` (migration 0071; no merge vira 0073, ver "Limitações e follow-ups"): `hash BYTEA PK` (SHA-256 do
 token), `usado_em`, `expira_em`. **Consumir** é `INSERT … ON CONFLICT DO NOTHING`: 1 linha afetada = primeiro uso.
 
 - Consome **antes** de executar. **Só a recusa de negócio libera** (`DELETE` da linha: o token volta a valer); erro interno
@@ -554,8 +554,9 @@ guarda o schema resolvido por tipo (`schemasDeEntrada`), para a aprovação. Rem
 - **`token_id` não aparece na tool `auditoria_mcp`** e dados de contato/CNPJ aparecem nos `args` do `audit_log` (ver acima).
 - **Recat assíncrono:** a regra e a troca de tipo respondem antes de a recategorização acabar (até 30 s); a resposta traz a
   ressalva. O override é síncrono.
-- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username`, então `0070_mcp_fundacao` vira `0071`,
-  `0071_mcp_confirmacoes` vira `0072` e `0072_mcp_acoes_pendentes` (Fatia 4) vira `0073` (e as referências a "migration 0070/0071/0072"
+- **Renumerar as migrations no merge:** o `master` já tem `0070_users_username` e `0071_recordings` (gravação programada, conferido em
+  2026-11-09), então `0070_mcp_fundacao` vira `0072`, `0071_mcp_confirmacoes` vira `0073` e `0072_mcp_acoes_pendentes` (Fatia 4) vira
+  `0074` (e as referências a "migration 0070/0071/0072"
   neste doc). Ver também a nota sobre a 0072 editada no lugar, em [operations/mcp.md](../operations/mcp.md).
 - **Trailers de commit da branch** misturam "Claude Opus 5.5" e "Claude Sonnet 5.5" (dois modelos trabalharam nela).
 

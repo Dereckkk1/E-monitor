@@ -148,7 +148,7 @@ fallback da SPA (`curl -sI … | grep -i frame`).
 
 ## Armadilhas novas (valem para a Fatia 5 e para quem mexer no crítico)
 
-- **0072 editada no lugar** (ver "Ambiente de teste"): banco antigo sem `ressalvas`. E ela vira **0073** no merge.
+- **0072 editada no lugar** (ver "Ambiente de teste"): banco antigo sem `ressalvas`. E ela vira **0074** no merge.
 - **Aprovar é síncrono** e o `middleware.Timeout` (60 s) corre desde o início do pedido; o `Executar` tem os próprios 60 s. Uma execução
   lenta pode terminar depois de a tela já ter recebido o erro; o pedido fecha `executada` mesmo assim. Quem recarrega vê o desfecho.
 - **`.falhou` no `audit_log` nem sempre é um pedido `falhou`**: o `codigo` da recusa de negócio e `conferencia_falhou` significam que o
@@ -242,7 +242,7 @@ Pronto quando: "doc com header YAML, índice `docs/README.md` atualizado". O que
 - **`docs/README.md`**: as duas linhas do MCP já falam das Fatias 0 a 4; atualize quando a 5 fechar.
 - **Regra "o MCP faz parte do pronto" no `CLAUDE.md`**: já existe uma linha no mapa de consulta (`| **MCP do E-monitor** …`). Falta
   acrescentar o crítico: "escrita nova passa pela lista única `escritasDe`, `Preview` determinístico (a aprovação compara o resumo),
-  `/pendentes`, a 0072/0073" e a armadilha do `npm ci`. Edite o `CLAUDE.md` só com o OK do dono (é arquivo de instruções do projeto).
+  `/pendentes`, a 0072/0074" e a armadilha do `npm ci`. Edite o `CLAUDE.md` só com o OK do dono (é arquivo de instruções do projeto).
 - **Hub (outro repositório; peça OK antes de mexer):** linha **"Pontes"** (o hub já devolve `pontes.emonitor` em `obter_cliente`; as instruções
   do MCP do hub ainda dizem que "o E-monitor ainda não tem MCP"), **`SEM_MIDIA_NO_HUB`** e **§1 do contrato** `mcp-ecossistema.md`
   (a lista dos MCPs da E-Series passa a incluir o do E-monitor). Não verificado por este agente: confira no `origin/main` do hub o texto
@@ -256,9 +256,12 @@ Pronto quando: "doc com header YAML, índice `docs/README.md` atualizado". O que
 ## Checklist de merge e deploy (com OK do dono; nunca antes do MCP 100%)
 
 1. **`git fetch origin`** e reveja `git log --oneline HEAD..origin/master`; rebase/merge e resolva.
-2. **Renumere as migrations**, nesta ordem, no master que tiver `0070_users_username`: `0072_mcp_acoes_pendentes` → **0073**,
-   `0071_mcp_confirmacoes` → **0072**, `0070_mcp_fundacao` → **0071** (seis arquivos `.up/.down.sql`; atualize as referências nos docs
-   e nos comentários de código). Se o master ganhou migrations novas, desloque tudo mais.
+2. **Renumere as migrations**, nesta ordem, no master que tiver `0070_users_username` e `0071_recordings`: `0072_mcp_acoes_pendentes` → **0074**,
+   `0071_mcp_confirmacoes` → **0073**, `0070_mcp_fundacao` → **0072** (seis arquivos `.up/.down.sql`; atualize as referências nos docs
+   e nos comentários de código). **Confira o maior número de migration no master na hora do merge** (em 2026-11-09 era
+   `0071_recordings`); se o master ganhou migrations novas, desloque tudo mais. **Preserve a ordem relativa:** a `CREATE OR REPLACE
+   FUNCTION mcp_revogar_credenciais_do_usuario` no fim da `0072_mcp_acoes_pendentes` (vira 0074) precisa rodar DEPOIS da que cria a função
+   na `0070_mcp_fundacao` (vira 0072); a renumeração em bloco mantém isso, mas não renumere uma sem a outra.
 3. **Bancos que aplicaram a 0072 antiga** (dev, testes, o template `d4` de outras máquinas): recrie. Em prod não há o que fazer (nunca
    rodou).
 4. **Shadow migration test** (regra 4.8): o `deploy.sh` aplica as pendentes sobre uma cópia dos dados de prod e aborta se falhar. As três
