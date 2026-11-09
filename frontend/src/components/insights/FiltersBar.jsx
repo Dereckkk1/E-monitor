@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import RSelect from '../RSelect'
 import { useAuth } from '../../contexts/AuthContext'
-import { useClients, useCampaignsPaged, useStations, useMaterials, useCampaignMaterialsMany } from '../../api/hooks'
+import { useClients, useCampaignsWithSelected, useStations, useMaterials, useCampaignMaterialsMany } from '../../api/hooks'
 import { buildLogoUrl } from '../../utils/logoUrl'
 
 // MiniAvatar quadrado (logo ou iniciais). Espelha o ClientMiniAvatar de
@@ -146,9 +146,11 @@ export default function FiltersBar({ value, onChange }) {
   // O recorte pelo cliente selecionado é client-side aqui mesmo, e vale pra
   // qualquer role: pro Cliente de 1 cliente é no-op (todas as campanhas são
   // dele), pra agência é o que separa a carteira.
-  const campaignsQ = useCampaignsPaged({ page: 1, pageSize: 200 })
-
-  const allCampaigns = useMemo(() => campaignsQ.data?.data || [], [campaignsQ.data])
+  // As selecionadas que ficaram fora da página 1/200 (link para campanha
+  // antiga) entram junto: sem elas o seletor, as emissoras-alvo e o "Período
+  // completo" ficariam vazios com a tela filtrando por elas.
+  const campaignsQ = useCampaignsWithSelected(value.campaignIds || [])
+  const allCampaigns = campaignsQ.campaigns
 
   const campOpts = useMemo(() => {
     const scoped = value.clientId

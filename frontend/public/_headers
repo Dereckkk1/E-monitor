@@ -1,0 +1,15 @@
+/autorizar-ia
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/autorizar-ia/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/pendentes
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/pendentes/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'

@@ -32,6 +32,8 @@ import AdminMonitoringPage from './pages/AdminMonitoringPage'
 import AdminStationFailuresPage from './pages/AdminStationFailuresPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AccountPage from './pages/AccountPage'
+import AuthorizeAiPage from './pages/AuthorizeAiPage'
+import PendentesPage from './pages/PendentesPage'
 import InsightsPage from './pages/InsightsPage'
 import LiveMapPage from './pages/LiveMapPage'
 import ManagementPage from './pages/ManagementPage'
@@ -172,6 +174,18 @@ function AppShell() {
             } />
             <Route path="/admin/pos-venda/:id" element={
               <RequireRole roles={['admin']}><AdminPostSaleDetailPage /></RequireRole>
+            } />
+            {/* Consentimento OAuth do MCP — exige sessão (o RequireAuth do
+                wrapper devolve ao /login com a query preservada e volta para cá). */}
+            <Route path="/autorizar-ia" element={
+              <RequireRole roles={['admin']}><AuthorizeAiPage /></RequireRole>
+            } />
+            {/* Aprovação dos pedidos `critico` que a IA fez pelo MCP. Rota PRIVADA (fora de
+                PUBLIC_ROUTES): sem sessão, o RequireAuth manda ao /login guardando o destino em
+                `state.from` (a URL inteira, com o ?id=), e o LoginPage devolve para cá depois de
+                entrar — é o caminho do link /pendentes?id= que a IA entrega. */}
+            <Route path="/pendentes" element={
+              <RequireRole roles={['admin']}><PendentesPage /></RequireRole>
             } />
             <Route path="/dashboard"   element={<DashboardPage />} />
             <Route path="/account"     element={<AccountPage />} />
