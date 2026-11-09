@@ -106,6 +106,7 @@ function RecordingForm() {
       </div>
       <p className="ar-hint">
         Horário de Brasília. Até 6 horas, no mesmo dia. O áudio fica disponível por 15 dias.
+        O stream chega com atraso em relação ao ar: marque alguns minutos de folga antes e depois do horário.
       </p>
       {error && <p className="ar-msg ar-msg--error" role="alert">{error}</p>}
       {warning && <p className="ar-msg ar-msg--warn" role="status">{warning}</p>}

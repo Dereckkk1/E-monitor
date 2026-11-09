@@ -83,9 +83,14 @@ func (h *RecordingsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List pagina as gravações.
 func (h *RecordingsHandler) List(w http.ResponseWriter, r *http.Request) {
+	// Acima do máximo devolve o máximo, que é o que a doc promete: cair no padrão
+	// de 50 mostraria menos do que se pediu sem avisar.
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 200 {
+	switch {
+	case limit <= 0:
 		limit = 50
+	case limit > 200:
+		limit = 200
 	}
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	if offset < 0 {
