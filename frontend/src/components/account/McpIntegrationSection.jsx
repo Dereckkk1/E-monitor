@@ -88,14 +88,14 @@ export default function McpIntegrationSection({ numeral }) {
       </p>
 
       <form className="account-mcp-form" onSubmit={gerar}>
-        <label className="field">
-          <span>Nome do token</span>
-          <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Claude Code no notebook" maxLength={80} required />
-        </label>
-        <label className="field">
-          <span>Validade (dias)</span>
-          <input type="number" min={1} max={365} value={validade} required onChange={e => setValidade(e.target.value)} />
-        </label>
+        <div className="account-field account-mcp-nome">
+          <label htmlFor="acc-mcp-nome">Nome do token</label>
+          <input id="acc-mcp-nome" className="account-input" value={nome} onChange={e => setNome(e.target.value)} placeholder="Claude Code no notebook" maxLength={80} required />
+        </div>
+        <div className="account-field account-mcp-validade">
+          <label htmlFor="acc-mcp-validade">Validade (dias)</label>
+          <input id="acc-mcp-validade" className="account-input" type="number" inputMode="numeric" min={1} max={365} value={validade} required onChange={e => setValidade(e.target.value)} />
+        </div>
         <button className="btn btn-primary" type="submit" disabled={criar.isPending}>Gerar token</button>
       </form>
       {criar.isError && <p className="account-mcp-erro" role="alert">{erroDe(criar.error)}</p>}

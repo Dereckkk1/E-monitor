@@ -796,7 +796,8 @@
 .account-mcp-texto { margin: 0 0 8px; color: var(--c-text-2); line-height: 1.5; }
 .account-mcp-url { display: block; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--c-surface-2); overflow-x: auto; }
 .account-mcp-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 16px 0; }
-.account-mcp-form .field { flex: 1 1 200px; }
+.account-mcp-nome { flex: 1 1 240px; }
+.account-mcp-validade { flex: 0 1 140px; }
 .account-mcp-gerado { margin: 0 0 16px; padding: 12px; border: 1px solid var(--c-border); border-radius: 8px; }
 .account-mcp-gerado code { word-break: break-all; }
 .account-mcp-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
