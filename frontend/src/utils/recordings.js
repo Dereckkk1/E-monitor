@@ -1,5 +1,7 @@
 // Formatação da tela /admin/gravacoes. Tudo em horário de São Paulo: é o que o
 // admin digitou e o que a rádio usa, independente do fuso do navegador.
+import { formatDial } from './dial.js'
+
 const TZ = 'America/Sao_Paulo'
 
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -19,6 +21,28 @@ const STATUS = {
 }
 
 const LIVE = new Set(['programada', 'gravando', 'processando'])
+
+/** Linha de baixo da emissora, igual à do seletor: "99,9 FM · Joinville/SC". */
+export function stationSub(st) {
+  const dial = st.frequency_mhz == null ? '' : formatDial(st.frequency_mhz, st.band)
+  const place = [st.city, st.state].filter(Boolean).join('/')
+  return [dial, place].filter(Boolean).join(' · ')
+}
+
+/**
+ * A emissora de uma gravação, no formato do StationAvatar. Dial e cidade vêm da
+ * emissora atual e somem se ela foi excluída; o nome é o guardado na gravação.
+ */
+export function recordingStation(r) {
+  return {
+    name: r.station_name,
+    logo_url: r.station_logo_url ?? null,
+    sub: stationSub({
+      frequency_mhz: r.station_frequency_mhz, band: r.station_band,
+      city: r.station_city, state: r.station_state,
+    }),
+  }
+}
 
 export function statusInfo(status) {
   return STATUS[status] ?? { label: status, badge: 'badge-ended' }
