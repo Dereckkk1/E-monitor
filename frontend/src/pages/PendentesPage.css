@@ -665,3 +665,213 @@
     animation: none;
   }
 }
+
+/* ─── Grupos por campanha (o lote decide dentro deles) ───────── */
+
+.pen-grupos {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.pen-grupo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 0 2px;
+}
+
+.pen-grupo-nome {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+.pen-grupo-tipo {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+
+.pen-grupo-conta {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+
+/* Caixa de marcar no padrão de seleção do sistema (rosa ativo). */
+.pen-check-input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--c-action);
+  cursor: pointer;
+}
+
+.pen-check-input:disabled {
+  cursor: not-allowed;
+}
+
+.pen-check-input:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
+}
+
+/* Marcado para o lote: a borda acende, como a seleção do resto do sistema. */
+.pen-card--marcado {
+  border-color: var(--c-action-border);
+}
+
+/* ─── Barra do lote: fixa no rodapé enquanto há seleção ─────── */
+
+.pen-lote {
+  position: sticky;
+  bottom: 16px;
+  z-index: 20;
+  margin-top: 20px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(6, 5, 91, 0.12));
+  animation: pen-lote-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pen-lote-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pen-lote { animation: none; }
+}
+
+.pen-lote-barra {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+}
+
+.pen-lote-texto {
+  font-size: 13.5px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-lote-texto strong {
+  color: var(--c-text);
+  font-weight: 700;
+}
+
+.pen-lote-limpar {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-action);
+  cursor: pointer;
+}
+
+.pen-lote-limpar:hover:not(:disabled) {
+  color: var(--c-action-hover);
+  text-decoration: underline;
+}
+
+.pen-lote-acoes {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.pen-lote-trilho {
+  flex: 1 1 200px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.pen-lote-avanco {
+  display: block;
+  height: 100%;
+  background: var(--c-action);
+  transform-origin: left center;
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pen-lote-confirma {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.pen-lote-titulo {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.pen-lote-apoio {
+  margin: 0;
+  max-width: 75ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+}
+
+.pen-lote-lista {
+  margin: 0;
+  padding: 10px 12px 10px 32px;
+  max-height: 32vh;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-bg);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--c-text);
+}
+
+.pen-lote-lista li {
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+
+.pen-lote-botoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 540px) {
+  .pen-lote-acoes,
+  .pen-lote-botoes {
+    width: 100%;
+  }
+
+  .pen-lote-acoes .btn,
+  .pen-lote-botoes .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}

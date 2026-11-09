@@ -389,3 +389,30 @@ func TestPendentesHTTP_RessalvasVoltamNaListaENoDestaque(t *testing.T) {
 	require.Equal(t, []any{}, itens[0].(map[string]any)["ressalvas"], "o pedido aberto tem ressalvas: [], não null nem ausente")
 	require.Contains(t, rec.Body.String(), `"ressalvas":[]`)
 }
+
+// A lista diz de que campanha é cada pedido (a tela agrupa e aprova em lote por ela): vem de
+// args.campanha_id, com o nome atual. Sem campanha_id, id que não existe ou lixo = null.
+func TestPendentesHTTP_ListaTrazACampanhaDoPedido(t *testing.T) {
+	b := novaBancadaPendentesHTTP(t, &sondaEscrita{})
+	cli := mcptest.Cliente(t, b.ctx, b.pool, "Cliente Lote")
+	camp := mcptest.Campanha(t, b.ctx, b.pool, cli, "Verão Lote", "2026-11-01", "2026-11-30")
+	comCamp := b.pedido(t, "t_crit", fmt.Sprintf(`{"campanha_id":%q,"valor":"a"}`, camp))
+	semCamp := b.pedido(t, "t_crit", `{"valor":"b"}`)
+	inexistente := b.pedido(t, "t_crit", fmt.Sprintf(`{"campanha_id":%q,"valor":"c"}`, uuid.New()))
+	lixo := b.pedido(t, "t_crit", `{"campanha_id":"nao-e-uuid","valor":"d"}`)
+
+	rec, m := b.fazer(http.MethodGet, "/mcp/pendentes?id="+comCamp.ID.String(), b.jwtDono)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	porID := map[string]map[string]any{}
+	for _, it := range m["items"].([]any) {
+		x := it.(map[string]any)
+		porID[x["id"].(string)] = x
+	}
+	require.Equal(t, map[string]any{"id": camp.String(), "nome": "Verão Lote"}, porID[comCamp.ID.String()]["campanha"])
+	for _, p := range []Pendente{semCamp, inexistente, lixo} {
+		c, tem := porID[p.ID.String()]["campanha"]
+		require.True(t, tem, "a chave campanha sempre vem (null quando não há)")
+		require.Nil(t, c)
+	}
+	require.Equal(t, map[string]any{"id": camp.String(), "nome": "Verão Lote"}, m["destaque"].(map[string]any)["campanha"])
+}

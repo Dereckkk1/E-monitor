@@ -52,6 +52,15 @@ type pendenteDTO struct {
 	// Ressalvas são os avisos da execução ("o email não saiu: a pessoa não tem a senha"), gravados
 	// ao fechar o pedido: quem recarrega /pendentes?id= os lê de novo. Sempre um array.
 	Ressalvas []string `json:"ressalvas"`
+	// Campanha é a que os args citam (campanha_id), com o nome atual: a tela agrupa e aprova em lote
+	// por ela. null sem campanha, com campanha apagada e nas respostas de aprovar/recusar (a tela
+	// mantém o que já tinha).
+	Campanha *campanhaDoPedido `json:"campanha"`
+}
+
+type campanhaDoPedido struct {
+	ID   uuid.UUID `json:"id"`
+	Nome string    `json:"nome"`
 }
 
 // ressalvasOuVazio garante o array (nunca null) no JSON.
@@ -131,12 +140,14 @@ func (h *PendentesHTTP) Listar(w http.ResponseWriter, r *http.Request) {
 	// destaque: o pedido do link ?id=. De outra pessoa ou malformado vira null,
 	// com o mesmo 200, para a listagem não servir de oráculo.
 	var destaque *pendenteDTO
+	var destaquePend *Pendente
 	if id, err := uuid.Parse(r.URL.Query().Get("id")); err == nil {
 		got, err := h.Pendentes.Obter(r.Context(), id, p.UserID)
 		switch {
 		case err == nil:
 			d := pendenteParaDTO(got)
 			destaque = &d
+			destaquePend = &got
 		case errors.Is(err, ErrPendenteNaoAchada):
 		default:
 			h.Log.Error("mcp: obter pendente em destaque", zap.Error(err))
@@ -144,7 +155,47 @@ func (h *PendentesHTTP) Listar(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	alvos := make([]*pendenteDTO, 0, len(dtos)+1)
+	pedidos := make([]Pendente, 0, len(itens)+1)
+	for i := range dtos {
+		alvos = append(alvos, &dtos[i])
+		pedidos = append(pedidos, itens[i])
+	}
+	if destaque != nil {
+		alvos = append(alvos, destaque)
+		pedidos = append(pedidos, *destaquePend)
+	}
+	h.preencherCampanhas(r.Context(), pedidos, alvos)
 	escreverJSON(w, http.StatusOK, map[string]any{"items": dtos, "destaque": destaque})
+}
+
+// preencherCampanhas põe em cada DTO (alvos[i] é o de pedidos[i]) a campanha que os args citam. É
+// enfeite de agrupamento: se a leitura dos nomes falhar, a lista sai sem as campanhas em vez de falhar.
+func (h *PendentesHTTP) preencherCampanhas(ctx context.Context, pedidos []Pendente, alvos []*pendenteDTO) {
+	citadas := make([]*uuid.UUID, len(pedidos))
+	var ids []uuid.UUID
+	for i, p := range pedidos {
+		if c := campanhaDosArgs(p.Args); c != nil {
+			citadas[i] = c
+			ids = append(ids, *c)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	nomes, err := h.Pendentes.NomesDeCampanhas(ctx, ids)
+	if err != nil {
+		h.Log.Warn("mcp: nomes das campanhas dos pedidos", zap.Error(err))
+		return
+	}
+	for i, c := range citadas {
+		if c == nil {
+			continue
+		}
+		if nome, ok := nomes[*c]; ok {
+			alvos[i].Campanha = &campanhaDoPedido{ID: *c, Nome: nome}
+		}
+	}
 }
 
 // preparar valida o admin, o id e o executor; devolve false depois de responder.

@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { usePendentesMcp, useAprovarPendenteMcp, useRecusarPendenteMcp } from '../api/hooks'
+import {
+  usePendentesMcp, useAprovarPendenteMcp, useRecusarPendenteMcp,
+  aprovarPendenteMcp, recusarPendenteMcp, trocarPedidoNoCache,
+} from '../api/hooks'
 import FlowEmptyState from '../components/FlowEmptyState'
 import { emoldurada } from '../utils/emoldurada'
 import './PendentesPage.css'
@@ -45,6 +49,48 @@ const ROTULO_FALHA = {
   incerto: 'Não sabemos se foi feito',
 }
 const rotuloDaFalha = (f) => ROTULO_FALHA[f.codigo] ?? (f.status === 409 ? 'O estado do pedido mudou' : 'Não foi feito')
+
+/** O que um erro de aprovar/recusar significa. É a MESMA leitura para o botão do cartão e para o lote. */
+function lerErro(err) {
+  const status = err?.response?.status
+  // Um 524 do Cloudflare (ou um 502) chega como HTML: o corpo não é objeto e não tem `error`.
+  const corpo = err?.response?.data && typeof err.response.data === 'object' ? err.response.data : {}
+  const semResposta = !err?.response
+  const interrompida = status === 500 && corpo.error === 'interrompida'
+  const incerto = !interrompida && (semResposta || (status >= 500 && !CODIGOS_SEM_EFEITO.has(corpo.error)))
+  const mensagem = incerto ? MSG_INCERTO : (corpo.mensagem ?? MSG_PADRAO)
+  return { status, corpo, interrompida, incerto, mensagem }
+}
+
+/** Agrupa os cartões pela campanha do pedido, na ordem em que aparecem. Sem campanha = "Outros pedidos". */
+function agrupar(cartoes) {
+  const grupos = []
+  const porChave = new Map()
+  for (const p of cartoes) {
+    const chave = p.campanha?.id ?? '_sem'
+    let g = porChave.get(chave)
+    if (!g) {
+      g = { chave, nome: p.campanha?.nome ?? null, itens: [] }
+      porChave.set(chave, g)
+      grupos.push(g)
+    }
+    g.itens.push(p)
+  }
+  // "Outros pedidos" vai por último: o que tem campanha é o caso do lote.
+  return [...grupos.filter(g => g.chave !== '_sem'), ...grupos.filter(g => g.chave === '_sem')]
+}
+
+/** Caixa de marcar com o estado "alguns" (indeterminate), que só existe pela propriedade do DOM. */
+function CaixaTodos({ marcados, total, disabled, onChange, rotulo }) {
+  const ref = useRef(null)
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.indeterminate = marcados > 0 && marcados < total
+  }, [marcados, total])
+  return (
+    <input ref={ref} type="checkbox" className="pen-check-input" checked={total > 0 && marcados === total}
+      disabled={disabled} onChange={onChange} aria-label={rotulo} />
+  )
+}
 
 const quando = (iso) =>
   iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : ''
@@ -185,7 +231,7 @@ function Desfecho({ p, estado, falha }) {
   )
 }
 
-function Cartao({ p, estado, destaque, agindo, falha, onAgir, agora }) {
+function Cartao({ p, estado, destaque, agindo, falha, onAgir, agora, selecao, Titulo = 'h2' }) {
   const idResumo = `pen-resumo-${p.id}`
   const pv = p.preview ?? {}
   const mudancas = pv.mudancas ?? []
@@ -193,12 +239,16 @@ function Cartao({ p, estado, destaque, agindo, falha, onAgir, agora }) {
   const avisos = pv.ressalvas ?? []
   const meu = agindo?.id === p.id ? agindo.acao : null
   const prazo = estado === 'pendente' ? falta(p.expira_em, agora) : null
-  const classe = `pen-card pen-card--${estado}${destaque ? ' pen-card--destaque' : ''}`
+  const classe = `pen-card pen-card--${estado}${destaque ? ' pen-card--destaque' : ''}${selecao?.marcado ? ' pen-card--marcado' : ''}`
 
   return (
     <article className={classe} aria-labelledby={idResumo} aria-current={destaque ? 'true' : undefined}>
       <div className="pen-card-main">
         <div className="pen-topo">
+          {selecao && (
+            <input type="checkbox" className="pen-check-input" checked={selecao.marcado} disabled={selecao.disabled}
+              onChange={selecao.alternar} aria-label={`Selecionar: ${pv.resumo ?? p.tool}`} />
+          )}
           <span className={`pen-estado pen-estado--${estado}`}>{ROTULO_ESTADO[estado] ?? estado}</span>
           {prazo && (
             <span className={`pen-prazo${prazo.urgente ? ' pen-prazo--urgente' : ''}`}>
@@ -208,7 +258,7 @@ function Cartao({ p, estado, destaque, agindo, falha, onAgir, agora }) {
           )}
         </div>
 
-        <h2 className="pen-resumo" id={idResumo} dir="auto">{pv.resumo}</h2>
+        <Titulo className="pen-resumo" id={idResumo} dir="auto">{pv.resumo}</Titulo>
 
         {estado !== 'pendente' && <Desfecho p={p} estado={estado} falha={falha} />}
 
@@ -305,12 +355,46 @@ export default function PendentesPage() {
   const agora = useAgora()
   const { toast, avisar, fechar } = useToast()
   const area = useRef(null)
+  const qc = useQueryClient()
   const [agindo, setAgindo] = useState(null) // { id, acao }
-  const [falha, setFalha] = useState(null) // { id, mensagem }: a recusa/erro da última ação
+  const [falhas, setFalhas] = useState({}) // id -> { mensagem, codigo, status }: a recusa/erro da última ação nele
   const [desfechos, setDesfechos] = useState([]) // pedidos que acabei de fechar, do mais novo ao mais antigo
+  const [selecionados, setSelecionados] = useState(() => new Set())
+  const [confirmar, setConfirmar] = useState(null) // { acao }: o lote esperando o "confirmar"
+  const [progresso, setProgresso] = useState(null) // { acao, feitos, total }: o lote rodando
+
+  const tirarFalha = (id) => setFalhas(f => { if (!(id in f)) return f; const n = { ...f }; delete n[id]; return n })
+  const porFalha = (id, falha) => setFalhas(f => ({ ...f, [id]: falha }))
+
+  // Fechado: sai da fila aberta, então o cartão fica aqui com o desfecho (e as ressalvas da execução).
+  // A resposta não traz a campanha: o cartão mantém a sua, para não pular de grupo.
+  function fecharCartao(p, acao, data) {
+    const ressalvas = (acao === 'aprovar' ? data?.ressalvas : null) ?? data?.pendente?.ressalvas ?? []
+    setDesfechos(d => [{ ...p, ...data?.pendente, campanha: p.campanha, ressalvas }, ...d.filter(x => x.id !== p.id)])
+    return ressalvas
+  }
+
+  // Registra no cartão o que o erro significa e devolve o tipo: 'interrompida' | 'incerto' | 'recusa'.
+  function registrarErro(p, err) {
+    const e = lerErro(err)
+    if (e.interrompida) {
+      // Virou `falhou`: final, e a ação pode ter acontecido. O texto do servidor diz o quê.
+      setDesfechos(d => [{ ...p, estado: 'falhou', erro: e.mensagem, ressalvas: [] }, ...d.filter(x => x.id !== p.id)])
+      return 'interrompida'
+    }
+    if (e.incerto) {
+      // Sem saber se rodou: o aviso fica no cartão e a fila é relida — se a ação rodou, o cartão vira o desfecho dela.
+      porFalha(p.id, { mensagem: e.mensagem, codigo: 'incerto', status: e.status })
+      return 'incerto'
+    }
+    // 422: nada aconteceu e o pedido segue pendente (com o resumo novo, se era preview_desatualizado).
+    // 409: o estado mudou por baixo (outra aba aprovou, o prazo venceu, o resumo mudou).
+    porFalha(p.id, { mensagem: e.mensagem, codigo: e.corpo.error, status: e.status })
+    return 'recusa'
+  }
 
   async function agir(p, acao) {
-    setFalha(null)
+    tirarFalha(p.id)
     setAgindo({ id: p.id, acao })
     try {
       // Aprovar manda a versão (tentativa) do pedido que ESTE cartão mostra: se o pedido mudou desde
@@ -318,40 +402,63 @@ export default function PendentesPage() {
       const data = await (acao === 'aprovar'
         ? aprovar.mutateAsync({ id: p.id, tentativa: p.tentativa })
         : recusar.mutateAsync(p.id))
-      // Fechado: sai da fila aberta, então o cartão fica aqui com o desfecho (e as ressalvas da execução).
-      const ressalvas = (acao === 'aprovar' ? data?.ressalvas : null) ?? data?.pendente?.ressalvas ?? []
-      setDesfechos(d => [{ ...p, ...data?.pendente, ressalvas }, ...d.filter(x => x.id !== p.id)])
+      const ressalvas = fecharCartao(p, acao, data)
       avisar('success', acao === 'aprovar' ? 'Ação executada' : 'Pedido recusado', ressalvas.length ? 'Com ressalvas: leia no cartão.' : null)
     } catch (err) {
-      const status = err?.response?.status
-      // Um 524 do Cloudflare (ou um 502) chega como HTML: o corpo não é objeto e não tem `error`.
-      const corpo = err?.response?.data && typeof err.response.data === 'object' ? err.response.data : {}
-      const semResposta = !err?.response
-      const interrompida = status === 500 && corpo.error === 'interrompida'
-      const incerto = !interrompida && (semResposta || (status >= 500 && !CODIGOS_SEM_EFEITO.has(corpo.error)))
-      const mensagem = incerto ? MSG_INCERTO : (corpo.mensagem ?? (err?.response ? MSG_PADRAO : MSG_SEM_REDE))
-      if (interrompida) {
-        // Virou `falhou`: final, e a ação pode ter acontecido. O texto do servidor diz o quê.
-        setDesfechos(d => [{ ...p, estado: 'falhou', erro: mensagem, ressalvas: [] }, ...d.filter(x => x.id !== p.id)])
+      const tipo = registrarErro(p, err)
+      if (tipo === 'interrompida') {
         avisar('error', 'Execução interrompida', 'Leia no cartão o que confirmar antes de pedir de novo.')
-      } else if (incerto) {
-        // Sem saber se rodou: o aviso fica no cartão e a fila é relida (a mutação já invalida a lista
-        // ao terminar, com erro ou não) — se a ação rodou, o cartão vira o desfecho dela.
-        setFalha({ id: p.id, mensagem, codigo: 'incerto', status })
+      } else if (tipo === 'incerto') {
         avisar('error', 'Não sabemos se foi feito', 'Recarregue a página para ver o estado do pedido.')
-      } else {
-        // 422: nada aconteceu e o pedido segue pendente (com o resumo novo, se era preview_desatualizado).
-        // O texto do servidor fica no cartão.
-        setFalha({ id: p.id, mensagem, codigo: corpo.error, status })
-        // 409: o estado mudou por baixo (outra aba aprovou, o prazo venceu, o resumo mudou). Pedir o do
-        // link (?id=) traz o estado REAL dele, com as ressalvas, e o mantém na tela.
-        if (status === 409) setParams({ id: p.id }, { replace: true })
+      } else if (err?.response?.status === 409) {
+        // Pedir o do link (?id=) traz o estado REAL dele, com as ressalvas, e o mantém na tela.
+        setParams({ id: p.id }, { replace: true })
       }
     } finally {
       setAgindo(null)
       // O botão clicado some da tela; sem isto o foco cai no body.
       area.current?.focus()
     }
+  }
+
+  // Lote: a MESMA rota do botão do cartão, um pedido por vez, na ordem em que a IA pediu. Cada um tem
+  // as conferências de sempre no servidor (a versão lida, o resumo recalculado). Não é tudo-ou-nada:
+  // o que passou fica feito. Para no primeiro sem resposta (não sabemos se rodou: seguir disparando
+  // seria às cegas) e quando a sessão cai (401/403).
+  async function executarLote(acao, alvos) {
+    setConfirmar(null)
+    setProgresso({ acao, feitos: 0, total: alvos.length })
+    let ok = 0
+    let nao = 0
+    let parou = false
+    for (const p of alvos) {
+      tirarFalha(p.id)
+      try {
+        const data = acao === 'aprovar' ? await aprovarPendenteMcp(p.id, p.tentativa) : await recusarPendenteMcp(p.id)
+        fecharCartao(p, acao, data)
+        ok++
+      } catch (err) {
+        trocarPedidoNoCache(qc, err?.response?.data?.pendente)
+        const tipo = registrarErro(p, err)
+        nao++
+        const st = err?.response?.status
+        if (tipo === 'incerto' || st === 401 || st === 403) { parou = true }
+      }
+      setProgresso(pr => pr && { ...pr, feitos: pr.feitos + 1 })
+      if (parou) break
+    }
+    const naoTentados = alvos.length - ok - nao
+    setProgresso(null)
+    setSelecionados(new Set())
+    qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] })
+    const feitoTxt = acao === 'aprovar'
+      ? (ok === 1 ? '1 pedido executado' : `${ok} pedidos executados`)
+      : (ok === 1 ? '1 pedido recusado' : `${ok} pedidos recusados`)
+    const partes = []
+    if (nao > 0) partes.push(nao === 1 ? '1 não passou: leia no cartão.' : `${nao} não passaram: leia nos cartões.`)
+    if (parou && naoTentados > 0) partes.push(`Parei sem saber se o último rodou: ${naoTentados} não foram tentados.`)
+    avisar(nao > 0 ? 'error' : 'success', feitoTxt, partes.join(' ') || null)
+    area.current?.focus()
   }
 
   if (moldura) {
@@ -377,9 +484,23 @@ export default function PendentesPage() {
   const aguardando = cartoes.filter(p => estadoVisual(p, agora) === 'pendente').length
   const executando = cartoes.filter(p => estadoVisual(p, agora) === 'aprovada').length
 
+  // Lote: só faz sentido com 2+ pedidos que ainda podem ser decididos.
+  const selecionaveis = cartoes.filter(p => estadoVisual(p, agora) === 'pendente')
+  const modoLote = selecionaveis.length >= 2
+  // Na ordem em que a IA pediu (o mais antigo primeiro): é a ordem em que ela pensou as ações.
+  const alvosLote = selecionaveis.filter(p => selecionados.has(p.id))
+    .sort((a, b) => Date.parse(a.criada_em) - Date.parse(b.criada_em))
+  const ocupado = agindo !== null || progresso !== null
+  const alternar = (ids, marcar) => setSelecionados(sel => {
+    const n = new Set(sel)
+    ids.forEach(id => (marcar ? n.add(id) : n.delete(id)))
+    return n
+  })
+  const grupos = agrupar(cartoes)
+
   // Com a tela anterior mantida enquanto a nova carrega (placeholder), `dados` ainda não é a do link.
   const linkNaoAchado = !!idUrl && !!dados && !q.isPlaceholderData && !dados.destaque
-  const falhaSemCartao = falha && !vistos.has(falha.id)
+  const falhasSemCartao = Object.entries(falhas).filter(([id]) => !vistos.has(id))
 
   let corpo
   if (q.isLoading) {
@@ -410,12 +531,12 @@ export default function PendentesPage() {
             <span>Não encontramos o pedido deste link. Ele pode ser de outra pessoa ou ter sido apagado.</span>
           </p>
         )}
-        {falhaSemCartao && (
-          <p className="pen-aviso pen-aviso--erro" role="alert">
-            <span className="pen-rotulo">{rotuloDaFalha(falha)}</span>
-            <span>{falha.mensagem}</span>
+        {falhasSemCartao.map(([id, f]) => (
+          <p key={id} className="pen-aviso pen-aviso--erro" role="alert">
+            <span className="pen-rotulo">{rotuloDaFalha(f)}</span>
+            <span>{f.mensagem}</span>
           </p>
-        )}
+        ))}
         {cartoes.length === 0 ? (
           <FlowEmptyState
             className="pen-vazio"
@@ -427,21 +548,59 @@ export default function PendentesPage() {
             ghost={<Silhueta />}
           />
         ) : (
-          <ul className="pen-lista">
-            {cartoes.map(p => (
-              <li key={p.id}>
-                <Cartao
-                  p={p}
-                  estado={estadoVisual(p, agora)}
-                  destaque={p.id === idUrl || desfechos.some(d => d.id === p.id)}
-                  agindo={agindo}
-                  falha={falha?.id === p.id ? falha : null}
-                  onAgir={agir}
-                  agora={agora}
-                />
-              </li>
-            ))}
-          </ul>
+          <div className="pen-grupos">
+            {grupos.map(g => {
+              const abertos = g.itens.filter(p => estadoVisual(p, agora) === 'pendente')
+              const marcados = abertos.filter(p => selecionados.has(p.id)).length
+              const nome = g.nome ?? 'Outros pedidos'
+              const comCabecalho = grupos.length > 1 || modoLote
+              return (
+                <section key={g.chave} className="pen-grupo" aria-label={g.nome ? `Campanha ${g.nome}` : nome}>
+                  {comCabecalho && (
+                    <div className="pen-grupo-head">
+                      {modoLote && abertos.length > 0 && (
+                        <CaixaTodos marcados={marcados} total={abertos.length} disabled={ocupado}
+                          rotulo={`Selecionar todos os pedidos de ${nome}`}
+                          onChange={() => alternar(abertos.map(p => p.id), marcados < abertos.length)} />
+                      )}
+                      <h2 className="pen-grupo-nome">
+                        {g.nome && <span className="pen-grupo-tipo">Campanha</span>}
+                        <span dir="auto">{nome}</span>
+                      </h2>
+                      <span className="pen-grupo-conta">
+                        {g.itens.length === 1 ? '1 pedido' : `${g.itens.length} pedidos`}
+                        {abertos.length > 0 && abertos.length < g.itens.length && ` · ${abertos.length} aguardando`}
+                      </span>
+                    </div>
+                  )}
+                  <ul className="pen-lista">
+                    {g.itens.map(p => {
+                      const estado = estadoVisual(p, agora)
+                      return (
+                        <li key={p.id}>
+                          <Cartao
+                            p={p}
+                            estado={estado}
+                            destaque={p.id === idUrl || desfechos.some(d => d.id === p.id)}
+                            agindo={progresso ? { id: null, acao: 'lote' } : agindo}
+                            falha={falhas[p.id] ?? null}
+                            onAgir={agir}
+                            agora={agora}
+                            Titulo={comCabecalho ? 'h3' : 'h2'}
+                            selecao={modoLote && estado === 'pendente' ? {
+                              marcado: selecionados.has(p.id),
+                              disabled: ocupado,
+                              alternar: () => alternar([p.id], !selecionados.has(p.id)),
+                            } : null}
+                          />
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </section>
+              )
+            })}
+          </div>
         )}
       </>
     )
@@ -471,6 +630,56 @@ export default function PendentesPage() {
       <div ref={area} tabIndex={-1} aria-label="Pedidos" className="pen-area">
         {corpo}
       </div>
+
+      {modoLote && (alvosLote.length > 0 || progresso) && (
+        <div className="pen-lote" role="region" aria-label="Decidir em lote">
+          {progresso ? (
+            <div className="pen-lote-barra" role="status">
+              <span className="pen-lote-texto">
+                {progresso.acao === 'aprovar' ? 'Executando' : 'Recusando'} {Math.min(progresso.feitos + 1, progresso.total)} de {progresso.total}…
+              </span>
+              <span className="pen-lote-trilho" aria-hidden="true">
+                <span className="pen-lote-avanco" style={{ transform: `scaleX(${progresso.total ? progresso.feitos / progresso.total : 0})` }} />
+              </span>
+            </div>
+          ) : confirmar ? (
+            <div className="pen-lote-confirma">
+              <p className="pen-lote-titulo">
+                {confirmar.acao === 'aprovar'
+                  ? `Aprovar e executar ${alvosLote.length} pedidos?`
+                  : `Recusar ${alvosLote.length} pedidos?`}
+              </p>
+              <p className="pen-lote-apoio">
+                {confirmar.acao === 'aprovar'
+                  ? 'Rodam um por vez, na ordem em que a IA pediu, cada um conferido de novo. O que mudou desde que você leu fica pendente. Não é tudo-ou-nada: o que passar fica feito.'
+                  : 'Nada é executado. A IA precisa pedir de novo se você mudar de ideia.'}
+              </p>
+              <ol className="pen-lote-lista">
+                {alvosLote.map(p => <li key={p.id} dir="auto">{p.preview?.resumo ?? p.tool}</li>)}
+              </ol>
+              <div className="pen-lote-botoes">
+                <button className="btn btn-secondary" type="button" onClick={() => setConfirmar(null)}>Voltar</button>
+                <button className="btn btn-primary" type="button" onClick={() => executarLote(confirmar.acao, alvosLote)}>
+                  {confirmar.acao === 'aprovar' ? `Confirmar e executar ${alvosLote.length}` : `Confirmar recusa de ${alvosLote.length}`}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="pen-lote-barra">
+              <span className="pen-lote-texto"><strong>{alvosLote.length}</strong> {alvosLote.length === 1 ? 'selecionado' : 'selecionados'}</span>
+              <button className="pen-lote-limpar" type="button" disabled={ocupado} onClick={() => setSelecionados(new Set())}>Limpar</button>
+              <span className="pen-lote-acoes">
+                <button className="btn btn-secondary" type="button" disabled={ocupado} onClick={() => setConfirmar({ acao: 'recusar' })}>
+                  Recusar selecionados
+                </button>
+                <button className="btn btn-primary" type="button" disabled={ocupado} onClick={() => setConfirmar({ acao: 'aprovar' })}>
+                  Aprovar selecionados ({alvosLote.length})
+                </button>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* A região viva fica SEMPRE montada e só o conteúdo muda: um leitor de tela só anuncia o que entra
           numa região que já existia. */}

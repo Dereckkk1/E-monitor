@@ -814,6 +814,18 @@ das chamadas da tela). Layout: cartão em duas colunas (o pedido | o painel da d
 `frontend/e2e/mcp-pendentes.spec.js`. Tela nova = regra 5 do `CLAUDE.md` (o lockfile não pode ser podado) e deploy em dois
 caminhos (backend primeiro: a tela chama rotas novas).
 
+**Decidir em lote (2026-11-09).** Com 2+ pedidos abertos, a tela agrupa os cartões pela **campanha** do pedido (a lista
+`GET /v1/internal/mcp/pendentes` traz `campanha: {id, nome}`, lida de `args.campanha_id` com o nome atual; `null` sem
+campanha, com campanha apagada ou se a leitura dos nomes falhar, e então o pedido cai em "Outros pedidos"). Cada pedido
+pendente ganha uma caixa de marcar e cada grupo um "selecionar todos"; a barra fixa no rodapé oferece **Aprovar
+selecionados** e **Recusar selecionados**, sempre com uma confirmação que lista o resumo de cada um. O lote **não tem rota
+própria**: a tela chama a MESMA `POST …/pendentes/{id}/aprovar` (ou `/recusar`) do cartão, **um pedido por vez, do mais
+antigo para o mais novo** (a ordem em que a IA pediu), cada um com a `tentativa` que a pessoa leu e todas as conferências do
+servidor; a fila é relida uma vez no fim. **Não é tudo-ou-nada**: o que passou fica feito, o que o servidor recusou (422,
+409) fica pendente com o motivo no cartão, e o lote **para no primeiro pedido sem resposta** (rede caiu, 5xx sem corpo
+nosso) ou com a sessão caída (401/403), porque seguir disparando seria às cegas. Teste em
+`frontend/e2e/mcp-pendentes-lote.spec.js`; o campo `campanha` em `TestPendentesHTTP_ListaTrazACampanhaDoPedido`.
+
 ### Limitações e follow-ups (Fatia 4)
 
 - **Corrida do último admin.** `ultimo_admin` conta os admins ativos no `Preview`/`planejar*`, **fora** da transação da escrita
