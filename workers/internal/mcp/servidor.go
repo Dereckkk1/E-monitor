@@ -30,6 +30,7 @@ var ToolsEsperadas = []string{
 	"ativar_cliente",
 	"auditoria_mcp",
 	"buscar_emissoras",
+	"buscar_emissoras_lote",
 	"cancelar_campanha",
 	"criar_campanha",
 	"criar_cliente",
@@ -172,6 +173,7 @@ func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
 var ToolsPerfilProgramacao = []string{
 	"apagar_regra_distribuicao",
 	"buscar_emissoras",
+	"buscar_emissoras_lote",
 	"criar_campanha",
 	"criar_regra_distribuicao",
 	"editar_campanha",
@@ -219,6 +221,7 @@ func novoServidorCompleto(cfg ConfigServidor, p *Principal) *sdk.Server {
 	registrarGrade(s, cfg)
 	registrarMateriais(s, cfg)
 	registrarEmissoras(s, cfg)
+	registrarEmissorasLote(s, cfg)
 	registrarVeiculacoes(s, cfg)
 	registrarUsuarios(s, cfg)
 	registrarIntegracoes(s, cfg, p)
