@@ -84,8 +84,13 @@ const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids, name,
        plays_per_day, created_at, updated_at`
 
 func (dr *DistributionRules) Create(ctx context.Context, in CreateDistributionRuleInput) (*DistributionRule, error) {
+	return insertRule(ctx, dr.pool, in)
+}
+
+// insertRule é o INSERT do Create sobre um pool ou uma transação.
+func insertRule(ctx context.Context, q queryRower, in CreateDistributionRuleInput) (*DistributionRule, error) {
 	var r DistributionRule
-	err := dr.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO distribution_rules
 		  (campaign_id, type_id, station_ids, material_ids, name, start_date, end_date,
 		   weekday_mask, time_start, time_end, plays_per_day)

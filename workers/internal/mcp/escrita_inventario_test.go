@@ -29,11 +29,16 @@ import (
 // são crítico desde a declaração: nunca recebem token, então NÃO levam
 // `confirmacao`; a pessoa aprova em /pendentes. Tool de escrita nova entra aqui
 // e em ToolsEsperadas no mesmo commit.
+//
+// 2026-11-11: programar_campanha (confirma, escala como criar_campanha) entrou, e
+// editar_precos_campanha desceu de critico para confirma com Escalar (crítico só com
+// veiculação aprovada) — as duas levam `confirmacao`; são 39 as que podem pedir token.
 var escritasEsperadas = map[string]string{
 	"marcar_notificacoes_lidas":        "livre",
 	"reconhecer_similaridade_material": "livre",
 
 	"criar_campanha":            "confirma",
+	"programar_campanha":        "confirma",
 	"editar_campanha":           "confirma",
 	"editar_emissoras_campanha": "confirma",
 
@@ -58,7 +63,7 @@ var escritasEsperadas = map[string]string{
 	"cancelar_campanha":      "critico",
 	"apagar_campanha":        "critico",
 	"editar_cpm_fixo":        "critico",
-	"editar_precos_campanha": "critico",
+	"editar_precos_campanha": "confirma",
 
 	"criar_veiculacao_manual": "critico",
 	"ignorar_veiculacao":      "critico",
@@ -149,7 +154,7 @@ func TestInventarioEscrita_ConjuntoEExatamenteOCatalogo(t *testing.T) {
 	}
 	sort.Strings(escritas)
 	sort.Strings(esperadas)
-	require.Len(t, esperadas, 38)
+	require.Len(t, esperadas, 39)
 	require.Equal(t, esperadas, escritas)
 }
 
@@ -225,7 +230,7 @@ func TestInventarioEscrita_ConfirmacaoNoSchemaSoOndePodePedir(t *testing.T) {
 			require.NotEqual(t, "confirmacao", obrigatorio, "%s: confirmacao não é obrigatória", tl.Name)
 		}
 	}
-	require.Equal(t, 38, vistas)
+	require.Equal(t, 39, vistas)
 }
 
 // Nenhum schema de escrita carrega campo proibido, em nenhuma profundidade.

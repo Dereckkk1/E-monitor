@@ -92,6 +92,7 @@ var ToolsEsperadas = []string{
 	"obter_webhook_cliente",
 	"plano_do_dia",
 	"pmm_target_cliente",
+	"programar_campanha",
 	"quem_sou_eu",
 	"reconhecer_similaridade_material",
 	"reenviar_pos_venda",
@@ -118,6 +119,9 @@ type ConfigServidor struct {
 	// [interno] antes de qualquer coisa.
 	Escritas *Escritas
 	Log      *zap.Logger
+	// Perfil: as únicas tools que este endereço expõe (nil = todas). O /mcp/programacao usa
+	// ToolsPerfilProgramacao.
+	Perfil []string
 }
 
 func (c ConfigServidor) log() *zap.Logger {
@@ -154,6 +158,57 @@ var servidoresMontados atomic.Int64
 // novoServidor monta um Server por pedido (stateless): o principal entra por
 // closure em cada tool, sem estado entre pedidos.
 func novoServidor(cfg ConfigServidor, p *Principal) *sdk.Server {
+	s := novoServidorCompleto(cfg, p)
+	if len(cfg.Perfil) > 0 {
+		s.RemoveTools(foraDoPerfil(cfg.Perfil)...)
+	}
+	return s
+}
+
+// ToolsPerfilProgramacao são as tools do /mcp/programacao: só o que um agente que programa
+// campanha usa (achar cliente, emissora e tipo; programar; conferir; corrigir). O Gemini baixa o
+// tools/list inteiro duas vezes a cada turno (log da VM, 2026-11-10): com as 84 tools são ~118 KB
+// por vez; com estas, uma fração — e o modelo escolhe entre poucas.
+var ToolsPerfilProgramacao = []string{
+	"apagar_regra_distribuicao",
+	"buscar_emissoras",
+	"criar_campanha",
+	"criar_regra_distribuicao",
+	"editar_campanha",
+	"editar_emissoras_campanha",
+	"editar_precos_campanha",
+	"editar_regra_distribuicao",
+	"listar_campanhas",
+	"listar_clientes",
+	"listar_materiais",
+	"listar_precos_campanha",
+	"listar_regras_distribuicao",
+	"listar_tipos_material",
+	"minhas_pendentes",
+	"obter_campanha",
+	"obter_cliente",
+	"obter_emissora",
+	"programar_campanha",
+	"quem_sou_eu",
+	"vincular_material",
+}
+
+// foraDoPerfil: as tools registradas que o perfil não expõe.
+func foraDoPerfil(perfil []string) []string {
+	manter := make(map[string]bool, len(perfil))
+	for _, n := range perfil {
+		manter[n] = true
+	}
+	var tirar []string
+	for _, n := range ToolsEsperadas {
+		if !manter[n] {
+			tirar = append(tirar, n)
+		}
+	}
+	return tirar
+}
+
+func novoServidorCompleto(cfg ConfigServidor, p *Principal) *sdk.Server {
 	servidoresMontados.Add(1)
 	s := sdk.NewServer(&sdk.Implementation{Name: "emonitor", Version: cfg.Versao},
 		&sdk.ServerOptions{Instructions: Instrucoes, SchemaCache: cacheEsquemas, Logger: logSDK})

@@ -337,12 +337,12 @@ func TestInstrucoes_Relatorios(t *testing.T) {
 	require.Contains(t, Instrucoes, "Assertividade: apresente o percentual sempre com o volume.")
 }
 
-// A lista é a do tools/list do SDK (ordem alfabética) e tem as 83 tools das
-// Fatias 0 a 4 (45 de leitura + 38 de escrita): quem acrescentar tool atualiza
-// o número junto.
-func TestToolsEsperadas_OrdemAlfabeticaE83(t *testing.T) {
+// A lista é a do tools/list do SDK (ordem alfabética) e tem as 84 tools: as 83 das
+// Fatias 0 a 4 (45 de leitura + 38 de escrita) mais programar_campanha
+// (2026-11-11). Quem acrescentar tool atualiza o número junto.
+func TestToolsEsperadas_OrdemAlfabeticaE84(t *testing.T) {
 	require.True(t, slices.IsSorted(ToolsEsperadas))
-	require.Len(t, ToolsEsperadas, 83)
+	require.Len(t, ToolsEsperadas, 84)
 }
 
 // Toda tool que pede id obrigatório diz "nunca invente" (contrato §3.2), na

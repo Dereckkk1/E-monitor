@@ -117,7 +117,7 @@ func TestDesativarCliente_UsuarioNovoDepoisDoPedidoPedeNovaAprovacao(t *testing.
 // nunca viu.
 func TestEditarPrecosCampanha_PrecoMudadoPorOutraPessoaPedeNovaAprovacao(t *testing.T) {
 	b := novaBancadaTool(t)
-	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 	out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e2, 1500.75)))
 	require.Contains(t, mustJSON(t, out["preview"].(map[string]any)["mudancas"]), `"de":"sem preço"`)
 	mcptest.PrecoConsolidado(t, b.ctx, b.pool, c.camp, c.e2, 900)

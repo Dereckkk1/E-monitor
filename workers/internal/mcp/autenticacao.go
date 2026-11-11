@@ -51,6 +51,15 @@ func NovoAutenticador(st *tokens.Store, db auditoria.Execer, urlMetadados string
 	}
 }
 
+// ComMetadados devolve o mesmo autenticador apontando o WWW-Authenticate para outros metadados de
+// recurso (o /mcp/programacao). Os limitadores são os MESMOS ponteiros: a cota de 240/min é do
+// token, não do endereço — dois endereços não dobram a cota.
+func (a *Autenticador) ComMetadados(url string) *Autenticador {
+	b := *a
+	b.URLMetadados = url
+	return &b
+}
+
 func (a *Autenticador) resolver(r *http.Request, bearer string) (*Principal, error) {
 	if !strings.HasPrefix(bearer, tokens.PrefixoAcesso) {
 		return nil, errRecusada

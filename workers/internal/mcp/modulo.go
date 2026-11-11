@@ -65,6 +65,8 @@ type DepsModulo struct {
 
 type Modulo struct {
 	mcp http.Handler
+	// mcpProgramacao é o perfil enxuto (ToolsPerfilProgramacao) em /mcp/programacao.
+	mcpProgramacao http.Handler
 	// cfg é a configuração com que o handler MCP foi montado (lida pelos testes
 	// da ligação DepsModulo → Leitura).
 	cfg    ConfigServidor
@@ -118,21 +120,27 @@ func NovoModulo(d DepsModulo) *Modulo {
 	if err != nil {
 		d.Log.Error("mcp: índice das escritas inválido — aprovações de pendentes NÃO montadas", zap.Error(err))
 	}
+	// O perfil de programação: o mesmo servidor com menos tools, noutro endereço.
+	cfgProg := cfg
+	cfgProg.Perfil = ToolsPerfilProgramacao
 	return &Modulo{
-		pendentesHTTP: &PendentesHTTP{Tokens: st, Pendentes: cfg.Escritas.Pendentes, Aprovacoes: apr, Log: d.Log},
-		varredor:      &Varredor{DB: d.Pool, Log: d.Log},
-		mcp:           SoPost(a.Middleware(NovoHandlerMCP(cfg))),
-		cfg:           cfg,
-		oauth:         o,
-		tokens:        &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
+		pendentesHTTP:  &PendentesHTTP{Tokens: st, Pendentes: cfg.Escritas.Pendentes, Aprovacoes: apr, Log: d.Log},
+		varredor:       &Varredor{DB: d.Pool, Log: d.Log},
+		mcp:            SoPost(a.Middleware(NovoHandlerMCP(cfg))),
+		mcpProgramacao: SoPost(a.ComMetadados(o.URLMetadadosRecursoProgramacao()).Middleware(NovoHandlerMCP(cfgProg))),
+		cfg:            cfg,
+		oauth:          o,
+		tokens:         &TokensHTTP{Tokens: st, DB: d.Pool, Log: d.Log},
 	}
 }
 
 // MontarPublico: rotas sem JWT do portal (o MCP tem a própria autenticação).
 func (m *Modulo) MontarPublico(r chi.Router) {
 	r.Handle("/mcp", m.mcp)
+	r.Handle("/mcp/programacao", m.mcpProgramacao)
 	r.Get("/.well-known/oauth-protected-resource", m.oauth.MetadadosRecurso)
 	r.Get("/.well-known/oauth-protected-resource/mcp", m.oauth.MetadadosRecurso)
+	r.Get("/.well-known/oauth-protected-resource/mcp/programacao", m.oauth.MetadadosRecursoProgramacao)
 	r.Get("/.well-known/oauth-authorization-server", m.oauth.MetadadosAutorizacao)
 	r.Post("/mcp/oauth/register", m.oauth.Registrar)
 	r.Get("/mcp/oauth/authorize", m.oauth.Autorizar)

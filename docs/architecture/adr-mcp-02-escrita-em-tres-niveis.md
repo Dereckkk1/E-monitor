@@ -48,8 +48,9 @@ crítico") jogaria quase todo o catálogo do E-monitor em `critico`, inclusive m
 
 - **Positivas:** o caso comum (mexer no futuro) custa uma confirmação, não uma ida ao portal. O replay de um token de
   confirmação nunca duplica uma criação.
-- **Aceitas:** o consumo do token não está na mesma transação da escrita. Nenhuma das funções reaproveitadas das rotas
-  aceita `pgx.Tx`, e passar uma transação por todas mudaria o comportamento das rotas. A auditoria também é gravada
+- **Aceitas:** o consumo do token não está na mesma transação da escrita. As funções reaproveitadas das rotas não
+  recebem a transação do token, e passar uma por todas mudaria o comportamento das rotas. (Desde 2026-11-11, os INSERTs de
+  campanha, regra e preço aceitam `pgx.Tx` para a `programar_campanha` gravar os três juntos; o token continua fora.) A auditoria também é gravada
   depois do sucesso, fora da transação.
 - **Negativas / dívida:** a escalada depende da data corrente em SP. Um pedido que atravessa a meia-noite pode mudar de
   preview (ver ADR-MCP-03, `preview_desatualizado`).

@@ -1,6 +1,6 @@
 ---
 status: parcialmente-implementado
-ultima-verificacao: 2026-11-03
+ultima-verificacao: 2026-11-11
 codigo-relacionado:
   - workers/internal/mcp/
   - workers/internal/mcp/oauth/
@@ -58,6 +58,9 @@ codigo-relacionado:
   - migrations/0074_mcp_acoes_pendentes.up.sql
   - workers/internal/mcp/pendentes.go
   - workers/internal/mcp/registro_escritas.go
+  - workers/internal/mcp/tools_escrita_programar.go
+  - workers/internal/acoes/programacao.go
+  - workers/internal/catalog/campaign_program.go
   - workers/internal/mcp/aprovacao.go
   - workers/internal/mcp/pendentes_http.go
   - workers/internal/mcp/varredor.go
@@ -93,7 +96,7 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | 4 | Escrita `critico` executável: 18 tools que viram pedido pendente (`mcp_acoes_pendentes`), a tela `/pendentes` onde o admin que pediu aprova, o varredor e `minhas_pendentes`; torna executáveis também as escaladas das 20 tools da Fatia 3 | implementada (branch `feat/mcp-server`, não deployada; ver "Crítico e /pendentes (Fatia 4)") |
 | 5 | Ecossistema: ADRs ([01](../architecture/adr-mcp-01-dentro-da-api-go.md), [02](../architecture/adr-mcp-02-escrita-em-tres-niveis.md), [03](../architecture/adr-mcp-03-critico-aprovado-em-pendentes.md)); hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato) | ADRs feitos; o lado do hub espera o deploy do MCP (até lá, o hub diria aos modelos para usar um conector que não existe) |
 
-Tools hoje: as 83 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
+Tools hoje: as 84 da seção "Tools" — `programar_campanha` (2026-11-11, ver [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11)) mais as 83 das fatias (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
 `minhas_pendentes`). O `status` deste doc vira `implementado` quando a Fatia 5 fechar.
 
 ## Regra de ouro: o MCP faz parte do pronto
@@ -108,7 +111,9 @@ Tools hoje: as 83 da seção "Tools" (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 d
   tratamento de `cancelada`). Tela e MCP não podem discordar de número. Na escrita, essa função mora em
   `internal/acoes` (ver "Escrita (Fatia 3)"): handler e tool chamam a mesma ação, com os mesmos gatilhos.
 
-## Tools (83)
+## Tools (84)
+
+> `programar_campanha` e o perfil `/mcp/programacao` estão em [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11). Na mesma data, `editar_precos_campanha` desceu para `confirma` (crítico se a campanha já começou ou tem veiculação aprovada); a linha dela continua na tabela das críticas abaixo, por histórico.
 
 ### Fatias 0 e 1 (27)
 
@@ -224,7 +229,7 @@ resultado de cada uma é o registro como ficou, no formato da tool `obter_*` cor
 | `cancelar_campanha` | `campanha_id` | congela o déficit e tira a campanha das telas operacionais e da cobrança | `estado_terminal` (só programada/ativa se cancela). Ressalva diz o que fez com os workers | `acoes.CancelarCampanha` (+ `StopWorkersForCampaign`) |
 | `apagar_campanha` | `campanha_id` | irreversível: apaga a campanha e tudo que é dela | `campanha_com_historico` (qualquer veiculação própria ou projeção, comprovante manual ou pós-venda: "cancele em vez de apagar"). A rota apaga as próprias veiculações; o MCP não | `acoes.ApagarCampanhaCom{ExigirSemHistorico}` |
 | `editar_cpm_fixo` | `campanha_id`, `cpm_fixo` (obrigatório, aceita `null` = volta ao dinâmico) | muda o CPM que o cliente vê | `campanha_cancelada`, `sem_mudanca`, `entrada_invalida` (negativo, > 2 casas, ≥ 1e10) | `acoes.DefinirCPMFixo` |
-| `editar_precos_campanha` | `campanha_id`, `precos[]` (1–300 emissoras; cada item substitui o preço da emissora) | dinheiro: muda investido, bonificação e CPM, inclusive dos dias já veiculados | `entrada_invalida` (emissora fora da campanha ou repetida, modo/valores), `nao_encontrado` (tipo de material), `campanha_cancelada`, `sem_mudanca`. Tudo ou nada numa transação | `acoes.DefinirPrecos` → `Pricing.UpsertLote` |
+| `editar_precos_campanha` | `campanha_id`, `precos[]` (1–300 emissoras; cada item substitui o preço da emissora) | **desde 2026-11-11 é `confirma`** e sobe a crítico quando a campanha já começou ou tem veiculação aprovada (dinheiro: muda investido, bonificação e CPM que o cliente já viu) | `entrada_invalida` (emissora fora da campanha ou repetida, modo/valores), `nao_encontrado` (tipo de material), `campanha_cancelada`, `sem_mudanca`. Tudo ou nada numa transação | `acoes.DefinirPrecos` → `Pricing.UpsertLote` |
 | `criar_veiculacao_manual` | `campanha_id`, `emissora_id`, `material_id`, `quando` (RFC3339 COM fuso), `nota?` | entra na cobrança e pode mudar a categoria das outras veiculações do mesmo dia | `material_nao_vinculado`, instante no futuro, `campanha_cancelada`. **Sem comprovante** (o PDF só entra na criação pela tela; a descrição manda perguntar). Preview avisa possível duplicata (mesmo material × emissora × campanha a ±10 min), sem recusar | `acoes.CriarVeiculacaoManual` |
 | `ignorar_veiculacao` | `veiculacao_id` | a vaga liberada pode promover outra veiculação do mesmo dia | `ja_ignorada` | `acoes.IgnorarVeiculacao` |
 | `restaurar_veiculacao` | `veiculacao_id` | a veiculação volta a disputar a cota do dia e pode rebaixar outra | `nao_ignorada`. Não desfaz retratação nem rejeição do audit | `acoes.RestaurarVeiculacao` |
@@ -245,6 +250,73 @@ Notas: `destinatarios_pos_venda` e `obter_pos_venda` passaram a trazer o `id` do
 pós-venda pedem. Toda mensagem de erro de email passa por `semSegredoNoTexto`. `minhas_pendentes` devolve por padrão só os
 abertos (`pendente` e `aprovada`); `estado=todos` traz o histórico; o `erro` sai cortado em 250 caracteres e as `ressalvas`
 da execução em 250 cada / 300 somadas (a lista de 50 pedidos tem de caber em ~60 KB). Nunca devolve `args`, `resultado` nem `token_id`.
+
+## Programação de campanha numa chamada (2026-11-11)
+
+Origem: programando campanhas pelo Gemini, cada regra era uma chamada com preview e "aprovo" próprios. Numa campanha
+de 6 regras isso levou cerca de 1 h, e o conector do Google caiu várias vezes no meio, deixando a campanha pela metade.
+Os "503" que o Gemini relatou **nunca chegaram à API**: o log do chi na VM (`logs api | grep /mcp`) mostrou 316
+respostas 200, 105 respostas 202 e nenhum 5xx entre 17:35 e 18:50 de 10/11, todas abaixo de 100 ms. A falha é do conector.
+Cada turno do Gemini faz `initialize` e baixa o `tools/list` inteiro duas vezes (84 tools, ~118 KB).
+
+Três mudanças, para usar menos turnos e mandar menos dados por turno:
+
+### `programar_campanha` (confirma; crítico se o início é hoje ou já passou)
+
+- **Entrada:** os campos de `criar_campanha` (com `emissora_ids` obrigatório), `regras[]` (1–150, cada uma com os campos
+  de `criar_regra_distribuicao` exceto `campanha_id` e `material_ids`) e `precos[]` opcional (o formato de
+  `editar_precos_campanha`).
+- **Validação:** as mesmas funções das tools separadas, sobre a campanha "como será criada" (`conferirRegra`,
+  `validarLinhasDePreco`). A recusa diz qual item falhou (`regras[1] ("PI 6967 - Janeiro"): …`, `precos: …`). Regra cuja
+  vigência não tem nenhum dia dos dias da semana é recusada.
+- **Preview com conferência calculada pelo servidor:**
+  - por emissora e tipo, inserções = dias cobertos × N, somando as regras;
+  - valor previsto = inserções × unitário, ou o consolidado;
+  - total geral;
+  - ressalvas: regras do mesmo tipo que **se somam** (mesma emissora e dia — o erro de regra repetida), emissoras sem
+    regra, emissoras sem preço, tipo com regra e sem valor unitário, nome repetido no cliente, falta de `codigo_hub`.
+- **Gravação numa transação só** (`catalog.ProgramacaoDeCampanha.Gravar`: campanha → regras → preços): uma queda no meio
+  não deixa nada pela metade. Por trás, `acoes.ProgramarCampanha`, com as validações de `CriarCampanha`, `CriarRegra` e
+  `DefinirPrecos` antes da transação e o aviso ao hub depois do commit. Os INSERTs são os mesmos de `Campaigns.Create`,
+  `DistributionRules.Create` e `Pricing.UpsertLote` (refatorados para aceitar `pgx.Tx`), então tela e tool não divergem.
+- **Sem recategorização:** a campanha acabou de nascer e não tem veiculação.
+- **Escalada:** a mesma de `criar_campanha` (início ≤ hoje em SP vira **um** pedido em `/pendentes`; aprovado, grava
+  tudo). Regras e preços não escalam por conta própria: numa campanha que ainda não existe não há número que alguém já
+  tenha visto.
+- **Resultado:** a campanha no formato de `obter_campanha`, os ids e nomes das regras, as emissoras com preço e os totais.
+
+### Preço: `confirma` em campanha futura sem veiculação
+
+`editar_precos_campanha` era `critico` por declaração. Passou a `confirma` com `Escalar` (`escalaDePreco`): sobe a crítico
+quando a campanha **já começou** (início ≤ hoje em SP: o `/insights` mostra o "investido contratado" desde o primeiro dia,
+mesmo sem tocada) **ou** tem qualquer veiculação aprovada (`HaVeiculacao` da campanha, todos os tipos). Campanha futura
+e sem veiculação não tem número que o cliente já viu. O "já começou" veio da revisão da mesma data. Decisão do dono em 2026-11-11, para a programação de campanha nova não
+depender de `/pendentes`.
+
+### Perfil `/mcp/programacao`
+
+O mesmo servidor e as mesmas credenciais, noutro endereço, expondo só `ToolsPerfilProgramacao` (21 tools: achar
+cliente, emissora e tipo; programar; conferir; corrigir regra, preço e emissoras; vincular material; `minhas_pendentes`).
+O `tools/list` cai a menos de 1/3 do inteiro (há teste travando).
+
+- **Implementação:** `ConfigServidor.Perfil` + `RemoveTools` depois do registro.
+- **Cota:** o autenticador é o MESMO (`Autenticador.ComMetadados`). A cota de 240/min é do token e não dobra com dois
+  endereços.
+- **OAuth:**
+  - `/.well-known/oauth-protected-resource/mcp/programacao` devolve `resource = …/mcp/programacao`, porque clientes
+    conferem;
+  - o 401 aponta para esses metadados;
+  - o `/mcp/oauth/authorize` aceita os dois `resource`;
+  - um token emitido para um endereço vale no outro.
+- **Para o Gemini:** cadastrar o conector com a URL `https://api.e-monitor.online/mcp/programacao`. O system prompt do
+  agente (fora do repo) manda usar `programar_campanha`.
+
+### Correção à parte: envio de traces
+
+`observability.buildOTLPExporter` passava `grpc.WithTransportCredentials(insecure…)` como dial option. O `otlptracegrpc`
+acrescenta as credenciais dele **depois** das nossas e, sem `WithInsecure()`, elas são TLS: todo envio ao Jaeger falhava
+com `tls: first record does not look like a TLS handshake`, a cada 10–15 s (log da VM, 2026-11-10). A correção é usar
+`otlptracegrpc.WithInsecure()`.
 
 ## Relatórios: deep-link e downloads
 

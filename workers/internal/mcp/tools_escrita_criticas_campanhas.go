@@ -494,6 +494,7 @@ type linhaPrecoEmissora struct {
 type entradaEditarPrecosCampanha struct {
 	CampanhaID string               `json:"campanha_id" jsonschema:"Id (uuid) da campanha, vindo de listar_campanhas. Nunca invente: pergunte."`
 	Precos     []linhaPrecoEmissora `json:"precos" jsonschema:"De 1 a 300 emissoras da campanha. Cada item SUBSTITUI por inteiro o preço anterior daquela emissora; as emissoras que não estão na lista ficam como estão."`
+	CampoConfirmacao
 }
 
 type precoPlanejado struct {
@@ -596,94 +597,13 @@ func planejarPrecos(ctx context.Context, E *Escritas, in entradaEditarPrecosCamp
 	if len(in.Precos) == 0 {
 		return nil, errEntrada("precos vazio: passe ao menos uma emissora com o preço dela")
 	}
-	if len(in.Precos) > tetoPrecosPorChamada {
-		return nil, errEntrada(fmt.Sprintf("no máximo %d emissoras por chamada", tetoPrecosPorChamada))
-	}
-
-	// 1. Os ids (emissoras e tipos), sem repetição.
-	emissoras := make([]uuid.UUID, len(in.Precos))
-	vistas := make(map[uuid.UUID]bool, len(in.Precos))
-	tiposDaLinha := make([][]uuid.UUID, len(in.Precos))
-	for i, l := range in.Precos {
-		id, err := uuidDaEntrada("emissora_id", l.EmissoraID)
-		if err != nil {
-			return nil, err
-		}
-		if vistas[id] {
-			return nil, errEntrada(fmt.Sprintf("a emissora %s aparece mais de uma vez em precos: mande um preço só por emissora", id))
-		}
-		vistas[id] = true
-		emissoras[i] = id
-		tvistos := make(map[uuid.UUID]bool, len(l.PorTipo))
-		for _, t := range l.PorTipo {
-			tid, err := uuidDaEntrada("tipo_id", t.TipoID)
-			if err != nil {
-				return nil, err
-			}
-			if tvistos[tid] {
-				return nil, errEntrada(fmt.Sprintf("o tipo de material %s aparece mais de uma vez em por_tipo da emissora %s", tid, id))
-			}
-			tvistos[tid] = true
-			tiposDaLinha[i] = append(tiposDaLinha[i], tid)
-		}
-	}
-
-	// 2. Nomes: das emissoras do pedido e das do alvo (o preview nomeia as que ficam sem preço).
-	nomes, err := nomesEmissoras(ctx, E.Leitura, append(slices.Clone(emissoras), camp.TargetStations...))
+	entradas, nomes, tipos, err := validarLinhasDePreco(ctx, E, camp, in.Precos)
 	if err != nil {
 		return nil, err
 	}
-	nomeDe := func(id uuid.UUID) string {
-		if n := nomes[id]; n != "" {
-			return n
-		}
-		return id.String()
-	}
-	tipos, err := nomesTipos(ctx, E.Leitura)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cada linha vira uma EntradaPreco validada.
 	pl := &edicaoDePrecos{camp: camp, nomes: nomes, tipos: tipos}
-	entradas := make([]catalog.EntradaPreco, len(in.Precos))
-	for i, l := range in.Precos {
-		id := emissoras[i]
-		if !slices.Contains(camp.TargetStations, id) {
-			quem := id.String()
-			if n := nomes[id]; n != "" {
-				quem = fmt.Sprintf("%q (%s)", n, id)
-			}
-			return nil, errEntrada(fmt.Sprintf("a emissora %s não está nas emissoras-alvo da campanha %q: só emissora da campanha tem preço (inclua-a antes em editar_emissoras_campanha)", quem, camp.Name))
-		}
-		for _, tid := range tiposDaLinha[i] {
-			if _, ok := tipos[tid]; !ok {
-				return nil, errNaoEncontrado(fmt.Sprintf("tipo de material %s", tid))
-			}
-		}
-		rotulo := fmt.Sprintf("valor_consolidado da emissora %q", nomeDe(id))
-		if l.ValorConsolidado != nil {
-			if err := valorMonetario(rotulo, *l.ValorConsolidado); err != nil {
-				return nil, err
-			}
-		}
-		porTipo := make([]catalog.TypePricing, len(l.PorTipo))
-		for j, t := range l.PorTipo {
-			if err := valorMonetario(fmt.Sprintf("valor_unitario do tipo %s na emissora %q", tipos[tiposDaLinha[i][j]], nomeDe(id)), t.ValorUnitario); err != nil {
-				return nil, err
-			}
-			porTipo[j] = catalog.TypePricing{TypeID: tiposDaLinha[i][j], UnitValue: t.ValorUnitario}
-		}
-		e := catalog.EntradaPreco{StationID: id, Mode: modoDaEntrada(l.Modo), ConsolidatedValue: l.ValorConsolidado, PerType: porTipo}
-		if err := catalog.ValidatePricingInput(catalog.UpsertInput{
-			CampaignID: camp.ID, StationID: id, Mode: e.Mode, ConsolidatedValue: e.ConsolidatedValue, PerType: e.PerType,
-		}); err != nil {
-			return nil, recusaDePreco(nomeDe(id), catalog.UpsertInput{Mode: e.Mode}, err)
-		}
-		entradas[i] = e
-	}
 
-	// 4. O que já está gravado: só entra o que muda.
+	// O que já está gravado: só entra o que muda.
 	atuais, err := E.Leitura.Precos.ListByCampaign(ctx, camp.ID)
 	if err != nil {
 		return nil, err
@@ -715,6 +635,124 @@ func planejarPrecos(ctx context.Context, E *Escritas, in entradaEditarPrecosCamp
 	return pl, nil
 }
 
+// validarLinhasDePreco transforma as linhas da entrada em EntradaPreco validadas contra a campanha
+// (camp pode ser a de uma programação ainda não gravada: só TargetStations e Name são lidos).
+// Devolve também os nomes das emissoras do pedido e das do alvo, e os nomes dos tipos.
+func validarLinhasDePreco(ctx context.Context, E *Escritas, camp *catalog.Campaign, linhas []linhaPrecoEmissora) ([]catalog.EntradaPreco, map[uuid.UUID]string, map[uuid.UUID]string, error) {
+	if len(linhas) > tetoPrecosPorChamada {
+		return nil, nil, nil, errEntrada(fmt.Sprintf("no máximo %d emissoras por chamada", tetoPrecosPorChamada))
+	}
+
+	// 1. Os ids (emissoras e tipos), sem repetição.
+	emissoras := make([]uuid.UUID, len(linhas))
+	vistas := make(map[uuid.UUID]bool, len(linhas))
+	tiposDaLinha := make([][]uuid.UUID, len(linhas))
+	for i, l := range linhas {
+		id, err := uuidDaEntrada("emissora_id", l.EmissoraID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if vistas[id] {
+			return nil, nil, nil, errEntrada(fmt.Sprintf("a emissora %s aparece mais de uma vez em precos: mande um preço só por emissora", id))
+		}
+		vistas[id] = true
+		emissoras[i] = id
+		tvistos := make(map[uuid.UUID]bool, len(l.PorTipo))
+		for _, t := range l.PorTipo {
+			tid, err := uuidDaEntrada("tipo_id", t.TipoID)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if tvistos[tid] {
+				return nil, nil, nil, errEntrada(fmt.Sprintf("o tipo de material %s aparece mais de uma vez em por_tipo da emissora %s", tid, id))
+			}
+			tvistos[tid] = true
+			tiposDaLinha[i] = append(tiposDaLinha[i], tid)
+		}
+	}
+
+	// 2. Nomes: das emissoras do pedido e das do alvo (o preview nomeia as que ficam sem preço).
+	nomes, err := nomesEmissoras(ctx, E.Leitura, append(slices.Clone(emissoras), camp.TargetStations...))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	nomeDe := func(id uuid.UUID) string {
+		if n := nomes[id]; n != "" {
+			return n
+		}
+		return id.String()
+	}
+	tipos, err := nomesTipos(ctx, E.Leitura)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// 3. Cada linha vira uma EntradaPreco validada.
+	entradas := make([]catalog.EntradaPreco, len(linhas))
+	for i, l := range linhas {
+		id := emissoras[i]
+		if !slices.Contains(camp.TargetStations, id) {
+			quem := id.String()
+			if n := nomes[id]; n != "" {
+				quem = fmt.Sprintf("%q (%s)", n, id)
+			}
+			return nil, nil, nil, errEntrada(fmt.Sprintf("a emissora %s não está nas emissoras-alvo da campanha %q: só emissora da campanha tem preço (inclua-a antes em editar_emissoras_campanha)", quem, camp.Name))
+		}
+		for _, tid := range tiposDaLinha[i] {
+			if _, ok := tipos[tid]; !ok {
+				return nil, nil, nil, errNaoEncontrado(fmt.Sprintf("tipo de material %s", tid))
+			}
+		}
+		rotulo := fmt.Sprintf("valor_consolidado da emissora %q", nomeDe(id))
+		if l.ValorConsolidado != nil {
+			if err := valorMonetario(rotulo, *l.ValorConsolidado); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		porTipo := make([]catalog.TypePricing, len(l.PorTipo))
+		for j, t := range l.PorTipo {
+			if err := valorMonetario(fmt.Sprintf("valor_unitario do tipo %s na emissora %q", tipos[tiposDaLinha[i][j]], nomeDe(id)), t.ValorUnitario); err != nil {
+				return nil, nil, nil, err
+			}
+			porTipo[j] = catalog.TypePricing{TypeID: tiposDaLinha[i][j], UnitValue: t.ValorUnitario}
+		}
+		e := catalog.EntradaPreco{StationID: id, Mode: modoDaEntrada(l.Modo), ConsolidatedValue: l.ValorConsolidado, PerType: porTipo}
+		if err := catalog.ValidatePricingInput(catalog.UpsertInput{
+			CampaignID: camp.ID, StationID: id, Mode: e.Mode, ConsolidatedValue: e.ConsolidatedValue, PerType: e.PerType,
+		}); err != nil {
+			return nil, nil, nil, recusaDePreco(nomeDe(id), catalog.UpsertInput{Mode: e.Mode}, err)
+		}
+		entradas[i] = e
+	}
+
+	return entradas, nomes, tipos, nil
+}
+
+// Motivos da escalada do preço: o investido que o cliente já viu muda.
+const (
+	motivoPrecoComVeiculacao = "dinheiro: a campanha já tem veiculação aprovada, e o preço (que não tem histórico) muda o investido, a bonificação e o CPM que o cliente já viu"
+	motivoPrecoJaComecou     = "dinheiro: a campanha já começou, e o /insights mostra o investido contratado desde o primeiro dia (mesmo sem nenhuma veiculação) — o preço muda esse número que o cliente pode ter visto"
+)
+
+// escalaDePreco: preço de campanha que JÁ COMEÇOU (início ≤ hoje em SP) ou que tem veiculação aprovada
+// é crítico — o /insights mostra o "investido contratado" desde o primeiro dia, mesmo sem tocada
+// (catalog/insights.go). Só a campanha futura e sem veiculação é confirma: não há número que alguém
+// tenha visto (decisão do dono em 2026-11-11, para a programação de campanha nova não depender de
+// /pendentes; o "já começou" veio da revisão da mesma data).
+func escalaDePreco(ctx context.Context, E *Escritas, camp *catalog.Campaign) (Escalada, error) {
+	if !camp.StartDate.After(hojeSP(E.agora())) {
+		return Escalada{Nivel: Critico, Motivo: motivoPrecoJaComecou}, nil
+	}
+	ha, err := E.Leitura.Veiculacoes.HaVeiculacao(ctx, catalog.EscopoVeiculacao{CampanhaIDs: []uuid.UUID{camp.ID}})
+	if err != nil {
+		return Escalada{}, err
+	}
+	if !ha {
+		return Escalada{}, nil
+	}
+	return Escalada{Nivel: Critico, Motivo: motivoPrecoComVeiculacao}, nil
+}
+
 type saidaEditarPrecosCampanha struct {
 	Campanha ref        `json:"campanha"`
 	Gravadas int        `json:"gravadas"`
@@ -730,9 +768,18 @@ func escritaEditarPrecosCampanha(cfg ConfigServidor) Escrita[entradaEditarPrecos
 			"estão. Valores em reais, até 2 casas decimais; de 1 a 300 emissoras. As armadilhas: (1) só emissora-alvo da campanha tem preço; (2) o preço " +
 			"não tem histórico — muda o investido, a bonificação e o CPM de toda a campanha, inclusive dos dias já veiculados; (3) só emissora com preço " +
 			"entra no investido; (4) pós-venda já enviado não muda. Campanha cancelada é recusada, e pedir os preços que já estão gravados também " +
-			"(sem_mudanca). " + fraseCritica,
-		Nivel:  Critico,
-		Motivo: "dinheiro: muda o investido, a bonificação e o CPM que o cliente vê",
+			"(sem_mudanca). Sobe para crítico quando a campanha já começou (início hoje ou antes: o /insights mostra o investido contratado desde o " +
+			"primeiro dia) ou já tem veiculação aprovada — o preço muda o investido, a bonificação e o CPM que o cliente já viu; nesse caso vira um " +
+			"pedido que uma pessoa aprova em /pendentes — entregue o link aprovar_em e diga que nada aconteceu ainda. Campanha futura e sem " +
+			"veiculação (recém-programada) é confirma. Nunca invente ids: pergunte. Mostre o preview e espere a pessoa aprovar antes de confirmar.",
+		Nivel: Confirma,
+		Escalar: func(ctx context.Context, E *Escritas, in entradaEditarPrecosCampanha) (Escalada, error) {
+			camp, err := lerCampanhaParaEscrever(ctx, E.Leitura, in.CampanhaID)
+			if err != nil {
+				return Escalada{}, err
+			}
+			return escalaDePreco(ctx, E, camp)
+		},
 		Recurso: func(in entradaEditarPrecosCampanha) (string, *uuid.UUID) {
 			return recursoDe("campaign", in.CampanhaID)
 		},
