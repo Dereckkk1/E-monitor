@@ -96,7 +96,7 @@ diagnosticar: [operations/mcp.md](../operations/mcp.md).
 | 4 | Escrita `critico` executável: 18 tools que viram pedido pendente (`mcp_acoes_pendentes`), a tela `/pendentes` onde o admin que pediu aprova, o varredor e `minhas_pendentes`; torna executáveis também as escaladas das 20 tools da Fatia 3 | implementada (branch `feat/mcp-server`, não deployada; ver "Crítico e /pendentes (Fatia 4)") |
 | 5 | Ecossistema: ADRs ([01](../architecture/adr-mcp-01-dentro-da-api-go.md), [02](../architecture/adr-mcp-02-escrita-em-tres-niveis.md), [03](../architecture/adr-mcp-03-critico-aprovado-em-pendentes.md)); hub (linha "Pontes", `SEM_MIDIA_NO_HUB`, §1 do contrato) | ADRs feitos; o lado do hub espera o deploy do MCP (até lá, o hub diria aos modelos para usar um conector que não existe) |
 
-Tools hoje: as 84 da seção "Tools" — `programar_campanha` (2026-11-11, ver [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11)) mais as 83 das fatias (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
+Tools hoje: as 85 da seção "Tools" — `programar_campanha` e `buscar_emissoras_lote` (2026-11-11, ver [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11)) mais as 83 das fatias (27 das Fatias 0 e 1 + 17 da Fatia 2 + 20 da Fatia 3 + 19 da Fatia 4: 18 escritas críticas e
 `minhas_pendentes`). O `status` deste doc vira `implementado` quando a Fatia 5 fechar.
 
 ## Regra de ouro: o MCP faz parte do pronto
@@ -111,9 +111,9 @@ Tools hoje: as 84 da seção "Tools" — `programar_campanha` (2026-11-11, ver [
   tratamento de `cancelada`). Tela e MCP não podem discordar de número. Na escrita, essa função mora em
   `internal/acoes` (ver "Escrita (Fatia 3)"): handler e tool chamam a mesma ação, com os mesmos gatilhos.
 
-## Tools (84)
+## Tools (85)
 
-> `programar_campanha` e o perfil `/mcp/programacao` estão em [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11). Na mesma data, `editar_precos_campanha` desceu para `confirma` (crítico se a campanha já começou ou tem veiculação aprovada); a linha dela continua na tabela das críticas abaixo, por histórico.
+> `programar_campanha`, `buscar_emissoras_lote` e o perfil `/mcp/programacao` estão em [Programação de campanha numa chamada](#programação-de-campanha-numa-chamada-2026-11-11). Na mesma data, `editar_precos_campanha` desceu para `confirma` (crítico se a campanha já começou ou tem veiculação aprovada); a linha dela continua na tabela das críticas abaixo, por histórico.
 
 ### Fatias 0 e 1 (27)
 
@@ -140,6 +140,7 @@ Listas: `{items, page: {total, limit, offset, returned, has_more}}`, `limit` pad
 | `obter_material` | material, similaridade, campanhas | `GET /materials/{id}` + `CampaignMaterials.ListByMaterial` |
 | `listar_tipos_material` | tipos | `GET /material-types` |
 | `buscar_emissoras` | emissoras (busca da tela) | `GET /stations` |
+| `buscar_emissoras_lote` | várias emissoras por dial + UF numa chamada (casar as linhas de um PI) | mesma expressão de dial do `GET /stations` |
 | `obter_emissora` | ficha, Anatel, cidades no alcance, campanhas | `GET /stations/{id}` + `Stations.Anatel`/`CoverageCities` |
 | `listar_veiculacoes` | veiculações com total real | `GET /detections?page=` -> `Detections.ListPaged` |
 | `obter_veiculacao` | veiculação, atribuições, aprovação | `GET /detections/{id}` + `Attributions` + `Approved` |
@@ -295,8 +296,8 @@ depender de `/pendentes`.
 
 ### Perfil `/mcp/programacao`
 
-O mesmo servidor e as mesmas credenciais, noutro endereço, expondo só `ToolsPerfilProgramacao` (21 tools: achar
-cliente, emissora e tipo; programar; conferir; corrigir regra, preço e emissoras; vincular material; `minhas_pendentes`).
+O mesmo servidor e as mesmas credenciais, noutro endereço, expondo só `ToolsPerfilProgramacao` (22 tools: achar
+cliente, emissora (uma a uma ou em lote) e tipo; programar; conferir; corrigir regra, preço e emissoras; vincular material; `minhas_pendentes`).
 O `tools/list` cai a menos de 1/3 do inteiro (há teste travando).
 
 - **Implementação:** `ConfigServidor.Perfil` + `RemoveTools` depois do registro.
@@ -310,6 +311,23 @@ O `tools/list` cai a menos de 1/3 do inteiro (há teste travando).
   - um token emitido para um endereço vale no outro.
 - **Para o Gemini:** cadastrar o conector com a URL `https://api.e-monitor.online/mcp/programacao`. O system prompt do
   agente (fora do repo) manda usar `programar_campanha`.
+
+### `buscar_emissoras_lote` (leitura)
+
+Mesmo depois do perfil enxuto, o conector do Gemini seguiu "perdendo a sessão": no log da VM (11/11, 17:10 UTC) as 4
+chamadas dele voltaram 200 em menos de 20 ms e o agente reportou queda logo depois. A API é stateless, então não há sessão
+do nosso lado para cair; o que dá para fazer é diminuir as idas e voltas. Casar as emissoras do PI era uma
+`buscar_emissoras` por emissora (~12 por campanha); esta tool resolve o lote numa chamada.
+
+- **Entrada:** `emissoras[]` (1–100), cada uma com `dial` ("99,9" ou "99.9") e `uf` obrigatórios, e `banda`,
+  `cidade`, `nome` e `ref` (rótulo que volta igual) opcionais. Linha inválida recusa o lote dizendo o índice.
+- **Consulta:** uma só (`catalog.Stations.CandidatosPorDial`), com o dial comparado pela MESMA expressão da busca da tela
+  (`dialTextExpr`, NUMERIC(6,2) sem zeros à direita). Emissora sem dial cadastrado casa se o dial estiver no nome
+  ("89 - FM (89.1)"), sem colar em outro número ("9,1" não casa "89.1").
+- **Resultado por linha:** `unica`, `varias`, `cidade_diferente` (o dial existe na UF, mas não na cidade informada) ou
+  `nenhuma`, com até 5 candidatos. Cidade compara sem acento e sem maiúscula. `nome_confere` é só pista (palavras do nome
+  sem "rádio"/"FM") e põe primeiro os candidatos que conferem; nunca decide sozinho.
+- **Ressalva** quando duas linhas caem na mesma emissora (PI repetindo a emissora ou linha errada).
 
 ### Correção à parte: envio de traces
 
