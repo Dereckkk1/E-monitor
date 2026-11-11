@@ -68,8 +68,8 @@ func (s *Servidor) Autorizar(w http.ResponseWriter, r *http.Request) {
 		falhar("invalid_request", "PKCE S256 obrigatório para cliente público")
 		return
 	}
-	if rec := q.Get("resource"); rec != "" && normalizarRecurso(rec) != normalizarRecurso(s.URLRecurso()) {
-		falhar("invalid_target", "resource deve ser "+s.URLRecurso())
+	if rec := q.Get("resource"); rec != "" && !s.recursoAceito(rec) {
+		falhar("invalid_target", "resource deve ser "+s.URLRecurso()+" ou "+s.URLRecursoProgramacao())
 		return
 	}
 

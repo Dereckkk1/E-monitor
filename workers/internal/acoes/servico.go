@@ -76,6 +76,8 @@ type Servico struct {
 	Emissoras   *catalog.Stations
 	// Precos é o preço por emissora × campanha (DefinirPrecos).
 	Precos *catalog.Pricing
+	// Programacao grava campanha + regras + preços numa transação (ProgramarCampanha).
+	Programacao *catalog.ProgramacaoDeCampanha
 
 	// Supervisor pode ser nil: mesma regra dos handlers — sem supervisor, a
 	// ação só grava no banco.
@@ -127,6 +129,7 @@ func NovoServico(pool *pgxpool.Pool, sup SupervisorDeCampanha, h AvisoHub, lig *
 		Clientes:          catalog.NewClients(pool),
 		Emissoras:         catalog.NewStations(pool),
 		Precos:            catalog.NewPricing(pool),
+		Programacao:       catalog.NewProgramacaoDeCampanha(pool),
 		Veiculacoes:       catalog.NewDetections(pool),
 		Usuarios:          users.NewRepo(pool),
 		Supervisor:        sup,

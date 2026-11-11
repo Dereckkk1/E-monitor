@@ -59,3 +59,11 @@ o pedido e a aprovação, o mundo muda: a campanha recebe tocadas, o usuário é
 - **Negativas / dívida:** a corrida do último admin (a contagem fica fora da transação da escrita), a poda de
   `mcp_acoes_pendentes`, que guarda os args para sempre, e o item `/pendentes` na barra lateral. Lista completa no handoff
   da Fatia 5 (`docs/superpowers/HANDOFF-2026-11-03-mcp-fatia-5.md`).
+
+## Atualização 2026-11-11
+
+`editar_precos_campanha` deixou de ser `critico` por declaração: é `confirma` e escala para crítico quando a campanha
+já começou ou tem veiculação aprovada. Preço de campanha futura e sem veiculação não mexe em número que o cliente já viu
+(o `/insights` mostra o investido contratado desde o primeiro dia, por isso "já começou" também escala). Na mesma
+data entrou `programar_campanha`, que grava campanha, regras e preços numa transação só, com uma aprovação. Detalhes em
+[docs/features/mcp.md §Programação de campanha numa chamada](../features/mcp.md#programação-de-campanha-numa-chamada-2026-11-11).

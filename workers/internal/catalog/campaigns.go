@@ -80,6 +80,12 @@ type CreateCampaignInput struct {
 }
 
 func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campaign, error) {
+	return insertCampaign(ctx, c.pool, in)
+}
+
+// insertCampaign é o INSERT do Create sobre um pool ou uma transação
+// (ProgramacaoDeCampanha grava a campanha, as regras e os preços numa transação só).
+func insertCampaign(ctx context.Context, q queryRower, in CreateCampaignInput) (*Campaign, error) {
 	// target_stations é NOT NULL DEFAULT '{}'. Inserir nil vira NULL e viola a
 	// constraint — coalescemos pra array vazio (mesma semântica do default da
 	// coluna) pra ser nil-safe.
@@ -93,7 +99,7 @@ func (c *Campaigns) Create(ctx context.Context, in CreateCampaignInput) (*Campai
 	// `hub_code` de " " passaria pelo NULLIF cru. Aí a campanha entra na fila de
 	// reemissão com um código que o hub recusa, para sempre, de 15 em 15
 	// minutos. O `btrim` faz " " e "" serem a mesma coisa, que é o que são.
-	err := c.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO campaigns (client_id, name, start_date, end_date, target_stations, hub_code)
 		VALUES ($1, $2, $3, $4, $5, NULLIF(btrim($6), ''))
 		RETURNING id, client_id, name, start_date, end_date, status, target_stations,

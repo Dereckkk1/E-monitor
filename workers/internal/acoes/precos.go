@@ -25,27 +25,8 @@ func (s *Servico) DefinirPrecos(ctx context.Context, campanha uuid.UUID, entrada
 	if len(entradas) == 0 {
 		return nil, entradaInvalida("pelo menos uma emissora é obrigatória")
 	}
-	vistas := make(map[uuid.UUID]struct{}, len(entradas))
-	for _, e := range entradas {
-		if _, repetida := vistas[e.StationID]; repetida {
-			return nil, entradaInvalida("emissora repetida no lote de preços")
-		}
-		vistas[e.StationID] = struct{}{}
-		tipos := make(map[uuid.UUID]struct{}, len(e.PerType))
-		for _, t := range e.PerType {
-			if _, repetido := tipos[t.TypeID]; repetido {
-				return nil, entradaInvalida("tipo de material repetido no preço da emissora")
-			}
-			tipos[t.TypeID] = struct{}{}
-		}
-	}
-	for _, e := range entradas {
-		if err := catalog.ValidatePricingInput(catalog.UpsertInput{
-			CampaignID: campanha, StationID: e.StationID, Mode: e.Mode,
-			ConsolidatedValue: e.ConsolidatedValue, PerType: e.PerType,
-		}); err != nil {
-			return nil, &Recusa{Codigo: CodigoEntradaInvalida, Mensagem: err.Error(), Causa: err}
-		}
+	if err := validarLoteDePrecos(entradas, campanha); err != nil {
+		return nil, err
 	}
 	out, err := s.Precos.UpsertLote(ctx, campanha, entradas)
 	if err != nil {

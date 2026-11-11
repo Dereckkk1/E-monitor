@@ -207,6 +207,26 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 		}
 	}
 
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := upsertPricingTx(ctx, tx, campaignID, entradas); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: commit: %w", err)
+	}
+	return p.relerLote(ctx, campaignID, entradas)
+}
+
+// upsertPricingTx grava o lote dentro de uma transação aberta por quem chama
+// (UpsertLote, ou ProgramacaoDeCampanha junto com a campanha e as regras). Não
+// valida: quem chama já passou cada entrada por ValidatePricingInput.
+func upsertPricingTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID, entradas []EntradaPreco) error {
 	// Escreve em ordem de station_id (e não na da entrada): duas chamadas
 	// concorrentes com as mesmas emissoras em ordens opostas travariam uma na
 	// outra (deadlock). A ordem de ENTRADA só vale para o resultado.
@@ -215,15 +235,9 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 		return bytes.Compare(ordenadas[i].StationID[:], ordenadas[j].StationID[:]) < 0
 	})
 
-	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("pricing.UpsertLote: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
 	for _, e := range ordenadas {
 		// 1. Upsert do cabeçalho.
-		_, err = tx.Exec(ctx, `
+		_, err := tx.Exec(ctx, `
 			INSERT INTO campaign_station_pricing
 			    (campaign_id, station_id, mode, consolidated_value)
 			VALUES ($1, $2, $3, $4)
@@ -233,7 +247,7 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 			    consolidated_value = EXCLUDED.consolidated_value`,
 			campaignID, e.StationID, e.Mode, e.ConsolidatedValue)
 		if err != nil {
-			return nil, fmt.Errorf("pricing.UpsertLote: upsert head: %w", err)
+			return fmt.Errorf("pricing.UpsertLote: upsert head: %w", err)
 		}
 
 		// 2. Limpa o detalhe atual e (se per_insertion) reinsere.
@@ -241,7 +255,7 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 			DELETE FROM campaign_station_type_pricing
 			WHERE campaign_id = $1 AND station_id = $2`,
 			campaignID, e.StationID); err != nil {
-			return nil, fmt.Errorf("pricing.UpsertLote: clear detail: %w", err)
+			return fmt.Errorf("pricing.UpsertLote: clear detail: %w", err)
 		}
 
 		for _, t := range e.PerType {
@@ -250,15 +264,15 @@ func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas
 				    (campaign_id, station_id, type_id, unit_value)
 				VALUES ($1, $2, $3, $4)`,
 				campaignID, e.StationID, t.TypeID, t.UnitValue); err != nil {
-				return nil, fmt.Errorf("pricing.UpsertLote: insert type %s: %w", t.TypeID, err)
+				return fmt.Errorf("pricing.UpsertLote: insert type %s: %w", t.TypeID, err)
 			}
 		}
 	}
+	return nil
+}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("pricing.UpsertLote: commit: %w", err)
-	}
-
+// relerLote relê o lote gravado, na ordem de entrada.
+func (p *Pricing) relerLote(ctx context.Context, campaignID uuid.UUID, entradas []EntradaPreco) ([]StationPricing, error) {
 	// Relê tudo em DUAS consultas (cabeçalhos + detalhes), não N×2.
 	ids := make([]uuid.UUID, len(entradas))
 	for i, e := range entradas {

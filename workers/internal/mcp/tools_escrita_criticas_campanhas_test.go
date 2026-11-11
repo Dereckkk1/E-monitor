@@ -1,7 +1,9 @@
 package mcp
 
 // Task 15 (Fatia 4): cancelar_campanha, apagar_campanha, editar_cpm_fixo e
-// editar_precos_campanha. As quatro são `critico`: a chamada NUNCA executa, grava
+// editar_precos_campanha. As quatro eram `critico` (desde 2026-11-11 o preço é `confirma`
+// que escala: crítico se a campanha já começou ou tem veiculação — os testes dele aqui
+// usam comVeiculacao para provar o caminho crítico). Crítico: a chamada NUNCA executa, grava
 // um pedido pendente, e quem executa é a aprovação do dono em /pendentes
 // (b.aprovar, sobre a lista REAL das escritas). Cada tool prova: (1) o pedido não
 // escreve, (2) aprovar executa e devolve o formato do obter_*, (3) o efeito é o
@@ -47,6 +49,14 @@ func semearCritCamp(t *testing.T, b *bancadaTool, estado string, tipo uuid.UUID)
 	mcptest.Regra(t, b.ctx, b.pool, c.camp, c.tipo, c.e1, "2026-10-01", "2026-12-31", 127, "08:00", "10:00", 1)
 	mcptest.Ajuste(t, b.ctx, b.pool, c.camp, c.tipo, c.e1, "2026-11-10", 2, "08:00", "10:00")
 	mcptest.Preco(t, b.ctx, b.pool, c.camp, c.e1, c.tipo, 10)
+	return c
+}
+
+// comVeiculacao põe uma veiculação aprovada na campanha do cenário: é ela que faz o preço subir para
+// crítico (editar_precos_campanha é confirma em campanha sem veiculação, 2026-11-11).
+func comVeiculacao(t *testing.T, b *bancadaTool, c cenarioCritCamp) cenarioCritCamp {
+	t.Helper()
+	mcptest.Veiculacao(t, b.ctx, b.pool, c.camp, c.mat, c.e1, "in_slot", mcptest.Quando("2026-10-15", "09:00"))
 	return c
 }
 
@@ -742,9 +752,9 @@ func argsPrecos(camp uuid.UUID, precos ...any) map[string]any {
 
 func TestEditarPrecosCampanha_PedidoNaoEscreveEAprovarGrava(t *testing.T) {
 	b := novaBancadaTool(t)
-	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 	outroTipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Vinheta")
-	require.NotContains(t, propriedades(esquemaDa(t, b.cfg, "editar_precos_campanha")), "confirmacao")
+	require.Contains(t, propriedades(esquemaDa(t, b.cfg, "editar_precos_campanha")), "confirmacao", "confirma que escala: leva o token")
 	antes := linhasDePreco(t, b, c.camp)
 	require.Len(t, antes, 1, "só a Rádio 1 tem preço (por inserção)")
 	args := argsPrecos(c.camp,
@@ -815,8 +825,8 @@ func TestEditarPrecosCampanha_ParidadeComARota(t *testing.T) {
 	b := novaBancadaTool(t)
 	tipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Spot")
 	outroTipo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Vinheta")
-	viaRota := semearCritCamp(t, b, "ativa", tipo)
-	viaTool := semearCritCamp(t, b, "ativa", tipo)
+	viaRota := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", tipo))
+	viaTool := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", tipo))
 	h := &handlers.PricingHandler{Repo: catalog.NewPricing(b.pool)}
 
 	// A rota grava uma emissora por PUT; a tool, o lote numa transação. O estado final é o mesmo.
@@ -847,7 +857,7 @@ func TestEditarPrecosCampanha_ParidadeComARota(t *testing.T) {
 
 func TestEditarPrecosCampanha_SoMudaOQueFoiPedido(t *testing.T) {
 	b := novaBancadaTool(t)
-	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 	mcptest.Preco(t, b.ctx, b.pool, c.camp, c.e2, c.tipo, 7)
 	antes := linhasDePreco(t, b, c.camp)
 	require.Len(t, antes, 2)
@@ -868,7 +878,7 @@ func TestEditarPrecosCampanha_SoMudaOQueFoiPedido(t *testing.T) {
 
 func TestEditarPrecosCampanha_RessalvaDasEmissorasSemPreco(t *testing.T) {
 	b := novaBancadaTool(t)
-	c := semearCritCamp(t, b, "ativa", uuid.Nil) // só a Rádio 1 tem preço
+	c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil)) // só a Rádio 1 tem preço
 
 	out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e1, 100)))
 
@@ -877,7 +887,7 @@ func TestEditarPrecosCampanha_RessalvaDasEmissorasSemPreco(t *testing.T) {
 
 func TestEditarPrecosCampanha_Recusas(t *testing.T) {
 	b := novaBancadaTool(t)
-	c := semearCritCamp(t, b, "ativa", uuid.Nil)
+	c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 	cancelada := semearCritCamp(t, b, "cancelada", uuid.Nil)
 	mcptest.Preco(t, b.ctx, b.pool, c.camp, c.e2, c.tipo, 7)
 	antes := linhasDePreco(t, b, c.camp)
@@ -936,7 +946,7 @@ func TestEditarPrecosCampanha_Recusas(t *testing.T) {
 func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 	t.Run("a campanha foi cancelada no meio", func(t *testing.T) {
 		b := novaBancadaTool(t)
-		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 		antes := linhasDePreco(t, b, c.camp)
 		out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e1, 99)))
 		mcptest.EstadoCampanha(t, b.ctx, b.pool, c.camp, "cancelada")
@@ -946,7 +956,7 @@ func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 	})
 	t.Run("a emissora saiu da campanha no meio", func(t *testing.T) {
 		b := novaBancadaTool(t)
-		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 		antes := linhasDePreco(t, b, c.camp)
 		out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e1, 99), precoConsolidado(c.e2, 50)))
 		_, err := b.pool.Exec(b.ctx, `UPDATE campaigns SET target_stations = ARRAY[$2]::uuid[] WHERE id = $1`, c.camp, c.e1)
@@ -957,7 +967,7 @@ func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 	})
 	t.Run("alguém já pôs os mesmos preços", func(t *testing.T) {
 		b := novaBancadaTool(t)
-		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 		out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e2, 50)))
 		_, err := b.pool.Exec(b.ctx, `INSERT INTO campaign_station_pricing (campaign_id, station_id, mode, consolidated_value) VALUES ($1,$2,'consolidated',50)`, c.camp, c.e2)
 		require.NoError(t, err)
@@ -966,7 +976,7 @@ func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 	})
 	t.Run("o tipo de material sumiu no meio", func(t *testing.T) {
 		b := novaBancadaTool(t)
-		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 		tipoNovo := mcptest.TipoMaterial(t, b.ctx, b.pool, "Efêmero")
 		out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoPorInsercao(c.e2, valorDoTipo(tipoNovo, 5))))
 		_, err := b.pool.Exec(b.ctx, `DELETE FROM material_types WHERE id = $1`, tipoNovo)
@@ -976,9 +986,12 @@ func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 	})
 	t.Run("a campanha foi apagada no meio", func(t *testing.T) {
 		b := novaBancadaTool(t)
-		c := semearCritCamp(t, b, "ativa", uuid.Nil)
+		c := comVeiculacao(t, b, semearCritCamp(t, b, "ativa", uuid.Nil))
 		out := b.pedePendente(t, "editar_precos_campanha", argsPrecos(c.camp, precoConsolidado(c.e1, 99)))
-		_, err := b.pool.Exec(b.ctx, `DELETE FROM campaigns WHERE id = $1`, c.camp)
+		// A veiculação (que faz o preço ser crítico) sai antes: detections tem FK para a campanha.
+		_, err := b.pool.Exec(b.ctx, `DELETE FROM detections WHERE campaign_id = $1`, c.camp)
+		require.NoError(t, err)
+		_, err = b.pool.Exec(b.ctx, `DELETE FROM campaigns WHERE id = $1`, c.camp)
 		require.NoError(t, err)
 
 		exigeRecusaNaAprovacao(t, b, "editar_precos_campanha", out["pendente_id"].(string), "nao_encontrado")
@@ -990,7 +1003,7 @@ func TestEditarPrecosCampanha_RecusaNaAprovacao(t *testing.T) {
 func TestCriticasDeCampanha_DescricaoPedeAprovacaoENuncaInventarIds(t *testing.T) {
 	for _, tl := range listarToolsDoServidor(t) {
 		switch tl.Name {
-		case "cancelar_campanha", "apagar_campanha", "editar_cpm_fixo", "editar_precos_campanha":
+		case "cancelar_campanha", "apagar_campanha", "editar_cpm_fixo":
 		default:
 			continue
 		}
@@ -1118,6 +1131,9 @@ func TestCriticasDeCampanha_SemSegredoNoResultadoNemNosArgsGravados(t *testing.T
 		t.Run(caso.tool, func(t *testing.T) {
 			b := novaBancadaTool(t)
 			c := semearCritCamp(t, b, "ativa", uuid.Nil)
+			if caso.tool == "editar_precos_campanha" {
+				comVeiculacao(t, b, c) // sem veiculação o preço é confirma, não pedido pendente
+			}
 			proibidos := semearStreamSecreto(t, b, c.e1, c.e2)
 
 			out := b.pedePendente(t, caso.tool, caso.args(c))

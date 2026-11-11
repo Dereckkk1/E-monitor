@@ -107,6 +107,19 @@ func (s *Servidor) URLMetadadosRecurso() string {
 	return s.Origem + "/.well-known/oauth-protected-resource/mcp"
 }
 
+// URLRecursoProgramacao é o perfil enxuto do MCP (só as tools de programar campanha): o mesmo
+// servidor e as mesmas credenciais, outro endereço. Um token emitido para um vale no outro.
+func (s *Servidor) URLRecursoProgramacao() string { return s.Origem + "/mcp/programacao" }
+func (s *Servidor) URLMetadadosRecursoProgramacao() string {
+	return s.Origem + "/.well-known/oauth-protected-resource/mcp/programacao"
+}
+
+// recursoAceito: os dois endereços do MCP são o mesmo recurso protegido para a autorização.
+func (s *Servidor) recursoAceito(rec string) bool {
+	n := normalizarRecurso(rec)
+	return n == normalizarRecurso(s.URLRecurso()) || n == normalizarRecurso(s.URLRecursoProgramacao())
+}
+
 func escreverJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

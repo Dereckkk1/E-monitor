@@ -183,7 +183,7 @@ func (d Escrita[In]) conferirAprovada(ctx context.Context, E *Escritas, args jso
 func escritasDe(cfg ConfigServidor) []escritaRegistravel {
 	var todas []escritaRegistravel
 	for _, familia := range [][]escritaRegistravel{
-		escritasBasicas(cfg), escritasCadastros(cfg), escritasCampanhas(cfg),
+		escritasBasicas(cfg), escritasCadastros(cfg), escritasCampanhas(cfg), escritasProgramacao(cfg),
 		escritasVinculos(cfg), escritasRegras(cfg), escritasAjustes(cfg),
 		escritasCriticasCampanhas(cfg), escritasCriticasVeiculacoes(cfg), escritasCriticasUsuarios(cfg),
 		escritasCriticasClientes(cfg), escritasCriticasWebhooks(cfg), escritasCriticasPosVenda(cfg),
