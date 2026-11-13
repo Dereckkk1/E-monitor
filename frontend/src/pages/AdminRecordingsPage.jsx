@@ -3,6 +3,7 @@
 // Programa a gravação de um trecho de stream e lista o que já foi gravado. O
 // áudio fica 15 dias e depois é apagado. Ver docs/features/scheduled-recording.md.
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import {
   fetchRecordingAudio, useCancelRecording, useCreateRecording, useDeleteRecording,
@@ -61,6 +62,14 @@ function IconTrash() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
       <path d="M2 3.5H12M5.5 3.5V2.5C5.5 2.22 5.72 2 6 2H8C8.28 2 8.5 2.22 8.5 2.5V3.5M5.5 6.5V10.5M8.5 6.5V10.5M3 3.5L3.5 11.5C3.5 11.78 3.72 12 4 12H10C10.28 12 10.5 11.78 10.5 11.5L11 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+function IconPencil() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M9.5 2.5L11.5 4.5L5 11L2.5 11.5L3 9L9.5 2.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M8.5 3.5L10.5 5.5" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   )
 }
@@ -314,6 +323,14 @@ function RecordingRow({ rec }) {
                 <button type="button" className="btn btn-icon btn-sm" onClick={download} disabled={busy} title="Baixar" aria-label="Baixar">
                   <IconDownload />
                 </button>
+                <Link
+                  to={`/admin/gravacoes/${rec.id}/editar`}
+                  className="btn btn-icon btn-sm"
+                  title="Editar trechos (cortar e exportar só a parte que interessa)"
+                  aria-label="Editar trechos"
+                >
+                  <IconPencil />
+                </Link>
               </>
             )}
             {canCancel && (
