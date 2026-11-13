@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -283,8 +284,7 @@ func TestUsers_Create_Client_EmptyWalletRejected(t *testing.T) {
 }
 
 // Id inexistente na carteira tem que virar client_not_found 400 — inclusive
-// quando ele está numa posição SECUNDÁRIA, onde quem estoura o 23503 é o
-// SetClients e não o INSERT do usuário.
+// quando ele está numa posição SECUNDÁRIA — e sem deixar usuário gravado.
 func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	ctx, pool := newUsersTestPool(t)
 	clients := catalog.NewClients(pool)
@@ -301,8 +301,7 @@ func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "client_not_found")
 
-	// (b) inválido em posição secundária → falha no SetClients. Sem tradução
-	// do 23503 isso viraria 500.
+	// (b) inválido em posição secundária.
 	body = `{"email":"ghost2@acme.com","password":"super-secret-pw-12345","name":"G",
 	         "role":"client","client_ids":["` + real.ID.String() + `","` + bogus.String() + `"]}`
 	req = httptest.NewRequest("POST", "/admin/users", strings.NewReader(body))
@@ -311,15 +310,11 @@ func TestUsers_Create_Client_UnknownClientIs400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "client_not_found")
 
-	// Trade-off documentado do caso (b): o INSERT do usuário já commitou antes
-	// do SetContext falhar, então ghost2 EXISTE com a carteira de um elemento.
-	// Não é vazamento (o vínculo inválido nunca entrou — SetClients é
-	// transacional), mas o admin que corrigir o id e reenviar toma
-	// email_taken 409 e precisa editar o usuário em vez de recriar.
-	orphan, err := users.NewRepo(pool).GetByEmail(ctx, "ghost2@acme.com")
-	require.NoError(t, err, "usuário parcial fica gravado — se isso mudar, atualize o comentário")
-	require.Equal(t, []uuid.UUID{real.ID}, orphan.ClientIDs,
-		"carteira parcial tem só o principal: SetClients falhou inteiro")
+	// A conferência dos clientes vem ANTES de gravar: nada de usuário parcial
+	// (antes ghost2 ficava criado com a carteira de um elemento e reenviar dava
+	// email_taken 409).
+	_, err := users.NewRepo(pool).GetByEmail(ctx, "ghost2@acme.com")
+	require.ErrorIs(t, err, pgx.ErrNoRows, "nenhum usuário parcial pode ficar gravado")
 }
 
 // ── Patch ───────────────────────────────────────────────────────────────
@@ -648,4 +643,78 @@ func TestUsers_Patch_ClientIDsWinsOverClientID(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	require.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, got.ClientIDs,
 		"client_ids tem que vencer — o client_id sozinho truncaria pra 1")
+}
+
+// ── Travas da extração para internal/acoes ──────────────────────────────
+
+func TestUsers_Create_MissingFields_400(t *testing.T) {
+	_, pool := newUsersTestPool(t)
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+	for _, body := range []string{
+		`{"password":"super-secret-pw-12345","name":"A","role":"admin"}`,
+		`{"email":"a@x.test","name":"A","role":"admin"}`,
+		`{"email":"a@x.test","password":"super-secret-pw-12345","role":"admin"}`,
+	} {
+		w := httptest.NewRecorder()
+		h.Create(w, httptest.NewRequest("POST", "/admin/users", strings.NewReader(body)))
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Contains(t, w.Body.String(), "missing_fields")
+	}
+}
+
+func TestUsers_Create_PreferenciasDeEmail(t *testing.T) {
+	_, pool := newUsersTestPool(t)
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+	body := `{"email":"pref@x.test","password":"super-secret-pw-12345","name":"P","role":"admin",
+	          "receive_alert_emails":false,"receive_post_sale_emails":true}`
+	w := httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest("POST", "/admin/users", strings.NewReader(body)))
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var u users.User
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &u))
+	require.False(t, u.ReceiveAlertEmails)
+	require.True(t, u.ReceivePostSaleEmails)
+}
+
+func TestUsers_Patch_NaoExiste_404(t *testing.T) {
+	_, pool := newUsersTestPool(t)
+	h := NewUsersHandler(users.NewRepo(pool), nil)
+	w := httptest.NewRecorder()
+	h.Patch(w, reqWithIDParam("PATCH", "/admin/users/x", `{"name":"Z"}`, uuid.NewString()))
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Contains(t, w.Body.String(), "not_found")
+}
+
+func TestUsers_Patch_PapelInvalidoEClienteSemCarteira_400(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
+	h := NewUsersHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	h.Patch(w, reqWithIDParam("PATCH", "/admin/users/x", `{"role":"operator"}`, u.ID.String()))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Contains(t, w.Body.String(), "invalid_role")
+
+	w = httptest.NewRecorder()
+	h.Patch(w, reqWithIDParam("PATCH", "/admin/users/x", `{"role":"client"}`, u.ID.String()))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Contains(t, w.Body.String(), "client_id_required")
+}
+
+func TestUsers_Patch_PreferenciasDeEmailENome(t *testing.T) {
+	ctx, pool := newUsersTestPool(t)
+	repo := users.NewRepo(pool)
+	u, _ := repo.Create(ctx, users.CreateInput{Email: "a@x.test", PasswordHash: "h", Role: "admin", Name: "A"})
+	h := NewUsersHandler(repo, nil)
+	w := httptest.NewRecorder()
+	h.Patch(w, reqWithIDParam("PATCH", "/admin/users/x",
+		`{"name":"Novo","receive_alert_emails":false,"receive_post_sale_emails":true,"is_active":false}`, u.ID.String()))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	got, err := repo.Get(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Novo", got.Name)
+	require.False(t, got.ReceiveAlertEmails)
+	require.True(t, got.ReceivePostSaleEmails)
+	require.False(t, got.IsActive)
 }

@@ -84,8 +84,13 @@ const ruleColumns = `id, campaign_id, type_id, station_ids, material_ids, name,
        plays_per_day, created_at, updated_at`
 
 func (dr *DistributionRules) Create(ctx context.Context, in CreateDistributionRuleInput) (*DistributionRule, error) {
+	return insertRule(ctx, dr.pool, in)
+}
+
+// insertRule é o INSERT do Create sobre um pool ou uma transação.
+func insertRule(ctx context.Context, q queryRower, in CreateDistributionRuleInput) (*DistributionRule, error) {
 	var r DistributionRule
-	err := dr.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO distribution_rules
 		  (campaign_id, type_id, station_ids, material_ids, name, start_date, end_date,
 		   weekday_mask, time_start, time_end, plays_per_day)
@@ -712,4 +717,20 @@ func (dr *DistributionRules) RecategorizeForOverride(ctx context.Context,
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RecategorizeForCampaignType re-classifica as projeções de UM tipo na campanha
+// inteira (todas as emissoras, período inteiro da campanha). É o que a edição de
+// regra que TROCA o tipo usa para curar o tipo ANTIGO: o RecategorizeForRule só
+// enxerga o tipo atual da regra, e as células do tipo de onde a regra acabou de
+// sair ficavam com a categoria velha (cobrança errada até o projrecon curar, em
+// até 48 h).
+func (dr *DistributionRules) RecategorizeForCampaignType(ctx context.Context, campaignID, typeID uuid.UUID) error {
+	var start, end time.Time
+	if err := dr.pool.QueryRow(ctx,
+		`SELECT start_date, end_date FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&start, &end); err != nil {
+		return err
+	}
+	return dr.recategorizeScope(ctx, campaignID, &typeID, nil, start, end)
 }

@@ -1,0 +1,55 @@
+package mcp
+
+import (
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
+
+	"radiocheck/internal/acoes"
+	"radiocheck/internal/mcp/auditoria"
+	"radiocheck/internal/postsale"
+)
+
+// Escritas reúne o que as tools de escrita usam (plano Fatia 3, Task 4). Vive
+// em ConfigServidor.Escritas; nil falha fechado (ferramentaEscrita devolve
+// [interno] antes de qualquer coisa).
+type Escritas struct {
+	// Acoes: as escritas de negócio que os handlers HTTP também chamam (regra
+	// de ouro da spec §3: a tool não reimplementa).
+	Acoes *acoes.Servico
+	// Confirmacoes marca o uso único do token do nível confirma.
+	Confirmacoes *Confirmacoes
+	// Pendentes guarda os pedidos do nível crítico (aprovados em /pendentes).
+	Pendentes *Pendentes
+	// Segredo é o JWT_SECRET: assina o token (com separação de domínio).
+	Segredo []byte
+	// Leitura monta previews e resultados no formato das tools obter_*.
+	Leitura *Leitura
+	// DB grava a auditoria (audit_log); *pgxpool.Pool serve. Falso nos testes.
+	DB auditoria.Execer
+	// Agora é o relógio injetável (validade do token).
+	Agora func() time.Time
+	// PosVenda é o serviço de pós-venda (o mesmo das rotas): reenviar_pos_venda manda
+	// o email por ele. Pode ser nil — a escrita recusa com pos_venda_indisponivel.
+	// A revogação de destinatário não depende dele (usa o repositório de Leitura).
+	PosVenda *postsale.Service
+}
+
+func (E *Escritas) agora() time.Time {
+	if E.Agora != nil {
+		return E.Agora()
+	}
+	return time.Now()
+}
+
+// NovasEscritas monta as dependências das tools de escrita sobre o pool.
+func NovasEscritas(pool *pgxpool.Pool, segredo []byte, servico *acoes.Servico, leitura *Leitura, log *zap.Logger) *Escritas {
+	E := &Escritas{Acoes: servico, Segredo: segredo, Leitura: leitura}
+	if pool != nil { // evita o typed-nil dentro da interface
+		E.Confirmacoes = &Confirmacoes{DB: pool, Log: log}
+		E.Pendentes = &Pendentes{DB: pool}
+		E.DB = pool
+	}
+	return E
+}

@@ -116,17 +116,37 @@ GROUP BY dps.for_date, dps.station_id`,
 	// 20× por 5s soma 100s e some com "≥ 5 min", que é a leitura correta.
 	//
 	// O bound superior é `< to + 1 day` (não `<= to`) pra pegar o dia inteiro.
+	//
+	// Tempo fora do ar = UNIÃO dos downs do dia, cada um cortado na meia-noite
+	// SP seguinte — os downs se sobrepõem no histórico (incidente 2026-11-08) e
+	// a soma crua passava de 24 h. evts continua contando os eventos crus.
 	downRows, err := r.pool.Query(ctx, `
-SELECT (date_trunc('day', event_at AT TIME ZONE 'America/Sao_Paulo'))::date::text AS d,
-       station_id,
-       SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int))::int AS down_sec,
-       COUNT(*)::int AS evts
-FROM stream_health_events
-WHERE event_type = 'down'
-  AND event_at >= ($1::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
-  AND event_at <  (($2::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
-GROUP BY 1, 2
-HAVING SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) >= $3`,
+WITH down_iv AS (
+  SELECT (event_at AT TIME ZONE 'America/Sao_Paulo')::date AS d,
+         station_id,
+         tstzrange(event_at,
+                   LEAST(COALESCE(event_at + make_interval(secs => duration_seconds), NOW()),
+                         (((event_at AT TIME ZONE 'America/Sao_Paulo')::date + 1)::timestamp
+                            AT TIME ZONE 'America/Sao_Paulo'))) AS r
+  FROM stream_health_events
+  WHERE event_type = 'down'
+    AND event_at >= ($1::date::timestamp AT TIME ZONE 'America/Sao_Paulo')
+    AND event_at <  (($2::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+),
+merged AS (
+  SELECT d, station_id, COUNT(*)::int AS evts, range_agg(r) AS mr
+  FROM down_iv
+  GROUP BY d, station_id
+),
+per_day AS (
+  SELECT m.d, m.station_id, m.evts,
+         (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM upper(u) - lower(u))), 0)
+            FROM unnest(m.mr) AS u)::int AS down_sec
+  FROM merged m
+)
+SELECT d::text, station_id, down_sec, evts
+FROM per_day
+WHERE down_sec >= $3`,
 		fromStr, toStr, minDownSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("query 2 downtime por dia: %w", err)

@@ -1,0 +1,877 @@
+/* ─────────────────────────────────────────────────────────────
+   PendentesPage — /pendentes (aprovação dos pedidos da IA)
+   Class prefix: .pen-
+   Tokens from index.css. Reuses .btn.
+   ───────────────────────────────────────────────────────────── */
+
+.pen-page {
+  max-width: 1180px;
+  padding-bottom: 48px;
+  font-family: var(--font-body);
+  color: var(--c-text);
+}
+
+.pen-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ─── Header ──────────────────────────────────────────────── */
+
+.pen-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 4px 0 20px;
+}
+
+.pen-header-main {
+  min-width: 0;
+  flex: 1 1 380px;
+}
+
+.pen-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--c-text);
+}
+
+.pen-subtitle {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--c-text-2);
+  max-width: 68ch;
+}
+
+/* ─── Situação da fila: o "o que está acontecendo agora" antes dos cartões ─── */
+
+.pen-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.pen-fila-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  font-size: 12.5px;
+  color: var(--c-text-2);
+}
+
+.pen-fila-item strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-fila-item--pendente {
+  border-color: var(--c-action-border);
+  background: var(--c-action-light);
+  color: var(--c-action-hover);
+}
+
+.pen-fila-item--aprovada {
+  border-color: color-mix(in srgb, var(--c-info) 40%, transparent);
+  background: color-mix(in srgb, var(--c-info) 8%, transparent);
+  color: var(--c-info);
+}
+
+/* A área que recebe o foco depois de uma ação: o botão clicado some da tela. */
+.pen-area:focus {
+  outline: none;
+}
+
+/* ─── Lista e cartão ──────────────────────────────────────── */
+
+.pen-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pen-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+.pen-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px 24px;
+}
+
+/* Segunda camada neutra: o painel é da decisão, não do conteúdo. */
+.pen-card-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px 20px;
+  border-left: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-bg) 70%, var(--c-surface));
+}
+
+@media (max-width: 900px) {
+  .pen-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pen-card-side {
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
+}
+
+/* O pedido do link (?id=) ou o que você acabou de decidir: a borda acende, como a seleção do sistema. */
+.pen-card--destaque {
+  border-color: var(--c-action-border);
+  box-shadow: 0 0 0 3px var(--c-action-light), var(--shadow-sm);
+}
+
+/* Pedido que já não pede nada de você: some a ênfase, fica o registro. */
+.pen-card--executada,
+.pen-card--recusada,
+.pen-card--expirada {
+  background: var(--c-bg);
+  box-shadow: none;
+}
+
+.pen-card--executada .pen-card-side,
+.pen-card--recusada .pen-card-side,
+.pen-card--expirada .pen-card-side {
+  background: transparent;
+}
+
+.pen-topo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pen-ficha {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pen-ficha-rotulo {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+
+.pen-tool {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Quanto falta para o pedido expirar: perto do fim, ganha a cor de atenção. */
+.pen-prazo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-prazo--urgente {
+  color: color-mix(in srgb, var(--c-warning) 75%, var(--c-text));
+}
+
+.pen-estado {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.pen-estado--pendente {
+  color: var(--c-action-hover);
+  background: var(--c-action-light);
+  border-color: var(--c-action-border);
+}
+
+.pen-estado--aprovada {
+  color: var(--c-info);
+  border-color: color-mix(in srgb, var(--c-info) 40%, transparent);
+  background: color-mix(in srgb, var(--c-info) 8%, transparent);
+}
+
+.pen-estado--executada {
+  color: var(--c-success);
+  border-color: color-mix(in srgb, var(--c-success) 40%, transparent);
+  background: color-mix(in srgb, var(--c-success) 8%, transparent);
+}
+
+.pen-estado--falhou {
+  color: var(--c-danger);
+  border-color: color-mix(in srgb, var(--c-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--c-danger) 8%, transparent);
+}
+
+.pen-resumo {
+  margin: 0;
+  max-width: 70ch;
+  font-family: var(--font-heading);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+.pen-rotulo {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+
+.pen-motivo {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.pen-bloco {
+  min-width: 0;
+}
+
+.pen-bloco > .pen-rotulo {
+  margin-bottom: 6px;
+}
+
+/* ─── Mudanças "de → para" ────────────────────────────────── */
+
+.pen-mudancas {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.pen-mudanca {
+  display: grid;
+  grid-template-columns: minmax(110px, 220px) 1fr;
+  gap: 4px 16px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+}
+
+.pen-mudanca + .pen-mudanca {
+  border-top: 1px solid var(--c-border);
+}
+
+.pen-mudanca dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--c-text-2);
+  overflow-wrap: anywhere;
+}
+
+.pen-mudanca dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.pen-de {
+  color: var(--c-text-2);
+  overflow-wrap: anywhere;
+}
+
+.pen-seta {
+  color: var(--c-text-3);
+}
+
+.pen-para {
+  font-weight: 700;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 540px) {
+  .pen-mudanca {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Texto que pode ter vindo do que o modelo digitou: cada valor é um isolate bidi, para um caractere
+   de direção (U+202E…) dentro dele não reordenar o que vem em volta, e o `dir="auto"` do JSX deixa a
+   direção seguir o próprio texto. O servidor também os tira do resumo; esta é a segunda camada. */
+.pen-resumo,
+.pen-mudanca dt,
+.pen-de,
+.pen-para,
+.pen-itens li {
+  unicode-bidi: isolate;
+}
+
+/* ─── Efeitos e avisos ────────────────────────────────────── */
+
+.pen-itens {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--c-text);
+}
+
+.pen-itens li {
+  overflow-wrap: anywhere;
+}
+
+.pen-aviso {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+  overflow-wrap: anywhere;
+}
+
+.pen-aviso > .pen-rotulo {
+  margin: 0;
+  color: inherit;
+}
+
+.pen-aviso--atencao {
+  border-color: color-mix(in srgb, var(--c-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--c-warning) 10%, transparent);
+  color: var(--c-text);
+}
+
+.pen-aviso--atencao > .pen-rotulo {
+  color: color-mix(in srgb, var(--c-warning) 60%, var(--c-text));
+}
+
+.pen-aviso--erro {
+  border-color: color-mix(in srgb, var(--c-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--c-danger) 7%, transparent);
+  color: color-mix(in srgb, var(--c-danger) 80%, var(--c-text));
+}
+
+.pen-area > .pen-aviso {
+  margin-bottom: 16px;
+}
+
+.pen-area > .pen-aviso .btn {
+  align-self: flex-start;
+}
+
+/* O desfecho vem logo abaixo do título: é o que a pessoa quer saber primeiro. */
+.pen-desfecho {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── Meta, ações e estado final ──────────────────────────── */
+
+.pen-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+
+.pen-acoes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.pen-acoes .btn {
+  justify-content: center;
+  width: 100%;
+}
+
+.pen-fechado {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--c-text-2);
+  line-height: 1.5;
+}
+
+.pen-fechado--forte {
+  font-weight: 700;
+  color: var(--c-danger);
+}
+
+.pen-fechado--ok {
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+/* ─── Estado vazio / erro de carga (FlowEmptyState + silhueta) ─── */
+
+.pen-vazio {
+  min-height: 440px;
+}
+
+.pen-lista--silhueta {
+  gap: 14px;
+}
+
+.pen-lista--silhueta .pen-card {
+  box-shadow: none;
+}
+
+/* ─── Esqueleto: a forma do cartão, não um spinner ────────── */
+
+.pen-skel {
+  display: block;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--c-surface-2) 0%, var(--c-bg) 50%, var(--c-surface-2) 100%);
+  background-size: 220% 100%;
+  animation: pen-varrer 1.4s ease-in-out infinite;
+}
+
+.pen-skel--topo {
+  height: 14px;
+  width: 30%;
+}
+
+.pen-skel--titulo {
+  height: 20px;
+  width: 70%;
+}
+
+.pen-skel--linha {
+  height: 12px;
+  width: 45%;
+}
+
+.pen-skel--linha-curta {
+  height: 12px;
+  width: 30%;
+}
+
+.pen-skel--bloco {
+  height: 64px;
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.pen-skel--botao {
+  height: 36px;
+  width: 100%;
+  margin-top: auto;
+  border-radius: var(--radius-md);
+}
+
+.pen-card-side .pen-skel--linha {
+  width: 70%;
+}
+
+/* Na silhueta do estado vazio nada se mexe: é fundo, não carregamento. */
+.pen-skel--parado {
+  animation: none;
+  background: var(--c-border);
+}
+
+@keyframes pen-varrer {
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pen-skel {
+    animation: none;
+    background: var(--c-surface-2);
+  }
+}
+
+/* ─── Toast (borda cheia, sem faixa lateral) ──────────────── */
+
+.pen-toast-region {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.pen-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 280px;
+  max-width: 380px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+  animation: pen-toast-in 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pen-toast-icone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+}
+
+.pen-toast--success .pen-toast-icone {
+  background: color-mix(in srgb, var(--c-success) 12%, transparent);
+  color: var(--c-success);
+}
+
+.pen-toast--error .pen-toast-icone {
+  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
+  color: var(--c-danger);
+}
+
+.pen-toast-corpo {
+  flex: 1;
+  min-width: 0;
+}
+
+.pen-toast-titulo {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.pen-toast-msg {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--c-text-2);
+  word-break: break-word;
+}
+
+.pen-toast-fechar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: color 120ms;
+}
+
+.pen-toast-fechar:hover {
+  color: var(--c-text);
+}
+
+@keyframes pen-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pen-toast {
+    animation: none;
+  }
+}
+
+/* ─── Grupos por campanha (o lote decide dentro deles) ───────── */
+
+.pen-grupos {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.pen-grupo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 0 2px;
+}
+
+.pen-grupo-nome {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+.pen-grupo-tipo {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+
+.pen-grupo-conta {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+
+/* Caixa de marcar no padrão de seleção do sistema (rosa ativo). */
+.pen-check-input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--c-action);
+  cursor: pointer;
+}
+
+.pen-check-input:disabled {
+  cursor: not-allowed;
+}
+
+.pen-check-input:focus-visible {
+  outline: 2px solid var(--c-action);
+  outline-offset: 2px;
+}
+
+/* Marcado para o lote: a borda acende, como a seleção do resto do sistema. */
+.pen-card--marcado {
+  border-color: var(--c-action-border);
+}
+
+/* ─── Barra do lote: fixa no rodapé enquanto há seleção ─────── */
+
+.pen-lote {
+  position: sticky;
+  bottom: 16px;
+  z-index: 20;
+  margin-top: 20px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(6, 5, 91, 0.12));
+  animation: pen-lote-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pen-lote-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pen-lote { animation: none; }
+}
+
+.pen-lote-barra {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+}
+
+.pen-lote-texto {
+  font-size: 13.5px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pen-lote-texto strong {
+  color: var(--c-text);
+  font-weight: 700;
+}
+
+.pen-lote-limpar {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-action);
+  cursor: pointer;
+}
+
+.pen-lote-limpar:hover:not(:disabled) {
+  color: var(--c-action-hover);
+  text-decoration: underline;
+}
+
+.pen-lote-acoes {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.pen-lote-trilho {
+  flex: 1 1 200px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.pen-lote-avanco {
+  display: block;
+  height: 100%;
+  background: var(--c-action);
+  transform-origin: left center;
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pen-lote-confirma {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.pen-lote-titulo {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.pen-lote-apoio {
+  margin: 0;
+  max-width: 75ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+}
+
+.pen-lote-lista {
+  margin: 0;
+  padding: 10px 12px 10px 32px;
+  max-height: 32vh;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-bg);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--c-text);
+}
+
+.pen-lote-lista li {
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+
+.pen-lote-botoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 540px) {
+  .pen-lote-acoes,
+  .pen-lote-botoes {
+    width: 100%;
+  }
+
+  .pen-lote-acoes .btn,
+  .pen-lote-botoes .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}

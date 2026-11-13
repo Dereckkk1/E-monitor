@@ -13,27 +13,6 @@ import (
 	"radiocheck/internal/catalog"
 )
 
-// TestMaskSecret covers the helper that builds the safe-to-expose DTO.
-func TestMaskSecret(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"abc", "..."},       // <= 4 chars
-		{"abcd", "..."},      // exactly 4 chars
-		{"abcde", "abcd..."}, // > 4 chars
-		{"this-is-a-very-strong-secret", "this..."},
-	}
-	for _, c := range cases {
-		t.Run(c.in, func(t *testing.T) {
-			if got := maskSecret(c.in); got != c.want {
-				t.Fatalf("maskSecret(%q) = %q, want %q", c.in, got, c.want)
-			}
-		})
-	}
-}
-
 // TestToDTO_Defaults_NilCfg verifies the function tolerates a nil config and
 // returns the canonical default subscription set.
 func TestToDTO_NilCfg(t *testing.T) {
@@ -69,21 +48,6 @@ func TestToDTO_FromConfig(t *testing.T) {
 	}
 	if !strings.HasPrefix(dto.SecretMasked, "supe") || !strings.HasSuffix(dto.SecretMasked, "...") {
 		t.Fatalf("SecretMasked = %q; want supe...", dto.SecretMasked)
-	}
-}
-
-// TestValidEvent enumerates all currently-accepted event identifiers and
-// confirms unknown ones are rejected.
-func TestValidEvent(t *testing.T) {
-	for _, e := range []string{"detection.confirmed", "detection.retracted", "webhook.test", "*"} {
-		if !validEvent(e) {
-			t.Errorf("validEvent(%q) = false, want true", e)
-		}
-	}
-	for _, e := range []string{"", "DETECTION.CONFIRMED", "unknown.event", "detection.*"} {
-		if validEvent(e) {
-			t.Errorf("validEvent(%q) = true, want false", e)
-		}
 	}
 }
 
@@ -239,6 +203,20 @@ func TestWebhooks_SendTest_NoOutboxReturns503(t *testing.T) {
 
 	id := uuid.New()
 	req := httptest.NewRequest(http.MethodPost, "/clients/"+id.String()+"/webhook-test", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+// Sem outbox, o 503 vem ANTES da conferência do id (ordem original da rota).
+func TestWebhooks_SendTest_NoOutboxReturns503EvenWithInvalidID(t *testing.T) {
+	h := &WebhooksHandler{}
+	r := chi.NewRouter()
+	r.Post("/clients/{id}/webhook-test", h.SendTest)
+
+	req := httptest.NewRequest(http.MethodPost, "/clients/xyz/webhook-test", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {

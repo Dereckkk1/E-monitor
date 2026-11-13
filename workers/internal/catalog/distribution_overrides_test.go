@@ -69,7 +69,7 @@ func TestDistributionOverrides_Upsert(t *testing.T) {
 	}
 
 	// Delete
-	if err := repo.Delete(ctx, cmp.ID, typeID, stat.ID, date); err != nil {
+	if _, err := repo.Delete(ctx, cmp.ID, typeID, stat.ID, date); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	list, _ = repo.ListByCampaignAndDateRange(ctx, cmp.ID,

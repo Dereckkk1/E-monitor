@@ -168,6 +168,8 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfiles/workers.Dockerfile
+    # Gravações em curso: o ffmpeg precisa de ~8s após o SIGTERM; o padrão de 10s empata com o Shutdown e o SIGKILL o corta.
+    stop_grace_period: 20s
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       REDIS_URL: redis://redis:6379
@@ -265,6 +267,12 @@ services:
       # aqui pra não quebrar ambientes que não setam essas vars.
       NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-false}
       NOTIFICATIONS_BASE_URL: ${NOTIFICATIONS_BASE_URL:-https://e-monitor.online}
+      # MCP do E-monitor (spec 2026-10-27 §4.2): origem pública da API — vira o
+      # issuer OAuth e o resource. Em dev local, defina http://localhost:8080 no .env.
+      MCP_ORIGEM_PUBLICA: ${MCP_ORIGEM_PUBLICA:-https://api.e-monitor.online}
+      # Callbacks exatos aceitos como redirect no registro OAuth do MCP, separados por
+      # vírgula (vazio = callbacks do claude.ai e claude.com). Loopback vale sempre.
+      MCP_REDIRECT_URIS: ${MCP_REDIRECT_URIS:-}
       NOTIFICATIONS_SEND_HOUR: ${NOTIFICATIONS_SEND_HOUR:-8}
       NOTIFICATIONS_INTERVAL: ${NOTIFICATIONS_INTERVAL:-}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}

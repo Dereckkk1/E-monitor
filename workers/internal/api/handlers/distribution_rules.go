@@ -1,17 +1,16 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
@@ -22,6 +21,16 @@ type DistributionRulesHandler struct {
 	// anti-oracle quando viewer pede regras de campanha de outro cliente).
 	// Nil-safe — quem só faz writes (admin/operator) pode passar nil.
 	CampaignRepo *catalog.Campaigns
+	// EmSegundoPlano roda a recategorização que não pode atrasar a resposta.
+	// nil = goroutine (produção); os testes injetam um executor que espera.
+	EmSegundoPlano func(func())
+}
+
+// servico monta as ações de regra sobre o repositório deste handler. A
+// regra de negócio (validação, gravação, recategorização) mora em
+// internal/acoes: o MCP chama as mesmas funções.
+func (h *DistributionRulesHandler) servico() *acoes.Servico {
+	return &acoes.Servico{Regras: h.Repo, EmSegundoPlano: h.EmSegundoPlano}
 }
 
 type rulePayload struct {
@@ -37,24 +46,24 @@ type rulePayload struct {
 	PlaysPerDay int16       `json:"plays_per_day"`
 }
 
-func (p *rulePayload) toInput(campaignID uuid.UUID) (catalog.CreateDistributionRuleInput, error) {
+func (p *rulePayload) toEntrada() (acoes.EntradaRegra, error) {
 	start, err := time.Parse("2006-01-02", p.StartDate)
 	if err != nil {
-		return catalog.CreateDistributionRuleInput{}, err
+		return acoes.EntradaRegra{}, err
 	}
 	end, err := time.Parse("2006-01-02", p.EndDate)
 	if err != nil {
-		return catalog.CreateDistributionRuleInput{}, err
+		return acoes.EntradaRegra{}, err
 	}
-	return catalog.CreateDistributionRuleInput{
-		CampaignID: campaignID, TypeID: p.TypeID,
-		StationIDs:  p.StationIDs,
+	return acoes.EntradaRegra{
+		TipoID:      p.TypeID,
+		EmissoraIDs: p.StationIDs,
 		MaterialIDs: p.MaterialIDs,
-		Name:        strings.TrimSpace(p.Name),
-		StartDate:   start, EndDate: end,
-		WeekdayMask: p.WeekdayMask,
-		TimeStart:   p.TimeStart, TimeEnd: p.TimeEnd,
-		PlaysPerDay: p.PlaysPerDay,
+		Nome:        p.Name,
+		Inicio:      start, Fim: end,
+		MascaraDias: p.WeekdayMask,
+		HoraInicio:  p.TimeStart, HoraFim: p.TimeEnd,
+		InsercoesPorDia: p.PlaysPerDay,
 	}, nil
 }
 
@@ -69,22 +78,20 @@ func (h *DistributionRulesHandler) Create(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	in, err := p.toInput(campaignID)
+	in, err := p.toEntrada()
 	if err != nil {
 		http.Error(w, "invalid dates: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	rule, err := h.Repo.Create(r.Context(), in)
+	// Grava e recategoriza em segundo plano (best-effort) as detections que a
+	// regra possa afetar.
+	rule, err := h.servico().CriarRegra(r.Context(), campaignID, in)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	// Recategoriza detections existentes que possam ser afetadas (async, best-effort)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		recordRecatFailure("rule_create", h.Repo.RecategorizeForRule(ctx, rule.ID))
-	}()
 	writeJSON(w, http.StatusCreated, rule)
 }
 
@@ -137,20 +144,17 @@ func (h *DistributionRulesHandler) Update(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	in, err := p.toInput(campaignID)
+	in, err := p.toEntrada()
 	if err != nil {
 		http.Error(w, "invalid dates: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Update(r.Context(), ruleID, in); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := h.servico().EditarRegra(r.Context(), campaignID, ruleID, in); err != nil {
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		recordRecatFailure("rule_update", h.Repo.RecategorizeForRule(ctx, ruleID))
-	}()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -165,15 +169,19 @@ func (h *DistributionRulesHandler) Delete(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid ruleID", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Delete(r.Context(), ruleID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// Após o delete o escopo da regra se perde — a ação recategoriza a campanha toda.
+	if err := h.servico().ApagarRegra(r.Context(), campaignID, ruleID); err != nil {
+		// DELETE é idempotente: apagar uma regra que já não existe é 204, como a
+		// rota sempre foi (a ação devolve nao_encontrado para o MCP não dizer
+		// "feito" quando nada foi feito). A regra de OUTRA campanha segue 404.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	// Após delete o scope se perde — recategoriza toda a campanha
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		recordRecatFailure("rule_delete", h.Repo.RecategorizeForCampaign(ctx, campaignID))
-	}()
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -179,11 +179,15 @@ func (m *Materials) ListByClient(ctx context.Context, clientID uuid.UUID, q stri
 	return out, rows.Err()
 }
 
-// UpdateType sets (or clears) the type_id for a material.
-func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.UUID) error {
-	_, err := m.pool.Exec(ctx,
+// UpdateType sets (or clears) the type_id for a material and returns how many
+// rows it touched (0 = the material does not exist).
+func (m *Materials) UpdateType(ctx context.Context, id uuid.UUID, typeID *uuid.UUID) (int64, error) {
+	tag, err := m.pool.Exec(ctx,
 		`UPDATE materials SET type_id = $2, updated_at = now() WHERE id = $1`, id, typeID)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // UpdateTitle renames a material. Title is a pure label — nada no matching,
@@ -219,10 +223,14 @@ func (m *Materials) UpdateScript(ctx context.Context, id uuid.UUID, script *stri
 	return nil
 }
 
-// Delete removes a material by ID.
-func (m *Materials) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
-	return err
+// Delete removes a material by ID and returns the rows deleted (0 = it did not
+// exist). A material still linked to a campaign fails with SQLSTATE 23503.
+func (m *Materials) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
+	tag, err := m.pool.Exec(ctx, `DELETE FROM materials WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // Acknowledge marks the similarity warning for the given material as resolved

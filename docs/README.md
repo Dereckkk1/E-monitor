@@ -53,6 +53,9 @@ docs/
 | [evidence-audit.md](architecture/evidence-audit.md) | Re-fingerprint do clipe salvo × master antes de confirmar veiculação (§9.9) |
 | [evidence-segments.md](architecture/evidence-segments.md) | ffmpeg escreve segmentos ADTS-AAC 30s; evidence extrai por timestamp |
 | [frontend-design-system.md](architecture/frontend-design-system.md) | Tokens CSS, componentes reutilizáveis (.btn, .field, RSelect), barra de filtros em passos (`.flow-filters`) e shell de estado vazio (`FlowEmptyState`) |
+| [adr-mcp-01-dentro-da-api-go.md](architecture/adr-mcp-01-dentro-da-api-go.md) | ADR: MCP dentro da API Go, tools chamando as mesmas funções das telas (`internal/acoes`, `catalog`), só admin, OAuth 2.1 + token pessoal |
+| [adr-mcp-02-escrita-em-tres-niveis.md](architecture/adr-mcp-02-escrita-em-tres-niveis.md) | ADR: escrita `livre`/`confirma`/`critico`, escalada a `critico` em dia já veiculado (SP), token de confirmação HMAC de uso único no Postgres |
+| [adr-mcp-03-critico-aprovado-em-pendentes.md](architecture/adr-mcp-03-critico-aprovado-em-pendentes.md) | ADR: crítico vira pedido aprovado por quem pediu em `/pendentes`; a aprovação reroda o preview (`preview_desatualizado`), confere a `tentativa` e recusa credencial revogada |
 
 ## `features/` — feature implementada
 
@@ -74,6 +77,7 @@ docs/
 | [user-management.md](features/user-management.md) | CRUD de usuários admin/cliente, /admin/users, /account, filtragem por client_id |
 | [multi-client-user.md](features/multi-client-user.md) | Usuário de agência com vários clientes vinculados: carteira `user_clients`, escopo multi-cliente no JWT, seletor de cliente |
 | [hub-sso.md](features/hub-sso.md) | Entrada pela Central de Clientes (E-Hub): `POST /v1/internal/auth/sso` + página `/sso`, código de uso único de 60s, JIT provisioning e `users.hub_id`/`clients.hub_id`. **Cliente sem `clients.hub_id` mapeado recusa com `client_not_provisioned` e não cria nada** — o preenchimento automático é da Fase 3 do RFC |
+| [codigo-da-campanha.md](features/codigo-da-campanha.md) | O vínculo com o E-Hub pelo **código da campanha** (`EH-7K4M2X`): campo obrigatório no wizard, barreira de 422 no `POST`/`PUT`, `GET /v1/internal/hub-codes/{code}` para a tela conferir sem expor a chave, e job de 15min que reemite quem o hub não confirmou. **Implementado e não publicado** |
 | [campaign-notification-emails.md](features/campaign-notification-emails.md) | 3 emails diários a admins: campanhas iniciando sem material / iniciando / terminando (janela <3d corridos ou ≤2d úteis, SMTP Workspace) |
 | [post-sale.md](features/post-sale.md) | Pós-venda: admin monta o fechamento por cliente × campanhas × período, dispara email e o cliente abre em `/pos-venda/:token` — documento congelado com valor entregue, impactos, CPM, mapa, checking por emissora e zip dos relatórios |
 | [client-deactivation.md](features/client-deactivation.md) | Desativar cliente (reversível) + delete bloqueado vira 409 com contagem de vínculos; login gating de cliente inativo |
@@ -106,6 +110,9 @@ docs/
 | [campaign-fixed-cpm.md](features/campaign-fixed-cpm.md) | CPM fixo opcional por campanha (Step 6 do wizard); o **CPM dinâmico soma investido + bonificado no numerador** — não "simplifique" (há guarda de teste) |
 | [admin-station-failures.md](features/admin-station-failures.md) | `/admin/station-failures` — emissoras com falha no dia + campanhas com slots perdidos |
 | [admin-campaign-failures.md](features/admin-campaign-failures.md) | Modo "Por campanha" + PDF de cobrança; desde 2026-08-17 o déficit vem partido em `deficit_absent` × `deficit_off_slot` (a emissora não pode ser acusada de ausência num dia em que veiculou fora do horário) |
+| [mcp.md](features/mcp.md) | Servidor MCP do E-monitor (`POST /mcp`, só admin): token pessoal + OAuth 2.1 (claude.ai, Claude Code, Gemini Enterprise), revogação por trigger em `users`, rate limit, auditoria. **Parcial: Fatias 0 a 4 (83 tools: 44 de leitura, 17 delas de relatório com deep-link para a tela filtrada, 20 de escrita `livre`/`confirma` com token HMAC de uso único e 18 de escrita `critico` que viram pedido aprovado pelo próprio admin na tela `/pendentes`, mais `minhas_pendentes`; avaliação mcp-builder 10/10). Falta a Fatia 5 (ecossistema)**. Toda feature nova deve ganhar tool (`ToolsEsperadas`) chamando a mesma função do handler HTTP (as escritas, em `workers/internal/acoes`) |
+| [scheduled-recording.md](features/scheduled-recording.md) | Programar gravação (`/admin/gravacoes`): admin agenda um trecho de stream de qualquer emissora e o áudio fica 15 dias. Status pela lista de buracos, finalização repetível, e-mails de falha. `deploy.sh` para se houver gravação em andamento |
+| [recording-clip-editor.md](features/recording-clip-editor.md) | Editor de trechos (`/admin/gravacoes/:id/editar`, lápis na lista): marca trechos sobre a forma de onda e exporta em MP3, um por vez ou num `.zip`. Corte e onda no servidor (ffmpeg); régua em hora do ar aproximada, buracos marcados, atalhos de teclado, fade |
 
 ## `operations/` — operar o sistema em prod
 
@@ -126,6 +133,7 @@ docs/
 | [backup-and-retention.md](operations/backup-and-retention.md) | ⚠️ doc parcialmente desatualizado — descreve pg_basebackup, código usa pg_dump |
 | [data-durability.md](operations/data-durability.md) | Modelo de ameaças + 5 camadas de defesa (bind mount, R2, snapshot GCP, alerta, drill) |
 | [vendor-reconciliation.md](operations/vendor-reconciliation.md) | Método de comparação com o fornecedor externo: regimes do algoritmo, dedup 30/60s, audit_rejected, workflow por discrepância |
+| [mcp.md](operations/mcp.md) | Conectar claude.ai / Claude Code / Gemini Enterprise ao MCP, cadastrar cliente confidencial (`registra-cliente-mcp`), revogar (`revoga-mcp`), variáveis `MCP_*`, diagnóstico, avaliação mcp-builder (semente + CLI `-tags avaliacao`), auditoria das escritas (`mcp.escrita.*`, `mcp.pendente.*`), pedidos críticos (`mcp_acoes_pendentes`, tela `/pendentes`, varredor, SQL de diagnóstico), poda de `mcp_confirmacoes_usadas`, renumeração das migrations no merge, conferência de relatórios, de escritas e de críticas no deploy |
 
 ## `incidents/` — postmortems
 

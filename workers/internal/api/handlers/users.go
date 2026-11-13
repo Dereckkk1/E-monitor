@@ -9,9 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/users"
 	"radiocheck/internal/welcome"
@@ -36,17 +36,6 @@ type UsersHandler struct {
 
 func NewUsersHandler(repo *users.Repo, welcomeSvc *welcome.Service) *UsersHandler {
 	return &UsersHandler{repo: repo, welcomeSvc: welcomeSvc}
-}
-
-// roleAlias converte vocabulário API → DB. operator não é exposto.
-func roleAlias(in string) (string, bool) {
-	switch in {
-	case "admin":
-		return "admin", true
-	case "client":
-		return "viewer", true
-	}
-	return "", false
 }
 
 // parseRoleFilter converte vocabulário API → DB para filtros do query string.
@@ -169,7 +158,9 @@ func (h *UsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 // ── Create ───────────────────────────────────────────────────────────────
 
 type createUserPayload struct {
-	Email    string     `json:"email"`
+	Email string `json:"email"`
+	// Username é opcional: ausente ou vazio = a conta entra só pelo e-mail.
+	Username *string    `json:"username,omitempty"`
 	Password string     `json:"password"`
 	Name     string     `json:"name"`
 	Phone    *string    `json:"phone,omitempty"`
@@ -204,28 +195,32 @@ type welcomeInfo struct {
 	EmailError  string     `json:"email_error,omitempty"`
 }
 
-// writeUserPGError traduz os SQLSTATEs que o /admin/users sabe explicar e
-// devolve true quando escreveu a resposta. Um único lugar porque agora três
-// escritas distintas (INSERT em users, UPDATE em users, SetClients na
-// carteira) podem estourar os MESMOS códigos — o 23503 do SetClients é um id
-// de cliente inexistente na carteira, e sem essa tradução ele viraria um 500
-// mudo em vez de client_not_found.
-func writeUserPGError(w http.ResponseWriter, err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
+// escreveRecusaUsuario traduz a Recusa de internal/acoes no status e no corpo
+// (texto puro = o código) que /admin/users sempre deu. Devolve false quando o
+// erro não é uma Recusa — quem chama responde 500.
+func escreveRecusaUsuario(w http.ResponseWriter, err error) bool {
+	var r *acoes.Recusa
+	if !errors.As(err, &r) {
 		return false
 	}
-	switch pgErr.Code {
-	case "23505": // unique_violation (email)
-		http.Error(w, "email_taken", http.StatusConflict)
-	case "23514": // check_violation (users_client_role_consistency)
-		http.Error(w, "role_client_inconsistent", http.StatusBadRequest)
-	case "23503": // foreign_key_violation (client_id inexistente)
-		http.Error(w, "client_not_found", http.StatusBadRequest)
+	switch r.Codigo {
+	case acoes.CodigoEmailEmUso, acoes.CodigoUsernameEmUso:
+		http.Error(w, r.Mensagem, http.StatusConflict)
+	case acoes.CodigoUsuarioNaoEncontrado:
+		http.Error(w, r.Mensagem, http.StatusNotFound)
 	default:
-		return false
+		// missing_fields, password_too_short, invalid_role, client_id_required,
+		// client_id_not_allowed_for_admin, role_client_inconsistent,
+		// client_not_found, cannot_reactivate_deleted.
+		http.Error(w, r.Mensagem, http.StatusBadRequest)
 	}
 	return true
+}
+
+// servico monta as ações de usuário sobre os colaboradores deste handler. A
+// regra de negócio mora em internal/acoes: o MCP chama as mesmas funções.
+func (h *UsersHandler) servico() *acoes.Servico {
+	return &acoes.Servico{Usuarios: h.repo, BoasVindas: acoes.BoasVindasDoServico(h.welcomeSvc)}
 }
 
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -234,132 +229,41 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if p.Email == "" || p.Password == "" || p.Name == "" {
-		http.Error(w, "missing_fields", http.StatusBadRequest)
-		return
-	}
-	if len(p.Password) < minPasswordLen {
-		http.Error(w, "password_too_short", http.StatusBadRequest)
-		return
-	}
-	dbRole, ok := roleAlias(p.Role)
-	if !ok {
-		http.Error(w, "invalid_role", http.StatusBadRequest)
-		return
-	}
-	// Normaliza carteira: client_ids vence, client_id é o fallback legado.
-	wallet := p.ClientIDs
-	if len(wallet) == 0 && p.ClientID != nil {
-		wallet = []uuid.UUID{*p.ClientID}
-	}
-	if dbRole == "viewer" && len(wallet) == 0 {
-		http.Error(w, "client_id_required", http.StatusBadRequest)
-		return
-	}
-	if dbRole != "viewer" && len(wallet) > 0 {
-		http.Error(w, "client_id_not_allowed_for_admin", http.StatusBadRequest)
-		return
-	}
-	// O principal SEMPRE sai da carteira normalizada. Nunca indexe wallet[0]
-	// sem o guard: pra admin a lista é vazia (e o CHECK
-	// users_client_role_consistency exige client_id NULL nesse caso).
-	var primary *uuid.UUID
-	if len(wallet) > 0 {
-		primary = &wallet[0]
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), 10)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	u, err := h.repo.Create(r.Context(), users.CreateInput{
-		Email:                 p.Email,
-		PasswordHash:          string(hash),
-		Role:                  dbRole,
-		ClientID:              primary,
-		Name:                  p.Name,
-		Phone:                 p.Phone,
-		ReceiveAlertEmails:    p.ReceiveAlertEmails,
-		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
-	})
-	if err != nil {
-		if writeUserPGError(w, err) {
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// O INSERT + trigger da 0062 já deixou o principal na carteira; só os
-	// secundários exigem uma segunda escrita.
-	if len(wallet) > 1 {
-		if err := h.repo.SetClients(r.Context(), u.ID, wallet); err != nil {
-			// Mesma tradução do INSERT: um id inexistente na carteira estoura
-			// 23503 aqui, e tem que virar client_not_found 400, não 500.
-			//
-			// O usuário JÁ foi gravado (com a carteira de um elemento) — ver o
-			// comentário de writeUserPGError. Não desfazemos: o vínculo extra
-			// nunca chegou a existir (SetClients é transacional), então não há
-			// escopo de leitura a mais; o admin corrige o id e edita o usuário.
-			if writeUserPGError(w, err) {
-				return
-			}
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		u, err = h.repo.Get(r.Context(), u.ID)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	resp := createUserResponse{User: u}
-	if p.SendWelcome {
-		resp.Welcome = h.issueWelcome(r, u, p.Password)
-	}
-	writeJSON(w, http.StatusCreated, resp)
-}
-
-// issueWelcome emite o convite pro usuário recém-criado.
-//
-// Nunca devolve erro: o usuário JÁ está gravado, e falhar a resposta inteira
-// porque o SMTP recusou a conexão faria o admin achar que a criação não
-// funcionou (e tentar de novo, colidindo em email_taken). O desfecho vai no
-// campo email_status pra UI mostrar honestamente o que aconteceu.
-func (h *UsersHandler) issueWelcome(r *http.Request, u *users.User, plainPassword string) *welcomeInfo {
-	if h.welcomeSvc == nil || !h.welcomeSvc.Enabled() {
-		return &welcomeInfo{EmailStatus: "unavailable"}
-	}
-	in := welcome.SendInput{
-		UserID:   u.ID,
-		Name:     u.Name,
-		Email:    u.Email,
-		Password: plainPassword,
-		Role:     u.Role,
+	in := acoes.EntradaUsuario{
+		Email:            p.Email,
+		Senha:            p.Password,
+		Nome:             p.Name,
+		Username:         p.Username,
+		Telefone:         p.Phone,
+		Papel:            p.Role,
+		ClienteID:        p.ClientID,
+		ClienteIDs:       p.ClientIDs,
+		EnviarBoasVindas: p.SendWelcome,
+		RecebeAlertas:    p.ReceiveAlertEmails,
+		RecebePosVenda:   p.ReceivePostSaleEmails,
 	}
 	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
 		by := claims.UserID
-		in.CreatedBy = &by
+		in.Ator = &by
 	}
-	if u.ClientID != nil {
-		// Carteira inteira, não só o principal: "vinculada a A, B e C". Com um
-		// cliente só o texto é idêntico ao de antes.
-		in.ClientName = h.welcomeSvc.Repo().WalletNames(r.Context(), u.ID)
-		if in.ClientName == "" {
-			in.ClientName = h.welcomeSvc.Repo().ClientName(r.Context(), *u.ClientID)
+	u, bv, err := h.servico().CriarUsuario(r.Context(), in)
+	if err != nil {
+		if escreveRecusaUsuario(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	resp := createUserResponse{User: u}
+	if bv != nil {
+		resp.Welcome = &welcomeInfo{
+			InviteID:    bv.ConviteID,
+			Link:        bv.Link,
+			EmailStatus: bv.EmailStatus,
+			EmailError:  bv.EmailErro,
 		}
 	}
-	res, err := h.welcomeSvc.Issue(r.Context(), in)
-	if err != nil {
-		return &welcomeInfo{EmailStatus: "unavailable", EmailError: err.Error()}
-	}
-	return &welcomeInfo{
-		InviteID:    &res.InviteID,
-		Link:        res.Link,
-		EmailStatus: res.EmailStatus,
-		EmailError:  res.EmailError,
-	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // ── Patch ────────────────────────────────────────────────────────────────
@@ -377,8 +281,12 @@ type updateUserPayload struct {
 	// ReceiveAlertEmails: opt-in/out dos emails diários de alerta (admins).
 	ReceiveAlertEmails *bool `json:"receive_alert_emails,omitempty"`
 	// ReceivePostSaleEmails: opt-in/out da cópia de todo pós-venda (admins).
-	ReceivePostSaleEmails *bool   `json:"receive_post_sale_emails,omitempty"`
-	Email                 *string `json:"email,omitempty"` // só pra detectar e rejeitar
+	ReceivePostSaleEmails *bool `json:"receive_post_sale_emails,omitempty"`
+	// Username: ausente = não mexe; "" = remove; valor = define/troca. Ao
+	// contrário do e-mail, é mutável — mas só por aqui (admin), nunca pelo
+	// /me: trocar o próprio login não é autoatendimento (decisão do dono).
+	Username *string `json:"username,omitempty"`
+	Email    *string `json:"email,omitempty"` // só pra detectar e rejeitar
 }
 
 func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
@@ -397,102 +305,23 @@ func (h *UsersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, err := h.repo.Get(r.Context(), id)
+	u, err := h.servico().EditarUsuario(r.Context(), id, acoes.EdicaoUsuario{
+		Nome:           p.Name,
+		Telefone:       p.Phone,
+		Papel:          p.Role,
+		ClienteID:      p.ClientID,
+		ClienteIDs:     &p.ClientIDs,
+		Ativo:          p.IsActive,
+		RecebeAlertas:  p.ReceiveAlertEmails,
+		RecebePosVenda: p.ReceivePostSaleEmails,
+		Username:       p.Username,
+	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not_found", http.StatusNotFound)
+		if escreveRecusaUsuario(w, err) {
 			return
 		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
-	}
-
-	// Reativar deletado é proibido (decisão da P4 do spec).
-	if p.IsActive != nil && *p.IsActive && current.DeletedAt != nil {
-		http.Error(w, "cannot_reactivate_deleted", http.StatusBadRequest)
-		return
-	}
-
-	in := users.UpdateInput{
-		Name:                  p.Name,
-		Phone:                 p.Phone,
-		IsActive:              p.IsActive,
-		ReceiveAlertEmails:    p.ReceiveAlertEmails,
-		ReceivePostSaleEmails: p.ReceivePostSaleEmails,
-	}
-	if p.Role != nil {
-		dbRole, ok := roleAlias(*p.Role)
-		if !ok {
-			http.Error(w, "invalid_role", http.StatusBadRequest)
-			return
-		}
-		in.Role = &dbRole
-		// Se vai virar admin, força client_id a nulo (consistência);
-		// se vai virar client, exige p.ClientID/p.ClientIDs OU já estar com um.
-		if dbRole == "viewer" && p.ClientID == nil && len(p.ClientIDs) == 0 && current.ClientID == nil {
-			http.Error(w, "client_id_required", http.StatusBadRequest)
-			return
-		}
-		if dbRole != "viewer" {
-			in.ClearClient = true
-		}
-	}
-	if p.ClientID != nil && len(p.ClientIDs) == 0 {
-		// ClientID só faz sentido se o usuário é (ou está virando) viewer.
-		// Se Role não veio mas current já é viewer, OK: trocar de cliente.
-		// Se Role veio como admin, ClearClient já está true acima e ignoramos.
-		//
-		// Quando client_ids TAMBÉM veio, ele vence e este ramo é pulado — igual
-		// ao Create. Aplicar os dois faria o Update podar a carteira pro
-		// client_id antes do SetClients reconstruí-la, e um SetClients que
-		// falhasse depois deixaria a carteira truncada.
-		if !in.ClearClient {
-			in.ClientID = p.ClientID
-		}
-	} else if len(p.ClientIDs) > 0 && !in.ClearClient && current.ClientID == nil {
-		// SÓ na promoção admin → cliente (o usuário ainda não tem principal):
-		// o Update precisa gravar um principal na MESMA transação em que grava
-		// role='viewer', senão o CHECK users_client_role_consistency estoura no
-		// caminho. O SetClients logo abaixo acrescenta os secundários.
-		//
-		// Para quem JÁ é cliente, não tocamos client_id aqui de propósito. O
-		// Update poda a carteira sempre que mexe em client_id (é o que fecha o
-		// vazamento do caminho legado), então setá-lo aqui truncaria a carteira
-		// pra um cliente ANTES do SetClients rodar — e um SetClients que
-		// falhasse depois (id inválido na lista, por exemplo) deixaria a
-		// carteira destruída, com o admin vendo só um erro. Deixando client_id
-		// quieto, o SetClients faz tudo numa transação só e a regra "mantém o
-		// principal atual se ele continuar na carteira" (§5.3) continua valendo.
-		in.ClientID = &p.ClientIDs[0]
-	}
-
-	u, err := h.repo.Update(r.Context(), id, in)
-	if err != nil {
-		if writeUserPGError(w, err) {
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Carteira: client_ids vence; client_id sozinho já foi aplicado pelo Update
-	// acima (que também poda os vínculos antigos), então só entra aqui quando a
-	// lista veio explícita. ClearClient (virou admin) já esvaziou a carteira
-	// dentro do Update — não há SetClients pra chamar, e chamar seria devolver
-	// o acesso que a promoção acabou de tirar.
-	if len(p.ClientIDs) > 0 && !in.ClearClient {
-		if err := h.repo.SetClients(r.Context(), id, p.ClientIDs); err != nil {
-			if writeUserPGError(w, err) {
-				return
-			}
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		u, err = h.repo.Get(r.Context(), id)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, u)
 }

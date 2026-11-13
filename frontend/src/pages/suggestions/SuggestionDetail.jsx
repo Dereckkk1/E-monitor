@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useSuggestion, useUpdateSuggestion, useMarkSuggestionRead } from '../../api/hooks'
-import { StatusPill, TypePill, ReqPriorityPill, DevPriorityPill, EffortPill } from './SuggestionPills'
+import { StatusPill, TypePill, ReqPriorityPill, DevPriorityPill, EffortPill, OriginPill } from './SuggestionPills'
 import SuggestionThread from './SuggestionThread'
 import AttachmentLightbox from './AttachmentLightbox'
-import AttachmentImage from './AttachmentImage'
+import AttachmentItem from './AttachmentItem'
 import { STATUS, STATUS_ORDER, DEV_PRIORITY, DEV_PRIORITY_ORDER, EFFORT, EFFORT_ORDER } from './constants'
-import { timeAgo, fmtDateTime, authorLabel, initialOf } from './utils'
+import { timeAgo, fmtDateTime, authorLabel, initialOf, isImage } from './utils'
 
 // Frase humana de um evento da timeline.
 function eventPhrase(ev) {
@@ -17,6 +17,13 @@ function eventPhrase(ev) {
     case 'feedback_given':   return 'deixou um feedback'
     case 'attachment_added': return 'anexou uma imagem'
     case 'reopened':         return 'reabriu'
+    case 'retirada':         return 'retirou a sugestão'
+    case 'esforco':          return 'definiu o esforço'
+    case 'sua_vez':          return ev.to_value === 'true' ? 'passou a vez para quem abriu' : 'retomou a vez'
+    case 'comentario':       return 'comentou'
+    case 'editada':          return 'editou a sugestão'
+    case 'anexo_removido':   return 'removeu um anexo'
+    case 'apoio':            return 'apoiou'
     default:                 return ev.event_type
   }
 }
@@ -39,6 +46,7 @@ export default function SuggestionDetail({ id, isDev, onClose }) {
   const s = q.data
   const attachments = s?.attachments || []
   const rootAtts = useMemo(() => attachments.filter((a) => !a.comment_id), [attachments])
+  const rootImages = useMemo(() => rootAtts.filter(isImage), [rootAtts])
   const attsByComment = useMemo(() => {
     const m = {}
     for (const a of attachments) if (a.comment_id) (m[a.comment_id] ||= []).push(a)
@@ -66,6 +74,10 @@ export default function SuggestionDetail({ id, isDev, onClose }) {
                 <span className="sug-ref">#{s.ref_num}</span>
                 <TypePill value={s.type} size="sm" />
                 <StatusPill value={s.status} size="sm" />
+                <OriginPill value={s.origin} />
+                {s.numero_original && s.origin === 'e-monitor' && (
+                  <span className="sug-ref" title="O número desta sugestão antes da fila ir para o hub">antes #{s.numero_original}</span>
+                )}
                 {s.awaiting_author && <span className="sug-pill sug-pill--awaiting">Aguardando autor</span>}
               </div>
               <h2 className="sug-drawer-title">{s.title}</h2>
@@ -140,10 +152,7 @@ export default function SuggestionDetail({ id, isDev, onClose }) {
               {!!rootAtts.length && (
                 <div className="sug-att-grid">
                   {rootAtts.map((a) => (
-                    <button key={a.id} type="button" className="sug-att-thumb sug-att-thumb--lg"
-                            onClick={() => openLightbox(a, rootAtts)}>
-                      <AttachmentImage att={a} />
-                    </button>
+                    <AttachmentItem key={a.id} att={a} large onOpenImage={(x) => openLightbox(x, rootImages)} />
                   ))}
                 </div>
               )}
@@ -170,7 +179,7 @@ export default function SuggestionDetail({ id, isDev, onClose }) {
             {/* Thread */}
             <SuggestionThread suggestionId={s.id} requesterId={s.created_by}
                               comments={s.comments || []} attachmentsByComment={attsByComment}
-                              onOpenImage={(a) => openLightbox(a, attsByComment[a.comment_id] || [])} />
+                              onOpenImage={(a) => openLightbox(a, (attsByComment[a.comment_id] || []).filter(isImage))} />
           </div>
         )}
       </aside>

@@ -323,3 +323,35 @@ func TestClients_TargetLabel_RoundTrip(t *testing.T) {
 		t.Errorf("Update(nil): TargetLabel = %v, want nil", *cleared.TargetLabel)
 	}
 }
+
+// Nomes iguais desempatam por id: sem isso a paginação repete/pula linhas.
+func TestClients_ListPaged_DesempataPorID(t *testing.T) {
+	ctx, pool := newTestDB(t)
+	repo := NewClients(pool)
+
+	const nome = "ZZListPagedTieTok"
+	var ids []uuid.UUID
+	for i := 0; i < 4; i++ {
+		c, err := repo.Create(ctx, CreateClientInput{Name: nome})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		ids = append(ids, c.ID)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM clients WHERE id = ANY($1)`, ids) //nolint:errcheck
+	})
+	var got []string
+	for pg := 1; pg <= 4; pg++ {
+		rows, _, err := repo.ListPaged(ctx, nome, pg, 1, false)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("página %d: err=%v len=%d", pg, err, len(rows))
+		}
+		got = append(got, rows[0].ID.String())
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1] >= got[i] {
+			t.Fatalf("ordem não é por id crescente: %v", got)
+		}
+	}
+}

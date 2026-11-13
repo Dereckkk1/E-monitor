@@ -1,7 +1,12 @@
 ---
 status: implementado
-ultima-verificacao: 2026-07-13
+ultima-verificacao: 2026-10-26
 codigo-relacionado:
+  - workers/internal/hub/sugestoes.go
+  - workers/internal/hub/sugestoes_anexos.go
+  - workers/internal/api/handlers/suggestions_hub.go
+  - workers/cmd/import-suggestions-hub/
+  - frontend/src/pages/suggestions/FilaNoHub.jsx
   - migrations/0051_suggestions.up.sql
   - workers/internal/catalog/suggestions.go
   - workers/internal/api/handlers/suggestions.go
@@ -15,6 +20,38 @@ codigo-relacionado:
 ---
 
 # Sugestões — Central de demandas interna
+
+> **Desde 2026-10-26 a fila MORA NO HUB.** Esta tela grava e lê pela porta
+> `/api/platform/sugestoes` da Central de Clientes (spec do hub
+> `docs/superpowers/specs/2026-10-26-sugestoes-de-todas-as-plataformas-design.md`).
+> O que está abaixo desta caixa descreve o módulo ANTIGO (Postgres), que ficou no
+> código e nas tabelas como arquivo; o que mudou:
+>
+> - **Handler:** `SuggestionsHubHandler` (`handlers/suggestions_hub.go`) atende as
+>   mesmas rotas e o mesmo JSON. Traduz `feature↔ideia`; `dev_feedback` vem da
+>   `resposta` do hub. `SuggestionsHandler` (Postgres) saiu do router.
+> - **Quem é o autor:** e-mail e nome lidos do banco (o JWT não tem e-mail) vão nos
+>   headers `X-Hub-Autor-Email` / `X-Hub-Autor-Nome`, com a `HUB_PLATFORM_KEY`.
+> - **Persona dev:** não há mais Central de Comando aqui — `FilaNoHub.jsx` mostra
+>   "A fila agora vive no hub" com o link. PATCH, `/summary` e
+>   `/attachments/{aid}/url` respondem **410**.
+> - **Anexo:** a tela sobe a imagem ANTES (`POST /suggestions/attachments` →
+>   upload "sem dono" no hub: upload-url → PUT no GCS → confirm) e a criação ou o
+>   comentário a amarram por `attachment_ids`. A exibição continua pelo proxy de
+>   bytes; o 302 do hub é seguido no servidor, SEM headers (o `http.Client`
+>   padrão copiaria a chave para o GCS).
+> - **Idempotência:** a tela manda `client_key` (gerada ao abrir o formulário);
+>   tentar de novo é o mesmo envio.
+> - **Badge:** `unread-count` com cache de 30 s por autor, em memória.
+> - **Sem HUB_URL/HUB_PLATFORM_KEY** toda rota responde 503 — de propósito.
+> - **Status novo:** `retirada`. **Selo de origem:** "via Hub" / "via Plura".
+> - **Histórico:** `import-suggestions-hub` (CLI no container da API) leva tudo
+>   do Postgres + MinIO para o hub, uma vez. Todo anexo sobe em nome de quem o
+>   ENVIOU; o print que o dev pôs na sugestão de alguém vira uma fala sem texto
+>   dele (`anexo-<id>`). Autor apagado vira `autor-removido@e-monitor.invalid`
+>   (o hub não manda aviso para `.invalid`). Um arquivo de estado local faz a
+>   2ª rodada pular o que já foi. Ver o cabeçalho de
+>   `workers/cmd/import-suggestions-hub/main.go`.
 
 Quando o Dereck fala de **"sugestões"**, é esta tela: `/admin/suggestions`. Uma
 central onde os admins mandam demandas detalhadas (o que querem na plataforma) e

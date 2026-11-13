@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/reportcsv"
@@ -25,6 +26,13 @@ type DetectionsHandler struct {
 	CampaignRepo *catalog.Campaigns
 	Storage      *storage.Client
 	SummaryRepo  *catalog.DailySummaryRepo
+}
+
+// servico monta as ações de veiculação sobre o repositório deste handler: a
+// regra (validação, vínculo, cota do dia) mora em internal/acoes, e o MCP chama
+// as mesmas funções.
+func (h *DetectionsHandler) servico() *acoes.Servico {
+	return &acoes.Servico{Veiculacoes: h.Repo}
 }
 
 // parseCampaignIDs lê a seleção de campanhas da querystring. Aceita
@@ -474,33 +482,18 @@ func (h *DetectionsHandler) CreateManual(w http.ResponseWriter, r *http.Request)
 		note = in.Note
 	}
 
-	if campaignID == uuid.Nil || stationID == uuid.Nil || commercialID == uuid.Nil {
-		http.Error(w, "campaign_id, station_id and commercial_id are required", http.StatusBadRequest)
-		return
-	}
-	if detectedAt.IsZero() {
-		http.Error(w, "detected_at is required", http.StatusBadRequest)
-		return
-	}
-	if detectedAt.After(time.Now().Add(5 * time.Minute)) {
-		http.Error(w, "detected_at cannot be in the future", http.StatusBadRequest)
-		return
-	}
-
-	det, err := h.Repo.CreateManual(r.Context(), catalog.CreateManualInput{
-		StationID:    stationID,
-		CommercialID: commercialID,
-		CampaignID:   campaignID,
-		DetectedAt:   detectedAt,
-		ManualBy:     claims.UserID,
-		ManualNote:   note,
+	det, err := h.servico().CriarVeiculacaoManual(r.Context(), acoes.EntradaManual{
+		Campanha: campaignID,
+		Emissora: stationID,
+		Material: commercialID,
+		Quando:   detectedAt,
+		Nota:     note,
+		Ator:     claims.UserID,
 	})
 	if err != nil {
-		if errors.Is(err, catalog.ErrMaterialNotLinkedToStation) {
-			http.Error(w, "material is not linked to this station in this campaign", http.StatusUnprocessableEntity)
-			return
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -555,27 +548,25 @@ func (h *DetectionsHandler) Ignore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Existence + idempotency guard: surface 404 if the row doesn't exist,
-	// otherwise the UPDATE silently no-ops.
-	det, err := h.Repo.Get(r.Context(), id)
+	updated, err := h.servico().IgnorarVeiculacao(r.Context(), id, claims.UserID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
 	}
-	if err := h.Repo.Ignore(r.Context(), det.ID, claims.UserID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	writeVeiculacaoGravada(w, id, updated)
+}
+
+// writeVeiculacaoGravada responde a veiculação como ficou. A ação devolve nil (sem erro) quando a
+// escrita está gravada e só a releitura falhou: a resposta continua sendo 200 — a tocada FOI
+// ignorada/restaurada —, só com o id.
+func writeVeiculacaoGravada(w http.ResponseWriter, id uuid.UUID, det *catalog.Detection) {
+	if det == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"id": id})
 		return
 	}
-	updated, err := h.Repo.Get(r.Context(), id)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, det)
 }
 
 // Restore reverts Ignore by clearing ignored_at/ignored_by. The row counts
@@ -586,25 +577,14 @@ func (h *DetectionsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	det, err := h.Repo.Get(r.Context(), id)
+	updated, err := h.servico().RestaurarVeiculacao(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
 	}
-	if err := h.Repo.Restore(r.Context(), det.ID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	updated, err := h.Repo.Get(r.Context(), id)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, updated)
+	writeVeiculacaoGravada(w, id, updated)
 }
 
 // Export streams detections as CSV (semicolon-separated, BOM-prefixed UTF-8

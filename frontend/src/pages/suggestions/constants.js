@@ -9,9 +9,10 @@ export const STATUS = {
   em_progresso: { label: 'Em progresso', hint: 'Em desenvolvimento agora' },
   concluida:    { label: 'Concluída',    hint: 'Implementada' },
   recusada:     { label: 'Recusada',     hint: 'Não será feita' },
+  retirada:     { label: 'Retirada',     hint: 'Quem abriu retirou a sugestão' },
 }
 // Ordem canônica do fluxo (usada em selects e no board).
-export const STATUS_ORDER = ['nova', 'em_analise', 'aceita', 'em_progresso', 'concluida', 'recusada']
+export const STATUS_ORDER = ['nova', 'em_analise', 'aceita', 'em_progresso', 'concluida', 'recusada', 'retirada']
 // Colunas do board — recusada fica fora (acessível por filtro), pra não poluir.
 export const BOARD_COLUMNS = ['nova', 'em_analise', 'aceita', 'em_progresso', 'concluida']
 
@@ -62,3 +63,14 @@ export const TARGET_SCREENS = [
 export function devPriorityRank(p) {
   return DEV_PRIORITY[p]?.rank ?? 99
 }
+
+// De onde a sugestão veio. A fila mora no hub e junta as três plataformas; a
+// daqui (e-monitor) não ganha selo.
+export const ORIGIN = {
+  hub:   { label: 'via Hub' },
+  plura: { label: 'via Plura' },
+}
+
+// A Central de Clientes (o portal, não a API). Default funciona sem env, como o
+// VITE_SUGGESTIONS_DEV_EMAIL.
+export const HUB_PORTAL_URL = (import.meta.env.VITE_HUB_PORTAL_URL || 'https://clientes.emidiastec.com.br').replace(/\/$/, '')

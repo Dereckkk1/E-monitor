@@ -214,7 +214,15 @@ type pgxQuerier interface {
 // spLoc é o fuso das datas de negócio. O "dia" de uma célula (campanha, tipo,
 // emissora, dia) é sempre o dia calendário local em São Paulo — é assim que o
 // categorizer, a view daily_play_summary e o recat SQL enxergam a grade.
-var spLoc, _ = time.LoadLocation("America/Sao_Paulo")
+var spLoc = func() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		// Sem tzdata: UTC-3 fixo (o Brasil não observa horário de verão desde 2019),
+		// o mesmo fallback do handlers/insights.go. nil aqui daria panic em time.In.
+		return time.FixedZone("BRT", -3*3600)
+	}
+	return loc
+}()
 
 // settleCellDay FECHA a célula-dia (campanha, tipo de material, emissora, dia
 // local SP) da tocada descrita por `in`: carrega TODAS as tocadas aprovadas
@@ -1226,6 +1234,12 @@ type ListPagedFilter struct {
 	// ClientIDs, quando não-nil, restringe às detecções cujas campanhas
 	// pertencem a esses clientes (carteira do viewer no JWT). nil = admin.
 	ClientIDs []uuid.UUID
+
+	// Filtros do MCP (listar_veiculacoes, spec 2026-10-27 §6). nil/vazio =
+	// sem filtro; a tela não os manda, então nada muda para ela.
+	StationID  *uuid.UUID
+	MaterialID *uuid.UUID
+	Categories []string
 }
 
 // ListPagedResult is the wire format returned to the frontend. Total is a
@@ -1324,6 +1338,9 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
 		  AND ($7::uuid[] IS NULL OR cmp.client_id = ANY($7))
+		  AND ($8::uuid IS NULL OR d.station_id = $8)
+		  AND ($9::uuid IS NULL OR d.commercial_id = $9)
+		  AND ($10::text[] IS NULL OR d.category = ANY($10))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -1339,12 +1356,17 @@ func (d *Detections) ListPaged(ctx context.Context, f ListPagedFilter) (*ListPag
 		      )
 		      FROM unnest($4::text[]) AS tok
 		  ))
-		ORDER BY d.detected_at ` + order + `
+		ORDER BY d.detected_at ` + order + `, d.id, d.campaign_id
 		LIMIT $5 OFFSET $6`
 
 	offset := (f.Page - 1) * f.PageSize
+	var cats any // nil → NULL: sem filtro de categoria
+	if len(f.Categories) > 0 {
+		cats = f.Categories
+	}
 	rows, err := d.pool.Query(ctx, sql,
-		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs)
+		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.PageSize, offset, f.ClientIDs,
+		f.StationID, f.MaterialID, cats)
 	if err != nil {
 		return nil, err
 	}
@@ -1625,7 +1647,9 @@ func (d *Detections) AggregateByMaterial(ctx context.Context, f AggregateFilter)
 		      FROM unnest($4::text[]) AS tok
 		  ))
 		GROUP BY d.commercial_id, m.short_id, m.title, c.title, m.duration_seconds, m.type_id, mt.name, mt.color
-		ORDER BY cnt DESC, c.title ASC`,
+		-- d.commercial_id só desempata: c.title é nulo para materiais, e o MCP
+		-- pagina/corta esta lista (a ordem não pode trocar entre duas chamadas).
+		ORDER BY cnt DESC, c.title ASC, d.commercial_id`,
 		f.CampaignIDs, f.StartDate, f.EndDate, qTokens, f.ClientIDs)
 	if err != nil {
 		return nil, err
@@ -1885,7 +1909,8 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		  AND d.evidence_status <> 'audit_rejected'
 		GROUP BY d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		         s.pmm, cst.pmm_target
-		ORDER BY cnt DESC, s.name ASC`,
+		-- d.station_id só desempata (o MCP pagina esta lista).
+		ORDER BY cnt DESC, s.name ASC, d.station_id`,
 		f.CampaignIDs, f.StartDate, f.EndDate)
 	if err != nil {
 		return nil, err

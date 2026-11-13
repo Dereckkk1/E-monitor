@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,17 +12,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"radiocheck/internal/supervisor"
 )
 
 // fakeSupervisor implements CampaignSupervisor for tests.
 type fakeSupervisor struct {
 	startCalls          atomic.Int32
-	pauseCalls          atomic.Int32
 	reload              atomic.Int32
 	stopCalls           atomic.Int32
 	updateStationsCalls atomic.Int32
 	startErr            error
-	pauseErr            error
 	reloadErr           error
 	updateStationsErr   error
 	lastCancelArg       uuid.UUID
@@ -30,10 +31,6 @@ type fakeSupervisor struct {
 func (f *fakeSupervisor) Start(id uuid.UUID) error {
 	f.startCalls.Add(1)
 	return f.startErr
-}
-func (f *fakeSupervisor) Pause(id uuid.UUID) error {
-	f.pauseCalls.Add(1)
-	return f.pauseErr
 }
 func (f *fakeSupervisor) Reload(id uuid.UUID) error {
 	f.reload.Add(1)
@@ -221,9 +218,6 @@ func TestCampaigns_UpdateStations_DelegatesToSupervisor(t *testing.T) {
 	if got := sup.updateStationsCalls.Load(); got != 1 {
 		t.Errorf("UpdateStations calls = %d, want 1", got)
 	}
-	if got := sup.pauseCalls.Load(); got != 0 {
-		t.Errorf("Pause calls = %d, want 0 (Pause+Start dance must be gone)", got)
-	}
 	if got := sup.startCalls.Load(); got != 0 {
 		t.Errorf("Start calls = %d, want 0 (Pause+Start dance must be gone)", got)
 	}
@@ -232,7 +226,7 @@ func TestCampaigns_UpdateStations_DelegatesToSupervisor(t *testing.T) {
 // TestCampaigns_UpdateStations_NotFoundFromSupervisor maps the supervisor's
 // "campaign not found" sentinel to a 404 response.
 func TestCampaigns_UpdateStations_NotFoundFromSupervisor(t *testing.T) {
-	sup := &fakeSupervisor{updateStationsErr: errors.New("supervisor.UpdateStations: campaign not found: x")}
+	sup := &fakeSupervisor{updateStationsErr: fmt.Errorf("supervisor.UpdateStations: %w: x", supervisor.ErrCampaignNotFound)}
 	h := &CampaignsHandler{Supervisor: sup}
 	r := chi.NewRouter()
 	r.Put("/campaigns/{id}/stations", h.UpdateStations)

@@ -1,6 +1,9 @@
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
+import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
+import { isLive } from '../utils/recordings'
 
 // Stations
 export function useStations({ enabled = true, ...params } = {}) {
@@ -243,6 +246,33 @@ export function useCampaignsPaged({ q = '', competence = '', id = '', page = 1, 
     // search input's focus) doesn't flicker out on every keystroke.
     placeholderData: (prev) => prev,
   })
+}
+
+// Opções dos seletores de campanha (/insights, /management, /live-map): a 1ª
+// página de /campaigns (200, ativas primeiro) MAIS as campanhas selecionadas
+// que ficaram fora dela — o caso de um link (de outra tela ou do MCP) para uma
+// campanha concluída antiga. Sem isso a tela filtrava por ela com o seletor
+// vazio. Cada uma vem de /campaigns?id=, que devolve a mesma linha da lista e
+// respeita o escopo de quem está logado (campanha alheia simplesmente não vem).
+export function useCampaignsWithSelected(selectedIds = []) {
+  const pageQ = useCampaignsPaged({ page: 1, pageSize: 200 })
+  const page = pageQ.data?.data
+  const missing = campanhasForaDaPagina(page, selectedIds)
+  const extras = useQueries({
+    queries: missing.map(id => ({
+      queryKey: ['campaigns', 'row', id],
+      queryFn: () => api.get('/campaigns', { params: { id, page: 1, page_size: 1 } })
+        .then(r => r.data?.data?.[0] ?? null),
+      staleTime: 60_000,
+    })),
+  })
+  // Chave estável dos extras: useQueries devolve um array novo a cada render.
+  const extrasKey = extras.map(q => `${q.data?.id ?? ''}@${q.dataUpdatedAt}`).join(',')
+  const campaigns = useMemo(
+    () => juntarCampanhas(page, extras.map(q => q.data)),
+    [page, extrasKey], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  return { campaigns, isPending: pageQ.isPending || extras.some(q => q.isPending) }
 }
 
 // Admin — emissoras que falharam num dado dia (default ontem). Cruza
@@ -1506,10 +1536,14 @@ export function useUpdateSuggestion() {
   })
 }
 
+// Comentário: texto e/ou anexos JÁ SUBIDOS (ids de useStageSuggestionAttachment).
+// `clientKey` torna o reenvio inofensivo (o hub não duplica a fala).
 export function useAddSuggestionComment() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, body }) => api.post(`/suggestions/${id}/comments`, { body }).then(r => r.data),
+    mutationFn: ({ id, body, attachmentIds, clientKey }) => api.post(`/suggestions/${id}/comments`, {
+      body, attachment_ids: attachmentIds?.length ? attachmentIds : undefined, client_key: clientKey,
+    }).then(r => r.data),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
       qc.invalidateQueries({ queryKey: ['suggestions'] })
@@ -1531,6 +1565,22 @@ export function useUploadSuggestionAttachment() {
     },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['suggestion', vars.id] })
+    },
+  })
+}
+
+// Sobe a imagem "sem dono" e devolve { id }. A criação ou o comentário a amarram
+// por attachment_ids — subir ANTES é o que impede o reenvio de duplicar a
+// sugestão quando o upload falha no meio (a fila mora no hub, ver
+// docs/features/suggestions-board.md).
+export function useStageSuggestionAttachment() {
+  return useMutation({
+    mutationFn: (file) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return api.post('/suggestions/attachments', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then(r => r.data)
     },
   })
 }
@@ -1696,4 +1746,238 @@ export function useRevokePostSaleRecipient() {
     mutationFn: ({ recipientId }) => api.post(`/post-sale/recipients/${recipientId}/revoke`),
     onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['post-sale-report', vars.id] }),
   })
+}
+
+// ─── MCP do E-monitor (spec docs/superpowers/specs/2026-10-27-mcp-server-design.md §4) ───
+
+export function useMcpConexoes({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'conexoes'],
+    queryFn: () => api.get('/mcp/tokens').then(r => r.data.items),
+    enabled,
+  })
+}
+
+export function useCriarTokenMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => api.post('/mcp/tokens', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
+  })
+}
+
+export function useRevogarMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.delete(`/mcp/tokens/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp', 'conexoes'] }),
+  })
+}
+
+export function usePedidoAutorizacaoMcp(pedido, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'pedido', pedido],
+    queryFn: () => api.get('/mcp/oauth/pedido', { params: { p: pedido } }).then(r => r.data),
+    enabled: !!pedido && enabled,
+    retry: false,
+  })
+}
+
+export function useConcederMcp() {
+  return useMutation({
+    mutationFn: (body) => api.post('/mcp/oauth/grant', body).then(r => r.data),
+  })
+}
+
+// ─── Pedidos da IA aguardando aprovação (/pendentes — spec 2026-10-27 §4.3) ───
+// A fila é de quem a lê: o pedido de outra pessoa nunca chega aqui. `id` traz
+// o pedido do link (?id=) como `destaque`, mesmo já fechado.
+
+export function usePendentesMcp(id = null, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'pendentes', id ?? null],
+    queryFn: () => api.get('/mcp/pendentes', { params: id ? { id } : undefined }).then(r => r.data),
+    enabled,
+    // Aprovar grava dinheiro: o que a pessoa lê tem de ser o que vale agora,
+    // não o cache de 30 s.
+    staleTime: 0,
+    // O padrão do app é não reler ao voltar para a aba (main.jsx), mas aqui é o contrário: quem
+    // volta para uma aba aberta há tempo pode estar vendo um resumo que mudou (outra aba aprovou e
+    // recebeu preview_desatualizado). Só esta fila relê no foco.
+    refetchOnWindowFocus: true,
+    // Trocar a chave (?id= depois de um 409) não pode piscar o esqueleto: mantém a tela anterior até
+    // a nova chegar.
+    placeholderData: keepPreviousData,
+    // Um pedido aprovado e ainda rodando vira executada/falhou em segundos: relê até fechar.
+    refetchInterval: (query) => {
+      const d = query.state.data
+      return d?.items?.some(p => p.estado === 'aprovada') || d?.destaque?.estado === 'aprovada' ? 3000 : false
+    },
+  })
+}
+
+// Quantos pedidos esperam a pessoa (o badge da barra lateral). Lê a MESMA fila de /pendentes (mesma
+// chave), mas sem a pressa da tela: a lista é relida a cada 2 min e no foco. Dentro de /pendentes o
+// badge não busca nada (enabled=false) e só lê o cache: a tela já pede a fila e a ordem das chamadas
+// dela é contrato (o pedido do link vem primeiro). Um pendente com o prazo vencido no relógio não conta.
+export function useContagemPendentesMcp({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ['mcp', 'pendentes', null],
+    queryFn: () => api.get('/mcp/pendentes').then(r => r.data),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: enabled ? 120_000 : false,
+    refetchOnWindowFocus: true,
+    retry: false,
+    select: (d) => (d?.items ?? []).filter(p => p.estado === 'pendente' && Date.parse(p.expira_em) > Date.now()).length,
+  })
+}
+
+// Troca, em toda cópia da fila no cache, o pedido de mesmo id pelo `pendente` que a API devolveu.
+// As respostas de aprovar/recusar não trazem a `campanha` (só a lista traz): mantém a que o cache tinha,
+// senão o cartão pula de grupo na tela.
+export function trocarPedidoNoCache(qc, pendente) {
+  if (!pendente?.id) return
+  const troca = (p) => (p?.id === pendente.id ? { ...pendente, campanha: pendente.campanha ?? p.campanha ?? null } : p)
+  qc.setQueriesData({ queryKey: ['mcp', 'pendentes'] }, (old) => old && {
+    ...old,
+    items: old.items?.map(troca),
+    destaque: troca(old.destaque),
+  })
+}
+
+// Toda ação invalida a fila inteira, também quando falha: um 422 troca o resumo
+// gravado e um 409 mostra que o estado mudou, e a tela tem de reler antes de a
+// pessoa decidir de novo. Devolver a promessa faz a mutação esperar a releitura.
+//
+// Aprovar manda a `tentativa` do pedido que a pessoa está lendo: o servidor só aprova se ela ainda
+// for a vigente (senão 409 pendente_mudou). O 422 traz o `pendente` relido, com o resumo novo e a
+// tentativa nova, e ele entra no cache NA HORA — se a releitura que vem em seguida falhar, a tela
+// já mostra o que vale, e o próximo clique manda a versão certa.
+export function useAprovarPendenteMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, tentativa }) => api.post(`/mcp/pendentes/${id}/aprovar`, { tentativa }).then(r => r.data),
+    onError: (err) => trocarPedidoNoCache(qc, err?.response?.data?.pendente),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
+  })
+}
+
+// Chamadas cruas, uma por pedido, para a aprovação em lote: a tela as faz em sequência e relê a fila
+// UMA vez no fim (as mutações acima releem a cada chamada). Cada uma é a mesma rota do botão do cartão,
+// com as mesmas conferências no servidor.
+export const aprovarPendenteMcp = (id, tentativa) => api.post(`/mcp/pendentes/${id}/aprovar`, { tentativa }).then(r => r.data)
+export const recusarPendenteMcp = (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data)
+
+export function useRecusarPendenteMcp() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => api.post(`/mcp/pendentes/${id}/recusar`).then(r => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['mcp', 'pendentes'] }),
+  })
+}
+
+// ── Gravações programadas ────────────────────────────────────────────────
+// Só admin. Ver docs/features/scheduled-recording.md.
+const RECORDINGS_KEY = ['recordings']
+const RECORDINGS_POLL_MS = 5000
+
+export function useRecordings({ limit = 50, offset = 0 } = {}) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, limit, offset],
+    queryFn: () => api.get('/recordings', { params: { limit, offset } }).then(r => r.data),
+    // Só atualiza sozinha enquanto houver gravação que ainda pode mudar de status.
+    refetchInterval: query => (isLive(query.state.data?.items) ? RECORDINGS_POLL_MS : false),
+  })
+}
+
+export function useCreateRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: body => api.post('/recordings', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+export function useCancelRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: id => api.post(`/recordings/${id}/cancel`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+export function useDeleteRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: id => api.delete(`/recordings/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RECORDINGS_KEY }),
+  })
+}
+
+// Imperativo: <audio> e <a download> não mandam o header Authorization, então o
+// arquivo vem como blob. Gravação longa pesa: o "Baixar" é o caminho indicado.
+export async function fetchRecordingAudio(id, { onProgress, signal } = {}) {
+  const resp = await api.get(`/recordings/${id}/audio`, {
+    responseType: 'blob',
+    signal,
+    // timeout 0: arquivo de 6h passa de 300 MB e o padrão do axios cortaria.
+    timeout: 0,
+    onDownloadProgress: onProgress ? e => onProgress(e.total ? e.loaded / e.total : null) : undefined,
+  })
+  return resp.data
+}
+
+// ── Editor de trechos ─────────────────────────────────────────────────────
+// Ver docs/features/recording-clip-editor.md.
+export function useRecording(id) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, 'one', id],
+    queryFn: () => api.get(`/recordings/${id}`).then(r => r.data),
+    enabled: Boolean(id),
+  })
+}
+
+/** Forma de onda: Uint8Array (um pico por 1/pps s) e pps. */
+export function useRecordingPeaks(id, enabled = true) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, 'peaks', id],
+    queryFn: async () => {
+      // Gravação de 6h leva dezenas de segundos na primeira vez (o servidor decodifica tudo).
+      const r = await api.get(`/recordings/${id}/peaks`, { responseType: 'arraybuffer', timeout: 0 })
+      return { peaks: new Uint8Array(r.data), pps: Number(r.headers['x-peaks-per-second']) || 20 }
+    },
+    enabled: Boolean(id) && enabled,
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+// Os erros chegam como blob (responseType), e o errorMessage espera texto.
+async function blobErrorToText(err) {
+  const data = err?.response?.data
+  if (data instanceof Blob) {
+    try { err.response.data = await data.text() } catch { /* fica o blob */ }
+  }
+  throw err
+}
+
+/** Um trecho em MP3. */
+export async function fetchRecordingClip(id, { from, to, fade, name }) {
+  const resp = await api.get(`/recordings/${id}/clip`, {
+    params: { from: from.toFixed(3), to: to.toFixed(3), fade: fade ? 1 : 0, name },
+    responseType: 'blob',
+    timeout: 0,
+  }).catch(blobErrorToText)
+  return resp.data
+}
+
+/** Vários trechos num .zip, um MP3 por trecho. */
+export async function fetchRecordingClipsZip(id, { clips, fade, name }) {
+  const resp = await api.post(`/recordings/${id}/clips`, {
+    name,
+    fade,
+    clips: clips.map(c => ({ name: c.name, from: c.from, to: c.to })),
+  }, { responseType: 'blob', timeout: 0 }).catch(blobErrorToText)
+  return resp.data
 }

@@ -539,12 +539,34 @@ export default function ClientsPage() {
   const initialEmpty  = !search && total === 0 && !isLoading
   const filteredEmpty = !!search && total === 0 && !isLoading
 
+  /* CNPJ repetido (spec do hub 2026-10-22 §3.2): o servidor devolve o cliente
+     que já tem esses dígitos. A lista é filtrada por ele para a pessoa achar
+     e usar o existente, em vez de criar o gêmeo que quebra a ligação com o hub. */
+  function avisarCnpjRepetido(err) {
+    const ex = err?.response?.status === 409 ? err.response.data?.existente : null
+    if (!ex) return false
+    window.alert(`Já existe ${ex.nome} com este CNPJ. Use esse cliente em vez de criar outro.`)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSearchInput(ex.nome)
+    setSearch(ex.nome)
+    setPage(1)
+    return true
+  }
+
   function handleCreate(data) {
-    createClient.mutate(data, { onSuccess: () => setCreating(false) })
+    createClient.mutate(data, {
+      onSuccess: () => setCreating(false),
+      // Só o 409 fecha o form; qualquer outro erro segue como antes (form
+      // aberto, `isError` mostra a falha) — não se engole erro alheio.
+      onError: err => { if (avisarCnpjRepetido(err)) setCreating(false) },
+    })
   }
 
   function handleUpdate(data) {
-    updateClient.mutate({ id: editing.id, ...data }, { onSuccess: () => setEditing(null) })
+    updateClient.mutate({ id: editing.id, ...data }, {
+      onSuccess: () => setEditing(null),
+      onError: err => { avisarCnpjRepetido(err) },
+    })
   }
 
   async function handleDelete(c) {

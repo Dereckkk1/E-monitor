@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/api"
 	"radiocheck/internal/api/handlers"
 	"radiocheck/internal/assertiveness"
@@ -24,15 +26,18 @@ import (
 	"radiocheck/internal/catalog"
 	"radiocheck/internal/config"
 	"radiocheck/internal/hub"
+	"radiocheck/internal/hubnotify"
 	"radiocheck/internal/db"
 	"radiocheck/internal/events"
 	"radiocheck/internal/evidence"
 	"radiocheck/internal/fingerprintqueue"
 	"radiocheck/internal/index"
 	"radiocheck/internal/mailer"
+	"radiocheck/internal/mcp"
 	"radiocheck/internal/observability"
 	"radiocheck/internal/postsale"
 	"radiocheck/internal/projrecon"
+	"radiocheck/internal/recording"
 	"radiocheck/internal/reqmetrics"
 	"radiocheck/internal/sharing"
 	"radiocheck/internal/similarity"
@@ -49,7 +54,20 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	ctx := context.Background()
+	/* ⚠️ O ctx do processo MORRE no SIGTERM, e antes de 2026-09-21 ele não
+	   morria: era `context.Background()` puro, e nenhum cancel saía dele. Todo
+	   `case <-ctx.Done(): return` das goroutinas deste arquivo — reconcile do
+	   índice, manutenção de partição, reemissão para o hub — era CÓDIGO MORTO:
+	   elas seguiam rodando durante o `srv.Shutdown` e morriam de repente quando
+	   `main` retornava, podendo pegar o `pool.Close()` no meio de uma consulta.
+
+	   ⚠️ E por isso o `shutdownCtx` lá embaixo nasce de `context.Background()` e
+	   NÃO deste ctx: derivado daqui ele já nasceria cancelado, e o
+	   `srv.Shutdown` devolveria na hora em vez de drenar as requisições em voo
+	   — trocaria uma parada abrupta por outra. */
+	ctx, pararDeOuvirSinais := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer pararDeOuvirSinais()
 
 	// Logger.
 	logger, err := zap.NewProduction()
@@ -57,7 +75,7 @@ func main() {
 		log.Fatalf("logger: %v", err)
 	}
 	defer logger.Sync()        //nolint:errcheck
-	zap.ReplaceGlobals(logger) // zap.L() nos helpers de handler (recordRecatFailure)
+	zap.ReplaceGlobals(logger) // zap.L() nos helpers de acoes/handler (acoes.RegistrarFalhaRecat)
 
 	// OpenTelemetry tracing (§15.3). Init returns a no-op shutdown when no
 	// OTLP endpoint is configured so dev / CI keep working without a
@@ -102,6 +120,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("s3: %v", err)
 	}
+
+	// Programar gravação. Sobe ANTES da carga do índice, que leva minutos: depois
+	// de um reinício, cada minuto de boot seria um minuto de buraco na gravação.
+	// Enabled true: sem credenciais SMTP, mailer.New já devolve noop.
+	// Doc: docs/features/scheduled-recording.md
+	recordings := recording.NewManager(
+		recording.Config{
+			Root:    filepath.Join(cfg.SegmentsPath, "_recordings"),
+			BaseURL: cfg.NotificationsBaseURL,
+		},
+		recording.NewStore(pool),
+		recording.FFmpeg{},
+		s3Client,
+		mailer.New(mailer.Config{
+			Enabled: true,
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.MailFrom,
+		}, logger),
+		logger,
+	)
+	go recordings.Run(ctx)
 
 	stations := catalog.NewStations(pool)
 	clients := catalog.NewClients(pool)
@@ -318,6 +360,10 @@ func main() {
 
 	// Lifecycle scheduler (§18.2.1): promote programada→ativa→concluida by date.
 	sup.StartLifecycle(ctx)
+
+	// Fleet reconciler: starts workers missing for stations of active campaigns
+	// and keeps stations.monitoring_status in sync (incident 2026-10-02).
+	sup.StartFleetReconciler(ctx)
 
 	// Daily calibration job: promote stations out of calibration mode after 7 days (§9.4).
 	// This handles the *initial* calibration window — stations entering the
@@ -536,12 +582,68 @@ func main() {
 	campaignsHandler := &handlers.CampaignsHandler{
 		Repo:       campaigns,
 		Supervisor: sup,
-		Log:        logger,
+		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+		Ligacoes:   catalog.NewLigacoes(pool),
+	}
+
+	/* A rede de seguranca do §8 da spec do codigo da campanha (2026-09-18).
+	   O `campanha.upsert` e dispara-e-esquece: sem esta varredura, um evento
+	   perdido vira campanha que NUNCA chega ao hub, e nao ha nada em tela
+	   nenhuma dizendo que falta alguma. Em regime ela devolve zero linhas.
+
+	   ⚠️ So com o hub configurado: sem este portao, dev e teste ficariam
+	   batendo numa URL vazia a cada 15 minutos. E o mesmo portao que o SSO e o
+	   `acoes.Servico` (aviso da campanha) ja usam.
+
+	   ⚠️ Goroutine dentro do `cmd/api`, e NAO um binario proprio em `cmd/*`:
+	   a regra 6.7 do CLAUDE.md exige duas linhas no `workers.Dockerfile` para
+	   CLI novo entrar na imagem, e um job que nao entra na imagem e um job que
+	   nunca roda. Como goroutine, ele sobe com a API e morre com ela. */
+	/* ⚠️ `NewComTimeout` e nao `New`: os 10s do New sao MENORES que os 15s que o
+	   hub espera ao chamar de volta a porta de leitura daqui enquanto trata o
+	   `campanha.upsert`. Com 10s, uma ida-e-volta legitima de 12s faz o hub
+	   gravar a proposta e este lado ler timeout — a campanha nunca e marcada,
+	   o job a reemite para sempre, e cada repeticao escreve mais uma linha no
+	   AuditLog de la, que nao tem TTL. Quem espera aqui e um job, nao uma
+	   pessoa: pode esperar mais que o outro lado. */
+	if hubClient := hub.NewComTimeout(cfg.HubURL, cfg.HubPlatformKey, 25*time.Second); hubClient.Configured() {
+		hubnotify.Iniciar(ctx, campaigns, hubnotify.EmissorHTTP{Hub: hubClient})
+		logger.Info("hubnotify: reemissao de campanhas ligada",
+			zap.Duration("intervalo", hubnotify.Intervalo), zap.Int("por_ciclo", hubnotify.PorCiclo))
+	}
+
+	if !hub.New(cfg.HubURL, cfg.HubPlatformKey).Configured() {
+		logger.Warn("sugestões: HUB_URL/HUB_PLATFORM_KEY ausentes — /suggestions responde 503 até configurar")
+	}
+
+	mcpModulo := mcp.NovoModulo(mcp.DepsModulo{
+		Pool:    pool,
+		Segredo: []byte(os.Getenv("JWT_SECRET")),
+		Origem:  cfg.MCPOrigemPublica,
+		Portal:  cfg.NotificationsBaseURL,
+		Versao:  "fatia-4",
+		Log:     logger,
+		Workers: sup,
+		// As escritas do MCP chamam o que as telas chamam (plano Fatia 3):
+		// mesmo supervisor, mesmo cliente do hub, mesma barreira da ligação.
+		Supervisor: sup,
+		Hub:        hub.New(cfg.HubURL, cfg.HubPlatformKey),
+		Ligacoes:   catalog.NewLigacoes(pool),
+		// criar_usuario emite o mesmo convite de boas-vindas da tela /admin/users.
+		BoasVindas: acoes.BoasVindasDoServico(welcomeSvc),
+		// testar_webhook enfileira na mesma outbox da rota webhook-test.
+		Webhooks: deliverer.Outbox(),
+		// reenviar_pos_venda usa o mesmo serviço (e o mesmo correio) das rotas de pós-venda.
+		PosVenda: postSaleSvc,
+	})
+	// Varredor: expira pedidos vencidos, fecha aprovadas presas e poda confirmações.
+	if mcpModulo != nil {
+		go mcpModulo.IniciarVarredor(ctx)
 	}
 
 	deps := api.Deps{
 		Stations:     &handlers.StationsHandler{Repo: stations, Workers: sup},
-		Clients:      &handlers.ClientsHandler{Repo: clients},
+		Clients:      &handlers.ClientsHandler{Repo: clients, Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey)},
 		Campaigns:    campaignsHandler,
 		Commercials:  &handlers.CommercialsHandler{Repo: commercials, NATS: nc, MastersPath: cfg.MastersPath, Supervisor: sup, Log: logger},
 		Detections:   &handlers.DetectionsHandler{Repo: detections, CampaignRepo: campaigns, Storage: s3Client, SummaryRepo: dailySumRepo},
@@ -560,6 +662,11 @@ func main() {
 		// sem variavel de ambiente nova.
 		HubClient:    hub.New(cfg.HubURL, cfg.HubPlatformKey),
 		HubClients:   catalog.NewHubClients(pool),
+		// A conferencia do codigo da campanha para a TELA (spec do hub
+		// 2026-09-18 §4.3) — o quarto sentido da ponte, e o unico em que o
+		// pedido nasce no navegador. Mesma chave das linhas acima, e por isso
+		// tambem sem variavel de ambiente nova.
+		HubCodes:     &handlers.HubCodesHandler{Hub: hub.New(cfg.HubURL, cfg.HubPlatformKey), Ligacoes: catalog.NewLigacoes(pool), Campanhas: campaigns},
 		// Fecha a janela de 8h em que um usuario desativado seguia usando o
 		// sistema com o token que ja tinha — vale tanto para o `user.deactivate`
 		// do hub quanto para o botao de bloqueio do /admin/monitoring, cujo
@@ -611,7 +718,7 @@ func main() {
 		Webhooks:              handlers.NewWebhooksHandler(pool, clients, deliverer.Outbox()),
 		MaterialTypes:         &handlers.MaterialTypesHandler{Repo: matTypesRepo},
 		Materials:             &handlers.MaterialsHandler{Repo: matsRepo, MastersPath: cfg.MastersPath, NATS: nc, DistRules: distRulesRepo},
-		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup, Log: logger},
+		CampaignMaterials:     &handlers.CampaignMaterialsHandler{Repo: cmpMatsRepo, CampaignRepo: campaigns, Supervisor: sup},
 		DistributionRules:     &handlers.DistributionRulesHandler{Repo: distRulesRepo, CampaignRepo: campaigns},
 		DistributionOverrides: &handlers.DistributionOverridesHandler{Repo: distOverRepo, Recat: distRulesRepo},
 		Pricing:               &handlers.PricingHandler{Repo: pricingRepo, CampaignRepo: campaigns},
@@ -625,13 +732,17 @@ func main() {
 		LiveMap:               handlers.NewLiveMapHandler(catalog.NewLiveMap(pool)),
 		ManagementOverview:    &handlers.ManagementOverviewHandler{Repo: catalog.NewManagementOverview(pool), Workers: sup},
 		Assertiveness:         handlers.NewAssertivenessHandler(assertivenessRepo),
-		Suggestions: &handlers.SuggestionsHandler{
-			Repo:     catalog.NewSuggestions(pool),
-			Users:    usersRepo,
-			Storage:  s3Client,
-			DevEmail: cfg.SuggestionsDevEmail,
-		},
+		Recordings:            &handlers.RecordingsHandler{Service: recordings, Log: logger},
+		// A fila de sugestões mora no hub (spec do hub 2026-10-26). Sem
+		// HUB_URL/HUB_PLATFORM_KEY o handler responde 503 em toda rota — de
+		// propósito: voltar a gravar no Postgres em silêncio faria a fila ter
+		// duas fontes de novo. `cfg.SuggestionsDevEmail` continua sendo lido
+		// (o handler antigo, fora do router, e o front ainda o espelham).
+		SuggestionsHub:  handlers.NewSuggestionsHubHandler(hub.New(cfg.HubURL, cfg.HubPlatformKey), usersRepo),
 		ClientTargetPmm: &handlers.ClientTargetPmmHandler{Repo: catalog.NewClientStationPMM(pool)},
+		// MCP do E-monitor (spec 2026-10-27). Segredo = o mesmo JWT_SECRET do
+		// portal: salga os hashes das credenciais e assina o pedido OAuth.
+		MCP: mcpModulo,
 	}
 
 	srv := &http.Server{
@@ -683,12 +794,23 @@ func main() {
 		}()
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	<-ctx.Done()
 	log.Println("shutting down...")
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Background, e não `ctx`: ver o comentário do `signal.NotifyContext` no
+	// topo. Derivado do ctx, este deadline já nasceria vencido.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Os gravadores já receberam o cancelamento via ctx (recordings.Run). Esperar
+	// por eles EM PARALELO ao Shutdown: em série, os prazos somariam. Os 8s ficam
+	// acima dos 5s de WaitDelay do Capture (o SIGTERM do ffmpeg tem esse tempo para
+	// gravar até ~16s de áudio em buffer) e abaixo do stop_grace_period do compose.
+	recordersDone := make(chan struct{})
+	go func() {
+		defer close(recordersDone)
+		recordings.WaitRecorders(8 * time.Second)
+	}()
 	srv.Shutdown(shutdownCtx) //nolint:errcheck
+	<-recordersDone
 }

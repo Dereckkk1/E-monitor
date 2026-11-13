@@ -333,6 +333,14 @@ func Settle(day time.Time, plays []Play, cmp Campaign, rules []Rule, override *O
 	return out
 }
 
+// RuleCoversDay diz se a regra vale no dia (vigência + dia da semana). day é
+// uma DATA de calendário: um DATE que chega como meia-noite UTC serve, e só
+// ano/mês/dia são usados (o fuso do time.Time é ignorado). Para passar um
+// INSTANTE (ex.: detected_at), converta antes com .In(America/Sao_Paulo), senão
+// uma tocada de madrugada cai no dia errado. É a mesma decisão que Settle usa para somar
+// a meta do dia — exportada para o MCP (plano_do_dia) não reimplementá-la.
+func RuleCoversDay(r Rule, day time.Time) bool { return ruleCoversDay(r, dateOnlySP(day)) }
+
 // ruleCoversDay casa data+dia-da-semana de uma regra contra o dia da célula.
 // (No SQL: `for_date BETWEEN r.start_date AND r.end_date` + máscara do DOW.)
 func ruleCoversDay(r Rule, day time.Time) bool {

@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import RSelect from '../../components/RSelect'
-import { useCreateSuggestion, useUploadSuggestionAttachment } from '../../api/hooks'
+import { useCreateSuggestion, useStageSuggestionAttachment } from '../../api/hooks'
 import ClipboardPasteZone from './ClipboardPasteZone'
 import { TypeIcon } from './icons'
 import { TYPE, TYPE_ORDER, REQ_PRIORITY, REQ_PRIORITY_ORDER, TARGET_SCREENS } from './constants'
 
 // Modal de criação. Serve ao autor (nova sugestão) e ao dev (nova demanda).
-// Fluxo de submit: cria a sugestão → sobe os anexos referenciando o id novo →
-// fecha e devolve a sugestão criada pro chamador (que abre o detalhe).
+// Fluxo de submit: sobe os anexos "sem dono" → cria a sugestão com os ids →
+// fecha e devolve a sugestão criada pro chamador (que abre o detalhe). A fila
+// mora no hub: subir ANTES é o que impede o reenvio de duplicar.
 export default function SuggestionCreateModal({ onClose, onCreated, devMode }) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState('melhoria')
@@ -19,8 +20,13 @@ export default function SuggestionCreateModal({ onClose, onCreated, devMode }) {
   const [error, setError] = useState('')
 
   const createM = useCreateSuggestion()
-  const uploadM = useUploadSuggestionAttachment()
-  const busy = createM.isPending || uploadM.isPending
+  const stageM = useStageSuggestionAttachment()
+  const busy = createM.isPending || stageM.isPending
+  // A chave do envio nasce com o formulário: tentar de novo depois de um erro é
+  // o MESMO envio, e o hub não cria a sugestão duas vezes.
+  const [clientKey] = useState(() => crypto.randomUUID())
+  // Arquivo → id já subido. Reenviar não sobe a mesma imagem de novo.
+  const staged = useRef(new Map())
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose() }
@@ -37,19 +43,24 @@ export default function SuggestionCreateModal({ onClose, onCreated, devMode }) {
       return
     }
     try {
+      const ids = []
+      for (const f of files) {
+        if (!staged.current.has(f)) staged.current.set(f, (await stageM.mutateAsync(f)).id)
+        ids.push(staged.current.get(f))
+      }
       const created = await createM.mutateAsync({
         title: title.trim(),
         type,
         target_screen: targetScreen || null,
         description: description.trim(),
         requester_priority: priority,
+        attachment_ids: ids,
+        client_key: clientKey,
       })
-      for (const f of files) {
-        await uploadM.mutateAsync({ id: created.id, file: f })
-      }
       onCreated?.(created)
       onClose()
     } catch (err) {
+      // O texto digitado fica no formulário: nada se perde quando o hub não responde.
       setError(err?.response?.data?.error || 'Não consegui salvar. Tenta de novo.')
     }
   }

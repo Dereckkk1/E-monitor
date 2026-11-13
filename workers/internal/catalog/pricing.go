@@ -1,9 +1,11 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -172,53 +174,165 @@ func ValidatePricingInput(in UpsertInput) error {
 // detalhe por tipo inteiro a cada chamada — não tenta merge incremental, pois
 // o Step 5 do wizard sempre envia o estado completo.
 func (p *Pricing) Upsert(ctx context.Context, in UpsertInput) (*StationPricing, error) {
-	if err := ValidatePricingInput(in); err != nil {
+	out, err := p.UpsertLote(ctx, in.CampaignID, []EntradaPreco{{
+		StationID: in.StationID, Mode: in.Mode,
+		ConsolidatedValue: in.ConsolidatedValue, PerType: in.PerType,
+	}})
+	if err != nil {
 		return nil, err
+	}
+	return &out[0], nil
+}
+
+// EntradaPreco é o preço de UMA emissora dentro de um lote de UpsertLote.
+type EntradaPreco struct {
+	StationID         uuid.UUID
+	Mode              string
+	ConsolidatedValue *float64
+	PerType           []TypePricing
+}
+
+// UpsertLote grava o pricing de várias emissoras de uma campanha numa
+// transação só: ou grava todas ou nenhuma (a tool de preços do MCP edita a
+// campanha inteira de uma vez). Todas as entradas passam por
+// ValidatePricingInput ANTES de abrir a transação; o erro de validação volta
+// como veio (ErrPricing*). O resultado vem na ordem de entrada, relido do banco.
+func (p *Pricing) UpsertLote(ctx context.Context, campaignID uuid.UUID, entradas []EntradaPreco) ([]StationPricing, error) {
+	for _, e := range entradas {
+		if err := ValidatePricingInput(UpsertInput{
+			CampaignID: campaignID, StationID: e.StationID, Mode: e.Mode,
+			ConsolidatedValue: e.ConsolidatedValue, PerType: e.PerType,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("pricing.Upsert: begin tx: %w", err)
+		return nil, fmt.Errorf("pricing.UpsertLote: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// 1. Upsert do cabeçalho.
-	_, err = tx.Exec(ctx, `
-		INSERT INTO campaign_station_pricing
-		    (campaign_id, station_id, mode, consolidated_value)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (campaign_id, station_id)
-		DO UPDATE SET
-		    mode = EXCLUDED.mode,
-		    consolidated_value = EXCLUDED.consolidated_value`,
-		in.CampaignID, in.StationID, in.Mode, in.ConsolidatedValue)
-	if err != nil {
-		return nil, fmt.Errorf("pricing.Upsert: upsert head: %w", err)
-	}
-
-	// 2. Limpa o detalhe atual e (se per_insertion) reinsere.
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM campaign_station_type_pricing
-		WHERE campaign_id = $1 AND station_id = $2`,
-		in.CampaignID, in.StationID); err != nil {
-		return nil, fmt.Errorf("pricing.Upsert: clear detail: %w", err)
-	}
-
-	for _, t := range in.PerType {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO campaign_station_type_pricing
-			    (campaign_id, station_id, type_id, unit_value)
-			VALUES ($1, $2, $3, $4)`,
-			in.CampaignID, in.StationID, t.TypeID, t.UnitValue); err != nil {
-			return nil, fmt.Errorf("pricing.Upsert: insert type %s: %w", t.TypeID, err)
-		}
+	if err := upsertPricingTx(ctx, tx, campaignID, entradas); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("pricing.Upsert: commit: %w", err)
+		return nil, fmt.Errorf("pricing.UpsertLote: commit: %w", err)
+	}
+	return p.relerLote(ctx, campaignID, entradas)
+}
+
+// upsertPricingTx grava o lote dentro de uma transação aberta por quem chama
+// (UpsertLote, ou ProgramacaoDeCampanha junto com a campanha e as regras). Não
+// valida: quem chama já passou cada entrada por ValidatePricingInput.
+func upsertPricingTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID, entradas []EntradaPreco) error {
+	// Escreve em ordem de station_id (e não na da entrada): duas chamadas
+	// concorrentes com as mesmas emissoras em ordens opostas travariam uma na
+	// outra (deadlock). A ordem de ENTRADA só vale para o resultado.
+	ordenadas := append([]EntradaPreco(nil), entradas...)
+	sort.SliceStable(ordenadas, func(i, j int) bool {
+		return bytes.Compare(ordenadas[i].StationID[:], ordenadas[j].StationID[:]) < 0
+	})
+
+	for _, e := range ordenadas {
+		// 1. Upsert do cabeçalho.
+		_, err := tx.Exec(ctx, `
+			INSERT INTO campaign_station_pricing
+			    (campaign_id, station_id, mode, consolidated_value)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (campaign_id, station_id)
+			DO UPDATE SET
+			    mode = EXCLUDED.mode,
+			    consolidated_value = EXCLUDED.consolidated_value`,
+			campaignID, e.StationID, e.Mode, e.ConsolidatedValue)
+		if err != nil {
+			return fmt.Errorf("pricing.UpsertLote: upsert head: %w", err)
+		}
+
+		// 2. Limpa o detalhe atual e (se per_insertion) reinsere.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM campaign_station_type_pricing
+			WHERE campaign_id = $1 AND station_id = $2`,
+			campaignID, e.StationID); err != nil {
+			return fmt.Errorf("pricing.UpsertLote: clear detail: %w", err)
+		}
+
+		for _, t := range e.PerType {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO campaign_station_type_pricing
+				    (campaign_id, station_id, type_id, unit_value)
+				VALUES ($1, $2, $3, $4)`,
+				campaignID, e.StationID, t.TypeID, t.UnitValue); err != nil {
+				return fmt.Errorf("pricing.UpsertLote: insert type %s: %w", t.TypeID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// relerLote relê o lote gravado, na ordem de entrada.
+func (p *Pricing) relerLote(ctx context.Context, campaignID uuid.UUID, entradas []EntradaPreco) ([]StationPricing, error) {
+	// Relê tudo em DUAS consultas (cabeçalhos + detalhes), não N×2.
+	ids := make([]uuid.UUID, len(entradas))
+	for i, e := range entradas {
+		ids[i] = e.StationID
+	}
+	porEmissora := make(map[uuid.UUID]*StationPricing, len(entradas))
+	rows, err := p.pool.Query(ctx, `
+		SELECT campaign_id, station_id, mode, consolidated_value, created_at, updated_at
+		FROM campaign_station_pricing
+		WHERE campaign_id = $1 AND station_id = ANY($2)`, campaignID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê cabeçalhos: %w", err)
+	}
+	for rows.Next() {
+		var sp StationPricing
+		if err := rows.Scan(&sp.CampaignID, &sp.StationID, &sp.Mode, &sp.ConsolidatedValue, &sp.CreatedAt, &sp.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("pricing.UpsertLote: scan cabeçalho: %w", err)
+		}
+		sp.PerType = []TypePricing{}
+		porEmissora[sp.StationID] = &sp
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê cabeçalhos: %w", err)
+	}
+	detalhes, err := p.pool.Query(ctx, `
+		SELECT station_id, type_id, unit_value
+		FROM campaign_station_type_pricing
+		WHERE campaign_id = $1 AND station_id = ANY($2)
+		ORDER BY station_id, type_id`, campaignID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê detalhes: %w", err)
+	}
+	for detalhes.Next() {
+		var station uuid.UUID
+		var tp TypePricing
+		if err := detalhes.Scan(&station, &tp.TypeID, &tp.UnitValue); err != nil {
+			detalhes.Close()
+			return nil, fmt.Errorf("pricing.UpsertLote: scan detalhe: %w", err)
+		}
+		// Só per_insertion carrega detalhe (como o GetByCampaignStation).
+		if sp := porEmissora[station]; sp != nil && sp.Mode == PricingModePerInsertion {
+			sp.PerType = append(sp.PerType, tp)
+		}
+	}
+	detalhes.Close()
+	if err := detalhes.Err(); err != nil {
+		return nil, fmt.Errorf("pricing.UpsertLote: relê detalhes: %w", err)
 	}
 
-	return p.GetByCampaignStation(ctx, in.CampaignID, in.StationID)
+	out := make([]StationPricing, 0, len(entradas))
+	for _, e := range entradas {
+		sp := porEmissora[e.StationID]
+		if sp == nil {
+			return nil, fmt.Errorf("pricing.UpsertLote: emissora %s sumiu depois do commit", e.StationID)
+		}
+		out = append(out, *sp)
+	}
+	return out, nil
 }
 
 // GetByCampaignStation retorna o pricing de uma combinação específica. Retorna

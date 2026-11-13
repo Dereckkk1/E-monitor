@@ -5,18 +5,21 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/hub"
 )
 
 type ClientsHandler struct {
 	Repo *catalog.Clients
+	// Hub é opcional: nil ou não configurado significa "esta instalação não
+	// avisa o hub", e a criação de cliente segue igual. É o mesmo portão que o
+	// SSO já usa, e é o que faz dev e teste não baterem em produção.
+	Hub *hub.Client
 }
 
 // List supports two modes:
@@ -86,29 +89,16 @@ func (h *ClientsHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// maxTargetLabelLen é o teto defensivo do rótulo de público-alvo gravado em
-// clients.target_label. A UI sugere 60 chars; aqui só barramos o absurdo (o
-// campo é TEXT no banco, sem CHECK).
-const maxTargetLabelLen = 200
-
-// normalizeTargetLabel apara espaços e colapsa "" em nil (NULL no banco =
-// cliente sem rótulo, que é o mesmo significado de string vazia). Devolve
-// false quando o rótulo excede maxTargetLabelLen — contado em runes, pra um
-// rótulo acentuado não ser rejeitado por causa de bytes UTF-8.
-func normalizeTargetLabel(p **string) bool {
-	if *p == nil {
-		return true
+// servico monta as ações de cliente sobre o repositório e o hub deste handler. A
+// regra de criação (validação, conferência do CNPJ, gravação, aviso ao hub) mora
+// em internal/acoes: o MCP chama as mesmas funções. O hub só entra quando
+// existe (um *hub.Client nil dentro da interface passaria no `!= nil`).
+func (h *ClientsHandler) servico() *acoes.Servico {
+	s := &acoes.Servico{Clientes: h.Repo}
+	if h.Hub != nil {
+		s.Hub = h.Hub
 	}
-	s := strings.TrimSpace(**p)
-	if s == "" {
-		*p = nil
-		return true
-	}
-	if utf8.RuneCountInString(s) > maxTargetLabelLen {
-		return false
-	}
-	*p = &s
-	return true
+	return s
 }
 
 func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -117,17 +107,11 @@ func (h *ClientsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.Name == "" {
-		http.Error(w, "name is required", 400)
-		return
-	}
-	if !normalizeTargetLabel(&in.TargetLabel) {
-		http.Error(w, "target_label must be at most 200 characters", 400)
-		return
-	}
-	out, err := h.Repo.Create(r.Context(), in)
+	out, err := h.servico().CriarCliente(r.Context(), in)
 	if err != nil {
-		http.Error(w, "internal error", 500)
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", 500)
+		}
 		return
 	}
 	writeJSON(w, 201, out)
@@ -139,26 +123,21 @@ func (h *ClientsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			http.Error(w, "not found", 404)
-		case errors.Is(err, catalog.ErrClientHasDependents):
+	if err := h.servico().ApagarCliente(r.Context(), id); err != nil {
+		var rec *acoes.Recusa
+		if errors.As(err, &rec) && rec.Codigo == acoes.CodigoClienteComVinculos {
 			// Hard-delete refused by a foreign key. Tell the operator exactly
 			// what's blocking so the UI can offer the reversible "deactivate"
-			// path instead of a silent 500. Counts are best-effort: if the
-			// breakdown query fails we still return 409 (the conflict is real).
-			counts, cerr := h.Repo.CountDependents(r.Context(), id)
-			if cerr != nil {
-				counts = catalog.DependentCounts{}
-			}
+			// path instead of a silent 500.
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":     "client_has_dependents",
-				"campaigns": counts.Campaigns,
-				"materials": counts.Materials,
-				"users":     counts.Users,
+				"campaigns": rec.Dados["campanhas"],
+				"materials": rec.Dados["materiais"],
+				"users":     rec.Dados["usuarios"],
 			})
-		default:
+			return
+		}
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -184,11 +163,9 @@ func (h *ClientsHandler) setActive(w http.ResponseWriter, r *http.Request, activ
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	out, err := h.Repo.SetActive(r.Context(), id, active)
+	out, err := h.servico().DefinirAtivoCliente(r.Context(), id, active)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -207,19 +184,11 @@ func (h *ClientsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.Name == "" {
-		http.Error(w, "name is required", 400)
-		return
-	}
-	if !normalizeTargetLabel(&in.TargetLabel) {
-		http.Error(w, "target_label must be at most 200 characters", 400)
-		return
-	}
-	out, err := h.Repo.Update(r.Context(), id, in)
+	// Validação, conferência do CNPJ (só quando os dígitos mudam) e gravação
+	// moram em acoes.EditarCliente — o MCP chama a mesma função.
+	out, err := h.servico().EditarCliente(r.Context(), id, in)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return

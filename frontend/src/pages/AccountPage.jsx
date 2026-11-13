@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useMe, useUpdateMe, useChangeMyPassword, useClients } from '../api/hooks'
 import { useAuth } from '../contexts/AuthContext'
+import McpIntegrationSection from '../components/account/McpIntegrationSection'
 import './AccountPage.css'
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -363,6 +364,12 @@ export default function AccountPage() {
             <dt className="account-def-key">email</dt>
             <dd className="account-def-val" title={me.email}>{me.email}</dd>
           </div>
+          {me.username && (
+            <div className="account-def">
+              <dt className="account-def-key">usuário</dt>
+              <dd className="account-def-val account-def-val-mono">{me.username}</dd>
+            </div>
+          )}
           <div className="account-def">
             <dt className="account-def-key">papel</dt>
             <dd className="account-def-val">
@@ -389,7 +396,7 @@ export default function AccountPage() {
         </dl>
 
         <p className="account-section-note">
-          Email, papel e vínculo só podem ser alterados pelo administrador.
+          Email, nome de usuário, papel e vínculo só podem ser alterados pelo administrador.
         </p>
       </section>
 
@@ -563,6 +570,7 @@ export default function AccountPage() {
           </div>
         </form>
       </section>
+      {isAdmin && <McpIntegrationSection numeral="04" />}
 
         </div>{/* /.account-main */}
 

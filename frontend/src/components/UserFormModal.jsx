@@ -12,6 +12,8 @@ const EMPTY = {
   client_ids: [],
   name: '',
   email: '',
+  // Opcional: segunda forma de entrar, além do e-mail.
+  username: '',
   phone: '',
   password: '',
   is_active: true,
@@ -22,6 +24,17 @@ const EMPTY = {
   // admin — o formulário nem mostra as opções pra Cliente.
   receive_alert_emails: true,
   receive_post_sale_emails: false,
+}
+
+// Espelha users.NormalizeUsername / CHECK users_username_format (migration
+// 0070). O servidor valida de novo; aqui é só pra o erro aparecer antes do POST.
+const USERNAME_RE = /^[a-z0-9._-]{3,32}$/
+
+// Códigos que o /admin/users devolve como texto cru, traduzidos pro formulário.
+const SERVER_ERRORS = {
+  email_taken: 'Já existe um usuário com este e-mail.',
+  username_taken: 'Este nome de usuário já está em uso.',
+  invalid_username: 'Nome de usuário inválido: use 3 a 32 caracteres entre letras minúsculas, números, ponto, hífen e sublinhado.',
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -114,6 +127,7 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
           : (initial.client_id ? [initial.client_id] : []),
         name: initial.name ?? '',
         email: initial.email,
+        username: initial.username ?? '',
         phone: initial.phone ?? '',
         password: '',
         is_active: initial.is_active,
@@ -144,11 +158,19 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
       setLocalError('Selecione pelo menos um cliente vinculado.')
       return
     }
+    const username = v.username.trim().toLowerCase()
+    if (username && !USERNAME_RE.test(username)) {
+      setLocalError(SERVER_ERRORS.invalid_username)
+      return
+    }
     setLocalError(null)
     const payload = {
       role: v.role,
       name: v.name.trim(),
       phone: v.phone.trim() || null,
+      // Na edição, "" remove o username (a conta volta a entrar só pelo
+      // e-mail); na criação, "" é o mesmo que não ter.
+      username,
     }
     // A carteira inteira vai em client_ids e SUBSTITUI a anterior. O servidor
     // mantém o cliente principal (client_id) se ele continuar na lista; se
@@ -171,9 +193,10 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
   }
 
   const clientOptions = (clientsQ.data ?? []).map(c => ({ value: c.id, label: c.name }))
-  const errorMsg = localError ?? (typeof error === 'string'
+  const rawError = typeof error === 'string'
     ? error
-    : (error?.error || error?.message || (error ? JSON.stringify(error) : null)))
+    : (error?.error || error?.message || (error ? JSON.stringify(error) : null))
+  const errorMsg = localError ?? (SERVER_ERRORS[rawError?.trim()] ?? rawError)
 
   const initials = isEdit ? getInitials(v.name, v.email) : '+'
   const hue = isEdit ? getAvatarHue(v.email || v.name) : 332 // E-radios rose hue
@@ -317,6 +340,27 @@ export default function UserFormModal({ mode, initial, onSubmit, onClose, error,
             {isEdit && (
               <p className="ufm-hint">Email é imutável após o cadastro.</p>
             )}
+          </div>
+
+          <div className="field">
+            <label htmlFor="ufm-username">Nome de usuário</label>
+            <input
+              id="ufm-username"
+              className="input"
+              value={v.username}
+              onChange={e => set('username', e.target.value.toLowerCase())}
+              placeholder="ex.: joao.silva"
+              maxLength={32}
+              disabled={busy}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
+            <p className="ufm-hint">
+              Opcional. Permite entrar com ele no lugar do e-mail. 3 a 32
+              caracteres: letras minúsculas, números, ponto, hífen e sublinhado.
+              {isEdit && ' Deixe em branco para remover.'}
+            </p>
           </div>
 
           {!isEdit && (

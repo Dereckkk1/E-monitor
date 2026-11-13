@@ -485,3 +485,11 @@ func TestRepo_WalletNames(t *testing.T) {
 	tres := repo.WalletNames(ctx, userID)
 	require.Equal(t, umSo+", Milium e Uniube", tres)
 }
+
+// MailEnabled diz o que Issue decide: só há email de verdade com a flag ligada E um mailer.
+func TestService_MailEnabled(t *testing.T) {
+	require.True(t, New(Config{Mailer: &fakeMailer{}, MailEnabled: true}).MailEnabled())
+	require.False(t, New(Config{Mailer: &fakeMailer{}, MailEnabled: false}).MailEnabled(), "flag desligada (sem credencial de SMTP)")
+	require.False(t, New(Config{MailEnabled: true}).MailEnabled(), "flag ligada mas sem mailer")
+	require.False(t, (*Service)(nil).MailEnabled())
+}

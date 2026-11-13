@@ -190,7 +190,8 @@ func (r *Repo) Recipients(ctx context.Context, reportID uuid.UUID) ([]Recipient,
 		        opened_at, open_count, revoked_at
 		   FROM post_sale_report_recipients
 		  WHERE report_id = $1
-		  ORDER BY email`, reportID)
+		  -- id só desempata (o MCP pagina esta lista).
+		  ORDER BY email, id`, reportID)
 	if err != nil {
 		return nil, fmt.Errorf("postsale: destinatários: %w", err)
 	}

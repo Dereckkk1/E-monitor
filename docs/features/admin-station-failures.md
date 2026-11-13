@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-11-09
 codigo-relacionado:
   - workers/internal/catalog/station_failures.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -15,6 +15,7 @@ codigo-relacionado:
   - frontend/src/api/hooks.js
   - frontend/src/components/Sidebar.jsx
   - frontend/src/App.jsx
+  - frontend/src/utils/filtrosDaUrl.js
 ---
 
 # Admin → Emissoras com falha (`/admin/station-failures`)
@@ -103,6 +104,7 @@ Ordenação: stations por `total_down_seconds desc`, depois `affected_campaigns 
 3 queries SQL + cruzamento de janelas em Go:
 
 1. **Q1** — Stations com problema: `stream_health_events` (down ≥ minDown) UNION `daily_play_summary` (deficit > 0). Devolve totals.
+   **`total_down_seconds` é a UNIÃO dos downs do dia, cada um cortado na meia-noite seguinte** (`range_agg` de `tstzrange`), nunca a soma crua de `duration_seconds`: o histórico de `stream_health_events` tem downs sobrepostos e a soma passava de 24 h num dia (incidente 2026-11-08, Positiva 99.1 com 37,8 h). Teto: 86 400 s. A lista `incidents` continua com os eventos crus (pode ter intervalos sobrepostos em dias anteriores ao fix do watchdog).
 2. **Q2** — Incidents (down events) por station no dia. Calcula `duration_seconds` retroativamente para events abertos via `NOW() - event_at`.
 3. **Q3** — Campanhas com deficit no dia + janelas de regra `HH:MM/HH:MM` agregadas por (station, campaign). Usa subquery na lista de `distribution_rules` filtrando por weekday_mask + date range.
 
@@ -115,6 +117,26 @@ Pós-processamento (puro Go): pra cada `(station, campaign)`, `crossesAny(rule_w
 Backend: `GET /v1/internal/campaigns?id=<uuid>` (extensão de `Campaigns.ListPaged`). Quando `id` vem setado, ignora `q` e `competence` e devolve no máximo 1 campanha.
 
 Frontend: `useSearchParams` lê o param em `CampaignsPage.jsx`, passa pro `useCampaignsPaged({ id })`. Quando filtrado, renderiza um banner sticky rosa com nome da campanha e botão `×` pra limpar (`setSearchParams({})`).
+
+## Abrir já filtrado pela URL
+
+A tela já lia `view` (`by_station|by_campaign|by_day`), `date` e `campaign` (o deep-link do sininho).
+Desde 2026-10-28 (MCP Fatia 2) lê também, no primeiro render, o que as tools de falha põem em `links.tela`:
+
+| Parâmetro | Efeito | Quem gera |
+|---|---|---|
+| `sub=historical` | abre a sub-aba "Histórico" da visão Por campanha | `falhas_campanhas` (modo histórico) |
+| `min_down` | limiar de queda (`0`, `60`, `300` ou `1800`, as opções do seletor; outro valor é ignorado) | `falhas_emissoras`, `falhas_por_dia` |
+| `from`, `to` | período da aba "Por dia"; marca o preset quando bate com um ("30 dias"…), senão "custom" | `falhas_por_dia` |
+
+As outras tools geram `view=by_station&date` (`falhas_emissoras`), `view=by_campaign&date`
+(`falhas_campanhas` no modo dia, `resumo_diario_falhas`) e `view=by_campaign&campaign=<id>`
+(`obter_falhas_campanha`, que abre o drawer). Depois de ler, a tela limpa a URL (todas as 7 chaves).
+
+Limitações: o período da aba "Por dia" só vale de hoje − 90 dias até hoje (o limite do seletor); fora
+disso a aba volta para "Este mês" sem avisar. `date` continua sem validação no frontend (como antes). A
+URL é limpa antes de qualquer resposta da API: numa aba com sessão vencida, o filtro do link se perde no
+login.
 
 ## Performance
 

@@ -1208,12 +1208,31 @@ cd radiocheck
 ```
 
 O script faz automaticamente:
+0. Guarda de gravações, antes do backup: aborta se houver gravação em andamento (ver abaixo)
 1. `git pull` — puxa o código novo
 2. `docker compose build` — rebuilda as imagens alteradas
-3. `docker compose up -d` — sobe os containers
+3. Guarda de gravações de novo, e então `docker compose up -d` — sobe os containers
 4. Aguarda migrations completarem
 5. Health check na API
 6. Mostra status final dos containers
+
+**Gravação em andamento:** o `deploy.sh` aborta se houver gravação em andamento
+(`gravando`) ou começando em menos de 10 minutos (`programada`), porque recriar a API
+corta o áudio. Só conta linha com `ends_at` no futuro: uma linha vencida que ninguém
+fechou (API fora do ar) não barra o hotfix. Gravação `processando` não bloqueia: a
+finalização é repetível e retoma sozinha depois do reinício. Espere terminar ou cancele
+em `/admin/gravacoes`.
+
+A guarda roda **duas vezes**. A primeira, antes do backup, é aviso cedo: deploy
+bloqueado não gasta backup. A segunda, logo antes do `up -d`, é a que protege: o build
+leva minutos, uma gravação pode começar nesse meio-tempo, e até ali abortar não custa
+nada, porque nenhum container foi recriado. `psql` inacessível ou SQL com erro
+(`ON_ERROR_STOP=1`) só avisa e segue.
+
+Bypass de emergência: `SKIP_RECORDING_GUARD=yes ./scripts/deploy.sh`. Corta o áudio
+enquanto a API reinicia. O trecho perdido entra na lista de buracos se tiver 30s ou
+mais; abaixo disso cai na tolerância de 30s de áudio faltando não listado. Ver
+[scheduled-recording.md](../features/scheduled-recording.md).
 
 ### Deploy do frontend
 

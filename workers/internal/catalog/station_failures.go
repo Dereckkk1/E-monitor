@@ -83,6 +83,7 @@ type Incident struct {
 type CampaignDeficit struct {
 	CampaignID   uuid.UUID `json:"campaign_id"`
 	CampaignName string    `json:"campaign_name"`
+	ClientID     uuid.UUID `json:"client_id"`
 	ClientName   string    `json:"client_name"`
 	Expected     int       `json:"expected"`
 	Delivered    int       `json:"delivered"`
@@ -124,14 +125,25 @@ func (r *StationFailures) ListForDate(ctx context.Context, day time.Time, minDow
 	}
 
 	rows, err := r.pool.Query(ctx, `
-WITH down_aggr AS (
+WITH down_iv AS (
+  -- Tempo fora do ar = UNIÃO dos downs, cortada no fim do dia. Os 'down' de
+  -- stream_health_events se sobrepõem no histórico (incidente 2026-11-08:
+  -- Positiva com 37,8 h num dia) e um down das 23h que dura 3 h não pode
+  -- somar 3 h aqui. Mesma leitura do alerta por email (campaignalerts).
   SELECT station_id,
-         SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) AS down_sec
+         tstzrange(event_at,
+                   LEAST(COALESCE(event_at + make_interval(secs => duration_seconds), NOW()),
+                         $1::date + INTERVAL '1 day')) AS r
   FROM stream_health_events
   WHERE event_type = 'down'
     AND event_at >= $1::date AND event_at < ($1::date + INTERVAL '1 day')
+),
+down_aggr AS (
+  SELECT station_id,
+         SUM(EXTRACT(EPOCH FROM upper(u) - lower(u)))::int AS down_sec
+  FROM (SELECT station_id, unnest(range_agg(r)) AS u FROM down_iv GROUP BY station_id) merged
   GROUP BY station_id
-  HAVING SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - event_at))::int)) >= $2
+  HAVING SUM(EXTRACT(EPOCH FROM upper(u) - lower(u))) >= $2
 ),
 deficit_aggr AS (
   -- Exclude cancelled campaigns: a campaign manually ended early must not be
@@ -161,7 +173,8 @@ FROM stations s
 LEFT JOIN down_aggr d   ON d.station_id = s.id
 LEFT JOIN deficit_aggr df ON df.station_id = s.id
 WHERE df.station_id IS NOT NULL
-ORDER BY COALESCE(d.down_sec, 0) DESC, COALESCE(df.aff_camp, 0) DESC, s.name ASC`,
+-- s.id só desempata (o MCP pagina esta lista).
+ORDER BY COALESCE(d.down_sec, 0) DESC, COALESCE(df.aff_camp, 0) DESC, s.name ASC, s.id`,
 		dayStr, minDownSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("query 1 stations: %w", err)
@@ -238,7 +251,7 @@ ORDER BY station_id, event_at ASC`,
 
 	rows3, err := r.pool.Query(ctx, `
 SELECT dps.station_id, dps.campaign_id,
-       c.name AS campaign_name, COALESCE(cl.name, '—') AS client_name,
+       c.name AS campaign_name, c.client_id, COALESCE(cl.name, '—') AS client_name,
        SUM(dps.expected)::int AS expected,
        SUM(dps.in_slot)::int  AS delivered,
        SUM(dps.deficit)::int  AS deficit,
@@ -257,8 +270,9 @@ LEFT JOIN clients cl ON cl.id = c.client_id
 WHERE dps.deficit > 0
   AND dps.station_id = ANY($2::uuid[])
   AND c.status <> 'cancelada'
-GROUP BY dps.station_id, dps.campaign_id, c.name, cl.name
-ORDER BY dps.station_id, deficit DESC`,
+GROUP BY dps.station_id, dps.campaign_id, c.name, c.client_id, cl.name
+-- dps.campaign_id só desempata (o MCP corta as campanhas de cada emissora).
+ORDER BY dps.station_id, deficit DESC, dps.campaign_id`,
 		dayStr, stationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("query 3 deficits: %w", err)
@@ -271,11 +285,11 @@ ORDER BY dps.station_id, deficit DESC`,
 	}
 	campsByStation := map[uuid.UUID][]campAcc{}
 	for rows3.Next() {
-		var sid, cid uuid.UUID
+		var sid, cid, clientID uuid.UUID
 		var name, client string
 		var expected, delivered, deficit int
 		var windows []string
-		if err := rows3.Scan(&sid, &cid, &name, &client, &expected, &delivered, &deficit, &windows); err != nil {
+		if err := rows3.Scan(&sid, &cid, &name, &clientID, &client, &expected, &delivered, &deficit, &windows); err != nil {
 			return nil, err
 		}
 		wins := make([]TimeWindow, 0, len(windows))
@@ -287,7 +301,7 @@ ORDER BY dps.station_id, deficit DESC`,
 		}
 		campsByStation[sid] = append(campsByStation[sid], campAcc{
 			Campaign: CampaignDeficit{
-				CampaignID: cid, CampaignName: name, ClientName: client,
+				CampaignID: cid, CampaignName: name, ClientID: clientID, ClientName: client,
 				Expected: expected, Delivered: delivered, Deficit: deficit,
 			},
 			Windows: wins,

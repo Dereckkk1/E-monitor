@@ -239,6 +239,14 @@ Expostas em `/metrics` (Prometheus):
 `webhook.test` com `data: { message, sent_at, environment }`. Mesmo pipeline,
 mesmo HMAC — útil para validar a integração antes de uma campanha real.
 
+**Armadilha da rota:** ela responde `202 {"queued": true}` mesmo quando a outbox **descarta** o teste em silêncio (cliente sem
+URL, webhook desligado, ou `webhook.test` fora dos `events`; o padrão é só `detection.confirmed`).
+
+**Pelo MCP** ([mcp.md](mcp.md)): `editar_webhook_cliente` (URL, ativo, eventos; **sem segredo**, que continua na tela) e
+`testar_webhook` são tools críticas, aprovadas em `/pendentes`. `testar_webhook` recusa o teste que a rota descartaria
+(`webhook_teste_descartado`, dizendo a condição). Dívida conhecida e não corrigida: o worker lê a URL na hora do envio e ignora
+`webhook_enabled`, então desligar não cancela as entregas já na fila e trocar a URL redireciona as pendentes.
+
 ## Eventos suportados
 
 Hoje:

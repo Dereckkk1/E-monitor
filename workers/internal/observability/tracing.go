@@ -38,8 +38,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ServiceVersion is exposed as the resource attribute service.version. Bumped
@@ -129,9 +127,14 @@ func buildOTLPExporter(ctx context.Context, endpoint string) (*otlptrace.Exporte
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 
+	// WithInsecure, e NÃO WithDialOption(grpc.WithTransportCredentials(insecure...)): o
+	// otlptracegrpc acrescenta as credenciais dele DEPOIS das dial options de quem chama
+	// (otlpconfig.NewGRPCConfig), e sem WithInsecure elas são TLS — a opção nossa era sobrescrita e
+	// todo envio falhava com "tls: first record does not look like a TLS handshake" (log da VM,
+	// 2026-11-10, a cada 10–15 s).
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(endpoint),
-		otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		otlptracegrpc.WithInsecure(),
 	}
 	return otlptracegrpc.New(ctx, opts...)
 }

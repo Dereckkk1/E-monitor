@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-09-10
+ultima-verificacao: 2026-10-28
 codigo-relacionado:
   - workers/internal/catalog/insights.go
   - migrations/0065_quota_aware_summary.up.sql
@@ -17,6 +17,7 @@ codigo-relacionado:
   - frontend/src/api/hooks.js (useInsights)
   - frontend/src/components/Sidebar.jsx
   - frontend/src/App.jsx
+  - frontend/src/utils/filtrosDaUrl.js
 ---
 
 # Dashboard de Veiculação (`/insights`)
@@ -445,6 +446,26 @@ Reutilizar o padrão de [pdfReport.js](../../frontend/src/utils/pdfReport.js) �
 
   **Cuidado ao repetir isso em outro consumidor:** a função corta linhas fora de `[p_from, p_to]`. Quem agrega `out_date` **sem lower bound** não pode migrar — ver a armadilha em [daily-play-summary-for](../operations/migrations.md) e os 4 consumidores que continuam na view em `campaign_failures.go` (Q3/Get/ListHistorical), deliberadamente.
 - **Cliente com 50+ campanhas:** o select faz busca local; se ficar lento, virtualizar o `RSelect` ou adicionar busca server-side.
+
+## Abrir já filtrado pela URL
+
+Desde 2026-10-28 (MCP Fatia 2), `/insights` lê no primeiro render os filtros que as tools do MCP põem em
+`links.tela` (`insights_campanha`): `client_id`, `campaigns` (csv), `from` e `to` (os dois, `from <= to`),
+`stations` (csv) e `materials` (csv). A validação mora em `frontend/src/utils/filtrosDaUrl.js`; depois a
+tela limpa a URL e segue com o próprio estado.
+
+- Admin aceita qualquer `client_id`; a agência (carteira 2+) só um cliente da própria carteira; o Cliente de
+  um cliente só ignora o parâmetro (fica com o dele).
+- Quem escolhe cliente e não ficou com um `client_id` válido da URL descarta também `campaigns`,
+  `stations` e `materials` (são recortes daquele cliente).
+- Campanha que não está na página 1/200 do seletor (uma concluída antiga, por exemplo) é buscada à parte
+  (`useCampaignsWithSelected` em `api/hooks.js`, via `/campaigns?id=`, no escopo de quem está logado) e entra
+  nas opções — antes, a tela filtrava por ela com o seletor vazio. Com elas vêm também as
+  emissoras-alvo (passo 4) e o botão "Período completo".
+
+Limitações: a URL é limpa logo no primeiro render, antes de qualquer resposta da API — numa aba com sessão
+vencida, o 401 leva ao login e o filtro do link se perde (abra o link de novo depois de entrar). Valor
+vazio ou malformado é ignorado em silêncio (vira "sem filtro"); os ids saem em minúsculas.
 
 ## Limitações conhecidas
 

@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-08
+ultima-verificacao: 2026-10-28
 codigo-relacionado:
   - workers/internal/catalog/management_overview.go
   - workers/internal/api/handlers/management_overview.go
@@ -9,6 +9,7 @@ codigo-relacionado:
   - frontend/src/pages/ManagementPage.css
   - frontend/src/components/LiveAiringRow.jsx
   - frontend/src/api/hooks.js
+  - frontend/src/utils/filtrosDaUrl.js
 ---
 
 # Visão Gerencial (/management)
@@ -65,6 +66,22 @@ campanhas** entram. Sobre elas, o **mapa** e o **feed** são sempre "agora"; o
 roda 3 queries (KPIs, stations, recent detections) sobre uma CTE `scoped`
 comum. Frontend: `useManagementOverview` (react-query, refetch 20s,
 `placeholderData`).
+
+## Abrir já filtrado pela URL
+
+Desde 2026-10-28 (MCP Fatia 2), `/management` lê no primeiro render os filtros que `visao_gerencial` e
+`assertividade` põem em `links.tela`: `client_id`, `campaigns` (csv), `status`
+(`ativa|programada|concluida|cancelada`, os valores do seletor) e `from`/`to` (os dois, `from <= to`;
+senão vale o padrão 01/01 até hoje). Validação em `frontend/src/utils/filtrosDaUrl.js`; depois a tela
+limpa a URL e segue com o próprio estado.
+
+Campanha que não está na página 1/200 do seletor (uma concluída antiga, por exemplo) é buscada à parte
+(`useCampaignsWithSelected` em `api/hooks.js`, via `/campaigns?id=`, no escopo de quem está logado) e entra
+nas opções — antes, a tela filtrava por ela com o seletor vazio.
+
+Limitações: a URL é limpa logo no primeiro render, antes de qualquer resposta da API — numa aba com sessão
+vencida, o 401 leva ao login e o filtro do link se perde (abra o link de novo depois de entrar). Valor
+vazio ou malformado é ignorado em silêncio (vira "sem filtro"); os ids saem em minúsculas.
 
 ## Limitações conhecidas
 

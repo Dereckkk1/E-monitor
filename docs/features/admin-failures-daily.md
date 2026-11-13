@@ -1,9 +1,10 @@
 ---
 status: implementado
-ultima-verificacao: 2026-08-17
+ultima-verificacao: 2026-11-09
 codigo-relacionado:
   - workers/internal/catalog/failures_daily.go
   - workers/internal/catalog/failures_daily_test.go
+  - workers/internal/catalog/downtime_overlap_test.go
   - workers/internal/api/handlers/admin_failures_daily.go
   - workers/internal/api/handlers/admin_failures_daily_test.go
   - workers/internal/api/router.go
@@ -123,8 +124,11 @@ Duas queries + merge em Go (`catalog.FailuresDaily.ListDaily`):
    O recorte por data é **pushdown dentro da função** (migration 0052), não um
    `WHERE` por cima.
 2. **Q2 — downtime por (dia, emissora)**: `stream_health_events` do tipo `down`,
-   agrupado por dia local (`AT TIME ZONE 'America/Sao_Paulo'`) e emissora, com
-   `HAVING SUM(...) >= min_down_seconds`.
+   agrupado por dia local (`AT TIME ZONE 'America/Sao_Paulo'`) e emissora. O tempo é a
+   **UNIÃO** dos downs (`range_agg`), cada um cortado na meia-noite SP seguinte — nunca a
+   soma crua, que contava em dobro os downs sobrepostos (incidente 2026-11-08, Positiva
+   99.1 com 37,8 h num dia). Filtro `down_sec >= min_down_seconds` sobre a união;
+   `down_events` segue contando os eventos crus.
 
 O merge só soma o downtime de emissoras presentes na Q1 daquele dia (ver seção
 acima). Depois `buildDailyResult` preenche os dias faltantes com zeros e calcula

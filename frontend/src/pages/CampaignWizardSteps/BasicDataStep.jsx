@@ -1,10 +1,37 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import RSelect from '../../components/RSelect'
+import api from '../../api/client'
 
 function fmtDate(iso) {
   if (!iso) return '—'
   const [y, m, d] = iso.slice(0, 10).split('-')
   return `${d}/${m}/${y}`
+}
+
+/*
+A ponte de identidade, do jeito que o servidor a lê.
+
+⚠️ Espelha o `clienteDoHubConfere` do Go (`handlers/campaigns.go`) e o
+`mesmaPonte` do hub. Os três precisam concordar: o `emonitorClientId` do hub é
+texto livre digitado à mão, e o `uuid.Parse` do Go aceita as formas sem hífen,
+entre chaves e com `urn:uuid:`. Uma tela mais ESTREITA que o servidor recusa o
+que ele aceita — e a mensagem que ela mostra nomeia o próprio cliente escolhido.
+
+⚠️ FILTRA antes de minusculizar, pela mesma razão medida no código da campanha:
+`toLowerCase()` do JS aplica o case mapping completo do Unicode e o
+`strings.ToLower` do Go só o simples. Reduzindo a hexadecimal primeiro sobra só
+ASCII, onde as duas linguagens concordam por construção.
+
+Devolve `null` para o que NÃO é UUID — ausência de ponte, não divergência.
+*/
+function soHex(v) {
+  const semUrn = (v ?? '').trim().replace(/^urn:uuid:/i, '')
+  return semUrn.replace(/[^0-9a-fA-F]/g, '').toLowerCase()
+}
+
+function ponteComoUUID(v) {
+  const hex = soHex(v)
+  return hex.length === 32 ? hex : null
 }
 
 function diffInDays(a, b) {
@@ -24,14 +51,30 @@ function diffInDays(a, b) {
  * collapses below the form.
  *
  * Props:
- *  - value: { name, client_id, start_date, end_date }
+ *  - value: { name, client_id, start_date, end_date, hub_code }
  *  - onChange: (newValue) => void
  *  - clients: Array<{id, name}>
  *  - isEditMode: bool — disables client field after creation
+ *  - onBloqueioChange: (bool) => void — a ligação com o hub trava o Avançar
  */
-export default function BasicDataStep({ value, onChange, clients, isEditMode }) {
+export default function BasicDataStep({ value, onChange, clients, isEditMode, onBloqueioChange }) {
+  /* ⚠️ O valor CORRENTE, não o do render que fechou sobre ele.
+     `onChange({...value})` com o `value` capturado parece inofensivo até alguém
+     chamar `setField` de dentro de uma função ASSÍNCRONA: a conferência do
+     código demora o tempo da rede, e tudo o que a pessoa digitar nesse intervalo
+     é DESFEITO quando a resposta chega e espalha a cópia velha.
+
+     Medido em 2026-09-22, com resposta em 1,2s: o nome voltava ao valor
+     anterior, as datas voltavam a vazias, e em modo edição o wizard AVANÇAVA
+     sem mandar PUT nenhum — a pessoa saía convencida de que tinha salvado. */
+  const valorAtual = useRef(value)
+  // Escrito no EFEITO, não no render: o compilador do React proíbe tocar ref
+  // durante o render, e para o que isto serve — ser lido por um callback
+  // assíncrono, muito depois do commit — dá no mesmo.
+  useEffect(() => { valorAtual.current = value }, [value])
+
   function setField(k, v) {
-    onChange({ ...value, [k]: v })
+    onChange({ ...valorAtual.current, [k]: v })
   }
 
   const selectedClient = useMemo(
@@ -40,6 +83,284 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
   )
 
   const days = diffInDays(value.start_date, value.end_date)
+
+  /* ─────────────── A conferência do código do hub (§4.3 da spec) ───────────────
+
+     ⚠️ Isto é CONVENIÊNCIA, não barreira. A barreira de verdade é o 422 do
+     servidor no POST e no PUT (§4.4): quem chamar a API direto pula esta tela
+     inteira. O que esta conferência compra é a pessoa ver EM QUE está
+     amarrando a campanha antes de salvar, em vez de descobrir no erro. */
+  const [conferencia, setConferencia] = useState({ estado: 'vazio' })
+  // Lida pelo `ligar` DEPOIS do await, como o `valorAtual`: a conferência do
+  // render que clicou já pode não ser a da tela.
+  const conferenciaAtual = useRef(conferencia)
+  useEffect(() => { conferenciaAtual.current = conferencia }, [conferencia])
+  /* Cada ida ao servidor leva um número, e só a resposta do pedido MAIS RECENTE
+     pinta a tela. Sem isto, colar um código, corrigir e sair do campo de novo
+     deixa a resposta do primeiro — que pode chegar depois — sobrescrever a do
+     segundo, e a tela passa a falar de um código que não está mais no campo. */
+  const pedidoAtual = useRef(0)
+  const codigoDigitado = (value.hub_code ?? '').trim()
+
+  async function conferir(bruto, { reescrever = true } = {}) {
+    const code = (bruto ?? '').trim()
+    if (!code) {
+      pedidoAtual.current += 1
+      setConferencia({ estado: 'vazio' })
+      return
+    }
+    // ⚠️ Não reconfere o que já está conferido: o `onBlur` dispara toda vez que
+    // o campo perde o foco, mesmo sem edição — medido, 4 idas à rede para o
+    // mesmo código só entrando e saindo. Cada uma divide com o job de 15 em 15
+    // minutos o balde por IP do hub.
+    // O cliente entra na guarda: a LIGAÇÃO que volta é a do cliente enviado, e
+    // a de outro cliente não vale (spec 2026-10-22).
+    const clienteAgora = valorAtual.current.client_id || ''
+    if (code === conferencia.codigo && conferencia.estado === 'achou' && conferencia.clienteId === clienteAgora) return
+
+    const meuPedido = (pedidoAtual.current += 1)
+    setConferencia({ estado: 'conferindo', codigo: code })
+    try {
+      /* `timeout` explícito: o axios desta casa não tem nenhum (padrão 0 =
+         nunca). O teto de 2s de que a feature fala é do SERVIDOR; sem este, uma
+         conexão pendurada deixa "Conferindo com a Central…" para sempre, sem
+         saída a não ser reeditar o campo. */
+      const { data } = await api.get(`/hub-codes/${encodeURIComponent(code)}`, {
+        timeout: 8000,
+        // O estado da ligação depende do cliente escolhido (spec 2026-10-22).
+        // Sem cliente, o servidor só confere o código e não devolve `ligacao`.
+        params: clienteAgora ? { client_id: clienteAgora } : undefined,
+      })
+      if (meuPedido !== pedidoAtual.current) return
+
+      /* ⚠️ 200 com corpo inutilizável NÃO é sucesso. Sem esta guarda, um
+         `{}` — proxy no meio, envelope novo, rota renomeada — vira uma caixa
+         VERDE com o ✓ e nada escrito dentro. O backend traduz esse mesmo caso
+         em 502 → âmbar quando ele vem do hub; quando vem da nossa própria rota,
+         quem tem de traduzir é a tela. */
+      if (!data || typeof data !== 'object' || !data.nome) {
+        setConferencia({ estado: 'naoConferido', codigo: code })
+        return
+      }
+
+      /* A forma CANÔNICA volta do servidor e substitui o que foi digitado: quem
+         digita escreve `eh7k4m2x` e a coluna guarda `EH-7K4M2X` (§10). Sem
+         isto a tela mostra uma string e o banco guarda outra.
+
+         ⚠️ Mas só se o campo AINDA falar deste código. Entre o blur e a resposta
+         a pessoa pode ter apagado o campo (que é a operação de congelar a
+         coleta, §6.5) ou digitado outro — repor aqui desfaria o gesto dela em
+         silêncio. O `pedidoAtual` não cobre isso: ele só anda no `onBlur`. */
+      const canonico = data.codigo || code
+      if ((valorAtual.current.hub_code ?? '').trim() !== code) {
+        setConferencia({ estado: 'vazio' })
+        return
+      }
+      /* ⚠️ A conferência AO ABRIR (modo edição) não reescreve: ninguém editou o
+         campo, e mudar o código ali faria o PUT da próxima edição de nome levar
+         `hub_code` — que é o que `campanha-codigo-do-hub.spec.js` garante que
+         não acontece. Sem reescrever, a conferência fica guardada com o código
+         como está no campo, para o veredito continuar casando com ele. */
+      const reescreve = reescrever && canonico !== code
+      if (reescreve) setField('hub_code', canonico)
+      setConferencia({ estado: 'achou', campanha: data, codigo: reescreve ? canonico : code, clienteId: clienteAgora })
+    } catch (err) {
+      if (meuPedido !== pedidoAtual.current) return
+      /* ⚠️ 404 é o ÚNICO vermelho — é o caso em que o problema é do que a
+         pessoa digitou. Todo o resto é problema NOSSO e vira âmbar: 503 (hub
+         mudo, 401 por chave errada ou produto desmarcado, 429 pelo balde por
+         IP), 502 (respondeu 200 com um corpo que não dá para usar) e 500.
+
+         Escrever `status === 503 ? âmbar : erro` pintaria de vermelho um código
+         perfeito no dia em que o hub trocasse o envelope da resposta — que é a
+         falha mais provável do dia a dia. */
+      const status = err?.response?.status
+      setConferencia({
+        estado: status === 404 ? 'inexistente' : 'naoConferido',
+        codigo: code,
+      })
+    }
+  }
+
+  /* Ao trocar de cliente, a ligação muda: reconfere o código já conferido.
+
+     ⚠️ Só quando há o que o servidor possa dizer de novo: a resposta anterior
+     trouxe `ligacao` (servidor novo) ou foi pedida SEM cliente. Um servidor
+     antigo não fala de ligação, e para ele o veredito "de outro cliente" já se
+     deriva aqui do que voltou — reconferir só gastaria o balde por IP do hub
+     (é o que `campanha-codigo-do-hub.spec.js` prova com `idas === 1`).
+
+     ⚠️ Reage também à conferência que CHEGA para um cliente que já não é o
+     escolhido: a pessoa troca de A para B com a ida de A em voo, e nesse
+     instante não há o que reconferir (o estado é "conferindo"). Quando A volta,
+     é a mudança de `estado`/`clienteId` que dispara a ida de B. Não entra em
+     laço: depois da ida de B os dois clientes são o mesmo. */
+  useEffect(() => {
+    const c = conferencia
+    if (c.estado !== 'achou' || c.clienteId === (value.client_id || '')) return
+    if (c.campanha?.ligacao || !c.clienteId) conferir(c.codigo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.client_id, conferencia.estado, conferencia.clienteId])
+
+  /* Em modo edição a conferência roda AO ABRIR: uma campanha antiga com a
+     ligação quebrada mostra o problema e o botão sem esperar o blur do campo. */
+  const conferiuAoAbrir = useRef(false)
+  useEffect(() => {
+    if (!isEditMode || conferiuAoAbrir.current) return
+    if ((value.hub_code ?? '').trim() && value.client_id) {
+      conferiuAoAbrir.current = true
+      conferir(value.hub_code, { reescrever: false })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode, value.hub_code, value.client_id])
+
+  /* O botão "Ligar os dois clientes". A resposta traz a ligação JÁ decidida pelo
+     servidor e ela substitui a da conferência: 200 é normalmente `ligado`, mas
+     pode ser outro estado se alguém ligou no meio; 409 é `bloqueado`; 503 é
+     `faltaLigar` com a mensagem dizendo que o hub não confirmou. Só o erro SEM
+     `ligacao` (400/404/500 em texto puro) vira o aviso genérico. */
+  /* ⚠️ "Ligando…" pertence a UM par código+cliente, não à tela: trocar de
+     cliente com o POST em voo deixaria o botão do cliente novo travado em
+     "Ligando…" esperando a resposta de outro. */
+  const [ligandoPara, setLigandoPara] = useState(null)
+  const chaveDaConferencia = `${conferencia.codigo ?? ''}|${conferencia.clienteId ?? ''}`
+  const ligando = ligandoPara === chaveDaConferencia
+  // O botão some quando a ligação dá certo; o foco vai para a caixa de estado,
+  // senão quem usa teclado cai no <body> e perde o lugar na página.
+  const estadoRef = useRef(null)
+  const focarEstado = useRef(false)
+  useEffect(() => {
+    if (!focarEstado.current) return
+    focarEstado.current = false
+    estadoRef.current?.focus()
+  }, [conferencia])
+  // A resposta pode voltar depois que o passo 1 saiu da tela.
+  const montado = useRef(true)
+  useEffect(() => {
+    montado.current = true
+    return () => { montado.current = false }
+  }, [])
+
+  async function ligar() {
+    if (ligando) return
+    /* O par vem da CONFERÊNCIA, que é o que está na tela: é a ligação desse
+       cliente que a pessoa leu antes de clicar. Se o cliente do formulário já
+       é outro, a tela está para mudar — reconfere em vez de ligar o errado. */
+    const code = conferencia.codigo
+    const clientId = conferencia.clienteId
+    if (!code || !clientId) return
+    if (clientId !== (valorAtual.current.client_id || '')) {
+      conferir(code)
+      return
+    }
+    const chave = `${code}|${clientId}`
+    // ⚠️ Só aplica o que voltou se a tela AINDA fala deste par. Sem isto o
+    // "ligado" de A, chegando depois da troca, era escrito na conferência de B.
+    const aplicar = lig => {
+      // Sem botão no estado novo, o foco precisa de outro lugar.
+      if (!['faltaLigar', 'ligacaoNoDuplicado'].includes(lig.estado)) focarEstado.current = true
+      setConferencia(c => {
+        if (c.codigo !== code || c.clienteId !== clientId || c.estado !== 'achou') return c
+        return { ...c, campanha: { ...c.campanha, ligacao: lig } }
+      })
+    }
+    // Nem aviso nem estado para uma tela que já fala de outro par (ou saiu).
+    const aindaAqui = () => montado.current &&
+      conferenciaAtual.current.codigo === code && conferenciaAtual.current.clienteId === clientId
+    setLigandoPara(chave)
+    try {
+      const { data } = await api.post(`/hub-codes/${encodeURIComponent(code)}/ligar`, { client_id: clientId }, { timeout: 15000 })
+      if (!aindaAqui()) return
+      /* ⚠️ 200 sem `ligacao` NÃO é sucesso: gravar `undefined` aqui faria o
+         veredito cair no caminho do servidor antigo, pintar verde e destravar
+         o Avançar sem ninguém ter confirmado a ligação. */
+      if (!data?.ligacao?.estado) {
+        window.alert('Não deu para ligar agora. Tente de novo em instantes.')
+        return
+      }
+      aplicar(data.ligacao)
+    } catch (err) {
+      if (!aindaAqui()) return
+      const lig = err?.response?.data?.ligacao
+      if (lig?.estado) {
+        aplicar(lig)
+      } else {
+        window.alert('Não deu para ligar agora. Tente de novo em instantes.')
+      }
+    } finally {
+      if (montado.current) setLigandoPara(p => (p === chave ? null : p))
+    }
+  }
+
+  /* O veredito é DERIVADO do que voltou, e não guardado pronto: trocar o
+     CLIENTE depois de conferir muda a resposta sem precisar de outra ida ao
+     servidor — e sem isso a tela ficaria verde afirmando um cliente que não é
+     mais o escolhido. */
+  const veredito = useMemo(() => {
+    const c = conferencia
+    // ⚠️ `codigoDigitado` primeiro: sem isso, um campo JÁ PREENCHIDO (modo
+    // edição, ou antes do primeiro blur) mostra "cole o código aqui" embaixo de
+    // um código, e o estado "pendente" fica inalcançável.
+    if (c.estado === 'vazio') return { tipo: codigoDigitado ? 'pendente' : 'idle' }
+    // O código mudou depois da última conferência: o resultado antigo não vale
+    // mais, e mostrar o verde de OUTRO código seria mentira.
+    if ((c.codigo ?? '') !== codigoDigitado) {
+      return { tipo: codigoDigitado ? 'pendente' : 'idle' }
+    }
+    if (c.estado !== 'achou') return { tipo: c.estado }
+
+    /* A ligação que o SERVIDOR decidiu (spec 2026-10-22 §3.1) manda sobre a
+       comparação local: ele vê os dois lados (o `hub_id` do cliente daqui e o
+       `emonitorClientId` do hub) e esta tela só vê um. A mensagem vem pronta
+       dele e é mostrada como chegou. */
+    const lig = c.campanha?.ligacao
+    if (lig) {
+      /* ⚠️ A ligação é a do cliente ENVIADO. Se o escolhido agora é outro (a
+         resposta de A chegou depois da troca para B), ela não diz nada sobre
+         ele: mostra "conferindo" — o efeito acima já está buscando a de B —
+         e nunca o verde de A. */
+      if (c.clienteId !== (value.client_id || '')) return { tipo: 'conferindo' }
+      const tipo = {
+        ligado: 'achou', faltaLigar: 'faltaLigar', ligacaoNoDuplicado: 'duplicado', bloqueado: 'bloqueado',
+      }[lig.estado] ?? 'achou'
+      return { tipo, campanha: c.campanha, mensagem: lig.mensagem }
+    }
+
+    // Daqui para baixo é o caminho de um servidor que ainda não devolve `ligacao`.
+    const dono = ponteComoUUID(c.campanha?.cliente?.idNaPlataforma)
+    /* ⚠️ Ponte AUSENTE ou ilegível NÃO é divergência: o cliente do hub ainda não
+       foi ligado a este E-monitor, e não há o que comparar (§6.1). Tratar
+       ausência como divergência barraria todo cliente ainda não ligado
+       justamente na primeira campanha dele.
+
+       ⚠️ E a comparação é por UUID, espelhando o `clienteDoHubConfere` do Go.
+       Comparando string crua, um UUID sem hífen, com `urn:uuid:` ou com espaço
+       em volta — todos que o `uuid.Parse` do servidor ACEITA — pintavam
+       vermelho dizendo "do cliente Rôgga" com Rôgga sendo o cliente escolhido,
+       e oferecendo uma saída que não existe. Medido em 2026-09-22. */
+    if (dono && value.client_id && dono !== soHex(value.client_id)) {
+      return { tipo: 'outroCliente', campanha: c.campanha }
+    }
+    return { tipo: 'achou', campanha: c.campanha }
+  }, [conferencia, codigoDigitado, value.client_id])
+
+  /* A ligação quebrada trava o Avançar da página (§3.1): salvar com ela quebrada
+     levaria a campanha a um cliente do hub que não é o dela. A queda do hub
+     (`naoConferido`) continua NÃO travando — decisão 2 da spec de 09-18.
+
+     ⚠️ Na EDIÇÃO, a conferência ao abrir ainda em voo também trava: a campanha
+     já existe e o Avançar salva direto, então sem isto a pessoa sai do passo 1
+     antes de a tela dizer que a ligação está quebrada. É limitado pelo timeout
+     de 8s do GET, que vira `naoConferido` e destrava. Na CRIAÇÃO não trava: lá
+     "conferindo" é o caminho normal entre o blur e o clique. */
+  const bloqueia = ['faltaLigar', 'duplicado', 'bloqueado'].includes(veredito.tipo) ||
+    (isEditMode && veredito.tipo === 'conferindo')
+  useEffect(() => {
+    onBloqueioChange?.(bloqueia)
+    // O passo 1 desmontado não pode deixar a página travada por ele.
+    return () => onBloqueioChange?.(false)
+  }, [bloqueia, onBloqueioChange])
+  const mostraBotao = veredito.tipo === 'faltaLigar' || veredito.tipo === 'duplicado'
 
   return (
     <div style={{
@@ -94,6 +415,98 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
             isClearable
             isDisabled={isEditMode}
           />
+        </FieldBlock>
+
+        {/* Código do hub */}
+        <FieldBlock
+          label="Código do hub"
+          htmlFor="hub-code"
+          required={!isEditMode}
+        >
+          <input
+            id="hub-code"
+            className="input"
+            placeholder="EH-7K4M2X"
+            value={value.hub_code ?? ''}
+            onChange={e => setField('hub_code', e.target.value)}
+            onBlur={e => conferir(e.target.value)}
+            /* O corretor do navegador "conserta" códigos em maiúscula, e a
+               capitalização automática do celular estraga o que foi colado. */
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            /* O asterisco do rótulo é só tinta: quem usa leitor de tela precisa
+               do `required`. E o `aria-describedby` é o que faz o resultado da
+               conferência ser lido ao voltar ao campo com Tab — sem ele, quem
+               tomou o vermelho não ouve nada ao tentar de novo. */
+            required={!isEditMode}
+            aria-describedby="hub-code-estado"
+            /* Só o que diz que o CÓDIGO está errado. Em faltaLigar e duplicado o
+               código é válido — o que falta é a ligação, e o botão resolve. */
+            aria-invalid={['inexistente', 'outroCliente', 'bloqueado'].includes(veredito.tipo)}
+            style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.04em' }}
+          />
+          {/* ⚠️ Altura reservada. O resultado chega ao SAIR do campo, que é o
+              instante em que a pessoa já está indo clicar na data logo abaixo —
+              um bloco aparecendo aqui empurraria o alvo do clique no meio do
+              movimento. Reservando, a dica e o resultado ocupam o mesmo espaço
+              e nada se mexe.
+
+              ⚠️ 56 e não 42: medido em 2026-09-22, o bloco de "outro cliente"
+              ocupa 54,8px a 1280 e 72,2px a 390. Os 42 só bastavam a partir de
+              1440 — abaixo disso ele empurrava o campo de data, que é o alvo do
+              clique seguinte, que é exatamente o que reservar altura evita.
+
+              ⚠️ 110 só quando há cliente E código: só aí a conferência pode
+              trazer a ligação (spec 2026-10-22), e com ela a mensagem do
+              servidor mais o botão "Ligar os dois clientes". Medido em
+              2026-10-22, caixa + botão com a fonte carregada: 91,6px a 1280
+              e 109,0px a 390 (mensagem de 3 linhas). Assim a área cresce UMA
+              vez, quando o código entra (a pessoa ainda está no campo), e não a
+              cada resultado; e quem ainda não preencheu não carrega 54px de
+              branco. Um nome longo que quebre em 4 linhas a 390 ainda passa um
+              pouco — o caso raro empurra a data, uma vez. */}
+          <div style={{
+            minHeight: value.client_id && codigoDigitado ? 110 : 56,
+            display: 'flex', flexDirection: 'column', justifyContent: 'center',
+            alignItems: 'flex-start', gap: 8,
+          }}>
+            {/* ⚠️ `role="status"` mora AQUI, no wrapper que nunca desmonta, e não
+                no bloco colorido: vários leitores de tela não anunciam uma região
+                viva que aparece no DOM já com texto dentro. Estando o wrapper
+                sempre montado, quem troca é só o filho.
+
+                `tabIndex={-1}`: é para onde o foco vai quando o botão de ligar
+                some (deu certo) — focável por código, fora da ordem do Tab. */}
+            <div
+              id="hub-code-estado"
+              role="status"
+              ref={estadoRef}
+              tabIndex={-1}
+              style={{ display: 'flex', alignItems: 'center', outline: 'none' }}
+            >
+              <ConferenciaDoCodigo veredito={veredito} />
+            </div>
+            {/* ⚠️ O botão fica FORA da região viva: dentro dela, trocar o rótulo
+                para "Ligando…" e de volta reanunciava a mensagem inteira.
+
+                `aria-disabled` e não `disabled` enquanto liga: o Chromium tira o
+                foco de um botão que fica `disabled`, e quem usa teclado cairia no
+                <body> no meio da operação. O clique repetido é barrado no
+                `ligar`. */}
+            {mostraBotao && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={ligar}
+                aria-disabled={ligando}
+                style={ligando ? { opacity: 0.6, cursor: 'progress' } : undefined}
+              >
+                {ligando ? 'Ligando…' : 'Ligar os dois clientes'}
+              </button>
+            )}
+          </div>
         </FieldBlock>
 
         {/* Dates */}
@@ -215,10 +628,13 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode }) 
   )
 }
 
-function FieldBlock({ label, required, hint, children }) {
+function FieldBlock({ label, required, hint, children, htmlFor }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label style={{
+      {/* `htmlFor` é opcional para não mexer nos campos que já existiam, mas
+          quem o passa ganha o vínculo de verdade: clicar no rótulo foca o
+          campo, e o leitor de tela anuncia os dois juntos. */}
+      <label htmlFor={htmlFor} style={{
         fontSize: 12, fontWeight: 600,
         color: 'var(--c-text)',
         fontFamily: 'var(--font-heading)',
@@ -236,6 +652,142 @@ function FieldBlock({ label, required, hint, children }) {
     </div>
   )
 }
+
+/*
+As quatro caras da §4.3, e a razão de cada cor.
+
+⚠️ O texto NÃO é a cor de status crua. Medido contra o branco: `--c-success` dá
+3,30:1 e `--c-warning` 2,89:1 — os dois abaixo dos 4,5:1 que a AA pede para
+texto, e o âmbar abaixo até dos 3:1 de elemento gráfico. Escurecendo a própria
+cor em 28% eles passam, e continuam tingidos da própria hue, que é o que o texto
+sobre superfície colorida pede (cinza ali seria lavado).
+
+⚠️ E a conta é contra o FUNDO DESTE BLOCO, não contra o branco da página — o
+bloco pinta o próprio fundo, e é sobre ele que o texto assenta. Medido no
+navegador em 2026-09-22, lendo o `getComputedStyle` dos dois:
+
+    verde    rgb(16,117,53)  sobre rgb(234,247,239)  =  5,23:1
+    vermelho rgb(158,27,27)  sobre rgb(252,235,235)  =  6,93:1
+    âmbar    rgb(145,99,3)   sobre rgb(250,245,232)  =  4,80:1
+
+Os três passam a AA para texto normal, mas a margem do âmbar é 0,30 e não a
+0,65 que a medição contra branco sugeria: mexer na tinta do fundo tira o âmbar
+da conformidade antes de qualquer aviso.
+
+⚠️ E a cor nunca fala sozinha: cada estado tem um ÍCONE de forma diferente
+(certo, cruz, triângulo) e uma frase que diz o que houve. Quem não distingue
+verde de vermelho lê a mesma coisa.
+*/
+function ConferenciaDoCodigo({ veredito }) {
+  const { tipo } = veredito
+
+  if (tipo === 'idle') {
+    return (
+      <span style={dicaStyle}>
+        Crie a campanha no hub primeiro e cole o código aqui — é ele que liga as duas.
+      </span>
+    )
+  }
+  if (tipo === 'pendente') {
+    return <span style={dicaStyle}>Confere quando você sair do campo.</span>
+  }
+  if (tipo === 'conferindo') {
+    return (
+      <span style={{ ...dicaStyle, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span style={{
+          width: 12, height: 12, borderRadius: '50%', flexShrink: 0,
+          border: '2px solid var(--c-border)',
+          borderTopColor: 'var(--c-action)',
+          animation: 'spin 0.7s linear infinite',
+        }} />
+        Conferindo com a Central…
+      </span>
+    )
+  }
+
+  const cores = {
+    achou: 'var(--c-success)',
+    outroCliente: 'var(--c-danger)',
+    inexistente: 'var(--c-danger)',
+    naoConferido: 'var(--c-warning)',
+    // Os dois âmbares da ligação têm saída na própria tela (o botão); o
+    // vermelho não tem — só um admin desfaz.
+    faltaLigar: 'var(--c-warning)',
+    duplicado: 'var(--c-warning)',
+    bloqueado: 'var(--c-danger)',
+  }
+  const cor = cores[tipo] ?? 'var(--c-text-2)'
+  const campanha = veredito.campanha
+
+  const conteudo = {
+    achou: campanha && (
+      <>
+        {/* ⚠️ Sem este prefixo, o leitor de tela anuncia só "Verão 2026 ·
+            01/12/2026 a 28/02/2027" — nada diz que o código CONFERE, e o ícone
+            é decorativo. Era o único estado em que a cor falava sozinha. */}
+        <span>Confere: </span>
+        <strong style={{ fontWeight: 700 }}>{campanha.nome}</strong>
+        {campanha.inicio && campanha.fim && (
+          <span style={{ opacity: 0.85 }}>
+            {' · '}{fmtDate(campanha.inicio)} a {fmtDate(campanha.fim)}
+          </span>
+        )}
+      </>
+    ),
+    outroCliente: (
+      <>
+        Esse código é da campanha <strong style={{ fontWeight: 700 }}>{campanha?.nome}</strong>,
+        {' '}do cliente <strong style={{ fontWeight: 700 }}>{campanha?.cliente?.nome}</strong>.
+        {' '}Escolha esse cliente acima ou cole outro código.
+      </>
+    ),
+    inexistente: <>Código não encontrado na Central. Confira no cabeçalho da campanha, no hub.</>,
+    naoConferido: <>Não deu para conferir agora. Pode seguir: o código é conferido ao salvar.</>,
+    // A frase é do servidor: é ele que sabe os nomes dos dois lados.
+    faltaLigar: <>{veredito.mensagem}</>,
+    duplicado: <>{veredito.mensagem}</>,
+    bloqueado: <>{veredito.mensagem}</>,
+  }[tipo]
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'flex-start', gap: 8,
+        padding: '9px 12px',
+        borderRadius: 'var(--radius-md)',
+        background: `color-mix(in srgb, ${cor} 9%, var(--c-surface))`,
+        border: `1px solid color-mix(in srgb, ${cor} 30%, var(--c-surface))`,
+        color: `color-mix(in srgb, ${cor} 72%, #000)`,
+        fontSize: 12, fontWeight: 500, lineHeight: 1.45,
+      }}
+    >
+      <IconeDoVeredito tipo={tipo} />
+      <span>{conteudo}</span>
+    </span>
+  )
+}
+
+// Ícones desenhados, no mesmo traço 1.75 do resto desta tela.
+function IconeDoVeredito({ tipo }) {
+  const comum = {
+    width: 15, height: 15, viewBox: '0 0 16 16', fill: 'none',
+    stroke: 'currentColor', strokeWidth: 1.75,
+    strokeLinecap: 'round', strokeLinejoin: 'round',
+    // Decorativo: o texto ao lado já diz o desfecho, e um SVG sem nome
+    // acessível seria anunciado como "imagem" sem conteúdo.
+    'aria-hidden': true, focusable: false,
+    style: { flexShrink: 0, marginTop: 1 },
+  }
+  if (tipo === 'achou') {
+    return <svg {...comum}><circle cx="8" cy="8" r="6.25" /><path d="M5.3 8.2l1.9 1.9 3.5-4" /></svg>
+  }
+  if (tipo === 'naoConferido' || tipo === 'faltaLigar' || tipo === 'duplicado') {
+    return <svg {...comum}><path d="M8 2.1 1.7 13.2h12.6L8 2.1Z" /><path d="M8 6.3v3.1M8 11.4h.01" /></svg>
+  }
+  return <svg {...comum}><circle cx="8" cy="8" r="6.25" /><path d="M6.1 6.1l3.8 3.8M9.9 6.1l-3.8 3.8" /></svg>
+}
+
+const dicaStyle = { fontSize: 11, color: 'var(--c-text-3)', lineHeight: 1.5 }
 
 function PreviewRow({ label, value }) {
   return (

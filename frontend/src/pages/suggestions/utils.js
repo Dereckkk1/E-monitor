@@ -37,3 +37,8 @@ export function initialOf(nameOrEmail) {
 export function authorLabel(s) {
   return s?.created_by_name || s?.created_by_email || 'Autor'
 }
+
+// Anexo que se desenha como imagem. Os de antes da fila no hub não traziam
+// `kind`: valem como arquivo. Mora aqui, e não no AttachmentItem, porque o
+// react-refresh só aceita componente num arquivo .jsx.
+export const isImage = (a) => (a?.kind ?? 'arquivo') === 'arquivo' && (a?.content_type || '').startsWith('image/')

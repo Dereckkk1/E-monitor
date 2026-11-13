@@ -11,9 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
+	"radiocheck/internal/hub"
 )
 
 // validStatuses lists the four lifecycle states accepted by the ?status= filter.
@@ -27,13 +28,19 @@ var validStatuses = map[string]struct{}{
 type CampaignsHandler struct {
 	Repo       *catalog.Campaigns
 	Supervisor CampaignSupervisor
-	Log        *zap.Logger // optional; used to surface Pause/Start/Reload failures
+	// Hub é opcional: nil ou não configurado significa "esta instalação não
+	// avisa o hub", e a criação de campanha segue igual. É o mesmo portão que
+	// o SSO já usa, e é o que faz dev e teste não baterem em produção.
+	Hub *hub.Client
+	// Ligacoes liga a barreira da ligação com o hub (spec 2026-10-22 §4.1.4).
+	// nil = só a conferência antiga de "outro cliente" — é o que os testes
+	// anteriores a esta série constroem. Produção preenche em main.go.
+	Ligacoes *catalog.Ligacoes
 }
 
 // CampaignSupervisor is the subset of supervisor.Supervisor used by API handlers.
 type CampaignSupervisor interface {
 	Start(campaignID uuid.UUID) error
-	Pause(campaignID uuid.UUID) error
 	Reload(campaignID uuid.UUID) error
 	// UpdateStations replaces target_stations on a campaign and reconciles
 	// running workers without bouncing the campaign through 'cancelada' as
@@ -113,6 +120,22 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": items})
 }
 
+// servico monta as ações de campanha sobre os colaboradores deste handler. A
+// regra de negócio (barreira do código do hub, gravação, aviso ao hub, troca de
+// emissoras) mora em internal/acoes: o MCP chama as mesmas funções. As
+// interfaces só são preenchidas quando há valor (um *hub.Client nil dentro da
+// interface passaria no `!= nil`).
+func (h *CampaignsHandler) servico() *acoes.Servico {
+	s := &acoes.Servico{Campanhas: h.Repo, Ligacoes: h.Ligacoes}
+	if h.Supervisor != nil {
+		s.Supervisor = h.Supervisor
+	}
+	if h.Hub != nil {
+		s.Hub = h.Hub
+	}
+	return s
+}
+
 func (h *CampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in catalog.CreateCampaignInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -123,9 +146,18 @@ func (h *CampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name and client_id are required", 400)
 		return
 	}
-	out, err := h.Repo.Create(r.Context(), in)
+
+	// A barreira do código do hub (§4.4), a gravação e o aviso ao hub moram em
+	// acoes.CriarCampanha; o mesmo helper de barreira serve o `Update`.
+	out, err := h.servico().CriarCampanha(r.Context(), acoes.CriarCampanhaEntrada{
+		ClienteID: in.ClientID, Nome: in.Name,
+		Inicio: in.StartDate, Fim: in.EndDate,
+		EmissoraIDs: in.TargetStations, CodigoHub: in.HubCode,
+	})
 	if err != nil {
-		http.Error(w, "internal error", 500)
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", 500)
+		}
 		return
 	}
 	writeJSON(w, 201, out)
@@ -207,15 +239,20 @@ func (h *CampaignsHandler) Financials(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
-
-// Update edits the basic data trio (name, start_date, end_date) of an existing
-// campaign — what the wizard's Step 1 surfaces in edit mode. client_id stays
-// locked because Step 3 is hydrated against the client's material library.
+// Update edits the basic data (name, start_date, end_date, hub_code) of an
+// existing campaign — what the wizard's Step 1 surfaces in edit mode. client_id
+// stays locked because Step 3 is hydrated against the client's material library.
 //
 // Returns:
 //   - 200 + updated campaign on success.
-//   - 400 on invalid JSON, missing required fields, or end_date <= start_date.
+//   - 400 on invalid JSON, missing required fields, or end_date BEFORE start_date
+//     (end_date == start_date is a valid one-day campaign and passes).
+//   - 422 when hub_code is present and the hub says it is malformed, unknown, or
+//     belongs to another client — the §4.4 barrier, shared with Create.
 //   - 404 if the id does not exist.
+//
+// A lógica (barreira do código, gravação, aviso ao hub só quando o código mudou)
+// mora em acoes.EditarCampanha — ver o comentário dela.
 func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -226,32 +263,19 @@ func (h *CampaignsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Name      string    `json:"name"`
 		StartDate time.Time `json:"start_date"`
 		EndDate   time.Time `json:"end_date"`
+		// PONTEIRO: nil = o corpo não falou do código (não mexe), "" = mandou
+		// vazio (apaga). Ver acoes.EditarCampanhaEntrada.
+		HubCode *string `json:"hub_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" {
-		http.Error(w, "name is required", 400)
-		return
-	}
-	if in.StartDate.IsZero() || in.EndDate.IsZero() {
-		http.Error(w, "start_date and end_date are required", 400)
-		return
-	}
-	if in.EndDate.Before(in.StartDate) {
-		http.Error(w, "end_date must be on or after start_date", 400)
-		return
-	}
-	out, err := h.Repo.UpdateBasic(r.Context(), id, catalog.UpdateBasicInput{
-		Name:      strings.TrimSpace(in.Name),
-		StartDate: in.StartDate,
-		EndDate:   in.EndDate,
+	out, err := h.servico().EditarCampanha(r.Context(), id, acoes.EditarCampanhaEntrada{
+		Nome: in.Name, Inicio: in.StartDate, Fim: in.EndDate, CodigoHub: in.HubCode,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -276,15 +300,9 @@ func (h *CampaignsHandler) UpdateFixedCPM(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.FixedCPM != nil && *in.FixedCPM < 0 {
-		http.Error(w, "fixed_cpm must be >= 0", 400)
-		return
-	}
-	out, err := h.Repo.UpdateFixedCPM(r.Context(), id, in.FixedCPM)
+	out, err := h.servico().DefinirCPMFixo(r.Context(), id, in.FixedCPM)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -315,35 +333,21 @@ func (h *CampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	// Guard (audit C1): recusa (409) ANTES de pausar workers se apagar esta
-	// campanha destruiria projeções fan-out de OUTRAS campanhas via CASCADE.
-	// Checar antes do Pause evita deixar uma campanha viva pausada num delete
-	// que vai falhar.
-	if n, cerr := h.Repo.CountForeignProjections(r.Context(), id); cerr == nil && n > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":               "campaign_has_foreign_projections",
-			"foreign_projections": n,
-		})
-		return
-	}
-	if h.Supervisor != nil {
-		if perr := h.Supervisor.Pause(id); perr != nil && h.Log != nil {
-			h.Log.Error("campaigns.Delete: supervisor pause failed",
-				zap.String("campaign_id", id.String()),
-				zap.Error(perr),
-			)
+	// A regra (recusas ANTES de qualquer escrita, depois cancelar + apagar) mora
+	// em acoes.ApagarCampanha.
+	if err := h.servico().ApagarCampanha(r.Context(), id); err != nil {
+		// Apagar o que não existe é 204 (idempotente), como sempre.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(204)
+			return
 		}
-	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			http.Error(w, "not found", 404)
-		case errors.Is(err, catalog.ErrCampaignHasForeignProjections):
-			// Defense-in-depth: o pre-check acima normalmente já pegou isto.
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "campaign_has_foreign_projections",
-			})
-		default:
+		// Projeção alheia que apareceu depois do cancelamento (a ação devolve erro
+		// interno, não Recusa): a rota segue dizendo 409.
+		if errors.Is(err, catalog.ErrCampaignHasForeignProjections) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "campaign_has_foreign_projections"})
+			return
+		}
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
@@ -364,27 +368,12 @@ func (h *CampaignsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
-	changed, prev, err := h.Repo.CancelCampaign(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-			return
+	// acoes.CancelarCampanha grava a transição e, só depois, derruba os workers.
+	if _, err := h.servico().CancelarCampanha(r.Context(), id); err != nil {
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", 500)
 		}
-		http.Error(w, "internal error", 500)
 		return
-	}
-	if !changed {
-		writeJSON(w, 409, map[string]any{
-			"error":          "campaign already in terminal state",
-			"current_status": prev,
-		})
-		return
-	}
-	// Stop workers for stations that no longer have any active campaign.
-	// CancelCampaign already flipped the status, so we go straight to the
-	// worker-stop path without an extra DB round-trip via Pause().
-	if h.Supervisor != nil {
-		h.Supervisor.StopWorkersForCampaign(id)
 	}
 	w.WriteHeader(204)
 }
@@ -402,14 +391,14 @@ func (h *CampaignsHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		"since":   "2026-05-07",
 	})
 }
-
 // UpdateStations replaces the target_stations list for a campaign.
 //
 // When a supervisor is wired, the DB write and the per-station worker
 // reconciliation happen inside Supervisor.UpdateStations as a single path —
 // the campaign never transitions through 'cancelada' (which is what the
 // previous Pause+Start dance did). When no supervisor is wired (test mode),
-// we fall back to a plain DB update.
+// we fall back to a plain DB update. Both paths live in
+// acoes.TrocarEmissorasCampanha.
 func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -423,42 +412,11 @@ func (h *CampaignsHandler) UpdateStations(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if in.TargetStations == nil {
-		in.TargetStations = []uuid.UUID{}
-	}
-
-	if h.Supervisor != nil {
-		if err := h.Supervisor.UpdateStations(id, in.TargetStations); err != nil {
-			if h.Log != nil {
-				h.Log.Error("campaigns.UpdateStations: supervisor failed",
-					zap.String("campaign_id", id.String()),
-					zap.Error(err),
-				)
-			}
-			if strings.Contains(err.Error(), "campaign not found") {
-				http.Error(w, "not found", 404)
-				return
-			}
-			http.Error(w, "internal error", 500)
-			return
-		}
-		w.WriteHeader(204)
-		return
-	}
-
-	// No supervisor (test setup) — plain DB update.
-	if _, err := h.Repo.Get(r.Context(), id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", 404)
-		} else {
+	if err := h.servico().TrocarEmissorasCampanha(r.Context(), id, in.TargetStations); err != nil {
+		if !escreveRecusa(w, err) {
 			http.Error(w, "internal error", 500)
 		}
 		return
 	}
-	if err := h.Repo.UpdateTargetStations(r.Context(), id, in.TargetStations); err != nil {
-		http.Error(w, "internal error", 500)
-		return
-	}
-
 	w.WriteHeader(204)
 }

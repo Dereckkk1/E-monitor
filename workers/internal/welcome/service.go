@@ -66,6 +66,11 @@ func New(cfg Config) *Service {
 // Enabled diz se dá pra emitir convite. Falso quando falta a chave de cifra.
 func (s *Service) Enabled() bool { return s != nil && s.cipher != nil }
 
+// MailEnabled diz se o serviço manda email de verdade: a flag ligada (há credencial de SMTP) E um
+// mailer. Sem isso o convite sai com email_status 'disabled' e a pessoa só recebe o link se o admin
+// o mandar por fora. É a mesma condição que Issue testa antes de enviar.
+func (s *Service) MailEnabled() bool { return s != nil && s.mailEnabled && s.mail != nil }
+
 // SendResult é o que o handler de criação devolve pro frontend, pra ele poder
 // mostrar o link (e o admin copiar) mesmo quando o SMTP não está configurado.
 type SendResult struct {
@@ -180,6 +185,7 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 	return &Resolved{
 		Name:          row.Name,
 		Email:         row.Email,
+		Username:      row.Username,
 		Password:      password,
 		Role:          apiRole(row.Role),
 		ClientName:    row.ClientName,

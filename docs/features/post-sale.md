@@ -571,6 +571,13 @@ imprimir o documento para levar numa reunião.
   Nenhuma variável nova.
 - Objetos no S3 sob o prefixo `post-sale/{report_id}/{campaign_id}/` — separado
   da evidência, que tem tiering e retenção próprios.
+- **Pelo MCP** ([mcp.md](mcp.md)): o reenvio e a revogação de um destinatário saem pelas tools
+  `reenviar_pos_venda` e `revogar_destinatario_pos_venda` (críticas: a IA grava o pedido e o admin aprova em
+  `/pendentes`). Publicar **não** é tool (exige as capturas PNG que o navegador gera). O MCP recusa o que a rota
+  deixa passar: destinatário de outro relatório (a rota `RevokeRecipient` não confere o relatório da URL) e reenvio com
+  SMTP desligado (a rota `Resend` grava `disabled` por cima de um `sent` real e responde 204). Bug de rota conhecido e
+  **não corrigido**: `PATCH /post-sale/reports/{id}` só com `blocks` reescreve (`ReplaceBlocks`, sem guarda de rascunho)
+  um relatório já enviado e apaga os `assets` dos blocos que o link público usa.
 
 ## Casos de borda
 

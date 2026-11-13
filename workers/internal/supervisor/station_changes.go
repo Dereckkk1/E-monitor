@@ -74,7 +74,7 @@ func (s *Supervisor) UpdateStations(campaignID uuid.UUID, newStations []uuid.UUI
 	camp, err := s.campaigns.Get(ctx, campaignID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("supervisor.UpdateStations: campaign not found: %s", campaignID)
+			return fmt.Errorf("supervisor.UpdateStations: %w: %s", ErrCampaignNotFound, campaignID)
 		}
 		return fmt.Errorf("supervisor.UpdateStations: get campaign: %w", err)
 	}

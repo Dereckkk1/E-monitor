@@ -8,8 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
 
+	"radiocheck/internal/acoes"
 	"radiocheck/internal/auth"
 	"radiocheck/internal/catalog"
 )
@@ -28,28 +28,22 @@ type CampaignMaterialsHandler struct {
 	// matching até o próximo tick — exatamente o sintoma do incidente
 	// 2026-05-08 (workers cegos a target_stations editado).
 	Supervisor CampaignSupervisor
-	Log        *zap.Logger
+}
+
+// servico monta as ações de vínculo sobre o repositório e o supervisor deste
+// handler. A regra (gravar e recarregar a campanha, logando a falha do reload)
+// mora em internal/acoes: o MCP chama as mesmas funções.
+func (h *CampaignMaterialsHandler) servico() *acoes.Servico {
+	s := &acoes.Servico{MateriaisCampanha: h.Repo}
+	if h.Supervisor != nil {
+		s.Supervisor = h.Supervisor
+	}
+	return s
 }
 
 type linkPayload struct {
 	MaterialID     uuid.UUID   `json:"material_id"`
 	TargetStations []uuid.UUID `json:"target_stations"`
-}
-
-// reloadOrLog dispara Supervisor.Reload e loga o erro sem propagar pro caller —
-// o DB já foi mutado, o cliente precisa receber sucesso. Reconciler de 30s é
-// o safety net se o reload sofrer.
-func (h *CampaignMaterialsHandler) reloadOrLog(campaignID uuid.UUID, op string) {
-	if h.Supervisor == nil {
-		return
-	}
-	if err := h.Supervisor.Reload(campaignID); err != nil && h.Log != nil {
-		h.Log.Error("campaign_materials: supervisor reload failed",
-			zap.String("op", op),
-			zap.String("campaign_id", campaignID.String()),
-			zap.Error(err),
-		)
-	}
 }
 
 func (h *CampaignMaterialsHandler) Link(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +57,12 @@ func (h *CampaignMaterialsHandler) Link(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Link(r.Context(), campaignID, p.MaterialID, p.TargetStations); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := h.servico().VincularMaterial(r.Context(), campaignID, p.MaterialID, p.TargetStations); err != nil {
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	h.reloadOrLog(campaignID, "link")
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -123,11 +118,18 @@ func (h *CampaignMaterialsHandler) UpdateStations(w http.ResponseWriter, r *http
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.UpdateStations(r.Context(), campaignID, materialID, p.TargetStations); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := h.servico().TrocarEmissorasMaterial(r.Context(), campaignID, materialID, p.TargetStations); err != nil {
+		// Sem vínculo é 204 (idempotente), como sempre: a ação devolve
+		// nao_encontrado para o MCP não dizer "feito" quando nada foi feito.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	h.reloadOrLog(campaignID, "update_stations")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -142,10 +144,17 @@ func (h *CampaignMaterialsHandler) Unlink(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid materialID", http.StatusBadRequest)
 		return
 	}
-	if err := h.Repo.Unlink(r.Context(), campaignID, materialID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := h.servico().DesvincularMaterial(r.Context(), campaignID, materialID); err != nil {
+		// Sem vínculo é 204 (idempotente), como sempre: a ação devolve
+		// nao_encontrado para o MCP não dizer "feito" quando nada foi feito.
+		if errors.Is(err, acoes.ErrAlvoInexistente) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !escreveRecusa(w, err) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
-	h.reloadOrLog(campaignID, "unlink")
 	w.WriteHeader(http.StatusNoContent)
 }

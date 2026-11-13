@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"radiocheck/internal/auth"
+	"radiocheck/internal/catalog"
 )
 
 type APIKeysHandler struct{ db *pgxpool.Pool }
@@ -15,32 +16,23 @@ type APIKeysHandler struct{ db *pgxpool.Pool }
 func NewAPIKeysHandler(db *pgxpool.Pool) *APIKeysHandler { return &APIKeysHandler{db: db} }
 
 func (h *APIKeysHandler) List(w http.ResponseWriter, r *http.Request) {
-	clientID := chi.URLParam(r, "clientID")
-	rows, err := h.db.Query(r.Context(), `
-		SELECT id::text, LEFT(key_hash, 8)||'...', created_at, last_used_at
-		FROM api_keys WHERE client_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
-	`, clientID)
+	// Id malformado sempre deu 500 (o pgx recusava o texto como uuid); mantém.
+	clientID, err := uuid.Parse(chi.URLParam(r, "clientID"))
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-	var keys []map[string]interface{}
-	for rows.Next() {
-		var id, masked string
-		var created, lastUsed interface{}
-		if err := rows.Scan(&id, &masked, &created, &lastUsed); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		keys = append(keys, map[string]interface{}{"id": id, "key_masked": masked, "created_at": created, "last_used_at": lastUsed})
-	}
-	if err := rows.Err(); err != nil {
+	infos, err := catalog.NewClients(h.db).ListAPIKeys(r.Context(), clientID)
+	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if keys == nil {
-		keys = []map[string]interface{}{}
+	keys := make([]map[string]interface{}, 0, len(infos))
+	for _, k := range infos {
+		keys = append(keys, map[string]interface{}{
+			"id": k.ID.String(), "key_masked": k.KeyMasked,
+			"created_at": k.CreatedAt, "last_used_at": k.LastUsedAt,
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(keys)
