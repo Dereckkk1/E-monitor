@@ -493,7 +493,8 @@ func TestPrune_ApagaObjetoAntesDeMarcar(t *testing.T) {
 	objs.deleteErr = nil
 	m.prune(context.Background())
 	require.Equal(t, StatusExpirada, repo.snapshot(r.ID).Status)
-	require.Equal(t, []string{*r.ObjectKey}, objs.deleted)
+	// A forma de onda do editor vai junto, depois do áudio.
+	require.Equal(t, []string{*r.ObjectKey, PeaksKey(*r.ObjectKey)}, objs.deleted)
 }
 
 // Gravação marcada para agora não pode esperar o bucket: a linha chega depois do tick
@@ -561,7 +562,8 @@ func TestPrune_ContextoCanceladoParaAPassada(t *testing.T) {
 
 	m.prune(ctx)
 
-	require.Len(t, objs.deleted, 1)
+	// Só a primeira linha: áudio e forma de onda dela.
+	require.Len(t, objs.deleted, 2)
 }
 
 func TestCreate(t *testing.T) {
@@ -671,7 +673,7 @@ func TestDelete(t *testing.T) {
 
 	require.ErrorIs(t, m.Delete(context.Background(), busy.ID), ErrBusy)
 	require.NoError(t, m.Delete(context.Background(), done.ID))
-	require.Equal(t, []string{key}, objs.deleted)
+	require.Equal(t, []string{key, PeaksKey(key)}, objs.deleted) // forma de onda do editor vai junto
 	_, err := m.repo.Get(context.Background(), done.ID)
 	require.ErrorIs(t, err, ErrNotFound)
 }
