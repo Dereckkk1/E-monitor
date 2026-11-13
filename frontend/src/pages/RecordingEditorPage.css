@@ -1,0 +1,419 @@
+/* /admin/gravacoes/:id/editar. Prefixos: re- (página) e rw- (RecordingWaveform). */
+
+.re-back {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--c-text-2);
+  font-size: 13px;
+  text-decoration: none;
+}
+.re-back:hover { color: var(--c-action); }
+
+.re-muted { color: var(--c-text-3); font-size: 14px; }
+
+.re-header { align-items: flex-start; }
+.re-title h1 { margin-bottom: 8px; }
+
+.re-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.re-identity-name { font-size: 14px; font-weight: 600; color: var(--c-text); }
+.re-identity-sub { font-size: 12px; color: var(--c-text-3); }
+.re-identity .badge { margin-left: 4px; }
+
+/* ── Barra de controle ─────────────────────────────────────────────── */
+.re-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin: 16px 0 12px;
+}
+
+.re-play {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.re-play svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+.re-now { display: flex; flex-direction: column; line-height: 1.25; min-width: 132px; }
+.re-now-clock {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.re-approx { color: var(--c-text-3); font-weight: 400; }
+.re-now-offset { font-size: 12px; color: var(--c-text-3); font-variant-numeric: tabular-nums; }
+
+.re-goto { display: flex; align-items: center; gap: 8px; }
+.re-goto label { font-size: 13px; color: var(--c-text-2); }
+.re-goto .flow-input { width: 88px; height: 34px; font-variant-numeric: tabular-nums; }
+
+.re-zoom { display: flex; gap: 4px; }
+.re-zoom .btn { min-width: 34px; }
+
+.re-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.re-loading-bar {
+  width: 120px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+.re-loading-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--c-action);
+  transform-origin: left;
+  transition: transform 0.2s ease;
+}
+
+.re-error-inline { color: var(--c-danger); font-size: 13px; }
+
+.re-wave-loading {
+  padding: 48px 16px;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  color: var(--c-text-3);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* ── Onda ──────────────────────────────────────────────────────────── */
+.re-wave {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+}
+
+.re-help {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--c-text-3);
+  line-height: 1.8;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin: 0 1px;
+  border: 1px solid var(--c-border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font: 11px/16px var(--font-body, system-ui);
+  text-align: center;
+}
+
+.rw-overview,
+.rw-detail {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  user-select: none;
+  touch-action: none;
+}
+.rw-overview { height: 44px; cursor: pointer; }
+.rw-detail { cursor: crosshair; }
+.rw-overview canvas,
+.rw-detail canvas { position: absolute; inset: 0 auto auto 0; display: block; }
+
+.rw-ov-view {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1.5px solid var(--c-action);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--c-action) 12%, transparent);
+  cursor: grab;
+}
+.rw-ov-clip {
+  position: absolute;
+  bottom: 0;
+  height: 6px;
+  background: var(--c-action);
+  opacity: 0.75;
+}
+.rw-ov-gap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--c-danger);
+}
+
+.rw-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--c-text);
+  pointer-events: none;
+}
+.rw-playhead--thin { width: 1px; margin-left: 0; }
+
+.rw-clip {
+  position: absolute;
+  bottom: 0;
+  border-left: 1px solid var(--c-action);
+  border-right: 1px solid var(--c-action);
+  background: color-mix(in srgb, var(--c-action) 14%, transparent);
+  cursor: pointer;
+}
+.rw-clip--sel {
+  background: color-mix(in srgb, var(--c-action) 26%, transparent);
+  border-color: var(--c-action);
+  box-shadow: inset 0 0 0 1px var(--c-action);
+}
+.rw-clip--draft {
+  background: color-mix(in srgb, var(--c-action) 20%, transparent);
+  border-style: dashed;
+  pointer-events: none;
+}
+.rw-clip-label {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--c-action);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Alças largas para pegar fácil; a linha visível fica na borda do trecho. */
+.rw-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: ew-resize;
+}
+.rw-handle--from { left: -6px; }
+.rw-handle--to { right: -6px; }
+.rw-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 4px;
+  height: 28px;
+  margin-top: -14px;
+  border-radius: var(--radius-full);
+  background: var(--c-action);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.rw-clip:hover .rw-handle::after,
+.rw-clip--sel .rw-handle::after { opacity: 1; }
+
+/* Buraco: ponto no arquivo (o áudio emenda), marcado com faixa hachurada. */
+.rw-gap {
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  margin-left: -4px;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--c-danger) 70%, transparent) 0 3px,
+    transparent 3px 6px
+  );
+  border-left: 1px solid var(--c-danger);
+  border-right: 1px solid var(--c-danger);
+  pointer-events: auto;
+  cursor: help;
+}
+.rw-gap-label {
+  position: absolute;
+  bottom: 4px;
+  left: 8px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--c-danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rw-markin {
+  position: absolute;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--c-success);
+  pointer-events: none;
+}
+.rw-markin::before {
+  content: 'I';
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  color: var(--c-success);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ── Lista de trechos ──────────────────────────────────────────────── */
+.re-clips { margin-top: 20px; }
+
+.re-clips-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-bottom: 10px;
+}
+.re-clips-head h2 { margin: 0; font-size: 16px; }
+.re-count { margin-left: 6px; font-size: 13px; font-weight: 400; color: var(--c-text-3); }
+.re-fade {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--c-text-2);
+  cursor: pointer;
+}
+
+.re-clips-empty {
+  padding: 20px;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  line-height: 1.8;
+}
+
+.re-clip-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.re-clip {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  cursor: pointer;
+}
+.re-clip--sel {
+  border-color: var(--c-action-border);
+  background: var(--c-action-light);
+}
+
+.re-clip-n {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--c-action);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+}
+
+.re-clip-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.re-clip-name {
+  width: 100%;
+  max-width: 520px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+.re-clip-name:hover { border-color: var(--c-border); }
+.re-clip-name:focus { outline: none; border-color: var(--c-action); background: var(--c-surface); }
+
+.re-clip-times {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--c-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.re-arrow { color: var(--c-text-3); }
+.re-clip-len { margin-left: 6px; color: var(--c-text-3); }
+
+.re-edge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  overflow: hidden;
+}
+.re-edge button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.re-nudge { width: 22px; height: 26px; color: var(--c-text-3); font-size: 15px; }
+.re-nudge:hover { background: var(--c-surface-2); color: var(--c-text); }
+.re-edge-time { padding: 0 6px; height: 26px; }
+.re-edge-time:hover { color: var(--c-action); }
+
+.re-clip-warn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-warning);
+}
+
+.re-clip-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .re-loading { margin-left: 0; }
+  .re-fade { margin-left: 0; }
+  .re-clip { flex-wrap: wrap; }
+}

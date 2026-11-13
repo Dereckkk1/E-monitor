@@ -1917,7 +1917,67 @@ export function useDeleteRecording() {
 
 // Imperativo: <audio> e <a download> não mandam o header Authorization, então o
 // arquivo vem como blob. Gravação longa pesa: o "Baixar" é o caminho indicado.
-export async function fetchRecordingAudio(id) {
-  const resp = await api.get(`/recordings/${id}/audio`, { responseType: 'blob' })
+export async function fetchRecordingAudio(id, { onProgress, signal } = {}) {
+  const resp = await api.get(`/recordings/${id}/audio`, {
+    responseType: 'blob',
+    signal,
+    // timeout 0: arquivo de 6h passa de 300 MB e o padrão do axios cortaria.
+    timeout: 0,
+    onDownloadProgress: onProgress ? e => onProgress(e.total ? e.loaded / e.total : null) : undefined,
+  })
+  return resp.data
+}
+
+// ── Editor de trechos ─────────────────────────────────────────────────────
+// Ver docs/features/recording-clip-editor.md.
+export function useRecording(id) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, 'one', id],
+    queryFn: () => api.get(`/recordings/${id}`).then(r => r.data),
+    enabled: Boolean(id),
+  })
+}
+
+/** Forma de onda: Uint8Array (um pico por 1/pps s) e pps. */
+export function useRecordingPeaks(id, enabled = true) {
+  return useQuery({
+    queryKey: [...RECORDINGS_KEY, 'peaks', id],
+    queryFn: async () => {
+      // Gravação de 6h leva dezenas de segundos na primeira vez (o servidor decodifica tudo).
+      const r = await api.get(`/recordings/${id}/peaks`, { responseType: 'arraybuffer', timeout: 0 })
+      return { peaks: new Uint8Array(r.data), pps: Number(r.headers['x-peaks-per-second']) || 20 }
+    },
+    enabled: Boolean(id) && enabled,
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+// Os erros chegam como blob (responseType), e o errorMessage espera texto.
+async function blobErrorToText(err) {
+  const data = err?.response?.data
+  if (data instanceof Blob) {
+    try { err.response.data = await data.text() } catch { /* fica o blob */ }
+  }
+  throw err
+}
+
+/** Um trecho em MP3. */
+export async function fetchRecordingClip(id, { from, to, fade, name }) {
+  const resp = await api.get(`/recordings/${id}/clip`, {
+    params: { from: from.toFixed(3), to: to.toFixed(3), fade: fade ? 1 : 0, name },
+    responseType: 'blob',
+    timeout: 0,
+  }).catch(blobErrorToText)
+  return resp.data
+}
+
+/** Vários trechos num .zip, um MP3 por trecho. */
+export async function fetchRecordingClipsZip(id, { clips, fade, name }) {
+  const resp = await api.post(`/recordings/${id}/clips`, {
+    name,
+    fade,
+    clips: clips.map(c => ({ name: c.name, from: c.from, to: c.to })),
+  }, { responseType: 'blob', timeout: 0 }).catch(blobErrorToText)
   return resp.data
 }
