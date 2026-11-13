@@ -348,8 +348,9 @@ recebe 403).
   linha da lista.
 - Ações da lista são ícones no padrão de `/campaigns` (`btn btn-icon btn-sm`, com
   `title` e `aria-label`): ouvir/pausar, baixar, parar (gravando) ou cancelar
-  (programada), excluir. Não existe editar: para mudar o horário, cancele e programe
-  de novo.
+  (programada), excluir, e o lápis "Editar trechos" (gravação com áudio), que abre o
+  editor de trechos ([recording-clip-editor.md](recording-clip-editor.md)). O horário de
+  uma gravação não se edita: para mudar, cancele e programe de novo.
 
 ## Pasta órfã
 

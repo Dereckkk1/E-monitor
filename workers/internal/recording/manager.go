@@ -133,6 +133,9 @@ type Manager struct {
 	// draining barra gravador e e-mail novos depois que WaitRecorders começou.
 	draining bool
 
+	// editor guarda as vagas e os locks do editor de trechos (editor.go).
+	editor editorState
+
 	// recorders e notifications contam gravadores vivos e e-mails em andamento,
 	// para o desligamento esperar por eles.
 	recorders     sync.WaitGroup
@@ -152,6 +155,7 @@ func NewManager(cfg Config, repo Repo, media Media, objects ObjectStore, mail ma
 		live:             map[uuid.UUID]*liveRecorder{},
 		finalizing:       map[uuid.UUID]struct{}{},
 		finalizeFailures: map[uuid.UUID]int{},
+		editor:           newEditorState(),
 	}
 }
 
@@ -277,6 +281,7 @@ func (m *Manager) finalizeProcessing(runCtx, stepCtx context.Context) {
 // evidence/prune.go: na ordem inversa, uma falha deixaria objeto que nunca mais
 // seria encontrado.
 func (m *Manager) prune(ctx context.Context) {
+	m.pruneEditorCache()
 	expired, err := m.repo.Expired(ctx, m.now())
 	if err != nil {
 		m.log.Warn("recording: listar expiradas", zap.Error(err))
@@ -290,6 +295,7 @@ func (m *Manager) prune(ctx context.Context) {
 			m.log.Warn("recording: apagar áudio", zap.Stringer("id", rec.ID), zap.Error(err))
 			continue
 		}
+		m.dropEditorArtifacts(ctx, &rec)
 		if err := m.repo.MarkExpired(ctx, rec.ID); err != nil {
 			m.log.Warn("recording: marcar expirada", zap.Stringer("id", rec.ID), zap.Error(err))
 		}

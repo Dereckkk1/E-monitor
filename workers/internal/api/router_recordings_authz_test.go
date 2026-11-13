@@ -36,6 +36,19 @@ func (recordingsStub) Audio(context.Context, uuid.UUID) (io.ReadCloser, *recordi
 	return io.NopCloser(strings.NewReader("audio")), &recording.Recording{}, 5, nil
 }
 
+func (recordingsStub) Get(context.Context, uuid.UUID) (*recording.Recording, error) {
+	return &recording.Recording{Gaps: []recording.Gap{}}, nil
+}
+func (recordingsStub) Peaks(context.Context, uuid.UUID) ([]byte, error) { return []byte{1, 2}, nil }
+func (recordingsStub) Clip(_ context.Context, _ uuid.UUID, _ recording.ClipSpec, _ bool, out recording.ClipWriter) error {
+	_, err := out(&recording.Recording{}).Write([]byte("mp3"))
+	return err
+}
+func (recordingsStub) Clips(_ context.Context, _ uuid.UUID, _ []recording.ClipSpec, _ bool, out recording.ClipWriter) error {
+	_, err := out(&recording.Recording{}).Write([]byte("zip"))
+	return err
+}
+
 func routerComRecordings() http.Handler {
 	return NewRouter(Deps{Recordings: &handlers.RecordingsHandler{Service: recordingsStub{}}})
 }
@@ -56,6 +69,11 @@ func TestRecordings_AdminOnly(t *testing.T) {
 		{"POST", "/v1/internal/recordings/" + id + "/cancel", http.StatusNoContent},
 		{"DELETE", "/v1/internal/recordings/" + id, http.StatusNoContent},
 		{"GET", "/v1/internal/recordings/" + id + "/audio", http.StatusOK},
+		{"GET", "/v1/internal/recordings/" + id, http.StatusOK},
+		{"GET", "/v1/internal/recordings/" + id + "/peaks", http.StatusOK},
+		// Sem from/to: o handler responde 400, o que prova que passou do gate.
+		{"GET", "/v1/internal/recordings/" + id + "/clip", http.StatusBadRequest},
+		{"POST", "/v1/internal/recordings/" + id + "/clips", http.StatusOK},
 	}
 	ad, op, vw := issue(t, "admin"), issue(t, "operator"), issue(t, "viewer")
 	for _, rt := range routes {

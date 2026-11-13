@@ -74,8 +74,14 @@ func (m *Manager) Delete(ctx context.Context, id uuid.UUID) error {
 		if err := m.objects.Delete(ctx, *rec.ObjectKey); err != nil {
 			return err
 		}
+		m.dropEditorArtifacts(ctx, rec)
 	}
 	return m.repo.Delete(ctx, id)
+}
+
+// Get devolve uma gravação. O editor de trechos abre por id.
+func (m *Manager) Get(ctx context.Context, id uuid.UUID) (*Recording, error) {
+	return m.repo.Get(ctx, id)
 }
 
 // Audio abre o arquivo. Quem chama fecha o corpo. Objeto ausente no bucket também

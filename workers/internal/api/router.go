@@ -752,6 +752,11 @@ func NewRouter(d Deps) http.Handler {
 						r.Post("/recordings/{id}/cancel", d.Recordings.Cancel)
 						r.Delete("/recordings/{id}", d.Recordings.Delete)
 						r.Get("/recordings/{id}/audio", d.Recordings.Audio)
+						// Editor de trechos: docs/features/recording-clip-editor.md
+						r.Get("/recordings/{id}", d.Recordings.Get)
+						r.Get("/recordings/{id}/peaks", d.Recordings.Peaks)
+						r.Get("/recordings/{id}/clip", d.Recordings.Clip)
+						r.Post("/recordings/{id}/clips", d.Recordings.Clips)
 					})
 				}
 

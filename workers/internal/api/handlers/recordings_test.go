@@ -29,6 +29,11 @@ type fakeRecordings struct {
 	gotLimit  int
 	gotOffset int
 	listItems []recording.Recording
+
+	clipErr    error
+	clipCtxErr error
+	gotClips   []recording.ClipSpec
+	gotFade    bool
 }
 
 func (f *fakeRecordings) Create(_ context.Context, in recording.CreateInput) (*recording.Recording, error) {
@@ -60,6 +65,35 @@ func (f *fakeRecordings) Audio(ctx context.Context, _ uuid.UUID) (io.ReadCloser,
 	}
 	return io.NopCloser(strings.NewReader("audio")),
 		&recording.Recording{}, 5, nil
+}
+
+func (f *fakeRecordings) Get(context.Context, uuid.UUID) (*recording.Recording, error) {
+	f.calls++
+	return &recording.Recording{Gaps: []recording.Gap{}}, nil
+}
+func (f *fakeRecordings) Peaks(context.Context, uuid.UUID) ([]byte, error) {
+	f.calls++
+	return []byte{0, 128, 255}, nil
+}
+func (f *fakeRecordings) Clip(ctx context.Context, _ uuid.UUID, c recording.ClipSpec, fade bool, out recording.ClipWriter) error {
+	f.calls++
+	f.clipCtxErr = ctx.Err()
+	f.gotClips, f.gotFade = []recording.ClipSpec{c}, fade
+	if f.clipErr != nil {
+		return f.clipErr
+	}
+	_, err := out(&recording.Recording{}).Write([]byte("mp3"))
+	return err
+}
+func (f *fakeRecordings) Clips(ctx context.Context, _ uuid.UUID, clips []recording.ClipSpec, fade bool, out recording.ClipWriter) error {
+	f.calls++
+	f.clipCtxErr = ctx.Err()
+	f.gotClips, f.gotFade = clips, fade
+	if f.clipErr != nil {
+		return f.clipErr
+	}
+	_, err := out(&recording.Recording{}).Write([]byte("zip"))
+	return err
 }
 
 func recReq(method, target, body string, id uuid.UUID) *http.Request {
@@ -235,4 +269,65 @@ func TestRecordings_Audio_ContextoNaoHerdaOTimeout(t *testing.T) {
 	h.Audio(httptest.NewRecorder(), req.WithContext(ctx))
 
 	require.NoError(t, f.audioCtx.Err())
+}
+
+func TestRecordings_ClipRepassaTemposEFade(t *testing.T) {
+	f := &fakeRecordings{}
+	h := &RecordingsHandler{Service: f}
+	rr := httptest.NewRecorder()
+	// Requisição já cancelada (o timeout do router estourou): o corte segue mesmo assim.
+	req := recReq("GET", "/x?from=1.5&to=10&fade=1&name=Bloco%C3%A9%201", "", uuid.New())
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	h.Clip(rr, req.WithContext(ctx))
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "audio/mpeg", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Header().Get("Content-Disposition"), `filename*=UTF-8''Bloco%C3%A9%201.mp3`)
+	require.Equal(t, []recording.ClipSpec{{Name: "Blocoé 1", From: 1.5, To: 10}}, f.gotClips)
+	require.True(t, f.gotFade)
+	require.NoError(t, f.clipCtxErr, "o corte não pode herdar o timeout de 60s do router")
+	require.Equal(t, "mp3", rr.Body.String())
+}
+
+func TestRecordings_ClipSemTempos400(t *testing.T) {
+	f := &fakeRecordings{}
+	rr := httptest.NewRecorder()
+	(&RecordingsHandler{Service: f}).Clip(rr, recReq("GET", "/x?from=1", "", uuid.New()))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Zero(t, f.calls)
+}
+
+func TestRecordings_ClipErrosAntesDoPrimeiroByte(t *testing.T) {
+	cases := map[error]int{
+		&recording.ValidationError{Msg: "trecho 1: fora da gravação"}: http.StatusBadRequest,
+		recording.ErrEditorBusy: http.StatusServiceUnavailable,
+		recording.ErrNoAudio:    http.StatusNotFound,
+	}
+	for err, want := range cases {
+		rr := httptest.NewRecorder()
+		(&RecordingsHandler{Service: &fakeRecordings{clipErr: err}}).Clip(rr, recReq("GET", "/x?from=0&to=5", "", uuid.New()))
+		require.Equal(t, want, rr.Code, err.Error())
+	}
+}
+
+func TestRecordings_ClipsZip(t *testing.T) {
+	f := &fakeRecordings{}
+	rr := httptest.NewRecorder()
+	body := `{"name":"Entrevista","fade":true,"clips":[{"name":"a","from":0,"to":2},{"name":"b","from":3,"to":5}]}`
+	(&RecordingsHandler{Service: f}).Clips(rr, recReq("POST", "/x", body, uuid.New()))
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "application/zip", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Header().Get("Content-Disposition"), `filename="Entrevista.zip"`)
+	require.Len(t, f.gotClips, 2)
+	require.True(t, f.gotFade)
+}
+
+func TestRecordings_Peaks(t *testing.T) {
+	rr := httptest.NewRecorder()
+	(&RecordingsHandler{Service: &fakeRecordings{}}).Peaks(rr, recReq("GET", "/x", "", uuid.New()))
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "20", rr.Header().Get("X-Peaks-Per-Second"))
+	require.Equal(t, []byte{0, 128, 255}, rr.Body.Bytes())
 }
