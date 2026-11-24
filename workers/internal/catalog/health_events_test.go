@@ -57,9 +57,14 @@ func TestBuildDailySummary_AllUp(t *testing.T) {
 
 func TestBuildDailySummary_WithDowntime(t *testing.T) {
 	dur := 43200 // 12 hours down on today
-	today := time.Now().UTC().Format("2006-01-02")
+	now := time.Now().UTC()
+	today := now.Format("2006-01-02")
+	// O evento tem que cair no dia UTC de HOJE (buildDailySummary agrupa pela
+	// data UTC do EventAt). Antes era now-13h, que antes das 13:00 UTC cai em
+	// ONTEM e fazia o teste falhar de manhã — quebraria o CI todo dia.
+	startOfToday := now.Truncate(24 * time.Hour)
 	events := []HealthEvent{
-		{EventType: "down", EventAt: time.Now().Add(-13 * time.Hour), DurationSeconds: &dur},
+		{EventType: "down", EventAt: startOfToday.Add(time.Minute), DurationSeconds: &dur},
 	}
 	daily := buildDailySummary(events, 3)
 
