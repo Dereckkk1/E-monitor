@@ -383,8 +383,7 @@
   /* Quebra a linha inteira antes de deixar rótulo e botão se espremerem: em
      375px os dois quebravam em duas linhas cada, virando quatro. */
   flex-wrap: wrap;
-  row-gap: 12px;
-  gap: 9px;
+  gap: 9px; /* o `row-gap: 12px` que vinha antes era anulado por este shorthand */
   padding-bottom: 14px;
   border-bottom: 1px solid var(--wel-rule);
   font-size: 0.79rem;

@@ -249,7 +249,7 @@ function TargetLabelControl({ value, disabled, onSave, saving, error }) {
           aria-label="Público-alvo do cliente"
           onChange={e => setText(e.target.value.slice(0, LABEL_MAX))}
           onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            if (e.key === 'Enter') { e.preventDefault(); void commit() }
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false) }
           }}
         />

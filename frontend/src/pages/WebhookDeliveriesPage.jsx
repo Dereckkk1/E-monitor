@@ -860,12 +860,14 @@ function DeliveryRow({ delivery: d, open, onToggle, ts, httpClass }) {
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
   function onCopy() {
-    if (!text) return
-    try {
-      navigator.clipboard?.writeText(text)
+    if (!text || !navigator.clipboard) return
+    // writeText é assíncrono: o try/catch que existia aqui não pegava a recusa
+    // (permissão negada / contexto não seguro) e o botão dizia "Copiado" mesmo
+    // sem copiar. Agora só confirma quando a cópia de fato aconteceu.
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
-    } catch { /* ignore */ }
+    }).catch(() => { /* sem permissão de área de transferência: não finge que copiou */ })
   }
   return (
     <button type="button" className="whd-copy-btn" onClick={onCopy}>

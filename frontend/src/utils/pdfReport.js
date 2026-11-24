@@ -97,7 +97,7 @@ async function loadLogoDataURL() {
 // Pré-carrega a logo eagerly — o usuário sempre acaba clicando em PDF, e
 // poupamos um round-trip no momento do click. Idempotente.
 export function prefetchReportLogo() {
-  loadLogoDataURL()
+  void loadLogoDataURL() // pré-carga: falha vira null lá dentro, o PDF tenta de novo
 }
 
 // ── Status badge (capa) ──────────────────────────────────────────

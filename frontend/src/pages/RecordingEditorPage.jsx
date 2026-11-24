@@ -480,7 +480,7 @@ export default function RecordingEditorPage() {
                     <button type="button" className="btn btn-icon btn-sm" onClick={e => { e.stopPropagation(); playClip(c) }} disabled={!ready} title="Ouvir o trecho" aria-label="Ouvir o trecho">
                       <IconPlay />
                     </button>
-                    <button type="button" className="btn btn-icon btn-sm" onClick={e => { e.stopPropagation(); exportOne(c) }} disabled={busy[c.id]} title="Baixar MP3" aria-label="Baixar MP3">
+                    <button type="button" className="btn btn-icon btn-sm" onClick={e => { e.stopPropagation(); void exportOne(c) }} disabled={busy[c.id]} title="Baixar MP3" aria-label="Baixar MP3">
                       <IconDownload />
                     </button>
                     <button type="button" className="btn btn-icon btn-danger-ghost btn-sm" onClick={e => { e.stopPropagation(); removeClip(c.id) }} title="Excluir trecho" aria-label="Excluir trecho">

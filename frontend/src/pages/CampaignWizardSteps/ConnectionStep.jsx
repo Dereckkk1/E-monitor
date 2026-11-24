@@ -88,11 +88,11 @@ export default function ConnectionStep({ campaignStations = [] }) {
   useEffect(() => {
     if (didAutoPing.current || campaignStations.length === 0) return
     didAutoPing.current = true
-    runPool(campaignStations, TEST_CONCURRENCY, s => runTests(s, ['ping']))
+    void runPool(campaignStations, TEST_CONCURRENCY, s => runTests(s, ['ping']))
   }, [campaignStations, runTests])
 
   const testAll = useCallback(() => {
-    runPool(campaignStations, TEST_CONCURRENCY, s => runTests(s, ALL_TESTS))
+    void runPool(campaignStations, TEST_CONCURRENCY, s => runTests(s, ALL_TESTS))
   }, [campaignStations, runTests])
 
   const anyRunning = useMemo(

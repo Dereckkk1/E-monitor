@@ -198,7 +198,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode, on
   useEffect(() => {
     const c = conferencia
     if (c.estado !== 'achou' || c.clienteId === (value.client_id || '')) return
-    if (c.campanha?.ligacao || !c.clienteId) conferir(c.codigo)
+    if (c.campanha?.ligacao || !c.clienteId) void conferir(c.codigo)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.client_id, conferencia.estado, conferencia.clienteId])
 
@@ -209,7 +209,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode, on
     if (!isEditMode || conferiuAoAbrir.current) return
     if ((value.hub_code ?? '').trim() && value.client_id) {
       conferiuAoAbrir.current = true
-      conferir(value.hub_code, { reescrever: false })
+      void conferir(value.hub_code, { reescrever: false })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditMode, value.hub_code, value.client_id])
@@ -250,7 +250,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode, on
     const clientId = conferencia.clienteId
     if (!code || !clientId) return
     if (clientId !== (valorAtual.current.client_id || '')) {
-      conferir(code)
+      void conferir(code)
       return
     }
     const chave = `${code}|${clientId}`

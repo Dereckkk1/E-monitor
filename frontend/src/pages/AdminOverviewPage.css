@@ -136,9 +136,9 @@
 }
 
 @keyframes aov-playhead {
-  0%   { r: 0.9; opacity: 1; }
-  60%  { r: 2.2; opacity: 0; }
-  100% { r: 2.2; opacity: 0; }
+  0%   { r: 0.9px; opacity: 1; }
+  60%  { r: 2.2px; opacity: 0; }
+  100% { r: 2.2px; opacity: 0; }
 }
 
 /* Overlay sits on top of the SVG and holds all the typography. */

@@ -280,7 +280,7 @@
 .live-dot--degraded { fill: #f59e0b; }
 .live-dot--down { fill: #94a3b8; }
 .live-dot-hit { fill: transparent; }
-.br-dot-group:hover .live-dot { r: 5.5; }
+.br-dot-group:hover .live-dot { r: 5.5px; }
 
 /* Halo pulsando em qualquer emissora "ao vivo" (independe de detecção) */
 .live-halo {

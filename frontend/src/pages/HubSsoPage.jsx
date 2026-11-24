@@ -56,7 +56,7 @@ export default function HubSsoPage() {
      * Desmontar no meio não é motivo para descartar o resultado: a sessão já
      * foi emitida do outro lado, e guardá-la é o comportamento certo.
      */
-    ;(async () => {
+    void (async () => {
       try {
         const { data } = await api.post('/auth/sso', { code })
         login(data.token, data.user)

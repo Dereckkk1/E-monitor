@@ -432,8 +432,8 @@ export default function FailuresDailyView({ minDownSeconds = 60, onPickDay, peri
     [days, metric]
   )
 
-  const decadeVerdict  = useMemo(() => verdictOf(decades, {}),  [decades])
-  const weekdayVerdict = useMemo(() => verdictOf(weekdays, {}), [weekdays])
+  const decadeVerdict  = useMemo(() => verdictOf(decades),  [decades])
+  const weekdayVerdict = useMemo(() => verdictOf(weekdays), [weekdays])
 
   const hasAnyFailure = maxValue > 0 || (summary?.days_with_failure ?? 0) > 0
 

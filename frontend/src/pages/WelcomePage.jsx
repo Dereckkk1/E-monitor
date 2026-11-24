@@ -562,7 +562,7 @@ function useMotion(rootRef, ready) {
     let ctx
     let cancelled = false
 
-    ;(async () => {
+    void (async () => {
       let gsap, ScrollTrigger
       try {
         ;({ gsap } = await import('gsap'))

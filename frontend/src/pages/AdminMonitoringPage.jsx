@@ -176,7 +176,13 @@ function CopyBtn({ text }) {
     <button
       type="button"
       className="am-copy"
-      onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+      onClick={(e) => {
+        e.stopPropagation()
+        // só confirma "copiado" se a cópia aconteceu (writeText rejeita sem permissão)
+        navigator.clipboard?.writeText(text)
+          .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200) })
+          .catch(() => {})
+      }}
       title="Copiar"
     >
       {copied ? <Icon.Check /> : <Icon.Copy />}
