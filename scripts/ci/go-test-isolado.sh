@@ -11,7 +11,7 @@
 #   e dá pra rodar pacotes em paralelo.
 #
 # Uso (de qualquer lugar):
-#   PG_URL_BASE=postgres://radiocheck:radiocheck@localhost:5432 \
+#   PG_URL_BASE=postgres://USUARIO:SENHA@localhost:5432 \
 #   TEMPLATE_DB=radiocheck_tmpl PARALELO=3 COVER_OUT=workers/coverage.out \
 #     bash scripts/ci/go-test-isolado.sh
 #
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-: "${PG_URL_BASE:?ex.: postgres://radiocheck:radiocheck@localhost:5432}"
+: "${PG_URL_BASE:?defina PG_URL_BASE — postgres://USUARIO:SENHA@host:porta, sem o nome do banco}"
 TEMPLATE_DB="${TEMPLATE_DB:-radiocheck_tmpl}"
 PARALELO="${PARALELO:-2}"
 COVER_OUT="${COVER_OUT:-$ROOT/workers/coverage.out}"

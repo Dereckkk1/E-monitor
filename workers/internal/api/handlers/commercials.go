@@ -91,8 +91,8 @@ func (h *CommercialsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext != ".wav" && ext != ".mp3" && ext != ".m4a" && ext != ".aac" && ext != ".mpeg" {
+	ext, ok := extensaoDeAudio(header.Filename)
+	if !ok {
 		http.Error(w, "unsupported audio format (use wav/mp3/m4a/aac/mpeg)", 400)
 		return
 	}

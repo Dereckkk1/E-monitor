@@ -170,13 +170,18 @@ shadow_migration_test() {
 
   SHADOW_NET="rc-shadow-net-$$"
   SHADOW_NAME="rc-shadow-pg-$$"
+  # senha do postgres DESCARTÁVEL, gerada a cada deploy (o container morre no
+  # shadow_cleanup e só existe numa rede própria). Antes era o literal "shadow",
+  # que o SonarCloud (secrets:S6698) acusava como senha no código.
+  local shadow_pass
+  shadow_pass="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 
   # ── setup (best-effort: qualquer falha aqui → warn + segue) ──
   if ! docker network create "$SHADOW_NET" >/dev/null 2>&1; then
     warn "não criou a rede de sombra — pulando teste (deploy segue)."; shadow_cleanup; return 0
   fi
   if ! docker run -d --name "$SHADOW_NAME" --network "$SHADOW_NET" \
-        -e POSTGRES_USER=radiocheck -e POSTGRES_PASSWORD=shadow -e POSTGRES_DB=radiocheck \
+        -e POSTGRES_USER=radiocheck -e POSTGRES_PASSWORD="$shadow_pass" -e POSTGRES_DB=radiocheck \
         "$SHADOW_PG_IMAGE" >/dev/null 2>&1; then
     warn "não subiu o postgres de sombra — pulando teste (deploy segue)."; shadow_cleanup; return 0
   fi
@@ -223,7 +228,7 @@ shadow_migration_test() {
   local out rc
   out=$(docker run --rm --network "$SHADOW_NET" -v "$REPO_ROOT/migrations:/migrations:ro" \
         "$SHADOW_MIGRATE_IMAGE" -path=/migrations \
-        -database="postgres://radiocheck:shadow@$SHADOW_NAME:5432/radiocheck?sslmode=disable" up 2>&1) && rc=0 || rc=$?
+        -database="postgres://radiocheck:${shadow_pass}@$SHADOW_NAME:5432/radiocheck?sslmode=disable" up 2>&1) && rc=0 || rc=$?
 
   shadow_cleanup
 
