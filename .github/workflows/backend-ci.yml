@@ -85,7 +85,7 @@ jobs:
       PG_URL_BASE: postgres://radiocheck:radiocheck@localhost:5432
       TEMPLATE_DB: radiocheck_tmpl
       # o `if` de um step não vê secrets nem o env do próprio step: expõe só SE existe
-      SONAR_ATIVO: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' && secrets.SONAR_TOKEN != '' }}
+      SONAR_ATIVO: ${{ github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && secrets.SONAR_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v5
         with:

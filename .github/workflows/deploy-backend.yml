@@ -17,8 +17,9 @@ name: deploy-backend
 # Portões antes de tocar na VM:
 #   1. só o master (o deploy.sh também barra branch != master)
 #   2. o SHA tem que estar com o backend-ci VERDE
-#   3. na VM, origin/master tem que ser EXATAMENTE esse SHA (se alguém deu
-#      push depois do clique, aborta: publicar só o que foi testado)
+#   3. na VM, o SHA tem que estar no origin/master, e o deploy.sh recebe
+#      DEPLOY_SHA: publica EXATAMENTE esse commit (ff-only), mesmo que alguém
+#      dê push no master entre o clique e o git pull. Só o testado vai pra VM.
 #
 # Doc (inclui como instalar o runner na VM): docs/operations/ci-cd.md
 
@@ -94,15 +95,19 @@ jobs:
           cd "$dir"
           [ "$(git rev-parse --abbrev-ref HEAD)" = "master" ] || { echo "::error::o clone da VM não está no master"; exit 1; }
           git fetch --quiet origin master
+          git merge-base --is-ancestor "$SHA" origin/master \
+            || { echo "::error::$SHA não está no origin/master (reescreveram o master?)"; exit 1; }
           remoto="$(git rev-parse origin/master)"
           if [ "$remoto" != "$SHA" ]; then
-            echo "::error::master andou depois do clique (origin/master=$remoto, pedido=$SHA). Rode de novo pelo SHA novo, depois do CI dele."
-            exit 1
+            echo "::notice::master andou depois do clique (agora $remoto); o deploy.sh publica só $SHA (DEPLOY_SHA)"
           fi
 
       - name: scripts/deploy.sh
         env:
           SKIP_RECORDING_GUARD: ${{ inputs.pular_guarda_gravacao && 'yes' || '' }}
+          # publica EXATAMENTE o SHA aprovado pelo portão, não o que chegar no
+          # master entre o clique e o git pull do deploy.sh
+          DEPLOY_SHA: ${{ github.sha }}
         run: |
           cd "$EMONITOR_DIR"
           ./scripts/deploy.sh

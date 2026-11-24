@@ -30,6 +30,10 @@
 #   CONFIRM=yes          ignora guard de branch não-master
 #   SKIP_BACKUP=yes      pula backup pré-deploy (NÃO USE EM PROD — só dev)
 #   SHRINK_THRESHOLD=N   percentual de redução tolerado (default 50)
+#   DEPLOY_SHA=<sha>     publica EXATAMENTE este commit (ff-only) em vez de
+#                        "o que estiver no origin/master agora". Usado pelo CD
+#                        (.github/workflows/deploy-backend.yml) pra não puxar um
+#                        push feito DEPOIS do CI aprovar. Sem ela: git pull, como sempre.
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -315,7 +319,16 @@ fi
 # ── atualizar código ─────────────────────────────────────────────────────────
 
 step "git pull"
-git -C "$REPO_ROOT" pull --ff-only
+if [ -n "${DEPLOY_SHA:-}" ]; then
+  # CD: o SHA aprovado pelo CI, não o que chegou no master depois do clique
+  git -C "$REPO_ROOT" fetch --quiet origin master
+  git -C "$REPO_ROOT" merge-base --is-ancestor "$DEPLOY_SHA" origin/master \
+    || err "DEPLOY_SHA $DEPLOY_SHA não está no origin/master — não publico"
+  git -C "$REPO_ROOT" merge --ff-only --quiet "$DEPLOY_SHA"
+  ok "fixado em $(git -C "$REPO_ROOT" rev-parse --short HEAD) (SHA aprovado pelo CI)"
+else
+  git -C "$REPO_ROOT" pull --ff-only
+fi
 
 # ── teste de migrations em sombra (antes de qualquer build/up) ────────────────
 # Roda APÓS o pull (pra testar as migrations recém-puxadas) e ANTES do up -d
