@@ -1,0 +1,112 @@
+name: deploy-backend
+
+# CD do backend: roda o scripts/deploy.sh NA VM de produção, sem SSH.
+#
+# Por que assim:
+#   - A VM só aceita SSH do IP do Dereck (deploy.md) — runner hospedado do
+#     GitHub não alcança. Um runner self-hosted NA VM (label `emonitor-prod`)
+#     abre conexão só de SAÍDA pro GitHub: nenhuma porta nova na VM.
+#   - O deploy.sh já é o caminho seguro (backup verificado, migration em sombra
+#     sobre cópia de prod, guarda de gravação, tripwire de row count, health
+#     check). Este workflow NÃO reimplementa nada disso: só o dispara.
+#
+# Aprovação manual = o próprio botão "Run workflow". Repo privado no plano
+# Free não tem "required reviewers" em environment; quem pode clicar é quem tem
+# escrita no repo. Não existe deploy automático por push — de propósito.
+#
+# Portões antes de tocar na VM:
+#   1. só o master (o deploy.sh também barra branch != master)
+#   2. o SHA tem que estar com o backend-ci VERDE
+#   3. na VM, origin/master tem que ser EXATAMENTE esse SHA (se alguém deu
+#      push depois do clique, aborta: publicar só o que foi testado)
+#
+# Doc (inclui como instalar o runner na VM): docs/operations/ci-cd.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: 'O que está subindo (vai pro resumo do run)'
+        required: true
+      pular_guarda_gravacao:
+        description: 'SKIP_RECORDING_GUARD=yes (só se souber que a gravação pode cair)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false   # nunca dois deploys ao mesmo tempo, nunca cancela um no meio
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+
+jobs:
+  portao:
+    name: portão (master + CI verde)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: só master
+        if: github.ref != 'refs/heads/master'
+        run: |
+          echo "::error::deploy só do master (pedido em ${{ github.ref }})"
+          exit 1
+
+      - name: backend-ci verde neste SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          ATOR: ${{ github.actor }}
+          MOTIVO: ${{ inputs.motivo }}   # via env, nunca ${{ }} no script (injeção)
+        run: |
+          run="$(gh run list -R "$REPO" --workflow backend-ci.yml --commit "$SHA" \
+                 --json conclusion,status,createdAt --jq 'sort_by(.createdAt) | last // empty')"
+          [ -n "$run" ] || { echo "::error::nenhum backend-ci rodou pro $SHA"; exit 1; }
+          echo "backend-ci de $SHA: $run"
+          [ "$(jq -r .status <<<"$run")" = "completed" ] || { echo "::error::backend-ci ainda não terminou pro $SHA"; exit 1; }
+          [ "$(jq -r .conclusion <<<"$run")" = "success" ] || { echo "::error::backend-ci NÃO está verde pro $SHA, não publico"; exit 1; }
+          {
+            echo "### Deploy pedido"
+            echo "- SHA: \`$SHA\`"
+            echo "- por: @$ATOR"
+            echo "- motivo: $MOTIVO"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: deploy.sh na VM
+    needs: portao
+    runs-on: [self-hosted, emonitor-prod]
+    timeout-minutes: 60
+    steps:
+      # Sem actions/checkout de propósito: o deploy.sh roda no clone que já
+      # existe na VM (ele mesmo faz o git pull e usa o override + .env de lá).
+      - name: VM vai puxar exatamente o SHA testado
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          dir="${EMONITOR_DIR:?defina EMONITOR_DIR no .env do runner (docs/operations/ci-cd.md)}"
+          cd "$dir"
+          [ "$(git rev-parse --abbrev-ref HEAD)" = "master" ] || { echo "::error::o clone da VM não está no master"; exit 1; }
+          git fetch --quiet origin master
+          remoto="$(git rev-parse origin/master)"
+          if [ "$remoto" != "$SHA" ]; then
+            echo "::error::master andou depois do clique (origin/master=$remoto, pedido=$SHA). Rode de novo pelo SHA novo, depois do CI dele."
+            exit 1
+          fi
+
+      - name: scripts/deploy.sh
+        env:
+          SKIP_RECORDING_GUARD: ${{ inputs.pular_guarda_gravacao && 'yes' || '' }}
+        run: |
+          cd "$EMONITOR_DIR"
+          ./scripts/deploy.sh
+
+      - name: resumo
+        if: always()
+        run: |
+          cd "$EMONITOR_DIR"
+          echo "- VM agora em: \`$(git rev-parse HEAD)\` (resultado: ${{ job.status }})" >> "$GITHUB_STEP_SUMMARY"

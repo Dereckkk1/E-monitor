@@ -1,0 +1,4 @@
+# Labels do runner self-hosted da VM de produção (docs/operations/ci-cd.md).
+self-hosted-runner:
+  labels:
+    - emonitor-prod

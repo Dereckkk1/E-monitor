@@ -1,0 +1,64 @@
+name: public-mirror
+
+# Publica o espelho público higienizado (Dereckkk1/E-monitor, o repo do TCC)
+# a cada push no master deste repo privado. O gerador + a TRAVA anti-vazamento
+# estão em scripts/mirror/build_mirror.py: se a trava achar nome de cliente,
+# email interno, IP, CNPJ ou segredo em QUALQUER ponto do histórico gerado,
+# este job falha e nada é publicado.
+#
+# Credencial: deploy key COM escrita no repo público (a chave pública fica em
+# Dereckkk1/E-monitor → Settings → Deploy keys; a privada no secret
+# MIRROR_DEPLOY_KEY deste repo). Não usa PAT: a chave só alcança o espelho.
+# Doc: docs/operations/public-mirror.md
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: public-mirror
+  cancel-in-progress: false   # publicações em fila, nunca duas ao mesmo tempo
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: gerar, travar e publicar o espelho
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIRROR_REPO: ${{ vars.MIRROR_REPO || 'git@github.com:Dereckkk1/E-monitor.git' }}
+      TEM_CHAVE: ${{ secrets.MIRROR_DEPLOY_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # mesma versão em todo lugar: é o que torna os SHAs do espelho reproduzíveis
+      - run: python -m pip install --quiet git-filter-repo==2.47.0
+
+      - name: gerar + trava
+        run: python -X utf8 scripts/mirror/build_mirror.py --source . --out "$RUNNER_TEMP/espelho"
+
+      - name: publicar
+        if: env.TEM_CHAVE == 'true'
+        env:
+          MIRROR_DEPLOY_KEY: ${{ secrets.MIRROR_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MIRROR_DEPLOY_KEY" > ~/.ssh/mirror_key && chmod 600 ~/.ssh/mirror_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes"
+          cd "$RUNNER_TEMP/espelho"
+          git push --force "$MIRROR_REPO" master:refs/heads/master
+          echo "publicado: $MIRROR_REPO master = $(git rev-parse master)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: sem chave = só validou
+        if: env.TEM_CHAVE != 'true'
+        run: echo "MIRROR_DEPLOY_KEY não configurado — espelho gerado e travado, mas NÃO publicado." >> "$GITHUB_STEP_SUMMARY"

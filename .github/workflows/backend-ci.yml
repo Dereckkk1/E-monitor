@@ -1,0 +1,131 @@
+name: backend-ci
+
+# CI do backend (Go). Reproduz o que o deploy.sh faz na VM e o que a VM não faz:
+#   build  — cross-compile igual ao workers.Dockerfile (CLAUDE.md 6.1), go vet,
+#            todo cmd/* no Dockerfile (6.7), diretiva go <= imagem (6.2)
+#   test   — Postgres 16 limpo + migrations (golang-migrate, mesma versão do
+#            compose) + go test com cobertura; no master, manda pro SonarCloud
+#            analisando o ESPELHO PÚBLICO (o código que o Sonar mostra é o
+#            higienizado — o projeto do Sonar é público)
+#
+# No master roda em TODO push (sem filtro de path): o deploy-backend.yml só
+# libera publicar um SHA que tenha este workflow verde.
+# Doc: docs/operations/ci-cd.md
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - 'workers/**'
+      - 'migrations/**'
+      - 'infra/docker/Dockerfiles/workers.Dockerfile'
+      - 'scripts/ci/**'
+      - 'scripts/mirror/**'
+      - '.github/workflows/backend-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (linux) + vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: workers/go.mod
+          cache-dependency-path: workers/go.sum
+
+      - name: go.mod/go.sum consistentes (o Dockerfile faz go mod download)
+        working-directory: workers
+        run: go mod download && go mod verify
+
+      - name: cross-compile igual ao workers.Dockerfile
+        working-directory: workers
+        run: CGO_ENABLED=0 GOOS=linux go build ./...
+
+      - name: go vet (compila os testes também)
+        working-directory: workers
+        run: go vet ./...
+
+      - name: todo cmd/* está no workers.Dockerfile (CLAUDE.md 6.7)
+        run: bash scripts/ci/check-dockerfile-cmds.sh
+
+      - name: diretiva go <= imagem do builder (CLAUDE.md 6.2)
+        run: bash scripts/ci/check-go-version.sh
+
+  test:
+    name: test (Postgres 16 + migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: radiocheck
+          POSTGRES_PASSWORD: radiocheck
+          POSTGRES_DB: radiocheck_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U radiocheck -d radiocheck_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://radiocheck:radiocheck@localhost:5432/radiocheck_test?sslmode=disable
+      # o `if` de um step não vê secrets nem o env do próprio step: expõe só SE existe
+      SONAR_ATIVO: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' && secrets.SONAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # o espelho (pra Sonar) é derivado do histórico inteiro do master
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: workers/go.mod
+          cache-dependency-path: workers/go.sum
+
+      - name: migrations (mesma imagem do service migrate do compose)
+        run: |
+          docker run --rm --network host -v "$PWD/migrations:/migrations:ro" \
+            migrate/migrate:v4.17.1 -path=/migrations -database "$TEST_DATABASE_URL" up
+
+      # -p 1: os pacotes dividem o MESMO banco; em paralelo dá deadlock e
+      # contagem errada que parece regressão (memória test-db-native-pg-shadows-docker)
+      - name: go test
+        working-directory: workers
+        run: go test -p 1 -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      # ── SonarCloud (só master): analisa o espelho público com a cobertura daqui ──
+      - name: gerar o espelho público (o que o Sonar vai ver)
+        if: env.SONAR_ATIVO == 'true'
+        run: |
+          python3 -m pip install --quiet --user --break-system-packages git-filter-repo==2.47.0
+          python3 -X utf8 scripts/mirror/build_mirror.py --source . --out "$RUNNER_TEMP/espelho"
+          # a cobertura usa caminho de módulo (radiocheck/...): vale igual no espelho,
+          # que tem as mesmas linhas (as substituições não criam nem removem linha)
+          cp workers/coverage.out "$RUNNER_TEMP/espelho/workers/coverage.out"
+
+      - name: SonarCloud
+        if: env.SONAR_ATIVO == 'true'
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          projectBaseDir: ${{ runner.temp }}/espelho
+          args: >
+            "-Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}"
+            "-Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}"
+            "-Dsonar.sources=."
+            "-Dsonar.tests=."
+            "-Dsonar.test.inclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**"
+            "-Dsonar.exclusions=**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
+            "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
