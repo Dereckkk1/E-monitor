@@ -683,7 +683,8 @@ func TestDetections_ListPaged_IgnoredExcluded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed d2: %v", err)
 	}
-	if err := dets.Ignore(ctx, d1.ID, uuid.New()); err != nil {
+	// ignored_by tem FK pra users: um uuid solto só passava em banco "podre"
+	if err := dets.Ignore(ctx, d1.ID, seedUser(t, ctx, pool)); err != nil {
 		t.Fatalf("ignore d1: %v", err)
 	}
 

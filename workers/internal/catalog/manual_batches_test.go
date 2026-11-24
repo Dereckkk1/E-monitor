@@ -53,7 +53,7 @@ func TestDetections_CreateManualBatch_WithProof(t *testing.T) {
 	out, err := dets.CreateManualBatch(ctx, CreateManualBatchInput{
 		CampaignID:   campID,
 		StationID:    statID,
-		ManualBy:     uuid.New(),
+		ManualBy:     seedUser(t, ctx, pool), // manual_by e created_by têm FK pra users
 		BatchNote:    "comprovante da emissora 25/06",
 		ProofBatchID: &batchID,
 		ProofPDFKey:  "proofs/2026/06/25/" + statID.String() + "/" + batchID.String() + ".pdf",
@@ -117,7 +117,7 @@ func TestDetections_CreateManualBatch_NoProof(t *testing.T) {
 	}
 	dets := NewDetections(pool)
 	out, err := dets.CreateManualBatch(ctx, CreateManualBatchInput{
-		CampaignID: campID, StationID: statID, ManualBy: uuid.New(),
+		CampaignID: campID, StationID: statID, ManualBy: seedUser(t, ctx, pool), // FK pra users
 		Entries: []ManualBatchEntry{{CommercialID: matID, DetectedAt: time.Now()}},
 	})
 	if err != nil {

@@ -345,8 +345,14 @@ func TestRecord_TentativaPenduradaMorreAoCompletarStallAfter(t *testing.T) {
 func TestRecord_EntreTentativasNaoTrocaOMotivo(t *testing.T) {
 	r := recordingRow(300 * time.Millisecond)
 	repo := newFakeRepo(r)
+	// A captura termina BEM antes do StallAfter (50ms × 120ms). Antes era 150ms:
+	// a tentativa ficava "sem dados" de 120 a 150ms e o teste só passava se o
+	// tick do watchdog (100ms) não caísse nessa janela — num runner lento do CI
+	// caía, e o watchdog matava a tentativa antes do "caiu". O que o teste prova
+	// continua igual: os ticks de 200/300ms veem idade > StallAfter ENTRE
+	// tentativas e não podem trocar o motivo.
 	media := &fakeMedia{capture: func(context.Context, string, string) error {
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		return errors.New("caiu")
 	}}
 	m := newTestManager(t, repo, media, newFakeObjects(), &fakeMailer{})
