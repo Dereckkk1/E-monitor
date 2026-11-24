@@ -52,8 +52,12 @@ done
 roda_um() {
   local db="$1" pkg="$2" ini fim rc=0
   ini=$(date +%s)
+  # -timeout: o padrão de 10m não basta pros pacotes grandes (acoes, api/handlers,
+  # mcp) num runner de 2 vCPU dividido com o Postgres — no 2º run do CI os três
+  # morreram em ~10m com o teste corrente rodando há 0–2s (lentidão, não trava)
   TEST_DATABASE_URL="$PG_URL_BASE/$db?sslmode=disable" \
-    go test -count=1 -covermode=atomic -coverprofile="$WORK/$db.cov" "$pkg" > "$WORK/$db.log" 2>&1 || rc=$?
+    go test -count=1 -timeout "${GO_TEST_TIMEOUT:-25m}" -covermode=atomic \
+      -coverprofile="$WORK/$db.cov" "$pkg" > "$WORK/$db.log" 2>&1 || rc=$?
   fim=$(date +%s)
   if [ "$rc" -eq 0 ]; then
     printf 'ok    %-50s %4ss\n' "$pkg" "$((fim - ini))"
@@ -63,7 +67,7 @@ roda_um() {
   fi
 }
 export -f roda_um
-export PG_URL_BASE WORK
+export PG_URL_BASE WORK GO_TEST_TIMEOUT
 tr '\t' ' ' < "$WORK/plano.tsv" | xargs -P "$PARALELO" -n 2 bash -c 'roda_um "$0" "$1"'
 
 # 3) cobertura única (mesmo formato de um `go test -coverprofile` só)

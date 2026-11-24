@@ -16,6 +16,9 @@ on:
   push:
     branches: [master]
   pull_request:
+    # só PR que entra no master. Sem isto, o PR #10 (master → n1-base) fazia
+    # todo push no master rodar o CI 2× (push + pull_request/synchronize).
+    branches: [master]
     paths:
       - 'workers/**'
       - 'migrations/**'

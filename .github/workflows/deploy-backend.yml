@@ -62,7 +62,9 @@ jobs:
           ATOR: ${{ github.actor }}
           MOTIVO: ${{ inputs.motivo }}   # via env, nunca ${{ }} no script (injeção)
         run: |
-          run="$(gh run list -R "$REPO" --workflow backend-ci.yml --commit "$SHA" \
+          # só o run do PUSH no master: um run de pull_request no mesmo SHA testa
+          # o merge com OUTRA base, não o código que vai pra VM
+          run="$(gh run list -R "$REPO" --workflow backend-ci.yml --commit "$SHA" --event push \
                  --json conclusion,status,createdAt --jq 'sort_by(.createdAt) | last // empty')"
           [ -n "$run" ] || { echo "::error::nenhum backend-ci rodou pro $SHA"; exit 1; }
           echo "backend-ci de $SHA: $run"
