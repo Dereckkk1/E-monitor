@@ -139,6 +139,11 @@ jobs:
           # que tem as mesmas linhas (as substituições não criam nem removem linha)
           cp workers/coverage.out "$RUNNER_TEMP/espelho/workers/coverage.out"
 
+      # sources e tests apontam pro repo inteiro: os padrões de teste vão em
+      # test.inclusions E em exclusions, senão o Sonar conta teste como código
+      # (1ª análise: Go com 118k linhas = produção + testes). Cobertura só é
+      # coletada do Go (workers/coverage.out), então o resto fica fora da conta
+      # de cobertura — senão o frontend entra como 0% e a métrica não diz nada.
       - name: SonarCloud
         if: env.SONAR_ATIVO == 'true'
         uses: SonarSource/sonarqube-scan-action@v7
@@ -153,5 +158,6 @@ jobs:
             "-Dsonar.sources=."
             "-Dsonar.tests=."
             "-Dsonar.test.inclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**"
-            "-Dsonar.exclusions=**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
+            "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
+            "-Dsonar.coverage.exclusions=frontend/**,fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
             "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
