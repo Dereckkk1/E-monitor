@@ -151,6 +151,11 @@ jobs:
       #   e4 javascript:S6544 ConfirmModal.jsx — window.alert customizado devolve
       #      Promise de propósito (alert assíncrono com modal)
       #   e5 shell:S4790 backup.sh — md5 só pra registrar o dump no log
+      #   e6/e7 gosecurity:S2083 materials.go/commercials.go e e8 S6350 — o fluxo
+      #      que o Sonar mostra parte do CONTEÚDO do upload → SHA-256 em hex →
+      #      nome do arquivo; hex não forma "../". A extensão é literal
+      #      (handlers/audio_ext.go) e o resto do caminho é MastersPath + uuid.
+      #      Coberto por TestUpload_RecusaExtensaoForaDaLista
       # sources e tests apontam pro repo inteiro: os padrões de teste vão em
       # test.inclusions E em exclusions, senão o Sonar conta teste como código
       # (1ª análise: Go com 118k linhas = produção + testes). Cobertura só é
@@ -173,7 +178,7 @@ jobs:
             "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
             "-Dsonar.coverage.exclusions=frontend/**,fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
             "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
-            "-Dsonar.issue.ignore.multicriteria=e1,e2,e3,e4,e5"
+            "-Dsonar.issue.ignore.multicriteria=e1,e2,e3,e4,e5,e6,e7,e8"
             "-Dsonar.issue.ignore.multicriteria.e1.ruleKey=javascript:S2871"
             "-Dsonar.issue.ignore.multicriteria.e1.resourceKey=frontend/src/api/hooks.js"
             "-Dsonar.issue.ignore.multicriteria.e2.ruleKey=javascript:S2189"
@@ -184,3 +189,9 @@ jobs:
             "-Dsonar.issue.ignore.multicriteria.e4.resourceKey=frontend/src/components/ConfirmModal.jsx"
             "-Dsonar.issue.ignore.multicriteria.e5.ruleKey=shell:S4790"
             "-Dsonar.issue.ignore.multicriteria.e5.resourceKey=infra/scripts/backup.sh"
+            "-Dsonar.issue.ignore.multicriteria.e6.ruleKey=gosecurity:S2083"
+            "-Dsonar.issue.ignore.multicriteria.e6.resourceKey=workers/internal/api/handlers/materials.go"
+            "-Dsonar.issue.ignore.multicriteria.e7.ruleKey=gosecurity:S2083"
+            "-Dsonar.issue.ignore.multicriteria.e7.resourceKey=workers/internal/api/handlers/commercials.go"
+            "-Dsonar.issue.ignore.multicriteria.e8.ruleKey=gosecurity:S6350"
+            "-Dsonar.issue.ignore.multicriteria.e8.resourceKey=workers/internal/api/handlers/commercials.go"
