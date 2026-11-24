@@ -139,6 +139,18 @@ jobs:
           # que tem as mesmas linhas (as substituições não criam nem removem linha)
           cp workers/coverage.out "$RUNNER_TEMP/espelho/workers/coverage.out"
 
+      # Supressões (sonar.issue.ignore.multicriteria) — SÓ falsos positivos
+      # conferidos linha a linha em 2026-11-24; o que é endurecimento real
+      # (PATH do ffmpeg, Dockerfile como root/sem lock, http) fica VISÍVEL:
+      #   e1 javascript:S2871 hooks.js — sort() de listas de UUID (texto) só pra
+      #      montar chave de cache; a ordem padrão é exatamente a desejada
+      #   e2 javascript:S2189 dates.js — o laço muta `cur` via setDate(); trocar
+      #      por aritmética de ms quebraria na virada de horário de verão
+      #   e3 plsql:DeleteOrUpdateWithoutWhereCheck migrations/** — reset de tabela
+      #      de propósito em migration de schema (0019, 0025), comentado no SQL
+      #   e4 javascript:S6544 ConfirmModal.jsx — window.alert customizado devolve
+      #      Promise de propósito (alert assíncrono com modal)
+      #   e5 shell:S4790 backup.sh — md5 só pra registrar o dump no log
       # sources e tests apontam pro repo inteiro: os padrões de teste vão em
       # test.inclusions E em exclusions, senão o Sonar conta teste como código
       # (1ª análise: Go com 118k linhas = produção + testes). Cobertura só é
@@ -161,3 +173,14 @@ jobs:
             "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
             "-Dsonar.coverage.exclusions=frontend/**,fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
             "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
+            "-Dsonar.issue.ignore.multicriteria=e1,e2,e3,e4,e5"
+            "-Dsonar.issue.ignore.multicriteria.e1.ruleKey=javascript:S2871"
+            "-Dsonar.issue.ignore.multicriteria.e1.resourceKey=frontend/src/api/hooks.js"
+            "-Dsonar.issue.ignore.multicriteria.e2.ruleKey=javascript:S2189"
+            "-Dsonar.issue.ignore.multicriteria.e2.resourceKey=frontend/src/utils/dates.js"
+            "-Dsonar.issue.ignore.multicriteria.e3.ruleKey=plsql:DeleteOrUpdateWithoutWhereCheck"
+            "-Dsonar.issue.ignore.multicriteria.e3.resourceKey=migrations/**"
+            "-Dsonar.issue.ignore.multicriteria.e4.ruleKey=javascript:S6544"
+            "-Dsonar.issue.ignore.multicriteria.e4.resourceKey=frontend/src/components/ConfirmModal.jsx"
+            "-Dsonar.issue.ignore.multicriteria.e5.ruleKey=shell:S4790"
+            "-Dsonar.issue.ignore.multicriteria.e5.resourceKey=infra/scripts/backup.sh"

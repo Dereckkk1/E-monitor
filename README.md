@@ -1,5 +1,10 @@
 # Radiocheck
 
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Dereckkk1_E-monitor&metric=alert_status)](https://sonarcloud.io/summary/overall?id=Dereckkk1_E-monitor)
+[![Cobertura (backend Go)](https://sonarcloud.io/api/project_badges/measure?project=Dereckkk1_E-monitor&metric=coverage)](https://sonarcloud.io/summary/overall?id=Dereckkk1_E-monitor)
+[![Manutenibilidade](https://sonarcloud.io/api/project_badges/measure?project=Dereckkk1_E-monitor&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=Dereckkk1_E-monitor)
+[![Segurança](https://sonarcloud.io/api/project_badges/measure?project=Dereckkk1_E-monitor&metric=security_rating)](https://sonarcloud.io/summary/overall?id=Dereckkk1_E-monitor)
+
 Sistema de monitoramento de veiculação de comerciais em rádios AM/FM via streaming.
 Detecta comerciais conhecidos por fingerprint acústico (estilo Shazam), grava clip de
 evidência e expõe API + frontend para operação.
