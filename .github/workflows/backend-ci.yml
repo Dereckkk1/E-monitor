@@ -96,6 +96,18 @@ jobs:
           go-version-file: workers/go.mod
           cache-dependency-path: workers/go.sum
 
+      # banco descartável: durabilidade não importa, velocidade sim. Os testes do
+      # MCP fazem TRUNCATE ... CASCADE a cada teste (centenas de arquivos por vez)
+      # e cada pacote ganha um CREATE DATABASE — com fsync isso dominava o tempo.
+      - name: Postgres do CI sem fsync (só aqui; NUNCA em prod)
+        run: |
+          docker run --rm --network host postgres:16-alpine \
+            psql "$PG_URL_BASE/$TEMPLATE_DB" -v ON_ERROR_STOP=1 -q \
+              -c "ALTER SYSTEM SET fsync = off" \
+              -c "ALTER SYSTEM SET synchronous_commit = off" \
+              -c "ALTER SYSTEM SET full_page_writes = off" \
+              -c "SELECT pg_reload_conf()"
+
       - name: banco-modelo — migrations (mesma imagem do service migrate do compose)
         run: |
           docker run --rm --network host -v "$PWD/migrations:/migrations:ro" \
@@ -104,7 +116,7 @@ jobs:
 
       # as migrations só criam partição do mês corrente pra frente; os testes
       # inserem datas fixas (jun/2026). Ver o cabeçalho do .sql.
-      - name: banco-modelo — partições mensais de teste (2024-01 → +36 meses)
+      - name: banco-modelo — partições dos meses passados que os testes usam
         run: |
           docker run --rm --network host -v "$PWD/scripts/ci:/sql:ro" postgres:16-alpine \
             psql "$PG_URL_BASE/$TEMPLATE_DB" -v ON_ERROR_STOP=1 -q -f /sql/test-db-partitions.sql
