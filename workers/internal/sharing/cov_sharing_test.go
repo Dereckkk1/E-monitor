@@ -498,7 +498,6 @@ func TestCovH_Subscriber_SubscribeOnClosedConn(t *testing.T) {
 // pra frente) e a cobertura do outro lado (otherCov) é superestimada, podendo
 // classificar um sting como subset (e não flagar nada).
 func TestCovH_ScanForSharedRegions_OtherRangesTrackTruePosition(t *testing.T) {
-	t.Skip("BUG: sharing.go:296 xStart = ownStart - OffsetFrames soma ownStart duas vezes (MatchWindow devolve frames relativos à janela); esperado xStart ≈ ownStart, atual ≈ 2*ownStart")
 
 	pcm := covHNoise(90, 20)
 	store := covHStoreFor(pcm, 5)

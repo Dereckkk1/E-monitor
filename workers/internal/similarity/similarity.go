@@ -432,9 +432,13 @@ func runScan(
 			s.ownRanges = append(s.ownRanges, frameRange{ownStart, ownEnd})
 
 			// Other range derived from the histogram delta:
-			// live_frame - OffsetFrames = entry.TimeFrame.
-			xStart := int32(int(ownStart) - r.OffsetFrames)
-			xEnd := int32(int(ownEnd) - r.OffsetFrames)
+			// live_frame - OffsetFrames = entry.TimeFrame. MatchWindow sees the
+			// window as standalone PCM, so live frames are window-relative
+			// ([0, windowFrames]); adding the absolute ownStart counted the
+			// window start twice (same bug as sharing.scanForSharedRegions).
+			windowFrames := int(ownEnd - ownStart)
+			xStart := int32(-r.OffsetFrames)
+			xEnd := int32(windowFrames - r.OffsetFrames)
 			if xStart > xEnd {
 				xStart, xEnd = xEnd, xStart
 			}

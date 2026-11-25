@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-05-15
+ultima-verificacao: 2026-11-25
 codigo-relacionado:
   - workers/internal/sharing/sharing.go
   - workers/internal/sharing/sharing_test.go
@@ -57,10 +57,18 @@ For each new commercial Y the routine:
 3. Slides a 4-second window with 1-second hop over the PCM. For every window
    where some other commercial X scores at or above
    [`sharing.MinScore`](../../workers/internal/sharing/sharing.go) (currently
-   `5`, aligned with the runtime matcher):
+   `DefaultMinScore = 20`):
     - Y's `time_frame` range = the window's frame interval.
     - X's `time_frame` range is derived from the histogram delta:
-      `entry.TimeFrame = live_frame - MatchResult.OffsetFrames`.
+      `entry.TimeFrame = live_frame - MatchResult.OffsetFrames`, where
+      `live_frame` is **relative to the window** (`MatchWindow` fingerprints the
+      window as standalone PCM), so X's range is
+      `[-OffsetFrames, windowFrames - OffsetFrames]`. Until 2026-11-25 the code
+      added the window's absolute start frame on top, counting it twice: X's
+      range drifted away from the true position, the wrong frames of X were
+      flagged as shared and `otherCov` came out inflated (a sting could be read
+      as a subset and go unflagged). Flags written before the fix are not
+      rewritten automatically.
 4. Merges overlapping/contiguous frame ranges per commercial and issues one
    `UPDATE fingerprint_hashes SET is_shared = true` per merged range.
 

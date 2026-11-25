@@ -427,7 +427,6 @@ func TestCovM_FrameCoverage_EmptyAndUnion(t *testing.T) {
 // isolado). Efeito: other_segments da timeline e otherCov saem deslocados/
 // inflados; esperado xStart = -OffsetFrames.
 func TestCovM_RunScan_OtherRangesTrackTruePosition(t *testing.T) {
-	t.Skip("BUG: similarity.go:436 xStart = ownStart - OffsetFrames soma ownStart duas vezes (MatchWindow devolve frames relativos à janela); esperado xStart ≈ ownStart, atual ≈ 2*ownStart")
 
 	pcm := covMNoise(91, 20)
 	const short int32 = 5

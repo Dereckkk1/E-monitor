@@ -291,10 +291,15 @@ func scanForSharedRegions(
 
 			// Other commercial's range: live_time_frame - entry.TimeFrame =
 			// OffsetFrames, so entry.TimeFrame = live_time_frame -
-			// OffsetFrames. The window covers live frames
-			// [ownStartFrame, ownEndFrame].
-			xStart := int32(int(ownStartFrame) - r.OffsetFrames)
-			xEnd := int32(int(ownEndFrame) - r.OffsetFrames)
+			// OffsetFrames. MatchWindow fingerprints the WINDOW as standalone
+			// PCM, so its live frames are window-relative: [0, windowFrames].
+			// Using the absolute ownStartFrame here counted the window start
+			// twice — X's range drifted 2 frames per window frame (measured:
+			// window at 5s → xStart 77 instead of ~39), flagging the wrong
+			// frames of X as shared and inflating otherCov.
+			windowFrames := int(ownEndFrame - ownStartFrame)
+			xStart := int32(-r.OffsetFrames)
+			xEnd := int32(windowFrames - r.OffsetFrames)
 			if xStart > xEnd {
 				xStart, xEnd = xEnd, xStart
 			}
