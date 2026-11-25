@@ -252,9 +252,16 @@ func computeSummary(stationID uuid.UUID, events []HealthEvent, days int, periodS
 func buildDailySummary(events []HealthEvent, days int) []DailySummary {
 	downtimeByDate := make(map[string]int)
 	for _, ev := range events {
-		if ev.EventType == "down" && ev.DurationSeconds != nil {
-			date := ev.EventAt.UTC().Format("2006-01-02")
+		if ev.EventType != "down" {
+			continue
+		}
+		date := ev.EventAt.UTC().Format("2006-01-02")
+		if ev.DurationSeconds != nil {
 			downtimeByDate[date] += *ev.DurationSeconds
+		} else {
+			// Queda ABERTA conta até agora, como em computeSummary: sem isto o
+			// dia corrente de uma emissora fora do ar aparecia com 100%.
+			downtimeByDate[date] += int(time.Since(ev.EventAt).Seconds())
 		}
 	}
 

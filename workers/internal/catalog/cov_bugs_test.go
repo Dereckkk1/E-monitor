@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Os testes deste arquivo descrevem o comportamento ESPERADO onde o código atual
-// diverge dele. Cada um está com t.Skip("BUG: ...") — a correção é de quem toca
-// o código de produção; ao corrigir, é só remover o Skip.
+// Regressões de defeitos que a rodada de cobertura de 2026-11 achou: cada teste
+// nasceu com t.Skip("BUG: ...") descrevendo o comportamento ESPERADO e o Skip
+// saiu junto com a correção (o teste falha sem ela).
 
 // AggregateFilter.ClientIDs está documentado como "restringe às detecções cujas
 // campanhas pertencem a esses clientes", mas só AggregateByMaterial aplica o
@@ -19,8 +19,7 @@ import (
 // quem popular ClientIDs achando que escopou a leitura recebe os dados de TODOS.
 // Hoje nenhum caller depende disso (os handlers checam a posse da campanha antes),
 // mas é uma armadilha de vazamento entre clientes.
-func TestCovC_BUG_AggregateFilter_ClientIDsIgnoradoEmAggregateByStationEMaterialStation(t *testing.T) {
-	t.Skip("BUG: detections.go:1805 (AggregateByMaterialStation) e :1891 (AggregateByStation) ignoram AggregateFilter.ClientIDs; só AggregateByMaterial (:1609) aplica. Esperado: carteira de outro cliente = zero linhas (falha fechada), como em AggregateByMaterial.")
+func TestCovC_AggregateFilter_ClientIDsValeEmAggregateByStationEMaterialStation(t *testing.T) {
 
 	w := covCSeedWorld(t, "bug-clientids")
 	dets := NewDetections(w.pool)
@@ -45,8 +44,7 @@ func TestCovC_BUG_AggregateFilter_ClientIDsIgnoradoEmAggregateByStationEMaterial
 // "quando aplicável"; o comentário do IterateForExport lembra que não há FK entre
 // as duas tabelas e que uma linha órfã não pode virar cobrança). As leituras da
 // MESMA emissora divergem quando sobra linha de tipo num preço consolidado.
-func TestCovC_BUG_Pricing_ListByCampaignMostraDetalheEmModoConsolidado(t *testing.T) {
-	t.Skip("BUG: pricing.go:117 (ListByCampaign) anexa campaign_station_type_pricing a emissora em modo consolidated; GetByCampaignStation (:340-367) e relerLote (:319) só em per_insertion. Esperado: PerType vazio quando Mode=consolidated, em qualquer leitura.")
+func TestCovC_Pricing_ListByCampaignEscondeDetalheEmModoConsolidado(t *testing.T) {
 
 	w := covCSeedWorld(t, "bug-pricing")
 	repo := NewPricing(w.pool)
@@ -73,8 +71,7 @@ func TestCovC_BUG_Pricing_ListByCampaignMostraDetalheEmModoConsolidado(t *testin
 // ("open outage: count elapsed time to now"), mas buildDailySummary a ignora: o
 // dia corrente de uma emissora que está fora do ar agora aparece com 100% de
 // uptime na barra diária, enquanto o KPI geral já a desconta.
-func TestCovC_BUG_HealthEvents_DailySummaryIgnoraQuedaAberta(t *testing.T) {
-	t.Skip("BUG: health_events.go:255 (buildDailySummary) só soma down com duration_seconds != nil; queda aberta fica de fora e o dia corrente mostra 100%, ao contrário de computeSummary (:216) que a desconta. Esperado: dia corrente < 100% enquanto a queda segue aberta.")
+func TestCovC_HealthEvents_DailySummaryContaQuedaAberta(t *testing.T) {
 
 	sid := uuid.New()
 	startedAt := time.Now().UTC().Add(-time.Minute)

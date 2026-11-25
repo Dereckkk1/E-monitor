@@ -1833,6 +1833,9 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		WHERE d.campaign_id = ANY($1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  -- carteira do viewer (nil = admin), igual a AggregateByMaterial: sem
+		  -- isto, quem populava ClientIDs recebia os dados de TODOS os clientes
+		  AND ($4::uuid[] IS NULL OR cmp.client_id = ANY($4))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -1840,7 +1843,7 @@ func (d *Detections) AggregateByMaterialStation(ctx context.Context, f Aggregate
 		         d.station_id, s.name, s.band, s.frequency_mhz, s.city, s.state,
 		         s.pmm, cst.pmm_target
 		ORDER BY COALESCE(m.title, c.title, '') ASC, s.name ASC`,
-		f.CampaignIDs, f.StartDate, f.EndDate)
+		f.CampaignIDs, f.StartDate, f.EndDate, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1904,6 +1907,9 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		WHERE d.campaign_id = ANY($1)
 		  AND ($2::timestamptz IS NULL OR d.detected_at >= $2)
 		  AND ($3::timestamptz IS NULL OR d.detected_at <= $3)
+		  -- carteira do viewer (nil = admin), igual a AggregateByMaterial: sem
+		  -- isto, quem populava ClientIDs recebia os dados de TODOS os clientes
+		  AND ($4::uuid[] IS NULL OR cmp.client_id = ANY($4))
 		  AND d.ignored_at IS NULL
 		  AND d.retracted_at IS NULL
 		  AND d.evidence_status <> 'audit_rejected'
@@ -1911,7 +1917,7 @@ func (d *Detections) AggregateByStation(ctx context.Context, f AggregateFilter) 
 		         s.pmm, cst.pmm_target
 		-- d.station_id só desempata (o MCP pagina esta lista).
 		ORDER BY cnt DESC, s.name ASC, d.station_id`,
-		f.CampaignIDs, f.StartDate, f.EndDate)
+		f.CampaignIDs, f.StartDate, f.EndDate, f.ClientIDs)
 	if err != nil {
 		return nil, err
 	}

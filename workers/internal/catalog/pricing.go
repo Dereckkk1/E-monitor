@@ -113,7 +113,10 @@ func (p *Pricing) ListByCampaign(ctx context.Context, campaignID uuid.UUID) ([]S
 		if err := detRows.Scan(&stationID, &tp.TypeID, &tp.UnitValue); err != nil {
 			return nil, fmt.Errorf("pricing.ListByCampaign: scan detail: %w", err)
 		}
-		if sp, ok := byStation[stationID]; ok {
+		// Detalhe por tipo só vale em per_insertion, como em GetByCampaignStation
+		// e relerLote: não há FK entre as tabelas, e uma linha de tipo que sobrou
+		// num preço consolidado não pode aparecer (nem virar cobrança).
+		if sp, ok := byStation[stationID]; ok && sp.Mode == PricingModePerInsertion {
 			sp.PerType = append(sp.PerType, tp)
 		}
 	}
