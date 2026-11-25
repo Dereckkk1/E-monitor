@@ -3,6 +3,13 @@
 // rolagem, observador de interseção, URL de blob e canvas (html2canvas/jsPDF).
 // NÃO declare hooks de teste aqui (afterEach etc.): no Vitest 5 isso quebra.
 
+// waitFor/findBy: 1s (padrão) é curto pro runner do CI (2 vCPU dividindo com
+// os workers do Vitest) — dois testes estouraram só com a máquina carregada.
+// Pelo @testing-library/dom (o mesmo que o RTL usa): importar o RTL aqui
+// registraria o afterEach dele, o que quebra no Vitest 5 (ver acima).
+import { configure } from '@testing-library/dom'
+configure({ asyncUtilTimeout: 5000 })
+
 class ResizeObserverFalso {
   constructor(cb) { this.cb = cb }
   observe() {}
