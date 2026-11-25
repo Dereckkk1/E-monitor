@@ -38,6 +38,19 @@ psql_admin() {   # psql nativo se houver; senão o da imagem postgres (rede do h
 
 cd "$ROOT/workers"
 mapfile -t PKGS < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
+# Pacotes lentos PRIMEIRO. Com -P N o tempo total é ~max(mais lento, resto÷N)
+# só se o mais lento começar já; em ordem alfabética o mcp (~13 min no CI,
+# 2026-11-25) entrava depois de todos os cmd/* e o job pagava "fila + mcp".
+PESADOS="${PESADOS:-internal/mcp internal/api/handlers internal/acoes internal/catalog}"
+ordenados=()
+for p in $PESADOS; do
+  for k in "${PKGS[@]}"; do [ "$k" = "radiocheck/$p" ] && ordenados+=("$k"); done
+done
+for k in "${PKGS[@]}"; do
+  case " $PESADOS " in *" ${k#radiocheck/} "*) ;; *) ordenados+=("$k") ;; esac
+done
+PKGS=("${ordenados[@]}")
+
 echo "pacotes com teste: ${#PKGS[@]} · paralelo: $PARALELO · modelo: $TEMPLATE_DB"
 
 # 1) um banco por pacote (sequencial: CREATE DATABASE ... TEMPLATE é rápido e
