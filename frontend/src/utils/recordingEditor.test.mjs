@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import {
   audioStartMs, bucketPeaks, clockAt, defaultClipName, formatClock, formatOffset, formatSpan, gapMarkers, gapsInside,

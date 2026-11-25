@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import {
   coveragePercent, downloadName, errorMessage, gapLabels, isLive, recordingStation, stationSub, statusInfo, todayInSaoPaulo,

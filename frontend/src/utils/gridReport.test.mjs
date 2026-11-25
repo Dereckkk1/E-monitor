@@ -5,7 +5,7 @@
 // só a 1ª página de 7,5 mil). Na campanha 191 isso apagou 258 veiculações do
 // relatório entregue ao cliente, sem nenhum aviso — o rodapé continuava
 // dizendo "4 emissoras".
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { buildGridReportModel } from './gridReport.js'
 

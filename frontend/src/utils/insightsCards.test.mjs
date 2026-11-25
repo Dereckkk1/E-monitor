@@ -4,7 +4,7 @@
 // consolidada — e 14 dos 28 clientes têm ao menos uma na seleção típica, então
 // metade da base nunca via a bonificação precificada. A regra abaixo é a que
 // devolve o número sem inventar preço pra emissora que não tem preço unitário.
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { showBonificacao } from './insightsCards.js'
 

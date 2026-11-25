@@ -10,6 +10,22 @@ export default defineConfig({
   optimizeDeps: {
     include: ['recharts'],
   },
+  // Vitest (testes unitários + cobertura). A cobertura conta TODO o src/
+  // (componentes inclusive) — só fica fora o próprio código de teste.
+  test: {
+    environment: 'jsdom',
+    // globals: a Testing Library desmonta o que renderizou entre testes sozinha
+    // (usa o afterEach global). Hook em setupFiles quebra no Vitest 5.
+    globals: true,
+    include: ['src/**/*.test.{js,jsx,mjs}'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{js,jsx}'],
+      exclude: ['src/**/*.test.{js,jsx,mjs}'],
+      reporter: ['text-summary', 'lcov', 'json-summary'],
+      reportsDirectory: 'coverage',
+    },
+  },
   server: {
     port: 3000,
     proxy: {

@@ -1,5 +1,5 @@
 // Filtros que as tools do MCP põem na URL das telas (links.tela).
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import {
   lerId, lerIds, lerPeriodo, lerOpcao, lerInteiro, temFiltro,

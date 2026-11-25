@@ -1,5 +1,5 @@
 // Aritmética das setas ‹ › do seletor de competência.
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { shiftMonth } from './monthStep.js'
 

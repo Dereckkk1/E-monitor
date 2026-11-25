@@ -129,6 +129,19 @@ jobs:
           COVER_OUT: ${{ github.workspace }}/workers/coverage.out
         run: bash scripts/ci/go-test-isolado.sh
 
+      # ── frontend: testes unitários (Vitest + Testing Library) com cobertura ──
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: frontend — vitest + cobertura
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx vitest run --coverage
+
       # ── SonarCloud (só master): analisa o espelho público com a cobertura daqui ──
       - name: gerar o espelho público (o que o Sonar vai ver)
         if: env.SONAR_ATIVO == 'true'
@@ -138,6 +151,9 @@ jobs:
           # a cobertura usa caminho de módulo (radiocheck/...): vale igual no espelho,
           # que tem as mesmas linhas (as substituições não criam nem removem linha)
           cp workers/coverage.out "$RUNNER_TEMP/espelho/workers/coverage.out"
+          # lcov do vitest usa caminho relativo a frontend/ (SF:src/...); o Sonar
+          # resolve a partir da raiz do espelho → prefixa frontend/
+          sed 's#^SF:src/#SF:frontend/src/#' frontend/coverage/lcov.info > "$RUNNER_TEMP/espelho/frontend-lcov.info"
 
       # Supressões (sonar.issue.ignore.multicriteria) — SÓ falsos positivos
       # conferidos linha a linha em 2026-11-24; o que é endurecimento real
@@ -158,9 +174,9 @@ jobs:
       #      Coberto por TestUpload_RecusaExtensaoForaDaLista
       # sources e tests apontam pro repo inteiro: os padrões de teste vão em
       # test.inclusions E em exclusions, senão o Sonar conta teste como código
-      # (1ª análise: Go com 118k linhas = produção + testes). Cobertura só é
-      # coletada do Go (workers/coverage.out), então o resto fica fora da conta
-      # de cobertura — senão o frontend entra como 0% e a métrica não diz nada.
+      # (1ª análise: Go com 118k linhas = produção + testes). Cobertura coletada:
+      # Go (workers/coverage.out) e frontend (lcov do vitest); o resto (Python,
+      # infra, scripts, migrations) fica fora da conta de cobertura.
       - name: SonarCloud
         if: env.SONAR_ATIVO == 'true'
         uses: SonarSource/sonarqube-scan-action@v7
@@ -176,8 +192,9 @@ jobs:
             "-Dsonar.tests=."
             "-Dsonar.test.inclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**"
             "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
-            "-Dsonar.coverage.exclusions=frontend/**,fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
+            "-Dsonar.coverage.exclusions=fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
             "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
+            "-Dsonar.javascript.lcov.reportPaths=frontend-lcov.info"
             "-Dsonar.issue.ignore.multicriteria=e1,e2,e3,e4,e5,e6,e7,e8"
             "-Dsonar.issue.ignore.multicriteria.e1.ruleKey=javascript:S2871"
             "-Dsonar.issue.ignore.multicriteria.e1.resourceKey=frontend/src/api/hooks.js"

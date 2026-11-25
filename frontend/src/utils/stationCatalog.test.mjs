@@ -7,7 +7,7 @@
 // descartava a linha inteira em silêncio (`if (!station) return null`) enquanto
 // o rodapé continuava contando 4 emissoras. Campanha 191 (CLIENTE DELTA) exibia 3 de
 // 4, escondendo 258 veiculações.
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { collectStationIds, chunkIds, indexStations, resolveStation } from './stationCatalog.js'
 
