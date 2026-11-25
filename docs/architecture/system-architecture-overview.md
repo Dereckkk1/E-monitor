@@ -1,6 +1,6 @@
 ---
 status: implementado
-ultima-verificacao: 2026-06-19
+ultima-verificacao: 2026-11-25
 codigo-relacionado:
   - workers/cmd/api/main.go
   - workers/internal/api/router.go
@@ -184,7 +184,7 @@ flowchart TB
     histo -. lookup .-> idx
 
     subgraph confirm["✅ CONFIRMAÇÃO & EVIDÊNCIA"]
-        smnode["State machine<br/>(cobertura temporal ≥ 0.5)"]
+        smnode["State machine<br/>(cobertura temporal ≥ 0.15)"]
         neural{"Incerto?"}
         clapcheck["CLAP: cosine similarity<br/>live × master"]
         pending["NATS: detections.pending"]
@@ -223,8 +223,8 @@ stateDiagram-v2
     [*] --> Idle
     Idle --> Detecting: score ≥ minScore
     Detecting --> Detecting: acumula cobertura temporal
-    Detecting --> Confirmed: cobertura ≥ 0.5
-    Detecting --> Uncertain: borderline (cobertura 0.4–0.5) ou score alto sem cobertura
+    Detecting --> Confirmed: cobertura ≥ MinTemporalCoverage (0.15)
+    Detecting --> Uncertain: cobertura ≥ 0.4 (ou ≥ 0.2 com score 3×) e ABAIXO do limiar
     Uncertain --> Confirmed: CLAP resolve (similaridade alta)
     Uncertain --> Idle: timeout / CLAP rejeita
     Confirmed --> Cooldown: emite detections.pending
@@ -241,6 +241,14 @@ stateDiagram-v2
         material; heurística de re-veiculação
     end note
 ```
+
+> **Limiar real (verificado no código em 2026-11-25):** `supervisor.go` configura
+> `MinTemporalCoverage: 0.15` (~4,5 s sustentados). As faixas do estado `Uncertain`
+> (`cov ≥ 0.4` ou `cov ≥ 0.2` com score alto, **e** `cov < MinTemporalCoverage`) foram
+> desenhadas pro limiar antigo de 0.5: com 0.15 elas são **inalcançáveis** e a
+> verificação neural (CLAP) não é acionada por esse caminho. Não é bug de detecção —
+> a confirmação acontece antes —, mas o estado `Uncertain` hoje é código morto.
+
 
 ---
 
