@@ -73,16 +73,19 @@ jobs:
     services:
       postgres:
         image: postgres:16-alpine
+        # descartável, só no localhost de um runner efêmero: SEM senha (trust).
+        # Senha fixa aqui viraria "credencial no código" no Sonar (BLOCKER
+        # secrets:S6698) sem proteger nada.
         env:
           POSTGRES_USER: radiocheck
-          POSTGRES_PASSWORD: radiocheck
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: radiocheck_tmpl   # banco-MODELO: cada pacote de teste ganha um clone
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U radiocheck -d radiocheck_tmpl"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      PG_URL_BASE: postgres://radiocheck:radiocheck@localhost:5432
+      PG_URL_BASE: postgres://radiocheck@localhost:5432
       TEMPLATE_DB: radiocheck_tmpl
       # o `if` de um step não vê secrets nem o env do próprio step: expõe só SE existe
       SONAR_ATIVO: ${{ github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && secrets.SONAR_TOKEN != '' }}
@@ -138,15 +141,18 @@ jobs:
 
       - name: frontend — vitest + cobertura
         working-directory: frontend
+        # --ignore-scripts: nenhum pacote precisa de script de instalação no Linux
+        # (core-js só imprime aviso; fsevents é de macOS). `npm run` usa o vitest
+        # travado no lockfile — `npx` poderia baixar outro (Sonar S6505/S8543).
         run: |
-          npm ci --no-audit --no-fund
-          npx vitest run --coverage
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run test:coverage
 
       # ── SonarCloud (só master): analisa o espelho público com a cobertura daqui ──
       - name: gerar o espelho público (o que o Sonar vai ver)
         if: env.SONAR_ATIVO == 'true'
         run: |
-          python3 -m pip install --quiet --user --break-system-packages git-filter-repo==2.47.0
+          python3 -m pip install --quiet --user --break-system-packages --only-binary :all: git-filter-repo==2.47.0
           python3 -X utf8 scripts/mirror/build_mirror.py --source . --out "$RUNNER_TEMP/espelho"
           # a cobertura usa caminho de módulo (radiocheck/...): vale igual no espelho,
           # que tem as mesmas linhas (as substituições não criam nem removem linha)
@@ -179,7 +185,7 @@ jobs:
       # infra, scripts, migrations) fica fora da conta de cobertura.
       - name: SonarCloud
         if: env.SONAR_ATIVO == 'true'
-        uses: SonarSource/sonarqube-scan-action@v7
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
@@ -190,8 +196,8 @@ jobs:
             "-Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}"
             "-Dsonar.sources=."
             "-Dsonar.tests=."
-            "-Dsonar.test.inclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**"
-            "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
+            "-Dsonar.test.inclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,**/*.test.jsx,frontend/src/test-utils/**,frontend/e2e/**,fingerprint/tests/**"
+            "-Dsonar.exclusions=**/*_test.go,**/*.test.mjs,**/*.test.js,**/*.test.jsx,frontend/src/test-utils/**,frontend/e2e/**,fingerprint/tests/**,**/testdata/**,**/node_modules/**,**/*.csv,frontend/public/**"
             "-Dsonar.coverage.exclusions=fingerprint/**,clap-verifier/**,infra/**,scripts/**,migrations/**"
             "-Dsonar.go.coverage.reportPaths=workers/coverage.out"
             "-Dsonar.javascript.lcov.reportPaths=frontend-lcov.info"

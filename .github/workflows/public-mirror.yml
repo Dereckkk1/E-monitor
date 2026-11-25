@@ -41,7 +41,8 @@ jobs:
           python-version: '3.12'
 
       # mesma versão em todo lugar: é o que torna os SHAs do espelho reproduzíveis
-      - run: python -m pip install --quiet git-filter-repo==2.47.0
+      - run: |
+          python -m pip install --quiet --only-binary :all: git-filter-repo==2.47.0
 
       - name: gerar + trava
         run: python -X utf8 scripts/mirror/build_mirror.py --source . --out "$RUNNER_TEMP/espelho"
