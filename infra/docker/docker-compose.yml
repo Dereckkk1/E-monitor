@@ -430,7 +430,10 @@ services:
     ports:
       - "3001:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # senha do admin vem do .env (GRAFANA_ADMIN_PASSWORD). O Grafana só a usa
+      # na PRIMEIRA inicialização do volume grafana-data; depois manda o que
+      # está gravado nele. "admin" é só o fallback de dev local.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     volumes:
       - ../grafana/datasources:/etc/grafana/provisioning/datasources:ro
