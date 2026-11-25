@@ -19,6 +19,9 @@ export default defineConfig({
     globals: true,
     include: ['src/**/*.test.{js,jsx,mjs}'],
     setupFiles: ['./src/test-utils/polyfills.js'],
+    // fuso fixo: o CI roda em UTC e a máquina de dev em BRT — sem isto, teste
+    // que confere data formatada passa num e quebra no outro
+    env: { TZ: 'America/Sao_Paulo' },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{js,jsx}'],
