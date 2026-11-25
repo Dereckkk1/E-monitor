@@ -54,8 +54,13 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIKeysHandler) Revoke(w http.ResponseWriter, r *http.Request) {
+	clientID := chi.URLParam(r, "clientID")
 	keyID := chi.URLParam(r, "keyID")
-	_, err := h.db.Exec(r.Context(), `UPDATE api_keys SET revoked_at = NOW() WHERE id = $1`, keyID)
+	// A chave tem de ser do cliente da URL: sem o client_id no WHERE,
+	// DELETE /clients/A/api-keys/{chave de B} revogava a chave de B. Continua
+	// idempotente (204 sem linha afetada) e não revela se a chave existe.
+	_, err := h.db.Exec(r.Context(),
+		`UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND client_id = $2`, keyID, clientID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

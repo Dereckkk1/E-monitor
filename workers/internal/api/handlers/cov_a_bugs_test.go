@@ -30,10 +30,9 @@ func TestCovA_Bug_BlockIPAceitaTextoQueNaoEhIP(t *testing.T) {
 	assert.Zero(t, n)
 }
 
-// apikeys.go:56-64 (Revoke) apaga a chave só pelo keyID: o clientID da URL é
-// ignorado. Pelo path de um cliente dá para revogar a chave de outro.
-func TestCovA_Bug_RevogarChaveIgnoraOClienteDaURL(t *testing.T) {
-	t.Skip("BUG: apikeys.go:56-64 — Revoke faz UPDATE api_keys ... WHERE id = keyID sem conferir client_id da URL; DELETE /clients/A/api-keys/{chave de B} revoga a chave de B (204). Deveria exigir client_id = clientID (404 caso contrário)")
+// Regressão: Revoke apagava a chave só pelo keyID e ignorava o clientID da URL —
+// pelo path de um cliente dava para revogar a chave de outro.
+func TestCovA_RevogarChaveRespeitaOClienteDaURL(t *testing.T) {
 	ctx, pool := covADB(t)
 	h := NewAPIKeysHandler(pool)
 	r := covARouter(nil, func(r chi.Router) {

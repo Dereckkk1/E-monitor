@@ -255,9 +255,8 @@ func TestCovW_HandleDetection_LateNightLastDayUsesSaoPauloDate(t *testing.T) {
 
 	// 2026-07-31 23:30 BRT == 2026-08-01 02:30 UTC
 	require.NoError(t, d.handleDetection(ctx, covWDetectionJSON(t, station, short, "2026-08-01T02:30:00Z")))
-	if covWCountDeliveries(t, ctx, pool, client, "detection.confirmed") == 0 {
-		t.Skip("BUG: deliverer.go:171 usa `$3::date` (data UTC) em vez de `($3 AT TIME ZONE 'America/Sao_Paulo')::date`; tocada 23:30 BRT do último dia da campanha é descartada e o cliente nunca recebe o webhook. Esperado: 1 linha enfileirada; atual: 0")
-	}
+	require.Equal(t, 1, covWCountDeliveries(t, ctx, pool, client, "detection.confirmed"),
+		"tocada 23:30 (São Paulo) do último dia da campanha tem de gerar o webhook")
 
 	require.NoError(t, d.handleRetracted(ctx, covWRetractedJSON(t, station, short, "2026-08-01T02:30:00Z")))
 	assert.Equal(t, 1, covWCountDeliveries(t, ctx, pool, client, "detection.retracted"))

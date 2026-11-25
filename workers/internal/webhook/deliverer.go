@@ -168,7 +168,9 @@ func (d *Deliverer) handleDetection(ctx context.Context, raw []byte) error {
 			  AND m.fingerprint_status = 'ready'
 			  AND $2 = ANY(cm.target_stations)
 			  AND ca.status IN ('programada','ativa')
-			  AND $3::date BETWEEN ca.start_date AND ca.end_date
+			  -- data da campanha é de calendário em São Paulo (como em evidence/attribution.go):
+			  -- $3::date era a data UTC e uma tocada às 23:30 do último dia virava o dia seguinte
+			  AND ($3::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN ca.start_date AND ca.end_date
 			ORDER BY cm.added_at DESC
 			LIMIT 1`, ev.CommercialShortID, stationUUID, detectedAt).Scan(&commercialID, &commercialTitle, &clientID)
 	}
@@ -284,7 +286,9 @@ func (d *Deliverer) handleRetracted(ctx context.Context, raw []byte) error {
 			WHERE m.short_id = $1
 			  AND $2 = ANY(cm.target_stations)
 			  AND ca.status IN ('programada','ativa')
-			  AND $3::date BETWEEN ca.start_date AND ca.end_date
+			  -- data da campanha é de calendário em São Paulo (como em evidence/attribution.go):
+			  -- $3::date era a data UTC e uma tocada às 23:30 do último dia virava o dia seguinte
+			  AND ($3::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN ca.start_date AND ca.end_date
 			ORDER BY cm.added_at DESC
 			LIMIT 1`, ev.CommercialShortID, stationUUID, detectedAt).Scan(&commercialID, &commercialTitle, &clientID)
 	}
