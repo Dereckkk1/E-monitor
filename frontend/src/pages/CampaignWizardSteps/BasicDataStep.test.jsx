@@ -302,3 +302,58 @@ describe('BasicDataStep — ligação entre os clientes', () => {
     await waitFor(() => expect(onBloqueioChange).toHaveBeenLastCalledWith(false))
   })
 })
+
+describe('BasicDataStep — trocar de cliente reconfere o código só quando há o que o servidor dizer', () => {
+  const idasDe = (chamadas, codigo) => chamadas.filter(c => c.chave === `GET /hub-codes/${codigo}`)
+
+  test('resposta com `ligacao` (servidor novo): trocar o cliente reconfere já com o cliente novo', async () => {
+    const chamadas = mockApi({
+      'GET /hub-codes/EH-FFFFFF': { nome: 'Campanha Teste', codigo: 'EH-FFFFFF', ligacao: { estado: 'ligado', mensagem: '' } },
+    })
+    montar({ inicial: { ...VAZIO, client_id: CLIENTE_A.id, hub_code: 'EH-FFFFFF' } })
+    fireEvent.blur(campoCodigo())
+    await screen.findByText('Confere:')
+
+    const [caixaCliente] = screen.getAllByRole('combobox')
+    escolherOpcao(caixaCliente, 'Cliente Teste B')
+
+    await waitFor(() => expect(idasDe(chamadas, 'EH-FFFFFF').length).toBe(2))
+    const [primeira, segunda] = idasDe(chamadas, 'EH-FFFFFF')
+    expect(primeira.params).toEqual({ client_id: CLIENTE_A.id })
+    expect(segunda.params).toEqual({ client_id: CLIENTE_B.id })
+  })
+
+  test('conferido SEM cliente: escolher o cliente reconfere, agora pedindo a ligação dele', async () => {
+    const chamadas = mockApi({
+      'GET /hub-codes/EH-GGGGGG': (config) => (config.params?.client_id
+        ? { nome: 'Campanha Teste', codigo: 'EH-GGGGGG', ligacao: { estado: 'ligado', mensagem: '' } }
+        : { nome: 'Campanha Teste', codigo: 'EH-GGGGGG' }),
+    })
+    montar({ inicial: { ...VAZIO, hub_code: 'EH-GGGGGG' } })
+    fireEvent.blur(campoCodigo())
+    await screen.findByText('Confere:')
+    expect(idasDe(chamadas, 'EH-GGGGGG')[0].params).toBeUndefined()
+
+    const [caixaCliente] = screen.getAllByRole('combobox')
+    escolherOpcao(caixaCliente, 'Cliente Teste A')
+
+    await waitFor(() => expect(idasDe(chamadas, 'EH-GGGGGG').length).toBe(2))
+    expect(idasDe(chamadas, 'EH-GGGGGG')[1].params).toEqual({ client_id: CLIENTE_A.id })
+  })
+
+  test('servidor antigo (sem `ligacao`) com cliente: trocar o cliente NÃO gasta outra ida ao hub', async () => {
+    const chamadas = mockApi({
+      'GET /hub-codes/EH-HHHHHH': { nome: 'Campanha Teste', codigo: 'EH-HHHHHH' },
+    })
+    montar({ inicial: { ...VAZIO, client_id: CLIENTE_A.id, hub_code: 'EH-HHHHHH' } })
+    fireEvent.blur(campoCodigo())
+    await screen.findByText('Confere:')
+
+    const [caixaCliente] = screen.getAllByRole('combobox')
+    escolherOpcao(caixaCliente, 'Cliente Teste B')
+
+    // dá tempo de um efeito disparar uma ida, se fosse disparar
+    await new Promise(r => setTimeout(r, 50))
+    expect(idasDe(chamadas, 'EH-HHHHHH').length).toBe(1)
+  })
+})
