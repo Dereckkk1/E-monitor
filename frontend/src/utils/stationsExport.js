@@ -168,8 +168,11 @@ export function summarizeStations(stations) {
 
 // ── Download ─────────────────────────────────────────────────────
 
+// Carimbo AAAAMMDD do nome do arquivo, na data LOCAL de quem baixa.
+// toISOString() é UTC: entre 21h e 24h de Brasília o arquivo saía com a data de amanhã.
 export function stampNow() {
-  return new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const d = new Date()
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
 }
 
 function download(blob, filename) {

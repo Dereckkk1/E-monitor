@@ -91,10 +91,9 @@ describe('DashboardPage — cliente', () => {
     expect(urlAtual(screen)).toBe('/detections?campaign_id=c-ativa')
   })
 
-  // BUG: DashboardPage.jsx:13-21 (formatDate) — o backend manda DATE como
-  // RFC3339 em UTC ("2026-07-01T00:00:00Z"); toLocaleDateString com
-  // timeZone America/Sao_Paulo mostra 30/06/2026. Esperado: 01/07/2026 → 31/07/2026.
-  test.skip('período do card mostra as datas de calendário da campanha (sem voltar 1 dia)', async () => {
+  // Regressão: o backend manda DATE como RFC3339 em UTC ("2026-07-01T00:00:00Z")
+  // e o card mostrava 30/06/2026 em São Paulo (dia anterior).
+  test('período do card mostra as datas de calendário da campanha (sem voltar 1 dia)', async () => {
     montar({
       'GET /campaigns': { data: [{ ...CAMPANHAS[0], start_date: '2026-07-01T00:00:00Z', end_date: '2026-07-31T00:00:00Z' }] },
     })

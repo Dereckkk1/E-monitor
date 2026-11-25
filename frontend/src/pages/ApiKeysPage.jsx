@@ -84,7 +84,7 @@ function relativeTime(iso) {
   const day = Math.round(hr / 24)
   if (day < 30)        return `há ${day} d`
   const mo = Math.round(day / 30)
-  if (mo < 12)         return `há ${mo} meses`
+  if (mo < 12)         return `há ${mo} ${mo === 1 ? 'mês' : 'meses'}`
   const yr = Math.round(mo / 12)
   return `há ${yr} ${yr === 1 ? 'ano' : 'anos'}`
 }

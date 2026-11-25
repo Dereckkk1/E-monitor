@@ -90,6 +90,9 @@ const PricingStep = forwardRef(function PricingStep({
   // dashboard usam o cálculo dinâmico (executado / impactos × 1000). Quando
   // preenchido aqui, vira a fonte da verdade nas telas de exibição.
   const initialFixedCPMNum = useMemo(() => {
+    // null/'' = sem CPM fixo. Sem esta guarda, Number(null) = 0 (finito) e a
+    // campanha abria com "0,00 · ativo" em vez de vazio e opcional.
+    if (initialFixedCPM == null || initialFixedCPM === '') return null
     const n = Number(initialFixedCPM)
     return Number.isFinite(n) ? n : null
   }, [initialFixedCPM])

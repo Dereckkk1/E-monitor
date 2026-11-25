@@ -58,9 +58,8 @@ describe('ApiKeysPage', () => {
     expect(screen.getByText('2 chaves')).toBeTruthy()
   })
 
-  // BUG: ApiKeysPage.jsx (relativeTime, ramo de meses) — "há 1 meses": o singular não é tratado
-  // (o ramo de anos trata). Esperado: "há 1 mês".
-  test.skip('tempo relativo de 1 mês usa o singular', async () => {
+  // Regressão: o ramo de meses dizia "há 1 meses".
+  test('tempo relativo de 1 mês usa o singular', async () => {
     montar()
     const k2 = (await screen.findByText('b71c••••••••••••')).closest('.ak-row')
     expect(within(k2).getByText('há 1 mês')).toBeTruthy()

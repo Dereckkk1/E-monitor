@@ -4,20 +4,20 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { useCampaigns, useStreamHealth, useClients, useCampaignsFinancials, useWorkersStatus } from '../api/hooks'
 import api from '../api/client'
+import { parseLocalDate } from '../utils/dates'
 import StationAvatar from '../components/StationAvatar'
 import NotificationBell from '../components/NotificationBell'
 import './DashboardPage.css'
 
 // ── Shared helpers ────────────────────────────────────────────────
 
-function formatDate(isoString) {
-  if (!isoString) return '—'
-  return new Date(isoString).toLocaleDateString('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  })
+// Data de CALENDÁRIO (vigência da campanha). O backend manda DATE como
+// "AAAA-MM-DD" ou "AAAA-MM-DDT00:00:00Z"; new Date() leria como instante UTC
+// e, em São Paulo, mostraria o dia ANTERIOR. parseLocalDate fica só com o dia.
+function formatDate(value) {
+  const d = parseLocalDate(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
 function formatDateFull(date) {

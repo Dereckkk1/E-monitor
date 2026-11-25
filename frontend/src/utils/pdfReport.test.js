@@ -163,11 +163,9 @@ describe('buildCampaignReportPDF: capa', () => {
     expect(fetch).toHaveBeenCalledWith('/E-monitor%20logo.png')
   })
 
-  // BUG (pdfReport.js:99-101 x 77-95): o comentário de prefetchReportLogo promete que,
-  // se a pré-carga falhar, "o PDF tenta de novo" — mas a promessa que resolveu em null
-  // fica em cache (_logoPromise) e nenhum PDF seguinte tenta baixar a logo outra vez.
-  // Uma falha transitória na pré-carga tira a logo de todos os PDFs até recarregar a página.
-  test.skip('BUG: falha transitória na pré-carga não deveria tirar a logo dos PDFs seguintes', async () => {
+  // Regressão: a promessa que resolvia em null ficava em cache (_logoPromise) e uma
+  // falha transitória na pré-carga tirava a logo de todos os PDFs até recarregar a página.
+  test('falha transitória na pré-carga não tira a logo dos PDFs seguintes', async () => {
     logoFalha()
     const { buildCampaignReportPDF, prefetchReportLogo } = await carregar()
     prefetchReportLogo()
@@ -177,13 +175,10 @@ describe('buildCampaignReportPDF: capa', () => {
     expect(doc().de('addImage')).toHaveLength(1)
   })
 
-  // BUG (pdfReport.js:35-40): fmtDate faz new Date('2026-03-01T00:00:00Z'). A API manda
-  // start_date/end_date (DATE do Postgres, time.Time no Go) como meia-noite UTC; no fuso de
-  // São Paulo isso é 21h do dia anterior, então, quando o summary não traz `period`
-  // (cai na vigência da campanha), a capa mostra "28/02/2026 – 30/03/2026" para uma
-  // campanha de 01/03 a 31/03. dates.js (parseLocalDate) e stationsExport.js (fmtIsoDate)
-  // já tratam essa armadilha; aqui ficou de fora.
-  test.skip('BUG: vigência em meia-noite UTC aparece um dia antes no PDF', async () => {
+  // Regressão: a API manda start_date/end_date como meia-noite UTC; fmtDate fazia
+  // new Date() e, em São Paulo, a capa mostrava "28/02/2026 – 30/03/2026" para uma
+  // campanha de 01/03 a 31/03.
+  test('vigência em meia-noite UTC aparece com as datas de calendário certas', async () => {
     const { buildCampaignReportPDF } = await carregar()
     await buildCampaignReportPDF(resumo({
       period: {},
@@ -600,12 +595,9 @@ describe('buildStationsPDF / exportStationsPdf', () => {
 
 // ── Data no nome do arquivo ──────────────────────────────────────────────
 describe('data do nome do arquivo', () => {
-  // BUG (pdfReport.js:297 e :884; mesmo padrão em stationsExport.stampNow, gridReport e
-  // hooks.exportDetectionsCsv): o carimbo usa new Date().toISOString().slice(0, 10), ou
-  // seja, a data em UTC. Entre 21h e 24h de Brasília o arquivo sai com a data de amanhã
-  // ("relatorio-...-20260311.pdf" gerado às 22h30 de 10/03). O PDF de cobrança
-  // (pdfCampaignFailure) já usa a data local e está certo.
-  test.skip('BUG: às 22h30 de 10/03 em São Paulo o arquivo deveria levar 20260310', async () => {
+  // Regressão: o carimbo era toISOString() (UTC) e, entre 21h e 24h de Brasília, o
+  // arquivo saía com a data de amanhã. Agora é a data local (stationsExport.stampNow).
+  test('às 22h30 de 10/03 em São Paulo o arquivo leva 20260310', async () => {
     vi.setSystemTime(new Date('2026-03-11T01:30:00Z'))
     const { buildCampaignReportPDF } = await carregar()
     await buildCampaignReportPDF(resumo())

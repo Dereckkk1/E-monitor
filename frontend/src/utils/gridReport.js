@@ -28,6 +28,7 @@
 // dateISO segue a mesma construção da grade (`d.toISOString().slice(0,10)`), que
 // em America/Sao_Paulo (UTC-3) coincide com o for_date da view.
 
+import { stampNow } from './stationsExport.js'
 import { pad2 } from './dates.js'
 import { indexStations, resolveStation } from './stationCatalog.js'
 
@@ -326,9 +327,7 @@ export function buildGridReportCSV(model) {
 }
 
 // ── Download (browser-only) ──────────────────────────────────────
-function stampNow() {
-  return new Date().toISOString().slice(0, 10).replace(/-/g, '')
-}
+
 
 export function exportGridReportCsv(model) {
   const csv = buildGridReportCSV(model)

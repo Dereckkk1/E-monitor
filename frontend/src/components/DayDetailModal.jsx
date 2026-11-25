@@ -775,7 +775,7 @@ function ManualEntryForm({
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
                 <path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Salvar {rows.length} veiculação{rows.length > 1 ? 'ões' : ''}
+              Salvar {rows.length} {rows.length > 1 ? 'veiculações' : 'veiculação'}
             </>
           )}
         </PrimaryButton>

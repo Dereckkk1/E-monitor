@@ -312,7 +312,7 @@ export default function RuleSidePanel({
                     selecionadas{singleSelectedType.materialCount != null && (
                       singleSelectedType.materialCount === 0
                         ? ' (nenhum material desse tipo na campanha ainda — será contado quando subir)'
-                        : ` (${singleSelectedType.materialCount} material${singleSelectedType.materialCount !== 1 ? 'is' : ''} desse tipo na campanha)`
+                        : ` (${singleSelectedType.materialCount} ${singleSelectedType.materialCount !== 1 ? 'materiais' : 'material'} desse tipo na campanha)`
                     )}.
                   </>
                 ) : (

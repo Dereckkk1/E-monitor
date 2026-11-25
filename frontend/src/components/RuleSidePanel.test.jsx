@@ -117,15 +117,14 @@ describe('RuleSidePanel — criação', () => {
   test('tipo único mostra quantos materiais dele estão na campanha; tipo sem material avisa', () => {
     montar()
     fireEvent.click(screen.getByRole('button', { name: /Spot 30s/ }))
-    expect(document.body.textContent).toMatch(/\(2 material\w* desse tipo na campanha\)/)
+    expect(document.body.textContent).toMatch(/\(2 materiais desse tipo na campanha\)/)
     fireEvent.click(screen.getByRole('button', { name: /Spot 30s/ }))  // desmarca
     fireEvent.click(screen.getByRole('button', { name: /Vinheta/ }))
     expect(document.body.textContent).toMatch(/nenhum material desse tipo na campanha ainda/)
   })
 
-  // BUG: RuleSidePanel.jsx:315 — `material${n !== 1 ? 'is' : ''}` gera "materialis" no plural.
-  // Esperado: "2 materiais desse tipo na campanha".
-  test.skip('plural correto: "(2 materiais desse tipo na campanha)"', () => {
+  // Regressão: o plural saía "materialis".
+  test('plural correto: "(2 materiais desse tipo na campanha)"', () => {
     montar()
     fireEvent.click(screen.getByRole('button', { name: /Spot 30s/ }))
     expect(document.body.textContent).toMatch(/\(2 materiais desse tipo na campanha\)/)

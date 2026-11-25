@@ -15,6 +15,7 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { fmtDial, contractStatusLabel, summarizeStations, stampNow } from './stationsExport.js'
+import { parseLocalDate } from './dates.js'
 
 // ── Design tokens ────────────────────────────────────────────────
 // Mantidos em sync com src/index.css. Se mudar lá, mudar aqui — não há
@@ -32,9 +33,12 @@ const TOKENS = {
 
 // ── Helpers de formatação ────────────────────────────────────────
 function pad2(n) { return String(n).padStart(2, '0') }
+// Date = instante (ex.: "gerado em" agora). String = data de CALENDÁRIO da API
+// ("AAAA-MM-DD" ou meia-noite UTC "AAAA-MM-DDT00:00:00Z"): new Date() leria
+// como instante UTC e, em São Paulo, a capa mostraria o dia anterior.
 function fmtDate(d) {
   if (!d) return '—'
-  const dt = (d instanceof Date) ? d : new Date(d)
+  const dt = (d instanceof Date) ? d : parseLocalDate(d)
   if (isNaN(dt.getTime())) return '—'
   return `${pad2(dt.getDate())}/${pad2(dt.getMonth()+1)}/${dt.getFullYear()}`
 }
@@ -74,24 +78,31 @@ function slugify(s) {
 // Carrega o PNG da logo E-monitor via fetch e converte pra dataURL.
 // Cached em módulo pra não rebaixar a cada PDF gerado.
 let _logoPromise = null
+async function fetchLogoDataURL() {
+  try {
+    const resp = await fetch('/E-monitor%20logo.png')
+    if (!resp.ok) return null
+    const blob = await resp.blob()
+    return await new Promise((resolve) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(fr.result)
+      fr.onerror = () => resolve(null)
+      fr.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
 async function loadLogoDataURL() {
-  if (_logoPromise) return _logoPromise
-  _logoPromise = (async () => {
-    try {
-      const resp = await fetch('/E-monitor%20logo.png')
-      if (!resp.ok) return null
-      const blob = await resp.blob()
-      return await new Promise((resolve) => {
-        const fr = new FileReader()
-        fr.onload = () => resolve(fr.result)
-        fr.onerror = () => resolve(null)
-        fr.readAsDataURL(blob)
-      })
-    } catch {
-      return null
-    }
-  })()
-  return _logoPromise
+  const emCache = _logoPromise ? await _logoPromise : null
+  if (emCache) return emCache
+  // Nada em cache, ou a carga anterior (ex.: a pré-carga) falhou: tenta agora.
+  // Falha (null) NÃO fica em cache — sem isto, uma queda de rede na pré-carga
+  // tirava a logo de todo PDF até recarregar a página.
+  const p = (_logoPromise = fetchLogoDataURL())
+  const url = await p
+  if (!url && _logoPromise === p) _logoPromise = null
+  return url
 }
 
 // Pré-carrega a logo eagerly — o usuário sempre acaba clicando em PDF, e
@@ -623,7 +634,7 @@ export async function buildCampaignReportPDF(summary) {
   }
 
   // 8) Trigger download.
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const stamp = stampNow()
   const filename = `relatorio-${slugify(summary.campaign?.name)}-${stamp}.pdf`
   doc.save(filename)
 }
@@ -881,7 +892,7 @@ export async function buildGridReportPDF(model) {
   }
 
   // 6) Download.
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const stamp = stampNow()
   doc.save(`relatorio-veiculacoes-${model.slug}-${stamp}.pdf`)
 }
 

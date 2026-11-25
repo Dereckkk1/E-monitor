@@ -11,6 +11,7 @@ import RuleSidePanel from '../../components/RuleSidePanel'
 import OverridePopover from '../../components/OverridePopover'
 import { useConfirm } from '../../components/ConfirmModal'
 import { tokenize, matchesAllTokens } from '../../utils/search'
+import { parseLocalDate } from '../../utils/dates'
 
 /**
  * Step 4: distribution rules + grid + override.
@@ -27,8 +28,10 @@ export default function DistributionStep({
   campaignId, campaignStart, campaignEnd,
   campaignMaterials, campaignStationIds = [], materialsById = {}, allStations,
 }) {
-  const cStart = new Date(campaignStart)
-  const cEnd = new Date(campaignEnd)
+  // Datas de CALENDÁRIO: new Date('2026-03-01') é meia-noite UTC = 21h do dia
+  // anterior em São Paulo, e o passo abria no mês ANTERIOR com a grade vazia.
+  const cStart = parseLocalDate(campaignStart)
+  const cEnd = parseLocalDate(campaignEnd)
   const [month, setMonth] = useState(() => new Date(cStart.getFullYear(), cStart.getMonth(), 1))
 
   const fromISO = new Date(month.getFullYear(), month.getMonth(), 1).toISOString().slice(0, 10)

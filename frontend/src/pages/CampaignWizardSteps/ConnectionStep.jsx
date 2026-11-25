@@ -60,7 +60,11 @@ export default function ConnectionStep({ campaignStations = [] }) {
   // read-only: testar nunca grava).
   const runTests = useCallback(async (station, tests) => {
     const id = station.id
-    const url = (rowsRef.current[id]?.urlDraft || '').trim()
+    // O auto-ping roda no MESMO commit que semeia `rows`: a linha ainda não existe
+    // e o ref está vazio. Sem linha, vale a URL cadastrada (é o que a semente
+    // poria em urlDraft); com linha, vale o rascunho, mesmo vazio.
+    const row = rowsRef.current[id]
+    const url = (row ? row.urlDraft : station.stream_url || '').trim()
     if (!url) {
       patchRow(id, { results: { ping: fail('sem URL'), stream: null, worker: null } })
       return

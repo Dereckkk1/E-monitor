@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import api from './client'
 import { chunkIds } from '../utils/stationCatalog'
+import { stampNow } from '../utils/stationsExport'
 import { campanhasForaDaPagina, juntarCampanhas } from '../utils/filtrosDaUrl'
 import { isLive } from '../utils/recordings'
 
@@ -573,7 +574,7 @@ export async function exportDetectionsCsv({ campaignId, from, to, q = '', sort =
   const url = URL.createObjectURL(resp.data)
   const a = document.createElement('a')
   a.href = url
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const stamp = stampNow()
   a.download = `veiculacoes_${stamp}.csv`
   document.body.appendChild(a)
   a.click()
@@ -606,7 +607,7 @@ export async function exportConsolidatedCsv({ campaignId, from, to } = {}) {
   const m = /filename="([^"]+)"/i.exec(cd)
   if (m) filename = m[1]
   if (!filename) {
-    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const stamp = stampNow()
     filename = `relatorio-consolidado-${stamp}.csv`
   }
   const url = URL.createObjectURL(resp.data)

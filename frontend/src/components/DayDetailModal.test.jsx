@@ -404,9 +404,8 @@ describe('DayDetailModal — inserção manual em lote (admin)', () => {
     expect(screen.queryByRole('button', { name: 'Remover linha 1' })).toBeNull()
   })
 
-  // BUG: DayDetailModal.jsx:778 — `veiculação{rows.length > 1 ? 'ões' : ''}` gera
-  // "veiculaçãoões" no plural. Esperado: "Salvar 2 veiculações".
-  test.skip('plural do botão Salvar é "veiculações"', async () => {
+  // Regressão: o plural saía "veiculaçãoões".
+  test('plural do botão Salvar é "veiculações"', async () => {
     mockApi(rotas())
     await abrirForm()
     fireEvent.click(screen.getByRole('button', { name: 'Adicionar linha' }))

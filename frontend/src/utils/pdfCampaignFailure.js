@@ -84,22 +84,29 @@ function stamp() {
 }
 
 let _logoPromise = null
+async function fetchLogoDataURL() {
+  try {
+    const resp = await fetch('/E-monitor%20logo.png')
+    if (!resp.ok) return null
+    const blob = await resp.blob()
+    return await new Promise((resolve) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(fr.result)
+      fr.onerror = () => resolve(null)
+      fr.readAsDataURL(blob)
+    })
+  } catch { return null }
+}
 async function loadLogoDataURL() {
-  if (_logoPromise) return _logoPromise
-  _logoPromise = (async () => {
-    try {
-      const resp = await fetch('/E-monitor%20logo.png')
-      if (!resp.ok) return null
-      const blob = await resp.blob()
-      return await new Promise((resolve) => {
-        const fr = new FileReader()
-        fr.onload = () => resolve(fr.result)
-        fr.onerror = () => resolve(null)
-        fr.readAsDataURL(blob)
-      })
-    } catch { return null }
-  })()
-  return _logoPromise
+  const emCache = _logoPromise ? await _logoPromise : null
+  if (emCache) return emCache
+  // Nada em cache, ou a carga anterior (ex.: a pré-carga) falhou: tenta agora.
+  // Falha (null) NÃO fica em cache — sem isto, uma queda de rede na pré-carga
+  // tirava a logo de todo PDF até recarregar a página.
+  const p = (_logoPromise = fetchLogoDataURL())
+  const url = await p
+  if (!url && _logoPromise === p) _logoPromise = null
+  return url
 }
 
 // Day chips: render as "24, 26, 29" for compactness in PDF cell.

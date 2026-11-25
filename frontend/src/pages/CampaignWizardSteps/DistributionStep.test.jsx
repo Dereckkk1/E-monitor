@@ -115,11 +115,8 @@ describe('DistributionStep — visão geral', () => {
 })
 
 describe('DistributionStep — mês inicial', () => {
-  // BUG: DistributionStep.jsx:30-32 — `new Date(campaignStart)` lê 'YYYY-MM-DD' como UTC; em
-  // America/Sao_Paulo (UTC-3) uma campanha que começa no dia 1º vira 21:00 do último dia do mês
-  // anterior, e o passo abre em Fevereiro com a grade vazia. Esperado: abrir em "Março 2026"
-  // (o resto do app usa parseLocalDate — utils/dates.js — justamente por isso).
-  test.skip('campanha que começa no dia 1º abre no mês de início', async () => {
+  // Regressão: new Date('2026-03-01') é UTC; em São Paulo o passo abria em Fevereiro, vazio.
+  test('campanha que começa no dia 1º abre no mês de início', async () => {
     await montar({ campaignStart: '2026-03-01' })
     expect(await screen.findByText('Março 2026')).toBeTruthy()
   })

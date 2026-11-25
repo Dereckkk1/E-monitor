@@ -140,10 +140,9 @@ describe('PricingStep — cartões por emissora', () => {
 })
 
 describe('PricingStep — CPM fixo', () => {
-  // BUG: PricingStep.jsx:93 — `Number(initialFixedCPM)` com initialFixedCPM=null (campanha
-  // SEM CPM fixo, como o CampaignWizardPage passa: `fixed_cpm ?? null`) vira 0, que é finito;
-  // o campo abre com "0,00" e a etiqueta "· ativo". Esperado: vazio e "· opcional".
-  test.skip('campanha sem CPM fixo (null) abre vazia e "opcional"', async () => {
+  // Regressão: initialFixedCPM=null (campanha SEM CPM fixo) virava 0 via Number(null) e o
+  // campo abria com "0,00 · ativo".
+  test('campanha sem CPM fixo (null) abre vazia e "opcional"', async () => {
     await montar({ initialFixedCPM: null })
     expect(screen.getByText('· opcional')).toBeTruthy()
     expect(screen.getByPlaceholderText('usa cálc. dinâmico').value).toBe('')

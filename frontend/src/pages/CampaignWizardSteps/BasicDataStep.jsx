@@ -543,7 +543,7 @@ export default function BasicDataStep({ value, onChange, clients, isEditMode, on
               <rect x="2" y="3" width="12" height="11" rx="1.5" />
               <path d="M11 1.5v3M5 1.5v3M2 6.5h12" />
             </svg>
-            Campanha de {days} {days === 1 ? 'dia' : 'dias'} corridos
+            Campanha de {days} {days === 1 ? 'dia corrido' : 'dias corridos'}
           </div>
         )}
       </div>
