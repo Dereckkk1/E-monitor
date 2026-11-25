@@ -18,10 +18,12 @@ export default defineConfig({
     // (usa o afterEach global). Hook em setupFiles quebra no Vitest 5.
     globals: true,
     include: ['src/**/*.test.{js,jsx,mjs}'],
+    setupFiles: ['./src/test-utils/polyfills.js'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{js,jsx}'],
-      exclude: ['src/**/*.test.{js,jsx,mjs}'],
+      // fora: o próprio código de teste e a infra compartilhada de teste
+      exclude: ['src/**/*.test.{js,jsx,mjs}', 'src/test-utils/**'],
       reporter: ['text-summary', 'lcov', 'json-summary'],
       reportsDirectory: 'coverage',
     },
