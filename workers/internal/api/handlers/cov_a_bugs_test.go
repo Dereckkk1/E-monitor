@@ -16,12 +16,9 @@ import (
 	"radiocheck/internal/mcp/mcptest"
 )
 
-// admin_monitoring.go:821-873 (BlockIP) só checa que o campo não é vazio: texto
-// qualquer entra em blocked_ips e na lista em memória. Um IP digitado errado
-// (ou colado com espaço/ponto-e-vírgula) bloqueia nada e ainda polui a tabela;
-// o correto é validar com net.ParseIP e responder 400.
-func TestCovA_Bug_BlockIPAceitaTextoQueNaoEhIP(t *testing.T) {
-	t.Skip("BUG: admin_monitoring.go:827-831 — BlockIP aceita qualquer texto não-vazio como IP (200 e grava em blocked_ips); deveria validar net.ParseIP e responder 400")
+// Regressão: BlockIP só checava que o campo não era vazio e texto qualquer
+// entrava em blocked_ips (não bloqueava nada e poluía a tabela).
+func TestCovA_BlockIPRecusaTextoQueNaoEhIP(t *testing.T) {
 	_, pool, h := covAMon(t)
 	rec := covAServe(covAMonRouter(h), covAJSON(t, http.MethodPost, "/block-ip", map[string]string{"ip": "isto-nao-e-ip"}))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -51,11 +48,9 @@ func TestCovA_RevogarChaveRespeitaOClienteDaURL(t *testing.T) {
 	assert.Zero(t, revogada, "a chave do cliente B não pode ser revogada pelo path do cliente A")
 }
 
-// detections.go:126 (List legado): quando não há linhas o repo devolve slice
-// nil e a resposta sai {"data":null}; as outras listas (commercials, regras,
-// vínculos) normalizam para []. Clientes que fazem data.map(...) quebram.
-func TestCovA_Bug_ListaLegadaDeVeiculacoesDevolveNullQuandoVazia(t *testing.T) {
-	t.Skip(`BUG: detections.go:126 — GET /detections (sem ?page) sem resultados responde {"data":null}; deveria ser {"data":[]} como as demais listas`)
+// Regressão: o List legado (sem ?page) respondia {"data":null} quando vazio;
+// as outras listas normalizam para [] e cliente que faz data.map(...) quebrava.
+func TestCovA_ListaLegadaDeVeiculacoesVaziaDevolveArray(t *testing.T) {
 	c := covANewDetCen(t)
 	rec := c.get(c.adminR(), "/detections?campaign_id="+c.campanha.String()+"&start_date=2030-01-01T00:00:00Z")
 	require.Equal(t, http.StatusOK, rec.Code)

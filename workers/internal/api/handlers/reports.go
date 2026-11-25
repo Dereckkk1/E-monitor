@@ -124,7 +124,8 @@ func slugify(s string) string {
 		return "campanha"
 	}
 	if len(out) > 60 {
-		out = out[:60]
+		// apara de novo: o corte pode cair logo depois de um '-'
+		out = strings.TrimRight(out[:60], "-")
 	}
 	return out
 }

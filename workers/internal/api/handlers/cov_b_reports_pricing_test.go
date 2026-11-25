@@ -20,9 +20,6 @@ import (
 func TestCovB_Reports_SlugifyTruncationTrailingDash(t *testing.T) {
 	got := slugify(strings.Repeat("ab ", 30))
 	assert.LessOrEqual(t, len(got), 60)
-	if strings.HasSuffix(got, "-") {
-		t.Skip("BUG: reports.go:127 slugify apara o '-' final ANTES de truncar em 60; nomes longos podem terminar em '-' (cosmético: nome de arquivo 'x--20260101_...csv')")
-	}
 	assert.False(t, strings.HasSuffix(got, "-"))
 }
 

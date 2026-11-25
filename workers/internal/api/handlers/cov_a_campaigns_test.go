@@ -171,7 +171,6 @@ func TestCovA_Campaigns_List_Paginada(t *testing.T) {
 	})
 
 	t.Run("competência malformada vira 400", func(t *testing.T) {
-		t.Skip("BUG: campaigns.go:81-85 (e catalog/campaigns.go:264-267) — ListPaged devolve erro para competence inválida (catalog/campaigns.go:264-267) e o handler responde 500 'internal error'; entrada inválida do usuário deveria ser 400 (confirmado: 2026-13 devolve 500)")
 		rec := c.get(admin, "/campaigns?competence=2026-13")
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})

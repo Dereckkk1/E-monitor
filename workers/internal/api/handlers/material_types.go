@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"radiocheck/internal/catalog"
 )
@@ -69,6 +71,10 @@ func (h *MaterialTypesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(p.Name) == "" { // mesma regra do Create
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
 	mt, err := h.Repo.Update(r.Context(), id, catalog.CreateMaterialTypeInput{
 		Name:        p.Name,
 		Color:       p.Color,
@@ -92,6 +98,13 @@ func (h *MaterialTypesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Repo.Delete(r.Context(), id); err != nil {
+		// Tipo em uso por regra de distribuição ou preço: o banco recusa
+		// (ON DELETE RESTRICT). É ação do usuário, não falha do servidor.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			http.Error(w, "tipo em uso por regras de distribuição ou preços da campanha; troque o tipo nelas antes de excluir", http.StatusConflict)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

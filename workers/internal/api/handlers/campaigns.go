@@ -78,6 +78,13 @@ func (h *CampaignsHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 			campIDPtr = &cid
 		}
+		// competência é entrada do usuário (AAAA-MM): malformada é 400, não 500
+		if c := q.Get("competence"); c != "" {
+			if _, err := time.Parse("2006-01", c); err != nil {
+				http.Error(w, "invalid competence (use AAAA-MM)", 400)
+				return
+			}
+		}
 		items, total, err := h.Repo.ListPaged(r.Context(), q.Get("q"), q.Get("competence"), scope, campIDPtr, page, size)
 		if err != nil {
 			http.Error(w, "internal error", 500)

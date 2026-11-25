@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -827,6 +828,12 @@ func (h *AdminMonitoringHandler) BlockIP(w http.ResponseWriter, r *http.Request)
 	req.IP = strings.TrimSpace(req.IP)
 	if req.IP == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ip is required"})
+		return
+	}
+	// A lista de bloqueio compara o IP EXATO (reqmetrics.BlockList, sem CIDR):
+	// texto que não é IP não bloquearia nada e só poluiria a tabela.
+	if net.ParseIP(req.IP) == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ip inválido"})
 		return
 	}
 	if req.Reason == "" {

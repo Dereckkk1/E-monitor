@@ -123,6 +123,9 @@ func (h *DetectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", 500)
 		return
 	}
+	if items == nil {
+		items = []catalog.Detection{} // {"data":[]} como as outras listas, nunca null
+	}
 	writeJSON(w, 200, map[string]any{"data": items})
 }
 

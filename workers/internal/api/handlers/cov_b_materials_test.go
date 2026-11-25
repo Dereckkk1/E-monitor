@@ -517,9 +517,6 @@ func TestCovB_MaterialTypes(t *testing.T) {
 	})
 	t.Run("update: nome vazio é recusado como no create", func(t *testing.T) {
 		rec := covBServe(h.Update, covBReq("PUT", "/x", `{"name":"","color":"#abcdef"}`, map[string]string{"id": idA.String()}, nil))
-		if rec.Code == http.StatusOK {
-			t.Skip("BUG: material_types.go:61-85 Update não valida name (Create exige); PUT com name vazio grava nome vazio e responde 200")
-		}
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 	t.Run("delete: id inválido 400; sucesso 204", func(t *testing.T) {
@@ -528,7 +525,7 @@ func TestCovB_MaterialTypes(t *testing.T) {
 		_, err := h.Repo.Get(ctx, idB)
 		assert.Error(t, err, "o tipo foi removido")
 	})
-	t.Run("delete: tipo em uso por regra de distribuição deveria ser 409, não 500", func(t *testing.T) {
+	t.Run("delete: tipo em uso por regra de distribuição é 409, não 500", func(t *testing.T) {
 		cli := mcptest.Cliente(t, ctx, pool, "Cliente Teste")
 		est := mcptest.Emissora(t, ctx, pool, "Rádio Teste FM", 0)
 		camp := mcptest.Campanha(t, ctx, pool, cli, "Campanha", "2026-01-01", "2026-12-31", est)
@@ -537,9 +534,6 @@ func TestCovB_MaterialTypes(t *testing.T) {
 		// O banco protege (ON DELETE RESTRICT) e o tipo permanece; o status devolvido é o que está em discussão.
 		_, err := h.Repo.Get(ctx, idA)
 		require.NoError(t, err, "o tipo em uso não pode ser apagado")
-		if rec.Code == http.StatusInternalServerError {
-			t.Skip("BUG: material_types.go:88 Delete devolve 500 'internal error' quando o tipo está em uso (FK RESTRICT); esperado 409 com mensagem acionável")
-		}
 		assert.Equal(t, http.StatusConflict, rec.Code)
 	})
 }
